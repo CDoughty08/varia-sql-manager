@@ -20,8 +20,10 @@ export const limits = {
   /** results.rowBytes: the most rows one request asks for (SqlService.MaxRowBytesRows in C#). */
   rowSizes: { maxRows: 16_384 },
   /** results.view: sort keys a view takes, views one results.viewClose names (ViewSorter.MaxKeys and
-   *  SqlService.MaxViewIds in C#), and views a result keeps (ResultStore.MaxViewsPerResult). */
-  views: { maxKeys: 16, maxClose: 64, perResult: 8 },
+   *  SqlService.MaxViewIds in C#), and views a result keeps (ResultStore.MaxViewsPerResult); filters a view takes, distinct
+   *  values one In or NotIn filter holds, and cell ranges one filter's selection names (ViewSorter.MaxFilters,
+   *  MaxFilterValues and MaxFilterRanges). */
+  views: { maxKeys: 16, maxClose: 64, perResult: 8, maxFilters: 16, maxFilterValues: 4096, maxFilterRanges: 256 },
   /** Row identities for highlights: rows one results.rowIds names, identities one results.findRows looks for and rows it
    *  lists (SqlService.MaxRowIds, MaxFindIds and MaxFindMatches in C#); identities are below 2^53. */
   identity: { maxRows: 16_384, maxFind: 10_000, maxMatches: 100_000 },

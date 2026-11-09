@@ -49,23 +49,23 @@ export interface SsisOperationsKeys { readonly stoppable: boolean; readonly paus
 export interface SsisOperationsContextState { readonly byDocument: Readonly<Record<string, SsisOperationsKeys>> }
 /** The parts of a DOM element and of the editor that `focusFacts` reads, so tests can pass plain objects. */
 export interface FocusElement { matches(selector: string): boolean; closest(selector: string): { getAttribute(name: string): string | null } | null }
-export interface FocusEditor<E> { getContainerDomNode(): { contains(node: E): boolean }; hasTextFocus(): boolean }
+export interface FocusEditor<E> { getContainerDomNode(): { contains(node: E): boolean }; hasTextFocus(): boolean; hasWidgetFocus?(): boolean }
 
 const noFocus: FocusFacts = { editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '', outputGridFocus: false, searchHitsFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false, peekFocus: false, peekTabFocus: false,
   messagesFocus: false, explorerFocus: false, explorerTypeAhead: false, optionsDialogFocus: false }
 const panels: ReadonlySet<string> = new Set(['explorer', 'editor'])
 
-/** Focus keys for the focused element. The find widget is inside the editor, so its inputs give editorFocus and inputFocus. */
+/** Focus keys for editor text and owned widgets, including widgets hosted outside the editor container. */
 export function focusFacts<E extends FocusElement>(element: E | null, editor: FocusEditor<E> | undefined): FocusFacts {
   if (!element) return noFocus
   const editorTextFocus = !!editor?.hasTextFocus()
-  const editorFocus = editorTextFocus || !!editor?.getContainerDomNode().contains(element)
+  const editorFocus = editorTextFocus || !!editor?.hasWidgetFocus?.() || !!editor?.getContainerDomNode().contains(element)
   const inputFocus = !editorTextFocus && (element.matches('input, textarea, select') || !!element.closest('[contenteditable]:not([contenteditable="false"])'))
   // DockWorkspace marks each pane host, and the mark moves with floating groups.
   const pane = element.closest('[data-pane]')?.getAttribute('data-pane') ?? ''
   const tree = element.closest('[data-explorer-tree]')
   return {
-    editorFocus, editorTextFocus, inputFocus, activePanel: isOutputPane(pane) ? 'output' : panels.has(pane) ? pane as FocusFacts['activePanel'] : '', outputGridFocus: !!element.closest('[data-result-grid]'),
+    editorFocus, editorTextFocus, inputFocus, activePanel: isOutputPane(pane) ? 'output' : panels.has(pane) ? pane as FocusFacts['activePanel'] : editorFocus ? 'editor' : '', outputGridFocus: !!element.closest('[data-result-grid]'),
     searchHitsFocus: !!element.closest('[data-search-hits]'),
     designerFocus: !!element.closest('[data-designer]'), queryBarFocus: !!element.closest('[data-query-bar]'), activityMonitorFocus: !!element.closest('[data-activity-monitor]'),
     documentTabFocus: !!element.closest('[data-document-tab]'), peekFocus: !!element.closest('[data-peek-card]'), peekTabFocus: !!element.closest('[data-peek-tab]'), messagesFocus: !!element.closest('[data-output-view="messages"]'),

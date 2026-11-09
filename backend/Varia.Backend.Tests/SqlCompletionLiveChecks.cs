@@ -50,9 +50,27 @@ internal static class SqlCompletionLiveChecks
             check(Has(derived, "insideAlias.FirstOnly") && !derived.Items.Any(item => item.Label.StartsWith("outsideAlias.", StringComparison.Ordinal)
                 || item.Label.StartsWith("derivedAlias.", StringComparison.Ordinal)),
                 "live derived-table SELECT does not qualify sibling or containing aliases");
+            var apply = await Complete("SELECT * FROM dbo.LanguageFixture AS outerAlias CROSS APPLY (SELECT | FROM dbo.EditedFixture AS innerAlias WHERE innerAlias.EditedOnly=outerAlias.FirstOnly) AS derivedAlias;");
+            check(Has(apply, "innerAlias.EditedOnly") && Has(apply, "outerAlias.FirstOnly")
+                && !apply.Items.Any(item => item.Label.StartsWith("derivedAlias.", StringComparison.Ordinal)),
+                "live CROSS APPLY qualifies its inner source and lateral left source without exposing its own output alias");
+            var outerApply = await Complete("SELECT * FROM dbo.LanguageFixture AS outerAlias OUTER APPLY (SELECT | FROM dbo.EditedFixture AS innerAlias WHERE innerAlias.EditedOnly=outerAlias.FirstOnly) AS derivedAlias;");
+            check(Has(outerApply, "innerAlias.EditedOnly") && Has(outerApply, "outerAlias.FirstOnly"),
+                "live OUTER APPLY qualifies its inner source and lateral left source");
+            var outerInDerived = await Complete("SELECT * FROM dbo.LanguageFixture AS outerAlias WHERE EXISTS (SELECT * FROM dbo.EditedFixture AS siblingAlias CROSS JOIN (SELECT outerAlias.| FROM dbo.LanguageFixture AS innerAlias WHERE innerAlias.FirstOnly=outerAlias.FirstOnly) AS derivedAlias);");
+            check(Has(outerInDerived, "FirstOnly"), "live binder resolves a higher outer correlation inside an ordinary derived table");
+            var nestedDerived = await Complete("SELECT * FROM dbo.LanguageFixture AS outerAlias WHERE EXISTS (SELECT * FROM dbo.EditedFixture AS siblingAlias CROSS JOIN (SELECT | FROM dbo.LanguageFixture AS innerAlias WHERE innerAlias.FirstOnly=outerAlias.FirstOnly) AS derivedAlias);");
+            check(Has(nestedDerived, "innerAlias.FirstOnly") && Has(nestedDerived, "outerAlias.FirstOnly")
+                && !nestedDerived.Items.Any(item => item.Label.StartsWith("siblingAlias.", StringComparison.Ordinal)
+                    || item.Label.StartsWith("derivedAlias.", StringComparison.Ordinal)),
+                "live ordinary derived table excludes immediate siblings while retaining higher outer correlations");
             var outputAlias = await Complete("SELECT t.FirstOnly + 1 AS ComputedOnly FROM dbo.LanguageFixture AS t ORDER BY |;");
             check(Has(outputAlias, "ComputedOnly") && !Has(outputAlias, "t.ComputedOnly"),
                 "live ORDER BY retains a semantic result alias that is not a table column");
+            var collidingOutputAlias = await Complete("SELECT t.FirstOnly + 1 AS FirstOnly FROM dbo.LanguageFixture AS t ORDER BY |;");
+            check(Has(collidingOutputAlias, "FirstOnly") && Has(collidingOutputAlias, "t.FirstOnly")
+                && !Has(collidingOutputAlias, "SharedName"),
+                "live ORDER BY retains a source-named output alias without restoring unrelated bare table fields");
             var caseDistinct = await Complete("SELECT | FROM dbo.LanguageFixture AS t CROSS JOIN dbo.EditedFixture AS T;");
             check(Has(caseDistinct, "t.FirstOnly") && Has(caseDistinct, "T.EditedOnly")
                 && !Has(caseDistinct, "t.EditedOnly") && !Has(caseDistinct, "T.FirstOnly"),

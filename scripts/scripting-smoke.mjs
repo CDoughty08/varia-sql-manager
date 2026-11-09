@@ -132,11 +132,13 @@ const menusInside = () => page.evaluate(() => ({
   inside: [...document.querySelectorAll('[role="menu"]')].every(menu => { const box = menu.getBoundingClientRect(); return box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight }),
   count: document.querySelectorAll('[role="menu"]').length, overflow: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight
 }))
-/** Whether the query tab strip scrolls, and whether the active tab lies wholly inside its visible part. */
+/** Whether tabs extend past the strip, and whether the active tab lies wholly inside its visible part. */
 const activeTabInView = () => page.evaluate(documentTabs => {
   const strip = document.querySelector(documentTabs), tab = strip.querySelector('[role="tab"][aria-selected="true"]')
   const box = tab.getBoundingClientRect(), view = strip.getBoundingClientRect()
-  return { overflows: strip.scrollWidth > strip.clientWidth, inView: box.left >= view.left - 1 && box.right <= view.right + 1 }
+  // Revealing the final one-row tab offsets earlier tabs left of the strip, which scrollWidth does not include.
+  const overflows = [...strip.querySelectorAll('[role="tab"]')].some(tab => { const box = tab.getBoundingClientRect(); return box.left < view.left - 1 || box.right > view.right + 1 })
+  return { overflows, inView: box.left >= view.left - 1 && box.right <= view.right + 1 }
 }, part.documentTabs)
 /** Opens Script Table as › CREATE To on dbo.Orders by mouse, with Clipboard under the pointer. */
 async function openNestedScriptMenu() {

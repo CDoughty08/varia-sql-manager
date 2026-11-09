@@ -336,6 +336,7 @@ if (liveGroup is null)
         ("Entra", () => EntraChecks.RunAsync(Check)),
         ("Store", Sync(() => StoreChecks.Run(Check))),
         ("View", Sync(() => ViewChecks.Run(Check))),
+        ("Filter", Sync(() => FilterChecks.Run(Check))),
         ("Identity", Sync(() => IdentityChecks.Run(Check))),
         ("Diff", Sync(() => DiffChecks.Run(Check))),
         ("ResultSearch", Sync(() => ResultSearchChecks.Run(Check))),

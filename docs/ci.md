@@ -42,6 +42,8 @@ with `node scripts/ci-timings.mjs` (add `--steps` for per-step times) before and
 
   Smoke builds and packaging prepare Electron from its npm-pinned checksums, retrying transient official-download failures
   within a three-attempt, three-minute budget and seeding the shared archive cache so packaging verifies checksums offline.
+  Publishing a verified SQL Tools archive or runtime retries brief Windows sharing violations up to seven times. Persistent
+  locks and other filesystem errors still fail preparation; checksum and file-inventory verification remain required.
 
 ## Where the time goes (baseline, 2026-11-07)
 

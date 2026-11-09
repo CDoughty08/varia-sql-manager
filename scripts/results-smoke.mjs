@@ -3,7 +3,7 @@
 // Save Results As, XML, JSON and plan values in their own tabs, Messages, lifecycle, the memory indicator, the grid's
 // menu, styling, panes and tabs. Then, with VARIA_TEST_SQL_SERVER set, part B repeats the essentials against that
 // server through the Release backend. No assertion depends on absolute pixel sizes.
-import { electron, expect, within } from './fixtures/smoke.mjs'
+import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
@@ -1407,7 +1407,7 @@ try {
   await page.keyboard.press('Shift+F10')
   const outputMenu = page.getByRole('menu', { name: 'Query output', exact: true })
   await expect(outputMenu).toBeVisible()
-  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Highlight', 'Compare with Previous Result', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Results'])
+  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Filter', 'Highlight', 'Compare with Previous Result', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Results'])
   await page.keyboard.press('Escape')
   // Shift+F10 right after a click opens at the cell just clicked, though the grid paints it as active only on its next
   // frame: below it (or above, when there is no room), from its left edge (or to its right edge, near the window's).
@@ -1482,6 +1482,58 @@ try {
   await show('Row size').click()
   await expect(rowNumber(0)).toHaveAttribute('title', /^Row 1: /)
   console.log('Results checks: the column profile panel shows the figures the backend computes for each column, and the row-size bar shows and hides with its bytes.')
+
+  // 13c. Filters: the grid menu's Filter submenu filters by the selected cells' values, without NULL, between the lowest and
+  // highest selected value and to duplicates; the caption counts the rows kept and lists each filter, named by its values,
+  // with a Remove button, and Clear filters takes them all off. W1's active is 1 for every third id; its score is NULL for
+  // ids ending in 4 or 9.
+  const filterMenu = async (row, column, name) => {
+    await cell(row, column).click({ button: 'right' })
+    await outputMenu.getByRole('menuitem', { name: 'Filter', exact: true }).click()
+    await page.getByRole('menu', { name: 'Filter', exact: true }).getByRole('menuitem', { name, exact: true }).click()
+  }
+  const filterList = outputPane(page).getByRole('group', { name: 'Filters of Result 1', exact: true })
+  const caption = page.locator(part.resultCaption)
+  // Clicking a far column scrolls the grid sideways, and a narrow window then leaves id out of the rendered columns. Each
+  // menu opens on a cell already in view, since a scroll closes it.
+  const idInView = () => scroller().evaluate(element => { element.scrollLeft = 0 })
+  await cell(0, 6).click()
+  await filterMenu(0, 6, 'Filter for Selected Values')
+  await expect(caption).toContainText('34 of 100 rows')
+  await expect(filterList).toContainText("active = '1'")
+  await filterMenu(0, 7, 'Exclude NULLs')
+  await expect(caption).toContainText('27 of 100 rows')
+  await expect(filterList).toContainText('score is not NULL')
+  await idInView()
+  await expect(cell(1, 0)).toHaveText('3')
+  // Ids 3, 6 and 12 selected in the filtered grid: Between keeps ids 3 to 12 that pass the other filters.
+  await idInView()
+  await cell(1, 0).click()
+  await cell(3, 0).click({ modifiers: ['Shift'] })
+  await filterMenu(3, 0, 'Filter Between Lowest and Highest Selected')
+  await expect(filterList).toContainText("id between '3' and '12'")
+  await expect(caption).toContainText('3 of 100 rows')
+  // Without the first filter, ids 3 to 12 with a score: 3, 5, 6, 7, 8, 10, 11, 12.
+  await filterList.getByRole('button', { name: "Remove filter active = '1'", exact: true }).click()
+  await expect(caption).toContainText('8 of 100 rows')
+  // Duplicates in active: every row repeats a value, each group together in the order of its first row (1s, then 0s).
+  await cell(0, 6).click()
+  await filterMenu(0, 6, 'Filter for Duplicates in Selected Columns')
+  await expect(filterList).toContainText('Duplicates in active')
+  await idInView()
+  await expect(cell(2, 0)).toHaveText('12')
+  await expect(cell(3, 0)).toHaveText('5')
+  await expect(caption).toContainText('8 of 100 rows')
+  await page.screenshot({ path: resolve('artifacts', 'results-filters.png') })
+  await filterList.getByRole('button', { name: 'Clear filters', exact: true }).click()
+  await expect(filterList).toHaveCount(0)
+  // The focused button went with the filters: focus is on the result's caption, not lost to the page.
+  await expect(outputPane(page).getByRole('button', { name: 'Result 1', exact: true })).toBeFocused()
+  await expect(caption).toContainText('100 rows')
+  await expect(caption).not.toContainText(' of ')
+  await idInView()
+  await expect(cell(1, 0)).toHaveText('1')
+  console.log('Results checks: the Filter submenu filters by selected values, NULL, a range and duplicates; the caption counts the rows and removes and clears filters.')
 
   // 14. Styling: NULL, truncation, read errors and the selection (focused or not) take their tokens; a theme change
   // recolours the same nodes.
@@ -2139,19 +2191,25 @@ try {
   // of 100,000 rows matches the server's rows; a FOR XML PATH value opens in its own tab; and a SQL error sits between
   // the messages printed around it.
   if (process.env.VARIA_TEST_SQL_SERVER) {
-    await within(application.close(), 10000).catch(() => {})
-    child?.kill()
+    await application.close().catch(() => {})
     const liveProfile = await mkdtemp(resolve('artifacts', 'results-live-profile-')), liveSaves = await mkdtemp(resolve('artifacts', 'results-live-save-'))
     cleanups.push(() => rm(liveProfile, { recursive: true, force: true }), () => rm(liveSaves, { recursive: true, force: true }))
     const liveEnv = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: liveProfile }
     delete liveEnv.ELECTRON_RUN_AS_NODE
     application = await electron.launch({ args: ['.'], env: liveEnv, chromiumSandbox: process.getuid?.() !== 0 })
     child = application.process()
+    child.stderr?.on('data', chunk => { for (const line of chunk.toString().split(/\r?\n/)) if (line.startsWith('Results close prompt: ')) console.error(line) })
     page = await application.firstWindow()
     page.setDefaultTimeout(30000)
     page.on('pageerror', error => failures.push(error.message))
     await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive())
-    await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
+    await application.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async (...args) => {
+        const { title, buttons } = args.at(-1)
+        if (title !== 'Unsaved query') process.stderr.write('Results close prompt: ' + JSON.stringify({ title, buttons }) + '\n')
+        return { response: 1, checkboxChecked: false }
+      }
+    })
     await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
     await connectLive(page, expect)
     await enlargeOutput(page)
@@ -2308,6 +2366,8 @@ try {
     await queryTabs().nth(1).click()
     await page.keyboard.press('Control+W')
     await expect(queryTabs()).toHaveCount(1)
+    // Results can publish completion before the query service releases its execution reservation.
+    await expect(queryBarButton(page, 'Cancel')).toBeDisabled()
     expect(failures).toEqual([])
     console.log('Results live checks passed: rows show while a million stream, Cancel keeps them, Save Results As and Copy match the server, FOR XML opens in a tab, errors keep their order, and the memory indicator survives a close racing a summary.')
   }
@@ -2316,8 +2376,7 @@ try {
   throw error
 } finally {
   clearTimeout(watchdog)
-  await within(application.close(), 10000).catch(() => {})
-  child?.kill()
+  await application.close().catch(() => {})
   await rm(profile, { recursive: true, force: true }).catch(() => {})
   await rm(control, { recursive: true, force: true }).catch(() => {})
   for (const cleanup of cleanups) await cleanup().catch(() => {})

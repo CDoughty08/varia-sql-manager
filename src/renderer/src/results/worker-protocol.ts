@@ -1,6 +1,6 @@
 // Messages between the UI thread (ResultClient) and the results worker. The worker also owns the results port to main
 // (src/shared/ipc/port-messages.ts).
-import type { BackendStatus, IdentityBy, QueryEvent, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ViewSortKey, WireKind } from '../../../shared/contracts'
+import type { BackendStatus, IdentityBy, QueryEvent, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ResolvedViewFilter, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport } from '../../../shared/ipc/port-messages'
 import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
@@ -69,7 +69,7 @@ export type WorkerRequest =
   | { readonly type: 'stats'; readonly id: number }
   /** A sorted view of `key`'s result (results.view); `cancel` with the same id stops the sort. `replaces` names a view it
    *  supersedes, whose pages go once it is built. */
-  | { readonly type: 'view'; readonly id: number; readonly key: ResultKey; readonly sort: readonly ViewSortKey[]; readonly replaces?: number }
+  | { readonly type: 'view'; readonly id: number; readonly key: ResultKey; readonly sort: readonly ViewSortKey[]; readonly filters?: readonly ViewFilter[]; readonly replaces?: number }
   | { readonly type: 'viewClose'; readonly id: number; readonly key: ResultKey; readonly viewIds: readonly number[] }
   /** Row identities (results.identify, rowIds, findRows), relayed to main as they are; `key.view` reads through a view.
    *  `cancel` with the same id stops an identify. */
@@ -97,7 +97,7 @@ export type WorkerResponse =
   | { readonly type: 'closed'; readonly id: number; readonly closed: number; readonly usedBytes: number }
   | { readonly type: 'rowBytes'; readonly id: number; readonly firstRow: number; readonly bytes: readonly number[]; readonly rowsAvailable: number; readonly estimated: readonly number[] }
   | { readonly type: 'stats'; readonly id: number; readonly bytes: number; readonly pages: number; readonly wireBytes: number; readonly columns: number }
-  | { readonly type: 'view'; readonly id: number; readonly viewId: number; readonly rows: number; readonly complete: boolean; readonly approximate: boolean }
+  | { readonly type: 'view'; readonly id: number; readonly viewId: number; readonly rows: number; readonly complete: boolean; readonly approximate: boolean; readonly filters?: readonly ResolvedViewFilter[] }
   | { readonly type: 'viewClosed'; readonly id: number; readonly closed: number }
   | { readonly type: 'identity'; readonly id: number; readonly result: ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsDiffResult }
   | { readonly type: 'search'; readonly id: number; readonly result: ResultsSearchResult }

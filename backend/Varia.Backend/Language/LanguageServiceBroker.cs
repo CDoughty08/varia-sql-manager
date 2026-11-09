@@ -1,3 +1,6 @@
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+
 namespace Varia.Backend.Language;
 
 /// <summary>An engine owns its grammar, metadata/auth adapter and server lifecycle. Implementations may use stdio LSP,
@@ -33,7 +36,7 @@ internal sealed class LanguageServiceBroker(IEnumerable<ILanguageServiceProvider
         public string? ConnectionId;
         public LanguageContext? Context;
         public int Version;
-        public string? Text;
+        public string? TextFingerprint;
         public long Epoch;
         public Task<LanguageCloseResult>? CloseTask;
         public bool Closing;
@@ -52,13 +55,14 @@ internal sealed class LanguageServiceBroker(IEnumerable<ILanguageServiceProvider
         ValidateId(request.DocumentId);
         if (request.Context is null || !providers.TryGetValue(request.Context.ProviderId, out var provider) || !provider.Status().Refresh)
             throw new RequestException("INVALID_PARAMS", "This database language provider does not support cache refresh.");
+        var fingerprint = TextFingerprint(request.Text);
         lock (gate)
         {
             if (documents.TryGetValue(request.DocumentId, out var binding) && !binding.Closing)
             {
                 if (binding.Context is not null && binding.Context != request.Context)
                     throw new RequestException("STALE", "The language refresh refers to an older connection context.");
-                if (request.Version < binding.Version || request.Version == binding.Version && binding.Text is not null && request.Text != binding.Text)
+                if (request.Version < binding.Version || request.Version == binding.Version && binding.TextFingerprint is not null && fingerprint != binding.TextFingerprint)
                     throw new RequestException("STALE", "The language refresh refers to an older document version.");
                 binding.Epoch++;
                 binding.Active?.Cancel();
@@ -77,6 +81,7 @@ internal sealed class LanguageServiceBroker(IEnumerable<ILanguageServiceProvider
         ValidateId(request.DocumentId);
         if (request.Context is null || request.Context.ProviderId is null || !providers.TryGetValue(request.Context.ProviderId, out var provider))
             throw new RequestException("INVALID_PARAMS", "This database language provider is not installed.");
+        var fingerprint = TextFingerprint(request.Text);
         Binding binding;
         long epoch;
         while (true)
@@ -108,10 +113,10 @@ internal sealed class LanguageServiceBroker(IEnumerable<ILanguageServiceProvider
                 if (binding.Closing) throw new RequestException("STALE", "The SQL language document has closed.");
                 if (binding.Epoch != epoch) throw new RequestException("STALE", "A newer language refresh superseded this request.");
                 if (suspensions != 0) throw new RequestException("BUSY", "SQL language services are paused while a database management action finishes.");
-                if (request.Version < binding.Version || request.Version == binding.Version && binding.Text is not null && request.Text != binding.Text)
+                if (request.Version < binding.Version || request.Version == binding.Version && binding.TextFingerprint is not null && fingerprint != binding.TextFingerprint)
                     throw new RequestException("STALE", "The SQL language request refers to an older document version.");
                 binding.Active = deadline; binding.ConnectionId = request.Context.ConnectionId; binding.Context = request.Context;
-                binding.Version = request.Version; binding.Text = request.Text;
+                binding.Version = request.Version; binding.TextFingerprint = fingerprint;
             }
             if (binding.Provider is { } previous && !ReferenceEquals(previous, provider)) await previous.CloseAsync(request.DocumentId, deadline.Token);
             binding.Provider = provider;
@@ -191,6 +196,9 @@ internal sealed class LanguageServiceBroker(IEnumerable<ILanguageServiceProvider
     {
         if (!Guid.TryParseExact(id, "D", out _)) throw new RequestException("INVALID_PARAMS", "A language document ID is required.");
     }
+
+    // Providers own their document budget; stale-request checks must not retain another full copy of every buffer.
+    private static string? TextFingerprint(string? text) => text is null ? null : Convert.ToBase64String(SHA256.HashData(MemoryMarshal.AsBytes(text.AsSpan())));
 
     public void Dispose()
     {

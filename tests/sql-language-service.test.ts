@@ -4,6 +4,7 @@ import type { ApiResult, BackendState, ConnectionInfo, VariaApi } from '../src/s
 import { languageLimits, type LanguageCompletions, type LanguageHover, type LanguageStatus } from '../src/shared/language-service'
 import { limits as ipcLimits } from '../src/shared/ipc/wire/protocol'
 import { SqlLanguageService } from '../src/renderer/src/languages/SqlLanguageService'
+import { SqlDiagnosticsService, sqlDiagnosticDebounceMs } from '../src/renderer/src/languages/SqlDiagnosticsService'
 import { ConnectionService } from '../src/renderer/src/services/connections'
 import { BackendStateService } from '../src/renderer/src/services/backend'
 import { documentFixture, deferred, TestModel } from './fixtures/documents'
@@ -59,6 +60,7 @@ async function fixture(status = configured, withBackend = false) {
     const value = docs.model(id)
     return Object.assign(value, {
       getLanguageId: () => value.language,
+      isDisposed: () => value.disposed,
       getWordUntilPosition: (at: Monaco.Position) => {
         const word = value.getWordAtPosition(at)
         return { word: word?.word ?? '', startColumn: word?.startColumn ?? at.column, endColumn: at.column }
@@ -86,6 +88,76 @@ describe('SQL language editor integration', () => {
     expect(await f.service.refreshCache(a.id)).toBe(true)
     expect(f.service.diagnosticsEpoch(b.id)).toBeGreaterThan(before)
     expect(f.service.diagnosticsEpoch(c.id)).toBe(unrelated)
+  })
+  it('rechecks sibling markers when refresh succeeds after its initiating query was edited', async () => {
+    const f = await fixture()
+    vi.useFakeTimers()
+    f.addConnection('connection-a')
+    const a = f.documents.create('a.sql', 'SELECT Missing', 'first', 'connection-a'), b = f.documents.create('b.sql', 'SELECT Missing', 'first', 'connection-a')
+    const setModelMarkers = vi.fn()
+    const diagnostics = new SqlDiagnosticsService({ editor: { setModelMarkers }, MarkerSeverity: { Error: 8, Warning: 4, Info: 2, Hint: 1 } } as unknown as typeof Monaco,
+      f.service, f.documents, f.connections, { enabled: () => true, subscribe: () => () => {} })
+    cleanups.push(() => diagnostics.dispose())
+    const markers = (id: string) => setModelMarkers.mock.calls.filter(call => call[0] === f.model(id)).at(-1)?.[2] ?? []
+    f.api.languageDiagnostics.mockImplementation(async request => ({ ok: true, value: { version: request.version,
+      items: [{ range: { start: { line: 0, character: 7 }, end: { line: 0, character: 14 } }, message: 'Invalid column.', severity: 1 }], isIncomplete: false } }))
+    await vi.advanceTimersByTimeAsync(sqlDiagnosticDebounceMs)
+    expect(markers(b.id)).toHaveLength(1)
+    const answer = deferred<ApiResult<{ refreshed: boolean }>>()
+    f.api.languageRefresh.mockReturnValueOnce(answer.promise)
+    const refresh = f.service.refreshCache(a.id)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(f.api.languageRefresh).toHaveBeenCalledOnce()
+    f.models.get(`varia-sql://query/${a.id}`)!.edit('SELECT Corrected')
+    expect(await refresh).toBe(false)
+    f.api.languageDiagnostics.mockImplementation(async request => ({ ok: true, value: { version: request.version, items: [], isIncomplete: false } }))
+    answer.resolve({ ok: true, value: { refreshed: true } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(markers(b.id)).toEqual([])
+    expect(diagnostics.status(b.id)?.label).toBe('Checking SQL')
+    await vi.advanceTimersByTimeAsync(sqlDiagnosticDebounceMs)
+    expect(diagnostics.status(b.id)?.label).toBe('SQL: no issues')
+    expect(f.api.languageDiagnostics.mock.calls.filter(([request]) => request.documentId === b.id)).toHaveLength(2)
+  })
+  it.each(['context', 'close', 'cancel'] as const)('invalidates the refreshed context after its initiating query changes by %s', async change => {
+    const f = await fixture()
+    f.addConnection('connection-a')
+    const a = f.documents.create('a.sql', 'SELECT 1', 'first', 'connection-a'), b = f.documents.create('b.sql', 'SELECT 2', 'first', 'connection-a')
+    const c = f.documents.create('c.sql', 'SELECT 3', 'other', 'connection-a'), cancel = cancellationSource()
+    const before = f.service.diagnosticsEpoch(b.id), unrelated = f.service.diagnosticsEpoch(c.id), changed = vi.fn()
+    const unsubscribe = f.service.subscribe(changed)
+    cleanups.push(unsubscribe)
+    const answer = deferred<ApiResult<{ refreshed: boolean }>>()
+    f.api.languageRefresh.mockReturnValueOnce(answer.promise)
+    const refresh = f.service.refreshCache(a.id, cancel.token)
+    await vi.waitFor(() => expect(f.api.languageRefresh).toHaveBeenCalledOnce())
+    if (change === 'context') f.documents.update(a.id, { database: 'other' })
+    if (change === 'close') await f.documents.close(a.id)
+    if (change === 'cancel') cancel.cancel()
+    expect(await refresh).toBe(false)
+    changed.mockClear()
+    answer.resolve({ ok: true, value: { refreshed: true } })
+    await vi.waitFor(() => expect(f.service.diagnosticsEpoch(b.id)).toBeGreaterThan(before))
+    expect(f.service.diagnosticsEpoch(c.id)).toBe(unrelated)
+    expect(changed).toHaveBeenCalled()
+  })
+  it.each(['backend', 'dispose'] as const)('ignores late refresh invalidation after %s changes', async change => {
+    const f = await fixture(configured, true)
+    f.addConnection('connection-a')
+    const a = f.documents.create('a.sql', 'SELECT 1', 'first', 'connection-a'), b = f.documents.create('b.sql', 'SELECT 2', 'first', 'connection-a')
+    const answer = deferred<ApiResult<{ refreshed: boolean }>>()
+    f.api.languageRefresh.mockReturnValueOnce(answer.promise)
+    const refresh = f.service.refreshCache(a.id)
+    await vi.waitFor(() => expect(f.api.languageRefresh).toHaveBeenCalledOnce())
+    if (change === 'backend') f.backend!.receive({ status: 'unresponsive', generation: 1, silentMs: 1 })
+    else f.service.dispose()
+    expect(await refresh).toBe(false)
+    const before = f.service.diagnosticsEpoch(b.id), changed = vi.fn(), unsubscribe = f.service.subscribe(changed)
+    cleanups.push(unsubscribe)
+    answer.resolve({ ok: true, value: { refreshed: true } })
+    for (let count = 0; count < 5; count++) await Promise.resolve()
+    expect(f.service.diagnosticsEpoch(b.id)).toBe(before)
+    expect(changed).not.toHaveBeenCalled()
   })
   it('closes again after diagnostics queued behind metadata work settle, preventing an orphaned analysis document', async () => {
     const f = await fixture(), tab = f.documents.create('query.sql', 'SELECT Missing', 'master')

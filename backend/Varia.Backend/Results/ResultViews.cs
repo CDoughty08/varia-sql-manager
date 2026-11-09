@@ -10,6 +10,19 @@ internal enum SortMode { Value, Chars, Bytes }
 
 internal sealed record ViewKey(int Column, bool Descending, SortMode Mode);
 
+/// <summary>How a view filter keeps rows: a column's value among some values (In) or not (NotIn), between two values, or
+/// rows whose values in some columns repeat (Duplicates).</summary>
+internal enum FilterOp { In, NotIn, Between, Duplicates }
+
+/// <summary>Cells a filter takes its values from: positions in a view's order (or the result's own when Order is null).</summary>
+internal sealed record ViewCells(int[]? Order, (long First, long Count)[] Ranges);
+
+/// <summary>One results.view filter. In, NotIn and Between compare Column's values with those of base rows (Rows: one row per
+/// distinct value; Between's lowest and highest), or of the cells a selection named (Cells), which building the view
+/// resolves to rows; Nulls says NULL is among In's and NotIn's values. Duplicates compares Columns. Equality and order are
+/// the sort's (<see cref="ViewSorter"/>): a column's collation decides which texts are equal.</summary>
+internal sealed record ViewFilter(FilterOp Op, int Column, int[]? Rows, bool Nulls, ViewCells? Cells, int[] Columns);
+
 /// <summary>A view of one stored result: its rows in another order (and, later, only some of them), as base row numbers.
 /// Reads through it build pages in view order from the stored ones (<see cref="ViewPages"/>), so the renderer caches and
 /// draws them as it does a result's own. It covers the rows sealed when it was built; a view of a set still loading is
@@ -41,12 +54,39 @@ internal sealed class ResultView(uint viewId, ResultSetBuffer set, int[] order, 
 internal static class ViewSorter
 {
     public const int MaxKeys = 16;
+    /// <summary>Filters one view takes, distinct values one In or NotIn filter holds, and cell ranges one selection names
+    /// (src/shared/ipc/wire/protocol.ts limits.views).</summary>
+    public const int MaxFilters = 16, MaxFilterValues = 4096, MaxFilterRanges = 256;
+    /// <summary>Bytes a row one filter holds at most while it runs, besides its column's key: Duplicates' positions (4), group
+    /// starts (up to 8, as their list grows) and the rows it keeps (4); Keep and Pick hold less.</summary>
+    public const int FilterBytes = 16;
     private const int CancelEvery = 1 << 14;
 
     /// <summary>Bytes a sort holds per row and key while it runs: the key's 8- or 16-byte value and a NULL bit.</summary>
     public static long WorkingBytes(long rows, int keys) => rows * (16L * keys + 4) + rows / 8 * keys;
 
     public static (int[] Order, bool Approximate) Sort(ResultSetBuffer set, StoredPage[] pages, IReadOnlyList<ViewKey> keys, CancellationToken token)
+    {
+        var built = Build(set, pages, keys, [], token);
+        return (built.Order, built.Approximate);
+    }
+
+    /// <summary>Columns whose values a view's filters compare (each needs a key while the view is built).</summary>
+    public static int FilterColumns(IReadOnlyList<ViewFilter> filters)
+    {
+        var columns = new HashSet<int>();
+        foreach (var filter in filters)
+        {
+            if (filter.Op == FilterOp.Duplicates) columns.UnionWith(filter.Columns);
+            else columns.Add(filter.Column);
+        }
+        return columns.Count;
+    }
+
+    /// <summary>A view's order: the sealed rows its filters keep, in turn (each over the rows the ones before it kept), then
+    /// sorted by its keys. Without keys, rows keep the result's order, except that Duplicates puts each group of equal rows
+    /// together, in the order of their first rows. Returns the filters with their cells resolved to rows.</summary>
+    public static (int[] Order, bool Approximate, ViewFilter[] Filters) Build(ResultSetBuffer set, StoredPage[] pages, IReadOnlyList<ViewKey> keys, IReadOnlyList<ViewFilter> filters, CancellationToken token)
     {
         long total = 0;
         foreach (var page in pages) total += page.Rows;
@@ -59,10 +99,181 @@ internal static class ViewSorter
         {
             built[k] = Build(set, source, keys[k], rows, token, ref approximate);
         }
+        var values = new Dictionary<int, Key>();
+        Key ValueKey(int column)
+        {
+            if (!values.TryGetValue(column, out var key))
+                values[column] = key = Build(set, source, new ViewKey(column, false, SortMode.Value), rows, token, ref approximate);
+            return key;
+        }
         var order = new int[rows];
         for (var i = 0; i < rows; i++) order[i] = i;
-        if (rows > 1) Array.Sort(order, new Comparer(built, token));
-        return (order, approximate);
+        var resolved = new ViewFilter[filters.Count];
+        for (var f = 0; f < filters.Count; f++)
+        {
+            var filter = filters[f];
+            if (filter.Op == FilterOp.Duplicates)
+            {
+                var columns = new Key[filter.Columns.Length];
+                for (var c = 0; c < columns.Length; c++) columns[c] = ValueKey(filter.Columns[c]);
+                order = Duplicates(order, columns, token);
+                resolved[f] = filter;
+                continue;
+            }
+            var key = ValueKey(filter.Column);
+            var (reps, nulls) = filter.Cells is { } cells ? Pick(key, cells, rows, token) : Distinct(key, filter.Rows!, rows, token);
+            nulls |= filter.Nulls;
+            if (filter.Op == FilterOp.Between)
+            {
+                if (filter.Rows is not null && (filter.Nulls || nulls || filter.Rows.Length != 2))
+                    throw new RequestException("INVALID_PARAMS", "Between takes two rows with distinct values, not NULL.");
+                if (reps.Length == 0) throw new RequestException("INVALID_PARAMS", "Select at least one value that is not NULL to filter between.");
+                reps = [reps[0], reps[^1]];
+                nulls = false;
+            }
+            else if (reps.Length > MaxFilterValues)
+                throw new RequestException("TOO_LARGE", "Select at most 4,096 different values to filter by.");
+            else if (reps.Length == 0 && !nulls) throw new RequestException("INVALID_PARAMS", "A filter needs at least one value.");
+            order = Keep(order, key, filter.Op, reps, nulls, token);
+            resolved[f] = filter with { Rows = reps, Nulls = nulls, Cells = null };
+        }
+        if (keys.Count > 0 && order.Length > 1) Array.Sort(order, new Comparer(built, token));
+        return (order, approximate, resolved);
+    }
+
+    /// <summary>The base rows the cells name, one per distinct non-NULL value in ascending order, and whether one is NULL.</summary>
+    private static (int[] Rows, bool Nulls) Pick(Key key, ViewCells cells, int rows, CancellationToken token)
+    {
+        // Overlapping ranges are merged first, so the cells read are at most the positions there are.
+        var spans = Merge(cells.Ranges, cells.Order?.Length ?? rows);
+        long total = 0;
+        foreach (var (first, end) in spans) total += end - first;
+        var picked = new int[total];
+        var count = 0;
+        var nulls = false;
+        foreach (var (first, end) in spans)
+        {
+            for (var position = first; position < end; position++)
+            {
+                if ((position & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+                var row = cells.Order is { } order ? order[position] : position;
+                if (row >= rows) continue;
+                if (key.IsNull(row)) nulls = true;
+                else picked[count++] = row;
+            }
+        }
+        return (Unique(key, picked, count, token), nulls);
+    }
+
+    /// <summary>[first, count] ranges as sorted, disjoint [first, end) spans of the positions below <paramref name="length"/>.</summary>
+    internal static List<(int First, int End)> Merge(IReadOnlyList<(long First, long Count)> ranges, int length)
+    {
+        var spans = new List<(int First, int End)>(ranges.Count);
+        foreach (var (first, count) in ranges)
+        {
+            var end = Math.Min(length, first + count);
+            if (first < end) spans.Add(((int)first, (int)end));
+        }
+        spans.Sort((a, b) => a.First.CompareTo(b.First));
+        var merged = new List<(int First, int End)>(spans.Count);
+        foreach (var span in spans)
+        {
+            if (merged.Count > 0 && span.First <= merged[^1].End) merged[^1] = (merged[^1].First, Math.Max(merged[^1].End, span.End));
+            else merged.Add(span);
+        }
+        return merged;
+    }
+
+    /// <summary>Rows a request named, checked and reduced to one per distinct value in ascending order.</summary>
+    private static (int[] Rows, bool Nulls) Distinct(Key key, int[] named, int rows, CancellationToken token)
+    {
+        var picked = new int[named.Length];
+        var count = 0;
+        var nulls = false;
+        foreach (var row in named)
+        {
+            if (row < 0 || row >= rows) throw new RequestException("INVALID_PARAMS", "A filter's rows must be rows of the result.");
+            if (key.IsNull(row)) nulls = true;
+            else picked[count++] = row;
+        }
+        return (Unique(key, picked, count, token), nulls);
+    }
+
+    /// <summary>The first <paramref name="count"/> rows, sorted and reduced in place to one per distinct value.</summary>
+    private static int[] Unique(Key key, int[] rows, int count, CancellationToken token)
+    {
+        if (count > 1) Array.Sort(rows, 0, count, new Comparer([key], token));
+        var unique = 0;
+        for (var i = 0; i < count; i++)
+            if (unique == 0 || key.Compare(rows[unique - 1], rows[i]) != 0) rows[unique++] = rows[i];
+        Array.Resize(ref rows, unique);
+        return rows;
+    }
+
+    private static int[] Keep(int[] order, Key key, FilterOp op, int[] reps, bool nulls, CancellationToken token)
+    {
+        var kept = new int[order.Length];
+        var count = 0;
+        for (var i = 0; i < order.Length; i++)
+        {
+            if ((i & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+            var row = order[i];
+            bool keep;
+            if (key.IsNull(row)) keep = op == FilterOp.In ? nulls : op == FilterOp.NotIn && !nulls;
+            else if (op == FilterOp.Between) keep = key.Compare(row, reps[0]) >= 0 && key.Compare(row, reps[1]) <= 0;
+            else keep = Contains(key, reps, row) == (op == FilterOp.In);
+            if (keep) kept[count++] = row;
+        }
+        Array.Resize(ref kept, count);
+        return kept;
+    }
+
+    private static bool Contains(Key key, int[] reps, int row)
+    {
+        int low = 0, high = reps.Length - 1;
+        while (low <= high)
+        {
+            var mid = (low + high) >>> 1;
+            var compared = key.Compare(reps[mid], row);
+            if (compared == 0) return true;
+            if (compared < 0) low = mid + 1;
+            else high = mid - 1;
+        }
+        return false;
+    }
+
+    /// <summary>The rows whose values in the columns equal another row's (NULL equal to NULL, as GROUP BY has it), each
+    /// group together in the order of its first row and its rows in their order.</summary>
+    private static int[] Duplicates(int[] order, Key[] columns, CancellationToken token)
+    {
+        var positions = new int[order.Length];
+        for (var i = 0; i < positions.Length; i++) positions[i] = i;
+        var equal = new Comparer(columns, token);
+        int Same(int a, int b) => equal.Values(order[a], order[b]);
+        if (positions.Length > 1) Array.Sort(positions, Comparer<int>.Create((a, b) => Same(a, b) is var c && c != 0 ? c : a.CompareTo(b)));
+        // Each group is a run of positions whose first is its first row's (ties keep their order); a run's start names it.
+        var starts = new List<int>();
+        var total = 0;
+        for (var start = 0; start < positions.Length;)
+        {
+            var end = start + 1;
+            while (end < positions.Length && Same(positions[start], positions[end]) == 0) end++;
+            if (end - start > 1)
+            {
+                starts.Add(start);
+                total += end - start;
+            }
+            start = end;
+        }
+        starts.Sort((a, b) => positions[a].CompareTo(positions[b]));
+        var kept = new int[total];
+        var count = 0;
+        foreach (var start in starts)
+        {
+            var first = positions[start];
+            for (var i = start; i < positions.Length && (i == start || Same(first, positions[i]) == 0); i++) kept[count++] = order[positions[i]];
+        }
+        return kept;
     }
 
     private static Key Build(ResultSetBuffer set, PageSource source, ViewKey sort, int rows, CancellationToken token, ref bool approximate)
@@ -390,6 +601,13 @@ internal static class ViewSorter
 
         public int Compare(int a, int b)
         {
+            var compared = Values(a, b);
+            return compared != 0 ? compared : a.CompareTo(b);
+        }
+
+        /// <summary>The keys alone: 0 when the rows' values are equal.</summary>
+        public int Values(int a, int b)
+        {
             if (++calls == CancelEvery)
             {
                 calls = 0;
@@ -404,7 +622,7 @@ internal static class ViewSorter
                 else compared = key.Compare(a, b);
                 if (compared != 0) return key.Descending ? -compared : compared;
             }
-            return a.CompareTo(b);
+            return 0;
         }
     }
 }

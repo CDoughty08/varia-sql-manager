@@ -372,6 +372,18 @@ describe('ResultClient', () => {
     await expect(handle.sort([])).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     await expect(handle.sort([{ column: 0, descending: false, mode: 'value' }, { column: 0, descending: true, mode: 'value' }])).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     await expect(handle.sort([{ column: 1, descending: false, mode: 'value' }])).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.sort([], { filters: [{ op: 'in', column: 1, rows: [0] }] })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.sort([], { filters: [{ op: 'duplicates', columns: [0, 0] }] })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    // A filtered view with no keys: the filters reach the worker, and the view holds them resolved.
+    const filtering = handle.sort([], { filters: [{ op: 'between', column: 0, cells: { ranges: [[0, 3]] } }] })
+    await settle()
+    const asked = worker().fromWorker.findLast(item => item.t === 'view')!
+    expect(asked).toMatchObject({ sort: [], filters: [{ op: 'between', column: 0, cells: { ranges: [[0, 3]] } }] })
+    worker().toWorker({ t: 'end', rid: asked.rid, ok: true, result: { viewId: 7, rows: 2, complete: true, approximate: false, filters: [{ op: 'between', column: 0, rows: [0, 2], nulls: false }] } })
+    const filteredView = await filtering
+    expect([filteredView.rows, filteredView.filters]).toEqual([2, [{ op: 'between', column: 0, rows: [0, 2], nulls: false }]])
+    expect(view.filters).toEqual([])
+    void filteredView.close()
     // Views go with their result: released with it, or lost with its backend.
     const third = handle.sort([{ column: 0, descending: false, mode: 'bytes' }])
     await answerView(6)

@@ -1532,9 +1532,11 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// memory and then the view's order to the result's query budget; TOO_LARGE when the budget has no room.</summary>
     private async Task<ResultsViewResult> ViewAsync(ResultsViewArgs args, CancellationToken token)
     {
-        if (args.ResultId == 0 || args.Sort is not { Length: >= 1 and <= ViewSorter.MaxKeys } || args.Replaces == 0)
-            throw new RequestException("INVALID_PARAMS", "Between 1 and 16 sort keys are required.");
+        if (args.ResultId == 0 || args.Sort is not { Length: <= ViewSorter.MaxKeys } || args.Replaces == 0
+            || args.Filters is { Length: > ViewSorter.MaxFilters } || args.Sort.Length + (args.Filters?.Length ?? 0) == 0)
+            throw new RequestException("INVALID_PARAMS", "A view needs up to 16 sort keys and up to 16 filters, and at least one of either.");
         var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        var filters = ViewFilters(args, set);
         var keys = new ViewKey[args.Sort.Length];
         for (var i = 0; i < keys.Length; i++)
         {
@@ -1553,21 +1555,75 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
-        var working = ViewSorter.WorkingBytes(rows, keys.Length);
+        // Filters hold a key per column they compare and what the one running needs (FilterBytes a row at most).
+        var working = ViewSorter.WorkingBytes(rows, keys.Length + ViewSorter.FilterColumns(filters)) + (filters.Length > 0 ? ViewSorter.FilterBytes * rows : 0);
         var kept = 4 * rows + ResultStore.ViewOverhead;
         if (!store.TryReserve(set.Budget, working + kept, false, out _))
-            throw new RequestException("TOO_LARGE", "There is not enough result memory to sort these rows. Close other results and try again.");
-        (int[] Order, bool Approximate) sorted;
-        try { sorted = await Task.Run(() => ViewSorter.Sort(set, pages, keys, token), token); }
+            throw new RequestException("TOO_LARGE", filters.Length > 0
+                ? "There is not enough result memory to filter these rows. Close other results and try again."
+                : "There is not enough result memory to sort these rows. Close other results and try again.");
+        (int[] Order, bool Approximate, ViewFilter[] Filters) built;
+        try { built = await Task.Run(() => ViewSorter.Build(set, pages, keys, filters, token), token); }
         catch
         {
             store.Return(set.Budget, working + kept);
             throw;
         }
-        store.Return(set.Budget, working);
-        var view = store.AddView(set, sorted.Order, keys, sorted.Approximate, complete, kept, args.Replaces);
-        return new ResultsViewResult(view.ViewId, view.Rows, view.Complete, view.Approximate);
+        // A filtered view keeps only its rows' order.
+        var charged = 4L * built.Order.Length + ResultStore.ViewOverhead;
+        store.Return(set.Budget, working + kept - charged);
+        var view = store.AddView(set, built.Order, keys, built.Approximate, complete, charged, args.Replaces);
+        return new ResultsViewResult(view.ViewId, view.Rows, view.Complete, view.Approximate, args.Filters is null ? null : [.. built.Filters.Select(FilterResult)]);
     }
+
+    /// <summary>A view request's filters, checked against the result; cells name positions in the result or a view of it.</summary>
+    private ViewFilter[] ViewFilters(ResultsViewArgs args, ResultSetBuffer set)
+    {
+        if (args.Filters is null) return [];
+        var filters = new ViewFilter[args.Filters.Length];
+        var columns = set.Columns.Count;
+        for (var i = 0; i < filters.Length; i++)
+        {
+            var filter = args.Filters[i];
+            if (filter.Op == "duplicates")
+            {
+                if (filter.Column is not null || filter.Rows is not null || filter.Nulls is not null || filter.Cells is not null
+                    || filter.Columns is not { Length: >= 1 } || filter.Columns.Length > columns
+                    || filter.Columns.Any(column => column < 0 || column >= columns) || filter.Columns.Distinct().Count() != filter.Columns.Length)
+                    throw new RequestException("INVALID_PARAMS", "A duplicates filter needs distinct columns of the result.");
+                filters[i] = new ViewFilter(FilterOp.Duplicates, -1, null, false, null, filter.Columns);
+                continue;
+            }
+            var op = filter.Op switch
+            {
+                "in" => FilterOp.In,
+                "notIn" => FilterOp.NotIn,
+                "between" => FilterOp.Between,
+                _ => throw new RequestException("INVALID_PARAMS", "A filter's op is in, notIn, between or duplicates.")
+            };
+            if (filter.Column is not { } column || column < 0 || column >= columns || filter.Columns is not null
+                || (filter.Rows is null) == (filter.Cells is null) || (filter.Cells is not null && filter.Nulls is not null)
+                || filter.Rows is { Length: > ViewSorter.MaxFilterValues })
+                throw new RequestException("INVALID_PARAMS", "A filter needs a column of the result and either up to 4,096 rows or the selected cells.");
+            ViewCells? cells = null;
+            if (filter.Cells is { } named)
+            {
+                if (named.Ranges is not { Length: >= 1 and <= ViewSorter.MaxFilterRanges } || named.ViewId == 0
+                    || named.Ranges.Any(range => range is not [>= 0 and <= MaxSafeInteger, >= 1 and <= MaxSafeInteger]))
+                    throw new RequestException("INVALID_PARAMS", "Selected cells are 1 to 256 ranges of rows.");
+                var order = named.ViewId is { } viewId ? FindView(args.ResultId, viewId).Order : null;
+                cells = new ViewCells(order, [.. named.Ranges.Select(range => (range[0], range[1]))]);
+            }
+            filters[i] = new ViewFilter(op, column, filter.Rows, filter.Nulls ?? false, cells, []);
+        }
+        return filters;
+    }
+
+    private static ViewFilterResult FilterResult(ViewFilter filter) => filter.Op switch
+    {
+        FilterOp.Duplicates => new ViewFilterResult("duplicates", Columns: filter.Columns),
+        _ => new ViewFilterResult(filter.Op switch { FilterOp.In => "in", FilterOp.NotIn => "notIn", _ => "between" }, filter.Column, filter.Rows, filter.Nulls)
+    };
 
     /// <summary>results.search: finds the cells containing a text (ResultSearcher) off the frame loop, over the rows sealed now
     /// or a view's; what it holds is a run of at most 10,000 matches and one row's and at most 1 MiB of page layouts, so it

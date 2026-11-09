@@ -6,7 +6,7 @@ import { connectLive } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import { checkCanvasUx } from './fixtures/plan-canvas-ux.mjs'
-import { backendReady, planCanvas, planViewer, queryBarButton, documentTabs, outputView } from './fixtures/ui.mjs'
+import { backendReady, planCanvas, planViewer, queryBarButton, documentTabs, outputView, selectOpenDocument } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 let application, page
@@ -75,7 +75,7 @@ try {
     await expect(firstCell).toHaveText(retainedValue)
     // Returning to a query keeps the output the user selected, even while that query retains an estimate.
     await page.keyboard.press(`${mod}+n`)
-    await documentTabs(page).getByRole('tab').filter({ hasText: /^SQLQuery1/ }).click()
+    await selectOpenDocument(page, /^SQLQuery1/)
     await expect(outputView(page, /^Results,/)).toHaveAttribute('aria-selected', 'true')
     await expect(firstCell).toHaveText(retainedValue)
     await outputView(page, 'Execution plan, Estimated').click()
@@ -95,7 +95,7 @@ try {
     await page.keyboard.press(`${mod}+s`)
     await expect.poll(() => readFile(save, 'utf8').catch(() => '')).toContain('ShowPlanXML')
     if (live) expect(await readFile(save, 'utf8')).not.toContain('RunTimeCountersPerThread')
-    await documentTabs(page).getByRole('tab').filter({ hasText: /^SQLQuery1/ }).click()
+    await selectOpenDocument(page, /^SQLQuery1/)
     // A toolbar click keeps Monaco's selection: the erroneous first line must not be submitted.
     await text('SELECT * FROM dbo.VariaEstimateMissing;\nSELECT name FROM sys.objects;')
     await page.keyboard.press('Home'); await page.keyboard.press('Shift+End')
@@ -141,7 +141,7 @@ try {
       await expect(queryBarButton(page, 'Display Estimated Execution Plan')).toBeEnabled()
     }
     // A query with only an estimate has no ordinary ResultsService run to supply its Ctrl+R restore view.
-    await documentTabs(page).getByRole('tab').filter({ hasText: /^SQLQuery2/ }).click()
+    await selectOpenDocument(page, /^SQLQuery2/)
     await text('SELECT name FROM sys.objects;')
     await page.keyboard.press(`${mod}+l`)
     await expect(planCanvas(page).locator('canvas')).toHaveCount(1)

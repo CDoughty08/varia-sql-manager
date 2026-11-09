@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { dialogLifecycle, longRunRefusals, rendererWatchdog } from './fixtures/dialog-lifecycle.mjs'
 import { sessionPrompts } from './fixtures/session-prompts.mjs'
-import { activeMenuItem, anyResultGrid, backendReady, banner, documentTabs, documentTabSlots, slotTab, editorText as editorTextOf, errorMessages, explorerLabel, gridCell, gridPart, matching, memoryBreakdown, memoryIndicator, menuItemNames, messages as messagesOf, openMenus as openMenusOf, outputPane, outputView, paneMenuButton, paneTab, part, quickInput, searchBox, serverRows, statusBar, titleBar, toolbarButton } from './fixtures/ui.mjs'
+import { activeDocumentName, activeMenuItem, anyResultGrid, backendReady, banner, documentTabFullyShown, documentTabs, documentTabSlots, slotTab, editorText as editorTextOf, errorMessages, explorerLabel, gridCell, gridPart, matching, memoryBreakdown, memoryIndicator, menuItemNames, messages as messagesOf, openMenus as openMenusOf, outputPane, outputView, paneMenuButton, paneTab, part, quickInput, searchBox, serverRows, statusBar, titleBar, toolbarButton } from './fixtures/ui.mjs'
 
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
 if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
@@ -84,6 +84,13 @@ async function typeSql(sql) {
   await page.keyboard.press('Control+A')
   await page.keyboard.insertText(sql)
   await expect.poll(editorText).toContain(sql.replaceAll(' ', ' '))
+}
+/** Shelf scrolling follows tab focus; entering from the editor reveals an inactive tab without choosing it. */
+async function revealQueryTab(tab) {
+  await textbox().focus()
+  await tab.evaluate(element => element.focus({ preventScroll: true }))
+  await expect(tab).toBeFocused()
+  await expect.poll(() => documentTabFullyShown(tab)).toBe(true)
 }
 /** Opens a title-bar menu with the mouse and clicks an item, as a user would. */
 async function choose(name, label, role = 'menuitem') {
@@ -590,28 +597,31 @@ try {
   await choose('File', 'New Query')
   expect(await tabs().count()).toBeGreaterThanOrEqual(3)
   const queryTab = () => documentTabSlots(page).first(), tabMenu = menu('Query tab')
-  await slotTab(queryTab()).click({ button: 'right', force: true })
+  const activeBeforeTabMenu = await activeDocumentName(page)
+  await revealQueryTab(slotTab(queryTab()))
+  await slotTab(queryTab()).click({ button: 'right' })
   await expect(tabMenu).toBeVisible()
+  expect(await activeDocumentName(page)).toBe(activeBeforeTabMenu)
   await expect(tabMenu.getByRole('menuitem', { name: 'Reopen Closed Query', exact: true })).toBeVisible()
   await expect(slotTab(queryTab())).toHaveAttribute('data-menu-target', '')
   // The tab took focus first, as in Windows Explorer, so closing the menu returns focus there.
   await page.keyboard.press('Escape')
   await expect(slotTab(queryTab())).toBeFocused()
   await expect(slotTab(queryTab())).not.toHaveAttribute('data-menu-target')
-  await slotTab(queryTab()).click({ button: 'right', force: true })
+  await slotTab(queryTab()).click({ button: 'right' })
   // Unsaved changes in the other queries are discarded (the stubbed prompt answers Don't Save).
   await tabMenu.getByRole('menuitem', { name: 'Close All But This', exact: true }).click()
   await expect(tabs()).toHaveCount(1)
   await expect(page.locator('[data-menu-target]')).toHaveCount(0)
-  await queryTab().click({ button: 'right', force: true })
+  await queryTab().click({ button: 'right' })
   await expect(tabMenu.getByRole('menuitem', { name: 'Copy Full Path', exact: true })).toHaveAttribute('aria-disabled', 'true')
   await expect(tabMenu.getByRole('menuitem', { name: 'Open Containing Folder', exact: true })).toHaveAttribute('aria-disabled', 'true')
   await tabMenu.getByRole('menuitem', { name: 'Save As…', exact: true }).click()
   await expect(slotTab(queryTab())).toHaveAttribute('aria-label', 'menus-saved.sql')
-  await queryTab().click({ button: 'right', force: true })
+  await queryTab().click({ button: 'right' })
   await tabMenu.getByRole('menuitem', { name: 'Copy Full Path', exact: true }).click()
   await expect.poll(clipboard).toBe(savedPath)
-  await queryTab().click({ button: 'right', force: true })
+  await queryTab().click({ button: 'right' })
   await tabMenu.getByRole('menuitem', { name: 'Open Containing Folder', exact: true }).click()
   await expect.poll(() => application.evaluate(() => globalThis.variaRevealed)).toEqual([savedPath])
   // Main takes only a known file id and bounded clipboard text.
@@ -1004,7 +1014,7 @@ try {
   await expect(grid.getByRole('columnheader').nth(2)).toContainText('(No column name)')
   // A right-click selects the cell under it first; Copy copies its value.
   await cell(1, 2).click({ button: 'right', force: true })
-  expect(await outputLabels()).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Highlight', 'Compare with Previous Result', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Results'])
+  expect(await outputLabels()).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Filter', 'Highlight', 'Compare with Previous Result', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Results'])
   await expect(selected()).toHaveCount(1)
   await expect(cell(1, 2)).toHaveAttribute('aria-selected', 'true')
   await outputMenu.getByRole('menuitem', { name: 'Copy', exact: true }).click()
@@ -1129,8 +1139,8 @@ try {
     ['the editor by mouse', () => rightClick(page.locator('.monaco-editor .view-lines').getByText('SELECT', { exact: true }).first()), textbox()],
     ['the editor by Shift+F10', fromEditor(() => page.keyboard.press('Shift+F10')), textbox()],
     ['the editor\'s Connection by the context-menu key', fromEditor(async () => { for (const key of ['ContextMenu', 'ArrowDown', 'ArrowDown', 'ArrowRight']) await page.keyboard.press(key); await expect(menu('Connection')).toBeVisible() }), textbox()],
-    ['a query tab by mouse', () => rightClick(firstTab), firstTab],
-    ['a query tab by Shift+F10', async () => { await firstTab.focus(); await page.keyboard.press('Shift+F10') }, firstTab],
+    ['a query tab by mouse', async () => { await revealQueryTab(firstTab); await rightClick(firstTab, { force: false }) }, firstTab],
+    ['a query tab by Shift+F10', async () => { await revealQueryTab(firstTab); await page.keyboard.press('Shift+F10') }, firstTab],
     ['a panel tab by mouse', () => rightClick(paneTab(page, 'explorer')), dockTab('explorer')],
     ['a panel tab by Shift+F10', async () => { await dockTab('results').focus(); await page.keyboard.press('Shift+F10') }, dockTab('results')],
     // Object Explorer's rows are not focusable: focus stays on the tree, which names the selected row.

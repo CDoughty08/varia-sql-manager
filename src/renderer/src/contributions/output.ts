@@ -3,6 +3,7 @@ import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { resolveBlocks } from '../grid/selection'
 import { outputOf, type MenuTargetService, type OutputTarget } from '../menus/targets'
+import type { SelectionFilter } from '../results/ResultsService'
 import { requestFrame, windows } from '../core/windows'
 import { focusHeld } from '../core/modal'
 
@@ -69,6 +70,15 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     when: (args?: CommandArgs) => !!sortTarget(args),
     run: (args?: CommandArgs) => { const at = sortTarget(args); if (at) results.sortBy(at.tabId, at.index, at.column, direction, add) }
   })
+  /** A filter by the grid's selection: the menu's grid, else the focused one. */
+  const selectionFilter = (kind: SelectionFilter) => ({
+    when: (args?: CommandArgs) => { const target = targetOf(args); return !!grid(target) && results.canFilterSelection(target!.tabId, target!.resultIndex, kind) },
+    run: (args?: CommandArgs) => { const target = targetOf(args); if (target && grid(target)) results.filterSelection(target.tabId, target.resultIndex, kind) }
+  })
+  const duplicatesFilter = (allColumns: boolean) => ({
+    when: (args?: CommandArgs) => { const target = targetOf(args); return !!grid(target) && results.canFilterDuplicates(target!.tabId, target!.resultIndex, allColumns) },
+    run: (args?: CommandArgs) => { const target = targetOf(args); if (target && grid(target)) results.filterDuplicates(target.tabId, target.resultIndex, allColumns) }
+  })
   /** The tab search in results acts on: the focused output's, else the active query's. */
   const searchTab = (args?: CommandArgs) => targetOf(args)?.tabId ?? documents.getSnapshot().activeId
   const closeTab = (args?: CommandArgs) => {
@@ -96,8 +106,18 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     commands.register('output.thenSortAscending', sortCommand('ascending', true)),
     commands.register('output.thenSortDescending', sortCommand('descending', true)),
     commands.register('output.clearSort', {
-      when: args => { const target = targetOf(args); return !!grid(target) && !!results.sortOf(target!.tabId, target!.resultIndex) },
+      when: args => { const target = targetOf(args); return !!grid(target) && !!results.sortOf(target!.tabId, target!.resultIndex)?.keys.length },
       run: args => { const target = targetOf(args); if (target && grid(target)) results.clearSort(target.tabId, target.resultIndex) }
+    }),
+    commands.register('output.filterSelection', selectionFilter('in')),
+    commands.register('output.excludeSelection', selectionFilter('notIn')),
+    commands.register('output.filterBetween', selectionFilter('between')),
+    commands.register('output.excludeNulls', selectionFilter('notNull')),
+    commands.register('output.filterDuplicates', duplicatesFilter(false)),
+    commands.register('output.filterDuplicateRows', duplicatesFilter(true)),
+    commands.register('output.clearFilters', {
+      when: args => { const target = targetOf(args); return !!grid(target) && !!results.sortOf(target!.tabId, target!.resultIndex)?.filters.length },
+      run: args => { const target = targetOf(args); if (target && grid(target)) results.clearFilters(target.tabId, target.resultIndex) }
     }),
     commands.register('output.sortTextByChars', { run: () => showSortText('chars') }),
     commands.register('output.sortTextByBytes', { run: () => showSortText('bytes') }),

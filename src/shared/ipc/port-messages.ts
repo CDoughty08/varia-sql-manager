@@ -17,6 +17,21 @@ const generation = u31
 /** A row identity (results.identify): a hash below 2^53. */
 const identityId = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
 export const viewSortKeySchema = z.object({ column: z.number().int().min(0).max(limits.page.maxColumns - 1), descending: z.boolean(), mode: z.enum(['value', 'chars', 'bytes']) }).strict()
+const column = z.number().int().min(0).max(limits.page.maxColumns - 1)
+/** A base row a filter names (rows are below 2^31). */
+const filterRow = z.number().int().min(0).max(2 ** 31 - 1)
+const filterRows = z.array(filterRow).max(limits.views.maxFilterValues)
+const filterOp = z.enum(['in', 'notIn', 'between'])
+const distinctColumns = z.array(column).min(1).max(limits.page.maxColumns).refine(columns => new Set(columns).size === columns.length, 'Columns must be distinct.')
+export const viewFilterSchema = z.union([
+  z.object({ op: filterOp, column, rows: filterRows, nulls: z.boolean().optional() }).strict(),
+  z.object({ op: filterOp, column, cells: z.object({ ranges: z.array(z.tuple([count, z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)])).min(1).max(limits.views.maxFilterRanges), viewId: u32.optional() }).strict() }).strict(),
+  z.object({ op: z.literal('duplicates'), columns: distinctColumns }).strict()
+])
+const resolvedFilterSchema = z.union([
+  z.object({ op: filterOp, column, rows: filterRows, nulls: z.boolean() }).strict(),
+  z.object({ op: z.literal('duplicates'), columns: distinctColumns }).strict()
+])
 
 /** The port schema around a set of live schemas (buildLiveSchemas): the shipped ones, or a test catalogue's. */
 export const buildPortRequestSchema = (live: { subscribe: z.ZodType<LiveSubscribeParams>; update: z.ZodType<LiveUpdateParams> }) => z.discriminatedUnion('t', [
@@ -26,7 +41,8 @@ export const buildPortRequestSchema = (live: { subscribe: z.ZodType<LiveSubscrib
   z.object({ t: z.literal('close'), rid: u31, generation, resultIds: z.array(u32).min(1).max(1024) }).strict(),
   z.object({ t: z.literal('rowBytes'), rid: u31, generation, resultId: u32, firstRow: count, count: z.number().int().min(1).max(limits.rowSizes.maxRows), viewId: u32.optional() }).strict(),
   // Views (results.view): a result's rows sorted in the backend, read with `read` and `rowBytes` by viewId.
-  z.object({ t: z.literal('view'), rid: u31, generation, resultId: u32, sort: z.array(viewSortKeySchema).min(1).max(limits.views.maxKeys), replaces: u32.optional() }).strict(),
+  z.object({ t: z.literal('view'), rid: u31, generation, resultId: u32, sort: z.array(viewSortKeySchema).max(limits.views.maxKeys), filters: z.array(viewFilterSchema).min(1).max(limits.views.maxFilters).optional(), replaces: u32.optional() }).strict()
+    .refine(request => request.sort.length > 0 || request.filters !== undefined, 'A view needs a sort key or a filter.'),
   z.object({ t: z.literal('viewClose'), rid: u31, generation, resultId: u32, viewIds: z.array(u32).min(1).max(limits.views.maxClose) }).strict(),
   // Row identities (results.identify, rowIds, findRows): highlights find their rows by them after a sort or a re-run.
   z.object({ t: z.literal('identify'), rid: u31, generation, resultId: u32, by: z.enum(['auto', 'column', 'row']), column: z.number().int().min(0).max(limits.page.maxColumns - 1).optional() }).strict()
@@ -69,7 +85,7 @@ export type PortMessage =
 /** A results.rowBytes answer as the backend sends it; main also checks it answers the range asked before forwarding it. */
 export const rowBytesResultSchema = z.object({ firstRow: count, bytes: z.array(count).max(limits.rowSizes.maxRows), rowsAvailable: count, estimated: z.array(count).max(limits.rowSizes.maxRows) }).strict()
 /** A results.view answer as the backend sends it. */
-export const viewResultSchema = z.object({ viewId: u32, rows: count, complete: z.boolean(), approximate: z.boolean() }).strict()
+export const viewResultSchema = z.object({ viewId: u32, rows: count, complete: z.boolean(), approximate: z.boolean(), filters: z.array(resolvedFilterSchema).max(limits.views.maxFilters).optional() }).strict()
 export const viewCloseResultSchema = z.object({ closed: z.number().int().min(0).max(limits.views.maxClose) }).strict()
 /** Identity answers as the backend sends them; main also checks they answer what was asked before forwarding them. */
 export const identifyResultSchema = z.object({ column: z.number().int().min(-1).max(limits.page.maxColumns - 1), unique: z.boolean(), approximate: z.boolean(), rows: count }).strict()

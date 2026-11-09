@@ -13,8 +13,10 @@ default. While it is off, pinned tabs still reopen, and a close asks about unsav
 
 - The pin button moves a query or other text tab to its editor group's shelf above the unpinned tabs. Click it again
   to unpin the tab. Drag or use Move Left and Move Right to reorder tabs within either shelf.
-- Hold Ctrl and scroll down over either shelf to add rows there. Scroll up to remove rows. The row buttons do the same,
-  and the overflow button lists tabs that are out of view. Each shelf and each editor group keeps its own row count.
+- Hold Ctrl and scroll down over either shelf to add rows there. Scroll up to remove rows. **Increase Tab Stack Height**
+  and **Decrease Tab Stack Height** in the tab menu and command palette do the same. A one-row shelf scrolls horizontally;
+  stacked shelves list tabs outside their shown rows through **… N more**. Each shelf and editor group keeps its requested
+  height with the saved layout.
 - The SID badge to the right of a query name shows its SQL Server session ID as soon as execution acquires a session.
   A dash means there is no known live session. Restored queries start disconnected.
 - View › Reload Window keeps pinned tabs and reopens them disconnected. Unpinned tabs follow the workbench's existing
@@ -27,8 +29,9 @@ default. While it is off, pinned tabs still reopen, and a close asks about unsav
 
 - Every text tab (queries, and XML, JSON and plan values opened from results), in strip order, including which are
   pinned and which one is active. Pinned tabs are first in their group's strip.
-- The editor groups the kept tabs are in, when there are two or more (docs/editor-groups.md, *Persistence*): splits,
-  sizes, floating groups and each group's shown tab, naming tabs by their place in the kept list.
+- The editor groups the kept tabs are in (docs/editor-groups.md, *Persistence*): splits, sizes, floating groups, each
+  group's shown tab and requested pinned and unpinned stack heights, naming tabs by their place in the kept list.
+  A single docked group is kept when its requested stack heights differ from the default one row.
 - An untitled tab, or one with unsaved changes, keeps its text and unsaved state. A clean tab with a file keeps only
   its file's path and reopens by reading the file again (a file that is gone is named in a notice). An unsaved tab
   whose file is gone reopens with its text, without the file.

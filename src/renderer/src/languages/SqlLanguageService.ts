@@ -224,15 +224,19 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
         if (!this.current(refresh.capture, actionToken)) return false
         const { version, text, context } = refresh.capture.request
         this.used.add(documentId)
+        const backendEpoch = this.backendEpoch
         const result = await this.track(documentId, this.api.languageRefresh({ documentId, version, text, context }))
-        if (!this.current(refresh.capture, actionToken)) return false
-        if (!result.ok) throw new Error(result.error)
-        this.failure(documentId)
-        if (result.value.refreshed) {
+        // An edit or a closed query cancels the caller's wait, but an already-dispatched refresh still changes the
+        // shared metadata context. Notify sibling models even when the initiating query no longer accepts its result.
+        if (!this.disposed && backendEpoch === this.backendEpoch && result.ok && result.value.refreshed) {
           const active = new Set(this.contexts.values())
           for (const key of this.diagnosticContextEpochs.keys()) if (!active.has(key)) this.diagnosticContextEpochs.delete(key)
           this.diagnosticContextEpochs.set(refresh.capture.key, (this.diagnosticContextEpochs.get(refresh.capture.key) ?? 0) + 1)
+          this.publish({ ...this.getSnapshot() })
         }
+        if (!this.current(refresh.capture, actionToken)) return false
+        if (!result.ok) throw new Error(result.error)
+        this.failure(documentId)
         return result.value.refreshed
       } catch (error) {
         if (!this.current(refresh.capture, actionToken)) return false

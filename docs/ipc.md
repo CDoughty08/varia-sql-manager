@@ -234,7 +234,7 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `results.read` | port | stream | results | 60 s |
 | `results.close` | port | unary | control | 10 s |
 | `results.rowBytes` | port | unary | control | 10 s; each row's bytes for 1 – 16,384 sealed rows ([Cell lengths and row sizes](#cell-lengths-and-row-sizes)) |
-| `results.view` | port | unary | results | 120 s; a sorted view of a result's sealed rows ([Sorted views](#sorted-views)) |
+| `results.view` | port | unary | results | 120 s; a sorted or filtered view of a result's sealed rows ([Sorted views](#sorted-views)) |
 | `results.viewClose` | port | unary | control | 10 s |
 | `results.identify` | port | unary | results | 120 s; tells a complete result's rows apart ([Row identities and highlights](#row-identities-and-highlights)) |
 | `results.rowIds` | port | unary | control | 10 s; 1 – 16,384 rows' identities |
@@ -1311,10 +1311,12 @@ renderer adds its `error` as one.
 
 ## Sorted views
 
-A results grid sorts in the backend, over the rows it already holds (`Results/ResultViews.cs`); nothing re-reads SQL
-Server. A view is an order of a result's base rows, read through the same calls as the result itself by view position.
+A results grid sorts and filters in the backend, over the rows it already holds (`Results/ResultViews.cs`); nothing
+re-reads SQL Server. A view is an order of some or all of a result's base rows, read through the same calls as the result
+itself by view position.
 
-- **`results.view { resultId, sort: 1 – 16 keys, replaces? }`** answers `{ viewId, rows, complete, approximate }`. A key
+- **`results.view { resultId, sort: 0 – 16 keys, filters?: 1 – 16, replaces? }`** answers `{ viewId, rows, complete,
+  approximate, filters? }`, with at least one key or filter (`INVALID_PARAMS`). A key
   is `{ column, descending, mode: 'value' | 'chars' | 'bytes' }`, columns distinct and within the result
   (`INVALID_PARAMS`). The view covers the rows sealed when it was built (`rows`); `complete` says that was every row of a
   finished set. `approximate` says a key compared a truncated value's stored prefix or a length that is only an estimate.
@@ -1327,8 +1329,22 @@ Server. A view is an order of a result's base rows, read through the same calls 
   ignoring trailing spaces; other types by their display text's code points. `chars` and `bytes` sort character, xml and
   json columns (and binary, for `bytes`) by each cell's length from [Cell lengths and row sizes](#cell-lengths-and-row-sizes);
   other columns ignore the mode and sort by value. Equal rows keep their base order.
-- **Memory.** A sort holds 8 to 16 bytes per row and key while it runs, and a view keeps 4 bytes a row, both charged to
-  the result's query budget (`TOO_LARGE` past it) and freed when the view is closed, replaced, or its result released.
+- **Filters.** Applied in order before the sort, each over the rows the ones before it kept; `rows` counts the rows kept.
+  `{ op: 'in' | 'notIn' | 'between', column, rows: 0 – 4,096 base rows, nulls? }` compares the column's values with those
+  rows' values (`nulls`: NULL is among `in`'s and `notIn`'s values; `between` takes two rows, its lowest and highest
+  value, and keeps no NULL). The same filter can name selected cells instead,
+  `cells: { ranges: 1 – 256 [first, count], viewId? }`, positions in a view (or the result) that the backend reads (each
+  once, however the ranges overlap), reduces to one row per distinct value (at most 4,096, else `TOO_LARGE`; `between` keeps only the lowest and highest) and
+  answers resolved, `{ op, column, rows, nulls }`, in `filters`, so the renderer builds the same view again from rows. A
+  view named that is gone answers `VIEW_NOT_FOUND`. `{ op: 'duplicates', columns }` keeps the rows whose values in those
+  distinct columns equal another row's (NULL equal to NULL, as GROUP BY has it), each group together in the order of its
+  first row. Values are equal and ordered as the sort compares them, so a column's collation decides which texts match
+  (case and trailing spaces under a CI collation) and `2` equals `2.0` in a float column; a truncated value compares by
+  its stored prefix (`approximate`).
+- **Memory.** A sort holds 8 to 16 bytes per row and key while it runs (a filter, per column it compares, and 16 bytes a row
+  for the rows it keeps, a selection's rows or duplicates' groups), and a view keeps 4 bytes a row it shows, all charged
+  to the result's query budget (`TOO_LARGE` past it); what building needed is returned at once, the order when the view is closed,
+  replaced, or its result released.
 - **Reading through a view.** `results.read`, `results.rowBytes`, `results.copy` and `results.export` take `viewId`;
   rows are then view positions. Read pages are built in view order from the stored cells (flags and truncation kept) and
   numbered by view position, so the worker caches them as it does a result's own (keyed `generation:resultId#viewId`). A
@@ -1336,15 +1352,19 @@ Server. A view is an order of a result's base rows, read through the same calls 
   (`RESULT_OPEN`, "Save the results after they are sorted again.").
 - **`results.viewClose { resultId, viewIds: 1 – 64 }`** answers `{ closed }`. Views end with their result too: a released
   result's views go with it, without a close.
-- **Renderer.** `ResultHandle.sort(keys, { replaces, signal })` validates the keys before sending and returns a
-  `ResultView` handle (`viewId`, `base`, `keys`, `rows`, `complete`, `approximate`) that reads, measures and copies like
-  any handle; closing it sends `viewClose`, and it ends (released or lost) with its base. `ResultsService` keeps a view
+- **Renderer.** `ResultHandle.sort(keys, { filters, replaces, signal })` validates the keys and filters before sending
+  and returns a `ResultView` handle (`viewId`, `base`, `keys`, `filters` resolved, `rows`, `complete`, `approximate`) that
+  reads, measures and copies like any handle; closing it sends `viewClose`, and it ends (released or lost) with its base. `ResultsService` keeps a view
   per grid: a newer sort aborts the running one, and it sends no `replaces`, so the view a grid shows stays readable until
   the grid has read the new one's rows and swapped (`viewShown`), and only then closes. A view of a set still loading is
   sorted again once the set completes, also when it completes during the sort, and the text mode (Tools › Options ›
   Query Results › Grid, Sort text columns by, and the results toolbar) sorts again every grid sorted by a text, xml, json
   or binary column when it changes. A view main sees built after its port went (a reload) is closed by main. Copy, Save Results As and opening a value follow the
-  grid's order through its view; Save waits until a running or pending sort is built.
+  grid's order through its view; Save waits until a running or pending sort is built. A grid's filters (the grid menu's Filter
+  submenu) go with its keys: a filter by the selection sends the selected cells of one column as ranges of what the grid
+  shows (with its view's id), and keeps the resolved filter the view answers, so later views (a sort, another filter, the
+  set completing) send rows; a failed view keeps the last view, keys and filters. The caption counts the rows a filtered
+  view kept and names each filter by the values its rows hold ("name = 'x'", "id between '3' and '12'").
 
 ## Row identities and highlights
 
@@ -2326,7 +2346,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Row sizes a request | `results.rowBytes`: 1 – 16,384 rows (`rowSizes.maxRows`) | zod and backend |
 | Row identities | `results.rowIds` 1 – 16,384 rows; `results.findRows` 1 – 10,000 ids, 100,000 matches (`limits.identity`); 24 bytes a row while identifying, 8 kept, under the query budget | zod and backend |
 | Result diffs | context -1 – 100 rows, 64 one-sided column names each side (`limits.diff`); about 80 bytes a row of both results and 12 a differing cell while aligning, the diff's rows under the query budget | zod and backend |
-| Sorted views | 1 – 16 keys a sort, 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key while sorting, 4 bytes a row kept, under the query budget | zod and backend |
+| Sorted views | 0 – 16 keys and 0 – 16 filters a view (one at least), 4,096 distinct values a filter, 256 cell ranges a selection, 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key or filtered column while building, 4 bytes a row kept, under the query budget | zod and backend |
 | Search in results | 1 – 1,024 characters of text, 1 – 10,000 matches an answer plus its last row's columns (`limits.search`); no budget held | zod and backend |
 | Column profiles | 0 – 32 columns a request (`limits.profile`), 20 buckets, distinct exact to 16,384, values cut to 256 characters; working memory under the query budget | zod and backend |
 | Copy | 64 MiB of UTF-8 (estimated before any work; main cancels past 65 MiB received); DATA ≤ 1 MiB; 16 MiB initial credit; 120 s; one per window | backend and main |

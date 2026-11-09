@@ -1,5 +1,5 @@
 import { electron, expect } from './fixtures/smoke.mjs'
-import { activeDocumentName, backendReady, documentTab, editorGroupForDocument, editorGroups, editorHover, editorOverflowHosts, editorSurface, editorText, editorTextbox, floatingEditorGroups, movePane, part, popoutDockButton, popoutTabs, queryDatabase, queryServer, suggestionItems, suggestionOption, suggestionWidget, toolbarButton } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, documentTab, editorGroupForDocument, editorGroups, editorHover, editorOverflowHosts, editorSurface, editorText, editorTextbox, floatingEditorGroups, movePane, paneMenuButton, part, popoutDockButton, popoutTabs, queryDatabase, queryServer, suggestionItems, suggestionOption, suggestionWidget, toolbarButton } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
@@ -144,6 +144,26 @@ try {
   await hover(page, page, 'Customer table (fake language service).')
   await expect.poll(async () => (await languageCalls('language.hover')).length).toBeGreaterThan(0)
 
+  if (process.platform !== 'darwin') {
+    await editorTextbox(page).focus()
+    await page.keyboard.press(`${mod}+K`)
+    await page.keyboard.press(`${mod}+I`)
+    const widget = editorHover(page, 'Customer table (fake language service).')
+    await expect(widget).toBeVisible()
+    // Keep the pointer stationary: a mouse leave could hide the hover and conceal a leaked external host.
+    await paneMenuButton(page, 'editor').focus()
+    await page.keyboard.press('Space')
+    await expect(page.getByRole('menuitem', { name: 'Close', exact: true })).toBeVisible()
+    await page.keyboard.press('c')
+    await expect(editorSurface(page)).toBeHidden()
+    await expect(widget).toBeHidden()
+    expect(await editorOverflowHosts(page).evaluateAll(hosts => hosts.every(host => host.hidden))).toBe(true)
+    await application.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('window.editor').click())
+    await expect(editorSurface(page)).toBeVisible()
+    await hover(page, page, 'Customer table (fake language service).')
+    console.log('Language checks: closing the outer Query Editor hides its owned hover, and reopening restores its widgets.')
+  }
+
   // The original clipping bug: the query panel is near its minimum height, with Results immediately underneath. A visible DOM
   // node alone passes even when clipped, so check every widget corner by hit testing outside the editor's rectangle.
   const normalHeight = (await editorSurface(page).boundingBox()).height
@@ -194,6 +214,21 @@ try {
   await suggestAndAccept(page, page, 'CustomerAppData')
   await expect.poll(async () => (await languageCalls('language.complete')).at(-1)?.params.context).toEqual({ providerId: 'sqlserver', connectionId: idA, database: 'AppData' })
   const documentA = (await languageCalls('language.complete')).at(-1).params.documentId
+  await editorTextbox(page).focus()
+  await page.keyboard.press('Home')
+  await page.keyboard.press('ArrowRight')
+  for (let count = 0; count < 2; count++) {
+    await page.keyboard.press(`${mod}+K`)
+    await page.keyboard.press(`${mod}+I`)
+    await expect(editorHover(page, 'language-server-a/AppData')).toBeVisible()
+  }
+  await expect.poll(() => editorHover(page, 'language-server-a/AppData').evaluate(widget => widget.contains(document.activeElement))).toBe(true)
+  const focusedRefreshes = (await languageCalls('language.refresh')).length
+  await page.keyboard.press(`${mod}+Shift+R`)
+  await expect.poll(async () => (await languageCalls('language.refresh')).length).toBe(focusedRefreshes + 1)
+  expect((await languageCalls('language.refresh')).at(-1).params).toMatchObject({ documentId: documentA, context: { connectionId: idA, database: 'AppData' } })
+  await page.keyboard.press('Escape')
+  console.log('Language checks: a focused external hover keeps query-editor shortcuts and refreshes its own database.')
 
   const idB = await connect('language-server-b')
   expect(idB).not.toBe(idA)

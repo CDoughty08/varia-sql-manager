@@ -15,6 +15,7 @@ internal sealed partial class SqlToolsLanguageService
     private DiagnosticOwner? diagnosticOwner;
     private Timer? diagnosticIdle;
     private int diagnosticOwners;
+    private int diagnosticCharacters;
     private bool diagnosticRunning;
     private string? diagnosticDocumentId;
     private string? diagnosticContextKey;
@@ -44,7 +45,8 @@ internal sealed partial class SqlToolsLanguageService
                 diagnosticIdle?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
                 // STS retains parse/binding owners after didClose. Bound that retention and keep only the current
                 // database context; the separate child also isolates its global diagnostic debounce from edits.
-                if (diagnosticOwner is { } owner && owner.ContextKey != contextKey || diagnosticOwners >= MaxDocuments)
+                if (diagnosticOwner is { } owner && owner.ContextKey != contextKey || diagnosticOwners >= MaxDocuments
+                    || diagnosticCharacters + request.Text.Length > MaxTotalCharacters)
                     ResetDiagnostics();
                 previous = diagnosticOwner;
             }
@@ -64,6 +66,7 @@ internal sealed partial class SqlToolsLanguageService
                 diagnosticPending.Add(uri, new(current, request, answer));
                 diagnosticOwner = new(uri, request.DocumentId, contextKey, current);
                 diagnosticOwners++;
+                diagnosticCharacters += request.Text.Length;
             }
             await ConfigureDiagnosticsAsync(current, true, token);
             // Configuration updates do not consistently requeue analysis in the pinned service. Replace this
@@ -200,6 +203,7 @@ internal sealed partial class SqlToolsLanguageService
         diagnosticClient = null;
         diagnosticOwner = null;
         diagnosticOwners = 0;
+        diagnosticCharacters = 0;
         foreach (var pending in diagnosticPending.Values) pending.Answer.TrySetCanceled();
         diagnosticPending.Clear();
         // Transport disposal stops the process first. A later stream-handle failure must not escape an idle timer

@@ -8,6 +8,17 @@ const split = (...children: EditorGroupsLayout['root'][]) => ({ type: 'branch' a
 const layout = (root: EditorGroupsLayout['root'], extra: Partial<EditorGroupsLayout> = {}): EditorGroupsLayout => ({ root, orientation: 'HORIZONTAL', width: 800, height: 600, ...extra })
 
 describe('the kept editor groups layout', () => {
+  it('accepts requested shelf heights beyond the kept tab count and rejects invalid or unknown row fields', () => {
+    const withRows = (tabRows: unknown) => layout(split({ ...leaf([0]), tabRows } as never))
+    expect(editorGroupsLayoutSchema.safeParse(withRows({ pinned: 3, unpinned: 120 })).success).toBe(true)
+    expect(editorGroupsLayoutSchema.safeParse(withRows({ pinned: 1, unpinned: Number.MAX_SAFE_INTEGER })).success).toBe(true)
+    for (const value of [0, -1, 1.5, Infinity, NaN, Number.MAX_SAFE_INTEGER + 1, '3']) {
+      expect(editorGroupsLayoutSchema.safeParse(withRows({ pinned: 1, unpinned: value })).success, String(value)).toBe(false)
+    }
+    expect(editorGroupsLayoutSchema.safeParse(withRows({ pinned: 1, unpinned: 2, other: 3 })).success).toBe(false)
+    expect(editorGroupsLayoutSchema.safeParse(withRows({ pinned: 1 })).success).toBe(false)
+  })
+
   it('accepts groups of distinct documents and refuses duplicates, missing actives, a leaf root and too many groups', () => {
     expect(editorGroupsLayoutSchema.safeParse(layout(split(leaf([0, 1], 1), leaf([2])), { activeGroup: 1 })).success).toBe(true)
     expect(editorGroupsLayoutSchema.safeParse(layout(split(leaf([0, 1]), leaf([1])))).success).toBe(false)
@@ -86,6 +97,34 @@ describe('the kept editor groups layout', () => {
     expect(restored.floatingGroups).toHaveLength(2)
     expect(restored.activeGroup).toBe('g2')
   })
+
+  it('round-trips requested shelf heights through renamed groups, pruning and floating groups', () => {
+    const json = {
+      grid: { orientation: 'HORIZONTAL', width: 800, height: 600, root: { type: 'branch', data: [
+        { type: 'leaf', data: { id: 'old-grid', views: ['a'], activeView: 'a' } },
+        { type: 'leaf', data: { id: 'old-default', views: ['b'], activeView: 'b' } }
+      ] } },
+      floatingGroups: [{ data: { id: 'old-float', views: ['c'], activeView: 'c' }, position: { left: 20, top: 30, width: 300, height: 200 } }],
+      panels: {}, activeGroup: 'old-float'
+    } as unknown as SerializedDockview
+    const preferences: Record<string, { pinned: number; unpinned: number }> = {
+      'old-grid': { pinned: 2, unpinned: 80 }, 'old-default': { pinned: 1, unpinned: 1 }, 'old-float': { pinned: 7, unpinned: 3 }
+    }
+    const captured = captureEditorGroups(json, id => ({ a: 0, b: 1, c: 2 } as Record<string, number>)[id], group => preferences[group])!
+    expect(captured.root).toEqual(split({ ...leaf([0], 0), tabRows: preferences['old-grid'] }, leaf([1], 1)))
+    expect(captured.floating?.[0].root).toMatchObject({ tabRows: preferences['old-float'] })
+    const restoredRows = vi.fn()
+    restoreEditorGroups(captured, place => ['x', 'y', 'z'][place], id => ({ id }), restoredRows)
+    expect(restoredRows.mock.calls).toEqual([
+      ['g1', preferences['old-grid']], ['g2', { pinned: 1, unpinned: 1 }], ['g3', preferences['old-float']]
+    ])
+    const pruned = remapEditorGroups(captured, place => place === 1 ? undefined : place)!
+    expect(pruned.root).toEqual(split({ ...leaf([0], 0), tabRows: preferences['old-grid'] }))
+    expect(pruned.floating?.[0].root).toMatchObject({ tabRows: preferences['old-float'] })
+    restoredRows.mockClear()
+    restoreEditorGroups(captured, place => place === 1 ? undefined : ['x', 'y', 'z'][place], id => ({ id }), restoredRows)
+    expect(restoredRows.mock.calls).toEqual([['g1', preferences['old-grid']], ['g2', preferences['old-float']]])
+  })
 })
 
 function service() {
@@ -93,7 +132,7 @@ function service() {
   const docs = {
     getSnapshot: () => ({ documents: documents.list.map(id => ({ id })), activeId: documents.active }) as never,
     move: vi.fn((id: string, index: number) => { documents.list.splice(documents.list.indexOf(id), 1); documents.list.splice(index, 0, id); return true }),
-    get: () => undefined
+    get: (_id: string) => undefined
   }
   const host: EditorGroupHost = { move: vi.fn(), focusGroup: vi.fn(), join: vi.fn(), capture: vi.fn(() => layout(split(leaf([0]), leaf([1])))), restore: vi.fn(), focusedDocument: vi.fn(() => 'c'), focusTab: vi.fn() }
   return { groups: new EditorGroupService(docs), docs, documents, host }
@@ -101,6 +140,94 @@ function service() {
 const twoGroups: EditorGroupSnapshot = { groups: [{ id: 'g1', documents: ['a', 'b'], active: 'b', floating: false }, { id: 'g2', documents: ['c'], active: 'c', floating: false }], activeGroup: 'g1' }
 
 describe('the editor group service', () => {
+  it('enables row actions in each direction using the requested tab’s own shelf', () => {
+    const { groups, docs } = service(), adjust = vi.fn(), canAdjust = vi.fn((pinned: boolean, delta: 1 | -1) => pinned ? delta === -1 : delta === 1)
+    vi.spyOn(docs, 'get').mockImplementation(id => id === 'a' ? { id, pinned: true } as never : id === 'b' ? { id } as never : undefined)
+    groups.update(twoGroups)
+    groups.registerTabRows('g1', adjust, canAdjust)
+    expect(groups.canChangeTabRows('a')).toBe(true)
+    expect(groups.canChangeTabRows('a', -1)).toBe(true)
+    expect(groups.canChangeTabRows('a', 1)).toBe(false)
+    expect(groups.canChangeTabRows('b', -1)).toBe(false)
+    expect(groups.canChangeTabRows('b', 1)).toBe(true)
+    expect(groups.canChangeTabRows('gone', 1)).toBe(false)
+  })
+
+  it('keeps each group’s requested heights, publishes real changes, and gives new groups the default', () => {
+    const { groups } = service(), changed = vi.fn()
+    groups.subscribe(changed)
+    expect(groups.getTabRows('new')).toEqual({ pinned: 1, unpinned: 1 })
+    groups.setTabRows('g1', { pinned: 3, unpinned: 80 })
+    groups.setTabRows('g2', { pinned: 1, unpinned: 2 })
+    groups.setTabRows('g1', { pinned: 3, unpinned: 80 })
+    expect(changed).toHaveBeenCalledTimes(2)
+    expect(groups.getTabRows('g1')).toEqual({ pinned: 3, unpinned: 80 })
+    expect(groups.getTabRows('g2')).toEqual({ pinned: 1, unpinned: 2 })
+    groups.forgetTabRows('g1')
+    expect(groups.getTabRows('g1')).toEqual({ pinned: 1, unpinned: 1 })
+    expect(groups.getTabRows('g2')).toEqual({ pinned: 1, unpinned: 2 })
+    groups.setTabRows('g2', { pinned: 1, unpinned: 1 })
+    groups.setTabRows('invalid', { pinned: Infinity, unpinned: -1 })
+    expect(groups.getTabRows('invalid')).toEqual({ pinned: 1, unpinned: 1 })
+    groups.dispose()
+    expect(groups.getTabRows('g2')).toEqual({ pinned: 1, unpinned: 1 })
+  })
+
+  it('captures a single group when it has requested shelf heights and omits an ordinary single group', () => {
+    const { groups, host } = service()
+    const json = { grid: { orientation: 'HORIZONTAL', width: 800, height: 600, root: { type: 'branch', data: [{ type: 'leaf', data: { id: 'g1', views: ['a', 'b'], activeView: 'b' } }] } }, panels: {}, activeGroup: 'g1' } as unknown as SerializedDockview
+    vi.mocked(host.capture).mockImplementation(place => captureEditorGroups(json, place, group => groups.getTabRows(group)))
+    groups.attach(host)
+    groups.update({ groups: [twoGroups.groups[0]], activeGroup: 'g1' })
+    const place = (id: string) => ['a', 'b'].indexOf(id)
+    expect(groups.capture(place)).toBeUndefined()
+    groups.setTabRows('g1', { pinned: 2, unpinned: 80 })
+    const captured = groups.capture(place)!
+    expect(captured.root).toEqual(split({ ...leaf([0, 1], 1), tabRows: { pinned: 2, unpinned: 80 } }))
+    expect(editorGroupsLayoutSchema.safeParse(captured).success).toBe(true)
+    groups.setTabRows('g1', { pinned: 1, unpinned: 1 })
+    expect(groups.capture(place)).toBeUndefined()
+  })
+
+  it('replaces old group preferences atomically when a restored layout reuses their ids', () => {
+    const { groups } = service()
+    groups.setTabRows('g1', { pinned: 5, unpinned: 8 })
+    groups.setTabRows('old-float', { pinned: 2, unpinned: 4 })
+    const changed = vi.fn(() => [groups.getTabRows('g1'), groups.getTabRows('g2')])
+    groups.subscribe(changed)
+    groups.restoreTabRows(new Map([['g1', { pinned: 1, unpinned: 1 }], ['g2', { pinned: 3, unpinned: 80 }]]))
+    expect(changed).toHaveBeenCalledTimes(1)
+    expect(changed.mock.results[0].value).toEqual([{ pinned: 1, unpinned: 1 }, { pinned: 3, unpinned: 80 }])
+    expect(groups.getTabRows('old-float')).toEqual({ pinned: 1, unpinned: 1 })
+    groups.restoreTabRows(new Map())
+    expect(groups.getTabRows('g2')).toEqual({ pinned: 1, unpinned: 1 })
+  })
+
+  it('changes the requested document shelf and forgets disposed or replaced row layouts', () => {
+    const { groups, docs } = service(), first = vi.fn(), second = vi.fn(), replacement = vi.fn()
+    vi.spyOn(docs, 'get').mockImplementation(id => id === 'a' ? { id, pinned: true } as never : id === 'b' || id === 'c' ? { id } as never : undefined)
+    groups.update(twoGroups)
+    expect(groups.canChangeTabRows('a')).toBe(false)
+    const registration = groups.registerTabRows('g1', first)
+    groups.registerTabRows('g2', second)
+    expect(groups.canChangeTabRows('a')).toBe(true)
+    groups.changeTabRows('a', 1)
+    groups.changeTabRows('b', -1)
+    groups.changeTabRows('c', 1)
+    expect(first.mock.calls).toEqual([[true, 1], [false, -1]])
+    expect(second.mock.calls).toEqual([[false, 1]])
+    expect(groups.canChangeTabRows('gone')).toBe(false)
+    groups.changeTabRows('gone', 1)
+    const latest = groups.registerTabRows('g1', replacement)
+    registration.dispose()
+    groups.changeTabRows('a', -1)
+    expect(replacement).toHaveBeenCalledExactlyOnceWith(true, -1)
+    latest.dispose()
+    expect(groups.canChangeTabRows('a')).toBe(false)
+    groups.dispose()
+    expect(groups.canChangeTabRows('c')).toBe(false)
+  })
+
   it('treats every document as one group without an editor area, moving along DocumentService\'s order', () => {
     const { groups, docs, documents } = service()
     expect(groups.count).toBe(1)

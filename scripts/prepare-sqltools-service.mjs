@@ -42,6 +42,16 @@ function inside(base, path) {
   return target
 }
 async function removeGenerated(base, path) { await rm(inside(base, path), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }) }
+/** Windows scanners can briefly hold newly verified files or directories without delete sharing. */
+export async function renamePreparedArtifact(from, to, platform = process.platform, move = rename) {
+  for (let attempt = 1; ; attempt++) {
+    try { return await move(from, to) }
+    catch (error) {
+      if (platform !== 'win32' || attempt === 8 || !['EPERM', 'EACCES', 'EBUSY'].includes(error?.code)) throw error
+      await new Promise(resolve => setTimeout(resolve, Math.min(25 * 2 ** attempt, 500)))
+    }
+  }
+}
 async function distributionFiles(folder, prefix = '') {
   const files = []
   for (const entry of await readdir(join(folder, prefix), { withFileTypes: true })) {
@@ -157,7 +167,7 @@ export async function prepareSqlToolsService({ rid = hostRid(), root = projectRo
       try {
         await downloadArchive(archiveUrl(rid, manifest), partial, entry.assetId)
         if (await sha256(partial) !== entry.sha256) throw new Error('SQL Tools Service archive SHA-256 does not match the pinned release.')
-        await rm(archive, { force: true }); await rename(partial, archive)
+        await rm(archive, { force: true }); await renamePreparedArtifact(partial, archive)
       } finally { await rm(partial, { force: true }) }
     }
   }
@@ -172,7 +182,7 @@ export async function prepareSqlToolsService({ rid = hostRid(), root = projectRo
     const problems = await sqlToolsServiceProblems(staging, rid, manifest)
     if (problems.length) throw new Error(problems.join(' '))
     await removeGenerated(artifacts, output)
-    await rename(staging, output)
+    await renamePreparedArtifact(staging, output)
     return output
   } finally { await removeGenerated(artifacts, staging) }
 }

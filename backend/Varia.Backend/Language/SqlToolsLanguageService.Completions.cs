@@ -9,7 +9,7 @@ internal sealed partial class SqlToolsLanguageService
     private const string CompletionMarker = "__varia_completion_cursor_8c1f6e__";
     private static readonly JsonSerializerOptions CompletionJson = new(JsonSerializerDefaults.Web);
 
-    internal sealed record CompletionScope(LanguageRange Range, int Start, int End, IReadOnlyList<string> Qualifiers);
+    internal sealed record CompletionScope(LanguageRange Range, int Start, int End, IReadOnlyList<string> Qualifiers, IReadOnlySet<string> OutputAliases);
 
     private static async Task<JsonElement> ScopedCompletionAsync(ILspClient current, Document document, LanguageRequest request,
         object position, CancellationToken token)
@@ -93,7 +93,8 @@ internal sealed partial class SqlToolsLanguageService
             // Result aliases, such as a computed SELECT expression in ORDER BY, have no table qualifier.
             // Retain them only after every source was bound, so a busy/truncated expansion cannot restore
             // ambiguous table fields under bare names.
-            if (!IsColumn(item) || completeScope && String(item, "label") is { } name && resultColumns.Contains(UnquoteCompletion(name))) Include(item);
+            if (!IsColumn(item) || completeScope && String(item, "label") is { } name
+                && (resultColumns.Contains(UnquoteCompletion(name)) || scope.OutputAliases.Contains(UnquoteCompletion(name)))) Include(item);
         var items = candidates.UnorderedItems.OrderByDescending(item => item.Priority).Select(item => item.Element);
         return JsonSerializer.SerializeToElement(new { items, isIncomplete = incomplete }, CompletionJson);
     }
@@ -153,7 +154,7 @@ internal sealed partial class SqlToolsLanguageService
         if (errors.Count != 0) return null;
         var visitor = new CompletionScopeVisitor(parsedText, from);
         fragment.Accept(visitor);
-        return visitor.Qualifiers is { Count: > 0 } qualifiers ? new(replacement, from, to, qualifiers) : null;
+        return visitor.Qualifiers is { Count: > 0 } qualifiers ? new(replacement, from, to, qualifiers, visitor.OutputAliases) : null;
     }
 
     private static bool BoundedCompletionSyntax(IList<TSqlParserToken> tokens)
@@ -199,23 +200,43 @@ internal sealed partial class SqlToolsLanguageService
 
     private sealed class CompletionScopeVisitor(string text, int markerOffset) : TSqlFragmentVisitor
     {
-        private readonly List<QuerySpecification?> scopes = [];
+        private sealed record SourceScope(QuerySpecification? Query, IReadOnlyList<Identifier>? LateralSources = null);
+        private readonly List<SourceScope> scopes = [];
+        private readonly List<QuerySpecification?> orderByScopes = [];
+        private readonly Dictionary<QueryDerivedTable, IReadOnlyList<Identifier>> lateralTables = [];
         public IReadOnlyList<string>? Qualifiers { get; private set; }
+        public IReadOnlySet<string> OutputAliases { get; private set; } = new HashSet<string>(StringComparer.Ordinal);
 
         public override void ExplicitVisit(QuerySpecification node)
         {
-            scopes.Add(node);
+            scopes.Add(new(node));
             base.ExplicitVisit(node);
             scopes.RemoveAt(scopes.Count - 1);
         }
 
+        public override void ExplicitVisit(UnqualifiedJoin node)
+        {
+            var lateral = node.UnqualifiedJoinType is UnqualifiedJoinType.CrossApply or UnqualifiedJoinType.OuterApply
+                ? node.SecondTableReference as QueryDerivedTable : null;
+            if (lateral is not null) lateralTables.Add(lateral, CorrelationNames(node.FirstTableReference).ToList());
+            base.ExplicitVisit(node);
+            if (lateral is not null) lateralTables.Remove(lateral);
+        }
+
         public override void ExplicitVisit(QueryDerivedTable node)
         {
-            // A derived table cannot see sibling correlation names through its containing SELECT. Its own
-            // nested SELECTs still resolve normally; STS remains responsible for CTE/derived output columns.
-            scopes.Add(null);
+            // Derived tables skip their immediate SELECT's sources while retaining higher outer correlations.
+            // APPLY additionally sees its left operand, but neither its own output alias nor later joins.
+            scopes.Add(new(null, lateralTables.GetValueOrDefault(node) ?? []));
             base.ExplicitVisit(node);
             scopes.RemoveAt(scopes.Count - 1);
+        }
+
+        public override void ExplicitVisit(OrderByClause node)
+        {
+            orderByScopes.Add(scopes.LastOrDefault()?.Query);
+            base.ExplicitVisit(node);
+            orderByScopes.RemoveAt(orderByScopes.Count - 1);
         }
 
         public override void ExplicitVisit(ColumnReferenceExpression node)
@@ -224,10 +245,20 @@ internal sealed partial class SqlToolsLanguageService
                 || identifiers[0].Value != CompletionMarker) return;
             List<string> found = [];
             HashSet<string> hidden = new(StringComparer.Ordinal);
+            var skipEnclosingQuery = false;
             foreach (var scope in scopes.AsEnumerable().Reverse())
             {
-                if (scope is null) break;
-                var names = scope.FromClause?.TableReferences.SelectMany(CorrelationNames).ToList() ?? [];
+                IReadOnlyList<Identifier> names;
+                if (scope.Query is null)
+                {
+                    names = scope.LateralSources!;
+                    skipEnclosingQuery = true;
+                }
+                else
+                {
+                    if (skipEnclosingQuery) { skipEnclosingQuery = false; continue; }
+                    names = scope.Query.FromClause?.TableReferences.SelectMany(CorrelationNames).ToList() ?? [];
+                }
                 foreach (var group in names.GroupBy(identifier => identifier.Value, StringComparer.Ordinal))
                 {
                     if (!hidden.Add(group.Key) || group.Count() != 1) continue;
@@ -236,6 +267,11 @@ internal sealed partial class SqlToolsLanguageService
                 }
             }
             Qualifiers = found;
+            var query = scopes.LastOrDefault()?.Query;
+            if (query is not null && orderByScopes.Contains(query))
+                OutputAliases = query.SelectElements.OfType<SelectScalarExpression>().Select(element => element.ColumnName?.Value)
+                    .OfType<string>().GroupBy(name => name, StringComparer.Ordinal).Where(group => group.Count() == 1)
+                    .Select(group => group.Key).ToHashSet(StringComparer.Ordinal);
         }
 
         private static IEnumerable<Identifier> CorrelationNames(TableReference table)

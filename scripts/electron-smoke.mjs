@@ -409,8 +409,7 @@ try {
   const closeTarget = await activeDocument(page).getAttribute('aria-label')
   await selectOpenDocument(page, 'saved-as.sql')
   // Keep the inactive close target reachable at the compact CI size without selecting it before its close prompt.
-  if (await documentTab(page, closeTarget).getAttribute('data-tab-overflow') !== null)
-    await documentTabs(page).getByRole('button', { name: 'More query rows', exact: true }).click()
+  await documentTab(page, closeTarget).evaluate(tab => tab.focus({ preventScroll: true }))
   await dialogs({ holdConfirm: true, closeResponse: 1 })
   await closeDocumentButton(page, closeTarget).click()
   await expect.poll(() => application.evaluate(() => typeof globalThis.variaReleaseConfirm)).toBe('function')

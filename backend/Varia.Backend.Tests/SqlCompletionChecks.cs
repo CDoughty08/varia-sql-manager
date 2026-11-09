@@ -35,6 +35,11 @@ internal static class SqlCompletionChecks
         Scope(check, "SELECT * FROM dbo.T t WHERE EXISTS (SELECT | FROM dbo.B t)", ["t"], "inner alias shadows the same outer correlation name");
         Scope(check, "SELECT * FROM dbo.T t WHERE EXISTS (SELECT | FROM dbo.B T)", ["T", "t"], "case-distinct nested correlation names remain distinct for case-sensitive databases");
         Scope(check, "SELECT * FROM (SELECT | FROM dbo.InnerTable i) d JOIN dbo.OuterTable o ON 1=1", ["i"], "derived SELECT does not acquire sibling aliases");
+        Scope(check, "SELECT * FROM dbo.T t CROSS APPLY (SELECT | FROM dbo.B b WHERE b.id=t.id) d", ["b", "t"], "CROSS APPLY SELECT retains its lateral outer correlation names");
+        Scope(check, "SELECT * FROM dbo.T t OUTER APPLY (SELECT | FROM dbo.B b WHERE b.id=t.id) d", ["b", "t"], "OUTER APPLY SELECT retains its lateral outer correlation names");
+        Scope(check, "SELECT * FROM dbo.T t CROSS APPLY (SELECT |) d", ["t"], "APPLY without an inner FROM retains its lateral source");
+        Scope(check, "SELECT * FROM dbo.T t WHERE EXISTS (SELECT * FROM dbo.B b CROSS JOIN (SELECT | FROM dbo.I i WHERE i.id=t.id) d)", ["i", "t"],
+            "ordinary derived SELECT excludes immediate siblings while retaining higher outer correlations");
         Scope(check, "SELECT * FROM dbo.T t UNION ALL SELECT | FROM dbo.B b", ["b"], "UNION branch does not acquire the other branch's alias");
         Scope(check, "SELECT |, 'FROM dbo.Fake f' FROM dbo.T t -- JOIN dbo.Fake g", ["t"], "strings and comments cannot invent correlation names");
         Scope(check, "SELECT * FROM |", null, "table-name position does not become a column scope");
@@ -110,6 +115,24 @@ internal static class SqlCompletionChecks
             check(result.Items.Any(item => item.Label == "ComputedOnly") && !result.Items.Any(item => item.Label == "t.ComputedOnly")
                 && result.Items.Any(item => item.Label == "t.LeftOnly") && !result.Items.Any(item => item.Label == "LeftOnly"),
                 "semantic result aliases survive ORDER BY expansion while source columns remain qualified");
+        }
+        var collidingAlias = new CompletionClient();
+        using (var provider = new SqlToolsLanguageService(_ => null, createClient: _ => collidingAlias))
+        {
+            const string text = "SELECT t.LeftOnly + 1 AS high FROM dbo.LeftFixture t JOIN dbo.RightFixture b ON 1=1 ORDER BY ";
+            var result = await provider.CompleteAsync(new(Guid.NewGuid().ToString(), 1, text, new("sqlserver"), new(0, text.Length)), default);
+            check(result.Items.Any(item => item.Label == "high") && result.Items.Any(item => item.Label == "t.high")
+                && result.Items.Any(item => item.Label == "b.high") && !result.Items.Any(item => item.Label is "LeftOnly" or "RightOnly"),
+                "ORDER BY preserves a unique output alias that collides with source columns without restoring unrelated bare fields");
+        }
+        var duplicateAlias = new CompletionClient();
+        using (var provider = new SqlToolsLanguageService(_ => null, createClient: _ => duplicateAlias))
+        {
+            const string text = "SELECT t.LeftOnly AS high, b.RightOnly AS high FROM dbo.LeftFixture t JOIN dbo.RightFixture b ON 1=1 ORDER BY ";
+            var result = await provider.CompleteAsync(new(Guid.NewGuid().ToString(), 1, text, new("sqlserver"), new(0, text.Length)), default);
+            check(!result.Items.Any(item => item.Label == "high") && result.Items.Any(item => item.Label == "t.high")
+                && result.Items.Any(item => item.Label == "b.high"),
+                "duplicate output aliases do not restore an ambiguous bare source column in ORDER BY");
         }
     }
 

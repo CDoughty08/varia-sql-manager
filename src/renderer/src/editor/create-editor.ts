@@ -8,7 +8,7 @@ import { bindExplorerDrop } from '../explorer/drop'
 export interface QueryEditorInstance extends Disposable { readonly instance: editor.IStandaloneCodeEditor; setVisible(visible: boolean): void }
 
 /** Creates a query editor in `container`. Each editor group has one, which shows the group's active text document. */
-export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorOptions'>, container: HTMLElement): QueryEditorInstance {
+export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorOptions' | 'panes'>, container: HTMLElement): QueryEditorInstance {
   // Dockview clips panel contents and floats create stacking contexts. Keep Monaco's widgets in the document that
   // owns this editor, outside those ancestors; fixed positioning lets Monaco constrain them to the window's edges.
   const overflow = container.ownerDocument.createElement('div')
@@ -57,8 +57,14 @@ export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorO
   }
   const model = instance.onDidChangeModel(watchClasses)
   watchClasses()
+  // Closing or tabbing away from the outer Query Editor keeps its inner groups mounted. The body-level host must
+  // follow that pane too, since it no longer inherits the editor container's visibility.
+  let visible = true
+  const syncVisibility = () => { overflow.hidden = !visible || !workbench.panes.getSnapshot().editor }
+  const visibility = workbench.panes.subscribe(syncVisibility)
+  syncVisibility()
   // Object Explorer rows dropped on the editor insert their names.
   const drop = bindExplorerDrop(instance)
-  return { instance, setVisible: visible => { overflow.hidden = !visible },
-    dispose: () => { drop.dispose(); options.dispose(); model.dispose(); classes.disconnect(); instance.dispose(); overflow.remove() } }
+  return { instance, setVisible: value => { visible = value; syncVisibility() },
+    dispose: () => { visibility(); drop.dispose(); options.dispose(); model.dispose(); classes.disconnect(); instance.dispose(); overflow.remove() } }
 }

@@ -5,6 +5,7 @@ import { emptyShortcutFile, type ShortcutFile } from '../src/shared/commands/sho
 import { gestureAvailable, gestureIds } from '../src/shared/commands/gestures'
 import { gestureRows, setGesture } from '../src/renderer/src/settings/shortcuts/gesture-rows'
 import MouseView from '../src/renderer/src/settings/shortcuts/MouseView'
+import { shortcutSearchChars } from '../src/renderer/src/settings/shortcuts/shortcuts-search'
 
 // The view reads the linked editor setting and command keys from the workbench, which server rendering has no store for.
 vi.mock('../src/renderer/src/core/WorkbenchContext', async original => ({
@@ -25,7 +26,12 @@ describe('gesture rows', () => {
     expect(rows.find(row => row.id === 'connections.connect')).toMatchObject({ scopeTitle: 'Connect Dialog', kind: 'fixed', options: [] })
     expect(rows.find(row => row.id === 'documentTabs.rows')).toMatchObject({
       scopeTitle: 'Document Tabs', kind: 'fixed', label: 'Ctrl+Wheel', source: 'builtin', options: [],
-      locked: expect.stringContaining('row buttons')
+      locked: expect.stringContaining('Increase Tab Stack Height and Decrease Tab Stack Height in the tab menu and command palette'),
+      keyboard: ['editor.increaseTabRows', 'editor.decreaseTabRows']
+    })
+    expect(rows.find(row => row.id === 'documentTabs.scroll')).toMatchObject({
+      scopeTitle: 'Document Tabs', kind: 'fixed', label: 'Wheel', source: 'builtin', options: [],
+      locked: expect.stringContaining('Arrow keys, Home and End')
     })
     // macOS's Control+click is a right-click there only.
     expect(ids(rows)).not.toContain('grid.secondaryClick')
@@ -82,11 +88,21 @@ describe('gesture rows follow the page', () => {
     expect(gestureRows(file, 'win32', '@kind:k')).toEqual([])
     expect(ids(gestureRows(file, 'win32', '@source:u'))).toEqual(['explorer.peekHover', 'dock.floatWhileDragging'])
     expect(ids(gestureRows(file, 'win32', '@scope:grid'))).toEqual(['grid.addToSelection', 'grid.addSortKey', 'grid.extendSelection', 'grid.fitColumn'])
+    // Scope ids match too, as the page's `@scope:editor` does for keyboard rows (case-folded, like every token).
+    expect(ids(gestureRows(file, 'win32', '@scope:resultsgrid'))).toEqual(['grid.addToSelection', 'grid.addSortKey', 'grid.extendSelection', 'grid.fitColumn'])
+    expect(ids(gestureRows(file, 'win32', '@scope:tableDesigner'))).toEqual(['grid.addToSelection', 'grid.extendSelection'])
+    expect(ids(gestureRows(file, 'win32', '@scope:queryeditor', { multiCursorModifier: 'alt' }))).toEqual(['textEditor.multiCursorModifier'])
     expect(ids(gestureRows(file, 'win32', '@scope:messages'))).toEqual(['messages.revealError'])
     expect(ids(gestureRows(file, 'win32', '@unbound'))).toEqual(['explorer.peekHover'])
     expect(ids(gestureRows(file, 'win32', '@command:pane.dock'))).toEqual(['dock.toggleFloat'])
     // Problems: Alt on Linux warns.
     expect(ids(gestureRows(file, 'linux', '@conflicts'))).toEqual(['dock.floatWhileDragging'])
+  })
+  it('read only the first shortcutSearchChars characters of the search, as the page does', () => {
+    const all = gestureRows(draft(), 'win32', '').length
+    // A word that matches nothing filters everything out while it fits, and nothing once it starts past the cap.
+    expect(gestureRows(draft(), 'win32', ' '.repeat(shortcutSearchChars - 4) + 'qqqq')).toEqual([])
+    expect(gestureRows(draft(), 'win32', ' '.repeat(shortcutSearchChars) + 'qqqq')).toHaveLength(all)
   })
   it('call every locked row built-in, as the All view does', () => {
     const rows = gestureRows(draft(), 'win32', '')
@@ -129,13 +145,24 @@ describe('MouseView', () => {
     expect(html).toContain('Ctrl+Click · <button type="button" class="mouse-link">Text Editor › General</button>')
     expect(html).toContain('Keyboard: Peek <span class="keybinding" role="img" aria-label="Alt+F12">')
     // Float has no key of its own (its context menu reaches it): the title alone.
-    expect(html).toContain('<span class="mouse-keyboard">Keyboard: Float, Float Editor</span>')
+    expect(html).toContain('<span class="mouse-keyboard" id="mouse-dock-floatWhileDragging-keyboard">Keyboard: Float, Float Editor</span>')
   })
   it('keeps the row header to the title and reads the details with the dropdown', () => {
     const html = render()
     expect(html).toContain('<th scope="row"><span class="mouse-gesture"><span class="mouse-dot" aria-hidden="true"></span><span class="mouse-title">Peek on Hover</span></span></th>')
-    expect(html).toContain('aria-describedby="mouse-explorer-peekHover-about"')
+    expect(html).toContain('aria-describedby="mouse-explorer-peekHover-about mouse-explorer-peekHover-keyboard"')
     expect(html).toContain('<span class="mouse-about" id="mouse-explorer-peekHover-about">Peeks the object')
+  })
+  it('reads the other-platform note and the keyboard path with the dropdown, and shows the id in the details', () => {
+    const html = render({ draft: draft({ 'dock.toggleFloat': 'meta' }), platform: 'win32' })
+    const describedBy = /<select id="mouse-dock-toggleFloat"[^>]*aria-describedby="([^"]+)"/.exec(html)?.[1].split(' ') ?? []
+    const spans = new Map([...html.matchAll(/<span class="[^"]*" id="([^"]+)">((?:(?!<span class="mouse-).)*)/g)].map(match => [match[1], match[2]]))
+    expect(describedBy).toEqual(['mouse-dock-toggleFloat-about', 'mouse-dock-toggleFloat-other', 'mouse-dock-toggleFloat-keyboard'])
+    expect(spans.get('mouse-dock-toggleFloat-other')).toContain('only another platform offers')
+    expect(spans.get('mouse-dock-toggleFloat-keyboard')).toContain('Keyboard: Float')
+    expect(html).toContain('<span class="mouse-about mouse-id">Id: <code>dock.toggleFloat</code></span>')
+    // A row with neither names only its description.
+    expect(html).toContain('aria-describedby="mouse-grid-addToSelection-about"')
   })
   it("shows the Options dialog's draft value of the linked setting when it is given", () => {
     // The mocked saved setting is Ctrl+Click; the page's draft says Alt+Click.

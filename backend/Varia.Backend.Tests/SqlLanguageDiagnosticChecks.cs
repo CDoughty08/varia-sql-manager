@@ -28,6 +28,8 @@ internal static class SqlLanguageDiagnosticChecks
         var invalid = SqlToolsLanguageService.ReadDiagnostics(Element(new[] { Marker(), new { range = new { start = new { line = 0, character = 100 }, end = new { line = 0, character = 101 } }, message = "outside", severity = 1, code = 207, source = "MSSQL" } }), "SELECT missing", 1);
         check(invalid.Items.Count == 1 && invalid.IsIncomplete, "diagnostics reject ranges outside the actual immutable snapshot");
 
+        await BrokerSnapshotChecks(check);
+
         List<Client> clients = [];
         using (var sql = new SqlToolsLanguageService(_ => null, createClient: notify =>
             { var value = new Client(notify); clients.Add(value); return value; }))
@@ -144,6 +146,24 @@ internal static class SqlLanguageDiagnosticChecks
                 "immutable diagnostic owner churn retires retained SQL Tools parse state at a fixed bound");
         }
 
+        clients.Clear();
+        using (var sql = new SqlToolsLanguageService(_ => null, createClient: notify =>
+            { var value = new Client(notify); clients.Add(value); return value; }))
+        {
+            var request = Request(text: new string('x', SqlToolsLanguageService.MaxTextCharacters));
+            var snapshots = SqlToolsLanguageService.MaxTotalCharacters / request.Text.Length;
+            for (var version = 1; version <= snapshots; version++)
+                await sql.DiagnosticsAsync(request with { Version = version }, default);
+            check(clients.Count == 1 && !clients[0].Disposed,
+                "diagnostic snapshots can fill the aggregate retained text budget exactly without premature retirement");
+            await sql.DiagnosticsAsync(request with { Version = snapshots + 1, Text = "x" }, default);
+            check(clients.Count == 2 && clients[0].Disposed && clients[1].LiveUris.Count == 1,
+                "one character beyond the diagnostic snapshot budget retires retained parse state before opening another buffer");
+            await sql.DiagnosticsAsync(request with { Version = snapshots + 2 }, default);
+            check(clients.Count == 2 && clients[1].LiveUris.Count == 1,
+                "diagnostic process retirement resets the cumulative snapshot text budget");
+        }
+
         Client? idle = null;
         using (var sql = new SqlToolsLanguageService(_ => null, createClient: notify => idle = new Client(notify), diagnosticIdleTimeout: TimeSpan.FromMilliseconds(25)))
         {
@@ -151,6 +171,46 @@ internal static class SqlLanguageDiagnosticChecks
             await idle!.DisposedSignal.Task.WaitAsync(Wait);
             check(idle.Disposed, "an idle analysis child releases its metadata cache without requiring a document close");
         }
+    }
+
+    private static async Task BrokerSnapshotChecks(Action<bool, string> check)
+    {
+        using var broker = new LanguageServiceBroker([new SqlToolsLanguageService(_ => null, createClient: notify => new Client(notify))]);
+        var buffer = SubmitSnapshot(broker);
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        check(!buffer.IsAlive, "the language broker does not retain a completed diagnostic buffer solely for stale-request checks");
+
+        var request = Request(version: 2, text: "SELECT N'🙂'; SELECT missing");
+        await broker.DiagnosticsAsync(request, default);
+        var same = await broker.DiagnosticsAsync(request with { Text = new string(request.Text.ToCharArray()) }, default);
+        check(same.Version == request.Version, "broker snapshot identity accepts equal UTF-16 text in a different string instance");
+        var changed = request with { Text = "SELECT N'🙃'; SELECT missing" };
+        check(await Code(async () => await broker.DiagnosticsAsync(request with { Version = 1 }, default)) == "STALE"
+            && await Code(async () => await broker.DiagnosticsAsync(changed, default)) == "STALE"
+            && await Code(async () => await broker.RefreshAsync(changed, default)) == "STALE"
+            && await Code(async () => await broker.CompleteAsync(new(changed.DocumentId, changed.Version, changed.Text, changed.Context, new(0, 0)), default)) == "STALE"
+            && await Code(async () => await broker.HoverAsync(new(changed.DocumentId, changed.Version, changed.Text, changed.Context, new(0, 0)), default)) == "STALE",
+            "broker fingerprints preserve old-version and same-version text rejection across every language operation");
+        check(await Code(async () => await broker.DiagnosticsAsync(request with { Version = 3, Text = null! }, default)) == "INVALID_PARAMS"
+            && (await broker.DiagnosticsAsync(request with { Version = 3 }, default)).Version == 3,
+            "malformed null diagnostic text returns a validation failure and does not prevent a subsequent valid snapshot");
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static WeakReference SubmitSnapshot(LanguageServiceBroker broker)
+    {
+        var text = new string('x', SqlToolsLanguageService.MaxTextCharacters);
+        var buffer = new WeakReference(text);
+        _ = broker.DiagnosticsAsync(Request(text: text), default).GetAwaiter().GetResult();
+        return buffer;
+    }
+
+    private static async Task<string?> Code(Func<Task> run)
+    {
+        try { await run(); return null; }
+        catch (RequestException error) { return error.Code; }
     }
 
     private sealed class Client(Func<string, JsonElement, Task> notification) : ILspClient
