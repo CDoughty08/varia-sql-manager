@@ -125,13 +125,13 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
   useLayoutEffect(() => { viewRef.current?.setHighlights(highlightRows ?? []) }, [highlightRows, tabId, index, entry])
   // The active match scrolls into view once, in the grid that holds it: at once, or when this grid mounts (the stack
   // scrolled to it) or has swapped to the order the matches number.
-  const reveal = search?.reveal ?? 0
+  const reveal = search?.reveal ?? 0, revealSelect = search?.revealSelect ?? false
   useEffect(() => {
     const view = viewRef.current
     if (!view) return
     view.setMarks(marks)
-    if (resultsSearch.pendingReveal(tabId, index) && view.revealMark()) resultsSearch.revealed(tabId)
-  }, [marks, reveal, swaps, resultsSearch, tabId, index])
+    if (resultsSearch.pendingReveal(tabId, index) && view.revealMark(revealSelect)) resultsSearch.revealed(tabId)
+  }, [marks, reveal, revealSelect, swaps, resultsSearch, tabId, index])
   // A built view replaces what the grid shows: its first rows are read before the swap, so it paints whole rows at once,
   // unless what it shows is already gone (its result released or lost). While a first sort runs the grid keeps the rows in
   // their order; the views it showed close once it has swapped (ResultsService.viewShown).
