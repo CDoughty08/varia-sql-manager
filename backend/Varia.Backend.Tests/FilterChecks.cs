@@ -138,19 +138,26 @@ internal static class FilterChecks
     {
         var store = new ResultStore(1L << 30, 1L << 29);
         var small = Fill(store, Rows);
-        // Over two pages (4,096 rows each): long values share their 8-byte prefixes, so ties read the stored cells again.
+        // Over two pages (4,096 rows each): long values share their 8-byte prefixes, so ties read the stored cells again; texts
+        // differ in length (for a Chars key), and a decimal column repeats values written two ways (1 and 1.00), so its ties
+        // compare the stored text of rows a key built over only the kept rows indexes by their place.
+        string Text(int value) => value.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var big = Fill(store, [.. Enumerable.Range(0, 10_000).Select(i => new string?[]
         {
-            i.ToString(System.Globalization.CultureInfo.InvariantCulture), i % 17 == 0 ? null : $"name-prefix-{i % 13:D2}", $"code-prefix-{i % 11:D2}", i % 5 == 4 ? "2.0" : (i % 5).ToString(System.Globalization.CultureInfo.InvariantCulture)
-        })]);
-        (ResultSetBuffer Set, string Name, int Column, int Other, ViewFilter[] Filters)[] cases =
+            Text(i), i % 17 == 0 ? null : $"name-prefix-{i % 13:D2}" + new string('x', i % 3), $"code-prefix-{i % 11:D2}" + new string('y', i % 4),
+            i % 5 == 4 ? "2.0" : Text(i % 5), i % 2 == 0 ? Text(i % 7) : Text(i % 7) + ".00"
+        })], [.. Columns, new("amount", "decimal(9,2)", "text")]);
+        // Each case: the filtered column, another Value key, and a column a Chars key sorts by (or -1).
+        (ResultSetBuffer Set, string Name, int Column, int Other, int Length, ViewFilter[] Filters)[] cases =
         [
-            (small, "a collated column", 1, 0, [Named(FilterOp.In, 1, [0]), Named(FilterOp.NotIn, 1, [1], nulls: true), Named(FilterOp.Between, 1, [0, 1]), Dups(1)]),
-            (small, "a float column", 3, 1, [Named(FilterOp.In, 3, [1]), Named(FilterOp.NotIn, 3, [0], nulls: true), Named(FilterOp.Between, 3, [0, 1]), Dups(3)]),
-            (big, "a collated column over two pages", 1, 2, [Named(FilterOp.In, 1, [1, 2, 3]), Named(FilterOp.NotIn, 1, [1, 2], nulls: true), Named(FilterOp.Between, 1, [3, 8]), Dups(1, 3)]),
-            (big, "a _BIN2 column over two pages", 2, 1, [Named(FilterOp.In, 2, [1, 2]), Named(FilterOp.NotIn, 2, [1]), Named(FilterOp.Between, 2, [3, 8]), Dups(2)])
+            (small, "a collated column", 1, 0, -1, [Named(FilterOp.In, 1, [0]), Named(FilterOp.NotIn, 1, [1], nulls: true), Named(FilterOp.Between, 1, [0, 1]), Dups(1)]),
+            (small, "a float column", 3, 1, -1, [Named(FilterOp.In, 3, [1]), Named(FilterOp.NotIn, 3, [0], nulls: true), Named(FilterOp.Between, 3, [0, 1]), Dups(3)]),
+            (big, "a collated column over two pages", 1, 4, 2, [Named(FilterOp.In, 1, [1, 2, 3]), Named(FilterOp.NotIn, 1, [1, 2], nulls: true), Named(FilterOp.Between, 1, [3, 8]), Dups(1, 3)]),
+            // Duplicates in the codes keep every row (each repeats): the sort then takes the whole, grouped order.
+            (big, "a _BIN2 column over two pages", 2, 4, 1, [Named(FilterOp.In, 2, [1, 2]), Named(FilterOp.NotIn, 2, [1]), Named(FilterOp.Between, 2, [3, 8]), Dups(2)])
         ];
-        foreach (var (set, name, column, other, filters) in cases)
+        check(Build(big, [], Dups(2)).Order.Length == 10_000, "the duplicates case keeps every row");
+        foreach (var (set, name, column, other, length, filters) in cases)
         {
             foreach (var filter in filters)
             {
@@ -158,7 +165,9 @@ internal static class FilterChecks
                 var keptRows = alone.ToHashSet();
                 foreach (var descending in new[] { true, false })
                 {
-                    ViewKey[] keys = [new ViewKey(column, descending, SortMode.Value), new ViewKey(other, !descending, SortMode.Value), new ViewKey(0, false, SortMode.Value)];
+                    ViewKey[] keys = length < 0
+                        ? [new ViewKey(column, descending, SortMode.Value), new ViewKey(other, !descending, SortMode.Value), new ViewKey(0, false, SortMode.Value)]
+                        : [new ViewKey(column, descending, SortMode.Value), new ViewKey(length, descending, SortMode.Chars), new ViewKey(other, !descending, SortMode.Value), new ViewKey(0, false, SortMode.Value)];
                     var expected = Build(set, keys).Order.Where(keptRows.Contains);
                     var (order, resolved) = Build(set, keys, filter);
                     check(order.SequenceEqual(expected) && (resolved[0].Rows ?? []).SequenceEqual(aloneResolved[0].Rows ?? []) && resolved[0].Nulls == aloneResolved[0].Nulls,

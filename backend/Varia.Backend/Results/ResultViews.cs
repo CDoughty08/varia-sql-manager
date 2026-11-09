@@ -151,10 +151,12 @@ internal static class ViewSorter
         for (var k = 0; k < keys.Count; k++)
         {
             descending[k] = keys[k].Descending;
-            built[k] = keys[k].Mode == SortMode.Value && values.TryGetValue(keys[k].Column, out var shared)
-                ? kept is null ? shared : new MappedKey(shared, kept)
-                : Build(set, source, keys[k], kept, rows, token, ref approximate);
+            if (keys[k].Mode == SortMode.Value && values.TryGetValue(keys[k].Column, out var shared)) built[k] = kept is null ? shared : new MappedKey(shared, kept);
         }
+        // Filter keys no sort key shares are done with: let them go before the sort keys are built.
+        values.Clear();
+        for (var k = 0; k < keys.Count; k++)
+            built[k] ??= Build(set, source, keys[k], kept, rows, token, ref approximate);
         var comparer = new Comparer(built, descending, token);
         if (kept is null)
         {
