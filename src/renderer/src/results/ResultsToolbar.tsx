@@ -1,9 +1,11 @@
-import type { KeyboardEvent } from 'react'
+import { useEffect, useRef, type KeyboardEvent } from 'react'
 import type { CommandId } from '../../../shared/commands/catalog'
 import type { ViewSortMode } from '../../../shared/contracts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import type { WhitespaceMode } from '../grid/whitespace'
 import Icon from '../Icon'
+import { searchCount, type SearchMode } from './search'
+import { formatCount } from './status'
 
 interface Choice<T> { readonly mode: T; readonly label: string; readonly title: string; readonly command?: CommandId }
 
@@ -20,15 +22,56 @@ const sortTextChoices: readonly Choice<ViewSortMode>[] = [
   { mode: 'bytes', label: 'Bytes', title: 'Sort text and binary values by their length in bytes (DATALENGTH)', command: 'output.sortTextByBytes' }
 ]
 
+/** What the search box searches: cell values (in the backend) or column names. */
+const searchModes: readonly { readonly mode: SearchMode; readonly label: string; readonly title: string; readonly icon: 'list-flat' | 'symbol-field' }[] = [
+  { mode: 'values', label: 'Data', title: 'Data: search cell values, comparing text by each column collation', icon: 'list-flat' },
+  { mode: 'columns', label: 'Columns', title: 'Columns: search column names only', icon: 'symbol-field' }
+]
+
+/**
+ * The search box: its text searches every grid of the run (ResultsSearchService), Enter and Shift+Enter step through the
+ * matches, Escape clears it. It is its own Tab stop, so Left and Right stay with its text.
+ */
+function ResultsSearchBox({ tabId }: { tabId: string }) {
+  const { resultsSearch } = useWorkbench()
+  const search = useServiceSnapshot(resultsSearch)[tabId] ?? resultsSearch.of(tabId)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const focus = search.focus
+  // Find in Results (Ctrl+F in a grid) puts the focus here with the text selected, so typing replaces it; once, even when
+  // the box is shown only after it (the Messages view), and not again each time the box is shown.
+  useEffect(() => { if (resultsSearch.takeFocus(tabId)) { inputRef.current?.focus(); inputRef.current?.select() } }, [focus, resultsSearch, tabId])
+  const keyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter' && !event.altKey && !event.ctrlKey && !event.metaKey) { event.preventDefault(); resultsSearch.step(tabId, event.shiftKey ? -1 : 1) }
+    else if (event.key === 'Escape' && search.text) { event.preventDefault(); event.stopPropagation(); resultsSearch.clear(tabId) }
+  }
+  const count = searchCount(search, formatCount)
+  const columns = search.mode === 'columns'
+  return <div className="results-search" data-mode={search.mode}>
+    <Icon name="search" className="results-search-icon" />
+    <input ref={inputRef} type="text" spellCheck={false} maxLength={1024} aria-label={columns ? 'Search column names' : 'Search results'} placeholder={columns ? 'Search column names' : 'Search all results'}
+      value={search.text} title={search.approximate ? 'Some long values were searched only as far as they were stored.' : undefined}
+      onChange={event => resultsSearch.setText(tabId, event.target.value)} onKeyDown={keyDown} />
+    <span className="results-search-count" role="status" aria-live="polite" title={search.error}>{count}</span>
+    <button type="button" tabIndex={-1} aria-label="Previous match" title="Previous match (Shift+Enter)" disabled={search.total === 0} onClick={() => resultsSearch.step(tabId, -1)}><Icon name="arrow-up" /></button>
+    <button type="button" tabIndex={-1} aria-label="Next match" title="Next match (Enter)" disabled={search.total === 0} onClick={() => resultsSearch.step(tabId, 1)}><Icon name="arrow-down" /></button>
+    <div className="results-segments" role="group" aria-label="Search in">
+      {/* Icons only, as the Show toggles: the toolbar must still fit the output pane of a 1024 px window. */}
+      {searchModes.map(choice => <button key={choice.mode} type="button" className="results-icon-toggle" tabIndex={-1} aria-label={choice.label} aria-pressed={choice.mode === search.mode} title={choice.title}
+        onClick={() => resultsSearch.setMode(tabId, choice.mode)}><Icon name={choice.icon} /></button>)}
+    </div>
+  </div>
+}
+
 /**
  * The results toolbar, in the Results panel's head beside its views: what it changes applies to every grid in the run. It
- * holds White space and Sort text by for now; search, stats and the other result tools join it. The controls follow the
- * ARIA toolbar pattern: one Tab stop, Left and Right (Home, End) move between them.
+ * holds search, White space, Sort text by, and the Profile and Row size toggles; the other result tools join it. The controls follow the
+ * ARIA toolbar pattern: one Tab stop, Left and Right (Home, End) move between them; the search box is a Tab stop of its own.
  */
-export default function ResultsToolbar() {
+export default function ResultsToolbar({ tabId }: { tabId: string }) {
   const { commands, settings } = useWorkbench()
   const values = useServiceSnapshot(settings).values
   const whitespace = values['queryResults.grid.whitespace'], sortText = values['queryResults.grid.sortText']
+  const profile = values['queryResults.grid.columnProfile'], rowSize = values['queryResults.grid.rowSize']
   // Off (or Value) runs the command of the choice that is on, which turns it off.
   const choose = <T,>(choices: readonly Choice<T>[], current: T, mode: T) => {
     if (mode === current) return
@@ -55,7 +98,15 @@ export default function ResultsToolbar() {
     </div>
   </>
   return <div className="results-toolbar" role="toolbar" aria-label="Results tools" onKeyDown={keyDown}>
+    <ResultsSearchBox tabId={tabId} />
     {group('White space', 'whitespace', whitespaceChoices, whitespace, true)}
     {group('Sort text by', 'symbol-ruler', sortTextChoices, sortText, false)}
+    {/* Icons only: with the two segmented groups the toolbar must still fit the output pane of a 1024 px window. */}
+    <div className="results-segments" role="group" aria-label="Show">
+      <button type="button" className="results-icon-toggle" aria-label="Profile" aria-pressed={profile} tabIndex={-1} title="Column profile: NULLs, distinct values, lowest and highest, lengths and a histogram for each column"
+        onClick={() => void commands.execute('output.toggleColumnProfile', undefined, 'toolbar')}><Icon name="graph" /></button>
+      <button type="button" className="results-icon-toggle" aria-label="Row size" aria-pressed={rowSize} tabIndex={-1} title="Row size: a bar behind each row number; hover it for the exact bytes"
+        onClick={() => void commands.execute('output.toggleRowSize', undefined, 'toolbar')}><Icon name="list-flat" /></button>
+    </div>
   </div>
 }

@@ -54,15 +54,23 @@ function highlightText(marked: SetHighlights | undefined): string | undefined {
 const keysOf = (sort: GridSort | undefined) => sort?.keys.map(key => `${key.column}${key.descending ? 'd' : 'a'}`).join(',') ?? ''
 
 function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, onWide }: ResultGridProps) {
-  const { results, resultClient, commands, platform, gridStats, panes, settings, highlights } = useWorkbench()
+  const { results, resultClient, commands, platform, gridStats, panes, settings, resultsSearch, highlights } = useWorkbench()
   const marked = useSyncExternalStore(highlights.subscribe, () => highlights.getSnapshot()[tabId]?.get(entry.index))
   const values = useServiceSnapshot(settings).values
-  const showTypes = values['queryResults.grid.showColumnTypes'], whitespace = values['queryResults.grid.whitespace']
-  const showTypesRef = useRef(showTypes), whitespaceRef = useRef(whitespace)
+  const showTypes = values['queryResults.grid.showColumnTypes'], whitespace = values['queryResults.grid.whitespace'], rowSize = values['queryResults.grid.rowSize']
+  const showTypesRef = useRef(showTypes), whitespaceRef = useRef(whitespace), rowSizeRef = useRef(rowSize)
   showTypesRef.current = showTypes
   whitespaceRef.current = whitespace
+  rowSizeRef.current = rowSize
   const rootRef = useRef<HTMLDivElement>(null), scrollRef = useRef<HTMLDivElement>(null), viewRef = useRef<GridView | undefined>(undefined)
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
+  // Search in results: this grid's marks, and the tab's reveal of the active match.
+  const search = useServiceSnapshot(resultsSearch)[tabId]
+  const marks = search?.marks.get(entry.index)
+  const marksRef = useRef(marks)
+  // Bumped by each swap, so a reveal waiting for the sorted rows runs once they show.
+  const [swaps, setSwaps] = useState(0)
+  marksRef.current = marks
   const [status, setStatus] = useState<GridStatus>({})
   const index = entry.index
   const countRef = useRef(count)
@@ -81,7 +89,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
     results.viewShown(tabId, index, sorted)
     const view = new GridView({
       root: rootRef.current!, scroller: scrollRef.current!, handle: shownRef.current.handle, client: resultClient, descriptor: entry.descriptor, state: results.gridState(tabId, index),
-      resultIndex: index, resultCount: countRef.current, platform, stats: gridStats, showTypes: showTypesRef.current, whitespace: whitespaceRef.current,
+      resultIndex: index, resultCount: countRef.current, platform, stats: gridStats, showTypes: showTypesRef.current, whitespace: whitespaceRef.current, rowSize: rowSizeRef.current,
       onSelection: selection => {
         const current = entry.handle.getSnapshot()
         results.announceSelection(tabId, describeSelection(selection, current.rowsAvailable, entry.descriptor.columns.length))
@@ -97,6 +105,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
       onSort: (column, add) => results.cycleSort(tabId, index, column, add)
     })
     viewRef.current = view
+    view.setMarks(marksRef.current)
     const registration = results.registerGrid(tabId, index, { selectAll: () => view.selectAll(), repaint: () => view.repaint() })
     // Closing and opening the pane within one frame moves the grid without resizing it, and the move drops the scroller's
     // offsets: the frame this asks for writes them back (GridView's offsetsDropped), and a press before it keeps them.
@@ -108,10 +117,19 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
       if (viewRef.current === view) viewRef.current = undefined
     }
   }, [tabId, index, entry, results, resultClient, commands, platform, gridStats, panes])
-  useEffect(() => { viewRef.current?.update({ resultCount: count, showTypes, whitespace, sort: sort?.keys }) }, [count, showTypes, whitespace, sort?.keys])
+  useEffect(() => { viewRef.current?.update({ resultCount: count, showTypes, whitespace, sort: sort?.keys, rowSize }) }, [count, showTypes, whitespace, sort?.keys, rowSize])
   // The grid draws the highlighted rows of the handle it shows, and switches with its swaps.
   const highlightRows = marked?.rows
   useLayoutEffect(() => { viewRef.current?.setHighlights(highlightRows ?? []) }, [highlightRows, tabId, index, entry])
+  // The active match scrolls into view once, in the grid that holds it: at once, or when this grid mounts (the stack
+  // scrolled to it) or has swapped to the order the matches number.
+  const reveal = search?.reveal ?? 0
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+    view.setMarks(marks)
+    if (resultsSearch.pendingReveal(tabId, index) && view.revealMark()) resultsSearch.revealed(tabId)
+  }, [marks, reveal, swaps, resultsSearch, tabId, index])
   // A built view replaces what the grid shows: its first rows are read before the swap, so it paints whole rows at once,
   // unless what it shows is already gone (its result released or lost). While a first sort runs the grid keeps the rows in
   // their order; the views it showed close once it has swapped (ResultsService.viewShown).
@@ -125,6 +143,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
       if (abort.signal.aborted || viewRef.current !== view) return
       shownRef.current = { handle: target, keys }
       view.swap(target, entry.descriptor, row => row, top === undefined ? {} : { top })
+      setSwaps(value => value + 1)
       // The views it showed before can close now.
       results.viewShown(tabId, index, target === entry.handle ? undefined : target)
     }

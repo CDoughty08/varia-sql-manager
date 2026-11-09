@@ -2,6 +2,10 @@
 
 The Execution Plan output and `.sqlplan` documents share the Pixi viewer. Operators use the workbench icon registry: seeks/lookups, scans/writes, joins, sorts, filters, aggregates, exchanges, scalar operations and spools have recognizable families; unknown operators keep a generic plan icon. Text and strokes use the active theme.
 
+The canvas uses its owning window's full device pixel ratio with `autoDensity`. Visible text is rasterized at `renderer.resolution × camera.scale` and uses `roundPixels`, keeping glyph textures matched to their displayed pixel size at fractional zoom as well as 100–300%. Panning and unchanged live counters reuse those textures; zoom changes regenerate visible labels. Display DPI changes and moving into a popout rebind the resolution watch and redraw. Text hidden at low zoom keeps the existing visibility thresholds and bounded label pool.
+
+[Text rendering verification](plan-text-quality.md) includes before/after screenshots, the zoom/DPI matrix, and the reproduction command.
+
 Row flow labels describe the **child's output into its consuming parent**, with arrows pointing toward the parent. Actual values include measured zero; estimates are labeled `Est.` and use estimated executions when available, otherwise say `rows/exec`. Missing runtime rows stay unavailable. Live values explicitly say `Live partial`, including after a stopped execution. Line width is logarithmic and capped; width alone cannot identify provenance. The outline supplies the same row-flow words to assistive technology, even when edge labels are hidden at low zoom.
 
 Select a branch and use **Collapse inputs**, **Expand inputs**, or **Expand all**. Left and Right also collapse/expand inputs before moving to the parent/first input. The virtual outline intentionally lists every operator, including graph-hidden inputs. Choosing an input through the outline, search, rankings or `selectOperator` expands only its ancestors and reveals it. Collapsing a branch selects its root. Models and retained snapshots remain unchanged.

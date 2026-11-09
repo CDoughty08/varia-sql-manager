@@ -6,9 +6,11 @@ import { isSsisDocumentKind } from '../../../shared/ssis/catalog.ts'
 import type { ThemeType } from '../../../shared/theme/types'
 import { useServiceSelector, useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import type { Workbench } from '../core/workbench'
+import { focusWhenDrawn } from '../core/modal'
 import { documentKind, isCustomKind, isQueryDocument, isTextDocument, kindInfo, type QueryTab } from '../documents'
 import { DockingGuides } from '../docking-guides'
 import { afterPointer } from './pointer'
+import TabShelves from './TabShelves'
 import { createQueryEditor, type QueryEditorInstance } from '../editor/create-editor'
 import EnvironmentTag from '../EnvironmentTag'
 import Icon from '../Icon'
@@ -168,12 +170,10 @@ function DocumentTab({ api }: IDockviewPanelHeaderProps) {
     else host.removeAttribute('aria-description')
   }, [description, tooltip])
   const name = tab?.name
-  // A tab is as wide as its name and SID chip, so every tab after the first would start on a fractional pixel and blur
-  // its kind icon. Their boxes are rounded up to whole pixels (the rest of a tab already is), measured from their text so
-  // the tab never shrinks meanwhile; again once the fonts have loaded, and when its strip is laid out after being hidden.
+  // The SID chip stays on whole pixels as its text changes. Shelf columns already keep tab origins on whole pixels.
   const sidText = tab && isQueryDocument(tab) ? String(spid ?? '') : undefined
   useLayoutEffect(() => {
-    const boxes = [...element.current?.querySelectorAll<HTMLElement>('.tab-name, .tab-sid') ?? []], strip = element.current?.closest('[role="tablist"]')
+    const boxes = [...element.current?.querySelectorAll<HTMLElement>('.tab-sid') ?? []], strip = element.current?.closest('[role="tablist"]')
     if (!boxes.length) return
     const snap = () => {
       for (const box of boxes) {
@@ -191,15 +191,6 @@ function DocumentTab({ api }: IDockviewPanelHeaderProps) {
     if (strip) shown?.observe(strip)
     return () => { current = false; shown?.disconnect() }
   }, [name, sidText, renaming])
-  // The shown tab stays in view on a full strip. Dockview scrolls to a tab as it is chosen, which for a new document is
-  // before React has drawn its name (and so its width); this scrolls again once it has, and when a rename widens it.
-  useLayoutEffect(() => {
-    const host = element.current?.closest<HTMLElement>('.dv-tab'), strip = host?.parentElement
-    if (!selected || !host || !strip) return
-    const start = host.offsetLeft, end = start + host.offsetWidth
-    if (start < strip.scrollLeft) strip.scrollLeft = start
-    else if (end > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = end - strip.clientWidth
-  }, [selected, name])
   // The close button and the rename box take the pointer for themselves: Dockview would otherwise choose the tab, or
   // start dragging it, on the press.
   useEffect(() => {
@@ -238,7 +229,7 @@ function GroupActions({ group, containerApi }: IDockviewHeaderActionsProps) {
     const layout = containerApi.onDidLayoutChange(check), location = group.api.onDidLocationChange(check)
     return () => { layout.dispose(); location.dispose() }
   }, [group, containerApi])
-  return corner ? <div className="editor-group-actions"><PaneMenuButton pane="editor" /></div> : null
+  return <><TabShelves group={group} />{corner && <div className="editor-group-actions"><PaneMenuButton pane="editor" /></div>}</>
 }
 
 function EmptyEditor({ group }: IWatermarkPanelProps) {
@@ -271,6 +262,7 @@ export default function EditorArea() {
   return <div className="editor-groups-root" ref={root}>
     <AreaContext.Provider value={area}><RestoredContext.Provider value={restored}>
       <DockviewReact className="editor-groups-dock" theme={areaThemes[themeType]} components={components} tabComponents={tabComponents} defaultTabComponent={DocumentTab}
+        disableTabsOverflowList scrollbars="native"
         rightHeaderActionsComponent={GroupActions} watermarkComponent={EmptyEditor} defaultRenderer="onlyWhenVisible" floatingGroupBounds={floatingBounds}
         transformFloatingGroupDrag={keepTitlebar} floatingGroupDragHandle="titlebar" dndStrategy="pointer" onReady={onReady} />
     </RestoredContext.Provider></AreaContext.Provider>
@@ -313,7 +305,8 @@ function followFocus(root: HTMLElement, report: (inside: boolean) => void): { di
  */
 function chooseFocusedTabs(root: HTMLElement, choose: (id: string) => void): { dispose(): void } {
   let pressed = false
-  const press = () => { pressed = true; setTimeout(() => { pressed = false }) }
+  const press = () => { pressed = true }
+  const release = () => { pressed = false }
   const focused = (event: FocusEvent) => {
     const target = event.target
     const from = event.relatedTarget instanceof Element ? event.relatedTarget.closest('.dv-tab') : null
@@ -322,8 +315,17 @@ function chooseFocusedTabs(root: HTMLElement, choose: (id: string) => void): { d
     if (id) choose(id)
   }
   root.addEventListener('pointerdown', press, true)
+  root.ownerDocument.addEventListener('pointerup', release, true)
+  root.ownerDocument.addEventListener('pointercancel', release, true)
+  root.ownerDocument.defaultView?.addEventListener('blur', release)
   root.addEventListener('focusin', focused)
-  return { dispose: () => { root.removeEventListener('pointerdown', press, true); root.removeEventListener('focusin', focused) } }
+  return { dispose: () => {
+    root.removeEventListener('pointerdown', press, true)
+    root.ownerDocument.removeEventListener('pointerup', release, true)
+    root.ownerDocument.removeEventListener('pointercancel', release, true)
+    root.ownerDocument.defaultView?.removeEventListener('blur', release)
+    root.removeEventListener('focusin', focused)
+  } }
 }
 
 /**
@@ -538,6 +540,13 @@ class EditorAreaController implements Area, EditorGroupHost {
     editor.focus()
     return true
   }
+  private focusLater(): void {
+    const target = document.activeElement
+    focusWhenDrawn(requestAnimationFrame, () => {
+      const active = document.activeElement
+      if (!active || active === document.body || active === target) this.workbench.documents.focusActive()
+    })
+  }
   // EditorGroupHost: the moves commands ask for.
   move(id: string, to: EditorMove): void {
     const api = this.api, panel = api?.getPanel(id)
@@ -559,14 +568,14 @@ class EditorAreaController implements Area, EditorGroupHost {
     // The moved document stays the one shown, in its new group, and keeps the keyboard, as VS Code's moves do.
     api.getPanel(id)?.api.setActive()
     this.publish()
-    requestAnimationFrame(() => this.workbench.documents.focusActive())
+    this.focusLater()
   }
   focusGroup(groupId: string): void {
     const group = this.groupById(groupId)
     if (!group) return
     group.api.setActive()
     const shown = group.activePanel
-    if (shown) { shown.api.setActive(); requestAnimationFrame(() => this.workbench.documents.focusActive()) }
+    if (shown) { shown.api.setActive(); this.focusLater() }
   }
   join(): void {
     const api = this.api
@@ -577,7 +586,7 @@ class EditorAreaController implements Area, EditorGroupHost {
     for (const info of groups.slice(1)) for (const id of info.documents) api.getPanel(id)?.api.moveTo({ group: first, position: 'center' })
     if (active) api.getPanel(active)?.api.setActive()
     this.publish()
-    requestAnimationFrame(() => this.workbench.documents.focusActive())
+    this.focusLater()
   }
   focusedDocument(): string | undefined {
     const tab = document.activeElement?.closest('.dv-tab')

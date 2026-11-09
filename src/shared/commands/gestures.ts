@@ -29,7 +29,8 @@ export const gestureScopes = {
   objectExplorer: 'Object Explorer',
   panels: 'Panels and Editor Tabs',
   popouts: 'Popout Windows',
-  documentTabs: 'Document Tabs'
+  documentTabs: 'Document Tabs',
+  connectionDialog: 'Connect Dialog'
 } as const
 export type GestureScope = keyof typeof gestureScopes
 
@@ -93,18 +94,23 @@ export const gestureCatalog = {
     locked: 'Double-clicking a column border fits it, as in SSMS.'
   },
   'global.wheelZoom': {
-    title: 'Zoom', description: 'Zooms the window. The results grid and Object Explorer leave the wheel to Chromium while Control is held.',
+    title: 'Zoom', description: 'Zooms the window, except over a document tab shelf where Control+wheel changes its row count.',
     kind: 'fixed', scope: 'global', action: 'wheel', target: 'anywhere', modifiers: ['ctrl'], keyboard: ['view.zoomIn', 'view.zoomOut', 'view.resetZoom'],
     locked: 'Chromium zooms the window with Control+wheel and with a trackpad pinch.'
   },
+  'connections.connect': {
+    title: 'Connect to Saved Connection', description: 'Connects to the saved connection in the Connect dialog.',
+    kind: 'fixed', scope: 'connectionDialog', action: 'doubleClick', target: 'a saved connection', modifiers: [],
+    locked: 'Double-clicking submits the Connect dialog; the Connect button also works from the keyboard.'
+  },
   'explorer.peekHover': {
-    title: 'Peek on Hover', description: 'Peeks a table, view, procedure or function while the pointer rests on its row.',
+    title: 'Peek on Hover', description: 'Peeks the object (a table, procedure, index, login and so on) while the pointer rests on its row.',
     kind: 'modifier', scope: 'objectExplorer', action: 'hover', target: 'an object', modifiers: ['mod'],
     // Not Alt: hovering presses nothing, so releasing Alt afterwards would count as a bare-Alt tap and focus the menu bar.
     choices: [['mod'], ['shift']], keyboard: ['explorer.peek']
   },
   'explorer.openPeekTab': {
-    title: 'Open Peek as Tab', description: 'Opens Peek on a table, view, procedure or function in a document tab.',
+    title: 'Open Peek as Tab', description: 'Opens Peek on the object (a table, procedure, index, login and so on) in a document tab.',
     kind: 'pointerCommand', scope: 'objectExplorer', action: 'click', target: 'an object', modifiers: ['mod'],
     choices: [['mod'], ['shift']], keyboard: ['explorer.openPeekTab']
   },
@@ -133,6 +139,11 @@ export const gestureCatalog = {
     title: 'Move Back into Main Window', description: 'Docks a popout window\'s panel back into the main window.',
     kind: 'pointerCommand', scope: 'popouts', action: 'doubleClick', target: 'a popout tab', modifiers: ['ctrl'],
     choices: [['ctrl'], ['alt'], ['shift'], []], darwin: { modifiers: ['meta'], choices: [['meta'], ['alt'], ['shift'], []] }, keyboard: ['pane.moveToMainWindow']
+  },
+  'documentTabs.rows': {
+    title: 'Change Tab Rows', description: 'Scrolling down adds rows to the pinned or unpinned shelf under the pointer, and scrolling up removes rows from that shelf alone.',
+    kind: 'fixed', scope: 'documentTabs', action: 'wheel', target: 'a tab shelf', modifiers: ['ctrl'],
+    locked: 'Control+wheel changes shelf rows, and the row buttons provide the same action from the keyboard.'
   },
   'documentTabs.rename': {
     title: 'Rename Tab', description: 'Opens the rename box on a query tab.',

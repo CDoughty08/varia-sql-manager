@@ -96,12 +96,12 @@ try {
   await closeMenu()
   expect(await menuOf(...appData, 'Programmability', 'Stored Procedures', 'dbo.ShipOrder')).toEqual(['Modify', 'Peek', 'Script Stored Procedure as', 'Copy Name', 'Rename', 'Delete', 'Refresh'])
   await closeMenu()
-  expect(await menuOf(...appData)).toEqual(['New Database…', 'New Query', 'Search Objects…', 'Script Database as', 'Tasks', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
+  expect(await menuOf(...appData)).toEqual(['New Database…', 'New Query', 'Search Objects…', 'Peek', 'Script Database as', 'Tasks', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await closeMenu()
   // SSMS offers Properties on its own databases too: only Rename, Delete and Tasks' items are greyed. Tasks holds Detach…, Take
   // Offline, Bring Online and Restore › Database… so far, all greyed there (system databases restore with T-SQL), so the submenu is greyed too.
   expect(await explorerMenuItems(page, 'server-a', 'Databases', 'System Databases', 'master')).toEqual({
-    names: ['New Database…', 'New Query', 'Search Objects…', 'Script Database as', 'Tasks', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'], disabled: ['Tasks', 'Rename', 'Delete']
+    names: ['New Database…', 'New Query', 'Search Objects…', 'Peek', 'Script Database as', 'Tasks', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'], disabled: ['Tasks', 'Rename', 'Delete']
   })
   await closeMenu()
   await select('server-a', 'Databases', 'System Databases', 'master')
@@ -1528,14 +1528,14 @@ try {
   const chooseLogin = (name, item) => chooseExplorerMenuItem(page, [...logins, name], item)
   // A SQL Server login offers Unlock… whatever its state (only its dialog reads whether it is locked out); other kinds do not. Every
   // login offers Properties (Login Properties, D2c), SQL Server's own too, as in SSMS.
-  expect((await loginMenu('AppUser')).names).toEqual(['New Login…', 'Script Login as', 'Copy Name', 'Disable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
+  expect((await loginMenu('AppUser')).names).toEqual(['New Login…', 'Peek', 'Script Login as', 'Copy Name', 'Disable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await closeMenu()
-  expect((await loginMenu('Retired')).names).toEqual(['New Login…', 'Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
+  expect((await loginMenu('Retired')).names).toEqual(['New Login…', 'Peek', 'Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await closeMenu()
   // A Windows group cannot be disabled (SQL Server refuses it), and SQL Server's own logins cannot be changed.
-  expect(await loginMenu('CONTOSO\\Ops')).toEqual({ names: ['New Login…', 'Script Login as', 'Copy Name', 'Disable', 'Rename', 'Delete', 'Refresh', 'Properties'], disabled: ['Disable'] })
+  expect(await loginMenu('CONTOSO\\Ops')).toEqual({ names: ['New Login…', 'Peek', 'Script Login as', 'Copy Name', 'Disable', 'Rename', 'Delete', 'Refresh', 'Properties'], disabled: ['Disable'] })
   await closeMenu()
-  expect(await loginMenu('##MS_PolicyTsqlExecutionLogin##')).toEqual({ names: ['New Login…', 'Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'], disabled: ['Enable', 'Unlock…', 'Rename', 'Delete'] })
+  expect(await loginMenu('##MS_PolicyTsqlExecutionLogin##')).toEqual({ names: ['New Login…', 'Peek', 'Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'], disabled: ['Enable', 'Unlock…', 'Rename', 'Delete'] })
   await closeMenu()
   // The palette says why a greyed login verb is greyed for the login selected, in its own words.
   await select(...logins, 'CONTOSO\\Ops')
@@ -1556,7 +1556,7 @@ try {
   expect((await stubCalls('actions.execute')).at(-1)).toEqual({ action: 'disable', connectionId: expect.any(String), requestId: expect.any(String), target: { kind: 'login', name: 'AppUser' },
     loginIdentity: { sid: '01', created: '2026-01-02T03:04:05.000' } })
   // The row follows once Logins is listed again; each read opens the row's menu afresh.
-  await expect.poll(async () => (await loginMenu('AppUser')).names).toEqual(['New Login…', 'Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
+  await expect.poll(async () => (await loginMenu('AppUser')).names).toEqual(['New Login…', 'Peek', 'Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
   // Enable runs at once; the notice says the login still may not connect while its CONNECT SQL is denied.
   await closeMenu()
   await chooseLogin('Retired', 'Enable')
@@ -1842,7 +1842,7 @@ try {
   // databases it could not check, SSMS's orphan note and the option to delete the users too, which Script and OK send with the
   // identity of the login it read. A login with sessions is refused with the dialog kept; another is deleted and leaves Logins.
   // Logins may still be reloading after the rename; each read opens sa's menu afresh.
-  await expect.poll(() => loginMenu('sa')).toEqual({ names: ['New Login…', 'Script Login as', 'Copy Name', 'Disable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'], disabled: ['Delete'] })
+  await expect.poll(() => loginMenu('sa')).toEqual({ names: ['New Login…', 'Peek', 'Script Login as', 'Copy Name', 'Disable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'], disabled: ['Delete'] })
   await closeMenu()
   await chooseLogin('AppOwner', 'Delete')
   await expect(objectDialogProgress(dialog())).toHaveText('Ready')

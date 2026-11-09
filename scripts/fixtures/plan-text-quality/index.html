@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Execution plan text comparison</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'">
+<style>
+body { margin: 0; background: #181818; color: #ddd; font: 14px 'Segoe UI', sans-serif; }
+header { padding: 16px; display: grid; grid-template-columns: 1fr 1fr; }
+.samples { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.sample { min-width: 0; border-top: 1px solid #444; }
+.title { padding: 8px 16px; }
+.canvas { overflow: hidden; }
+canvas { display: block; }
+</style></head><body>
+<header><b>Before · fixed text textures</b><b>After · zoom-aware text textures</b></header>
+<main class="samples"></main><script src="./quality.js"></script>
+</body></html>

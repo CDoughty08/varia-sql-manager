@@ -114,6 +114,7 @@ describe('GestureService', () => {
       // Except on macOS, where Control+double-click never arrived (Control+click is a right-click): ⌘ instead.
       'dock.toggleFloat': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
       'popout.returnToMain': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
+      'documentTabs.rows': event => !!event.ctrlKey,
       'documentTabs.rename': () => true
     }
     for (const platform of platforms) {

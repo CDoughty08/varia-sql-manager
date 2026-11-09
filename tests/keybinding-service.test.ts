@@ -125,6 +125,62 @@ describe('keybinding dispatch', () => {
     }
     expect(execute).not.toHaveBeenCalled()
   })
+  it.each(platforms)('identifies physical Ctrl holds across wheel events and repeated presses on %s', platform => {
+    const { press, keybindings, execute } = service(platform)
+    expect(keybindings.controlWheelGesture).toBeUndefined()
+    // A ctrlKey flag alone, as a trackpad pinch supplies, does not identify a physical Ctrl hold.
+    press(key('KeyJ', 'j', { ctrl: true }))
+    expect(keybindings.controlWheelGesture).toBeUndefined()
+    expect(press(key('ControlLeft', 'Control', { ctrl: true })).consumed).toBe(false)
+    const first = keybindings.controlWheelGesture
+    expect(first).toBeDefined()
+    press(key('ControlLeft', 'Control', { ctrl: true, repeat: true }))
+    keybindings.handleKeyUp(key('KeyJ', 'j', { ctrl: true }))
+    expect(keybindings.controlWheelGesture).toBe(first)
+    // Releasing one Ctrl while the other is held keeps the same gesture.
+    keybindings.handleKeyUp(key('ControlLeft', 'Control', { ctrl: true }))
+    expect(keybindings.controlWheelGesture).toBe(first)
+    keybindings.handleKeyUp(key('ControlRight', 'Control'))
+    expect(keybindings.controlWheelGesture).toBeUndefined()
+    press(key('ControlLeft', 'Control', { ctrl: true }))
+    expect(keybindings.controlWheelGesture).toBeGreaterThan(first!)
+    expect(execute).not.toHaveBeenCalled()
+  })
+  it('keeps a Ctrl hold across focus moves within the window and ends it on window blur', () => {
+    const { press, keybindings } = service()
+    const target = new EventTarget(), attached = keybindings.attach(target)
+    press(key('ControlLeft', 'Control', { ctrl: true }))
+    const first = keybindings.controlWheelGesture
+    // Focus leaving Monaco may drop a chord prefix, while Ctrl is still physically held.
+    target.dispatchEvent(new Event('focusout'))
+    expect(keybindings.controlWheelGesture).toBe(first)
+    target.dispatchEvent(new Event('blur'))
+    expect(keybindings.controlWheelGesture).toBeUndefined()
+    press(key('ControlLeft', 'Control', { ctrl: true }))
+    expect(keybindings.controlWheelGesture).toBeGreaterThan(first!)
+    attached.dispose()
+  })
+  it('tracks Ctrl before handled events, key capture and menu routing can return', () => {
+    const menus: MenuKeyRouter = {
+      noteKeyDown: vi.fn(), ownsKeyboard: () => true, handleKeyDown: () => 'consumed',
+      handleAccessKey: () => false, handleKeyUp: vi.fn()
+    }
+    const { press, keybindings, execute } = service('win32', { menus })
+    press(key('ControlLeft', 'Control', { ctrl: true, defaultPrevented: true }))
+    const first = keybindings.controlWheelGesture
+    expect(first).toBeDefined()
+    keybindings.handleKeyUp(key('ControlLeft', 'Control'))
+    press(key('ControlLeft', 'Control', { ctrl: true }))
+    expect(keybindings.controlWheelGesture).toBeGreaterThan(first!)
+    const captured = service(), recorded = vi.fn()
+    captured.keybindings.capture(recorded)
+    captured.press(key('ControlLeft', 'Control', { ctrl: true }))
+    expect(captured.keybindings.controlWheelGesture).toBeDefined()
+    captured.keybindings.handleKeyUp(key('ControlLeft', 'Control'))
+    expect(captured.keybindings.controlWheelGesture).toBeUndefined()
+    expect(recorded).not.toHaveBeenCalled()
+    expect(execute).not.toHaveBeenCalled()
+  })
   it('runs F5 by focus: Execute in the editor, Refresh in Object Explorer, nothing in Query Output', () => {
     for (const platform of platforms) {
       const { press, ran, state } = service(platform, { values: editorText })

@@ -114,6 +114,8 @@ export const contextKeys = {
   resultsWhitespaceAll: { type: 'boolean', scope: 'state', description: 'The results grid marks every white space character, line breaks included (Show All White Space in Results).' },
   resultsSortTextChars: { type: 'boolean', scope: 'state', description: 'Sorted results grids order text columns by their length in characters (Sort Text by Length in Characters).' },
   resultsSortTextBytes: { type: 'boolean', scope: 'state', description: 'Sorted results grids order text and binary columns by their length in bytes (Sort Text by Length in Bytes).' },
+  resultsColumnProfile: { type: 'boolean', scope: 'state', description: 'The column profile panel shows beside the results (Show Column Profile).' },
+  resultsRowSize: { type: 'boolean', scope: 'state', description: 'A bar behind each row number shows the row\'s size (Show Row Size in Results).' },
   hasBookmarks: { type: 'boolean', scope: 'state', description: 'An open document has a bookmark.' },
   activeDocumentHasBookmarks: { type: 'boolean', scope: 'state', description: 'The active document has a bookmark.' },
   anyDocumentDirty: { type: 'boolean', scope: 'state', description: 'Some open document has unsaved changes.' },
@@ -150,6 +152,7 @@ export const contextKeys = {
   },
   ...scriptVerbKeys,
   explorerSelectionModifiable: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node offers Modify: a T-SQL stored procedure, function, or trigger.' },
+  explorerSelectionPeekable: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node is of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts`).' },
   ...actionKeys,
   ...ssisVerbKeys,
   explorerLoading: { type: 'boolean', scope: 'state', description: 'Object Explorer is loading or waiting to load nodes.' },
@@ -167,6 +170,7 @@ export const contextKeys = {
     type: 'enum', scope: 'target', menu: 'explorer.context', values: ['', ...folderIds],
     description: "The id of the Object Explorer folder the menu is for, from `src/shared/explorer/catalog.ts` ('tables' offers New › Table…), or '' for anything else."
   },
+  explorerNodePeekable: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer node of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts`).' },
   explorerFolderInsertable: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for a Columns folder whose columns have all loaded, so Copy Name copies their list.' },
   explorerNodeStatus: {
     type: 'enum', scope: 'target', menu: 'explorer.context', values: ['', ...nodeStatuses],

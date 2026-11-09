@@ -100,9 +100,12 @@ function Columns({ details }: { readonly details: Details }) {
   </ul>
 }
 
-function Properties({ details }: { readonly details: Details }) {
-  const facts = details.facts, spec = details.kind && peekSpecs[details.kind]
-  const shown = facts?.status === 'ready' && spec ? spec.groups.flatMap(group => group.facts).filter(fact => fact.id !== 'schema' && Object.hasOwn(facts.value, fact.id)) : []
+export function Properties({ details }: { readonly details: Details }) {
+  const facts = details.facts, spec = details.kind && peekSpecs[details.kind], subtype = details.hit.subtype
+  // The card's groups: those of the hit's subtype, and none the login was refused (said below instead).
+  const groups = spec ? spec.groups.filter(group => (!group.subtypes || (subtype !== undefined && group.subtypes.includes(subtype))) && !(group.refused && details.refused?.includes(group.id))) : []
+  const refused = spec ? spec.groups.filter(group => group.refused && details.refused?.includes(group.id)) : []
+  const shown = facts?.status === 'ready' ? groups.flatMap(group => group.facts).filter(fact => fact.id !== 'schema' && Object.hasOwn(facts.value, fact.id)) : []
   return <div className="search-details-properties">
     <dl className="search-details-facts" aria-label="Properties">
       {hitProperties(details.hit).map(row => <div key={row.label} className="search-details-fact"><dt>{row.label}</dt><dd title={displayText(row.value)}>{displayText(row.value)}</dd></div>)}
@@ -111,6 +114,7 @@ function Properties({ details }: { readonly details: Details }) {
         return <div key={fact.id} className="search-details-fact"><dt>{fact.label}</dt><dd title={value}>{value}</dd></div>
       })}
     </dl>
+    {facts?.status === 'ready' && refused.map(group => <p key={group.id} className="peek-note">{group.refused}</p>)}
     {facts?.status === 'loading' && <p className="peek-note">Loading properties…</p>}
     {facts?.status === 'error' && <p className="peek-note error" role="alert">{facts.message}</p>}
   </div>

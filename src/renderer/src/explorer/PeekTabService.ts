@@ -1,5 +1,6 @@
 import { isPeekKind, type PeekTab } from '../../../shared/explorer/peek.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
+import { peekObjectName } from './peek-format'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
@@ -16,10 +17,9 @@ export interface PeekTabServiceOptions {
   readonly focus?: (id: string) => void
 }
 
-/** A promoted tab's name: the object's two-part name, as the card's header shows it. */
+/** A promoted tab's name, as the card's header shows it: the object's schema and name, a child's below its parent's. */
 export function peekTabName(node: ExplorerMenuNode): string {
-  const object = node.ref.type === 'object' ? node.ref.object : undefined
-  return displayText(object?.schema === undefined ? object?.name ?? node.label : `${object.schema}.${object.name ?? ''}`)
+  return node.ref.type === 'object' ? peekObjectName(node.ref.object) : displayText(node.label)
 }
 
 /**
@@ -56,7 +56,9 @@ export class PeekTabService extends SnapshotStore<PeekTabSnapshot> implements Cu
   open(node: ExplorerMenuNode | undefined, tab?: PeekTab): string | undefined {
     if (this.disposed || !this.canOpen(node) || node.ref.type !== 'object' || node.kind === 'folder' || !isPeekKind(node.kind)) return undefined
     const view = this.o.peek.createView()
-    const document = this.o.documents.openCustom('peek', peekTabName(node), node.connectionId, node.ref.object.database ?? '')
+    // A database's tab is in that database, as a query opened from it would be.
+    const database = node.kind === 'database' ? node.ref.object.name ?? '' : node.ref.object.database ?? ''
+    const document = this.o.documents.openCustom('peek', peekTabName(node), node.connectionId, database)
     const server = this.o.connections.get(node.connectionId)?.server
     if (server !== undefined) this.servers.set(document.id, server)
     this.publish({ views: { ...this.getSnapshot().views, [document.id]: view } })
