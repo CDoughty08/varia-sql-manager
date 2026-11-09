@@ -91,8 +91,19 @@ internal static class ResultDiffer
 {
     private const int CancelEvery = 1 << 12;
 
-    /// <summary>Bytes the alignment holds per row while it runs (identities, the match table and the entries).</summary>
-    public static long WorkingBytes(long leftRows, long rightRows) => 48 * (leftRows + rightRows);
+    /// <summary>Bytes the alignment holds per row while it runs: a left row's identity, match, chain and lookup entry
+    /// (8 + 4 + 4 + 24), a right row's identity and match (8 + 4), and up to one entry a row of both results (20), held
+    /// twice while the list becomes the model's array. Differing cells are charged as they are found (<see cref="CellBytes"/>).</summary>
+    public static long WorkingBytes(long leftRows, long rightRows) => 40 * leftRows + 12 * rightRows + 2 * EntryBytes * (leftRows + rightRows);
+
+    private const long EntryBytes = 20;
+
+    /// <summary>Bytes one differing cell can hold at most while the alignment runs: its index in a list grown by doubling
+    /// (twice 4), and once more in the model's array.</summary>
+    public const long CellBytes = 12;
+
+    /// <summary>Differing cells charged at a time, through Compare's <c>reserve</c>.</summary>
+    public const int CellChunk = 1 << 16;
 
     /// <summary>The shared columns: each visible column of the first result with a visible column of the same name in the
     /// second, in the first result's order.</summary>
@@ -114,7 +125,11 @@ internal static class ResultDiffer
         return [.. pairs];
     }
 
-    public static DiffModel Compare(ResultSetBuffer left, StoredPage[] leftPages, ResultSetBuffer right, StoredPage[] rightPages, bool exact, CancellationToken token)
+    /// <summary>Aligns the two results. <paramref name="reserve"/> is asked for <see cref="CellBytes"/> per differing cell,
+    /// <see cref="CellChunk"/> cells at a time, beyond the <see cref="WorkingBytes"/> the caller reserved; a refusal fails
+    /// the diff with TOO_LARGE, since every value of two wide results can differ.</summary>
+    public static DiffModel Compare(ResultSetBuffer left, StoredPage[] leftPages, ResultSetBuffer right, StoredPage[] rightPages, bool exact, CancellationToken token,
+        Func<long, bool>? reserve = null)
     {
         var pairs = Pairs(left.Columns, right.Columns);
         if (pairs.Length == 0) throw new RequestException("INVALID_PARAMS", "These results have no column names in common, so they cannot be compared.");
@@ -154,7 +169,7 @@ internal static class ResultDiffer
         var matchedLeft = new int[leftTotal];
         Array.Fill(matchedLeft, -1);
         var rightMatch = new int[rightTotal];
-        var heads = new Dictionary<long, int>((int)Math.Min(leftTotal, int.MaxValue));
+        Dictionary<long, int>? heads = new((int)Math.Min(leftTotal, int.MaxValue));
         var next = new int[leftTotal];
         for (var i = (int)leftTotal - 1; i >= 0; i--)
         {
@@ -173,12 +188,13 @@ internal static class ResultDiffer
             }
             else rightMatch[j] = -1;
         }
-        heads.Clear();
+        heads = null;
 
         // Unified order: removed rows before the first match go first; then each right row, and after a matched one the
         // left rows that followed its left row up to the next matched one.
-        var entries = new List<DiffEntry>((int)Math.Max(leftTotal, rightTotal));
+        var entries = new List<DiffEntry>((int)(leftTotal + rightTotal));
         var cells = new List<int>();
+        long cellsCharged = 0;
         var leftAccess = new RowAccess(leftPages, left.Wires.Count);
         var rightAccess = new RowAccess(rightPages, right.Wires.Count);
         var at = 0;
@@ -190,6 +206,12 @@ internal static class ResultDiffer
             if (i < 0) { entries.Add(new DiffEntry(DiffKind.Added, -1, j)); continue; }
             var before = cells.Count;
             approximate |= CompareCells(leftHasher, leftAccess, i, rightHasher, rightAccess, j, pairs, exact, cells, out var hard);
+            while (cells.Count > cellsCharged)
+            {
+                if (reserve is not null && !reserve(CellChunk * CellBytes))
+                    throw new RequestException("TOO_LARGE", "These results differ in too many values to compare in the result memory left. Close other results and try again.");
+                cellsCharged += CellChunk;
+            }
             entries.Add(new DiffEntry(hard ? DiffKind.Changed : DiffKind.Same, i, j, before, cells.Count - before));
             for (var k = i + 1; k < leftTotal && matchedLeft[k] < 0; k++) entries.Add(new DiffEntry(DiffKind.Removed, k, -1));
         }

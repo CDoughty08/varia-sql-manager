@@ -1394,8 +1394,8 @@ receives a new result to read like any other, never rows to compare.
   row is its old row (−) then its new one (+). Only `context` unchanged rows (default 1, at most 100, -1 for all) show on
   each side of a change. It is a result of the same query, charged to its budget (rows stop when it is full, with the
   usual truncation), released with the query's other results, and closed by main if its port went before the answer.
-  While it is built the alignment holds 48 bytes a row of both results, charged to the budget too (`TOO_LARGE` without
-  room).
+  While it is built the alignment holds about 80 bytes a row of both results (`ResultDiffer.WorkingBytes`) and 12 bytes
+  a differing cell, charged to the budget too as they grow (`TOO_LARGE` without room).
 - **Renderer.** `ResultHandle.diff(right, { exact, context, signal })` relays it; `CompareService` appends the new result
   as the run's last set (`ResultsService.addSet`), named "Differences: Result 1 → Result 2", and its grid's strip says what
   was compared. `GridView` colours added and removed rows from the tone column and marks the listed cells (`is-chg`,
@@ -2233,7 +2233,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | FOR XML / FOR JSON value | 2,097,152 characters, the rest marks it truncated | backend |
 | Row sizes a request | `results.rowBytes`: 1 – 16,384 rows (`rowSizes.maxRows`) | zod and backend |
 | Row identities | `results.rowIds` 1 – 16,384 rows; `results.findRows` 1 – 10,000 ids, 100,000 matches (`limits.identity`); 24 bytes a row while identifying, 8 kept, under the query budget | zod and backend |
-| Result diffs | context -1 – 100 rows, 64 one-sided column names each side (`limits.diff`); 48 bytes a row of both results while aligning, the diff's rows under the query budget | zod and backend |
+| Result diffs | context -1 – 100 rows, 64 one-sided column names each side (`limits.diff`); about 80 bytes a row of both results and 12 a differing cell while aligning, the diff's rows under the query budget | zod and backend |
 | Sorted views | 1 – 16 keys a sort, 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key while sorting, 4 bytes a row kept, under the query budget | zod and backend |
 | Copy | 64 MiB of UTF-8 (estimated before any work; main cancels past 65 MiB received); DATA ≤ 1 MiB; 16 MiB initial credit; 120 s; one per window | backend and main |
 | Save Results As | one per window; 1 MiB writes; no deadline; suggested name ≤ 128 characters, path ≤ 32,767 | main and backend |

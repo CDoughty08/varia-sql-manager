@@ -1651,9 +1651,16 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var working = ResultDiffer.WorkingBytes(leftRows, rightRows);
         if (!store.TryReserve(left.Budget, working, false, out _))
             throw new RequestException("TOO_LARGE", "There is not enough result memory to compare these results. Close other results and try again.");
+        long cellBytes = 0;
+        bool ReserveCells(long bytes)
+        {
+            if (!store.TryReserve(left.Budget, bytes, false, out _)) return false;
+            cellBytes += bytes;
+            return true;
+        }
         try
         {
-            var model = await Task.Run(() => ResultDiffer.Compare(left, leftPages, right, rightPages, args.Exact, token), token);
+            var model = await Task.Run(() => ResultDiffer.Compare(left, leftPages, right, rightPages, args.Exact, token, ReserveCells), token);
             var set = store.Open(left.Budget, right.Index, right.BatchNumber, right.Iteration, "diff", UnifiedDiff.Columns(right, model), UnifiedDiff.Wires(right, model),
                 lengths: UnifiedDiff.Lengths(right, model))
                 ?? throw new RequestException("TOO_LARGE", "There is not enough result memory to show the differences. Close other results and try again.");
@@ -1671,7 +1678,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             return new ResultsDiffResult(set.Describe(), model.KeyPair < 0 ? null : right.Columns[paired[model.KeyPair].Right].Name, same, changed, added, removed, soft,
                 model.Approximate, OneSided(left.Columns, pair => pair.Left), OneSided(right.Columns, pair => pair.Right));
         }
-        finally { store.Return(left.Budget, working); }
+        finally { store.Return(left.Budget, working + cellBytes); }
     }
 
     /// <summary>The most views one results.viewClose names (src/shared/ipc/wire/protocol.ts limits.views.maxClose).</summary>

@@ -23,6 +23,7 @@ internal static class DiffChecks
         Keyed(check);
         WholeRows(check);
         Context(check);
+        CellMemory(check);
         Host(check);
     }
 
@@ -137,6 +138,26 @@ internal static class DiffChecks
         var shown = UnifiedDiff.Shown(model, 1);
         check(string.Concat(shown.Select(item => item ? '1' : '0')) == "0001110000" && UnifiedDiff.Shown(model, 0).Count(item => item) == 1 && UnifiedDiff.Shown(model, -1).All(item => item),
             "one row of context shows the rows next to a change; none shows only the change; -1 shows every row");
+    }
+
+    /// <summary>Differing cells are charged as they are found, so two results whose every value differs fail with TOO_LARGE
+    /// once the budget refuses, instead of holding memory nothing counts.</summary>
+    private static void CellMemory(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        var rows = ResultDiffer.CellChunk + 1;
+        string?[][] Rows(string price) => [.. Enumerable.Range(1, rows).Select(i => new[] { i.ToString(System.Globalization.CultureInfo.InvariantCulture), "n", price })];
+        var (left, right) = Pair(store, Rows("1"), Rows("2"));
+        var asked = new List<long>();
+        var model = ResultDiffer.Compare(left, left.SealedSnapshot(), right, right.SealedSnapshot(), false, CancellationToken.None, bytes => { asked.Add(bytes); return true; });
+        check(model.Cells.Length == rows && asked.Count == 2 && asked.All(bytes => bytes == ResultDiffer.CellChunk * ResultDiffer.CellBytes),
+            "a diff charges its differing cells a chunk at a time (" + asked.Count + " chunks for " + model.Cells.Length + " cells)");
+        var calls = 0;
+        string? code = null;
+        try { ResultDiffer.Compare(left, left.SealedSnapshot(), right, right.SealedSnapshot(), false, CancellationToken.None, _ => ++calls < 2); }
+        catch (RequestException error) { code = error.Code; }
+        check(code == "TOO_LARGE" && calls == 2, "a diff whose differing cells the budget refuses fails with TOO_LARGE");
+        check(ResultDiffer.WorkingBytes(10, 10) == 40 * 10 + 12 * 10 + 2 * 20 * 20, "a diff reserves its identities, match tables and entries, held twice while the model is built");
     }
 
     private static void Host(Action<bool, string> check)
