@@ -112,6 +112,9 @@ the rules that keep it lean.
   4 vCPU runners stall for seconds), and keep tight bounds for what the check means to time. Two timers that race (a budget
   that must outlast a delay or a second call) need about a second between them. A CancellationTokenSource timer cancels from the thread pool, so a Stop that must land before CPU-bound work ends comes from a dedicated thread. Before pushing an offline .NET timing check,
   run `node scripts/offline-stress.mjs` (five copies of the offline checks pinned to three CPUs, as starved as CI's).
+  Checks never depend on the machine's memory load: build a `ResultStore` without a memory probe (or pass a fake one), and
+  give a sidecar with the test hooks `VARIA_RESULT_BUDGET_BYTES`, which turns the load check off; parallel lanes push a
+  developer machine past the 90 % high-load threshold, where the real probe truncates every result.
   A new smoke suite needs its seconds on Linux and Windows in `suiteSeconds`, and a new live .NET suite runs through
   `Suite(...)` in `Program.cs` with an entry in `LiveGroups.Suites`. Copy times from CI's logs: each shard's summary and
   each `Live suite name: n s` line. Before you add a smoke suite, check whether an existing suite's launch can take the

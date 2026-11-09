@@ -452,7 +452,8 @@ describe('real .NET sidecar frame handling', () => {
 })
 
 describe('real .NET sidecar results (test hooks)', () => {
-  const hooks = { VARIA_BACKEND_TEST_HOOKS: '1' }
+  // A fixed budget also turns off the memory-load check, which otherwise truncates results whenever the machine is busy.
+  const hooks = { VARIA_BACKEND_TEST_HOOKS: '1', VARIA_RESULT_BUDGET_BYTES: String(1024 * 1024 * 1024) }
   const w1 = ['text', 'text', 'text', 'text', 'text', 'text', 'text', 'text'].map(wire => ({ wire: wire as 'text' }))
   /** Reads a result as the worker would: credit back after each page, checking the backend never runs ahead of it. */
   async function readAll(connection: BackendConnection, resultId: number, credit: number) {
@@ -643,7 +644,8 @@ describe('real .NET sidecar results (test hooks)', () => {
 })
 
 describe('real .NET sidecar live subscriptions (test hooks)', () => {
-  const hooks = { VARIA_BACKEND_TEST_HOOKS: '1' }
+  // A fixed budget also turns off the memory-load check, which otherwise truncates results whenever the machine is busy.
+  const hooks = { VARIA_BACKEND_TEST_HOOKS: '1', VARIA_RESULT_BUDGET_BYTES: String(1024 * 1024 * 1024) }
   const params = (args: Record<string, number> = { tickMs: 20 }, probes = ['debug.synthetic.table', 'debug.synthetic.metrics', 'debug.synthetic.status']) => ({
     subscriptionId: crypto.randomUUID(), connectionId: crypto.randomUUID(), source: 'debug.synthetic', probes: probes.map(probe => ({ probe, intervalMs: 1000 })), args
   }) as BackendMethods['live.subscribe']['params']

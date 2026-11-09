@@ -104,11 +104,18 @@ describe('highlights', () => {
     const ids = [column('ID'), column('ID')]
     expect(trackedColumn(ids, { column: 'ID', dataType: 'int', ordinal: 1 })).toBe(1)
     expect(trackedColumn([column('Name', 'nvarchar'), ...ids], { column: 'ID', dataType: 'int', ordinal: 1 })).toBe(1)
-    expect(trackedColumn([column('Name', 'nvarchar'), column('ID'), column('X'), column('ID')], { column: 'ID', dataType: 'int', ordinal: 0 })).toBe(-1)
+    // Several of the name, none where it was: ambiguous (-2), not missing (-1).
+    expect(trackedColumn([column('Name', 'nvarchar'), column('ID'), column('X'), column('ID')], { column: 'ID', dataType: 'int', ordinal: 0 })).toBe(-2)
+    expect(highlightText({ count: 2, found: 0, unique: true, truncated: false, rows: [], lacks: 'ID', ambiguous: true }))
+      .toBe('2 highlights follow ID, which these results have more than once, in other places. Clear All Highlights to highlight rows here.')
     expect(trackedColumn([column('Name', 'nvarchar'), column('ID')], { column: 'ID', dataType: 'int', ordinal: 0 })).toBe(1)
     expect(trackedColumn([column('ID', 'nvarchar')], { column: 'ID', dataType: 'int', ordinal: 0 })).toBe(-1)
     // A re-run that widens the column keeps following it: the backend hashes its values alike.
     expect(trackedColumn([column('Code', 'nvarchar(60)')], { column: 'Code', dataType: 'nvarchar(50)', ordinal: 0 })).toBe(0)
+    expect(trackedColumn([column('Price', 'decimal(12,4)')], { column: 'Price', dataType: 'decimal(10,2)', ordinal: 0 })).toBe(0)
+    // A change of precision that changes the values themselves (time rounded to whole seconds) is a different column.
+    expect(trackedColumn([column('At', 'datetime2(0)')], { column: 'At', dataType: 'datetime2(7)', ordinal: 0 })).toBe(-1)
+    expect(trackedColumn([column('At', 'DateTime2(7)')], { column: 'At', dataType: 'datetime2(7)', ordinal: 0 })).toBe(0)
     // Auto picked the second of two ID columns; the re-run identifies by that one, not the first of the name.
     const { results, highlights, client } = fixture()
     const runWith = (resultId: number) => {
@@ -159,18 +166,28 @@ describe('highlights', () => {
     await settle()
     expect(second.findRows).toHaveBeenCalledTimes(1)
     // Each retry waits longer; after the last the error is said, and nothing more is tried.
-    for (const ms of highlightLimits.retryMs) { timers.advance(ms); await settle() }
+    for (const ms of highlightLimits.retryMs) {
+      // Nothing is said while a retry is still to come.
+      expect(notify).not.toHaveBeenCalled()
+      timers.advance(ms)
+      await settle()
+    }
     expect(second.findRows).toHaveBeenCalledTimes(1 + highlightLimits.retryMs.length)
+    expect(notify).toHaveBeenCalledTimes(1)
     expect(notify).toHaveBeenCalledWith('t1', 'Could not find the highlighted rows: The backend is busy.')
     timers.advance(60_000)
     await settle()
     expect(second.findRows).toHaveBeenCalledTimes(1 + highlightLimits.retryMs.length)
-    // The user acting searches again at once, even when the command changes nothing.
-    vi.mocked(second.findRows).mockResolvedValue({ positions: [1], marks: [0], truncated: false, rows: 6 })
+    // The user acting searches again at once, even when the command changes nothing, and earns a fresh set of retries.
     results.setSelection('t1', 0, undefined)
     await highlights.highlight('t1', 0, 2)
     await settle()
     expect(second.findRows).toHaveBeenCalledTimes(2 + highlightLimits.retryMs.length)
+    expect(notify).toHaveBeenCalledTimes(1)
+    vi.mocked(second.findRows).mockResolvedValue({ positions: [1], marks: [0], truncated: false, rows: 6 })
+    timers.advance(highlightLimits.retryMs[0])
+    await settle()
+    expect(second.findRows).toHaveBeenCalledTimes(3 + highlightLimits.retryMs.length)
     expect(shown()).toMatchObject({ count: 1, found: 1 })
   })
 

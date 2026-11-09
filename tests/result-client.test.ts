@@ -314,6 +314,17 @@ describe('ResultClient', () => {
     const diffAnswer = { descriptor: descriptor({ resultId: 9, kind: 'diff' }), key: null, same: 0, changed: 0, added: 10, removed: 10, soft: 0, approximate: false, leftOnly: [], rightOnly: [] }
     expect(await answer('diff', diffAnswer)).toMatchObject({ t: 'diff', generation: 1, resultId: 3, right: 4, exact: true, context: -1 })
     expect(await comparing).toEqual(diffAnswer)
+    // A diff given up whose answer comes anyway is closed, and the page stops waiting for it once the worker says so.
+    const abort = new AbortController()
+    const dropped = handle.diff(other, { signal: abort.signal })
+    await settle()
+    const asked = worker().fromWorker.findLast(item => item.t === 'diff')!
+    abort.abort()
+    await expect(dropped).rejects.toMatchObject({ name: 'AbortError' })
+    worker().toWorker({ t: 'end', rid: asked.rid, ok: true, result: { ...diffAnswer, descriptor: descriptor({ resultId: 10, kind: 'diff' }) } } as never)
+    await settle()
+    expect(worker().fromWorker.findLast(item => item.t === 'close')).toMatchObject({ generation: 1, resultIds: [10] })
+    expect((client as unknown as { pending: Map<number, unknown> }).pending.size).toBe(0)
   })
 
   it('sorts a result into a view read by position, replaces and closes views, and drops them with their result', async () => {

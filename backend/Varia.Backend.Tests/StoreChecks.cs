@@ -42,6 +42,8 @@ internal static class StoreChecks
         low = true;
         check(!store.TryReserve(b, 1, true, out var system) && system == TruncationReason.SystemMemory && store.TryReserve(b, 1, false, out _),
             "high memory load refuses reservations checked at a seal, before any budget");
+        check(!new ResultStore(1000, 600).ChecksSystemMemory && !ResultStore.FromSystem(4L << 20).ChecksSystemMemory && ResultStore.FromSystem().ChecksSystemMemory && store.ChecksSystemMemory,
+            "only the process's own store watches the machine's memory load: stores built for checks, and the test hooks' budget override, keep to their budgets however busy the machine is");
         store.Return(a, 500);
         store.Return(b, 401);
         check(store.UsedBytes == 0 && a.UsedBytes == 0 && b.UsedBytes == 0, "returned bytes leave both counters at zero");

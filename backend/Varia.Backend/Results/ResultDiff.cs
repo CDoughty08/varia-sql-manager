@@ -142,7 +142,10 @@ internal static class ResultDiffer
         Func<long, bool>? reserve = null)
     {
         var pairs = Pairs(left.Columns, right.Columns, left.Wires, right.Wires);
-        if (pairs.Length == 0) throw new RequestException("INVALID_PARAMS", "These results have no column names in common, so they cannot be compared.");
+        if (pairs.Length == 0)
+            throw new RequestException("INVALID_PARAMS", Pairs(left.Columns, right.Columns).Length == 0
+                ? "These results have no column names in common, so they cannot be compared."
+                : "The columns these results share hold binary data in one and text in the other, so they cannot be compared.");
         if (pairs.Length > MaxPairs)
             throw new RequestException("INVALID_PARAMS", "These results share more than " + MaxPairs.ToString("N0", CultureInfo.InvariantCulture) + " columns, more than a diff can show.");
         long leftTotal = 0, rightTotal = 0;
@@ -296,14 +299,18 @@ internal static class UnifiedDiff
 {
     public const string Removed = "−", Added = "+";
 
+    /// <summary>The longest tone text: under the 512 characters a grid reads of a cell (src/renderer/src/grid/constants.ts
+    /// maxCellChars), so the grid always reads it whole. Runs of adjacent columns are listed as ranges, which keeps a row
+    /// that differs everywhere short; a tone that would still be longer stops at a whole entry and ends with "…".</summary>
+    public const int MaxToneChars = 500;
+
     public static IReadOnlyList<ResultColumn> Columns(ResultSetBuffer right, DiffModel model) =>
     [
         new("Change", "nvarchar(1)", "text", MaxLength: 1),
         new("R1", "bigint", "text"),
         new("R2", "bigint", "text"),
         .. model.Pairs.Select(pair => right.Columns[pair.Right]),
-        // Unbounded: a row can differ in every shared column, and each is listed.
-        new("", "nvarchar(max)", "text", Role: "tone")
+        new("", "nvarchar(" + MaxToneChars.ToString(CultureInfo.InvariantCulture) + ")", "text", Role: "tone", MaxLength: MaxToneChars)
     ];
 
     public static IReadOnlyList<WireKind> Wires(ResultSetBuffer right, DiffModel model) =>
@@ -361,15 +368,34 @@ internal static class UnifiedDiff
         finally { set.Complete(); }
     }
 
-    private static string Tone(System.Text.StringBuilder tone, string kind, ReadOnlySpan<int> cells)
+    /// <summary>The tone text: the kind, then the differing cells' column numbers in order, each run of adjacent columns of
+    /// one kind (changed, or soft with "~") as "first-last", cut at a whole entry with " …" past <see cref="MaxToneChars"/>.</summary>
+    internal static string Tone(System.Text.StringBuilder tone, string kind, ReadOnlySpan<int> cells)
     {
         tone.Clear().Append(kind);
-        foreach (var cell in cells)
+        Span<char> entry = stackalloc char[32];
+        for (var i = 0; i < cells.Length;)
         {
+            var soft = cells[i] < 0;
+            var first = soft ? ~cells[i] : cells[i];
+            var last = first;
+            var j = i + 1;
+            while (j < cells.Length && cells[j] < 0 == soft && (soft ? ~cells[j] : cells[j]) == last + 1) { last++; j++; }
             // Data columns follow the marker and the two row numbers.
-            tone.Append(' ');
-            if (cell < 0) tone.Append('~').Append((~cell + 3).ToString(CultureInfo.InvariantCulture));
-            else tone.Append((cell + 3).ToString(CultureInfo.InvariantCulture));
+            var length = 0;
+            entry[length++] = ' ';
+            if (soft) entry[length++] = '~';
+            (first + 3).TryFormat(entry[length..], out var written, provider: CultureInfo.InvariantCulture);
+            length += written;
+            if (last > first)
+            {
+                entry[length++] = '-';
+                (last + 3).TryFormat(entry[length..], out written, provider: CultureInfo.InvariantCulture);
+                length += written;
+            }
+            if (tone.Length + length > MaxToneChars - 2) { tone.Append(" …"); break; }
+            tone.Append(entry[..length]);
+            i = j;
         }
         return tone.ToString();
     }
