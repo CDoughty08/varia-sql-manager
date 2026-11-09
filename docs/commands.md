@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (257)
+## Commands (259)
 
 ### File
 
@@ -148,6 +148,8 @@ keys it uses are listed below.
 | Clear Sort (not in the palette) | `output.clearSort` | — | — | — | Always | Query Output context menu › Clear Sort |
 | Sort Text by Length in Characters | `output.sortTextByChars` | — | — | — | Always; checked when `resultsSortTextChars` | — |
 | Sort Text by Length in Bytes | `output.sortTextByBytes` | — | — | — | Always; checked when `resultsSortTextBytes` | — |
+| Show Column Profile | `output.toggleColumnProfile` | — | — | — | Always; checked when `resultsColumnProfile` | Query Output context menu › Column Profile |
+| Show Row Size in Results | `output.toggleRowSize` | — | — | — | Always; checked when `resultsRowSize` | Query Output context menu › Show Row Size |
 | Open Value in New Tab (not in the palette) | `output.openValue` | — | — | — | Always | — |
 
 ### Connection
@@ -782,6 +784,8 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | `3_save` | Sa**v**e Results As… | `output.saveResultsAs` | `outputView == 'grid'` |
 | `4_view` | Show S**p**aces and Tabs | `output.showSpaces` | `outputView == 'grid'` |
 | `4_view` | Show All **W**hite Space | `output.showAllWhitespace` | `outputView == 'grid'` |
+| `4_view` | Column Pro**f**ile | `output.toggleColumnProfile` | `outputView == 'grid'` |
+| `4_view` | Show Row Si**z**e | `output.toggleRowSize` | `outputView == 'grid'` |
 
 #### Panel tab context menu (`dockTab.context`)
 
@@ -937,6 +941,8 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `resultsWhitespaceAll` | boolean | state | The results grid marks every white space character, line breaks included (Show All White Space in Results). |
 | `resultsSortTextChars` | boolean | state | Sorted results grids order text columns by their length in characters (Sort Text by Length in Characters). |
 | `resultsSortTextBytes` | boolean | state | Sorted results grids order text and binary columns by their length in bytes (Sort Text by Length in Bytes). |
+| `resultsColumnProfile` | boolean | state | The column profile panel shows beside the results (Show Column Profile). |
+| `resultsRowSize` | boolean | state | A bar behind each row number shows the row's size (Show Row Size in Results). |
 | `hasBookmarks` | boolean | state | An open document has a bookmark. |
 | `activeDocumentHasBookmarks` | boolean | state | The active document has a bookmark. |
 | `anyDocumentDirty` | boolean | state | Some open document has unsaved changes. |

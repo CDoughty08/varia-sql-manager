@@ -22,13 +22,14 @@ const sortTextChoices: readonly Choice<ViewSortMode>[] = [
 
 /**
  * The results toolbar, in the Results panel's head beside its views: what it changes applies to every grid in the run. It
- * holds White space and Sort text by for now; search, stats and the other result tools join it. The controls follow the
+ * holds White space, Sort text by, and the Profile and Row size toggles; search and the other result tools join it. The controls follow the
  * ARIA toolbar pattern: one Tab stop, Left and Right (Home, End) move between them.
  */
 export default function ResultsToolbar() {
   const { commands, settings } = useWorkbench()
   const values = useServiceSnapshot(settings).values
   const whitespace = values['queryResults.grid.whitespace'], sortText = values['queryResults.grid.sortText']
+  const profile = values['queryResults.grid.columnProfile'], rowSize = values['queryResults.grid.rowSize']
   // Off (or Value) runs the command of the choice that is on, which turns it off.
   const choose = <T,>(choices: readonly Choice<T>[], current: T, mode: T) => {
     if (mode === current) return
@@ -57,5 +58,12 @@ export default function ResultsToolbar() {
   return <div className="results-toolbar" role="toolbar" aria-label="Results tools" onKeyDown={keyDown}>
     {group('White space', 'whitespace', whitespaceChoices, whitespace, true)}
     {group('Sort text by', 'symbol-ruler', sortTextChoices, sortText, false)}
+    {/* Icons only: with the two segmented groups the toolbar must still fit the output pane of a 1024 px window. */}
+    <div className="results-segments" role="group" aria-label="Show">
+      <button type="button" className="results-icon-toggle" aria-label="Profile" aria-pressed={profile} tabIndex={-1} title="Column profile: NULLs, distinct values, lowest and highest, lengths and a histogram for each column"
+        onClick={() => void commands.execute('output.toggleColumnProfile', undefined, 'toolbar')}><Icon name="graph" /></button>
+      <button type="button" className="results-icon-toggle" aria-label="Row size" aria-pressed={rowSize} tabIndex={-1} title="Row size: a bar behind each row number; hover it for the exact bytes"
+        onClick={() => void commands.execute('output.toggleRowSize', undefined, 'toolbar')}><Icon name="list-flat" /></button>
+    </div>
   </div>
 }

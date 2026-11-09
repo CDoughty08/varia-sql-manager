@@ -1,7 +1,7 @@
 // The renderer's access to stored query results (the PR7 grid contract). Rows stay in the backend; the results worker
 // reads and decodes pages, and the UI thread receives only windows of display text. Live subscriptions run through the
 // same worker and port: their tables are ordinary stored results, opened with the same handles.
-import type { ApiResult, BackendStatus, QueryEvent, QueryResult, ResultColumn, ResultDescriptor, TruncationReason, VariaApi, ViewSortKey, WireKind } from '../../../shared/contracts'
+import type { ApiResult, BackendStatus, QueryEvent, QueryResult, ResultColumn, ResultDescriptor, ResultsProfileResult, TruncationReason, VariaApi, ViewSortKey, WireKind } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport } from '../../../shared/ipc/port-messages'
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
@@ -77,6 +77,9 @@ export interface ResultHandle extends Disposable {
   getCell(row: number, col: number, o?: { format?: ValueFormat; signal?: AbortSignal }): Promise<CellValue>
   /** Each row's bytes (sum of DATALENGTH over its cells) for up to 16,384 rows from `first`, as far as rows are available. */
   rowBytes(first: number, count: number, signal?: AbortSignal): Promise<RowBytes>
+  /** Aggregates for up to `limits.profile.maxColumns` distinct columns over the rows (a view's rows, through a view), computed
+   *  in the backend (results.profile): never rows. No columns gives only the rows' byte sizes. */
+  profile(columns: readonly number[], signal?: AbortSignal): Promise<ResultsProfileResult>
   /** Releases the result in the backend (results.close); queued while the results port is down. A view's close closes
    *  only the view (results.viewClose). */
   close(): Promise<void>
@@ -324,6 +327,14 @@ export class ResultClient implements Disposable {
         const response = await this.request(id => ({ type: 'rowBytes', id, key: state.key, firstRow: first, count: Math.min(count, wire.rowSizes.maxRows) }), signal)
         if (response.type !== 'rowBytes') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
         return { first: response.firstRow, bytes: response.bytes, rowsAvailable: response.rowsAvailable, estimated: response.estimated }
+      },
+      profile: async (columns, signal) => {
+        this.usable(state)
+        if (columns.length > wire.profile.maxColumns || new Set(columns).size !== columns.length || columns.some(column => !Number.isInteger(column) || column < 0 || column >= state.columns.length))
+          throw new ResultError('INVALID_PARAMS', 'Each profiled column must be a distinct column of the result.')
+        const response = await this.request(id => ({ type: 'profile', id, key: state.key, columns: [...columns] }), signal)
+        if (response.type !== 'profile') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
+        return response.result
       },
       close,
       sort: (keys, o) => this.sort(state.base === undefined ? state : this.results.get(state.base), keys, o),
@@ -655,7 +666,7 @@ export class ResultClient implements Disposable {
 
   private received(message: WorkerResponse): void {
     switch (message.type) {
-      case 'window': case 'cell': case 'closed': case 'rowBytes': case 'measure': case 'stats': case 'liveUpdated': case 'view': case 'viewClosed': {
+      case 'window': case 'cell': case 'closed': case 'rowBytes': case 'measure': case 'stats': case 'liveUpdated': case 'view': case 'viewClosed': case 'profile': {
         const pending = this.pending.get(message.id)
         this.pending.delete(message.id)
         pending?.resolve(message)

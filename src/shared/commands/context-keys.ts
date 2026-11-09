@@ -114,6 +114,8 @@ export const contextKeys = {
   resultsWhitespaceAll: { type: 'boolean', scope: 'state', description: 'The results grid marks every white space character, line breaks included (Show All White Space in Results).' },
   resultsSortTextChars: { type: 'boolean', scope: 'state', description: 'Sorted results grids order text columns by their length in characters (Sort Text by Length in Characters).' },
   resultsSortTextBytes: { type: 'boolean', scope: 'state', description: 'Sorted results grids order text and binary columns by their length in bytes (Sort Text by Length in Bytes).' },
+  resultsColumnProfile: { type: 'boolean', scope: 'state', description: 'The column profile panel shows beside the results (Show Column Profile).' },
+  resultsRowSize: { type: 'boolean', scope: 'state', description: 'A bar behind each row number shows the row\'s size (Show Row Size in Results).' },
   hasBookmarks: { type: 'boolean', scope: 'state', description: 'An open document has a bookmark.' },
   activeDocumentHasBookmarks: { type: 'boolean', scope: 'state', description: 'The active document has a bookmark.' },
   anyDocumentDirty: { type: 'boolean', scope: 'state', description: 'Some open document has unsaved changes.' },

@@ -1,6 +1,6 @@
 // Messages between the UI thread (ResultClient) and the results worker. The worker also owns the results port to main
 // (src/shared/ipc/port-messages.ts).
-import type { BackendStatus, QueryEvent, ViewSortKey, WireKind } from '../../../shared/contracts'
+import type { BackendStatus, QueryEvent, ResultsProfileResult, ViewSortKey, WireKind } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport } from '../../../shared/ipc/port-messages'
 import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
@@ -63,6 +63,8 @@ export type WorkerRequest =
    *  supersedes, whose pages go once it is built. */
   | { readonly type: 'view'; readonly id: number; readonly key: ResultKey; readonly sort: readonly ViewSortKey[]; readonly replaces?: number }
   | { readonly type: 'viewClose'; readonly id: number; readonly key: ResultKey; readonly viewIds: readonly number[] }
+  /** A column profile (results.profile) of `key`'s rows, through its view when it names one; `cancel` with the same id stops it. */
+  | { readonly type: 'profile'; readonly id: number; readonly key: ResultKey; readonly columns: readonly number[] }
   /** A live subscription (docs/ipc.md, Live subscriptions); `cancel` with the same id ends it. */
   | { readonly type: 'live'; readonly id: number; readonly params: LiveSubscribeParams }
   /** A change to the running subscription whose request id is `live`. */
@@ -83,6 +85,7 @@ export type WorkerResponse =
   | { readonly type: 'stats'; readonly id: number; readonly bytes: number; readonly pages: number; readonly wireBytes: number; readonly columns: number }
   | { readonly type: 'view'; readonly id: number; readonly viewId: number; readonly rows: number; readonly complete: boolean; readonly approximate: boolean }
   | { readonly type: 'viewClosed'; readonly id: number; readonly closed: number }
+  | { readonly type: 'profile'; readonly id: number; readonly result: ResultsProfileResult }
   | { readonly type: 'error'; readonly id: number; readonly code: ErrorCode; readonly message: string }
   | { readonly type: 'query'; readonly queryId: string; readonly event: QueryEvent }
   | ({ readonly type: 'memory'; readonly feature: MemoryFeature } & MemoryReport)

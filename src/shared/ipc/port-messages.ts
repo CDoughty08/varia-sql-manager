@@ -2,7 +2,7 @@
 // requests are validated with portRequestSchema; backend payloads main forwards are validated with the schemas below.
 import { z } from 'zod'
 import { clientStatisticsSchema } from '../client-statistics'
-import type { BackendStatus, MemoryOrder, QueryEvent, ResultsCloseResult, ResultsReadResult, ResultsRowBytesResult, ResultsViewCloseResult, ResultsViewResult } from '../contracts'
+import type { BackendStatus, MemoryOrder, QueryEvent, ResultsCloseResult, ResultsProfileResult, ResultsReadResult, ResultsRowBytesResult, ResultsViewCloseResult, ResultsViewResult } from '../contracts'
 import { maxQueryPlanDocuments } from '../plans'
 import { liveSubscribeParamsSchema, liveUpdateParamsSchema, testLiveSubscribeParamsSchema, testLiveUpdateParamsSchema, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../live/schema'
 import { backendDescriptorSchema } from './descriptors'
@@ -26,6 +26,8 @@ export const buildPortRequestSchema = (live: { subscribe: z.ZodType<LiveSubscrib
   // Views (results.view): a result's rows sorted in the backend, read with `read` and `rowBytes` by viewId.
   z.object({ t: z.literal('view'), rid: u31, generation, resultId: u32, sort: z.array(viewSortKeySchema).min(1).max(limits.views.maxKeys), replaces: u32.optional() }).strict(),
   z.object({ t: z.literal('viewClose'), rid: u31, generation, resultId: u32, viewIds: z.array(u32).min(1).max(limits.views.maxClose) }).strict(),
+  // Column profiles (results.profile): aggregates over a result's rows or a view's; `cancel` stops one.
+  z.object({ t: z.literal('profile'), rid: u31, generation, resultId: u32, columns: z.array(z.number().int().min(0).max(limits.page.maxColumns - 1)).max(limits.profile.maxColumns).refine(columns => new Set(columns).size === columns.length, 'Columns must be distinct.'), viewId: u32.optional() }).strict(),
   // Live subscriptions (docs/ipc.md): a stream acknowledged with `credit`, ended with `cancel`, changed with liveUpdate.
   z.object({ t: z.literal('live'), rid: u31, generation, params: live.subscribe }).strict(),
   z.object({ t: z.literal('liveUpdate'), rid: u31, generation, params: live.update }).strict()
@@ -54,7 +56,18 @@ export const rowBytesResultSchema = z.object({ firstRow: count, bytes: z.array(c
 /** A results.view answer as the backend sends it. */
 export const viewResultSchema = z.object({ viewId: u32, rows: count, complete: z.boolean(), approximate: z.boolean() }).strict()
 export const viewCloseResultSchema = z.object({ closed: z.number().int().min(0).max(limits.views.maxClose) }).strict()
-export type PortEndResult = ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | ResultsViewResult | ResultsViewCloseResult | LiveEnd | LiveUpdateResult
+const lengths = z.object({ min: count, max: count, average: z.number().min(0).max(Number.MAX_SAFE_INTEGER), exact: z.boolean() }).strict()
+const profileValue = z.string().max(limits.profile.valueChars + 1).optional()
+/** A results.profile answer as the backend sends it; main also checks it answers the columns asked, in order. */
+export const profileResultSchema = z.object({
+  rows: count, complete: z.boolean(), rowBytes: lengths.optional(),
+  columns: z.array(z.object({
+    column: z.number().int().min(0).max(limits.page.maxColumns - 1), values: count, nulls: count, distinct: count, distinctExact: z.boolean(), min: profileValue, max: profileValue,
+    approximate: z.boolean(), chars: lengths.optional(), bytes: lengths.optional(),
+    histogram: z.object({ basis: z.enum(['value', 'time', 'chars', 'bytes']), low: z.number(), high: z.number(), counts: z.array(count).length(limits.profile.bins) }).strict().optional()
+  }).strict()).max(limits.profile.maxColumns)
+}).strict()
+export type PortEndResult = ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | ResultsViewResult | ResultsViewCloseResult | ResultsProfileResult | LiveEnd | LiveUpdateResult
 
 const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'server', 'print', 'error']) }).strict()
 const session = { spid: z.number().int().min(0).max(32767), login: z.string().max(128).optional() }

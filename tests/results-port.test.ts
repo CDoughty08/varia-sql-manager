@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ResultsPortHost, toExactArrayBuffer, type FrameLike, type LiveStreamHandle, type PortMainLike, type ReadStream, type ResultsBackend } from '../src/main/backend/results-port'
 import { BackendError } from '../src/main/backend/errors'
 import type { StreamSink } from '../src/main/backend/connection'
-import type { QueryEvent, ResultDescriptor, ResultsReadParams, ResultsRowBytesParams, ResultsViewCloseParams, ResultsViewParams, ResultsViewResult } from '../src/shared/contracts'
+import type { QueryEvent, ResultDescriptor, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsRowBytesParams, ResultsViewCloseParams, ResultsViewParams, ResultsViewResult } from '../src/shared/contracts'
 import { cancelReasons, type CancelReason } from '../src/shared/ipc/wire/protocol'
 import { buildPortRequestSchema, type PortMessage, type portRequestSchema } from '../src/shared/ipc/port-messages'
 import { buildLiveSchemas } from '../src/shared/live/schema'
@@ -33,6 +33,7 @@ class FakePort implements PortMainLike {
 interface FakeRead { generation: number; params: ResultsReadParams; sink: StreamSink; credit: number; credits: number[]; cancels: number[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeLive { generation: number; params: LiveSubscribeParams; onLive: (event: LiveEvent, bytes: number) => void; credit: number; credits: number[]; cancels: number[]; resolve(value: LiveEnd): void; reject(error: unknown): void }
 interface FakeView { generation: number; params: ResultsViewParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
+interface FakeProfile { generation: number; params: ResultsProfileParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeUpdate { generation: number; params: LiveUpdateParams; resolve(value: LiveUpdateResult): void; reject(error: unknown): void }
 
 function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof portRequestSchema } = {}) {
@@ -40,6 +41,7 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
   const lives: FakeLive[] = []
   const updates: FakeUpdate[] = []
   const views: FakeView[] = []
+  const profiles: FakeProfile[] = []
   let ready: number | undefined = 1
   const backend: ResultsBackend = {
     readyGeneration: () => ready,
@@ -60,6 +62,13 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
       return { done, cancel: reason => view.cancels.push(reason) }
     },
     viewClose: vi.fn(async (_generation: number, params: ResultsViewCloseParams) => ({ closed: params.viewIds.length })),
+    profile: (generation, params) => {
+      let resolve!: (value: unknown) => void, reject!: (error: unknown) => void
+      const done = new Promise<ResultsProfileResult>((onResolve, onReject) => { resolve = onResolve as (value: unknown) => void; reject = onReject })
+      const profile: FakeProfile = { generation, params, cancels: [], resolve, reject }
+      profiles.push(profile)
+      return { done, cancel: reason => profile.cancels.push(reason) }
+    },
     live: (generation, params, onLive, credit): LiveStreamHandle => {
       let resolve!: (value: LiveEnd) => void, reject!: (error: unknown) => void
       const done = new Promise<LiveEnd>((onResolve, onReject) => { resolve = onResolve; reject = onReject })
@@ -81,7 +90,7 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
     port().send({ t: 'live', rid, generation, params })
     return params
   }
-  return { host, backend, reads, lives, updates, views, ports, port, frame, read, live, setReady: (generation: number | undefined) => { ready = generation } }
+  return { host, backend, reads, lives, updates, views, profiles, ports, port, frame, read, live, setReady: (generation: number | undefined) => { ready = generation } }
 }
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
 const descriptor = (resultId: number, generation = 1): Pick<ResultDescriptor, 'generation' | 'resultId'> => ({ generation, resultId })
@@ -350,6 +359,45 @@ describe('ResultsPortHost', () => {
     views[1].resolve({ viewId: 9, rows: 1, complete: true, approximate: false })
     await settle()
     expect(backend.viewClose).toHaveBeenLastCalledWith(1, { resultId: 7, viewIds: [9] })
+  })
+  it('profiles only owned results of the current generation, within the schema bounds, and relays an answer that matches the columns asked', async () => {
+    const { host, port, profiles } = fixture()
+    host.own([descriptor(7)])
+    port().send({ t: 'profile', rid: 1, generation: 1, resultId: 7, columns: [2, 0], viewId: 4 })
+    port().send({ t: 'profile', rid: 2, generation: 1, resultId: 8, columns: [0] })
+    port().send({ t: 'profile', rid: 3, generation: 2, resultId: 7, columns: [0] })
+    port().send({ t: 'profile', rid: 4, generation: 1, resultId: 7, columns: Array.from({ length: 33 }, (_, column) => column) })
+    port().send({ t: 'profile', rid: 5, generation: 1, resultId: 7, columns: [1, 1] })
+    port().send({ t: 'profile', rid: 6, generation: 1, resultId: 7, columns: [4096] })
+    port().send({ t: 'profile', rid: 7, generation: 1, resultId: 7, columns: [0], extra: true })
+    port().send({ t: 'profile', rid: 8, generation: 1, resultId: 7, columns: [] })
+    port().send({ t: 'profile', rid: 9, generation: 1, resultId: 7, columns: [0] })
+    port().send({ t: 'profile', rid: 10, generation: 1, resultId: 7, columns: [0] })
+    expect(profiles.map(profile => profile.params)).toEqual([{ resultId: 7, columns: [2, 0], viewId: 4 }, { resultId: 7, columns: [] }, { resultId: 7, columns: [0] }, { resultId: 7, columns: [0] }])
+    const column = (index: number) => ({ column: index, values: 3, nulls: 1, distinct: 2, distinctExact: true, min: 'a', max: 'b', approximate: false, chars: { min: 1, max: 1, average: 1, exact: true },
+      histogram: { basis: 'chars', low: 1, high: 1, counts: Array.from({ length: 20 }, (_, bin) => bin === 0 ? 3 : 0) } })
+    const good = { rows: 4, complete: true, rowBytes: { min: 4, max: 12, average: 8, exact: true }, columns: [column(2), column(0)] }
+    profiles[0].resolve(good)
+    profiles[1].resolve({ rows: 4, complete: true, columns: [] })
+    // Answers the wrong columns, then a histogram of the wrong size: neither reaches the renderer.
+    profiles[2].resolve({ rows: 4, complete: true, columns: [column(1)] })
+    profiles[3].resolve({ rows: 4, complete: true, columns: [{ ...column(0), histogram: { basis: 'chars', low: 1, high: 1, counts: [3] } }] })
+    await settle()
+    expect(codes(port())).toEqual([[2, 'RESULT_UNAVAILABLE'], [3, 'RESULT_UNAVAILABLE'], [4, 'INVALID_REQUEST'], [5, 'INVALID_REQUEST'], [6, 'INVALID_REQUEST'], [7, 'INVALID_REQUEST'], [1, 'ok'], [8, 'ok'], [9, 'BACKEND_ERROR'], [10, 'BACKEND_ERROR']])
+    expect(port().ends().find(end => end.rid === 1)).toEqual({ t: 'end', rid: 1, ok: true, result: good })
+  })
+  it('cancels a profile on the worker\'s cancel and when the port closes', async () => {
+    const { host, port, profiles } = fixture()
+    host.own([descriptor(7)])
+    port().send({ t: 'profile', rid: 1, generation: 1, resultId: 7, columns: [0] })
+    port().send({ t: 'cancel', rid: 1 })
+    expect(profiles[0].cancels).toEqual([cancelReasons.user])
+    profiles[0].reject(new BackendError('CANCELLED', 'The request was cancelled.'))
+    await settle()
+    expect(codes(port())).toEqual([[1, 'CANCELLED']])
+    port().send({ t: 'profile', rid: 2, generation: 1, resultId: 7, columns: [0] })
+    port().hangUp()
+    expect(profiles[1].cancels).toHaveLength(1)
   })
   it('forwards a row sizes answer only when it is well formed and answers the range asked', async () => {
     const { host, backend, port } = fixture()
