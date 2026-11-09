@@ -178,10 +178,11 @@ try {
   await menubarItem('Query').click()
   await expect(openMenus()).toHaveCount(0)
   await expect(textbox()).toBeFocused()
-  // A press outside closes the menu.
+  // The backend segment is inert; the status bar's centre can land on Go to Line on a narrow display.
   await menubarItem('View').click()
-  await statusBar(page).click()
+  await backendReady(page, 'fake').click()
   await expect(openMenus()).toHaveCount(0)
+  await expect(page.getByRole('dialog')).toHaveCount(0)
   console.log('Menus checks: mouse open, hover switching, item activation, disabled items, and outside clicks.')
 
   // 2. The menubar by keyboard: F10 (from the page and from the operating system) focuses File, arrows move between
