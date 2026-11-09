@@ -1188,6 +1188,11 @@ async function environmentLabels() {
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Backslash' : 'Control+Backslash')
   await expect(editorGroups(page)).toHaveCount(2)
   await expect.poll(tabFit, { message: '1024 px, two editor groups' }).toEqual(fitted)
+  // A cell too narrow for the label's few characters beside the SID lets the label go rather than clip the SID.
+  const widenEditor = await narrowBar(430)
+  await expect.poll(() => documentTab(page, connected).evaluate(tab => tab.getBoundingClientRect().width), { message: 'a split cell under 220 px' }).toBeLessThan(220)
+  await expect.poll(tabFit, { message: 'a narrow split cell' }).toMatchObject({ sid: true, buttons: true })
+  await widenEditor()
   await page.screenshot({ path: resolve('artifacts', 'environment-long-label-tabs.png') })
   // The query now has unsaved text: the quit below answers Don't Save.
   await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
