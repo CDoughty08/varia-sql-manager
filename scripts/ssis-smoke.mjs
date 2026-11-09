@@ -2,7 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
-import { backendReady, closeDocumentButton, documentCrumbs, documentFactValues, documentFrame, documentHeader, documentBanner, documentStaleBadge, documentState, documentSubtitle, documentTab, documentTabs, frameSection, menuItemNames, part, quickInputRows, sectionColumn, sectionList, toolbarButton } from './fixtures/ui.mjs'
+import { backendReady, closeDocumentButton, documentCrumbs, documentFactValues, documentFrame, documentHeader, documentBanner, documentStaleBadge, documentState, documentSubtitle, documentTab, documentTabs, frameSection, menuItemNames, part, quickInputRows, sectionColumn, sectionList, selectOpenDocument, toolbarButton } from './fixtures/ui.mjs'
 
 // The SSIS Catalog's properties documents against the fake backend (tests/fixtures/backend.mjs, workbench mode), through
 // main's real schemas: Properties from a node's menu, the palette, Enter and a double-click; the sections and their list,
@@ -150,7 +150,7 @@ try {
   console.log('SSIS checks: Enter on a package and a double-click on an environment open their Properties.')
 
   // 4. Each tab keeps its section across switches; opening the folder again shows its tab and reads it again.
-  await tab('Project Properties - Loads').click()
+  await selectOpenDocument(page, 'Project Properties - Loads')
   await expect(sections('Loads').getByRole('button', { name: 'References', exact: true })).toHaveAttribute('aria-current', 'location')
   // The content comes back on that section too, not on General from the top.
   await expect.poll(() => headingShown('Loads', 'references')).toEqual({ shown: true, scrolled: true })
@@ -178,7 +178,7 @@ try {
 
   // 6. A read that fails keeps the last model under the failure, the header says since when it is stale (without growing),
   // and Retry reads it again.
-  await tab('Package Properties - Daily.dtsx').click()
+  await selectOpenDocument(page, 'Package Properties - Daily.dtsx')
   await expect(documentStaleBadge(frame('Daily.dtsx'))).toHaveText(/^Updated /)
   const daily = await headerHeight('Daily.dtsx')
   await writeFile(join(control, 'ssis', 'fail'), '')
@@ -228,7 +228,7 @@ try {
 
   // 8. Lists at the 2,048-row cap draw only the rows near the view, also after a tab switch, and scroll to their last row.
   await writeFile(join(control, 'ssis', 'many'), '')
-  await tab('Project Properties - Loads').click()
+  await selectOpenDocument(page, 'Project Properties - Loads')
   await frame('Loads').getByRole('button', { name: 'Refresh', exact: true }).click()
   const references = frame('Loads').getByRole('table', { name: 'References', exact: true })
   await expect(references).toHaveAttribute('aria-rowcount', '2049')
@@ -251,8 +251,8 @@ try {
   await expect(last.locator('td').first()).toHaveText('Environment 2048')
   await expect(last).toBeInViewport()
   await bounded()
-  await tab('Environment Properties - Test').click()
-  await tab('Project Properties - Loads').click()
+  await selectOpenDocument(page, 'Environment Properties - Test')
+  await selectOpenDocument(page, 'Project Properties - Loads')
   await expect(references).toHaveAttribute('aria-rowcount', '2049')
   await expect(sections('Loads').getByRole('button', { name: 'References', exact: true })).toHaveAttribute('aria-current', 'location')
   await bounded()
@@ -262,7 +262,7 @@ try {
   console.log('SSIS checks: lists at the 2,048-row cap draw only the rows near the view, after a tab switch too, and reach their last row.')
 
   // 9. Light theme, and still no page-wide horizontal scroll.
-  await tab('Project Properties - Loads').click()
+  await selectOpenDocument(page, 'Project Properties - Loads')
   await page.evaluate(() => window.varia.setThemePreference({ mode: 'light' }))
   await expect.poll(() => page.evaluate(() => document.documentElement.dataset.themeType)).toBe('light')
   await page.screenshot({ path: resolve('artifacts', 'ssis-project-light.png') })

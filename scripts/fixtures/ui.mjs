@@ -14,6 +14,7 @@ export const part = {
   toolbar: '[role="toolbar"][aria-label="Standard"]',
   queryBar: '[role="toolbar"][aria-label="SQL Editor"]',
   documentTabs: '[role="tablist"][aria-label="Query documents"]',
+  tabShelfRows: '.query-shelf-rows',
   statusBar: 'footer[aria-label="Status bar"]',
   queryStatus: '[role="status"][aria-label="Query status"]',
   explorerToolbar: '[role="toolbar"][aria-label="Object Explorer toolbar"]',
@@ -364,6 +365,10 @@ export const activeDocumentName = page => activeDocument(page).getAttribute('ari
 /** The editor groups, the grid's in order and then the floating ones, and the tabs of one. */
 export const editorGroups = page => page.locator(part.editorGroup)
 export const editorGroupTabs = group => group.getByRole('tablist', { name: 'Query documents', exact: true }).getByRole('tab')
+/** One editor group's independent pinned or unpinned shelf, its row controls, and its row count. */
+export const tabShelf = (scope, pinned = false) => scope.locator(`[data-shelf-controls="${pinned ? 'pinned' : 'unpinned'}"]`)
+export const tabShelfControls = (scope, pinned = false) => scope.getByRole('group', { name: `${pinned ? 'Pinned' : 'Unpinned'} tab rows`, exact: true })
+export const tabShelfRows = (scope, pinned = false) => tabShelfControls(scope, pinned).locator(part.tabShelfRows)
 export const floatingEditorGroups = page => page.locator(part.floatingEditorGroup)
 /** A document's tab with its Close button: the target of the tab's menu. */
 export const documentTabSlots = page => documentTabs(page).locator('[data-tab-id]')
@@ -372,8 +377,20 @@ export const slotTab = slot => slot.locator('xpath=ancestor::*[@role="tab"][1]')
 /** Every open document's tab, in any group. */
 export const openDocuments = documentTabSlots
 export const openDocument = documentTab
-/** Selects a document's tab in its group (Playwright scrolls a strip's hidden tab into view). */
-export const selectOpenDocument = (page, name) => documentTab(page, name).click()
+/** Selects a document through its tab or its shelf's overflow list when the tab is outside the shown rows. */
+export const selectOpenDocument = async (page, name) => {
+  const tab = documentTab(page, name)
+  if (await tab.getAttribute('data-tab-overflow') !== null) {
+    const section = await tab.getAttribute('data-tab-shelf') === 'pinned' ? 'pinned' : 'query'
+    const strip = tab.locator('xpath=ancestor::*[@role="tablist"][1]')
+    const overflow = strip.getByRole('button', { name: new RegExp(`^Show \\d+ more ${section} tabs?$`) })
+    const options = strip.getByRole('button', { name: `${section === 'pinned' ? 'Pinned' : 'Query'} tab options`, exact: true })
+    await overflow.or(options).click()
+    await strip.getByRole('group', { name: `More ${section} tabs`, exact: true }).getByRole('button', named(name)).click()
+    return
+  }
+  await tab.click()
+}
 export const pinDocumentButton = (page, name, pinned = false) => documentTabs(page).getByRole('button', { name: `${pinned ? 'Unpin' : 'Pin'} ${name}`, exact: true })
 /** Rename Tab's text box, in the tab being renamed. */
 export const tabNameBox = page => documentTabs(page).getByRole('textbox', { name: 'Tab name', exact: true })
