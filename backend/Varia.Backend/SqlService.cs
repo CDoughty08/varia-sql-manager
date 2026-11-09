@@ -1568,14 +1568,20 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var working = ColumnProfiler.WorkingBytes(rows, args.Columns.Length);
         if (!store.TryReserve(set.Budget, working, false, out _))
             throw new RequestException("TOO_LARGE", "There is not enough result memory to profile these rows. Close other results and try again.");
+        // Large values (a long lowest or highest key, a long sort key) are charged as the profile meets them.
+        var charges = new ColumnProfiler.Charges(bytes => store.TryReserve(set.Budget, bytes, false, out _));
         try
         {
-            var result = await Task.Run(() => ColumnProfiler.Profile(set, pages, view, args.Columns, complete, token), token);
+            var result = await Task.Run(() => ColumnProfiler.Profile(set, pages, view, args.Columns, complete, token, charges), token);
             if (set.IsReleased) throw Unavailable(args.ResultId);
             if (view is not null && !store.HasView(view)) throw ViewClosed();
             return result;
         }
-        finally { store.Return(set.Budget, working); }
+        catch (ColumnProfiler.ProfileTooLargeException)
+        {
+            throw new RequestException("TOO_LARGE", "There is not enough result memory to profile these rows. Close other results and try again.");
+        }
+        finally { store.Return(set.Budget, working + charges.Extra); }
     }
 
     private ResultsViewCloseResult CloseViews(ResultsViewCloseArgs args)

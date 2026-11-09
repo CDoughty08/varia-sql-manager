@@ -32,8 +32,27 @@ internal static class ColumnProfiler
     /// an exact distinct set at its cap (about 24 bytes an entry), the estimator's registers and its two kept values.</summary>
     public static long WorkingBytes(long baseRows, int columns) => baseRows / 8 + 1024 + columns * (24L * Math.Min(baseRows, ExactDistinct) + Registers + 4 * DisplayBytes + 4096);
 
-    public static ResultsProfileResult Profile(ResultSetBuffer set, StoredPage[] pages, ResultView? view, IReadOnlyList<int> columns, bool complete, CancellationToken token)
+    /// <summary>Memory a profile takes beyond <see cref="WorkingBytes"/> as it meets large values (a lowest or highest
+    /// key, a sort key's buffers), reserved from the result's budget as it grows; the caller returns <see cref="Extra"/>.
+    /// A refusal ends the profile with <see cref="ProfileTooLargeException"/>.</summary>
+    internal sealed class Charges(Func<long, bool> reserve)
     {
+        private long extra;
+        public long Extra => Interlocked.Read(ref extra);
+
+        public void Add(long bytes)
+        {
+            if (bytes <= 0) return;
+            if (!reserve(bytes)) throw new ProfileTooLargeException();
+            Interlocked.Add(ref extra, bytes);
+        }
+    }
+
+    internal sealed class ProfileTooLargeException() : Exception("The profile needs more result memory than the budget has.");
+
+    public static ResultsProfileResult Profile(ResultSetBuffer set, StoredPage[] pages, ResultView? view, IReadOnlyList<int> columns, bool complete, CancellationToken token, Charges? charges = null)
+    {
+        charges ??= new Charges(_ => true);
         long baseRows = 0;
         foreach (var page in pages) baseRows += page.Rows;
         byte[]? included = null;
@@ -44,7 +63,7 @@ internal static class ColumnProfiler
         }
         bool Included(long row) => included is null || (included[row >> 3] & (1 << (int)(row & 7))) != 0;
         var rows = view?.Rows ?? baseRows;
-        var accumulators = columns.Select(column => new Accumulator(set, column)).ToArray();
+        var accumulators = columns.Select(column => new Accumulator(set, column, charges)).ToArray();
         var sizes = new LengthStats();
         var guessed = set.Lengths.Any(length => length.Estimated);
         var count = set.Wires.Count;
@@ -56,7 +75,8 @@ internal static class ColumnProfiler
             var measured = page.Lengths.Rows == page.Rows;
             var estimated = new HashSet<int>();
             if (measured) page.Lengths.EstimatedRows(0, page.Rows, row => estimated.Add(row));
-            var parsed = PageView.Parse(page.Body, count, scratch);
+            // Row sizes come from the page's lengths: with no columns asked (the row-size bar), the body is never parsed.
+            var parsed = accumulators.Length > 0 ? PageView.Parse(page.Body, count, scratch) : default;
             for (var r = 0; r < page.Rows; r++)
             {
                 if (!Included(first + r)) continue;
@@ -122,22 +142,27 @@ internal static class ColumnProfiler
         private readonly Basis basis;
         private readonly (CompareInfo Info, CompareOptions Options)? culture;
         private readonly bool trim;
+        private readonly Charges charges;
         private long values;
         private bool approximate;
         private HashSet<ulong>? exact = [];
         private byte[]? registers;
         private byte[] key = new byte[64];
         private char[] chars = new char[256];
-        private byte[]? minKey, maxKey;
+        /// <summary>The lowest and highest keys so far, in buffers reused as they change (grown, and charged, only for a
+        /// longer key), and the starts of their cells for display.</summary>
+        private byte[] minKey = [], maxKey = [];
+        private int minLength = -1, maxLength = -1;
         private byte[]? minCell, maxCell;
         private bool minCut, maxCut;
         private readonly LengthStats? charStats, byteStats;
         private double low = double.PositiveInfinity, high = double.NegativeInfinity;
         private readonly long[] bins = new long[Bins];
 
-        public Accumulator(ResultSetBuffer set, int column)
+        public Accumulator(ResultSetBuffer set, int column, Charges charges)
         {
             this.column = column;
+            this.charges = charges;
             meta = set.Columns[column];
             wire = set.Wires[column];
             length = set.Lengths[column];
@@ -163,8 +188,8 @@ internal static class ColumnProfiler
             if (truncated) approximate = true;
             var normal = Normalize(cell);
             Distinct(normal);
-            if (minKey is null || Compare(normal, minKey) < 0) { minKey = normal.ToArray(); minCut = Keep(cell, truncated, ref minCell); }
-            if (maxKey is null || Compare(normal, maxKey) > 0) { maxKey = normal.ToArray(); maxCut = Keep(cell, truncated, ref maxCell); }
+            if (minLength < 0 || Compare(normal, minKey.AsSpan(0, minLength)) < 0) { minLength = Hold(normal, ref minKey); minCut = Keep(cell, truncated, ref minCell); }
+            if (maxLength < 0 || Compare(normal, maxKey.AsSpan(0, maxLength)) > 0) { maxLength = Hold(normal, ref maxKey); maxCut = Keep(cell, truncated, ref maxCell); }
             if (byteStats is not null)
             {
                 var size = Size(lengths, row, cell, truncated);
@@ -267,7 +292,12 @@ internal static class ColumnProfiler
                 case ViewSorter.Kind.Collated when culture is { } compare:
                 {
                     var trimmed = ViewSorter.TrimEnd(cell);
-                    if (chars.Length < trimmed.Length) chars = new char[Math.Max(trimmed.Length, 2 * chars.Length)];
+                    if (chars.Length < trimmed.Length)
+                    {
+                        var grown = Math.Max(trimmed.Length, 2 * chars.Length);
+                        charges.Add(2L * (grown - chars.Length));
+                        chars = new char[grown];
+                    }
                     var text = chars.AsSpan(0, Encoding.UTF8.GetChars(trimmed, chars));
                     var size = compare.Info.GetSortKeyLength(text, compare.Options);
                     Grow(size);
@@ -288,7 +318,23 @@ internal static class ColumnProfiler
 
         private void Grow(int size)
         {
-            if (key.Length < size) key = new byte[Math.Max(size, 2 * key.Length)];
+            if (key.Length >= size) return;
+            var grown = Math.Max(size, 2 * key.Length);
+            charges.Add(grown - key.Length);
+            key = new byte[grown];
+        }
+
+        /// <summary>Copies a key into a kept buffer, growing it (and charging the growth) only for a longer key.</summary>
+        private int Hold(ReadOnlySpan<byte> normal, ref byte[] kept)
+        {
+            if (kept.Length < normal.Length)
+            {
+                var grown = Math.Max(normal.Length, Math.Min(2 * kept.Length, normal.Length + 4096));
+                charges.Add(grown - kept.Length);
+                kept = new byte[grown];
+            }
+            normal.CopyTo(kept);
+            return normal.Length;
         }
 
         /// <summary>Exact numeric text without a negative zero's sign, leading zeros or trailing fraction zeros, so equal
@@ -361,7 +407,8 @@ internal static class ColumnProfiler
         {
             var limit = wire == WireKind.Binary ? ValueChars / 2 - 1 : DisplayBytes;
             var take = Math.Min(cell.Length, limit);
-            kept = cell[..take].ToArray();
+            if (kept is null || kept.Length != take) kept = new byte[take];
+            cell[..take].CopyTo(kept);
             return truncated || take < cell.Length;
         }
 

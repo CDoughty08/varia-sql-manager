@@ -90,6 +90,24 @@ describe('row sizes', () => {
     expect(sizes.get(69 * rowSizeLimits.blockRows)?.bytes).toBe(1)
   })
 
+  it('asks for the largest row again, after the wait, when the profile fails', async () => {
+    vi.useFakeTimers({ toFake: ['performance'] })
+    const { sizes, profiles, settle } = fixture()
+    sizes.ensure(0, 0)
+    profiles[0].reject(new Error('busy'))
+    await settle()
+    sizes.ensure(0, 0)
+    expect(profiles).toHaveLength(1)
+    vi.advanceTimersByTime(rowSizeLimits.retryMs)
+    sizes.ensure(0, 0)
+    expect(profiles).toHaveLength(2)
+    profiles[1].resolve({ rows: 1000, complete: true, rowBytes: { min: 0, max: 900, average: 1, exact: true }, columns: [] })
+    await settle()
+    expect(sizes.max).toBe(900)
+    sizes.ensure(0, 0)
+    expect(profiles).toHaveLength(2)
+  })
+
   it('stops its requests and keeps nothing once disposed', async () => {
     const { sizes, reads, profiles, answer, settle, changed } = fixture()
     sizes.ensure(0, 10)

@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ColumnProfile, ProfileLengths } from '../../../shared/contracts'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
@@ -9,12 +9,16 @@ import type { TabResults } from './ResultsService'
 import { chunked, histogramCaptions, histogramHeights, profileLines, rowSizeText } from './profile-format'
 import { formatCount, plural } from './status'
 
+interface Profiled { readonly profile: ColumnProfile; readonly rows: number }
+
 interface Profiles {
   readonly handle: ResultHandle
   readonly rows?: number
   readonly complete?: boolean
   readonly rowBytes?: ProfileLengths
-  readonly columns: ReadonlyMap<number, ColumnProfile>
+  /** Each column's figures with the rows they were computed over: requests of 32 columns each see the rows sealed when
+   *  they ran, so a set still loading gives each chunk its own count. */
+  readonly columns: ReadonlyMap<number, Profiled>
   readonly loading: boolean
   readonly error?: string
 }
@@ -50,6 +54,10 @@ export default function ColumnProfilePanel({ tabId, tab, index }: { tabId: strin
   const handle = entry ? results.sortOf(tabId, entry.index)?.view ?? entry.handle : undefined
   const snapshot = useSyncExternalStore(handle?.subscribe ?? noSubscribe, handle?.getSnapshot ?? noSnapshot)
   const [profiles, setProfiles] = useState<Profiles | undefined>(undefined)
+  // The latest profiles, read when a new request starts: asking again for the same rows keeps the cards shown until each
+  // chunk's new figures arrive, rather than going back to "Profiling…".
+  const latest = useRef(profiles)
+  latest.current = profiles
   const columns = entry ? entry.descriptor.columns.flatMap((column, at) => column.role === 'tone' ? [] : [at]) : []
   const columnKey = columns.join(',')
   const held = snapshot && snapshot.state !== 'released' && snapshot.state !== 'lost'
@@ -58,8 +66,9 @@ export default function ColumnProfilePanel({ tabId, tab, index }: { tabId: strin
   useEffect(() => {
     if (!handle || !held) return
     const abort = new AbortController()
-    let current: Profiles = { handle, columns: new Map(), loading: true }
-    setProfiles(previous => previous?.handle === handle ? { ...previous, loading: true, error: undefined } : current)
+    const previous = latest.current?.handle === handle ? latest.current : undefined
+    let current: Profiles = previous ? { ...previous, loading: true, error: undefined } : { handle, columns: new Map(), loading: true }
+    setProfiles(current)
     const wanted = columnKey ? columnKey.split(',').map(Number) : []
     void (async () => {
       try {
@@ -67,7 +76,7 @@ export default function ColumnProfilePanel({ tabId, tab, index }: { tabId: strin
           const result = await handle.profile(part, abort.signal)
           if (abort.signal.aborted) return
           const merged = new Map(current.columns)
-          for (const column of result.columns) merged.set(column.column, column)
+          for (const column of result.columns) merged.set(column.column, { profile: column, rows: result.rows })
           current = { handle, rows: result.rows, complete: result.complete, rowBytes: result.rowBytes, columns: merged, loading: true }
           setProfiles(current)
         }
@@ -80,7 +89,6 @@ export default function ColumnProfilePanel({ tabId, tab, index }: { tabId: strin
     return () => abort.abort()
   }, [handle, held, settled, columnKey])
   const shown = profiles?.handle === handle ? profiles : undefined
-  const rows = shown?.rows ?? snapshot?.rowsAvailable ?? 0
   const name = entry ? `Result ${entry.index + 1}` : ''
   const facts = shown?.rows === undefined ? '' : `${formatCount(shown.rows)} ${plural(shown.rows, 'row')}${shown.complete ? '' : ' so far'}`
   const sizes = rowSizeText(shown?.rowBytes)
@@ -97,7 +105,8 @@ export default function ColumnProfilePanel({ tabId, tab, index }: { tabId: strin
     <div className="profile-cards">
       {entry && held && columns.map(column => {
         const info = entry.descriptor.columns[column]
-        return <ProfileCard key={column} name={info.name || '(No column name)'} type={sqlTypeLabel(info)} profile={shown?.columns.get(column)} rows={rows} />
+        const profiled = shown?.columns.get(column)
+        return <ProfileCard key={column} name={info.name || '(No column name)'} type={sqlTypeLabel(info)} profile={profiled?.profile} rows={profiled?.rows ?? 0} />
       })}
     </div>
   </aside>

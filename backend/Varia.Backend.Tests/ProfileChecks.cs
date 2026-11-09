@@ -34,6 +34,8 @@ internal static class ProfileChecks
     {
         Figures(check);
         Estimates(check);
+        Pages(check);
+        Charged(check);
         Requests(check);
         Hashes(check);
     }
@@ -118,6 +120,48 @@ internal static class ProfileChecks
         var error = Math.Abs(many.Distinct - count) / (double)count;
         check(!many.DistinctExact && error < 0.03 && many.Distinct <= count && result.Columns[1] is { Distinct: 1, DistinctExact: true, Values: count },
             "past the exact cap a distinct count is an estimate (" + many.Distinct + " for " + count + "), and a column of one value stays exact");
+    }
+
+    /// <summary>Rows over many pages: every page counts, the histogram's second pass sees every value, and a column of
+    /// only NULLs has no lowest, highest or histogram.</summary>
+    private static void Pages(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        const int count = 5000;
+        var set = Fill(store, [new("n", "int", "text"), new("none", "int", "text")],
+            Enumerable.Range(0, count).Select(i => new object?[] { i % 10 == 0 ? null : i.ToString(CultureInfo.InvariantCulture), null }));
+        var pages = set.SealedSnapshot();
+        var result = Profile(set, null, 0, 1);
+        var n = result.Columns[0];
+        check(pages.Length > 1 && result.Rows == count && n is { Values: 4500, Nulls: 500, Distinct: 4500, DistinctExact: true, Min: "1", Max: "4999" }
+            && n.Histogram is { Basis: "value", Low: 1, High: 4999 } histogram && histogram.Counts.Sum() == 4500,
+            "a profile over " + pages.Length + " pages counts every row and bins every value: " + Describe(n));
+        check(result.Columns[1] is { Values: 0, Nulls: count, Distinct: 0, Min: null, Max: null, Histogram: null, Chars: null },
+            "a column of only NULLs has no lowest, highest or histogram: " + Describe(result.Columns[1]));
+        var sizes = ColumnProfiler.Profile(set, pages, null, [], true, CancellationToken.None);
+        var each = set.RowBytes(0, count);
+        check(sizes.Columns.Length == 0 && sizes.Rows == count && sizes.RowBytes is { } bytes && bytes.Min == each.Min() && bytes.Max == each.Max() && bytes == result.RowBytes,
+            "a profile of no columns sizes every row of every page, as one with columns does");
+    }
+
+    /// <summary>Long values are charged as the profile keeps them, and a refusal ends it; the service returns every charge.</summary>
+    private static void Charged(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        using var service = new SqlService(store);
+        var set = Fill(store, [new("doc", "xml", "text"), new("name", "nvarchar(max)", "text", Collation: CaseInsensitive)],
+            new[] { 100_000, 200_000, 300_000 }.Select(size => new object?[] { new string('a', size), new string('b', size) }));
+        long charged = 0;
+        ColumnProfiler.Profile(set, set.SealedSnapshot(), null, [0, 1], true, CancellationToken.None, new ColumnProfiler.Charges(bytes => { charged += bytes; return true; }));
+        // Each column keeps a lowest and a highest key; the longest is 300,000 bytes (xml compares its stored text).
+        check(charged >= 2 * 300_000, "a profile charges the long keys it keeps (" + charged + " bytes)");
+        string refused;
+        try { ColumnProfiler.Profile(set, set.SealedSnapshot(), null, [0], true, CancellationToken.None, new ColumnProfiler.Charges(bytes => bytes < 50_000)); refused = "ran"; }
+        catch (ColumnProfiler.ProfileTooLargeException) { refused = "TOO_LARGE"; }
+        check(refused == "TOO_LARGE", "a profile whose long keys the budget refuses stops");
+        var baseline = store.UsedBytes;
+        var answered = (ResultsProfileResult)service.DispatchAsync("results.profile", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, columns = new[] { 0, 1 } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult();
+        check(answered.Columns[0].Max?.Length == ColumnProfiler.ValueChars + 1 && store.UsedBytes == baseline, "results.profile returns what it charged for long keys");
     }
 
     private static void Requests(Action<bool, string> check)

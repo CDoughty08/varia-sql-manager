@@ -23,6 +23,8 @@ export class RowSizes {
   private readonly failed = new Map<number, number>()
   private readonly abort = new AbortController()
   private profiled = false
+  /** When the last profile failed (BUSY, TOO_LARGE): asked again once it has waited, as a failed block is. */
+  private profileFailedAt: number | undefined
   private profileMax = 0
   private readMax = 0
   private disposed = false
@@ -39,7 +41,8 @@ export class RowSizes {
     if (snapshot.state === 'released' || snapshot.state === 'lost' || snapshot.rowsAvailable <= 0) return
     // The largest row of the whole set is asked for once it is complete: profiling a set still streaming would scan its
     // rows again for every page, and compete with the reads that paint its first rows.
-    if (!this.profiled && snapshot.state === 'complete') this.profile()
+    const waited = this.profileFailedAt === undefined || performance.now() - this.profileFailedAt >= rowSizeLimits.retryMs
+    if (!this.profiled && waited && snapshot.state === 'complete') this.profile()
     const end = Math.min(last, snapshot.rowsAvailable - 1)
     for (let block = Math.floor(Math.max(0, first) / rowSizeLimits.blockRows); block * rowSizeLimits.blockRows <= end; block++) {
       const held = this.blocks.get(block)
@@ -98,7 +101,13 @@ export class RowSizes {
     this.handle.profile([], this.abort.signal).then(result => {
       if (this.disposed) return
       this.profileMax = result.rowBytes?.max ?? 0
+      this.profileFailedAt = undefined
       this.changed()
-    }, () => { /* The rows read still scale the bars. */ })
+    }, () => {
+      // The rows read scale the bars meanwhile; a paint after the wait asks again.
+      if (this.disposed) return
+      this.profiled = false
+      this.profileFailedAt = performance.now()
+    })
   }
 }

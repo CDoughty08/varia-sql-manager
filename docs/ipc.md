@@ -1360,11 +1360,15 @@ renderer (`Results/ColumnProfiles.cs`): `results.profile` answers aggregates, ne
 - **Work.** Two passes over the sealed pages, off the frame loop, reading rows in base order through a bitmap of the
   view's rows. Its working memory (a bit a row, and per column the exact distinct set up to its cap, 16 KiB of estimator
   registers and the kept values) is charged to the result's query budget while it runs (`TOO_LARGE` when there is no
-  room) and returned when it ends. The worker's `cancel` stops it (`CANCELLED`).
+  room) and returned when it ends. Longer keys (a long lowest or highest value, a long collation sort key) are charged
+  as the profile meets them, and a refusal ends it with `TOO_LARGE`. With no columns it reads only the pages' row sums,
+  never their bodies. The worker's `cancel` stops it (`CANCELLED`).
 - **Renderer.** `ResultHandle.profile(columns, signal)` validates the columns before sending. The profile panel asks for
   the shown grid's columns, 32 at a time, through the view the grid shows, and again when its rows or its view change;
-  a newer request cancels the older. The row-size bar reads `results.rowBytes` for the rows in view only, through the
-  shown handle, and scales them to the profile's `rowBytes.max` (or the largest row read, while that is larger).
+  a newer request cancels the older, each card's NULL share is of the rows its own request saw, and cards stay shown
+  while the same rows are asked again. The row-size bar reads `results.rowBytes` for the rows in view only, through the
+  shown handle, and scales them to the profile's `rowBytes.max` once the set is complete (asked again 2 s after a
+  failure), or to the largest row read while that is larger.
 
 ## Copy and Save Results As
 
