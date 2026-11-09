@@ -35,7 +35,8 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     if (target?.view !== 'grid') return undefined
     const set = results.getSnapshot()[target.tabId]?.sets[target.resultIndex]
     const state = set?.handle.getSnapshot()
-    return set && state && state.state !== 'lost' && state.state !== 'released' ? { set, rows: state.rowsAvailable, columns: set.descriptor.columns.length } : undefined
+    const current = !target.result || (set?.descriptor.generation === target.result.generation && set.descriptor.resultId === target.result.resultId)
+    return set && current && state && state.state !== 'lost' && state.state !== 'released' ? { set, rows: state.rowsAvailable, columns: set.descriptor.columns.length } : undefined
   }
   const valueCell = (args?: CommandArgs) => {
     let cell: (NonNullable<CommandArgs['cell']> & { tabId: string }) | undefined
@@ -55,11 +56,13 @@ export function outputContribution({ commands, results, menuTargets, documents, 
   }
   const showSortText = (mode: 'chars' | 'bytes') =>
     settings.choose('queryResults.grid.sortText', settings.getSnapshot().values['queryResults.grid.sortText'] === mode ? 'value' : mode)
-  /** The column a sort command acts on: the menu's (a right-press on a header selects its column), else the active cell's. */
+  /** The column captured by the menu, else the focused grid's active cell. */
   const sortTarget = (args?: CommandArgs) => {
     const target = targetOf(args), shown = grid(target)
     const active = shown && results.selection(target!.tabId, target!.resultIndex)?.active
-    return shown && active && active.column < shown.columns ? { tabId: target!.tabId, index: target!.resultIndex, column: active.column } : undefined
+    const column = target?.column ?? active?.column
+    return shown && column !== undefined && Number.isInteger(column) && column >= 0 && column < shown.columns && shown.set.descriptor.columns[column].role !== 'tone'
+      ? { tabId: target!.tabId, index: target!.resultIndex, column } : undefined
   }
   const sortCommand = (direction: 'ascending' | 'descending', add: boolean) => ({
     when: (args?: CommandArgs) => !!sortTarget(args),
@@ -67,6 +70,12 @@ export function outputContribution({ commands, results, menuTargets, documents, 
   })
   /** The tab search in results acts on: the focused output's, else the active query's. */
   const searchTab = (args?: CommandArgs) => targetOf(args)?.tabId ?? documents.getSnapshot().activeId
+  const closeTab = (args?: CommandArgs) => {
+    const target = outputOf(args) ?? (args?.tabId || args?.target ? undefined : focusedOutput(menuTargets))
+    if (args?.target && !target) return undefined
+    if (target?.view === 'grid' && !grid(target)) return undefined
+    return target?.tabId ?? args?.tabId ?? documents.getSnapshot().activeId
+  }
   const registrations = [
     commands.register('output.find', {
       run: args => {
@@ -106,6 +115,17 @@ export function outputContribution({ commands, results, menuTargets, documents, 
         if (failure) commands.reportError(failure)
       }
     }),
+    commands.register('output.copyColumnName', {
+      when: args => !!sortTarget(args),
+      run: async args => {
+        const at = sortTarget(args)
+        if (at) unwrap(await api.writeClipboardText(results.getSnapshot()[at.tabId].sets[at.index].descriptor.columns[at.column].name))
+      }
+    }),
+    commands.register('output.fitColumn', {
+      when: args => { const at = sortTarget(args); return !!at && results.canFitColumn(at.tabId, at.index, at.column) },
+      run: args => { const at = sortTarget(args); if (at) results.fitColumn(at.tabId, at.index, at.column) }
+    }),
     commands.register('output.saveResultsAs', {
       run: async args => {
         const target = targetOf(args), tabId = target?.tabId ?? documents.getSnapshot().activeId
@@ -129,14 +149,14 @@ export function outputContribution({ commands, results, menuTargets, documents, 
       }
     }),
     commands.register('output.closeResults', {
-      run: () => {
-        const tabId = documents.getSnapshot().activeId
+      when: args => { const tabId = closeTab(args); return !!tabId && !!results.context.getSnapshot()[tabId] && results.getSnapshot()[tabId]?.status !== 'running' },
+      run: args => {
+        const tabId = closeTab(args)
         if (!tabId) return
-        // Closing unmounts the grids and Messages, which would drop focus held in them to <body>, and selects the Results
-        // tab, which stays (saying the results were closed): focus in the view or on its tabs moves there first. Focus
-        // anywhere else stays put.
-        const view = typeof document === 'undefined' ? null : windows.activeElement()?.closest('.output-view, .output-toolbar [role="tablist"]')
-        view?.closest('.output-panel')?.querySelector<HTMLElement>('[role="tab"][data-output-tab="results"]')?.focus({ preventScroll: true })
+        // The grid and its tools unmount. Leave focus on the surviving Results tab in their own window; closing another
+        // query's contextual results leaves focus in the current query alone.
+        const panel = windows.activeElement()?.closest('.output-panel')
+        if (panel?.getAttribute('data-tab-id') === tabId) panel.querySelector<HTMLElement>('[role="tab"][data-output-tab="results"]')?.focus({ preventScroll: true })
         results.closeResults(tabId)
       }
     }),

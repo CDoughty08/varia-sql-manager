@@ -7,6 +7,8 @@ import type { ThemeType } from '../../../shared/theme/types'
 import { useServiceSelector, useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import type { Workbench } from '../core/workbench'
 import { focusWhenDrawn } from '../core/modal'
+import { useCommandEnabled, useKeybindingLabel } from '../core/useCommand'
+import { withKey } from '../query-context'
 import { documentKind, isCustomKind, isQueryDocument, isTextDocument, kindInfo, type QueryTab } from '../documents'
 import { DockingGuides } from '../docking-guides'
 import { afterPointer } from './pointer'
@@ -219,6 +221,8 @@ function DocumentTab({ api }: IDockviewPanelHeaderProps) {
 
 /** The editor panel's ⋯ menu, in the group whose header is at the editor area's top right. */
 function GroupActions({ group, containerApi }: IDockviewHeaderActionsProps) {
+  const { commands } = useWorkbench()
+  const enabled = useCommandEnabled('file.new'), key = useKeybindingLabel('file.new')
   const [corner, setCorner] = useState(false)
   useEffect(() => {
     const check = () => {
@@ -229,7 +233,11 @@ function GroupActions({ group, containerApi }: IDockviewHeaderActionsProps) {
     const layout = containerApi.onDidLayoutChange(check), location = group.api.onDidLocationChange(check)
     return () => { layout.dispose(); location.dispose() }
   }, [group, containerApi])
-  return <><TabShelves group={group} />{corner && <div className="editor-group-actions"><PaneMenuButton pane="editor" /></div>}</>
+  return <><TabShelves group={group} /><div className="editor-group-actions">
+    <button type="button" className="icon-button editor-group-new-query" aria-label="New query in this group" title={withKey('New query', key)} disabled={!enabled}
+      onClick={() => { group.api.setActive(); void commands.execute('file.new', { editorGroup: group.id }, 'toolbar') }}><Icon name="add" /></button>
+    {corner && <PaneMenuButton pane="editor" />}
+  </div></>
 }
 
 function EmptyEditor({ group }: IWatermarkPanelProps) {
@@ -356,10 +364,19 @@ class EditorAreaController implements Area, EditorGroupHost {
   ready(api: DockviewApi, root: HTMLElement): void {
     this.api = api
     this.root = root
+    const newQuery = (event: MouseEvent) => {
+      const target = event.target
+      if (!(target instanceof Element) || !target.closest('.dv-tabs-and-actions-container') || target.closest('.dv-tab, button, a, input, [role="menu"], [role="listbox"]') || !this.workbench.gestures.matches('documentTabs.newQuery', event)) return
+      const group = api.groups.find(group => group.element.contains(target))
+      if (!group) return
+      group.api.setActive()
+      void this.workbench.commands.execute('file.new', { editorGroup: group.id }, 'toolbar')
+    }
+    root.addEventListener('dblclick', newQuery)
     const { documents, editorGroups } = this.workbench
     const guides = new DockingGuides(api, root, () => {}, error => this.workbench.commands.reportError(error instanceof Error ? error.message : 'The editor could not move.'), this.workbench.gestures)
     api.updateOptions({ dropPositionResolver: guides })
-    this.disposables.push(guides,
+    this.disposables.push(guides, { dispose: () => root.removeEventListener('dblclick', newQuery) },
       api.onDidActivePanelChange(event => { if (!this.reconciling && event.panel && documents.getSnapshot().activeId !== event.panel.id) documents.activate(event.panel.id); this.followStatus() }),
       api.onDidLayoutChange(() => { this.keepGrid(); this.keepPinsFirst(); this.publish() }),
       api.onDidRemoveGroup(group => this.dropEditor(group.id)),

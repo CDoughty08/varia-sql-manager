@@ -10,6 +10,8 @@ import { lostHint, queryContextModel, toolbarMove, toolbarRescue, toolbarReturn,
 import type { LiveConnection } from '../src/renderer/src/services/connections'
 import { densityUse } from '../src/shared/theme/metrics'
 import { stylesheetRules } from './fixtures/css-rules'
+import { documentUri } from '../src/renderer/src/services/documents'
+import { EditorStatusService } from '../src/renderer/src/services/editor-status'
 import { connectionInfo, connectionOptions, readyBackend, workbenchFixture } from './fixtures/workbench'
 
 // Server rendering reads a store through getServerSnapshot, which the services leave to their client snapshot.
@@ -100,9 +102,11 @@ describe('query bar', () => {
     value.api.push(readyBackend())
     // Server rendering has no theme store: a connection colour is drawn as the theme would give it.
     const theme = { subscribe: () => () => {}, getSnapshot: () => 0, accent: (color: string | undefined) => color ? `var(--varia-connection-${color})` : undefined }
-    const workbench = { ...value, theme } as unknown as Workbench
+    const editorStatus = new EditorStatusService(callback => callback())
+    cleanups.push(() => editorStatus.dispose())
+    const workbench = { ...value, theme, editorStatus } as unknown as Workbench
     const render = (element: ReactElement) => renderToStaticMarkup(createElement(WorkbenchProvider, { workbench, children: element }))
-    return { ...value, render }
+    return { ...value, render, editorStatus }
   }
   it('is an ARIA toolbar with Execute, Cancel and the connection pill: colour, environment tag, server and database', () => {
     const { connections, documents, render } = fixture()
@@ -130,6 +134,21 @@ describe('query bar', () => {
     const html = render(createElement(QueryBar))
     expect(html).toContain('<option value="Sales  2024" selected="">Sales  2024</option>')
     expect(html).not.toContain('aria-description')
+  })
+  it('labels the execution selection in both toolbar layouts and rejects stale metadata from another query', () => {
+    const { documents, render, editorStatus } = fixture()
+    const query = documents.create('a.sql', 'SELECT 1\nSELECT 2', 'master')
+    vi.spyOn(editorStatus, 'getSnapshot').mockReturnValue({ line: 2, column: 9, character: 9, eol: 'lf', selection: { uri: documentUri(query.id), startLine: 1, endLine: 2 } })
+    for (const bar of [createElement(QueryBar), createElement(StandardToolbar, { variant: 'classic' })]) {
+      const html = render(bar)
+      expect(html).toContain('aria-label="Execute selection"')
+      expect(html).toContain('Execute selection · Lines 1–2 (F5)')
+      expect(html).toContain('<span class="query-scope">Lines 1–2</span>')
+    }
+    documents.create('b.sql', '', 'master')
+    const html = render(createElement(QueryBar))
+    expect(html).toContain('aria-label="Execute"')
+    expect(html).toContain('<span class="query-scope">Entire query</span>')
   })
   it('names the lost connection on Execute, and shows no colour or tag for a disconnected query', () => {
     const { connections, documents, render, api } = fixture()

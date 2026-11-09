@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (272)
+## Commands (276)
 
 ### File
 
@@ -27,6 +27,7 @@ keys it uses are listed below.
 | Close Query | `file.close` | Ctrl+W, Ctrl+F4, Delete (`documentTabFocus && !inputFocus`), Backspace (`documentTabFocus && !inputFocus`) | Ctrl+W, Ctrl+F4, Delete (`documentTabFocus && !inputFocus`), Backspace (`documentTabFocus && !inputFocus`) | ⌘W, ⌦ (`documentTabFocus && !inputFocus`), ⌫ (`documentTabFocus && !inputFocus`) | `hasActiveDocument && !documentBusy` | File › Close Query; Query tab context menu › Close |
 | Close All But This | `file.closeOthers` | — | — | — | `multipleDocuments && !documentBusy` | Query tab context menu › Close All But This |
 | Close All | `file.closeAll` | — | — | — | `hasActiveDocument && !documentBusy` | Window › Close All Documents; Query tab context menu › Close All |
+| Reopen Closed Query | `file.reopenClosed` | Ctrl+Shift+T | Ctrl+Shift+T | ⇧⌘T | `!documentBusy` | Query tab context menu › Reopen Closed Query; File › Reopen Closed Query |
 | Copy Full Path | `file.copyPath` | — | — | — | `hasActiveDocument` | Query tab context menu › Copy Full Path |
 | Open Containing Folder | `file.revealInFolder` | — | — | — | `hasActiveDocument` | Query tab context menu › Open Containing Folder (Windows, Linux only); Query tab context menu › Reveal in Finder (macOS only) |
 
@@ -136,9 +137,10 @@ keys it uses are listed below.
 | Change Database… | `query.changeDatabase` | Ctrl+U | Ctrl+U | ⌘U | `activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy` | Query › Change Database… |
 | Copy (not in the palette) | `output.copy` | Ctrl+C (`outputGridFocus`) | Ctrl+C (`outputGridFocus`) | ⌘C (`outputGridFocus`) | Always | Query Output context menu › Copy |
 | Copy with Headers (not in the palette) | `output.copyWithHeaders` | Ctrl+Shift+C (`outputGridFocus`) | Ctrl+Shift+C (`outputGridFocus`) | ⇧⌘C (`outputGridFocus`) | Always | Query Output context menu › Copy with Headers |
+| Copy Column Name (not in the palette) | `output.copyColumnName` | — | — | — | Always | Query Output context menu › Copy Column Name |
 | Select All (not in the palette) | `output.selectAll` | Ctrl+A (`outputGridFocus \|\| messagesFocus`) | Ctrl+A (`outputGridFocus \|\| messagesFocus`) | ⌘A (`outputGridFocus \|\| messagesFocus`) | Always | Query Output context menu › Select All |
 | Save Results As… | `output.saveResultsAs` | Ctrl+S (`outputGridFocus`) | Ctrl+S (`outputGridFocus`) | ⌘S (`outputGridFocus`) | `hasResults` | Query Output context menu › Save Results As… |
-| Close Results | `output.closeResults` | — | — | — | `hasResults && !queryRunning` | — |
+| Close Results | `output.closeResults` | — | — | — | `!documentBusy` | Query Output context menu › Close Results |
 | Show Spaces and Tabs in Results | `output.showSpaces` | — | — | — | Always; checked when `resultsWhitespaceSpaces` | Query Output context menu › Show Spaces and Tabs |
 | Show All White Space in Results | `output.showAllWhitespace` | — | — | — | Always; checked when `resultsWhitespaceAll` | Query Output context menu › Show All White Space |
 | Sort Ascending (not in the palette) | `output.sortAscending` | — | — | — | Always | Query Output context menu › Sort Ascending |
@@ -146,6 +148,8 @@ keys it uses are listed below.
 | Then Sort Ascending (not in the palette) | `output.thenSortAscending` | — | — | — | Always | Query Output context menu › Then Sort Ascending |
 | Then Sort Descending (not in the palette) | `output.thenSortDescending` | — | — | — | Always | Query Output context menu › Then Sort Descending |
 | Clear Sort (not in the palette) | `output.clearSort` | — | — | — | Always | Query Output context menu › Clear Sort |
+| Fit Column (not in the palette) | `output.fitColumn` | — | — | — | Always | Query Output context menu › Fit Column |
+| Go to Error Line (not in the palette) | `output.revealError` | — | — | — | `!documentBusy` | — |
 | Find in Results | `output.find` | Ctrl+F (`outputGridFocus`) | Ctrl+F (`outputGridFocus`) | ⌘F (`outputGridFocus`) | `hasResults` | — |
 | Find Next in Results | `output.findNext` | F3 (`outputGridFocus`) | F3 (`outputGridFocus`) | ⌘G (`outputGridFocus`), F3 (`outputGridFocus`) | `hasResults` | — |
 | Find Previous in Results | `output.findPrevious` | Shift+F3 (`outputGridFocus`) | Shift+F3 (`outputGridFocus`) | ⇧⌘G (`outputGridFocus`), ⇧F3 (`outputGridFocus`) | `hasResults` | — |
@@ -392,6 +396,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_file` | Save **A**s… | `file.saveAs` | Always |
 | `1_file` | Save A**l**l | `file.saveAll` | Always |
 | `2_close` | **C**lose Query | `file.close` | Always |
+| `2_close` | Reo**p**en Closed Query | `file.reopenClosed` | Always |
 | `7_recent` | Recent **F**iles › | Submenu: File › Recent Files | Always |
 | `z_quit` | E**x**it | `window.close` | Windows only |
 | `z_quit` | **Q**uit | `window.close` | Linux only |
@@ -767,6 +772,7 @@ Right-click a query tab, or press Shift+F10 or the context-menu key on a focused
 | `2_close` | **C**lose | `file.close` | Always |
 | `2_close` | Close All **B**ut This | `file.closeOthers` | Always |
 | `2_close` | C**l**ose All | `file.closeAll` | Always |
+| `2_close` | Reopen Closed **Q**uery | `file.reopenClosed` | Always |
 | `3_file` | Copy Full **P**ath | `file.copyPath` | Always |
 | `3_file` | **O**pen Containing Folder | `file.revealInFolder` | Windows, Linux only |
 | `3_file` | Reveal in Finder | `file.revealInFolder` | macOS only |
@@ -788,6 +794,7 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | --- | --- | --- | --- |
 | `1_copy` | **C**opy | `output.copy` | Always |
 | `1_copy` | Copy with **H**eaders | `output.copyWithHeaders` | `outputView == 'grid'` |
+| `1_copy` | Copy Column **N**ame | `output.copyColumnName` | `outputView == 'grid'` |
 | `2_select` | Select **A**ll | `output.selectAll` | Always |
 | `2_sort` | S**o**rt Ascending | `output.sortAscending` | `outputView == 'grid'` |
 | `2_sort` | Sort **D**escending | `output.sortDescending` | `outputView == 'grid'` |
@@ -796,11 +803,13 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | `2_sort` | Clea**r** Sort | `output.clearSort` | `outputView == 'grid'` |
 | `2_sort` | Hi**g**hlight › | Submenu: Query Output context menu › Highlight | `outputView == 'grid'` |
 | `2_sort` | Co**m**pare with Previous Result | `output.compareWithPrevious` | `outputView == 'grid'` |
+| `2_width` | F**i**t Column | `output.fitColumn` | `outputView == 'grid'` |
 | `3_save` | Sa**v**e Results As… | `output.saveResultsAs` | `outputView == 'grid'` |
 | `4_view` | Show S**p**aces and Tabs | `output.showSpaces` | `outputView == 'grid'` |
 | `4_view` | Show All **W**hite Space | `output.showAllWhitespace` | `outputView == 'grid'` |
 | `4_view` | Column Pro**f**ile | `output.toggleColumnProfile` | `outputView == 'grid'` |
 | `4_view` | Show Row Si**z**e | `output.toggleRowSize` | `outputView == 'grid'` |
+| `z_close` | C**l**ose Results | `output.closeResults` | Always |
 
 #### Query Output context menu › Highlight
 

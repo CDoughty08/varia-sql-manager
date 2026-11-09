@@ -13,6 +13,7 @@ export const part = {
   menubar: '[role="menubar"][aria-label="Application menu"]',
   toolbar: '[role="toolbar"][aria-label="Standard"]',
   queryBar: '[role="toolbar"][aria-label="SQL Editor"]',
+  queryScope: '.query-scope',
   documentTabs: '[role="tablist"][aria-label="Query documents"]',
   tabShelfRows: '.query-shelf-rows',
   statusBar: 'footer[aria-label="Status bar"]',
@@ -330,6 +331,7 @@ export const toolbarButton = (page, name) => toolbar(page).getByRole('button', n
 /** A query's own bar (SSMS's SQL Editor toolbar): Execute, Cancel, and the Connection group with the server and database lists. */
 export const queryBar = page => page.getByRole('toolbar', { name: 'SQL Editor', exact: true })
 export const queryBarButton = (page, name) => queryBar(page).getByRole('button', named(name))
+export const queryScope = page => queryBar(page).locator(part.queryScope)
 export const queryConnection = page => queryBar(page).getByRole('group', { name: 'Connection', exact: true })
 /** The active query's server and database lists: in its query bar, or in the classic toolbar when that is on. */
 export const queryServer = page => page.getByLabel('Query server', { exact: true })
@@ -379,6 +381,16 @@ export const activeDocumentName = page => activeDocument(page).getAttribute('ari
 /** The editor groups, the grid's in order and then the floating ones, and the tabs of one. */
 export const editorGroups = page => page.locator(part.editorGroup)
 export const editorGroupTabs = group => group.getByRole('tablist', { name: 'Query documents', exact: true }).getByRole('tab')
+export const newQueryInGroupButton = group => group.getByRole('button', { name: 'New query in this group', exact: true })
+/** A visible empty part of a tab strip, excluding tabs and their shelf controls. */
+export const emptyQueryStripPoint = group => group.getByRole('tablist', { name: 'Query documents', exact: true }).evaluate(strip => {
+  const box = strip.getBoundingClientRect(), y = box.top + Math.min(12, box.height / 2)
+  for (let x = box.right - 8; x > box.left + 8; x -= 12) {
+    const hit = strip.ownerDocument.elementFromPoint(x, y)
+    if (hit && strip.contains(hit) && !hit.closest('.dv-tab, button, input, [role="group"]')) return { x, y }
+  }
+  return null
+})
 /** One editor group's independent pinned or unpinned shelf, its row controls, and its row count. */
 export const tabShelf = (scope, pinned = false) => scope.locator(`[data-shelf-controls="${pinned ? 'pinned' : 'unpinned'}"]`)
 export const tabShelfControls = (scope, pinned = false) => scope.getByRole('group', { name: `${pinned ? 'Pinned' : 'Unpinned'} tab rows`, exact: true })

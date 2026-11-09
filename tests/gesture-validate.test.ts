@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { gestureIds, gestureOptions, type GestureChoice, type GestureId } from '../src/shared/commands/gestures'
+import { gestureDescriptor, gestureIds, gestureOptions, type GestureChoice, type GestureId } from '../src/shared/commands/gestures'
 import {
   gestureChoiceFromText as parseGestureToken, gestureChoiceText as gestureToken, gestureChoiceTexts, gestureOverrides, withGestureChoice
 } from '../src/shared/commands/gesture-choices'
@@ -41,6 +41,13 @@ describe('gesture choice tokens', () => {
 })
 
 describe('gesture validation', () => {
+  it('allows blank-strip New Query and tab Rename because a press can land on only one of their places', () => {
+    const create = gestureDescriptor('documentTabs.newQuery'), rename = gestureDescriptor('documentTabs.rename')
+    expect([create.scope, create.action, create.modifiers]).toEqual([rename.scope, rename.action, rename.modifiers])
+    expect(create.place).toBe('emptyTabStrip')
+    expect(create.place).not.toBe(rename.place)
+    for (const platform of platforms) expect(gestureErrors(validateGestures(platform, new Map()))).toEqual([])
+  })
   it('finds nothing wrong with the defaults or with any one choice the catalogue offers', () => {
     for (const platform of platforms) {
       expect(validateGestures(platform, new Map()), platform).toEqual([])

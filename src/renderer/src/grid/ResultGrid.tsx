@@ -108,7 +108,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
     })
     viewRef.current = view
     view.setMarks(marksRef.current)
-    const registration = results.registerGrid(tabId, index, { selectAll: () => view.selectAll(), repaint: () => view.repaint() })
+    const registration = results.registerGrid(tabId, index, { selectAll: () => view.selectAll(), repaint: () => view.repaint(), fitColumn: column => view.fitColumn(column) })
     // Closing and opening the pane within one frame moves the grid without resizing it, and the move drops the scroller's
     // offsets: the frame this asks for writes them back (GridView's offsetsDropped), and a press before it keeps them.
     const unsubscribe = panes.subscribe(() => view.panesChanged())
@@ -165,6 +165,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
   // The grid holds only rows; its strip and the lost overlay are its siblings, outside the table structure.
   return <div className="rg-frame">
     <div ref={rootRef} className="results-grid rg" role="grid" tabIndex={0} data-result-grid="" data-output-view="grid" data-tab-id={tabId} data-result-index={index}
+      data-result-generation={entry.descriptor.generation} data-result-id={entry.descriptor.resultId}
       data-pane-focus={focused ? 'selected' : 'grid'} aria-multiselectable="true" aria-readonly="true" onKeyDown={keyDown} onFocus={() => onFocus(index)}>
       <div ref={scrollRef} className="rg-scroll" tabIndex={-1} />
     </div>

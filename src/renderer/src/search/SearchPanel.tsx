@@ -166,6 +166,15 @@ export function KindBadge({ kind }: { readonly kind: string }) {
   return <span className="object-search-kind" data-tone={badge.tone} aria-hidden="true">{badge.letters}</span>
 }
 
+/** A visible, removable database scope so a database-menu search never silently narrows the server's results. */
+export function DatabaseScope({ database, onClear }: { readonly database: string; readonly onClear: () => void }) {
+  return <div className="object-search-database-scope" role="group" aria-label="Database scope">
+    <span>Database</span><button type="button" className="chip" title="Search all databases" aria-label={`Clear database scope: ${displayText(database)}`} onClick={onClear}>
+      <Icon name="database" /><bdi>{displayText(database)}</bdi><Icon name="close" />
+    </button>
+  </div>
+}
+
 /** An All servers group's header: a button that collapses or expands it, with the server's colour, name, environment and note. */
 function GroupHead({ group, color, environment, note, expanded, controls, tabbable, onToggle }: {
   readonly group: ServerGroup; readonly color: string | undefined; readonly environment: string | undefined; readonly note: string
@@ -520,6 +529,7 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
           </label>
         </SearchPopover> : <>{toggle('caseSensitive', 'Match Case', 'case-sensitive')}{toggle('wholeWord', 'Match Whole Word', 'whole-word')}{toggle('regex', 'Use Regular Expression', 'regex')}{toggle('fuzzy', fuzzyLabel, 'fuzzy-match', fuzzyTitle)}</>}
       </div>
+      {!pane && state.database !== undefined && <DatabaseScope database={state.database} onClear={() => { focusInput(); set({ database: undefined }) }} />}
       {showHits && <>
         {pane ? <PaneSearchFilters id={searchId} scope={state.scope} types={state.types} onScope={scope => set({ scope })} onTypes={types => set({ types })} />
           : <SearchFilters id={searchId} scope={state.scope} types={state.types} onScope={scope => set({ scope })} onTypes={types => set({ types })} options={options} />}

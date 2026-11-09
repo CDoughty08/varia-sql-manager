@@ -193,6 +193,20 @@ describe('menu target service', () => {
       expect(service.targetFor(dom(make('div').append(view('messages', attributes)).children[0])), JSON.stringify(attributes)).toBeUndefined()
     }
   })
+  it('captures the clicked column and result identity, or the keyboard menu\'s active column', () => {
+    const doc = fakeDocument(), make = (tag: string, init?: ConstructorParameters<typeof FakeElement>[2]) => new FakeElement(doc, tag, init)
+    const text = make('span'), header = make('div', { attributes: { 'aria-colindex': '3' } }).append(text)
+    const active = make('div', { className: 'rg-c is-act', attributes: { 'aria-colindex': '4' } })
+    const grid = make('div', { attributes: { 'data-output-view': 'grid', 'data-tab-id': 'query', 'data-result-index': '1', 'data-result-generation': '2', 'data-result-id': '7' } }).append(header, active)
+    const service = new MenuTargetService()
+    const clicked = service.targetFor(dom(text))!.target
+    expect(clicked).toMatchObject({ kind: 'output', tabId: 'query', resultIndex: 1, column: 1, result: { generation: 2, resultId: 7 } })
+    expect(service.targetFor(dom(grid))!.target).toMatchObject({ column: 2 })
+    header.setAttribute('aria-colindex', '5')
+    expect(clicked).toMatchObject({ column: 1 })
+    active.setAttribute('aria-colindex', '1')
+    expect(service.targetFor(dom(grid))!.target).not.toHaveProperty('column')
+  })
   it('reads a text field\'s facts again once it has focus', () => {
     let undo = false
     const doc = fakeDocument(), field = new FakeElement(doc, 'input', { value: 'x' })

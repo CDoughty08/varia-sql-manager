@@ -10,8 +10,8 @@ import { serverItems } from './query'
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 
 /**
- * Search Objects' commands. Search Objects opens a tab on the server whose Object Explorer menu runs it (a database's menu
- * narrows nothing yet: the tab searches the whole server); from anywhere else it searches all servers when several are
+ * Search Objects' commands. Search Objects opens a tab on the server whose Object Explorer menu runs it, narrowed to the
+ * database when opened from its menu; from anywhere else it searches all servers when several are
  * connected, else the one. Rebuild Search Index rebuilds the index of the server its menu or tab is on (every server, from an
  * All servers tab), else the active document's or the selected node's, else the one picked; Stop Indexing stops every running build. A result's Reveal and Copy commands act on the result its menu was opened for, else the
  * selected result of the list that has focus, on a live server.
@@ -30,6 +30,8 @@ export function searchContribution(workbench: Pick<Workbench, 'commands' | 'obje
     const go = (id: string) => { try { run(id) } catch (error) { report(error) } }
     const connectionId = target(args)
     if (connectionId) return go(connectionId)
+    // A retained context menu belongs to its server even after that server disconnects.
+    if (explorerNodeOf(args)) return report(new Error('The server is not connected.'))
     const choices = connections.live()
     if (choices.length === 1) return go(choices[0].id)
     if (!choices.length) return report(new Error('Connect to a server to search its objects.'))
@@ -59,9 +61,14 @@ export function searchContribution(workbench: Pick<Workbench, 'commands' | 'obje
     copy('search.copyQualifiedName', names => names.qualified),
     copy('search.copyBracketedName', names => names.bracketed),
     commands.register('explorer.searchObjects', {
+      when: args => !explorerNodeOf(args) || target(args) !== undefined,
       run: args => {
         const node = explorerNodeOf(args), choices = connections.live()
-        if (node || choices.length < 2) { withServer('Select a server to search', id => { objectSearch.open(id) })(args); return }
+        if (node || choices.length < 2) {
+          const database = node?.ref.type === 'object' && node.ref.object.kind === 'database' ? node.ref.object.name : undefined
+          withServer('Select a server to search', id => { objectSearch.open(id, undefined, false, database) })(args)
+          return
+        }
         try { objectSearch.open(undefined, undefined, true) } catch (error) { commands.reportError(error instanceof Error ? error.message : 'Search Objects could not open.') }
       }
     }),

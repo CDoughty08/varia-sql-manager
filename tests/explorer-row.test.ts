@@ -2,7 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { ExplorerNodeRef } from '../src/shared/explorer/refs'
-import ExplorerRow, { rowClick, changedSentence, connectionState, itemCount, Label, liveDatabase, RowEnd, rowDescription, rowName, rowTooltip, shownSublabel, type RowActions, type RowProps } from '../src/renderer/src/explorer/ExplorerRow'
+import ExplorerRow, { rowClick, changedSentence, connectionState, itemCount, Label, liveDatabase, recoveryLabel, RowEnd, rowDescription, rowName, rowTooltip, shownSublabel, type RowActions, type RowProps } from '../src/renderer/src/explorer/ExplorerRow'
 import { onlineStatus, type RowStatus } from '../src/renderer/src/explorer/ExplorerStatusService'
 import { databaseChips, serverChips } from '../src/shared/explorer/status'
 import { RowKind } from '../src/renderer/src/explorer/tree-model'
@@ -27,6 +27,26 @@ function node(fields: Partial<TreeNode> = {}): TreeNode {
 }
 
 describe('Object Explorer rows', () => {
+  it('offers the recovery action as a mouse button without adding another tree tab stop, and leaves loading rows inert', () => {
+    const actions: RowActions = { select: vi.fn(), toggle: vi.fn(), activate: vi.fn(), reconnect: vi.fn(), remove: vi.fn(), dragStart: vi.fn(() => true), commitRename: vi.fn(async () => true), cancelRename: vi.fn(), peekHover: vi.fn(), click: vi.fn() }
+    for (const [kind, action, label] of [[RowKind.Error, 'retry', 'Retry'], [RowKind.MoreError, 'retry', 'Retry'], [RowKind.Stopped, 'continue', 'Continue loading'], [RowKind.Paused, 'continue', 'Continue loading'], [RowKind.Capped, 'filter', 'Filter…']] as const) {
+      expect(recoveryLabel({ type: action, id: 7 })).toBe(label)
+      const html = renderToStaticMarkup(createElement(ExplorerRow, {
+        rowId: -7, kind, top: 0, level: 3, posinset: 0, setsize: 0, node: undefined, rev: 0, text: 'Recovery message', selected: false, draggable: false, active: false, color: undefined,
+        actions, menuTarget: () => {}, recovery: { label, run: vi.fn() }
+      }))
+      expect(html).toContain(`class="oe-recovery-action" tabindex="-1" title="${label} (Enter)"`)
+      expect(html).not.toContain('aria-disabled')
+    }
+    const loading = renderToStaticMarkup(createElement(ExplorerRow, {
+      rowId: -7, kind: RowKind.Loading, top: 0, level: 3, posinset: 0, setsize: 0, node: undefined, rev: 0, text: 'Loading…', selected: false, draggable: false, active: false, color: undefined,
+      actions, menuTarget: () => {}, recovery: { label: 'Retry', run: vi.fn() }
+    }))
+    expect(loading).toContain('aria-disabled="true"')
+    expect(loading).not.toContain('<button')
+    expect(recoveryLabel({ type: 'none' })).toBeUndefined()
+  })
+
   it("pass a row's click to Open Peek as Tab's gesture, but not a twistie's or a double-click's second click", () => {
     const actions = { click: vi.fn() }
     const target = (twistie: boolean) => ({ closest: (selector: string) => twistie && selector === '.oe-twistie' ? {} : null }) as unknown as EventTarget

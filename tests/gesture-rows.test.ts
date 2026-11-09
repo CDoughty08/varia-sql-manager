@@ -35,9 +35,11 @@ describe('gesture rows', () => {
     const toggle = gestureRows(draft(), 'darwin', '').find(row => row.id === 'dock.toggleFloat')!
     expect([toggle.label, toggle.options.map(option => option.label), toggle.keyboard]).toEqual(['⌘ Double-click', ['⌘', '⌥', '⇧', 'None'], ['pane.float', 'pane.dock']])
     const fit = rows.find(row => row.id === 'grid.fitColumn')!
-    expect([fit.source, fit.options, fit.locked]).toEqual(['builtin', [], 'Double-clicking a column border fits it, as in SSMS.'])
+    expect([fit.source, fit.options, fit.locked, fit.keyboard]).toEqual(['builtin', [], 'Double-clicking a column border fits it, as in SSMS; Fit Column in the grid menu also works from the keyboard.', ['output.fitColumn']])
     const rename = rows.find(row => row.id === 'documentTabs.rename')!
     expect([rename.kind, rename.options, rename.locked]).toEqual(['pointerCommand', [], expect.stringContaining('F2 renames')])
+    expect(rows.find(row => row.id === 'documentTabs.newQuery')).toMatchObject({ scopeTitle: 'Document Tabs', kind: 'fixed', label: 'Double-click', keyboard: ['file.new'], problems: [] })
+    expect(rows.find(row => row.id === 'messages.revealError')).toMatchObject({ scopeTitle: 'Query Messages', kind: 'fixed', label: 'Double-click', problems: [] })
     // The linked editor setting shows only where the Mouse view passes its value, never in the All view's gesture rows.
     expect(gestureRows(draft(), 'win32', '', { multiCursorModifier: 'alt' }).at(-1)).toMatchObject({ id: 'textEditor.multiCursorModifier', kind: 'linked', label: 'Alt+Click', source: 'setting', changed: false, page: 'textEditor.general' })
     expect(gestureRows(draft(), 'darwin', '', { multiCursorModifier: 'ctrlCmd' }).at(-1)).toMatchObject({ label: '⌘ Click', changed: true })
@@ -80,6 +82,7 @@ describe('gesture rows follow the page', () => {
     expect(gestureRows(file, 'win32', '@kind:k')).toEqual([])
     expect(ids(gestureRows(file, 'win32', '@source:u'))).toEqual(['explorer.peekHover', 'dock.floatWhileDragging'])
     expect(ids(gestureRows(file, 'win32', '@scope:grid'))).toEqual(['grid.addToSelection', 'grid.addSortKey', 'grid.extendSelection', 'grid.fitColumn'])
+    expect(ids(gestureRows(file, 'win32', '@scope:messages'))).toEqual(['messages.revealError'])
     expect(ids(gestureRows(file, 'win32', '@unbound'))).toEqual(['explorer.peekHover'])
     expect(ids(gestureRows(file, 'win32', '@command:pane.dock'))).toEqual(['dock.toggleFloat'])
     // Problems: Alt on Linux warns.

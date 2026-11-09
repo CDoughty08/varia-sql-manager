@@ -33,10 +33,12 @@ describe('the editor status service', () => {
       const set = listeners.get(name) ?? new Set(); set.add(listener); listeners.set(name, set)
       return { dispose: () => { set.delete(listener) } }
     }
-    const state = { line: 'SELECT\t1', lineNumber: 3, column: 8, tabSize: 4, eol: '\r\n', model: true }
+    const state = { line: 'SELECT\t1', lineNumber: 3, column: 8, tabSize: 4, eol: '\r\n', model: true,
+      selection: null as null | { startLineNumber: number; endLineNumber: number; endColumn: number; isEmpty(): boolean } }
     const instance = {
-      getModel: () => state.model ? { getLineContent: () => state.line, getOptions: () => ({ tabSize: state.tabSize }), getEOL: () => state.eol } : null,
+      getModel: () => state.model ? { uri: { toString: () => 'varia-sql://query/a' }, getLineContent: () => state.line, getOptions: () => ({ tabSize: state.tabSize }), getEOL: () => state.eol } : null,
       getPosition: () => ({ lineNumber: state.lineNumber, column: state.column }),
+      getSelection: () => state.selection, onDidChangeCursorSelection: on('selection'),
       onDidChangeCursorPosition: on('cursor'), onDidChangeModel: on('model'), onDidChangeModelContent: on('content'), onDidChangeModelOptions: on('options')
     }
     const fire = (name: string) => listeners.get(name)?.forEach(listener => listener())
@@ -75,6 +77,20 @@ describe('the editor status service', () => {
     binding.dispose()
     expect([...listeners.values()].every(set => set.size === 0)).toBe(true)
     service.dispose()
+  })
+  it('publishes the selected line range without text, excludes an untouched final line, and clears it with the selection', () => {
+    const service = new EditorStatusService(callback => callback()), { instance, state, fire } = editor()
+    const binding = service.bindEditor(instance)
+    state.selection = { startLineNumber: 2, endLineNumber: 5, endColumn: 1, isEmpty: () => false }
+    fire('selection')
+    expect(service.getSnapshot()?.selection).toEqual({ uri: 'varia-sql://query/a', startLine: 2, endLine: 4 })
+    state.selection = { startLineNumber: 3, endLineNumber: 3, endColumn: 8, isEmpty: () => false }
+    fire('selection')
+    expect(service.getSnapshot()?.selection).toMatchObject({ startLine: 3, endLine: 3 })
+    state.selection = null
+    fire('selection')
+    expect(service.getSnapshot()?.selection).toBeUndefined()
+    binding.dispose(); service.dispose()
   })
 })
 

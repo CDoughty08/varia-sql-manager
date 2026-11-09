@@ -70,6 +70,15 @@ its own Monaco editor, and groups split side by side, stack, or float over the e
 - Closing a group's shown document shows the next one in that group (the one before at the strip's end), as VS Code
   does: `DocumentService` asks `EditorGroupService.successor`, so the active document changes once. A group left empty
   goes, and the next document in order shows. A tab closed while it had focus hands focus to the tab shown next.
+- Each group's **+** opens a new query there, using the shown document's server and database, and focuses its editor.
+  Double-clicking empty tab-strip space does the same; double-clicking a tab still renames it. Ctrl+N (Cmd+N on macOS)
+  remains available from the keyboard.
+- **Reopen Closed Query** in File or a tab's menu (Ctrl+Shift+T; Cmd+Shift+T on macOS) reopens the last successfully closed
+  SQL query as an **unsaved, disconnected copy**, retaining its name, text, first caret, line ending and database. It has
+  no association with its previous saved file and no former SQL session, transaction or results; Save asks for a file.
+  Reconnecting the copy to its remembered server keeps the remembered database. The in-memory history holds at most
+  20 queries and 4,000,000 text characters in total, discarding the oldest first and omitting a query larger than that
+  budget. Value and custom tabs are excluded, and the history ends when the workbench window closes.
 
 ## Floating and popouts
 

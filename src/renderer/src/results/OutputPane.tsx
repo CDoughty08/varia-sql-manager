@@ -213,7 +213,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
     plan: planCount > 0 && <span className="badge">{planCount}</span>,
     statistics: statistics.length > 0 && <span className="badge">{statistics.length}</span>
   }
-  return <section className="output-panel" aria-label={regionNames[pane]} data-output-panel={pane}>
+  return <section className="output-panel" aria-label={regionNames[pane]} data-output-panel={pane} data-tab-id={tabId}>
     <div className="output-toolbar">
       <div className="output-views" role="tablist" aria-label="Query output views" onKeyDown={tabKey}>
         {/* The badges are drawn; the names say what they mean ("!" alone is not spoken). */}

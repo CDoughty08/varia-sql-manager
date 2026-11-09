@@ -31,6 +31,7 @@ import { ResultsSearchService } from '../../src/renderer/src/results/search'
 import { browserTimers } from '../../src/renderer/src/core/timers'
 import { explorerContribution } from '../../src/renderer/src/contributions/explorer'
 import { outputContribution } from '../../src/renderer/src/contributions/output'
+import { messagesContribution } from '../../src/renderer/src/contributions/messages'
 import { editorContribution } from '../../src/renderer/src/contributions/editor'
 import { editingContribution } from '../../src/renderer/src/contributions/editing'
 import { BookmarkService } from '../../src/renderer/src/editor/bookmarks'
@@ -492,6 +493,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     menusContribution(workbench),
     explorerContribution(workbench, api),
     outputContribution(workbench, api),
+    messagesContribution(workbench),
     highlightsContribution(workbench),
     compareContribution(workbench),
     shellContribution(workbench, host),

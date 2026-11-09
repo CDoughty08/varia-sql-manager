@@ -53,6 +53,10 @@ export interface OutputTarget {
   readonly tabId: string
   readonly view: OutputView
   readonly resultIndex: number
+  /** The header or cell column captured when the menu opened (zero-based, without the row-number column). */
+  readonly column?: number
+  /** Refuses commands after this grid was replaced by another execution at the same result index. */
+  readonly result?: { readonly generation: number; readonly resultId: number }
   readonly selectedText: string
   readonly element: HTMLElement
 }
@@ -184,12 +188,22 @@ export function selectedTextIn(element: Element): string {
   if (!selection?.anchorNode || !selection.focusNode || !element.contains(selection.anchorNode) || !element.contains(selection.focusNode)) return ''
   return selection.toString()
 }
+/** Grid columns count past the row-number column, which has ARIA index 1. */
+function outputColumn(element: Element, view: HTMLElement): number | undefined {
+  const cell = element.closest('[aria-colindex]'), value = cell?.getAttribute('aria-colindex')
+  const column = value && /^\d+$/.test(value) ? Number(value) - 2 : -1
+  return cell && view.contains(cell) && Number.isSafeInteger(column) && column >= 0 ? column : undefined
+}
 /** The Query Output view `element` is in: OutputPane marks each with its query, view, and result set. */
 export function outputTarget(element: Element): OutputTarget | undefined {
   const view = element.closest<HTMLElement>('[data-output-view]')
   const kind = view?.getAttribute('data-output-view') ?? '', tabId = view?.getAttribute('data-tab-id') ?? '', resultIndex = Number(view?.getAttribute('data-result-index') ?? 0)
   if (!view || !outputViews.has(kind) || !tabId || !Number.isInteger(resultIndex) || resultIndex < 0) return undefined
-  return { kind: 'output', tabId, view: kind as OutputView, resultIndex, selectedText: kind === 'grid' ? '' : selectedTextIn(view), element: view }
+  const column = kind === 'grid' ? outputColumn(element, view) : undefined
+  const generation = Number(view.getAttribute('data-result-generation')), resultId = Number(view.getAttribute('data-result-id'))
+  const result = kind === 'grid' && Number.isSafeInteger(generation) && generation > 0 && Number.isSafeInteger(resultId) && resultId > 0 ? { generation, resultId } : undefined
+  return { kind: 'output', tabId, view: kind as OutputView, resultIndex, selectedText: kind === 'grid' ? '' : selectedTextIn(view), element: view,
+    ...(column !== undefined ? { column } : {}), ...(result ? { result } : {}) }
 }
 
 /**
@@ -241,7 +255,9 @@ export class MenuTargetService {
       if (!output) return undefined
       // Keyboard menus open below the grid's active cell, else its first cell.
       const anchor = output.view === 'grid' ? gridAnchor(output.element) ?? output.element.querySelector('.rg-c.is-act') ?? output.element.querySelector('.rg-c') ?? undefined : undefined
-      return { target: output, element: output.element, focus: output.element, ...(anchor ? { anchor } : {}) }
+      const column = output.column ?? (anchor ? outputColumn(anchor, output.element) : undefined)
+      const target = column === undefined ? output : { ...output, column }
+      return { target, element: output.element, focus: output.element, ...(anchor ? { anchor } : {}) }
     } catch (error) { onUnexpectedError(error); return undefined }
   }
 
