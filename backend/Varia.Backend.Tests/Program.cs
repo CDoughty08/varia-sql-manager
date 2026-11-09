@@ -177,6 +177,16 @@ if (liveGroup is null)
     var batches = SqlScript.Parse("SELECT 1;\r\ngo\r\nSELECT 2;\r\nGo 3 -- repeat\r\n");
     Check(batches.Count == 2 && batches[0].RepeatCount == 1 && batches[1].RepeatCount == 3, "case insensitive GO and repetition");
     Check(batches[0].StartLine == 1 && batches[1].StartLine == 3, "source line offsets retained");
+    Check(batches.All(batch => batch.SourceLinesSafe), "ordinary SQL batches retain navigable source lines");
+    foreach (var sql in new[] { "SELECT 1;", ";WITH x AS (SELECT 1 AS id) SELECT * FROM x;", "-- EXEC sp_executesql\n/* nested /* EXECUTE */ comment */\nSELECT N'EXECUTE sp_executesql', [EXEC], \"EXECUTE\";",
+        "DECLARE @exec nvarchar(20) = N'sp_executesql';\nSELECT @exec;", "SELECT N'first\nEXEC sys.sp_executesql\nlast';" })
+        Check(SqlScript.Parse(sql).Single().SourceLinesSafe, "comments, strings, quoted names and similarly named variables do not suppress source navigation");
+    foreach (var sql in new[] { "SELECT 1;\n\nEXEC sys.sp_executesql N'SELECT 1/0';", "eXeCuTe(N'SELECT 1/0');", "BEGIN\nIF 1 = 1 EXEC dbo.p;\nEND;",
+        "sys.sp_executesql N'SELECT 1/0';", "[sys].[sp_executesql] N'SELECT 1/0';", "\"sys\".\"sp_executesql\" N'SELECT 1/0';", "dbo.userProcedure;", "[dbo].[userProcedure];", "userProcedure;", "Get;", "@returnCode = dbo.userProcedure;" })
+        Check(!SqlScript.Parse(sql).Single().SourceLinesSafe, "explicit or implicit procedure and dynamic batches have no assumed outer source line");
+    var scopedLines = SqlScript.Parse("EXEC(N'SELECT 1/0');\nGO 2\n/* EXEC */\nSELECT N'EXEC';", 12);
+    Check(!scopedLines[0].SourceLinesSafe && scopedLines[0].RepeatCount == 2 && scopedLines[1].SourceLinesSafe && scopedLines[1].StartLine == 3
+        && QueryMessages.ScriptLine(12, scopedLines[1].StartLine, 2) == 15, "GO resets source safety without changing repetition or selection line offsets");
     Check(!batches[0].Sql.Contains("go") && !batches[1].Sql.Contains("Go 3") && batches[1].Sql == "SELECT 2;\r\n", "GO commands removed");
     var modules = SqlScript.Parse("SELECT 1;\nGO\n\nCREATE PROC p AS SELECT 1;\r\nGO\r\nCREATE VIEW v AS SELECT 1 AS a;\nGO -- end\nSELECT 2;");
     Check(modules.Count == 4 && modules[1].Sql == "\nCREATE PROC p AS SELECT 1;\r\n" && modules[1].StartLine == 3 && modules[2].Sql == "CREATE VIEW v AS SELECT 1 AS a;\n" && modules[2].StartLine == 6
@@ -204,6 +214,17 @@ if (liveGroup is null)
     try { SqlScript.Parse("SELECT 1;\nGO 0", 20); throw new Exception("Invalid selection accepted"); }
     catch (RequestException error) { Check(error.Message.Contains("Line 21:"), "preflight errors include selected-text line offsets"); }
     var messages = new QueryMessages();
+    Check(QueryMessages.ScriptLine(12, 4, 2) == 16 && QueryMessages.ScriptLine(1, 1, 1) == 1,
+        "error locations combine selection, GO batch and SQL Server line offsets");
+    Check(QueryMessages.ScriptLine(1, 1, 2, "dbo.FailedProcedure") is null && QueryMessages.ScriptLine(1, 1, 0) is null
+        && QueryMessages.ScriptLine(0, 1, 1) is null && QueryMessages.ScriptLine(int.MaxValue, int.MaxValue, int.MaxValue) is null,
+        "procedure-relative, missing and overflowing error locations never navigate into the submitted query");
+    messages.Add("SQL error", MessageKind.Error, 16);
+    messages.Add("informational", MessageKind.Info, 16);
+    messages.Add("unlocated error", MessageKind.Error, 0);
+    Check(messages.Snapshot()[0].Line == 16 && messages.Snapshot()[1].Line is null && messages.Snapshot()[2].Line is null,
+        "only located SQL errors carry a positive source line in stored and streamed Messages");
+    messages = new QueryMessages();
     messages.Add(new string('x', 1_000_001));
     Check(messages.Truncated && messages.Snapshot()[0].Text.Length == 1_000_000 && messages.Snapshot().Last().Text.Contains("truncated"), "message text budget is explicit");
     messages = new QueryMessages();

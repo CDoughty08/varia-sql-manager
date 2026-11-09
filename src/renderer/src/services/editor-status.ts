@@ -7,7 +7,8 @@ import type { Disposable } from '../core/types'
  * The caret as Visual Studio's status bar shows it: `line`; `column`, the display column with tabs expanded; and
  * `character`, the 1-based UTF-16 index Monaco calls the column. Only numbers and the line ending: no query text.
  */
-export interface EditorStatus { readonly line: number; readonly column: number; readonly character: number; readonly eol: LineEnding }
+export interface EditorSelection { readonly uri: string; readonly startLine: number; readonly endLine: number }
+export interface EditorStatus { readonly line: number; readonly column: number; readonly character: number; readonly eol: LineEnding; readonly selection?: EditorSelection }
 export type EditorStatusSnapshot = EditorStatus | null
 
 /**
@@ -29,8 +30,8 @@ export function displayColumn(lineText: string, column: number, tabSize: number)
   return visible + 1
 }
 
-type StatusEditor = Pick<editor.ICodeEditor, 'getModel' | 'getPosition' | 'onDidChangeCursorPosition' | 'onDidChangeModel' | 'onDidChangeModelContent' | 'onDidChangeModelOptions'>
-const same = (a: EditorStatusSnapshot, b: EditorStatusSnapshot) => a === b || (!!a && !!b && a.line === b.line && a.column === b.column && a.character === b.character && a.eol === b.eol)
+type StatusEditor = Pick<editor.ICodeEditor, 'getModel' | 'getPosition' | 'onDidChangeCursorPosition' | 'onDidChangeModel' | 'onDidChangeModelContent' | 'onDidChangeModelOptions' | 'getSelection' | 'onDidChangeCursorSelection'>
+const same = (a: EditorStatusSnapshot, b: EditorStatusSnapshot) => a === b || (!!a && !!b && a.line === b.line && a.column === b.column && a.character === b.character && a.eol === b.eol && a.selection?.uri === b.selection?.uri && a.selection?.startLine === b.selection?.startLine && a.selection?.endLine === b.selection?.endLine)
 
 /**
  * Ln, Col, Ch and the line ending of the bound editor's caret, for the IDE status bar. Typing moves the caret on every
@@ -45,7 +46,7 @@ export class EditorStatusService extends SnapshotStore<EditorStatusSnapshot> imp
   bindEditor(instance: StatusEditor): Disposable {
     this.editor = instance
     const changed = () => this.schedule()
-    const subscriptions = [instance.onDidChangeCursorPosition(changed), instance.onDidChangeModel(changed), instance.onDidChangeModelContent(changed), instance.onDidChangeModelOptions(changed)]
+    const subscriptions = [instance.onDidChangeCursorPosition(changed), instance.onDidChangeCursorSelection(changed), instance.onDidChangeModel(changed), instance.onDidChangeModelContent(changed), instance.onDidChangeModelOptions(changed)]
     this.schedule()
     return { dispose: () => {
       subscriptions.forEach(subscription => subscription.dispose())
@@ -68,7 +69,10 @@ export class EditorStatusService extends SnapshotStore<EditorStatusSnapshot> imp
     const model = this.editor?.getModel(), position = this.editor?.getPosition()
     if (!model || !position) return null
     const column = displayColumn(model.getLineContent(position.lineNumber), position.column, model.getOptions().tabSize)
-    return { line: position.lineNumber, column, character: position.column, eol: model.getEOL() === '\r\n' ? 'crlf' : 'lf' }
+    const selected = this.editor?.getSelection()
+    const selection = selected && !selected.isEmpty() ? { uri: model.uri.toString(), startLine: selected.startLineNumber,
+      endLine: selected.endLineNumber > selected.startLineNumber && selected.endColumn === 1 ? selected.endLineNumber - 1 : selected.endLineNumber } : undefined
+    return { line: position.lineNumber, column, character: position.column, eol: model.getEOL() === '\r\n' ? 'crlf' : 'lf', ...selection ? { selection } : {} }
   }
   dispose(): void {
     this.disposed = true

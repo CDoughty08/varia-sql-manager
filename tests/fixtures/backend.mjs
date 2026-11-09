@@ -907,6 +907,10 @@ async function runDirective(id, params, directive) {
 }
 
 const fixtures = {
+  ERROR_NAV_FIXTURE: (id, params) => summary(id, params.database, [], {
+    messages: [{ text: 'Msg 207, Level 16, State 1, Line 1\nInvalid column name.', kind: 'error', line: 1 }], status: 'completedWithErrors',
+    error: { code: 'SQL_ERROR', message: 'Invalid column name.', batchNumber: 1, iteration: 1 }
+  }),
   BATCH_STATS_FIXTURE: (id, params) => summary(id, params.database, [{ columns: [column('retained', 'int')], rows: [['42']], batchNumber: 1, iteration: 1 }], {
     // As the real backend logs them: statistics, then the batch's error in SSMS's two-line form, and the third batch still runs.
     messages: [server('SQL Server Execution Times: CPU time = 1 ms, elapsed time = 2 ms.'), server("Table '#temp'. Scan count 1, logical reads 2."),

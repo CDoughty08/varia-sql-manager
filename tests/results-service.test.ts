@@ -535,7 +535,7 @@ describe('results service', () => {
     service.finish('t1', 'q1', { summary: summaryOf([descriptor(1)]) })
     service.selectAll('t1', 0)
     expect(service.selection('t1', 0)).toEqual(selectAll(0))
-    const controller = { selectAll: vi.fn(), repaint: vi.fn() }
+    const controller = { selectAll: vi.fn(), repaint: vi.fn(), fitColumn: vi.fn() }
     const registration = service.registerGrid('t1', 0, controller)
     service.selectAll('t1', 0)
     expect(controller.selectAll).toHaveBeenCalledOnce()
@@ -545,6 +545,31 @@ describe('results service', () => {
     registration.dispose()
     service.selectAll('t1', 0)
     expect(controller.selectAll).toHaveBeenCalledOnce()
+  })
+  it('fits only a readable column in its own mounted grid, including a header with no rows', () => {
+    const { service, client } = fixture()
+    const controller = { selectAll: vi.fn(), repaint: vi.fn(), fitColumn: vi.fn() }
+    service.begin('t1', 'q1')
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { rowsAvailable: 0, rowsStored: 0, rowsRead: 0 })]) })
+    expect(service.canFitColumn('t1', 0, 0)).toBe(false)
+    const registration = service.registerGrid('t1', 0, controller)
+    expect(service.canFitColumn('t1', 0, 0)).toBe(true)
+    service.fitColumn('t1', 0, 1)
+    expect(controller.fitColumn.mock.calls).toEqual([[1]])
+    for (const column of [-1, 2, 0.5, NaN]) {
+      expect(service.canFitColumn('t1', 0, column)).toBe(false)
+      service.fitColumn('t1', 0, column)
+    }
+    service.fitColumn('other', 0, 0)
+    service.fitColumn('t1', 1, 0)
+    expect(controller.fitColumn).toHaveBeenCalledOnce()
+    registration.dispose()
+    expect(service.canFitColumn('t1', 0, 0)).toBe(false)
+    service.registerGrid('t1', 0, controller)
+    client.lose()
+    service.fitColumn('t1', 0, 0)
+    expect(service.canFitColumn('t1', 0, 0)).toBe(false)
+    expect(controller.fitColumn).toHaveBeenCalledOnce()
   })
   it('opens XML, JSON and plan values as documents named as SSMS names them, formatted by the worker', async () => {
     const { client, service, documents } = fixture()

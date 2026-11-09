@@ -125,6 +125,22 @@ describe('menu target service', () => {
     // The tab itself is not focusable, so a click on its padding moves no focus.
     expect(service.targetFor(dom(queryTab))).toEqual({ target: { kind: 'documentTab', tabId: 't1' }, element: queryTab, mark: queryTab })
   })
+  it('keeps a registered composite widget as the focus owner when an inner action opens its menu', () => {
+    const doc = fakeDocument(), button = new FakeElement(doc, 'button', { attributes: { tabindex: '-1' } })
+    const row = new FakeElement(doc, 'div').append(button), tree = new FakeElement(doc, 'div', { attributes: { tabindex: '0' } }).append(row)
+    const service = new MenuTargetService()
+    let owner: HTMLElement | undefined = tree.dom
+    service.register(row.dom, () => ({ kind: 'explorer' }), () => owner)
+    expect(service.targetFor(button.dom)).toEqual({ target: { kind: 'explorer' }, element: row, mark: row, focus: tree })
+    expect(service.targetFor(row.dom)?.focus).toBe(tree)
+    // Text fields keep their own focus and text menu, including an inline rename field inside this widget.
+    const rename = new FakeElement(doc, 'input', { value: 'NewName' })
+    row.append(rename)
+    expect(service.targetFor(rename.dom)).toMatchObject({ target: { kind: 'input', element: rename }, focus: rename })
+    // The resolver runs when the menu opens, falling back to the clicked control if the owner is no longer available.
+    owner = undefined
+    expect(service.targetFor(button.dom)?.focus).toBe(button)
+  })
   it('resolves panel tabs inside Dockview\'s tab element, from the tab and from keyboard focus on it', () => {
     const { service, paneTitle, paneClose, dvTab } = setup()
     const expected = { target: { kind: 'dockTab', pane: 'results', floating: false, popout: false }, element: dvTab, mark: dvTab }
@@ -192,6 +208,20 @@ describe('menu target service', () => {
     for (const attributes of [{ 'data-output-view': 'chart' }, { 'data-tab-id': '' }, { 'data-result-index': '-1' }, { 'data-result-index': '1.5' }] as Record<string, string>[]) {
       expect(service.targetFor(dom(make('div').append(view('messages', attributes)).children[0])), JSON.stringify(attributes)).toBeUndefined()
     }
+  })
+  it('captures the clicked column and result identity, or the keyboard menu\'s active column', () => {
+    const doc = fakeDocument(), make = (tag: string, init?: ConstructorParameters<typeof FakeElement>[2]) => new FakeElement(doc, tag, init)
+    const text = make('span'), header = make('div', { attributes: { 'aria-colindex': '3' } }).append(text)
+    const active = make('div', { className: 'rg-c is-act', attributes: { 'aria-colindex': '4' } })
+    const grid = make('div', { attributes: { 'data-output-view': 'grid', 'data-tab-id': 'query', 'data-result-index': '1', 'data-result-generation': '2', 'data-result-id': '7' } }).append(header, active)
+    const service = new MenuTargetService()
+    const clicked = service.targetFor(dom(text))!.target
+    expect(clicked).toMatchObject({ kind: 'output', tabId: 'query', resultIndex: 1, column: 1, result: { generation: 2, resultId: 7 } })
+    expect(service.targetFor(dom(grid))!.target).toMatchObject({ column: 2 })
+    header.setAttribute('aria-colindex', '5')
+    expect(clicked).toMatchObject({ column: 1 })
+    active.setAttribute('aria-colindex', '1')
+    expect(service.targetFor(dom(grid))!.target).not.toHaveProperty('column')
   })
   it('reads a text field\'s facts again once it has focus', () => {
     let undo = false

@@ -4,7 +4,7 @@ import type { CommandArgs, CommandId } from './core/types'
 import type { IconId } from '../../shared/icons'
 import Icon from './Icon'
 import ClientStatisticsToggle from './statistics/ClientStatisticsToggle'
-import { ActualPlanToggle, EstimatedPlanButton, QueryPickers, useQueryContext } from './QueryBar'
+import { ActualPlanToggle, EstimatedPlanButton, QueryPickers, useExecutionScope, useQueryContext } from './QueryBar'
 import { lostHint, withKey } from './query-context'
 
 /**
@@ -40,6 +40,7 @@ export default function StandardToolbar({ variant }: { variant: 'header' | 'clas
   const { commands } = workbench
   const connections = useServiceSnapshot(workbench.connections)
   const { tab } = useQueryContext()
+  const scope = useExecutionScope()
   const enabled = {
     connect: useCommandEnabled('connection.connect'), newQuery: useCommandEnabled('file.new'), open: useCommandEnabled('file.open'), save: useCommandEnabled('file.save'), saveAll: useCommandEnabled('file.saveAll'),
     execute: useCommandEnabled('query.execute'), cancel: useCommandEnabled('query.cancel'), monitor: useCommandEnabled('activity.open')
@@ -57,8 +58,9 @@ export default function StandardToolbar({ variant }: { variant: 'header' | 'clas
       <button disabled={!enabled.save} onClick={() => run('file.save')} title={withKey('Save SQL query', keys.save)}><Icon name="save" />Save</button>
       <button disabled={!enabled.saveAll} onClick={() => run('file.saveAll')} title={withKey('Save all queries with unsaved changes', keys.saveAll)}><Icon name="save" />Save All</button>
       <span className="toolbar-divider" />
-      <button className="execute" disabled={!enabled.execute} title={lost ? lostHint : withKey('Execute', keys.execute)} onClick={() => run('query.execute')}>
-        <Icon name="play" />Execute{keys.execute && <kbd>{keys.execute.text}</kbd>}</button>
+      <button className="execute" disabled={!enabled.execute} aria-label={scope.title} title={lost ? lostHint : withKey(scope.title === 'Execute' ? scope.title : `${scope.title} · ${scope.detail}`, keys.execute)} onClick={() => run('query.execute')}>
+        <Icon name="play" />{scope.title}{keys.execute && <kbd>{keys.execute.text}</kbd>}</button>
+      <span className="query-scope">{scope.detail}</span>
       <button disabled={!enabled.cancel} onClick={() => run('query.cancel')}><Icon name="debug-stop" />Cancel</button>
       <ActualPlanToggle classic />
       <ActualPlanToggle classic live />

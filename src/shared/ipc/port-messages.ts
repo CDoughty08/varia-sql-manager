@@ -118,7 +118,7 @@ export const profileResultSchema = z.object({
 }).strict()
 export type PortEndResult = ResultsDiffResult | ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | ResultsViewResult | ResultsViewCloseResult | ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsSearchResult | ResultsProfileResult | LiveEnd | LiveUpdateResult
 
-const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'server', 'print', 'error']) }).strict()
+const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'server', 'print', 'error']), line: z.number().int().min(1).max(2_147_483_647).optional() }).strict()
 const session = { spid: z.number().int().min(0).max(32767), login: z.string().max(128).optional() }
 /** EVENT bodies for a query.execute request. */
 export const queryEventSchema = z.discriminatedUnion('type', [

@@ -11,6 +11,7 @@ File
   Save A&ll  Ctrl+Shift+S  ----
   ---
   &Close Query  Ctrl+W  +++-
+  Reo&pen Closed Query  Ctrl+Shift+T  ----
   ---
   Recent &Files >
     No Recent Files  ----

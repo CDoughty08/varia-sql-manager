@@ -10,6 +10,7 @@
   {"accelerator":"Ctrl+Shift+S","id":"file.saveAll","label":"Save All","registerAccelerator":false,"type":"normal","click":[["command","file.saveAll"]]}
   {"type":"separator"}
   {"accelerator":"Ctrl+W","id":"file.close","label":"Close Query","registerAccelerator":false,"type":"normal","click":[["command","file.close"]]}
+  {"accelerator":"Ctrl+Shift+T","id":"file.reopenClosed","label":"Reopen Closed Query","registerAccelerator":false,"type":"normal","click":[["command","file.reopenClosed"]]}
   {"type":"separator"}
   {"id":"file.recent","label":"Recent Files"}
     {"enabled":false,"id":"file.recent.empty","label":"No Recent Files"}

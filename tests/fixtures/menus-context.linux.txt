@@ -29,6 +29,7 @@ documentTab.context, for a saved query's tab
   &Close  Ctrl+W  +++-
   Close All &But This  +++-
   C&lose All  +++-
+  Reopen Closed &Query  Ctrl+Shift+T  ----
   ---
   Copy Full &Path  ++++
   &Open Containing Folder  ++++
@@ -49,6 +50,7 @@ documentTab.context, for an unsaved query's tab
   &Close  Ctrl+W  +++-
   Close All &But This  +++-
   C&lose All  +++-
+  Reopen Closed &Query  Ctrl+Shift+T  ----
   ---
   Copy Full &Path  ----
   &Open Containing Folder  ----
@@ -328,6 +330,7 @@ explorer.context, for a login
 output.context, for a results grid with selected cells
   &Copy  Ctrl+C  ++++
   Copy with &Headers  Ctrl+Shift+C  ++++
+  Copy Column &Name  ++++
   ---
   Select &All  Ctrl+A  ++++
   ---
@@ -336,7 +339,7 @@ output.context, for a results grid with selected cells
   &Then Sort Ascending  ++++
   Then &Sort Descending  ++++
   Clea&r Sort  ----
-  F&ilter >
+  Filt&er >
     Filter for &Selected Values  ++++
     &Exclude Selected Values  ++++
     Filter &Between Lowest and Highest Selected  ----
@@ -358,15 +361,20 @@ output.context, for a results grid with selected cells
     Clear &All Highlights  ----
   Co&mpare with Previous Result  ++++
   ---
+  F&it Column  ----
+  ---
   Sa&ve Results As…  Ctrl+S  ----
   ---
   Show S&paces and Tabs [ ]  ++++
   Show All &White Space [ ]  ++++
   Column Pro&file [ ]  ++++
   Show Row Si&ze [x]  ++++
+  ---
+  C&lose Results  +++-
 output.context, for a results grid without
   &Copy  Ctrl+C  ----
   Copy with &Headers  Ctrl+Shift+C  ----
+  Copy Column &Name  ----
   ---
   Select &All  Ctrl+A  ++++
   ---
@@ -375,7 +383,7 @@ output.context, for a results grid without
   &Then Sort Ascending  ----
   Then &Sort Descending  ----
   Clea&r Sort  ----
-  F&ilter >
+  Filt&er >
     Filter for &Selected Values  ----
     &Exclude Selected Values  ----
     Filter &Between Lowest and Highest Selected  ----
@@ -397,17 +405,25 @@ output.context, for a results grid without
     Clear &All Highlights  ----
   Co&mpare with Previous Result  ----
   ---
+  F&it Column  ----
+  ---
   Sa&ve Results As…  Ctrl+S  ----
   ---
   Show S&paces and Tabs [ ]  ++++
   Show All &White Space [ ]  ++++
   Column Pro&file [ ]  ++++
   Show Row Si&ze [x]  ++++
+  ---
+  C&lose Results  +++-
 output.context, for Messages with selected text
   &Copy  Ctrl+C  ++++
   ---
   Select &All  Ctrl+A  ++++
+  ---
+  C&lose Results  +++-
 output.context, for Messages without
   &Copy  Ctrl+C  ----
   ---
   Select &All  Ctrl+A  ++++
+  ---
+  C&lose Results  +++-

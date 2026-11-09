@@ -592,6 +592,7 @@ try {
   const queryTab = () => documentTabSlots(page).first(), tabMenu = menu('Query tab')
   await slotTab(queryTab()).click({ button: 'right', force: true })
   await expect(tabMenu).toBeVisible()
+  await expect(tabMenu.getByRole('menuitem', { name: 'Reopen Closed Query', exact: true })).toBeVisible()
   await expect(slotTab(queryTab())).toHaveAttribute('data-menu-target', '')
   // The tab took focus first, as in Windows Explorer, so closing the menu returns focus there.
   await page.keyboard.press('Escape')
@@ -1003,7 +1004,7 @@ try {
   await expect(grid.getByRole('columnheader').nth(2)).toContainText('(No column name)')
   // A right-click selects the cell under it first; Copy copies its value.
   await cell(1, 2).click({ button: 'right', force: true })
-  expect(await outputLabels()).toEqual(['Copy', 'Copy with Headers', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Filter', 'Highlight', 'Compare with Previous Result', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size'])
+  expect(await outputLabels()).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Filter', 'Highlight', 'Compare with Previous Result', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Results'])
   await expect(selected()).toHaveCount(1)
   await expect(cell(1, 2)).toHaveAttribute('aria-selected', 'true')
   await outputMenu.getByRole('menuitem', { name: 'Copy', exact: true }).click()
@@ -1065,7 +1066,7 @@ try {
   const messages = messagesOf(page)
   await expect(page.getByRole('log', { name: 'Messages', exact: true })).toBeVisible()
   await messages.locator('pre').first().click({ button: 'right', force: true })
-  expect(await outputLabels()).toEqual(['Copy', 'Select All'])
+  expect(await outputLabels()).toEqual(['Copy', 'Select All', 'Close Results'])
   await expect(outputMenu.getByRole('menuitem', { name: 'Copy', exact: true })).toHaveAttribute('aria-disabled', 'true')
   await outputMenu.getByRole('menuitem', { name: 'Select All', exact: true }).click()
   await expect(messages).toBeFocused()
