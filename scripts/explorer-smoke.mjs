@@ -303,6 +303,16 @@ try {
     window.__variaLiveChanges = 0
     new MutationObserver(records => { window.__variaLiveChanges += records.length }).observe(document.querySelector('[data-explorer-tree] + [role="status"]'), { childList: true, subtree: true, characterData: true })
   })
+  // A recovery button's menu selects its row and returns keyboard focus to the tree, even with another row selected before.
+  await select('server-a', 'Security')
+  await (await explorerRow(page, 'server-a', 'Security', 'Audits', auditsError)).getByRole('button', { name: 'Retry', exact: true }).click({ button: 'right' })
+  await expect(menu('Object Explorer')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(tree()).toBeFocused()
+  expect((await active())?.label).toBe(auditsError)
+  await press('ArrowLeft', 'Audits')
+  await press('ArrowDown', auditsError)
+  await expect(tree()).toBeFocused()
   await press('Enter')
   await expect.poll(() => page.evaluate(() => window.__variaLiveChanges)).toBeGreaterThan(0)
   await expect(liveRegion()).toHaveText(auditsSentence)

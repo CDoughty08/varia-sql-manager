@@ -11,7 +11,7 @@ import { selectAll, type GridSelection } from '../src/renderer/src/grid/selectio
 import type { ExplorerMenuNode, InputTarget, OutputTarget, OutputView } from '../src/renderer/src/menus/targets'
 import type { ExplorerNodeRef, ObjectRef } from '../src/shared/explorer/refs'
 import { fakeDocument, FakeElement } from './fixtures/elements'
-import { windows } from '../src/renderer/src/core/windows'
+import * as windowTools from '../src/renderer/src/core/windows'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
@@ -698,14 +698,43 @@ describe('Query Output commands', () => {
     const { commands, doc, element, tab } = await ran()
     const resultsTab = new FakeElement(doc, 'button', { attributes: { role: 'tab', 'data-output-tab': 'results' } })
     const button = new FakeElement(doc, 'button')
-    const panel = new FakeElement(doc, 'section', { className: 'output-panel', attributes: { 'data-tab-id': tab.id } })
+    const panel = new FakeElement(doc, 'section', { className: 'output-panel', attributes: { 'data-tab-id': tab.id, 'data-output-panel': 'results' } })
       .append(resultsTab, new FakeElement(doc, 'div', { className: 'output-toolbar' }).append(button), element('grid'))
-    const active = vi.spyOn(windows, 'activeElement').mockReturnValue(button.dom)
+    const active = vi.spyOn(windowTools.windows, 'activeElement').mockReturnValue(button.dom)
     cleanups.push(() => active.mockRestore())
     expect(await commands.execute('output.closeResults', { tabId: tab.id }, 'toolbar')).toBe(true)
     expect(resultsTab.focusCalls).toBe(1)
     expect(doc.activeElement).toBe(resultsTab)
     expect(panel.contains(resultsTab)).toBe(true)
+  })
+  it('focuses the surviving Results tab after Messages switches panels, unless later input or another run takes over', async () => {
+    const frames: (() => void)[] = []
+    const frame = vi.spyOn(windowTools, 'requestFrame').mockImplementation(callback => { frames.push(callback) })
+    const active = vi.spyOn(windowTools.windows, 'activeElement'), activeDocument = vi.spyOn(windowTools.windows, 'activeDocument')
+    cleanups.push(() => { frame.mockRestore(); active.mockRestore(); activeDocument.mockRestore() })
+    for (const cancel of ['none', 'input', 'focus', 'run'] as const) {
+      const { commands, doc, tab, on, panes, results } = await ran()
+      const body = new FakeElement(doc, 'body'), oldTab = new FakeElement(doc, 'button', { attributes: { role: 'tab', 'data-output-tab': 'results' } })
+      new FakeElement(doc, 'section', { className: 'output-panel', attributes: { 'data-tab-id': tab.id, 'data-output-panel': 'messages' } }).append(oldTab)
+      const target = Object.assign(new FakeElement(doc, 'button', { attributes: { role: 'tab', 'data-output-tab': 'results' } }), { checkVisibility: () => true })
+      new FakeElement(doc, 'section', { className: 'output-panel', attributes: { 'data-tab-id': tab.id, 'data-output-panel': 'results' } }).append(target)
+      const listeners = new Map<string, () => void>()
+      Object.assign(doc, { body, querySelector: () => target.dom,
+        addEventListener: (type: string, listener: () => void) => listeners.set(type, listener), removeEventListener: (type: string) => listeners.delete(type) })
+      active.mockImplementation(() => doc.activeElement?.dom ?? null)
+      activeDocument.mockReturnValue(doc as unknown as Document)
+      oldTab.focus()
+      const selector = panes.bindSelector(() => { oldTab.isConnected = false; doc.activeElement = body })
+      cleanups.push(() => selector.dispose())
+      expect(await commands.execute('output.closeResults', on('messages'), 'menu')).toBe(true)
+      expect(results.getSnapshot()[tab.id].status).toBe('closed')
+      if (cancel === 'input') listeners.get('pointerdown')?.()
+      if (cancel === 'focus') { new FakeElement(doc, 'input').focus(); listeners.get('focusin')?.(); doc.activeElement = body }
+      if (cancel === 'run') results.begin(tab.id, 'later-run')
+      frames.shift()!()
+      expect(target.focusCalls, cancel).toBe(cancel === 'none' ? 1 : 0)
+      expect(listeners.size, cancel).toBe(0)
+    }
   })
   it('open an XML, JSON or plan value from a click or Enter in a new tab, and focus the editor there', async () => {
     const columns: ResultColumn[] = [{ name: 'Id', dataType: 'int', wire: 'text', nullable: false }, { name: 'XML_F52E2B61-18A1-11d1-B105-00805F49916B', dataType: 'ntext', wire: 'text', role: 'xml', nullable: true }]

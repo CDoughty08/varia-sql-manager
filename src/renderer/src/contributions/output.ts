@@ -3,7 +3,8 @@ import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { resolveBlocks } from '../grid/selection'
 import { outputOf, type MenuTargetService, type OutputTarget } from '../menus/targets'
-import { windows } from '../core/windows'
+import { requestFrame, windows } from '../core/windows'
+import { focusHeld } from '../core/modal'
 
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 
@@ -26,7 +27,7 @@ const baseName = (name: string) => name.replace(/\.[^.]*$/, '') || 'Results'
  * focus (Ctrl+C, Ctrl+Shift+C, Ctrl+S, Edit › Copy); Save Results As from the palette acts on the grid that last had
  * focus. Open Value opens the XML, JSON or plan cell a click or Enter names, else the focused grid's active cell.
  */
-export function outputContribution({ commands, results, menuTargets, documents, settings, resultsSearch }: Pick<Workbench, 'commands' | 'results' | 'menuTargets' | 'documents' | 'settings' | 'resultsSearch'>, api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
+export function outputContribution({ commands, results, menuTargets, documents, settings, resultsSearch, panes }: Pick<Workbench, 'commands' | 'results' | 'menuTargets' | 'documents' | 'settings' | 'resultsSearch' | 'panes'>, api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
   const showWhitespace = (mode: 'spaces' | 'all') =>
     settings.choose('queryResults.grid.whitespace', settings.getSnapshot().values['queryResults.grid.whitespace'] === mode ? 'none' : mode)
   const targetOf = (args?: CommandArgs) => outputOf(args) ?? (args?.target ? undefined : focusedOutput(menuTargets))
@@ -157,9 +158,28 @@ export function outputContribution({ commands, results, menuTargets, documents, 
         if (!tabId) return
         // The grid and its tools unmount. Leave focus on the surviving Results tab in their own window; closing another
         // query's contextual results leaves focus in the current query alone.
-        const panel = windows.activeElement()?.closest('.output-panel')
-        if (panel?.getAttribute('data-tab-id') === tabId) panel.querySelector<HTMLElement>('[role="tab"][data-output-tab="results"]')?.focus({ preventScroll: true })
+        const active = windows.activeElement(), panel = active?.closest('.output-panel')
+        const ownPanel = panel?.getAttribute('data-tab-id') === tabId ? panel : undefined
+        const before = ownPanel?.querySelector<HTMLElement>('[role="tab"][data-output-tab="results"]')
+        before?.focus({ preventScroll: true })
         results.closeResults(tabId)
+        if (ownPanel && ownPanel.getAttribute('data-output-panel') !== 'results') {
+          const doc = ownPanel.ownerDocument, queryId = results.getSnapshot()[tabId]?.queryId
+          let moved = false
+          const input = () => { moved = true }, events = ['pointerdown', 'focusin'] as const
+          for (const event of events) doc.addEventListener(event, input, true)
+          panes.select('results')
+          // Messages' copy of the Results tab leaves when its panel switches. Focus the surviving tab after that render,
+          // provided the same output still owns focus; a later editor, menu, dialog or execution takes precedence.
+          requestFrame(() => {
+            for (const event of events) doc.removeEventListener(event, input, true)
+            const focused = doc.activeElement, run = results.getSnapshot()[tabId]
+            if (moved || focusHeld() || windows.activeDocument() !== doc || !run || run.queryId !== queryId || run.status !== 'closed'
+              || focused && focused !== doc.body && focused !== before && focused !== active) return
+            const target = doc.querySelector<HTMLElement>('[data-output-panel="results"] [data-output-tab="results"]')
+            if (target?.closest('[data-tab-id]')?.getAttribute('data-tab-id') === tabId && target.checkVisibility()) target.focus({ preventScroll: true })
+          })
+        }
       }
     }),
     commands.register('output.selectAll', {

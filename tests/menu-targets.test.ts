@@ -125,6 +125,22 @@ describe('menu target service', () => {
     // The tab itself is not focusable, so a click on its padding moves no focus.
     expect(service.targetFor(dom(queryTab))).toEqual({ target: { kind: 'documentTab', tabId: 't1' }, element: queryTab, mark: queryTab })
   })
+  it('keeps a registered composite widget as the focus owner when an inner action opens its menu', () => {
+    const doc = fakeDocument(), button = new FakeElement(doc, 'button', { attributes: { tabindex: '-1' } })
+    const row = new FakeElement(doc, 'div').append(button), tree = new FakeElement(doc, 'div', { attributes: { tabindex: '0' } }).append(row)
+    const service = new MenuTargetService()
+    let owner: HTMLElement | undefined = tree.dom
+    service.register(row.dom, () => ({ kind: 'explorer' }), () => owner)
+    expect(service.targetFor(button.dom)).toEqual({ target: { kind: 'explorer' }, element: row, mark: row, focus: tree })
+    expect(service.targetFor(row.dom)?.focus).toBe(tree)
+    // Text fields keep their own focus and text menu, including an inline rename field inside this widget.
+    const rename = new FakeElement(doc, 'input', { value: 'NewName' })
+    row.append(rename)
+    expect(service.targetFor(rename.dom)).toMatchObject({ target: { kind: 'input', element: rename }, focus: rename })
+    // The resolver runs when the menu opens, falling back to the clicked control if the owner is no longer available.
+    owner = undefined
+    expect(service.targetFor(button.dom)?.focus).toBe(button)
+  })
   it('resolves panel tabs inside Dockview\'s tab element, from the tab and from keyboard focus on it', () => {
     const { service, paneTitle, paneClose, dvTab } = setup()
     const expected = { target: { kind: 'dockTab', pane: 'results', floating: false, popout: false }, element: dvTab, mark: dvTab }

@@ -225,11 +225,11 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
       run('explorer.openPeekTab', rowId)
     }
   }), [explorer, run, activate, objectActions, peek, gestures])
-  // Rows are menu targets: right-click has selected the row; Shift+F10 asks for the active descendant's menu.
+  // Rows are menu targets: right-click has selected the row; its menu returns focus to the tree, including from inner actions.
   const rowTarget = useMenuTarget<HTMLDivElement>(row => {
     const node = explorer.menuNode(Number(row.getAttribute('data-row-id')))
     return node ? { kind: 'explorer', node } : null
-  })
+  }, () => element.current ?? undefined)
 
   /** Acts on `current`, the rows the action was worked out from. */
   const act = (action: TreeAction, current: VisibleRows) => {

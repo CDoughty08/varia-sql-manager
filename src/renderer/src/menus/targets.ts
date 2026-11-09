@@ -170,6 +170,11 @@ export interface TargetHit {
   readonly anchor?: Element
 }
 export type TargetProvider = (element: Element) => MenuTarget | null
+interface TargetRegistration {
+  readonly provider: TargetProvider
+  /** A composite widget keeps keyboard focus on its owner rather than an inner action button. */
+  readonly focus?: () => HTMLElement | undefined
+}
 export interface MenuTargetOptions {
   /** The bound query editor's container and the query it shows, when there is one. */
   readonly editor?: () => { readonly container: Element; readonly tabId: string } | undefined
@@ -213,11 +218,11 @@ export function outputTarget(element: Element): OutputTarget | undefined {
  * where nothing has a menu. Providers run at event time, so a target is never stale.
  */
 export class MenuTargetService {
-  private readonly providers = new WeakMap<Element, TargetProvider>()
+  private readonly providers = new WeakMap<Element, TargetRegistration>()
   private readonly revealers = new WeakMap<Element, (item: Element) => void>()
   constructor(private readonly options: MenuTargetOptions = {}) {}
 
-  register(element: Element, provider: TargetProvider): void { this.providers.set(element, provider) }
+  register(element: Element, provider: TargetProvider, focus?: () => HTMLElement | undefined): void { this.providers.set(element, { provider, ...focus ? { focus } : {} }) }
   /** A widget with its own layout reveals its active descendant before the menu measures it. */
   registerReveal(widget: Element, reveal: (item: Element) => void): () => void {
     this.revealers.set(widget, reveal)
@@ -241,16 +246,16 @@ export class MenuTargetService {
       // Outlined while its menu is open: focus is in the menu, and Chromium hides an unfocused field's selection.
       if (field) return { target: inputTarget(field, this.options.commandEnabled ?? documentCommandEnabled), element: field, focus: field, mark: field }
       for (let node: Element | null = element; node; node = node.parentElement) {
-        const provider = this.providers.get(node)
-        if (provider) return this.hit(provider, node, element)
+        const registration = this.providers.get(node)
+        if (registration) return this.hit(registration, node, element)
       }
       const editor = this.options.editor?.()
       if (editor?.container.contains(element)) return element.closest(editorChrome) || !editor.tabId ? null : { target: { kind: 'editor', tabId: editor.tabId }, element: editor.container }
       // Dockview's focusable tab element wraps the panel's own tab content (a workspace pane's, or a document's), which
       // registers the target.
       const tab = element.closest('.dv-tab')?.querySelector('[data-pane-tab], [data-tab-id]')
-      const provider = tab && this.providers.get(tab)
-      if (provider) return this.hit(provider, tab, element)
+      const registration = tab && this.providers.get(tab)
+      if (registration) return this.hit(registration, tab, element)
       const output = outputTarget(element)
       if (!output) return undefined
       // Keyboard menus open below the grid's active cell, else its first cell.
@@ -261,13 +266,13 @@ export class MenuTargetService {
     } catch (error) { onUnexpectedError(error); return undefined }
   }
 
-  private hit(provider: TargetProvider, registered: Element, from: Element): TargetHit | null {
+  private hit({ provider, focus: registeredFocus }: TargetRegistration, registered: Element, from: Element): TargetHit | null {
     const target = provider(registered)
     if (!target) return null
     const tab = registered.closest<HTMLElement>('.dv-tab') ?? undefined
     // The focusable part that was clicked (a tab's button), else the registered element or the Dockview tab around it.
     const inner = from.closest<HTMLElement>(focusable)
-    const focus = inner && registered.contains(inner) ? inner : registered.matches(focusable) ? registered as HTMLElement : tab
+    const focus = registeredFocus?.() ?? (inner && registered.contains(inner) ? inner : registered.matches(focusable) ? registered as HTMLElement : tab)
     return { target, element: tab ?? registered, mark: tab ?? registered, ...(focus ? { focus } : {}) }
   }
 }

@@ -1435,6 +1435,17 @@ try {
   await outputTab(/^Messages/).click()
   await expect(messageLines(page).first()).toBeVisible()
 
+  // Messages has its own copy of the output tabs, which leaves when Close Results selects the Results panel.
+  await run('-- varia-fake: sets=N1*3 messages=1')
+  await outputTab(/^Messages/).click()
+  await messages(page).click({ button: 'right' })
+  await outputMenu.getByRole('menuitem', { name: 'Close Results', exact: true }).click()
+  await expect(page.locator('[data-result-grid]')).toHaveCount(0)
+  await expect(outputTab(/^Results/)).toHaveAttribute('aria-selected', 'true')
+  await expect(outputTab(/^Results/)).toBeFocused()
+  await outputTab(/^Messages/).click()
+  await expect(messageLines(page).first()).toBeVisible()
+
   // 13b. Column profile and row size: the results toolbar's Profile opens a card per column, computed by the backend over
   // the set (results.profile), and closes from the panel; Row size draws a bar behind each row number with its bytes in
   // the tooltip, and hides it when turned off.

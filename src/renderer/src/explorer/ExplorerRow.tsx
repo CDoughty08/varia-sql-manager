@@ -269,7 +269,7 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
       aria-disabled={inert || undefined} aria-label={text} title={text} style={style} onMouseDown={select}>
       {indent}<span className="oe-twistie" /><span className="oe-icon" aria-hidden="true"><Icon name={icon} /></span><bdi className="oe-text">{text}</bdi>
       {!inert && recovery && <button type="button" className="oe-recovery-action" tabIndex={-1} title={`${recovery.label} (Enter)`}
-        onMouseDown={event => { event.preventDefault(); event.stopPropagation() }} onClick={() => { actions.select(rowId); recovery.run() }}>{recovery.label}</button>}
+        onMouseDown={event => { event.preventDefault(); event.stopPropagation(); actions.select(rowId) }} onClick={() => { actions.select(rowId); recovery.run() }}>{recovery.label}</button>}
     </div>
   }
   // A database the live status covers shows its state from the chips; any other row keeps the list's.
