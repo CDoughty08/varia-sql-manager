@@ -4,11 +4,13 @@ import type { MessageEntry, QueryStatus } from '../../../shared/contracts'
 /** Counts in en-US grouping, as SSMS shows them. */
 export const formatCount = (value: number): string => Math.max(0, Math.floor(value)).toLocaleString('en-US')
 export const plural = (count: number, noun: string): string => count === 1 ? noun : noun + 's'
-/** A result caption's row count: a filtered view's rows of the base rows it was built from, which while the set streamed
- *  were only those sealed then ("so far": the view is built again once they are all in), not the set's current count. */
-export function rowsFact(rows: number, filtered?: { readonly rows: number; readonly baseRows: number; readonly complete: boolean }): string {
-  if (!filtered) return `${formatCount(rows)} ${plural(rows, 'row')}`
-  return `${formatCount(filtered.rows)} of ${formatCount(filtered.baseRows)} ${plural(filtered.baseRows, 'row')}${filtered.complete ? '' : ' so far'}`
+/** A result caption's row count. A filtered grid counts its view's rows of the base rows the view was built from, not the
+ *  set's current count: a view built while the set streamed covers only the rows sealed then, "so far" while more arrive
+ *  (it is built again once they are all in). A rebuild that failed, or a set lost mid-stream, keeps the count, not "so far". */
+export function rowsFact(set: { readonly rowsAvailable: number; readonly state: string }, sort?: { readonly applied: readonly unknown[]; readonly view?: { readonly rows: number; readonly baseRows: number; readonly complete: boolean } }): string {
+  const view = sort?.view && sort.applied.length > 0 ? sort.view : undefined
+  if (!view) return `${formatCount(set.rowsAvailable)} ${plural(set.rowsAvailable, 'row')}`
+  return `${formatCount(view.rows)} of ${formatCount(view.baseRows)} ${plural(view.baseRows, 'row')}${!view.complete && set.state === 'open' ? ' so far' : ''}`
 }
 const pad = (value: number) => String(value).padStart(2, '0')
 

@@ -247,10 +247,10 @@ export type ResolvedViewFilter =
 /** results.view: up to `limits.views.maxKeys` keys on distinct columns and up to `limits.views.maxFilters` filters (at least
  *  one of either), the filters first; `replaces` names a view of the same result that this one supersedes. */
 export interface ResultsViewParams { resultId: number; sort: ViewSortKey[]; filters?: ViewFilter[]; replaces?: number }
-/** `rows` is the view's row count (the rows sealed when it was built that its filters kept), `complete` that they were
- *  built from all the result's rows, `approximate` that a key compared a truncated value's stored prefix or an estimated
- *  length; `filters`, when the request had them, are those filters resolved. */
-/** `rows` is the view's row count; `baseRows` the result's rows it was built from (those sealed then). */
+/** `rows` is the view's row count (the rows sealed when it was built that its filters kept), `baseRows` the result's rows
+ *  it was built from (those sealed then), `complete` that those were all the result's rows, `approximate` that a key
+ *  compared a truncated value's stored prefix or an estimated length; `filters`, when the request had them, are those
+ *  filters resolved. */
 export interface ResultsViewResult { viewId: number; rows: number; baseRows: number; complete: boolean; approximate: boolean; filters?: ResolvedViewFilter[] }
 export interface ResultsViewCloseParams { resultId: number; viewIds: number[] }
 export interface ResultsViewCloseResult { closed: number }

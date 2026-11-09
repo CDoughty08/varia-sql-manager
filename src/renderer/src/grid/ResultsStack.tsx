@@ -47,9 +47,8 @@ export function batchText(batchNumber: number, iteration: number, totalBatches: 
 const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, totalBatches, sort, onToggle }: { tabId: string; entry: ResultSetEntry; collapsed: boolean; totalBatches: number; sort?: GridSort; onToggle(index: number): void }) {
   const { commands, results } = useWorkbench()
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
-  const { descriptor } = entry, rows = snapshot.rowsAvailable, columns = descriptor.columns.length, name = entry.label ?? `Result ${entry.index + 1}`
-  // A filtered grid counts the rows its view kept of those it was built from.
-  const facts = [rowsFact(rows, sort?.view && sort.applied.length > 0 ? sort.view : undefined), `${formatCount(columns)} ${plural(columns, 'column')}`]
+  const { descriptor } = entry, columns = descriptor.columns.length, name = entry.label ?? `Result ${entry.index + 1}`
+  const facts = [rowsFact(snapshot, sort), `${formatCount(columns)} ${plural(columns, 'column')}`]
   if (descriptor.kind === 'executionPlan') facts.push('execution plan')
   const batch = batchText(descriptor.batchNumber, descriptor.iteration, totalBatches)
   const held = snapshot.state !== 'lost' && snapshot.state !== 'released'

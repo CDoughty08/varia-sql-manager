@@ -1355,7 +1355,7 @@ itself by view position.
 - **`results.viewClose { resultId, viewIds: 1 – 64 }`** answers `{ closed }`. Views end with their result too: a released
   result's views go with it, without a close.
 - **Renderer.** `ResultHandle.sort(keys, { filters, replaces, signal })` validates the keys and filters before sending
-  and returns a `ResultView` handle (`viewId`, `base`, `keys`, `filters` resolved, `rows`, `complete`, `approximate`) that
+  and returns a `ResultView` handle (`viewId`, `base`, `keys`, `filters` resolved, `rows`, `baseRows`, `complete`, `approximate`) that
   reads, measures and copies like any handle; closing it sends `viewClose`, and it ends (released or lost) with its base. `ResultsService` keeps a view
   per grid: a newer sort aborts the running one, and it sends no `replaces`, so the view a grid shows stays readable until
   the grid has read the new one's rows and swapped (`viewShown`), and only then closes. A view of a set still loading is
