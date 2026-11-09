@@ -63,7 +63,7 @@ internal sealed record ResultBudget(long UsedBytes, long GlobalBytes, long Query
 /// <summary>One line of the Messages tab: kind is "info" (Varia's row counts and notes), "print" (PRINT and RAISERROR with
 /// severity 10 or less), "server" (SQL Server's other informational messages: warnings, SET STATISTICS output, DBCC) or "error"
 /// (SQL errors, cancellation and timeout, shown in red).</summary>
-internal sealed record MessageEntry(string Text, string Kind);
+internal sealed record MessageEntry(string Text, string Kind, int? Line = null);
 /// <summary>The query.execute summary: rows stay in the backend's result store and are read with results.read. CompletedAt
 /// is the backend's local time with 7 fractional digits, as SSMS prints "Completion time:". Status is completed, completedWithErrors
 /// (every batch ran and at least one raised an error; Error holds the errors and the first such batch), failed (an error

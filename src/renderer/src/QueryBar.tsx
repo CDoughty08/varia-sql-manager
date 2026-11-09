@@ -7,6 +7,16 @@ import EnvironmentTag from './EnvironmentTag'
 import Icon from './Icon'
 import ClientStatisticsToggle from './statistics/ClientStatisticsToggle'
 import { lostHint, queryContextModel, toolbarMove, toolbarReturn, toolbarStop, withKey, type QueryContextModel } from './query-context'
+import { documentUri } from './services/documents'
+
+/** Selection metadata only: the execution service remains the source of the SQL that actually runs. */
+export function useExecutionScope(): { readonly title: string; readonly detail: string } {
+  const { documents, editorStatus } = useWorkbench()
+  const { activeId } = useServiceSnapshot(documents), status = useServiceSnapshot(editorStatus)
+  const selection = status?.selection?.uri === documentUri(activeId) ? status.selection : undefined
+  return selection ? { title: 'Execute selection', detail: selection.startLine === selection.endLine ? `Line ${selection.startLine}` : `Lines ${selection.startLine}–${selection.endLine}` }
+    : { title: 'Execute', detail: 'Entire query' }
+}
 
 /** The active document's server and database lists, as its query bar and the classic toolbar show them. */
 export function useQueryContext(): { readonly tab: QueryTab | undefined; readonly model: QueryContextModel } {
@@ -85,6 +95,7 @@ export function EstimatedPlanButton({ classic = false }: { classic?: boolean }) 
 export default function QueryBar() {
   const { commands } = useWorkbench()
   const { model } = useQueryContext()
+  const scope = useExecutionScope()
   const canExecute = useCommandEnabled('query.execute'), canCancel = useCommandEnabled('query.cancel')
   const keys = { execute: useKeybindingLabel('query.execute'), cancel: useKeybindingLabel('query.cancel') }
   const accent = useConnectionAccent(model.connection?.color)
@@ -127,10 +138,11 @@ export default function QueryBar() {
   const tag = environmentTag(environment)
   return <div className="query-bar" role="toolbar" aria-label="SQL Editor" data-query-bar="" ref={bar} onKeyDown={onKeyDown} onFocus={onFocus} onBlur={onBlur}>
     <div className="query-bar-actions">
-      <button type="button" className="query-bar-action execute primary" aria-label="Execute" aria-keyshortcuts={keys.execute?.aria} disabled={!canExecute}
-        title={model.connection?.lost ? lostHint : withKey('Execute', keys.execute)} onPointerDown={keepFocus} onClick={() => void commands.execute('query.execute', undefined, 'toolbar')}>
-        <Icon name="play" /><span className="query-bar-label">Execute</span>{keys.execute && <kbd aria-hidden="true">{keys.execute.text}</kbd>}
+      <button type="button" className="query-bar-action execute primary" aria-label={scope.title} aria-keyshortcuts={keys.execute?.aria} disabled={!canExecute}
+        title={model.connection?.lost ? lostHint : withKey(scope.title === 'Execute' ? scope.title : `${scope.title} · ${scope.detail}`, keys.execute)} onPointerDown={keepFocus} onClick={() => void commands.execute('query.execute', undefined, 'toolbar')}>
+        <Icon name="play" /><span className="query-bar-label">{scope.title}</span>{keys.execute && <kbd aria-hidden="true">{keys.execute.text}</kbd>}
       </button>
+      <span className="query-scope">{scope.detail}</span>
       <button type="button" className="query-bar-action" aria-label="Cancel" aria-keyshortcuts={keys.cancel?.aria} disabled={!canCancel} title={withKey('Cancel Executing Query', keys.cancel)}
         onPointerDown={keepFocus} onClick={() => void commands.execute('query.cancel', undefined, 'toolbar')}>
         <Icon name="debug-stop" /><span className="query-bar-label">Cancel</span>

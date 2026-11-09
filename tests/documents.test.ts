@@ -2,9 +2,105 @@ import { describe, expect, it } from 'vitest'
 import type { editor } from 'monaco-editor'
 import { afterClose } from '../src/renderer/src/documents'
 import { gridLimits } from '../src/renderer/src/grid/constants'
+import { closedQueryLimits } from '../src/renderer/src/services/documents'
 import { documentFixture, deferred, TestEditor, type SaveResponse } from './fixtures/documents'
 
 describe('query documents', () => {
+  it('reveals a captured line once a previously hidden group binds its editor, and rejects changed or invalid source', () => {
+    const { documents, model } = documentFixture()
+    const query = documents.create('source.sql', 'SELECT 1\nSELECT 2\nSELECT 3', 'master')
+    const revision = documents.revision(query.id)
+    documents.create('other.sql', 'SELECT other', 'master')
+    expect(documents.revealLine(query.id, 2, revision)).toBe(true)
+    const view = new TestEditor()
+    documents.showIn(view.asEditor(), query.id)
+    expect(view.position).toEqual({ lineNumber: 2, column: 1 })
+    expect(view.revealedLine).toBe(2)
+    expect(view.focused).toBeGreaterThan(0)
+    model(query.id).edit('SELECT edited')
+    expect(documents.revealLine(query.id, 1, revision)).toBe(false)
+    for (const line of [0, -1, 2, 1.5, Number.NaN]) expect(documents.revealLine(query.id, line, documents.revision(query.id))).toBe(false)
+    expect(documents.revealLine('gone', 1, revision)).toBe(false)
+    documents.dispose()
+  })
+  it('cancels a pending source reveal when its query changes or the user chooses another target', () => {
+    for (const cancel of ['edit', 'activate', 'focus'] as const) {
+      const { documents, model } = documentFixture()
+      const source = documents.create('source.sql', 'SELECT 1\nSELECT 2', 'master')
+      const other = documents.create('other.sql', '', 'master')
+      expect(documents.revealLine(source.id, 2, documents.revision(source.id))).toBe(true)
+      if (cancel === 'edit') model(source.id).edit('SELECT changed')
+      else if (cancel === 'activate') documents.activate(other.id)
+      else documents.dropPendingFocus()
+      const view = new TestEditor()
+      documents.showIn(view.asEditor(), source.id)
+      expect(view.position, cancel).toBeUndefined()
+      expect(view.revealedLine, cancel).toBeUndefined()
+      expect(view.focused, cancel).toBe(0)
+      documents.dispose()
+    }
+  })
+  it('reopens a closed SQL query as an unsaved disconnected copy with its name, database, line ending and first caret', async () => {
+    const { documents, api, model } = documentFixture({ server: id => id === 'prod' ? 'prod.example' : undefined })
+    const file = { id: 'registered', name: 'saved.sql', path: 'C:/saved.sql', encoding: 'utf8' as const, readOnly: false }
+    const original = documents.create(file.name, 'SELECT 1\r\nSELECT 2', 'Orders', 'prod', false, file, 'crlf')
+    documents.rename(original.id, 'Investigation')
+    documents.update(original.id, { includeActualPlan: true })
+    const editor = new TestEditor()
+    documents.bindEditor(editor.asEditor())
+    const state = { cursorState: [{ position: { lineNumber: 2, column: 5 } }, { position: { lineNumber: 1, column: 1 } }], viewState: { scrollTop: 40 }, contributionsState: { folding: 'discard this' } } as unknown as editor.ICodeEditorViewState
+    editor.viewState = state
+    await documents.close(original.id, 'rollback')
+    expect(api.closeQuerySession).toHaveBeenCalledWith(original.id, 'rollback')
+    expect(model(original.id).disposed).toBe(true)
+    expect(documents.canReopenClosed()).toBe(true)
+    const reopened = documents.reopenClosed()!
+    expect(reopened.id).not.toBe(original.id)
+    expect(reopened).toMatchObject({ name: 'Investigation', baseName: 'saved.sql', database: 'Orders', lastServer: 'prod.example', dirty: true, savedVersionId: null })
+    expect([reopened.connectionId, reopened.file, reopened.includeActualPlan, reopened.pinned]).toEqual([undefined, undefined, undefined, undefined])
+    expect(model(reopened.id).getValue()).toBe('SELECT 1\r\nSELECT 2')
+    expect(model(reopened.id).getEOL()).toBe('\r\n')
+    expect(editor.viewState).toEqual({ ...state, cursorState: state.cursorState.slice(0, 1), contributionsState: {} })
+    expect(editor.focused).toBeGreaterThan(0)
+    expect(documents.canReopenClosed()).toBe(false)
+    documents.dispose()
+  })
+  it('keeps no history for failed closes, non-query values or disposed documents', async () => {
+    const { documents, api } = documentFixture()
+    const query = documents.create('a.sql', 'SELECT 1', 'master')
+    api.closeQuerySession.mockResolvedValueOnce({ ok: false, error: 'Commit failed.' })
+    await expect(documents.close(query.id, 'commit')).rejects.toThrow('Commit failed.')
+    expect(documents.canReopenClosed()).toBe(false)
+    const value = documents.openText({ name: 'value.xml', text: '<a/>', kind: 'xml' })
+    await documents.close(value.id)
+    expect(documents.canReopenClosed()).toBe(false)
+    await documents.close(query.id)
+    documents.dispose()
+    expect(documents.canReopenClosed()).toBe(false)
+    expect(documents.reopenClosed()).toBeUndefined()
+  })
+  it('bounds closed-query history by count and total characters, omitting oversized queries', async () => {
+    const { documents } = documentFixture()
+    for (let index = 0; index <= closedQueryLimits.count; index++) {
+      const query = documents.create(`${index}.sql`, 'SELECT 1', 'master')
+      await documents.close(query.id)
+    }
+    const names: string[] = []
+    while (documents.canReopenClosed()) names.push(documents.reopenClosed()!.name)
+    expect(names).toHaveLength(closedQueryLimits.count)
+    expect(names[0]).toBe(`${closedQueryLimits.count}.sql`)
+    expect(names.at(-1)).toBe('1.sql')
+    const large = documents.create('large.sql', 'x'.repeat(closedQueryLimits.characters), 'master')
+    await documents.close(large.id)
+    const small = documents.create('small.sql', 'SELECT 1', 'master')
+    await documents.close(small.id)
+    expect(documents.reopenClosed()!.name).toBe('small.sql')
+    expect(documents.canReopenClosed()).toBe(false)
+    const oversized = documents.create('oversized.sql', 'x'.repeat(closedQueryLimits.characters + 1), 'master')
+    await documents.close(oversized.id)
+    expect(documents.canReopenClosed()).toBe(false)
+    documents.dispose()
+  })
   it('never saves an opening plan as a partial file, and a reload cancels its old pending chunks', async () => {
     const { documents, model, api, frames, frame } = documentFixture()
     const file = { id: 'plan-file', path: 'C:/large.sqlplan', name: 'large.sqlplan', encoding: 'utf8' as const, readOnly: false }

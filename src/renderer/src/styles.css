@@ -615,6 +615,11 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 @container (width < 338px) {
   .query-tab .tab-select { gap: 4px; padding-inline: 4px; }
 }
+/* A narrow split can leave the tab only its buttons and SID: decoration and spacing yield before the session badge. */
+@container (width < 200px) {
+  .query-tab .tab-select { gap: 0; padding-inline: 0; }
+  .query-tab .tab-select > .tab-icon, .query-tab .tab-select > .tab-readonly, .query-tab .tab-select > .tab-running, .query-tab .environment-tag[data-place="tab"] { display: none; }
+}
 /* A document tab's keyboard ring is a 1px inset outline, as the single strip drew it: the strip would clip the default ring,
    and forced colours drop box shadows. */
 .editor-groups .dv-tab:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; box-shadow: none; }
@@ -685,6 +690,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .query-bar-actions { display: flex; align-items: center; flex-shrink: 0; gap: var(--varia-space-1); }
 .query-bar-action { display: inline-flex; align-items: center; gap: 6px; height: var(--varia-control); padding: 0 10px; flex-shrink: 0; }
 .query-bar-action.execute kbd { color: inherit; border-color: currentColor; }
+.query-scope { flex-shrink: 0; max-width: 15em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.editor-group-new-query { color: var(--varia-descriptionForeground); }
+.oe-recovery-action { margin-left: auto; flex-shrink: 0; padding: 0 var(--varia-space-1); font-size: var(--varia-size-xs); line-height: var(--varia-line-sm); color: var(--varia-objectExplorer-actionForeground); }
+.object-search-database-scope { display: flex; align-items: center; gap: var(--varia-space-1); margin: var(--varia-space-1) 0; min-width: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.object-search-database-scope > .chip { min-width: 0; max-width: 100%; gap: var(--varia-space-1); }
+.object-search-database-scope > .chip > bdi { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@container (max-width: 700px) { .query-bar .query-scope { display: none; } }
 .query-bar .actual-plan-toggle[aria-pressed="true"], .toolbar .actual-plan-toggle[aria-pressed="true"] {
   background: var(--varia-list-activeSelectionBackground);
   color: var(--varia-list-activeSelectionForeground);
@@ -767,9 +779,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .results-search > button:disabled { opacity: 0.4; }
 .results-search .results-segments button { height: 16px; padding: 0 3px; }
 @media (max-width: 1180px) {
-  .results-toolbar-label, .results-search-icon, .results-search > button { display: none; }
+  .output-toolbar { gap: 4px; }
+  .output-views button { padding: 0 6px; }
+  .results-toolbar-label, .results-toolbar .results-search > .results-search-icon, .results-search > button { display: none; }
   .results-toolbar { gap: 2px; padding-left: 6px; }
   .results-segments button { padding: 0 3px; }
+  .results-segments button.results-icon-toggle { padding: 0 3px; }
   .results-search { padding-left: 4px; }
   .results-search input { min-width: 24px; }
 }
@@ -960,6 +975,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .messages:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .messages .msg { margin: 0; font: var(--varia-size-sm)/1.7 var(--varia-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; content-visibility: auto; contain-intrinsic-size: auto 20px; }
 .messages .msg.error, .output-toolbar .badge.error-count { color: var(--varia-errorForeground); }
+.message-entry { display: flex; align-items: flex-start; flex-wrap: wrap; gap: var(--varia-space-1) var(--varia-space-2); }
+.message-entry > .msg { flex: 1 1 260px; min-width: 0; }
+.message-source-link { display: inline-flex; align-items: center; gap: var(--varia-space-1); flex-shrink: 0; padding: 0 var(--varia-space-1); font-size: var(--varia-size-xs); line-height: var(--varia-line-md); color: var(--varia-resultsGrid-linkForeground); user-select: none; }
 /* The Messages strip under the results: one line (gridLimits.stripLine), opening to the messages. OutputPane caps it at what
    the stack leaves (at most 40 % of the pane), and never below a few lines; then they scroll. */
 .messages-strip { display: flex; flex: 0 0 auto; flex-direction: column; min-height: 0; max-height: 40%; border-top: 1px solid var(--varia-panel-border); background: var(--varia-panel-background); }
@@ -1128,6 +1146,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* The editor's facts are short and keep their size: the query's facts give way (and ellipsize) first. */
 .status-bar > .editor-status { display: flex; align-items: center; gap: 12px; flex-shrink: 0; margin: 0 12px; }
 .editor-status-position { display: flex; gap: 10px; }
+.editor-status-action { padding: 0 var(--varia-space-0); font-size: inherit; line-height: inherit; color: inherit; border: 0; }
 .editor-status > * + *::before { content: '|'; margin-right: 12px; color: var(--varia-statusBar-separatorForeground); }
 .editor-status-readonly { display: flex; align-items: center; gap: 4px; }
 .editor-status .codicon { font-size: var(--varia-glyph-sm); }
@@ -1778,6 +1797,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .environment-tag[data-place="tab"] { max-width: 10em; }
 /* A bounded tab lets either kind yield so its name and session badge retain their space. */
 .query-tab .environment-tag[data-place="tab"] { flex: 0 1 auto; }
+/* A custom label (up to 32 characters) gives way before the name, so the name stays readable beside a long label; its
+   full text is in the tab's description and tooltip. Where the cell has room beside the SID and a running spinner, the
+   label keeps a few characters and its ellipsis; a narrower cell lets it go entirely rather than clip the SID. */
+.query-tab .environment-tag[data-place="tab"][data-custom] { flex-shrink: 100; }
+@container (width >= 220px) {
+  .query-tab .environment-tag[data-place="tab"][data-custom] { min-width: 3em; }
+}
 .environment-tag[data-place="tab"], .environment-tag[data-place="list"] { margin-left: 6px; }
 .environment-tag[data-place="list"] { vertical-align: middle; }
 .query-status-environment { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; margin-right: 10px; }

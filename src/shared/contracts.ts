@@ -167,7 +167,11 @@ export interface ResultDescriptor {
  * Server's other informational messages (warnings such as 8153, SET STATISTICS output, DBCC) are `server`, which show in the
  * strip without opening it; Varia's own lines (row counts, notes) are `info`.
  */
-export interface MessageEntry { text: string; kind: 'info' | 'server' | 'print' | 'error' }
+export interface MessageEntry {
+  text: string; kind: 'info' | 'server' | 'print' | 'error'
+  /** Absolute source line for a submitted SQL batch error. Procedure-relative and non-SQL errors have no query location. */
+  line?: number
+}
 export type QueryStatus = 'completed' | 'completedWithErrors' | 'failed' | 'cancelled' | 'timedOut'
 /** The query.execute summary: the rows stay in the backend (ResultClient reads them). `completedAt` is the backend's
  *  local time with 7 fractional digits, for SSMS's "Completion time:" line. */

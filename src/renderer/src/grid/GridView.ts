@@ -834,13 +834,14 @@ export class GridView {
     const point = this.point(event)
     if (!point.inside || point.y >= g.headerHeight) return
     const hit = this.hitAt(point.x, point.y)
-    if (hit?.kind === 'resize' && this.gestures.matches('grid.fitColumn', event)) this.fit(hit.column)
+    if (hit?.kind === 'resize' && this.gestures.matches('grid.fitColumn', event)) this.fitColumn(hit.column)
   }
   /**
    * Fits a column to its header and the widest display text of its first 4,096 rows and the rows in view, measured by
    * the worker; a resize or another fit started meanwhile wins.
    */
-  private fit(column: number): void {
+  fitColumn(column: number): void {
+    if (this.disposed || !Number.isInteger(column) || column < 0 || column >= this.columns) return
     this.fitting?.abort()
     const abort = this.fitting = new AbortController()
     const rows = this.rows(), top = Math.min(g.measureFitRows, rows), range = this.lastRange
@@ -863,7 +864,7 @@ export class GridView {
       if (abort.signal.aborted || this.disposed) return
       done()
       // A full results port has room again shortly; a released or lost result is shown as such by its shell.
-      if (portBusy(error)) setTimeout(() => { if (!this.disposed && !abort.signal.aborted && !this.fitting) this.fit(column) }, g.busyRetryMs)
+      if (portBusy(error)) setTimeout(() => { if (!this.disposed && !abort.signal.aborted && !this.fitting) this.fitColumn(column) }, g.busyRetryMs)
     })
   }
 

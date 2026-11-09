@@ -290,7 +290,7 @@ try {
   for (const label of ['Databases', 'Security', 'Server Objects']) await expect(await explorerRow(page, 'server-a', label)).toHaveAttribute('aria-expanded', 'true')
   // Security's folders were requested only now, when `*` expanded it.
   expect((await stubCalls()).filter(params => isFolder(params, 'serverSecurity'))).toHaveLength(1)
-  // A folder that fails shows why as a row; Enter retries once the cause is gone.
+  // A folder that fails shows why as a row; Enter and its Retry button take the same recovery path.
   await select('server-a', 'Security', 'Audits')
   await press('ArrowRight')
   const auditsError = 'You do not have permission to view Audits. Press Enter to retry.'
@@ -303,12 +303,22 @@ try {
     window.__variaLiveChanges = 0
     new MutationObserver(records => { window.__variaLiveChanges += records.length }).observe(document.querySelector('[data-explorer-tree] + [role="status"]'), { childList: true, subtree: true, characterData: true })
   })
+  // A recovery button's menu selects its row and returns keyboard focus to the tree, even with another row selected before.
+  await select('server-a', 'Security')
+  await (await explorerRow(page, 'server-a', 'Security', 'Audits', auditsError)).getByRole('button', { name: 'Retry', exact: true }).click({ button: 'right' })
+  await expect(menu('Object Explorer')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(tree()).toBeFocused()
+  expect((await active())?.label).toBe(auditsError)
+  await press('ArrowLeft', 'Audits')
+  await press('ArrowDown', auditsError)
+  await expect(tree()).toBeFocused()
   await press('Enter')
   await expect.poll(() => page.evaluate(() => window.__variaLiveChanges)).toBeGreaterThan(0)
   await expect(liveRegion()).toHaveText(auditsSentence)
   await select('server-a', 'Security', 'Audits', auditsError)
   await setStub({ auditsOk: true })
-  await press('Enter')
+  await (await explorerRow(page, 'server-a', 'Security', 'Audits', auditsError)).getByRole('button', { name: 'Retry', exact: true }).click()
   await expect(await explorerRow(page, 'server-a', 'Security', 'Audits', 'LoginAudit')).toBeVisible()
   console.log('Object Explorer checks: arrows, Home, End, Page Up and Down, Numpad plus and minus, type-ahead with cycling, *, and Enter on an error row, announced again when it fails again.')
   // A login peeks too, with the tabs its catalogue entry declares: its lists come with the facts, and it has no Dependencies.
@@ -349,7 +359,7 @@ try {
   expect((await linkedCalls())[1].requestId).not.toBe(held.requestId)
   await application.evaluate(() => globalThis.variaStub.release())
   await expect(await explorerRow(page, 'server-a', 'Server Objects', 'Linked Servers', 'REMOTE1')).toBeVisible()
-  // Stop during streaming: the folder says how far it got, and Enter on that row continues. Small, slow pages keep the
+  // Stop during streaming: the folder says how far it got, and its Continue loading button resumes it. Small, slow pages keep the
   // folder's last row in view.
   await setStub({ pageDelayMs: 1000, pageSize: 5 })
   await expandExplorerPath(page, 'server-a', 'Databases', 'AppData', 'Tables')
@@ -360,8 +370,7 @@ try {
   await expect(stopped).toBeVisible()
   await expect(toolbarButton('Stop')).toBeDisabled()
   const before = (await stubCalls()).length
-  await stopped.click()
-  await press('Enter')
+  await stopped.getByRole('button', { name: 'Continue loading', exact: true }).click()
   await expect.poll(async () => (await stubCalls()).length).toBeGreaterThan(before)
   await expect(explorerTree(page).locator(part.explorerProgressRow)).toBeVisible()
   // Stop by keyboard: it disables itself, and focus moves on to the next enabled button instead of the page.
@@ -453,7 +462,7 @@ try {
       return counts
     })
     rows = Math.max(rows, await renderedRows())
-    // Enter on the capped row opens Filter Settings for its folder.
+    // The capped row's Filter button opens Filter Settings for its folder, as Enter does.
     await phase('capped row')
     await page.evaluate(() => {
       const element = document.querySelector('[data-explorer-tree]')
@@ -461,8 +470,7 @@ try {
     })
     // It is not aria-disabled: Enter acts on it. Escape returns to it, still in view.
     expect(await capped.getAttribute('aria-disabled')).toBeNull()
-    await capped.click()
-    await press('Enter')
+    await capped.getByRole('button', { name: 'Filter…', exact: true }).click()
     const cappedDialog = page.getByRole('dialog', { name: 'Filter Settings – Tables', exact: true })
     await expect(cappedDialog).toBeVisible()
     await page.keyboard.press('Escape')
@@ -1079,6 +1087,29 @@ try {
     await expect(searchBox()).toBeFocused()
     await page.keyboard.press('Escape')
     await expect(tree()).toBeFocused()
+    // A database's Search Objects menu scopes the existing search request; its chip clears the scope and returns focus.
+    await selectRevealed('server-a', 'Databases', 'AppData')
+    await (await explorerRow(page, 'server-a', 'Databases', 'AppData')).click({ button: 'right' })
+    await menu('Object Explorer').getByRole('menuitem', { name: 'Search Objects…', exact: true }).click()
+    const databaseScope = () => page.locator(part.objectSearchTab).getByRole('group', { name: 'Database scope', exact: true })
+    await expect(databaseScope()).toBeVisible()
+    await objectSearchBox(page).fill('table')
+    await expect.poll(lastSearch).toMatchObject({ text: 'table', database: 'AppData' })
+    await databaseScope().getByRole('button', { name: 'Clear database scope: AppData', exact: true }).click()
+    await expect(databaseScope()).toHaveCount(0)
+    await expect(objectSearchBox(page)).toBeFocused()
+    await expect.poll(async () => (await lastSearch())?.database ?? null).toBeNull()
+    await page.keyboard.press('Control+w')
+    // Choosing another server also drops a scope that belonged to the original server.
+    await selectRevealed('server-a', 'Databases', 'AppData')
+    await (await explorerRow(page, 'server-a', 'Databases', 'AppData')).click({ button: 'right' })
+    await menu('Object Explorer').getByRole('menuitem', { name: 'Search Objects…', exact: true }).click()
+    await expect(databaseScope()).toBeVisible()
+    await objectSearchServer(page).click()
+    await objectSearchServerOptions(page).filter({ hasText: 'server-b' }).click()
+    await expect(databaseScope()).toHaveCount(0)
+    await page.keyboard.press('Control+w')
+    await tree().focus()
     // The Search Objects tab: a click selects a hit and keeps focus in the list, so the arrows walk the hits; Enter and a
     // double-click reveal in Object Explorer without taking focus from the list. (A click used to reveal and focus the tree.)
     await page.keyboard.press('F1')

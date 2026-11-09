@@ -27,7 +27,15 @@ internal sealed class QueryMessages(Action<MessageEntry>? stored = null)
     private int truncatedAt;
     public bool Truncated { get; private set; }
 
-    public void Add(string text, MessageKind kind = MessageKind.Info)
+    /// <summary>A script location only exists for a line in a submitted batch, not inside a stored procedure.</summary>
+    public static int? ScriptLine(int startLine, int batchStartLine, int errorLine, string? procedure = null)
+    {
+        if (!string.IsNullOrEmpty(procedure) || startLine < 1 || batchStartLine < 1 || errorLine < 1) return null;
+        var line = (long)startLine + batchStartLine + errorLine - 2;
+        return line is > 0 and <= int.MaxValue ? (int)line : null;
+    }
+
+    public void Add(string text, MessageKind kind = MessageKind.Info, int? line = null)
     {
         lock (messages)
         {
@@ -36,13 +44,13 @@ internal sealed class QueryMessages(Action<MessageEntry>? stored = null)
                 MarkTruncated();
                 if (kind != MessageKind.Error || lateErrors >= MaxLateErrors) return;
                 lateErrors++;
-                Store(text.Length > MaxLateCharacters ? text[..MaxLateCharacters] : text, kind);
+                Store(text.Length > MaxLateCharacters ? text[..MaxLateCharacters] : text, kind, line);
                 return;
             }
             var cut = text.Length > MaxCharacters - characters;
             if (cut) text = text[..(MaxCharacters - characters)];
             characters += text.Length;
-            Store(text, kind);
+            Store(text, kind, line);
             if (cut) MarkTruncated();
         }
     }
@@ -64,9 +72,10 @@ internal sealed class QueryMessages(Action<MessageEntry>? stored = null)
         truncatedAt = messages.Count;
     }
 
-    private void Store(string text, MessageKind kind)
+    private void Store(string text, MessageKind kind, int? line)
     {
-        var entry = new MessageEntry(text, kind switch { MessageKind.Error => Error, MessageKind.Server => Server, MessageKind.Print => Print, _ => Info });
+        var entry = new MessageEntry(text, kind switch { MessageKind.Error => Error, MessageKind.Server => Server, MessageKind.Print => Print, _ => Info },
+            kind == MessageKind.Error && line is > 0 ? line : null);
         messages.Add(entry);
         stored?.Invoke(entry);
     }
