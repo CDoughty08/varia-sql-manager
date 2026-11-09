@@ -457,6 +457,8 @@ describe('ResultsPortHost', () => {
     expect(codes(port()).slice(-1)).toEqual([[6, 'BACKEND_ERROR']])
     expect(diffs[2].cancels).toEqual([cancelReasons.user])
     expect(host.owns(1, 21)).toBe(false)
+    // The refused answer still stored a result: main closes it by the id it names.
+    expect(backend.close).toHaveBeenCalledWith(1, [21])
     // Answered after the page reloaded: no port owns the diff, so main closes it.
     port().send({ t: 'diff', rid: 8, generation: 1, resultId: 7, right: 8, exact: false, context: 1 })
     host.open({ postMessage() {} })

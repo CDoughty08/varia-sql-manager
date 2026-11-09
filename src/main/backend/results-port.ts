@@ -641,12 +641,15 @@ export class ResultsPortHost {
     this.sorting.set(rid, diff)
     diff.done.then(result => {
       const parsed = diffResultSchema.safeParse(result)
-      if (this.port !== port || this.sorting.get(rid) !== diff) {
-        if (parsed.success) void this.backend.close(generation, [parsed.data.descriptor.resultId]).catch(() => undefined)
-        return
-      }
+      // The result the backend stored, even from an answer its schema refuses: nothing else would close it.
+      const stored = parsed.success ? parsed.data.descriptor.resultId : storedResultId(result)
+      const close = () => { if (stored !== undefined) void this.backend.close(generation, [stored]).catch(() => undefined) }
+      if (this.port !== port || this.sorting.get(rid) !== diff) return close()
       this.sorting.delete(rid)
-      if (!parsed.success) return this.end(rid, 'BACKEND_ERROR', 'The results could not be compared.')
+      if (!parsed.success) {
+        close()
+        return this.end(rid, 'BACKEND_ERROR', 'The results could not be compared.')
+      }
       const descriptor: ResultDescriptor = { ...parsed.data.descriptor, generation }
       if (generation === this.generation) this.own([descriptor])
       this.post({ t: 'end', rid, ok: true, result: { ...parsed.data, descriptor } })
@@ -765,4 +768,11 @@ export function supervisorResults(supervisor: BackendSupervisor): ResultsBackend
     },
     liveUpdate: (generation, params) => supervisor.request('live.update', params, { generation })
   }
+}
+
+/** The result id an answer's descriptor names, read without trusting the rest of it; undefined when it has none. */
+function storedResultId(answer: unknown): number | undefined {
+  const descriptor = typeof answer === 'object' && answer !== null ? (answer as { descriptor?: unknown }).descriptor : undefined
+  const id = typeof descriptor === 'object' && descriptor !== null ? (descriptor as { resultId?: unknown }).resultId : undefined
+  return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 && id <= 0xffff_ffff ? id : undefined
 }

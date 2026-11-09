@@ -5,7 +5,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import type { ResultHandle } from '../results/ResultClient'
 import { setKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
 import { compareText } from '../results/CompareService'
-import type { SetHighlights } from '../results/HighlightsService'
+import { highlightText } from '../results/HighlightsService'
 import { formatBytes, formatCount } from '../results/status'
 import { GridView, type GridStatus } from './GridView'
 import { describeSelection } from './selection'
@@ -37,16 +37,6 @@ function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: n
     return `${shown}: the result memory budget${bytes ? ` (${formatBytes(bytes)})` : ''} is full. Execution continued; close other results to free memory.`
   }
   if (o.truncated === 'rowLimit') return `${shown}. Execution continued.`
-  return undefined
-}
-
-/** What the strip says of a set's highlights: those this run lacks (kept, they return with their rows), or a key that is
- *  not unique here (one highlight covers every row with its value). */
-function highlightText(marked: SetHighlights | undefined): string | undefined {
-  if (!marked || marked.count === 0) return undefined
-  const missing = marked.count - marked.found
-  if (missing > 0 && marked.rows.length > 0) return `${formatCount(missing)} highlighted ${missing === 1 ? 'row is' : 'rows are'} not in these results. ${missing === 1 ? 'It stays' : 'They stay'} highlighted for when ${missing === 1 ? 'it returns' : 'they return'}.`
-  if (!marked.unique && marked.found > 0) return marked.by ? `${marked.by} is not unique in these results, so a highlight can cover several rows.` : 'Some rows here are identical, so a highlight covers each of them.'
   return undefined
 }
 

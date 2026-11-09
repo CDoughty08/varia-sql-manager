@@ -1777,7 +1777,29 @@ try {
   // The active cell names a changed value and its row's kind for screen readers.
   await cell(1, 5, diff).click()
   await expect(cell(1, 5, diff)).toHaveAttribute('aria-label', '1.75, changed, added row')
-  console.log('Results checks: Compare with Previous Result adds a unified diff of the two results, aligned by their key, with changed, soft, added and removed rows marked.')
+  // Where the features meet: a highlighted removed row shows its highlight over the diff's tone, and a search match on a
+  // changed value shows the match's tint over the changed one.
+  const background = locator => locator.evaluate(element => getComputedStyle(element).backgroundColor)
+  const removedTone = await background(diff.locator(gridPart.removedRow).first())
+  await cell(3, 1, diff).click({ button: 'right' })
+  await outputMenu.getByRole('menuitem', { name: 'Highlight', exact: true }).click()
+  await page.getByRole('menu', { name: 'Highlight', exact: true }).getByRole('menuitem', { name: 'Blue', exact: true }).click()
+  const highlightedRemoved = diff.locator(gridPart.highlightedRow).and(diff.locator(gridPart.removedRow))
+  await expect(highlightedRemoved).toHaveCount(1)
+  await expect.poll(() => background(highlightedRemoved)).not.toBe(removedTone)
+  // The changed value's own tint, measured now that the selection moved off it.
+  const changedTint = await background(cell(1, 5, diff))
+  await searchBox.click()
+  await page.keyboard.type('1.75')
+  const changedMatch = cell(1, 5, diff).and(diff.locator(gridPart.searchMatch))
+  await expect(changedMatch).toHaveCount(1)
+  await expect.poll(() => background(changedMatch)).not.toBe(changedTint)
+  await searchBox.press('Escape')
+  await cell(3, 1, diff).click({ button: 'right' })
+  await outputMenu.getByRole('menuitem', { name: 'Highlight', exact: true }).click()
+  await page.getByRole('menu', { name: 'Highlight', exact: true }).getByRole('menuitem', { name: 'Clear All Highlights', exact: true }).click()
+  await expect(diff.locator(gridPart.highlightedRow)).toHaveCount(0)
+  console.log('Results checks: Compare with Previous Result adds a unified diff of the two results, aligned by their key, with changed, soft, added and removed rows marked; highlights and search matches show over its tones.')
 
   // 15. Panes and tabs: F6 goes to the results and back; Ctrl+R hides and shows them keeping scroll, selection and a
   // resized column; a tab switch restores all three.

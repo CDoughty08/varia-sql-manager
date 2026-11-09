@@ -111,6 +111,9 @@ export class ResultsWorkerCore {
   private readonly viewCloses = new Map<number, number>()
   /** Row-identity requests in flight: the page's id by rid. */
   private readonly identities = new Map<number, number>()
+  /** The diffs among them, by rid: their generation, and whether the page gave them up. A diff answered after its cancel
+   *  is a stored result nobody holds, so it is closed. */
+  private readonly diffs = new Map<number, { readonly generation: number; cancelled: boolean }>()
   /** The worker's own viewCloses (a view built after its sort was given up), whose rids stay taken until main answers. */
   private readonly orphanCloses = new Set<number>()
   private readonly lives = new Map<number, Live>()
@@ -152,6 +155,7 @@ export class ResultsWorkerCore {
         this.error(sort.id, 'PORT_CLOSED', portClosed)
       }
       this.orphanCloses.clear()
+      this.diffs.clear()
       this.status = undefined
     }
     this.port = port
@@ -340,7 +344,10 @@ export class ResultsWorkerCore {
     }
     for (const [rid, identity] of this.identities) {
       // Main stops an identify and answers CANCELLED; it lets a range or a search finish, whose answer then settles nothing.
-      if (identity === id) return this.send({ t: 'cancel', rid })
+      if (identity !== id) continue
+      const diff = this.diffs.get(rid)
+      if (diff) diff.cancelled = true
+      return this.send({ t: 'cancel', rid })
     }
     for (const [rid, sort] of this.sorts) {
       // Main answers the cancelled sort (CANCELLED), which settles the page's request.
@@ -428,7 +435,10 @@ export class ResultsWorkerCore {
     if (body.method === 'identify') this.send({ t: 'identify', rid, generation, resultId, by: body.by, ...(body.column === undefined ? {} : { column: body.column }) })
     else if (body.method === 'rowIds') this.send({ t: 'rowIds', rid, generation, resultId, firstRow: body.firstRow, count: body.count, ...viewId })
     else if (body.method === 'findRows') this.send({ t: 'findRows', rid, generation, resultId, ids: [...body.ids], ...viewId })
-    else this.send({ t: 'diff', rid, generation, resultId, right: body.right, exact: body.exact, context: body.context })
+    else {
+      this.diffs.set(rid, { generation, cancelled: false })
+      this.send({ t: 'diff', rid, generation, resultId, right: body.right, exact: body.exact, context: body.context })
+    }
   }
 
   /** The views' pages go at once; the backend frees their order when it answers. */
@@ -631,6 +641,14 @@ export class ResultsWorkerCore {
     const identity = this.identities.get(rid)
     if (identity !== undefined) {
       this.identities.delete(rid)
+      const diff = this.diffs.get(rid)
+      this.diffs.delete(rid)
+      // Built before the cancel reached it: nobody holds the diff, so it goes (the answer is not awaited).
+      if (diff?.cancelled) {
+        const close = this.allocate()
+        this.orphanCloses.add(close)
+        return this.send({ t: 'close', rid: close, generation: diff.generation, resultIds: [(result as ResultsDiffResult).descriptor.resultId] })
+      }
       this.post({ type: 'identity', id: identity, result: result as ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsDiffResult })
       return
     }
@@ -693,6 +711,7 @@ export class ResultsWorkerCore {
     const identity = this.identities.get(rid)
     if (identity !== undefined) {
       this.identities.delete(rid)
+      this.diffs.delete(rid)
       return this.error(identity, code, message)
     }
     const sizes = this.sizes.get(rid)

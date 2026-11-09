@@ -1359,16 +1359,21 @@ the rows it holds (`Results/RowIdentity.cs`); the renderer never compares rows.
   trailing spaces trimmed (code points for _BIN and _BIN2), exact numerics by their canonical digits, uniqueidentifier by its
   bytes, datetimeoffset by its UTC instant, others by their stored bytes; so it matches rows equal under the collation.
   `approximate` says a hashed value was a truncated prefix. A second identify replaces the first. It holds 24 bytes a row
-  while it runs and keeps 8, charged to the query budget (`TOO_LARGE`) and freed with the result.
+  while it runs (one set, reused by every candidate `auto` tries and by the whole-row fallback, which all fill one array)
+  and keeps 8, charged to the query budget (`TOO_LARGE`) and freed with the result.
 - **`results.rowIds { resultId, firstRow, count: 1 – 16,384, viewId? }`** answers `{ firstRow, ids, rows }`, an id per row
   (by view position with `viewId`), -1 past the identified rows. Without an identify first: `IDENTITY_NOT_FOUND`.
 - **`results.findRows { resultId, ids: 1 – 10,000 in 0 – 2⁵³ − 1, viewId? }`** answers `{ positions, marks, truncated, rows }`:
   the ascending positions (view positions with `viewId`) of the rows whose identity is in `ids`, each with the index in
   `ids` it matched, at most 100,000 (`truncated`).
 - **Renderer.** `HighlightsService` keeps highlights per tab and result set index: the first highlight identifies the set
-  (`auto`) and fixes how its rows are told apart (the key column's name, or the whole row); a re-run of the tab's query
-  identifies its new set the same way once complete and finds the highlighted ids there, and a sorted view finds them by
-  view position. It colours at most 10,000 rows a command and keeps 10,000 a set. `GridView` draws the positions it is
+  (`auto`) and fixes how its rows are told apart (the key column's name and base type, or the whole row); a re-run of the
+  tab's query identifies its new set the same way once complete (a column whose length changed still counts) and finds the
+  highlighted ids there, and a sorted view finds them by view position. A re-run without the key column finds nothing: the
+  grid's strip and the Highlight command say the highlights follow a column these results lack. A `truncated` answer is
+  drawn as far as it goes and the strip says only the first 100,000 rows are. A search that fails with `BUSY`,
+  `TOO_MANY_REQUESTS` or `TIMEOUT` is tried again after 1, 4 and 16 seconds; any failed search is tried again when the user
+  highlights. It colours at most 10,000 rows a command and keeps 10,000 a set. `GridView` draws the positions it is
   given by binary search per painted row, with theme colours (`resultsGrid.highlight*Background`). Highlights live only in
   the renderer's memory: they do not survive a reload, hot exit or closing the tab.
 
@@ -1380,12 +1385,15 @@ receives a new result to read like any other, never rows to compare.
 - **`results.diff { left, right, exact?, context? }`** answers `{ descriptor, key, same, changed, added, removed, soft,
   approximate, leftOnly, rightOnly }`. Both results must belong to the same query (`INVALID_PARAMS` otherwise, and for a diff
   of a diff) and be complete (`RESULT_OPEN`, "Compare the results after they finish loading."). Columns pair by name,
-  case-insensitively, in `left`'s order; at least one must pair (`INVALID_PARAMS`), and `leftOnly` and `rightOnly` name up
-  to 64 that do not, which are not compared.
+  case-insensitively, in `left`'s order, when both hold text or both binary; at least one must pair (`INVALID_PARAMS`), at
+  most 4,092 may (`INVALID_PARAMS`: the unified result adds four columns to a page's 4,096), and `leftOnly` and `rightOnly`
+  name up to 64 that do not, which are not compared.
 - **Alignment.** Rows match by `key`: the first shared column that is unique, NULL-free and untruncated in both results,
   of up to 16 candidates as `results.identify` ranks them; else by all shared columns' values together (`key` null), the
   k-th copy of a row matching the k-th copy. Values compare as SQL Server would (the identity hashing above): numbers by
-  value, character columns by their collation, ignoring trailing spaces. Text equal by collation but not character for
+  value, character columns by their collation, ignoring trailing spaces, each pair by `left`'s column type and collation, so
+  a column whose collation or type changed between the results still matches. Matched cells compare their values, not only
+  their hashes. Text equal by collation but not character for
   character is a soft difference: it leaves its row unchanged and is counted in `soft`. `exact` compares text character
   for character instead. `approximate` says a truncated value's stored prefix was compared.
 - **The model.** The aligned entries (`DiffModel`: kind, row in each result, differing cells) are in unified order: the
@@ -1394,15 +1402,19 @@ receives a new result to read like any other, never rows to compare.
 - **The unified result** (`kind: 'diff'`, its descriptor stamped with the generation by main, which then owns it) has
   the columns `Change` (" ", "−" or "+"), `R1` and `R2` (each row's number in `left` and `right`, NULL where it has none),
   the shared columns with `right`'s names and types, and a hidden tone column: `added`, `removed` or, for an unchanged row
-  with soft differences, `same`, followed by the differing cells' column numbers, a soft one prefixed with `~`. A changed
+  with soft differences, `same`, followed by every differing cell's column number, a soft one prefixed with `~`. A changed
   row is its old row (−) then its new one (+). Only `context` unchanged rows (default 1, at most 100, -1 for all) show on
-  each side of a change. It is a result of the same query, charged to its budget (rows stop when it is full, with the
-  usual truncation), released with the query's other results, and closed by main if its port went before the answer.
+  each side of a change. Each copied cell's lengths are its source cell's, so `results.rowBytes` sums the shown values
+  (not the marker, row numbers or tone). It is a result of the same query, charged to its budget (rows stop when it is
+  full, with the usual truncation, never between a changed row's two halves), released with the query's other results,
+  and released at once when its answer is not delivered: a CANCEL or the deadline answered first (the backend), its
+  answer failed validation or its port went (main), or the page gave it up (the worker).
   While it is built the alignment holds about 80 bytes a row of both results (`ResultDiffer.WorkingBytes`) and 12 bytes
   a differing cell, charged to the budget too as they grow (`TOO_LARGE` without room).
 - **Renderer.** `ResultHandle.diff(right, { exact, context, signal })` relays it; `CompareService` appends the new result
   as the run's last set (`ResultsService.addSet`), named "Differences: Result 1 → Result 2", and its grid's strip says what
-  was compared. `GridView` colours added and removed rows from the tone column and marks the listed cells (`is-chg`,
+  was compared, and when `approximate`. A new run in the tab gives up a comparison in flight, and `addSet` takes a diff
+  only into the run that holds both compared sets; one it refuses is released. `GridView` colours added and removed rows from the tone column and marks the listed cells (`is-chg`,
   `is-soft`) with theme colours only (`resultsGrid.diff*`).
 
 ## Search in results
