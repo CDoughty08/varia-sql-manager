@@ -1572,7 +1572,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var charged = 4L * built.Order.Length + ResultStore.ViewOverhead;
         store.Return(set.Budget, working + kept - charged);
         var view = store.AddView(set, built.Order, keys, built.Approximate, complete, charged, args.Replaces);
-        return new ResultsViewResult(view.ViewId, view.Rows, view.Complete, view.Approximate, args.Filters is null ? null : [.. built.Filters.Select(FilterResult)]);
+        return new ResultsViewResult(view.ViewId, view.Rows, rows, view.Complete, view.Approximate, args.Filters is null ? null : [.. built.Filters.Select(FilterResult)]);
     }
 
     /// <summary>A view request's filters, checked against the result; cells name positions in the result or a view of it.</summary>

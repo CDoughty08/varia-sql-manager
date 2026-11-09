@@ -684,7 +684,7 @@ type FakeView = ResultView & { close: ReturnType<typeof vi.fn<() => Promise<void
 /** A view of `base` as ResultClient builds one. */
 function fakeView(base: FakeHandle, viewId: number, keys: readonly ViewSortKey[], complete = true, filters: ResultView['filters'] = []): FakeView {
   return {
-    ...base, viewId, base, keys, filters, rows: 2, complete, approximate: false,
+    ...base, viewId, base, keys, filters, rows: 2, baseRows: 2, complete, approximate: false,
     close: vi.fn(async () => {}),
     getCell: vi.fn<ResultHandle['getCell']>(async () => ({ text: '<a/>', isNull: false, truncated: false, error: false, formatted: true }))
   }

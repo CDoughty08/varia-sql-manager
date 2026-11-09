@@ -322,8 +322,8 @@ describe('results worker core', () => {
     const sort = [{ column: 0, descending: true, mode: 'value' as const }]
     core.handle({ type: 'view', id: 80, key, sort })
     expect(sent.at(-1)).toEqual({ t: 'view', rid: 1, generation: 1, resultId: 5, sort })
-    core.receive({ t: 'end', rid: 1, ok: true, result: { viewId: 3, rows: 64, complete: true, approximate: false } })
-    expect(posted.at(-1)).toEqual({ type: 'view', id: 80, viewId: 3, rows: 64, complete: true, approximate: false })
+    core.receive({ t: 'end', rid: 1, ok: true, result: { viewId: 3, rows: 64, baseRows: 90, complete: true, approximate: false } })
+    expect(posted.at(-1)).toEqual({ type: 'view', id: 80, viewId: 3, rows: 64, baseRows: 90, complete: true, approximate: false })
     // The result's own rows, then the view's: the same row numbers, read separately.
     window(0, 10)
     serve(reads()[0].rid)
@@ -340,7 +340,7 @@ describe('results worker core', () => {
     const rid = (sent.at(-1) as { rid: number }).rid
     expect(sent.at(-1)).toMatchObject({ t: 'view', replaces: 3 })
     expect(core.cachedPages).toBe(2)
-    core.receive({ t: 'end', rid, ok: true, result: { viewId: 4, rows: 64, complete: true, approximate: true } })
+    core.receive({ t: 'end', rid, ok: true, result: { viewId: 4, rows: 64, baseRows: 64, complete: true, approximate: true } })
     expect(core.cachedPages).toBe(1)
     // Closing a result drops its views' pages too.
     window(0, 10, { key: { ...key, view: 4 } })
@@ -364,7 +364,7 @@ describe('results worker core', () => {
     core.handle({ type: 'cancel', id: 92 })
     expect(sent.at(-1)).toEqual({ t: 'cancel', rid: 3 })
     const before = posted.length
-    core.receive({ t: 'end', rid: 3, ok: true, result: { viewId: 7, rows: 1, complete: true, approximate: false } })
+    core.receive({ t: 'end', rid: 3, ok: true, result: { viewId: 7, rows: 1, baseRows: 1, complete: true, approximate: false } })
     expect(posted.length).toBe(before)
     expect(sent.at(-1)).toMatchObject({ t: 'viewClose', resultId: 5, viewIds: [7] })
     // That close's rid stays taken until main answers it, and its answer goes to nobody.

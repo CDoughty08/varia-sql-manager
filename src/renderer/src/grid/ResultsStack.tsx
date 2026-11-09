@@ -4,7 +4,7 @@ import { observeResize } from '../core/windows'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import { setKey, type GridSort, type ResultSetEntry, type TabResults } from '../results/ResultsService'
-import { formatCount, plural } from '../results/status'
+import { formatCount, plural, rowsFact } from '../results/status'
 import { gridLimits as g } from './constants'
 import ResultGrid from './ResultGrid'
 import { contentHeight, dragSplitter, minGridHeight, mountedRange, revealScrollTop, setFloors, splitterMoves, stackLayout, stackMinimum } from './stack'
@@ -49,8 +49,7 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
   const { descriptor } = entry, rows = snapshot.rowsAvailable, columns = descriptor.columns.length, name = entry.label ?? `Result ${entry.index + 1}`
   // A filtered grid counts the rows its view kept of those it was built from.
-  const filtered = sort?.view && sort.applied.length > 0 ? sort.view.rows : undefined
-  const facts = [filtered === undefined ? `${formatCount(rows)} ${plural(rows, 'row')}` : `${formatCount(filtered)} of ${formatCount(rows)} ${plural(rows, 'row')}`, `${formatCount(columns)} ${plural(columns, 'column')}`]
+  const facts = [rowsFact(rows, sort?.view && sort.applied.length > 0 ? sort.view : undefined), `${formatCount(columns)} ${plural(columns, 'column')}`]
   if (descriptor.kind === 'executionPlan') facts.push('execution plan')
   const batch = batchText(descriptor.batchNumber, descriptor.iteration, totalBatches)
   const held = snapshot.state !== 'lost' && snapshot.state !== 'released'

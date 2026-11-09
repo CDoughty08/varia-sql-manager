@@ -617,7 +617,7 @@ export class ResultsWorkerCore {
         this.orphanCloses.add(close)
         return this.send({ t: 'viewClose', rid: close, generation: sort.key.generation, resultId: sort.key.resultId, viewIds: [view.viewId] })
       }
-      this.post({ type: 'view', id: sort.id, viewId: view.viewId, rows: view.rows, complete: view.complete, approximate: view.approximate, ...(view.filters ? { filters: view.filters } : {}) })
+      this.post({ type: 'view', id: sort.id, viewId: view.viewId, rows: view.rows, baseRows: view.baseRows, complete: view.complete, approximate: view.approximate, ...(view.filters ? { filters: view.filters } : {}) })
       return
     }
     const search = this.searches.get(rid)

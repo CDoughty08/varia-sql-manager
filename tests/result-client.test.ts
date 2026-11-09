@@ -283,7 +283,7 @@ describe('ResultClient', () => {
     expect(await answer('identify', { column: 1, unique: true, approximate: false, rows: 10 })).toMatchObject({ t: 'identify', generation: 1, resultId: 3, by: 'auto' })
     expect(await identifying).toEqual({ column: 1, unique: true, approximate: false, rows: 10 })
     const sorting = handle.sort([{ column: 0, descending: true, mode: 'value' }])
-    await answer('view', { viewId: 2, rows: 10, complete: true, approximate: false })
+    await answer('view', { viewId: 2, rows: 10, baseRows: 10, complete: true, approximate: false })
     const view = await sorting
     const reading = view.rowIds(4, 2)
     expect(await answer('rowIds', { firstRow: 4, ids: [11, 12], rows: 10 })).toMatchObject({ resultId: 3, firstRow: 4, count: 2, viewId: 2 })
@@ -336,13 +336,13 @@ describe('ResultClient', () => {
     const answerView = async (viewId: number, approximate = false) => {
       await settle()
       const request = worker().fromWorker.findLast(item => item.t === 'view')!
-      worker().toWorker({ t: 'end', rid: request.rid, ok: true, result: { viewId, rows: 10, complete: true, approximate } })
+      worker().toWorker({ t: 'end', rid: request.rid, ok: true, result: { viewId, rows: 10, baseRows: 60, complete: true, approximate } })
       return request
     }
     const sorting = handle.sort([{ column: 0, descending: true, mode: 'value' }])
     expect(await answerView(2)).toMatchObject({ t: 'view', generation: 1, resultId: 3, sort: [{ column: 0, descending: true, mode: 'value' }] })
     const view = await sorting
-    expect([view.viewId, view.rows, view.complete, view.approximate, view.base === handle]).toEqual([2, 10, true, false, true])
+    expect([view.viewId, view.rows, view.baseRows, view.complete, view.approximate, view.base === handle]).toEqual([2, 10, 60, true, false, true])
     expect(view.getSnapshot()).toMatchObject({ rowsAvailable: 10, state: 'complete' })
     expect(client.trackedViews).toBe(1)
     const pending = view.getWindow(0, 4)
@@ -379,7 +379,7 @@ describe('ResultClient', () => {
     await settle()
     const asked = worker().fromWorker.findLast(item => item.t === 'view')!
     expect(asked).toMatchObject({ sort: [], filters: [{ op: 'between', column: 0, cells: { ranges: [[0, 3]] } }] })
-    worker().toWorker({ t: 'end', rid: asked.rid, ok: true, result: { viewId: 7, rows: 2, complete: true, approximate: false, filters: [{ op: 'between', column: 0, rows: [0, 2], nulls: false }] } })
+    worker().toWorker({ t: 'end', rid: asked.rid, ok: true, result: { viewId: 7, rows: 2, baseRows: 2, complete: true, approximate: false, filters: [{ op: 'between', column: 0, rows: [0, 2], nulls: false }] } })
     const filteredView = await filtering
     expect([filteredView.rows, filteredView.filters]).toEqual([2, [{ op: 'between', column: 0, rows: [0, 2], nulls: false }]])
     expect(view.filters).toEqual([])
@@ -414,7 +414,7 @@ describe('ResultClient', () => {
     expect(await searching).toEqual(result)
     const sorting = handle.sort([{ column: 0, descending: true, mode: 'value' }])
     await settle()
-    worker().toWorker({ t: 'end', rid: worker().fromWorker.findLast(item => item.t === 'view')!.rid, ok: true, result: { viewId: 2, rows: 10, complete: true, approximate: false } })
+    worker().toWorker({ t: 'end', rid: worker().fromWorker.findLast(item => item.t === 'view')!.rid, ok: true, result: { viewId: 2, rows: 10, baseRows: 10, complete: true, approximate: false } })
     const view = await sorting
     const backward = view.search('4', 7, { backward: true, maxMatches: 5 })
     await settle()
@@ -453,7 +453,7 @@ describe('ResultClient', () => {
     const sorting = handle.sort([{ column: 0, descending: true, mode: 'value' }])
     await settle()
     const sort = worker().fromWorker.findLast(item => item.t === 'view')!
-    worker().toWorker({ t: 'end', rid: sort.rid, ok: true, result: { viewId: 2, rows: 10, complete: true, approximate: false } })
+    worker().toWorker({ t: 'end', rid: sort.rid, ok: true, result: { viewId: 2, rows: 10, baseRows: 10, complete: true, approximate: false } })
     const view = await sorting
     const viewed = view.profile([])
     expect(await answer({ rows: 10, complete: true, columns: [] })).toMatchObject({ t: 'profile', resultId: 3, columns: [], viewId: 2 })

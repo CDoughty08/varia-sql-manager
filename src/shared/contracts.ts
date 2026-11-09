@@ -250,7 +250,8 @@ export interface ResultsViewParams { resultId: number; sort: ViewSortKey[]; filt
 /** `rows` is the view's row count (the rows sealed when it was built that its filters kept), `complete` that they were
  *  built from all the result's rows, `approximate` that a key compared a truncated value's stored prefix or an estimated
  *  length; `filters`, when the request had them, are those filters resolved. */
-export interface ResultsViewResult { viewId: number; rows: number; complete: boolean; approximate: boolean; filters?: ResolvedViewFilter[] }
+/** `rows` is the view's row count; `baseRows` the result's rows it was built from (those sealed then). */
+export interface ResultsViewResult { viewId: number; rows: number; baseRows: number; complete: boolean; approximate: boolean; filters?: ResolvedViewFilter[] }
 export interface ResultsViewCloseParams { resultId: number; viewIds: number[] }
 export interface ResultsViewCloseResult { closed: number }
 /** How results.identify tells a result's rows apart: a unique key column it picks (else the whole row), a given column,

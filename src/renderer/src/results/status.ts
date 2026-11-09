@@ -4,6 +4,12 @@ import type { MessageEntry, QueryStatus } from '../../../shared/contracts'
 /** Counts in en-US grouping, as SSMS shows them. */
 export const formatCount = (value: number): string => Math.max(0, Math.floor(value)).toLocaleString('en-US')
 export const plural = (count: number, noun: string): string => count === 1 ? noun : noun + 's'
+/** A result caption's row count: a filtered view's rows of the base rows it was built from, which while the set streamed
+ *  were only those sealed then ("so far": the view is built again once they are all in), not the set's current count. */
+export function rowsFact(rows: number, filtered?: { readonly rows: number; readonly baseRows: number; readonly complete: boolean }): string {
+  if (!filtered) return `${formatCount(rows)} ${plural(rows, 'row')}`
+  return `${formatCount(filtered.rows)} of ${formatCount(filtered.baseRows)} ${plural(filtered.baseRows, 'row')}${filtered.complete ? '' : ' so far'}`
+}
 const pad = (value: number) => String(value).padStart(2, '0')
 
 /** Elapsed time as hh:mm:ss (hours keep counting past 99). */
