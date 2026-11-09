@@ -219,7 +219,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
         {/* The badges are drawn; the names say what they mean ("!" alone is not spoken). */}
         {views.map(view => <button key={view} {...tabProps(view)} aria-label={labels[view]}>{viewNames[view]}{badges[view]}</button>)}
       </div>
-      {showTools && <ResultsToolbar />}
+      {showTools && <ResultsToolbar tabId={tabId} />}
       {pane === 'plan' && <button type="button" aria-pressed={historyOpen} onClick={() => setHistoryOpen(value => !value)}>Plan history ({history.entries.length})</button>}
       {pane === 'plan' && estimated ? <span className="output-status">Estimated{estimated.loading ? ' · Compiling…' : estimated.error ? ' · Unavailable' : ''}</span>
         : leader && tab ? <RunSummaryView tab={tab} now={now} /> : <span className="output-spacer" />}
@@ -235,14 +235,15 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
       : !tab ? <EmptyState className="output-empty" icon={emptyIcons[pane]} title={emptyTitles[pane]} detail={!query ? 'Query results appear here for query tabs.' : hint ?? (connected ? 'Execute a query to view results and messages.' : 'Connect this query to a server to execute it.')} />
       : <div ref={viewRef} className="output-view" role="tabpanel" id={panelId} aria-labelledby={tabIds[pane]}>
         {pane === 'results' ? <>
+          {/* Siblings keyed by run: their keys must differ, or React keeps a superseded run's grids beside the new ones. */}
           <div className="results-main" onFocus={(event: FocusEvent<HTMLDivElement>) => {
             const grid = (event.target as Element).closest('[data-result-grid]')
             if (grid) setProfiled({ tabId, index: Number(grid.getAttribute('data-result-index')) })
           }}>
             {tab.status === 'closed' ? <EmptyState className="output-empty" detail="Results were closed to free memory. Execute the query again to see them." />
-              : hasSets ? <ResultsStack key={tab.queryId} tabId={tabId} tab={tab} />
+              : hasSets ? <ResultsStack key={'stack:' + tab.queryId} tabId={tabId} tab={tab} />
               : <EmptyState className="output-empty" icon="table" detail={tab.status === 'running' ? 'Result sets appear here as the query returns them.' : 'The query returned no result sets.'} />}
-            {profileOpen && hasSets && tab.status !== 'closed' && <ColumnProfilePanel key={tab.queryId} tabId={tabId} tab={tab}
+            {profileOpen && hasSets && tab.status !== 'closed' && <ColumnProfilePanel key={'profile:' + tab.queryId} tabId={tabId} tab={tab}
               index={profiled?.tabId === tabId ? profiled.index : results.viewState(tabId).focusedIndex} />}
           </div>
           {showStrip && <MessagesStrip tabId={tabId} tab={tab} fits={stripFits} maxHeight={stripMax} />}

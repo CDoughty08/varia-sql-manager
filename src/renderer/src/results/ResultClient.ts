@@ -1,7 +1,7 @@
 // The renderer's access to stored query results (the PR7 grid contract). Rows stay in the backend; the results worker
 // reads and decodes pages, and the UI thread receives only windows of display text. Live subscriptions run through the
 // same worker and port: their tables are ordinary stored results, opened with the same handles.
-import type { ApiResult, BackendStatus, QueryEvent, QueryResult, ResultColumn, ResultDescriptor, ResultsProfileResult, TruncationReason, VariaApi, ViewSortKey, WireKind } from '../../../shared/contracts'
+import type { ApiResult, BackendStatus, IdentityBy, QueryEvent, QueryResult, ResultColumn, ResultDescriptor, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, TruncationReason, VariaApi, ViewSortKey, WireKind } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport } from '../../../shared/ipc/port-messages'
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
@@ -87,7 +87,25 @@ export interface ResultHandle extends Disposable {
    *  view position. On a view, sorts its result again. `replaces` is a view of the same result the new one supersedes:
    *  the backend frees it once the new view is built, and its handle then reports itself released. */
   sort(keys: readonly ViewSortKey[], o?: { replaces?: ResultView; signal?: AbortSignal }): Promise<ResultView>
+  /** Tells the result's rows apart in the backend (results.identify), replacing its earlier identities: by a unique key
+   *  column it picks (else the whole row), a given column, or the whole row. On a view, identifies its result. The
+   *  result must have finished loading. */
+  identify(by: IdentityBy, o?: { column?: number; signal?: AbortSignal }): Promise<ResultsIdentifyResult>
+  /** The identities of up to 16,384 rows from `first` (view positions on a view); -1 past those identified. */
+  rowIds(first: number, count: number, signal?: AbortSignal): Promise<ResultsRowIdsResult>
+  /** Every row (view position on a view) whose identity is one of `ids` (1 to 10,000). */
+  findRows(ids: readonly number[], signal?: AbortSignal): Promise<ResultsFindRowsResult>
+  /** Compares this result (the earlier) with `right` (the later), both complete results of the same query, in the backend
+   *  (results.diff), and stores their unified diff as a new result, whose descriptor the answer carries: open it with
+   *  `ResultClient.open`. On a view, compares its result. `context`: unchanged rows around each change (default 1, -1 for
+   *  all); `exact`: text compared character for character instead of by collation. */
+  diff(right: ResultHandle, o?: { exact?: boolean; context?: number; signal?: AbortSignal }): Promise<ResultsDiffResult>
+  /** The cells whose grid text contains `text`, searched in the backend over the stored rows (results.search; a view's
+   *  positions on a view): every match counted, and a run of up to `maxMatches` in whole rows from `fromRow`, or with
+   *  `backward` the last before it. Aborting the signal stops the search. */
+  search(text: string, fromRow: number, o?: SearchOptions): Promise<ResultsSearchResult>
 }
+export interface SearchOptions { readonly maxMatches?: number; readonly backward?: boolean; readonly signal?: AbortSignal }
 /** A sorted view: the rows that were sealed when it was built (`complete` when that was all of them), in key order;
  *  `approximate` when a key compared a stored prefix or an estimated length. It never grows. */
 export interface ResultView extends ResultHandle {
@@ -338,6 +356,50 @@ export class ResultClient implements Disposable {
       },
       close,
       sort: (keys, o) => this.sort(state.base === undefined ? state : this.results.get(state.base), keys, o),
+      identify: async (by, o = {}) => {
+        this.usable(state)
+        const column = o.column
+        if ((by === 'column') !== (column !== undefined) || (column !== undefined && (!Number.isInteger(column) || column < 0 || column >= state.columns.length)))
+          throw new ResultError('INVALID_PARAMS', 'The column is not one of the result\'s.')
+        const key = { generation: state.key.generation, resultId: state.key.resultId }
+        const response = await this.request(id => ({ type: 'identity', id, key, request: { method: 'identify', by, ...(column === undefined ? {} : { column }) } }), o.signal)
+        if (response.type !== 'identity') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
+        return response.result as ResultsIdentifyResult
+      },
+      rowIds: async (first, count, signal) => {
+        this.usable(state)
+        if (!Number.isSafeInteger(first) || first < 0 || !Number.isInteger(count)) throw new ResultError('INVALID_PARAMS', 'The row range is invalid.')
+        if (count < 1) return { firstRow: first, ids: [], rows: state.snapshot.rowsAvailable }
+        const response = await this.request(id => ({ type: 'identity', id, key: state.key, request: { method: 'rowIds', firstRow: first, count: Math.min(count, wire.identity.maxRows) } }), signal)
+        if (response.type !== 'identity') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
+        return response.result as ResultsRowIdsResult
+      },
+      findRows: async (ids, signal) => {
+        this.usable(state)
+        if (ids.length < 1 || ids.length > wire.identity.maxFind || ids.some(id => !Number.isSafeInteger(id) || id < 0)) throw new ResultError('INVALID_PARAMS', 'Between 1 and 10,000 row identities are required.')
+        const response = await this.request(id => ({ type: 'identity', id, key: state.key, request: { method: 'findRows', ids: [...ids] } }), signal)
+        if (response.type !== 'identity') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
+        return response.result as ResultsFindRowsResult
+      },
+      diff: async (right, o = {}) => {
+        this.usable(state)
+        const context = o.context ?? 1
+        if (right.key.generation !== state.key.generation || right.key.resultId === state.key.resultId || !Number.isInteger(context) || context < -1 || context > wire.diff.maxContext)
+          throw new ResultError('INVALID_PARAMS', 'Two results of the same query and a context of -1 to 100 rows are required.')
+        const key = { generation: state.key.generation, resultId: state.key.resultId }
+        const response = await this.request(id => ({ type: 'identity', id, key, request: { method: 'diff', right: right.key.resultId, exact: o.exact ?? false, context } }), o.signal)
+        if (response.type !== 'identity') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
+        return response.result as ResultsDiffResult
+      },
+      search: async (text, fromRow, o = {}) => {
+        this.usable(state)
+        // Main counts a request its schema refuses toward closing the port, so a bad search never leaves the page.
+        if (text.length < 1 || text.length > wire.search.maxText || !Number.isSafeInteger(fromRow) || fromRow < 0) throw new ResultError('INVALID_PARAMS', 'The search is invalid.')
+        const maxMatches = Math.max(1, Math.min(wire.search.maxMatches, Math.floor(o.maxMatches ?? wire.search.maxMatches)))
+        const response = await this.request(id => ({ type: 'search', id, key: state.key, text, fromRow, maxMatches, backward: !!o.backward }), o.signal)
+        if (response.type !== 'search') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
+        return response.result
+      },
       dispose: () => {
         for (const listener of listeners) state.listeners.delete(listener)
         listeners.clear()
@@ -666,7 +728,7 @@ export class ResultClient implements Disposable {
 
   private received(message: WorkerResponse): void {
     switch (message.type) {
-      case 'window': case 'cell': case 'closed': case 'rowBytes': case 'measure': case 'stats': case 'liveUpdated': case 'view': case 'viewClosed': case 'profile': {
+      case 'window': case 'cell': case 'closed': case 'rowBytes': case 'measure': case 'stats': case 'liveUpdated': case 'view': case 'viewClosed': case 'identity': case 'search': case 'profile': {
         const pending = this.pending.get(message.id)
         this.pending.delete(message.id)
         pending?.resolve(message)

@@ -1,13 +1,13 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react'
 import { nextFrame } from '../core/frame'
 import { observeResize } from '../core/windows'
-import { useWorkbench } from '../core/WorkbenchContext'
+import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import { setKey, type ResultSetEntry, type TabResults } from '../results/ResultsService'
 import { formatCount, plural } from '../results/status'
 import { gridLimits as g } from './constants'
 import ResultGrid from './ResultGrid'
-import { contentHeight, dragSplitter, minGridHeight, mountedRange, setFloors, splitterMoves, stackLayout, stackMinimum } from './stack'
+import { contentHeight, dragSplitter, minGridHeight, mountedRange, revealScrollTop, setFloors, splitterMoves, stackLayout, stackMinimum } from './stack'
 
 let scrollbar: number | undefined
 /** The platform's scroll bar thickness (classic scroll bars take room; overlay ones take none). */
@@ -47,7 +47,7 @@ export function batchText(batchNumber: number, iteration: number, totalBatches: 
 const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, totalBatches, onToggle }: { tabId: string; entry: ResultSetEntry; collapsed: boolean; totalBatches: number; onToggle(index: number): void }) {
   const { commands } = useWorkbench()
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
-  const { descriptor } = entry, rows = snapshot.rowsAvailable, columns = descriptor.columns.length, name = `Result ${entry.index + 1}`
+  const { descriptor } = entry, rows = snapshot.rowsAvailable, columns = descriptor.columns.length, name = entry.label ?? `Result ${entry.index + 1}`
   const facts = [`${formatCount(rows)} ${plural(rows, 'row')}`, `${formatCount(columns)} ${plural(columns, 'column')}`]
   if (descriptor.kind === 'executionPlan') facts.push('execution plan')
   const batch = batchText(descriptor.batchNumber, descriptor.iteration, totalBatches)
@@ -76,8 +76,9 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
  * view state.
  */
 export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabResults }) {
-  const { results } = useWorkbench()
+  const { results, resultsSearch } = useWorkbench()
   const view = results.viewState(tabId)
+  const search = useServiceSnapshot(resultsSearch)[tabId]
   const sets = tab.sets, count = sets.length
   const stackRef = useRef<HTMLDivElement>(null)
   const [paneHeight, setPaneHeight] = useState(0)
@@ -144,6 +145,27 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
     view.collapsed = next
     setCollapsedState(next)
   }, [view])
+  // Search in results: the grid holding the active match opens and scrolls into view, which mounts it; the grid then
+  // scrolls the match itself into view (ResultGrid). Layout effects run before the grid's effect takes the reveal, so the
+  // stack still sees it pending; a collapsed grid opens first and scrolls once its new layout is in.
+  const revealSeq = search?.reveal ?? 0, revealIndex = search?.revealIndex ?? -1
+  const stackReveal = useRef(-1)
+  useLayoutEffect(() => {
+    if (revealIndex < 0 || revealIndex >= count || !resultsSearch.pendingReveal(tabId, revealIndex)) return
+    if (collapsed.has(revealIndex)) toggle(revealIndex)
+    stackReveal.current = revealIndex
+  }, [revealSeq, revealIndex])
+  useLayoutEffect(() => {
+    const element = stackRef.current, index = stackReveal.current
+    // A stack just mounted (Find Next while Messages showed) has no height for its first layout: the reveal waits for it.
+    if (!element || index < 0 || index >= layout.offsets.length || collapsed.has(index) || paneHeight <= 0) return
+    stackReveal.current = -1
+    const top = revealScrollTop(layout, index, element.scrollTop, element.clientHeight)
+    if (top === undefined) return
+    element.scrollTop = top
+    // The scroll event comes later: the saved position follows now, so a restore before it does not undo the reveal.
+    view.stackScrollTop = element.scrollTop
+  }, [revealSeq, revealIndex, layout, collapsed, paneHeight])
   const splitterDown = (index: number, event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
     event.preventDefault()

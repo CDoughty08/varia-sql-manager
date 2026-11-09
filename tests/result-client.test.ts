@@ -267,6 +267,55 @@ describe('ResultClient', () => {
     expect(client.trackedResults).toBe(0)
   })
 
+  it('identifies the rows of a result, reads and finds identities by view position, and refuses bad arguments in the page', async () => {
+    const { client, worker, handOver } = fixture()
+    handOver()
+    await client.ready()
+    worker().toWorker({ t: 'backend', generation: 1, status: 'ready' })
+    const handle = client.open(descriptor())
+    const answer = async (t: string, result: unknown) => {
+      await settle()
+      const request = worker().fromWorker.findLast(item => item.t === t)!
+      worker().toWorker({ t: 'end', rid: request.rid, ok: true, result } as never)
+      return request
+    }
+    const identifying = handle.identify('auto')
+    expect(await answer('identify', { column: 1, unique: true, approximate: false, rows: 10 })).toMatchObject({ t: 'identify', generation: 1, resultId: 3, by: 'auto' })
+    expect(await identifying).toEqual({ column: 1, unique: true, approximate: false, rows: 10 })
+    const sorting = handle.sort([{ column: 0, descending: true, mode: 'value' }])
+    await answer('view', { viewId: 2, rows: 10, complete: true, approximate: false })
+    const view = await sorting
+    const reading = view.rowIds(4, 2)
+    expect(await answer('rowIds', { firstRow: 4, ids: [11, 12], rows: 10 })).toMatchObject({ resultId: 3, firstRow: 4, count: 2, viewId: 2 })
+    expect((await reading).ids).toEqual([11, 12])
+    const finding = view.findRows([12])
+    expect(await answer('findRows', { positions: [5], marks: [0], truncated: false, rows: 10 })).toMatchObject({ resultId: 3, ids: [12], viewId: 2 })
+    expect((await finding).positions).toEqual([5])
+    // A view identifies its result: identities belong to the result, whatever order shows it.
+    const again = view.identify('row')
+    const sent = await answer('identify', { column: -1, unique: true, approximate: false, rows: 10 })
+    expect(sent).not.toHaveProperty('viewId')
+    await again
+    const before = worker().fromWorker.length
+    await expect(handle.identify('column')).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.identify('column', { column: 99 })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.findRows([])).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.findRows([-1])).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.rowIds(-1, 1)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    expect(await handle.rowIds(0, 0)).toMatchObject({ ids: [] })
+    expect(worker().fromWorker.length).toBe(before)
+    // A diff compares this result with another of the same generation, by result even through a view.
+    const other = client.open(descriptor({ resultId: 4 }))
+    await expect(handle.diff(handle)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.diff(other, { context: 101 })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.diff(client.open(descriptor({ generation: 2, resultId: 4 })))).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    expect(worker().fromWorker.length).toBe(before)
+    const comparing = view.diff(other, { exact: true, context: -1 })
+    const diffAnswer = { descriptor: descriptor({ resultId: 9, kind: 'diff' }), key: null, same: 0, changed: 0, added: 10, removed: 10, soft: 0, approximate: false, leftOnly: [], rightOnly: [] }
+    expect(await answer('diff', diffAnswer)).toMatchObject({ t: 'diff', generation: 1, resultId: 3, right: 4, exact: true, context: -1 })
+    expect(await comparing).toEqual(diffAnswer)
+  })
+
   it('sorts a result into a view read by position, replaces and closes views, and drops them with their result', async () => {
     const { client, worker, handOver, serve } = fixture()
     handOver()
@@ -327,6 +376,41 @@ describe('ResultClient', () => {
     expect([client.trackedViews, lostView.getSnapshot().state]).toEqual([0, 'lost'])
   })
 
+  it('searches a result or its view in the backend, bounding the request before the port, and stops on abort', async () => {
+    const { client, worker, handOver } = fixture()
+    handOver()
+    await client.ready()
+    worker().toWorker({ t: 'backend', generation: 1, status: 'ready' })
+    const handle = client.open(descriptor())
+    const result = { rows: 10, total: 1, first: 0, matchRows: [3], matchColumns: [0], complete: true, approximate: false }
+    const searching = handle.search('4', 0, { maxMatches: 50_000 })
+    await settle()
+    const request = worker().fromWorker.findLast(item => item.t === 'search')!
+    expect(request).toMatchObject({ t: 'search', generation: 1, resultId: 3, text: '4', fromRow: 0, maxMatches: 10_000 })
+    worker().toWorker({ t: 'end', rid: request.rid, ok: true, result })
+    expect(await searching).toEqual(result)
+    const sorting = handle.sort([{ column: 0, descending: true, mode: 'value' }])
+    await settle()
+    worker().toWorker({ t: 'end', rid: worker().fromWorker.findLast(item => item.t === 'view')!.rid, ok: true, result: { viewId: 2, rows: 10, complete: true, approximate: false } })
+    const view = await sorting
+    const backward = view.search('4', 7, { backward: true, maxMatches: 5 })
+    await settle()
+    const viewed = worker().fromWorker.findLast(item => item.t === 'search')!
+    expect(viewed).toMatchObject({ resultId: 3, viewId: 2, fromRow: 7, backward: true, maxMatches: 5 })
+    worker().toWorker({ t: 'end', rid: viewed.rid, ok: true, result })
+    await backward
+    // Refused before the port: no text, too long a text, a bad row.
+    await expect(handle.search('', 0)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.search('x'.repeat(1025), 0)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.search('x', -1)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    const abort = new AbortController()
+    const stopped = handle.search('4', 0, { signal: abort.signal })
+    await settle()
+    const running = worker().fromWorker.findLast(item => item.t === 'search')!
+    abort.abort()
+    await expect(stopped).rejects.toMatchObject({ name: 'AbortError' })
+    expect(worker().fromWorker.at(-1)).toEqual({ t: 'cancel', rid: running.rid })
+  })
   it('profiles a result or its view in the backend and refuses columns the result lacks before the port', async () => {
     const { client, worker, handOver } = fixture()
     handOver()

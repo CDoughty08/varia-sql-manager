@@ -1,5 +1,5 @@
-import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult } from '../../shared/contracts'
-import { portRequestSchema, profileResultSchema, rowBytesResultSchema, testPortRequestSchema, viewCloseResultSchema, viewResultSchema, type MemoryFeature, type MemoryReport, type PortMessage, type PortRequest } from '../../shared/ipc/port-messages'
+import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsDiffParams, ResultsDiffResult, ResultsFindRowsParams, ResultsFindRowsResult, ResultsIdentifyParams, ResultsIdentifyResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsRowIdsParams, ResultsRowIdsResult, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult } from '../../shared/contracts'
+import { diffResultSchema, findRowsResultSchema, identifyResultSchema, type MemoryFeature, type MemoryReport, type PortEndResult, type PortMessage, type PortRequest, portRequestSchema, profileResultSchema, rowBytesResultSchema, rowIdsResultSchema, searchResultSchema, testPortRequestSchema, viewCloseResultSchema, viewResultSchema } from '../../shared/ipc/port-messages'
 import { liveDescriptors, liveRetired, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../../shared/live/schema'
 import { cancelReasons, limits as wire, type CancelReason, type ErrorCode } from '../../shared/ipc/wire/protocol'
 import type { StreamSink } from './connection'
@@ -30,6 +30,14 @@ export interface ResultsBackend {
   /** A sort may take seconds: the worker's cancel (a newer sort, or the view no longer wanted) stops it. */
   view(generation: number, params: ResultsViewParams): { readonly done: Promise<ResultsViewResult>; cancel(reason: CancelReason): void }
   viewClose(generation: number, params: ResultsViewCloseParams): Promise<ResultsViewCloseResult>
+  /** Hashing a result's rows may take seconds: the worker's cancel stops it, as it does a sort. */
+  identify(generation: number, params: ResultsIdentifyParams): { readonly done: Promise<ResultsIdentifyResult>; cancel(reason: CancelReason): void }
+  rowIds(generation: number, params: ResultsRowIdsParams): Promise<ResultsRowIdsResult>
+  findRows(generation: number, params: ResultsFindRowsParams): Promise<ResultsFindRowsResult>
+  /** Comparing two results may take seconds: the worker's cancel stops it, as it does a sort. */
+  diff(generation: number, params: ResultsDiffParams): { readonly done: Promise<ResultsDiffResult>; cancel(reason: CancelReason): void }
+  /** A search reads every stored row: the worker's cancel (a newer search, or the text cleared) stops it. */
+  search(generation: number, params: ResultsSearchParams): { readonly done: Promise<ResultsSearchResult>; cancel(reason: CancelReason): void }
   /** A profile reads every row: the worker's cancel (a newer profile, or the panel closed) stops it. */
   profile(generation: number, params: ResultsProfileParams): { readonly done: Promise<ResultsProfileResult>; cancel(reason: CancelReason): void }
   live(generation: number, params: LiveSubscribeParams, onLive: (event: LiveEvent, bytes: number) => void, credit: number): LiveStreamHandle
@@ -75,8 +83,9 @@ export class ResultsPortHost {
   /** Live streams by subscription id: a second subscribe with the same id is refused. */
   private readonly subscriptions = new Map<string, number>()
   private readonly schema: typeof portRequestSchema
-  /** Result ids the current generation holds for this renderer, oldest first. */
-  private readonly owned = new Set<number>()
+  /** Result ids the current generation holds for this renderer, oldest first, with their column count when a descriptor
+   *  named it (search answers are bounded by it). */
+  private readonly owned = new Map<number, number | undefined>()
   private readonly latestMemory = new Map<MemoryFeature, Extract<PortMessage, { t: 'memory' }>>()
   private port: PortMainLike | undefined
   private generation = 0
@@ -85,6 +94,8 @@ export class ResultsPortHost {
   private updating = 0
   /** results.view and results.profile requests in flight, by rid, so the worker's cancel reaches them. */
   private readonly sorting = new Map<number, { cancel(reason: CancelReason): void }>()
+  /** results.search requests in flight, by rid, likewise. */
+  private readonly searching = new Map<number, { cancel(reason: CancelReason): void }>()
   private invalid = 0
   private opens: number[] = []
 
@@ -144,6 +155,10 @@ export class ResultsPortHost {
     this.subscriptions.clear()
     for (const sort of this.sorting.values()) sort.cancel(cancelReasons.consumerGone)
     this.sorting.clear()
+    // A search's answer is dropped once its port is gone, so it is stopped here: left in the map it would count as busy
+    // for good and refuse its rid in the next page.
+    for (const search of this.searching.values()) search.cancel(cancelReasons.consumerGone)
+    this.searching.clear()
     this.closing = 0
     this.updating = 0
     try { port?.close() } catch { /* Already closed. */ }
@@ -163,13 +178,18 @@ export class ResultsPortHost {
   }
 
   /** Results the renderer may read: from a query summary or event, or the test hooks. */
-  own(descriptors: readonly Pick<ResultDescriptor, 'generation' | 'resultId'>[]): void {
-    for (const { generation, resultId } of descriptors) {
-      if (generation !== this.generation) continue
-      this.owned.delete(resultId)
-      this.owned.add(resultId)
-      if (this.owned.size > this.limits.ownedResults) this.owned.delete(this.owned.values().next().value!)
+  own(descriptors: readonly (Pick<ResultDescriptor, 'generation' | 'resultId'> & { readonly columns?: readonly unknown[] })[]): void {
+    for (const { generation, resultId, columns } of descriptors) {
+      if (generation === this.generation) this.keep(resultId, columns?.length)
     }
+  }
+
+  /** Owns a result as the newest, keeping the column count known before when this one names none. */
+  private keep(resultId: number, columns: number | undefined): void {
+    const known = columns ?? this.owned.get(resultId)
+    this.owned.delete(resultId)
+    this.owned.set(resultId, known)
+    if (this.owned.size > this.limits.ownedResults) this.owned.delete(this.owned.keys().next().value!)
   }
 
   /** Whether this renderer may use the result: the current generation holds it for this renderer (copy and save). */
@@ -236,11 +256,17 @@ export class ResultsPortHost {
       case 'cancel':
         (this.streams.get(request.rid) ?? this.lives.get(request.rid))?.handle?.cancel(cancelReasons.user)
         this.sorting.get(request.rid)?.cancel(cancelReasons.user)
+        this.searching.get(request.rid)?.cancel(cancelReasons.user)
         return
       case 'close': return this.closeResults(request)
       case 'rowBytes': return this.rowBytes(request)
       case 'view': return this.view(request)
       case 'viewClose': return this.viewClose(request)
+      case 'identify': return this.identify(request)
+      case 'rowIds': return this.rowIds(request)
+      case 'findRows': return this.findRows(request)
+      case 'diff': return this.diff(request)
+      case 'search': return this.search(request)
       case 'profile': return this.profile(request)
       case 'live': return this.live(request)
       case 'liveUpdate': return this.liveUpdate(request)
@@ -254,9 +280,9 @@ export class ResultsPortHost {
     return total
   }
 
-  /** Requests counted against the 64 outstanding: reads, closes, sorts, row sizes and live updates (live streams have their
-   *  own cap). */
-  private busy(): number { return this.streams.size + this.closing + this.updating + this.sorting.size }
+  /** Requests counted against the 64 outstanding: reads, closes, sorts, searches, row sizes and live updates (live streams
+   *  have their own cap). */
+  private busy(): number { return this.streams.size + this.closing + this.updating + this.sorting.size + this.searching.size }
 
   private read(request: Extract<PortRequest, { t: 'read' }>): void {
     const { rid } = request
@@ -409,6 +435,7 @@ export class ResultsPortHost {
     const { rid } = request
     if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
     // Results of an earlier generation are already gone with it.
+    const columns = new Map(request.resultIds.map(id => [id, this.owned.get(id)]))
     const ids = request.generation === this.generation ? request.resultIds.filter(id => this.owned.delete(id)) : []
     if (ids.length === 0 || this.backend.readyGeneration() !== request.generation) {
       this.post({ t: 'end', rid, ok: true, result: { closed: 0, usedBytes: 0 } })
@@ -425,7 +452,7 @@ export class ResultsPortHost {
       this.closing--
       // The backend may not have released them (a TOO_MANY_REQUESTS refusal never reached it): the renderer may close
       // them again, so they stay its own; closing a result the backend already released closes nothing.
-      this.own(ids.map(resultId => ({ generation: request.generation, resultId })))
+      if (request.generation === this.generation) for (const id of ids) this.keep(id, columns.get(id))
       this.fail(rid, error)
     })
   }
@@ -504,6 +531,34 @@ export class ResultsPortHost {
     })
   }
 
+  /** A search of a result this renderer owns (through one of its views, which the backend checks belongs to it). Its answer
+   *  is checked before the renderer sees it: matches in row then column order, inside the rows searched and on the side of
+   *  `fromRow` asked, and a count that holds them. */
+  private search(request: Extract<PortRequest, { t: 'search' }>): void {
+    const { rid } = request
+    if (this.searching.has(rid)) return this.end(rid, 'INVALID_REQUEST', 'The results request was invalid.')
+    if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
+    if (!this.current(request.generation, request.resultId)) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
+    const port = this.port
+    const columns = this.owned.get(request.resultId)
+    const params: ResultsSearchParams = { resultId: request.resultId, text: request.text, fromRow: request.fromRow, maxMatches: request.maxMatches }
+    if (request.backward) params.backward = true
+    if (request.viewId !== undefined) params.viewId = request.viewId
+    const search = this.backend.search(request.generation, params)
+    this.searching.set(rid, search)
+    search.done.then(result => {
+      if (this.port !== port || this.searching.get(rid) !== search) return
+      this.searching.delete(rid)
+      const parsed = searchResultSchema.safeParse(result)
+      if (!parsed.success || !searchAnswers(parsed.data, params, columns)) return this.end(rid, 'BACKEND_ERROR', 'The results could not be searched.')
+      this.post({ t: 'end', rid, ok: true, result: parsed.data })
+    }, error => {
+      if (this.port !== port || this.searching.get(rid) !== search) return
+      this.searching.delete(rid)
+      this.fail(rid, error)
+    })
+  }
+
   /** A profile of a result this renderer owns (a view id is checked against its result by the backend). The answer is
    *  bounded before the renderer sees it: the columns asked, in order. */
   private profile(request: Extract<PortRequest, { t: 'profile' }>): void {
@@ -530,6 +585,100 @@ export class ResultsPortHost {
     })
   }
 
+  /** Row identities of a result this renderer owns (results.identify); cancelled like a sort, and counted with sorts. */
+  private identify(request: Extract<PortRequest, { t: 'identify' }>): void {
+    const { rid } = request
+    if (this.sorting.has(rid)) return this.end(rid, 'INVALID_REQUEST', 'The results request was invalid.')
+    if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
+    if (!this.current(request.generation, request.resultId)) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
+    const port = this.port
+    const params: ResultsIdentifyParams = { resultId: request.resultId, by: request.by }
+    if (request.column !== undefined) params.column = request.column
+    const identify = this.backend.identify(request.generation, params)
+    this.sorting.set(rid, identify)
+    identify.done.then(result => {
+      if (this.port !== port || this.sorting.get(rid) !== identify) return
+      this.sorting.delete(rid)
+      const parsed = identifyResultSchema.safeParse(result)
+      if (!parsed.success || (request.column !== undefined && parsed.data.column !== request.column)) return this.end(rid, 'BACKEND_ERROR', 'The rows could not be told apart.')
+      this.post({ t: 'end', rid, ok: true, result: parsed.data })
+    }, error => {
+      if (this.port !== port || this.sorting.get(rid) !== identify) return
+      this.sorting.delete(rid)
+      this.fail(rid, error)
+    })
+  }
+
+  /** A range's identities; the answer covers the range asked, at most as many rows as asked or as exist. */
+  private rowIds(request: Extract<PortRequest, { t: 'rowIds' }>): void {
+    const params: ResultsRowIdsParams = { resultId: request.resultId, firstRow: request.firstRow, count: request.count }
+    if (request.viewId !== undefined) params.viewId = request.viewId
+    this.counted(request.rid, request.generation, request.resultId, () => this.backend.rowIds(request.generation, params), result => {
+      const parsed = rowIdsResultSchema.safeParse(result)
+      return parsed.success && parsed.data.firstRow === request.firstRow && parsed.data.ids.length <= Math.min(request.count, Math.max(0, parsed.data.rows - request.firstRow)) ? parsed.data : undefined
+    })
+  }
+
+  /** The rows matching identities; every mark names one of the identities asked and every position is a row. */
+  private findRows(request: Extract<PortRequest, { t: 'findRows' }>): void {
+    const params: ResultsFindRowsParams = { resultId: request.resultId, ids: [...request.ids] }
+    if (request.viewId !== undefined) params.viewId = request.viewId
+    this.counted(request.rid, request.generation, request.resultId, () => this.backend.findRows(request.generation, params), result => {
+      const parsed = findRowsResultSchema.safeParse(result)
+      return parsed.success && parsed.data.marks.every(mark => mark < request.ids.length) && parsed.data.positions.every(position => position < parsed.data.rows) ? parsed.data : undefined
+    })
+  }
+
+  /** A unified diff of two results this renderer owns (results.diff); cancelled like a sort, and counted with sorts. The
+   *  diff is a new result: the port owns it once answered, and main closes one answered after its port went (a reload). */
+  private diff(request: Extract<PortRequest, { t: 'diff' }>): void {
+    const { rid, generation } = request
+    if (this.sorting.has(rid)) return this.end(rid, 'INVALID_REQUEST', 'The results request was invalid.')
+    if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
+    if (!this.current(generation, request.resultId) || !this.current(generation, request.right)) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
+    const port = this.port
+    const diff = this.backend.diff(generation, { left: request.resultId, right: request.right, exact: request.exact, context: request.context })
+    this.sorting.set(rid, diff)
+    diff.done.then(result => {
+      const parsed = diffResultSchema.safeParse(result)
+      // The result the backend stored, even from an answer its schema refuses: nothing else would close it.
+      const stored = parsed.success ? parsed.data.descriptor.resultId : storedResultId(result)
+      const close = () => { if (stored !== undefined) void this.backend.close(generation, [stored]).catch(() => undefined) }
+      if (this.port !== port || this.sorting.get(rid) !== diff) return close()
+      this.sorting.delete(rid)
+      if (!parsed.success) {
+        close()
+        return this.end(rid, 'BACKEND_ERROR', 'The results could not be compared.')
+      }
+      const descriptor: ResultDescriptor = { ...parsed.data.descriptor, generation }
+      if (generation === this.generation) this.own([descriptor])
+      this.post({ t: 'end', rid, ok: true, result: { ...parsed.data, descriptor } })
+    }, error => {
+      if (this.port !== port || this.sorting.get(rid) !== diff) return
+      this.sorting.delete(rid)
+      this.fail(rid, error)
+    })
+  }
+
+  /** A request of a result this renderer owns, counted with live updates against the 64; `check` bounds its answer. */
+  private counted<T>(rid: number, generation: number, resultId: number, run: () => Promise<unknown>, check: (result: unknown) => T | undefined): void {
+    if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
+    if (!this.current(generation, resultId)) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
+    const port = this.port
+    this.updating++
+    run().then(result => {
+      if (this.port !== port) return
+      this.updating--
+      const answered = check(result)
+      if (answered === undefined) return this.end(rid, 'BACKEND_ERROR', 'The results could not be read.')
+      this.post({ t: 'end', rid, ok: true, result: answered as PortEndResult })
+    }, error => {
+      if (this.port !== port) return
+      this.updating--
+      this.fail(rid, error)
+    })
+  }
+
   /** The request names the current, ready generation and a result this renderer owns. */
   private current(generation: number, resultId: number): boolean {
     return generation === this.generation && this.backend.readyGeneration() === generation && this.owned.has(resultId)
@@ -547,6 +696,21 @@ export class ResultsPortHost {
     if (!this.port) return
     try { this.port.postMessage(message) } catch { /* The port closed concurrently. */ }
   }
+}
+
+/** A search answer fits its request: as many columns as rows, matches strictly in (row, column) order and in the rows
+ *  searched, after `fromRow` (or before it, backward), columns inside the result's (`columns`, when its descriptor named
+ *  them), and no more than `total` counts with those before them. */
+export function searchAnswers(answer: ResultsSearchResult, request: Pick<ResultsSearchParams, 'fromRow' | 'maxMatches' | 'backward'>, columns?: number): boolean {
+  const { matchRows: rows, matchColumns: columnsOf } = answer
+  if (rows.length !== columnsOf.length || answer.first + rows.length > answer.total || rows.length > request.maxMatches + wire.page.maxColumns) return false
+  for (let k = 0; k < rows.length; k++) {
+    const row = rows[k]
+    if (row >= answer.rows || (request.backward ? row >= request.fromRow : row < request.fromRow)) return false
+    if (columns !== undefined && columnsOf[k] >= columns) return false
+    if (k > 0 && (row < rows[k - 1] || (row === rows[k - 1] && columnsOf[k] <= columnsOf[k - 1]))) return false
+  }
+  return true
 }
 
 /** The supervisor as a results backend: reads are bound to their generation, and credit and cancellation reach a
@@ -571,6 +735,23 @@ export function supervisorResults(supervisor: BackendSupervisor): ResultsBackend
       return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
     },
     viewClose: (generation, params) => supervisor.request('results.viewClose', params, { generation }),
+    identify: (generation, params) => {
+      let id = 0
+      const done = supervisor.request('results.identify', params, { generation, onSent: sent => { id = sent } })
+      return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
+    },
+    rowIds: (generation, params) => supervisor.request('results.rowIds', params, { generation }),
+    findRows: (generation, params) => supervisor.request('results.findRows', params, { generation }),
+    diff: (generation, params) => {
+      let id = 0
+      const done = supervisor.request('results.diff', params, { generation, onSent: sent => { id = sent } })
+      return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
+    },
+    search: (generation, params) => {
+      let id = 0
+      const done = supervisor.request('results.search', params, { generation, onSent: sent => { id = sent } })
+      return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
+    },
     profile: (generation, params) => {
       let id = 0
       const done = supervisor.request('results.profile', params, { generation, onSent: sent => { id = sent } })
@@ -587,4 +768,11 @@ export function supervisorResults(supervisor: BackendSupervisor): ResultsBackend
     },
     liveUpdate: (generation, params) => supervisor.request('live.update', params, { generation })
   }
+}
+
+/** The result id an answer's descriptor names, read without trusting the rest of it; undefined when it has none. */
+function storedResultId(answer: unknown): number | undefined {
+  const descriptor = typeof answer === 'object' && answer !== null ? (answer as { descriptor?: unknown }).descriptor : undefined
+  const id = typeof descriptor === 'object' && descriptor !== null ? (descriptor as { resultId?: unknown }).resultId : undefined
+  return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 && id <= 0xffff_ffff ? id : undefined
 }

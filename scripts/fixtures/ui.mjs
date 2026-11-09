@@ -14,6 +14,7 @@ export const part = {
   toolbar: '[role="toolbar"][aria-label="Standard"]',
   queryBar: '[role="toolbar"][aria-label="SQL Editor"]',
   documentTabs: '[role="tablist"][aria-label="Query documents"]',
+  tabShelfRows: '.query-shelf-rows',
   statusBar: 'footer[aria-label="Status bar"]',
   queryStatus: '[role="status"][aria-label="Query status"]',
   explorerToolbar: '[role="toolbar"][aria-label="Object Explorer toolbar"]',
@@ -47,6 +48,8 @@ export const part = {
   querySegment: '.query-status-segment',
   // Document tabs
   tabName: '.tab-name',
+  /** The tab's bounded name, environment and live-session area, before Pin and Close. */
+  tabSelect: '.tab-select',
   /** Editor groups (src/renderer/src/editor-groups/): Dockview's groups inside the query editor panel, and the active one. */
   /** The editor area in the Query editor panel: every editor group, under the active query's bar. */
   editorArea: '.editor-groups-root',
@@ -59,6 +62,8 @@ export const part = {
   // Query output
   outputPanel: 'section[data-output-panel]',
   outputAnnouncer: '[data-output-announcer]',
+  /** The results search box's count, drawn only: the toolbar's live region says the settled count (resultsSearchAnnouncer). */
+  resultsSearchCount: '.results-search-count',
   outputToolbar: '.output-toolbar',
   outputStatus: '.output-status',
   jobProgress: '.job-strip:not(.job-notice)',
@@ -284,7 +289,21 @@ export const gridPart = {
   sortButton: '.rg-cs',
   sortedButton: '.rg-cs.on',
   sortOrder: '.rg-co',
+  /** Search in results' marks (GridView's marks), drawn only: a matched cell, the active match, a column header a
+   *  column-name search matches, and cells and headers it leaves out. The active cell's label says "search match". */
+  searchMatch: '.rg-c.is-hit',
+  searchCurrent: '.rg-c.is-cur',
+  searchColumn: '.rg-ch.hit, .rg-ch.cur',
+  searchDimmedHeader: '.rg-ch.dim',
   borderHover: '.rg-border-hover',
+  /** A highlighted row (Highlight Rows), drawn in its colour; its row header's aria-description names the colour. */
+  highlightedRow: '[role="rowgroup"] > [role="row"][aria-rowindex].hl',
+  /** A result diff's rows (Compare with Previous Result): added (+) and removed (−), and its differing cells: a changed
+   *  value, and one equal to the other only by collation. */
+  addedRow: '[role="rowgroup"] > [role="row"][aria-rowindex].tone-added',
+  removedRow: '[role="rowgroup"] > [role="row"][aria-rowindex].tone-removed',
+  changedCell: '[role="gridcell"].is-chg',
+  softCell: '[role="gridcell"].is-soft',
   /** A live grid's row tones (LiveGrid), drawn with no ARIA of their own: the active cell's label names the tone. */
   toneError: '.tone-error',
   toneWarning: '.tone-warning',
@@ -366,6 +385,10 @@ export const editorGroups = page => page.locator(part.editorGroup)
 /** The grid or floating editor group showing a particular query. Query editors stay in the main window. */
 export const editorGroupForDocument = (page, name) => page.getByRole('region', { name: `Editor group: ${name}`, exact: true })
 export const editorGroupTabs = group => group.getByRole('tablist', { name: 'Query documents', exact: true }).getByRole('tab')
+/** One editor group's independent pinned or unpinned shelf, its row controls, and its row count. */
+export const tabShelf = (scope, pinned = false) => scope.locator(`[data-shelf-controls="${pinned ? 'pinned' : 'unpinned'}"]`)
+export const tabShelfControls = (scope, pinned = false) => scope.getByRole('group', { name: `${pinned ? 'Pinned' : 'Unpinned'} tab rows`, exact: true })
+export const tabShelfRows = (scope, pinned = false) => tabShelfControls(scope, pinned).locator(part.tabShelfRows)
 export const floatingEditorGroups = page => page.locator(part.floatingEditorGroup)
 /** A document's tab with its Close button: the target of the tab's menu. */
 export const documentTabSlots = page => documentTabs(page).locator('[data-tab-id]')
@@ -374,8 +397,20 @@ export const slotTab = slot => slot.locator('xpath=ancestor::*[@role="tab"][1]')
 /** Every open document's tab, in any group. */
 export const openDocuments = documentTabSlots
 export const openDocument = documentTab
-/** Selects a document's tab in its group (Playwright scrolls a strip's hidden tab into view). */
-export const selectOpenDocument = (page, name) => documentTab(page, name).click()
+/** Selects a document through its tab or its shelf's overflow list when the tab is outside the shown rows. */
+export const selectOpenDocument = async (page, name) => {
+  const tab = documentTab(page, name)
+  if (await tab.getAttribute('data-tab-overflow') !== null) {
+    const section = await tab.getAttribute('data-tab-shelf') === 'pinned' ? 'pinned' : 'query'
+    const strip = tab.locator('xpath=ancestor::*[@role="tablist"][1]')
+    const overflow = strip.getByRole('button', { name: new RegExp(`^Show \\d+ more ${section} tabs?$`) })
+    const options = strip.getByRole('button', { name: `${section === 'pinned' ? 'Pinned' : 'Query'} tab options`, exact: true })
+    await overflow.or(options).click()
+    await strip.getByRole('group', { name: `More ${section} tabs`, exact: true }).getByRole('button', named(name)).click()
+    return
+  }
+  await tab.click()
+}
 export const pinDocumentButton = (page, name, pinned = false) => documentTabs(page).getByRole('button', { name: `${pinned ? 'Unpin' : 'Pin'} ${name}`, exact: true })
 /** Rename Tab's text box, in the tab being renamed. */
 export const tabNameBox = page => documentTabs(page).getByRole('textbox', { name: 'Tab name', exact: true })
@@ -436,6 +471,9 @@ export const outputAnnouncer = page => page.locator(part.outputAnnouncer)
 export const outputToolbar = page => outputPane(page).locator(part.outputToolbar)
 /** The tools above a run's grids (White space, and the result tools that follow). */
 export const resultsToolbar = page => page.getByRole('toolbar', { name: 'Results tools', exact: true })
+/** The results search box's visible count, and its live region, which says only the settled count. */
+export const resultsSearchCount = page => resultsToolbar(page).locator(part.resultsSearchCount)
+export const resultsSearchAnnouncer = page => resultsToolbar(page).getByRole('status')
 export const outputStatus = page => outputPane(page).locator(part.outputStatus)
 /** The column profile panel beside a run's grids, and one column's card in it. */
 export const columnProfile = page => page.getByRole('complementary', { name: 'Column profile', exact: true })

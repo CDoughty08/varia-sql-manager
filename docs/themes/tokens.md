@@ -79,7 +79,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `shadow` | Shadows. | `#00000085` | `#10182824` |
 | `backdrop` | Modal scrim. | `#0a0c10b3` | `#1c1f2652` |
 
-## Color keys (269)
+## Color keys (280)
 
 ### Base
 
@@ -290,6 +290,17 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `resultsGrid.rowRunningForeground` | Varia | `@resultsGrid.foreground` | `#d9dce3` | `#1c1f26` | Text of live grid rows toned running. |
 | `resultsGrid.rowMutedBackground` | Varia | `@resultsGrid.background` | `#16181d` | `#ffffff` | Live grid rows toned muted: a row that left its source and stays one more sample, a system session. |
 | `resultsGrid.rowMutedForeground` | Varia | `$textTertiary` | `#a3a9b5` | `#4d5461` | Text of live grid rows toned muted. |
+| `resultsGrid.highlightYellowBackground` | Varia | `$yellow/14` | `#d8bf5e24` | `#8f6b0024` | Rows highlighted yellow: the results grid menu, Highlight › Yellow. |
+| `resultsGrid.highlightGreenBackground` | Varia | `$green/14` | `#6fbf8a24` | `#2e7d4f24` | Rows highlighted green: the results grid menu, Highlight › Green. |
+| `resultsGrid.highlightBlueBackground` | Varia | `$blue/14` | `#6ea4ea24` | `#2563a824` | Rows highlighted blue: the results grid menu, Highlight › Blue. |
+| `resultsGrid.highlightPurpleBackground` | Varia | `$purple/14` | `#ab95ea24` | `#7a4bbf24` | Rows highlighted purple: the results grid menu, Highlight › Purple. |
+| `resultsGrid.highlightRedBackground` | Varia | `$red/14` | `#e6676724` | `#c42b3c24` | Rows highlighted red: the results grid menu, Highlight › Red. |
+| `resultsGrid.highlightRowNumberForeground` | Varia | `$textStrong` | `#f5f6f8` | `#0a0c10` | Row numbers of highlighted rows, over their highlight colour. |
+| `resultsGrid.diffAddedBackground` | Varia | `$green/12` | `#6fbf8a1f` | `#2e7d4f1f` | Rows a result diff adds (+): Compare with Previous Result, and the new row of a changed one. |
+| `resultsGrid.diffRemovedBackground` | Varia | `$red/12` | `#e667671f` | `#c42b3c1f` | Rows a result diff removes (−): Compare with Previous Result, and the old row of a changed one. |
+| `resultsGrid.diffChangedAddedBackground` | Varia | `$green/18` | `#6fbf8a2e` | `#2e7d4f2e` | A changed value in its new row of a result diff, over the added row colour. |
+| `resultsGrid.diffChangedRemovedBackground` | Varia | `$red/18` | `#e667672e` | `#c42b3c2e` | A changed value in its old row of a result diff, over the removed row colour. |
+| `resultsGrid.diffSoftUnderline` | Varia | `$warning` | `#e4bb6a` | `#875800` | The dotted underline of a result diff value equal to the other only by collation (case or trailing spaces). |
 | `resultsGrid.rowNumberForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Row numbers. |
 | `resultsGrid.nullForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | NULL values, which are drawn in italics. |
 | `resultsGrid.nullBackground` | Varia | `$text/0` | `#d9dce300` | `#1c1f2600` | NULL cells; untinted by default, so NULL reads as muted italic text. |

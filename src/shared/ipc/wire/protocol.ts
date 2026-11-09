@@ -22,6 +22,15 @@ export const limits = {
   /** results.view: sort keys a view takes, views one results.viewClose names (ViewSorter.MaxKeys and
    *  SqlService.MaxViewIds in C#), and views a result keeps (ResultStore.MaxViewsPerResult). */
   views: { maxKeys: 16, maxClose: 64, perResult: 8 },
+  /** Row identities for highlights: rows one results.rowIds names, identities one results.findRows looks for and rows it
+   *  lists (SqlService.MaxRowIds, MaxFindIds and MaxFindMatches in C#); identities are below 2^53. */
+  identity: { maxRows: 16_384, maxFind: 10_000, maxMatches: 100_000 },
+  /** results.diff: unchanged rows shown around a change (-1 for all), and names listed of the columns only one result has
+   *  (SqlService.MaxDiffContext and MaxDiffColumnNames in C#). */
+  diff: { maxContext: 100, maxColumnNames: 64 },
+  /** results.search: the longest search text in UTF-16 code units and the most matches one answer holds before finishing
+   *  its last row (ResultSearcher.MaxText and MaxMatches in C#). */
+  search: { maxText: 1024, maxMatches: 10_000 },
   /** results.profile: columns one request profiles, histogram buckets, distinct values counted exactly before the count is
    *  an estimate, and characters of a lowest or highest value (ColumnProfiler in C#). */
   profile: { maxColumns: 32, bins: 20, exactDistinct: 16_384, valueChars: 256 },
@@ -88,6 +97,8 @@ export const errorCodes = [
   'TIMEOUT', 'TOO_LARGE', 'RESPONSE_TOO_LARGE', 'RESULT_NOT_FOUND', 'RESULT_RELEASED',
   // Backend: a view of a result (results.view) that was closed, replaced, or never existed for that result.
   'VIEW_NOT_FOUND',
+  // Backend: results.rowIds or results.findRows before results.identify told the result's rows apart.
+  'IDENTITY_NOT_FOUND',
   // Backend, results jobs: an export failure (its message is one token: ACCESS, DISK_FULL, IN_USE, NOT_FOUND,
   // IS_DIRECTORY or IO) and an export of a set still loading.
   'EXPORT_FAILED', 'RESULT_OPEN',

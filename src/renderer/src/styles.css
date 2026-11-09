@@ -598,6 +598,23 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .editor-groups-dock { --dv-tabs-and-actions-container-height: var(--varia-bar); --dv-tab-font-size: var(--varia-size-sm); --dv-floating-titlebar-height: 16px; }
 .editor-groups .dv-tabs-and-actions-container { background: var(--varia-documentTabs-background); }
 .editor-groups .dv-tab { padding: 0; background: none; }
+.editor-groups .query-shelves-header { align-items: flex-start; }
+.editor-groups .dv-tabs-container.query-shelves.dv-tabs-container--wrap { position: relative; flex: 1 1 0; min-width: 0; overflow: hidden; scrollbar-width: none; container-type: inline-size; }
+.editor-groups .query-shelves-header > .dv-void-container { flex: none; width: 0; }
+.editor-groups .query-shelves > .dv-tab { position: absolute; min-width: 0; box-sizing: border-box; }
+.editor-groups .query-shelves > .dv-tab[data-tab-overflow] { opacity: 0; pointer-events: none; }
+.query-shelf { position: absolute; left: 0; right: 0; pointer-events: none; border-bottom: 1px solid var(--varia-documentTabs-border); }
+.query-shelf-controls { position: absolute; right: 0; top: 0; display: flex; align-items: center; justify-content: flex-end; width: var(--shelf-controls-width); height: var(--varia-bar); background: var(--varia-documentTabs-background); pointer-events: auto; }
+.query-shelf-controls .icon-button { width: 26px; min-width: 0; padding: 3px; }
+.query-shelf-rows { width: 20px; text-align: center; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.query-shelf-overflow { position: fixed; inset: auto; position-area: bottom span-left; position-try-fallbacks: flip-block, flip-inline; margin: 0; min-width: 220px; max-width: min(480px, 90vw); max-height: 50vh; overflow: auto; padding: 3px; pointer-events: auto; color: var(--varia-menu-foreground); background: var(--varia-menu-background); border: 1px solid var(--varia-menu-border); border-radius: var(--varia-radius-sm); box-shadow: var(--varia-shadow-menu) var(--varia-widget-shadow); }
+.query-shelf-overflow > button { display: block; width: 100%; padding: 5px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: start; }
+.query-shelf-overflow > button:hover { background: var(--varia-list-hoverBackground); }
+.query-shelf-row-options { display: flex; align-items: center; justify-content: flex-end; }
+/* Compact spacing follows each tab's cell, including narrow columns inside a wide shelf. */
+@container (width < 338px) {
+  .query-tab .tab-select { gap: 4px; padding-inline: 4px; }
+}
 /* A document tab's keyboard ring is a 1px inset outline, as the single strip drew it: the strip would clip the default ring,
    and forced colours drop box shadows. */
 .editor-groups .dv-tab:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; box-shadow: none; }
@@ -608,7 +625,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .document-view { display: flex; flex-direction: column; overflow: hidden; }
 .editor-empty { position: relative; height: 100%; }
 .editor-empty > .editor-group-actions { position: absolute; top: 0; right: 0; height: var(--varia-bar); }
-.query-tab { position: relative; display: flex; align-items: center; flex-shrink: 0; height: 100%; border-right: 1px solid var(--varia-documentTabs-border); border-top: 2px solid transparent; color: var(--varia-documentTabs-inactiveForeground); }
+.query-tab { position: relative; display: flex; align-items: center; flex-shrink: 0; height: 100%; container-type: inline-size; border-right: 1px solid var(--varia-documentTabs-border); border-top: 2px solid transparent; color: var(--varia-documentTabs-inactiveForeground); }
 .query-tab.active { background: var(--varia-documentTabs-activeBackground); border-top-color: var(--varia-tab-activeBorderTop); color: var(--varia-documentTabs-activeForeground); }
 /* The selected tab of a group that is not the active one keeps its fill but not its top border. */
 .editor-groups .dv-groupview:not(.dv-active-group) .query-tab.active:not([style*="border-top-color"]) { border-top-color: transparent; }
@@ -617,15 +634,15 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .query-tab.active { border-top-color: Highlight; forced-color-adjust: none; }
   .editor-groups .dv-groupview:not(.dv-active-group) .query-tab.active { border-top-color: GrayText; }
 }
-.tab-select { display: flex; align-items: center; gap: 8px; height: calc(var(--varia-bar) - 3px); border: 0; border-radius: 0; padding: 0 10px 0 13px; color: inherit; }
+.tab-select { display: flex; flex: 1; min-width: 0; overflow: hidden; align-items: center; gap: 8px; height: calc(var(--varia-bar) - 3px); border: 0; border-radius: 0; padding: 0 10px 0 13px; color: inherit; }
 .tab-select:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
-.tab-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.tab-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab-renaming { padding-right: 6px; }
-.tab-rename { width: 180px; height: 20px; padding: 0 4px; border-color: var(--varia-focusBorder); }
+.tab-rename { flex: 1; min-width: 0; width: 180px; height: 20px; padding: 0 4px; border-color: var(--varia-focusBorder); }
 .tab-select .tab-readonly { font-size: var(--varia-glyph-sm); margin-left: -4px; }
 /* A query's live SQL session, after its name (SID and the server's session id, or a dash without one). */
-.tab-sid { flex: none; padding: 1px 4px; border-radius: var(--varia-radius-sm); background: var(--varia-badge-background); color: var(--varia-badge-foreground); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.tab-pin, .tab-close { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 4px; color: var(--varia-documentTabs-closeForeground); }
+.tab-sid { flex: none; margin-left: auto; padding: 1px 4px; border-radius: var(--varia-radius-sm); background: var(--varia-badge-background); color: var(--varia-badge-foreground); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tab-pin, .tab-close { display: flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 4px; color: var(--varia-documentTabs-closeForeground); }
 .tab-close { margin-right: 6px; }
 .tab-pin .codicon { font-size: var(--varia-glyph-sm); }
 .tab-close .codicon { font-size: var(--varia-glyph-sm); }
@@ -738,6 +755,24 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .results-segments button.results-icon-toggle { padding: 0 4px; }
 .results-segments button[aria-pressed="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-panelTitle-activeForeground); font-weight: 600; transition: none; }
 @media (forced-colors: active) { .results-segments button[aria-pressed="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; } }
+/* Search in results: the box, its count, Previous and Next, and Data or Columns. Its input gives way first in a narrow
+   panel, never below what the box holds, so its buttons never run under the groups after it; past that the toolbar clips
+   its last groups. A narrow window (a 1024-wide display) drops the groups' icons, the box's magnifier and its Previous and
+   Next (Enter, Shift+Enter, F3 and Shift+F3 still step), and tightens the buttons, so every group fits while the box is empty. */
+.results-search { display: flex; flex: 0 1 300px; align-items: center; gap: 3px; height: 24px; padding: 0 2px 0 6px; border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); background: var(--varia-input-background); color: var(--varia-descriptionForeground); }
+.results-search:focus-within { border-color: var(--varia-focusBorder); box-shadow: 0 0 0 1px var(--varia-focusBorder); }
+.results-search input { flex: 1 1 0; width: 0; min-width: 32px; border: 0; outline: none; background: none; color: var(--varia-input-foreground); font: inherit; font-size: var(--varia-size-xs); }
+.results-search-count { flex-shrink: 0; font-size: var(--varia-size-xs); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.results-search > button { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 20px; height: 18px; border-radius: var(--varia-radius-sm); }
+.results-search > button:disabled { opacity: 0.4; }
+.results-search .results-segments button { height: 16px; padding: 0 3px; }
+@media (max-width: 1180px) {
+  .results-toolbar-label, .results-search-icon, .results-search > button { display: none; }
+  .results-toolbar { gap: 2px; padding-left: 6px; }
+  .results-segments button { padding: 0 3px; }
+  .results-search { padding-left: 4px; }
+  .results-search input { min-width: 24px; }
+}
 .job-strip { display: flex; min-width: 0; align-items: center; gap: 6px; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); white-space: nowrap; }
 /* Strips give way to a narrow window: a long file name is cut short, while Cancel and the status line keep their room. */
 .output-toolbar > .job-strip { flex-shrink: 1; min-width: 72px; }
@@ -825,6 +860,30 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-row.tone-muted { background: var(--varia-resultsGrid-rowMutedBackground); color: var(--varia-resultsGrid-rowMutedForeground); }
 /* On a toned row a NULL keeps its color but not its tint, which would leave it too faint to read. */
 .rg-row.tone-error .rg-c.is-null, .rg-row.tone-warning .rg-c.is-null, .rg-row.tone-running .rg-c.is-null, .rg-row.tone-muted .rg-c.is-null { background: none; }
+/* A result diff (results.diff): added and removed rows take their colour over the stripe, as do their numbers; a changed
+   value a stronger one (selection and a search match keep their own); a value equal only by collation is underlined.
+   Before the highlight rules, which share their specificity, so a highlighted diff row shows its highlight. */
+.rg-row.tone-added { background: var(--varia-resultsGrid-diffAddedBackground); }
+.rg-row.tone-removed { background: var(--varia-resultsGrid-diffRemovedBackground); }
+.rg-row.tone-added .rg-c.is-null, .rg-row.tone-removed .rg-c.is-null { background: none; }
+.rg-row.tone-added .rg-c.is-chg:not(.is-sel):not(.is-hit) { background: var(--varia-resultsGrid-diffChangedAddedBackground); }
+.rg-row.tone-removed .rg-c.is-chg:not(.is-sel):not(.is-hit) { background: var(--varia-resultsGrid-diffChangedRemovedBackground); }
+.rg-row.tone-added .rg-c.is-chg.is-null, .rg-row.tone-removed .rg-c.is-chg.is-null { color: var(--varia-resultsGrid-foreground); }
+.rg-c.is-soft { text-decoration: underline dotted var(--varia-resultsGrid-diffSoftUnderline); text-underline-offset: 3px; }
+.rg-rn.tone-added:not(.sel) { background-image: linear-gradient(var(--varia-resultsGrid-diffAddedBackground), var(--varia-resultsGrid-diffAddedBackground)); }
+.rg-rn.tone-removed:not(.sel) { background-image: linear-gradient(var(--varia-resultsGrid-diffRemovedBackground), var(--varia-resultsGrid-diffRemovedBackground)); }
+/* Highlighted rows (grid/highlights.ts): the row takes its colour over the stripe; its number keeps the header under it. */
+.rg-row.hl-yellow { background: var(--varia-resultsGrid-highlightYellowBackground); }
+.rg-row.hl-green { background: var(--varia-resultsGrid-highlightGreenBackground); }
+.rg-row.hl-blue { background: var(--varia-resultsGrid-highlightBlueBackground); }
+.rg-row.hl-purple { background: var(--varia-resultsGrid-highlightPurpleBackground); }
+.rg-row.hl-red { background: var(--varia-resultsGrid-highlightRedBackground); }
+.rg-rn.hl-yellow:not(.sel) { background-image: linear-gradient(var(--varia-resultsGrid-highlightYellowBackground), var(--varia-resultsGrid-highlightYellowBackground)); }
+.rg-rn.hl-green:not(.sel) { background-image: linear-gradient(var(--varia-resultsGrid-highlightGreenBackground), var(--varia-resultsGrid-highlightGreenBackground)); }
+.rg-rn.hl-blue:not(.sel) { background-image: linear-gradient(var(--varia-resultsGrid-highlightBlueBackground), var(--varia-resultsGrid-highlightBlueBackground)); }
+.rg-rn.hl-purple:not(.sel) { background-image: linear-gradient(var(--varia-resultsGrid-highlightPurpleBackground), var(--varia-resultsGrid-highlightPurpleBackground)); }
+.rg-rn.hl-red:not(.sel) { background-image: linear-gradient(var(--varia-resultsGrid-highlightRedBackground), var(--varia-resultsGrid-highlightRedBackground)); }
+.rg-rn.hl:not(.sel) { color: var(--varia-resultsGrid-highlightRowNumberForeground); }
 /* Each row's own header is for screen readers; the numbers are drawn in one sticky column beside the rows. */
 .rg-rh { position: absolute; top: 0; left: 0; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .rg-rhs { position: sticky; left: 0; z-index: 1; width: var(--rg-rhw); height: 0; }
@@ -848,6 +907,15 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg:not(:focus-within) .rg-c.is-sel, .rg:not(:focus-within) .rg-c.is-sel.is-trunc::after { background: var(--varia-resultsGrid-inactiveSelectionBackground); }
 /* NULL's tint is too faint on the unfocused selection's fill; it takes the grid's text color there. */
 .rg:not(:focus-within) .rg-c.is-sel.is-null { color: var(--varia-resultsGrid-foreground); }
+/* Search in results (GridView's marks): matches tinted, the active one outlined, and columns a column-name search leaves out
+   faded, in the warning hue the search marks share with truncation (the theme has no search tokens yet). A selected match
+   keeps the selection's fill, with the outline when it is the active one. */
+.rg-c.is-hit { background: var(--varia-banner-warningBackground); }
+.rg-c.is-cur { box-shadow: inset 0 0 0 2px var(--varia-warningForeground); }
+.rg-c.is-dim, .rg-ch.dim { opacity: 0.4; }
+.rg-ch.hit { background: var(--varia-banner-warningBackground); }
+.rg-ch.cur { background: var(--varia-banner-warningBackground); box-shadow: inset 0 -2px 0 var(--varia-warningForeground); }
+@media (forced-colors: active) { .rg-c.is-hit { forced-color-adjust: none; background: Mark; color: MarkText; } .rg-c.is-cur, .rg-ch.cur { outline: 2px solid Highlight; outline-offset: -2px; } }
 /* Only the focused grid shows its active cell's outline, as in SSMS; the others show their selection. */
 .rg:focus-within .rg-c.is-act { outline: 1px solid var(--varia-resultsGrid-activeCellBorder); outline-offset: -1px; }
 .rg:focus-visible .rg-c.is-act { outline-width: 2px; outline-offset: -2px; }
@@ -878,6 +946,11 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .rg-c.is-null:not(.is-sel) { color: GrayText; }
   /* Forced colors drop row tones' backgrounds: a toned row's number gets a bar, and a muted row dimmed text. */
   .rg-rn.tone-error, .rg-rn.tone-warning, .rg-rn.tone-running { border-left: 3px solid CanvasText; }
+  .rg-rn.tone-added { border-left: 3px solid CanvasText; }
+  .rg-rn.tone-removed { border-left: 3px dashed CanvasText; }
+  /* The active search match keeps its own outline. */
+  .rg-c.is-chg:not(.is-cur) { outline: 1px solid CanvasText; outline-offset: -2px; }
+  .rg-rn.hl { border-left: 3px double CanvasText; }
   .rg-row.tone-muted { color: GrayText; }
   /* Splitters are drawn with a background only, which forced colors would drop. */
   .rs-splitter { background: CanvasText; forced-color-adjust: none; }
@@ -1691,7 +1764,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .status-pill[data-tone="critical"] { background: var(--varia-statusPill-criticalBackground); color: var(--varia-statusPill-criticalForeground); }
 .status-pill[data-tone="info"] { background: var(--varia-statusPill-infoBackground); color: var(--varia-statusPill-infoForeground); }
 .status-pill[data-tone="neutral"] { background: var(--varia-statusPill-neutralBackground); color: var(--varia-statusPill-neutralForeground); }
-/* A connection's environment tag where it labels the connection. A preset's word always fits; a custom label (up to 32
+/* A connection's environment tag where it labels the connection. Preset words stay whole where space allows; a custom label (up to 32
    characters) is bounded and ends in an ellipsis, with the full label in the tooltip and accessible name, so it never
    takes the server's name, the tab or the bar it sits in. */
 .environment-tag { display: inline-flex; flex: none; align-items: center; min-width: 0; max-width: 12em; }
@@ -1703,6 +1776,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* Beside the active query's glyph (.oe-active and the gap before it), so the two together keep to that 40%. */
 .explorer-row.active-connection .environment-tag[data-place="explorer"] { max-width: min(40cqw - var(--varia-glyph-sm) - var(--varia-space-1), 12em); }
 .environment-tag[data-place="tab"] { max-width: 10em; }
+/* A bounded tab lets either kind yield so its name and session badge retain their space. */
+.query-tab .environment-tag[data-place="tab"] { flex: 0 1 auto; }
 .environment-tag[data-place="tab"], .environment-tag[data-place="list"] { margin-left: 6px; }
 .environment-tag[data-place="list"] { vertical-align: middle; }
 .query-status-environment { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; margin-right: 10px; }

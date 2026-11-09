@@ -8,13 +8,13 @@ matches; a gesture matches when all of its modifiers are held. "Modifier" gestur
 pointing; "Command" gestures run a command that the keyboard also reaches; "Fixed" gestures belong to the platform,
 Chromium, or a library and cannot be remapped. "Choices" are the modifiers the Shortcuts page will offer.
 
-## Gestures (15)
+## Gestures (16)
 
 ### Global
 
 | Gesture | Id | What it does | Kind | Windows | Linux | macOS | Choices or lock | Keyboard |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Zoom | `global.wheelZoom` | Zooms the window. The results grid and Object Explorer leave the wheel to Chromium while Control is held. | Fixed | Ctrl+Wheel anywhere | Ctrl+Wheel anywhere | ⌃ Wheel anywhere | Locked: Chromium zooms the window with Control+wheel and with a trackpad pinch. | Zoom In (`view.zoomIn`), Zoom Out (`view.zoomOut`), Reset Zoom (`view.resetZoom`) |
+| Zoom | `global.wheelZoom` | Zooms the window, except over a document tab shelf where Control+wheel changes its row count. | Fixed | Ctrl+Wheel anywhere | Ctrl+Wheel anywhere | ⌃ Wheel anywhere | Locked: Chromium zooms the window with Control+wheel and with a trackpad pinch. | Zoom In (`view.zoomIn`), Zoom Out (`view.zoomOut`), Reset Zoom (`view.resetZoom`) |
 
 ### Results Grid
 
@@ -52,6 +52,7 @@ Chromium, or a library and cannot be remapped. "Choices" are the modifiers the S
 
 | Gesture | Id | What it does | Kind | Windows | Linux | macOS | Choices or lock | Keyboard |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Change Tab Rows | `documentTabs.rows` | Scrolling down adds rows to the pinned or unpinned shelf under the pointer, and scrolling up removes rows from that shelf alone. | Fixed | Ctrl+Wheel a tab shelf | Ctrl+Wheel a tab shelf | ⌃ Wheel a tab shelf | Locked: Control+wheel changes shelf rows, and the row buttons provide the same action from the keyboard. | — |
 | Rename Tab | `documentTabs.rename` | Opens the rename box on a query tab. | Command | Double-click a query tab | Double-click a query tab | Double-click a query tab | Locked: Only modifier gestures can be remapped in this version; F2 renames a focused tab. | Rename Tab… (`document.rename`) |
 
 ### Connect Dialog

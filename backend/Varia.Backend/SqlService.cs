@@ -31,7 +31,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
-        "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.profile", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.index", "explorer.search", "results.copy", "results.export",
+        "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.identify", "results.rowIds", "results.findRows", "results.diff", "results.search", "results.profile", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.index", "explorer.search", "results.copy", "results.export",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
         "ssis.describe", "ssis.execute", "ssis.catalogSetup"
@@ -301,14 +301,14 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     public RequestLane LaneOf(string method) => method switch
     {
         "query.execute" or "plans.estimate" => RequestLane.Query,
-        "results.read" or "results.copy" or "results.export" or "results.view" or "results.profile" => RequestLane.Results,
+        "results.read" or "results.copy" or "results.export" or "results.view" or "results.identify" or "results.findRows" or "results.diff" or "results.search" or "results.profile" => RequestLane.Results,
         "explorer.children" or "explorer.peek" or "explorer.peekDependencies" or "explorer.index" or "explorer.search" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
         "ssis.describe" or "ssis.execute" or "ssis.catalogSetup" => RequestLane.Ssis,
         "live.subscribe" or "activity.details" => RequestLane.Live,
         // Kill Process takes no metadata slot: it runs at once under its own gates, as object actions do under theirs.
         "activity.kill" => RequestLane.Actions,
-        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "entra.cache.clear"
+        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.rowIds" or "entra.cache.clear"
             or "live.update" or "language.status" or "language.refresh" or "language.close" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
         _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
@@ -363,6 +363,11 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "results.rowBytes" => RowBytes(Read<ResultsRowBytesArgs>(parameters, json)),
         "results.view" => await ViewAsync(Read<ResultsViewArgs>(parameters, json), Token(context)),
         "results.viewClose" => CloseViews(Read<ResultsViewCloseArgs>(parameters, json)),
+        "results.identify" => await IdentifyAsync(Read<ResultsIdentifyArgs>(parameters, json), Token(context)),
+        "results.rowIds" => RowIds(Read<ResultsRowIdsArgs>(parameters, json)),
+        "results.findRows" => await FindRowsAsync(Read<ResultsFindRowsArgs>(parameters, json), Token(context)),
+        "results.diff" => await DiffAsync(Read<ResultsDiffArgs>(parameters, json), context),
+        "results.search" => await SearchAsync(Read<ResultsSearchArgs>(parameters, json), Token(context)),
         "results.profile" => await ProfileAsync(Read<ResultsProfileArgs>(parameters, json), Token(context)),
         "results.copy" => await jobs.CopyAsync(Read<ResultsCopyArgs>(parameters, json), context),
         "results.export" => await jobs.ExportAsync(Read<ResultsExportArgs>(parameters, json), context),
@@ -1561,6 +1566,26 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         return new ResultsViewResult(view.ViewId, view.Rows, view.Complete, view.Approximate);
     }
 
+    /// <summary>results.search: finds the cells containing a text (ResultSearcher) off the frame loop, over the rows sealed now
+    /// or a view's; what it holds is a run of at most 10,000 matches and one row's and at most 1 MiB of page layouts, so it
+    /// reserves nothing. It stops at its next checkpoint once the result is released or the view closed.</summary>
+    private async Task<ResultsSearchResult> SearchAsync(ResultsSearchArgs args, CancellationToken token)
+    {
+        if (args.ResultId == 0 || args.Text is not { Length: >= 1 and <= ResultSearcher.MaxText } || args.FromRow is < 0 or > MaxSafeInteger
+            || args.MaxMatches is < 1 or > ResultSearcher.MaxMatches || args.ViewId == 0)
+            throw new RequestException("INVALID_PARAMS", "A search needs 1 to 1,024 characters of text and 1 to 10,000 matches from a row of the result.");
+        var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
+        var complete = view?.Complete ?? set.IsComplete;
+        var pages = set.SealedSnapshot();
+        var stopped = ResultSearcher.Stopped(store, set, view);
+        var found = await Task.Run(() => ResultSearcher.Search(set, pages, view, args.Text, args.FromRow, args.Backward, args.MaxMatches, token, stopped), token);
+        // A release can also come between FindView and the snapshot (which it empties): the search then answers no outcome.
+        if (set.IsReleased || (found is null && view is null)) throw Unavailable(args.ResultId);
+        if (found is null || (view is not null && !store.HasView(view))) throw ViewClosed();
+        return new ResultsSearchResult(found.Searched, found.Total, found.First, found.Rows, found.Columns, complete, found.Approximate);
+    }
+
     /// <summary>results.profile: a column profile (ColumnProfiler) of a result's sealed rows or a view's, off the frame loop,
     /// charging its working memory to the result's query budget while it runs; TOO_LARGE when the budget has no room.</summary>
     private async Task<ResultsProfileResult> ProfileAsync(ResultsProfileArgs args, CancellationToken token)
@@ -1600,6 +1625,130 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (args.ResultId == 0 || args.ViewIds is not { Length: >= 1 and <= MaxViewIds } || args.ViewIds.Contains(0u))
             throw new RequestException("INVALID_PARAMS", "Between 1 and 64 view IDs are required.");
         return new ResultsViewCloseResult(store.CloseViews(args.ResultId, args.ViewIds));
+    }
+
+    /// <summary>results.identify: hashes each row's identity (RowIdentity) off the frame loop, charging the check's working
+    /// memory and then the identities to the result's query budget; replaces the result's identities.</summary>
+    private async Task<ResultsIdentifyResult> IdentifyAsync(ResultsIdentifyArgs args, CancellationToken token)
+    {
+        var by = args.By switch { "auto" => IdentityBy.Auto, "column" => IdentityBy.Column, "row" => IdentityBy.Row, _ => (IdentityBy?)null };
+        if (args.ResultId == 0 || by is null || (by == IdentityBy.Column) != args.Column.HasValue)
+            throw new RequestException("INVALID_PARAMS", "Rows are told apart by auto, column (with a column) or row.");
+        var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        if (args.Column is { } column && (column < 0 || column >= set.Columns.Count))
+            throw new RequestException("INVALID_PARAMS", "The column is not one of the result's.");
+        if (!set.IsComplete) throw new RequestException("RESULT_OPEN", "Highlight rows after this result set finishes loading.");
+        var pages = set.SealedSnapshot();
+        long rows = 0;
+        foreach (var page in pages) rows += page.Rows;
+        var working = RowIdentity.WorkingBytes(rows);
+        var kept = 8 * rows + ResultStore.ViewOverhead;
+        if (!store.TryReserve(set.Budget, working + kept, false, out _))
+            throw new RequestException("TOO_LARGE", "There is not enough result memory to tell these rows apart. Close other results and try again.");
+        (int Column, bool Unique, bool Approximate, long[] Ids) built;
+        try { built = await Task.Run(() => RowIdentity.Build(set, pages, by.Value, args.Column ?? -1, token), token); }
+        catch
+        {
+            store.Return(set.Budget, working + kept);
+            throw;
+        }
+        store.Return(set.Budget, working);
+        store.SetIdentity(new ResultIdentity(set, built.Column, built.Unique, built.Approximate, built.Ids, kept));
+        return new ResultsIdentifyResult(built.Column, built.Unique, built.Approximate, built.Ids.LongLength);
+    }
+
+    /// <summary>The most rows one results.rowIds names, and the most identities one results.findRows looks for and rows it
+    /// lists (src/shared/ipc/wire/protocol.ts limits.identity).</summary>
+    public const int MaxRowIds = 16_384, MaxFindIds = 10_000, MaxFindMatches = 100_000;
+
+    private ResultIdentity IdentityOf(uint resultId) =>
+        store.FindIdentity(resultId) ?? throw new RequestException("IDENTITY_NOT_FOUND", "Tell this result's rows apart first (results.identify).");
+
+    /// <summary>results.rowIds: identities of a range of rows, or of view positions; past the rows identified, fewer.</summary>
+    private ResultsRowIdsResult RowIds(ResultsRowIdsArgs args)
+    {
+        if (args.ResultId == 0 || args.FirstRow is < 0 or > MaxSafeInteger || args.Count is < 1 or > MaxRowIds || args.ViewId == 0)
+            throw new RequestException("INVALID_PARAMS", "The result range is invalid.");
+        if (store.Find(args.ResultId) is null) throw Unavailable(args.ResultId);
+        var identity = IdentityOf(args.ResultId);
+        var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
+        var rows = view?.Rows ?? identity.Rows;
+        var end = Math.Min(rows, args.FirstRow + args.Count);
+        var ids = new long[Math.Max(0, end - args.FirstRow)];
+        for (var p = args.FirstRow; p < end; p++)
+        {
+            long row = view is null ? p : view.Order[p];
+            ids[p - args.FirstRow] = row < identity.Ids.Length ? identity.Ids[row] : -1;
+        }
+        return new ResultsRowIdsResult(args.FirstRow, ids, rows);
+    }
+
+    /// <summary>results.findRows: scans the result's identities (in a view's order with ViewId) for the ones asked.</summary>
+    private async Task<ResultsFindRowsResult> FindRowsAsync(ResultsFindRowsArgs args, CancellationToken token)
+    {
+        if (args.ResultId == 0 || args.Ids is not { Length: >= 1 and <= MaxFindIds } || args.ViewId == 0 || args.Ids.Any(id => id is < 0 or > RowIdentity.Mask))
+            throw new RequestException("INVALID_PARAMS", "Between 1 and 10,000 row identities are required.");
+        if (store.Find(args.ResultId) is null) throw Unavailable(args.ResultId);
+        var identity = IdentityOf(args.ResultId);
+        var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
+        var (positions, marks, truncated) = await Task.Run(() => IdentityMatches.Find(identity, view, args.Ids, MaxFindMatches, token), token);
+        return new ResultsFindRowsResult([.. positions], [.. marks], truncated, view?.Rows ?? identity.Rows);
+    }
+
+    /// <summary>The most unchanged rows a diff shows around a change, and the most one-sided column names it lists
+    /// (src/shared/ipc/wire/protocol.ts limits.diff).</summary>
+    public const int MaxDiffContext = 100, MaxDiffColumnNames = 64;
+
+    /// <summary>results.diff: aligns two complete results of one query off the frame loop (ResultDiffer), charging its working
+    /// memory to their query budget, and stores the unified diff as a new result of the query, released with its others, or
+    /// at once when its answer is not sent (a CANCEL or the deadline came first).</summary>
+    private async Task<ResultsDiffResult> DiffAsync(ResultsDiffArgs args, RequestContext? context)
+    {
+        var token = Token(context);
+        if (args.Left == 0 || args.Right == 0 || args.Left == args.Right || args.Context is < -1 or > MaxDiffContext)
+            throw new RequestException("INVALID_PARAMS", "Two different results and a context of -1 to 100 rows are required.");
+        var left = store.Find(args.Left) ?? throw Unavailable(args.Left);
+        var right = store.Find(args.Right) ?? throw Unavailable(args.Right);
+        if (!ReferenceEquals(left.Budget, right.Budget) || left.Kind == "diff" || right.Kind == "diff")
+            throw new RequestException("INVALID_PARAMS", "Only two result sets of the same query can be compared.");
+        if (!left.IsComplete || !right.IsComplete) throw new RequestException("RESULT_OPEN", "Compare the results after they finish loading.");
+        var leftPages = left.SealedSnapshot();
+        var rightPages = right.SealedSnapshot();
+        long leftRows = 0, rightRows = 0;
+        foreach (var page in leftPages) leftRows += page.Rows;
+        foreach (var page in rightPages) rightRows += page.Rows;
+        var working = ResultDiffer.WorkingBytes(leftRows, rightRows);
+        if (!store.TryReserve(left.Budget, working, false, out _))
+            throw new RequestException("TOO_LARGE", "There is not enough result memory to compare these results. Close other results and try again.");
+        long cellBytes = 0;
+        bool ReserveCells(long bytes)
+        {
+            if (!store.TryReserve(left.Budget, bytes, false, out _)) return false;
+            cellBytes += bytes;
+            return true;
+        }
+        try
+        {
+            var model = await Task.Run(() => ResultDiffer.Compare(left, leftPages, right, rightPages, args.Exact, token, ReserveCells), token);
+            var set = store.Open(left.Budget, right.Index, right.BatchNumber, right.Iteration, "diff", UnifiedDiff.Columns(right, model), UnifiedDiff.Wires(right, model),
+                lengths: UnifiedDiff.Lengths(right, model))
+                ?? throw new RequestException("TOO_LARGE", "There is not enough result memory to show the differences. Close other results and try again.");
+            try { await Task.Run(() => UnifiedDiff.Write(set, left, leftPages, right, rightPages, model, args.Context, token), token); }
+            catch
+            {
+                store.Release(set.ResultId);
+                throw;
+            }
+            if (context is not null) context.Unsent = context.Dropped = () => store.Release([set.ResultId]);
+            var (same, changed, added, removed, soft) = model.Counts();
+            var paired = model.Pairs;
+            string[] OneSided(IReadOnlyList<ResultColumn> columns, Func<(int Left, int Right), int> side) =>
+                [.. columns.Select((column, index) => (column, index)).Where(item => !ResultTextWriter.Hidden(item.column) && !paired.Any(pair => side(pair) == item.index))
+                    .Take(MaxDiffColumnNames).Select(item => item.column.Name)];
+            return new ResultsDiffResult(set.Describe(), model.KeyPair < 0 ? null : right.Columns[paired[model.KeyPair].Right].Name, same, changed, added, removed, soft,
+                model.Approximate, OneSided(left.Columns, pair => pair.Left), OneSided(right.Columns, pair => pair.Right));
+        }
+        finally { store.Return(left.Budget, working + cellBytes); }
     }
 
     /// <summary>The most views one results.viewClose names (src/shared/ipc/wire/protocol.ts limits.views.maxClose).</summary>

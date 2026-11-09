@@ -1,9 +1,11 @@
-import type { KeyboardEvent } from 'react'
+import { useEffect, useRef, type KeyboardEvent } from 'react'
 import type { CommandId } from '../../../shared/commands/catalog'
 import type { ViewSortMode } from '../../../shared/contracts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import type { WhitespaceMode } from '../grid/whitespace'
 import Icon from '../Icon'
+import { searchBoxKeyAction, searchCount, type SearchMode } from './search'
+import { formatCount } from './status'
 
 interface Choice<T> { readonly mode: T; readonly label: string; readonly title: string; readonly command?: CommandId }
 
@@ -20,12 +22,63 @@ const sortTextChoices: readonly Choice<ViewSortMode>[] = [
   { mode: 'bytes', label: 'Bytes', title: 'Sort text and binary values by their length in bytes (DATALENGTH)', command: 'output.sortTextByBytes' }
 ]
 
+/** What the search box searches: cell values (in the backend) or column names. */
+const searchModes: readonly { readonly mode: SearchMode; readonly label: string; readonly title: string; readonly icon: 'list-flat' | 'symbol-field' }[] = [
+  { mode: 'values', label: 'Data', title: 'Data: search cell values, comparing text by each column collation', icon: 'list-flat' },
+  { mode: 'columns', label: 'Columns', title: 'Columns: search column names only', icon: 'symbol-field' }
+]
+
+/**
+ * The search box: its text searches every grid of the run (ResultsSearchService), Enter and Shift+Enter step through the
+ * matches, Escape clears it and, in an empty box, returns to the grid. It is its own Tab stop, so Left and Right stay with
+ * its text.
+ */
+function ResultsSearchBox({ tabId }: { tabId: string }) {
+  const { resultsSearch } = useWorkbench()
+  const search = useServiceSnapshot(resultsSearch)[tabId] ?? resultsSearch.of(tabId)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const focus = search.focus
+  // Find in Results (Ctrl+F in a grid) puts the focus here with the text selected, so typing replaces it; once, even when
+  // the box is shown only after it (the Messages view), and not again each time the box is shown.
+  useEffect(() => { if (resultsSearch.takeFocus(tabId)) { inputRef.current?.focus(); inputRef.current?.select() } }, [focus, resultsSearch, tabId])
+  const keyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    const action = searchBoxKeyAction(event.nativeEvent, !!search.text)
+    if (!action) return
+    event.preventDefault()
+    if (action === 'next' || action === 'previous') { resultsSearch.step(tabId, action === 'next' ? 1 : -1); return }
+    event.stopPropagation()
+    if (action === 'clear') { resultsSearch.clear(tabId); return }
+    // Escape in an empty box goes back to the grid that last had the focus (the one F6 focuses), in the box's own window
+    // (a popped-out Results panel has its own document).
+    const grids = [...event.currentTarget.ownerDocument.querySelectorAll<HTMLElement>(`[data-result-grid][data-tab-id="${CSS.escape(tabId)}"]`)]
+    ;(grids.find(grid => grid.dataset.paneFocus === 'selected') ?? grids[0])?.focus()
+  }
+  const count = searchCount(search, formatCount)
+  const columns = search.mode === 'columns'
+  return <div className="results-search" data-mode={search.mode}>
+    <Icon name="search" className="results-search-icon" />
+    <input ref={inputRef} type="text" spellCheck={false} maxLength={1024} aria-label={columns ? 'Search column names' : 'Search results'} placeholder={columns ? 'Search column names' : 'Search all results'}
+      value={search.text} title={search.approximate ? 'Some long values were searched only as far as they were stored.' : undefined}
+      onChange={event => resultsSearch.setText(tabId, event.target.value)} onKeyDown={keyDown} />
+    {/* The count follows each keystroke and grid; the live region says only the settled count (TabSearch.announcement). */}
+    <span className="results-search-count" title={search.error}>{count}</span>
+    <span className="visually-hidden" role="status" aria-live="polite">{search.announcement}</span>
+    <button type="button" tabIndex={-1} aria-label="Previous match" title="Previous match (Shift+Enter)" disabled={search.total === 0} onClick={() => resultsSearch.step(tabId, -1)}><Icon name="arrow-up" /></button>
+    <button type="button" tabIndex={-1} aria-label="Next match" title="Next match (Enter)" disabled={search.total === 0} onClick={() => resultsSearch.step(tabId, 1)}><Icon name="arrow-down" /></button>
+    <div className="results-segments" role="group" aria-label="Search in">
+      {/* Icons only, as the Show toggles: the toolbar must still fit the output pane of a 1024 px window. */}
+      {searchModes.map(choice => <button key={choice.mode} type="button" className="results-icon-toggle" tabIndex={-1} aria-label={choice.label} aria-pressed={choice.mode === search.mode} title={choice.title}
+        onClick={() => resultsSearch.setMode(tabId, choice.mode)}><Icon name={choice.icon} /></button>)}
+    </div>
+  </div>
+}
+
 /**
  * The results toolbar, in the Results panel's head beside its views: what it changes applies to every grid in the run. It
- * holds White space, Sort text by, and the Profile and Row size toggles; search and the other result tools join it. The controls follow the
- * ARIA toolbar pattern: one Tab stop, Left and Right (Home, End) move between them.
+ * holds search, White space, Sort text by, and the Profile and Row size toggles; the other result tools join it. The controls follow the
+ * ARIA toolbar pattern: one Tab stop, Left and Right (Home, End) move between them; the search box is a Tab stop of its own.
  */
-export default function ResultsToolbar() {
+export default function ResultsToolbar({ tabId }: { tabId: string }) {
   const { commands, settings } = useWorkbench()
   const values = useServiceSnapshot(settings).values
   const whitespace = values['queryResults.grid.whitespace'], sortText = values['queryResults.grid.sortText']
@@ -56,6 +109,7 @@ export default function ResultsToolbar() {
     </div>
   </>
   return <div className="results-toolbar" role="toolbar" aria-label="Results tools" onKeyDown={keyDown}>
+    <ResultsSearchBox tabId={tabId} />
     {group('White space', 'whitespace', whitespaceChoices, whitespace, true)}
     {group('Sort text by', 'symbol-ruler', sortTextChoices, sortText, false)}
     {/* Icons only: with the two segmented groups the toolbar must still fit the output pane of a 1024 px window. */}

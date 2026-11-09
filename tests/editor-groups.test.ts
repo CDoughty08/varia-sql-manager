@@ -95,7 +95,7 @@ function service() {
     move: vi.fn((id: string, index: number) => { documents.list.splice(documents.list.indexOf(id), 1); documents.list.splice(index, 0, id); return true }),
     get: () => undefined
   }
-  const host: EditorGroupHost = { move: vi.fn(), focusGroup: vi.fn(), join: vi.fn(), capture: vi.fn(() => layout(split(leaf([0]), leaf([1])))), restore: vi.fn(), focusedDocument: vi.fn(() => 'c') }
+  const host: EditorGroupHost = { move: vi.fn(), focusGroup: vi.fn(), join: vi.fn(), capture: vi.fn(() => layout(split(leaf([0]), leaf([1])))), restore: vi.fn(), focusedDocument: vi.fn(() => 'c'), focusTab: vi.fn() }
   return { groups: new EditorGroupService(docs), docs, documents, host }
 }
 const twoGroups: EditorGroupSnapshot = { groups: [{ id: 'g1', documents: ['a', 'b'], active: 'b', floating: false }, { id: 'g2', documents: ['c'], active: 'c', floating: false }], activeGroup: 'g1' }
@@ -170,6 +170,23 @@ describe('the editor group service', () => {
     expect(groups.canFloat('a')).toBe(false)
     groups.float('a')
     expect(host.move).not.toHaveBeenCalledWith('a', { float: true })
+  })
+
+  it('focuses an open document tab through its editor area and ignores a document that is gone', () => {
+    const { groups, host, docs } = service()
+    const get = vi.spyOn(docs, 'get').mockReturnValue({ id: 'a' } as never)
+    groups.focusTab('a')
+    expect(host.focusTab).not.toHaveBeenCalled()
+    const attached = groups.attach(host)
+    groups.focusTab('a')
+    expect(host.focusTab).toHaveBeenCalledExactlyOnceWith('a')
+    get.mockReturnValue(undefined)
+    groups.focusTab('gone')
+    expect(host.focusTab).toHaveBeenCalledTimes(1)
+    attached.dispose()
+    get.mockReturnValue({ id: 'a' } as never)
+    groups.focusTab('a')
+    expect(host.focusTab).toHaveBeenCalledTimes(1)
   })
 
   it('publishes only real changes, restores once the editor area attaches, and forgets the area when it goes', () => {

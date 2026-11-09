@@ -152,7 +152,8 @@ export interface ResultDescriptor {
   index: number
   batchNumber: number
   iteration: number
-  kind: 'rows' | 'executionPlan'
+  /** `diff`: a unified diff of two other results of the query (results.diff). */
+  kind: 'rows' | 'executionPlan' | 'diff'
   columns: ResultColumn[]
   rowsRead: number
   rowsStored: number
@@ -233,6 +234,41 @@ export interface ResultsViewParams { resultId: number; sort: ViewSortKey[]; repl
 export interface ResultsViewResult { viewId: number; rows: number; complete: boolean; approximate: boolean }
 export interface ResultsViewCloseParams { resultId: number; viewIds: number[] }
 export interface ResultsViewCloseResult { closed: number }
+/** How results.identify tells a result's rows apart: a unique key column it picks (else the whole row), a given column,
+ *  or every value in the row. */
+export type IdentityBy = 'auto' | 'column' | 'row'
+/** results.identify (highlights): `column` only with `by: 'column'`. The result must have finished loading. */
+export interface ResultsIdentifyParams { resultId: number; by: IdentityBy; column?: number }
+/** `column` is the key column, -1 for the whole row; `unique`, that no two rows share an identity; `approximate`, that a
+ *  truncated value's stored prefix was hashed. */
+export interface ResultsIdentifyResult { column: number; unique: boolean; approximate: boolean; rows: number }
+/** Identities (below 2^53; -1 for a row past those identified) of up to `limits.identity.maxRows` rows or view positions. */
+export interface ResultsRowIdsParams { resultId: number; firstRow: number; count: number; viewId?: number }
+export interface ResultsRowIdsResult { firstRow: number; ids: number[]; rows: number }
+/** Every row (view position with `viewId`) whose identity is one of `ids`. */
+export interface ResultsFindRowsParams { resultId: number; ids: number[]; viewId?: number }
+/** `positions` ascend; `marks[k]` is the index in `ids` of position k's identity; `truncated`, that more rows matched
+ *  than `limits.identity.maxMatches`. */
+export interface ResultsFindRowsResult { positions: number[]; marks: number[]; truncated: boolean; rows: number }
+/** results.diff: compares two complete results of the same query, `left` the earlier and `right` the later, and stores
+ *  the unified diff as a new result of that query. `context`: unchanged rows shown around each change (default 1; -1 for
+ *  all); `exact`: text compared character for character instead of by collation. */
+export interface ResultsDiffParams { left: number; right: number; exact?: boolean; context?: number }
+/** `descriptor` is the diff's result (kind `diff`); `key` the shared column whose values matched rows (null: whole rows
+ *  did); counts by kind, `soft` the values equal only by collation; `leftOnly` and `rightOnly` the columns not compared. */
+export interface ResultsDiffResult {
+  descriptor: ResultDescriptor; key: string | null; same: number; changed: number; added: number; removed: number; soft: number; approximate: boolean
+  leftOnly: string[]; rightOnly: string[]
+}
+/** results.search: the cells whose grid text contains `text` (1 to `limits.search.maxText` characters), through `viewId`'s
+ *  order when given (rows are then view positions). Up to `maxMatches` of them come back in whole rows: from `fromRow` on,
+ *  or with `backward` the last ones before `fromRow`. Text columns compare by their collation; others ignore case. */
+export interface ResultsSearchParams { resultId: number; text: string; fromRow: number; maxMatches: number; backward?: boolean; viewId?: number }
+/** `rows` searched (the rows sealed so far, or the view's); `total` matches among them; the run's matches as
+ *  (`matchRows[k]`, `matchColumns[k]`) in row then column order, `first` the matches before the run's first (when it is empty,
+ *  those before `fromRow`). `complete`: those rows were all the result's; `approximate`: a truncated value was searched by
+ *  its stored prefix. */
+export interface ResultsSearchResult { rows: number; total: number; first: number; matchRows: number[]; matchColumns: number[]; complete: boolean; approximate: boolean }
 /** results.profile: up to `limits.profile.maxColumns` distinct columns of a result, through its view when `viewId` is
  *  given; no columns answers only the rows' byte sizes. */
 export interface ResultsProfileParams { resultId: number; columns: number[]; viewId?: number }
@@ -385,6 +421,13 @@ export interface PortMethods {
   'results.rowBytes': { params: ResultsRowBytesParams; result: ResultsRowBytesResult }
   'results.view': { params: ResultsViewParams; result: ResultsViewResult }
   'results.viewClose': { params: ResultsViewCloseParams; result: ResultsViewCloseResult }
+  /** Row identities for highlights (and the diff): a key column's values or whole rows, hashed by their collation. */
+  'results.identify': { params: ResultsIdentifyParams; result: ResultsIdentifyResult }
+  'results.rowIds': { params: ResultsRowIdsParams; result: ResultsRowIdsResult }
+  'results.findRows': { params: ResultsFindRowsParams; result: ResultsFindRowsResult }
+  /** A unified diff of two results of one query, aligned by a key both share or by whole rows, stored as a new result. */
+  'results.diff': { params: ResultsDiffParams; result: ResultsDiffResult }
+  'results.search': { params: ResultsSearchParams; result: ResultsSearchResult }
   /** Aggregates over a result's rows or a view's, for the column profile panel: never rows. */
   'results.profile': { params: ResultsProfileParams; result: ResultsProfileResult }
   /** A live subscription (docs/ipc.md): its EVENTs are credited, one unacknowledged at a time, and it ends only by CANCEL,

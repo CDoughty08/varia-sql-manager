@@ -36,6 +36,9 @@ The code is the reference implementation; this document describes it.
 - [Result store and memory budget](#result-store-and-memory-budget)
 - [Cell lengths and row sizes](#cell-lengths-and-row-sizes)
 - [Sorted views](#sorted-views)
+- [Row identities and highlights](#row-identities-and-highlights)
+- [Result diffs](#result-diffs)
+- [Search in results](#search-in-results)
 - [Column profiles](#column-profiles)
 - [Messages](#messages)
 - [Copy and Save Results As](#copy-and-save-results-as)
@@ -233,6 +236,11 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `results.rowBytes` | port | unary | control | 10 s; each row's bytes for 1 – 16,384 sealed rows ([Cell lengths and row sizes](#cell-lengths-and-row-sizes)) |
 | `results.view` | port | unary | results | 120 s; a sorted view of a result's sealed rows ([Sorted views](#sorted-views)) |
 | `results.viewClose` | port | unary | control | 10 s |
+| `results.identify` | port | unary | results | 120 s; tells a complete result's rows apart ([Row identities and highlights](#row-identities-and-highlights)) |
+| `results.rowIds` | port | unary | control | 10 s; 1 – 16,384 rows' identities |
+| `results.findRows` | port | unary | results | 60 s; where 1 – 10,000 identities are in a result or view |
+| `results.diff` | port | unary | results | 120 s; the unified diff of two results of one query, stored as a new result ([Result diffs](#result-diffs)) |
+| `results.search` | port | unary | results | 120 s; the cells of a result (or a view) containing a text ([Search in results](#search-in-results)) |
 | `results.profile` | port | unary | results | 120 s; aggregates over a result's or a view's rows ([Column profiles](#column-profiles)) |
 | `live.subscribe` | port | stream of credited EVENTs ([Live subscriptions](#live-subscriptions)) | live (no slot) | none, and no backstop: only CANCEL, a disconnect, a shutdown, a failure or its source ending ends it |
 | `live.update` | port | unary | control | 10 s |
@@ -1337,6 +1345,116 @@ Server. A view is an order of a result's base rows, read through the same calls 
   or binary column when it changes. A view main sees built after its port went (a reload) is closed by main. Copy, Save Results As and opening a value follow the
   grid's order through its view; Save waits until a running or pending sort is built.
 
+## Row identities and highlights
+
+Highlights (the grid menu's Highlight submenu and Ctrl+Shift+H) follow their rows by an identity the backend computes over
+the rows it holds (`Results/RowIdentity.cs`); the renderer never compares rows.
+
+- **`results.identify { resultId, by: 'auto' | 'column' | 'row', column? }`** answers `{ column, unique, approximate, rows }`.
+  The set must be complete (`RESULT_OPEN`, "Highlight rows after this result set finishes loading."). `auto` picks a key
+  column: of up to 16 candidates (names ending in id, key or guid first, then integer, uniqueidentifier and decimal
+  columns, then short character and date columns) the first with no NULL, no truncated value and no duplicate; with none it
+  uses the whole row (`column: -1`). `column` uses the given column (`unique` says whether it had duplicates), `row` the whole
+  row. An identity is a 53-bit hash of each cell's normalized value: character columns by their collation's sort key with
+  trailing spaces trimmed (code points for _BIN and _BIN2), exact numerics by their canonical digits, uniqueidentifier by its
+  bytes, datetimeoffset by its UTC instant, others by their stored bytes; so it matches rows equal under the collation.
+  `approximate` says a hashed value was a truncated prefix. A second identify replaces the first. It holds 24 bytes a row
+  while it runs (one set, reused by every candidate `auto` tries and by the whole-row fallback, which all fill one array)
+  and keeps 8, charged to the query budget (`TOO_LARGE`) and freed with the result.
+- **`results.rowIds { resultId, firstRow, count: 1 – 16,384, viewId? }`** answers `{ firstRow, ids, rows }`, an id per row
+  (by view position with `viewId`), -1 past the identified rows. Without an identify first: `IDENTITY_NOT_FOUND`.
+- **`results.findRows { resultId, ids: 1 – 10,000 in 0 – 2⁵³ − 1, viewId? }`** answers `{ positions, marks, truncated, rows }`:
+  the ascending positions (view positions with `viewId`) of the rows whose identity is in `ids`, each with the index in
+  `ids` it matched, at most 100,000 (`truncated`).
+- **Renderer.** `HighlightsService` keeps highlights per tab and result set index: the first highlight identifies the set
+  (`auto`) and fixes how its rows are told apart (the key column's name and base type, or the whole row); a re-run of the
+  tab's query identifies its new set the same way once complete (a column whose length changed still counts) and finds the
+  highlighted ids there, and a sorted view finds them by view position. A re-run without the key column finds nothing: the
+  grid's strip and the Highlight command say the highlights follow a column these results lack. A `truncated` answer is
+  drawn as far as it goes and the strip says only the first 100,000 rows are. A search that fails with `BUSY`,
+  `TOO_MANY_REQUESTS` or `TIMEOUT` is tried again after 1, 4 and 16 seconds; any failed search is tried again when the user
+  highlights. It colours at most 10,000 rows a command and keeps 10,000 a set. `GridView` draws the positions it is
+  given by binary search per painted row, with theme colours (`resultsGrid.highlight*Background`). Highlights live only in
+  the renderer's memory: they do not survive a reload, hot exit or closing the tab.
+
+## Result diffs
+
+Compare with Previous Result compares two results of one query in the backend (`Results/ResultDiff.cs`); the renderer
+receives a new result to read like any other, never rows to compare.
+
+- **`results.diff { left, right, exact?, context? }`** answers `{ descriptor, key, same, changed, added, removed, soft,
+  approximate, leftOnly, rightOnly }`. Both results must belong to the same query (`INVALID_PARAMS` otherwise, and for a diff
+  of a diff) and be complete (`RESULT_OPEN`, "Compare the results after they finish loading."). Columns pair by name,
+  case-insensitively, in `left`'s order, when both hold text or both binary; at least one must pair (`INVALID_PARAMS`), at
+  most 4,092 may (`INVALID_PARAMS`: the unified result adds four columns to a page's 4,096), and `leftOnly` and `rightOnly`
+  name up to 64 that do not, which are not compared.
+- **Alignment.** Rows match by `key`: the first shared column that is unique, NULL-free and untruncated in both results,
+  of up to 16 candidates as `results.identify` ranks them; else by all shared columns' values together (`key` null), the
+  k-th copy of a row matching the k-th copy. Values compare as SQL Server would (the identity hashing above): numbers by
+  value, character columns by their collation, ignoring trailing spaces, each pair by `left`'s column type and collation, so
+  a column whose collation or type changed between the results still matches. Matched cells compare their values, not only
+  their hashes. Text equal by collation but not character for
+  character is a soft difference: it leaves its row unchanged and is counted in `soft`. `exact` compares text character
+  for character instead. `approximate` says a truncated value's stored prefix was compared.
+- **The model.** The aligned entries (`DiffModel`: kind, row in each result, differing cells) are in unified order: the
+  later result's order, each removed row after the earlier result's row it followed. The unified result below is one
+  rendering of them; a side-by-side view would render the same entries.
+- **The unified result** (`kind: 'diff'`, its descriptor stamped with the generation by main, which then owns it) has
+  the columns `Change` (" ", "−" or "+"), `R1` and `R2` (each row's number in `left` and `right`, NULL where it has none),
+  the shared columns with `right`'s names and types, and a hidden tone column: `added`, `removed` or, for an unchanged row
+  with soft differences, `same`, followed by every differing cell's column number, a soft one prefixed with `~`. A changed
+  row is its old row (−) then its new one (+). Only `context` unchanged rows (default 1, at most 100, -1 for all) show on
+  each side of a change. Each copied cell's lengths are its source cell's, so `results.rowBytes` sums the shown values
+  (not the marker, row numbers or tone). It is a result of the same query, charged to its budget (rows stop when it is
+  full, with the usual truncation, never between a changed row's two halves), released with the query's other results,
+  and released at once when its answer is not delivered: a CANCEL or the deadline answered first (the backend), its
+  answer failed validation or its port went (main), or the page gave it up (the worker).
+  While it is built the alignment holds about 80 bytes a row of both results (`ResultDiffer.WorkingBytes`) and 12 bytes
+  a differing cell, charged to the budget too as they grow (`TOO_LARGE` without room).
+- **Renderer.** `ResultHandle.diff(right, { exact, context, signal })` relays it; `CompareService` appends the new result
+  as the run's last set (`ResultsService.addSet`), named "Differences: Result 1 → Result 2", and its grid's strip says what
+  was compared, and when `approximate`. A new run in the tab gives up a comparison in flight, and `addSet` takes a diff
+  only into the run that holds both compared sets; one it refuses is released. `GridView` colours added and removed rows from the tone column and marks the listed cells (`is-chg`,
+  `is-soft`) with theme colours only (`resultsGrid.diff*`).
+
+## Search in results
+
+The results toolbar's search box searches every grid of a run in the backend, over the rows it holds
+(`Results/ResultSearch.cs`), through the order the grid shows; rows never come to the renderer for it.
+
+- **`results.search { resultId, text: 1 – 1,024 characters, fromRow, maxMatches: 1 – 10,000, backward?, viewId? }`**
+  answers `{ rows, total, first, matchRows, matchColumns, complete, approximate }`. It searches the rows sealed now, or a
+  view's positions with `viewId` (`VIEW_NOT_FOUND` when it is gone). One pass counts every match (`total`) and keeps a
+  run of whole rows: from `fromRow` on until it holds `maxMatches`, or with `backward` the last rows before `fromRow` that
+  hold `maxMatches`, so a run passes `maxMatches` by at most its last row's columns. `matchRows[k]`, `matchColumns[k]`
+  are the run's cells in row then column order; `first` counts the matches before the run's first (when the run is
+  empty, those before `fromRow`). `complete`: those rows were all of a finished set; `approximate`: a truncated value was
+  searched by its stored prefix and did not match. A search holds its run, one row's matches and at most 1 MiB of parsed
+  page layouts (one page's in base order), so it reserves no budget. It checks at points spaced by the work done (cells
+  and bytes compared, so a wide or long-valued row is a checkpoint of its own): CANCEL (a newer search) stops it there,
+  and so does the result's release (`RESULT_RELEASED`) or the view's close (`VIEW_NOT_FOUND`), so it never reads pages
+  whose budget was returned for longer than one checkpoint.
+- **Matching.** A cell matches when its grid text contains the text. NULL and unreadable cells never match. Hidden columns (a
+  diff's row tone) are not searched. Character
+  columns compare by their collation, as `LIKE '%text%'` would: its locale and Ignore flags (case, accents, kana type,
+  width), code points for _BIN and _BIN2, and for a locale the runtime does not know its case flag alone. Text made only
+  of characters the locale ignores (U+200B, U+00AD) is looked for as written, by code point. Every other
+  column compares its display text ignoring case (numbers, dates, xml, json, uniqueidentifier); binary values match their
+  `0x` and uppercase hex, and a column of them is skipped when the text is not hex.
+- **Main** checks the request with the port schema and ownership, and the answer before forwarding it: as many columns as
+  rows, cells strictly in (row, column) order inside the rows searched and on the side of `fromRow` asked, columns inside
+  the result's (as its descriptor named them), and `first + matches ≤ total`.
+- **Renderer.** `ResultHandle.search(text, fromRow, { maxMatches, backward, signal })` bounds the request before the port.
+  `ResultsSearchService` (`results/search.ts`) runs each tab's search: typing searches once it pauses (200 ms; Enter at
+  once), one grid at a time in run order, through the view a sorted grid shows, and the first match becomes active as
+  soon as a grid has one. Each grid holds one run of up to 10,000 matches; a step past it reads the next run forward or
+  back (or the first or last, when it wraps). A grid that shows other rows (a new run, a sort, a set that finished)
+  searches again, keeping the active match's place. Columns mode matches column names from the descriptors, ignoring
+  case and accents, with no backend call. Grids draw the marks through `GridView` (`grid/marks.ts`) as cell and header
+  classes, never markup; the stack scrolls the grid holding the active match into view (opening it if collapsed), and the
+  grid scrolls the cell. Find in Results (Ctrl+F in a grid), Find Next and Find Previous in Results (F3, Shift+F3) are
+  catalogue commands.
+
 ## Column profiles
 
 The column profile panel and the grid's row-size bar describe rows the backend holds without reading them into the
@@ -2015,6 +2133,7 @@ crash and window close; a backend loss ends its streams but keeps the port.
 { t: 'rowBytes'; rid; generation; resultId: u32; firstRow: 0..2^53-1; count: 1..16_384; viewId?: u32 }
 { t: 'view'; rid; generation; resultId: u32; sort: ViewSortKey[1..16]; replaces?: u32 }
 { t: 'viewClose'; rid; generation; resultId: u32; viewIds: u32[1..64] }
+{ t: 'search'; rid; generation; resultId: u32; text: string[1..1024]; fromRow; maxMatches: 1..10000; backward?: boolean; viewId?: u32 }
 { t: 'live'; rid; generation; params: live.subscribe params }
 { t: 'liveUpdate'; rid; generation; params: live.update params }
 ```
@@ -2201,7 +2320,10 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Descriptors per summary | 8 MiB (bounded per set by names, types and 96 bytes per column) | backend |
 | FOR XML / FOR JSON value | 2,097,152 characters, the rest marks it truncated | backend |
 | Row sizes a request | `results.rowBytes`: 1 – 16,384 rows (`rowSizes.maxRows`) | zod and backend |
+| Row identities | `results.rowIds` 1 – 16,384 rows; `results.findRows` 1 – 10,000 ids, 100,000 matches (`limits.identity`); 24 bytes a row while identifying, 8 kept, under the query budget | zod and backend |
+| Result diffs | context -1 – 100 rows, 64 one-sided column names each side (`limits.diff`); about 80 bytes a row of both results and 12 a differing cell while aligning, the diff's rows under the query budget | zod and backend |
 | Sorted views | 1 – 16 keys a sort, 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key while sorting, 4 bytes a row kept, under the query budget | zod and backend |
+| Search in results | 1 – 1,024 characters of text, 1 – 10,000 matches an answer plus its last row's columns (`limits.search`); no budget held | zod and backend |
 | Column profiles | 0 – 32 columns a request (`limits.profile`), 20 buckets, distinct exact to 16,384, values cut to 256 characters; working memory under the query budget | zod and backend |
 | Copy | 64 MiB of UTF-8 (estimated before any work; main cancels past 65 MiB received); DATA ≤ 1 MiB; 16 MiB initial credit; 120 s; one per window | backend and main |
 | Save Results As | one per window; 1 MiB writes; no deadline; suggested name ≤ 128 characters, path ≤ 32,767 | main and backend |
@@ -2276,7 +2398,7 @@ access, choose Help › Clear Entra ID Token Cache, then connect again." The sam
 
 | Origin | Codes |
 | --- | --- |
-| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN` |
+| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN` |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
 | Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads, scripting, object actions and SSIS requests), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs), `STALE` (a shortcuts save based on an older revision), `DUPLICATE_REQUEST` and `NOT_FOUND` (live streams of the results port); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |

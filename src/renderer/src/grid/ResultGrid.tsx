@@ -3,7 +3,9 @@ import type { QueryResult } from '../../../shared/contracts'
 import { onUnexpectedError } from '../core/errors'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import type { ResultHandle } from '../results/ResultClient'
-import type { GridSort, ResultSetEntry } from '../results/ResultsService'
+import { setKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
+import { compareText } from '../results/CompareService'
+import { highlightText } from '../results/HighlightsService'
 import { formatBytes, formatCount } from '../results/status'
 import { GridView, type GridStatus } from './GridView'
 import { describeSelection } from './selection'
@@ -43,7 +45,9 @@ function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: n
 const keysOf = (sort: GridSort | undefined) => sort?.keys.map(key => `${key.column}${key.descending ? 'd' : 'a'}`).join(',') ?? ''
 
 function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, onWide }: ResultGridProps) {
-  const { results, resultClient, commands, platform, gridStats, panes, settings } = useWorkbench()
+  const { results, resultClient, commands, platform, gridStats, panes, settings, resultsSearch, highlights, compare } = useWorkbench()
+  const marked = useSyncExternalStore(highlights.subscribe, () => highlights.getSnapshot()[tabId]?.get(entry.index))
+  const compared = useSyncExternalStore(compare.subscribe, () => compare.getSnapshot().get(setKey(entry.descriptor)))
   const values = useServiceSnapshot(settings).values
   const showTypes = values['queryResults.grid.showColumnTypes'], whitespace = values['queryResults.grid.whitespace'], rowSize = values['queryResults.grid.rowSize']
   const showTypesRef = useRef(showTypes), whitespaceRef = useRef(whitespace), rowSizeRef = useRef(rowSize)
@@ -52,6 +56,13 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
   rowSizeRef.current = rowSize
   const rootRef = useRef<HTMLDivElement>(null), scrollRef = useRef<HTMLDivElement>(null), viewRef = useRef<GridView | undefined>(undefined)
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
+  // Search in results: this grid's marks, and the tab's reveal of the active match.
+  const search = useServiceSnapshot(resultsSearch)[tabId]
+  const marks = search?.marks.get(entry.index)
+  const marksRef = useRef(marks)
+  // Bumped by each swap, so a reveal waiting for the sorted rows runs once they show.
+  const [swaps, setSwaps] = useState(0)
+  marksRef.current = marks
   const [status, setStatus] = useState<GridStatus>({})
   const index = entry.index
   const countRef = useRef(count)
@@ -86,6 +97,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
       onSort: (column, add) => results.cycleSort(tabId, index, column, add)
     })
     viewRef.current = view
+    view.setMarks(marksRef.current)
     const registration = results.registerGrid(tabId, index, { selectAll: () => view.selectAll(), repaint: () => view.repaint() })
     // Closing and opening the pane within one frame moves the grid without resizing it, and the move drops the scroller's
     // offsets: the frame this asks for writes them back (GridView's offsetsDropped), and a press before it keeps them.
@@ -98,6 +110,18 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
     }
   }, [tabId, index, entry, results, resultClient, commands, platform, gridStats, panes])
   useEffect(() => { viewRef.current?.update({ resultCount: count, showTypes, whitespace, sort: sort?.keys, rowSize }) }, [count, showTypes, whitespace, sort?.keys, rowSize])
+  // The grid draws the highlighted rows of the handle it shows, and switches with its swaps.
+  const highlightRows = marked?.rows
+  useLayoutEffect(() => { viewRef.current?.setHighlights(highlightRows ?? []) }, [highlightRows, tabId, index, entry])
+  // The active match scrolls into view once, in the grid that holds it: at once, or when this grid mounts (the stack
+  // scrolled to it) or has swapped to the order the matches number.
+  const reveal = search?.reveal ?? 0, revealSelect = search?.revealSelect ?? false
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+    view.setMarks(marks)
+    if (resultsSearch.pendingReveal(tabId, index) && view.revealMark(revealSelect)) resultsSearch.revealed(tabId)
+  }, [marks, reveal, revealSelect, swaps, resultsSearch, tabId, index])
   // A built view replaces what the grid shows: its first rows are read before the swap, so it paints whole rows at once,
   // unless what it shows is already gone (its result released or lost). While a first sort runs the grid keeps the rows in
   // their order; the views it showed close once it has swapped (ResultsService.viewShown).
@@ -111,6 +135,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
       if (abort.signal.aborted || viewRef.current !== view) return
       shownRef.current = { handle: target, keys }
       view.swap(target, entry.descriptor, row => row, top === undefined ? {} : { top })
+      setSwaps(value => value + 1)
       // The views it showed before can close now.
       results.viewShown(tabId, index, target === entry.handle ? undefined : target)
     }
@@ -126,6 +151,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
   const lost = snapshot.state === 'lost'
   const truncation = truncationText({ truncated: snapshot.truncated, rowsStored: snapshot.rowsStored, rowsRead: snapshot.rowsRead, budget })
   const retry = () => viewRef.current?.retry()
+  const highlightNote = !lost && snapshot.state === 'complete' ? compared ? compareText(compared) : highlightText(marked) : undefined
   // The grid holds only rows; its strip and the lost overlay are its siblings, outside the table structure.
   return <div className="rg-frame">
     <div ref={rootRef} className="results-grid rg" role="grid" tabIndex={0} data-result-grid="" data-output-view="grid" data-tab-id={tabId} data-result-index={index}
@@ -136,7 +162,8 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
     {!lost && status.renderError ? <div className="rg-strip error" role="status">This result could not be displayed. <button onClick={retry}>Retry</button></div>
       : !lost && status.tileError ? <div className="rg-strip error" role="status">Some rows could not be loaded: {status.tileError} <button onClick={retry}>Retry</button></div>
         : !lost && snapshot.incomplete ? <div className="rg-strip" role="status" title={incompleteText}>{incompleteText}</div>
-          : !lost && truncation ? <div className="rg-strip" role="status" title={truncation}>{truncation}</div> : null}
+          : !lost && truncation ? <div className="rg-strip" role="status" title={truncation}>{truncation}</div>
+            : highlightNote ? <div className="rg-strip" role="status" title={highlightNote}>{highlightNote}</div> : null}
   </div>
 }
 

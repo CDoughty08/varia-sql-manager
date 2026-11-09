@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (260)
+## Commands (273)
 
 ### File
 
@@ -147,8 +147,21 @@ keys it uses are listed below.
 | Then Sort Ascending (not in the palette) | `output.thenSortAscending` | — | — | — | Always | Query Output context menu › Then Sort Ascending |
 | Then Sort Descending (not in the palette) | `output.thenSortDescending` | — | — | — | Always | Query Output context menu › Then Sort Descending |
 | Clear Sort (not in the palette) | `output.clearSort` | — | — | — | Always | Query Output context menu › Clear Sort |
+| Find in Results | `output.find` | Ctrl+F (`outputGridFocus`) | Ctrl+F (`outputGridFocus`) | ⌘F (`outputGridFocus`) | `hasResults` | — |
+| Find Next in Results | `output.findNext` | F3 (`outputGridFocus`) | F3 (`outputGridFocus`) | ⌘G (`outputGridFocus`), F3 (`outputGridFocus`) | `hasResults` | — |
+| Find Previous in Results | `output.findPrevious` | Shift+F3 (`outputGridFocus`) | Shift+F3 (`outputGridFocus`) | ⇧⌘G (`outputGridFocus`), ⇧F3 (`outputGridFocus`) | `hasResults` | — |
 | Sort Text by Length in Characters | `output.sortTextByChars` | — | — | — | Always; checked when `resultsSortTextChars` | — |
 | Sort Text by Length in Bytes | `output.sortTextByBytes` | — | — | — | Always; checked when `resultsSortTextBytes` | — |
+| Highlight Rows (not in the palette) | `output.highlightRows` | Ctrl+Shift+H (`outputGridFocus`) | Ctrl+Shift+H (`outputGridFocus`) | ⇧⌘H (`outputGridFocus`) | Always | — |
+| Highlight Rows Yellow (not in the palette) | `output.highlightYellow` | — | — | — | Always | Query Output context menu › Highlight › Yellow |
+| Highlight Rows Green (not in the palette) | `output.highlightGreen` | — | — | — | Always | Query Output context menu › Highlight › Green |
+| Highlight Rows Blue (not in the palette) | `output.highlightBlue` | — | — | — | Always | Query Output context menu › Highlight › Blue |
+| Highlight Rows Purple (not in the palette) | `output.highlightPurple` | — | — | — | Always | Query Output context menu › Highlight › Purple |
+| Highlight Rows Red (not in the palette) | `output.highlightRed` | — | — | — | Always | Query Output context menu › Highlight › Red |
+| Clear Highlight (not in the palette) | `output.clearHighlight` | — | — | — | Always | Query Output context menu › Highlight › Clear Highlight |
+| Clear All Highlights (not in the palette) | `output.clearAllHighlights` | — | — | — | Always | Query Output context menu › Highlight › Clear All Highlights |
+| Compare with Previous Result | `output.compareWithPrevious` | — | — | — | Always | Query Output context menu › Compare with Previous Result |
+| Compare with Previous Result (Exact Text) | `output.compareWithPreviousExact` | — | — | — | Always | — |
 | Show Column Profile | `output.toggleColumnProfile` | — | — | — | Always; checked when `resultsColumnProfile` | Query Output context menu › Column Profile |
 | Show Row Size in Results | `output.toggleRowSize` | — | — | — | Always; checked when `resultsRowSize` | Query Output context menu › Show Row Size |
 | Open Value in New Tab (not in the palette) | `output.openValue` | — | — | — | Always | — |
@@ -783,11 +796,25 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | `2_sort` | **T**hen Sort Ascending | `output.thenSortAscending` | `outputView == 'grid'` |
 | `2_sort` | Then **S**ort Descending | `output.thenSortDescending` | `outputView == 'grid'` |
 | `2_sort` | Clea**r** Sort | `output.clearSort` | `outputView == 'grid'` |
+| `2_sort` | Hi**g**hlight › | Submenu: Query Output context menu › Highlight | `outputView == 'grid'` |
+| `2_sort` | Co**m**pare with Previous Result | `output.compareWithPrevious` | `outputView == 'grid'` |
 | `3_save` | Sa**v**e Results As… | `output.saveResultsAs` | `outputView == 'grid'` |
 | `4_view` | Show S**p**aces and Tabs | `output.showSpaces` | `outputView == 'grid'` |
 | `4_view` | Show All **W**hite Space | `output.showAllWhitespace` | `outputView == 'grid'` |
 | `4_view` | Column Pro**f**ile | `output.toggleColumnProfile` | `outputView == 'grid'` |
 | `4_view` | Show Row Si**z**e | `output.toggleRowSize` | `outputView == 'grid'` |
+
+#### Query Output context menu › Highlight
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_colors` | **Y**ellow | `output.highlightYellow` | `outputView == 'grid'` |
+| `1_colors` | **G**reen | `output.highlightGreen` | `outputView == 'grid'` |
+| `1_colors` | **B**lue | `output.highlightBlue` | `outputView == 'grid'` |
+| `1_colors` | **P**urple | `output.highlightPurple` | `outputView == 'grid'` |
+| `1_colors` | **R**ed | `output.highlightRed` | `outputView == 'grid'` |
+| `2_clear` | **C**lear Highlight | `output.clearHighlight` | `outputView == 'grid'` |
+| `2_clear` | Clear **A**ll Highlights | `output.clearAllHighlights` | `outputView == 'grid'` |
 
 #### Panel tab context menu (`dockTab.context`)
 

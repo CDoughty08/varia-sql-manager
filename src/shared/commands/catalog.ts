@@ -842,12 +842,69 @@ export const commandCatalog = {
     title: 'Clear Sort', category: 'Query', keywords: ['order', 'unsort', 'original', 'grid'], palette: false,
     menus: [{ menu: 'output.context', group: '2_sort', order: 5, mnemonic: 'r', when: "outputView == 'grid'" }]
   },
+  // Search in results (the results toolbar's search box, results.search): Find in Results puts the focus in the box, as
+  // Ctrl+F does in a grid; Find Next and Previous step through the matches of every grid, as F3 and Shift+F3 do there.
+  'output.find': {
+    title: 'Find in Results', category: 'Query', icon: 'search', keywords: ['search', 'find', 'grid', 'values', 'columns', 'filter'], precondition: 'hasResults',
+    unavailableHint: 'Execute a query that returns results first.', keybindings: [{ key: 'mod+f', when: 'outputGridFocus' }]
+  },
+  'output.findNext': {
+    title: 'Find Next in Results', category: 'Query', keywords: ['search', 'next', 'match', 'grid'], precondition: 'hasResults', unavailableHint: 'Execute a query that returns results first.',
+    keybindings: [{ win: 'f3', linux: 'f3', mac: 'mod+g', when: 'outputGridFocus' }, { mac: 'f3', when: 'outputGridFocus' }]
+  },
+  'output.findPrevious': {
+    title: 'Find Previous in Results', category: 'Query', keywords: ['search', 'previous', 'match', 'grid'], precondition: 'hasResults', unavailableHint: 'Execute a query that returns results first.',
+    keybindings: [{ win: 'shift+f3', linux: 'shift+f3', mac: 'mod+shift+g', when: 'outputGridFocus' }, { mac: 'shift+f3', when: 'outputGridFocus' }]
+  },
   // The results toolbar's Sort text by choices (queryResults.grid.sortText); each goes back to Value when it is already on.
   'output.sortTextByChars': {
     title: 'Sort Text by Length in Characters', category: 'Query', icon: 'symbol-ruler', keywords: ['sort', 'length', 'len', 'characters', 'text', 'grid'], toggled: 'resultsSortTextChars'
   },
   'output.sortTextByBytes': {
     title: 'Sort Text by Length in Bytes', category: 'Query', icon: 'symbol-ruler', keywords: ['sort', 'length', 'datalength', 'bytes', 'text', 'binary', 'grid'], toggled: 'resultsSortTextBytes'
+  },
+  // Highlights (results PR 8): the selected rows of a grid whose result has every row take a colour, kept on each row by its
+  // identity (a unique key column, else the whole row) through sorts and re-runs. Highlight Rows uses the last colour
+  // picked (yellow at first); a colour every selected row already has comes off.
+  'output.highlightRows': {
+    title: 'Highlight Rows', category: 'Query', icon: 'symbol-color', keywords: ['highlight', 'mark', 'color', 'row', 'grid', 'flag'], palette: false,
+    keybindings: [{ key: 'mod+shift+h', when: 'outputGridFocus' }]
+  },
+  'output.highlightYellow': {
+    title: 'Highlight Rows Yellow', category: 'Query', keywords: ['highlight', 'mark', 'color', 'yellow', 'row', 'grid'], palette: false,
+    menus: [{ menu: 'output.highlight', group: '1_colors', order: 1, title: 'Yellow', mnemonic: 'y', when: "outputView == 'grid'" }]
+  },
+  'output.highlightGreen': {
+    title: 'Highlight Rows Green', category: 'Query', keywords: ['highlight', 'mark', 'color', 'green', 'row', 'grid'], palette: false,
+    menus: [{ menu: 'output.highlight', group: '1_colors', order: 2, title: 'Green', mnemonic: 'g', when: "outputView == 'grid'" }]
+  },
+  'output.highlightBlue': {
+    title: 'Highlight Rows Blue', category: 'Query', keywords: ['highlight', 'mark', 'color', 'blue', 'row', 'grid'], palette: false,
+    menus: [{ menu: 'output.highlight', group: '1_colors', order: 3, title: 'Blue', mnemonic: 'b', when: "outputView == 'grid'" }]
+  },
+  'output.highlightPurple': {
+    title: 'Highlight Rows Purple', category: 'Query', keywords: ['highlight', 'mark', 'color', 'purple', 'row', 'grid'], palette: false,
+    menus: [{ menu: 'output.highlight', group: '1_colors', order: 4, title: 'Purple', mnemonic: 'p', when: "outputView == 'grid'" }]
+  },
+  'output.highlightRed': {
+    title: 'Highlight Rows Red', category: 'Query', keywords: ['highlight', 'mark', 'color', 'red', 'row', 'grid'], palette: false,
+    menus: [{ menu: 'output.highlight', group: '1_colors', order: 5, title: 'Red', mnemonic: 'r', when: "outputView == 'grid'" }]
+  },
+  'output.clearHighlight': {
+    title: 'Clear Highlight', category: 'Query', keywords: ['highlight', 'unmark', 'row', 'grid'], palette: false,
+    menus: [{ menu: 'output.highlight', group: '2_clear', order: 1, mnemonic: 'c', when: "outputView == 'grid'" }]
+  },
+  'output.clearAllHighlights': {
+    title: 'Clear All Highlights', category: 'Query', icon: 'clear-all', keywords: ['highlight', 'unmark', 'reset', 'grid'], palette: false,
+    menus: [{ menu: 'output.highlight', group: '2_clear', order: 2, mnemonic: 'a', when: "outputView == 'grid'" }]
+  },
+  // Compares the grid's result with the run's result before it (results.diff) and adds their unified diff as a result.
+  'output.compareWithPrevious': {
+    title: 'Compare with Previous Result', category: 'Query', icon: 'git-compare', keywords: ['diff', 'compare', 'difference', 'changes', 'grid', 'result'],
+    menus: [{ menu: 'output.context', group: '2_sort', order: 7, mnemonic: 'm', when: "outputView == 'grid'" }]
+  },
+  'output.compareWithPreviousExact': {
+    title: 'Compare with Previous Result (Exact Text)', category: 'Query', icon: 'git-compare', keywords: ['diff', 'compare', 'difference', 'case', 'collation', 'exact', 'grid']
   },
   // The results toolbar's Profile and Row size toggles (queryResults.grid.columnProfile, queryResults.grid.rowSize).
   'output.toggleColumnProfile': {

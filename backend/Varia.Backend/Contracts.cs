@@ -95,6 +95,38 @@ internal sealed record ResultsViewArgs(uint ResultId, ViewSortArgs[] Sort, uint?
 internal sealed record ResultsViewResult(uint ViewId, long Rows, bool Complete, bool Approximate);
 internal sealed record ResultsViewCloseArgs(uint ResultId, uint[] ViewIds);
 internal sealed record ResultsViewCloseResult(int Closed);
+/// <summary>results.identify: how the result's rows are told apart, for highlights. By "auto" picks a unique key column, else
+/// the whole row; "column" uses Column (unique or not); "row" hashes every value. The result must have finished loading.</summary>
+internal sealed record ResultsIdentifyArgs(uint ResultId, string By, int? Column = null);
+/// <summary>Column is the key column, or -1 for the whole row; Unique says no two rows share an identity; Approximate that a
+/// truncated value's stored prefix was hashed.</summary>
+internal sealed record ResultsIdentifyResult(int Column, bool Unique, bool Approximate, long Rows);
+/// <summary>results.rowIds: the identities (results.identify) of up to 16,384 rows from FirstRow, view positions with ViewId.</summary>
+internal sealed record ResultsRowIdsArgs(uint ResultId, long FirstRow, int Count, uint? ViewId = null);
+internal sealed record ResultsRowIdsResult(long FirstRow, long[] Ids, long Rows);
+/// <summary>results.findRows: every row (view position with ViewId) whose identity is one of Ids (1 to 10,000).</summary>
+internal sealed record ResultsFindRowsArgs(uint ResultId, long[] Ids, uint? ViewId = null);
+/// <summary>Positions ascend; Marks[k] is the index in Ids of position k's identity. Truncated: more than 100,000 rows matched
+/// and only the first are listed.</summary>
+internal sealed record ResultsFindRowsResult(long[] Positions, int[] Marks, bool Truncated, long Rows);
+/// <summary>results.diff: compares two complete results of the same query (Left the earlier, Right the later) and stores
+/// the unified diff as a new result of that query (UnifiedDiff). Context is how many unchanged rows show around each change
+/// (-1: all); Exact compares text character for character instead of by collation.</summary>
+internal sealed record ResultsDiffArgs(uint Left, uint Right, bool Exact = false, int Context = 1);
+/// <summary>Key is the shared column whose values matched rows, or null when whole rows did; LeftOnly and RightOnly are the
+/// columns (at most 64 names each) without a namesake in the other result, which are not compared; Soft counts values equal
+/// only by collation (case or trailing spaces, say).</summary>
+internal sealed record ResultsDiffResult(ResultDescriptor Descriptor, string? Key, long Same, long Changed, long Added, long Removed, long Soft, bool Approximate,
+    string[] LeftOnly, string[] RightOnly);
+/// <summary>results.search: the cells whose grid text contains Text (1 to 1,024 characters), searched through ViewId's order
+/// when it is given (rows are then view positions). It returns up to MaxMatches (1 to 10,000) of them in whole rows: from
+/// FromRow on, or with Backward the last ones before FromRow.</summary>
+internal sealed record ResultsSearchArgs(uint ResultId, string Text, long FromRow, int MaxMatches, bool Backward = false, uint? ViewId = null);
+/// <summary>Rows is how many rows were searched (the rows sealed so far, or the view's); Total counts every match among them;
+/// MatchRows[k] and MatchColumns[k] are the run's matches in row then column order, First the matches before the run's
+/// first (when it is empty, those before FromRow). Complete says the rows searched were all the result's; Approximate that
+/// a truncated value was searched by its stored prefix.</summary>
+internal sealed record ResultsSearchResult(long Rows, long Total, long First, long[] MatchRows, int[] MatchColumns, bool Complete, bool Approximate);
 /// <summary>results.profile: aggregates for 0 to 32 distinct columns over a result's rows, or its view's (ViewId); 0 columns
 /// answers only the rows' byte sizes.</summary>
 internal sealed record ResultsProfileArgs(uint ResultId, int[] Columns, uint? ViewId = null);

@@ -34,6 +34,11 @@ const monacoShadowAllowlist: Readonly<Record<string, string>> = {
   'mod+a': "Select All in a results grid or Messages only (outputGridFocus || messagesFocus), both outside the editor; Monaco's Select All keeps the key in editor text",
   'cmd+e': "Search Options in the Options dialog only (optionsDialogFocus, a modal key); Monaco's find with selection keeps ⌘E in editor text",
   'cmd+i': "Properties in Object Explorer only (activePanel == 'explorer' && !textInputFocus && !searchHitsFocus): Monaco's suggestion trigger keeps ⌘I in editor text",
+  'mod+f': "Find in Results in a results grid only (outputGridFocus): the grid is outside the editor, so Monaco's find keeps the key in editor text",
+  'f3': "Find Next in Results in a results grid only (outputGridFocus); Monaco's next match keeps F3 in editor text",
+  'shift+f3': "Find Previous in Results in a results grid only (outputGridFocus); Monaco's previous match keeps Shift+F3 in editor text",
+  'cmd+g': "Find Next in Results on macOS in a results grid only (outputGridFocus); Monaco's ⌘G keeps it in editor text",
+  'shift+cmd+g': "Find Previous in Results on macOS in a results grid only (outputGridFocus); Monaco's ⇧⌘G keeps it in editor text",
   'shift+escape': "Close Activity Monitor (activityMonitorFocus), SSMS's key: the monitor is outside the editor, so Monaco's Shift+Escape (closing a widget, leaving a snippet) keeps it in editor text"
 }
 

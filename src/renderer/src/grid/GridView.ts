@@ -15,6 +15,7 @@ import { registerGridAnchor } from './anchor'
 import { gridLimits as g } from './constants'
 import { GridData, portBusy } from './data'
 import { gridKeyAction, pageStep } from './keyboard'
+import { cellKey, type GridMarks } from './marks'
 import { ColumnLayout, hitTest, rowHeaderWidth, visibleRange, type VisibleRange } from './layout'
 import { fitWidth, initialWidth, measureCharWidth, sqlTypeLabel, typeHintChars } from './measure'
 import { freshRing, ringStep, rotation, slotOf, type RowRing } from './ring'
@@ -23,20 +24,34 @@ import { applyWheel, ensureVisible, normalizeWheel, offsetsDropped, onNativeScro
 import { columnTitle, covered, dragSelection, navigate, pressButton, pressSelection, selectAll, windowRanges, type CellRange, type GridHit, type GridSelection } from './selection'
 import type { GridStats } from './stats'
 import { remapSelection, remapTop, sameSelection, type RowMap } from './swap'
+import { colorAt, highlightColors, type RowHighlights } from './highlights'
 import { tileKey } from './tiles'
 import { whitespaceRuns, type WhitespaceMode } from './whitespace'
 import { displayText } from '../../../shared/ipc/wire/cells'
 
-// A cell's look is one of 128 class strings, picked by these bits.
-const NULL = 1, TRUNC = 2, ERR = 4, LINK = 8, SEL = 16, ACT = 32, LOAD = 64
-const classes = Array.from({ length: 128 }, (_, bits) => 'rg-c' + (bits & NULL ? ' is-null' : '') + (bits & TRUNC ? ' is-trunc' : '') + (bits & ERR ? ' is-err' : '')
-  + (bits & LINK ? ' is-link' : '') + (bits & SEL ? ' is-sel' : '') + (bits & ACT ? ' is-act' : '') + (bits & LOAD ? ' is-load' : ''))
+// A cell's look is one of 4,096 class strings, picked by these bits.
+// HIT, CUR and DIM are search in results' marks (marks.ts): a matched cell, the active match, a column the search leaves out.
+// CHG and SOFT mark a diff's differing cell (results.diff): a value that changed, and one equal only by collation.
+const NULL = 1, TRUNC = 2, ERR = 4, LINK = 8, SEL = 16, ACT = 32, LOAD = 64, HIT = 128, CUR = 256, DIM = 512, CHG = 1024, SOFT = 2048
+const classes = Array.from({ length: 4096 }, (_, bits) => 'rg-c' + (bits & NULL ? ' is-null' : '') + (bits & TRUNC ? ' is-trunc' : '') + (bits & ERR ? ' is-err' : '')
+  + (bits & LINK ? ' is-link' : '') + (bits & SEL ? ' is-sel' : '') + (bits & ACT ? ' is-act' : '') + (bits & LOAD ? ' is-load' : '')
+  + (bits & HIT ? ' is-hit' : '') + (bits & CUR ? ' is-cur' : '') + (bits & DIM ? ' is-dim' : '') + (bits & CHG ? ' is-chg' : '') + (bits & SOFT ? ' is-soft' : ''))
+/** A header's search mark: 0 none, 1 matched, 2 the active match, 3 dimmed. */
+const headerMarks = ['', 'hit', 'cur', 'dim'] as const
 const truncatedAt: Record<string, string> = { binary: '32,766 bytes', document: '2,097,152 characters', text: '65,535 characters' }
-// A row's look is one class string too: odd or even, and its tone (none, or one of liveTones); the row number's likewise.
-const toneIndex = new Map<string, number>(liveTones.map((tone, index) => [tone, index + 1]))
-const rowClasses = [false, true].map(odd => ['', ...liveTones].map(tone => 'rg-row' + (odd ? ' odd' : '') + (tone ? ' tone-' + tone : '')))
-const markClasses = [false, true].map(sel => ['', ...liveTones].map(tone => 'rg-rn' + (sel ? ' sel' : '') + (tone ? ' tone-' + tone : '')))
+// A row's look is one class string too: odd or even, and its tone (none, one of liveTones, or a diff's added or removed
+// row); the row number's likewise.
+const rowTones = [...liveTones, 'added', 'removed'] as const
+const toneIndex = new Map<string, number>(rowTones.map((tone, index) => [tone, index + 1]))
+/** What a screen reader hears on a diff's added or removed row. */
+const diffLabels: Readonly<Record<string, string>> = { added: 'added row', removed: 'removed row' }
+// A highlight (highlights.ts) adds its colour's class to both: 0 for none, else 1 + its index in highlightColors.
+const highlightClass = ['', ...highlightColors.map(color => ' hl hl-' + color)]
+const rowClasses = [false, true].map(odd => ['', ...rowTones].map(tone => highlightClass.map(hl => 'rg-row' + (odd ? ' odd' : '') + (tone ? ' tone-' + tone : '') + hl)))
+const markClasses = [false, true].map(sel => ['', ...rowTones].map(tone => highlightClass.map(hl => 'rg-rn' + (sel ? ' sel' : '') + (tone ? ' tone-' + tone : '') + hl)))
 let nextGridId = 1
+/** What a screen reader hears on a highlighted row's header. */
+const highlightLabel = (highlight: number): string => 'Highlighted ' + highlightColors[highlight - 1]
 
 /** `mode` is the white space mode `value` was written under; `marked`, that the cell shows marks (runs of nodes) in place of `text` alone. */
 interface CellSlot { readonly el: HTMLDivElement; readonly text: Text; column: number; bits: number; value: string; mode: WhitespaceMode; marked: boolean; label: string; shown: boolean; left: number; width: number }
@@ -50,13 +65,21 @@ interface RowSlot {
   readonly el: HTMLDivElement; readonly header: HTMLDivElement; readonly number: Text; readonly mark?: { readonly el: HTMLDivElement; readonly text: Text; size: string }
   readonly cells: CellSlot[]; readonly pin: CellSlot
   row: number; top: number; width: number; odd: boolean; headerSel: boolean; shown: boolean
-  /** 0 for none, else 1 + the tone's index in liveTones. */
+  /** 0 for none, else 1 + the tone's index in rowTones. */
   tone: number
+  /** The tone text last parsed, and its tone (0 for none, else 1 + its index in rowTones). */
+  toneText: string
+  toneOf: number
+  /** A diff row's differing cells, as its tone column lists them after the tone (column numbers, a soft one with "~"), and
+   *  their bits (CHG or SOFT) by column, parsed with the tone text. */
+  cellMarks: ReadonlyMap<number, number> | undefined
+  /** 0 for none, else 1 + the highlight's index in highlightColors. */
+  highlight: number
 }
 /** A pooled column header: the name, then the SQL type (`type`, in muted small text and hidden from screen readers, which read it in the tooltip). Each is
  *  in its own bidi isolate (.rg-cn, .rg-ct), so a name with an unterminated override cannot reorder the type after it. */
 interface HeaderSlot {
-  readonly el: HTMLDivElement; readonly text: Text; readonly type: Text; column: number; sel: boolean; shown: boolean; left: number; width: number
+  readonly el: HTMLDivElement; readonly text: Text; readonly type: Text; column: number; sel: boolean; mark: number; shown: boolean; left: number; width: number
   /** The sort button (grids with `onSort`): its glyph, its place among several keys, and what it shows now ('' unsorted). */
   readonly sort?: { readonly el: HTMLSpanElement; readonly glyph: HTMLSpanElement; readonly order: Text; state: string }
 }
@@ -149,6 +172,13 @@ export class GridView {
   private readonly tone: number
   /** Rows a live revision lists as departed: muted, whatever their tone column says. */
   private muted: ReadonlySet<number> = new Set()
+  /** Highlighted rows (setHighlights); only those of the handle shown are drawn. */
+  private highlights: RowHighlights | undefined
+  private highlightSets: readonly RowHighlights[] = []
+  /** Search in results' marks, while the tab has a search. */
+  private searchMarks: GridMarks | undefined
+  /** A search match revealed in this grid, to bring into view in the panes around it (the results stack) once painted. */
+  private outerReveal: { readonly row: number; readonly column: number; frames: number } | undefined
   private links: Uint8Array
   private readonly gid = nextGridId++
   private readonly slots = new WeakMap<Element, { row?: RowSlot; cell?: CellSlot; header?: HeaderSlot }>()
@@ -357,6 +387,52 @@ export class GridView {
     this.schedule()
   }
   invalidate(): void { this.schedule() }
+  /** Search in results' marks for this grid (undefined: none). Cells marks name by row are drawn only while the grid shows
+   *  the rows they number (`marks.handle`). */
+  setMarks(marks: GridMarks | undefined): void {
+    if (marks === this.searchMarks) return
+    this.searchMarks = marks
+    this.schedule()
+  }
+  /** Scrolls the active match into view: its cell, or in columns mode its column at the rows in view. False when the marks
+   *  number rows this grid does not show (a sort it has not swapped to yet). `select` (F3 in a grid): the match also becomes
+   *  the active cell and this grid takes the focus, so the cell is announced and Copy copies it; only while the focus is
+   *  still in one of the run's grids, so a reveal that waited (for the match's rows, a sort's swap or a search again) never
+   *  takes it from the editor or the search box. */
+  revealMark(select = false): boolean {
+    const marks = this.searchMarks
+    select &&= this.focusInRun()
+    if (marks?.current && marks.handle === this.handle) {
+      // A hidden column (a diff's or live table's tone) is never the active cell.
+      if (select && marks.current.column < this.columns) this.selectCell(marks.current.row, marks.current.column)
+      this.reveal(marks.current.row, marks.current.column)
+      this.outerReveal = { row: marks.current.row, column: marks.current.column, frames: 10 }
+      return true
+    }
+    if (marks?.currentColumn !== undefined && marks.currentColumn < this.columns) {
+      const rows = this.rows()
+      const row = Math.min(Math.max(0, rows - 1), this.viewport?.firstRow ?? this.o.state.selection?.active.row ?? 0)
+      if (select && rows > 0) this.selectCell(row, marks.currentColumn)
+      this.reveal(row, marks.currentColumn)
+      return true
+    }
+    return false
+  }
+  private focusInRun(): boolean { return focusInRun(this.root, this.root.ownerDocument.activeElement) }
+  private selectCell(row: number, column: number): void {
+    this.select(cellSelection(this.o.resultIndex, row, column))
+    this.root.focus({ preventScroll: true })
+  }
+
+  /** The grid's highlighted rows, one set per handle it may show (its result's and a sorted view's): it draws the set of the
+   *  handle it shows, now and after a swap. */
+  setHighlights(sets: readonly RowHighlights[]): void {
+    this.highlightSets = sets
+    const shown = sets.find(set => set.handle === this.handle)
+    if (shown === this.highlights) return
+    this.highlights = shown
+    this.schedule()
+  }
 
   /**
    * Shows another result with the same columns in place of this one (a live table's next revision or segment): widths and
@@ -380,6 +456,7 @@ export class GridView {
     if (this.sizes) { this.sizes.dispose(); this.sizes = this.sizesFor(handle) }
     this.stopHandle = handle.subscribe(() => this.schedule())
     this.muted = new Set(o.muted ?? [])
+    this.highlights = this.highlightSets.find(set => set.handle === handle)
     const selection = this.selection()
     if (selection) {
       state.selection = remapSelection(selection, mapRow, handle.getSnapshot().rowsAvailable, this.columns)
@@ -462,6 +539,24 @@ export class GridView {
     this.schedule()
   }
 
+  /** A grid sized to its rows has nothing to scroll: its match may be below the stack's fold, so the painted cell is
+   *  brought into view in its scrolling ancestors and its own scroller, as little as it takes. A grid the stack has just
+   *  built has no size for its first frames and paints nothing: the reveal waits a few frames for its cell. */
+  private revealOuter(): void {
+    const target = this.outerReveal
+    if (!target) return
+    for (const slot of this.rowSlots) {
+      if (!slot.shown || slot.row !== target.row) continue
+      const cell = slot.cells.find(cell => cell.shown && cell.column === target.column)
+      if (!cell) break
+      this.outerReveal = undefined
+      cell.el.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+      return
+    }
+    if (--target.frames <= 0) this.outerReveal = undefined
+    else this.schedule()
+  }
+
   private schedule(): void {
     if (this.cancelFrame || this.disposed || this.stopped) return
     this.cancelFrame = nextFrame(() => {
@@ -475,6 +570,7 @@ export class GridView {
     const started = performance.now()
     try {
       this.render()
+      this.revealOuter()
       this.failures = 0
     } catch (error) {
       this.o.onError(error)
@@ -839,7 +935,7 @@ export class GridView {
       mark.el.append(mark.text)
       this.marksRows.append(mark.el)
     }
-    const slot: RowSlot = { el, header, number, ...mark ? { mark } : {}, cells: [], pin: this.createCell(el), row: -1, top: Number.NaN, width: -1, odd: false, headerSel: false, shown: false, tone: 0 }
+    const slot: RowSlot = { el, header, number, ...mark ? { mark } : {}, cells: [], pin: this.createCell(el), row: -1, top: Number.NaN, width: -1, odd: false, headerSel: false, shown: false, tone: 0, highlight: 0, toneText: '', toneOf: 0, cellMarks: undefined }
     this.slots.set(el, { row: slot })
     this.rowsEl.append(el)
     if (withCells) for (let index = 0; index < this.cellsPerRow; index++) slot.cells.push(this.createCell(el, slot))
@@ -909,7 +1005,7 @@ export class GridView {
           button.title = 'Sort ascending'
         }
         this.head.append(el)
-        const header: HeaderSlot = { el, text, type, column: -1, sel: false, shown: false, left: Number.NaN, width: -1, ...sort ? { sort } : {} }
+        const header: HeaderSlot = { el, text, type, column: -1, sel: false, mark: 0, shown: false, left: Number.NaN, width: -1, ...sort ? { sort } : {} }
         this.slots.set(el, { header })
         this.headerSlots.push(header)
       }
@@ -946,6 +1042,11 @@ export class GridView {
   }
 
   private render(): void {
+    // A horizontal scroll bar that appears as columns widen shrinks the client box without resizing the scroller, and
+    // ResizeObserver does not report it: a stale height hid the last row under the bar and undid scrolling to it. Read
+    // in the frame's read phase, with the offsets below.
+    this.viewportWidth = this.scroller.clientWidth
+    this.viewportHeight = this.scroller.clientHeight
     const width = this.viewportWidth, height = this.viewportHeight
     // A hidden pane (Ctrl+R) or a background tab has no size: nothing to paint until it is shown.
     if (width <= 0 || height <= 0) return
@@ -1121,8 +1222,9 @@ export class GridView {
       const bits = activeCell.bits
       // A cell whose rows are still being read says so: an empty name reads as "blank", and the value that follows is a
       // name change some screen readers do not read for the active cell.
-      const toned = this.o.toneLabel && active ? this.activeTone(active.row) : undefined
-      const label = bits & LOAD ? 'Loading' : displayText(activeCell.value) + (bits & ERR ? ', could not be read' : bits & NULL ? ', null value' : '') + (bits & TRUNC ? ', truncated' : '') + (bits & LINK ? ', link, press Enter to open' : '') + (toned ? ', ' + toned : '')
+      const toned = active ? this.activeTone(active.row) : undefined
+      const diff = bits & CHG ? ', changed' : bits & SOFT ? ', differs only by collation' : ''
+      const label = bits & LOAD ? 'Loading' : displayText(activeCell.value) + (bits & ERR ? ', could not be read' : bits & NULL ? ', null value' : '') + (bits & TRUNC ? ', truncated' : '') + (bits & LINK ? ', link, press Enter to open' : '') + (bits & HIT ? ', search match' : '') + diff + (toned ? ', ' + toned : '')
       if (label !== activeCell.label) { activeCell.label = label; activeCell.el.setAttribute('aria-label', label) }
     }
   }
@@ -1130,7 +1232,9 @@ export class GridView {
   /** The tone label of the active row (the toneLabel option), from the slot that painted it. */
   private activeTone(row: number): string | undefined {
     const slot = this.pinSlot.shown && this.pinSlot.row === row ? this.pinSlot : this.rowSlots.find(item => item.shown && item.row === row)
-    return slot && slot.tone > 0 ? this.o.toneLabel?.(liveTones[slot.tone - 1]) : undefined
+    if (!slot || slot.tone === 0) return undefined
+    const tone = rowTones[slot.tone - 1]
+    return tone === 'added' || tone === 'removed' ? diffLabels[tone] : this.o.toneLabel?.(tone)
   }
 
   /**
@@ -1171,24 +1275,40 @@ export class GridView {
       if (top !== slot.top) { slot.top = top; slot.el.style.top = top + 'px'; if (slot.mark) slot.mark.el.style.top = top + 'px' }
       if (!slot.shown) { slot.shown = true; slot.el.style.display = ''; if (slot.mark) slot.mark.el.style.display = '' }
     }
-    const odd = row % 2 === 1, tone = this.toneOf(row, tile)
-    if (odd !== slot.odd || tone !== slot.tone) { slot.odd = odd; slot.el.className = rowClasses[odd ? 1 : 0][tone] }
+    // A row's tone text is parsed only when it differs from the one the slot last painted (scrolling repaints rows).
+    const toneText = this.toneOf(row, tile)
+    if (toneText !== slot.toneText) {
+      const space = toneText.indexOf(' ')
+      slot.toneText = toneText
+      slot.toneOf = toneIndex.get(space < 0 ? toneText : toneText.slice(0, space)) ?? 0
+      slot.cellMarks = space < 0 ? undefined : cellMarksOf(toneText.slice(space + 1))
+    }
+    const odd = row % 2 === 1, tone = slot.toneOf, highlight = colorAt(this.highlights, row)
+    if (odd !== slot.odd || tone !== slot.tone || highlight !== slot.highlight) {
+      slot.odd = odd
+      slot.el.className = rowClasses[odd ? 1 : 0][tone][highlight]
+      if (highlight !== slot.highlight) {
+        if (highlight) slot.header.setAttribute('aria-description', highlightLabel(highlight))
+        else slot.header.removeAttribute('aria-description')
+      }
+    }
     if (slot.width !== this.width) { slot.width = this.width; slot.el.style.width = this.width + 'px' }
     let headerSel = false
     for (const item of ranges) if (row >= item.top && row <= item.bottom) { headerSel = true; break }
-    if (headerSel !== slot.headerSel || tone !== slot.tone) { slot.headerSel = headerSel; if (slot.mark) slot.mark.el.className = markClasses[headerSel ? 1 : 0][tone] }
+    if (headerSel !== slot.headerSel || tone !== slot.tone || highlight !== slot.highlight) { slot.headerSel = headerSel; if (slot.mark) slot.mark.el.className = markClasses[headerSel ? 1 : 0][tone][highlight] }
     if (slot.mark) this.paintSize(slot.mark, row)
     slot.tone = tone
+    slot.highlight = highlight
     let activeCell: CellSlot | undefined
     const perRow = slot.cells.length
     for (let column = range.firstColumn; column <= range.lastColumn; column++) {
       const cell = slot.cells[column % perRow]
-      this.paintCell(cell, row, column, ranges, active, tile, columnsMoved)
+      this.paintCell(cell, row, column, ranges, active, tile, columnsMoved, slot.cellMarks)
       if (cell.bits & ACT) activeCell = cell
     }
     for (const cell of slot.cells) if (cell.column < range.firstColumn || cell.column > range.lastColumn) this.hideCell(cell)
     if (active && active.row === row && (active.column < range.firstColumn || active.column > range.lastColumn)) {
-      this.paintCell(slot.pin, row, active.column, ranges, active, tile, columnsMoved)
+      this.paintCell(slot.pin, row, active.column, ranges, active, tile, columnsMoved, slot.cellMarks)
       activeCell = slot.pin
     } else this.hideCell(slot.pin)
     return activeCell
@@ -1220,18 +1340,19 @@ export class GridView {
     mark.el.title = `Row ${formatCount(row + 1)}: ${size.estimated ? 'about ' : ''}${formatCount(size.bytes)} ${plural(size.bytes, 'byte')} (the sum of DATALENGTH over its columns)`
   }
 
-  /** A row's tone: muted when the revision lists it departed, else its tone column's (0 for none or an unknown name). */
-  private toneOf(row: number, tile: (row: number, column: number) => RowWindow | null): number {
-    if (this.muted.has(row)) return toneIndex.get('muted')!
-    if (this.tone < 0) return 0
+  /** A row's tone text: muted when the revision lists it departed, else its tone column's ('' for none). A diff's tone may
+   *  list the row's differing cells after its name. */
+  private toneOf(row: number, tile: (row: number, column: number) => RowWindow | null): string {
+    if (this.muted.has(row)) return 'muted'
+    if (this.tone < 0) return ''
     const window = tile(row, this.tone)
-    if (!window || row - window.first >= window.count || this.tone >= window.colEnd) return 0
+    if (!window || row - window.first >= window.count || this.tone >= window.colEnd) return ''
     const index = (row - window.first) * (window.colEnd - window.colStart) + this.tone - window.colStart
-    return window.flags[index] & (FLAG_NULL | FLAG_ERROR) ? 0 : toneIndex.get(window.text[index]) ?? 0
+    return window.flags[index] & (FLAG_NULL | FLAG_ERROR) ? '' : window.text[index]
   }
 
   private paintCell(cell: CellSlot, row: number, column: number, ranges: readonly CellRange[], active: { row: number; column: number } | undefined,
-    tile: (row: number, column: number) => RowWindow | null, columnsMoved: boolean): void {
+    tile: (row: number, column: number) => RowWindow | null, columnsMoved: boolean, cellMarks?: ReadonlyMap<number, number>): void {
     if (cell.column !== column || columnsMoved) {
       if (cell.column !== column) { cell.column = column; cell.el.setAttribute('aria-colindex', String(column + 2)) }
       const left = this.rowHeader + this.layout.xOf(column), width = this.layout.width(column)
@@ -1249,8 +1370,14 @@ export class GridView {
       else if (flags & FLAG_NULL) { value = 'NULL'; bits = NULL }
       else { value = window.text[index]; if (flags & FLAG_TRUNCATED) bits = TRUNC; if (this.links[column]) bits |= LINK }
     }
+    if (cellMarks && !(bits & LOAD)) bits |= cellMarks.get(column) ?? 0
     if (covered(ranges, row, column)) bits |= SEL
     if (active && active.row === row && active.column === column) bits |= ACT
+    const marks = this.searchMarks
+    if (marks) {
+      if (marks.cells && marks.handle === this.handle && marks.cells.has(cellKey(row, column))) bits |= marks.current && marks.current.row === row && marks.current.column === column ? HIT | CUR : HIT
+      if (marks.columns && !marks.columns[column]) bits |= DIM
+    }
     if (bits !== cell.bits) {
       if ((bits ^ cell.bits) & SEL) cell.el.setAttribute('aria-selected', bits & SEL ? 'true' : 'false')
       cell.bits = bits
@@ -1333,6 +1460,12 @@ export class GridView {
       let sel = false
       for (const item of ranges) if (column >= item.left && column <= item.right) { sel = true; break }
       if (sel !== header.sel) { header.sel = sel; header.el.classList.toggle('sel', sel) }
+      const columns = this.searchMarks?.columns, mark = !columns ? 0 : !columns[column] ? 3 : this.searchMarks!.currentColumn === column ? 2 : 1
+      if (mark !== header.mark) {
+        if (header.mark) header.el.classList.remove(headerMarks[header.mark])
+        if (mark) header.el.classList.add(headerMarks[mark])
+        header.mark = mark
+      }
       if (header.sort) this.paintSort(header, header.sort, column)
     }
     for (const header of this.headerSlots) if (!used.has(header) && header.shown) { header.shown = false; header.column = -1; header.el.style.display = 'none'; header.el.removeAttribute('aria-colindex') }
@@ -1383,14 +1516,27 @@ export class GridView {
 export function gridLabel(name: string, rows: number, columns: number, open: boolean): string {
   return `${name}, ${formatCount(rows)} ${plural(rows, 'row')}, ${formatCount(columns)} ${plural(columns, 'column')}${open ? ', still loading' : ''}`
 }
+/** A diff row's differing cells from its tone text's tail ("4 ~6": column 4 changed, column 6 equal only by collation). */
+export function cellMarksOf(text: string): ReadonlyMap<number, number> | undefined {
+  if (!text) return undefined
+  const marks = new Map<number, number>()
+  for (const token of text.split(' ')) {
+    const soft = token.startsWith('~'), column = Number(soft ? token.slice(1) : token)
+    if (Number.isInteger(column) && column >= 0) marks.set(column, soft ? SOFT : CHG)
+  }
+  return marks.size > 0 ? marks : undefined
+}
+
 export function toneColumnOf(descriptor: Pick<ResultDescriptor, 'columns'>): number {
   const last = descriptor.columns.length - 1
   return last >= 1 && descriptor.columns[last].role === 'tone' ? last : -1
 }
 
 /** The first cell, as the current cell of a grid nothing has been selected in. */
-function firstCell(resultIndex: number): GridSelection {
-  const cell = { row: 0, column: 0 }
+function firstCell(resultIndex: number): GridSelection { return cellSelection(resultIndex, 0, 0) }
+/** One cell, selected and active. */
+function cellSelection(resultIndex: number, row: number, column: number): GridSelection {
+  const cell = { row, column }
   return { resultIndex, blocks: [{ kind: 'cells', anchor: cell, focus: cell }], active: cell }
 }
 
@@ -1411,3 +1557,10 @@ const sortMap = (keys: readonly HeaderSortKey[] = []): ReadonlyMap<number, { rea
   new Map(keys.map((key, at) => [key.column, { at, descending: key.descending }]))
 const sameSortMap = (a: ReadonlyMap<number, { readonly at: number; readonly descending: boolean }>, b: ReadonlyMap<number, { readonly at: number; readonly descending: boolean }>) =>
   a.size === b.size && [...a].every(([column, key]) => b.get(column)?.at === key.at && b.get(column)?.descending === key.descending)
+
+/** Whether the focused element is in a grid of `root`'s run: results grids name their tab, and a live grid (no tab) never
+ *  counts. A search step's reveal that waited selects only while this holds, so it never takes the focus from elsewhere. */
+export function focusInRun(root: Pick<HTMLElement, 'dataset'>, active: Pick<Element, 'closest'> | null): boolean {
+  const tabId = root.dataset.tabId
+  return tabId !== undefined && active?.closest<HTMLElement>('[data-result-grid]')?.dataset.tabId === tabId
+}

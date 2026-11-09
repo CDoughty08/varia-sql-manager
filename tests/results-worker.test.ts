@@ -279,6 +279,43 @@ describe('results worker core', () => {
     expect(posted.at(-1)).toMatchObject({ type: 'error', id: 73, code: 'PORT_CLOSED' })
   })
 
+  it('relays row identity requests to main by view, their answers and failures to the page, and cancels an identify', () => {
+    const { core, sent, posted } = fixture()
+    core.handle({ type: 'identity', id: 100, key: { ...key, view: 3 }, request: { method: 'identify', by: 'column', column: 2 } })
+    expect(sent.at(-1)).toEqual({ t: 'identify', rid: 1, generation: 1, resultId: 5, by: 'column', column: 2 })
+    core.receive({ t: 'end', rid: 1, ok: true, result: { column: 2, unique: true, approximate: false, rows: 9 } })
+    expect(posted.at(-1)).toEqual({ type: 'identity', id: 100, result: { column: 2, unique: true, approximate: false, rows: 9 } })
+    core.handle({ type: 'identity', id: 101, key: { ...key, view: 3 }, request: { method: 'rowIds', firstRow: 4, count: 2 } })
+    expect(sent.at(-1)).toEqual({ t: 'rowIds', rid: 2, generation: 1, resultId: 5, firstRow: 4, count: 2, viewId: 3 })
+    core.handle({ type: 'identity', id: 102, key, request: { method: 'findRows', ids: [7, 8] } })
+    expect(sent.at(-1)).toEqual({ t: 'findRows', rid: 3, generation: 1, resultId: 5, ids: [7, 8] })
+    core.receive({ t: 'end', rid: 3, ok: false, code: 'IDENTITY_NOT_FOUND', message: 'Tell the rows apart first.' })
+    expect(posted.at(-1)).toMatchObject({ type: 'error', id: 102, code: 'IDENTITY_NOT_FOUND' })
+    core.handle({ type: 'identity', id: 105, key: { ...key, view: 3 }, request: { method: 'diff', right: 6, exact: false, context: 1 } })
+    expect(sent.at(-1)).toEqual({ t: 'diff', rid: 4, generation: 1, resultId: 5, right: 6, exact: false, context: 1 })
+    core.receive({ t: 'end', rid: 4, ok: true, result: { key: 'Id' } as never })
+    expect(posted.at(-1)).toEqual({ type: 'identity', id: 105, result: { key: 'Id' } })
+    core.handle({ type: 'identity', id: 103, key, request: { method: 'identify', by: 'auto' } })
+    core.handle({ type: 'cancel', id: 103 })
+    expect(sent.at(-1)).toEqual({ t: 'cancel', rid: 5 })
+    core.handle({ type: 'identity', id: 104, key: { ...key, generation: 2 }, request: { method: 'identify', by: 'auto' } })
+    expect(posted.at(-1)).toMatchObject({ type: 'error', id: 104, code: 'RESULT_UNAVAILABLE' })
+    // A diff the page gave up whose answer came anyway is a stored result nobody holds: the worker closes it.
+    core.handle({ type: 'identity', id: 106, key, request: { method: 'diff', right: 6, exact: false, context: 1 } })
+    const diffRid = (sent.at(-1) as { rid: number }).rid
+    core.handle({ type: 'cancel', id: 106 })
+    expect(sent.at(-1)).toEqual({ t: 'cancel', rid: diffRid })
+    const postedBefore = posted.length
+    core.receive({ t: 'end', rid: diffRid, ok: true, result: { descriptor: { resultId: 77 } } as never })
+    expect(sent.at(-1)).toMatchObject({ t: 'close', generation: 1, resultIds: [77] })
+    expect(posted.length).toBe(postedBefore)
+    core.receive({ t: 'end', rid: (sent.at(-1) as { rid: number }).rid, ok: true, result: { closed: 1, usedBytes: 0 } as never })
+    expect(posted.length).toBe(postedBefore)
+    // Main drops answers meant for a replaced port: a request asked on it fails at once.
+    core.attach({ postMessage: () => {} })
+    expect(posted.filter(message => message.type === 'error' && (message.id === 101 || message.id === 103)).map(message => (message as { code: string }).code)).toEqual(['PORT_CLOSED', 'PORT_CLOSED'])
+  })
+
   it('sorts through main, caches a view\'s pages apart from its result\'s, and reads and sizes rows by view position', () => {
     const { core, sent, posted, window, reads, serve, answer } = fixture()
     const sort = [{ column: 0, descending: true, mode: 'value' as const }]
@@ -342,6 +379,27 @@ describe('results worker core', () => {
     expect(posted.at(-1)).toMatchObject({ type: 'error', id: 94, code: 'PORT_CLOSED' })
   })
 
+  it('searches through main by view position, relays the answer and failures, and cancels a search the page gave up', () => {
+    const { core, sent, posted } = fixture()
+    core.handle({ type: 'search', id: 100, key: { ...key, view: 3 }, text: 'abc', fromRow: 0, maxMatches: 50, backward: false })
+    expect(sent.at(-1)).toEqual({ t: 'search', rid: 1, generation: 1, resultId: 5, text: 'abc', fromRow: 0, maxMatches: 50, viewId: 3 })
+    const result = { rows: 64, total: 2, first: 0, matchRows: [4, 9], matchColumns: [1, 0], complete: true, approximate: false }
+    core.receive({ t: 'end', rid: 1, ok: true, result })
+    expect(posted.at(-1)).toEqual({ type: 'search', id: 100, result })
+    core.handle({ type: 'search', id: 101, key, text: 'abc', fromRow: 30, maxMatches: 50, backward: true })
+    expect(sent.at(-1)).toEqual({ t: 'search', rid: 2, generation: 1, resultId: 5, text: 'abc', fromRow: 30, maxMatches: 50, backward: true })
+    core.receive({ t: 'end', rid: 2, ok: false, code: 'VIEW_NOT_FOUND', message: 'This sorted view was closed.' })
+    expect(posted.at(-1)).toMatchObject({ type: 'error', id: 101, code: 'VIEW_NOT_FOUND' })
+    core.handle({ type: 'search', id: 102, key, text: 'abc', fromRow: 0, maxMatches: 50, backward: false })
+    core.handle({ type: 'cancel', id: 102 })
+    expect(sent.at(-1)).toEqual({ t: 'cancel', rid: 3 })
+    core.handle({ type: 'search', id: 103, key: { ...key, generation: 2 }, text: 'abc', fromRow: 0, maxMatches: 50, backward: false })
+    expect(posted.at(-1)).toMatchObject({ type: 'error', id: 103, code: 'RESULT_UNAVAILABLE' })
+    // Main drops answers meant for a replaced port, so a search asked on it fails at once.
+    core.handle({ type: 'search', id: 104, key, text: 'abc', fromRow: 0, maxMatches: 50, backward: false })
+    core.attach({ postMessage: () => {} })
+    expect(posted.filter(message => message.type === 'error').map(message => (message as { id: number }).id)).toEqual(expect.arrayContaining([102, 104]))
+  })
   it('relays column profiles through main by result or view, cancels them, and fails those asked on a replaced port', () => {
     const { core, sent, posted } = fixture()
     core.handle({ type: 'profile', id: 100, key: { ...key, view: 3 }, columns: [1, 0] })

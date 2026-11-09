@@ -11,10 +11,10 @@ default. While it is off, pinned tabs still reopen, and a close asks about unsav
 
 ## Pinned shelf
 
-- The pin button moves a query or other text tab to the shelf above the unpinned tabs. Click it again to unpin the tab.
-  Drag or use Move Left and Move Right to reorder tabs within either shelf.
+- The pin button moves a query or other text tab to its editor group's shelf above the unpinned tabs. Click it again
+  to unpin the tab. Drag or use Move Left and Move Right to reorder tabs within either shelf.
 - Hold Ctrl and scroll down over either shelf to add rows there. Scroll up to remove rows. The row buttons do the same,
-  and the overflow button lists tabs that are out of view.
+  and the overflow button lists tabs that are out of view. Each shelf and each editor group keeps its own row count.
 - The SID badge to the right of a query name shows its SQL Server session ID as soon as execution acquires a session.
   A dash means there is no known live session. Restored queries start disconnected.
 - View › Reload Window keeps pinned tabs and reopens them disconnected. Unpinned tabs follow the workbench's existing

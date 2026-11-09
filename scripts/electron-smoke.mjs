@@ -1,22 +1,25 @@
 import { electron, expect } from './fixtures/smoke.mjs'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { resizeContent } from './fixtures/window-resize.mjs'
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
 import {
-  activeDocument, anyResultGrid, backendReady, closeDocumentButton, documentTabs, editorText as editorTextOf, emptyState, emptyStateIcon, emptyStateTitle, errorMessages,
-  executingMark, explorerFooter, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, primaryAction, queryBar, queryBarButton, queryConnection, queryDatabase, queryServer,
-  queryStatus, resultGrid, statusChips, toolbar, toolbarButton, unsavedMark, workspaceEmpty
+  activeDocument, anyResultGrid, backendReady, closeDocumentButton, documentTab, documentTabs, editorText as editorTextOf, emptyState, emptyStateIcon, emptyStateTitle, errorMessages,
+  editorGroups, environmentPill, executingMark, explorerFooter, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, primaryAction, queryBar, queryBarButton, queryConnection, queryDatabase, queryServer,
+  queryStatus, readOnlyMark, resultGrid, selectOpenDocument, statusChips, tabNameBox, toolbar, toolbarButton, unsavedMark, workspaceEmpty
 } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'electron-profile-'))
+const crowdedQuery = join(profile, 'crowded-session.sql')
 // The fake backend (tests/fixtures/backend.mjs, workbench mode) speaks protocol v2 through main's real pipeline and
 // serves the SQL fixtures below as stored result pages; its control directory records calls and holds methods on cue.
 const control = await mkdtemp(resolve('artifacts', 'electron-control-'))
 await mkdir(join(control, 'hold'))
 await mkdir(join(control, 'allow'))
 await mkdir(join(control, 'extra'))
+await writeFile(join(control, 'wide-session-ids'), '')
 const calls = async () => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
 const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }
 delete env.ELECTRON_RUN_AS_NODE
@@ -298,8 +301,8 @@ try {
   await page.keyboard.press('Control+Y')
   await expect.poll(editorText).toBe(typed)
   const historyTab = await activeDocument(page).getAttribute('aria-label')
-  await documentTabs(page).getByRole('tab', { name: 'SQLQuery1.sql', exact: true }).click()
-  await documentTabs(page).getByRole('tab', { name: historyTab, exact: true }).click()
+  await selectOpenDocument(page, 'SQLQuery1.sql')
+  await selectOpenDocument(page, historyTab)
   await page.locator('.monaco-editor [role="textbox"]').focus()
   await page.keyboard.press('Control+Z')
   await expect.poll(editorText).not.toBe(typed)
@@ -404,18 +407,21 @@ try {
   await toolbarButton(page, 'New query').click()
   await typeSql('SELECT 88 AS close_me;')
   const closeTarget = await activeDocument(page).getAttribute('aria-label')
-  await documentTabs(page).getByRole('tab', { name: 'saved-as.sql', exact: true }).click()
+  await selectOpenDocument(page, 'saved-as.sql')
+  // Keep the inactive close target reachable at the compact CI size without selecting it before its close prompt.
+  if (await documentTab(page, closeTarget).getAttribute('data-tab-overflow') !== null)
+    await documentTabs(page).getByRole('button', { name: 'More query rows', exact: true }).click()
   await dialogs({ holdConfirm: true, closeResponse: 1 })
   await closeDocumentButton(page, closeTarget).click()
   await expect.poll(() => application.evaluate(() => typeof globalThis.variaReleaseConfirm)).toBe('function')
   expect(await application.evaluate(() => globalThis.variaDialogs.prompts.at(-1))).toContain(closeTarget)
-  await documentTabs(page).getByRole('tab', { name: 'SQLQuery1.sql', exact: true }).click()
+  await selectOpenDocument(page, 'SQLQuery1.sql')
   await application.evaluate(() => { globalThis.variaDialogs.holdConfirm = false; globalThis.variaReleaseConfirm(); delete globalThis.variaReleaseConfirm })
   await expect(documentTabs(page).getByRole('tab', { name: closeTarget, exact: true })).toHaveCount(0)
   await expect(activeDocument(page)).toHaveAttribute('aria-label', 'SQLQuery1.sql')
   await expect(documentTabs(page).getByRole('tab', { name: 'saved-as.sql', exact: true })).toBeVisible()
   await dialogs({ closeResponse: 2 })
-  await documentTabs(page).getByRole('tab', { name: 'saved-as.sql', exact: true }).click()
+  await selectOpenDocument(page, 'saved-as.sql')
   await menu('file.close')
   await expect(documentTabs(page).getByRole('tab')).toHaveCount(1)
   const unicodePath = artifact('unicode-query.sql')
@@ -440,6 +446,7 @@ try {
   await expect(documentTabs(page).getByRole('tab')).toHaveCount(2)
   await dialogs({ closeResponse: 1 })
   for (const name of await documentTabs(page).getByRole('tab').evaluateAll(elements => elements.map(element => element.getAttribute('aria-label')))) {
+    await selectOpenDocument(page, name)
     await closeDocumentButton(page, name).click()
     await expect(documentTabs(page).getByRole('tab', { name, exact: true })).toHaveCount(0)
   }
@@ -457,17 +464,24 @@ try {
 
   // Multi-server routing against the fake backend's fixtures, without external credentials.
   const executions = async () => (await calls()).filter(call => call.method === 'query.execute')
-  async function connect(server) {
+  async function connect(server, environment) {
     await toolbarButton(page, 'Connect').click()
     await page.getByLabel('Server Name', { exact: true }).fill(server)
     await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
+    if (environment) {
+      const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
+      const custom = dialog.getByRole('button', { name: 'Custom Properties', exact: true })
+      if (await custom.getAttribute('aria-expanded') !== 'true') await custom.click()
+      await dialog.getByLabel('Environment', { exact: true }).selectOption('custom')
+      await dialog.getByLabel('Custom environment label', { exact: true }).fill(environment)
+    }
     await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
     await expect(page.getByRole('dialog')).toHaveCount(0)
     await expect(await explorerRow(page, server)).toBeVisible()
   }
   // The servers also list databases whose names differ only in their spaces.
   await writeFile(join(control, 'spaced-databases'), '')
-  await connect('server-a')
+  await connect('server-a', 'Long environment name')
   const tabA = await activeDocument(page).getAttribute('aria-label')
   const idA = await queryServer(page).inputValue()
   await queryDatabase(page).selectOption('AppData')
@@ -494,7 +508,7 @@ try {
     await expect(queryDatabase(page)).toHaveAttribute('title', `Database: ${name}`)
   }
   await typeSql('SELECT 1;')
-  await connect('server-b')
+  await connect('server-b', 'Staging')
   const tabB = await activeDocument(page).getAttribute('aria-label')
   const idB = await queryServer(page).inputValue()
   expect(idA).not.toBe(idB)
@@ -502,7 +516,7 @@ try {
   await typeSql('SELECT 2;')
   await queryBarButton(page, /Execute/).click()
   await expect(anyResultGrid(page)).toContainText('server-b')
-  await documentTabs(page).getByRole('tab', { name: tabA, exact: true }).click()
+  await selectOpenDocument(page, tabA)
   await expect(queryServer(page)).toHaveValue(idA)
   await expect(queryDatabase(page)).toHaveValue('AppData')
   await queryBarButton(page, /Execute/).click()
@@ -512,19 +526,91 @@ try {
   expect(executed.map(call => [call.connectionId, call.database])).toEqual([[idB, 'master'], [idA, 'AppData']])
   expect(executed.every(call => !!call.sessionId && call.startLine === 1)).toBe(true)
   expect(executed.every(call => call.timeoutSeconds === 0)).toBe(true)
+  // A real connected custom environment shares a bounded cell with the name, SID and actions, including in split groups.
+  const connectedTab = documentTab(page, tabA)
+  await expect(environmentPill(connectedTab, 'tab')).toContainText('Long environment name')
+  await expect(connectedTab.locator(part.tabSid)).toHaveText(/^SID \d{5}$/)
+  const connectedDescription = await connectedTab.getAttribute('aria-description')
+  expect(connectedDescription).toContain('Long environment name')
+  expect(connectedDescription).toMatch(/SQL session ID \d+/)
+  const tabGeometry = (target = connectedTab) => target.evaluate((tab, part) => {
+    const box = element => element?.getBoundingClientRect()
+    const inside = (inner, outer) => !!inner && !!outer && inner.width > 0 && inner.left >= outer.left - 0.5 && inner.right <= outer.right + 0.5 && inner.top >= outer.top - 0.5 && inner.bottom <= outer.bottom + 0.5
+    const bounds = box(tab), select = box(tab.querySelector(part.tabSelect)), name = box(tab.querySelector(part.tabName)), sid = box(tab.querySelector(part.tabSid))
+    const pin = box(tab.querySelector('button[aria-label^="Pin "], button[aria-label^="Unpin "]')), close = box(tab.querySelector('button[aria-label^="Close "]'))
+    return {
+      cellWidth: bounds.width,
+      nameVisible: inside(name, select) && name.right <= sid.left + 0.5,
+      sidVisible: inside(sid, select),
+      actionsVisible: inside(pin, bounds) && inside(close, bounds) && sid.right <= pin.left + 0.5 && pin.right <= close.left + 0.5
+    }
+  }, part)
+  const beforeSidRegression = await page.evaluate(() => [innerWidth, innerHeight])
+  await resizeContent(application, page, 1440, 900)
+  await expect.poll(tabGeometry).toMatchObject({ nameVisible: true, sidVisible: true, actionsVisible: true })
+  await resizeContent(application, page, 1024, 720)
+  await page.keyboard.press('Control+\\')
+  await expect(editorGroups(page)).toHaveCount(2)
+  await expect(connectedTab).toHaveAttribute('aria-description', connectedDescription)
+  await expect.poll(tabGeometry).toMatchObject({ nameVisible: true, sidVisible: true, actionsVisible: true })
+  await connectedTab.focus()
+  await page.keyboard.press('F2')
+  await expect(tabNameBox(page)).toBeVisible()
+  await expect.poll(tabGeometry).toMatchObject({ sidVisible: true, actionsVisible: true })
+  await page.keyboard.press('Escape')
+  await page.keyboard.press('Alt+w')
+  await page.getByRole('menu', { name: 'Window', exact: true }).getByRole('menuitem', { name: 'Join All Editor Groups', exact: true }).click()
+  await expect(editorGroups(page)).toHaveCount(1)
+  await resizeContent(application, page, ...beforeSidRegression)
+  await selectOpenDocument(page, tabA)
+  console.log('Electron checks: long custom environment labels keep the query name, live SID and tab actions visible at full and split widths, including the SID during inline rename.')
   // F5, which Execute shows, runs the query from the query bar too.
   await queryDatabase(page).focus()
   await page.keyboard.press('F5')
   await expect.poll(async () => (await executions()).length).toBe(executed.length + 1)
   expect((await executions()).at(-1).params).toMatchObject({ connectionId: idA, database: 'AppData', sql: 'SELECT 1;' })
   await expect(queryBarButton(page, /Execute/)).toBeEnabled()
+  // Preset environments yield too: a read-only, running query still fits its name, five-digit SID and actions.
+  await selectOpenDocument(page, tabB)
+  await writeFile(crowdedQuery, 'WAIT_FOR_CANCEL')
+  await chmod(crowdedQuery, 0o444)
+  await dialogs({ openPaths: [crowdedQuery] })
+  await menu('file.open')
+  const crowdedTab = documentTab(page, 'crowded-session.sql')
+  await expect(crowdedTab).toBeVisible()
+  await expect(queryServer(page)).toHaveValue(idB)
+  await expect(environmentPill(crowdedTab, 'tab')).toHaveText('STAGING')
+  // Root can write any file; Windows and ordinary Linux users exercise the real read-only attribute.
+  if (process.getuid?.() !== 0) await expect(readOnlyMark(crowdedTab)).toHaveCount(1)
+  await crowdedTab.focus()
+  await page.keyboard.press('Enter')
+  await resizeContent(application, page, 1024, 720)
+  await page.keyboard.press('Control+\\')
+  await expect(editorGroups(page)).toHaveCount(2)
+  await queryBarButton(page, /Execute/).click()
+  await expect(executingMark(crowdedTab)).toHaveCount(1)
+  await expect(crowdedTab.locator(part.tabSid)).toHaveText(/^SID \d{5}$/)
+  await expect.poll(() => tabGeometry(crowdedTab)).toMatchObject({ nameVisible: true, sidVisible: true, actionsVisible: true })
+  await queryBarButton(page, 'Cancel').click()
+  await expect(executingMark(crowdedTab)).toHaveCount(0)
+  await page.keyboard.press('Alt+w')
+  await page.getByRole('menu', { name: 'Window', exact: true }).getByRole('menuitem', { name: 'Join All Editor Groups', exact: true }).click()
+  await expect(editorGroups(page)).toHaveCount(1)
+  await closeDocumentButton(page, 'crowded-session.sql').click()
+  await expect(crowdedTab).toHaveCount(0)
+  await chmod(crowdedQuery, 0o644)
+  await rm(crowdedQuery)
+  await dialogs({ openPaths: [] })
+  await resizeContent(application, page, ...beforeSidRegression)
+  await selectOpenDocument(page, tabA)
+  console.log('Electron checks: a preset environment, read-only mark and running spinner keep the query name, five-digit live SID and actions inside a compact split tab.')
   // Selection line offsets and both editor shortcuts use the same query command.
   await typeSql('-- heading\nSELECT 10;\nSELECT 20;')
   await page.keyboard.press('Control+Home')
   await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown')
   await page.keyboard.press('Shift+End')
-  await documentTabs(page).getByRole('tab', { name: tabB, exact: true }).click()
-  await documentTabs(page).getByRole('tab', { name: tabA, exact: true }).click()
+  await selectOpenDocument(page, tabB)
+  await selectOpenDocument(page, tabA)
   await page.locator('.monaco-editor [role="textbox"]').focus()
   await page.keyboard.press('F5')
   await expect.poll(async () => (await executions()).at(-1)?.params.sql).toBe('SELECT 20;')
@@ -819,7 +905,7 @@ try {
   await expect(queryBarButton(page, 'Cancel')).toBeEnabled()
   // A click on the bar's buttons leaves the keyboard in the query, as SSMS's toolbar does.
   expect(await page.evaluate(() => !!document.activeElement?.closest('.monaco-editor'))).toBe(true)
-  await documentTabs(page).getByRole('tab', { name: tabB, exact: true }).click()
+  await selectOpenDocument(page, tabB)
   await typeSql('WAIT_FOR_CANCEL')
   await queryBarButton(page, /Execute/).click()
   await expect(executingMark(documentTabs(page))).toHaveCount(2)
@@ -828,7 +914,7 @@ try {
   await expect(page.getByRole('contentinfo', { name: 'Status bar', exact: true })).toHaveAttribute('data-state', 'executing')
   await queryBarButton(page, 'Cancel').click()
   await expect(executingMark(documentTabs(page))).toHaveCount(1)
-  await documentTabs(page).getByRole('tab', { name: tabA, exact: true }).click()
+  await selectOpenDocument(page, tabA)
   await queryBarButton(page, 'Cancel').click()
   await expect(executingMark(documentTabs(page))).toHaveCount(0)
   // Tabs are whole pixels wide, so each tab's kind icon starts on a whole pixel, as the first one's does.
@@ -845,7 +931,7 @@ try {
   await explorerToolbar(page).getByRole('button', { name: 'Disconnect', exact: true }).click()
   await expect.poll(async () => (await explorerLines(page)).some(line => line.startsWith('1 server-b'))).toBe(false)
   await expect(queryServer(page)).toHaveValue(idA)
-  await documentTabs(page).getByRole('tab', { name: tabB, exact: true }).click()
+  await selectOpenDocument(page, tabB)
   await expect(queryServer(page)).toHaveValue('')
   // A disconnected query's Execute connects it first.
   await expect(queryBarButton(page, /Execute/)).toBeEnabled()
@@ -868,7 +954,7 @@ try {
   await page.screenshot({ path: artifact('workbench-compact.png') })
   // With a connected query's facts in the status bar, every other segment still fits whole; only the facts give way,
   // and they ellipsize. The search box shows as much of its label as fits, never a label cut short.
-  await documentTabs(page).getByRole('tab', { name: tabA, exact: true }).click()
+  await selectOpenDocument(page, tabA)
   await expect(queryStatus(page)).toContainText('server-a')
   const clipped = () => page.evaluate(part => {
     const cut = element => element.scrollWidth > element.clientWidth + 0.5
@@ -898,6 +984,7 @@ try {
   }))
   throw error
 } finally {
+  await chmod(crowdedQuery, 0o644).catch(() => {})
   await dialogs({ closeResponse: 1, holdSave: false, holdConfirm: false }).catch(() => {})
   await application.evaluate(() => { globalThis.variaReleaseSave?.(); globalThis.variaReleaseConfirm?.() }).catch(() => {})
   await rm(join(control, 'hold'), { recursive: true, force: true })

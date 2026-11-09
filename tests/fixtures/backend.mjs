@@ -23,6 +23,7 @@
 //                       deployment elsewhere
 //   crash-next          the next query.execute crashes the backend (GOAWAY BACKEND_CRASH, exit 70); the file is removed
 //   fail-commit         query.session.close with transaction commit fails as SQL Server's would, and the session stays
+//   wide-session-ids    session IDs start at 10000, exercising five-digit SQL session badges
 //   ssis/missing        ssis.describe answers NOT_FOUND, as for an object deleted elsewhere
 //   ssis/fail           ssis.describe answers a retryable TIMEOUT
 //   ssis/many           ssis.describe gives the project as many packages, parameters and references as one read returns
@@ -293,7 +294,7 @@ const waitingScripts = new Map()
 // Each tab's session: its SPID, open transaction count and compile-only options, until query.session.close or its
 // connection's disconnect.
 const sessions = new Map()
-let nextSpid = 51
+let nextSpid = controlDirectory && existsSync(join(controlDirectory, 'wide-session-ids')) ? 10000 : 51
 /** Applies a script's BEGIN TRAN, COMMIT and ROLLBACK to its session, as SQL Server would count them in @@TRANCOUNT. */
 function runInSession({ sessionId, connectionId, sql }) {
   const session = sessions.get(sessionId) ?? { spid: nextSpid++, connectionId, transactions: 0, compileOnly: new Set() }
@@ -517,9 +518,161 @@ function buildView(result, sort) {
   }
   order.sort((a, b) => { for (const key of sort) { const order = compareKey(a, b, key); if (order) return order } return a - b })
   return {
-    viewId: nextViewId++, resultId: result.resultId, columns: result.columns, rowAt: position => result.rowAt(order[position]), pageRows: result.pageRows,
+    viewId: nextViewId++, resultId: result.resultId, columns: result.columns, order, rowAt: position => result.rowAt(order[position]), pageRows: result.pageRows,
     read: rows, complete: true, pages: new Map(), sealed: result.complete && rows === result.read
   }
+}
+// results.identify: a row identity per row, the hash of a key column's text or of the whole row's. Text equality here is
+// case-insensitive and ignores trailing spaces (a CI collation); the real backend's collation-aware hashing is checked by
+// its own checks. Auto picks the first NULL-free unique column, names ending in id, key or guid first.
+function identityHash(text) {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) { hash ^= text.charCodeAt(i); hash = Math.imul(hash, 0x01000193) >>> 0 }
+  return hash
+}
+function buildIdentity(result, by, column) {
+  const rows = available(result)
+  const textOf = (row, at) => {
+    const cell = result.rowAt(row)[at], value = cell !== null && typeof cell === 'object' && !(cell instanceof Uint8Array) ? cell.value : cell
+    return value === null || value === undefined ? null : value instanceof Uint8Array ? Buffer.from(value).toString('hex') : String(value).replace(/ +$/, '').toLowerCase()
+  }
+  const idsBy = at => Array.from({ length: rows }, (_, row) => {
+    if (at >= 0) { const text = textOf(row, at); return text === null ? 0 : identityHash('v' + text) }
+    return identityHash(result.columns.map((_, c) => { const text = textOf(row, c); return text === null ? '\u0000' : 'v' + text }).join('\u0001'))
+  })
+  const distinct = ids => new Set(ids).size === ids.length
+  if (by === 'column') { const ids = idsBy(column); return { column, ids, unique: distinct(ids) } }
+  if (by === 'auto') {
+    const ranked = result.columns.map((item, at) => ({ at, named: /(^id|id|key|guid)$/i.test(item.name.trim()) })).filter(item => result.columns[item.at].wire !== 'binary')
+      .sort((a, b) => Number(b.named) - Number(a.named) || a.at - b.at)
+    for (const { at } of ranked) {
+      if (Array.from({ length: rows }, (_, row) => textOf(row, at)).some(text => text === null)) continue
+      const ids = idsBy(at)
+      if (distinct(ids)) return { column: at, ids, unique: true }
+    }
+  }
+  const ids = idsBy(-1)
+  return { column: -1, ids, unique: distinct(ids) }
+}
+// results.diff: the unified diff of two results as a new result, as UnifiedDiff writes it: rows matched by the first column
+// both share whose values are unique and NULL-free in both (names ending in id, key or guid first), else by whole rows;
+// text equal case-insensitively without trailing spaces is a soft difference (the real backend's collation-aware
+// comparison is checked by its own checks), numbers compare by value.
+function buildDiff(left, right, exact, context) {
+  const visible = result => result.columns.map((item, at) => ({ item, at })).filter(({ item }) => item.role !== 'tone')
+  const used = new Set(), pairs = []
+  for (const { item, at } of visible(left)) {
+    const match = visible(right).find(other => !used.has(other.at) && other.item.name.toLowerCase() === item.name.toLowerCase())
+    if (match) { used.add(match.at); pairs.push([at, match.at]) }
+  }
+  if (pairs.length === 0) return undefined
+  const valueOf = cell => cell !== null && typeof cell === 'object' && !(cell instanceof Uint8Array) ? cell.value : cell
+  const raw = (result, row, at) => { const value = valueOf(result.rowAt(row)[at]); return value === null || value === undefined ? null : String(value) }
+  const numeric = (result, at) => numericTypes.has(result.columns[at].dataType)
+  const norm = (result, row, at) => {
+    const text = raw(result, row, at)
+    return text === null ? null : numeric(result, at) ? String(Number(text)) : text.replace(/ +$/, '').toLowerCase()
+  }
+  const leftRows = available(left), rightRows = available(right)
+  const keyOf = (result, rows, at) => Array.from({ length: rows }, (_, row) => norm(result, row, at))
+  const unique = values => !values.includes(null) && new Set(values).size === values.length
+  const ranked = pairs.map((pair, index) => ({ pair, index, named: /(id|key|guid)$/i.test(left.columns[pair[0]].name.trim()) })).sort((a, b) => Number(b.named) - Number(a.named) || a.index - b.index)
+  let key = -1, leftIds, rightIds
+  for (const { pair, index } of ranked) {
+    const l = keyOf(left, leftRows, pair[0]), r = keyOf(right, rightRows, pair[1])
+    if (unique(l) && unique(r)) { key = index; leftIds = l; rightIds = r; break }
+  }
+  if (key < 0) {
+    const whole = (result, rows, side) => Array.from({ length: rows }, (_, row) => pairs.map(pair => { const text = norm(result, row, pair[side]); return text === null ? '\u0000' : 'v' + text }).join('\u0001'))
+    leftIds = whole(left, leftRows, 0); rightIds = whole(right, rightRows, 1)
+  }
+  const queues = new Map()
+  leftIds.forEach((value, row) => { const queue = queues.get(value) ?? []; queue.push(row); queues.set(value, queue) })
+  const matchedLeft = new Array(leftRows).fill(-1), rightMatch = rightIds.map((value, row) => { const i = queues.get(value)?.shift(); if (i === undefined) return -1; matchedLeft[i] = row; return i })
+  const entries = []
+  const compareCells = (i, j) => {
+    const cells = []
+    let hard = false
+    pairs.forEach(([lc, rc], p) => {
+      const a = raw(left, i, lc), b = raw(right, j, rc)
+      if (a === b) return
+      if (a === null || b === null || norm(left, i, lc) !== norm(right, j, rc)) { cells.push(p); hard = true; return }
+      if (numeric(left, lc) && numeric(right, rc)) return
+      if (exact) { cells.push(p); hard = true } else cells.push(~p)
+    })
+    return { cells, hard }
+  }
+  let at = 0
+  while (at < leftRows && matchedLeft[at] < 0) entries.push({ kind: 'removed', left: at++, right: -1, cells: [] })
+  rightMatch.forEach((i, j) => {
+    if (i < 0) { entries.push({ kind: 'added', left: -1, right: j, cells: [] }); return }
+    const { cells, hard } = compareCells(i, j)
+    entries.push({ kind: hard ? 'changed' : 'same', left: i, right: j, cells })
+    for (let k = i + 1; k < leftRows && matchedLeft[k] < 0; k++) entries.push({ kind: 'removed', left: k, right: -1, cells: [] })
+  })
+  const plain = entry => entry.kind === 'same' && entry.cells.length === 0
+  const shown = entries.map(entry => context < 0 || !plain(entry))
+  if (context >= 0) entries.forEach((entry, k) => { if (!plain(entry)) for (let d = 1; d <= context; d++) { if (k - d >= 0 && plain(entries[k - d])) shown[k - d] = true; if (k + d < entries.length && plain(entries[k + d])) shown[k + d] = true } })
+  const tone = (kind, cells) => [kind, ...cells.map(cell => cell < 0 ? '~' + (~cell + 3) : String(cell + 3))].join(' ')
+  const rowOf = (result, row, side, marker, r1, r2, toneText) => [marker, r1 < 0 ? null : String(r1 + 1), r2 < 0 ? null : String(r2 + 1), ...pairs.map(pair => result.rowAt(row)[pair[side]]), toneText]
+  const rows = []
+  entries.forEach((entry, k) => {
+    if (!shown[k]) return
+    if (entry.kind === 'same') rows.push(rowOf(right, entry.right, 1, ' ', entry.left, entry.right, entry.cells.length ? tone('same', entry.cells) : null))
+    else if (entry.kind === 'added') rows.push(rowOf(right, entry.right, 1, '+', -1, entry.right, 'added'))
+    else if (entry.kind === 'removed') rows.push(rowOf(left, entry.left, 0, '\u2212', entry.left, -1, 'removed'))
+    else rows.push(rowOf(left, entry.left, 0, '\u2212', entry.left, -1, tone('removed', entry.cells)), rowOf(right, entry.right, 1, '+', -1, entry.right, tone('added', entry.cells)))
+  })
+  const columns = [{ ...column('Change', 'nvarchar(1)'), maxLength: 1 }, column('R1', 'bigint'), column('R2', 'bigint'), ...pairs.map(pair => right.columns[pair[1]]), { ...column('', 'nvarchar(400)'), role: 'tone', maxLength: 400 }]
+  const count = kind => entries.filter(entry => entry.kind === kind).length
+  const oneSided = (result, side) => visible(result).filter(({ at }) => !pairs.some(pair => pair[side] === at)).map(({ item }) => item.name).slice(0, 64)
+  return {
+    set: { columns, rows, kind: 'diff', batchNumber: right.batchNumber, iteration: right.iteration }, key: key < 0 ? null : right.columns[pairs[key][1]].name,
+    same: count('same'), changed: count('changed'), added: count('added'), removed: count('removed'), soft: entries.reduce((sum, entry) => sum + entry.cells.filter(cell => cell < 0).length, 0),
+    leftOnly: oneSided(left, 0), rightOnly: oneSided(right, 1)
+  }
+}
+// results.search: the cells of a result (or a view's positions) whose display text contains the text, ignoring case;
+// binary values as 0x and uppercase hex, NULL and failed reads never. The real backend's collation rules have their own
+// checks. One pass counts every match and keeps a run of whole rows, forward from fromRow or the last before it.
+function searchResult(source, { text, fromRow, maxMatches, backward }) {
+  const needle = text.toLowerCase(), rows = source.sealed === undefined ? available(source) : source.read, columns = source.columns.length
+  const display = cell => {
+    const value = cell !== null && typeof cell === 'object' && !(cell instanceof Uint8Array) ? cell.value : cell
+    if (value === null || value === undefined) return null
+    return value instanceof Uint8Array ? '0x' + Buffer.from(value).toString('hex').toUpperCase() : String(value)
+  }
+  let total = 0, before = 0
+  const kept = []
+  for (let row = 0; row < rows; row++) {
+    const cells = source.rowAt(row), found = []
+    for (let column = 0; column < columns; column++) {
+      const shown = display(cells[column])
+      if (shown !== null && shown.toLowerCase().includes(needle)) found.push(column)
+    }
+    if (!found.length) continue
+    if (!backward && row >= fromRow && kept.length < maxMatches) {
+      if (kept.length === 0) before = total
+      for (const column of found) kept.push([row, column])
+    } else if (backward && row < fromRow) {
+      for (const column of found) kept.push([row, column])
+      // The oldest rows go while the rest still hold maxMatches.
+      while (kept.length > maxMatches) {
+        const first = kept[0][0], count = kept.filter(([at]) => at === first).length
+        if (kept.length - count < maxMatches) break
+        kept.splice(0, count)
+      }
+    }
+    total += found.length
+  }
+  const first = backward ? kept.length ? total - kept.length - countFrom(source, needle, display, fromRow, rows) : 0 : kept.length ? before : total
+  return { rows, total, first, matchRows: kept.map(([row]) => row), matchColumns: kept.map(([, column]) => column), complete: source.complete && (source.sealed ?? source.complete), approximate: false }
+}
+/** Matches at or after `fromRow` (a backward run's first counts the matches before it). */
+function countFrom(source, needle, display, fromRow, rows) {
+  let count = 0
+  for (let row = fromRow; row < rows; row++) for (const cell of source.rowAt(row)) { const shown = display(cell); if (shown !== null && shown.toLowerCase().includes(needle)) count++ }
+  return count
 }
 // results.rowBytes and results.profile: a cell's bytes are its text's UTF-8 bytes (a binary cell's own), and a profile
 // compares as the fake views sort, ordinally; the real backend's DATALENGTH rules and collations have their own checks.
@@ -757,7 +910,16 @@ const fixtures = {
   FOR_XML_FIXTURE: (id, params) => summary(id, params.database, [
     { columns: [{ ...column('XML_F52E2B61-18A1-11d1-B105-00805F49916B', 'ntext'), role: 'xml' }], rows: [['<objects><o><name>Orders</name><object_id>1</object_id></o><o><name>Customers</name><object_id>2</object_id></o></objects>']] }
   ]),
-  XML_CAST_FIXTURE: (id, params) => summary(id, params.database, [{ columns: [{ ...column('doc', 'xml'), role: 'xml' }], rows: [['<a><b>1</b><b>2</b></a>']] }])
+  XML_CAST_FIXTURE: (id, params) => summary(id, params.database, [{ columns: [{ ...column('doc', 'xml'), role: 'xml' }], rows: [['<a><b>1</b><b>2</b></a>']] }]),
+  // scripts/results-smoke.mjs: a table before and after a few changes, for Compare with Previous Result: a price changed,
+  // a name changed only in case, a row deleted and a row added.
+  DIFF_FIXTURE: (id, params) => {
+    const columns = [column('ItemId', 'int'), column('Name', 'nvarchar'), column('Price', 'decimal')]
+    return summary(id, params.database, [
+      { columns, rows: [['1', 'apple', '1.50'], ['2', 'pear', '2.00'], ['3', 'plum', '3.00'], ['4', 'fig', '4.00']] },
+      { columns, rows: [['1', 'apple', '1.75'], ['2', 'PEAR', '2.00'], ['4', 'fig', '4.00'], ['5', 'kiwi', '5.00']] }
+    ])
+  }
 }
 
 /** Workbench live.subscribe for debug.synthetic's metrics, table and status probes, as Live/SyntheticSampler.cs behaves, and for ssis.operations. */
@@ -1138,6 +1300,47 @@ async function workbench(id, method, params, credit) {
       result.views.set(view.viewId, view)
       if (params.replaces !== undefined) result.views.delete(params.replaces)
       return respond(id, { viewId: view.viewId, rows: view.read, complete: view.sealed, approximate: false })
+    }
+    case 'results.identify': {
+      const result = stored.get(params.resultId)
+      if (!result) return missing(id, params.resultId)
+      if (!result.complete) return fail(id, 'RESULT_OPEN', 'Highlight rows after this result set finishes loading.')
+      result.identity = buildIdentity(result, params.by, params.column)
+      return respond(id, { column: result.identity.column, unique: result.identity.unique, approximate: false, rows: result.identity.ids.length })
+    }
+    case 'results.rowIds': case 'results.findRows': {
+      const source = sourceOf(id, params.resultId, params.viewId)
+      if (!source) return
+      const result = stored.get(params.resultId), identity = result.identity
+      if (!identity) return fail(id, 'IDENTITY_NOT_FOUND', 'Tell the rows of this result apart first (results.identify).')
+      const rows = source === result ? identity.ids.length : source.read
+      // A view's rows are its result's in another order.
+      const baseRow = position => source === result ? position : source.order[position] ?? -1
+      const idAt = position => { const row = baseRow(position); return row < 0 ? -1 : identity.ids[row] }
+      if (method === 'results.rowIds') {
+        const end = Math.min(rows, params.firstRow + params.count)
+        return respond(id, { firstRow: params.firstRow, ids: Array.from({ length: Math.max(0, end - params.firstRow) }, (_, k) => idAt(params.firstRow + k)), rows })
+      }
+      const wanted = new Map(params.ids.map((value, mark) => [value, mark]).reverse())
+      const positions = [], marks = []
+      for (let position = 0; position < rows; position++) { const mark = wanted.get(idAt(position)); if (mark !== undefined) { positions.push(position); marks.push(mark) } }
+      return respond(id, { positions, marks, truncated: false, rows })
+    }
+    case 'results.diff': {
+      const left = stored.get(params.left), right = stored.get(params.right)
+      if (!left) return missing(id, params.left)
+      if (!right) return missing(id, params.right)
+      if (params.left === params.right || left.kind === 'diff' || right.kind === 'diff') return fail(id, 'INVALID_PARAMS', 'Only two result sets of the same query can be compared.')
+      if (!left.complete || !right.complete) return fail(id, 'RESULT_OPEN', 'Compare the results after they finish loading.')
+      const diff = buildDiff(left, right, params.exact ?? false, params.context ?? 1)
+      if (!diff) return fail(id, 'INVALID_PARAMS', 'These results have no column names in common, so they cannot be compared.')
+      const result = storeResult(diff.set, right.index)
+      const { set: _set, ...counts } = diff
+      return respond(id, { descriptor: describe(result), ...counts, approximate: false })
+    }
+    case 'results.search': {
+      const source = sourceOf(id, params.resultId, params.viewId)
+      return source && respond(id, searchResult(source, params))
     }
     case 'results.rowBytes': {
       const source = sourceOf(id, params.resultId, params.viewId)
