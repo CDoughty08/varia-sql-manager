@@ -12,7 +12,7 @@ import { checkClientStatistics } from './fixtures/client-statistics.mjs'
 import { enlargeOutput, sizeResultStack } from './fixtures/results-pane.mjs'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
-  activeDocument, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice,
+  activeDocument, anyResultGrid, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice,
   jobProgress, kindIcon, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
   outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, resultsToolbar, resultToggle, statusBar,
   profileCard, profileFigures, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, unsavedMark
@@ -1431,6 +1431,14 @@ try {
   await expect.poll(() => profileFigures(profileCard(page, 'id'))).toMatchObject({ NULLs: '0', Distinct: '100 · unique', Min: '0', Max: '99' })
   await expect.poll(() => profileFigures(profileCard(page, 'score'))).toMatchObject({ NULLs: '20 (20%)' })
   expect(await profileFigures(profileCard(page, 'name'))).toHaveProperty('Length')
+  // Running again with the panel open replaces the run's grids rather than leaving the last run's beside them.
+  await run('-- varia-fake: sets=W1*100')
+  await settled()
+  await run('-- varia-fake: sets=W1*100')
+  await settled()
+  await expect(anyResultGrid(page)).toHaveCount(1)
+  await expect(columnProfile(page)).toHaveCount(1)
+  await expect(columnProfile(page)).toContainText('100 rows')
   await columnProfile(page).getByRole('button', { name: 'Close Column Profile', exact: true }).click()
   await expect(columnProfile(page)).toHaveCount(0)
   await expect(show('Profile')).toHaveAttribute('aria-pressed', 'false')
