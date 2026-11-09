@@ -17,7 +17,9 @@ export function editorContribution({ commands, documents, editorOptions, editorG
     const { documents: list, activeId } = documents.getSnapshot()
     if (list.length < 2) return
     const index = Math.max(0, list.findIndex(document => document.id === activeId))
-    documents.activate(list[(index + delta + list.length) % list.length].id)
+    const next = list[(index + delta + list.length) % list.length].id, fromTab = editorGroups.focusedDocument() !== undefined
+    documents.activate(next)
+    if (fromTab) editorGroups.focusTab(next)
   }
   // The query tab menu, or a key pressed on a focused tab, names its tab (`tabId`); otherwise the active document. The moved
   // tab stays the one shown, in its own group.

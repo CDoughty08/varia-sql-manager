@@ -14,7 +14,8 @@ interface Props {
  * A connection's environment as the kit's small square tag: PROD in the critical tone, STAGING in the info tone, and
  * the others neutral. The word carries it, so it reads in forced colours and without colour; the tooltip names it in
  * full. Where the tag sits inside a control with its own accessible name, that name or description says it too. A custom
- * label is marked data-custom: only it may give way in a narrow row, since a preset's short word always fits whole.
+ * label is marked data-custom so rows can bound it separately while keeping preset words whole where possible. Tabs
+ * let either kind yield to their name and session badge.
  */
 export default function EnvironmentTag({ environment, place, about }: Props) {
   const tag = environmentTag(environment)

@@ -29,6 +29,8 @@ export interface EditorGroupHost {
   restore(layout: EditorGroupsLayout, id: (place: number) => string | undefined): void
   /** The document whose tab has focus, if one does. */
   focusedDocument(): string | undefined
+  /** Moves keyboard focus to a document's native tab after it is activated. */
+  focusTab(id: string): void
 }
 
 /** The group holding document `id`. */
@@ -123,6 +125,8 @@ export class EditorGroupService extends SnapshotStore<EditorGroupSnapshot> imple
    * opened on without choosing it), so a key pressed on a tab acts on this one.
    */
   focusedDocument(): string | undefined { return this.host?.focusedDocument() }
+  /** Query cycling that began in a tab keeps focus in the selected tab's strip. */
+  focusTab(id: string): void { if (this.documents.get(id)) this.host?.focusTab(id) }
   isFloating(id: string): boolean { return !!this.groupOf(id)?.floating }
   /**
    * Whether Float Editor can move the document into a floating group: it is docked, the grid keeps another document (a
