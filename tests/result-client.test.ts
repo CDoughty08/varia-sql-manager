@@ -304,6 +304,16 @@ describe('ResultClient', () => {
     await expect(handle.rowIds(-1, 1)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     expect(await handle.rowIds(0, 0)).toMatchObject({ ids: [] })
     expect(worker().fromWorker.length).toBe(before)
+    // A diff compares this result with another of the same generation, by result even through a view.
+    const other = client.open(descriptor({ resultId: 4 }))
+    await expect(handle.diff(handle)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.diff(other, { context: 101 })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.diff(client.open(descriptor({ generation: 2, resultId: 4 })))).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    expect(worker().fromWorker.length).toBe(before)
+    const comparing = view.diff(other, { exact: true, context: -1 })
+    const diffAnswer = { descriptor: descriptor({ resultId: 9, kind: 'diff' }), key: null, same: 0, changed: 0, added: 10, removed: 10, soft: 0, approximate: false, leftOnly: [], rightOnly: [] }
+    expect(await answer('diff', diffAnswer)).toMatchObject({ t: 'diff', generation: 1, resultId: 3, right: 4, exact: true, context: -1 })
+    expect(await comparing).toEqual(diffAnswer)
   })
 
   it('sorts a result into a view read by position, replaces and closes views, and drops them with their result', async () => {

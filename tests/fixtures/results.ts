@@ -61,6 +61,15 @@ export function fakeResultClient() {
           const found = ids.map((id, mark) => ({ position: id - 1000, mark })).filter(item => item.position >= 0 && item.position < handle.snapshot.rowsAvailable).sort((a, b) => a.position - b.position)
           return { positions: found.map(item => item.position), marks: found.map(item => item.mark), truncated: false, rows: handle.snapshot.rowsAvailable }
         }),
+        // A diff is result 900 + this one's id: a marker, R1 and R2, this result's columns and the hidden tone.
+        diff: vi.fn<ResultHandle['diff']>(async right => ({
+          descriptor: descriptor(900 + value.resultId, {
+            generation: value.generation, index: value.index, kind: 'diff', rowsRead: 3, rowsStored: 3, rowsAvailable: 3,
+            columns: [{ name: 'Change', dataType: 'nvarchar(1)', wire: 'text', nullable: true }, { name: 'R1', dataType: 'bigint', wire: 'text', nullable: true }, { name: 'R2', dataType: 'bigint', wire: 'text', nullable: true },
+              ...right.columns, { name: '', dataType: 'nvarchar(400)', wire: 'text', nullable: true, role: 'tone' }] as ResultColumn[]
+          }),
+          key: 'Id', same: 1, changed: 1, added: 1, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: []
+        })),
         search: vi.fn<ResultHandle['search']>(async () => ({ rows: 0, total: 0, first: 0, matchRows: [], matchColumns: [], complete: true, approximate: false })),
         profile: vi.fn<ResultHandle['profile']>(async columns => ({ rows: handle.snapshot.rowsAvailable, complete: handle.snapshot.state === 'complete', columns: columns.map(column => ({ column, values: 0, nulls: 0, distinct: 0, distinctExact: true, approximate: false })) })),
         dispose: vi.fn()

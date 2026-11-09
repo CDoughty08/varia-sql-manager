@@ -1,6 +1,6 @@
 // Messages between the UI thread (ResultClient) and the results worker. The worker also owns the results port to main
 // (src/shared/ipc/port-messages.ts).
-import type { BackendStatus, IdentityBy, QueryEvent, ResultsFindRowsResult, ResultsIdentifyResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ViewSortKey, WireKind } from '../../../shared/contracts'
+import type { BackendStatus, IdentityBy, QueryEvent, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ViewSortKey, WireKind } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport } from '../../../shared/ipc/port-messages'
 import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
@@ -14,6 +14,8 @@ export type IdentityRequest =
   | { readonly method: 'identify'; readonly by: IdentityBy; readonly column?: number }
   | { readonly method: 'rowIds'; readonly firstRow: number; readonly count: number }
   | { readonly method: 'findRows'; readonly ids: readonly number[] }
+  /** results.diff: this result (the earlier) against `right` (the later), of the same generation. */
+  | { readonly method: 'diff'; readonly right: number; readonly exact: boolean; readonly context: number }
 
 /** Cell flags in a window: NULL, truncated where the backend stored it (a prefix), read error, over the window's text
  *  budget, and cut at the window's maxCellChars. */
@@ -97,7 +99,7 @@ export type WorkerResponse =
   | { readonly type: 'stats'; readonly id: number; readonly bytes: number; readonly pages: number; readonly wireBytes: number; readonly columns: number }
   | { readonly type: 'view'; readonly id: number; readonly viewId: number; readonly rows: number; readonly complete: boolean; readonly approximate: boolean }
   | { readonly type: 'viewClosed'; readonly id: number; readonly closed: number }
-  | { readonly type: 'identity'; readonly id: number; readonly result: ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult }
+  | { readonly type: 'identity'; readonly id: number; readonly result: ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsDiffResult }
   | { readonly type: 'search'; readonly id: number; readonly result: ResultsSearchResult }
   | { readonly type: 'profile'; readonly id: number; readonly result: ResultsProfileResult }
   | { readonly type: 'error'; readonly id: number; readonly code: ErrorCode; readonly message: string }

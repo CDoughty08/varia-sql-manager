@@ -2,7 +2,7 @@
 // from main through the results port, validates and caches them (decodePage), and answers the UI's windows and cells
 // with display text decoded only for the cells asked for. It also relays live subscriptions between the page and main
 // without decoding anything, and grants each live event's bytes back only once the page says it applied the event.
-import type { BackendStatus, ResultsCloseResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsProfileResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult, WireKind } from '../../../shared/contracts'
+import type { BackendStatus, ResultsCloseResult, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsProfileResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult, WireKind } from '../../../shared/contracts'
 import type { PortEndResult, PortMessage, PortRequest } from '../../../shared/ipc/port-messages'
 import { decodePage, pageMemoryBytes, PageFormatError, type PageView } from '../../../shared/ipc/wire/pages'
 import { CELL_ERROR, CELL_NULL, cellFlags, cellSlice, cellText, displayText, runSlice, textRun, type TextRun } from '../../../shared/ipc/wire/cells'
@@ -427,7 +427,8 @@ export class ResultsWorkerCore {
     const viewId = view === undefined ? {} : { viewId: view }
     if (body.method === 'identify') this.send({ t: 'identify', rid, generation, resultId, by: body.by, ...(body.column === undefined ? {} : { column: body.column }) })
     else if (body.method === 'rowIds') this.send({ t: 'rowIds', rid, generation, resultId, firstRow: body.firstRow, count: body.count, ...viewId })
-    else this.send({ t: 'findRows', rid, generation, resultId, ids: [...body.ids], ...viewId })
+    else if (body.method === 'findRows') this.send({ t: 'findRows', rid, generation, resultId, ids: [...body.ids], ...viewId })
+    else this.send({ t: 'diff', rid, generation, resultId, right: body.right, exact: body.exact, context: body.context })
   }
 
   /** The views' pages go at once; the backend frees their order when it answers. */
@@ -630,7 +631,7 @@ export class ResultsWorkerCore {
     const identity = this.identities.get(rid)
     if (identity !== undefined) {
       this.identities.delete(rid)
-      this.post({ type: 'identity', id: identity, result: result as ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult })
+      this.post({ type: 'identity', id: identity, result: result as ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsDiffResult })
       return
     }
     const sizes = this.sizes.get(rid)

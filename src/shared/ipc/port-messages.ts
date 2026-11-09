@@ -2,7 +2,7 @@
 // requests are validated with portRequestSchema; backend payloads main forwards are validated with the schemas below.
 import { z } from 'zod'
 import { clientStatisticsSchema } from '../client-statistics'
-import type { BackendStatus, MemoryOrder, QueryEvent, ResultsCloseResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsProfileResult, ResultsReadResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult } from '../contracts'
+import type { BackendStatus, MemoryOrder, QueryEvent, ResultsCloseResult, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsProfileResult, ResultsReadResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult } from '../contracts'
 import { maxQueryPlanDocuments } from '../plans'
 import { liveSubscribeParamsSchema, liveUpdateParamsSchema, testLiveSubscribeParamsSchema, testLiveUpdateParamsSchema, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../live/schema'
 import { backendDescriptorSchema } from './descriptors'
@@ -33,6 +33,9 @@ export const buildPortRequestSchema = (live: { subscribe: z.ZodType<LiveSubscrib
     .refine(request => (request.by === 'column') === (request.column !== undefined), 'A column goes with by: column only.'),
   z.object({ t: z.literal('rowIds'), rid: u31, generation, resultId: u32, firstRow: count, count: z.number().int().min(1).max(limits.identity.maxRows), viewId: u32.optional() }).strict(),
   z.object({ t: z.literal('findRows'), rid: u31, generation, resultId: u32, ids: z.array(identityId).min(1).max(limits.identity.maxFind), viewId: u32.optional() }).strict(),
+  // A unified diff of two results of one query (results.diff), stored as a new result the port then owns.
+  z.object({ t: z.literal('diff'), rid: u31, generation, resultId: u32, right: u32, exact: z.boolean(), context: z.number().int().min(-1).max(limits.diff.maxContext) }).strict()
+    .refine(request => request.resultId !== request.right, 'A result is not compared with itself.'),
   // Search (results.search): the cells containing a text, through a view when one is named; `cancel` stops it.
   z.object({
     t: z.literal('search'), rid: u31, generation, resultId: u32, text: z.string().min(1).max(limits.search.maxText), fromRow: count,
@@ -73,6 +76,12 @@ export const identifyResultSchema = z.object({ column: z.number().int().min(-1).
 export const rowIdsResultSchema = z.object({ firstRow: count, ids: z.array(z.number().int().min(-1).max(Number.MAX_SAFE_INTEGER)).max(limits.identity.maxRows), rows: count }).strict()
 export const findRowsResultSchema = z.object({ positions: z.array(count).max(limits.identity.maxMatches), marks: z.array(z.number().int().min(0).max(limits.identity.maxFind - 1)).max(limits.identity.maxMatches), truncated: z.boolean(), rows: count }).strict()
   .refine(result => result.positions.length === result.marks.length && result.positions.every((position, index) => index === 0 || position > result.positions[index - 1]), 'Positions ascend, one mark each.')
+const columnNames = z.array(z.string().max(512)).max(limits.diff.maxColumnNames)
+/** A results.diff answer as the backend sends it (its descriptor without the generation, which main adds). */
+export const diffResultSchema = z.object({
+  descriptor: backendDescriptorSchema.extend({ kind: z.literal('diff') }), key: z.string().max(512).nullable(), same: count, changed: count, added: count, removed: count, soft: count,
+  approximate: z.boolean(), leftOnly: columnNames, rightOnly: columnNames
+}).strict()
 /** A results.search answer as the backend sends it: a run of at most maxMatches plus one row's columns. Main also checks
  *  its matches are in order and inside the rows searched before forwarding it. */
 const maxRun = limits.search.maxMatches + limits.page.maxColumns
@@ -91,7 +100,7 @@ export const profileResultSchema = z.object({
     histogram: z.object({ basis: z.enum(['value', 'time', 'chars', 'bytes']), low: z.number(), high: z.number(), counts: z.array(count).length(limits.profile.bins) }).strict().optional()
   }).strict()).max(limits.profile.maxColumns)
 }).strict()
-export type PortEndResult = ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | ResultsViewResult | ResultsViewCloseResult | ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsSearchResult | ResultsProfileResult | LiveEnd | LiveUpdateResult
+export type PortEndResult = ResultsDiffResult | ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | ResultsViewResult | ResultsViewCloseResult | ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsSearchResult | ResultsProfileResult | LiveEnd | LiveUpdateResult
 
 const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'server', 'print', 'error']) }).strict()
 const session = { spid: z.number().int().min(0).max(32767), login: z.string().max(128).optional() }

@@ -37,6 +37,7 @@ The code is the reference implementation; this document describes it.
 - [Cell lengths and row sizes](#cell-lengths-and-row-sizes)
 - [Sorted views](#sorted-views)
 - [Row identities and highlights](#row-identities-and-highlights)
+- [Result diffs](#result-diffs)
 - [Search in results](#search-in-results)
 - [Column profiles](#column-profiles)
 - [Messages](#messages)
@@ -238,6 +239,7 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `results.identify` | port | unary | results | 120 s; tells a complete result's rows apart ([Row identities and highlights](#row-identities-and-highlights)) |
 | `results.rowIds` | port | unary | control | 10 s; 1 – 16,384 rows' identities |
 | `results.findRows` | port | unary | results | 60 s; where 1 – 10,000 identities are in a result or view |
+| `results.diff` | port | unary | results | 120 s; the unified diff of two results of one query, stored as a new result ([Result diffs](#result-diffs)) |
 | `results.search` | port | unary | results | 120 s; the cells of a result (or a view) containing a text ([Search in results](#search-in-results)) |
 | `results.profile` | port | unary | results | 120 s; aggregates over a result's or a view's rows ([Column profiles](#column-profiles)) |
 | `live.subscribe` | port | stream of credited EVENTs ([Live subscriptions](#live-subscriptions)) | live (no slot) | none, and no backstop: only CANCEL, a disconnect, a shutdown, a failure or its source ending ends it |
@@ -1370,6 +1372,39 @@ the rows it holds (`Results/RowIdentity.cs`); the renderer never compares rows.
   given by binary search per painted row, with theme colours (`resultsGrid.highlight*Background`). Highlights live only in
   the renderer's memory: they do not survive a reload, hot exit or closing the tab.
 
+## Result diffs
+
+Compare with Previous Result compares two results of one query in the backend (`Results/ResultDiff.cs`); the renderer
+receives a new result to read like any other, never rows to compare.
+
+- **`results.diff { left, right, exact?, context? }`** answers `{ descriptor, key, same, changed, added, removed, soft,
+  approximate, leftOnly, rightOnly }`. Both results must belong to the same query (`INVALID_PARAMS` otherwise, and for a diff
+  of a diff) and be complete (`RESULT_OPEN`, "Compare the results after they finish loading."). Columns pair by name,
+  case-insensitively, in `left`'s order; at least one must pair (`INVALID_PARAMS`), and `leftOnly` and `rightOnly` name up
+  to 64 that do not, which are not compared.
+- **Alignment.** Rows match by `key`: the first shared column that is unique, NULL-free and untruncated in both results,
+  of up to 16 candidates as `results.identify` ranks them; else by all shared columns' values together (`key` null), the
+  k-th copy of a row matching the k-th copy. Values compare as SQL Server would (the identity hashing above): numbers by
+  value, character columns by their collation, ignoring trailing spaces. Text equal by collation but not character for
+  character is a soft difference: it leaves its row unchanged and is counted in `soft`. `exact` compares text character
+  for character instead. `approximate` says a truncated value's stored prefix was compared.
+- **The model.** The aligned entries (`DiffModel`: kind, row in each result, differing cells) are in unified order: the
+  later result's order, each removed row after the earlier result's row it followed. The unified result below is one
+  rendering of them; a side-by-side view would render the same entries.
+- **The unified result** (`kind: 'diff'`, its descriptor stamped with the generation by main, which then owns it) has
+  the columns `Change` (" ", "−" or "+"), `R1` and `R2` (each row's number in `left` and `right`, NULL where it has none),
+  the shared columns with `right`'s names and types, and a hidden tone column: `added`, `removed` or, for an unchanged row
+  with soft differences, `same`, followed by the differing cells' column numbers, a soft one prefixed with `~`. A changed
+  row is its old row (−) then its new one (+). Only `context` unchanged rows (default 1, at most 100, -1 for all) show on
+  each side of a change. It is a result of the same query, charged to its budget (rows stop when it is full, with the
+  usual truncation), released with the query's other results, and closed by main if its port went before the answer.
+  While it is built the alignment holds about 80 bytes a row of both results (`ResultDiffer.WorkingBytes`) and 12 bytes
+  a differing cell, charged to the budget too as they grow (`TOO_LARGE` without room).
+- **Renderer.** `ResultHandle.diff(right, { exact, context, signal })` relays it; `CompareService` appends the new result
+  as the run's last set (`ResultsService.addSet`), named "Differences: Result 1 → Result 2", and its grid's strip says what
+  was compared. `GridView` colours added and removed rows from the tone column and marks the listed cells (`is-chg`,
+  `is-soft`) with theme colours only (`resultsGrid.diff*`).
+
 ## Search in results
 
 The results toolbar's search box searches every grid of a run in the backend, over the rows it holds
@@ -2269,6 +2304,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | FOR XML / FOR JSON value | 2,097,152 characters, the rest marks it truncated | backend |
 | Row sizes a request | `results.rowBytes`: 1 – 16,384 rows (`rowSizes.maxRows`) | zod and backend |
 | Row identities | `results.rowIds` 1 – 16,384 rows; `results.findRows` 1 – 10,000 ids, 100,000 matches (`limits.identity`); 24 bytes a row while identifying, 8 kept, under the query budget | zod and backend |
+| Result diffs | context -1 – 100 rows, 64 one-sided column names each side (`limits.diff`); about 80 bytes a row of both results and 12 a differing cell while aligning, the diff's rows under the query budget | zod and backend |
 | Sorted views | 1 – 16 keys a sort, 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key while sorting, 4 bytes a row kept, under the query budget | zod and backend |
 | Search in results | 1 – 1,024 characters of text, 1 – 10,000 matches an answer plus its last row's columns (`limits.search`); no budget held | zod and backend |
 | Column profiles | 0 – 32 columns a request (`limits.profile`), 20 buckets, distinct exact to 16,384, values cut to 256 characters; working memory under the query budget | zod and backend |

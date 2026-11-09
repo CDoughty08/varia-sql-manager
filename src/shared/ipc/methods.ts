@@ -86,6 +86,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'results.rowIds': control,
   // Scans a result's identities in memory: milliseconds per million rows.
   'results.findRows': { kind: 'unary', lane: 'results', deadlineMs: 60_000 },
+  // Aligns two stored results and writes their unified diff off the frame loop (seconds for millions of rows).
+  'results.diff': { kind: 'unary', lane: 'results', deadlineMs: 120_000 },
   // Searches a result's stored rows in memory off the frame loop, as results.view sorts them; a newer search cancels it.
   'results.search': { kind: 'unary', lane: 'results', deadlineMs: 120_000 },
   // Profiles stored rows in memory off the frame loop, two passes over the pages; Stop and a newer profile cancel it.

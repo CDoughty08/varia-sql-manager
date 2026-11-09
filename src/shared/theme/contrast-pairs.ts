@@ -140,6 +140,13 @@ export const contrastPairs: readonly ContrastPair[] = [
     ...text(['resultsGrid.foreground', 'resultsGrid.nullForeground'], ['resultsGrid.background', `resultsGrid.highlight${color}Background`]),
     ...text(['resultsGrid.highlightRowNumberForeground'], ['resultsGrid.headerBackground', `resultsGrid.highlight${color}Background`])
   ]),
+  // A diff's added and removed rows have their own background instead of the stripe, and a changed value a stronger one,
+  // where even a NULL shows in the cells' own colour.
+  ...(['Added', 'Removed'] as const).flatMap(kind => [
+    ...text(['resultsGrid.foreground', 'resultsGrid.nullForeground'], ['resultsGrid.background', `resultsGrid.diff${kind}Background`]),
+    ...text(['resultsGrid.foreground'], ['resultsGrid.background', `resultsGrid.diff${kind}Background`, `resultsGrid.diffChanged${kind}Background`]),
+    ...text(['resultsGrid.rowNumberForeground'], ['resultsGrid.headerBackground', `resultsGrid.diff${kind}Background`])
+  ]),
   // A toned live grid row has its own background instead of the stripe; its NULL cells drop their tint, keeping their colour.
   ...([['resultsGrid.rowErrorForeground', 'resultsGrid.rowErrorBackground'], ['resultsGrid.rowWarningForeground', 'resultsGrid.rowWarningBackground'],
     ['resultsGrid.rowRunningForeground', 'resultsGrid.rowRunningBackground'], ['resultsGrid.rowMutedForeground', 'resultsGrid.rowMutedBackground']] as const)

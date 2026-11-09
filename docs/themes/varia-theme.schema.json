@@ -1281,6 +1281,31 @@
           "description": "(Varia) Row numbers of highlighted rows, over their highlight colour. Default $textStrong (Dark #f5f6f8, Light #0a0c10).",
           "markdownDescription": "(Varia) Row numbers of highlighted rows, over their highlight colour. Default `$textStrong` (Dark `#f5f6f8`, Light `#0a0c10`)."
         },
+        "resultsGrid.diffAddedBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Rows a result diff adds (+): Compare with Previous Result, and the new row of a changed one. Default $green/12 (Dark #6fbf8a1f, Light #2e7d4f1f).",
+          "markdownDescription": "(Varia) Rows a result diff adds (+): Compare with Previous Result, and the new row of a changed one. Default `$green/12` (Dark `#6fbf8a1f`, Light `#2e7d4f1f`)."
+        },
+        "resultsGrid.diffRemovedBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Rows a result diff removes (−): Compare with Previous Result, and the old row of a changed one. Default $red/12 (Dark #e667671f, Light #c42b3c1f).",
+          "markdownDescription": "(Varia) Rows a result diff removes (−): Compare with Previous Result, and the old row of a changed one. Default `$red/12` (Dark `#e667671f`, Light `#c42b3c1f`)."
+        },
+        "resultsGrid.diffChangedAddedBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) A changed value in its new row of a result diff, over the added row colour. Default $green/18 (Dark #6fbf8a2e, Light #2e7d4f2e).",
+          "markdownDescription": "(Varia) A changed value in its new row of a result diff, over the added row colour. Default `$green/18` (Dark `#6fbf8a2e`, Light `#2e7d4f2e`)."
+        },
+        "resultsGrid.diffChangedRemovedBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) A changed value in its old row of a result diff, over the removed row colour. Default $red/18 (Dark #e667672e, Light #c42b3c2e).",
+          "markdownDescription": "(Varia) A changed value in its old row of a result diff, over the removed row colour. Default `$red/18` (Dark `#e667672e`, Light `#c42b3c2e`)."
+        },
+        "resultsGrid.diffSoftUnderline": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) The dotted underline of a result diff value equal to the other only by collation (case or trailing spaces). Default $warning (Dark #e4bb6a, Light #875800).",
+          "markdownDescription": "(Varia) The dotted underline of a result diff value equal to the other only by collation (case or trailing spaces). Default `$warning` (Dark `#e4bb6a`, Light `#875800`)."
+        },
         "resultsGrid.rowNumberForeground": {
           "$ref": "#/definitions/value",
           "description": "(Varia) Row numbers. Default $textMuted (Dark #9298a4, Light #5c6370).",

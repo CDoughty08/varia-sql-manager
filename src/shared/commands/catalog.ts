@@ -892,6 +892,14 @@ export const commandCatalog = {
     title: 'Clear All Highlights', category: 'Query', icon: 'clear-all', keywords: ['highlight', 'unmark', 'reset', 'grid'], palette: false,
     menus: [{ menu: 'output.highlight', group: '2_clear', order: 2, mnemonic: 'a', when: "outputView == 'grid'" }]
   },
+  // Compares the grid's result with the run's result before it (results.diff) and adds their unified diff as a result.
+  'output.compareWithPrevious': {
+    title: 'Compare with Previous Result', category: 'Query', icon: 'git-compare', keywords: ['diff', 'compare', 'difference', 'changes', 'grid', 'result'],
+    menus: [{ menu: 'output.context', group: '2_sort', order: 7, mnemonic: 'm', when: "outputView == 'grid'" }]
+  },
+  'output.compareWithPreviousExact': {
+    title: 'Compare with Previous Result (Exact Text)', category: 'Query', icon: 'git-compare', keywords: ['diff', 'compare', 'difference', 'case', 'collation', 'exact', 'grid']
+  },
   // The results toolbar's Profile and Row size toggles (queryResults.grid.columnProfile, queryResults.grid.rowSize).
   'output.toggleColumnProfile': {
     title: 'Show Column Profile', category: 'Query', icon: 'graph', keywords: ['profile', 'stats', 'statistics', 'distinct', 'nulls', 'histogram', 'grid', 'column'],

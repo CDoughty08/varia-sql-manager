@@ -47,7 +47,7 @@ export function batchText(batchNumber: number, iteration: number, totalBatches: 
 const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, totalBatches, onToggle }: { tabId: string; entry: ResultSetEntry; collapsed: boolean; totalBatches: number; onToggle(index: number): void }) {
   const { commands } = useWorkbench()
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
-  const { descriptor } = entry, rows = snapshot.rowsAvailable, columns = descriptor.columns.length, name = `Result ${entry.index + 1}`
+  const { descriptor } = entry, rows = snapshot.rowsAvailable, columns = descriptor.columns.length, name = entry.label ?? `Result ${entry.index + 1}`
   const facts = [`${formatCount(rows)} ${plural(rows, 'row')}`, `${formatCount(columns)} ${plural(columns, 'column')}`]
   if (descriptor.kind === 'executionPlan') facts.push('execution plan')
   const batch = batchText(descriptor.batchNumber, descriptor.iteration, totalBatches)

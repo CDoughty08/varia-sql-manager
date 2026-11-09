@@ -550,6 +550,84 @@ function buildIdentity(result, by, column) {
   const ids = idsBy(-1)
   return { column: -1, ids, unique: distinct(ids) }
 }
+// results.diff: the unified diff of two results as a new result, as UnifiedDiff writes it: rows matched by the first column
+// both share whose values are unique and NULL-free in both (names ending in id, key or guid first), else by whole rows;
+// text equal case-insensitively without trailing spaces is a soft difference (the real backend's collation-aware
+// comparison is checked by its own checks), numbers compare by value.
+function buildDiff(left, right, exact, context) {
+  const visible = result => result.columns.map((item, at) => ({ item, at })).filter(({ item }) => item.role !== 'tone')
+  const used = new Set(), pairs = []
+  for (const { item, at } of visible(left)) {
+    const match = visible(right).find(other => !used.has(other.at) && other.item.name.toLowerCase() === item.name.toLowerCase())
+    if (match) { used.add(match.at); pairs.push([at, match.at]) }
+  }
+  if (pairs.length === 0) return undefined
+  const valueOf = cell => cell !== null && typeof cell === 'object' && !(cell instanceof Uint8Array) ? cell.value : cell
+  const raw = (result, row, at) => { const value = valueOf(result.rowAt(row)[at]); return value === null || value === undefined ? null : String(value) }
+  const numeric = (result, at) => numericTypes.has(result.columns[at].dataType)
+  const norm = (result, row, at) => {
+    const text = raw(result, row, at)
+    return text === null ? null : numeric(result, at) ? String(Number(text)) : text.replace(/ +$/, '').toLowerCase()
+  }
+  const leftRows = available(left), rightRows = available(right)
+  const keyOf = (result, rows, at) => Array.from({ length: rows }, (_, row) => norm(result, row, at))
+  const unique = values => !values.includes(null) && new Set(values).size === values.length
+  const ranked = pairs.map((pair, index) => ({ pair, index, named: /(id|key|guid)$/i.test(left.columns[pair[0]].name.trim()) })).sort((a, b) => Number(b.named) - Number(a.named) || a.index - b.index)
+  let key = -1, leftIds, rightIds
+  for (const { pair, index } of ranked) {
+    const l = keyOf(left, leftRows, pair[0]), r = keyOf(right, rightRows, pair[1])
+    if (unique(l) && unique(r)) { key = index; leftIds = l; rightIds = r; break }
+  }
+  if (key < 0) {
+    const whole = (result, rows, side) => Array.from({ length: rows }, (_, row) => pairs.map(pair => { const text = norm(result, row, pair[side]); return text === null ? '\u0000' : 'v' + text }).join('\u0001'))
+    leftIds = whole(left, leftRows, 0); rightIds = whole(right, rightRows, 1)
+  }
+  const queues = new Map()
+  leftIds.forEach((value, row) => { const queue = queues.get(value) ?? []; queue.push(row); queues.set(value, queue) })
+  const matchedLeft = new Array(leftRows).fill(-1), rightMatch = rightIds.map((value, row) => { const i = queues.get(value)?.shift(); if (i === undefined) return -1; matchedLeft[i] = row; return i })
+  const entries = []
+  const compareCells = (i, j) => {
+    const cells = []
+    let hard = false
+    pairs.forEach(([lc, rc], p) => {
+      const a = raw(left, i, lc), b = raw(right, j, rc)
+      if (a === b) return
+      if (a === null || b === null || norm(left, i, lc) !== norm(right, j, rc)) { cells.push(p); hard = true; return }
+      if (numeric(left, lc) && numeric(right, rc)) return
+      if (exact) { cells.push(p); hard = true } else cells.push(~p)
+    })
+    return { cells, hard }
+  }
+  let at = 0
+  while (at < leftRows && matchedLeft[at] < 0) entries.push({ kind: 'removed', left: at++, right: -1, cells: [] })
+  rightMatch.forEach((i, j) => {
+    if (i < 0) { entries.push({ kind: 'added', left: -1, right: j, cells: [] }); return }
+    const { cells, hard } = compareCells(i, j)
+    entries.push({ kind: hard ? 'changed' : 'same', left: i, right: j, cells })
+    for (let k = i + 1; k < leftRows && matchedLeft[k] < 0; k++) entries.push({ kind: 'removed', left: k, right: -1, cells: [] })
+  })
+  const plain = entry => entry.kind === 'same' && entry.cells.length === 0
+  const shown = entries.map(entry => context < 0 || !plain(entry))
+  if (context >= 0) entries.forEach((entry, k) => { if (!plain(entry)) for (let d = 1; d <= context; d++) { if (k - d >= 0 && plain(entries[k - d])) shown[k - d] = true; if (k + d < entries.length && plain(entries[k + d])) shown[k + d] = true } })
+  const tone = (kind, cells) => [kind, ...cells.map(cell => cell < 0 ? '~' + (~cell + 3) : String(cell + 3))].join(' ')
+  const rowOf = (result, row, side, marker, r1, r2, toneText) => [marker, r1 < 0 ? null : String(r1 + 1), r2 < 0 ? null : String(r2 + 1), ...pairs.map(pair => result.rowAt(row)[pair[side]]), toneText]
+  const rows = []
+  entries.forEach((entry, k) => {
+    if (!shown[k]) return
+    if (entry.kind === 'same') rows.push(rowOf(right, entry.right, 1, ' ', entry.left, entry.right, entry.cells.length ? tone('same', entry.cells) : null))
+    else if (entry.kind === 'added') rows.push(rowOf(right, entry.right, 1, '+', -1, entry.right, 'added'))
+    else if (entry.kind === 'removed') rows.push(rowOf(left, entry.left, 0, '\u2212', entry.left, -1, 'removed'))
+    else rows.push(rowOf(left, entry.left, 0, '\u2212', entry.left, -1, tone('removed', entry.cells)), rowOf(right, entry.right, 1, '+', -1, entry.right, tone('added', entry.cells)))
+  })
+  const columns = [{ ...column('Change', 'nvarchar(1)'), maxLength: 1 }, column('R1', 'bigint'), column('R2', 'bigint'), ...pairs.map(pair => right.columns[pair[1]]), { ...column('', 'nvarchar(400)'), role: 'tone', maxLength: 400 }]
+  const count = kind => entries.filter(entry => entry.kind === kind).length
+  const oneSided = (result, side) => visible(result).filter(({ at }) => !pairs.some(pair => pair[side] === at)).map(({ item }) => item.name).slice(0, 64)
+  return {
+    set: { columns, rows, kind: 'diff', batchNumber: right.batchNumber, iteration: right.iteration }, key: key < 0 ? null : right.columns[pairs[key][1]].name,
+    same: count('same'), changed: count('changed'), added: count('added'), removed: count('removed'), soft: entries.reduce((sum, entry) => sum + entry.cells.filter(cell => cell < 0).length, 0),
+    leftOnly: oneSided(left, 0), rightOnly: oneSided(right, 1)
+  }
+}
 // results.search: the cells of a result (or a view's positions) whose display text contains the text, ignoring case;
 // binary values as 0x and uppercase hex, NULL and failed reads never. The real backend's collation rules have their own
 // checks. One pass counts every match and keeps a run of whole rows, forward from fromRow or the last before it.
@@ -828,7 +906,16 @@ const fixtures = {
   FOR_XML_FIXTURE: (id, params) => summary(id, params.database, [
     { columns: [{ ...column('XML_F52E2B61-18A1-11d1-B105-00805F49916B', 'ntext'), role: 'xml' }], rows: [['<objects><o><name>Orders</name><object_id>1</object_id></o><o><name>Customers</name><object_id>2</object_id></o></objects>']] }
   ]),
-  XML_CAST_FIXTURE: (id, params) => summary(id, params.database, [{ columns: [{ ...column('doc', 'xml'), role: 'xml' }], rows: [['<a><b>1</b><b>2</b></a>']] }])
+  XML_CAST_FIXTURE: (id, params) => summary(id, params.database, [{ columns: [{ ...column('doc', 'xml'), role: 'xml' }], rows: [['<a><b>1</b><b>2</b></a>']] }]),
+  // scripts/results-smoke.mjs: a table before and after a few changes, for Compare with Previous Result: a price changed,
+  // a name changed only in case, a row deleted and a row added.
+  DIFF_FIXTURE: (id, params) => {
+    const columns = [column('ItemId', 'int'), column('Name', 'nvarchar'), column('Price', 'decimal')]
+    return summary(id, params.database, [
+      { columns, rows: [['1', 'apple', '1.50'], ['2', 'pear', '2.00'], ['3', 'plum', '3.00'], ['4', 'fig', '4.00']] },
+      { columns, rows: [['1', 'apple', '1.75'], ['2', 'PEAR', '2.00'], ['4', 'fig', '4.00'], ['5', 'kiwi', '5.00']] }
+    ])
+  }
 }
 
 /** Workbench live.subscribe for debug.synthetic's metrics, table and status probes, as Live/SyntheticSampler.cs behaves, and for ssis.operations. */
@@ -1209,6 +1296,18 @@ async function workbench(id, method, params, credit) {
       const positions = [], marks = []
       for (let position = 0; position < rows; position++) { const mark = wanted.get(idAt(position)); if (mark !== undefined) { positions.push(position); marks.push(mark) } }
       return respond(id, { positions, marks, truncated: false, rows })
+    }
+    case 'results.diff': {
+      const left = stored.get(params.left), right = stored.get(params.right)
+      if (!left) return missing(id, params.left)
+      if (!right) return missing(id, params.right)
+      if (params.left === params.right || left.kind === 'diff' || right.kind === 'diff') return fail(id, 'INVALID_PARAMS', 'Only two result sets of the same query can be compared.')
+      if (!left.complete || !right.complete) return fail(id, 'RESULT_OPEN', 'Compare the results after they finish loading.')
+      const diff = buildDiff(left, right, params.exact ?? false, params.context ?? 1)
+      if (!diff) return fail(id, 'INVALID_PARAMS', 'These results have no column names in common, so they cannot be compared.')
+      const result = storeResult(diff.set, right.index)
+      const { set: _set, ...counts } = diff
+      return respond(id, { descriptor: describe(result), ...counts, approximate: false })
     }
     case 'results.search': {
       const source = sourceOf(id, params.resultId, params.viewId)
