@@ -85,10 +85,14 @@ internal static partial class CatalogSql
     public static string EscapeLike(string value) => value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_").Replace("[", "\\[");
 
     /// <summary>The kinds' catalog types for a child folder's parent lookup.</summary>
-    public static string ParentLookup(string parentKind) => parentKind switch
+    public static string ParentLookup(string parentKind) => ParentSelect(parentKind) + Found("@object_id");
+
+    /// <summary>Sets @object_id to the parent object found by @object_schema and @object_name (NULL when there is none), without
+    /// the found row: Peek's child lookups find the child before they answer.</summary>
+    public static string ParentSelect(string parentKind) => parentKind switch
     {
         "tableType" => "DECLARE @object_id int;\nSELECT @object_id = tt.type_table_object_id FROM sys.table_types AS tt JOIN sys.schemas AS ps ON ps.schema_id = tt.schema_id "
-            + "WHERE ps.name = @object_schema AND tt.name = @object_name;\n" + ParentFound,
+            + "WHERE ps.name = @object_schema AND tt.name = @object_name;\n",
         _ => "DECLARE @object_id int;\nSELECT @object_id = po.object_id FROM sys.all_objects AS po JOIN sys.schemas AS ps ON ps.schema_id = po.schema_id "
             + "WHERE ps.name = @object_schema AND po.name = @object_name AND po.type IN (" + parentKind switch
             {
@@ -96,11 +100,16 @@ internal static partial class CatalogSql
                 "view" => "'V'",
                 "procedure" => "'P', 'PC', 'X', 'RF'",
                 "function" => "'IF', 'TF', 'FT', 'FN', 'FS', 'AF'",
+                // Peek's own kinds, found the same way.
+                "synonym" => "'SN'",
+                "sequence" => "'SO'",
                 _ => throw new InvalidOperationException("Unknown parent kind.")
-            } + ");\n" + ParentFound
+            } + ");\n"
     };
 
-    private const string ParentFound = "SELECT CONVERT(bit, CASE WHEN @object_id IS NULL THEN 0 ELSE 1 END);\nIF @object_id IS NULL RETURN;\n";
+    /// <summary>The one bit row that says whether a lookup found its object (the variable it set), and the end of the batch when
+    /// it did not.</summary>
+    public static string Found(string variable) => "SELECT CONVERT(bit, CASE WHEN " + variable + " IS NULL THEN 0 ELSE 1 END);\nIF " + variable + " IS NULL RETURN;\n";
 
     // Metadata functions ignore the isolation level and LOCK_TIMEOUT, so the catalog is read through joins only. LOGINPROPERTY
     // waits on a login another session alters even under READ UNCOMMITTED (D4 P8; its one exception is ActionSql.LoginLock,
@@ -129,7 +138,9 @@ internal static partial class CatalogSql
         ("is_node", 14), ("is_edge", 14), ("graph_type", 14), ("sys.edge_constraints", 15),
         ("ledger_type", 16), ("is_dropped_ledger_table", 16), ("ledger_view_type", 16), ("is_dropped_ledger_view", 16), ("is_dropped_ledger_column", 16),
         // Database Properties (Actions/DatabaseProperties.cs).
-        ("is_ledger_on", 16), ("sys.database_scoped_configurations", 13), ("is_autogrow_all_files", 13)
+        ("is_ledger_on", 16), ("sys.database_scoped_configurations", 13), ("is_autogrow_all_files", 13),
+        // Peek (Explorer/PeekSql.cs).
+        ("is_query_store_on", 13), ("last_used_value", 14), ("optimize_for_sequential_key", 15), ("is_accelerated_database_recovery_on", 15)
     ];
     private static readonly HashSet<string> Literals = ["N'microsoft_database_tools_support'", "N'%'", "N'\\'", "N'.sys.sp_executesql'"];
 

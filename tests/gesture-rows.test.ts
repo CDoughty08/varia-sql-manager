@@ -125,7 +125,7 @@ describe('MouseView', () => {
     const html = render()
     expect(html).toContain('<th scope="row"><span class="mouse-gesture"><span class="mouse-dot" aria-hidden="true"></span><span class="mouse-title">Peek on Hover</span></span></th>')
     expect(html).toContain('aria-describedby="mouse-explorer-peekHover-about"')
-    expect(html).toContain('<span class="mouse-about" id="mouse-explorer-peekHover-about">Peeks a table')
+    expect(html).toContain('<span class="mouse-about" id="mouse-explorer-peekHover-about">Peeks the object')
   })
   it("shows the Options dialog's draft value of the linked setting when it is given", () => {
     // The mocked saved setting is Ctrl+Click; the page's draft says Alt+Click.

@@ -104,13 +104,13 @@ export const gestureCatalog = {
     locked: 'Double-clicking submits the Connect dialog; the Connect button also works from the keyboard.'
   },
   'explorer.peekHover': {
-    title: 'Peek on Hover', description: 'Peeks a table, view, procedure or function while the pointer rests on its row.',
+    title: 'Peek on Hover', description: 'Peeks the object (a table, procedure, index, login and so on) while the pointer rests on its row.',
     kind: 'modifier', scope: 'objectExplorer', action: 'hover', target: 'an object', modifiers: ['mod'],
     // Not Alt: hovering presses nothing, so releasing Alt afterwards would count as a bare-Alt tap and focus the menu bar.
     choices: [['mod'], ['shift']], keyboard: ['explorer.peek']
   },
   'explorer.openPeekTab': {
-    title: 'Open Peek as Tab', description: 'Opens Peek on a table, view, procedure or function in a document tab.',
+    title: 'Open Peek as Tab', description: 'Opens Peek on the object (a table, procedure, index, login and so on) in a document tab.',
     kind: 'pointerCommand', scope: 'objectExplorer', action: 'click', target: 'an object', modifiers: ['mod'],
     choices: [['mod'], ['shift']], keyboard: ['explorer.openPeekTab']
   },

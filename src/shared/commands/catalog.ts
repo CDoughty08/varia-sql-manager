@@ -445,10 +445,10 @@ export const commandCatalog = {
   // row opens it too, except while type-ahead collects a name with spaces; Ctrl+hover (⌘ on macOS) is the tree's own.
   'explorer.peek': {
     title: 'Peek', category: 'Object Explorer', icon: 'eye', keywords: ['definition', 'properties', 'preview', 'describe'],
-    precondition: "backendReady && (explorerSelectionKind == 'table' || explorerSelectionKind == 'view' || explorerSelectionKind == 'procedure' || explorerSelectionKind == 'function')",
-    unavailableHint: 'Select a table, view, stored procedure, or function.',
+    precondition: 'backendReady && explorerSelectionPeekable',
+    unavailableHint: 'Select an object Peek describes: a table, view, procedure, function, index, trigger, database, login, synonym, sequence, or type.',
     keybindings: [{ key: 'alt+f12', when: "activePanel == 'explorer' && !inputFocus && !searchHitsFocus" }, { key: 'space', when: 'explorerFocus && !textInputFocus && !explorerTypeAhead' }],
-    menus: [{ menu: 'explorer.context', group: '1_query', order: 7, mnemonic: 'k', when: "(explorerNode == 'table' || explorerNode == 'view' || explorerNode == 'procedure' || explorerNode == 'function') && !explorerServerLost" }]
+    menus: [{ menu: 'explorer.context', group: '1_query', order: 7, mnemonic: 'k', when: 'explorerNodePeekable && !explorerServerLost' }]
   },
   // Peek promoted to a document tab, with more room: the card's object while the card is open, otherwise the selection. A
   // Ctrl+click (⌘-click on macOS) on a row opens one too (gestures.ts, explorer.openPeekTab).
@@ -456,7 +456,7 @@ export const commandCatalog = {
     title: 'Open Peek as Tab', category: 'Object Explorer', icon: 'link-external', keywords: ['peek', 'definition', 'properties', 'preview', 'document', 'promote'],
     // The open card, else the menu's or Ctrl+click's row, else the selection: the handler's own condition says which applies.
     precondition: 'backendReady',
-    unavailableHint: 'Peek or select a table, view, stored procedure, or function.',
+    unavailableHint: 'Peek or select an object Peek describes, such as a table, procedure, index or login.',
     // Not in the card's grid, whose keys stay the results grid's.
     keybindings: [{ key: 'mod+enter', when: 'peekFocus && !outputGridFocus' }, { key: 'mod+enter', when: "activePanel == 'explorer' && !inputFocus && !searchHitsFocus" }]
   },

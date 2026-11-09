@@ -532,11 +532,11 @@ internal static class ExplorerChecks
         var ssis = Variant(json =>
         {
             SetKind(json, "server", ("scope", "ssisCatalog"));
-            SetKind(json, "login", ("scope", "ssisFolder"));
+            SetKind(json, "credential", ("scope", "ssisFolder"));
             SetKind(json, "user", ("scope", "ssisFolderObject"));
-            SetKind(json, "synonym", ("scope", "ssisProjectObject"), ("maxName", 260));
+            SetKind(json, "rule", ("scope", "ssisProjectObject"), ("maxName", 260));
         });
-        var scoped = new[] { "server", "login", "user", "synonym" }.Select(ssis.KindOf).ToList();
+        var scoped = new[] { "server", "credential", "user", "rule" }.Select(ssis.KindOf).ToList();
         var problems = new List<string>();
         foreach (var kind in scoped)
         {
@@ -555,7 +555,7 @@ internal static class ExplorerChecks
             problems.AddRange(scope.Required.Where(field => Valid(ssis, Without(field))).Select(field => kind.Scope + " without " + field));
             problems.AddRange(scope.Forbidden.Where(field => Valid(ssis, With(field))).Select(field => kind.Scope + " with " + field));
         }
-        var package = Minimal(ssis, ssis.KindOf("synonym"));
+        var package = Minimal(ssis, ssis.KindOf("rule"));
         check(problems.Count == 0 && Valid(ssis, package with { Name = new string('x', 260) }) && !Valid(ssis, package with { Name = new string('x', 261) })
             && !Valid(ssis, package with { SsisFolder = new string('f', 129) }) && !Valid(ssis, package with { SsisProject = "a\0b" }) && !Valid(ssis, package with { SsisFolder = "" })
             && Valid(ssis, package with { SsisFolder = new string('f', 128), SsisProject = new string('p', 128) }) && !Valid(ssis, package with { SsisProject = new string('p', 129) })
@@ -598,8 +598,8 @@ internal static class ExplorerChecks
             "an object whose kind lists rows takes cursors of that query only; a folder's cursor names the folder's own query, never its owner's; filters stay a folder's");
 
         // Listings read their owner from its own fields: an object node's rows and a folder's alike, SSIS folder and project too.
-        var owned = Variant(json => SetKind(json, "login", ("scope", "ssisProjectObject"), ("list", "credentials"), ("rows", new JsonArray("credential"))));
-        var daily = new ObjectRefDto("login", Name: "Daily", SsisFolder: "Finance", SsisProject: "Loads");
+        var owned = Variant(json => SetKind(json, "credential", ("scope", "ssisProjectObject"), ("list", "credentials"), ("rows", new JsonArray("credential"))));
+        var daily = new ObjectRefDto("credential", Name: "Daily", SsisFolder: "Finance", SsisProject: "Loads");
         var own = ExplorerService.Parameters(ExplorerRefs.Validate(Args(Object(daily)), owned), null, true);
         var orders = new ObjectRefDto("table", "db", "Sales", "Orders");
         var columns = ExplorerService.Parameters(ExplorerRefs.Validate(Args(Folder(orders, "columns")), catalog), null, true);
