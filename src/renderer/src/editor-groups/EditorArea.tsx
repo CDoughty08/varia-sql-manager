@@ -161,8 +161,8 @@ function DocumentTab({ api, containerApi }: IDockviewPanelHeaderProps) {
   // A query's live SQL session shows after its name, and screen readers hear it with the tab's environment and pin.
   const spid = tab && isQueryDocument(tab) ? liveQuerySession(query, connection)?.spid : undefined
   const session = spid === undefined ? 'No live SQL session' : `SQL session ID ${spid}`
-  const description = [environmentTag(environment)?.description, tab?.pinned && 'Pinned', spid !== undefined && session].filter(Boolean).join('. ') || undefined
-  const tooltip = tab ? tabTooltip(tab) : ''
+  const description = [environmentTag(environment)?.description, tab?.pinned && 'Pinned', tab?.file?.readOnly && 'Read-only', running && 'Executing', spid !== undefined && session].filter(Boolean).join('. ') || undefined
+  const tooltip = tab ? [tabTooltip(tab), environmentTag(environment)?.description, running && 'Executing'].filter(Boolean).join('\n') : ''
   useEffect(() => {
     const update = () => {
       const host = element.current?.closest<HTMLElement>('.dv-tab')

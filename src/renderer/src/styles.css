@@ -615,6 +615,11 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 @container (width < 338px) {
   .query-tab .tab-select { gap: 4px; padding-inline: 4px; }
 }
+/* A narrow split can leave the tab only its buttons and SID: decoration and spacing yield before the session badge. */
+@container (width < 200px) {
+  .query-tab .tab-select { gap: 0; padding-inline: 0; }
+  .query-tab .tab-select > .tab-icon, .query-tab .tab-select > .tab-readonly, .query-tab .tab-select > .tab-running, .query-tab .environment-tag[data-place="tab"] { display: none; }
+}
 /* A document tab's keyboard ring is a 1px inset outline, as the single strip drew it: the strip would clip the default ring,
    and forced colours drop box shadows. */
 .editor-groups .dv-tab:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; box-shadow: none; }
@@ -958,8 +963,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .rg-rn.tone-error, .rg-rn.tone-warning, .rg-rn.tone-running { border-left: 3px solid CanvasText; }
   .rg-rn.tone-added { border-left: 3px solid CanvasText; }
   .rg-rn.tone-removed { border-left: 3px dashed CanvasText; }
-  /* The active search match keeps its own outline. */
-  .rg-c.is-chg:not(.is-cur) { outline: 1px solid CanvasText; outline-offset: -2px; }
+  /* Weaker than any other cell outline (:where adds nothing), so the active cell and the active search match keep theirs. */
+  .rg-c:where(.is-chg) { outline: 1px solid CanvasText; outline-offset: -2px; }
   .rg-rn.hl { border-left: 3px double CanvasText; }
   .rg-row.tone-muted { color: GrayText; }
   /* Splitters are drawn with a background only, which forced colors would drop. */
@@ -1792,6 +1797,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .environment-tag[data-place="tab"] { max-width: 10em; }
 /* A bounded tab lets either kind yield so its name and session badge retain their space. */
 .query-tab .environment-tag[data-place="tab"] { flex: 0 1 auto; }
+/* A custom label (up to 32 characters) gives way before the name, so the name stays readable beside a long label; its
+   full text is in the tab's description and tooltip. Where the cell has room beside the SID and a running spinner, the
+   label keeps a few characters and its ellipsis; a narrower cell lets it go entirely rather than clip the SID. */
+.query-tab .environment-tag[data-place="tab"][data-custom] { flex-shrink: 100; }
+@container (width >= 220px) {
+  .query-tab .environment-tag[data-place="tab"][data-custom] { min-width: 3em; }
+}
 .environment-tag[data-place="tab"], .environment-tag[data-place="list"] { margin-left: 6px; }
 .environment-tag[data-place="list"] { vertical-align: middle; }
 .query-status-environment { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; margin-right: 10px; }

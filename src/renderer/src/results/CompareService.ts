@@ -28,7 +28,8 @@ export type CompareSnapshot = ReadonlyMap<string, CompareInfo>
 
 const comparable = (entry: ResultSetEntry | undefined): entry is ResultSetEntry =>
   entry !== undefined && entry.descriptor.kind === 'rows' && entry.handle.getSnapshot().state === 'complete'
-const names = (entry: ResultSetEntry) => new Set(entry.descriptor.columns.filter(column => column.role !== 'tone').map(column => column.name.toLowerCase()))
+/** The columns a diff can pair: visible ones, by name and whether they hold text or binary (ResultDiffer.Pairs). */
+const names = (entry: ResultSetEntry) => new Set(entry.descriptor.columns.filter(column => column.role !== 'tone').map(column => column.wire + ':' + column.name.toLowerCase()))
 
 /**
  * Compare with Previous Result (results PR 8): a set against the run's set before it, in the backend (results.diff),

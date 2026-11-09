@@ -643,11 +643,13 @@ export class ResultsWorkerCore {
       this.identities.delete(rid)
       const diff = this.diffs.get(rid)
       this.diffs.delete(rid)
-      // Built before the cancel reached it: nobody holds the diff, so it goes (the answer is not awaited).
+      // Built before the cancel reached it: nobody holds the diff, so it goes (the answer is not awaited), and the page,
+      // which waits for its request to end, hears it was cancelled.
       if (diff?.cancelled) {
         const close = this.allocate()
         this.orphanCloses.add(close)
-        return this.send({ t: 'close', rid: close, generation: diff.generation, resultIds: [(result as ResultsDiffResult).descriptor.resultId] })
+        this.send({ t: 'close', rid: close, generation: diff.generation, resultIds: [(result as ResultsDiffResult).descriptor.resultId] })
+        return this.error(identity, 'CANCELLED', 'The comparison was cancelled.')
       }
       this.post({ type: 'identity', id: identity, result: result as ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsDiffResult })
       return

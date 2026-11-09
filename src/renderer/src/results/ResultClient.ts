@@ -387,7 +387,13 @@ export class ResultClient implements Disposable {
         if (right.key.generation !== state.key.generation || right.key.resultId === state.key.resultId || !Number.isInteger(context) || context < -1 || context > wire.diff.maxContext)
           throw new ResultError('INVALID_PARAMS', 'Two results of the same query and a context of -1 to 100 rows are required.')
         const key = { generation: state.key.generation, resultId: state.key.resultId }
-        const response = await this.request(id => ({ type: 'identity', id, key, request: { method: 'diff', right: right.key.resultId, exact: o.exact ?? false, context } }), o.signal)
+        // A diff answered just before the abort reached the worker is a stored result nobody holds: it is released.
+        const late = (message: WorkerResponse) => {
+          if (message.type !== 'identity') return
+          const { descriptor } = message.result as ResultsDiffResult
+          void this.release([{ generation: descriptor.generation, resultId: descriptor.resultId }]).catch(() => {})
+        }
+        const response = await this.request(id => ({ type: 'identity', id, key, request: { method: 'diff', right: right.key.resultId, exact: o.exact ?? false, context } }), o.signal, late)
         if (response.type !== 'identity') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
         return response.result as ResultsDiffResult
       },
@@ -706,14 +712,18 @@ export class ResultClient implements Disposable {
     for (const request of pending) request.reject(error)
   }
 
-  private async request(build: (id: number) => WorkerRequest, signal?: AbortSignal): Promise<WorkerResponse> {
+  /** Sends a worker request. Aborting it rejects at once; with `late`, an answer that still comes (sent before the cancel
+   *  reached the worker) goes to `late`, and the worker's answer to the cancel ends the wait. */
+  private async request(build: (id: number) => WorkerRequest, signal?: AbortSignal, late?: (message: WorkerResponse) => void): Promise<WorkerResponse> {
     if (this.failure) throw new ResultError('RESULT_DECODER_FAILED', this.failure)
     await this.attached
     if (signal?.aborted) throw abortError()
     const id = this.nextId++
     return new Promise<WorkerResponse>((resolve, reject) => {
       const onAbort = () => {
-        if (!this.pending.delete(id)) return
+        if (!this.pending.has(id)) return
+        if (late) this.pending.set(id, { resolve: late, reject: () => {} })
+        else this.pending.delete(id)
         this.worker.postMessage({ type: 'cancel', id })
         reject(abortError())
       }

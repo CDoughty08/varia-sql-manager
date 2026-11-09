@@ -581,7 +581,11 @@ try {
   await expect(queryServer(page)).toHaveValue(idB)
   await expect(environmentPill(crowdedTab, 'tab')).toHaveText('STAGING')
   // Root can write any file; Windows and ordinary Linux users exercise the real read-only attribute.
-  if (process.getuid?.() !== 0) await expect(readOnlyMark(crowdedTab)).toHaveCount(1)
+  if (process.getuid?.() !== 0) {
+    await expect(readOnlyMark(crowdedTab)).toHaveCount(1)
+    await expect(crowdedTab).toHaveAttribute('aria-description', /Read-only/)
+    await expect(crowdedTab).toHaveAttribute('title', /read-only/)
+  }
   await crowdedTab.focus()
   await page.keyboard.press('Enter')
   await resizeContent(application, page, 1024, 720)
@@ -589,10 +593,14 @@ try {
   await expect(editorGroups(page)).toHaveCount(2)
   await queryBarButton(page, /Execute/).click()
   await expect(executingMark(crowdedTab)).toHaveCount(1)
+  await expect(crowdedTab).toHaveAttribute('aria-description', /Executing/)
+  await expect(crowdedTab).toHaveAttribute('title', /Executing/)
+  await expect(crowdedTab).toHaveAttribute('title', /Staging environment/)
   await expect(crowdedTab.locator(part.tabSid)).toHaveText(/^SID \d{5}$/)
   await expect.poll(() => tabGeometry(crowdedTab)).toMatchObject({ nameVisible: true, sidVisible: true, actionsVisible: true })
   await queryBarButton(page, 'Cancel').click()
   await expect(executingMark(crowdedTab)).toHaveCount(0)
+  await expect(crowdedTab).not.toHaveAttribute('aria-description', /Executing/)
   await page.keyboard.press('Alt+w')
   await page.getByRole('menu', { name: 'Window', exact: true }).getByRole('menuitem', { name: 'Join All Editor Groups', exact: true }).click()
   await expect(editorGroups(page)).toHaveCount(1)

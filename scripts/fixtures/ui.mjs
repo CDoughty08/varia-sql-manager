@@ -4,6 +4,7 @@
 // names in `part`, `gridPart` and `queryFacts`, used only from here and from page code that receives them as arguments.
 // tests/smoke-selectors.test.ts keeps Varia's class names out of the suites and checks that each one here still exists
 // in the renderer.
+import { expect } from '@playwright/test'
 
 /**
  * CSS selectors for page code (pass them in as arguments: they are plain strings) and for the parts without a role or
@@ -411,16 +412,20 @@ export const openDocument = documentTab
 /** Selects a document through its tab or its shelf's overflow list when the tab is outside the shown rows. */
 export const selectOpenDocument = async (page, name) => {
   const tab = documentTab(page, name)
-  if (await tab.getAttribute('data-tab-overflow') !== null) {
-    const section = await tab.getAttribute('data-tab-shelf') === 'pinned' ? 'pinned' : 'query'
-    const strip = tab.locator('xpath=ancestor::*[@role="tablist"][1]')
-    const overflow = strip.getByRole('button', { name: new RegExp(`^Show \\d+ more ${section} tabs?$`) })
-    const options = strip.getByRole('button', { name: `${section === 'pinned' ? 'Pinned' : 'Query'} tab options`, exact: true })
-    await overflow.or(options).click()
-    await strip.getByRole('group', { name: `More ${section} tabs`, exact: true }).getByRole('button', named(name)).click()
-    return
-  }
-  await tab.click()
+  // A close or resize can promote the tab after its overflow flag is read, disabling the old opener. Retry the whole
+  // choice with short ordinary clicks, so Playwright re-reads the shelf instead of waiting on a now-obsolete button.
+  await expect(async () => {
+    if (await tab.getAttribute('data-tab-overflow') !== null) {
+      const section = await tab.getAttribute('data-tab-shelf') === 'pinned' ? 'pinned' : 'query'
+      const strip = tab.locator('xpath=ancestor::*[@role="tablist"][1]')
+      const overflow = strip.getByRole('button', { name: new RegExp(`^Show \\d+ more ${section} tabs?$`) })
+      const options = strip.getByRole('button', { name: `${section === 'pinned' ? 'Pinned' : 'Query'} tab options`, exact: true })
+      const choice = strip.getByRole('group', { name: `More ${section} tabs`, exact: true }).getByRole('button', named(name))
+      if (!await choice.isVisible()) await overflow.or(options).click({ timeout: 2000 })
+      await choice.click({ timeout: 2000 })
+    } else await tab.click({ timeout: 2000 })
+    await expect(tab).toHaveAttribute('aria-selected', 'true', { timeout: 2000 })
+  }).toPass({ timeout: 15000, intervals: [100, 250, 500] })
 }
 export const pinDocumentButton = (page, name, pinned = false) => documentTabs(page).getByRole('button', { name: `${pinned ? 'Unpin' : 'Pin'} ${name}`, exact: true })
 /** Rename Tab's text box, in the tab being renamed. */

@@ -28,6 +28,7 @@ import { colorAt, highlightColors, type RowHighlights } from './highlights'
 import { tileKey } from './tiles'
 import { whitespaceRuns, type WhitespaceMode } from './whitespace'
 import { displayText } from '../../../shared/ipc/wire/cells'
+import { limits as wire } from '../../../shared/ipc/wire/protocol'
 
 // A cell's look is one of 4,096 class strings, picked by these bits.
 // HIT, CUR and DIM are search in results' marks (marks.ts): a matched cell, the active match, a column the search leaves out.
@@ -1512,21 +1513,28 @@ export class GridView {
   }
 }
 
-/** A live table's hidden tone column: its last column, when that column's role is tone; else -1. */
 /** A grid's accessible label: its name, then how many rows and shown columns it has, and whether more rows are coming. */
 export function gridLabel(name: string, rows: number, columns: number, open: boolean): string {
   return `${name}, ${formatCount(rows)} ${plural(rows, 'row')}, ${formatCount(columns)} ${plural(columns, 'column')}${open ? ', still loading' : ''}`
 }
-/** A diff row's differing cells from its tone text's tail ("4 ~6": column 4 changed, column 6 equal only by collation). */
+const toneEntry = /^(~?)(\d{1,5})(?:-(\d{1,5}))?$/
+/** A diff row's differing cells from its tone text's tail ("4 ~6-8": column 4 changed, columns 6 to 8 equal only by
+ *  collation). Runs are ranges (UnifiedDiff.Tone); anything else, such as the "…" a cut tone ends with, is skipped, and no
+ *  run reaches past the widest result. */
 export function cellMarksOf(text: string): ReadonlyMap<number, number> | undefined {
   if (!text) return undefined
   const marks = new Map<number, number>()
   for (const token of text.split(' ')) {
-    const soft = token.startsWith('~'), column = Number(soft ? token.slice(1) : token)
-    if (Number.isInteger(column) && column >= 0) marks.set(column, soft ? SOFT : CHG)
+    const entry = toneEntry.exec(token)
+    if (!entry) continue
+    const first = Number(entry[2]), last = entry[3] === undefined ? first : Number(entry[3])
+    if (last < first || last >= wire.page.maxColumns) continue
+    for (let column = first; column <= last; column++) marks.set(column, entry[1] ? SOFT : CHG)
   }
   return marks.size > 0 ? marks : undefined
 }
+
+/** A live table's hidden tone column: its last column, when that column's role is tone; else -1. */
 
 export function toneColumnOf(descriptor: Pick<ResultDescriptor, 'columns'>): number {
   const last = descriptor.columns.length - 1
