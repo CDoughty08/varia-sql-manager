@@ -13,6 +13,7 @@ import { explorerStatics } from './explorer-tree.mjs'
  * - AppData › Views: `views` expandable views (dbo.view0…), paged the same way.
  * - Security › Audits fails with PERMISSION_DENIED until `auditsOk` is set.
  * - Server Objects › Linked Servers is held until `release()` or a cancel for its request.
+ * - Peek's Top rows (query.execute with maxRows 10): fail once, then answer ten synthetic W1 rows (the backend's test hooks).
  * - The object index (explorer.index, explorer.search) holds dbo.Orders, dbo.usp_ShipOrders, dbo.Orders.trg_Orders, dbo.table1 and
  *   dbo.table2.
  */
@@ -174,16 +175,22 @@ export function installExplorerStub({ ipcMain }, { statics }) {
       })
       case 'explorer.peekDependencies': return ok(params.target.kind === 'view' ? { uses: [{ name: 'Orders', schema: 'dbo', kind: 'table' }], usedBy: [], elapsedMs: 1 }
         : { uses: [{ name: 'Customers', schema: 'dbo', database: 'Crm' }], usedBy: [{ name: 'OrderLines', schema: 'dbo', kind: 'table', foreignKey: true }, { name: 'vOrders', schema: 'dbo', kind: 'view' }], elapsedMs: 1 })
-      // The first rows read times out, so the smoke walks Retry.
-      case 'explorer.peekRows': if (stub.calls.filter(call => call.method === 'explorer.peekRows').length === 1) return ok({ columns: [], rows: [], elapsedMs: 1, error: { code: 'TIMEOUT', message: 'Reading the rows took longer than 15 seconds. Retry.', retryable: true } })
-        return ok({ columns: [{ name: 'Id', type: 'int' }, { name: 'CustomerName', type: 'nvarchar' }], rows: [['1', 'Alice'], ['2', null], ['3', null], ['4', 'B'.repeat(256)]], unread: [[2, 1]], cut: [[3, 1]], elapsedMs: 1 })
+      case 'tables.columns': return ok({ columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false })
       case 'scripting.script': return ok({ text: `CREATE TABLE [${params.targets[0].schema}].[${params.targets[0].name}](\n\t[Id] [int] NOT NULL\n)\nGO\n`, database: params.targets[0].database ?? 'master', warnings: [], commands: 1, elapsedMs: 1 })
       case 'query.session.close': return ok({ closed: true })
       case 'query.session.state': return ok({ transactionCount: 0, checked: true })
-      case 'query.execute': return ok({
-        resultSets: [], discardedResultSets: 0, messages: [`Executed in ${params.database}`], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1,
-        database: params.database, messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1, generation: 1, seq: 1 }
-      })
+      case 'query.execute': {
+        const summary = {
+          resultSets: [], discardedResultSets: 0, messages: [`Executed in ${params.database}`], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1,
+          database: params.database, messagesTruncated: false, budget: { usedBytes: 0, globalBytes: 1, queryBytes: 1, generation: 1, seq: 1 }
+        }
+        // Peek's Top rows (one result set of at most 10 rows): the first run fails, so the smoke walks Retry; later ones store ten
+        // synthetic rows with the backend's test hooks, which the real results grid then reads through the results port.
+        if (params.maxResultSets !== 1 || params.maxRows !== 10) return ok(summary)
+        if (stub.calls.filter(call => call.method === 'query.execute' && call.params.maxRows === 10).length === 1)
+          return ok({ ...summary, status: 'failed', messages: [], error: { code: 'SQL_ERROR', message: 'Query timeout expired.', batchNumber: 1, iteration: 1 } })
+        return ok({ ...summary, messages: [], resultSets: [await globalThis.__variaTest.synthesize('W1', 10)] })
+      }
       default: return { ok: false, error: 'Unsupported stub operation.' }
     }
   })

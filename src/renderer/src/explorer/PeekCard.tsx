@@ -1,4 +1,4 @@
-import { Component, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { Component, createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { kindSpecs } from '../../../shared/explorer/catalog.ts'
 import { isPeekListTab, peekLists, peekSpecs, peekTabsOf, peekTabTitle, type PeekDependency, type PeekList, type PeekListId, type PeekTab } from '../../../shared/explorer/peek.ts'
@@ -6,16 +6,25 @@ import { displayText } from '../../../shared/explorer/refs.ts'
 import { scriptCommandId } from '../../../shared/scripting/catalog.ts'
 import { isSqlScope } from '../../../shared/theme/registry'
 import type { SyntaxStyle } from '../../../shared/theme/types'
-import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
+import { useServiceSelector, useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { onUnexpectedError } from '../core/errors'
+import ResultsStack from '../grid/ResultsStack'
 import Icon from '../Icon'
+import { useKeybindingsRevision } from '../core/useCommand'
 import ExplorerIcon from './ExplorerIcon'
 import { formatPeekValue, placePeek } from './peek-format'
-import { peekMessages, type OpenPeek, type PeekDependencies, type PeekMembers, type PeekPart } from './PeekService'
-import type { PeekRowsResult } from '../../../shared/explorer/peek.ts'
+import { peekMessages, type OpenPeek, type PeekDependencies, type PeekMembers, type PeekPart, type PeekRows, type PeekView } from './PeekService'
 
 /** Lines of a definition that are coloured; longer text shows the rest plain, so a huge module never stalls the card. */
 const colouredLines = 3000
+
+/** The view the parts below read and act on: the card's (the Peek service) or a promoted tab's. */
+const PeekViewContext = createContext<PeekView | undefined>(undefined)
+export function usePeekView(): PeekView {
+  const view = useContext(PeekViewContext)
+  if (!view) throw new Error('A Peek part is drawn outside a Peek view.')
+  return view
+}
 
 /** A run of definition text in one SQL scope's colour. */
 export interface Run { readonly text: string; readonly style?: SyntaxStyle }
@@ -74,7 +83,7 @@ function Definition({ part }: { part: PeekPart<{ readonly text?: string; readonl
     <pre className="peek-definition" tabIndex={0} aria-label="Definition text">{runs.map((run, index) => run.style
       ? <span key={index} style={{ color: run.style.foreground, fontStyle: run.style.fontStyle.includes('italic') ? 'italic' : undefined, fontWeight: run.style.fontStyle.includes('bold') ? 'bold' : undefined }}>{run.text}</span>
       : run.text)}</pre>
-    {part.value.truncated && <p className="peek-note">The definition is longer than the card shows. Script it to see all of it.</p>}
+    {part.value.truncated && <p className="peek-note">The definition is longer than Peek shows. Script it to see all of it.</p>}
   </>
 }
 
@@ -98,16 +107,16 @@ export function Properties({ peek }: { peek: OpenPeek }) {
   </div>
 }
 
-/** A tab's part that is still loading or failed, in the card's words, with Retry for a failed read; nothing once it is ready. */
+/** A tab's part that is still loading or failed, in Peek's words, with Retry for a failed read; nothing once it is ready. */
 function Pending({ part, loading }: { part: PeekPart<unknown> | undefined; loading: string }) {
-  const { peek } = useWorkbench()
+  const view = usePeekView()
   if (!part || part.status === 'loading') return <p className="peek-note" role="status">{loading}</p>
   if (part.status === 'error') return <div className="peek-note error" role="alert">{part.message}
-    <button type="button" className="peek-action" onClick={event => {
-      // The button goes away as the read starts again: focus moves to the shown tab, so it stays in the card and Esc reaches it.
-      event.currentTarget.closest('.peek-card')?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus()
-      const open = peek.getSnapshot().open
-      if (open) peek.selectTab(open.tab)
+    <button type="button" className="peek-action" disabled={!view.connected} onClick={event => {
+      // The button goes away as the read starts again: focus moves to the shown tab, so it stays in the view and Esc reaches it.
+      event.currentTarget.closest('.peek-view')?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus()
+      const open = view.getSnapshot().open
+      if (open) view.selectTab(open.tab)
     }}>Retry</button></div>
   return null
 }
@@ -138,47 +147,37 @@ function DependencyList({ title, items, truncated, follow, canFollow }: { title:
         ? <button type="button" className="peek-follow" aria-label={`Peek ${dependencyName(dependency)}`} title={`Peek ${dependencyName(dependency)}`} onClick={() => follow(dependency)}>{body}</button>
         : body}</li>
     })}</ul>}
-    {truncated && <p className="peek-note">There are more than the card lists.</p>}
+    {truncated && <p className="peek-note">There are more than Peek lists.</p>}
   </section>
 }
 
 function Dependencies({ part }: { part: PeekPart<PeekDependencies> | undefined }) {
-  const { peek } = useWorkbench()
+  const view = usePeekView()
   if (part?.status !== 'ready') return <Pending part={part} loading="Loading dependencies…" />
   const { uses, usesTruncated, usedBy, usedByTruncated } = part.value
-  const follow = (dependency: PeekDependency) => peek.follow(dependency), canFollow = (dependency: PeekDependency) => peek.canFollow(dependency)
+  const follow = (dependency: PeekDependency) => view.follow(dependency), canFollow = (dependency: PeekDependency) => view.canFollow(dependency)
   return <div className="peek-properties">
     <DependencyList title="Uses" items={uses} truncated={usesTruncated} follow={follow} canFollow={canFollow} />
     <DependencyList title="Used by" items={usedBy} truncated={usedByTruncated} follow={follow} canFollow={canFollow} />
   </div>
 }
 
-const cells = (list: readonly (readonly [number, number])[] | undefined) => new Set((list ?? []).map(([row, column]) => `${row}:${column}`))
-
 /**
- * The first rows as the results grid shows their values: NULL in the grid's NULL style, cut values ending in an ellipsis (their
- * tooltips say so), and values that could not be read as NULL, as the grid shows them, with a note.
+ * The first rows in the results grid, as Select Top N Rows shows them: the view's run is a ResultsService entry under its own
+ * key, so the grid's selection, Copy, Save Results As and Open Value work as in a query's results.
  */
-export function PeekRows({ part }: { part: PeekPart<PeekRowsResult> | undefined }) {
-  const value = part?.status === 'ready' ? part.value : undefined
-  const cut = useMemo(() => cells(value?.cut), [value]), unread = useMemo(() => cells(value?.unread), [value])
-  if (!value) return <Pending part={part} loading="Reading the top rows…" />
-  const { columns, rows, moreColumns } = value
-  return <>
-    <table className="peek-rows" aria-label="Top rows">
-      <thead><tr>{columns.map((column, index) => <th key={index} scope="col" title={column.type}><bdi>{column.name}</bdi></th>)}</tr></thead>
-      <tbody>{rows.map((row, r) => <tr key={r}>{row.map((value, c) => {
-        const at = `${r}:${c}`
-        return value === null ? <td key={c} className="peek-null" title={unread.has(at) ? peekMessages.unreadCell : undefined}>NULL</td>
-          // The title repeats the value for the mouse; assistive technology, which reads the value as the cell's name, gets the note alone.
-          : cut.has(at) ? <td key={c} title={`${value}…\n${peekMessages.cutCell}`} aria-description={peekMessages.cutCell}>{`${value}…`}</td>
-            : <td key={c} title={value}>{value}</td>
-      })}</tr>)}</tbody>
-    </table>
-    {rows.length === 0 && <p className="peek-note">{peekMessages.noRows}</p>}
-    {unread.size > 0 && <p className="peek-note">{unread.size === 1 ? '1 value' : `${unread.size.toLocaleString()} values`} could not be read and show as NULL.</p>}
-    {moreColumns !== undefined && <p className="peek-note">{moreColumns === 1 ? '1 more column is' : `${moreColumns.toLocaleString()} more columns are`} not shown.</p>}
-  </>
+export function PeekRowsPart({ part }: { part: PeekPart<PeekRows> | undefined }) {
+  const { results } = useWorkbench()
+  // Only this run's entry: other tabs' results streaming do not draw the card again.
+  const key = part?.status === 'ready' ? part.value.key : undefined
+  const tab = useServiceSelector(results, all => key === undefined ? undefined : all[key])
+  if (part?.status !== 'ready') return <Pending part={part} loading="Reading the top rows…" />
+  if (!tab?.sets.length) return <p className="peek-note">{peekMessages.rowsUnavailable}</p>
+  const read = tab.summary?.resultSets[0]?.rowsRead
+  return <div className="peek-rows" data-peek-rows="">
+    <ResultsStack tabId={part.value.key} tab={tab} />
+    {read === 0 && <p className="peek-note">{peekMessages.noRows}</p>}
+  </div>
 }
 
 /** One of the kind's lists (`peekLists`), which come with the facts: a table of the list's columns, values formatted as facts are. */
@@ -202,21 +201,21 @@ export function PeekListView({ id, part, list }: { id: PeekListId; part: OpenPee
  * The left pane's tabs: Left and Right (Home, End) move focus between them, and Enter or Space shows the focused one. Tabs
  * are chosen, not shown as focus passes them, since Top rows reads the table or view.
  */
-function Tabs({ peek }: { peek: OpenPeek }) {
-  const { peek: service } = useWorkbench()
+function Tabs({ peek, idPrefix }: { peek: OpenPeek; idPrefix: string }) {
+  const view = usePeekView()
   const tabs = peekTabsOf(peek.kind)
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const focused = (event.target as HTMLElement).dataset.peekTab as PeekTab | undefined
+    const focused = (event.target as HTMLElement).dataset.peekPart as PeekTab | undefined
     const at = tabs.indexOf(focused && tabs.includes(focused) ? focused : peek.tab)
     const next = event.key === 'ArrowRight' ? tabs[(at + 1) % tabs.length] : event.key === 'ArrowLeft' ? tabs[(at - 1 + tabs.length) % tabs.length]
       : event.key === 'Home' ? tabs[0] : event.key === 'End' ? tabs[tabs.length - 1] : undefined
     if (!next) return
     event.preventDefault()
-    event.currentTarget.querySelector<HTMLElement>(`[data-peek-tab="${next}"]`)?.focus()
+    event.currentTarget.querySelector<HTMLElement>(`[data-peek-part="${next}"]`)?.focus()
   }
   return <div className="peek-tabs" role="tablist" aria-label="Peek" onKeyDown={keyDown}>
-    {tabs.map(tab => <button key={tab} type="button" role="tab" className="peek-tab" id={`peek-tab-${tab}`} data-peek-tab={tab} aria-selected={peek.tab === tab} aria-controls="peek-tab-panel"
-      tabIndex={peek.tab === tab ? 0 : -1} onClick={() => service.selectTab(tab)}>{peekTabTitle(peek.kind, tab)}</button>)}
+    {tabs.map(tab => <button key={tab} type="button" role="tab" className="peek-tab" id={`${idPrefix}-tab-${tab}`} data-peek-part={tab} aria-selected={peek.tab === tab} aria-controls={`${idPrefix}-panel`}
+      tabIndex={peek.tab === tab ? 0 : -1} onClick={() => view.selectTab(tab)}>{peekTabTitle(peek.kind, tab)}</button>)}
   </div>
 }
 
@@ -228,7 +227,47 @@ function panel(open: OpenPeek): ReactNode {
   const tab: PeekTab = open.tab
   if (isPeekListTab(tab)) return <PeekListView id={tab} part={open.facts} list={open.lists?.[tab]} />
   return tab === 'definition' ? <Definition part={open.definition} /> : tab === 'members' ? <Members part={open.members} />
-    : tab === 'dependencies' ? <Dependencies part={open.dependencies} /> : <PeekRows part={open.rows} />
+    : tab === 'dependencies' ? <Dependencies part={open.dependencies} /> : <PeekRowsPart part={open.rows} />
+}
+
+/** An Object Explorer node's display name for Peek's header: its schema and name, a child's (an index, a trigger) below its parent's. */
+export function peekName(open: OpenPeek): string {
+  const object = open.node.ref.type === 'object' ? open.node.ref.object : undefined
+  return object ? displayText([object.parent?.schema, object.parent?.name, object.schema, object.name].filter(part => part !== undefined).join('.')) : ''
+}
+
+/**
+ * Peek's body, the card's and a promoted tab's alike: the tabs (Definition, Columns or Parameters, Dependencies, Top rows) on
+ * the left, with Copy and Script to New Query over the definition, and the properties on the right. `beforeScript` runs before
+ * Script to New Query (the card closes itself first). `idPrefix` keeps each body's tab ids its own.
+ */
+export function PeekBody({ view, open, idPrefix, beforeScript }: { view: PeekView; open: OpenPeek; idPrefix: string; beforeScript?: () => void }) {
+  const { commands } = useWorkbench()
+  const node = open.node
+  const definition = open.definition.status === 'ready' ? open.definition.value : undefined
+  const copyable = definition?.text !== undefined && !definition.truncated
+  const script = scriptCommandId('create', 'newQuery')
+  const target = { target: { kind: 'explorer' as const, node } }
+  return <PeekViewContext.Provider value={view}>
+    <div className="peek-body">
+      <div className="peek-pane">
+        <div className="peek-pane-title">
+          <Tabs peek={open} idPrefix={idPrefix} />
+          <span className="peek-spacer" />
+          {open.tab === 'definition' && <>
+            <button type="button" className="peek-action" disabled={!copyable} title={definition?.truncated ? 'The definition is cut; Script to New Query has all of it.' : undefined} onClick={() => { view.copyDefinition().catch(onUnexpectedError) }}>Copy</button>
+            <button type="button" className="peek-action" disabled={!commands.isEnabled(script, target)}
+              onClick={() => { beforeScript?.(); void commands.execute(script, target, 'toolbar') }}>Script to New Query</button>
+          </>}
+        </div>
+        <div key={`${open.id}:${open.tab}`} className={open.tab === 'rows' ? 'peek-scroll peek-grid' : 'peek-scroll'} id={`${idPrefix}-panel`} role="tabpanel" aria-labelledby={`${idPrefix}-tab-${open.tab}`}>{panel(open)}</div>
+      </div>
+      <div className="peek-pane peek-side">
+        <PaneTitle title="Properties" />
+        <div className="peek-scroll"><Properties peek={open} /></div>
+      </div>
+    </div>
+  </PeekViewContext.Provider>
 }
 
 /**
@@ -259,11 +298,15 @@ export default function PeekCard() {
 /**
  * The Peek card: the object's definition on the left, its properties on the right, floating beside Object Explorer in the
  * window the pane is in (docs/popout-windows.md), so it is drawn into that window's body. Esc, a click outside it or
- * another peek closes it; a peek from the keyboard or the menu focuses it, a hover does not.
+ * another peek closes it; a peek from the keyboard or the menu focuses it, a hover does not. Open as Tab (Ctrl+Enter, ⌘↩ on
+ * macOS) moves it to a document tab.
  */
 function PeekCardView() {
-  const { peek: service, commands } = useWorkbench()
+  const { peek: service, commands, keybindings } = useWorkbench()
   const { open } = useServiceSnapshot(service)
+  // The tooltip names Open as Tab's key, which the Shortcuts page can change.
+  useKeybindingsRevision()
+  const tabKey = keybindings.lookup('explorer.openPeekTab')
   const anchor = useRef<HTMLSpanElement>(null)
   const card = useRef<HTMLDivElement>(null)
   const [place, setPlace] = useState<ReturnType<typeof placePeek> | undefined>(undefined)
@@ -320,15 +363,10 @@ function PeekCardView() {
     else if (!event.shiftKey && at === last) { event.preventDefault(); first.focus() }
   }
   const node = open?.node
-  const object = node?.ref.type === 'object' ? node.ref.object : undefined
-  // A child (an index, a trigger) is named below its parent.
-  const name = object ? displayText([object.parent?.schema, object.parent?.name, object.schema, object.name].filter(part => part !== undefined).join('.')) : ''
-  const definition = open?.definition.status === 'ready' ? open.definition.value : undefined
-  const copyable = definition?.text !== undefined && !definition.truncated
-  const script = scriptCommandId('create', 'newQuery')
+  const name = open ? peekName(open) : ''
   return <span ref={anchor} className="peek-anchor" hidden>
     {open && node && place && doc && createPortal(
-      <div ref={card} className="peek-card" role="dialog" aria-modal="false" aria-label={`Peek: ${name}`} tabIndex={-1} onKeyDown={keyDown} data-peek-source={open.source}
+      <div ref={card} className="peek-card peek-view" role="dialog" aria-modal="false" aria-label={`Peek: ${name}`} tabIndex={-1} onKeyDown={keyDown} data-peek-source={open.source} data-peek-card=""
         style={{ left: place.left, top: place.top, width: place.width, height: place.height }}>
         <div className="peek-head">
           {open.back.length > 0 && <button type="button" className="icon-button" aria-label="Back" title="Back" onClick={() => service.goBack()}><Icon name="arrow-left" /></button>}
@@ -336,27 +374,12 @@ function PeekCardView() {
           <bdi className="peek-name" title={name}>{name}</bdi>
           <span className="peek-kind">{kindSpecs[open.kind].title}</span>
           <span className="peek-spacer" />
+          <button type="button" className="icon-button" aria-label="Open as Tab" title={tabKey ? `Open as Tab (${tabKey.text})` : 'Open as Tab'}
+            onClick={() => { void commands.execute('explorer.openPeekTab', undefined, 'toolbar') }}><Icon name="link-external" /></button>
           <button type="button" className="icon-button" aria-label="Refresh" title="Refresh" onClick={() => service.refresh()}><Icon name="refresh" /></button>
           <button type="button" className="icon-button" aria-label="Close" title="Close (Esc)" onClick={() => close(true)}><Icon name="close" /></button>
         </div>
-        <div className="peek-body">
-          <div className="peek-pane">
-            <div className="peek-pane-title">
-              <Tabs peek={open} />
-              <span className="peek-spacer" />
-              {open.tab === 'definition' && <>
-                <button type="button" className="peek-action" disabled={!copyable} title={definition?.truncated ? 'The definition is cut; Script to New Query has all of it.' : undefined} onClick={() => { service.copyDefinition().catch(onUnexpectedError) }}>Copy</button>
-                <button type="button" className="peek-action" disabled={!commands.isEnabled(script, { target: { kind: 'explorer', node } })}
-                  onClick={() => { const target = { target: { kind: 'explorer' as const, node } }; close(false); void commands.execute(script, target, 'toolbar') }}>Script to New Query</button>
-              </>}
-            </div>
-            <div key={`${open.id}:${open.tab}`} className="peek-scroll" id="peek-tab-panel" role="tabpanel" aria-labelledby={`peek-tab-${open.tab}`}>{panel(open)}</div>
-          </div>
-          <div className="peek-pane peek-side">
-            <PaneTitle title="Properties" />
-            <div className="peek-scroll"><Properties peek={open} /></div>
-          </div>
-        </div>
+        <PeekBody view={service} open={open} idPrefix="peek" beforeScript={() => close(false)} />
       </div>, doc.body)}
   </span>
 }

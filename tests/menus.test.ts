@@ -328,7 +328,7 @@ describe('menu state', () => {
     // Context-menu commands and the keyboard-only ones are not in the native menu bar either.
     const unplaced = ['file.closeOthers', 'file.copyPath', 'file.revealInFolder', 'document.moveLeft', 'document.moveRight', 'document.rename', 'editor.moveToNextGroup', 'editor.moveToPreviousGroup', 'editor.float', 'editor.dock', 'workbench.showContextMenu', 'explorer.refresh', 'preferences.createTheme', 'preferences.openThemesFolder',
       'preferences.reloadThemes', 'preferences.setTheme', 'pane.dockLeft', 'pane.dockRight', 'pane.dockTop', 'pane.dockBottom', 'pane.tabWithExplorer', 'pane.tabWithEditor', 'pane.tabWithResults', 'pane.tabWithMessages', 'pane.tabWithPlan', 'pane.float', 'pane.dock', 'pane.moveToNewWindow', 'pane.moveToMainWindow', 'pane.close', 'explorer.newQuery', 'explorer.selectTopRows', 'explorer.rename', 'explorer.delete', 'explorer.properties', 'explorer.disable', 'explorer.enable', 'explorer.unlock', 'explorer.restoreDatabase', 'explorer.tasks.restoreDatabase', 'explorer.restoreFiles', 'explorer.tasks.restoreFiles', 'explorer.newTable', 'explorer.newDatabase', 'explorer.newDatabaseOnDatabase', 'explorer.createCatalog', 'explorer.attachDatabase', 'explorer.takeOffline', 'explorer.bringOnline', 'explorer.detachDatabase', 'explorer.newLogin', 'explorer.newLoginOnSecurity', ...scriptCommandIds,
-      'explorer.scriptAs', 'explorer.modify', 'explorer.peek', 'explorer.cancelScripting', 'explorer.copyName', 'search.revealHit', 'search.copyName', 'search.copySchemaName', 'search.copyQualifiedName', 'search.copyBracketedName', 'output.copy', 'output.copyWithHeaders', 'output.selectAll', 'options.focusSearch', 'backend.restart',
+      'explorer.scriptAs', 'explorer.modify', 'explorer.peek', 'explorer.openPeekTab', 'peek.refresh', 'explorer.cancelScripting', 'explorer.copyName', 'search.revealHit', 'search.copyName', 'search.copySchemaName', 'search.copyQualifiedName', 'search.copyBracketedName', 'output.copy', 'output.copyWithHeaders', 'output.selectAll', 'options.focusSearch', 'backend.restart',
       'connection.removeLost', 'explorer.stop', 'explorer.collapseAll', 'explorer.filter', 'explorer.focusSearch', 'explorer.removeFilter', 'window.switchPane',
       'output.saveResultsAs', 'output.closeResults', 'output.openValue', 'editor.toggleOvertype', 'file.openRecent', 'file.clearRecent', 'file.recoverUnsaved', 'editor.toggleLineNumbers',
       // Main runs AutoRecover's save as Windows ends the session; no menu shows it.
@@ -358,7 +358,9 @@ describe('menu state', () => {
       // Focusing editor groups: keys in editor text and the palette.
       'editor.focusNextGroup', 'editor.focusPreviousGroup',
       // The results toolbar's White space choices, also in the grid's menu.
-      'output.showSpaces', 'output.showAllWhitespace']
+      'output.showSpaces', 'output.showAllWhitespace',
+      // Sorting a grid: its menu and its headers' sort buttons; Sort text by is the results toolbar's and the palette's.
+      'output.sortAscending', 'output.sortDescending', 'output.thenSortAscending', 'output.thenSortDescending', 'output.clearSort', 'output.sortTextByChars', 'output.sortTextByBytes']
     expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))
     // Query › Connection is a native submenu too.
     for (const id of ['preferences.colorTheme', 'connection.connect', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'file.closeAll', 'view.toggleResultsPane'] as const) expect(menuCommandIds).toContain(id)
@@ -366,7 +368,7 @@ describe('menu state', () => {
       const placed = commandDescriptor(id).menus?.some(placement => nativeMenuIds.includes(placement.menu)) ?? false
       expect(menuCommandIds.includes(id), id).toBe(placed && !commandDescriptor(id).role)
     }
-    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'query.includeActualPlan', 'query.includeLivePlan', 'query.includeClientStatistics', 'explorer.groupBySchema', 'ssis.pauseOperations', 'editor.toggleWordWrap', 'editor.toggleOvertype', 'editor.toggleWhitespace', 'editor.toggleLineNumbers', 'activity.togglePause', 'activity.toggleSplit', 'output.showSpaces', 'output.showAllWhitespace', 'window.togglePanelTabs'])
+    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'query.includeActualPlan', 'query.includeLivePlan', 'query.includeClientStatistics', 'explorer.groupBySchema', 'ssis.pauseOperations', 'editor.toggleWordWrap', 'editor.toggleOvertype', 'editor.toggleWhitespace', 'editor.toggleLineNumbers', 'activity.togglePause', 'activity.toggleSplit', 'output.showSpaces', 'output.showAllWhitespace', 'output.sortTextByChars', 'output.sortTextByBytes', 'window.togglePanelTabs'])
     // Main checks only toggles the schema names.
     expect(menuStateSchema.safeParse({ disabled: [], checked: ['editor.toggleWhitespace', 'editor.toggleLineNumbers'] }).success).toBe(true)
   })

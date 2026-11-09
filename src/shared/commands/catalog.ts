@@ -450,6 +450,23 @@ export const commandCatalog = {
     keybindings: [{ key: 'alt+f12', when: "activePanel == 'explorer' && !inputFocus && !searchHitsFocus" }, { key: 'space', when: 'explorerFocus && !textInputFocus && !explorerTypeAhead' }],
     menus: [{ menu: 'explorer.context', group: '1_query', order: 7, mnemonic: 'k', when: 'explorerNodePeekable && !explorerServerLost' }]
   },
+  // Peek promoted to a document tab, with more room: the card's object while the card is open, otherwise the selection. A
+  // Ctrl+click (⌘-click on macOS) on a row opens one too (gestures.ts, explorer.openPeekTab).
+  'explorer.openPeekTab': {
+    title: 'Open Peek as Tab', category: 'Object Explorer', icon: 'link-external', keywords: ['peek', 'definition', 'properties', 'preview', 'document', 'promote'],
+    // The open card, else the menu's or Ctrl+click's row, else the selection: the handler's own condition says which applies.
+    precondition: 'backendReady',
+    unavailableHint: 'Peek or select an object Peek describes, such as a table, procedure, index or login.',
+    // Not in the card's grid, whose keys stay the results grid's.
+    keybindings: [{ key: 'mod+enter', when: 'peekFocus && !outputGridFocus' }, { key: 'mod+enter', when: "activePanel == 'explorer' && !inputFocus && !searchHitsFocus" }]
+  },
+  // The Peek card's or the active Peek tab's Refresh: it reads the object again, its script and its top rows included.
+  'peek.refresh': {
+    title: 'Refresh Peek', category: 'Object Explorer', icon: 'refresh',
+    // The card has no state key of its own: the handler's condition asks whether one is open.
+    precondition: 'backendReady', unavailableHint: 'Open Peek first.',
+    keybindings: [{ key: 'f5', when: 'peekFocus || peekTabFocus' }]
+  },
   'explorer.copyName': {
     title: 'Copy Name', category: 'Object Explorer', icon: 'copy', precondition: 'hasConnection', unavailableHint: 'Select an object that has a name.',
     menus: [{ menu: 'explorer.context', group: '5_copy', order: 1, mnemonic: 'a', when: "(explorerNode != 'background' && explorerNode != 'folder' && explorerNode != 'returnValue' && !explorerServerLost) || explorerFolderInsertable" }]
@@ -796,6 +813,35 @@ export const commandCatalog = {
   'output.showAllWhitespace': {
     title: 'Show All White Space in Results', category: 'Query', icon: 'whitespace', keywords: ['whitespace', 'crlf', 'nbsp', 'invisible', 'grid'],
     toggled: 'resultsWhitespaceAll', menus: [{ menu: 'output.context', group: '4_view', order: 2, title: 'Show All White Space', mnemonic: 'w', when: "outputView == 'grid'" }]
+  },
+  // Sorting a grid (results.view): the menu's column, else the active cell's. Sort replaces the grid's sort; Then Sort adds
+  // the column as a further key. A header's sort button does the same with a click, and Shift+click (grid.addSortKey).
+  'output.sortAscending': {
+    title: 'Sort Ascending', category: 'Query', icon: 'arrow-up', keywords: ['order', 'sort', 'asc', 'grid', 'column'], palette: false,
+    menus: [{ menu: 'output.context', group: '2_sort', order: 1, mnemonic: 'o', when: "outputView == 'grid'" }]
+  },
+  'output.sortDescending': {
+    title: 'Sort Descending', category: 'Query', icon: 'arrow-down', keywords: ['order', 'sort', 'desc', 'grid', 'column'], palette: false,
+    menus: [{ menu: 'output.context', group: '2_sort', order: 2, mnemonic: 'd', when: "outputView == 'grid'" }]
+  },
+  'output.thenSortAscending': {
+    title: 'Then Sort Ascending', category: 'Query', keywords: ['order', 'sort', 'secondary', 'grid', 'column'], palette: false,
+    menus: [{ menu: 'output.context', group: '2_sort', order: 3, when: "outputView == 'grid'" }]
+  },
+  'output.thenSortDescending': {
+    title: 'Then Sort Descending', category: 'Query', keywords: ['order', 'sort', 'secondary', 'grid', 'column'], palette: false,
+    menus: [{ menu: 'output.context', group: '2_sort', order: 4, when: "outputView == 'grid'" }]
+  },
+  'output.clearSort': {
+    title: 'Clear Sort', category: 'Query', keywords: ['order', 'unsort', 'original', 'grid'], palette: false,
+    menus: [{ menu: 'output.context', group: '2_sort', order: 5, mnemonic: 'r', when: "outputView == 'grid'" }]
+  },
+  // The results toolbar's Sort text by choices (queryResults.grid.sortText); each goes back to Value when it is already on.
+  'output.sortTextByChars': {
+    title: 'Sort Text by Length in Characters', category: 'Query', icon: 'symbol-ruler', keywords: ['sort', 'length', 'len', 'characters', 'text', 'grid'], toggled: 'resultsSortTextChars'
+  },
+  'output.sortTextByBytes': {
+    title: 'Sort Text by Length in Bytes', category: 'Query', icon: 'symbol-ruler', keywords: ['sort', 'length', 'datalength', 'bytes', 'text', 'binary', 'grid'], toggled: 'resultsSortTextBytes'
   },
   // A click or Enter on an XML, JSON or plan cell opens its whole value, formatted, in a new tab (the grid runs it).
   'output.openValue': { title: 'Open Value in New Tab', category: 'Query', icon: 'go-to-file', palette: false },

@@ -27,6 +27,7 @@ export interface FocusFacts {
   readonly editorFocus: boolean; readonly editorTextFocus: boolean; readonly inputFocus: boolean; readonly activePanel: 'explorer' | 'editor' | 'output' | ''; readonly outputGridFocus: boolean
   readonly searchHitsFocus: boolean
   readonly designerFocus: boolean; readonly queryBarFocus: boolean; readonly activityMonitorFocus: boolean; readonly documentTabFocus: boolean
+  readonly peekFocus: boolean; readonly peekTabFocus: boolean
   readonly messagesFocus: boolean; readonly explorerFocus: boolean; readonly explorerTypeAhead: boolean; readonly optionsDialogFocus: boolean
 }
 /** A table designer's state for its commands: TableDesignerService publishes one per open designer. */
@@ -50,7 +51,7 @@ export interface SsisOperationsContextState { readonly byDocument: Readonly<Reco
 export interface FocusElement { matches(selector: string): boolean; closest(selector: string): { getAttribute(name: string): string | null } | null }
 export interface FocusEditor<E> { getContainerDomNode(): { contains(node: E): boolean }; hasTextFocus(): boolean }
 
-const noFocus: FocusFacts = { editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '', outputGridFocus: false, searchHitsFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false,
+const noFocus: FocusFacts = { editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '', outputGridFocus: false, searchHitsFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false, peekFocus: false, peekTabFocus: false,
   messagesFocus: false, explorerFocus: false, explorerTypeAhead: false, optionsDialogFocus: false }
 const panels: ReadonlySet<string> = new Set(['explorer', 'editor'])
 
@@ -67,7 +68,7 @@ export function focusFacts<E extends FocusElement>(element: E | null, editor: Fo
     editorFocus, editorTextFocus, inputFocus, activePanel: isOutputPane(pane) ? 'output' : panels.has(pane) ? pane as FocusFacts['activePanel'] : '', outputGridFocus: !!element.closest('[data-result-grid]'),
     searchHitsFocus: !!element.closest('[data-search-hits]'),
     designerFocus: !!element.closest('[data-designer]'), queryBarFocus: !!element.closest('[data-query-bar]'), activityMonitorFocus: !!element.closest('[data-activity-monitor]'),
-    documentTabFocus: !!element.closest('[data-document-tab]'), messagesFocus: !!element.closest('[data-output-view="messages"]'),
+    documentTabFocus: !!element.closest('[data-document-tab]'), peekFocus: !!element.closest('[data-peek-card]'), peekTabFocus: !!element.closest('[data-peek-tab]'), messagesFocus: !!element.closest('[data-output-view="messages"]'),
     // The tree marks itself while type-ahead collects a name (ExplorerTree), so Space types rather than peeks.
     explorerFocus: !!tree, explorerTypeAhead: tree?.getAttribute('data-type-ahead') != null, optionsDialogFocus: !!element.closest('[data-options-dialog]')
   }
@@ -86,6 +87,8 @@ export interface ContextInputs {
   readonly lineNumbers?: boolean
   /** How the results grid shows white space (queryResults.grid.whitespace); without it, its keys are false. */
   readonly resultsWhitespace?: SettingsValues['queryResults.grid.whitespace']
+  /** How sorted grids order text (queryResults.grid.sortText); without it, its keys are false. */
+  readonly resultsSortText?: SettingsValues['queryResults.grid.sortText']
   /** Bookmarks per open document (`BookmarkService`). */
   readonly bookmarks?: Readonly<Record<string, number>>
   readonly backendStatus: BackendStatus | ''
@@ -138,6 +141,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     quickInputVisible: inputs.quickInputVisible, backendStatus: inputs.backendStatus, backendReady: inputs.backendStatus === 'ready', editorWordWrap: inputs.wordWrap,
     editorWhitespace: !!inputs.whitespace, editorLineNumbers: !!inputs.lineNumbers,
     resultsWhitespaceSpaces: inputs.resultsWhitespace === 'spaces', resultsWhitespaceAll: inputs.resultsWhitespace === 'all',
+    resultsSortTextChars: inputs.resultsSortText === 'chars', resultsSortTextBytes: inputs.resultsSortText === 'bytes',
     hasBookmarks: Object.values(inputs.bookmarks ?? {}).some(count => count > 0), activeDocumentHasBookmarks: !!active && (inputs.bookmarks?.[active.id] ?? 0) > 0,
     anyDocumentDirty: documents.documents.some(document => document.dirty), editorOvertype: !!inputs.overtype, hasRecentFiles: !!inputs.recentFiles, hasRecoveryFiles: !!inputs.recoveryFiles,
     hasActiveDocument: !!active, activeDocumentIsQuery: isQueryDocument(active), activeDocumentIsText: isTextDocument(active), activeDocumentIsDesigner: active?.kind === 'tableDesigner', activeDocumentIsSsis: isSsisDocumentKind(active?.kind),
@@ -145,7 +149,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     propertiesRefreshable: !!properties?.refreshable,
     activeDocumentIsNewDatabase: active?.kind === 'newDatabase', newDatabaseCreatable: !!newDatabase?.creatable, newDatabaseCreating: !!newDatabase?.creating,
     activeDocumentIsRestore: active?.kind === 'restoreDatabase', restoreRunnable: !!restore?.runnable, restoreRunning: !!restore?.running, restoreRefreshable: !!restore?.refreshable,
-    activeDocumentIsActivityMonitor: active?.kind === 'activityMonitor', activityPaused: !!monitor?.paused, activitySplit: !!monitor?.split,
+    activeDocumentIsActivityMonitor: active?.kind === 'activityMonitor', activeDocumentIsPeek: active?.kind === 'peek', activityPaused: !!monitor?.paused, activitySplit: !!monitor?.split,
     activeDocumentIsSsisOperations: active?.kind === 'ssisOperations', ssisOperationStoppable: !!operations?.stoppable, ssisOperationsPaused: !!operations?.paused, ssisOperationsRefreshable: !!operations?.refreshable, ssisOperationsPausable: !!operations?.pausable,
     designerEditable: !!designer?.editable, designerRowSelected: !!designer?.rowSelected, designerPrimaryKeyRemovable: !!designer?.keyRemovable, designerSaving: !!inputs.designer?.saving, multipleDocuments: documents.documents.length > 1, multipleEditorGroups: groups.length > 1,
     activeDocumentFloating: !!activeGroup?.floating, documentBusy: documents.busy,
@@ -169,7 +173,7 @@ export interface ContextKeyOptions {
   readonly connections: ExternalStore<readonly LiveConnection[]>
   readonly backend: ExternalStore<BackendSnapshot>
   readonly editorOptions: ExternalStore<EditorOptions>
-  /** Settings read by keys of their own (`resultsWhitespaceSpaces`, `resultsWhitespaceAll`). */
+  /** Settings read by keys of their own (`resultsWhitespaceSpaces`, `resultsWhitespaceAll`, `resultsSortTextChars`, `resultsSortTextBytes`). */
   readonly settings?: ExternalStore<{ readonly values: SettingsValues }>
   readonly quickInput?: ExternalStore<{ readonly visible: boolean }>
   readonly panes?: ExternalStore<PaneVisibility>
@@ -222,7 +226,7 @@ export class ContextKeyService implements Disposable {
     const { options } = this, editor = options.editorOptions.getSnapshot()
     return {
       platform: options.platform, focus, documents: options.documents.getSnapshot(), queries: options.queries.getSnapshot(), connections: options.connections.getSnapshot(),
-      quickInputVisible: !!options.quickInput?.getSnapshot().visible, wordWrap: editor.wordWrap, whitespace: editor.whitespace, lineNumbers: editor.lineNumbers, resultsWhitespace: options.settings?.getSnapshot().values['queryResults.grid.whitespace'], bookmarks: options.bookmarks?.getSnapshot().counts, backendStatus: options.backend.getSnapshot().state.status,
+      quickInputVisible: !!options.quickInput?.getSnapshot().visible, wordWrap: editor.wordWrap, whitespace: editor.whitespace, lineNumbers: editor.lineNumbers, resultsWhitespace: options.settings?.getSnapshot().values['queryResults.grid.whitespace'], resultsSortText: options.settings?.getSnapshot().values['queryResults.grid.sortText'], bookmarks: options.bookmarks?.getSnapshot().counts, backendStatus: options.backend.getSnapshot().state.status,
       panes: options.panes?.getSnapshot(), panelTabs: options.shell?.getSnapshot().panelTabs, explorer: options.explorer?.getSnapshot(), results: options.results?.getSnapshot(), scriptingRunning: options.scripting?.getSnapshot(),
       overtype: options.inputMode?.getSnapshot().mode === 'overtype', recentFiles: !!options.recentFiles?.getSnapshot().length,
       recoveryFiles: !!options.recovery?.getSnapshot().entries.length, designer: options.designer?.getSnapshot(), properties: options.properties?.getSnapshot(), newDatabase: options.newDatabase?.getSnapshot(), restore: options.restore?.getSnapshot(),

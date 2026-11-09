@@ -46,6 +46,12 @@ internal sealed class ResultStore
     private const long CompactWhenEmpty = 16L * 1024 * 1024;
     private readonly object gate = new();
     private readonly Dictionary<uint, ResultSetBuffer> sets = [];
+    private readonly Dictionary<uint, ResultView> views = [];
+    /// <summary>Views one result keeps at most; a new one past this replaces its oldest.</summary>
+    public const int MaxViewsPerResult = 8;
+    /// <summary>Bookkeeping charged per view on top of its order array.</summary>
+    public const long ViewOverhead = 256;
+    private uint nextViewId = 1;
     private readonly Func<(long Load, long Threshold)> memory;
     private uint nextId = 1;
     private long used;
@@ -217,15 +223,75 @@ internal sealed class ResultStore
 
     public bool Release(uint resultId) => Release([resultId]) == 1;
 
+    /// <summary>Keeps a view built for <paramref name="set"/>, whose order and overhead (<paramref name="charged"/> bytes) the
+    /// caller has reserved from the set's budget: they are returned when the view goes. <paramref name="replaces"/> names a
+    /// view of the same set this one supersedes; past <see cref="MaxViewsPerResult"/> the set's oldest view goes. Throws
+    /// RESULT_RELEASED, returning the charge, when the set was released while the view was built.</summary>
+    public ResultView AddView(ResultSetBuffer set, int[] order, IReadOnlyList<ViewKey> keys, bool approximate, bool complete, long charged, uint? replaces)
+    {
+        List<ResultView> dropped = [];
+        ResultView view;
+        lock (gate)
+        {
+            if (!sets.ContainsKey(set.ResultId) || set.IsReleased || nextViewId == 0)
+            {
+                Return(set.Budget, charged);
+                throw nextViewId == 0 ? new RequestException("BACKEND_ERROR", "View identifiers are exhausted. Restart the SQL backend.")
+                    : new RequestException("RESULT_RELEASED", "These results were closed. Execute the query again to see them.");
+            }
+            if (replaces is { } old && views.TryGetValue(old, out var replaced) && replaced.Set == set && views.Remove(old)) dropped.Add(replaced);
+            var own = views.Values.Where(item => item.Set == set).OrderBy(item => item.ViewId).ToList();
+            for (var i = 0; i <= own.Count - MaxViewsPerResult; i++)
+            {
+                views.Remove(own[i].ViewId);
+                dropped.Add(own[i]);
+            }
+            view = new ResultView(nextViewId++, set, order, keys, approximate, complete, charged);
+            views[view.ViewId] = view;
+        }
+        foreach (var item in dropped) Return(item.Set.Budget, item.Charged);
+        return view;
+    }
+
+    /// <summary>A view of <paramref name="resultId"/>, or null when there is none by that id for that result (closed,
+    /// replaced, or another result's).</summary>
+    public ResultView? FindView(uint resultId, uint viewId)
+    {
+        lock (gate) return views.TryGetValue(viewId, out var view) && view.Set.ResultId == resultId ? view : null;
+    }
+
+    public bool HasView(ResultView view)
+    {
+        lock (gate) return views.TryGetValue(view.ViewId, out var kept) && kept == view;
+    }
+
+    public int ViewCount { get { lock (gate) return views.Count; } }
+
+    /// <summary>Closes views of <paramref name="resultId"/> (others' ids, unknown and repeated ones are skipped); returns how
+    /// many were closed.</summary>
+    public int CloseViews(uint resultId, IEnumerable<uint> viewIds)
+    {
+        List<ResultView> closed = [];
+        lock (gate)
+        {
+            foreach (var id in viewIds)
+                if (views.TryGetValue(id, out var view) && view.Set.ResultId == resultId && views.Remove(id)) closed.Add(view);
+        }
+        foreach (var view in closed) Return(view.Set.Budget, view.Charged);
+        return closed.Count;
+    }
+
     /// <summary>Releases the given ids (unknown and repeated ids are skipped) and returns how many were released.</summary>
     public int Release(IEnumerable<uint> resultIds)
     {
         List<ResultSetBuffer> released = [];
+        List<ResultView> dropped;
         lock (gate)
         {
             foreach (var id in resultIds) if (sets.Remove(id, out var set)) released.Add(set);
+            dropped = DropViewsLocked(released);
         }
-        return Free(released);
+        return Free(released, dropped);
     }
 
     public int ReleaseSession(string sessionId) => Release(set => set.Budget.SessionId == sessionId);
@@ -234,17 +300,34 @@ internal sealed class ResultStore
     private int Release(Func<ResultSetBuffer, bool> match)
     {
         List<ResultSetBuffer> released;
+        List<ResultView> dropped;
         lock (gate)
         {
             released = [.. sets.Values.Where(match)];
             foreach (var set in released) sets.Remove(set.ResultId);
+            dropped = DropViewsLocked(released);
         }
-        return Free(released);
+        return Free(released, dropped);
     }
 
-    private int Free(List<ResultSetBuffer> released)
+    /// <summary>The views of the sets just released, removed with them.</summary>
+    private List<ResultView> DropViewsLocked(List<ResultSetBuffer> released)
+    {
+        if (released.Count == 0 || views.Count == 0) return [];
+        var gone = released.ToHashSet();
+        var dropped = views.Values.Where(view => gone.Contains(view.Set)).ToList();
+        foreach (var view in dropped) views.Remove(view.ViewId);
+        return dropped;
+    }
+
+    private int Free(List<ResultSetBuffer> released, List<ResultView> dropped)
     {
         long freed = 0;
+        foreach (var view in dropped)
+        {
+            Return(view.Set.Budget, view.Charged);
+            if (view.Set.Budget.Live is null) freed += view.Charged;
+        }
         foreach (var set in released)
         {
             var bytes = set.Release();

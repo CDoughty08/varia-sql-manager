@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { ResultsPortHost, toExactArrayBuffer, type FrameLike, type LiveStreamHandle, type PortMainLike, type ReadStream, type ResultsBackend } from '../src/main/backend/results-port'
 import { BackendError } from '../src/main/backend/errors'
 import type { StreamSink } from '../src/main/backend/connection'
-import type { QueryEvent, ResultDescriptor, ResultsReadParams, ResultsRowBytesParams } from '../src/shared/contracts'
+import type { QueryEvent, ResultDescriptor, ResultsReadParams, ResultsRowBytesParams, ResultsViewCloseParams, ResultsViewParams, ResultsViewResult } from '../src/shared/contracts'
+import { cancelReasons, type CancelReason } from '../src/shared/ipc/wire/protocol'
 import { buildPortRequestSchema, type PortMessage, type portRequestSchema } from '../src/shared/ipc/port-messages'
 import { buildLiveSchemas } from '../src/shared/live/schema'
 import type { LiveProbeSpec, LiveSourceSpec } from '../src/shared/live/catalog'
@@ -31,12 +32,14 @@ class FakePort implements PortMainLike {
 
 interface FakeRead { generation: number; params: ResultsReadParams; sink: StreamSink; credit: number; credits: number[]; cancels: number[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeLive { generation: number; params: LiveSubscribeParams; onLive: (event: LiveEvent, bytes: number) => void; credit: number; credits: number[]; cancels: number[]; resolve(value: LiveEnd): void; reject(error: unknown): void }
+interface FakeView { generation: number; params: ResultsViewParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeUpdate { generation: number; params: LiveUpdateParams; resolve(value: LiveUpdateResult): void; reject(error: unknown): void }
 
 function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof portRequestSchema } = {}) {
   const reads: FakeRead[] = []
   const lives: FakeLive[] = []
   const updates: FakeUpdate[] = []
+  const views: FakeView[] = []
   let ready: number | undefined = 1
   const backend: ResultsBackend = {
     readyGeneration: () => ready,
@@ -49,6 +52,14 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
     },
     close: vi.fn(async (_generation: number, resultIds: number[]) => ({ closed: resultIds.length, usedBytes: 0 })),
     rowBytes: vi.fn(async (_generation: number, params: ResultsRowBytesParams) => ({ firstRow: params.firstRow, bytes: [4, 8], rowsAvailable: 2, estimated: [1] })),
+    view: (generation, params) => {
+      let resolve!: (value: unknown) => void, reject!: (error: unknown) => void
+      const done = new Promise<ResultsViewResult>((onResolve, onReject) => { resolve = onResolve as (value: unknown) => void; reject = onReject })
+      const view: FakeView = { generation, params, cancels: [], resolve, reject }
+      views.push(view)
+      return { done, cancel: reason => view.cancels.push(reason) }
+    },
+    viewClose: vi.fn(async (_generation: number, params: ResultsViewCloseParams) => ({ closed: params.viewIds.length })),
     live: (generation, params, onLive, credit): LiveStreamHandle => {
       let resolve!: (value: LiveEnd) => void, reject!: (error: unknown) => void
       const done = new Promise<LiveEnd>((onResolve, onReject) => { resolve = onResolve; reject = onReject })
@@ -70,7 +81,7 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
     port().send({ t: 'live', rid, generation, params })
     return params
   }
-  return { host, backend, reads, lives, updates, ports, port, frame, read, live, setReady: (generation: number | undefined) => { ready = generation } }
+  return { host, backend, reads, lives, updates, views, ports, port, frame, read, live, setReady: (generation: number | undefined) => { ready = generation } }
 }
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
 const descriptor = (resultId: number, generation = 1): Pick<ResultDescriptor, 'generation' | 'resultId'> => ({ generation, resultId })
@@ -288,6 +299,57 @@ describe('ResultsPortHost', () => {
     expect(backend.rowBytes).toHaveBeenCalledWith(1, { resultId: 7, firstRow: 0, count: 2 })
     expect(codes(port())).toEqual([[2, 'RESULT_UNAVAILABLE'], [3, 'RESULT_UNAVAILABLE'], [4, 'INVALID_REQUEST'], [5, 'INVALID_REQUEST'], [6, 'INVALID_REQUEST'], [1, 'ok']])
     expect(port().ends().at(-1)).toEqual({ t: 'end', rid: 1, ok: true, result: { firstRow: 0, bytes: [4, 8], rowsAvailable: 2, estimated: [1] } })
+  })
+  it('sorts only owned results of the current generation, within the schema bounds, and relays a well formed view', async () => {
+    const { host, backend, port, views, read, reads } = fixture()
+    host.own([descriptor(7)])
+    const key = { column: 0, descending: true, mode: 'value' }
+    port().send({ t: 'view', rid: 1, generation: 1, resultId: 7, sort: [key], replaces: 3 })
+    port().send({ t: 'view', rid: 2, generation: 1, resultId: 8, sort: [key] })
+    port().send({ t: 'view', rid: 3, generation: 2, resultId: 7, sort: [key] })
+    port().send({ t: 'view', rid: 4, generation: 1, resultId: 7, sort: [] })
+    port().send({ t: 'view', rid: 5, generation: 1, resultId: 7, sort: Array.from({ length: 17 }, (_, column) => ({ ...key, column })) })
+    port().send({ t: 'view', rid: 6, generation: 1, resultId: 7, sort: [{ ...key, mode: 'length' }] })
+    port().send({ t: 'view', rid: 7, generation: 1, resultId: 7, sort: [{ ...key, column: 4096 }] })
+    port().send({ t: 'view', rid: 8, generation: 1, resultId: 7, sort: [{ ...key, extra: true }] })
+    port().send({ t: 'view', rid: 9, generation: 1, resultId: 7, sort: [key] })
+    expect(views.map(view => view.params)).toEqual([{ resultId: 7, sort: [key], replaces: 3 }, { resultId: 7, sort: [key] }])
+    views[0].resolve({ viewId: 4, rows: 10, complete: true, approximate: false })
+    views[1].resolve({ viewId: 5, rows: -1, complete: true, approximate: false })
+    await settle()
+    expect(codes(port())).toEqual([[2, 'RESULT_UNAVAILABLE'], [3, 'RESULT_UNAVAILABLE'], [4, 'INVALID_REQUEST'], [5, 'INVALID_REQUEST'], [6, 'INVALID_REQUEST'], [7, 'INVALID_REQUEST'], [8, 'INVALID_REQUEST'], [1, 'ok'], [9, 'BACKEND_ERROR']])
+    expect(port().ends().find(end => end.rid === 1)).toEqual({ t: 'end', rid: 1, ok: true, result: { viewId: 4, rows: 10, complete: true, approximate: false } })
+    // Reads and row sizes through a view carry its id to the backend.
+    read(10, 7, { viewId: 4 })
+    expect(reads.at(-1)!.params).toEqual({ resultId: 7, firstRow: 0, maxRows: 100, viewId: 4 })
+    port().send({ t: 'rowBytes', rid: 11, generation: 1, resultId: 7, firstRow: 0, count: 2, viewId: 4 })
+    await settle()
+    expect(backend.rowBytes).toHaveBeenLastCalledWith(1, { resultId: 7, firstRow: 0, count: 2, viewId: 4 })
+  })
+  it('cancels a sort on the worker\'s cancel and when the port closes, and closes views of owned results', async () => {
+    const { host, backend, port, views } = fixture()
+    host.own([descriptor(7)])
+    const key = { column: 1, descending: false, mode: 'chars' }
+    port().send({ t: 'view', rid: 1, generation: 1, resultId: 7, sort: [key] })
+    port().send({ t: 'cancel', rid: 1 })
+    expect(views[0].cancels).toEqual([cancelReasons.user])
+    views[0].reject(new BackendError('CANCELLED', 'The request was cancelled.'))
+    port().send({ t: 'viewClose', rid: 2, generation: 1, resultId: 7, viewIds: [4, 5] })
+    port().send({ t: 'viewClose', rid: 3, generation: 1, resultId: 8, viewIds: [4] })
+    port().send({ t: 'viewClose', rid: 4, generation: 1, resultId: 7, viewIds: [] })
+    port().send({ t: 'viewClose', rid: 5, generation: 1, resultId: 7, viewIds: Array.from({ length: 65 }, (_, index) => index + 1) })
+    await settle()
+    expect(backend.viewClose).toHaveBeenCalledTimes(1)
+    expect(backend.viewClose).toHaveBeenCalledWith(1, { resultId: 7, viewIds: [4, 5] })
+    expect(port().ends().find(end => end.rid === 2)).toEqual({ t: 'end', rid: 2, ok: true, result: { closed: 2 } })
+    expect(codes(port()).filter(([rid]) => rid !== 1)).toEqual([[3, 'RESULT_UNAVAILABLE'], [4, 'INVALID_REQUEST'], [5, 'INVALID_REQUEST'], [2, 'ok']])
+    port().send({ t: 'view', rid: 6, generation: 1, resultId: 7, sort: [key] })
+    port().hangUp()
+    expect(views[1].cancels).toHaveLength(1)
+    // Built before the cancel reached the backend: with no port left to own it, main closes the view itself.
+    views[1].resolve({ viewId: 9, rows: 1, complete: true, approximate: false })
+    await settle()
+    expect(backend.viewClose).toHaveBeenLastCalledWith(1, { resultId: 7, viewIds: [9] })
   })
   it('forwards a row sizes answer only when it is well formed and answers the range asked', async () => {
     const { host, backend, port } = fixture()

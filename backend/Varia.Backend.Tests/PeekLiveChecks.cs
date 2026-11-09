@@ -15,9 +15,6 @@ internal static class PeekLiveChecks
     private static async Task<PeekDependenciesResult> Dependencies(SqlService service, string connectionId, ObjectRefDto target, JsonSerializerOptions json) =>
         (PeekDependenciesResult)await service.DispatchAsync("explorer.peekDependencies", JsonSerializer.SerializeToElement(new PeekArgs(connectionId, Guid.NewGuid().ToString(), target), json), json);
 
-    private static async Task<PeekRowsResult> Rows(SqlService service, string connectionId, ObjectRefDto target, JsonSerializerOptions json) =>
-        (PeekRowsResult)await service.DispatchAsync("explorer.peekRows", JsonSerializer.SerializeToElement(new PeekRowsArgs(connectionId, Guid.NewGuid().ToString(), target), json), json);
-
     public static async Task SystemAsync(Action<bool, string> check, SqlService service, string connectionId, int major, JsonSerializerOptions json)
     {
         var options = service.Explorer.Options;
@@ -84,12 +81,6 @@ internal static class PeekLiveChecks
         else Console.WriteLine("Peek's sa check skipped: this server has no login named sa.");
         var function = await Peek(service, connectionId, hex, json);
         check(function is { Error: null } && function.Facts["functionType"] as string == "Scalar-valued", "a system scalar function says Scalar-valued");
-
-        var sample = await Rows(service, connectionId, objects, json);
-        check(sample is { Error: null, Rows.Count: 10, MoreColumns: null } && sample.Columns.Any(column => column is { Name: "name", Type: "nvarchar" }) && sample.Rows.All(row => row.Length == sample.Columns.Count),
-            "sys.objects' top rows are 10 rows of its columns, with their names and types: " + (sample.Error?.Message ?? JsonSerializer.Serialize(sample.Columns.Take(3))));
-        var noRows = await Rows(service, connectionId, new ObjectRefDto("table", "msdb", "dbo", "VariaNoSuchTable"), json);
-        check(noRows is { Error.Code: "NOT_FOUND", Rows.Count: 0 }, "the top rows of a missing table are a NOT_FOUND value");
 
         var missing = await Peek(service, connectionId, new ObjectRefDto("table", "msdb", "dbo", "VariaNoSuchTable"), json);
         var goneDatabase = await Peek(service, connectionId, new ObjectRefDto("view", "VariaMissing_" + Guid.NewGuid().ToString("N"), "dbo", "v"), json);
@@ -230,25 +221,12 @@ internal static class PeekLiveChecks
                 && child.Uses is { } childUses && childUses.Any(item => item is { Name: "T]'表", Kind: "table", ForeignKey: true }) && procedureUses.Uses is { Count: 0 },
                 "dependencies list a view's table, a foreign key's table each way, and what uses a table, under hostile names, and a missing object's are NOT_FOUND: " + Names(tableUses.UsedBy) + " | " + Names(view.Uses) + " | " + Names(child.Uses));
 
-            var rows = await Rows(service, connectionId, Ref("table", schema, "T]'表"), json);
-            var notes = rows.Rows.FirstOrDefault(row => row[0] == "1");
-            check(rows is { Error: null, Rows.Count: 3, MoreColumns: null } && rows.Columns.Select(column => column.Name + " " + column.Type).SequenceEqual(["Id int", "Name nvarchar", "Notes nvarchar"])
-                && notes is { } first && first[1] == "a" && first[2] is { Length: 256 } cutText && cutText.All(c => c == 'x')
-                && rows.Cut is { } cut && cut.Any(cell => rows.Rows[cell[0]][0] == "1" && cell[1] == 2) && rows.Rows.Count(row => row[2] is null) == 2,
-                "a hostile-named table's top rows show its values as the grid does, NULL as null, and a long value cut at 256 and marked: " + JsonSerializer.Serialize(rows.Columns));
-            var blob = await Rows(service, connectionId, Ref("table", schema, "Blob"), json);
-            check(blob is { Error: null, Rows.Count: 1 } && blob.Rows[0][1] is { Length: 256 } hex && hex.StartsWith("0x6162", StringComparison.Ordinal) && blob.Cut is { } blobCut && blobCut.Any(cell => cell is [0, 1]),
-                "a 2 MB varbinary(max) value shows its first bytes as 0x… text, cut at 256 characters and marked: " + (blob.Error?.Message ?? blob.Rows.FirstOrDefault()?[1]?[..Math.Min(20, blob.Rows[0][1]?.Length ?? 0)]));
-            var viewRows = await Rows(service, connectionId, Ref("view", schema, "V]'表"), json);
-            check(viewRows is { Error: null, Rows.Count: 3 } && viewRows.Columns.Count == 2, "a hostile-named view's top rows are read too");
-
             service.Explorer.Options.ForcePerDatabaseScope = true;
             var perDatabase = await Peek(service, connectionId, Ref("table", schema, "T]'表"), json);
             var perDatabaseUses = await Dependencies(service, connectionId, Ref("table", schema, "T]'表"), json);
-            var perDatabaseRows = await Rows(service, connectionId, Ref("table", schema, "T]'表"), json);
             service.Explorer.Options.ForcePerDatabaseScope = false;
-            check(perDatabase is { Error: null } && perDatabase.Facts["rowCount"] is 3L && perDatabaseUses.UsedBy is { Count: > 0 } && perDatabaseRows is { Error: null, Rows.Count: 3 },
-                "the per-database strategy peeks the scratch database too, with its dependencies and rows");
+            check(perDatabase is { Error: null } && perDatabase.Facts["rowCount"] is 3L && perDatabaseUses.UsedBy is { Count: > 0 },
+                "the per-database strategy peeks the scratch database too, with its dependencies");
 
             // A user with VIEW DEFINITION but not db_owner reads the facts batch, and is refused only the dependencies one
             // (sys.sql_expression_dependencies), which is why that is a request of its own.
@@ -455,35 +433,15 @@ internal static class PeekLiveChecks
         }
     }
 
-    /// <summary>A memory-optimized table's rows (read under READ COMMITTED, since memory-optimized tables refuse the explorer pool's READ UNCOMMITTED) and those
-    /// of a view over it, in a database of their own, and a disk table there still read READ UNCOMMITTED (it waits on no lock).</summary>
+    /// <summary>A memory-optimized table's facts, in a database of their own. (Its Top rows run through query.execute in a session of
+    /// their own, under the session's READ COMMITTED, so the explorer pool's READ UNCOMMITTED never reaches them.)</summary>
     private static async Task MemoryOptimizedAsync(Action<bool, string> check, SqlService service, string connectionId, Func<string, string, Task<SqlRun>> sql, JsonSerializerOptions json,
         Func<Task<string>> create)
     {
         var database = await create();
-        var made = await sql("CREATE TABLE dbo.Mo (Id int NOT NULL PRIMARY KEY NONCLUSTERED, Name nvarchar(20) NULL) WITH (MEMORY_OPTIMIZED = ON, DURABILITY = SCHEMA_ONLY);\nGO\n"
-            + "INSERT dbo.Mo (Id, Name) VALUES (1, N'one'), (2, NULL);\nGO\nCREATE VIEW dbo.vMo AS SELECT Id, Name FROM dbo.Mo;\nGO\n"
-            + "CREATE TABLE dbo.Disk (Id int NOT NULL PRIMARY KEY, Name nvarchar(20) NULL);\nINSERT dbo.Disk (Id) VALUES (1);\nGO\n", database);
-        check(made.Status == "completed", "the memory-optimized fixtures are created: " + made.Error);
-        var table = await Rows(service, connectionId, new ObjectRefDto("table", database, "dbo", "Mo"), json);
-        var view = await Rows(service, connectionId, new ObjectRefDto("view", database, "dbo", "vMo"), json);
+        var made = await sql("CREATE TABLE dbo.Mo (Id int NOT NULL PRIMARY KEY NONCLUSTERED, Name nvarchar(20) NULL) WITH (MEMORY_OPTIMIZED = ON, DURABILITY = SCHEMA_ONLY);\nGO\n", database);
+        check(made.Status == "completed", "the memory-optimized fixture is created: " + made.Error);
         var facts = await Peek(service, connectionId, new ObjectRefDto("table", database, "dbo", "Mo"), json);
-        // A transaction holding an uncommitted change to the disk table's row: READ UNCOMMITTED reads past it.
-        var host = (IExplorerHost)service;
-        using var template = host.Connection(connectionId, null);
-        var locker = new SqlConnection(new SqlConnectionStringBuilder(template.ConnectionString) { InitialCatalog = database, Pooling = false }.ConnectionString);
-        await host.OpenAsync(locker, CancellationToken.None);
-        await using (var hold = locker.CreateCommand())
-        {
-            hold.CommandText = "BEGIN TRANSACTION; UPDATE dbo.Disk SET Name = N'held';";
-            await (await hold.ExecuteReaderAsync()).DisposeAsync();
-        }
-        PeekRowsResult disk;
-        try { disk = await Rows(service, connectionId, new ObjectRefDto("table", database, "dbo", "Disk"), json); }
-        finally { await locker.DisposeAsync(); }
-        check(table is { Error: null, Rows.Count: 2 } && table.Rows.Any(row => row[1] == "one") && table.Rows.Any(row => row[1] is null) && view is { Error: null, Rows.Count: 2 }
-            && facts is { Error: null } && facts.Facts["memoryOptimized"] is true && disk is { Error: null, Rows.Count: 1 },
-            "a memory-optimized table's top rows are read, and a view over it's, and a locked disk table beside them is still read uncommitted: "
-            + (table.Error?.Message ?? view.Error?.Message ?? facts.Error?.Message ?? disk.Error?.Message));
+        check(facts is { Error: null } && facts.Facts["memoryOptimized"] is true, "a memory-optimized table peeks as memory-optimized: " + facts.Error?.Message);
     }
 }

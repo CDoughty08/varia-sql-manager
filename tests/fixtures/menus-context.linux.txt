@@ -331,6 +331,12 @@ output.context, for a results grid with selected cells
   ---
   Select &All  Ctrl+A  ++++
   ---
+  S&ort Ascending  ++++
+  Sort &Descending  ++++
+  &Then Sort Ascending  ++++
+  Then &Sort Descending  ++++
+  Clea&r Sort  ----
+  ---
   Sa&ve Results As…  Ctrl+S  ----
   ---
   Show S&paces and Tabs [ ]  ++++
@@ -340,6 +346,12 @@ output.context, for a results grid without
   Copy with &Headers  Ctrl+Shift+C  ----
   ---
   Select &All  Ctrl+A  ++++
+  ---
+  S&ort Ascending  ----
+  Sort &Descending  ----
+  &Then Sort Ascending  ----
+  Then &Sort Descending  ----
+  Clea&r Sort  ----
   ---
   Sa&ve Results As…  Ctrl+S  ----
   ---

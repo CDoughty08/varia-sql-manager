@@ -1,5 +1,5 @@
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
-import type { MessageEntry, QueryEvent, QueryResult, QueryStatus, ResultColumn, ResultDescriptor, ResultsJobProgress, VariaApi } from '../../../shared/contracts'
+import type { MessageEntry, QueryEvent, QueryResult, QueryStatus, ResultColumn, ResultDescriptor, ResultsJobProgress, VariaApi, ViewSortKey, ViewSortMode } from '../../../shared/contracts'
 import type { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
@@ -9,7 +9,7 @@ import { gridLimits as g } from '../grid/constants'
 import { copyPlan, selectAll, type GridSelection } from '../grid/selection'
 import { kindInfo } from '../documents'
 import type { DocumentService, TextDocument } from '../services/documents'
-import type { ResultClient, ResultHandle } from './ResultClient'
+import type { ResultClient, ResultHandle, ResultView } from './ResultClient'
 import type { ResultKey } from './worker-protocol'
 import { completionSentence, formatCount, plural } from './status'
 import { retainedPlanLimits, type PlanExecutionContext, type RetainedPlansService, type SnapshotSource } from '../plans/RetainedPlansService'
@@ -18,6 +18,20 @@ import { orderPlanEntries } from '../plans/sources'
 export type RunStatus = 'running' | QueryStatus | 'lost' | 'closed'
 /** One result set of the run; `index` is its position in the stack (the grid's `data-result-index`). */
 export interface ResultSetEntry { readonly index: number; readonly descriptor: ResultDescriptor; readonly handle: ResultHandle; readonly capturedPlan?: true }
+/**
+ * A grid's sort (results.view): its keys in order, with the text mode each was sorted by, and the view the grid shows.
+ * While a sort runs (`sorting`) the grid keeps showing what it showed; a failed sort keeps the last view. `stale` is a view
+ * sorted while rows were still arriving: it is sorted again once they are all in.
+ */
+export interface GridSort {
+  readonly keys: readonly ViewSortKey[]
+  readonly view?: ResultView
+  readonly sorting: boolean
+  readonly approximate: boolean
+  readonly stale: boolean
+}
+/** How a header click or a command changes a column's place in the sort. */
+export type SortDirection = 'ascending' | 'descending' | 'none'
 /** A set that has all its rows, for sizing the stack to them: its rows, and whether its grid shows a strip (truncated or incomplete). */
 export interface SettledSet { readonly rows: number; readonly strip: boolean }
 /** The output pane's views: the stacked grids, Messages, and the run's execution plans (shown only when it returned some). */
@@ -56,6 +70,8 @@ export interface TabResults {
   readonly announced: number
   /** How the last save ended ("Saved 400 rows to results.csv."), shown in the toolbar for a few seconds; '' otherwise. */
   readonly jobNotice: string
+  /** Each sorted grid's sort, by set index. */
+  readonly sorts: ReadonlyMap<number, GridSort>
 }
 /** One grid's view, outside React and never in a snapshot: it survives tab switches, Ctrl+R and unmounting. */
 export interface GridViewState {
@@ -107,6 +123,13 @@ interface Run {
   endedAt?: number
   closedFrom?: Exclude<RunStatus, 'running' | 'closed'>
   retaining?: Promise<void>
+  /** Replaced, never changed in place, so a published snapshot keeps the one it had. */
+  sorts: ReadonlyMap<number, GridSort>
+  /** The sort each grid is waiting for, by set index. */
+  readonly sorting: Map<number, AbortController>
+  /** Each grid's views still open (its current one, the one it shows, and those superseded since), by set index: a view
+   *  closes only once the grid shows another or none, so a re-sort keeps painting the old order until the new one is read. */
+  readonly held: Map<number, { shown?: ResultHandle; readonly views: Set<ResultView> }>
 }
 interface RunningJob { job: ResultJob; readonly tabId: string; timer?: unknown }
 
@@ -118,6 +141,7 @@ export const resultLimits = { sets: 1000, messages: wire.messages.count + wire.m
 const unavailable = 'These results are no longer available because the SQL backend restarted.'
 const closedResults = 'These results were closed. Execute the query again to see them.'
 const stillLoading = 'Save the results after this result set finishes loading.'
+const stillSorting = 'Save the results after they are sorted.'
 const saveCancelled = 'Saving was cancelled. The file was not written.'
 /** Main's and the backend's own sentences for a save; anything else is prefixed. */
 const saveSentences: ReadonlySet<string> = new Set<ErrorCode>(['EXPORT_FAILED', 'JOB_BUSY', 'RESULT_OPEN', 'RESULT_UNAVAILABLE', 'RESULT_NOT_FOUND'])
@@ -158,6 +182,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private readonly api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'>
   private readonly documents: Pick<DocumentService, 'openText'> | undefined
   private readonly retainedPlans?: RetainedPlansService
+  /** How text columns sort (queryResults.grid.sortText). */
+  private readonly sortText: () => ViewSortMode
   /** The last number each value tab name used (XML_F52E2B61-…3.xml), for the window's lifetime. */
   private readonly valueNumbers = new Map<string, number>()
   private readonly frame: (callback: () => void) => void
@@ -190,6 +216,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   constructor(o: {
     client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary' | 'release' | 'onGeneration'>; api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'>; events: EventBus
     documents?: Pick<DocumentService, 'openText'>; frame?: (callback: () => void) => void; timers?: Timers; now?: () => number; newId?: () => string; retainedPlans?: RetainedPlansService
+    sortText?: () => ViewSortMode
+    /** Calls the listener when settings change; sorted grids sort again when the text mode did. Returns the unsubscribe. */
+    onSortTextChange?: (listener: () => void) => () => void
   }) {
     super({})
     this.client = o.client
@@ -197,6 +226,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.api = o.api
     this.documents = o.documents
     this.retainedPlans = o.retainedPlans
+    this.sortText = o.sortText ?? (() => 'value')
+    let sortText = this.sortText()
+    if (o.onSortTextChange) this.subscriptions.push(o.onSortTextChange(() => { const next = this.sortText(); if (next !== sortText) { sortText = next; this.resort() } }))
     this.frame = o.frame ?? (callback => requestFrame(callback))
     this.timers = o.timers ?? browserTimers
     this.now = o.now ?? (() => Date.now())
@@ -219,7 +251,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const run: Run = {
       queryId, startedAt: this.now(), status: 'running', sets: [], planSets: [], setKeys: new Set(), setsPublished: false, rowsRead: new Map(), messages: [], notices: [], messagesTruncated: false,
       completedBatches: 0, totalBatches: 0, view: 'messages', manualView: false, strip: this.stripChoices.get(tabId) === true, stripManual: false,
-      settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: ''
+      settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: '', sorts: new Map(), sorting: new Map(), held: new Map()
     }
     run.subscription = this.client.onQueryEvent(queryId, event => {
       if (event.type === 'session.opened') {
@@ -253,6 +285,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       run.planSets = (summary.planSets ?? []).map((descriptor, index) => ({
         index, descriptor, handle: this.client.open(descriptor), capturedPlan: true
       }))
+      this.refreshSorts(tabId, run)
       if (!sameMessages(run.messages, summary.messages)) run.messages = summary.messages.slice(0, resultLimits.messages)
       // The error that ended the run is always in Messages, whatever the backend could keep there.
       if (summary.error && summary.status !== 'completed' && !run.messages.some(entry => entry.kind === 'error')) run.messages = [...run.messages, { text: summary.error.message, kind: 'error' }]
@@ -326,6 +359,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   closeResults(tabId: string): void {
     const run = this.runs.get(tabId)
     if (!run || run.status === 'running' || run.status === 'closed') return
+    for (const controller of run.sorting.values()) controller.abort()
+    run.sorting.clear()
+    run.held.clear()
+    run.sorts = new Map()
     this.closeHandles(run)
     run.sets = []
     run.planSets = []
@@ -423,7 +460,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.schedule(tabId)
     running.timer = this.timers.setTimeout(() => { running.timer = undefined; this.updateJob(running, { visible: true }) }, g.copyStripDelayMs)
     let result
-    try { result = await this.api.copyResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, headers, parts }) }
+    const view = run.sorts.get(index)?.view
+    try { result = await this.api.copyResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, headers, parts, ...view ? { viewId: view.viewId } : {} }) }
     finally { this.endJob(running) }
     if (result.ok) {
       const { rows, partial, truncatedCells } = result.value
@@ -449,6 +487,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const snapshot = set.handle.getSnapshot()
     if (snapshot.state === 'lost' || snapshot.state === 'released') return snapshot.state === 'lost' ? unavailable : closedResults
     if (snapshot.state !== 'complete') return stillLoading
+    const sort = run.sorts.get(index)
+    // The file follows the grid's order, which a running or pending sort is about to change.
+    if (sort && (sort.sorting || sort.stale || !sort.view)) return stillSorting
     const jobId = this.newId()
     const running: RunningJob = { tabId, job: { jobId, kind: 'save', index, label: `Result ${index + 1}`, rowsDone: 0, rowsTotal: snapshot.rowsAvailable, startedAt: this.now(), visible: false } }
     this.saves.set(jobId, running)
@@ -456,7 +497,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     run.jobs = [...run.jobs, running.job]
     this.schedule(tabId)
     let result
-    try { result = await this.api.saveResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, suggestedName: suggestedName(baseName, index) }) }
+    try { result = await this.api.saveResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, suggestedName: suggestedName(baseName, index), ...sort?.view ? { viewId: sort.view.viewId } : {} }) }
     finally { this.endJob(running) }
     if (this.disposed) return undefined
     if (result.ok) {
@@ -487,7 +528,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (this.opening.has(key)) return { opened: false }
     this.opening.add(key)
     try {
-      const value = await set.handle.getCell(row, column, { format: spec.kind === 'json' ? 'json' : 'xml' })
+      // Rows are the grid's: a sorted grid's are its view's positions.
+      const handle = (capturedPlan ? undefined : run?.sorts.get(index)?.view) ?? set.handle
+      const value = await handle.getCell(row, column, { format: spec.kind === 'json' ? 'json' : 'xml' })
       if (this.disposed || value.isNull || value.error) return { opened: false }
       const base = spec.base ?? valueBase(info, spec.kind), number = (this.valueNumbers.get(base + spec.extension) ?? 0) + 1
       this.valueNumbers.set(base + spec.extension, number)
@@ -495,6 +538,56 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       return { opened: true, ...value.truncated ? { message: `This ${kindInfo[spec.kind].value} value was truncated at 2,097,152 characters, so it opened unformatted.` } : {} }
     } catch (error) { return { opened: false, message: 'Could not open the value: ' + (error instanceof Error ? error.message : 'The value could not be read.') } }
     finally { this.opening.delete(key) }
+  }
+
+  /** A grid's sort, while it has one. */
+  sortOf(tabId: string, index: number): GridSort | undefined { return this.runs.get(tabId)?.sorts.get(index) }
+
+  /**
+   * Sorts a grid by a column: alone, or with `add` as a further key after those it has (moved to the end when it is one).
+   * `none` takes the column out of the sort; a grid left with no key shows its rows in the order SQL Server sent them.
+   */
+  sortBy(tabId: string, index: number, column: number, direction: SortDirection, add = false): void {
+    const run = this.runs.get(tabId), set = run?.sets[index]
+    if (!run || !set || column < 0 || column >= set.descriptor.columns.length) return
+    const keys = add ? (run.sorts.get(index)?.keys ?? []).filter(key => key.column !== column) : []
+    if (direction !== 'none') keys.push({ column, descending: direction === 'descending', mode: 'value' })
+    this.applySort(tabId, run, index, keys.slice(-wire.views.maxKeys))
+  }
+
+  /** A header's sort button: ascending, then descending, then out of the sort. With `add`, the column changes in place among
+   *  the keys (a new one goes last); without, it becomes the only key. */
+  cycleSort(tabId: string, index: number, column: number, add = false): void {
+    const run = this.runs.get(tabId), keys = run?.sorts.get(index)?.keys ?? []
+    if (!run) return
+    const at = keys.findIndex(key => key.column === column), current = keys[at]
+    // Without the modifier only the sole key cycles; any other click starts a new sort by the column, ascending.
+    const cycles = add || keys.length === 1
+    const next: SortDirection = !current || !cycles ? 'ascending' : current.descending ? 'none' : 'descending'
+    if (!add || !current) return this.sortBy(tabId, index, column, next, add)
+    const changed = next === 'none' ? keys.filter(key => key.column !== column) : keys.map(key => key.column === column ? { ...key, descending: true } : key)
+    this.applySort(tabId, run, index, changed)
+  }
+
+  clearSort(tabId: string, index: number): void {
+    const run = this.runs.get(tabId)
+    if (run?.sorts.has(index)) this.applySort(tabId, run, index, [])
+  }
+
+  /** The text sort mode changed: every grid sorted by a column the mode orders (text, xml, json, binary) sorts again. */
+  resort(): void {
+    for (const [tabId, run] of this.runs) for (const [index, sort] of run.sorts) {
+      const columns = run.sets[index]?.descriptor.columns
+      if (columns && sort.keys.some(key => columns[key.column] && lengthSortable(columns[key.column]))) this.applySort(tabId, run, index, sort.keys)
+    }
+  }
+
+  /** The grid now shows `view` (undefined: its result's own order): the views it held before close. */
+  viewShown(tabId: string, index: number, view: ResultHandle | undefined): void {
+    const run = this.runs.get(tabId), held = run?.held.get(index)
+    if (!held) return
+    held.shown = view
+    this.closeHeld(run!, index)
   }
 
   /** Cancels a copy or save by its job id (Cancel on its strip). */
@@ -558,6 +651,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
         this.settle(run, event.descriptor)
         run.rowsRead.set(event.descriptor.resultId, event.descriptor.rowsRead)
         if (!run.manualView && run.sets.length > 0) run.view = 'results'
+        if (event.descriptor.state === 'complete') this.refreshSorts(tabId, run)
         break
       case 'progress':
         run.completedBatches = event.completedBatches
@@ -664,6 +758,76 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     void this.api.cancelResultsJob(running.job.jobId).catch(() => {})
   }
 
+  /**
+   * Sends a grid's sort to the backend (each key with the text mode now chosen), replacing the view it has once the new one
+   * is built; a newer sort of the same grid cancels this one. No keys closes the view. A failure keeps the last view and
+   * says why in the toolbar.
+   */
+  private applySort(tabId: string, run: Run, index: number, keys: readonly ViewSortKey[]): void {
+    const set = run.sets[index]
+    if (!set || this.disposed) return
+    run.sorting.get(index)?.abort()
+    run.sorting.delete(index)
+    const current = run.sorts.get(index)
+    if (keys.length === 0) {
+      // The view closes once the grid shows the rows in SQL Server's order (viewShown).
+      this.setSort(tabId, run, index, undefined)
+      this.closeHeld(run, index)
+      return
+    }
+    const mode = this.sortText(), sort = keys.map(key => ({ column: key.column, descending: key.descending, mode }))
+    const controller = new AbortController()
+    run.sorting.set(index, controller)
+    this.setSort(tabId, run, index, { keys: sort, ...current?.view ? { view: current.view } : {}, sorting: true, approximate: current?.approximate ?? false, stale: current?.stale ?? false })
+    // No `replaces`: the old view stays readable until the grid has swapped to the new one, and a sort given up after the
+    // backend built it cannot take the shown view with it.
+    set.handle.sort(sort, { signal: controller.signal }).then(view => {
+      if (run.sorting.get(index) !== controller || this.runs.get(tabId) !== run) { void view.close(); return }
+      run.sorting.delete(index)
+      const held = run.held.get(index) ?? { views: new Set<ResultView>() }
+      held.views.add(view)
+      run.held.set(index, held)
+      this.setSort(tabId, run, index, { keys: sort, view, sorting: false, approximate: view.approximate, stale: !view.complete })
+      this.closeHeld(run, index)
+      // The set finished while this sort ran (refreshSorts skipped it): sort its every row now.
+      if (!view.complete && set.handle.getSnapshot().state === 'complete') this.applySort(tabId, run, index, sort)
+    }, (error: unknown) => {
+      if (run.sorting.get(index) !== controller || this.runs.get(tabId) !== run) return
+      run.sorting.delete(index)
+      const last = run.sorts.get(index)
+      this.setSort(tabId, run, index, last?.view ? { ...last, keys: last.view.keys, sorting: false } : undefined)
+      this.notify(tabId, 'Could not sort the results: ' + (error instanceof Error ? error.message : 'The rows could not be sorted.'))
+    })
+  }
+
+  /** Closes the grid's views but its current one and the one it shows. */
+  private closeHeld(run: Run, index: number): void {
+    const held = run.held.get(index)
+    if (!held) return
+    const keep = run.sorts.get(index)?.view
+    for (const view of [...held.views]) {
+      if (view === keep || view === held.shown) continue
+      held.views.delete(view)
+      void view.close()
+    }
+    if (held.views.size === 0) run.held.delete(index)
+  }
+
+  private setSort(tabId: string, run: Run, index: number, sort: GridSort | undefined): void {
+    const next = new Map(run.sorts)
+    if (sort) next.set(index, sort)
+    else next.delete(index)
+    run.sorts = next
+    this.schedule(tabId)
+  }
+
+  /** Views sorted while rows were still arriving are sorted again once their set has every row. */
+  private refreshSorts(tabId: string, run: Run): void {
+    for (const [index, sort] of run.sorts) {
+      if (sort.stale && !sort.sorting && run.sets[index]?.handle.getSnapshot().state === 'complete') this.applySort(tabId, run, index, sort.keys)
+    }
+  }
+
   /** One release for all of a run's sets: main refuses requests past 64 at a time, and a request closes 1,024 ids. */
   private closeHandles(run: Run): void {
     if (this.copying && this.runs.get(this.copying.tabId) === run) this.cancelRunning(this.copying)
@@ -683,6 +847,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const run = this.runs.get(tabId)
     if (!run) return
     run.subscription?.dispose()
+    // Releasing a set frees its views too.
+    for (const controller of run.sorting.values()) controller.abort()
+    run.sorting.clear()
+    run.held.clear()
     this.closeHandles(run)
     this.runs.delete(tabId)
     for (const key of [...this.controllers.keys()]) if (key.startsWith(tabId + ':')) this.controllers.delete(key)
@@ -737,7 +905,15 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       messagesTruncated: run.messagesTruncated, rowsRead: this.totalRows(run), completedBatches: run.completedBatches, totalBatches: run.totalBatches,
       ...run.summary ? { summary: run.summary } : {}, ...run.error ? { error: run.error } : {}, view: run.view, manualView: run.manualView, strip: run.strip, stripChosen: run.stripManual, settled: run.settled,
       ...run.endedAt !== undefined ? { endedAt: run.endedAt } : {}, ...run.closedFrom ? { closedFrom: run.closedFrom } : {}, jobs: run.jobs, announcement: run.announcement, announced: run.announced,
-      jobNotice: run.jobNotice
+      jobNotice: run.jobNotice, sorts: run.sorts
     }
   }
+}
+
+/** A column whose order Sort text by changes (ViewSorter.IsText in C#, plus binary for Bytes). */
+const lengthTypes = new Set(['char', 'varchar', 'nchar', 'nvarchar', 'text', 'ntext', 'sysname', 'xml', 'json'])
+function lengthSortable(column: ResultColumn): boolean {
+  if (column.wire === 'binary' || column.collation !== undefined || column.role === 'xml' || column.role === 'json') return true
+  const cut = column.dataType.indexOf('(')
+  return lengthTypes.has((cut < 0 ? column.dataType : column.dataType.slice(0, cut)).trim().toLowerCase())
 }

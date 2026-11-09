@@ -59,6 +59,9 @@ export interface GestureDescriptor {
   readonly locked?: string
   /** Commands that do the same from the keyboard (a key, or a context menu that Shift+F10 opens). Required for `pointerCommand`. */
   readonly keyboard?: readonly CommandId[]
+  /** A control the gesture's press lands on, which takes the press for itself (a header's sort button): gestures with different
+   *  places never start on one press. Undefined is the scope's surface. */
+  readonly place?: string
 }
 
 const fixedNotYet = 'Only modifier gestures can be remapped in this version; F2 renames a focused tab.'
@@ -79,6 +82,11 @@ export const gestureCatalog = {
     kind: 'fixed', scope: 'resultsGrid', alsoIn: ['tableDesigner'], action: 'click', target: 'a cell or header', modifiers: ['ctrl'], platforms: ['darwin'],
     locked: 'macOS treats Control+click as a right-click.'
   },
+  'grid.addSortKey': {
+    title: 'Add Sort Column', description: 'Adds the column to the grid\'s sort after the columns it already sorts by, or changes its direction there.',
+    kind: 'modifier', scope: 'resultsGrid', place: 'sortButton', action: 'click', target: 'a column header\'s sort button', modifiers: ['shift'],
+    choices: [['shift'], ['mod']], keyboard: ['output.thenSortAscending', 'output.thenSortDescending']
+  },
   'grid.fitColumn': {
     title: 'Fit Column', description: 'Fits a column to its widest loaded value.',
     kind: 'fixed', scope: 'resultsGrid', action: 'doubleClick', target: 'a column border', modifiers: [],
@@ -90,10 +98,15 @@ export const gestureCatalog = {
     locked: 'Chromium zooms the window with Control+wheel and with a trackpad pinch.'
   },
   'explorer.peekHover': {
-    title: 'Peek on Hover', description: 'Peeks a table, view, procedure or function while the pointer rests on its row.',
+    title: 'Peek on Hover', description: 'Peeks the object (a table, procedure, index, login and so on) while the pointer rests on its row.',
     kind: 'modifier', scope: 'objectExplorer', action: 'hover', target: 'an object', modifiers: ['mod'],
     // Not Alt: hovering presses nothing, so releasing Alt afterwards would count as a bare-Alt tap and focus the menu bar.
     choices: [['mod'], ['shift']], keyboard: ['explorer.peek']
+  },
+  'explorer.openPeekTab': {
+    title: 'Open Peek as Tab', description: 'Opens Peek on the object (a table, procedure, index, login and so on) in a document tab.',
+    kind: 'pointerCommand', scope: 'objectExplorer', action: 'click', target: 'an object', modifiers: ['mod'],
+    choices: [['mod'], ['shift']], keyboard: ['explorer.openPeekTab']
   },
   'explorer.dragName': {
     title: 'Insert Name', description: 'Dropping an object in a query inserts its quoted name.',

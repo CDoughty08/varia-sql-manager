@@ -2,15 +2,16 @@ import { describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { explorerCatalogJson, maxBand, minBand } from '../src/shared/explorer/catalog'
-import { isPeekKind, isPeekListTab, peekCatalogBlock, peekFacts, peekFormats, peekHas, peekKinds, peekLimits, peekLists, peekListsOf, peekSpecs, peekTabsOf, peekTabTitle, type PeekDependenciesResult, type PeekResult, type PeekRowsResult } from '../src/shared/explorer/peek'
-import { peekDependenciesParamsSchema, peekParamsSchema, peekRowsParamsSchema } from '../src/shared/explorer/schema'
+import { isPeekKind, isPeekListTab, peekCatalogBlock, peekFacts, peekFormats, peekHas, peekKinds, peekLimits, peekLists, peekListsOf, peekSpecs, peekTabsOf, peekTabTitle, type PeekDependenciesResult, type PeekResult } from '../src/shared/explorer/peek'
+import { peekDependenciesParamsSchema, peekParamsSchema } from '../src/shared/explorer/schema'
 import { requestSchemas } from '../src/main/validation'
 import { methodPolicies } from '../src/shared/ipc/methods'
 import { cancellableRequests } from '../src/main/backend/renderer-requests'
-import { PeekBoundary, PeekListView, PeekRows, Properties } from '../src/renderer/src/explorer/PeekCard'
+import { PeekBoundary, PeekListView, Properties } from '../src/renderer/src/explorer/PeekCard'
 import { formatPeekValue, placePeek, cardWidth } from '../src/renderer/src/explorer/peek-format'
-import { PeekService, peekMessages } from '../src/renderer/src/explorer/PeekService'
-import type { ApiResult, ExplorerChildrenResult } from '../src/shared/contracts'
+import { PeekService } from '../src/renderer/src/explorer/PeekService'
+import type { ApiResult, ExplorerChildrenResult, QueryResult } from '../src/shared/contracts'
+import { fakeResults, summary } from './fixtures/peek-results'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import type { ScriptingOptions } from '../src/shared/scripting/options'
 
@@ -254,21 +255,6 @@ describe('PeekBoundary', () => {
   })
 })
 
-describe('Peek top rows', () => {
-  it('ends a cut value in an ellipsis, says in its tooltip that Select Top 1000 Rows shows more of it, and gives assistive technology only the note', () => {
-    // The results grid keeps 65,535 characters and shows 512 a cell (docs/ipc.md), so it cannot promise all of a long value.
-    expect(peekMessages.cutCell).toBe('Cut at about 256 characters; Select Top 1000 Rows shows more of it.')
-    const long = 'B'.repeat(peekLimits.rowCellChars)
-    const markup = renderToStaticMarkup(createElement(PeekRows, {
-      part: { status: 'ready', value: { columns: [{ name: 'Name', type: 'nvarchar' }, { name: 'Notes', type: 'nvarchar' }], rows: [['Alice', long]], cut: [[0, 1]], elapsedMs: 1 } }
-    }))
-    expect(markup.match(/<td[^>]*>[^<]*<\/td>/g)).toEqual([
-      '<td title="Alice">Alice</td>',
-      `<td title="${long}…\n${peekMessages.cutCell}" aria-description="${peekMessages.cutCell}">${long}…</td>`
-    ])
-  })
-})
-
 describe('PeekService script cache', () => {
   const ok = <T>(value: T): ApiResult<T> => ({ ok: true, value })
   type ScriptReply = ApiResult<{ text?: string; database: string; warnings: string[]; commands: number; elapsedMs: number }>
@@ -303,7 +289,7 @@ describe('PeekService script cache', () => {
       lose: () => { live = []; for (const listener of connectionListeners) listener() },
       changeOptions: () => { options = { scriptExtendedProperties: false } as unknown as ScriptingOptions; announce() },
       changeOtherSetting: announce,
-      kept: () => (service as unknown as { scripts: Map<string, unknown> }).scripts.size }
+      kept: () => (service as unknown as { reads: { scripts: Map<string, unknown> } }).reads.scripts.size }
   }
   const flush = () => new Promise(resolve => setTimeout(resolve, 0))
 
@@ -446,7 +432,7 @@ describe('PeekService script cache', () => {
     await flush()
     lose()
     expect(service.getSnapshot().open).toBeUndefined()
-    expect((service as unknown as { scripts: Map<string, unknown> }).scripts.size).toBe(0)
+    expect((service as unknown as { reads: { scripts: Map<string, unknown> } }).reads.scripts.size).toBe(0)
     expect(scriptsSent()).toBe(1)
   })
 })
@@ -454,15 +440,18 @@ describe('PeekService script cache', () => {
 describe('Peek tabs', () => {
   const ok = <T>(value: T): ApiResult<T> => ({ ok: true, value })
   function setup() {
+    const results = fakeResults()
     const peeks: ((value: ApiResult<PeekResult>) => void)[] = []
     const children: ((value: ApiResult<ExplorerChildrenResult>) => void)[] = []
-    const rows: ((value: ApiResult<PeekRowsResult>) => void)[] = []
+    const executes: ((value: ApiResult<QueryResult>) => void)[] = []
     const dependencies: ((value: ApiResult<PeekDependenciesResult>) => void)[] = []
     const api = {
       explorerPeekDependencies: vi.fn(() => new Promise<ApiResult<PeekDependenciesResult>>(resolve => { dependencies.push(resolve) })),
       explorerPeek: vi.fn(() => new Promise<ApiResult<PeekResult>>(resolve => { peeks.push(resolve) })),
       explorerChildren: vi.fn(() => new Promise<ApiResult<ExplorerChildrenResult>>(resolve => { children.push(resolve) })),
-      explorerPeekRows: vi.fn(() => new Promise<ApiResult<PeekRowsResult>>(resolve => { rows.push(resolve) })),
+      tableColumns: vi.fn(async () => ok({ columns: [{ name: 'Id', dataType: 'int' }], truncated: false })),
+      execute: vi.fn(() => new Promise<ApiResult<QueryResult>>(resolve => { executes.push(resolve) })),
+      closeQuerySession: vi.fn(async () => ok({ closed: true })),
       explorerCancel: vi.fn(async () => ok({ cancelled: 1 })),
       scriptObjects: vi.fn(() => new Promise<never>(() => {})),
       cancelScripting: vi.fn(async () => ok({ cancelled: 1 })),
@@ -472,31 +461,27 @@ describe('Peek tabs', () => {
     const service = new PeekService({
       api: api as never, connections: { getSnapshot: () => [{ id: connectionId }], subscribe: () => () => {} },
       scriptingOptions: { getSnapshot: () => ({ options: {} as ScriptingOptions }), subscribe: () => () => {} },
-      timers: { setTimeout: () => 1, clearTimeout: () => {} }, newId: () => `id-${++ids}`
+      timers: { setTimeout: () => 1, clearTimeout: () => {} }, newId: () => `id-${++ids}`, results
     })
-    return { service, api, peeks, children, rows, dependencies, open: () => service.getSnapshot().open! }
+    return { service, api, peeks, children, executes, dependencies, results, open: () => service.getSnapshot().open! }
   }
   const flush = () => new Promise(resolve => setTimeout(resolve, 0))
   const facts = (extra: Partial<PeekResult> = {}): ApiResult<PeekResult> => ok({ facts: { schema: 'dbo', modified: '2024-01-02T03:04:05' }, elapsedMs: 1, ...extra })
 
-  it('gives tables and views a Top rows tab and every kind Columns or Parameters and Dependencies, and only tables and views take a rows request', () => {
+  it('gives tables and views a Top rows tab and every kind Columns or Parameters and Dependencies, with no rows request of its own', () => {
     expect(peekTabsOf('table')).toEqual(['definition', 'members', 'dependencies', 'rows'])
     expect(peekTabsOf('view')).toEqual(['definition', 'members', 'dependencies', 'rows'])
     expect(peekTabsOf('procedure')).toEqual(['definition', 'members', 'dependencies'])
     expect([peekTabTitle('table', 'members'), peekTabTitle('function', 'members'), peekTabTitle('view', 'rows')]).toEqual(['Columns', 'Parameters', 'Top rows'])
-    const target = { kind: 'table', database: 'Sales', schema: 'dbo', name: 'Orders' }
-    expect(peekRowsParamsSchema.safeParse({ connectionId, requestId, target }).success).toBe(true)
-    expect(peekRowsParamsSchema.safeParse({ connectionId, requestId, target: { ...target, kind: 'view' } }).success).toBe(true)
-    expect(peekRowsParamsSchema.safeParse({ connectionId, requestId, target: { ...target, kind: 'procedure' } }).success).toBe(false)
-    expect(peekRowsParamsSchema.safeParse({ connectionId, requestId, target, extra: 1 }).success).toBe(false)
-    expect(requestSchemas['explorer.peekRows']).toBe(peekRowsParamsSchema)
+    // Top rows runs through query.execute and the results port: explorer.peekRows is gone from main and the backend's catalogue.
+    expect(Object.keys(requestSchemas)).not.toContain('explorer.peekRows')
+    expect(Object.keys(methodPolicies)).not.toContain('explorer.peekRows')
     expect(requestSchemas['explorer.peekDependencies']).toBe(peekDependenciesParamsSchema)
     expect(methodPolicies['explorer.peekDependencies']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 30_000 })
-    expect(methodPolicies['explorer.peekRows']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 30_000 })
-    expect(cancellableRequests('explorer.peekRows', { explorer: 'explorer', scripting: 'scripting', actions: 'actions', ssis: 'ssis', activity: 'activity', connections: 'connections' })).toBe('explorer')
-    const embedded = JSON.parse(explorerCatalogJson()) as { peek: { rows: number; kinds: { kind: string; rows: boolean }[] } }
-    expect(embedded.peek.rows).toBe(peekLimits.rows)
-    expect(embedded.peek.kinds.filter(kind => kind.rows).map(kind => kind.kind)).toEqual(['table', 'view'])
+    expect(cancellableRequests('explorer.peekDependencies', { explorer: 'explorer', scripting: 'scripting', actions: 'actions', ssis: 'ssis', activity: 'activity', connections: 'connections' })).toBe('explorer')
+    const embedded = JSON.parse(explorerCatalogJson()) as { peek: Record<string, unknown> & { kinds: Record<string, unknown>[] } }
+    expect(Object.keys(embedded.peek).sort()).toEqual(['budgetMs', 'definitionChars', 'dependencies', 'kinds', 'listRows', 'mappingDatabases'])
+    expect(embedded.peek.kinds.every(kind => !('rows' in kind))).toBe(true)
   })
   it('reads dependencies apart from the properties, only once their tab is chosen, so that either can fail alone', async () => {
     const { service, api, peeks, dependencies, open } = setup()
@@ -521,10 +506,10 @@ describe('Peek tabs', () => {
     expect(api.explorerPeekDependencies).toHaveBeenCalledTimes(2)
   })
   it('reads Columns or Parameters and Top rows only once their tab is chosen, and each once per card', async () => {
-    const { service, api, children, rows, open } = setup()
+    const { service, api, children, executes, results, open } = setup()
     service.peek(node('table'), 'hover')
     expect(api.explorerChildren).not.toHaveBeenCalled()
-    expect(api.explorerPeekRows).not.toHaveBeenCalled()
+    expect(api.execute).not.toHaveBeenCalled()
     service.selectTab('members')
     expect(api.explorerChildren).toHaveBeenCalledWith({ connectionId, requestId: 'id-3', node: { type: 'folder', owner: { kind: 'table', database: 'Sales', schema: 'dbo', name: 'Customer' }, folder: 'columns' }, pageSize: peekLimits.members })
     const column = { ref: { type: 'object' as const, object: { kind: 'column' as const, database: 'Sales', parent: { kind: 'table' as const, schema: 'dbo', name: 'Customer' }, name: 'Id' } }, label: 'Id', sublabel: '(PK, int, not null)', icon: 'column' as never, hasChildren: false }
@@ -535,24 +520,28 @@ describe('Peek tabs', () => {
     service.selectTab('members')
     service.selectTab('rows')
     expect(api.explorerChildren).toHaveBeenCalledTimes(1)
-    expect(api.explorerPeekRows).toHaveBeenCalledTimes(1)
-    expect(api.explorerPeekRows).toHaveBeenCalledWith({ connectionId, requestId: 'id-4', target: { kind: 'table', database: 'Sales', schema: 'dbo', name: 'Customer' } })
-    rows[0]!(ok({ columns: [{ name: 'Id', type: 'int' }], rows: [['1'], [null]], elapsedMs: 2 }))
     await flush()
-    expect(open().rows).toMatchObject({ status: 'ready', value: { rows: [['1'], [null]] } })
+    expect(api.execute).toHaveBeenCalledTimes(1)
+    executes[0]!(ok(summary('id-4')))
+    await flush()
+    expect(open().rows).toEqual({ status: 'ready', value: { key: 'id-4' } })
+    expect(results.held()).toEqual(['id-4'])
     // A procedure has no Top rows tab.
     service.peek(node('procedure', 2), 'menu')
     service.selectTab('rows')
     expect(open().tab).toBe('definition')
-    expect(api.explorerPeekRows).toHaveBeenCalledTimes(1)
+    expect(api.execute).toHaveBeenCalledTimes(1)
+    // Peeking another object released the table's rows.
+    expect(results.held()).toEqual([])
   })
   it('cancels the tabs\' reads with the peek\'s when the card closes, and drops their late answers', async () => {
-    const { service, api, children, open } = setup()
+    const { service, api, children, open, results } = setup()
     service.peek(node('table'), 'menu')
     service.selectTab('members')
     service.selectTab('rows')
     service.close()
-    expect(api.explorerCancel).toHaveBeenCalledWith(['id-1', 'id-3', 'id-4'])
+    expect(api.explorerCancel).toHaveBeenCalledWith(['id-1', 'id-3'])
+    expect(results.released).toContain('id-4')
     children[0]!(ok({ nodes: [], elapsedMs: 1 }))
     await flush()
     expect(service.getSnapshot().open).toBeUndefined()
@@ -662,7 +651,6 @@ describe('Peek kinds beyond modules', () => {
     expect(peekDependenciesParamsSchema.safeParse({ connectionId, requestId, target: { kind: 'login', name: 'sa' } }).success).toBe(false)
     expect(peekDependenciesParamsSchema.safeParse({ connectionId, requestId, target: { kind: 'database', name: 'Sales' } }).success).toBe(false)
     expect(peekDependenciesParamsSchema.safeParse({ connectionId, requestId, target: { kind: 'index', database: 'Sales', parent: { kind: 'table', schema: 'dbo', name: 'T' }, name: 'IX' } }).success).toBe(false)
-    expect(peekRowsParamsSchema.safeParse(schemaObject('synonym')).success).toBe(false)
   })
 
   it('words catalog codes for any fact or list column whose format is code', () => {
@@ -706,7 +694,6 @@ describe('Peek kinds beyond modules', () => {
       explorerPeek: vi.fn(() => new Promise<ApiResult<PeekResult>>(resolve => { peeks.push(resolve) })),
       explorerPeekDependencies: vi.fn(() => new Promise<never>(() => {})),
       explorerChildren: vi.fn(() => new Promise<never>(() => {})),
-      explorerPeekRows: vi.fn(() => new Promise<never>(() => {})),
       explorerCancel: vi.fn(async () => ok({ cancelled: 1 })),
       scriptObjects: vi.fn(() => new Promise<never>(() => {})),
       cancelScripting: vi.fn(async () => ok({ cancelled: 1 })),

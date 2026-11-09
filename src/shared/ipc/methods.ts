@@ -77,6 +77,9 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'results.close': control,
   // Reads the lengths recorded beside stored pages: memory only, at most 16,384 numbers.
   'results.rowBytes': control,
+  // Sorts a result's stored rows in memory off the frame loop (5 million rows take seconds); Stop cancels it.
+  'results.view': { kind: 'unary', lane: 'results', deadlineMs: 120_000 },
+  'results.viewClose': control,
   // The backend answers its own 40 s budget as a TIMEOUT value; main cancels it from the renderer (varia:explorer-cancel).
   'explorer.children': { kind: 'unary', lane: 'explorer', deadlineMs: 45_000 },
   // A build reads every database (each within its own 120 s budget) and only Stop (varia:explorer-cancel), a newer build or a
@@ -86,8 +89,6 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // The backend answers its own 15 s budget (peekLimits.budgetMs) as a TIMEOUT value, inside this deadline.
   'explorer.peek': { kind: 'unary', lane: 'explorer', deadlineMs: 30_000 },
   'explorer.peekDependencies': { kind: 'unary', lane: 'explorer', deadlineMs: 30_000 },
-  // Top rows answers the same budget the same way.
-  'explorer.peekRows': { kind: 'unary', lane: 'explorer', deadlineMs: 30_000 },
   // Copy streams its text as DATA within credit; an export writes the file the user chose and only CANCEL ends it.
   'results.copy': { kind: 'stream', lane: 'results', deadlineMs: 120_000 },
   'results.export': { kind: 'unary', lane: 'results', deadlineMs: 0 },

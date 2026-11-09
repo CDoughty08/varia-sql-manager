@@ -17,6 +17,11 @@ import { RowKind, type TreeNode } from './tree-model'
 const numbers = new Intl.NumberFormat('en-US')
 
 /** Row actions the tree carries out: selection, the chevron, and a lost server's buttons. */
+/** A row's click, for Open Peek as Tab's gesture: not on the twistie, and not a double-click's second click (Ctrl+double-click opens one tab). */
+export function rowClick(actions: Pick<RowActions, 'click'>, rowId: number, event: GestureEvent & { readonly detail: number; readonly target: EventTarget | null }): void {
+  if (event.detail <= 1 && !(event.target as Element | null)?.closest?.('.oe-twistie')) actions.click(rowId, event)
+}
+
 export interface RowActions {
   select(rowId: number): void
   toggle(rowId: number): void
@@ -32,6 +37,9 @@ export interface RowActions {
   cancelRename(refocus: boolean): void
   /** The pointer moved over a node row (with the keys held then) or left it (`held` absent): Peek on Hover's gesture peeks (Ctrl, ⌘ on macOS). */
   peekHover(rowId: number, held?: GestureEvent): void
+  /** A click on a node row: Open Peek as Tab's gesture (Ctrl+click, ⌘-click on macOS) opens the object in a Peek tab. A
+   *  double-click's second click is not one: Ctrl+double-click opens one tab. */
+  click(rowId: number, event: GestureEvent): void
 }
 export interface RowProps {
   readonly rowId: number
@@ -220,14 +228,14 @@ export function RowEnd({ count, connection, active, children, actions }: { count
 }
 
 /** A shortcut to the server's real tree row, with the same connection indicators. */
-export function PinnedServerRow({ node, edge, current, active, color, environment, status, menu, jump }: {
-  node: TreeNode; edge: 'top' | 'bottom'; current: boolean; active: boolean; color: string | undefined; environment?: string; status?: RowStatus; menu: boolean; jump(): void
+export function PinnedServerRow({ node, edge, current, active, color, environment, status, menu, top, jump }: {
+  node: TreeNode; edge: 'top' | 'bottom'; current: boolean; active: boolean; color: string | undefined; environment?: string; status?: RowStatus; menu: boolean; top?: number; jump(): void
 }) {
   const sublabel = shownSublabel(node), tag = environmentTag(environment)
   const facts = [status?.words && displayText(status.words), tag?.description]
   const name = [`Jump to ${rowName(node)}`, ...facts, active && 'server of the active query', current && 'current section'].filter(Boolean).join(', ')
   return <button type="button" className={`explorer-row server explorer-pinned-server${active ? ' active-connection' : ''}${node.lost ? ' lost dimmed' : ''}`}
-    data-current-section={current || undefined} role={menu ? 'menuitem' : undefined} tabIndex={menu ? -1 : undefined}
+    style={{ top }} data-current-section={current || undefined} role={menu ? 'menuitem' : undefined} tabIndex={menu ? -1 : undefined}
     aria-label={name} title={clip([rowTooltip(node), ...facts].filter(Boolean).join('\n'))} onClick={jump}>
     <Accent color={color} />
     <span className="oe-twistie"><Icon name={edge === 'top' ? 'chevron-up' : 'chevron-down'} /></span>
@@ -276,6 +284,7 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
     aria-level={level} aria-setsize={setsize || undefined} aria-posinset={posinset || undefined} aria-expanded={expandable ? node.expanded : undefined} aria-selected={selected}
     aria-busy={node.load === 'loading' || undefined} aria-label={name} aria-description={rowDescription(node, note)} title={clip(tooltip)} style={style} draggable={(draggable && !renaming) || undefined}
     onMouseDown={select} onDoubleClick={() => { if (expandable) actions.toggle(rowId); else actions.activate(rowId) }}
+    onClick={(event: MouseEvent) => rowClick(actions, rowId, event)}
     onMouseMove={(event: MouseEvent) => actions.peekHover(rowId, event)} onMouseLeave={() => actions.peekHover(rowId)}
     onDragStart={draggable ? (event: DragEvent) => { if (!actions.dragStart(rowId, event.dataTransfer)) event.preventDefault() } : undefined}>
     {root && <Accent color={color} />}

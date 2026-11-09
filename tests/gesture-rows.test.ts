@@ -18,7 +18,7 @@ const ids = (rows: readonly { id: string }[]) => rows.map(row => row.id)
 describe('gesture rows', () => {
   it('list every gesture of the platform by group, with its choices, lock and keyboard path', () => {
     const rows = gestureRows(draft(), 'win32', '')
-    expect(rows.map(row => row.kind)).toEqual(['modifier', 'modifier', 'modifier', 'pointerCommand', 'pointerCommand', 'pointerCommand', 'fixed', 'fixed', 'fixed', 'fixed', 'fixed'])
+    expect(rows.map(row => row.kind)).toEqual(['modifier', 'modifier', 'modifier', 'modifier', 'pointerCommand', 'pointerCommand', 'pointerCommand', 'pointerCommand', 'fixed', 'fixed', 'fixed', 'fixed', 'fixed'])
     // macOS's Control+click is a right-click there only.
     expect(ids(rows)).not.toContain('grid.secondaryClick')
     expect(ids(gestureRows(draft(), 'darwin', ''))).toContain('grid.secondaryClick')
@@ -58,7 +58,7 @@ describe('gesture rows', () => {
     expect(ids(gestureRows(file, 'win32', '@modified'))).toEqual(['dock.floatWhileDragging'])
     expect(ids(gestureRows(file, 'win32', '@source:fixed shift'))).toEqual(['grid.extendSelection', 'dock.dragFloatingTitleBar'])
     // Keyboard commands are searchable: Peek on Hover's keyboard path is Peek.
-    expect(ids(gestureRows(file, 'win32', 'object explorer peek'))).toEqual(['explorer.peekHover'])
+    expect(ids(gestureRows(file, 'win32', 'object explorer peek'))).toEqual(['explorer.peekHover', 'explorer.openPeekTab'])
     expect(gestureRows(file, 'win32', '@kind:keyboard')).toEqual([])
     expect(gestureRows(file, 'win32', 'nothing like this')).toEqual([])
   })
@@ -71,7 +71,7 @@ describe('gesture rows follow the page', () => {
     for (const query of ['@kind:', '@kind:m', '@kind:mo', '@kind:mouse', '@conflict', '@whatever:x']) expect(gestureRows(file, 'win32', query), query).toHaveLength(all)
     expect(gestureRows(file, 'win32', '@kind:k')).toEqual([])
     expect(ids(gestureRows(file, 'win32', '@source:u'))).toEqual(['explorer.peekHover', 'dock.floatWhileDragging'])
-    expect(ids(gestureRows(file, 'win32', '@scope:grid'))).toEqual(['grid.addToSelection', 'grid.extendSelection', 'grid.fitColumn'])
+    expect(ids(gestureRows(file, 'win32', '@scope:grid'))).toEqual(['grid.addToSelection', 'grid.addSortKey', 'grid.extendSelection', 'grid.fitColumn'])
     expect(ids(gestureRows(file, 'win32', '@unbound'))).toEqual(['explorer.peekHover'])
     expect(ids(gestureRows(file, 'win32', '@command:pane.dock'))).toEqual(['dock.toggleFloat'])
     // Problems: Alt on Linux warns.
@@ -124,7 +124,7 @@ describe('MouseView', () => {
     const html = render()
     expect(html).toContain('<th scope="row"><span class="mouse-gesture"><span class="mouse-dot" aria-hidden="true"></span><span class="mouse-title">Peek on Hover</span></span></th>')
     expect(html).toContain('aria-describedby="mouse-explorer-peekHover-about"')
-    expect(html).toContain('<span class="mouse-about" id="mouse-explorer-peekHover-about">Peeks a table')
+    expect(html).toContain('<span class="mouse-about" id="mouse-explorer-peekHover-about">Peeks the object')
   })
   it("shows the Options dialog's draft value of the linked setting when it is given", () => {
     // The mocked saved setting is Ctrl+Click; the page's draft says Alt+Click.

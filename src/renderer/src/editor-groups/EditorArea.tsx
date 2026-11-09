@@ -26,6 +26,7 @@ import RestoreDatabase from '../restore/RestoreDatabase'
 import ActivityMonitor from '../activity/ActivityMonitor'
 import SsisOperations from '../ssis/SsisOperations'
 import ObjectSearch from '../search/ObjectSearch'
+import PeekTab from '../explorer/PeekTab'
 import PlanDocument from '../plans/PlanDocument'
 
 /**
@@ -128,6 +129,7 @@ function DocumentPanel({ api }: IDockviewPanelProps) {
     {isSsisDocumentKind(kind) && <SsisProperties documentId={id} />}
     {kind === 'activityMonitor' && <ActivityMonitor documentId={id} />}
     {kind === 'objectSearch' && <ObjectSearch documentId={id} />}
+    {kind === 'peek' && <PeekTab documentId={id} />}
     {kind === 'ssisOperations' && <SsisOperations documentId={id} />}
     {kind === 'restoreDatabase' && <RestoreDatabase documentId={id} />}
   </div>

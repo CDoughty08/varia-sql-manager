@@ -489,6 +489,44 @@ function pageOf(result, block) {
   return page
 }
 const decodedPageAt = result => row => decodePage(pageOf(result, Math.floor(row / result.pageRows)).body, result.columns)
+// results.view: a sorted order over the rows readable when it was built, read like a result by view position. Text sorts
+// by ordinal value or by length (chars counts UTF-16 units, bytes UTF-8's), numbers by value, NULL lowest; the real
+// backend's collation-aware order is checked by its own checks.
+let nextViewId = 1
+const numericTypes = new Set(['tinyint', 'smallint', 'int', 'bigint', 'decimal', 'numeric', 'float', 'real', 'money', 'smallmoney', 'bit'])
+function buildView(result, sort) {
+  const rows = available(result), order = Array.from({ length: rows }, (_, row) => row)
+  // Shapes' cells: text, NULL, bytes, a stored prefix ({ value, truncated }) or a failed read ({ error }), which sorts as NULL.
+  const cellOf = (row, column) => {
+    const cell = result.rowAt(row)[column], value = cell !== null && typeof cell === 'object' && !(cell instanceof Uint8Array) ? cell.value : cell
+    return value === null || value === undefined ? null : value instanceof Uint8Array ? Buffer.from(value).toString('latin1') : String(value)
+  }
+  const compareKey = (a, b, { column, descending, mode }) => {
+    const x = cellOf(a, column), y = cellOf(b, column)
+    let order = x === y ? 0 : x === null ? -1 : y === null ? 1 : 0
+    if (order === 0 && x !== null && y !== null) {
+      const numeric = numericTypes.has(result.columns[column].dataType)
+      order = mode === 'chars' && !numeric ? x.length - y.length
+        : mode === 'bytes' && !numeric ? Buffer.byteLength(x) - Buffer.byteLength(y)
+          : numeric ? Number(x) - Number(y) : x < y ? -1 : x > y ? 1 : 0
+    }
+    return descending ? -order : order
+  }
+  order.sort((a, b) => { for (const key of sort) { const order = compareKey(a, b, key); if (order) return order } return a - b })
+  return {
+    viewId: nextViewId++, resultId: result.resultId, columns: result.columns, rowAt: position => result.rowAt(order[position]), pageRows: result.pageRows,
+    read: rows, complete: true, pages: new Map(), sealed: result.complete && rows === result.read
+  }
+}
+/** The result, or the view of it a request names; undefined (after answering) when either is gone. */
+function sourceOf(id, resultId, viewId) {
+  const result = stored.get(resultId)
+  if (!result) { missing(id, resultId); return undefined }
+  if (viewId === undefined) return result
+  const view = result.views?.get(viewId)
+  if (!view) fail(id, 'VIEW_NOT_FOUND', 'This sorted view was closed. Sort the results again.')
+  return view
+}
 /** Stores result sets ({ columns, rows, batchNumber?, iteration?, kind? }) and reports them as the real backend does. */
 function storeResults(id, sets) {
   return sets.map((set, index) => {
@@ -522,9 +560,9 @@ function streamBodies(id, credit, bodies, done) {
   pump()
 }
 /** results.read: the stored pages overlapping the range, while credit lasts, then the terminal RESPONSE. */
-function readResults(id, credit, { resultId, firstRow, maxRows }) {
-  const result = stored.get(resultId)
-  if (!result) return missing(id, resultId)
+function readResults(id, credit, { resultId, firstRow, maxRows, viewId }) {
+  const result = sourceOf(id, resultId, viewId)
+  if (!result) return
   const end = Math.min(firstRow + maxRows, available(result))
   const pages = []
   for (let block = Math.floor(firstRow / result.pageRows); block * result.pageRows < end; block++) pages.push(pageOf(result, block))
@@ -532,9 +570,9 @@ function readResults(id, credit, { resultId, firstRow, maxRows }) {
   streamBodies(id, credit, pages.map(page => page.body), () => ({ nextRow: next, rowsAvailable: available(result), complete: result.complete && next >= result.read, pages: pages.length, rows: pages.reduce((sum, page) => sum + page.rows, 0) }))
 }
 /** results.copy: the text_writer.mjs text in DATA chunks of 1 MiB within credit; TOO_LARGE before any DATA. */
-async function copyResults(id, credit, { resultId, parts, headers, eol, maxBytes }) {
-  const result = stored.get(resultId)
-  if (!result) return missing(id, resultId)
+async function copyResults(id, credit, { resultId, parts, headers, eol, maxBytes, viewId }) {
+  const result = sourceOf(id, resultId, viewId)
+  if (!result) return
   let copied
   try { copied = await copyText({ columns: result.columns, pageAt: decodedPageAt(result), available: available(result), parts, headers, crlf: eol === 'crlf' }) }
   catch { return fail(id, 'INVALID_PARAMS', 'The copy request is invalid.') }
@@ -542,16 +580,16 @@ async function copyResults(id, credit, { resultId, parts, headers, eol, maxBytes
   const chunks = []
   for (let at = 0; at < copied.text.length; at += 1024 * 1024) chunks.push(copied.text.subarray(at, at + 1024 * 1024))
   write(FrameKind.EVENT, id, 0, { type: 'job.progress', rowsDone: copied.rows, rowsTotal: copied.rows, bytes: copied.bytes })
-  streamBodies(id, credit, chunks, () => ({ rows: copied.rows, bytes: copied.bytes, truncatedCells: copied.truncatedCells, partial: !result.complete }))
+  streamBodies(id, credit, chunks, () => ({ rows: copied.rows, bytes: copied.bytes, truncatedCells: copied.truncatedCells, partial: !(result.sealed ?? result.complete) }))
 }
 /** results.export: a temporary file renamed over the target; hold/results.export pauses it after each page, and a
  *  CANCEL frame stops it (the temporary file is removed). */
-async function exportResults(id, { resultId, path, format, headers, nullText, temporaryId }) {
+async function exportResults(id, { resultId, path, format, headers, nullText, temporaryId, viewId }) {
   if (typeof path !== 'string' || !isAbsolute(path) || path.includes('\0') || !['csv', 'tsv', 'json'].includes(format) || !['empty', 'NULL'].includes(nullText)
     || typeof temporaryId !== 'string' || !/^[0-9a-f]{32}$/.test(temporaryId)) return fail(id, 'INVALID_PARAMS', 'The export request is invalid.')
-  const result = stored.get(resultId)
-  if (!result) return missing(id, resultId)
-  if (!result.complete) return fail(id, 'RESULT_OPEN', 'Save the results after this result set finishes loading.')
+  const result = sourceOf(id, resultId, viewId)
+  if (!result) return
+  if (!(result.sealed ?? result.complete)) return fail(id, 'RESULT_OPEN', result.sealed === false ? 'Save the results after they are sorted again.' : 'Save the results after this result set finishes loading.')
   if (!await access(dirname(path)).then(() => true, () => false)) return fail(id, 'EXPORT_FAILED', 'NOT_FOUND')
   if (await stat(path).then(entry => entry.isDirectory(), () => false)) return fail(id, 'EXPORT_FAILED', 'IS_DIRECTORY')
   const temporary = join(dirname(path), `.varia-${temporaryId}.tmp`)
@@ -1020,6 +1058,21 @@ async function workbench(id, method, params, credit) {
     case 'results.read': return credit === undefined ? fail(id, 'INVALID_REQUEST', 'Result pages are read as a stream with credit.') : readResults(id, credit, params)
     case 'results.copy': return credit === undefined ? fail(id, 'INVALID_REQUEST', 'Copied text is sent as a stream with credit.') : copyResults(id, credit, params)
     case 'results.export': return exportResults(id, params)
+    case 'results.view': {
+      const result = stored.get(params.resultId)
+      if (!result) return missing(id, params.resultId)
+      const view = buildView(result, params.sort)
+      result.views ??= new Map()
+      result.views.set(view.viewId, view)
+      if (params.replaces !== undefined) result.views.delete(params.replaces)
+      return respond(id, { viewId: view.viewId, rows: view.read, complete: view.sealed, approximate: false })
+    }
+    case 'results.viewClose': {
+      const result = stored.get(params.resultId)
+      let closed = 0
+      for (const viewId of params.viewIds) if (result?.views?.delete(viewId)) closed++
+      return respond(id, { closed })
+    }
     case 'results.close': {
       let closed = 0
       for (const resultId of params.resultIds) if (stored.delete(resultId)) closed++

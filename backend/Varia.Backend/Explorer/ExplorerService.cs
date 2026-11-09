@@ -127,7 +127,7 @@ internal sealed class ExplorerService : IDisposable
                 var mapping = await MappingAsync(command.Connection, profile, values, databases, ct);
                 return result with { Lists = new(result.Lists ?? [], StringComparer.Ordinal) { ["userMapping"] = mapping } };
             },
-            error => new PeekResult([], 0, Error: error), (result, elapsed) => result with { ElapsedMs = elapsed }, "the properties", CommandBehavior.Default, token);
+            error => new PeekResult([], 0, Error: error), (result, elapsed) => result with { ElapsedMs = elapsed }, "the properties", token);
     }
 
     /// <summary>A login's User mapping: its user in each database it may enter (at most the catalogue's databases, in name order),
@@ -184,18 +184,7 @@ internal sealed class ExplorerService : IDisposable
         // One more dependency than the card lists tells it there were more.
         return RunPeekAsync(args.ConnectionId, args.RequestId, args.Target, profile, PeekSql.Dependencies(spec.Kind, new SqlRender(profile.Band), args.Target.Parent?.Kind), max + 1,
             async (_, _, reader, ct) => await PeekSql.ReadDependenciesAsync(reader, max, ct),
-            error => new PeekDependenciesResult([], [], 0, Error: error), (result, elapsed) => result with { ElapsedMs = elapsed }, "the dependencies", CommandBehavior.Default, token);
-    }
-
-    /// <summary>explorer.peekRows: a table's or view's first rows (<see cref="PeekRowsSql"/>), read sequentially so that no long
-    /// value is held whole.</summary>
-    public Task<PeekRowsResult> PeekRowsAsync(PeekRowsArgs args, CancellationToken token)
-    {
-        var spec = ExplorerRefs.ValidatePeekRows(args, catalog);
-        var limits = catalog.Peek;
-        return RunPeekAsync(args.ConnectionId, args.RequestId, args.Target, PeekProfile(args.ConnectionId), PeekRowsSql.Render(spec.Kind), limits.Rows,
-            async (_, _, reader, ct) => await PeekRowsSql.ReadAsync(reader, limits.Rows, limits.RowColumns, limits.RowCellChars, ct),
-            error => new PeekRowsResult([], [], 0, Error: error), (result, elapsed) => result with { ElapsedMs = elapsed }, "the rows", CommandBehavior.SequentialAccess, token);
+            error => new PeekDependenciesResult([], [], 0, Error: error), (result, elapsed) => result with { ElapsedMs = elapsed }, "the dependencies", token);
     }
 
     private ExplorerProfile PeekProfile(string connectionId)
@@ -211,7 +200,7 @@ internal sealed class ExplorerService : IDisposable
     /// and its own name in @k1, any other object's name in @object_name. <paramref name="read"/> reads what follows the lookup's
     /// row; a null from it, like a missing object, is NOT_FOUND.</summary>
     private async Task<T> RunPeekAsync<T>(string connectionId, string requestId, ObjectRefDto target, ExplorerProfile profile, string statement, int take,
-        Func<SqlCommand, Values, SqlDataReader, CancellationToken, Task<T?>> read, Func<ExplorerError, T> failed, Func<T, long, T> timed, string what, CommandBehavior behavior, CancellationToken token)
+        Func<SqlCommand, Values, SqlDataReader, CancellationToken, Task<T?>> read, Func<ExplorerError, T> failed, Func<T, long, T> timed, string what, CancellationToken token)
         where T : class
     {
         var watch = Stopwatch.StartNew();
@@ -230,7 +219,7 @@ internal sealed class ExplorerService : IDisposable
             var subject = target.Parent is { } owner ? owner.Schema + "." + owner.Name + "." + target.Name : target.Schema is null ? target.Name ?? target.Kind : target.Schema + "." + target.Name;
             var result = await RunAsync(connectionId, server ? null : target.Database, subject, profile, server ? QueryScope.Server : QueryScope.Database, statement, values,
                 async (command, reader) => (await ParentExistsAsync(reader, source.Token) ? await read(command, values, reader, source.Token) : null) ?? failed(NotFound(target)),
-                failed, source.Token, lane, () => source.CancelAfter(budget), behavior);
+                failed, source.Token, lane, () => source.CancelAfter(budget));
             return timed(result, watch.ElapsedMilliseconds);
         }
         catch (Exception error) when (error is OperationCanceledException or SqlException && source.IsCancellationRequested && !token.IsCancellationRequested)
@@ -413,10 +402,8 @@ internal sealed class ExplorerService : IDisposable
     /// <param name="requestDatabase">The database the request reads (absent for server-scope statements).</param>
     /// <param name="subject">The folder or object being read, as the tree labels it, for error messages.</param>
     /// <param name="started">Runs once the slots are taken, before the connection opens (Peek starts its budget there).</param>
-    /// <param name="behavior">SequentialAccess for Peek's rows, whose values the results grid's readers stream.</param>
     private async Task<T> RunAsync<T>(string connectionId, string? requestDatabase, string subject, ExplorerProfile profile, QueryScope scope, string statement, Values values,
-        Func<SqlCommand, SqlDataReader, Task<T>> read, Func<ExplorerError, T> failed, CancellationToken token, SemaphoreSlim? lane = null, Action? started = null,
-        CommandBehavior behavior = CommandBehavior.Default)
+        Func<SqlCommand, SqlDataReader, Task<T>> read, Func<ExplorerError, T> failed, CancellationToken token, SemaphoreSlim? lane = null, Action? started = null)
     {
         var perDatabase = scope == QueryScope.Database && (profile.Cloud || Options.ForcePerDatabaseScope);
         var database = scope == QueryScope.Ssis ? host.SsisCatalog : requestDatabase;
@@ -452,7 +439,7 @@ internal sealed class ExplorerService : IDisposable
                 }
                 else command.CommandText = prologue + statement;
                 command.Parameters.AddRange(Bind(values));
-                await using var reader = await command.ExecuteReaderAsync(behavior, token);
+                await using var reader = await command.ExecuteReaderAsync(token);
                 return await read(command, reader);
             }
             finally { if (shared) total.Release(); }

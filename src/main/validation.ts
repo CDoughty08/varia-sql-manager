@@ -4,7 +4,7 @@ import { estimatedPlanRequestSchema, estimatedPlanResultSchema } from '../shared
 import type { RpcMethod } from '../shared/contracts'
 import { connectionOptionsSchema } from '../shared/connections'
 import { limits } from '../shared/ipc/wire/protocol'
-import { explorerChildrenParamsSchema, peekDependenciesParamsSchema, peekParamsSchema, peekRowsParamsSchema } from '../shared/explorer/schema.ts'
+import { explorerChildrenParamsSchema, peekDependenciesParamsSchema, peekParamsSchema } from '../shared/explorer/schema.ts'
 import { objectIndexParamsSchema, objectSearchParamsSchema } from '../shared/explorer/search.ts'
 import { scriptRequestSchema } from '../shared/scripting/schema.ts'
 import { actionDescribeSchema, actionExecuteRequestSchema, actionExecuteResultSchema, actionScriptRequestSchema } from '../shared/actions/schema.ts'
@@ -43,7 +43,6 @@ export const requestSchemas = {
   'explorer.search': objectSearchParamsSchema,
   'explorer.peek': peekParamsSchema,
   'explorer.peekDependencies': peekDependenciesParamsSchema,
-  'explorer.peekRows': peekRowsParamsSchema,
   'scripting.script': scriptRequestSchema,
   'actions.describe': actionDescribeSchema,
   'actions.script': actionScriptRequestSchema,
@@ -91,6 +90,6 @@ const rangesSchema = (max: number) => z.array(z.tuple([z.number().int().min(0).m
   .refine(ranges => ranges.every(([first, last], index) => first <= last && (index === 0 || first > ranges[index - 1][1])), 'Ranges must be ascending and disjoint.')
 export const copyPartSchema = z.object({ rows: rangesSchema(Number.MAX_SAFE_INTEGER), columns: rangesSchema(limits.page.maxColumns - 1) }).strict()
 /** varia:results-copy. Ownership and the generation are checked against the results port before anything runs. */
-export const resultsCopyRequestSchema = z.object({ jobId: z.uuid(), generation: u31, resultId: u32, headers: z.boolean(), parts: z.array(copyPartSchema).min(1).max(64) }).strict()
+export const resultsCopyRequestSchema = z.object({ jobId: z.uuid(), generation: u31, resultId: u32, headers: z.boolean(), parts: z.array(copyPartSchema).min(1).max(64), viewId: u32.optional() }).strict()
 /** varia:results-save. The name only suggests the file; the path comes from main's save dialog. */
-export const resultsSaveRequestSchema = z.object({ jobId: z.uuid(), generation: u31, resultId: u32, format: z.enum(['csv', 'tsv', 'json']).optional(), suggestedName: z.string().min(1).max(limits.jobs.suggestedName) }).strict()
+export const resultsSaveRequestSchema = z.object({ jobId: z.uuid(), generation: u31, resultId: u32, format: z.enum(['csv', 'tsv', 'json']).optional(), suggestedName: z.string().min(1).max(limits.jobs.suggestedName), viewId: u32.optional() }).strict()

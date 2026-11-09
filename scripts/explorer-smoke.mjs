@@ -5,7 +5,7 @@ import { randomBytes } from 'node:crypto'
 import { expandExplorerPath, explorerLines, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.mjs'
 import {
-  activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
+  anyResultGrid, closeDocumentButton, documentFrame, documentTab, gridCell, activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
   explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, searchHitApproximate, explorerSublabel, explorerToolbar, itemCount,
   menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, popoutDockButton, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
 } from './fixtures/ui.mjs'
@@ -15,7 +15,8 @@ const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TES
 if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'explorer-profile-'))
-const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile }
+// The backend's test hooks let the stub answer Peek's Top rows with synthetic rows the real results grid reads.
+const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, VARIA_BACKEND_TEST_HOOKS: '1' }
 delete env.ELECTRON_RUN_AS_NODE
 // Playwright adds --no-sandbox on Linux unless chromiumSandbox is set; only root (cloud sessions) needs it, as Chromium will not start sandboxed there.
 const launchOptions = { args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 }
@@ -129,8 +130,8 @@ const longTasks = () => page.evaluate(() => {
 const renderedRows = () => explorerTree(page).getByRole('treeitem').count()
 /** Rendered rows that show inside the tree's scrolled view. */
 const rowsInView = () => page.evaluate(() => {
-  const tree = document.querySelector('[data-explorer-tree]'), box = tree.getBoundingClientRect()
-  return [...tree.querySelectorAll('[role="treeitem"]')].filter(row => { const rect = row.getBoundingClientRect(); return rect.bottom > box.top && rect.top < box.bottom }).length
+  const tree = document.querySelector('[data-explorer-tree]'), box = tree.getBoundingClientRect(), style = getComputedStyle(tree)
+  return [...tree.querySelectorAll('[role="treeitem"]')].filter(row => { const rect = row.getBoundingClientRect(); return rect.bottom > box.top + parseFloat(style.scrollPaddingTop) && rect.top < box.top + tree.clientHeight - parseFloat(style.scrollPaddingBottom) }).length
 })
 const liveRegion = () => page.locator('[data-explorer-tree] + [role="status"]')
 /** The enabled toolbar buttons' names, in order, and the focused one's. */
@@ -142,8 +143,8 @@ const idle = (timeout = 30000) => expect(tree()).toHaveAttribute('aria-busy', 'f
 const activeInView = () => page.evaluate(() => {
   const tree = document.querySelector('[data-explorer-tree]'), row = document.getElementById(tree.getAttribute('aria-activedescendant') ?? '')
   if (!row) return false
-  const box = tree.getBoundingClientRect(), rect = row.getBoundingClientRect()
-  return rect.top >= box.top - 1 && rect.bottom <= box.bottom + 1
+  const box = tree.getBoundingClientRect(), rect = row.getBoundingClientRect(), style = getComputedStyle(tree)
+  return rect.top >= box.top + parseFloat(style.scrollPaddingTop) - 1 && rect.bottom <= box.top + tree.clientHeight - parseFloat(style.scrollPaddingBottom) + 1
 })
 /** The labels of the rendered children of the row at `path`, in order. */
 const childLabels = (...path) => page.evaluate(({ path, part }) => {
@@ -650,7 +651,7 @@ try {
   await page.keyboard.press('Shift+Tab')
   await expect(peekCard.getByLabel('Definition text', { exact: true })).toBeFocused()
   await page.keyboard.press('Tab')
-  await expect(peekCard.getByRole('button', { name: 'Refresh', exact: true })).toBeFocused()
+  await expect(peekCard.getByRole('button', { name: 'Open as Tab', exact: true })).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(peekCard).toBeHidden()
   await expect(tree()).toBeFocused()
@@ -658,7 +659,7 @@ try {
   await menu('Object Explorer').getByRole('menuitem', { name: 'Peek', exact: true }).click()
   await expect(peekCard).toBeFocused()
   // The tabs: Columns lists the tree's Columns folder, Dependencies both ways (a dependency in this database peeks in the same
-  // card, and Back returns), and Top rows reads only once chosen, showing NULL as the grid does. Arrow keys only move focus:
+  // card, and Back returns), and Top rows runs only once chosen, in the results grid. Arrow keys only move focus:
   // passing Top rows on the way to Dependencies reads nothing.
   const peekTabs = peekCard.getByRole('tablist', { name: 'Peek', exact: true })
   await peekTabs.getByRole('tab', { name: 'Columns', exact: true }).click()
@@ -675,29 +676,63 @@ try {
   await expect(peekTabs.getByRole('tab', { name: 'Dependencies', exact: true })).toHaveAttribute('aria-selected', 'true')
   await expect(peekCard.getByRole('region', { name: 'Uses', exact: true })).toContainText('Crm.dbo.Customers')
   await expect(peekCard.getByRole('region', { name: 'Used by', exact: true })).toContainText('Foreign key')
-  expect(await stubCalls('explorer.peekRows')).toHaveLength(0)
+  const topRowRuns = async () => (await stubCalls('query.execute')).filter(call => call.maxRows === 10)
+  expect(await topRowRuns()).toHaveLength(0)
   await peekCard.getByRole('button', { name: 'Peek dbo.vOrders', exact: true }).click()
   const followed = page.getByRole('dialog', { name: 'Peek: dbo.vOrders', exact: true })
   await expect(followed.getByLabel('Definition text', { exact: true })).toContainText('CREATE VIEW dbo.vOrders')
   await followed.getByRole('button', { name: 'Back', exact: true }).click()
   await expect(peekTabs.getByRole('tab', { name: 'Dependencies', exact: true })).toHaveAttribute('aria-selected', 'true')
   await peekTabs.getByRole('tab', { name: 'Top rows', exact: true }).click()
-  // A failed read offers Retry, which keeps focus in the card (on the tab), so Esc still closes it.
-  await expect(peekCard.getByRole('alert')).toContainText('took longer than 15 seconds')
+  // A failed run offers Retry, which keeps focus in the card (on the tab), so Esc still closes it.
+  await expect(peekCard.getByRole('alert')).toContainText('Query timeout expired.')
   await peekCard.getByRole('button', { name: 'Retry', exact: true }).click()
-  const topRows = peekCard.getByRole('table', { name: 'Top rows', exact: true })
-  await expect(topRows).toContainText('Alice')
+  // Select Top N Rows' script with N = 10, in a session of the card's own that closes once the run ends, in the results grid.
+  const cardRows = anyResultGrid(peekCard)
+  await expect(gridCell(cardRows, 0, 1)).toHaveText('Customer 0000000000 GmbH')
+  await expect(gridCell(cardRows, 9, 0)).toHaveText('9')
   await expect(peekTabs.getByRole('tab', { name: 'Top rows', exact: true })).toBeFocused()
-  // A value the readers could not read shows as NULL, as the grid shows it, with a note.
-  await expect(topRows.getByRole('cell', { name: 'NULL', exact: true })).toHaveCount(2)
-  await expect(peekCard.getByRole('tabpanel')).toContainText('1 value could not be read and show as NULL.')
-  // A cut value ends in an ellipsis, and its tooltip says it was cut; a whole one's is just the value.
-  const cutValue = topRows.getByRole('cell', { name: `${'B'.repeat(256)}…`, exact: true })
-  await expect(cutValue).toHaveAttribute('title', `${'B'.repeat(256)}…\nCut at about 256 characters; Select Top 1000 Rows shows more of it.`)
-  // Screen readers hear the value once, as the cell's name, and only the note as its description.
-  await expect(cutValue).toHaveAccessibleDescription('Cut at about 256 characters; Select Top 1000 Rows shows more of it.')
-  await expect(topRows.getByRole('cell', { name: 'Alice', exact: true })).toHaveAttribute('title', 'Alice')
-  expect((await stubCalls('explorer.peekRows')).at(-1).target).toMatchObject({ kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' })
+  const runs = await topRowRuns()
+  expect(runs).toHaveLength(2)
+  expect(runs[1]).toMatchObject({ database: 'AppData', maxResultSets: 1, sql: expect.stringMatching(/\nSELECT TOP \(10\) \[Id\][\s\S]*\[CustomerName\][\s\S]*FROM \[AppData\]\.\[dbo\]\.\[Orders\]/) })
+  expect(runs[1].sessionId).not.toBe(runs[0].sessionId)
+  expect((await stubCalls('query.session.close')).map(call => call.sessionId)).toEqual(expect.arrayContaining(runs.map(run => run.sessionId)))
+  // Open as Tab: the card becomes a document tab on the tab it showed, with a run of its own, Refresh and Script As (and Properties for a kind that has the dialog).
+  await peekCard.getByRole('button', { name: 'Open as Tab', exact: true }).click()
+  await expect(peekCard).toBeHidden()
+  const peekDocument = documentFrame(page, 'dbo.Orders')
+  await expect(documentTab(page, 'dbo.Orders')).toHaveAttribute('aria-selected', 'true')
+  await expect(gridCell(anyResultGrid(peekDocument), 0, 1)).toHaveText('Customer 0000000000 GmbH')
+  expect(await topRowRuns()).toHaveLength(3)
+  const peekActions = peekDocument.getByRole('group', { name: 'dbo.Orders actions', exact: true })
+  await expect(peekActions.getByRole('button', { name: /^Script As/ })).toBeEnabled()
+  // A table has no Properties dialog yet (databases and logins do), so its tab offers none.
+  await expect(peekActions.getByRole('button', { name: /^Properties/ })).toHaveCount(0)
+  await peekDocument.getByRole('tablist', { name: 'Peek', exact: true }).getByRole('tab', { name: 'Top rows', exact: true }).focus()
+  await page.keyboard.press('F5')
+  await expect.poll(async () => (await topRowRuns()).length).toBe(4)
+  await expect(gridCell(anyResultGrid(peekDocument), 0, 1)).toHaveText('Customer 0000000000 GmbH')
+  await closeDocumentButton(page, 'dbo.Orders').click()
+  await expect(peekDocument).toHaveCount(0)
+  expect((await stubCalls('query.session.close')).map(call => call.sessionId)).toEqual(expect.arrayContaining((await topRowRuns()).map(run => run.sessionId)))
+  // Ctrl+Enter (Cmd+Enter on macOS) moves the open card to a tab, on its Definition here.
+  const tabKey = process.platform === 'darwin' ? 'Meta' : 'Control'
+  await selectRow(peekRow)
+  await page.keyboard.press('Space')
+  await expect(peekCard).toBeFocused()
+  await page.keyboard.press(`${tabKey}+Enter`)
+  await expect(peekCard).toBeHidden()
+  await expect(documentFrame(page, 'dbo.Orders').getByLabel('Definition text', { exact: true })).toContainText('CREATE TABLE [dbo].[Orders]')
+  await closeDocumentButton(page, 'dbo.Orders').click()
+  // Ctrl+click (Cmd+click) on a row opens it in a tab straight away.
+  await peekRow.locator(part.explorerRowText).first().click({ modifiers: [tabKey] })
+  await expect(documentTab(page, 'dbo.Orders')).toHaveAttribute('aria-selected', 'true')
+  await expect(peekCard).toBeHidden()
+  await closeDocumentButton(page, 'dbo.Orders').click()
+  await expect(documentFrame(page, 'dbo.Orders')).toHaveCount(0)
+  await peekRow.click({ button: 'right' })
+  await menu('Object Explorer').getByRole('menuitem', { name: 'Peek', exact: true }).click()
+  await expect(peekCard).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(peekCard).toBeHidden()
   const peekKey = process.platform === 'darwin' ? 'Meta' : 'Control'
@@ -709,7 +744,7 @@ try {
   await expect(tree()).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(peekCard).toBeHidden()
-  console.log('Object Explorer checks: Peek opens on dbo.Orders by Space, the menu and Ctrl+hover, shows its properties and CREATE script, its Columns, Dependencies (followed and back) and Top rows tabs (a cut value says so in its tooltip), and Esc returns to the tree.')
+  console.log('Object Explorer checks: Peek opens on dbo.Orders by Space, the menu and Ctrl+hover, shows its properties and CREATE script, its Columns, Dependencies (followed and back) and Top rows tabs (Top rows in the results grid, its session closed), opens as a tab by its button, Ctrl+Enter and Ctrl+click (Refresh runs it again, closing releases it), and Esc returns to the tree.')
 
   // 9. An offline database is listed, dimmed, with no chevron.
   await select('server-a', 'Databases', 'AppData')
@@ -1626,12 +1661,106 @@ try {
   })
   await expandExplorerPath(page, 'pin-c', 'Databases', 'AppData', 'Tables')
   await idle()
+  // Pinning must never move the native viewport, change the thumb's range, or reverse a content row's motion. Sample
+  // individual pixels in both directions, including the old 30 px threshold and the first overflow transition.
+  const scrollGeometry = () => tree().evaluate(async element => {
+    await new Promise(resolve => requestAnimationFrame(resolve))
+    const box = element.getBoundingClientRect(), row = element.ownerDocument.getElementById(element.getAttribute('aria-activedescendant'))
+    return { top: element.scrollTop, x: box.x, y: box.y, width: element.clientWidth, height: element.clientHeight, scrollHeight: element.scrollHeight,
+      gutter: element.offsetWidth - element.clientWidth, row: row.id, rowY: row.getBoundingClientRect().y }
+  })
+  const sampleScroll = async top => {
+    await tree().evaluate((element, top) => { element.scrollTop = top; element.dispatchEvent(new Event('scroll')) }, top)
+    return scrollGeometry()
+  }
+  const fixed = await sampleScroll(0)
+  const checkGeometry = sample => {
+    for (const key of ['x', 'y', 'width', 'height', 'scrollHeight', 'gutter', 'row']) expect(sample[key], `fixed scroll geometry: ${key}`).toBe(fixed[key])
+    expect(sample.rowY + sample.top).toBeCloseTo(fixed.rowY + fixed.top, 4)
+  }
+  const thirdTop = middle - 260, end = fixed.scrollHeight - fixed.height
+  const thresholds = [0, 1, 29, 30, 31, thirdTop - 60, thirdTop - 52, end - 30, end]
+  const positions = [...new Set(thresholds.flatMap(top => [top - 1, top - 0.5, top, top + 0.5, top + 1]).filter(top => top >= 0 && top <= end))].sort((a, b) => a - b)
+  for (const top of [...positions, ...positions.toReversed()]) checkGeometry(await sampleScroll(top))
+  await sampleScroll(29)
+  const scrollBox = await tree().boundingBox()
+  await page.mouse.move(scrollBox.x + 40, scrollBox.y + scrollBox.height / 2)
+  await page.mouse.wheel(0, 4)
+  await expect.poll(async () => (await scrollGeometry()).top).toBeGreaterThan(29)
+  checkGeometry(await scrollGeometry())
+  await page.mouse.wheel(0, -4)
+  await expect.poll(async () => (await scrollGeometry()).top).toBeLessThan(33)
+  checkGeometry(await scrollGeometry())
+  // The pinned overlay ends before the native gutter, so the same thumb remains under the pointer throughout a drag.
+  await sampleScroll(0)
+  expect(fixed.gutter).toBeGreaterThan(0)
+  const dragX = fixed.x + fixed.width + fixed.gutter / 2, dragY = fixed.y + fixed.gutter + 10
+  let draggedTo = 0
+  await page.mouse.move(dragX, dragY)
+  await page.mouse.down()
+  try {
+    for (const delta of [4, 8, 12, 16, 12, 8, 4, 0]) {
+      await page.mouse.move(dragX, dragY + delta)
+      const sample = await scrollGeometry()
+      draggedTo = Math.max(draggedTo, sample.top)
+      checkGeometry(sample)
+    }
+  } finally { await page.mouse.up() }
+  // Assert a real drag moved the thumb, rather than merely checking a tree that never scrolled.
+  expect(draggedTo).toBeGreaterThan(30)
   const scrollToMiddle = () => tree().evaluate((element, top) => { element.scrollTop = top }, middle)
   await scrollToMiddle()
   const upper = page.getByRole('group', { name: 'Servers above', exact: true })
   const lower = page.getByRole('group', { name: 'Servers below', exact: true })
   await expect(upper.getByRole('button', { name: /^Jump to/ })).toHaveCount(2)
   await expect(lower.getByRole('button', { name: /^Jump to/ })).toHaveCount(2)
+  for (const band of [upper, lower]) {
+    const box = await band.boundingBox()
+    expect(box.x + box.width).toBeLessThanOrEqual(fixed.x + fixed.width)
+    expect(box.y + box.height).toBeLessThanOrEqual(fixed.y + fixed.height)
+  }
+  const beforePinnedWheel = await scrollGeometry()
+  await upper.getByRole('button', { name: /^Jump to pin-c/ }).hover()
+  await page.mouse.wheel(0, 4)
+  await expect.poll(async () => (await scrollGeometry()).top).toBeGreaterThan(beforePinnedWheel.top)
+  checkGeometry(await scrollGeometry())
+  await scrollToMiddle()
+  await page.screenshot({ path: resolve('artifacts', 'explorer-pins-stacked.png') })
+  const setPins = async (top, bottom) => {
+    const result = await page.evaluate(({ top, bottom }) => window.varia.updateSettings({ 'objectExplorer.pinnedServerHeadersTop': top, 'objectExplorer.pinnedServerHeadersBottom': bottom }), { top, bottom })
+    expect(result.ok).toBe(true)
+  }
+  await setPins(0, 0)
+  await expect(upper).toHaveCount(0)
+  await expect(lower).toHaveCount(0)
+  checkGeometry(await scrollGeometry())
+  await setPins(2, 2)
+  await expect(upper.getByRole('button', { name: /^Jump to/ })).toHaveCount(2)
+  await expect(lower.getByRole('button', { name: /^Jump to/ })).toHaveCount(2)
+  checkGeometry(await scrollGeometry())
+  // Four pending servers used to leave a partial third shortcut above "2 more below" if a wheel step or scrollbar
+  // drag stopped mid-rollover. Check the actual button rectangles, not only which shortcuts are in the DOM.
+  await tree().evaluate(element => { element.parentElement.style.flex = 'none'; element.parentElement.style.height = '300px' })
+  await expect.poll(() => tree().evaluate(element => element.clientHeight)).toBe(300)
+  const bottomRollover = thirdTop + 30 - 300 + 64
+  for (const top of [bottomRollover - 11, bottomRollover, bottomRollover + 11, bottomRollover, bottomRollover - 11]) {
+    await sampleScroll(top)
+    await expect(lower.getByRole('button', { name: /^Jump to/ })).toHaveCount(2)
+    await expect(lower.getByRole('button', { name: /2 more below/ })).toBeVisible()
+    const shape = await lower.evaluate(band => {
+      const box = band.getBoundingClientRect()
+      return { height: box.height, buttons: [...band.querySelectorAll('button')].map(button => {
+        const row = button.getBoundingClientRect()
+        return { top: row.top - box.top, height: row.height, bottom: row.bottom - box.top }
+      }) }
+    })
+    expect(shape).toEqual({ height: 82, buttons: [{ top: 0, height: 30, bottom: 30 }, { top: 30, height: 30, bottom: 60 }, { top: 60, height: 22, bottom: 82 }] })
+    expect(await tree().evaluate(element => element.clientHeight)).toBe(300)
+  }
+  await lower.screenshot({ path: resolve('artifacts', 'explorer-pins-bottom-whole-rows.png') })
+  await tree().evaluate(element => { element.parentElement.style.removeProperty('flex'); element.parentElement.style.removeProperty('height') })
+  await expect.poll(() => tree().evaluate(element => element.clientHeight)).toBe(fixed.height)
+  await scrollToMiddle()
   const moreAbove = upper.getByRole('button', { name: /1 more above/ })
   const aboveMenu = menu('More servers above')
   const openAbove = async () => {
@@ -1694,7 +1823,29 @@ try {
   await application.evaluate(() => { globalThis.variaStub.holdTablePages = false; globalThis.variaStub.release() })
   await idle()
   expect(await tree().evaluate(element => element.scrollTop)).toBe(0)
-  console.log('Object Explorer checks: pinned bands, overflow focus recovery, and following a query through streamed pages until the user scrolls.')
+  // Resize the pane with both settings at their maximum: the compact overflow bands still leave a full row usable,
+  // and Page Down, End and Home reveal the selected real row rather than leaving it underneath an overlay.
+  await setPins(10, 10)
+  await tree().evaluate(element => { element.parentElement.style.flex = 'none'; element.parentElement.style.height = '100px' })
+  await expect.poll(() => tree().evaluate(element => element.clientHeight)).toBe(100)
+  await sampleScroll(middle)
+  const compact = await tree().evaluate(element => {
+    const style = getComputedStyle(element)
+    return { height: element.clientHeight, visible: element.clientHeight - parseFloat(style.scrollPaddingTop) - parseFloat(style.scrollPaddingBottom) }
+  })
+  expect(compact.visible).toBeGreaterThanOrEqual(30)
+  await expect(upper.getByRole('button', { name: /more above/ })).toBeVisible()
+  await expect(lower.getByRole('button', { name: /more below/ })).toBeVisible()
+  await tree().focus()
+  for (const key of ['End', 'Home', 'PageDown', 'PageUp']) {
+    await press(key)
+    await expect.poll(activeInView).toBe(true)
+  }
+  await tree().evaluate(element => { element.parentElement.style.removeProperty('flex'); element.parentElement.style.removeProperty('height') })
+  await expect.poll(() => tree().evaluate(element => element.clientHeight)).toBe(fixed.height)
+  await setPins(2, 2)
+  await sampleScroll(0)
+  console.log('Object Explorer checks: continuous pinning in both directions, fixed geometry with wheel and native scrollbar dragging, overflow focus recovery, and following a query through streamed pages until the user scrolls.')
 
   // 14. A real server: a scratch database's table and columns, and F5 after DDL in a query.
   if (process.env.VARIA_TEST_SQL_SERVER && process.env.VARIA_TEST_SQL_SCRATCH === '1') {

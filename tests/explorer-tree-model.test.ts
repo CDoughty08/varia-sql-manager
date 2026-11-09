@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { FolderId, NodeKind, NodeSubtype } from '../src/shared/explorer/catalog'
 import type { ExplorerNodeRef } from '../src/shared/explorer/refs'
 import {
-  computeWindow, flatten, layoutWindow, needsQuery, pinnedServerBands, rowLayout, parentIndex, renderedIndices, revealScroll, rowIndex, rowKindOf, RowKind, rowOwner, siblingPlan, swallowedKey, syntheticId, treeKey, treeKeyOf, typeAhead,
+  computeWindow, flatten, layoutWindow, needsQuery, pinnedServerBands, rowLayout, parentIndex, renderedIndices, revealPinnedScroll, revealScroll, rowIndex, rowKindOf, RowKind, rowOwner, siblingPlan, swallowedKey, syntheticId, treeKey, treeKeyOf, typeAhead,
   TypeAheadBuffer, type TreeNode, type VisibleRows
 } from '../src/renderer/src/explorer/tree-model'
 import { heavyTimeout, meterWork } from './fixtures/work-meter'
@@ -161,8 +161,8 @@ describe('pinned server bands', () => {
   it('keeps the closest headers and counts overflow independently at both edges', () => {
     const layout = layoutFor([1, 1, 1, 1, ...Array<number>(30).fill(2), 1, 1, 1, 1])
     const bands = pinnedServerBands(layout, 150, 450, 1, 3)
-    expect(bands.top).toEqual({ headers: [3], overflow: [0, 1, 2], height: 52 })
-    expect(bands.bottom).toEqual({ headers: [34, 35, 36], overflow: [37], height: 112 })
+    expect(bands.top).toMatchObject({ headers: [3], overflow: [0, 1, 2], height: 52 })
+    expect(bands.bottom).toMatchObject({ headers: [34, 35, 36], overflow: [37], height: 112 })
     expect(bands.current).toBe(3)
     expect(bands.height).toBe(286)
     expect(pinnedServerBands(layout, 150, 450, 0, 2).top.height).toBe(0)
@@ -176,18 +176,83 @@ describe('pinned server bands', () => {
     expect(bands.bottom.overflow).toEqual([18])
     expect(layout.top(16)).toBeGreaterThanOrEqual(bands.height)
     const short = pinnedServerBands(layout, 100, 100, 10, 10)
-    expect(short.top).toEqual({ headers: [], overflow: [0], height: 22 })
+    expect(short.top).toMatchObject({ headers: [], overflow: [0], height: 22 })
     expect(short.height).toBe(56)
   })
 
-  it('keeps the current server pinned after its row leaves, including with a single connection', () => {
+  it('docks a header as its leading edge reaches the stack, including with a single connection', () => {
     const layout = layoutFor([1, ...Array<number>(50).fill(2)])
-    expect(pinnedServerBands(layout, 29, 400, 2, 2).top.headers).toEqual([])
+    expect(pinnedServerBands(layout, 0, 400, 2, 2).top.headers).toEqual([])
+    expect(pinnedServerBands(layout, 0.5, 400, 2, 2).top).toMatchObject({ headers: [0], offsets: [0], height: 30 })
     const bands = pinnedServerBands(layout, 30, 400, 2, 2)
     expect(bands.top.headers).toEqual([0])
     expect(bands.current).toBe(0)
     expect(bands.bottom.height).toBe(0)
     expect(pinnedServerBands(layout, 30, 120, 2, 2).top.headers).toEqual([0])
+  })
+
+  it('slides a full stack into overflow at the same speed as the incoming natural header', () => {
+    const layout = layoutFor([1, ...Array<number>(5).fill(2), 1, ...Array<number>(5).fill(2), 1, ...Array<number>(30).fill(2)])
+    expect(pinnedServerBands(layout, 220, 400, 2, 0).top).toMatchObject({ headers: [0, 6], offsets: [0, 30], overflow: [], height: 60 })
+    for (let moved = 0.5; moved < 8; moved += 0.5) {
+      const band = pinnedServerBands(layout, 220 + moved, 400, 2, 0).top
+      expect(band.headers).toEqual([0, 6, 12])
+      expect(band.offsets).toEqual([-moved, 30 - moved, 60 - moved])
+      expect(band.overflowHeight).toBe(22 * moved / 8)
+      expect(band.height).toBe(90 - moved)
+    }
+    expect(pinnedServerBands(layout, 228, 400, 2, 0).top).toMatchObject({ headers: [6, 12], offsets: [22, 52], overflow: [0], overflowHeight: 22, height: 82 })
+  })
+
+  it('keeps the bottom stack to whole headers and a full overflow row when stopped mid-rollover', () => {
+    const layout = layoutFor([1, ...Array<number>(30).fill(2), 1, 1, 1, 1])
+    for (let scroll = 372.5; scroll < 402; scroll += 0.5) {
+      expect(pinnedServerBands(layout, scroll, 400, 2, 2).bottom).toEqual({
+        headers: [31, 32], offsets: [0, 30], overflow: [33, 34], overflowHeight: 22, height: 82
+      })
+    }
+  })
+
+  it('mirrors server membership at the bottom, keeping whole slots and space in short panes', () => {
+    const levels = [1, ...Array<number>(8).fill(2), 1, 1, ...Array<number>(10).fill(2), 1, ...Array<number>(30).fill(2)]
+    const layout = layoutFor(levels), reversed = layoutFor([...levels].reverse())
+    for (const viewport of [65, 67, 74, 100, 160, 400]) {
+      for (let scroll = 0; scroll <= layout.total - viewport; scroll++) {
+        const bands = pinnedServerBands(layout, scroll, viewport, 2, 2)
+        const mirror = pinnedServerBands(reversed, layout.total - viewport - scroll, viewport, 2, 2).top
+        const headers = mirror.headers.filter(index => !mirror.overflow.includes(index))
+        expect(bands.bottom.headers).toEqual([...headers].reverse().map(index => levels.length - 1 - index))
+        expect(bands.bottom.offsets).toEqual(headers.map((_, index) => index * 30))
+        if (headers.length) {
+          expect(bands.bottom.overflowHeight).toBe(mirror.overflow.length ? 22 : 0)
+          expect(bands.bottom.height).toBe(headers.length * 30 + bands.bottom.overflowHeight)
+        }
+        expect(bands.height).toBeGreaterThanOrEqual(30)
+        expect(bands.top.headers.some(index => bands.bottom.headers.includes(index))).toBe(false)
+      }
+    }
+  })
+
+  it('reveals every row clear of the destination overlays, including real server headers', () => {
+    const layout = layoutFor([1, ...Array<number>(8).fill(2), 1, 1, ...Array<number>(10).fill(2), 1, ...Array<number>(30).fill(2), 1])
+    for (const viewport of [74, 100, 160, 400]) {
+      for (const [topLimit, bottomLimit] of [[0, 0], [0, 2], [2, 0], [1, 1], [1, 3], [2, 2], [10, 10]]) {
+        for (const scroll of [0, 0.5, 29, 30, 200, layout.total - viewport]) {
+          for (let index = 0; index < layout.count; index++) {
+            for (const alignTop of [false, true]) {
+              const destination = revealPinnedScroll(layout, index, scroll, viewport, topLimit, bottomLimit, alignTop) ?? scroll
+              const bands = pinnedServerBands(layout, destination, viewport, topLimit, bottomLimit)
+              expect(layout.top(index), `row ${index}, scroll ${scroll}, viewport ${viewport}, limits ${topLimit}/${bottomLimit}`).toBeGreaterThanOrEqual(destination + bands.top.height)
+              expect(layout.top(index) + layout.height(index)).toBeLessThanOrEqual(destination + viewport - bands.bottom.height)
+              expect(revealPinnedScroll(layout, index, destination, viewport, topLimit, bottomLimit)).toBeUndefined()
+            }
+          }
+        }
+      }
+    }
+    expect(revealPinnedScroll(layout, -1, 0, 400, 2, 2)).toBeUndefined()
+    expect(revealPinnedScroll(layout, layout.count, 0, 400, 2, 2)).toBeUndefined()
+    expect(revealPinnedScroll(layout, 0, 0, 0, 2, 2)).toBeUndefined()
   })
 })
 

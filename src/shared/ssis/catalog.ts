@@ -276,7 +276,7 @@ export function ssisCommandEntries(): { readonly [K in SsisCommandId]: SsisComma
   // an Activity Monitor's F5 (activityMonitorFocus) is its Refresh Now: focus in a monitor means no SSIS document is active.
   const refresh: SsisCommandEntry = {
     title: 'Refresh Properties', category: 'Integration Services', icon: 'refresh', keywords: ['ssis', 'reload', 'catalog'], precondition: 'backendReady && activeDocumentIsSsis',
-    unavailableHint: 'Open the properties of an SSIS Catalog object first.', keybindings: [{ key: 'f5', when: "activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus" }]
+    unavailableHint: 'Open the properties of an SSIS Catalog object first.', keybindings: [{ key: 'f5', when: "activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus" }]
   }
   return { ...verbs, 'ssis.refreshProperties': refresh } as { readonly [K in SsisCommandId]: SsisCommandEntry }
 }
