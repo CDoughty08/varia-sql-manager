@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
 import {
-  activeDocument, anyResultGrid, backendReady, closeDocumentButton, documentTab, documentTabs, editorText as editorTextOf, emptyState, emptyStateIcon, emptyStateTitle, errorMessages,
+  activeDocument, anyResultGrid, backendReady, closeDocumentButton, documentTab, documentTabs, editorStatus, editorText as editorTextOf, emptyState, emptyStateIcon, emptyStateTitle, errorMessages,
   editorGroups, environmentPill, executingMark, explorerFooter, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, primaryAction, queryBar, queryBarButton, queryConnection, queryDatabase, queryServer,
   queryStatus, readOnlyMark, resultGrid, selectOpenDocument, statusChips, tabNameBox, toolbar, toolbarButton, unsavedMark, workspaceEmpty
 } from './fixtures/ui.mjs'
@@ -581,7 +581,11 @@ try {
   await expect(queryServer(page)).toHaveValue(idB)
   await expect(environmentPill(crowdedTab, 'tab')).toHaveText('STAGING')
   // Root can write any file; Windows and ordinary Linux users exercise the real read-only attribute.
-  if (process.getuid?.() !== 0) await expect(readOnlyMark(crowdedTab)).toHaveCount(1)
+  if (process.getuid?.() !== 0) {
+    await expect(readOnlyMark(crowdedTab)).toHaveCount(1)
+    await expect(crowdedTab).toHaveAttribute('aria-description', /Read-only/)
+    await expect(crowdedTab).toHaveAttribute('title', /read-only/)
+  }
   await crowdedTab.focus()
   await page.keyboard.press('Enter')
   await resizeContent(application, page, 1024, 720)
@@ -589,10 +593,14 @@ try {
   await expect(editorGroups(page)).toHaveCount(2)
   await queryBarButton(page, /Execute/).click()
   await expect(executingMark(crowdedTab)).toHaveCount(1)
+  await expect(crowdedTab).toHaveAttribute('aria-description', /Executing/)
+  await expect(crowdedTab).toHaveAttribute('title', /Executing/)
+  await expect(crowdedTab).toHaveAttribute('title', /Staging environment/)
   await expect(crowdedTab.locator(part.tabSid)).toHaveText(/^SID \d{5}$/)
   await expect.poll(() => tabGeometry(crowdedTab)).toMatchObject({ nameVisible: true, sidVisible: true, actionsVisible: true })
   await queryBarButton(page, 'Cancel').click()
   await expect(executingMark(crowdedTab)).toHaveCount(0)
+  await expect(crowdedTab).not.toHaveAttribute('aria-description', /Executing/)
   await page.keyboard.press('Alt+w')
   await page.getByRole('menu', { name: 'Window', exact: true }).getByRole('menuitem', { name: 'Join All Editor Groups', exact: true }).click()
   await expect(editorGroups(page)).toHaveCount(1)
@@ -641,7 +649,7 @@ try {
   // A run with errors stays on Results, with the Messages strip open under them: its error inline in red in SSMS's
   // two-line form, then the line saying the next batch still ran, as in SSMS.
   await expect(errorMessages(page)).toContainText('Msg 137, Level 15, State 2, Line 8')
-  await expect(errorMessages(page).locator('xpath=following-sibling::pre[1]')).toHaveText('Batch 2 raised an error; execution continued with the next batch.')
+  await expect(errorMessages(page).locator('xpath=../following-sibling::*[1]')).toHaveText('Batch 2 raised an error; execution continued with the next batch.')
   await expect(messages(page)).toContainText('third batch')
   await expect(outputStatus(page)).toContainText(/^Completed with errors · /)
   await expect(outputStatus(page)).toContainText('3/3 batches')
@@ -972,6 +980,21 @@ try {
     await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width)
     expect(await clipped(), String(width)).toEqual({ status: [], search: [] })
   }
+  // Located errors reveal their source without adding link labels to copied SQL messages, and edits invalidate them.
+  await typeSql('ERROR_NAV_FIXTURE')
+  await queryBarButton(page, /Execute/).click()
+  const errorSource = messages(page).getByRole('button', { name: 'Go to line 1', exact: true })
+  await expect(errorSource).toBeEnabled()
+  await errorSource.click()
+  await expect(page.locator('.monaco-editor').filter({ has: page.locator('[role="textbox"]:focus') })).toBeVisible()
+  await expect(editorStatus(page)).toContainText('Ln 1')
+  await messages(page).focus()
+  await page.keyboard.press('Control+a')
+  await page.keyboard.press('Control+c')
+  await expect.poll(() => application.evaluate(({ clipboard }) => clipboard.readText())).toContain('Invalid column name.')
+  expect(await application.evaluate(({ clipboard }) => clipboard.readText())).not.toContain('Go to line')
+  await typeSql('ERROR_NAV_FIXTURE -- edited')
+  await expect(errorSource).toBeDisabled()
   expect(failures).toEqual([])
   console.log('Electron regression checks passed: the app://varia/ page that cannot read local files, the content security policy from main\'s header and the page\'s own <meta>, the startup failure screen (also for a workbench chunk that cannot load) and the workbench error boundary, integrated title bar and native controls, menu IPC and keyboard access, protocol v2 health and error codes, tab-switch undo/redo, save while typing and saved undo boundaries, file shortcuts and round trips, inactive-tab close with pending confirmation, unsaved close/quit, tab focus, selection execution and query shortcuts, zero timeout, retarget execution guard, two-server routing, the Object Explorer tree keys, lazy folders, per-folder errors, retry and refresh, per-tab execution sessions, partial results with statistics and batch errors, escaped XML plans, concurrent cancellation, alignment, the unsaved dot under forced colours, and whole status bar segments and search box labels from 1024 px up.')
 } catch (error) {

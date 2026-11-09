@@ -34,6 +34,8 @@ export interface SearchQueryState {
   readonly scope: SearchScope
   /** The type filters chosen (searchTypes); none searches every kind. */
   readonly types: readonly SearchType[]
+  /** A database-menu search is scoped until its chip is cleared or its server changes. */
+  readonly database?: string
 }
 /** One server's part of an All servers search: its answer, or why it has none. */
 export interface ServerAnswer {
@@ -289,11 +291,11 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
    * Opens a Search Objects tab on the server (the first connected one when none is named), with `text` if given; `allServers`
    * searches every connected server instead, and the tab belongs to none of them.
    */
-  open(connectionId?: string, text?: string, allServers = false): string | undefined {
+  open(connectionId?: string, text?: string, allServers = false, database?: string): string | undefined {
     const connection = connectionId ? this.o.connections.get(connectionId) : this.o.connections.getSnapshot().find(live)
     if (!live(connection)) throw new Error('Connect to a server to search its objects.')
     const document = this.o.documents.openCustom('objectSearch', searchTitle, allServers ? undefined : connection.id, 'master')
-    this.putDocument({ id: document.id, connectionId: connection.id, ...emptyQuery, ...text ? { text } : {}, ...allServers ? { allServers: true } : {} })
+    this.putDocument({ id: document.id, connectionId: connection.id, ...emptyQuery, ...text ? { text } : {}, ...allServers ? { allServers: true } : database !== undefined ? { database } : {} })
     for (const id of allServers ? this.liveIds() : [connection.id]) this.ensureIndex(id)
     if (text) void this.search(document.id)
     this.o.focus?.(document.id)
@@ -353,7 +355,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const document = this.getSnapshot().documents[id]
     if (!document || (document.connectionId === connectionId && !document.allServers) || !live(this.o.connections.get(connectionId))) return
     this.cancelSearch(document)
-    this.putDocument({ id, connectionId, ...this.query(document) })
+    const { database: _database, ...query } = this.query(document)
+    this.putDocument({ id, connectionId, ...query })
     this.ensureIndex(connectionId)
     void this.search(id)
   }
@@ -363,7 +366,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const document = this.getSnapshot().documents[id]
     if (!document || document.allServers || id === explorerSearchId) return
     this.cancelSearch(document)
-    this.putDocument({ id, connectionId: document.connectionId, ...this.query(document), allServers: true })
+    const { database: _database, ...query } = this.query(document)
+    this.putDocument({ id, connectionId: document.connectionId, ...query, allServers: true })
     for (const connectionId of this.liveIds()) this.ensureIndex(connectionId)
     void this.search(id)
   }
@@ -495,14 +499,15 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   }
 
   private query(document: SearchDocumentState): SearchQueryState {
-    return { text: document.text, caseSensitive: document.caseSensitive, wholeWord: document.wholeWord, regex: document.regex, fuzzy: document.fuzzy, scope: document.scope, types: document.types }
+    return { text: document.text, caseSensitive: document.caseSensitive, wholeWord: document.wholeWord, regex: document.regex, fuzzy: document.fuzzy, scope: document.scope, types: document.types,
+      ...document.database !== undefined ? { database: document.database } : {} }
   }
 
   private ask(connectionId: string, requestId: string, asked: SearchQueryState) {
     const kinds = searchTypeKinds(asked.types)
     return this.o.api.explorerSearch({
       connectionId, requestId, text: asked.text, caseSensitive: asked.caseSensitive, wholeWord: asked.wholeWord, regex: asked.regex, in: asked.scope, ...kinds ? { kinds } : {},
-      ...asked.fuzzy && !asked.regex ? { match: 'fuzzy' as const } : {}
+      ...asked.fuzzy && !asked.regex ? { match: 'fuzzy' as const } : {}, ...asked.database !== undefined ? { database: asked.database } : {}
     })
   }
 

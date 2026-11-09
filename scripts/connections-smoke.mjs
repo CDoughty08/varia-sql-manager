@@ -635,9 +635,16 @@ async function entraChecks(dialog, windowsIdentity) {
   const connectIds = () => app.evaluate(() => globalThis.connectionCalls.filter(call => call.method === 'connections.connect' && call.params.server === 'entra-wait').map(call => call.context?.requestId))
   await expect(connectOutcome(dialog)).toHaveCount(0)
   const footerBefore = await footerPlace(dialog)
-  await connect.click()
+  const stopsBeforeRepeat = await app.evaluate(() => globalThis.entraStops)
+  await connect.focus()
+  await page.keyboard.down('Enter')
   await expect(stopButton).toBeEnabled()
   await expect(stopButton).toBeFocused()
+  // Focus moved from Connect to Stop while Enter is held: its repeated keydown must not click Stop.
+  await page.keyboard.down('Enter')
+  await page.keyboard.up('Enter')
+  await expect(stopButton).toBeFocused()
+  expect(await app.evaluate(() => globalThis.entraStops)).toEqual(stopsBeforeRepeat)
   await expect(dialog.getByText('Complete the sign-in in your web browser. Waiting up to 3 minutes…', { exact: true })).toBeVisible()
   // The waiting line shows above the footer, so Stop is where Cancel was, and Connecting… where Connect was.
   expect(await footerPlace(dialog)).toEqual(footerBefore)
@@ -748,10 +755,15 @@ async function rememberPassword() {
   await dialog.screenshot({ path: resolve('artifacts', 'connect-remember-password.png') })
   expect(await page.evaluate(async () => JSON.stringify(await window.varia.loadConnectionLibrary()))).not.toContain(marker)
   expect(await page.evaluate(() => document.body.innerHTML)).not.toContain(marker)
-  // (4) Double-clicking a recent connection selects it and connects with main's injected password, even after editing the form.
+  // (4) Space selects without connecting. Enter connects the focused saved row, even after editing the form without reselecting it.
+  const attemptsBeforeEnter = (await calls()).filter(call => call.method === 'connections.connect').length
+  await savedConnections(dialog, 'password-check').focus()
+  await savedConnections(dialog, 'password-check').press('Space')
+  expect((await calls()).filter(call => call.method === 'connections.connect')).toHaveLength(attemptsBeforeEnter)
+  await expect(dialog).toBeVisible()
   await dialog.getByLabel('Server Name', { exact: true }).fill('other-server')
   await dialog.getByLabel('Login', { exact: true }).fill('other-reader')
-  await savedConnections(dialog, 'password-check').dblclick()
+  await savedConnections(dialog, 'password-check').press('Enter')
   await expect(dialog).toHaveCount(0)
   expect((await calls()).filter(call => call.method === 'connections.connect' && call.params.server === 'password-check').map(call => call.params.password)).toEqual(['<redacted>', '<redacted>'])
   // (5) A forged request naming the entry gets no password for another server or a weaker certificate check.
@@ -1192,6 +1204,16 @@ async function environmentLabels() {
   const widenEditor = await narrowBar(430)
   await expect.poll(() => documentTab(page, connected).evaluate(tab => tab.getBoundingClientRect().width), { message: 'a split cell under 220 px' }).toBeLessThan(220)
   await expect.poll(tabFit, { message: 'a narrow split cell' }).toMatchObject({ sid: true, buttons: true })
+  // The fake session is 51; a real session id may have five digits. Exercise their actual text width in the same cell.
+  const sidBefore = await documentTab(page, connected).locator(part.tabSid).evaluate(sid => ({ text: sid.textContent, width: sid.style.width }))
+  try {
+    for (const text of ['SID 10000', 'SID 32767']) {
+      await documentTab(page, connected).locator(part.tabSid).evaluate((sid, text) => { sid.textContent = text; sid.style.width = '' }, text)
+      await expect.poll(tabFit, { message: `a narrow split cell with ${text}` }).toMatchObject({ sid: true, buttons: true })
+    }
+  } finally {
+    await documentTab(page, connected).locator(part.tabSid).evaluate((sid, before) => { sid.textContent = before.text; sid.style.width = before.width }, sidBefore)
+  }
   await widenEditor()
   await page.screenshot({ path: resolve('artifacts', 'environment-long-label-tabs.png') })
   // The query now has unsaved text: the quit below answers Don't Save.

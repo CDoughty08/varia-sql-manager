@@ -59,6 +59,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   private disposed = false
   /** Each running execution, so closing its tab can wait for the cancel to land. */
   private readonly runs = new Map<string, Promise<void>>()
+  /** Source versions, without SQL text, so an old error never points into a query edited or re-executed since. */
+  private readonly sources = new Map<string, { readonly queryId: string; readonly revision: number }>()
   private readonly subscription: Disposable
   constructor(private documents: DocumentService, private api: QueryApi, private getConnection: (id: string) => QueryConnection | undefined, private events: EventBus,
     private results: Pick<ResultsService, 'begin' | 'finish'>, private now: () => number = () => Date.now(), private wait: (ms: number) => Promise<void> = ms => new Promise(resolve => { setTimeout(resolve, ms) }),
@@ -66,7 +68,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     super({})
     this.subscription = events.subscribe(event => {
       if (event.type === 'session.ended') this.sessionEnded(event.tabId)
-      if (event.type === 'documents.closed') this.statistics.reset(event.tabId)
+      if (event.type === 'documents.closed') { this.statistics.reset(event.tabId); this.sources.delete(event.tabId) }
       if (event.type === 'query.outputSelected') {
         const state = this.getSnapshot()[event.tabId]
         if (state?.estimated && state.estimated.view !== event.view)
@@ -76,6 +78,11 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   }
   isRunning(id: string): boolean { return !!this.getSnapshot()[id]?.running }
   isConnectionRunning(id: string): boolean { return Object.values(this.getSnapshot()).some(state => state.running?.connectionId === id) }
+  /** A location from this exact execution while the submitted document is still unchanged. */
+  sourceLine(tabId: string, queryId: string, line: number | undefined): number | undefined {
+    const source = this.sources.get(tabId), model = this.documents.getModel(tabId)
+    return source?.queryId === queryId && model && source.revision === model.getVersionId() && Number.isSafeInteger(line) && line! > 0 && line! <= model.getLineCount() ? line : undefined
+  }
   canExecute(id = this.documents.getSnapshot().activeId): boolean {
     const document = this.documents.get(id)
     const connection = document?.connectionId ? this.getConnection(document.connectionId) : undefined
@@ -142,6 +149,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   }
   private update(id: string, state: QueryState): void { this.publish({ ...this.getSnapshot(), [id]: state }) }
   forget(id: string): void {
+    this.sources.delete(id)
     if (!this.getSnapshot()[id]) return
     const next = { ...this.getSnapshot() }; delete next[id]; this.publish(next)
   }
@@ -230,6 +238,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const { sql, startLine } = this.documents.getExecuteText(tabId)
     if (!sql.trim()) return
     const queryId = crypto.randomUUID(), previous = this.getSnapshot()[tabId]?.session
+    this.sources.set(tabId, { queryId, revision: this.documents.revision(tabId) })
     const planContext = this.retainedPlans ? this.planContext(tabId, queryId, sql, startLine, this.now()) : undefined
     // Reserve before the first await so repeated commands cannot start a second script.
     const livePlan = document.includeLivePlan ? { queryId, connectionId: connection.id } : undefined
@@ -336,5 +345,5 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     await Promise.race([stopped, this.wait(cancelSettleMs)])
     return new Map(tabs.map(tab => [tab.id, !tab.running && answer === 'commit' ? 'commit' : 'rollback']))
   }
-  dispose(): void { this.disposed = true; this.subscription.dispose(); this.statistics.dispose(); this.clearListeners(); this.publish({}) }
+  dispose(): void { this.disposed = true; this.subscription.dispose(); this.statistics.dispose(); this.sources.clear(); this.clearListeners(); this.publish({}) }
 }

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { connectionInfo, connectionOptions, readyBackend, workbenchFixture } from './fixtures/workbench'
 import { searchHitNames, type ObjectSearchHit } from '../src/shared/explorer/search'
 import type { ObjectRef } from '../src/shared/explorer/refs'
-import type { ResolvedMenuItem } from '../src/renderer/src/menus/resolve'
+import type { ResolvedCommandItem, ResolvedMenuItem } from '../src/renderer/src/menus/resolve'
 import { argsFor } from '../src/renderer/src/menus/targets'
 import { isCopyKey, searchHitTarget } from '../src/renderer/src/search/hit-actions'
 import { defaultRules } from '../src/shared/commands/keybindings'
@@ -97,6 +97,28 @@ describe('a Search Objects result\'s context menu', () => {
     expect(await commands.execute('explorer.searchObjects', argsFor({ kind: 'explorer', node }), 'menu')).toBe(true)
     expect(opened()).toMatchObject({ connectionId: 'server-b' })
     expect(opened()?.allServers).toBeUndefined()
+    expect(opened()?.database).toBeUndefined()
+    const database = { ...explorer.objectNode('server-b', { kind: 'database', name: ' Sales ] ' }, ' Sales ] '), id: 2 }
+    expect(await commands.execute('explorer.searchObjects', argsFor({ kind: 'explorer', node: database }), 'menu')).toBe(true)
+    expect(opened()).toMatchObject({ connectionId: 'server-b', database: ' Sales ] ' })
+    expect(opened()?.allServers).toBeUndefined()
+  })
+
+  it.each([1, 2])('does not redirect a retained database menu after its server disconnects with %i other live servers', async remaining => {
+    const { commands, menus, objectSearch, explorer, connections, quickInput } = connected()
+    connections.add(connectionInfo('server-b'), connectionOptions)
+    if (remaining === 2) connections.add(connectionInfo('server-c'), connectionOptions)
+    const database = { ...explorer.objectNode('server-b', { kind: 'database', name: 'Sales' }, 'Sales'), id: 2 }
+    const item = menus.resolve('explorer.context', { kind: 'explorer', node: database })
+      .find((item): item is ResolvedCommandItem => item.kind === 'command' && item.id === 'explorer.searchObjects')!
+    expect(item.enabled).toBe(true)
+    const picker = vi.spyOn(quickInput, 'show')
+
+    connections.remove('server-b')
+    expect(commands.isEnabled(item.id, item.args)).toBe(false)
+    expect(await commands.execute(item.id, item.args, 'menu')).toBe(false)
+    expect(Object.values(objectSearch.getSnapshot().documents)).toEqual([])
+    expect(picker).not.toHaveBeenCalled()
   })
 })
 

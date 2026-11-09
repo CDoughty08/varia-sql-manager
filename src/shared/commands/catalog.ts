@@ -149,6 +149,11 @@ export const commandCatalog = {
     title: 'Close All', category: 'File', icon: 'close-all', precondition: 'hasActiveDocument && !documentBusy', unavailableHint: openFirst,
     menus: [{ menu: 'window', group: '2_documents', order: 3, title: 'Close All Documents', mnemonic: 'l' }, { menu: 'documentTab.context', group: '2_close', order: 3, mnemonic: 'l' }]
   },
+  'file.reopenClosed': {
+    title: 'Reopen Closed Query', category: 'File', icon: 'history', keywords: ['restore', 'closed', 'undo'], precondition: '!documentBusy',
+    unavailableHint: 'There are no closed queries to reopen.', keybindings: [{ key: 'mod+shift+t' }],
+    menus: [{ menu: 'documentTab.context', group: '2_close', order: 4, mnemonic: 'q' }, { menu: 'file', group: '2_close', order: 2, mnemonic: 'p' }]
+  },
   // Disabled, with the hint, for a query that has never been saved.
   'file.copyPath': {
     title: 'Copy Full Path', category: 'File', precondition: 'hasActiveDocument', unavailableHint: noFile,
@@ -790,6 +795,10 @@ export const commandCatalog = {
     title: 'Copy with Headers', category: 'Query', palette: false,
     keybindings: [{ key: 'mod+shift+c', when: 'outputGridFocus' }], menus: [{ menu: 'output.context', group: '1_copy', order: 2, mnemonic: 'h', when: "outputView == 'grid'" }]
   },
+  'output.copyColumnName': {
+    title: 'Copy Column Name', category: 'Query', icon: 'copy', palette: false,
+    menus: [{ menu: 'output.context', group: '1_copy', order: 3, mnemonic: 'n', when: "outputView == 'grid'" }]
+  },
   'output.selectAll': {
     title: 'Select All', category: 'Query', palette: false,
     keybindings: [{ key: 'mod+a', when: 'outputGridFocus || messagesFocus' }], menus: [{ menu: 'output.context', group: '2_select', order: 1, mnemonic: 'a' }]
@@ -802,8 +811,9 @@ export const commandCatalog = {
   },
   // Frees the active query's results in the backend; Messages stay.
   'output.closeResults': {
-    title: 'Close Results', category: 'Query', icon: 'close', keywords: ['free', 'memory', 'release', 'clear'], precondition: 'hasResults && !queryRunning',
-    unavailableHint: 'There are no results to close, or the query is still running.'
+    title: 'Close Results', category: 'Query', icon: 'close', keywords: ['free', 'memory', 'release', 'clear'], precondition: '!documentBusy',
+    unavailableHint: 'There are no results to close, or the query is still running.',
+    menus: [{ menu: 'output.context', group: 'z_close', order: 1, mnemonic: 'l' }]
   },
   // The results toolbar's White space choices; each turns the grid's marks off when it is already on (queryResults.grid.whitespace).
   'output.showSpaces': {
@@ -835,6 +845,14 @@ export const commandCatalog = {
   'output.clearSort': {
     title: 'Clear Sort', category: 'Query', keywords: ['order', 'unsort', 'original', 'grid'], palette: false,
     menus: [{ menu: 'output.context', group: '2_sort', order: 5, mnemonic: 'r', when: "outputView == 'grid'" }]
+  },
+  'output.fitColumn': {
+    title: 'Fit Column', category: 'Query', keywords: ['resize', 'width', 'autosize'], palette: false,
+    menus: [{ menu: 'output.context', group: '2_width', order: 1, mnemonic: 'i', when: "outputView == 'grid'" }]
+  },
+  'output.revealError': {
+    title: 'Go to Error Line', category: 'Query', icon: 'go-to-file', palette: false, precondition: '!documentBusy',
+    unavailableHint: 'The error has no location in this query, or the query text has changed since execution.'
   },
   // Search in results (the results toolbar's search box, results.search): Find in Results puts the focus in the box, as
   // Ctrl+F does in a grid; Find Next and Previous step through the matches of every grid, as F3 and Shift+F3 do there.

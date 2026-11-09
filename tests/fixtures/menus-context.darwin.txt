@@ -29,6 +29,7 @@ documentTab.context, for a saved query's tab
   &Close  ⌘W  +++-
   Close All &But This  +++-
   C&lose All  +++-
+  Reopen Closed &Query  ⇧⌘T  ----
   ---
   Copy Full &Path  ++++
   Reveal in Finder  ++++
@@ -49,6 +50,7 @@ documentTab.context, for an unsaved query's tab
   &Close  ⌘W  +++-
   Close All &But This  +++-
   C&lose All  +++-
+  Reopen Closed &Query  ⇧⌘T  ----
   ---
   Copy Full &Path  ----
   Reveal in Finder  ----
@@ -328,6 +330,7 @@ explorer.context, for a login
 output.context, for a results grid with selected cells
   &Copy  ⌘C  ++++
   Copy with &Headers  ⇧⌘C  ++++
+  Copy Column &Name  ++++
   ---
   Select &All  ⌘A  ++++
   ---
@@ -347,15 +350,20 @@ output.context, for a results grid with selected cells
     Clear &All Highlights  ----
   Co&mpare with Previous Result  ++++
   ---
+  F&it Column  ----
+  ---
   Sa&ve Results As…  ⌘S  ----
   ---
   Show S&paces and Tabs [ ]  ++++
   Show All &White Space [ ]  ++++
   Column Pro&file [ ]  ++++
   Show Row Si&ze [x]  ++++
+  ---
+  C&lose Results  +++-
 output.context, for a results grid without
   &Copy  ⌘C  ----
   Copy with &Headers  ⇧⌘C  ----
+  Copy Column &Name  ----
   ---
   Select &All  ⌘A  ++++
   ---
@@ -375,17 +383,25 @@ output.context, for a results grid without
     Clear &All Highlights  ----
   Co&mpare with Previous Result  ----
   ---
+  F&it Column  ----
+  ---
   Sa&ve Results As…  ⌘S  ----
   ---
   Show S&paces and Tabs [ ]  ++++
   Show All &White Space [ ]  ++++
   Column Pro&file [ ]  ++++
   Show Row Si&ze [x]  ++++
+  ---
+  C&lose Results  +++-
 output.context, for Messages with selected text
   &Copy  ⌘C  ++++
   ---
   Select &All  ⌘A  ++++
+  ---
+  C&lose Results  +++-
 output.context, for Messages without
   &Copy  ⌘C  ----
   ---
   Select &All  ⌘A  ++++
+  ---
+  C&lose Results  +++-

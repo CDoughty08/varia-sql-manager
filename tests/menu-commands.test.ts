@@ -8,9 +8,10 @@ import type { Platform } from '../src/shared/commands/keybindings'
 import { KeybindingService, type KeyDownEvent } from '../src/renderer/src/core/keybindings'
 import type { CommandArgs } from '../src/renderer/src/core/types'
 import { selectAll, type GridSelection } from '../src/renderer/src/grid/selection'
-import type { ExplorerMenuNode, InputTarget, OutputView } from '../src/renderer/src/menus/targets'
+import type { ExplorerMenuNode, InputTarget, OutputTarget, OutputView } from '../src/renderer/src/menus/targets'
 import type { ExplorerNodeRef, ObjectRef } from '../src/shared/explorer/refs'
 import { fakeDocument, FakeElement } from './fixtures/elements'
+import * as windowTools from '../src/renderer/src/core/windows'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
@@ -653,6 +654,87 @@ describe('Query Output commands', () => {
     expect(commands.isEnabled('output.closeResults')).toBe(false)
     await running.finish()
     expect(commands.isEnabled('output.closeResults')).toBe(true)
+  })
+  it('copies only the raw column name and fits the captured column of the addressed grid', async () => {
+    const columns: ResultColumn[] = [{ name: ' Total ] net\t', dataType: 'int', wire: 'text', nullable: false }, { name: '', dataType: 'nvarchar', wire: 'text', nullable: true }]
+    const { commands, documents, api, results, resultSelection, tab, on } = await ran('win32', { ...queryOutput, resultSets: [descriptor(1), descriptor(2, { index: 1, columns })] })
+    const controller = { selectAll: vi.fn(), repaint: vi.fn(), fitColumn: vi.fn() }
+    const registration = results.registerGrid(tab.id, 1, controller)
+    resultSelection.set(tab.id, block(1))
+    const captured = on('grid', { resultIndex: 1 })
+    if (captured.target?.kind !== 'output') throw new Error('Output target missing')
+    const args: CommandArgs = { ...captured, target: { ...captured.target, column: 0, result: { generation: 1, resultId: 2 } } }
+    // A different active document and cell do not replace the menu's captured tab, result or column.
+    documents.create('Other.sql', 'SELECT 2', 'master', 'server-a')
+    expect(await commands.execute('output.copyColumnName', args, 'menu')).toBe(true)
+    expect(api.writeClipboardText.mock.calls).toEqual([[' Total ] net\t']])
+    expect(api.copyResults).not.toHaveBeenCalled()
+    expect(await commands.execute('output.fitColumn', args, 'menu')).toBe(true)
+    expect(controller.fitColumn.mock.calls).toEqual([[0]])
+    // Keyboard commands use the active cell; an unnamed column copies its actual empty alias.
+    expect(await commands.execute('output.copyColumnName', captured, 'keybinding')).toBe(true)
+    expect(api.writeClipboardText.mock.calls.at(-1)).toEqual([''])
+    expect(commands.isEnabled('output.copyColumnName', on('messages'))).toBe(false)
+    const stale: CommandArgs = { ...args, target: { ...args.target as OutputTarget, result: { generation: 1, resultId: 99 } } }
+    for (const id of ['output.copyColumnName', 'output.fitColumn'] as const) expect(commands.isEnabled(id, stale)).toBe(false)
+    registration.dispose()
+    expect(commands.isEnabled('output.fitColumn', args)).toBe(false)
+    results.closeResults(tab.id)
+    expect(commands.isEnabled('output.copyColumnName', args)).toBe(false)
+  })
+  it('closes the contextual or toolbar query\'s results without requiring that query to be active', async () => {
+    const { commands, documents, results, tab, on } = await ran()
+    const other = documents.create('Other.sql', 'SELECT 2', 'master', 'server-a')
+    results.begin(other.id, 'other-run')
+    results.finish(other.id, 'other-run', { summary: { ...queryOutput, resultSets: [descriptor(9, { index: 0 })] } })
+    expect(await commands.execute('output.closeResults', on('grid', { resultIndex: 1 }), 'menu')).toBe(true)
+    expect(results.getSnapshot()[tab.id]).toMatchObject({ status: 'closed', messages: [{ text: 'hello', kind: 'info' }] })
+    expect(results.getSnapshot()[other.id].status).toBe('completed')
+    expect(await commands.execute('output.closeResults', { tabId: other.id }, 'toolbar')).toBe(true)
+    expect(results.getSnapshot()[other.id].status).toBe('closed')
+    expect(commands.isEnabled('output.closeResults', { tabId: tab.id })).toBe(false)
+  })
+  it('returns focus to the surviving output tab in the output\'s own window when its toolbar closes results', async () => {
+    const { commands, doc, element, tab } = await ran()
+    const resultsTab = new FakeElement(doc, 'button', { attributes: { role: 'tab', 'data-output-tab': 'results' } })
+    const button = new FakeElement(doc, 'button')
+    const panel = new FakeElement(doc, 'section', { className: 'output-panel', attributes: { 'data-tab-id': tab.id, 'data-output-panel': 'results' } })
+      .append(resultsTab, new FakeElement(doc, 'div', { className: 'output-toolbar' }).append(button), element('grid'))
+    const active = vi.spyOn(windowTools.windows, 'activeElement').mockReturnValue(button.dom)
+    cleanups.push(() => active.mockRestore())
+    expect(await commands.execute('output.closeResults', { tabId: tab.id }, 'toolbar')).toBe(true)
+    expect(resultsTab.focusCalls).toBe(1)
+    expect(doc.activeElement).toBe(resultsTab)
+    expect(panel.contains(resultsTab)).toBe(true)
+  })
+  it('focuses the surviving Results tab after Messages switches panels, unless later input or another run takes over', async () => {
+    const frames: (() => void)[] = []
+    const frame = vi.spyOn(windowTools, 'requestFrame').mockImplementation(callback => { frames.push(callback) })
+    const active = vi.spyOn(windowTools.windows, 'activeElement'), activeDocument = vi.spyOn(windowTools.windows, 'activeDocument')
+    cleanups.push(() => { frame.mockRestore(); active.mockRestore(); activeDocument.mockRestore() })
+    for (const cancel of ['none', 'input', 'focus', 'run'] as const) {
+      const { commands, doc, tab, on, panes, results } = await ran()
+      const body = new FakeElement(doc, 'body'), oldTab = new FakeElement(doc, 'button', { attributes: { role: 'tab', 'data-output-tab': 'results' } })
+      new FakeElement(doc, 'section', { className: 'output-panel', attributes: { 'data-tab-id': tab.id, 'data-output-panel': 'messages' } }).append(oldTab)
+      const target = Object.assign(new FakeElement(doc, 'button', { attributes: { role: 'tab', 'data-output-tab': 'results' } }), { checkVisibility: () => true })
+      new FakeElement(doc, 'section', { className: 'output-panel', attributes: { 'data-tab-id': tab.id, 'data-output-panel': 'results' } }).append(target)
+      const listeners = new Map<string, () => void>()
+      Object.assign(doc, { body, querySelector: () => target.dom,
+        addEventListener: (type: string, listener: () => void) => listeners.set(type, listener), removeEventListener: (type: string) => listeners.delete(type) })
+      active.mockImplementation(() => doc.activeElement?.dom ?? null)
+      activeDocument.mockReturnValue(doc as unknown as Document)
+      oldTab.focus()
+      const selector = panes.bindSelector(() => { oldTab.isConnected = false; doc.activeElement = body })
+      cleanups.push(() => selector.dispose())
+      expect(await commands.execute('output.closeResults', on('messages'), 'menu')).toBe(true)
+      expect(results.getSnapshot()[tab.id].status).toBe('closed')
+      if (cancel === 'input') listeners.get('pointerdown')?.()
+      if (cancel === 'focus') { new FakeElement(doc, 'input').focus(); listeners.get('focusin')?.(); doc.activeElement = body }
+      if (cancel === 'run') results.begin(tab.id, 'later-run')
+      frames.shift()!()
+      expect(target.focusCalls, cancel).toBe(cancel === 'none' ? 1 : 0)
+      expect(listeners.size, cancel).toBe(0)
+    }
   })
   it('open an XML, JSON or plan value from a click or Enter in a new tab, and focus the editor there', async () => {
     const columns: ResultColumn[] = [{ name: 'Id', dataType: 'int', wire: 'text', nullable: false }, { name: 'XML_F52E2B61-18A1-11d1-B105-00805F49916B', dataType: 'ntext', wire: 'text', role: 'xml', nullable: true }]

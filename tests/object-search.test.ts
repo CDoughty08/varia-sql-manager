@@ -18,7 +18,7 @@ import { explorerSearchId, hitServer, mergeAnswers, ObjectSearchService, revealP
 import { searchHitTarget } from '../src/renderer/src/search/hit-actions'
 import { insertTextFor } from '../src/shared/explorer/refs'
 import { indexSummary, searchHitPath } from '../src/renderer/src/search/ObjectSearch'
-import { allIndexesSummary, allServersSummary, groupNote, indexGap, indexIncomplete, KindBadge, listTabStop, moreMatches } from '../src/renderer/src/search/SearchPanel'
+import { allIndexesSummary, allServersSummary, DatabaseScope, groupNote, indexGap, indexIncomplete, KindBadge, listTabStop, moreMatches } from '../src/renderer/src/search/SearchPanel'
 import { kindSpecs, nodeKinds } from '../src/shared/explorer/catalog'
 import { colorKeys } from '../src/shared/theme/registry'
 import { layoutFilters, minimumChips } from '../src/renderer/src/search/filter-layout'
@@ -197,6 +197,42 @@ function harness(settings: { indexOnConnect?: boolean; definitions?: boolean } =
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
 
 describe('ObjectSearchService', () => {
+  it('carries a database scope through searches and rebuilds, clears it explicitly, and drops it when the server changes', async () => {
+    const { service, calls, pendingIndex, connections, timers } = harness()
+    connections.set([connection('a'), connection('b')])
+    const database = ' Sales ] 2024 '
+    const id = service.open('a', 'orders', false, database)!
+    expect(calls.search.at(-1)).toMatchObject({ connectionId: 'a', text: 'orders', database })
+    service.setQuery(id, { text: 'customers' })
+    timers.run()
+    expect(calls.search.at(-1)).toMatchObject({ text: 'customers', database })
+    pendingIndex[0]({ ok: true, value: { status: status(), elapsedMs: 1 } })
+    await settle()
+    expect(calls.search.at(-1)).toMatchObject({ text: 'customers', database })
+    service.setQuery(id, { database: undefined })
+    expect(calls.search.at(-1)).not.toHaveProperty('database')
+    service.setQuery(id, { database })
+    service.setConnection(id, 'b')
+    expect(service.getSnapshot().documents[id].database).toBeUndefined()
+    expect(calls.search.at(-1)).toMatchObject({ connectionId: 'b', text: 'customers' })
+    expect(calls.search.at(-1)).not.toHaveProperty('database')
+    service.setQuery(id, { database })
+    service.setAllServers(id)
+    expect(service.getSnapshot().documents[id].database).toBeUndefined()
+    expect(calls.search.slice(-2).every(call => call.database === undefined)).toBe(true)
+    const all = service.open('a', 'orders', true, database)!
+    expect(service.getSnapshot().documents[all].database).toBeUndefined()
+    service.dispose()
+  })
+
+  it('shows a removable database scope with hidden characters made visible', () => {
+    const html = renderToStaticMarkup(createElement(DatabaseScope, { database: 'Sales\u202e', onClear: () => {} }))
+    expect(html).toContain('aria-label="Database scope"')
+    expect(html).toContain('aria-label="Clear database scope: Sales⟨U+202E⟩"')
+    expect(html).toContain('<bdi>Sales⟨U+202E⟩</bdi>')
+    expect(html).toContain('title="Search all databases"')
+  })
+
   it('builds each server\'s index when it connects, with definitions as Options says, and drops it when the server goes', async () => {
     const { service, calls, pendingIndex, connections, emit } = harness({ definitions: false })
     connections.set([connection('a')])

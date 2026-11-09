@@ -84,7 +84,7 @@ export interface GridViewState {
 /** `collapsed` holds the sets shown as their caption alone, by index (a set's caption toggles it). */
 export interface TabViewState { stackScrollTop: number; weights?: number[]; focusedIndex: number; grids: Map<number, GridViewState>; collapsed: ReadonlySet<number> }
 /** A mounted grid, for the commands that act on it. */
-export interface GridController { selectAll(): void; repaint(): void }
+export interface GridController { selectAll(): void; repaint(): void; fitColumn(column: number): void }
 /** How a run ended: the summary, or main's failure (`code` BACKEND_LOST when the backend stopped), plus a notice to show first. */
 export interface RunEnd { summary?: QueryResult; error?: string; code?: ErrorCode; notice?: string; planContext?: PlanExecutionContext }
 /** Open Value in New Tab's outcome: whether a document opened, and what the banner says (a failure, or that it opened unformatted). */
@@ -417,6 +417,15 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const key = tabId + ':' + index
     this.controllers.set(key, controller)
     return { dispose: () => { if (this.controllers.get(key) === controller) this.controllers.delete(key) } }
+  }
+  /** Fitting uses the mounted grid's bounded measurement and current (possibly sorted) view. */
+  canFitColumn(tabId: string, index: number, column: number): boolean {
+    const set = this.runs.get(tabId)?.sets[index], state = set?.handle.getSnapshot().state
+    return !!set && Number.isInteger(column) && column >= 0 && column < set.descriptor.columns.length && set.descriptor.columns[column].role !== 'tone'
+      && state !== 'released' && state !== 'lost' && this.controllers.has(tabId + ':' + index)
+  }
+  fitColumn(tabId: string, index: number, column: number): void {
+    if (this.canFitColumn(tabId, index, column)) this.controllers.get(tabId + ':' + index)?.fitColumn(column)
   }
   selection(tabId: string, index: number): GridSelection | undefined {
     const selection = this.views.get(tabId)?.grids.get(index)?.selection

@@ -2,7 +2,7 @@ using System.Globalization;
 
 namespace Varia.Backend;
 
-internal sealed record SqlBatch(string Sql, int StartLine, int RepeatCount);
+internal sealed record SqlBatch(string Sql, int StartLine, int RepeatCount, bool SourceLinesSafe = true);
 
 /// <summary>Recognizes client batch delimiters without interpreting or rewriting T-SQL.</summary>
 internal static class SqlScript
@@ -18,6 +18,8 @@ internal static class SqlScript
         var batchOffset = 0;
         var batchLine = 1;
         var hasSql = false;
+        var sourceLinesSafe = true;
+        var sourceStartSeen = false;
         var executions = 0;
         var lineNumber = 1;
         for (var offset = 0; offset < sql.Length; lineNumber++)
@@ -84,8 +86,14 @@ internal static class SqlScript
                     batchLine = lineNumber + 1;
                 }
                 hasSql = false;
+                sourceLinesSafe = true;
+                sourceStartSeen = false;
             }
-            else if (!trimmed.IsEmpty) hasSql = true;
+            else if (!trimmed.IsEmpty)
+            {
+                hasSql = true;
+                ObserveSourceScope(text.AsSpan());
+            }
             offset = end;
             if (offset < sql.Length && sql[offset] == '\r') offset++;
             if (offset < sql.Length && sql[offset] == '\n') offset++;
@@ -98,11 +106,35 @@ internal static class SqlScript
         {
             executions += count;
             if (executions > MaxBatchExecutions) throw Invalid(startLine, $"A script may execute at most {MaxBatchExecutions} batches, including GO repetitions.");
-            batches.Add(new(text, startLine, count));
+            batches.Add(new(text, startLine, count, sourceLinesSafe));
+        }
+
+        // SQL Server can report a nested dynamic batch's line with no Procedure name. Those numbers cannot be mapped to
+        // the submitted script. Use the already masked lexical text, never words inside comments, strings or quoted names.
+        // Unknown first tokens also exclude implicit procedure calls (including quoted names), labels and unfamiliar syntax.
+        // This is a conservative navigation hint, not SQL validation; the original text and execution are unchanged.
+        void ObserveSourceScope(ReadOnlySpan<char> visible)
+        {
+            for (var at = 0; at < visible.Length;)
+            {
+                if (char.IsWhiteSpace(visible[at]) || visible[at] == ';') { at++; continue; }
+                if (!IsIdentifierPart(visible[at])) { if (!sourceStartSeen) sourceLinesSafe = false; sourceStartSeen = true; at++; continue; }
+                var start = at++;
+                while (at < visible.Length && IsIdentifierPart(visible[at])) at++;
+                var token = visible[start..at];
+                if (!sourceStartSeen) { sourceLinesSafe &= IsStatementStart(token); sourceStartSeen = true; }
+                if (token.Equals("EXEC", StringComparison.OrdinalIgnoreCase) || token.Equals("EXECUTE", StringComparison.OrdinalIgnoreCase)
+                    || token.Equals("sp_executesql", StringComparison.OrdinalIgnoreCase)) sourceLinesSafe = false;
+            }
         }
 
         RequestException Invalid(int line, string message) => new("INVALID_SCRIPT", $"Line {sourceStartLine + line - 1}: {message} The script was not executed.");
     }
 
     private static bool IsIdentifierPart(char value) => char.IsLetterOrDigit(value) || value is '_' or '@' or '#' or '$';
+    private static bool IsStatementStart(ReadOnlySpan<char> token) => token.ToString().ToUpperInvariant() is
+        "SELECT" or "WITH" or "INSERT" or "UPDATE" or "DELETE" or "MERGE" or "CREATE" or "ALTER" or "DROP" or "TRUNCATE"
+        or "DECLARE" or "SET" or "USE" or "BEGIN" or "IF" or "WHILE" or "PRINT" or "RAISERROR" or "RETURN"
+        or "WAITFOR" or "COMMIT" or "ROLLBACK" or "SAVE" or "GRANT" or "DENY" or "REVOKE" or "BACKUP" or "RESTORE"
+        or "DBCC" or "CHECKPOINT" or "RECONFIGURE" or "SHUTDOWN" or "KILL" or "BULK" or "OPEN" or "CLOSE" or "FETCH" or "DEALLOCATE";
 }
