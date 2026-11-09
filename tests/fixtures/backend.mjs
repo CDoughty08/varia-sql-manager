@@ -20,6 +20,7 @@
 //                       deployment elsewhere
 //   crash-next          the next query.execute crashes the backend (GOAWAY BACKEND_CRASH, exit 70); the file is removed
 //   fail-commit         query.session.close with transaction commit fails as SQL Server's would, and the session stays
+//   wide-session-ids    session IDs start at 10000, exercising five-digit SQL session badges
 //   ssis/missing        ssis.describe answers NOT_FOUND, as for an object deleted elsewhere
 //   ssis/fail           ssis.describe answers a retryable TIMEOUT
 //   ssis/many           ssis.describe gives the project as many packages, parameters and references as one read returns
@@ -290,7 +291,7 @@ const waitingScripts = new Map()
 // Each tab's session: its SPID, open transaction count and compile-only options, until query.session.close or its
 // connection's disconnect.
 const sessions = new Map()
-let nextSpid = 51
+let nextSpid = controlDirectory && existsSync(join(controlDirectory, 'wide-session-ids')) ? 10000 : 51
 /** Applies a script's BEGIN TRAN, COMMIT and ROLLBACK to its session, as SQL Server would count them in @@TRANCOUNT. */
 function runInSession({ sessionId, connectionId, sql }) {
   const session = sessions.get(sessionId) ?? { spid: nextSpid++, connectionId, transactions: 0, compileOnly: new Set() }

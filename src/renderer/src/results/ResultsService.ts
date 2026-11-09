@@ -730,12 +730,17 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** A save's outcome: announced, and shown in the toolbar until the next run or save, or for a few seconds. */
   /** Shows `text` in the tab's results toolbar for a few seconds and reads it out. */
   /** Adds a result Varia made from the run's own (a diff, results.diff) after the run ended, as its last set, named
-   *  `label`; it is released with the run's others. Returns its index, or undefined when the run is gone, still running,
-   *  or has its most sets. */
-  addSet(tabId: string, descriptor: ResultDescriptor, label: string): number | undefined {
+   *  `label`; it is released with the run's others. `sources` are the set keys it was made from: a run without them (a
+   *  newer one) does not take it. Returns its index, or undefined when the run is gone, still running, lacks a source, or
+   *  has its most sets; the result is then released, since nothing else would close it. */
+  addSet(tabId: string, descriptor: ResultDescriptor, label: string, sources: readonly string[] = []): number | undefined {
     const run = this.runs.get(tabId)
     const key = setKey(descriptor)
-    if (!run || run.status === 'running' || run.status === 'closed' || run.setKeys.has(key) || run.sets.length >= resultLimits.sets) return undefined
+    if (run?.setKeys.has(key)) return undefined
+    if (!run || run.status === 'running' || run.status === 'closed' || run.sets.length >= resultLimits.sets || sources.some(source => !run.setKeys.has(source))) {
+      void this.client.release([{ generation: descriptor.generation, resultId: descriptor.resultId }]).catch(() => {})
+      return undefined
+    }
     run.setKeys.add(key)
     if (run.setsPublished) { run.sets = run.sets.slice(); run.setsPublished = false }
     const index = run.sets.length

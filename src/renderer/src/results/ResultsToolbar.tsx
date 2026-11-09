@@ -5,7 +5,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { useCommandEnabled } from '../core/useCommand'
 import type { WhitespaceMode } from '../grid/whitespace'
 import Icon from '../Icon'
-import { searchCount, type SearchMode } from './search'
+import { searchBoxKeyAction, searchCount, type SearchMode } from './search'
 import { formatCount } from './status'
 
 interface Choice<T> { readonly mode: T; readonly label: string; readonly title: string; readonly command?: CommandId }
@@ -31,7 +31,8 @@ const searchModes: readonly { readonly mode: SearchMode; readonly label: string;
 
 /**
  * The search box: its text searches every grid of the run (ResultsSearchService), Enter and Shift+Enter step through the
- * matches, Escape clears it. It is its own Tab stop, so Left and Right stay with its text.
+ * matches, Escape clears it and, in an empty box, returns to the grid. It is its own Tab stop, so Left and Right stay with
+ * its text.
  */
 function ResultsSearchBox({ tabId }: { tabId: string }) {
   const { resultsSearch } = useWorkbench()
@@ -42,8 +43,16 @@ function ResultsSearchBox({ tabId }: { tabId: string }) {
   // the box is shown only after it (the Messages view), and not again each time the box is shown.
   useEffect(() => { if (resultsSearch.takeFocus(tabId)) { inputRef.current?.focus(); inputRef.current?.select() } }, [focus, resultsSearch, tabId])
   const keyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Enter' && !event.altKey && !event.ctrlKey && !event.metaKey) { event.preventDefault(); resultsSearch.step(tabId, event.shiftKey ? -1 : 1) }
-    else if (event.key === 'Escape' && search.text) { event.preventDefault(); event.stopPropagation(); resultsSearch.clear(tabId) }
+    const action = searchBoxKeyAction(event.nativeEvent, !!search.text)
+    if (!action) return
+    event.preventDefault()
+    if (action === 'next' || action === 'previous') { resultsSearch.step(tabId, action === 'next' ? 1 : -1); return }
+    event.stopPropagation()
+    if (action === 'clear') { resultsSearch.clear(tabId); return }
+    // Escape in an empty box goes back to the grid that last had the focus (the one F6 focuses), in the box's own window
+    // (a popped-out Results panel has its own document).
+    const grids = [...event.currentTarget.ownerDocument.querySelectorAll<HTMLElement>(`[data-result-grid][data-tab-id="${CSS.escape(tabId)}"]`)]
+    ;(grids.find(grid => grid.dataset.paneFocus === 'selected') ?? grids[0])?.focus()
   }
   const count = searchCount(search, formatCount)
   const columns = search.mode === 'columns'
@@ -52,7 +61,9 @@ function ResultsSearchBox({ tabId }: { tabId: string }) {
     <input ref={inputRef} type="text" spellCheck={false} maxLength={1024} aria-label={columns ? 'Search column names' : 'Search results'} placeholder={columns ? 'Search column names' : 'Search all results'}
       value={search.text} title={search.approximate ? 'Some long values were searched only as far as they were stored.' : undefined}
       onChange={event => resultsSearch.setText(tabId, event.target.value)} onKeyDown={keyDown} />
-    <span className="results-search-count" role="status" aria-live="polite" title={search.error}>{count}</span>
+    {/* The count follows each keystroke and grid; the live region says only the settled count (TabSearch.announcement). */}
+    <span className="results-search-count" title={search.error}>{count}</span>
+    <span className="visually-hidden" role="status" aria-live="polite">{search.announcement}</span>
     <button type="button" tabIndex={-1} aria-label="Previous match" title="Previous match (Shift+Enter)" disabled={search.total === 0} onClick={() => resultsSearch.step(tabId, -1)}><Icon name="arrow-up" /></button>
     <button type="button" tabIndex={-1} aria-label="Next match" title="Next match (Enter)" disabled={search.total === 0} onClick={() => resultsSearch.step(tabId, 1)}><Icon name="arrow-down" /></button>
     <div className="results-segments" role="group" aria-label="Search in">

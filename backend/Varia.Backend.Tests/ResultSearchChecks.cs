@@ -38,6 +38,10 @@ internal static class ResultSearchChecks
         Runs(check);
         Dispatch(check);
         Large(check);
+        Stopping(check);
+        Bounded(check);
+        Edges(check);
+        DiffTone(check);
     }
 
     private static ResultSetBuffer Fill(ResultStore store)
@@ -61,7 +65,7 @@ internal static class ResultSearchChecks
     }
 
     private static SearchOutcome Find(ResultSetBuffer set, string text, long fromRow = 0, bool backward = false, int max = ResultSearcher.MaxMatches, ResultView? view = null) =>
-        ResultSearcher.Search(set, set.SealedSnapshot(), view, text, fromRow, backward, max, CancellationToken.None);
+        ResultSearcher.Search(set, set.SealedSnapshot(), view, text, fromRow, backward, max, CancellationToken.None)!;
 
     private static string Show(SearchOutcome found) => string.Join(",", found.Rows.Zip(found.Columns).Select(pair => pair.First + ":" + pair.Second));
 
@@ -163,5 +167,174 @@ internal static class ResultSearchChecks
         check(forward.Total == count / 3 && forward.Rows.Length == ResultSearcher.MaxMatches && forward.Rows[^1] == 3L * (ResultSearcher.MaxMatches - 1)
             && backward.Rows.SequenceEqual([count - 9L, count - 6, count - 3]) && backward.First == count / 3 - 3,
             "over many pages a forward run stops at 10,000 matches, and a backward one keeps the last rows before its row");
+        // A view in reverse order reads its rows from every page, last page first (Source's binary search through a view).
+        var reversed = Enumerable.Range(0, count).Select(row => count - 1 - row).ToArray();
+        var view = store.AddView(set, reversed, [new ViewKey(0, true, SortMode.Value)], false, true, 0, null);
+        var viewed = Find(set, "match", view: view);
+        var viewedBack = Find(set, "match", count, true, 3, view);
+        check(set.SealedSnapshot().Length > 2 && viewed.Total == count / 3 && viewed.Rows[0] == 2 && viewed.Rows[^1] == 3L * (ResultSearcher.MaxMatches - 1) + 2
+            && viewedBack.Rows.SequenceEqual([count - 7L, count - 4, count - 1]) && viewedBack.First == count / 3 - 3,
+            "a search through a view over many pages finds each row's matches at its view position, forward and backward");
+    }
+
+    /// <summary>A result of columns filled from rows of cells (null for NULL, byte[] for binary), with the cells
+    /// <paramref name="truncated"/> names stored truncated.</summary>
+    private static ResultSetBuffer Build(ResultStore store, ResultColumn[] columns, IEnumerable<object?[]> rows, Func<int, int, bool>? truncated = null)
+    {
+        var wires = columns.Select(column => column.Wire == "binary" ? WireKind.Binary : WireKind.Text).ToArray();
+        var set = store.Open(store.BeginQuery("search"), 0, 1, 1, "rows", columns, wires) ?? throw new InvalidOperationException("The result set was not kept.");
+        var r = 0;
+        foreach (var row in rows)
+        {
+            set.CountRow();
+            var builder = set.BeginRow()!;
+            for (var c = 0; c < row.Length; c++)
+            {
+                var cut = truncated?.Invoke(r, c) == true;
+                if (row[c] is null) builder.AppendNull();
+                else if (row[c] is byte[] bytes) builder.AppendBinary(bytes, cut);
+                else builder.AppendText((string)row[c]!, cut);
+            }
+            set.TryCommitRow();
+            r++;
+        }
+        set.Complete();
+        return set;
+    }
+
+    private static ResultSetBuffer Matches(ResultStore store, int count) =>
+        Build(store, [new("name", "varchar", "text")], Enumerable.Range(0, count).Select(_ => new object?[] { "match" }));
+
+    /// <summary>A release or a view's close during a search stops it at its next checkpoint with no outcome (#350, #353),
+    /// and checkpoints come per work done, not per 1,024 rows (#352).</summary>
+    private static void Stopping(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        const int count = 30_000;
+        var set = Matches(store, count);
+        var stopped = ResultSearcher.Stopped(store, set, null);
+        var calls = 0;
+        var released = ResultSearcher.Search(set, set.SealedSnapshot(), null, "match", 0, false, 10, CancellationToken.None, () =>
+        {
+            if (++calls == 2) store.Release(set.ResultId);
+            return stopped();
+        });
+        check(released is null && calls == 2, "a result released during a search stops it at the next checkpoint, with no outcome (" + calls + " checkpoints)");
+
+        var viewed = Matches(store, count);
+        var view = store.AddView(viewed, Enumerable.Range(0, count).ToArray(), [new ViewKey(0, false, SortMode.Value)], false, true, 0, null);
+        var viewStopped = ResultSearcher.Stopped(store, viewed, view);
+        calls = 0;
+        var closed = ResultSearcher.Search(viewed, viewed.SealedSnapshot(), view, "match", 0, false, 10, CancellationToken.None, () =>
+        {
+            if (++calls == 2) store.CloseViews(viewed.ResultId, [view.ViewId]);
+            return viewStopped();
+        });
+        check(closed is null && calls == 2, "a view closed during a search through it stops the search at the next checkpoint, with no outcome");
+
+        // A release between FindView and the snapshot empties it: no outcome, not an IndexOutOfRangeException.
+        var raced = Matches(store, 10);
+        var racedView = store.AddView(raced, Enumerable.Range(0, 10).ToArray(), [new ViewKey(0, false, SortMode.Value)], false, true, 0, null);
+        store.Release(raced.ResultId);
+        SearchOutcome? empty = null;
+        var threw = false;
+        try { empty = ResultSearcher.Search(raced, raced.SealedSnapshot(), racedView, "match", 0, false, 10, CancellationToken.None); }
+        catch (Exception) { threw = true; }
+        check(!threw && empty is null && raced.SealedSnapshot().Length == 0, "a view search over a snapshot emptied by a release answers no outcome rather than failing");
+
+        // Wide rows check at least once per row, and so do long values, not once per 1,024 rows.
+        const int wide = 4096;
+        var wideSet = Build(store, [.. Enumerable.Range(0, wide).Select(c => new ResultColumn("c" + c, "varchar", "text"))],
+            Enumerable.Range(0, 8).Select(_ => Enumerable.Repeat<object?>("abcdefgh", wide).ToArray()));
+        calls = 0;
+        ResultSearcher.Search(wideSet, wideSet.SealedSnapshot(), null, "zz", 0, false, 10, CancellationToken.None, () => { calls++; return false; });
+        var longCalls = 0;
+        var longSet = Build(store, [new("doc", "nvarchar", "text")], Enumerable.Range(0, 4).Select(_ => new object?[] { new string('x', ResultSearcher.CheckEvery) }));
+        ResultSearcher.Search(longSet, longSet.SealedSnapshot(), null, "zz", 0, false, 10, CancellationToken.None, () => { longCalls++; return false; });
+        check(calls >= 8 && longCalls >= 4, "a search of wide or long-valued rows reaches a checkpoint at least once per row (" + calls + ", " + longCalls + ")");
+        // A long text costs per cell compared: 1,000 one-letter cells against 1,024 characters are over 16 checkpoints of work.
+        var shortCalls = 0;
+        var shortSet = Build(store, [new("c", "varchar", "text")], Enumerable.Range(0, 1000).Select(_ => new object?[] { "a" }));
+        ResultSearcher.Search(shortSet, shortSet.SealedSnapshot(), null, new string('z', ResultSearcher.MaxText), 0, false, 10, CancellationToken.None, () => { shortCalls++; return false; });
+        check(shortCalls >= 10, "a long search text counts toward the work between checkpoints for every cell it is compared with (" + shortCalls + ")");
+    }
+
+    /// <summary>Parsed page layouts are bounded: one in base order, LayoutCacheBytes through a view (#351).</summary>
+    private static void Bounded(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        const int wide = 4096, count = 120;
+        var set = Build(store, [.. Enumerable.Range(0, wide).Select(c => new ResultColumn("c" + c, "varchar", "text"))],
+            Enumerable.Range(0, count).Select(_ => Enumerable.Repeat<object?>("v", wide).ToArray()));
+        var pages = set.SealedSnapshot();
+        var layout = 4L * PageView.ScratchLength(wide);
+        var baseOrder = new ResultSearcher.Source(pages, wide, 1);
+        for (var row = 0; row < count; row++) baseOrder.ViewOf(row, out _);
+        var viewOrder = new ResultSearcher.Source(pages, wide, (int)(ResultSearcher.LayoutCacheBytes / layout));
+        for (var row = count - 1; row >= 0; row--) viewOrder.ViewOf(row, out _);
+        check(pages.Length > ResultSearcher.LayoutCacheBytes / layout + 1 && baseOrder.LayoutBytes == layout && viewOrder.LayoutBytes <= ResultSearcher.LayoutCacheBytes,
+            "a search of a wide result keeps one page layout in base order and at most 1 MiB of them through a view (" + pages.Length + " pages, "
+            + baseOrder.LayoutBytes + ", " + viewOrder.LayoutBytes + " bytes)");
+        var reversed = Enumerable.Range(0, count).Select(row => count - 1 - row).ToArray();
+        var view = store.AddView(set, reversed, [new ViewKey(0, true, SortMode.Value)], false, true, 0, null);
+        var found = Find(set, "v", 0, false, 3 * wide, view);
+        check(found.Total == (long)wide * count && found.Rows.Length == 3 * wide && found.Rows[^1] == 2, "a search through a view of a wide result reads its rows through the bounded layouts");
+    }
+
+    /// <summary>Ignorable text (#354), an unknown locale, an oversized backward row and a truncated binary column (#356).</summary>
+    private static void Edges(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        var set = Fill(store);
+        check(Find(set, "​").Total == 0 && Find(set, "­").Total == 0 && Find(set, "​cafe").Total == 3,
+            "text of only ignorable characters is looked for as written, matching no cell, while ignorables beside other text stay ignored (the hex column skips it)");
+        var withSpace = Build(store, [new("name", "nvarchar", "text", Collation: CaseAccentInsensitive)], [["a​b"], ["ab"]]);
+        check(Show(Find(withSpace, "​")) == "0:0", "a cell holding an ignorable character is found by it");
+
+        var unknown = new ResultCollation(0x7F7F, 0, 1252, false, 1 | 2);
+        var local = Build(store, [new("name", "nvarchar", "text", Collation: unknown)], [["Café"], ["CAFE"], ["cafe"]]);
+        check(ViewSorter.Culture(unknown) is null && Show(Find(local, "cafe")) == "1:0,2:0",
+            "a locale this runtime does not know compares by its case flag alone, not its accent flag (" + Show(Find(local, "cafe")) + ")");
+
+        var all = Build(store, [new("a", "varchar", "text"), new("b", "varchar", "text"), new("c", "varchar", "text")], Enumerable.Range(0, 3).Select(_ => new object?[] { "a", "a", "a" }));
+        var back = Find(all, "a", 3, true, 2);
+        var forward = Find(all, "a", 0, false, 2);
+        check(Show(back) == "2:0,2:1,2:2" && back.First == 6 && back.Total == 9 && Show(forward) == "0:0,0:1,0:2" && forward.First == 0,
+            "a run whose one row holds more matches than its size keeps that whole row, backward and forward");
+
+        var binary = Build(store, [new("blob", "varbinary", "binary"), new("note", "varchar", "text")], [[new byte[] { 0xAB, 0xCD }, "x"]], (_, column) => column == 0);
+        check(Find(binary, "q") is { Total: 0, Approximate: false } && Find(binary, "ab") is { Total: 1, Approximate: false } && Find(binary, "ef") is { Total: 0, Approximate: true },
+            "a truncated binary cell is skipped for text that is not hex, leaving the outcome exact, and searched by its prefix for hex");
+    }
+
+    /// <summary>A diff result's hidden tone column (its "added 3 5" text) never matches (#367).</summary>
+    private static void DiffTone(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        using var service = new SqlService(store);
+        T Call<T>(string method, object args) => (T)service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult()!;
+        ResultColumn[] columns = [new("id", "int", "text"), new("name", "varchar", "text")];
+        var budget = store.BeginQuery("diff");
+        ResultSetBuffer Side(int index, string[][] rows)
+        {
+            var set = store.Open(budget, index, 1, 1, "rows", columns, [WireKind.Text, WireKind.Text])!;
+            foreach (var row in rows)
+            {
+                set.CountRow();
+                var builder = set.BeginRow()!;
+                foreach (var cell in row) builder.AppendText(cell);
+                set.TryCommitRow();
+            }
+            set.Complete();
+            return set;
+        }
+        var left = Side(0, [["1", "a"], ["2", "b"]]);
+        var right = Side(1, [["1", "a"], ["2", "b"], ["3", "c"]]);
+        var diff = Call<ResultsDiffResult>("results.diff", new { left = left.ResultId, right = right.ResultId });
+        var added = Call<ResultsSearchResult>("results.search", new { resultId = diff.Descriptor.ResultId, text = "added", fromRow = 0, maxMatches = 100 });
+        var three = Call<ResultsSearchResult>("results.search", new { resultId = diff.Descriptor.ResultId, text = "3", fromRow = 0, maxMatches = 100 });
+        var tone = diff.Descriptor.Columns.ToList().FindIndex(ResultTextWriter.Hidden);
+        check(tone >= 0 && diff.Added == 1 && added.Total == 0 && three.Total == 2 && three.MatchColumns.All(column => column != tone),
+            "a search of a diff result skips its hidden tone column: \"added\" matches nothing and a digit only the grid's cells, R2 and id (" + added.Total + ", " + three.Total + ")");
     }
 }

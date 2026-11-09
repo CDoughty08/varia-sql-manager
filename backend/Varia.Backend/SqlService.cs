@@ -357,7 +357,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "results.identify" => await IdentifyAsync(Read<ResultsIdentifyArgs>(parameters, json), Token(context)),
         "results.rowIds" => RowIds(Read<ResultsRowIdsArgs>(parameters, json)),
         "results.findRows" => await FindRowsAsync(Read<ResultsFindRowsArgs>(parameters, json), Token(context)),
-        "results.diff" => await DiffAsync(Read<ResultsDiffArgs>(parameters, json), Token(context)),
+        "results.diff" => await DiffAsync(Read<ResultsDiffArgs>(parameters, json), context),
         "results.search" => await SearchAsync(Read<ResultsSearchArgs>(parameters, json), Token(context)),
         "results.profile" => await ProfileAsync(Read<ResultsProfileArgs>(parameters, json), Token(context)),
         "results.copy" => await jobs.CopyAsync(Read<ResultsCopyArgs>(parameters, json), context),
@@ -1558,7 +1558,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     }
 
     /// <summary>results.search: finds the cells containing a text (ResultSearcher) off the frame loop, over the rows sealed now
-    /// or a view's; what it holds is a run of at most 10,000 matches and one row's, so it reserves nothing.</summary>
+    /// or a view's; what it holds is a run of at most 10,000 matches and one row's and at most 1 MiB of page layouts, so it
+    /// reserves nothing. It stops at its next checkpoint once the result is released or the view closed.</summary>
     private async Task<ResultsSearchResult> SearchAsync(ResultsSearchArgs args, CancellationToken token)
     {
         if (args.ResultId == 0 || args.Text is not { Length: >= 1 and <= ResultSearcher.MaxText } || args.FromRow is < 0 or > MaxSafeInteger
@@ -1568,9 +1569,11 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var complete = view?.Complete ?? set.IsComplete;
         var pages = set.SealedSnapshot();
-        var found = await Task.Run(() => ResultSearcher.Search(set, pages, view, args.Text, args.FromRow, args.Backward, args.MaxMatches, token), token);
-        if (set.IsReleased) throw Unavailable(args.ResultId);
-        if (view is not null && !store.HasView(view)) throw ViewClosed();
+        var stopped = ResultSearcher.Stopped(store, set, view);
+        var found = await Task.Run(() => ResultSearcher.Search(set, pages, view, args.Text, args.FromRow, args.Backward, args.MaxMatches, token, stopped), token);
+        // A release can also come between FindView and the snapshot (which it empties): the search then answers no outcome.
+        if (set.IsReleased || (found is null && view is null)) throw Unavailable(args.ResultId);
+        if (found is null || (view is not null && !store.HasView(view))) throw ViewClosed();
         return new ResultsSearchResult(found.Searched, found.Total, found.First, found.Rows, found.Columns, complete, found.Approximate);
     }
 
@@ -1688,9 +1691,11 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     public const int MaxDiffContext = 100, MaxDiffColumnNames = 64;
 
     /// <summary>results.diff: aligns two complete results of one query off the frame loop (ResultDiffer), charging its working
-    /// memory to their query budget, and stores the unified diff as a new result of the query, released with its others.</summary>
-    private async Task<ResultsDiffResult> DiffAsync(ResultsDiffArgs args, CancellationToken token)
+    /// memory to their query budget, and stores the unified diff as a new result of the query, released with its others, or
+    /// at once when its answer is not sent (a CANCEL or the deadline came first).</summary>
+    private async Task<ResultsDiffResult> DiffAsync(ResultsDiffArgs args, RequestContext? context)
     {
+        var token = Token(context);
         if (args.Left == 0 || args.Right == 0 || args.Left == args.Right || args.Context is < -1 or > MaxDiffContext)
             throw new RequestException("INVALID_PARAMS", "Two different results and a context of -1 to 100 rows are required.");
         var left = store.Find(args.Left) ?? throw Unavailable(args.Left);
@@ -1725,6 +1730,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 store.Release(set.ResultId);
                 throw;
             }
+            if (context is not null) context.Unsent = context.Dropped = () => store.Release([set.ResultId]);
             var (same, changed, added, removed, soft) = model.Counts();
             var paired = model.Pairs;
             string[] OneSided(IReadOnlyList<ResultColumn> columns, Func<(int Left, int Right), int> side) =>

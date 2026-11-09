@@ -140,7 +140,7 @@ function DocumentPanel({ api }: IDockviewPanelProps) {
 }
 
 /** A document's tab: its kind, name, environment, read-only, running and unsaved marks, and Close; double-click renames it. */
-function DocumentTab({ api }: IDockviewPanelHeaderProps) {
+function DocumentTab({ api, containerApi }: IDockviewPanelHeaderProps) {
   const workbench = useWorkbench(), id = api.id
   const tab = useServiceSelector(workbench.documents, snapshot => snapshot.documents.find(document => document.id === id))
   const busy = useServiceSelector(workbench.documents, snapshot => snapshot.busy)
@@ -164,13 +164,19 @@ function DocumentTab({ api }: IDockviewPanelHeaderProps) {
   const description = [environmentTag(environment)?.description, tab?.pinned && 'Pinned', spid !== undefined && session].filter(Boolean).join('. ') || undefined
   const tooltip = tab ? tabTooltip(tab) : ''
   useEffect(() => {
-    const host = element.current?.closest<HTMLElement>('.dv-tab')
-    if (!host) return
-    host.dataset.documentTab = ''
-    host.title = tooltip
-    if (description) host.setAttribute('aria-description', description)
-    else host.removeAttribute('aria-description')
-  }, [description, tooltip])
+    const update = () => {
+      const host = element.current?.closest<HTMLElement>('.dv-tab')
+      if (!host) return
+      host.dataset.documentTab = ''
+      host.title = tooltip
+      if (description) host.setAttribute('aria-description', description)
+      else host.removeAttribute('aria-description')
+    }
+    update()
+    // Moving or reordering a panel replaces its native tab wrapper while retaining this React header.
+    const layout = containerApi.onDidLayoutChange(update)
+    return () => layout.dispose()
+  }, [containerApi, description, tooltip])
   const name = tab?.name
   // The SID chip stays on whole pixels as its text changes. Shelf columns already keep tab origins on whole pixels.
   const sidText = tab && isQueryDocument(tab) ? String(spid ?? '') : undefined
@@ -608,6 +614,9 @@ class EditorAreaController implements Area, EditorGroupHost {
   focusedDocument(): string | undefined {
     const tab = document.activeElement?.closest('.dv-tab')
     return tab && this.root?.contains(tab) ? tab.querySelector('[data-tab-id]')?.getAttribute('data-tab-id') ?? undefined : undefined
+  }
+  focusTab(id: string): void {
+    this.root?.querySelector<HTMLElement>(`.dv-tab[data-tab-panel-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true })
   }
   capture(place: (id: string) => number | undefined): EditorGroupsLayout | undefined {
     return this.api ? captureEditorGroups(this.api.toJSON(), place) : undefined

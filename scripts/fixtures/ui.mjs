@@ -49,6 +49,8 @@ export const part = {
   querySegment: '.query-status-segment',
   // Document tabs
   tabName: '.tab-name',
+  /** The tab's bounded name, environment and live-session area, before Pin and Close. */
+  tabSelect: '.tab-select',
   /** Editor groups (src/renderer/src/editor-groups/): Dockview's groups inside the query editor panel, and the active one. */
   /** The editor area in the Query editor panel: every editor group, under the active query's bar. */
   editorArea: '.editor-groups-root',
@@ -61,6 +63,8 @@ export const part = {
   // Query output
   outputPanel: 'section[data-output-panel]',
   outputAnnouncer: '[data-output-announcer]',
+  /** The results search box's count, drawn only: the toolbar's live region says the settled count (resultsSearchAnnouncer). */
+  resultsSearchCount: '.results-search-count',
   outputToolbar: '.output-toolbar',
   outputStatus: '.output-status',
   jobProgress: '.job-strip:not(.job-notice)',
@@ -477,6 +481,9 @@ export const outputAnnouncer = page => page.locator(part.outputAnnouncer)
 export const outputToolbar = page => outputPane(page).locator(part.outputToolbar)
 /** The tools above a run's grids (White space, and the result tools that follow). */
 export const resultsToolbar = page => page.getByRole('toolbar', { name: 'Results tools', exact: true })
+/** The results search box's visible count, and its live region, which says only the settled count. */
+export const resultsSearchCount = page => resultsToolbar(page).locator(part.resultsSearchCount)
+export const resultsSearchAnnouncer = page => resultsToolbar(page).getByRole('status')
 export const outputStatus = page => outputPane(page).locator(part.outputStatus)
 /** The column profile panel beside a run's grids, and one column's card in it. */
 export const columnProfile = page => page.getByRole('complementary', { name: 'Column profile', exact: true })

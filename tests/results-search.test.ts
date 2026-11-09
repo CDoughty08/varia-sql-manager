@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
+import { focusInRun } from '../src/renderer/src/grid/GridView'
 import { cellKey } from '../src/renderer/src/grid/marks'
-import type { ResultHandle, SearchOptions } from '../src/renderer/src/results/ResultClient'
+import { ResultError, type ResultHandle, type SearchOptions } from '../src/renderer/src/results/ResultClient'
 import type { GridSort, ResultSetEntry, TabResults } from '../src/renderer/src/results/ResultsService'
-import { ResultsSearchService, searchCount, searchDelayMs, type TabSearch } from '../src/renderer/src/results/search'
+import { announceDelayMs, ResultsSearchService, searchAnnouncement, searchBoxKeyAction, searchCount, searchDelayMs, type TabSearch } from '../src/renderer/src/results/search'
 import type { ResultColumn, ResultDescriptor, ResultsSearchResult } from '../src/shared/contracts'
 import { manualTimers } from './fixtures/workbench'
 
@@ -231,5 +232,166 @@ describe('ResultsSearchService', () => {
     // The box takes it once: a box shown again later (a new run's results) leaves the focus where it is.
     expect(service.takeFocus('t1')).toBe(true)
     expect(service.takeFocus('t1')).toBe(false)
+  })
+
+  // #346
+  it('says so in the count when the run read for a step fails, and reads again after a step', async () => {
+    const { service, searches, set, show, answerAll, search, settle } = fixture({ maxMatches: 1 })
+    show([set(0, ['a'], [[1, 0], [5, 0], [9, 0]])])
+    service.setText('t1', 'x', true)
+    await answerAll()
+    expect(searchCount(search(), String)).toBe('1 of 3')
+    service.step('t1', 1)
+    searches.shift()!.reject(new Error('The results could not be searched.'))
+    await settle()
+    // Nothing is marked for the active match, so the count does not read "2 of 3".
+    expect(search()).toMatchObject({ status: 'failed', error: 'The results could not be searched.', total: 3, current: 1 })
+    expect(searchCount(search(), String)).toBe('Search failed')
+    service.step('t1', 1)
+    expect(search().status).toBe('done')
+    await answerAll()
+    expect(search()).toMatchObject({ status: 'done', current: 2 })
+    expect(search().marks.get(0)!.current).toEqual({ row: 9, column: 0 })
+  })
+
+  it('searches again, keeping its place, when the rows a step reads were released, and says a failure if that read fails again', async () => {
+    const { service, searches, set, show, answerAll, search, settle } = fixture({ maxMatches: 1 })
+    show([set(0, ['a'], [[1, 0], [5, 0], [9, 0]])])
+    service.setText('t1', 'x', true)
+    await answerAll()
+    service.step('t1', 1)
+    searches.shift()!.reject(new ResultError('RESULT_RELEASED', 'These results were closed.'))
+    await settle()
+    // A search again from the first row, not a failure.
+    expect(searches).toHaveLength(1)
+    expect(searches[0]).toMatchObject({ fromRow: 0 })
+    expect(search().status).toBe('searching')
+    searches.shift()!.resolve()
+    await settle()
+    // Its place is outside the run the search returned: the run read again, released again, fails this time.
+    expect(searches).toHaveLength(1)
+    searches.shift()!.reject(new ResultError('RESULT_RELEASED', 'These results were closed.'))
+    await settle()
+    expect(searches).toHaveLength(0)
+    expect(search()).toMatchObject({ status: 'failed', current: 1 })
+  })
+
+  // #347
+  it('announces only the settled count, once it has held for a moment, and steps from a grid select the match', async () => {
+    const { service, advance, set, show, answerAll, search, searches, settle } = fixture()
+    show([set(0, ['a'], [[2, 0], [5, 0]]), set(1, ['b'], [[1, 0]])])
+    service.setText('t1', 'a')
+    advance(searchDelayMs / 2)
+    service.setText('t1', 'ab')
+    advance(searchDelayMs)
+    expect(search().announcement).toBe('')
+    // One grid in: the count shows it, but the live region waits for the search to end.
+    searches.shift()!.resolve()
+    await settle()
+    expect(searchCount(search(), String)).toBe('1 of 2+')
+    advance(announceDelayMs * 2)
+    expect(search().announcement).toBe('')
+    await answerAll()
+    expect(searchCount(search(), String)).toBe('1 of 3')
+    advance(announceDelayMs - 1)
+    expect(search().announcement).toBe('')
+    advance(1)
+    expect(search().announcement).toBe('1 of 3 matches')
+    // Steps in quick succession say only where they end.
+    service.step('t1', 1)
+    advance(announceDelayMs / 2)
+    service.step('t1', 1)
+    advance(announceDelayMs / 2)
+    expect(search().announcement).toBe('1 of 3 matches')
+    advance(announceDelayMs / 2)
+    expect(search().announcement).toBe('3 of 3 matches')
+    expect(search().revealSelect).toBe(false)
+    service.step('t1', 1, true)
+    expect(search().revealSelect).toBe(true)
+    service.step('t1', 1)
+    expect(search().revealSelect).toBe(false)
+    // An emptied box is silent at once.
+    service.clear('t1')
+    expect(search().announcement).toBe('')
+    expect(searchAnnouncement({ text: 'x', mode: 'values', status: 'failed', total: 0, current: -1, columns: 0, partial: false, error: 'Lost.' }, String)).toBe('Search failed: Lost.')
+    expect(searchAnnouncement({ text: 'x', mode: 'columns', status: 'done', total: 2, current: 0, columns: 7, partial: false }, String)).toBe('2 of 7 columns')
+  })
+
+  it('says a new search\'s count even when it is the same as the last search\'s', async () => {
+    const { service, set, show, answerAll, search, advance } = fixture()
+    show([set(0, ['a'], [[2, 0], [5, 0]])])
+    service.setText('t1', 'x', true)
+    await answerAll()
+    advance(announceDelayMs)
+    expect(search().announcement).toBe('1 of 2 matches')
+    // The live region empties as the new search starts, so the same words are said again once it settles.
+    service.setText('t1', 'xy', true)
+    expect(search().announcement).toBe('')
+    await answerAll()
+    advance(announceDelayMs)
+    expect(search().announcement).toBe('1 of 2 matches')
+  })
+
+  it('leaves a run read that fails while a search again runs to that search, and a step from a grid keeps its select through it', async () => {
+    const { service, searches, set, show, answerAll, search, settle, sorts } = fixture({ maxMatches: 1 })
+    const sets = [set(0, ['a'], [[1, 0], [5, 0], [9, 0]])]
+    show(sets)
+    service.setText('t1', 'x', true)
+    await answerAll()
+    // A sort swaps the grid: the search runs again; F3 in the grid steps outside the held run meanwhile.
+    const view = { key: { generation: 1, resultId: 1, view: 9 }, viewId: 9, search: sets[0].handle.search } as unknown as NonNullable<GridSort['view']>
+    sorts.set(0, { keys: [], view, sorting: false, approximate: false, stale: false })
+    show(sets)
+    expect(searches).toHaveLength(1)
+    service.step('t1', 1, true)
+    expect(searches).toHaveLength(2)
+    // The view that read was closed by the swap: no "Search failed", the search again reads the run when it ends.
+    searches.pop()!.reject(new ResultError('RESULT_RELEASED', 'These results were closed.'))
+    await settle()
+    expect(search()).toMatchObject({ status: 'searching' })
+    expect(search().error).toBeUndefined()
+    const reveal = search().reveal
+    await answerAll()
+    expect(search()).toMatchObject({ status: 'done', current: 1, revealSelect: true, reveal: reveal + 1 })
+    expect(search().marks.get(0)!.current).toEqual({ row: 5, column: 0 })
+  })
+
+  it('selects for a waiting reveal only while the focus is still in one of the run\'s grids', () => {
+    const root = { dataset: { tabId: 't1' } } as unknown as HTMLElement
+    const inGrid = (tabId: string | undefined) => ({ closest: () => (tabId === undefined ? null : { dataset: { tabId } }) }) as unknown as Element
+    expect(focusInRun(root, inGrid('t1'))).toBe(true)
+    // The editor, the search box, another tab's grid, or nothing focused.
+    expect(focusInRun(root, inGrid(undefined))).toBe(false)
+    expect(focusInRun(root, inGrid('t2'))).toBe(false)
+    expect(focusInRun(root, null)).toBe(false)
+    // A live grid names no tab.
+    expect(focusInRun({ dataset: {} } as unknown as HTMLElement, inGrid('t1'))).toBe(false)
+  })
+
+  it('steps with Enter and clears or leaves with Escape, but not for the Enter that commits an IME composition (#347, #348)', () => {
+    const key = (k: string, o: Partial<KeyboardEvent> = {}) => ({ key: k, shiftKey: false, altKey: false, ctrlKey: false, metaKey: false, isComposing: false, keyCode: 0, ...o })
+    expect(searchBoxKeyAction(key('Enter'), true)).toBe('next')
+    expect(searchBoxKeyAction(key('Enter', { shiftKey: true }), true)).toBe('previous')
+    expect(searchBoxKeyAction(key('Enter', { isComposing: true }), true)).toBeUndefined()
+    expect(searchBoxKeyAction(key('Enter', { keyCode: 229 }), true)).toBeUndefined()
+    expect(searchBoxKeyAction(key('Enter', { ctrlKey: true }), true)).toBeUndefined()
+    expect(searchBoxKeyAction(key('Escape'), true)).toBe('clear')
+    expect(searchBoxKeyAction(key('Escape'), false)).toBe('leave')
+    expect(searchBoxKeyAction(key('Escape', { isComposing: true }), false)).toBeUndefined()
+    expect(searchBoxKeyAction(key('a'), true)).toBeUndefined()
+  })
+
+  // #367
+  it('never matches or counts a diff\'s or live table\'s hidden tone column in a column-name search', () => {
+    const { service, set, show, search } = fixture()
+    const diff = set(0, ['id', 'note', 'tone'], [])
+    ;(diff.descriptor.columns as ResultColumn[])[2] = { ...column('tone'), dataType: 'nvarchar', role: 'tone' }
+    show([diff])
+    service.setMode('t1', 'columns')
+    service.setText('t1', 'o', true)
+    expect(search()).toMatchObject({ total: 1, columns: 2 })
+    expect([...search().marks.get(0)!.columns!]).toEqual([0, 1, 0])
+    service.setText('t1', 'tone', true)
+    expect(searchCount(search(), String)).toBe('0 of 2 columns')
   })
 })

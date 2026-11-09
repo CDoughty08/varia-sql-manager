@@ -155,3 +155,16 @@ export function mountedRange(layout: Pick<StackLayout, 'heights' | 'offsets'>, s
   }
   return [first, last]
 }
+
+/**
+ * Where the stack scrolls to bring grid `index` into view ('nearest'), or undefined when it is in view already or the
+ * stack has no height yet: a layout made for a 0 px pane places the grids where they will not be, and the saved scroll
+ * position restored once the pane has its height would undo the scroll anyway, so the reveal waits for the height.
+ */
+export function revealScrollTop(layout: Pick<StackLayout, 'heights' | 'offsets'>, index: number, scrollTop: number, viewportHeight: number): number | undefined {
+  if (viewportHeight <= 0 || index < 0 || index >= layout.offsets.length) return undefined
+  const top = layout.offsets[index], bottom = top + layout.heights[index]
+  if (top < scrollTop) return top
+  if (bottom > scrollTop + viewportHeight) return Math.max(top, bottom - viewportHeight)
+  return undefined
+}

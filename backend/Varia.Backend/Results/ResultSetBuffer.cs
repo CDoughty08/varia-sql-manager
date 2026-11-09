@@ -131,6 +131,19 @@ internal sealed class ResultSetBuffer
         }
     }
 
+    /// <summary>Makes sure the budget has room for rows of up to <paramref name="bytes"/> about to be written, with the
+    /// builder's buffers doubling once, so rows that belong together (a diff's changed pair) are stored both or neither.
+    /// False when it has not: the set stores nothing more and the query stops, as when a row is refused.</summary>
+    public bool TryReserveRows(long bytes)
+    {
+        lock (gate)
+        {
+            if (builder is null || state != 0) return false;
+            var need = 2 * bytes + builder.WorkingBytes;
+            return need <= slack || Reserve(need - slack);
+        }
+    }
+
     /// <summary>Rolls back a row whose cells could not all be read (the provider failed mid-row).</summary>
     public void AbortRow()
     {

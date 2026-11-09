@@ -67,9 +67,11 @@ interface RowSlot {
   row: number; top: number; width: number; odd: boolean; headerSel: boolean; shown: boolean
   /** 0 for none, else 1 + the tone's index in rowTones. */
   tone: number
+  /** The tone text last parsed, and its tone (0 for none, else 1 + its index in rowTones). */
+  toneText: string
+  toneOf: number
   /** A diff row's differing cells, as its tone column lists them after the tone (column numbers, a soft one with "~"), and
-   *  their bits (CHG or SOFT) by column, parsed when the text changes. */
-  cellText: string
+   *  their bits (CHG or SOFT) by column, parsed with the tone text. */
   cellMarks: ReadonlyMap<number, number> | undefined
   /** 0 for none, else 1 + the highlight's index in highlightColors. */
   highlight: number
@@ -393,10 +395,16 @@ export class GridView {
     this.schedule()
   }
   /** Scrolls the active match into view: its cell, or in columns mode its column at the rows in view. False when the marks
-   *  number rows this grid does not show (a sort it has not swapped to yet). */
-  revealMark(): boolean {
+   *  number rows this grid does not show (a sort it has not swapped to yet). `select` (F3 in a grid): the match also becomes
+   *  the active cell and this grid takes the focus, so the cell is announced and Copy copies it; only while the focus is
+   *  still in one of the run's grids, so a reveal that waited (for the match's rows, a sort's swap or a search again) never
+   *  takes it from the editor or the search box. */
+  revealMark(select = false): boolean {
     const marks = this.searchMarks
+    select &&= this.focusInRun()
     if (marks?.current && marks.handle === this.handle) {
+      // A hidden column (a diff's or live table's tone) is never the active cell.
+      if (select && marks.current.column < this.columns) this.selectCell(marks.current.row, marks.current.column)
       this.reveal(marks.current.row, marks.current.column)
       this.outerReveal = { row: marks.current.row, column: marks.current.column, frames: 10 }
       return true
@@ -404,10 +412,16 @@ export class GridView {
     if (marks?.currentColumn !== undefined && marks.currentColumn < this.columns) {
       const rows = this.rows()
       const row = Math.min(Math.max(0, rows - 1), this.viewport?.firstRow ?? this.o.state.selection?.active.row ?? 0)
+      if (select && rows > 0) this.selectCell(row, marks.currentColumn)
       this.reveal(row, marks.currentColumn)
       return true
     }
     return false
+  }
+  private focusInRun(): boolean { return focusInRun(this.root, this.root.ownerDocument.activeElement) }
+  private selectCell(row: number, column: number): void {
+    this.select(cellSelection(this.o.resultIndex, row, column))
+    this.root.focus({ preventScroll: true })
   }
 
   /** The grid's highlighted rows, one set per handle it may show (its result's and a sorted view's): it draws the set of the
@@ -922,7 +936,7 @@ export class GridView {
       mark.el.append(mark.text)
       this.marksRows.append(mark.el)
     }
-    const slot: RowSlot = { el, header, number, ...mark ? { mark } : {}, cells: [], pin: this.createCell(el), row: -1, top: Number.NaN, width: -1, odd: false, headerSel: false, shown: false, tone: 0, highlight: 0, cellText: '', cellMarks: undefined }
+    const slot: RowSlot = { el, header, number, ...mark ? { mark } : {}, cells: [], pin: this.createCell(el), row: -1, top: Number.NaN, width: -1, odd: false, headerSel: false, shown: false, tone: 0, highlight: 0, toneText: '', toneOf: 0, cellMarks: undefined }
     this.slots.set(el, { row: slot })
     this.rowsEl.append(el)
     if (withCells) for (let index = 0; index < this.cellsPerRow; index++) slot.cells.push(this.createCell(el, slot))
@@ -1262,10 +1276,15 @@ export class GridView {
       if (top !== slot.top) { slot.top = top; slot.el.style.top = top + 'px'; if (slot.mark) slot.mark.el.style.top = top + 'px' }
       if (!slot.shown) { slot.shown = true; slot.el.style.display = ''; if (slot.mark) slot.mark.el.style.display = '' }
     }
-    const toneText = this.toneOf(row, tile), space = toneText.indexOf(' ')
-    const odd = row % 2 === 1, tone = toneIndex.get(space < 0 ? toneText : toneText.slice(0, space)) ?? 0, highlight = colorAt(this.highlights, row)
-    const cellText = space < 0 ? '' : toneText.slice(space + 1)
-    if (cellText !== slot.cellText) { slot.cellText = cellText; slot.cellMarks = cellMarksOf(cellText) }
+    // A row's tone text is parsed only when it differs from the one the slot last painted (scrolling repaints rows).
+    const toneText = this.toneOf(row, tile)
+    if (toneText !== slot.toneText) {
+      const space = toneText.indexOf(' ')
+      slot.toneText = toneText
+      slot.toneOf = toneIndex.get(space < 0 ? toneText : toneText.slice(0, space)) ?? 0
+      slot.cellMarks = space < 0 ? undefined : cellMarksOf(toneText.slice(space + 1))
+    }
+    const odd = row % 2 === 1, tone = slot.toneOf, highlight = colorAt(this.highlights, row)
     if (odd !== slot.odd || tone !== slot.tone || highlight !== slot.highlight) {
       slot.odd = odd
       slot.el.className = rowClasses[odd ? 1 : 0][tone][highlight]
@@ -1515,8 +1534,10 @@ export function toneColumnOf(descriptor: Pick<ResultDescriptor, 'columns'>): num
 }
 
 /** The first cell, as the current cell of a grid nothing has been selected in. */
-function firstCell(resultIndex: number): GridSelection {
-  const cell = { row: 0, column: 0 }
+function firstCell(resultIndex: number): GridSelection { return cellSelection(resultIndex, 0, 0) }
+/** One cell, selected and active. */
+function cellSelection(resultIndex: number, row: number, column: number): GridSelection {
+  const cell = { row, column }
   return { resultIndex, blocks: [{ kind: 'cells', anchor: cell, focus: cell }], active: cell }
 }
 
@@ -1537,3 +1558,10 @@ const sortMap = (keys: readonly HeaderSortKey[] = []): ReadonlyMap<number, { rea
   new Map(keys.map((key, at) => [key.column, { at, descending: key.descending }]))
 const sameSortMap = (a: ReadonlyMap<number, { readonly at: number; readonly descending: boolean }>, b: ReadonlyMap<number, { readonly at: number; readonly descending: boolean }>) =>
   a.size === b.size && [...a].every(([column, key]) => b.get(column)?.at === key.at && b.get(column)?.descending === key.descending)
+
+/** Whether the focused element is in a grid of `root`'s run: results grids name their tab, and a live grid (no tab) never
+ *  counts. A search step's reveal that waited selects only while this holds, so it never takes the focus from elsewhere. */
+export function focusInRun(root: Pick<HTMLElement, 'dataset'>, active: Pick<Element, 'closest'> | null): boolean {
+  const tabId = root.dataset.tabId
+  return tabId !== undefined && active?.closest<HTMLElement>('[data-result-grid]')?.dataset.tabId === tabId
+}

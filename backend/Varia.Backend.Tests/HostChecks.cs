@@ -175,6 +175,13 @@ internal static class HostChecks
             var unsent = host.Next(FrameKind.Response);
             check(unsent?.Header.Id == 50 && ErrorCode(unsent.Value) == "RESPONSE_TOO_LARGE" && host.Dispatcher.Unsent == 1,
                 "a result too large to send is answered RESPONSE_TOO_LARGE and the handler is told, so it can release what it stored");
+            host.Request(51, "test.unsentLate", new { });
+            SpinWait.SpinUntil(() => Volatile.Read(ref host.Dispatcher.LateStarted) == 1, 15000);
+            host.Send(FrameKind.Cancel, 51, 1, []);
+            var dropped = host.Next(FrameKind.Response);
+            var told = SpinWait.SpinUntil(() => Volatile.Read(ref host.Dispatcher.Unsent) == 2, 15000);
+            check(dropped?.Header.Id == 51 && ErrorCode(dropped.Value) == "CANCELLED" && told && host.Next(FrameKind.Response, 1) is null,
+                "a result that comes after CANCEL answered is dropped and the handler is told, so it can release what it stored");
 
             host.Request(7, "test.stream", new { pages = 4, bytes = 40 * 1024 }, credit: 64 * 1024);
             var first = host.Next(FrameKind.Data);
@@ -462,9 +469,10 @@ internal sealed class StubDispatcher : IRequestDispatcher
     public int Completed;
     public int CancelAllCalls;
     public int Unsent;
+    public int LateStarted;
     public bool Disposed;
     public bool Created;
-    public IReadOnlyList<string> Methods { get; } = ["test.echo", "test.slow", "test.late", "test.wait", "test.stream", "test.events", "test.unsent", "test.failure", "test.certificate", "test.crash", "test.settle", "test.settleSsis", "test.secret"];
+    public IReadOnlyList<string> Methods { get; } = ["test.echo", "test.slow", "test.late", "test.wait", "test.stream", "test.events", "test.unsent", "test.unsentLate", "test.failure", "test.certificate", "test.crash", "test.settle", "test.settleSsis", "test.secret"];
     public RequestLane LaneOf(string method) => method switch { "test.slow" => RequestLane.Metadata, "test.stream" => RequestLane.Results, "test.settle" => RequestLane.Actions, "test.settleSsis" => RequestLane.Ssis, _ => RequestLane.Control };
     public bool AnswersStop(string method) => method is "test.settle" or "test.settleSsis";
     public readonly ConcurrentQueue<string> AskedSensitive = new();
@@ -518,6 +526,13 @@ internal sealed class StubDispatcher : IRequestDispatcher
             case "test.unsent":
                 context!.Unsent = () => Interlocked.Increment(ref Unsent);
                 return new { Text = new string('x', ProtocolLimits.ResponseBody) };
+            case "test.unsentLate":
+                // As results.diff when a CANCEL lands after its work: it answers anyway, after the host answered CANCELLED.
+                context!.Dropped = () => Interlocked.Increment(ref Unsent);
+                Interlocked.Increment(ref LateStarted);
+                try { await Task.Delay(Timeout.Infinite, context.Token); }
+                catch (OperationCanceledException) { }
+                return new { Stored = true };
             default: throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.");
         }
     }

@@ -24,20 +24,28 @@ internal static class DiffChecks
         WholeRows(check);
         Context(check);
         CellMemory(check);
+        WireMismatch(check);
+        Rules(check);
+        Tones(check);
+        Halves(check);
+        Sizes(check);
         Host(check);
     }
 
     private static ResultSetBuffer Fill(ResultStore store, QueryBudget budget, int index, string?[][] rows, ResultColumn[]? columns = null)
     {
         columns ??= Columns;
-        var set = store.Open(budget, index, 1, 1, "rows", columns, [.. columns.Select(_ => WireKind.Text)]) ?? throw new InvalidOperationException("The result set was not kept.");
+        var wires = columns.Select(column => column.Wire == "binary" ? WireKind.Binary : WireKind.Text).ToArray();
+        var set = store.Open(budget, index, 1, 1, "rows", columns, wires) ?? throw new InvalidOperationException("The result set was not kept.");
         foreach (var row in rows)
         {
             set.CountRow();
             var builder = set.BeginRow()!;
-            foreach (var cell in row)
+            for (var c = 0; c < row.Length; c++)
             {
+                var cell = row[c];
                 if (cell is null) builder.AppendNull();
+                else if (wires[c] == WireKind.Binary) builder.AppendBinary(Encoding.UTF8.GetBytes(cell));
                 else builder.AppendText(cell);
             }
             set.TryCommitRow();
@@ -71,10 +79,120 @@ internal static class DiffChecks
         _ => "-"
     } + (entry.Left < 0 ? "" : entry.Left.ToString(System.Globalization.CultureInfo.InvariantCulture)) + ":" + (entry.Right < 0 ? "" : entry.Right.ToString(System.Globalization.CultureInfo.InvariantCulture))));
 
-    private static (ResultSetBuffer Left, ResultSetBuffer Right) Pair(ResultStore store, string?[][] left, string?[][] right, ResultColumn[]? rightColumns = null)
+    private static (ResultSetBuffer Left, ResultSetBuffer Right) Pair(ResultStore store, string?[][] left, string?[][] right, ResultColumn[]? rightColumns = null,
+        ResultColumn[]? leftColumns = null)
     {
         var budget = store.BeginQuery("diff" + Guid.NewGuid());
-        return (Fill(store, budget, 0, left), Fill(store, budget, 1, right, rightColumns));
+        return (Fill(store, budget, 0, left, leftColumns), Fill(store, budget, 1, right, rightColumns));
+    }
+
+    private static ResultSetBuffer Unified(ResultStore store, ResultSetBuffer left, ResultSetBuffer right, DiffModel model, int context = -1)
+    {
+        var unified = store.Open(left.Budget, 2, 1, 1, "diff", UnifiedDiff.Columns(right, model), UnifiedDiff.Wires(right, model), lengths: UnifiedDiff.Lengths(right, model))
+            ?? throw new InvalidOperationException("The diff was not kept.");
+        UnifiedDiff.Write(unified, left, left.SealedSnapshot(), right, right.SealedSnapshot(), model, context, CancellationToken.None);
+        return unified;
+    }
+
+    /// <summary>A column of one name that holds binary in one result and text in the other is not compared (its cells could
+    /// not share the unified result's column) but listed as one-sided; too many shared columns are refused up front.</summary>
+    private static void WireMismatch(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        ResultColumn[] binary = [new("ItemId", "int", "text"), new("v", "varbinary(10)", "binary")];
+        ResultColumn[] text = [new("ItemId", "int", "text"), new("v", "varchar(10)", "text", Collation: CaseInsensitive)];
+        var (left, right) = Pair(store, [["1", "a"], ["2", "b"]], [["1", "a"], ["3", "c"]], text, binary);
+        var model = ResultDiffer.Compare(left, left.SealedSnapshot(), right, right.SealedSnapshot(), false, CancellationToken.None);
+        string? failure = null;
+        try { Unified(store, left, right, model); }
+        catch (Exception error) { failure = error.GetType().Name; }
+        check(model.Pairs is [(0, 0)] && failure is null, "a column that is binary in one result and text in the other is left out of the comparison, so the diff is written: " + failure);
+        using var service = new SqlService(store);
+        var diff = (ResultsDiffResult)service.DispatchAsync("results.diff", JsonSerializer.SerializeToElement(new { left = left.ResultId, right = right.ResultId }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult()!;
+        check(diff.LeftOnly is ["v"] && diff.RightOnly is ["v"] && diff is { Removed: 1, Added: 1, Same: 1 }, "results.diff lists such a column as not compared on both sides");
+
+        var wide = Enumerable.Range(0, ResultDiffer.MaxPairs + 1).Select(i => new ResultColumn("c" + i.ToString(System.Globalization.CultureInfo.InvariantCulture), "int", "text")).ToArray();
+        var row = wide.Select(_ => (string?)"1").ToArray();
+        var (wideLeft, wideRight) = Pair(store, [row], [row], wide, wide);
+        string? code = null;
+        try { ResultDiffer.Compare(wideLeft, wideLeft.SealedSnapshot(), wideRight, wideRight.SealedSnapshot(), false, CancellationToken.None); }
+        catch (RequestException error) { code = error.Code; }
+        check(code == "INVALID_PARAMS", "results sharing more columns than a diff can show are refused with INVALID_PARAMS, not a failure in the store: " + code);
+    }
+
+    /// <summary>A shared column's values compare by the first result's type and collation, so rows still match when the second
+    /// result's column changed collation or type; values compare themselves, not only their hashes.</summary>
+    private static void Rules(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        ResultColumn[] collated = [new("Name", "nvarchar", "text", Collation: CaseInsensitive), new("Qty", "int", "text")];
+        ResultColumn[] other = [new("Name", "varchar", "text"), new("Qty", "bigint", "text")];
+        // Repeated rows: no key is unique, so whole rows match.
+        string?[][] rows = [["apple", "1"], ["apple", "1"], ["pear", "2"]];
+        var (left, right) = Pair(store, rows, [["apple", "01"], ["apple", "1"], ["PEAR", "2"]], other, collated);
+        var model = ResultDiffer.Compare(left, left.SealedSnapshot(), right, right.SealedSnapshot(), false, CancellationToken.None);
+        check(model.KeyPair == -1 && Entries(model) == "=0:0 =1:1 =2:2" && model.Counts().Soft == 1,
+            "whole rows match when the second result's column has another collation or type, compared by the first's: " + Entries(model));
+
+        var budget = store.BeginQuery("same");
+        var a = Fill(store, budget, 0, [["Apple ", "2.0"]], [collated[0], new("Price", "decimal", "text")]);
+        var b = Fill(store, budget, 1, [["APPLE", "2.00"], ["Apples", "2.01"]], [collated[0], new("Price", "decimal", "text")]);
+        var left2 = new CellHasher(a.Columns, a.Wires);
+        var right2 = new CellHasher(b.Columns, b.Wires);
+        var va = PageView.Parse(a.SealedSnapshot()[0].Body, 2);
+        var vb = PageView.Parse(b.SealedSnapshot()[0].Body, 2);
+        check(left2.Same(va, 0, 0, right2, vb, 0, 0) && left2.Same(va, 1, 0, right2, vb, 1, 0) && !left2.Same(va, 0, 0, right2, vb, 0, 1) && !left2.Same(va, 1, 0, right2, vb, 1, 1)
+            , "values compare by value (collation, trailing spaces, numeric form), so a hash collision cannot make different values equal");
+    }
+
+    /// <summary>A row that differs in every one of many columns lists each of them in its tone.</summary>
+    private static void Tones(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        const int width = 150;
+        var columns = new[] { new ResultColumn("ItemId", "int", "text") }.Concat(Enumerable.Range(1, width).Select(i => new ResultColumn("c" + i.ToString(System.Globalization.CultureInfo.InvariantCulture), "int", "text"))).ToArray();
+        string?[] Row(string value) => [.. new[] { "1" }.Concat(Enumerable.Repeat(value, width))];
+        var (left, right) = Pair(store, [Row("1")], [Row("2")], columns, columns);
+        var model = ResultDiffer.Compare(left, left.SealedSnapshot(), right, right.SealedSnapshot(), false, CancellationToken.None);
+        var tones = Text(Unified(store, left, right, model)).Select(row => row.Split('|')[^1]).ToArray();
+        var expected = string.Join(" ", Enumerable.Range(1, width).Select(c => (c + 3).ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        check(tones.Length == 2 && tones[0] == "removed " + expected && tones[1] == "added " + expected, "a row's tone lists every differing column, however many: " + tones[0].Length + " characters");
+    }
+
+    /// <summary>When the budget fills, it never does so between a changed row's "−" and "+" rows.</summary>
+    private static void Halves(Action<bool, string> check)
+    {
+        var split = new List<int>();
+        string?[][] Rows(string price) => [.. Enumerable.Range(1, 400).Select(i => new[] { i.ToString(System.Globalization.CultureInfo.InvariantCulture), "name " + i.ToString(System.Globalization.CultureInfo.InvariantCulture), price })];
+        var big = new ResultStore(1L << 30, 1L << 29);
+        var source = big.BeginQuery("source");
+        var left = Fill(big, source, 0, Rows("1.00"));
+        var right = Fill(big, source, 1, Rows("2.00"));
+        var model = ResultDiffer.Compare(left, left.SealedSnapshot(), right, right.SealedSnapshot(), false, CancellationToken.None);
+        for (var budget = 24 * 1024; budget <= 96 * 1024; budget += 1024 + 136)
+        {
+            var store = new ResultStore(budget, budget);
+            var query = store.BeginQuery("halves" + budget.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            var unified = store.Open(query, 2, 1, 1, "diff", UnifiedDiff.Columns(right, model), UnifiedDiff.Wires(right, model), lengths: UnifiedDiff.Lengths(right, model));
+            if (unified is null) continue;
+            UnifiedDiff.Write(unified, left, left.SealedSnapshot(), right, right.SealedSnapshot(), model, -1, CancellationToken.None);
+            var rows = Text(unified);
+            if (rows.Count % 2 != 0 || rows.Where((row, at) => row.StartsWith(at % 2 == 0 ? UnifiedDiff.Removed : UnifiedDiff.Added, StringComparison.Ordinal)).Count() != rows.Count) split.Add(budget);
+            if (rows.Count < 800 && unified.Truncated == TruncationReason.None) split.Add(-budget);
+        }
+        check(split.Count == 0, "a full budget stops a diff before a changed row's two halves, never between them, and says it was truncated: " + string.Join(",", split));
+    }
+
+    /// <summary>A diff row's bytes (the row-size bar) are its source row's shared values, not its marker, row numbers or tone.</summary>
+    private static void Sizes(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        var (left, right) = Pair(store, [["1", "apple", "1.50"], ["2", "pear", "2.00"]], [["1", "apple", "1.75"], ["2", "pear", "2.00"]]);
+        var model = ResultDiffer.Compare(left, left.SealedSnapshot(), right, right.SealedSnapshot(), false, CancellationToken.None);
+        var unified = Unified(store, left, right, model);
+        var bytes = unified.RowBytes(0, 3);
+        // Utf16 text, 2 bytes a character: "1" "apple" "1.50" is 10 characters; "2" "pear" "2.00" 9.
+        check(bytes is [20, 20, 18], "a diff row's bytes are its shared values' (the source row's), without the marker, row numbers and tone: " + string.Join(",", bytes));
     }
 
     /// <summary>A key both results share aligns moved and changed rows; removed rows follow the row they followed; a value

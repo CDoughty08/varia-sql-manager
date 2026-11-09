@@ -267,7 +267,9 @@ internal sealed class ProtocolHost
                 context.Unsent?.Invoke();
                 throw;
             }
-            Respond(context, answer);
+            // A CANCEL or the deadline answered first: the result is dropped, so what it stored for main goes too.
+            if (context.TrySettle()) Respond(context.Id, answer, context.IsStream);
+            else context.Dropped?.Invoke();
         }
         catch (Exception error) { Respond(context, Failure(context, error)); }
         finally
