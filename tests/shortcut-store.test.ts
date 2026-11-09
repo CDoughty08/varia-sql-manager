@@ -125,6 +125,24 @@ describe('shortcuts file', () => {
     expect(JSON.parse(await readFile(join(directory, (await quarantined())[0]), 'utf8'))).toEqual(raw)
   })
 
+  it('keeps a record the bindings cap leaves in unknown through a salvage write-back and a save (#314)', async () => {
+    const full = Array.from({ length: shortcutLimits.bindings }, () => ({ command: 'query.execute' as const, key: 'ctrl+e' }))
+    const kept = { command: 'query.execute', key: 'f6' }
+    // The damaged gesture forces a salvage, so the file is written back.
+    await writeFile(path(), JSON.stringify({ version: 1, bindings: full, gestures: { 'explorer.peekHover': 42 }, unknown: [kept] }))
+    const shortcuts = store()
+    const load = await shortcuts.load()
+    expect(load).toMatchObject({ salvaged: true, notice: salvageNotice })
+    expect(load.file.unknown).toEqual([kept])
+    expect((await onDisk()).unknown).toEqual([kept])
+    // Saving what the page holds (the record included) keeps it too, and the next load sets nothing aside.
+    expect(await shortcuts.save({ ...load.file, scheme: 'default' }, load.revision)).toEqual({ revision: load.revision })
+    const next = { ...load.file, gestures: { 'grid.addToSelection': 'alt' } }
+    expect(await shortcuts.save(next, load.revision)).toEqual({ revision: load.revision + 1 })
+    expect((await onDisk()).unknown).toEqual([kept])
+    expect(await shortcuts.load()).toEqual({ file: next, revision: load.revision + 1, salvaged: false })
+  })
+
   it('keeps unknown entries through a load and save without setting anything aside', async () => {
     const file = withBindings([{ command: 'query.execute', key: 'ctrl+e' }], { unknown: [{ command: 'future.command', key: 'ctrl+alt+q' }] })
     await writeFile(path(), JSON.stringify(file))
@@ -194,6 +212,18 @@ describe('shortcuts file', () => {
     // A second damaged edit raises a new notice in the same words, with a new id.
     await writeFile(path(), '{ broken again')
     expect(await shortcuts.load()).toMatchObject({ revision: 3, notice: first.notice, noticeId: 2 })
+  })
+
+  it("announces a newer version's file, with a new id, while an earlier set-aside notice is pending (#315)", async () => {
+    await writeFile(path(), JSON.stringify({ version: 1, bindings: [42] }))
+    const shortcuts = store()
+    expect(await shortcuts.load()).toMatchObject({ salvaged: true, notice: salvageNotice, noticeId: 1 })
+    await writeFile(path(), JSON.stringify({ version: 2, bindings: [] }))
+    expect(await shortcuts.load()).toMatchObject({ salvaged: false, notice: shortcutSentences.newer, noticeId: 2 })
+    expect(await shortcuts.load()).toMatchObject({ salvaged: false, notice: shortcutSentences.newer, noticeId: 2 })
+    // The set-aside file is gone: once the newer file is replaced by a valid one, the old notice does not come back.
+    await writeFile(path(), JSON.stringify(remap))
+    expect(await shortcuts.load()).toEqual({ file: remap, revision: 2, salvaged: false })
   })
 
   it('saves twice in a row from the revision it answered, even with a gesture choice the catalogue does not offer (#238)', async () => {

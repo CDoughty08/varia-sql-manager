@@ -465,6 +465,9 @@ describe('Shortcuts page', () => {
     expect(host.textContent).not.toContain('No shortcuts match.')
     const gestures = [...host.querySelectorAll<HTMLElement>('tr.shortcuts-gesture')]
     expect(gestures.length).toBeGreaterThan(1)
+    // #294: with no command row matching, the first gesture row is the grid's one tab stop.
+    expect(host.querySelectorAll('tr[data-row]:not(.shortcuts-gesture)')).toHaveLength(0)
+    expect(gestures.map(gesture => gesture.tabIndex)).toEqual([0, ...gestures.slice(1).map(() => -1)])
     await act(() => { gestures[0].focus() })
     await press(gestures[0], { key: 'ArrowDown', code: 'ArrowDown' })
     expect(document.activeElement).toBe(gestures[1])
@@ -474,6 +477,18 @@ describe('Shortcuts page', () => {
     await act(() => root.render(createElement(WorkbenchProvider, { workbench, children: createElement(Harness, { initial: emptyShortcutFile }) })))
     await press(host.querySelectorAll<HTMLElement>('tr.shortcuts-gesture')[1], { key: 'Enter', code: 'Enter' })
     expect(host.querySelector('[role="radio"][aria-checked="true"]')?.textContent).toBe('Mouse')
+  })
+  it('keeps one tab stop on a gesture row when a search names only a gesture', async () => {
+    // #294
+    await render()
+    await search('Float While Dragging')
+    expect(host.querySelectorAll('tr[data-row]:not(.shortcuts-gesture)')).toHaveLength(0)
+    const tabbable = [...host.querySelectorAll<HTMLElement>('tr[data-row]')].filter(item => item.tabIndex === 0)
+    expect(tabbable.map(item => item.textContent)).toEqual([expect.stringContaining('Float While Dragging')])
+    // A command row, once one matches, holds the stop again.
+    await search('file.saveAs')
+    expect([...host.querySelectorAll<HTMLElement>('tr.shortcuts-gesture')].every(item => item.tabIndex === -1)).toBe(true)
+    expect([...host.querySelectorAll<HTMLElement>('tr[data-row]')].filter(item => item.tabIndex === 0)).toHaveLength(1)
   })
   it('shows the Options draft\'s multi-cursor modifier in both views, not the saved one', async () => {
     // #214, page side: the saved setting is Alt+Click; the dialog's draft says Ctrl+Click.

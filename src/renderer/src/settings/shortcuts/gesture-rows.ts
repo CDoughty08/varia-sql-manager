@@ -8,6 +8,7 @@ import { validateGestures, type GestureProblem } from '../../../../shared/comman
 import { effectiveRules } from '../../../../shared/commands/effective'
 import { keybindingLabel, type KeybindingLabel, type Platform } from '../../../../shared/commands/keybindings'
 import type { ShortcutFile } from '../../../../shared/commands/shortcut-schema'
+import { parseShortcutQuery, type SearchToken } from './shortcuts-search'
 
 /** The Mouse view's groups, in order; `linked` rows are settings of other pages shown with the gestures. */
 export type GestureRowGroup = GestureKind | 'linked'
@@ -40,6 +41,8 @@ export interface GestureRow {
   readonly target: string
   /** The scopes it works in: `Results Grid, Table Designer`. */
   readonly scopeTitle: string
+  /** Their ids (`resultsGrid`, `tableDesigner`), which `@scope:` matches as the page does a binding's scope id. */
+  readonly scopes: readonly string[]
   /** The gesture as it is in the draft: `Ctrl+Drag`, `Off`. */
   readonly label: string
   /** The draft's choice (null for Off); a linked row's modifiers. */
@@ -70,31 +73,19 @@ export interface GestureRow {
   readonly page?: string
 }
 
-const whereText = (id: GestureId) => { const gesture = gestureDescriptor(id); return [gesture.scope, ...gesture.alsoIn ?? []].map(scope => gestureScopes[scope]).join(', ') }
+const scopesOf = (id: GestureId) => { const gesture = gestureDescriptor(id); return [gesture.scope, ...gesture.alsoIn ?? []] }
 const groupOrder = (kind: GestureRowGroup) => gestureRowGroups.findIndex(entry => entry.id === kind)
 
 function linkedRow(platform: Platform, linked: LinkedSettings): GestureRow {
   const current: GestureModifiers = linked.multiCursorModifier === 'ctrlCmd' ? ['mod'] : ['alt']
   return {
     id: multiCursorRowId, kind: 'linked', title: 'Add Cursor', description: 'Adds another cursor where you click in the query editor (Monaco\'s multi-cursor modifier).',
-    action: 'click', target: 'the query editor', scopeTitle: 'SQL Query Editor', label: gestureLabel('click', current, platform), current, currentToken: gestureToken(current), defaultChoice: ['alt'],
+    action: 'click', target: 'the query editor', scopeTitle: 'SQL Query Editor', scopes: ['queryEditor'], label: gestureLabel('click', current, platform), current, currentToken: gestureToken(current), defaultChoice: ['alt'],
     defaultLabel: modifiersLabel(['alt'], platform), options: [], source: 'setting', changed: linked.multiCursorModifier !== defaultLinked.multiCursorModifier,
     keyboard: [], keys: [], problems: [], page: multiCursorPage
   }
 }
 
-interface SearchToken { readonly name: string; readonly value: string }
-/** As the Shortcuts page splits its search box (`shortcuts-search.ts`): lower-case words and `@name:value` tokens. */
-function parseSearch(text: string): { words: string[]; tokens: SearchToken[] } {
-  const words: string[] = [], tokens: SearchToken[] = []
-  for (const part of text.toLowerCase().split(/\s+/).filter(Boolean)) {
-    if (part.startsWith('@') && part.length > 1) {
-      const at = part.indexOf(':')
-      tokens.push(at < 0 ? { name: part.slice(1), value: '' } : { name: part.slice(1, at), value: part.slice(at + 1) })
-    } else words.push(part)
-  }
-  return { words, tokens }
-}
 /** The page's token rules for a gesture row: prefixes for `kind` and `source`, and a token it does not know filters nothing. */
 function tokenMatches({ name, value }: SearchToken, row: GestureRow): boolean {
   switch (name) {
@@ -102,7 +93,7 @@ function tokenMatches({ name, value }: SearchToken, row: GestureRow): boolean {
     case 'conflicts': return row.problems.length > 0
     case 'unbound': return row.current === null
     case 'source': return row.source.startsWith(value) || gestureSourceTitles[row.source].toLowerCase().startsWith(value) || (row.source === 'builtin' && 'fixed'.startsWith(value))
-    case 'scope': return row.scopeTitle.toLowerCase().includes(value)
+    case 'scope': return row.scopes.some(scope => scope.toLowerCase().includes(value)) || row.scopeTitle.toLowerCase().includes(value)
     case 'command': return [row.id, ...row.keyboard].some(id => id.toLowerCase().includes(value))
     case 'kind': return !value || 'mouse'.startsWith(value)
     default: return true
@@ -136,8 +127,10 @@ export function gestureRows(draft: ShortcutFile, platform: Platform, search: str
     const options = gestureOptions(id, platform).map(choice => ({ token: gestureToken(choice), choice, label: choice === null ? 'Off' : modifiersLabel(choice, platform) }))
     const otherPlatform = Object.hasOwn(draft.gestures, id) && !overrides.has(id)
     const modified = !sameChoice(current, fallback) || otherPlatform
+    const scopes = scopesOf(id)
     return {
-      id, kind: gesture.kind, title: gesture.title, description: gesture.description, action: gesture.action, target: gesture.target, scopeTitle: whereText(id),
+      id, kind: gesture.kind, title: gesture.title, description: gesture.description, action: gesture.action, target: gesture.target,
+      scopeTitle: scopes.map(scope => gestureScopes[scope]).join(', '), scopes,
       label: current === null ? 'Off' : gestureLabel(gesture.action, current, platform), current, currentToken: gestureToken(current), defaultChoice: fallback, defaultLabel: modifiersLabel(fallback, platform),
       options, locked: gesture.locked, source: gesture.locked ? 'builtin' : modified ? 'user' : 'default', changed: modified, keyboard: gesture.keyboard ?? [],
       keys: (gesture.keyboard ?? []).map(command => ({ command, label: keyOf(command) })), ...otherPlatform ? { otherPlatform: true as const } : {},
@@ -146,7 +139,8 @@ export function gestureRows(draft: ShortcutFile, platform: Platform, search: str
   })
   if (linked) rows.push(linkedRow(platform, linked))
   rows.sort((a, b) => groupOrder(a.kind) - groupOrder(b.kind))
-  const { words, tokens } = parseSearch(search)
+  // The page's own parser, so its token syntax and its length cap hold here too.
+  const { words, tokens } = parseShortcutQuery(search)
   return words.length || tokens.length ? rows.filter(row => matches(row, words, tokens)) : rows
 }
 
