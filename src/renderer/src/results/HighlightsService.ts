@@ -1,3 +1,4 @@
+import type { ResultColumn } from '../../../shared/contracts'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
@@ -22,8 +23,18 @@ export interface SetHighlights {
 }
 export type HighlightsSnapshot = Readonly<Record<string, ReadonlyMap<number, SetHighlights>>>
 
-/** How a set's highlights tell rows apart, chosen when its first row is highlighted and kept through re-runs. */
-type TrackBy = { readonly column: string } | { readonly row: true }
+/** How a set's highlights tell rows apart, chosen when its first row is highlighted and kept through re-runs. A column is
+ *  kept by its name, type and position, since a result may have several columns of one name (or none named). */
+type TrackBy = { readonly column: string; readonly dataType: string; readonly ordinal: number } | { readonly row: true }
+
+/** The column a re-run's result has for the one highlights follow: the same name and type, at the same position, or the
+ *  only such column anywhere; -1 when there is none or the choice would be a guess. */
+export function trackedColumn(columns: readonly ResultColumn[], by: { readonly column: string; readonly dataType: string; readonly ordinal: number }): number {
+  const same = (column: ResultColumn | undefined) => column !== undefined && column.name === by.column && column.dataType === by.dataType
+  if (same(columns[by.ordinal])) return by.ordinal
+  const matches = columns.flatMap((column, at) => same(column) ? [at] : [])
+  return matches.length === 1 ? matches[0] : -1
+}
 /** A set's highlights bound to one run's result: the identities the backend computed for it (results.identify). */
 interface Binding {
   readonly handle: ResultHandle
@@ -44,6 +55,8 @@ interface Marks {
   readonly found: Map<ResultHandle, { readonly version: number; readonly rows: RowHighlights; readonly marks: number }>
   /** Searches in flight, by handle. */
   readonly finding: Map<ResultHandle, number>
+  /** Searches that failed, by handle and version: not tried again until the highlights or the shown handle change. */
+  readonly failed: Map<ResultHandle, number>
 }
 
 /** The most rows one Highlight command marks, and the most highlights a result set keeps (results.findRows' limit). */
@@ -143,7 +156,7 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
     let sets = this.tabs.get(tabId)
     if (!sets && create) this.tabs.set(tabId, sets = new Map())
     let marks = sets?.get(index)
-    if (!marks && create) sets!.set(index, marks = { colors: new Map(), version: 0, found: new Map(), finding: new Map() })
+    if (!marks && create) sets!.set(index, marks = { colors: new Map(), version: 0, found: new Map(), finding: new Map(), failed: new Map() })
     return marks
   }
 
@@ -159,16 +172,18 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
     marks.bound?.abort.abort()
     marks.found.clear()
     marks.finding.clear()
+    marks.failed.clear()
     const abort = new AbortController()
     const by = marks.by
-    const column = by && 'column' in by ? entry.descriptor.columns.findIndex(item => item.name === by.column) : undefined
+    const column = by && 'column' in by ? trackedColumn(entry.descriptor.columns, by) : undefined
     const binding: Binding = {
       handle: entry.handle, abort, column: column ?? -1, unique: true,
       ready: column === -1 ? Promise.resolve(false) : entry.handle.identify(!by ? 'auto' : 'row' in by ? 'row' : 'column', { ...column === undefined ? {} : { column }, signal: abort.signal }).then(result => {
         if (marks.bound !== binding) return false
         binding.column = result.column
         binding.unique = result.unique
-        marks.by ??= result.column < 0 ? { row: true } : { column: entry.descriptor.columns[result.column].name }
+        const picked = entry.descriptor.columns[result.column]
+        marks.by ??= result.column < 0 || !picked ? { row: true } : { column: picked.name, dataType: picked.dataType, ordinal: result.column }
         return true
       }, error => {
         if (marks.bound === binding && (error as Error).name !== 'AbortError')
@@ -190,7 +205,7 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
     const handles = new Set([entry.handle, this.shownHandle(tabId, index, entry)])
     const ids = [...marks.colors.keys()], version = marks.version
     await Promise.all([...handles].map(async handle => {
-      if (marks.found.get(handle)?.version === version || marks.finding.get(handle) === version) return
+      if (marks.found.get(handle)?.version === version || marks.finding.get(handle) === version || marks.failed.get(handle) === version) return
       if (ids.length === 0) {
         marks.found.set(handle, { version, rows: { handle, positions: new Float64Array(0), colors: new Uint8Array(0) }, marks: 0 })
         return
@@ -202,6 +217,8 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
         const colors = Uint8Array.from(found.marks, mark => marks.colors.get(ids[mark]) ?? 0)
         marks.found.set(handle, { version, rows: { handle, positions: Float64Array.from(found.positions), colors }, marks: new Set(found.marks).size })
       } catch (error) {
+        // Remembered so the notice's own snapshot (resultsChanged) does not search again, and again, while the error lasts.
+        if ((error as Error).name !== 'AbortError' && marks.bound === binding) marks.failed.set(handle, version)
         if ((error as Error).name !== 'AbortError' && marks.bound === binding) this.results.notify(tabId, 'Could not find the highlighted rows: ' + (error instanceof Error ? error.message : 'The search failed.'))
       } finally {
         if (marks.finding.get(handle) === version) marks.finding.delete(handle)
@@ -209,6 +226,7 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
     }))
     // Rows found for handles the grid no longer shows go.
     for (const handle of [...marks.found.keys()]) if (!handles.has(handle)) marks.found.delete(handle)
+    for (const handle of [...marks.failed.keys()]) if (!handles.has(handle)) marks.failed.delete(handle)
     this.schedule()
   }
 
@@ -234,7 +252,7 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
         if (marks.colors.size === 0) continue
         if (marks.bound?.handle !== entry.handle) { this.bind(tabId, index, marks, entry); continue }
         const shown = this.shownHandle(tabId, index, entry)
-        if (!marks.found.has(shown) && !marks.finding.has(shown)) void this.refresh(tabId, index)
+        if (!marks.found.has(shown) && !marks.finding.has(shown) && marks.failed.get(shown) !== marks.version) void this.refresh(tabId, index)
       }
     }
     if (changed) this.schedule()
@@ -258,7 +276,7 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
         if (marks.colors.size === 0 && !marks.by) continue
         const found = [...marks.found.values()]
         const base = marks.bound && marks.found.get(marks.bound.handle)
-        const by = marks.by ? ('column' in marks.by ? marks.by.column : '') : undefined
+        const by = marks.by ? ('column' in marks.by ? marks.by.column || '(No column name)' : '') : undefined
         shown.set(index, { count: marks.colors.size, found: base?.marks ?? 0, ...by === undefined ? {} : { by }, unique: marks.bound?.unique ?? true, rows: found.map(item => item.rows) })
       }
       if (shown.size > 0) next[tabId] = shown

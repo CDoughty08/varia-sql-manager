@@ -4,7 +4,7 @@ import { EventBus } from '../src/renderer/src/core/events'
 import { colorAt, highlightColors, type RowHighlights } from '../src/renderer/src/grid/highlights'
 import type { GridSelection } from '../src/renderer/src/grid/selection'
 import type { ResultHandle, ResultView } from '../src/renderer/src/results/ResultClient'
-import { HighlightsService, highlightLimits, mergeRows } from '../src/renderer/src/results/HighlightsService'
+import { HighlightsService, highlightLimits, mergeRows, trackedColumn } from '../src/renderer/src/results/HighlightsService'
 import { ResultsService } from '../src/renderer/src/results/ResultsService'
 import { descriptor, fakeResultClient, summaryOf, type FakeHandle } from './fixtures/results'
 import { manualTimers } from './fixtures/workbench'
@@ -32,7 +32,7 @@ function fixture() {
     return results.getSnapshot().t1.sets[0].handle as FakeHandle
   }
   const shown = () => highlights.getSnapshot().t1?.get(0)
-  return { client, results, highlights, run, shown }
+  return { client, results, highlights, run, shown, timers }
 }
 
 describe('highlights', () => {
@@ -97,6 +97,53 @@ describe('highlights', () => {
     expect(view.findRows).toHaveBeenCalledWith([1001], expect.any(AbortSignal))
     expect(shown()!.rows.find(item => item.handle === view)?.positions[0]).toBe(0)
     expect(client.open).toHaveBeenCalledTimes(3)
+  })
+
+  it('follows a key column by its position among columns of one name, and finds none rather than guess', async () => {
+    const column = (name: string, dataType = 'int') => ({ name, dataType, wire: 'text' as const, nullable: false })
+    const ids = [column('ID'), column('ID')]
+    expect(trackedColumn(ids, { column: 'ID', dataType: 'int', ordinal: 1 })).toBe(1)
+    expect(trackedColumn([column('Name', 'nvarchar'), ...ids], { column: 'ID', dataType: 'int', ordinal: 1 })).toBe(1)
+    expect(trackedColumn([column('Name', 'nvarchar'), column('ID'), column('X'), column('ID')], { column: 'ID', dataType: 'int', ordinal: 0 })).toBe(-1)
+    expect(trackedColumn([column('Name', 'nvarchar'), column('ID')], { column: 'ID', dataType: 'int', ordinal: 0 })).toBe(1)
+    expect(trackedColumn([column('ID', 'nvarchar')], { column: 'ID', dataType: 'int', ordinal: 0 })).toBe(-1)
+    // Auto picked the second of two ID columns; the re-run identifies by that one, not the first of the name.
+    const { results, highlights, client } = fixture()
+    const runWith = (resultId: number) => {
+      const queryId = `q${resultId}`
+      results.begin('t1', queryId)
+      const value = descriptor(resultId, { index: 0, rowsRead: 10, rowsStored: 10, rowsAvailable: 10, columns: ids })
+      client.emit(queryId, { type: 'resultSet.opened', descriptor: value })
+      void results.finish('t1', queryId, { summary: summaryOf([value]) })
+      return results.getSnapshot().t1.sets[0].handle as FakeHandle
+    }
+    const first = runWith(1)
+    vi.mocked(first.identify).mockResolvedValueOnce({ column: 1, unique: true, approximate: false, rows: 10 })
+    results.setSelection('t1', 0, rows(0, 1, 1))
+    await highlights.highlight('t1', 0, 1)
+    const second = runWith(2)
+    await settle()
+    expect(second.identify).toHaveBeenCalledWith('column', { column: 1, signal: expect.any(AbortSignal) })
+  })
+
+  it('does not search again for rows after a failed search until the highlights change', async () => {
+    const { results, highlights, run, shown, timers } = fixture()
+    run(1)
+    results.setSelection('t1', 0, rows(0, 1, 1))
+    await highlights.highlight('t1', 0, 2)
+    const second = run(2, 6, 'q2')
+    vi.mocked(second.findRows).mockRejectedValue(Object.assign(new Error('Too many requests.'), { code: 'TOO_MANY_REQUESTS' }))
+    // The failure's notice publishes the results again, now and when it goes; neither searches again.
+    for (let i = 0; i < 5; i++) { await settle(); timers.advance(60_000) }
+    expect(second.findRows).toHaveBeenCalledTimes(1)
+    expect(shown()).toMatchObject({ count: 1, found: 0 })
+    // A new highlight is a new version, searched for again.
+    vi.mocked(second.findRows).mockReset()
+    vi.mocked(second.findRows).mockResolvedValue({ positions: [1, 2], marks: [0, 1], truncated: false, rows: 6 })
+    results.setSelection('t1', 0, rows(0, 2, 2))
+    await highlights.highlight('t1', 0, 2)
+    expect(second.findRows).toHaveBeenCalledTimes(1)
+    expect(shown()).toMatchObject({ count: 2, found: 2 })
   })
 
   it('keeps the whole-row fallback, refuses too many rows at once, and forgets a closed tab', async () => {
