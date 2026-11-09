@@ -3,6 +3,7 @@ import { insertTextFor } from '../../../shared/explorer/refs.ts'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { explorerNodeOf, filterable, type ExplorerMenuNode } from '../menus/targets'
+import { windows } from '../core/windows'
 
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 const frame = (callback: () => void) => { if (typeof requestAnimationFrame === 'function') requestAnimationFrame(callback); else callback() }
@@ -13,8 +14,9 @@ const frame = (callback: () => void) => { if (typeof requestAnimationFrame === '
  * on a server that is still connected (not lost with a backend restart, even when the backend restarted while the menu
  * was open or the command was waiting).
  */
-export function explorerContribution({ commands, documents, connections, explorer, explorerStatus, settings, peek }: Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer'>
-  & { explorerStatus?: Pick<Workbench['explorerStatus'], 'refresh'>; settings?: Pick<Workbench['settings'], 'toggle'>; peek?: Pick<Workbench['peek'], 'canPeek' | 'peek'> },
+export function explorerContribution({ commands, documents, connections, explorer, explorerStatus, settings, peek, peekTabs }: Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer'>
+  & { explorerStatus?: Pick<Workbench['explorerStatus'], 'refresh'>; settings?: Pick<Workbench['settings'], 'toggle'>; peek?: Pick<Workbench['peek'], 'canPeek' | 'peek' | 'getSnapshot' | 'close' | 'refresh'>
+    peekTabs?: Pick<Workbench['peekTabs'], 'canOpen' | 'open' | 'view'> },
   api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
   const nodeOf = (args?: CommandArgs): ExplorerMenuNode | undefined => args?.target ? explorerNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
   const live = (node: ExplorerMenuNode | undefined): node is ExplorerMenuNode => !!node && !node.lost && connections.isLive(node.connectionId)
@@ -54,6 +56,24 @@ export function explorerContribution({ commands, documents, connections, explore
     commands.register('explorer.peek', {
       when: args => !!peek?.canPeek(nodeOf(args)),
       run: args => peek?.peek(nodeOf(args), args?.target ? 'menu' : 'keyboard')
+    }),
+    // Open Peek as Tab: the open card's object (on the tab it shows, and the card closes), otherwise the node a menu, a Ctrl+click
+    // or the selection names.
+    commands.register('explorer.openPeekTab', {
+      when: args => !args?.target && !!peek?.getSnapshot().open || !!peekTabs?.canOpen(nodeOf(args)),
+      run: args => {
+        const card = args?.target ? undefined : peek?.getSnapshot().open
+        if (card) { peek?.close(); peekTabs?.open(card.node, card.tab) } else peekTabs?.open(nodeOf(args))
+      }
+    }),
+    // F5 in the card refreshes the card; elsewhere it refreshes the active Peek tab.
+    commands.register('peek.refresh', {
+      when: () => !!peek?.getSnapshot().open || !!peekTabs?.view(documents.getSnapshot().activeId),
+      run: () => {
+        const inCard = typeof document !== 'undefined' && !!windows.activeElement()?.closest('[data-peek-card]')
+        if (inCard || !peekTabs?.view(documents.getSnapshot().activeId)) peek?.refresh()
+        else peekTabs.view(documents.getSnapshot().activeId)?.refresh()
+      }
     }),
     // A server's name as connected to, or the quoted object name.
     commands.register('explorer.copyName', {

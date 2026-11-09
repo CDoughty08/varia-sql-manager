@@ -20,17 +20,18 @@ export type PeekFormat = typeof peekFormats[number]
 export interface PeekFact { readonly id: string; readonly label: string; readonly format: PeekFormat; readonly since?: number }
 export interface PeekGroup { readonly id: string; readonly title: string; readonly facts: readonly PeekFact[] }
 /**
- * The card's tabs beside Definition: `members` lists the object's Columns or Parameters folder (explorer.children, as the tree
- * lists it), `dependencies` what the object uses and what uses it (explorer.peekDependencies), and `rows` its first rows
- * (explorer.peekRows). Each is read the first time its tab is chosen, never with the facts: Dependencies stays its own request
- * so that a login refused sys.sql_expression_dependencies still sees the properties.
+ * Peek's tabs beside Definition (the card's and a promoted tab's): `members` lists the object's Columns or Parameters folder
+ * (explorer.children, as the tree lists it), `dependencies` what the object uses and what uses it (explorer.peekDependencies),
+ * and `rows` its first rows (Select Top N Rows' script through query.execute, shown in the results grid). Each is read the first
+ * time its tab is chosen, never with the facts: Dependencies stays its own request so that a login refused
+ * sys.sql_expression_dependencies still sees the properties.
  */
 export const peekTabs = ['definition', 'members', 'dependencies', 'rows'] as const
 export type PeekTab = typeof peekTabs[number]
 /**
  * `module`: the definition is the module's text from sys.sql_modules, read with the facts. `script`: the kind has no stored
  * text, so the card asks Script As (scripting.script, CREATE) for it. `members`: the folder the Columns or Parameters tab
- * lists. `rows`: whether the kind has rows to sample.
+ * lists. `rows`: whether the kind has rows for the Top rows tab.
  */
 export interface PeekKindSpec {
   readonly kind: PeekKind
@@ -107,14 +108,10 @@ export const peekLimits = {
   members: 1024,
   /** Objects listed each way on the Dependencies tab; more are marked `usesTruncated` or `usedByTruncated`. */
   dependencies: 200,
-  /** Rows the Top rows tab reads (SELECT TOP (n) *, in no order, as SSMS's Select Top rows). */
+  /** Rows the Top rows tab reads: Select Top N Rows' script with this N, in no order, as SSMS's Select Top rows. */
   rows: 10,
   /** Cards Back remembers when dependencies are followed one after another. */
-  backSteps: 16,
-  /** Columns the Top rows tab shows; wider objects say how many more they have. */
-  rowColumns: 100,
-  /** UTF-16 code units of a value the Top rows tab keeps; longer values are cut and marked. */
-  rowCellChars: 256
+  backSteps: 16
 } as const
 
 export type PeekValue = string | number | boolean | null
@@ -169,36 +166,10 @@ export interface PeekDependenciesResult {
   readonly error?: ExplorerError
 }
 
-/** explorer.peekRows: a table's or view's first rows, on Peek's slot, within its budget. */
-export interface PeekRowsParams {
-  readonly connectionId: string
-  readonly requestId: string
-  /** A table or view. */
-  readonly target: ObjectRef
-}
-export interface PeekRowsColumn { readonly name: string; readonly type: string }
-export interface PeekRowsResult {
-  /** The first `peekLimits.rowColumns` columns. */
-  readonly columns: readonly PeekRowsColumn[]
-  /** Columns past those, left out. */
-  readonly moreColumns?: number
-  /** Each value as the results grid shows it (docs/ipc.md, Display formats), null for NULL, cut to `peekLimits.rowCellChars`. */
-  readonly rows: readonly (readonly (string | null)[])[]
-  /** [row, column] of the values that were cut. */
-  readonly cut?: readonly (readonly [number, number])[]
-  /** [row, column] of the values that could not be read (null in `rows`; the results grid shows them as NULL with a warning). */
-  readonly unread?: readonly (readonly [number, number])[]
-  readonly elapsedMs: number
-  readonly error?: ExplorerError
-}
-
 /** The block explorerCatalogJson embeds for the backend. */
 export const peekCatalogBlock = () => ({
-  kinds: peekKinds.map(kind => ({ kind, definition: peekSpecs[kind].definition, rows: peekSpecs[kind].rows, facts: peekFacts(kind).map(({ id, format, since }) => ({ id, format, since: since ?? null })) })),
+  kinds: peekKinds.map(kind => ({ kind, definition: peekSpecs[kind].definition, facts: peekFacts(kind).map(({ id, format, since }) => ({ id, format, since: since ?? null })) })),
   definitionChars: peekLimits.definitionChars,
   budgetMs: peekLimits.budgetMs,
-  dependencies: peekLimits.dependencies,
-  rows: peekLimits.rows,
-  rowColumns: peekLimits.rowColumns,
-  rowCellChars: peekLimits.rowCellChars
+  dependencies: peekLimits.dependencies
 })
