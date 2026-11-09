@@ -1417,16 +1417,21 @@ The results toolbar's search box searches every grid of a run in the backend, ov
   hold `maxMatches`, so a run passes `maxMatches` by at most its last row's columns. `matchRows[k]`, `matchColumns[k]`
   are the run's cells in row then column order; `first` counts the matches before the run's first (when the run is
   empty, those before `fromRow`). `complete`: those rows were all of a finished set; `approximate`: a truncated value was
-  searched by its stored prefix and did not match. A search holds only its run, so it reserves no budget; CANCEL (a newer
-  search) stops it.
-- **Matching.** A cell matches when its grid text contains the text. NULL and unreadable cells never match. Character
+  searched by its stored prefix and did not match. A search holds its run, one row's matches and at most 1 MiB of parsed
+  page layouts (one page's in base order), so it reserves no budget. It checks at points spaced by the work done (cells
+  and bytes compared, so a wide or long-valued row is a checkpoint of its own): CANCEL (a newer search) stops it there,
+  and so does the result's release (`RESULT_RELEASED`) or the view's close (`VIEW_NOT_FOUND`), so it never reads pages
+  whose budget was returned for longer than one checkpoint.
+- **Matching.** A cell matches when its grid text contains the text. NULL and unreadable cells never match. Hidden columns (a
+  diff's row tone) are not searched. Character
   columns compare by their collation, as `LIKE '%text%'` would: its locale and Ignore flags (case, accents, kana type,
-  width), code points for _BIN and _BIN2, and for a locale the runtime does not know its case flag alone. Every other
+  width), code points for _BIN and _BIN2, and for a locale the runtime does not know its case flag alone. Text made only
+  of characters the locale ignores (U+200B, U+00AD) is looked for as written, by code point. Every other
   column compares its display text ignoring case (numbers, dates, xml, json, uniqueidentifier); binary values match their
   `0x` and uppercase hex, and a column of them is skipped when the text is not hex.
 - **Main** checks the request with the port schema and ownership, and the answer before forwarding it: as many columns as
-  rows, cells strictly in (row, column) order inside the rows searched and on the side of `fromRow` asked, and
-  `first + matches ≤ total`.
+  rows, cells strictly in (row, column) order inside the rows searched and on the side of `fromRow` asked, columns inside
+  the result's (as its descriptor named them), and `first + matches ≤ total`.
 - **Renderer.** `ResultHandle.search(text, fromRow, { maxMatches, backward, signal })` bounds the request before the port.
   `ResultsSearchService` (`results/search.ts`) runs each tab's search: typing searches once it pauses (200 ms; Enter at
   once), one grid at a time in run order, through the view a sorted grid shows, and the first match becomes active as
