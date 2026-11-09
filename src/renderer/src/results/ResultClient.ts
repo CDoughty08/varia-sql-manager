@@ -1,7 +1,7 @@
 // The renderer's access to stored query results (the PR7 grid contract). Rows stay in the backend; the results worker
 // reads and decodes pages, and the UI thread receives only windows of display text. Live subscriptions run through the
 // same worker and port: their tables are ordinary stored results, opened with the same handles.
-import type { ApiResult, BackendStatus, IdentityBy, QueryEvent, QueryResult, ResultColumn, ResultDescriptor, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, TruncationReason, VariaApi, ViewSortKey, WireKind } from '../../../shared/contracts'
+import type { ApiResult, BackendStatus, IdentityBy, QueryEvent, QueryResult, ResultColumn, ResultDescriptor, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ResolvedViewFilter, TruncationReason, VariaApi, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport } from '../../../shared/ipc/port-messages'
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
@@ -83,10 +83,10 @@ export interface ResultHandle extends Disposable {
   /** Releases the result in the backend (results.close); queued while the results port is down. A view's close closes
    *  only the view (results.viewClose). */
   close(): Promise<void>
-  /** A view of the result's stored rows sorted by `keys` in the backend (results.view), read through the same calls by
-   *  view position. On a view, sorts its result again. `replaces` is a view of the same result the new one supersedes:
-   *  the backend frees it once the new view is built, and its handle then reports itself released. */
-  sort(keys: readonly ViewSortKey[], o?: { replaces?: ResultView; signal?: AbortSignal }): Promise<ResultView>
+  /** A view of the result's stored rows kept by `filters` and sorted by `keys` in the backend (results.view), read through
+   *  the same calls by view position. On a view, views its result again. `replaces` is a view of the same result the new
+   *  one supersedes: the backend frees it once the new view is built, and its handle then reports itself released. */
+  sort(keys: readonly ViewSortKey[], o?: { filters?: readonly ViewFilter[]; replaces?: ResultView; signal?: AbortSignal }): Promise<ResultView>
   /** Tells the result's rows apart in the backend (results.identify), replacing its earlier identities: by a unique key
    *  column it picks (else the whole row), a given column, or the whole row. On a view, identifies its result. The
    *  result must have finished loading. */
@@ -112,6 +112,8 @@ export interface ResultView extends ResultHandle {
   readonly viewId: number
   readonly base: ResultHandle
   readonly keys: readonly ViewSortKey[]
+  /** The view's filters as it applied them (selected cells resolved to base rows), which build it again. */
+  readonly filters: readonly ResolvedViewFilter[]
   readonly rows: number
   readonly complete: boolean
   readonly approximate: boolean
@@ -420,14 +422,19 @@ export class ResultClient implements Disposable {
   }
 
   /** results.view through the worker. A view built after its sort was given up is closed by the worker. */
-  private async sort(base: ResultState | undefined, keys: readonly ViewSortKey[], o: { replaces?: ResultView; signal?: AbortSignal } = {}): Promise<ResultView> {
+  private async sort(base: ResultState | undefined, keys: readonly ViewSortKey[], o: { filters?: readonly ViewFilter[]; replaces?: ResultView; signal?: AbortSignal } = {}): Promise<ResultView> {
     if (!base) throw new ResultError('RESULT_RELEASED', released)
     this.usable(base)
-    if (keys.length < 1 || keys.length > wire.views.maxKeys || new Set(keys.map(item => item.column)).size !== keys.length || keys.some(item => !Number.isInteger(item.column) || item.column < 0 || item.column >= base.columns.length))
+    const columnOf = (column: number) => Number.isInteger(column) && column >= 0 && column < base.columns.length
+    if (keys.length > wire.views.maxKeys || new Set(keys.map(item => item.column)).size !== keys.length || keys.some(item => !columnOf(item.column)))
       throw new ResultError('INVALID_PARAMS', 'Each sort key needs a distinct column of the result.')
+    const filters = o.filters?.length ? o.filters.map(item => ({ ...item })) : undefined
+    if (keys.length + (filters?.length ?? 0) === 0 || (filters?.length ?? 0) > wire.views.maxFilters
+      || filters?.some(item => item.op === 'duplicates' ? item.columns.length === 0 || new Set(item.columns).size !== item.columns.length || !item.columns.every(columnOf) : !columnOf(item.column)))
+      throw new ResultError('INVALID_PARAMS', 'A view needs a sort key or a filter, on columns of the result.')
     const replaces = o.replaces && o.replaces.base === base.handle && this.views.has(`${base.id}#${o.replaces.viewId}`) ? o.replaces.viewId : undefined
     const sort = keys.map(item => ({ column: item.column, descending: item.descending, mode: item.mode }))
-    const response = await this.request(id => ({ type: 'view', id, key: base.key, sort, ...(replaces === undefined ? {} : { replaces }) }), o.signal)
+    const response = await this.request(id => ({ type: 'view', id, key: base.key, sort, ...(filters ? { filters } : {}), ...(replaces === undefined ? {} : { replaces }) }), o.signal)
     if (response.type !== 'view') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
     if (replaces !== undefined) this.endView(this.views.get(`${base.id}#${replaces}`), 'released')
     const key: ResultKey = { ...base.key, view: response.viewId }
@@ -439,7 +446,7 @@ export class ResultClient implements Disposable {
     if (!this.tracked(base)) state.snapshot = { ...state.snapshot, state: base.snapshot.state }
     else this.views.set(state.id, state)
     const baseHandle = base.handle ?? this.handleFor(base, () => this.release([{ generation: base.key.generation, resultId: base.key.resultId }]))
-    return this.handleFor<ResultView>(state, () => this.closeView(state), () => ({ viewId: response.viewId, base: baseHandle, keys: sort, rows: response.rows, complete: response.complete, approximate: response.approximate }))
+    return this.handleFor<ResultView>(state, () => this.closeView(state), () => ({ viewId: response.viewId, base: baseHandle, keys: sort, filters: response.filters ?? [], rows: response.rows, complete: response.complete, approximate: response.approximate }))
   }
 
   /** results.viewClose: the view's windows and pages go at once; a failure (its result already released) changes nothing. */

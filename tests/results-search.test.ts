@@ -170,14 +170,14 @@ describe('ResultsSearchService', () => {
     const reveal = search().reveal
     // The grid swaps to a sorted view: the search runs again through it, the old matches showing until it answers.
     const view = { key: { generation: 1, resultId: 1, view: 9 }, viewId: 9, search: sets[0].handle.search } as unknown as NonNullable<GridSort['view']>
-    sorts.set(0, { keys: [], view, sorting: false, approximate: false, stale: false })
+    sorts.set(0, { keys: [], filters: [], applied: [], view, sorting: false, approximate: false, stale: false })
     show(sets)
     expect(searches).toHaveLength(1)
     expect(search().marks.get(0)?.cells?.size).toBe(3)
     await answerAll()
     expect(search()).toMatchObject({ current: 1, reveal })
     // A step while it searches again moves the active match; the end keeps that place and shows it in the new matches.
-    sorts.set(0, { keys: [], view: { ...view, viewId: 10 } as never, sorting: false, approximate: false, stale: false })
+    sorts.set(0, { keys: [], filters: [], applied: [], view: { ...view, viewId: 10 } as never, sorting: false, approximate: false, stale: false })
     show(sets)
     service.step('t1', 1)
     const stepped = search().reveal
@@ -340,7 +340,7 @@ describe('ResultsSearchService', () => {
     await answerAll()
     // A sort swaps the grid: the search runs again; F3 in the grid steps outside the held run meanwhile.
     const view = { key: { generation: 1, resultId: 1, view: 9 }, viewId: 9, search: sets[0].handle.search } as unknown as NonNullable<GridSort['view']>
-    sorts.set(0, { keys: [], view, sorting: false, approximate: false, stale: false })
+    sorts.set(0, { keys: [], filters: [], applied: [], view, sorting: false, approximate: false, stale: false })
     show(sets)
     expect(searches).toHaveLength(1)
     service.step('t1', 1, true)

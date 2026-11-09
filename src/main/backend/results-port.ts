@@ -1,4 +1,4 @@
-import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsDiffParams, ResultsDiffResult, ResultsFindRowsParams, ResultsFindRowsResult, ResultsIdentifyParams, ResultsIdentifyResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsRowIdsParams, ResultsRowIdsResult, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult } from '../../shared/contracts'
+import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ViewFilter, ResultsCloseResult, ResultsDiffParams, ResultsDiffResult, ResultsFindRowsParams, ResultsFindRowsResult, ResultsIdentifyParams, ResultsIdentifyResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsRowIdsParams, ResultsRowIdsResult, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult } from '../../shared/contracts'
 import { diffResultSchema, findRowsResultSchema, identifyResultSchema, type MemoryFeature, type MemoryReport, type PortEndResult, type PortMessage, type PortRequest, portRequestSchema, profileResultSchema, rowBytesResultSchema, rowIdsResultSchema, searchResultSchema, testPortRequestSchema, viewCloseResultSchema, viewResultSchema } from '../../shared/ipc/port-messages'
 import { liveDescriptors, liveRetired, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../../shared/live/schema'
 import { cancelReasons, limits as wire, type CancelReason, type ErrorCode } from '../../shared/ipc/wire/protocol'
@@ -492,6 +492,7 @@ export class ResultsPortHost {
     if (!this.current(request.generation, request.resultId)) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
     const port = this.port
     const params: ResultsViewParams = { resultId: request.resultId, sort: request.sort.map(key => ({ ...key })) }
+    if (request.filters) params.filters = request.filters.map(copyFilter)
     if (request.replaces !== undefined) params.replaces = request.replaces
     const sort = this.backend.view(request.generation, params)
     this.sorting.set(rid, sort)
@@ -503,7 +504,8 @@ export class ResultsPortHost {
         return
       }
       this.sorting.delete(rid)
-      if (!parsed.success) return this.end(rid, 'BACKEND_ERROR', 'The results could not be sorted.')
+      // A filtered view answers each filter it was asked for, no more.
+      if (!parsed.success || (parsed.data.filters?.length ?? 0) !== (request.filters?.length ?? 0)) return this.end(rid, 'BACKEND_ERROR', 'The results could not be sorted.')
       this.post({ t: 'end', rid, ok: true, result: parsed.data })
     }, error => {
       if (this.port !== port || this.sorting.get(rid) !== sort) return
@@ -775,4 +777,11 @@ function storedResultId(answer: unknown): number | undefined {
   const descriptor = typeof answer === 'object' && answer !== null ? (answer as { descriptor?: unknown }).descriptor : undefined
   const id = typeof descriptor === 'object' && descriptor !== null ? (descriptor as { resultId?: unknown }).resultId : undefined
   return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 && id <= 0xffff_ffff ? id : undefined
+}
+
+/** A validated filter copied member by member, so nothing but its schema's members reaches the backend. */
+function copyFilter(filter: ViewFilter): ViewFilter {
+  if (filter.op === 'duplicates') return { op: 'duplicates', columns: [...filter.columns] }
+  if ('cells' in filter) return { op: filter.op, column: filter.column, cells: { ranges: filter.cells.ranges.map(([first, count]) => [first, count]), ...(filter.cells.viewId === undefined ? {} : { viewId: filter.cells.viewId }) } }
+  return { op: filter.op, column: filter.column, rows: [...filter.rows], ...(filter.nulls === undefined ? {} : { nulls: filter.nulls }) }
 }

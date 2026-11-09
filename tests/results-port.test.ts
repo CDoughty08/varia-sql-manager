@@ -364,6 +364,35 @@ describe('ResultsPortHost', () => {
     await settle()
     expect(backend.rowBytes).toHaveBeenLastCalledWith(1, { resultId: 7, firstRow: 0, count: 2, viewId: 4 })
   })
+  it('filters within the schema bounds, copies only the filters\' members, and relays a view only with each filter resolved', async () => {
+    const { host, port, views } = fixture()
+    host.own([descriptor(7)])
+    const cells = { op: 'in', column: 1, cells: { ranges: [[0, 2], [5, 1]], viewId: 4 } }
+    const rows = { op: 'notIn', column: 0, rows: [3], nulls: true }
+    const dups = { op: 'duplicates', columns: [0, 1] }
+    port().send({ t: 'view', rid: 1, generation: 1, resultId: 7, sort: [], filters: [cells, rows, dups] })
+    port().send({ t: 'view', rid: 2, generation: 1, resultId: 7, sort: [], filters: [] })
+    port().send({ t: 'view', rid: 3, generation: 1, resultId: 7, sort: [], filters: Array.from({ length: 17 }, () => rows) })
+    port().send({ t: 'view', rid: 4, generation: 1, resultId: 7, sort: [], filters: [{ op: 'in', column: 1, rows: Array.from({ length: 4097 }, (_, row) => row) }] })
+    port().send({ t: 'view', rid: 5, generation: 1, resultId: 7, sort: [], filters: [{ op: 'in', column: 1, cells: { ranges: Array.from({ length: 257 }, (_, row) => [row, 1]) } }] })
+    port().send({ t: 'view', rid: 6, generation: 1, resultId: 7, sort: [], filters: [{ op: 'in', column: 1, cells: { ranges: [[0, 0]] } }] })
+    port().send({ t: 'view', rid: 7, generation: 1, resultId: 7, sort: [], filters: [{ op: 'in', column: 1, rows: [1], cells: { ranges: [[0, 1]] } }] })
+    port().send({ t: 'view', rid: 8, generation: 1, resultId: 7, sort: [], filters: [{ op: 'duplicates', columns: [1, 1] }] })
+    port().send({ t: 'view', rid: 9, generation: 1, resultId: 7, sort: [], filters: [{ op: 'like', column: 1, rows: [1] }] })
+    port().send({ t: 'view', rid: 10, generation: 1, resultId: 7, sort: [], filters: [{ op: 'in', column: 1, rows: [-1] }] })
+    port().send({ t: 'view', rid: 11, generation: 1, resultId: 7, sort: [], filters: [{ ...rows, extra: true }] })
+    port().send({ t: 'view', rid: 12, generation: 1, resultId: 7, sort: [], filters: [rows] })
+    port().send({ t: 'view', rid: 13, generation: 1, resultId: 7, sort: [], filters: [rows] })
+    expect(views.map(view => view.params)).toEqual([{ resultId: 7, sort: [], filters: [cells, rows, dups] }, { resultId: 7, sort: [], filters: [rows] }, { resultId: 7, sort: [], filters: [rows] }])
+    const resolved = [{ op: 'in', column: 1, rows: [0, 5], nulls: false }, { op: 'notIn', column: 0, rows: [3], nulls: true }, dups]
+    views[0].resolve({ viewId: 6, rows: 3, complete: true, approximate: false, filters: resolved })
+    // A view that answers fewer filters than asked, or a filter still naming cells, is not relayed.
+    views[1].resolve({ viewId: 7, rows: 3, complete: true, approximate: false })
+    views[2].resolve({ viewId: 8, rows: 3, complete: true, approximate: false, filters: [{ op: 'in', column: 1, cells: { ranges: [[0, 1]] } }] })
+    await settle()
+    expect(codes(port())).toEqual([...[2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(rid => [rid, 'INVALID_REQUEST']), [1, 'ok'], [12, 'BACKEND_ERROR'], [13, 'BACKEND_ERROR']])
+    expect(port().ends().find(end => end.rid === 1)).toEqual({ t: 'end', rid: 1, ok: true, result: { viewId: 6, rows: 3, complete: true, approximate: false, filters: resolved } })
+  })
   it('cancels a sort on the worker\'s cancel and when the port closes, and closes views of owned results', async () => {
     const { host, backend, port, views } = fixture()
     host.own([descriptor(7)])
