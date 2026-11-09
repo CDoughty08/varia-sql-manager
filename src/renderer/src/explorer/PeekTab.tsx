@@ -13,7 +13,7 @@ import { peekMessages } from './PeekService'
 const unsubscribed = () => () => {}
 
 /**
- * Peek promoted to a document tab: the card's body (PeekBody: Definition, Columns or Parameters, Dependencies, Top rows, and
+ * Peek promoted to a document tab: the card's body (PeekBody: the kind's tabs, from Definition to its lists, and
  * the properties) with the room of a tab, under a header with Refresh, Script As… and, for a kind that has one, the full
  * Properties dialog. Script As and Properties act on the tab's object, with the selection keys it stands in for the tree's.
  */

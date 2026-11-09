@@ -6,6 +6,7 @@ import type { Platform } from '../src/shared/commands/keybindings'
 import { contextMenuRequestSchema, submenuTitle } from '../src/shared/commands/menus'
 import { compileWhen, evaluateWhen } from '../src/shared/commands/when'
 import { kindSpecs, nodeKinds, parentKinds, type NodeKind, type NodeSubtype, type ParentKind } from '../src/shared/explorer/catalog'
+import { isPeekKind } from '../src/shared/explorer/peek'
 import { contextMenuTemplate } from '../src/main/context-menu'
 import { hoverDelay, MenuController, type MenuKey } from '../src/renderer/src/menus/MenuController'
 import { nativeMenuRequest } from '../src/renderer/src/menus/native'
@@ -22,7 +23,7 @@ function resolveFor(platform: Platform, target: ScriptTarget, extra: Partial<Con
   const state = stateFor(platform, target, extra)
   const enabled = (id: CommandId) => { const { precondition } = commandDescriptor(id); return precondition === undefined || evaluateWhen(compileWhen(precondition), state) }
   return resolveMenu('explorer.context', {
-    platform, state, target: { explorerNode: target.kind }, commands: { isEnabled: enabled, isToggled: () => false }, keybindings: { lookup: () => undefined }
+    platform, state, target: { explorerNode: target.kind, explorerNodePeekable: isPeekKind(target.kind) }, commands: { isEnabled: enabled, isToggled: () => false }, keybindings: { lookup: () => undefined }
   })
 }
 /** One line per item, `&` before its access key, with `(disabled)` on items that cannot run or open. */

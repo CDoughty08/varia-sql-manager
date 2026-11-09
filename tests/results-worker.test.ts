@@ -363,6 +363,25 @@ describe('results worker core', () => {
     core.attach({ postMessage: () => {} })
     expect(posted.filter(message => message.type === 'error').map(message => (message as { id: number }).id)).toEqual(expect.arrayContaining([102, 104]))
   })
+  it('relays column profiles through main by result or view, cancels them, and fails those asked on a replaced port', () => {
+    const { core, sent, posted } = fixture()
+    core.handle({ type: 'profile', id: 100, key: { ...key, view: 3 }, columns: [1, 0] })
+    expect(sent.at(-1)).toEqual({ t: 'profile', rid: 1, generation: 1, resultId: 5, columns: [1, 0], viewId: 3 })
+    const result = { rows: 2, complete: true, rowBytes: { min: 4, max: 8, average: 6, exact: true }, columns: [{ column: 1, values: 2, nulls: 0, distinct: 2, distinctExact: true, approximate: false }, { column: 0, values: 1, nulls: 1, distinct: 1, distinctExact: true, approximate: false }] }
+    core.receive({ t: 'end', rid: 1, ok: true, result })
+    expect(posted.at(-1)).toEqual({ type: 'profile', id: 100, result })
+    core.handle({ type: 'profile', id: 101, key, columns: [] })
+    expect(sent.at(-1)).toEqual({ t: 'profile', rid: 2, generation: 1, resultId: 5, columns: [] })
+    core.handle({ type: 'cancel', id: 101 })
+    expect(sent.at(-1)).toEqual({ t: 'cancel', rid: 2 })
+    core.receive({ t: 'end', rid: 2, ok: false, code: 'CANCELLED', message: 'The request was cancelled.' })
+    expect(posted.at(-1)).toMatchObject({ type: 'error', id: 101, code: 'CANCELLED' })
+    core.handle({ type: 'profile', id: 102, key: { ...key, generation: 2 }, columns: [0] })
+    expect(posted.at(-1)).toMatchObject({ type: 'error', id: 102, code: 'RESULT_UNAVAILABLE' })
+    core.handle({ type: 'profile', id: 103, key, columns: [0] })
+    core.attach({ postMessage: () => {} })
+    expect(posted.at(-1)).toMatchObject({ type: 'error', id: 103, code: 'PORT_CLOSED' })
+  })
 
   it('formats a whole XML or JSON value in the worker, but never a stored prefix, a NULL, a read error, or malformed text', () => {
     const documentWires: WireKind[] = ['text']

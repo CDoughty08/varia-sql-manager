@@ -441,6 +441,11 @@ export const outputToolbar = page => outputPane(page).locator(part.outputToolbar
 /** The tools above a run's grids (White space, and the result tools that follow). */
 export const resultsToolbar = page => page.getByRole('toolbar', { name: 'Results tools', exact: true })
 export const outputStatus = page => outputPane(page).locator(part.outputStatus)
+/** The column profile panel beside a run's grids, and one column's card in it. */
+export const columnProfile = page => page.getByRole('complementary', { name: 'Column profile', exact: true })
+export const profileCard = (page, column) => columnProfile(page).getByRole('region', { name: column, exact: true })
+/** A profile card's figures, label to value ("NULLs" → "20 (20%)"). */
+export const profileFigures = card => card.locator('dl > div').evaluateAll(items => Object.fromEntries(items.map(item => [item.querySelector('dt').textContent, item.querySelector('dd').textContent])))
 export const jobProgress = page => outputPane(page).locator(part.jobProgress)
 export const jobNotice = page => outputPane(page).locator(part.jobNotice)
 export const outputEmpty = page => outputPane(page).locator(part.outputEmpty)

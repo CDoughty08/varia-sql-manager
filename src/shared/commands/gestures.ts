@@ -29,7 +29,8 @@ export const gestureScopes = {
   objectExplorer: 'Object Explorer',
   panels: 'Panels and Editor Tabs',
   popouts: 'Popout Windows',
-  documentTabs: 'Document Tabs'
+  documentTabs: 'Document Tabs',
+  connectionDialog: 'Connect Dialog'
 } as const
 export type GestureScope = keyof typeof gestureScopes
 
@@ -97,14 +98,19 @@ export const gestureCatalog = {
     kind: 'fixed', scope: 'global', action: 'wheel', target: 'anywhere', modifiers: ['ctrl'], keyboard: ['view.zoomIn', 'view.zoomOut', 'view.resetZoom'],
     locked: 'Chromium zooms the window with Control+wheel and with a trackpad pinch.'
   },
+  'connections.connect': {
+    title: 'Connect to Saved Connection', description: 'Connects to the saved connection in the Connect dialog.',
+    kind: 'fixed', scope: 'connectionDialog', action: 'doubleClick', target: 'a saved connection', modifiers: [],
+    locked: 'Double-clicking submits the Connect dialog; the Connect button also works from the keyboard.'
+  },
   'explorer.peekHover': {
-    title: 'Peek on Hover', description: 'Peeks a table, view, procedure or function while the pointer rests on its row.',
+    title: 'Peek on Hover', description: 'Peeks the object (a table, procedure, index, login and so on) while the pointer rests on its row.',
     kind: 'modifier', scope: 'objectExplorer', action: 'hover', target: 'an object', modifiers: ['mod'],
     // Not Alt: hovering presses nothing, so releasing Alt afterwards would count as a bare-Alt tap and focus the menu bar.
     choices: [['mod'], ['shift']], keyboard: ['explorer.peek']
   },
   'explorer.openPeekTab': {
-    title: 'Open Peek as Tab', description: 'Opens Peek on a table, view, procedure or function in a document tab.',
+    title: 'Open Peek as Tab', description: 'Opens Peek on the object (a table, procedure, index, login and so on) in a document tab.',
     kind: 'pointerCommand', scope: 'objectExplorer', action: 'click', target: 'an object', modifiers: ['mod'],
     choices: [['mod'], ['shift']], keyboard: ['explorer.openPeekTab']
   },

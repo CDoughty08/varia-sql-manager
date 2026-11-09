@@ -1,5 +1,5 @@
-import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult } from '../../shared/contracts'
-import { portRequestSchema, rowBytesResultSchema, searchResultSchema, testPortRequestSchema, viewCloseResultSchema, viewResultSchema, type MemoryFeature, type MemoryReport, type PortMessage, type PortRequest } from '../../shared/ipc/port-messages'
+import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult } from '../../shared/contracts'
+import { portRequestSchema, profileResultSchema, rowBytesResultSchema, searchResultSchema, testPortRequestSchema, viewCloseResultSchema, viewResultSchema, type MemoryFeature, type MemoryReport, type PortMessage, type PortRequest } from '../../shared/ipc/port-messages'
 import { liveDescriptors, liveRetired, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../../shared/live/schema'
 import { cancelReasons, limits as wire, type CancelReason, type ErrorCode } from '../../shared/ipc/wire/protocol'
 import type { StreamSink } from './connection'
@@ -32,6 +32,8 @@ export interface ResultsBackend {
   viewClose(generation: number, params: ResultsViewCloseParams): Promise<ResultsViewCloseResult>
   /** A search reads every stored row: the worker's cancel (a newer search, or the text cleared) stops it. */
   search(generation: number, params: ResultsSearchParams): { readonly done: Promise<ResultsSearchResult>; cancel(reason: CancelReason): void }
+  /** A profile reads every row: the worker's cancel (a newer profile, or the panel closed) stops it. */
+  profile(generation: number, params: ResultsProfileParams): { readonly done: Promise<ResultsProfileResult>; cancel(reason: CancelReason): void }
   live(generation: number, params: LiveSubscribeParams, onLive: (event: LiveEvent, bytes: number) => void, credit: number): LiveStreamHandle
   liveUpdate(generation: number, params: LiveUpdateParams): Promise<LiveUpdateResult>
 }
@@ -83,7 +85,7 @@ export class ResultsPortHost {
   private status: BackendStatus = 'stopped'
   private closing = 0
   private updating = 0
-  /** results.view requests in flight, by rid, so the worker's cancel reaches them. */
+  /** results.view and results.profile requests in flight, by rid, so the worker's cancel reaches them. */
   private readonly sorting = new Map<number, { cancel(reason: CancelReason): void }>()
   /** results.search requests in flight, by rid, likewise. */
   private readonly searching = new Map<number, { cancel(reason: CancelReason): void }>()
@@ -249,6 +251,7 @@ export class ResultsPortHost {
       case 'view': return this.view(request)
       case 'viewClose': return this.viewClose(request)
       case 'search': return this.search(request)
+      case 'profile': return this.profile(request)
       case 'live': return this.live(request)
       case 'liveUpdate': return this.liveUpdate(request)
     }
@@ -538,6 +541,32 @@ export class ResultsPortHost {
     })
   }
 
+  /** A profile of a result this renderer owns (a view id is checked against its result by the backend). The answer is
+   *  bounded before the renderer sees it: the columns asked, in order. */
+  private profile(request: Extract<PortRequest, { t: 'profile' }>): void {
+    const { rid } = request
+    if (this.sorting.has(rid)) return this.end(rid, 'INVALID_REQUEST', 'The results request was invalid.')
+    if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
+    if (!this.current(request.generation, request.resultId)) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
+    const port = this.port
+    const params: ResultsProfileParams = { resultId: request.resultId, columns: [...request.columns] }
+    if (request.viewId !== undefined) params.viewId = request.viewId
+    const profile = this.backend.profile(request.generation, params)
+    this.sorting.set(rid, profile)
+    profile.done.then(result => {
+      if (this.port !== port || this.sorting.get(rid) !== profile) return
+      this.sorting.delete(rid)
+      const parsed = profileResultSchema.safeParse(result)
+      if (!parsed.success || parsed.data.columns.length !== request.columns.length || parsed.data.columns.some((column, index) => column.column !== request.columns[index]))
+        return this.end(rid, 'BACKEND_ERROR', 'The results could not be profiled.')
+      this.post({ t: 'end', rid, ok: true, result: parsed.data })
+    }, error => {
+      if (this.port !== port || this.sorting.get(rid) !== profile) return
+      this.sorting.delete(rid)
+      this.fail(rid, error)
+    })
+  }
+
   /** The request names the current, ready generation and a result this renderer owns. */
   private current(generation: number, resultId: number): boolean {
     return generation === this.generation && this.backend.readyGeneration() === generation && this.owned.has(resultId)
@@ -595,6 +624,11 @@ export function supervisorResults(supervisor: BackendSupervisor): ResultsBackend
     search: (generation, params) => {
       let id = 0
       const done = supervisor.request('results.search', params, { generation, onSent: sent => { id = sent } })
+      return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
+    },
+    profile: (generation, params) => {
+      let id = 0
+      const done = supervisor.request('results.profile', params, { generation, onSent: sent => { id = sent } })
       return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
     },
     live: (generation, params, onLive, credit) => {

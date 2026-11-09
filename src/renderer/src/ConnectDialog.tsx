@@ -92,7 +92,7 @@ function AdvancedProperties({ value, onSave, onClose }: { value: Partial<Advance
 }
 
 export default function ConnectDialog({ initial, onConnected, onClose }: Props) {
-  const { theme, platform } = useWorkbench()
+  const { theme, platform, gestures } = useWorkbench()
   const { active } = useServiceSnapshot(theme)
   const [options, setOptions] = useState<ConnectionOptions>({ ...initial, password: '' })
   const [library, setLibrary] = useState<ConnectionLibrary>({ version: 1, profiles: [] })
@@ -368,7 +368,7 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   const passwordShown = usesPassword(options.authentication)
   function profileRows(profiles: ConnectionProfile[], empty: string) {
     return profiles.length ? profiles.map(profile => <div key={profile.id} className={'connection-list-row' + (selectedId === profile.id ? ' selected' : '')}>
-      <button type="button" className="connection-choice" disabled={locked} onClick={() => choose(profile)} title={rowTitle(profile.options)}><span className="connection-swatch" style={{ backgroundColor: theme.accent(profile.options.color) ?? 'var(--varia-connection-default)' }} /><Icon name="server" /><span><span className="connection-choice-title"><strong>{profile.options.displayName || profile.options.server}</strong><EnvironmentTag environment={profile.options.environment} place="list" /></span><small>{profile.options.displayName ? profile.options.server + ' · ' : ''}{profile.options.database || '<default>'} · {showsIdentity(profile.options.authentication) ? identityOf(profile.options.authentication) : profile.options.username ?? ''}</small></span></button>
+      <button type="button" className="connection-choice" disabled={locked} onClick={() => choose(profile)} onDoubleClick={event => { if (gestures.matches('connections.connect', event)) connectButton.current?.click() }} title={rowTitle(profile.options)}><span className="connection-swatch" style={{ backgroundColor: theme.accent(profile.options.color) ?? 'var(--varia-connection-default)' }} /><Icon name="server" /><span><span className="connection-choice-title"><strong>{profile.options.displayName || profile.options.server}</strong><EnvironmentTag environment={profile.options.environment} place="list" /></span><small>{profile.options.displayName ? profile.options.server + ' · ' : ''}{profile.options.database || '<default>'} · {showsIdentity(profile.options.authentication) ? identityOf(profile.options.authentication) : profile.options.username ?? ''}</small></span></button>
       <button type="button" className="icon-button favorite-button" aria-label={`${profile.favorite ? 'Unfavorite' : 'Favorite'} ${profile.options.displayName || profile.options.server}`} title={profile.favorite ? 'Remove from favorites' : 'Add to favorites'} disabled={locked} onClick={() => void saveProfile(!profile.favorite, undefined, profile)}><Icon name={profile.favorite ? 'star-full' : 'star-empty'} /></button>
       <button type="button" className="icon-button" aria-label={`Remove saved ${profile.options.displayName || profile.options.server}`} title="Remove saved connection" disabled={locked} onClick={() => void remove(profile)}><Icon name="close" /></button>
     </div>) : <p className="connection-empty">{empty}</p>

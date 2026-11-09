@@ -210,10 +210,10 @@ internal static class ExplorerLiveChecks
         var echoes = ExplorerQueries.All.Append(new(serverEcho.Id, serverEcho)).Append(new(databaseEcho.Id, databaseEcho)).ToDictionary(StringComparer.Ordinal);
         var ssis = ExplorerChecks.Variant(json =>
         {
-            ExplorerChecks.SetKind(json, "login", ("scope", "ssisProjectObject"), ("list", serverEcho.Id), ("rows", new JsonArray("credential")));
+            ExplorerChecks.SetKind(json, "credential", ("scope", "ssisProjectObject"), ("list", serverEcho.Id), ("rows", new JsonArray("credential")));
             ExplorerChecks.SetKind(json, "database", ("list", databaseEcho.Id), ("rows", new JsonArray("credential")));
         });
-        var package = new ObjectRefDto("login", Name: "Daily ]' 😀", SsisFolder: "Finance [x]", SsisProject: "Loads; --");
+        var package = new ObjectRefDto("credential", Name: "Daily ]' 😀", SsisFolder: "Finance [x]", SsisProject: "Loads; --");
         foreach (var perDatabase in new[] { false, true })
         {
             using var service = new ExplorerService(host, new ExplorerOptions { ForcePerDatabaseScope = perDatabase }, ssis, echoes);
@@ -361,7 +361,8 @@ internal static class ExplorerLiveChecks
         await using var scratch = await ScratchDatabase.CreateAsync(sql, Path.Combine(AppContext.BaseDirectory, "Fixtures"));
         Console.WriteLine("Created the Object Explorer scratch database in " + watch.ElapsedMilliseconds + " ms.");
         await SearchLiveChecks.RunAsync(check, service, client.ConnectionId, json, sql, scratch.Name);
-        await PeekLiveChecks.ScratchAsync(check, service, client.ConnectionId, scratch.Name, scratch.Major, sql, json, scratch.CreateMemoryOptimizedAsync, scratch.DropMemoryOptimizedAsync);
+        await PeekLiveChecks.ScratchAsync(check, service, client.ConnectionId, scratch.Name, scratch.Major, sql, json, scratch.CreateMemoryOptimizedAsync, scratch.DropMemoryOptimizedAsync,
+            scratch.OwnLogin);
         var major = scratch.Major;
         var db = Database(scratch.Name);
         var dbName = scratch.Name;

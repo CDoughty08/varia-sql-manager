@@ -45,10 +45,11 @@ const keysOf = (sort: GridSort | undefined) => sort?.keys.map(key => `${key.colu
 function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, onWide }: ResultGridProps) {
   const { results, resultClient, commands, platform, gridStats, panes, settings, resultsSearch } = useWorkbench()
   const values = useServiceSnapshot(settings).values
-  const showTypes = values['queryResults.grid.showColumnTypes'], whitespace = values['queryResults.grid.whitespace']
-  const showTypesRef = useRef(showTypes), whitespaceRef = useRef(whitespace)
+  const showTypes = values['queryResults.grid.showColumnTypes'], whitespace = values['queryResults.grid.whitespace'], rowSize = values['queryResults.grid.rowSize']
+  const showTypesRef = useRef(showTypes), whitespaceRef = useRef(whitespace), rowSizeRef = useRef(rowSize)
   showTypesRef.current = showTypes
   whitespaceRef.current = whitespace
+  rowSizeRef.current = rowSize
   const rootRef = useRef<HTMLDivElement>(null), scrollRef = useRef<HTMLDivElement>(null), viewRef = useRef<GridView | undefined>(undefined)
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
   // Search in results: this grid's marks, and the tab's reveal of the active match.
@@ -76,7 +77,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
     results.viewShown(tabId, index, sorted)
     const view = new GridView({
       root: rootRef.current!, scroller: scrollRef.current!, handle: shownRef.current.handle, client: resultClient, descriptor: entry.descriptor, state: results.gridState(tabId, index),
-      resultIndex: index, resultCount: countRef.current, platform, stats: gridStats, showTypes: showTypesRef.current, whitespace: whitespaceRef.current,
+      resultIndex: index, resultCount: countRef.current, platform, stats: gridStats, showTypes: showTypesRef.current, whitespace: whitespaceRef.current, rowSize: rowSizeRef.current,
       onSelection: selection => {
         const current = entry.handle.getSnapshot()
         results.announceSelection(tabId, describeSelection(selection, current.rowsAvailable, entry.descriptor.columns.length))
@@ -104,7 +105,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
       if (viewRef.current === view) viewRef.current = undefined
     }
   }, [tabId, index, entry, results, resultClient, commands, platform, gridStats, panes])
-  useEffect(() => { viewRef.current?.update({ resultCount: count, showTypes, whitespace, sort: sort?.keys }) }, [count, showTypes, whitespace, sort?.keys])
+  useEffect(() => { viewRef.current?.update({ resultCount: count, showTypes, whitespace, sort: sort?.keys, rowSize }) }, [count, showTypes, whitespace, sort?.keys, rowSize])
   // The active match scrolls into view once, in the grid that holds it: at once, or when this grid mounts (the stack
   // scrolled to it) or has swapped to the order the matches number.
   const reveal = search?.reveal ?? 0

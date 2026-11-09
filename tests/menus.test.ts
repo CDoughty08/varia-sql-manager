@@ -362,7 +362,9 @@ describe('menu state', () => {
       // Sorting a grid: its menu and its headers' sort buttons; Sort text by is the results toolbar's and the palette's.
       'output.sortAscending', 'output.sortDescending', 'output.thenSortAscending', 'output.thenSortDescending', 'output.clearSort', 'output.sortTextByChars', 'output.sortTextByBytes',
       // Search in results: the results toolbar's search box, its keys in a grid, and the palette.
-      'output.find', 'output.findNext', 'output.findPrevious']
+      'output.find', 'output.findNext', 'output.findPrevious',
+      // The results toolbar's Profile and Row size toggles, also in the grid's menu.
+      'output.toggleColumnProfile', 'output.toggleRowSize']
     expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))
     // Query › Connection is a native submenu too.
     for (const id of ['preferences.colorTheme', 'connection.connect', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'file.closeAll', 'view.toggleResultsPane'] as const) expect(menuCommandIds).toContain(id)
@@ -370,7 +372,7 @@ describe('menu state', () => {
       const placed = commandDescriptor(id).menus?.some(placement => nativeMenuIds.includes(placement.menu)) ?? false
       expect(menuCommandIds.includes(id), id).toBe(placed && !commandDescriptor(id).role)
     }
-    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'query.includeActualPlan', 'query.includeLivePlan', 'query.includeClientStatistics', 'explorer.groupBySchema', 'ssis.pauseOperations', 'editor.toggleWordWrap', 'editor.toggleOvertype', 'editor.toggleWhitespace', 'editor.toggleLineNumbers', 'activity.togglePause', 'activity.toggleSplit', 'output.showSpaces', 'output.showAllWhitespace', 'output.sortTextByChars', 'output.sortTextByBytes', 'window.togglePanelTabs'])
+    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'query.includeActualPlan', 'query.includeLivePlan', 'query.includeClientStatistics', 'explorer.groupBySchema', 'ssis.pauseOperations', 'editor.toggleWordWrap', 'editor.toggleOvertype', 'editor.toggleWhitespace', 'editor.toggleLineNumbers', 'activity.togglePause', 'activity.toggleSplit', 'output.showSpaces', 'output.showAllWhitespace', 'output.sortTextByChars', 'output.sortTextByBytes', 'output.toggleColumnProfile', 'output.toggleRowSize', 'window.togglePanelTabs'])
     // Main checks only toggles the schema names.
     expect(menuStateSchema.safeParse({ disabled: [], checked: ['editor.toggleWhitespace', 'editor.toggleLineNumbers'] }).success).toBe(true)
   })

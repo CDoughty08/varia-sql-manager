@@ -89,6 +89,9 @@ export interface ContextInputs {
   readonly resultsWhitespace?: SettingsValues['queryResults.grid.whitespace']
   /** How sorted grids order text (queryResults.grid.sortText); without it, its keys are false. */
   readonly resultsSortText?: SettingsValues['queryResults.grid.sortText']
+  /** Whether the column profile panel and the row-size bar show (queryResults.grid.columnProfile, queryResults.grid.rowSize). */
+  readonly resultsColumnProfile?: boolean
+  readonly resultsRowSize?: boolean
   /** Bookmarks per open document (`BookmarkService`). */
   readonly bookmarks?: Readonly<Record<string, number>>
   readonly backendStatus: BackendStatus | ''
@@ -142,6 +145,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     editorWhitespace: !!inputs.whitespace, editorLineNumbers: !!inputs.lineNumbers,
     resultsWhitespaceSpaces: inputs.resultsWhitespace === 'spaces', resultsWhitespaceAll: inputs.resultsWhitespace === 'all',
     resultsSortTextChars: inputs.resultsSortText === 'chars', resultsSortTextBytes: inputs.resultsSortText === 'bytes',
+    resultsColumnProfile: !!inputs.resultsColumnProfile, resultsRowSize: !!inputs.resultsRowSize,
     hasBookmarks: Object.values(inputs.bookmarks ?? {}).some(count => count > 0), activeDocumentHasBookmarks: !!active && (inputs.bookmarks?.[active.id] ?? 0) > 0,
     anyDocumentDirty: documents.documents.some(document => document.dirty), editorOvertype: !!inputs.overtype, hasRecentFiles: !!inputs.recentFiles, hasRecoveryFiles: !!inputs.recoveryFiles,
     hasActiveDocument: !!active, activeDocumentIsQuery: isQueryDocument(active), activeDocumentIsText: isTextDocument(active), activeDocumentIsDesigner: active?.kind === 'tableDesigner', activeDocumentIsSsis: isSsisDocumentKind(active?.kind),
@@ -173,7 +177,7 @@ export interface ContextKeyOptions {
   readonly connections: ExternalStore<readonly LiveConnection[]>
   readonly backend: ExternalStore<BackendSnapshot>
   readonly editorOptions: ExternalStore<EditorOptions>
-  /** Settings read by keys of their own (`resultsWhitespaceSpaces`, `resultsWhitespaceAll`, `resultsSortTextChars`, `resultsSortTextBytes`). */
+  /** Settings read by keys of their own (`resultsWhitespaceSpaces`, `resultsWhitespaceAll`, `resultsSortTextChars`, `resultsSortTextBytes`, `resultsColumnProfile`, `resultsRowSize`). */
   readonly settings?: ExternalStore<{ readonly values: SettingsValues }>
   readonly quickInput?: ExternalStore<{ readonly visible: boolean }>
   readonly panes?: ExternalStore<PaneVisibility>
@@ -226,7 +230,7 @@ export class ContextKeyService implements Disposable {
     const { options } = this, editor = options.editorOptions.getSnapshot()
     return {
       platform: options.platform, focus, documents: options.documents.getSnapshot(), queries: options.queries.getSnapshot(), connections: options.connections.getSnapshot(),
-      quickInputVisible: !!options.quickInput?.getSnapshot().visible, wordWrap: editor.wordWrap, whitespace: editor.whitespace, lineNumbers: editor.lineNumbers, resultsWhitespace: options.settings?.getSnapshot().values['queryResults.grid.whitespace'], resultsSortText: options.settings?.getSnapshot().values['queryResults.grid.sortText'], bookmarks: options.bookmarks?.getSnapshot().counts, backendStatus: options.backend.getSnapshot().state.status,
+      quickInputVisible: !!options.quickInput?.getSnapshot().visible, wordWrap: editor.wordWrap, whitespace: editor.whitespace, lineNumbers: editor.lineNumbers, resultsWhitespace: options.settings?.getSnapshot().values['queryResults.grid.whitespace'], resultsSortText: options.settings?.getSnapshot().values['queryResults.grid.sortText'], resultsColumnProfile: options.settings?.getSnapshot().values['queryResults.grid.columnProfile'], resultsRowSize: options.settings?.getSnapshot().values['queryResults.grid.rowSize'], bookmarks: options.bookmarks?.getSnapshot().counts, backendStatus: options.backend.getSnapshot().state.status,
       panes: options.panes?.getSnapshot(), panelTabs: options.shell?.getSnapshot().panelTabs, explorer: options.explorer?.getSnapshot(), results: options.results?.getSnapshot(), scriptingRunning: options.scripting?.getSnapshot(),
       overtype: options.inputMode?.getSnapshot().mode === 'overtype', recentFiles: !!options.recentFiles?.getSnapshot().length,
       recoveryFiles: !!options.recovery?.getSnapshot().entries.length, designer: options.designer?.getSnapshot(), properties: options.properties?.getSnapshot(), newDatabase: options.newDatabase?.getSnapshot(), restore: options.restore?.getSnapshot(),

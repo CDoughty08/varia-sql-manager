@@ -18,13 +18,17 @@ describe('menu targets', () => {
       { kind: 'searchHit', searchId: 's', index: 0, hit: { object: hitObject, folder: 'tables', label: 'dbo.Orders' }, pane: false, node: { lost: false, kind: 'table', connectionId: 'c', label: 'dbo.Orders', ref: { type: 'object', object: hitObject } }, state: { explorerScriptTitle: 'table' } }
     ]
     expect(targets.map(target => menuForTarget[target.kind])).toEqual(contextMenuIds)
-    const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, explorerFolder: '', explorerFolderInsertable: false, explorerNodeStatus: '', explorerServerEngine: '', explorerServerLinux: false, outputView: '', pane: '', paneFloating: false, panePopout: false, documentTabFloating: false, searchHitSchema: false }
-    expect(targets.map(targetKeys)).toEqual([none, { ...none, explorerNode: 'table' }, none, none, { ...none, outputView: 'messages' }, { ...none, pane: 'results', paneFloating: true }, none, none, { ...none, searchHitSchema: true }])
+    const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, explorerFolder: '', explorerFolderInsertable: false, explorerNodePeekable: false, explorerNodeStatus: '', explorerServerEngine: '', explorerServerLinux: false, outputView: '', pane: '', paneFloating: false, panePopout: false, documentTabFloating: false, searchHitSchema: false }
+    expect(targets.map(targetKeys)).toEqual([none, { ...none, explorerNode: 'table', explorerNodePeekable: true }, none, none, { ...none, outputView: 'messages' }, { ...none, pane: 'results', paneFloating: true }, none, none, { ...none, searchHitSchema: true }])
     expect(targetKeys(undefined)).toEqual(none)
     // The empty area below the servers, and a server lost with its backend generation.
     expect(targetKeys({ kind: 'explorer' })).toEqual({ ...none, explorerNode: 'background' })
     const lost = { id: 1, lost: true, kind: 'server', connectionId: 'c', label: 'c', ref: { type: 'object', object: { kind: 'server' } } } as const
     expect(targetKeys({ kind: 'explorer', node: lost })).toEqual({ ...none, explorerNode: 'server', explorerServerLost: true })
+    // Peek's menu item follows the Peek catalogue: a login peeks, a user does not.
+    const principal = (kind: 'login' | 'user') => ({ id: 4, lost: false, kind, connectionId: 'c', label: 'p', ref: { type: 'object', object: kind === 'login' ? { kind, name: 'p' } : { kind, database: 'd', name: 'p' } } } as const)
+    expect(targetKeys({ kind: 'explorer', node: principal('login') }).explorerNodePeekable).toBe(true)
+    expect(targetKeys({ kind: 'explorer', node: principal('user') }).explorerNodePeekable).toBe(false)
     expect(targetKeys({ kind: 'dockTab', pane: 'editor', floating: false, popout: false }).paneFloating).toBe(false)
     expect(targetKeys({ kind: 'dockTab', pane: 'results', floating: false, popout: true }).panePopout).toBe(true)
     // A document tab in a floating editor group offers Dock rather than Float.

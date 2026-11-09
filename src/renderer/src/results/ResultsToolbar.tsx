@@ -23,9 +23,9 @@ const sortTextChoices: readonly Choice<ViewSortMode>[] = [
 ]
 
 /** What the search box searches: cell values (in the backend) or column names. */
-const searchModes: readonly { readonly mode: SearchMode; readonly label: string; readonly title: string }[] = [
-  { mode: 'values', label: 'Data', title: 'Search cell values, comparing text by each column collation' },
-  { mode: 'columns', label: 'Columns', title: 'Search column names only' }
+const searchModes: readonly { readonly mode: SearchMode; readonly label: string; readonly title: string; readonly icon: 'list-flat' | 'symbol-field' }[] = [
+  { mode: 'values', label: 'Data', title: 'Data: search cell values, comparing text by each column collation', icon: 'list-flat' },
+  { mode: 'columns', label: 'Columns', title: 'Columns: search column names only', icon: 'symbol-field' }
 ]
 
 /**
@@ -47,7 +47,7 @@ function ResultsSearchBox({ tabId }: { tabId: string }) {
   const count = searchCount(search, formatCount)
   const columns = search.mode === 'columns'
   return <div className="results-search" data-mode={search.mode}>
-    <Icon name="search" />
+    <Icon name="search" className="results-search-icon" />
     <input ref={inputRef} type="text" spellCheck={false} maxLength={1024} aria-label={columns ? 'Search column names' : 'Search results'} placeholder={columns ? 'Search column names' : 'Search all results'}
       value={search.text} title={search.approximate ? 'Some long values were searched only as far as they were stored.' : undefined}
       onChange={event => resultsSearch.setText(tabId, event.target.value)} onKeyDown={keyDown} />
@@ -55,21 +55,23 @@ function ResultsSearchBox({ tabId }: { tabId: string }) {
     <button type="button" tabIndex={-1} aria-label="Previous match" title="Previous match (Shift+Enter)" disabled={search.total === 0} onClick={() => resultsSearch.step(tabId, -1)}><Icon name="arrow-up" /></button>
     <button type="button" tabIndex={-1} aria-label="Next match" title="Next match (Enter)" disabled={search.total === 0} onClick={() => resultsSearch.step(tabId, 1)}><Icon name="arrow-down" /></button>
     <div className="results-segments" role="group" aria-label="Search in">
-      {searchModes.map(choice => <button key={choice.mode} type="button" tabIndex={-1} aria-pressed={choice.mode === search.mode} title={choice.title}
-        onClick={() => resultsSearch.setMode(tabId, choice.mode)}>{choice.label}</button>)}
+      {/* Icons only, as the Show toggles: the toolbar must still fit the output pane of a 1024 px window. */}
+      {searchModes.map(choice => <button key={choice.mode} type="button" className="results-icon-toggle" tabIndex={-1} aria-label={choice.label} aria-pressed={choice.mode === search.mode} title={choice.title}
+        onClick={() => resultsSearch.setMode(tabId, choice.mode)}><Icon name={choice.icon} /></button>)}
     </div>
   </div>
 }
 
 /**
  * The results toolbar, in the Results panel's head beside its views: what it changes applies to every grid in the run. It
- * holds search, White space and Sort text by for now; stats and the other result tools join it. The buttons follow the
+ * holds search, White space, Sort text by, and the Profile and Row size toggles; the other result tools join it. The controls follow the
  * ARIA toolbar pattern: one Tab stop, Left and Right (Home, End) move between them; the search box is a Tab stop of its own.
  */
 export default function ResultsToolbar({ tabId }: { tabId: string }) {
   const { commands, settings } = useWorkbench()
   const values = useServiceSnapshot(settings).values
   const whitespace = values['queryResults.grid.whitespace'], sortText = values['queryResults.grid.sortText']
+  const profile = values['queryResults.grid.columnProfile'], rowSize = values['queryResults.grid.rowSize']
   // Off (or Value) runs the command of the choice that is on, which turns it off.
   const choose = <T,>(choices: readonly Choice<T>[], current: T, mode: T) => {
     if (mode === current) return
@@ -99,5 +101,12 @@ export default function ResultsToolbar({ tabId }: { tabId: string }) {
     <ResultsSearchBox tabId={tabId} />
     {group('White space', 'whitespace', whitespaceChoices, whitespace, true)}
     {group('Sort text by', 'symbol-ruler', sortTextChoices, sortText, false)}
+    {/* Icons only: with the two segmented groups the toolbar must still fit the output pane of a 1024 px window. */}
+    <div className="results-segments" role="group" aria-label="Show">
+      <button type="button" className="results-icon-toggle" aria-label="Profile" aria-pressed={profile} tabIndex={-1} title="Column profile: NULLs, distinct values, lowest and highest, lengths and a histogram for each column"
+        onClick={() => void commands.execute('output.toggleColumnProfile', undefined, 'toolbar')}><Icon name="graph" /></button>
+      <button type="button" className="results-icon-toggle" aria-label="Row size" aria-pressed={rowSize} tabIndex={-1} title="Row size: a bar behind each row number; hover it for the exact bytes"
+        onClick={() => void commands.execute('output.toggleRowSize', undefined, 'toolbar')}><Icon name="list-flat" /></button>
+    </div>
   </div>
 }
