@@ -21,6 +21,8 @@ export interface SetHighlights {
   readonly unique: boolean
   /** The column the highlights follow when this run's result has no such column, so none of its rows can be found. */
   readonly lacks?: string
+  /** With `lacks`: the result has several such columns, none at the old position, so which one is not known. */
+  readonly ambiguous?: boolean
   /** More rows have the highlights than one search lists (results.findRows' limit): only the first are drawn. */
   readonly truncated: boolean
   /** The rows to draw, one set per handle the grid may show (the result's, and its sorted view's). */
@@ -32,17 +34,24 @@ export type HighlightsSnapshot = Readonly<Record<string, ReadonlyMap<number, Set
  *  kept by its name, type and position, since a result may have several columns of one name (or none named). */
 type TrackBy = { readonly column: string; readonly dataType: string; readonly ordinal: number } | { readonly row: true }
 
-/** A type without its length, precision or scale (nvarchar(60) is nvarchar), as the backend hashes it. */
-const baseType = (dataType: string) => dataType.replace(/\(.*$/, '').trim().toLowerCase()
+/** Types whose length, precision or scale may change without changing how the backend hashes a value: text by its
+ *  characters, decimals by their digits, binary by its bytes. Any other type must stay the same to the letter. */
+const resizable = new Set(['char', 'varchar', 'nchar', 'nvarchar', 'decimal', 'numeric', 'binary', 'varbinary'])
+/** The type compared across re-runs: nvarchar(60) is nvarchar, but datetime2(3) stays datetime2(3). */
+const trackedType = (dataType: string) => {
+  const type = dataType.trim().toLowerCase(), base = type.replace(/\(.*$/, '').trim()
+  return resizable.has(base) ? base : type
+}
 
-/** The column a re-run's result has for the one highlights follow: the same name and base type (a length may change), at
- *  the same position, or the only such column anywhere; -1 when there is none or the choice would be a guess. */
+/** The column a re-run's result has for the one highlights follow: the same name and type (a length may change), at the
+ *  same position, or the only such column anywhere. -1 when there is none, -2 when there are several and picking one
+ *  would be a guess. */
 export function trackedColumn(columns: readonly ResultColumn[], by: { readonly column: string; readonly dataType: string; readonly ordinal: number }): number {
-  const type = baseType(by.dataType)
-  const same = (column: ResultColumn | undefined) => column !== undefined && column.name === by.column && baseType(column.dataType) === type
+  const type = trackedType(by.dataType)
+  const same = (column: ResultColumn | undefined) => column !== undefined && column.name === by.column && trackedType(column.dataType) === type
   if (same(columns[by.ordinal])) return by.ordinal
   const matches = columns.flatMap((column, at) => same(column) ? [at] : [])
-  return matches.length === 1 ? matches[0] : -1
+  return matches.length === 1 ? matches[0] : matches.length === 0 ? -1 : -2
 }
 /** A set's highlights bound to one run's result: the identities the backend computed for it (results.identify). */
 interface Binding {
@@ -52,8 +61,9 @@ interface Binding {
   readonly ready: Promise<boolean>
   column: number
   unique: boolean
-  /** The column highlights follow, when this result has none like it. */
+  /** The column highlights follow, when this result has none like it (or, `ambiguous`, several). */
   readonly lacks?: string
+  readonly ambiguous?: boolean
 }
 interface Marks {
   by?: TrackBy
@@ -124,6 +134,7 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
     if (retry) {
       this.stopRetry(existing)
       existing.failed.clear()
+      existing.retries = 0
     }
     try { await this.mark(tabId, index, color) }
     finally { if (retry && existing.version === version && this.marksOf(tabId, index) === existing) void this.refresh(tabId, index) }
@@ -143,7 +154,7 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
     const binding = this.bind(tabId, index, marks, entry)
     try {
       if (!await binding.ready || marks.bound !== binding) {
-        if (binding.lacks !== undefined && marks.bound === binding) this.results.notify(tabId, lacksText(marks.colors.size, binding.lacks))
+        if (binding.lacks !== undefined && marks.bound === binding) this.results.notify(tabId, lacksText(marks.colors.size, binding.lacks, binding.ambiguous))
         return
       }
       const ids: number[] = []
@@ -216,8 +227,9 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
     const by = marks.by
     const column = by && 'column' in by ? trackedColumn(entry.descriptor.columns, by) : undefined
     const binding: Binding = {
-      handle: entry.handle, abort, column: column ?? -1, unique: true, ...column === -1 && by && 'column' in by ? { lacks: by.column || '(No column name)' } : {},
-      ready: column === -1 ? Promise.resolve(false) : entry.handle.identify(!by ? 'auto' : 'row' in by ? 'row' : 'column', { ...column === undefined ? {} : { column }, signal: abort.signal }).then(result => {
+      handle: entry.handle, abort, column: column ?? -1, unique: true,
+      ...column !== undefined && column < 0 && by && 'column' in by ? { lacks: by.column || '(No column name)', ...column === -2 ? { ambiguous: true } : {} } : {},
+      ready: column !== undefined && column < 0 ? Promise.resolve(false) : entry.handle.identify(!by ? 'auto' : 'row' in by ? 'row' : 'column', { ...column === undefined ? {} : { column }, signal: abort.signal }).then(result => {
         if (marks.bound !== binding) return false
         binding.column = result.column
         binding.unique = result.unique
@@ -261,8 +273,10 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
         // Remembered so the notice's own snapshot (resultsChanged) does not search again, and again, while the error lasts.
         marks.failed.set(handle, version)
         const code = (error as { code?: unknown }).code
-        // A passing error is tried again a few times, each after a longer wait.
-        if (typeof code === 'string' && passing.has(code) && marks.retries < highlightLimits.retryMs.length && marks.retry === undefined) {
+        // A passing error is tried again a few times, each after a longer wait; one that comes while a retry waits (another
+        // handle's search) waits for that retry too, rather than tell the user of a failure about to be retried.
+        if (typeof code === 'string' && passing.has(code) && marks.retry !== undefined) return
+        if (typeof code === 'string' && passing.has(code) && marks.retries < highlightLimits.retryMs.length) {
           marks.retry = this.timers.setTimeout(() => {
             marks.retry = undefined
             if (this.disposed || marks.bound !== binding) return
@@ -336,7 +350,8 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
         const by = marks.by ? ('column' in marks.by ? marks.by.column || '(No column name)' : '') : undefined
         const lacks = marks.bound?.lacks
         shown.set(index, {
-          count: marks.colors.size, found: base?.marks ?? 0, ...by === undefined ? {} : { by }, unique: marks.bound?.unique ?? true, ...lacks === undefined ? {} : { lacks },
+          count: marks.colors.size, found: base?.marks ?? 0, ...by === undefined ? {} : { by }, unique: marks.bound?.unique ?? true,
+          ...lacks === undefined ? {} : { lacks, ...marks.bound?.ambiguous ? { ambiguous: true } : {} },
           truncated: base?.truncated ?? false, rows: found.map(item => item.rows)
         })
       }
@@ -346,15 +361,15 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
   }
 }
 
-const lacksText = (count: number, column: string) =>
-  `${formatCount(count)} ${count === 1 ? 'highlight follows' : 'highlights follow'} ${column}, which these results lack. Clear All Highlights to highlight rows here.`
+const lacksText = (count: number, column: string, ambiguous = false) =>
+  `${formatCount(count)} ${count === 1 ? 'highlight follows' : 'highlights follow'} ${column}, ${ambiguous ? 'which these results have more than once, in other places' : 'which these results lack'}. Clear All Highlights to highlight rows here.`
 
 /** What the strip says of a set's highlights: a key column these results lack (nothing can be found or highlighted), more
  *  rows than one search draws, those this run lacks (kept, they return with their rows), or a key that is not unique here
  *  (one highlight covers every row with its value). */
 export function highlightText(marked: SetHighlights | undefined): string | undefined {
   if (!marked || marked.count === 0) return undefined
-  if (marked.lacks !== undefined) return lacksText(marked.count, marked.lacks)
+  if (marked.lacks !== undefined) return lacksText(marked.count, marked.lacks, marked.ambiguous)
   if (marked.truncated) return `More than ${formatCount(highlightLimits.drawn)} rows have these highlights; only the first ${formatCount(highlightLimits.drawn)} are drawn.`
   const missing = marked.count - marked.found
   if (missing > 0 && marked.rows.length > 0) return `${formatCount(missing)} highlighted ${missing === 1 ? 'row is' : 'rows are'} not in these results. ${missing === 1 ? 'It stays' : 'They stay'} highlighted for when ${missing === 1 ? 'it returns' : 'they return'}.`

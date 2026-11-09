@@ -948,8 +948,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .rg-rn.tone-error, .rg-rn.tone-warning, .rg-rn.tone-running { border-left: 3px solid CanvasText; }
   .rg-rn.tone-added { border-left: 3px solid CanvasText; }
   .rg-rn.tone-removed { border-left: 3px dashed CanvasText; }
-  /* The active search match keeps its own outline. */
-  .rg-c.is-chg:not(.is-cur) { outline: 1px solid CanvasText; outline-offset: -2px; }
+  /* Weaker than any other cell outline (:where adds nothing), so the active cell and the active search match keep theirs. */
+  .rg-c:where(.is-chg) { outline: 1px solid CanvasText; outline-offset: -2px; }
   .rg-rn.hl { border-left: 3px double CanvasText; }
   .rg-row.tone-muted { color: GrayText; }
   /* Splitters are drawn with a background only, which forced colors would drop. */

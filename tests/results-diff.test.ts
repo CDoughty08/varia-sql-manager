@@ -97,6 +97,19 @@ describe('result diffs', () => {
     expect(client.released()).toContain(952)
   })
 
+  it('compares only sets that share a column holding the same kind of data', () => {
+    const { client, results, compare } = fixture()
+    results.begin('t1', 'q1')
+    const column = (name: string, wire: 'text' | 'binary') => ({ name, dataType: wire === 'text' ? 'int' : 'varbinary', wire, nullable: false })
+    const values = [descriptor(1, { index: 0, columns: [column('Id', 'text')] }), descriptor(2, { index: 1, columns: [column('Id', 'binary')] }), descriptor(3, { index: 2, columns: [column('ID', 'text')] })]
+    for (const value of values) client.emit('q1', { type: 'resultSet.opened', descriptor: value })
+    void results.finish('t1', 'q1', { summary: summaryOf(values) })
+    // Id is binary in the second and text in the first: the backend could pair nothing, so the second is not offered.
+    expect(compare.previousOf('t1', 1)).toBeUndefined()
+    // The third skips the second for the first, whose Id holds text like its own.
+    expect(compare.previousOf('t1', 2)).toBe(0)
+  })
+
   it('draws highlights and search matches over a diff\'s tones (styles.css order and selectors)', () => {
     const css = readFileSync(new URL('../src/renderer/src/styles.css', import.meta.url), 'utf8')
     const at = (rule: string) => { const index = css.indexOf(rule); expect(index, rule).toBeGreaterThanOrEqual(0); return index }
@@ -106,9 +119,10 @@ describe('result diffs', () => {
     // A changed cell's tint, more specific than a search match's, leaves a match its own.
     expect(css).toContain('.rg-row.tone-added .rg-c.is-chg:not(.is-sel):not(.is-hit) {')
     expect(css).toContain('.rg-row.tone-removed .rg-c.is-chg:not(.is-sel):not(.is-hit) {')
-    // Under forced colours a changed cell's outline leaves the active match's outline alone.
-    expect(css).toContain('.rg-c.is-chg:not(.is-cur) { outline')
-    expect(css).not.toMatch(/\.rg-c\.is-chg \{ outline/)
+    // Under forced colours a changed cell's outline is the weakest outline rule, so the active cell's and the active
+    // match's win.
+    expect(css).toContain('.rg-c:where(.is-chg) { outline')
+    expect(css).not.toMatch(/\.rg-c\.is-chg[^{]*\{ outline/)
   })
 
   it('says when values were compared by their stored prefix', () => {
@@ -122,5 +136,11 @@ describe('result diffs', () => {
     const marks = cellMarksOf('4 ~6 x')!
     expect([...marks.keys()]).toEqual([4, 6])
     expect(marks.get(4)).not.toBe(marks.get(6))
+    // Runs of adjacent columns are ranges; a cut tone's ellipsis, and a range that is backwards or past any result, mark nothing.
+    const runs = cellMarksOf('4-6 ~8-9 12 …')!
+    expect([...runs.keys()]).toEqual([4, 5, 6, 8, 9, 12])
+    expect(runs.get(5)).toBe(runs.get(4))
+    expect(runs.get(9)).toBe(marks.get(6))
+    expect(cellMarksOf('9-4 3-99999999 -2 ~')).toBeUndefined()
   })
 })

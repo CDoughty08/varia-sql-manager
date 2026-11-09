@@ -1403,7 +1403,10 @@ receives a new result to read like any other, never rows to compare.
 - **The unified result** (`kind: 'diff'`, its descriptor stamped with the generation by main, which then owns it) has
   the columns `Change` (" ", "−" or "+"), `R1` and `R2` (each row's number in `left` and `right`, NULL where it has none),
   the shared columns with `right`'s names and types, and a hidden tone column: `added`, `removed` or, for an unchanged row
-  with soft differences, `same`, followed by every differing cell's column number, a soft one prefixed with `~`. A changed
+  with soft differences, `same`, followed by the differing cells' column numbers, a soft one prefixed with `~` and a run of
+  adjacent columns of one kind written `first-last` (`removed 4-9 ~11`). It is an `nvarchar(500)`, under the 512
+  characters the grid reads of a cell, so the grid always reads it whole; a row that differs in more scattered columns
+  than fit stops at a whole entry and ends with `…`, and the cells past it are not marked. A changed
   row is its old row (−) then its new one (+). Only `context` unchanged rows (default 1, at most 100, -1 for all) show on
   each side of a change. Each copied cell's lengths are its source cell's, so `results.rowBytes` sums the shown values
   (not the marker, row numbers or tone). It is a result of the same query, charged to its budget (rows stop when it is
