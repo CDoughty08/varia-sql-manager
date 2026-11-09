@@ -21,9 +21,11 @@ on:
       - backend/Varia.Backend/Varia.Backend.csproj
       - src/main/app-protocol.ts
       - src/main/backend/spawn-spec.ts
+      - src/main/backend/sqltools-runtime.ts
       - src/main/update-install.ts
       - scripts/packaged-smoke.mjs
       - scripts/packaged-contents.mjs
+      - scripts/prepare-sqltools-service.mjs
       - scripts/portable-smoke.mjs
       - scripts/appimage-check.mjs
       - scripts/windows-installer-smoke.ps1

@@ -17,6 +17,7 @@ import { defaultScriptingOptions } from '../src/shared/scripting/options'
 import { preparePlan } from '../src/main/plan-request'
 import { planDocumentSchema } from '../src/shared/plans'
 import { liveEndSchema, liveEventSchema, liveUpdateResultSchema, type BackendLiveEvent } from '../src/shared/live/schema'
+import { languageStatusSchema } from '../src/shared/language-service'
 
 // The Release build, as CI checks it: npm run check builds it before vitest runs.
 const dll = resolve('backend/Varia.Backend/bin/Release/net10.0/Varia.Backend.dll')
@@ -98,6 +99,18 @@ function header(kind: number, length: number, id = 1, arg = 0, flags = 0, magic 
 const requestFrame = (id: number, value: unknown) => encodeFrame(FrameKind.REQUEST, id, 0, encodeControl(value))
 
 describe('real .NET sidecar over protocol v2', () => {
+  it('reports optional SQL language support and rejects unavailable providers over the real wire', async () => {
+    const connection = backend({ VARIA_SQLTOOLS_SERVICE_PATH: resolve('artifacts', 'missing-sqltools-service', 'never-launch.exe') })
+    const status = languageStatusSchema.parse(await call(connection, 'language.status', {}))
+    expect(status.providers).toEqual([{ id: 'sqlserver', configured: false, completion: true, hover: true, refresh: true, reason: expect.stringContaining('VARIA_SQLTOOLS_SERVICE_PATH') }])
+    const documentId = crypto.randomUUID(), request = { documentId, version: 1, text: 'SELECT 1', context: { providerId: 'sqlserver' as const, connectionId: crypto.randomUUID() }, position: { line: 0, character: 8 } }
+    await expect(call(connection, 'language.complete', request)).rejects.toMatchObject({ code: 'BACKEND_UNAVAILABLE' })
+    const { position: _position, ...refresh } = request
+    await expect(call(connection, 'language.refresh', refresh)).rejects.toMatchObject({ code: 'BACKEND_UNAVAILABLE' })
+    await expect(call(connection, 'language.hover', { ...request, context: { providerId: 'postgresql' } })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    expect(await call(connection, 'language.close', { documentId })).toEqual({ closed: true })
+    expect(await call(connection, 'system.health', {})).toMatchObject({ protocolVersion: 2 })
+  })
   it('announces itself in HELLO with every method main may call', async () => {
     const hello = await backend().ready
     expect(hello).toMatchObject({ version: 2, generation: 1, maxFrameBytes: 4 * 1024 * 1024, sqlClientVersion: expect.stringMatching(/^\d+\./) })

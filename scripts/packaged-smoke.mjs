@@ -9,6 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { getCurrentFuseWire } from '@electron/fuses'
 import { backendReady } from './fixtures/ui.mjs'
 import { asarProblems, isReadyToRun, readAsar, readyToRunAssemblies } from './packaged-contents.mjs'
+import { hostRid, sqlToolsServiceProblems } from './prepare-sqltools-service.mjs'
 
 const { fuseMismatches, fuseTarget } = createRequire(import.meta.url)('../build/fuses.cjs')
 const executablePath = process.env.VARIA_PACKAGED_EXECUTABLE
@@ -33,6 +34,8 @@ if (!appImage) {
   // The backend is published ReadyToRun.
   const interpreted = readyToRunAssemblies.filter(name => !isReadyToRun(resolve(resources, 'backend', name)))
   if (interpreted.length) throw new Error(`Packaged backend assemblies are not ReadyToRun: ${interpreted.join(', ')}`)
+  const languageProblems = await sqlToolsServiceProblems(resolve(resources, 'sqltools-service'), hostRid())
+  if (languageProblems.length) throw new Error(`Packaged SQL Tools Service: ${languageProblems.join(' ')}`)
 }
 
 // With --inspect fused off, Playwright's Electron launcher cannot attach to main; connect to Chromium's debugging port. A
@@ -44,6 +47,9 @@ const port = server.address().port
 await new Promise(resolveClose => server.close(resolveClose))
 const env = { ...process.env, VARIA_PACKAGED_SMOKE: '1' }
 delete env.ELECTRON_RUN_AS_NODE
+// The package must supply its language service independently of a developer's override.
+delete env.VARIA_SQLTOOLS_SERVICE_PATH
+delete env.VARIA_SQLTOOLS_SERVICE_SOURCE
 const temporaryProfile = process.env.VARIA_PACKAGED_PROFILE ? undefined : mkdtempSync(join(tmpdir(), 'varia-packaged-smoke-'))
 const profile = temporaryProfile ?? resolve(process.env.VARIA_PACKAGED_PROFILE)
 const args = [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, ...(process.getuid?.() === 0 ? ['--no-sandbox'] : [])]
@@ -67,6 +73,15 @@ try {
   const health = await page.evaluate(() => window.varia.health())
   expect(health.ok && health.value.protocolVersion).toBe(2)
   expect(health.ok && health.value.smoVersion).toMatch(/^\d+\./)
+  const languageStatus = await page.evaluate(() => window.varia.languageStatus())
+  expect(languageStatus.ok && languageStatus.value.providers.find(provider => provider.id === 'sqlserver')?.configured).toBe(true)
+  const languageDocument = await page.evaluate(async () => {
+    const documentId = crypto.randomUUID()
+    const result = await window.varia.languageComplete({ documentId, version: 1, text: 'SEL', context: { providerId: 'sqlserver' }, position: { line: 0, character: 3 } })
+    await window.varia.languageClose(documentId)
+    return result
+  })
+  expect(languageDocument.ok, JSON.stringify(languageDocument)).toBe(true)
   // The packaged page cannot read local files either.
   expect(await page.evaluate(async () => { try { await fetch('file:///'); return 'read' } catch (error) { return error.name } })).toBe('TypeError')
   await page.close()

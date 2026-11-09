@@ -20,8 +20,8 @@ static class OfflineSuites
     {
         ["Host"] = 12.5, ["Ssis"] = 7.7, ["Explorer"] = 7.1, ["ActivityAction"] = 6.2, ["LiveScheduler"] = 5.5, ["Restore"] = 5.1,
         ["Live"] = 4.4, ["ServerFiles"] = 4.2, ["LiveTable"] = 3.7, ["Store"] = 3.0, ["Entra"] = 2.4, ["Text"] = 12.0,
-        ["Login"] = 2.2, ["Peek"] = 2.2, ["Seam"] = 2.2, ["ActionProgress"] = 1.8, ["Action"] = 1.7, ["Scripting"] = 1.6,
-        ["LoginDelete"] = 0.8, ["Unlock"] = 0.7, ["LoginAction"] = 0.7, ["Page"] = 0.4, ["ActivitySource"] = 0.4,
+        ["Login"] = 2.2, ["Peek"] = 2.2, ["Seam"] = 2.2, ["ActionProgress"] = 1.8, ["LspTransport"] = 1.8, ["Action"] = 1.7, ["Scripting"] = 1.6,
+        ["LoginDelete"] = 0.8, ["Unlock"] = 0.7, ["LoginAction"] = 0.7, ["SqlLanguage"] = 0.5, ["Page"] = 0.4, ["ActivitySource"] = 0.4,
     };
 
     // Six lanes. The lanes mostly wait, so more lanes than CI's 3 to 4 vCPUs still help: locally, 1 lane took 65 s, 4 took

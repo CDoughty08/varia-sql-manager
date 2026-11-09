@@ -363,6 +363,8 @@ export const activeDocument = page => page.locator(part.activeEditorGroup).getBy
 export const activeDocumentName = page => activeDocument(page).getAttribute('aria-label')
 /** The editor groups, the grid's in order and then the floating ones, and the tabs of one. */
 export const editorGroups = page => page.locator(part.editorGroup)
+/** The grid or floating editor group showing a particular query. Query editors stay in the main window. */
+export const editorGroupForDocument = (page, name) => page.getByRole('region', { name: `Editor group: ${name}`, exact: true })
 export const editorGroupTabs = group => group.getByRole('tablist', { name: 'Query documents', exact: true }).getByRole('tab')
 export const floatingEditorGroups = page => page.locator(part.floatingEditorGroup)
 /** A document's tab with its Close button: the target of the tab's menu. */

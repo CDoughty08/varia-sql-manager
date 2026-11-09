@@ -12,6 +12,9 @@
 //                       accepts only the password correct-horse-marker
 //   untrusted-certificate  server 'password-check' refuses a connect without Trust server certificate, as a self-signed
 //                       certificate does (reason 'certificate')
+//   language-enabled    enables deterministic completion/hover; otherwise the language provider reports unavailable
+//   language-fail       completion/hover refuse requests until removed, to exercise cache refresh recovery in the UI
+//   language-status-fail  availability fails until removed, to exercise same-generation manual recovery
 //   hold/<method>       the method waits while this file exists; a directive with `hold` waits after its sets and
 //                       messages, and results.export after each page (so a test can cancel it mid-save)
 //   allow/audits        explorer.children may list audits (otherwise they fail as a permission error would)
@@ -1043,6 +1046,31 @@ async function workbench(id, method, params, credit) {
   if (!directive?.hold && method !== 'results.export' && method !== 'ssis.describe') while (await controlled(join('hold', method))) await sleep(25)
   switch (method) {
     case 'system.health': return respond(id, { protocolVersion: 2, runtime: 'fake', platform: process.platform, smoVersion: 'fake', sqlClientVersion: 'fake' })
+    case 'language.status': {
+      if (await controlled('language-status-fail')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL language provider availability check failed.')
+      const configured = await controlled('language-enabled')
+      return respond(id, { providers: [{ id: 'sqlserver', configured, completion: true, hover: true,
+        ...configured ? { refresh: true } : { reason: 'SQL language test provider is disabled.' } }] })
+    }
+    case 'language.complete': {
+      if (!await controlled('language-enabled')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL language test provider is disabled.')
+      if (await controlled('language-fail')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL language test provider failed.')
+      const label = params.context.connectionId ? `Customer${params.context.database === 'AppData' ? 'AppData' : 'Master'}` : 'Customer'
+      return respond(id, { items: [{ label, kind: 7, detail: `${params.context.database ?? 'offline'}.${label} (fake language service)`, insertText: label }], isIncomplete: false })
+    }
+    case 'language.hover': {
+      if (!await controlled('language-enabled')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL language test provider is disabled.')
+      if (await controlled('language-fail')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL language test provider failed.')
+      const connection = workbenchConnections.get(params.context.connectionId)
+      const contents = connection ? `Customer${params.context.database === 'AppData' ? 'AppData' : 'Master'} table (${connection.server}/${params.context.database}; fake language service).`
+        : 'Customer table (fake language service).'
+      return respond(id, { contents })
+    }
+    case 'language.refresh':
+      if (!await controlled('language-enabled')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL language test provider is disabled.')
+      if (await controlled('language-fail')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL language test provider failed.')
+      return respond(id, { refreshed: true })
+    case 'language.close': return respond(id, { closed: true })
     case 'plans.estimate': return respond(id, { plans: [{ xml: fixturePlanXml, batchNumber: 1, iteration: 1 }], database: params.database })
     case 'plans.parse': {
       const xml = gunzipSync(Buffer.from(params.xml, 'base64'), { maxOutputLength: 32 * 1024 * 1024 }).toString('utf8')

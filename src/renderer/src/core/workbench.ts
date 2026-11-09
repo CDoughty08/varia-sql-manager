@@ -1,4 +1,6 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
+import { SqlLanguageService } from '../languages/SqlLanguageService'
+import { languagesContribution } from '../contributions/languages'
 import type { ReloadPins, VariaApi } from '../../../shared/contracts'
 import { actsOnTab } from '../../../shared/commands/catalog'
 import { toPlatform, type Platform } from '../../../shared/commands/keybindings'
@@ -117,6 +119,7 @@ export interface Workbench extends Disposable {
   readonly menuTargets: MenuTargetService
   readonly quickInput: QuickInputService
   readonly documents: DocumentService
+  readonly sqlLanguage: SqlLanguageService
   readonly queries: QueryService
   readonly connections: ConnectionService
   readonly backend: BackendStateService
@@ -252,6 +255,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const documents = new DocumentService((text, uri, language) => monaco.editor.createModel(text, language, monaco.Uri.parse(uri)), api, events, callback => { frame(callback) },
     { ...settingsDocumentOptions(() => settings.getSnapshot().values), newLineEnding: platformLineEnding(platform) })
   const editorStatus = new EditorStatusService(callback => { frame(callback) }), inputMode = new InputModeService()
+  const sqlLanguage = new SqlLanguageService(monaco, api, documents, connections, backend)
   const refreshDocuments = settings.subscribe(() => documents.refreshOptions())
   const bookmarks = new BookmarkService(documents, events), editorDialogs = new EditorDialogs(), tabRename = new TabRenameService(documents)
   const editorGroups = new EditorGroupService(documents)
@@ -446,6 +450,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     menuTargets,
     quickInput,
     documents,
+    sqlLanguage,
     queries,
     connections,
     backend,
@@ -548,6 +553,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       properties.dispose()
       newDatabase.dispose()
       restore.dispose()
+      sqlLanguage.dispose()
       documents.dispose()
       backend.dispose()
       explorer.dispose()
@@ -583,6 +589,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     filesContribution(workbench, api),
     editorContribution(workbench),
     editingContribution(workbench, monaco),
+    languagesContribution(workbench),
     editContribution(workbench, api),
     windowContribution(workbench, api, reloadPins),
     menusContribution(workbench),

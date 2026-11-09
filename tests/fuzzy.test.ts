@@ -61,7 +61,7 @@ describe('fuzzy matching', () => {
       expect(palette(query), query).not.toContain(label)
     }
     // Words that start with it match, not "Reload Themes" scattered.
-    expect(palette('refresh')).toEqual(['Object Explorer: Refresh', 'Restore Database: Refresh', 'Database Properties: Refresh', 'Activity Monitor: Refresh Now', 'Object Explorer: Refresh Peek', 'Integration Services: Refresh Operations', 'Integration Services: Refresh Properties', 'Activity Monitor: Set Refresh Interval…', 'Object Explorer: Rebuild Search Index'])
+    expect(palette('refresh')).toEqual(['Object Explorer: Refresh', 'Edit: Refresh Local Cache', 'Restore Database: Refresh', 'Database Properties: Refresh', 'Activity Monitor: Refresh Now', 'Object Explorer: Refresh Peek', 'Integration Services: Refresh Operations', 'Integration Services: Refresh Properties', 'Activity Monitor: Set Refresh Interval…', 'Object Explorer: Rebuild Search Index'])
     expect(palette('go to')[0]).toBe('Go to Query…')
     // The last capital of an acronym starts the next word.
     expect(highlight('q1', 'SQLQuery1.sql')).toEqual(['Q', '1'])

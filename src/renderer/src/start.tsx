@@ -13,6 +13,8 @@ import 'monaco-editor/editor/contrib/snippet/browser/snippetController2.js'
 import 'monaco-editor/editor/contrib/bracketMatching/browser/bracketMatching.js'
 import 'monaco-editor/editor/contrib/wordOperations/browser/wordOperations.js'
 import 'monaco-editor/editor/contrib/hover/browser/hoverContribution.js'
+// Completion providers need the suggestion controller in this deliberately small Monaco bundle.
+import 'monaco-editor/editor/contrib/suggest/browser/suggestController.js'
 // The codicon font face: Monaco generates the glyph rules but loads the font only with this stylesheet.
 import 'monaco-editor/features/codicon/register.js'
 import EditorWorker from 'monaco-editor/editor/editor.worker.js?worker'

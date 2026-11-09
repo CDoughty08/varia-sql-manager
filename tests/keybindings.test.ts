@@ -204,7 +204,7 @@ describe('default keybindings', () => {
     expect(defaultRules('win32')).toBe(defaultRules('win32'))
     expect(Object.isFrozen(defaultRules('darwin'))).toBe(true)
     const native = ['edit.find', 'edit.replace', 'edit.toggleLineComment', 'edit.commentLines', 'edit.uncommentLines']
-    const bookmarksAndSnippets = ['edit.toggleBookmark', 'edit.previousBookmark', 'edit.nextBookmark', 'edit.clearBookmarks', 'edit.insertSnippet', 'edit.surroundWith']
+    const bookmarksAndSnippets = ['edit.toggleBookmark', 'edit.previousBookmark', 'edit.nextBookmark', 'edit.clearBookmarks', 'edit.insertSnippet', 'edit.surroundWith', 'edit.refreshIntelliSense']
     const editing = ['edit.findNext', 'edit.findPrevious', 'edit.goToLine', 'edit.makeUppercase', 'edit.makeLowercase', ...bookmarksAndSnippets]
     // macOS has ⌘G and F3 for Find Next, as Monaco does.
     const macEditing = ['edit.findNext', 'edit.findNext', 'edit.findPrevious', 'edit.findPrevious', 'edit.goToLine', 'edit.makeUppercase', 'edit.makeLowercase', ...bookmarksAndSnippets]

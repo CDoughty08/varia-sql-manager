@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { getCurrentFuseWire } from '@electron/fuses'
+import { sqlToolsServiceProblems } from './prepare-sqltools-service.mjs'
 
 /** The search paths AppRun exports, each with its application directory first. */
 export const searchPaths = ['PATH', 'LD_LIBRARY_PATH', 'XDG_DATA_DIRS', 'GSETTINGS_SCHEMA_DIR']
@@ -98,6 +99,8 @@ async function inspect(appImage) {
     for (const file of [executable, 'resources/app.asar', 'resources/backend/Varia.Backend', 'chrome-sandbox']) {
       if (!existsSync(join(root, file))) throw new Error(`The AppImage lacks ${file}.`)
     }
+    const languageProblems = await sqlToolsServiceProblems(join(root, 'resources', 'sqltools-service'), 'linux-x64')
+    if (languageProblems.length) throw new Error(`AppImage SQL Tools Service: ${languageProblems.join(' ')}`)
     // The bundled executable carries the same fuses as linux-unpacked's (packaged-smoke.mjs reads those).
     const { fuseMismatches } = createRequire(import.meta.url)('../build/fuses.cjs')
     const wrong = fuseMismatches(await getCurrentFuseWire(join(root, executable)))

@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (259)
+## Commands (260)
 
 ### File
 
@@ -62,6 +62,7 @@ keys it uses are listed below.
 | Next Bookmark In Document | `edit.nextBookmarkInDocument` | — | — | — | `activeDocumentHasBookmarks` | Edit › Bookmarks › Next Bookmark In Document |
 | Insert Snippet… | `edit.insertSnippet` | Ctrl+K Ctrl+X * | Ctrl+K Ctrl+X * | ⌘K ⌘X * | `activeDocumentIsQuery && !documentBusy` | Edit › IntelliSense › Insert Snippet…; Editor context menu › Insert Snippet… |
 | Surround With… | `edit.surroundWith` | Ctrl+K Ctrl+S * | Ctrl+K Ctrl+S * | ⌘K ⌘S * | `activeDocumentIsQuery && !documentBusy` | Edit › IntelliSense › Surround With…; Editor context menu › Surround With… |
+| Refresh Local Cache | `edit.refreshIntelliSense` | Ctrl+Shift+R (`editorFocus && !inputFocus`) | Ctrl+Shift+R (`editorFocus && !inputFocus`) | ⇧⌘R (`editorFocus && !inputFocus`) | `backendReady && !documentBusy` | Edit › IntelliSense › Refresh Local Cache |
 
 ### View
 
@@ -448,6 +449,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | --- | --- | --- | --- |
 | `1_snippets` | **I**nsert Snippet… | `edit.insertSnippet` | Always |
 | `1_snippets` | **S**urround With… | `edit.surroundWith` | Always |
+| `2_cache` | **R**efresh Local Cache | `edit.refreshIntelliSense` | Always |
 
 #### View (Alt+V)
 
@@ -856,7 +858,7 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
 | `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
 
-## Context keys (144)
+## Context keys (146)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only

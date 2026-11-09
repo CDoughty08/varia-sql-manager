@@ -28,6 +28,7 @@ import { explorerContribution } from '../../src/renderer/src/contributions/explo
 import { outputContribution } from '../../src/renderer/src/contributions/output'
 import { editorContribution } from '../../src/renderer/src/contributions/editor'
 import { editingContribution } from '../../src/renderer/src/contributions/editing'
+import { languagesContribution } from '../../src/renderer/src/contributions/languages'
 import { BookmarkService } from '../../src/renderer/src/editor/bookmarks'
 import { TabRenameService } from '../../src/renderer/src/services/tab-rename'
 import { EditorGroupService } from '../../src/renderer/src/services/editor-groups'
@@ -423,7 +424,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   // The menus over these services: resolution, enablement, and activation, without the DOM.
   const menuTargets = new MenuTargetService({ commandEnabled: () => true })
   const menus = new MenuService({ platform, commands, context, keybindings, theme, recentFiles, settings: () => settings.getSnapshot().values, focus: focus.adapter, modalOpen: options.modal ?? (() => false), timers: options.timers, targets: menuTargets })
+  const sqlLanguage = { refreshCache: vi.fn(async (_id?: string) => true) }
   const workbench = {
+    sqlLanguage,
     platform,
     commands,
     context,
@@ -476,6 +479,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     filesContribution(workbench, api),
     editorContribution(workbench),
     editingContribution(workbench, monaco),
+    languagesContribution(workbench),
     editContribution(workbench, api),
     windowContribution(workbench, api),
     menusContribution(workbench),
@@ -544,6 +548,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   }
   return {
     ...doc,
+    sqlLanguage,
     api,
     connections,
     backend,

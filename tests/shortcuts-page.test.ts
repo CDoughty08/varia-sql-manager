@@ -428,7 +428,8 @@ describe('Shortcuts page', () => {
   })
   it('keeps the inspector\'s command highlighted when Show other platforms keeps one row a command', async () => {
     // #223
-    await render(file([{ command: 'file.saveAs', key: 'mod+shift+e' }, { command: 'file.saveAs', key: 'mod+shift+r' }]))
+    // Keep both bindings free: Ctrl/⌘+Shift+R now belongs to Refresh Local Cache in the editor.
+    await render(file([{ command: 'file.saveAs', key: 'mod+shift+e' }, { command: 'file.saveAs', key: 'mod+shift+j' }]))
     await search('file.saveAs')
     await click(row('file.saveAs', 1))
     await click([...host.querySelectorAll('label')].find(item => item.textContent === 'Show other platforms')!.querySelector('input'))

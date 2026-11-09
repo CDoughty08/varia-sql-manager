@@ -59,6 +59,8 @@
   {"id":"edit.intellisense","label":"IntelliSense"}
     {"id":"edit.insertSnippet","label":"Insert Snippet…","registerAccelerator":false,"type":"normal","click":[["command","edit.insertSnippet"]]}
     {"id":"edit.surroundWith","label":"Surround With…","registerAccelerator":false,"type":"normal","click":[["command","edit.surroundWith"]]}
+    {"type":"separator"}
+    {"accelerator":"Ctrl+Shift+R","id":"edit.refreshIntelliSense","label":"Refresh Local Cache","registerAccelerator":false,"type":"normal","click":[["command","edit.refreshIntelliSense"]]}
 {"id":"menu.view","label":"View"}
   {"accelerator":"Ctrl+Shift+P","id":"workbench.showCommands","label":"Command Palette…","registerAccelerator":false,"type":"normal","click":[["command","workbench.showCommands"]]}
   {"accelerator":"Ctrl+P","id":"workbench.quickOpen","label":"Go to Query…","registerAccelerator":false,"type":"normal","click":[["command","workbench.quickOpen"]]}

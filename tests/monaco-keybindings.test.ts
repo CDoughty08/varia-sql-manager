@@ -33,6 +33,7 @@ const monacoShadowAllowlist: Readonly<Record<string, string>> = {
   'mod+c': "Copy in a results grid only (outputGridFocus): the grid is outside the editor, so Monaco's clipboard keeps the key in editor text",
   'mod+a': "Select All in a results grid or Messages only (outputGridFocus || messagesFocus), both outside the editor; Monaco's Select All keeps the key in editor text",
   'cmd+e': "Search Options in the Options dialog only (optionsDialogFocus, a modal key); Monaco's find with selection keeps ⌘E in editor text",
+  'cmd+i': "Properties in Object Explorer only (activePanel == 'explorer' && !textInputFocus && !searchHitsFocus): Monaco's suggestion trigger keeps ⌘I in editor text",
   'shift+escape': "Close Activity Monitor (activityMonitorFocus), SSMS's key: the monitor is outside the editor, so Monaco's Shift+Escape (closing a widget, leaving a snippet) keeps it in editor text"
 }
 
@@ -157,6 +158,7 @@ describe('Monaco keybinding drift', () => {
       expect(chordsByPlatform.get(platform)!.has(chord), platform).toBe(false)
       expect(workbenchRules(defaultRules(platform)).get(chord)?.map(rule => rule.command), platform).toEqual(['view.toggleResultsPane'])
       expect(chordsByPlatform.get(platform)!.has(platform === 'darwin' ? 'shift+meta+r' : 'ctrl+shift+r'), platform).toBe(false)
+      expect(workbenchRules(defaultRules(platform)).get(platform === 'darwin' ? 'shift+meta+r' : 'ctrl+shift+r')?.map(rule => rule.command), platform).toEqual(['edit.refreshIntelliSense'])
     }
   })
 })
@@ -196,6 +198,16 @@ describe('Monaco runtime keybinding rules', () => {
       expect(monacoKeyRules.some(rule => rule.keys[platform].some(chords => chords.join(' ') === free)), platform).toBe(false)
     }
     expect(keysOf('cancelSelection')).toEqual(['escape', 'shift+escape'])
+  })
+
+  it('triggers suggestions and lets the visible widget handle navigation, acceptance and dismissal', () => {
+    const { KeyMod, KeyCode } = loaded.monaco
+    const control = loaded.internals.os === 2 ? KeyMod.WinCtrl : KeyMod.CtrlCmd
+    expect(press(control | KeyCode.Space, { ...editor, editorHasCompletionItemProvider: true })).toBe('editor.action.triggerSuggest')
+    const suggestions = { ...editor, suggestWidgetVisible: true, suggestWidgetHasFocusedSuggestion: true, suggestWidgetMultipleSuggestions: true }
+    expect(press(KeyCode.DownArrow, suggestions)).toBe('selectNextSuggestion')
+    expect(press(KeyCode.Tab, suggestions)).toBe('acceptSelectedSuggestion')
+    expect(press(KeyCode.Escape, suggestions)).toBe('hideSuggestWidget')
   })
 
   it('adds a rule and disposing it restores the default', () => {
