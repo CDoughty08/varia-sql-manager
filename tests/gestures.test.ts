@@ -115,6 +115,7 @@ describe('GestureService', () => {
       'dock.toggleFloat': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
       'popout.returnToMain': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
       'documentTabs.rows': event => !!event.ctrlKey,
+      'documentTabs.scroll': () => true,
       'documentTabs.rename': () => true
     }
     for (const platform of platforms) {

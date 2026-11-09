@@ -19,9 +19,11 @@ export const editorGroupLimits = {
 } as const
 
 export type EditorGroupOrientation = 'HORIZONTAL' | 'VERTICAL'
+/** Requested shelf heights, independent of the current width and number of open tabs. */
+export interface EditorTabRows { readonly pinned: number; readonly unpinned: number }
 /** A group, its documents by their place in the kept list, in tab order, and the one it shows; or a split of groups. */
 export type EditorGroupNode =
-  | { readonly type: 'leaf'; readonly views: readonly number[]; readonly active?: number; readonly size?: number }
+  | { readonly type: 'leaf'; readonly views: readonly number[]; readonly active?: number; readonly size?: number; readonly tabRows?: EditorTabRows }
   | { readonly type: 'branch'; readonly children: readonly EditorGroupNode[]; readonly size?: number }
 export interface EditorFloatingGroup {
   readonly root: EditorGroupNode
@@ -42,8 +44,9 @@ export interface EditorGroupsLayout {
 
 const dimension = z.number().finite().min(0).max(32_000)
 const place = z.int().min(0).max(editorGroupLimits.documents - 1)
+const tabRowsSchema = z.object({ pinned: z.int().min(1), unpinned: z.int().min(1) }).strict()
 const nodeSchema: z.ZodType<EditorGroupNode> = z.lazy(() => z.discriminatedUnion('type', [
-  z.object({ type: z.literal('leaf'), views: z.array(place).min(1).max(editorGroupLimits.documents), active: place.optional(), size: dimension.optional() }).strict(),
+  z.object({ type: z.literal('leaf'), views: z.array(place).min(1).max(editorGroupLimits.documents), active: place.optional(), size: dimension.optional(), tabRows: tabRowsSchema.optional() }).strict(),
   z.object({ type: z.literal('branch'), children: z.array(nodeSchema).max(editorGroupLimits.nodes), size: dimension.optional() }).strict()
 ]))
 const orientation = z.enum(['HORIZONTAL', 'VERTICAL'])
@@ -107,7 +110,7 @@ export function remapEditorGroups(layout: EditorGroupsLayout, map: (place: numbe
       if (was === layout.activeGroup) active = kept
       kept++
       const shown = value.active === undefined ? undefined : map(value.active)
-      return { type: 'leaf', views, ...shown !== undefined && views.includes(shown) ? { active: shown } : {}, ...value.size !== undefined ? { size: value.size } : {} }
+      return { type: 'leaf', views, ...shown !== undefined && views.includes(shown) ? { active: shown } : {}, ...value.size !== undefined ? { size: value.size } : {}, ...value.tabRows ? { tabRows: value.tabRows } : {} }
     }
     const list = children(value)
     if (list.length === 0) return undefined
@@ -139,14 +142,15 @@ const isLeaf = (node: DockNode): node is DockNode & { type: 'leaf'; data: DockGr
  * (a table designer, a tab past hot exit's caps) left out, and with them groups that held nothing else. Undefined when
  * no group holds a kept document.
  */
-export function captureEditorGroups(json: SerializedDockview, place: (id: string) => number | undefined): EditorGroupsLayout | undefined {
+export function captureEditorGroups(json: SerializedDockview, place: (id: string) => number | undefined, tabRows?: (group: string) => EditorTabRows): EditorGroupsLayout | undefined {
   let index = 0, activeGroup: number | undefined
   const group = (data: DockGroup, size?: number): EditorGroupNode => {
     if (data.id === json.activeGroup) activeGroup = index
     index++
     const views = data.views.map(place).filter((view): view is number => view !== undefined)
     const active = data.activeView === undefined ? undefined : place(data.activeView)
-    return { type: 'leaf', views, ...active !== undefined ? { active } : {}, ...size !== undefined ? { size } : {} }
+    const rows = tabRows?.(data.id)
+    return { type: 'leaf', views, ...active !== undefined ? { active } : {}, ...size !== undefined ? { size } : {}, ...rows && (rows.pinned !== 1 || rows.unpinned !== 1) ? { tabRows: rows } : {} }
   }
   const node = (value: DockNode): EditorGroupNode => isLeaf(value) ? group(value.data, value.size)
     : { type: 'branch', children: (value.data as DockNode[]).map(node), ...value.size !== undefined ? { size: value.size } : {} }
@@ -171,7 +175,7 @@ export function captureEditorGroups(json: SerializedDockview, place: (id: string
  * The Dockview layout for kept groups: each place's document by `id(place)` (places it gives undefined for are left
  * out) and each document's panel as `panel` describes it. Undefined when no group is left.
  */
-export function restoreEditorGroups<P extends { id: string }>(layout: EditorGroupsLayout, id: (place: number) => string | undefined, panel: (id: string) => P): SerializedDockview | undefined {
+export function restoreEditorGroups<P extends { id: string }>(layout: EditorGroupsLayout, id: (place: number) => string | undefined, panel: (id: string) => P, tabRows?: (group: string, rows: EditorTabRows) => void): SerializedDockview | undefined {
   const ids = new Map<number, string>()
   for (const view of layoutViews(layout)) { const value = id(view); if (value !== undefined) ids.set(view, value) }
   const pruned = remapEditorGroups(layout, view => ids.has(view) ? view : undefined)
@@ -180,6 +184,7 @@ export function restoreEditorGroups<P extends { id: string }>(layout: EditorGrou
   const panels: Record<string, P> = {}
   const group = (value: Extract<EditorGroupNode, { type: 'leaf' }>): DockGroup => {
     const groupId = 'g' + (index + 1)
+    tabRows?.(groupId, value.tabRows ?? { pinned: 1, unpinned: 1 })
     if (index === pruned.activeGroup) activeGroup = groupId
     index++
     const views = value.views.map(view => ids.get(view)!)

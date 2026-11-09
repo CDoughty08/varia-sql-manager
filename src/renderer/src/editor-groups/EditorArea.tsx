@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { DockviewReact, themeDark, themeLight, type DockviewApi, type DockviewGroupPanel, type DockviewReadyEvent, type FloatingGroupDragContext, type IDockviewHeaderActionsProps, type IDockviewPanel, type IDockviewPanelHeaderProps, type IDockviewPanelProps, type IWatermarkPanelProps, type SerializedDockview } from 'dockview-react'
-import { captureEditorGroups, editorGroupLimits, restoreEditorGroups, type EditorGroupsLayout } from '../../../shared/editor-groups'
+import { captureEditorGroups, editorGroupLimits, restoreEditorGroups, type EditorGroupsLayout, type EditorTabRows } from '../../../shared/editor-groups'
 import { environmentTag } from '../../../shared/environments'
 import { isSsisDocumentKind } from '../../../shared/ssis/catalog.ts'
 import type { ThemeType } from '../../../shared/theme/types'
@@ -346,6 +346,7 @@ class EditorAreaController implements Area, EditorGroupHost {
   private readonly parking = document.createElement('div')
   private disposables: { dispose(): void }[] = []
   private reconciling = false
+  private restoringLayout = false
   private disposed = false
   /**
    * Whether the last element to take focus, menus, the palette and dialogs aside, was in the editor area. Focus on the
@@ -368,7 +369,7 @@ class EditorAreaController implements Area, EditorGroupHost {
     this.disposables.push(guides,
       api.onDidActivePanelChange(event => { if (!this.reconciling && event.panel && documents.getSnapshot().activeId !== event.panel.id) documents.activate(event.panel.id); this.followStatus() }),
       api.onDidLayoutChange(() => { this.keepGrid(); this.keepPinsFirst(); this.publish() }),
-      api.onDidRemoveGroup(group => this.dropEditor(group.id)),
+      api.onDidRemoveGroup(group => { this.dropEditor(group.id); if (!this.restoringLayout) editorGroups.forgetTabRows(group.id) }),
       // A group past the cap (a drop that would split once more) goes back: its documents join the active group.
       api.onDidAddGroup(group => { if (api.groups.length > editorGroupLimits.groups) queueMicrotask(() => this.mergeInto(group)) }),
       { dispose: documents.subscribe(() => this.reconcile()) },
@@ -602,22 +603,25 @@ class EditorAreaController implements Area, EditorGroupHost {
     this.root?.querySelector<HTMLElement>(`.dv-tab[data-tab-panel-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true })
   }
   capture(place: (id: string) => number | undefined): EditorGroupsLayout | undefined {
-    return this.api ? captureEditorGroups(this.api.toJSON(), place) : undefined
+    return this.api ? captureEditorGroups(this.api.toJSON(), place, group => this.workbench.editorGroups.getTabRows(group)) : undefined
   }
   restore(layout: EditorGroupsLayout, id: (place: number) => string | undefined): void {
     const api = this.api
     if (!api) return
     const names = new Map(this.workbench.documents.getSnapshot().documents.map(document => [document.id, document.name]))
-    const json = restoreEditorGroups(layout, place => { const value = id(place); return value && names.has(value) ? value : undefined }, panelId => panelOptions(panelId, names.get(panelId) ?? ''))
+    const rows = new Map<string, EditorTabRows>()
+    const json = restoreEditorGroups(layout, place => { const value = id(place); return value && names.has(value) ? value : undefined }, panelId => panelOptions(panelId, names.get(panelId) ?? ''), (group, value) => rows.set(group, value))
     if (!json) return
+    this.workbench.editorGroups.restoreTabRows(rows)
     this.reconciling = true
+    this.restoringLayout = true
     try {
       // Live panels are reused, so their editors' models and undo stay; documents the layout leaves out come back below.
       api.fromJSON(json, { reuseExistingPanels: true })
       for (const panel of api.panels) this.guard(panel)
     } catch (error) {
       this.workbench.commands.reportWarning('The editor groups could not be restored: ' + (error instanceof Error ? error.message : 'the layout was refused.'))
-    } finally { this.reconciling = false }
+    } finally { this.restoringLayout = false; this.reconciling = false }
     for (const group of [...this.editors.keys()]) if (!this.groupById(group)) this.dropEditor(group)
     this.reconcile()
   }

@@ -198,7 +198,7 @@ describe('context menu model', () => {
     // The editor menu's Connection submenu is Query › Connection.
     expect(contextCommandIds('editor.context')).toEqual(['edit.cut', 'edit.copy', 'edit.paste', 'query.execute', 'query.cancel', 'query.estimatePlan', 'query.estimateSessionPlan', 'workbench.showCommands', 'connection.connect', 'connection.environment', 'connection.reconnect',
       'query.changeConnection', 'query.disconnect', 'query.disconnectAll', 'edit.insertSnippet', 'edit.surroundWith'])
-    expect(contextCommandIds('documentTab.context')).toEqual(['file.save', 'file.saveAs', 'file.close', 'file.closeOthers', 'file.closeAll', 'file.copyPath', 'file.revealInFolder', 'document.moveLeft', 'document.moveRight', 'document.rename', 'editor.splitRight', 'editor.splitDown', 'editor.moveToNextGroup', 'editor.moveToPreviousGroup', 'editor.float', 'editor.dock'])
+    expect(contextCommandIds('documentTab.context')).toEqual(['file.save', 'file.saveAs', 'file.close', 'file.closeOthers', 'file.closeAll', 'file.copyPath', 'file.revealInFolder', 'document.moveLeft', 'document.moveRight', 'document.rename', 'editor.splitRight', 'editor.splitDown', 'editor.moveToNextGroup', 'editor.moveToPreviousGroup', 'editor.increaseTabRows', 'editor.decreaseTabRows', 'editor.float', 'editor.dock'])
     expect(contextCommandIds('dockTab.context')).toEqual(['pane.dockLeft', 'pane.dockRight', 'pane.dockTop', 'pane.dockBottom', 'pane.tabWithExplorer', 'pane.tabWithEditor', 'pane.tabWithResults', 'pane.tabWithMessages', 'pane.tabWithPlan', 'pane.float', 'pane.dock', 'pane.moveToNewWindow', 'pane.moveToMainWindow', 'pane.close', 'window.togglePanelTabs'])
     expect(contextCommandIds('input.context')).toEqual(['edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'])
     for (const menu of contextMenuIds) expect(contextCommandIds(menu), menu).toEqual(commandIds.filter(id => menuIds.some(inner => menuRoots(inner).includes(menu) && commandDescriptor(id).menus?.some(placement => placement.menu === inner))))
@@ -357,6 +357,8 @@ describe('menu state', () => {
       'explorer.groupBySchema',
       // Focusing editor groups: keys in editor text and the palette.
       'editor.focusNextGroup', 'editor.focusPreviousGroup',
+      // Tab stack height: the query tab menu and palette equivalent of Control+wheel.
+      'editor.increaseTabRows', 'editor.decreaseTabRows',
       // The results toolbar's White space choices, also in the grid's menu.
       'output.showSpaces', 'output.showAllWhitespace',
       // Sorting a grid: its menu and its headers' sort buttons; Sort text by is the results toolbar's and the palette's.

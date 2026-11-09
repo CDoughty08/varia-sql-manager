@@ -44,6 +44,8 @@ export function editorContribution({ commands, documents, editorOptions, editorG
     commands.register('editor.focusNextGroup', { run: () => editorGroups.focusGroup(1) }),
     commands.register('editor.focusPreviousGroup', { run: () => editorGroups.focusGroup(-1) }),
     commands.register('editor.joinGroups', { run: () => editorGroups.join() }),
+    commands.register('editor.increaseTabRows', { when: context => editorGroups.canChangeTabRows(tab(context?.tabId), 1), run: context => editorGroups.changeTabRows(tab(context?.tabId), 1) }),
+    commands.register('editor.decreaseTabRows', { when: context => editorGroups.canChangeTabRows(tab(context?.tabId), -1), run: context => editorGroups.changeTabRows(tab(context?.tabId), -1) }),
     commands.register('editor.float', { when: context => editorGroups.canFloat(tab(context?.tabId)), run: context => editorGroups.float(tab(context?.tabId)) }),
     commands.register('editor.dock', { when: context => editorGroups.isFloating(tab(context?.tabId)), run: context => editorGroups.dock(tab(context?.tabId)) }),
     // The tab menu names its tab; F2 renames the focused tab (it runs only while one has focus); the palette, the active one.

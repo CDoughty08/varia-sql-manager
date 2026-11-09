@@ -37,6 +37,9 @@ documentTab.context, for a saved query's tab
   Move &Right  ⌃⇧⇟  ----
   Re&name Tab…  F2  ++++
   ---
+  Increase Tab Stack &Height  ----
+  Decrease &Tab Stack Height  ----
+  ---
   Spl&it Right  ⌘\  ----
   Split Do&wn  ⌘K ⌘\  ----
   Move to Ne&xt Group  ⌃⌘→  ----
@@ -56,6 +59,9 @@ documentTab.context, for an unsaved query's tab
   Mov&e Left  ⌃⇧⇞  ++++
   Move &Right  ⌃⇧⇟  ++++
   Re&name Tab…  F2  ++++
+  ---
+  Increase Tab Stack &Height  ----
+  Decrease &Tab Stack Height  ----
   ---
   Spl&it Right  ⌘\  ----
   Split Do&wn  ⌘K ⌘\  ----

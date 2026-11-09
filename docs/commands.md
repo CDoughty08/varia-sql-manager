@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (272)
+## Commands (274)
 
 ### File
 
@@ -90,6 +90,8 @@ keys it uses are listed below.
 | Focus Next Editor Group | `editor.focusNextGroup` | Ctrl+K Ctrl+Right * | Ctrl+K Ctrl+Right * | ⌘K ⌘→ * | `multipleEditorGroups` | — |
 | Focus Previous Editor Group | `editor.focusPreviousGroup` | Ctrl+K Ctrl+Left * | Ctrl+K Ctrl+Left * | ⌘K ⌘← * | `multipleEditorGroups` | — |
 | Join All Editor Groups | `editor.joinGroups` | — | — | — | `multipleEditorGroups` | Window › Join All Editor Groups |
+| Increase Tab Stack Height | `editor.increaseTabRows` | — | — | — | `hasActiveDocument` | Query tab context menu › Increase Tab Stack Height |
+| Decrease Tab Stack Height | `editor.decreaseTabRows` | — | — | — | `hasActiveDocument` | Query tab context menu › Decrease Tab Stack Height |
 | Float Editor | `editor.float` | — | — | — | `hasActiveDocument` | Query tab context menu › Float |
 | Dock Editor | `editor.dock` | — | — | — | `hasActiveDocument` | Query tab context menu › Dock |
 | Toggle Word Wrap | `editor.toggleWordWrap` | Alt+Z | Alt+Z | — | Always; checked when `editorWordWrap` | Edit › Advanced › Word Wrap |
@@ -773,6 +775,8 @@ Right-click a query tab, or press Shift+F10 or the context-menu key on a focused
 | `4_move` | Mov**e** Left | `document.moveLeft` | Always |
 | `4_move` | Move **R**ight | `document.moveRight` | Always |
 | `4_move` | Re**n**ame Tab… | `document.rename` | Always |
+| `4_stack` | Increase Tab Stack **H**eight | `editor.increaseTabRows` | Always |
+| `4_stack` | Decrease **T**ab Stack Height | `editor.decreaseTabRows` | Always |
 | `5_groups` | Spl**i**t Right | `editor.splitRight` | Always |
 | `5_groups` | Split Do**w**n | `editor.splitDown` | Always |
 | `5_groups` | Move to Ne**x**t Group | `editor.moveToNextGroup` | Always |

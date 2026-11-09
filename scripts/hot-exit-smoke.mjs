@@ -5,9 +5,10 @@
 // session end keeps the tabs. Native message boxes are stubbed in main and recorded; files live under artifacts/.
 import { electron, expect } from './fixtures/smoke.mjs'
 import { crashRenderer } from './fixtures/dialog-lifecycle.mjs'
+import { resizeContent } from './fixtures/window-resize.mjs'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
-import { activeDocumentName, activeGroupEditorText, backendReady, documentTab, documentTabs, editorGroups, editorGroupTabs, editorTextbox, floatingEditorGroups, gridCell, menubar, outputStatus, pinDocumentButton, queryStatus, quickInputBox, quickInputRows, resultGrid, selectOpenDocument, tabNameBox, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocumentName, activeGroupEditorText, backendReady, documentTab, documentTabs, editorGroups, editorGroupTabs, editorTextbox, floatingEditorGroups, gridCell, menubar, outputStatus, pinDocumentButton, queryStatus, quickInputBox, quickInputRows, resultGrid, selectOpenDocument, tabNameBox, tabShelfRows, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'hot-exit-profile-'))
@@ -79,8 +80,14 @@ const typeInNew = async text => {
 // Keyboard access also reaches tabs in shelf overflow or beneath floating groups on Windows CI's small display.
 const tabMenuItem = async (tab, name) => {
   await documentTab(page, tab).focus()
+  await expect(documentTab(page, tab)).toBeFocused()
   await page.keyboard.press('Shift+F10')
+  await expect(documentTab(page, tab)).toHaveAttribute('data-menu-target', '')
   await page.getByRole('menuitem', { name, exact: true }).click()
+  if (name === 'Rename Tab…') {
+    await expect(tabNameBox(page)).toBeFocused()
+    await expect(tabNameBox(page)).toHaveValue(tab)
+  }
 }
 
 const holdNextRead = path => application.evaluate((_electron, path) => globalThis.variaHotExit.holdNextRead(path), path)
@@ -123,6 +130,7 @@ try {
   await page.keyboard.insertText('Totals')
   await page.keyboard.press('Enter')
   await expect(documentTab(page, 'Totals')).toHaveAttribute('title', 'SQLQuery3.sql (unsaved changes)')
+  await expect(documentTab(page, 'Totals')).toBeFocused()
   // The tab menu's Rename Tab…; Escape keeps the old name, and so does an empty one, which takes a rename away.
   await tabMenuItem('SQLQuery1.sql', 'Rename Tab…')
   await page.keyboard.insertText('Ignored')
@@ -131,10 +139,12 @@ try {
   await tabMenuItem('SQLQuery1.sql', 'Rename Tab…')
   await page.keyboard.insertText('Welcome')
   await page.keyboard.press('Enter')
+  await expect(documentTab(page, 'Welcome')).toBeFocused()
   await tabMenuItem('orders.sql', 'Rename Tab…')
   await page.keyboard.insertText('Orders report')
   await page.keyboard.press('Enter')
   await expect(documentTab(page, 'Orders report')).toHaveAttribute('title', orders)
+  await expect(documentTab(page, 'Orders report')).toBeFocused()
   expect(await tabNames()).toEqual(['Welcome', 'Orders report', 'Month end', 'Totals'])
   console.log('Hot exit checks: Rename Tab by F2, a double-click and the tab menu, Escape keeping the old name.')
 
@@ -143,6 +153,10 @@ try {
   await tabMenuItem('Orders report', 'Save As…')
   await expect.poll(() => application.evaluate(() => globalThis.variaHotExit.saveDefaults.map(path => path.split(/[\\/]/).at(-1)))).toEqual(['Month end.sql', 'Orders report.sql'])
   expect((await application.evaluate(() => globalThis.variaHotExit.saveDefaults))[1]).toBe(join(folder, 'Orders report.sql'))
+  // The single group's requested stack height survives pinning and a split, even when fewer tabs temporarily fit one row.
+  await resizeContent(application, page, 1024, 960)
+  await tabMenuItem('Welcome', 'Increase Tab Stack Height')
+  await expect.poll(() => tabShelfRows(editorGroups(page).first())).toBe('2')
 
   // Totals moves first, and Month end is the active tab as the app quits; nothing asks to save.
   await selectOpenDocument(page, 'Totals')
@@ -165,6 +179,9 @@ try {
   await expect.poll(() => groupNames(1)).toEqual(['Orders report', 'Month end'])
   expect(await groupNames(0)).toEqual(['Totals', 'Welcome'])
   expect(await activeDocumentName(page)).toBe('Month end')
+  await tabMenuItem('Orders report', 'Increase Tab Stack Height')
+  await expect.poll(() => tabShelfRows(editorGroups(page).nth(1))).toBe('2')
+  await selectOpenDocument(page, 'Month end')
   const exited = new Promise(done => application.process().once('exit', done))
   await application.evaluate(({ app }) => app.quit())
   await exited
@@ -178,6 +195,7 @@ try {
   expect(kept.activeIndex).toBe(3)
   expect(kept.groups.root.children.map(group => group.views)).toEqual([[0, 1], [2, 3]])
   expect(kept.groups.activeGroup).toBe(1)
+  expect(kept.groups.root.children.map(group => group.tabRows)).toEqual([{ pinned: 1, unpinned: 2 }, { pinned: 1, unpinned: 2 }])
   console.log('Hot exit checks: a quit asks nothing and keeps the tabs, in order, with their text and names.')
 
   // Changed on disk meanwhile: a clean file reopens with what is there now.
@@ -189,6 +207,8 @@ try {
   await expect(editorGroups(page)).toHaveCount(2)
   expect(await groupNames(0)).toEqual(['Totals', 'Welcome'])
   expect(await groupNames(1)).toEqual(['Orders report', 'Month end'])
+  await resizeContent(application, page, 1024, 960)
+  await expect.poll(() => tabShelfRows(editorGroups(page).nth(1))).toBe('2')
   await expect.poll(text).toContain('SELECT 2 AS month_end')
   await expect(unsavedMark(documentTab(page, 'Month end'))).toBeVisible()
   await expect(unsavedMark(documentTab(page, 'Totals'))).toBeVisible()
@@ -232,6 +252,9 @@ try {
   await expect(editorGroups(page)).toHaveCount(1)
   await expect(page.getByText('All open queries float', { exact: true })).toHaveCount(0)
   expect((await tabNames())[0]).toBe('Totals')
+  await resizeContent(application, page, 1024, 960)
+  if (await tabShelfRows(editorGroups(page).first()) === '1') await tabMenuItem('Welcome', 'Increase Tab Stack Height')
+  await expect.poll(() => tabShelfRows(editorGroups(page).first())).toBe('2')
   console.log('Hot exit checks: every query floating survives a relaunch, and joining them leaves no empty group.')
   // A canceled reload leaves the current page and its pins intact. An accepted reload reopens just the pins.
   await selectOpenDocument(page, 'Orders report')
@@ -247,6 +270,16 @@ try {
   await expect.poll(prompts).toEqual(['Reload Varia SQL Manager?'])
   expect((await tabNames()).slice(0, 2)).toEqual(['Totals', 'Orders report'])
   expect((await tabNames()).slice(2).sort()).toEqual(['Month end', 'SQLQuery4.sql', 'Welcome'])
+  // Reuse two clean fixture tabs so the single group needs two pinned rows at the normal minimum window width.
+  for (const name of ['Welcome', 'SQLQuery4.sql']) {
+    await selectOpenDocument(page, name)
+    await pinDocumentButton(page, name).click()
+    await expect(pinDocumentButton(page, name, true)).toBeVisible()
+    await expect(documentTab(page, name)).toBeFocused()
+  }
+  await tabMenuItem('Totals', 'Increase Tab Stack Height')
+  await expect.poll(() => tabShelfRows(editorGroups(page).first(), true)).toBe('2')
+  await page.evaluate(() => window.__variaRecovery.flush())
   // Hold the saved pin's read so the replacement page can issue another reload during the restore.
   await application.evaluate(() => {
     globalThis.variaHotExit.reloadAnswer = 0
@@ -284,11 +317,18 @@ try {
     })
     await releaseRead()
   }
-  await expect.poll(tabNames).toEqual(['Totals', 'Orders report'])
+  await expect.poll(tabNames).toEqual(['Totals', 'Orders report', 'Welcome', 'SQLQuery4.sql'])
   const recover = page.getByRole('dialog', { name: 'Recover Unsaved Queries', exact: true })
   await expect(recover.getByRole('checkbox', { name: 'Recover Month end', exact: true })).toBeVisible()
   await expect(recover.getByRole('checkbox', { name: 'Recover Totals', exact: true })).toHaveCount(0)
   await recover.getByRole('button', { name: 'Later', exact: true }).click()
+  await expect.poll(() => tabShelfRows(editorGroups(page).first(), true)).toBe('2')
+  for (const name of ['Welcome', 'SQLQuery4.sql']) {
+    await pinDocumentButton(page, name, true).click()
+    await tabMenuItem(name, 'Close')
+  }
+  await expect.poll(tabNames).toEqual(['Totals', 'Orders report'])
+  await selectOpenDocument(page, 'Orders report')
   expect(await activeDocumentName(page)).toBe('Orders report')
   await expect.poll(text).toContain('SELECT 2 AS orders')
   await selectOpenDocument(page, 'Totals')

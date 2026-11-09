@@ -60,9 +60,14 @@ its own Monaco editor, and groups split side by side, stack, or float over the e
   document's group; the palette's greyed row says so.
 - Each editor group puts pinned text tabs on a separate shelf above its unpinned tabs. The shelves use their layout
   and pin buttons to show the distinction, without visible section labels. Hold Ctrl and scroll down over either
-  shelf to add rows there, or scroll up to remove rows. Each shelf's row buttons provide the same action from the
-  keyboard, and its overflow button lists tabs that are out of view. Row counts are independent for both shelves
-  and for different editor groups.
+  shelf to add rows there, or scroll up to remove rows. **Increase Tab Stack Height** and **Decrease Tab Stack Height**
+  in the tab's context menu change that tab's shelf; the command palette changes the active document's shelf. A brief
+  hint reports the new row count, when all tabs fit, or the one-row minimum. A one-row shelf scrolls
+  horizontally through all its tabs. A shelf with several rows uses its last slot for **… N more** when tabs do not fit;
+  clicking it lists every tab outside the shown rows. Row counts and horizontal scroll positions are independent for
+  both shelves and for different editor groups. Stacks can expand until every tab fits, without a window-height cap.
+  When the expanded header is taller than its editor group, ordinary vertical scrolling reaches all its rows;
+  Ctrl+scroll continues to change the stack height. Keyboard selection and rename reveal the tab within that viewport.
 - Pinned tabs stay first in their group's document order (`EditorAreaController.keepPinsFirst`, after every layout
   change and reconcile). Move Left and Right never take a tab across that boundary. A pinned tab dragged into
   another group stays pinned and joins that group's pinned shelf. Pins survive hot exit and Reload Window with the
@@ -91,8 +96,10 @@ its own Monaco editor, and groups split side by side, stack, or float over the e
   by its place in the kept list (`EditorGroupsLayout`, `src/shared/editor-groups.ts`), because Dockview names panels by
   document id and ids do not outlive the process. Main validates it (`editorGroupsLayoutSchema`: limits, documents
   unique across groups, active documents inside their groups) and remaps the places as tabs are dropped or files are
-  gone. Groups left empty go, and splits left with one child give way to it. One group is not kept: the order says it
-  all.
+  gone. Groups left empty go, and splits left with one child give way to it. Each group's requested pinned and unpinned
+  stack heights are saved with the layout, including a single group with nondefault heights. A wider group or fewer
+  remaining tabs can use fewer rows without discarding the saved preference. An ordinary single group is not kept:
+  its document order already describes it.
 - Workspace layouts (`workspace-layouts.json`) are unchanged: they arrange the workspace's panels, and the editor
   groups live inside the "Query editor" panel. Old layouts need no migration.
 - Custom documents are not kept by hot exit, so their places in the groups are not kept either.

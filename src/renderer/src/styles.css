@@ -604,13 +604,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .editor-groups .query-shelves > .dv-tab { position: absolute; min-width: 0; box-sizing: border-box; }
 .editor-groups .query-shelves > .dv-tab[data-tab-overflow] { opacity: 0; pointer-events: none; }
 .query-shelf { position: absolute; left: 0; right: 0; pointer-events: none; border-bottom: 1px solid var(--varia-documentTabs-border); }
-.query-shelf-controls { position: absolute; right: 0; top: 0; display: flex; align-items: center; justify-content: flex-end; width: var(--shelf-controls-width); height: var(--varia-bar); background: var(--varia-documentTabs-background); pointer-events: auto; }
-.query-shelf-controls .icon-button { width: 26px; min-width: 0; padding: 3px; }
-.query-shelf-rows { width: 20px; text-align: center; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.query-shelf-more { position: absolute; height: var(--varia-bar); box-sizing: border-box; padding: 0 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: start; color: var(--varia-documentTabs-inactiveForeground); background: var(--varia-documentTabs-background); border: 1px solid var(--varia-documentTabs-border); pointer-events: auto; }
+.query-shelf-more:hover { color: var(--varia-foreground); background: var(--varia-list-hoverBackground); }
 .query-shelf-overflow { position: fixed; inset: auto; position-area: bottom span-left; position-try-fallbacks: flip-block, flip-inline; margin: 0; min-width: 220px; max-width: min(480px, 90vw); max-height: 50vh; overflow: auto; padding: 3px; pointer-events: auto; color: var(--varia-menu-foreground); background: var(--varia-menu-background); border: 1px solid var(--varia-menu-border); border-radius: var(--varia-radius-sm); box-shadow: var(--varia-shadow-menu) var(--varia-widget-shadow); }
 .query-shelf-overflow > button { display: block; width: 100%; padding: 5px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: start; }
 .query-shelf-overflow > button:hover { background: var(--varia-list-hoverBackground); }
-.query-shelf-row-options { display: flex; align-items: center; justify-content: flex-end; }
+.query-shelf-feedback { position: absolute; right: 8px; z-index: 4; max-width: calc(100% - 16px); padding: 6px 10px; border: 1px solid var(--varia-menu-border); border-radius: var(--varia-radius-sm); background: var(--varia-menu-background); color: var(--varia-menu-foreground); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); font-size: var(--varia-size-xs); pointer-events: none; }
 /* Compact spacing follows each tab's cell, including narrow columns inside a wide shelf. */
 @container (width < 338px) {
   .query-tab .tab-select { gap: 4px; padding-inline: 4px; }

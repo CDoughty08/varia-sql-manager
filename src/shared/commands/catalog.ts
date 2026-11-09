@@ -551,6 +551,14 @@ export const commandCatalog = {
     title: 'Join All Editor Groups', category: 'View', keywords: ['group', 'split', 'merge', 'unsplit'], precondition: 'multipleEditorGroups', unavailableHint: 'Split the editor first.',
     menus: [{ menu: 'window', group: '2_groups', order: 3, mnemonic: 'j' }]
   },
+  'editor.increaseTabRows': {
+    title: 'Increase Tab Stack Height', category: 'View', keywords: ['tab', 'rows', 'shelf', 'stack'], precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    menus: [{ menu: 'documentTab.context', group: '4_stack', order: 1, mnemonic: 'h' }]
+  },
+  'editor.decreaseTabRows': {
+    title: 'Decrease Tab Stack Height', category: 'View', keywords: ['tab', 'rows', 'shelf', 'stack'], precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    menus: [{ menu: 'documentTab.context', group: '4_stack', order: 2, mnemonic: 't' }]
+  },
   // A floating group stays over the editor area; documents do not move into windows of their own (docs/editor-groups.md).
   'editor.float': {
     title: 'Float Editor', category: 'View', keywords: ['group', 'undock', 'tab'], precondition: 'hasActiveDocument', unavailableHint: openFirst,

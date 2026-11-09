@@ -14,7 +14,6 @@ export const part = {
   toolbar: '[role="toolbar"][aria-label="Standard"]',
   queryBar: '[role="toolbar"][aria-label="SQL Editor"]',
   documentTabs: '[role="tablist"][aria-label="Query documents"]',
-  tabShelfRows: '.query-shelf-rows',
   statusBar: 'footer[aria-label="Status bar"]',
   queryStatus: '[role="status"][aria-label="Query status"]',
   explorerToolbar: '[role="toolbar"][aria-label="Object Explorer toolbar"]',
@@ -383,10 +382,24 @@ export const activeDocumentName = page => activeDocument(page).getAttribute('ari
 /** The editor groups, the grid's in order and then the floating ones, and the tabs of one. */
 export const editorGroups = page => page.locator(part.editorGroup)
 export const editorGroupTabs = group => group.getByRole('tablist', { name: 'Query documents', exact: true }).getByRole('tab')
-/** One editor group's independent pinned or unpinned shelf, its row controls, and its row count. */
+export const documentTabFullyShown = tab => tab.evaluate(tab => {
+  const box = tab.getBoundingClientRect(), view = tab.closest('[role="tablist"]').getBoundingClientRect()
+  return box.left >= view.left - 1 && box.right <= view.right + 1 && box.top >= view.top - 1 && box.bottom <= view.bottom + 1
+})
+/** The visible portion of a tab clipped at the right edge, for pointer selection without Playwright scrolling it first. */
+export const partiallyVisibleDocumentTab = group => editorGroupTabs(group).evaluateAll(tabs => {
+  const view = tabs[0].closest('[role="tablist"]').getBoundingClientRect()
+  const tab = tabs.find(tab => { const box = tab.getBoundingClientRect(); return box.left < view.right - 24 && box.right > view.right + 24 })
+  if (!tab) return undefined
+  const box = tab.getBoundingClientRect()
+  return { name: tab.getAttribute('aria-label'), x: view.right - 12, y: box.y + box.height / 2 }
+})
+/** One editor group's independent pinned or unpinned shelf and its row count. */
 export const tabShelf = (scope, pinned = false) => scope.locator(`[data-shelf-controls="${pinned ? 'pinned' : 'unpinned'}"]`)
-export const tabShelfControls = (scope, pinned = false) => scope.getByRole('group', { name: `${pinned ? 'Pinned' : 'Unpinned'} tab rows`, exact: true })
-export const tabShelfRows = (scope, pinned = false) => tabShelfControls(scope, pinned).locator(part.tabShelfRows)
+export const tabShelfRows = (scope, pinned = false) => tabShelf(scope, pinned).getAttribute('data-rows')
+export const tabStackFeedback = scope => scope.getByRole('status', { name: 'Tab stack height', exact: true })
+/** The visible native tab strip viewport, including its vertical scroll offset for stacks taller than the group. */
+export const tabStackScrollTop = scope => documentTabs(scope).evaluate(strip => parseFloat(strip.style.getPropertyValue('--tab-stack-scroll-top')) || 0)
 export const floatingEditorGroups = page => page.locator(part.floatingEditorGroup)
 /** A document's tab with its Close button: the target of the tab's menu. */
 export const documentTabSlots = page => documentTabs(page).locator('[data-tab-id]')
@@ -402,11 +415,12 @@ export const selectOpenDocument = async (page, name) => {
     const section = await tab.getAttribute('data-tab-shelf') === 'pinned' ? 'pinned' : 'query'
     const strip = tab.locator('xpath=ancestor::*[@role="tablist"][1]')
     const overflow = strip.getByRole('button', { name: new RegExp(`^Show \\d+ more ${section} tabs?$`) })
-    const options = strip.getByRole('button', { name: `${section === 'pinned' ? 'Pinned' : 'Query'} tab options`, exact: true })
-    await overflow.or(options).click()
+    await overflow.click()
     await strip.getByRole('group', { name: `More ${section} tabs`, exact: true }).getByRole('button', named(name)).click()
     return
   }
+  const shown = await documentTabFullyShown(tab)
+  if (!shown) await tab.evaluate(tab => tab.focus({ preventScroll: true }))
   await tab.click()
 }
 export const pinDocumentButton = (page, name, pinned = false) => documentTabs(page).getByRole('button', { name: `${pinned ? 'Unpin' : 'Pin'} ${name}`, exact: true })

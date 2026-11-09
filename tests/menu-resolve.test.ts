@@ -22,6 +22,15 @@ const marked = (items: readonly ResolvedMenuItem[]): string[] => items.map(item 
 const command = (id: CommandId, title: string = id, extra: Partial<Extract<MenuEntry, { kind: 'command' }>> = {}): MenuEntry => ({ kind: 'command', id, nativeId: id, title, toggle: false, ...extra })
 
 describe('menu resolution', () => {
+  it('offers direct stack height actions for the context tab with independent direction enablement', () => {
+    const args = { tabId: 'inactive-pin' }
+    const model = resolveMenu('documentTab.context', options({ args, disabled: ['editor.decreaseTabRows'] }))
+    const increase = model.findIndex(item => item.kind === 'command' && item.id === 'editor.increaseTabRows')
+    expect(model[increase]).toMatchObject({ kind: 'command', id: 'editor.increaseTabRows', title: 'Increase Tab Stack Height', args, enabled: true })
+    expect(model[increase + 1]).toMatchObject({ kind: 'command', id: 'editor.decreaseTabRows', title: 'Decrease Tab Stack Height', args, enabled: false })
+    expect(model[increase - 1].kind).toBe('separator')
+    expect(model[increase + 2].kind).toBe('separator')
+  })
   it('shows a menubar menu with mnemonics, chord labels, icons, and role-backed commands, without bare Electron roles', () => {
     const edit = resolveMenu('edit', options())
     expect(marked(edit)).toEqual(['&Undo', '&Redo', '-', 'Cu&t', '&Copy', '&Paste', '&Delete', 'Select &All', '-', '&Find and Replace', '&Go To Line…', '-', 'Ad&vanced', 'Boo&kmarks', '&IntelliSense'])

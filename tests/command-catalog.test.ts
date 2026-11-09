@@ -50,13 +50,13 @@ function showTogether(menu: MenuId, ...clauses: (string | undefined)[]): boolean
 describe('command catalogue', () => {
   it('lets keys on a focused tab name it only to the query tab menu’s commands', () => {
     // Close, Rename and the moves act on the focused tab, as its menu would; Execute and the rest follow the shown query.
-    for (const id of ['file.close', 'file.save', 'document.rename', 'editor.splitRight', 'editor.float'] as const) expect(actsOnTab(id)).toBe(true)
+    for (const id of ['file.close', 'file.save', 'document.rename', 'editor.splitRight', 'editor.float', 'editor.increaseTabRows', 'editor.decreaseTabRows'] as const) expect(actsOnTab(id)).toBe(true)
     for (const id of ['query.execute', 'file.new'] as const) expect(actsOnTab(id)).toBe(false)
   })
   it('is the renderer\'s command id type', () => {
     expectTypeOf<CommandId>().toEqualTypeOf<RendererCommandId>()
     // Includes generated Script As commands and internal lifecycle commands.
-    expect(commandIds).toHaveLength(272)
+    expect(commandIds).toHaveLength(274)
     expect(commandIds.filter(id => id.startsWith('explorer.script') && id.includes('To'))).toEqual([...scriptCommandIds])
   })
   it('has a handler for every command once all contributions have run', () => {

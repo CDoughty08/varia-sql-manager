@@ -8,7 +8,7 @@ matches; a gesture matches when all of its modifiers are held. "Modifier" gestur
 pointing; "Command" gestures run a command that the keyboard also reaches; "Fixed" gestures belong to the platform,
 Chromium, or a library and cannot be remapped. "Choices" are the modifiers the Shortcuts page will offer.
 
-## Gestures (16)
+## Gestures (17)
 
 ### Global
 
@@ -52,7 +52,8 @@ Chromium, or a library and cannot be remapped. "Choices" are the modifiers the S
 
 | Gesture | Id | What it does | Kind | Windows | Linux | macOS | Choices or lock | Keyboard |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Change Tab Rows | `documentTabs.rows` | Scrolling down adds rows to the pinned or unpinned shelf under the pointer, and scrolling up removes rows from that shelf alone. | Fixed | Ctrl+Wheel a tab shelf | Ctrl+Wheel a tab shelf | ⌃ Wheel a tab shelf | Locked: Control+wheel changes shelf rows, and the row buttons provide the same action from the keyboard. | — |
+| Scroll Tabs | `documentTabs.scroll` | Scrolls one-row shelves horizontally, or an expanded tab header vertically when its rows extend beyond the editor group. | Fixed | Wheel a tab shelf | Wheel a tab shelf | Wheel a tab shelf | Locked: Wheel input scrolls tabs horizontally or vertically through an expanded header. Arrow keys, Home and End on a focused tab also reach every tab. | — |
+| Change Tab Rows | `documentTabs.rows` | Scrolling down adds rows to the pinned or unpinned shelf under the pointer, and scrolling up removes rows from that shelf alone. | Fixed | Ctrl+Wheel a tab shelf | Ctrl+Wheel a tab shelf | ⌃ Wheel a tab shelf | Locked: Control+wheel changes shelf rows. Increase Tab Stack Height and Decrease Tab Stack Height in the tab menu and command palette provide the same action from the keyboard. | Increase Tab Stack Height (`editor.increaseTabRows`), Decrease Tab Stack Height (`editor.decreaseTabRows`) |
 | Rename Tab | `documentTabs.rename` | Opens the rename box on a query tab. | Command | Double-click a query tab | Double-click a query tab | Double-click a query tab | Locked: Only modifier gestures can be remapped in this version; F2 renames a focused tab. | Rename Tab… (`document.rename`) |
 
 ### Connect Dialog

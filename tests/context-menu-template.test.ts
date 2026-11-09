@@ -48,6 +48,7 @@ describe('native context menu template', () => {
     expect(describeTemplate(contextMenuTemplate(request('documentTab.context', { disabled: ['file.copyPath', 'file.revealInFolder'] }), 'darwin', () => {}))).toEqual([
       'Save (click, Cmd+S)', 'Save As… (click, Cmd+Shift+S)', '---', 'Close (click, Cmd+W)', 'Close All But This (click)', 'Close All (click)', '---',
       'Copy Full Path (click, disabled)', 'Reveal in Finder (click, disabled)', '---', 'Move Left (click, Ctrl+Shift+PageUp)', 'Move Right (click, Ctrl+Shift+PageDown)', 'Rename Tab… (click, F2)',
+      '---', 'Increase Tab Stack Height (click)', 'Decrease Tab Stack Height (click)',
       '---', 'Split Right (click, Cmd+\\)', 'Split Down (click)', 'Move to Next Group (click, Cmd+Ctrl+Right)', 'Move to Previous Group (click, Cmd+Ctrl+Left)', 'Float (click)', 'Dock (click)'
     ])
     expect(describeTemplate(contextMenuTemplate(request('input.context'), 'darwin', () => {}))).toEqual([
