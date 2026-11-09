@@ -121,11 +121,12 @@ export const profileResultSchema = z.object({
     histogram: z.object({ basis: z.enum(['value', 'time', 'chars', 'bytes']), low: z.number(), high: z.number(), counts: z.array(count).length(limits.profile.bins) }).strict().optional()
   }).strict()).max(limits.profile.maxColumns)
 }).strict()
-/** A results.distinct answer as the backend sends it; main also checks its rows are rows of the result. */
+/** A results.distinct answer as the backend sends it, its rows within a filter's bounds (the backend checks a filter's rows
+ *  against the result when one uses them); main also checks the values asked for and the kept marks. */
 export const distinctResultSchema = z.object({
   rows: count, complete: z.boolean(), nulls: count, distinct: count, truncated: z.boolean(), approximate: z.boolean(),
   values: z.array(z.object({ row: filterRow, text: z.string().max(limits.distinct.valueChars + 1), count: count.min(1), kept: z.boolean().optional() }).strict()).max(limits.distinct.maxValues),
-  nullsKept: z.boolean().optional()
+  nullsKept: z.boolean().optional(), unlistedKept: z.boolean().optional()
 }).strict().refine(result => result.values.length <= result.distinct && result.truncated === (result.distinct > result.values.length), 'Truncated says some values were left out.')
 export type PortEndResult = ResultsDistinctResult | ResultsDiffResult | ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | ResultsViewResult | ResultsViewCloseResult | ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsSearchResult | ResultsProfileResult | LiveEnd | LiveUpdateResult
 

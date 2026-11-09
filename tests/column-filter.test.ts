@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { checklistCondition, columnFilterKind, conditionFilter } from '../src/renderer/src/results/column-filter'
+import { checklistCondition, columnFilterKind, conditionFilter, sameFilterFamily } from '../src/renderer/src/results/column-filter'
 
 describe('column filter', () => {
   const rows = [10, 11, 12, 13, 14]
@@ -11,8 +11,11 @@ describe('column filter', () => {
     expect(checklistCondition({ rows: [10, 11], unchecked: new Set([11]), hasNull: false, nullChecked: true })).toEqual({ condition: { kind: 'values', op: 'in', rows: [10], nulls: false } })
     expect(checklistCondition({ rows, unchecked: new Set(), hasNull: true, nullChecked: false })).toEqual({ condition: { kind: 'values', op: 'notIn', rows: [], nulls: true } })
   })
-  it('drops the cleared values of a truncated list, so values it did not reach stay shown', () => {
-    expect(checklistCondition({ rows, unchecked: new Set([11, 12, 13, 14]), hasNull: false, nullChecked: true, truncated: true })).toEqual({ condition: { kind: 'values', op: 'notIn', rows: [11, 12, 13, 14], nulls: false } })
+  it('leaves the values a truncated list did not reach as the grid shows them', () => {
+    // Shown now (or some of them): drop only the cleared ones. All hidden now: keep only the ticked ones, even when longer.
+    expect(checklistCondition({ rows, unchecked: new Set([11, 12, 13, 14]), hasNull: false, nullChecked: true, unlisted: 'keep' })).toEqual({ condition: { kind: 'values', op: 'notIn', rows: [11, 12, 13, 14], nulls: false } })
+    expect(checklistCondition({ rows, unchecked: new Set([14]), hasNull: true, nullChecked: false, unlisted: 'drop' })).toEqual({ condition: { kind: 'values', op: 'in', rows: [10, 11, 12, 13], nulls: false } })
+    expect(sameFilterFamily('notNull', 'values') && sameFilterFamily('values', 'values') && !sameFilterFamily('between', 'values') && !sameFilterFamily('notNull', 'between')).toBe(true)
   })
   it('takes the filter off when everything is ticked and refuses an empty or oversized list', () => {
     expect(checklistCondition({ rows, unchecked: new Set(), hasNull: true, nullChecked: true })).toEqual({ condition: { kind: 'all' } })

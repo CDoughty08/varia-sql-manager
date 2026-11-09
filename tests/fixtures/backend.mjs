@@ -786,7 +786,7 @@ function distinctOf(result, source, { column, order, maxValues, search }, keptVi
   if (search !== undefined) values = values.filter(value => value.text.toLowerCase().includes(search.toLowerCase()))
   if (order === 'count') values = values.map((value, index) => ({ ...value, index })).sort((a, b) => b.count - a.count || a.index - b.index)
   const kept = values.slice(0, maxValues).map(({ key, row, text, count }) => ({ row, text: text.length > 256 ? text.slice(0, 256) + '…' : text, count, ...keptView ? { kept: keptKeys.has(key) } : {} }))
-  return { rows, complete: source.sealed ?? source.complete, nulls, distinct: values.length, truncated: values.length > kept.length, approximate: false, values: kept, ...keptView ? { nullsKept } : {} }
+  return { rows, complete: source.sealed ?? source.complete, nulls, distinct: values.length, truncated: values.length > kept.length, approximate: false, values: kept, ...keptView ? { nullsKept, unlistedKept: values.slice(maxValues).some(value => keptKeys.has(value.key)) } : {} }
 }
 /** The result, or the view of it a request names; undefined (after answering) when either is gone. */
 function sourceOf(id, resultId, viewId) {

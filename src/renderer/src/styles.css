@@ -866,7 +866,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-ch.narrow .rg-cs { pointer-events: none; }
 .rg-ch.narrow:hover .rg-cs:not(.on) { visibility: hidden; }
 .rg-cs.on { color: var(--varia-resultsGrid-headerForeground); }
-.rg-ch.sel .rg-cs { color: inherit; }
+.rg-ch.sel .rg-cs, .rg-ch.sel .rg-cf { color: inherit; }
 /* A header's funnel (results grids): at the header's right end, the sort button left of it; it shows while hovered and
    stays, filled, while its column has a filter. */
 .rg-cf { position: absolute; top: 0; right: 0; display: flex; align-items: center; justify-content: center; width: 18px; height: 21px; background: inherit; color: var(--varia-resultsGrid-headerDescriptionForeground); visibility: hidden; cursor: pointer; }

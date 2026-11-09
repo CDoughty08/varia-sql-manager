@@ -314,7 +314,8 @@ export interface ResultsProfileResult { rows: number; complete: boolean; rowByte
 /** results.distinct: a column's distinct values through `viewId`'s rows when given (else the rows sealed now), ordered by
  *  `count` (most frequent first, ties by value) or `value`, at most `maxValues` (1 to `limits.distinct.maxValues`) of them;
  *  `search` keeps the values whose display text contains it, compared as the results search compares a cell. With
- *  `keptViewId`, another view of the result, each value says whether a row of that view holds it. */
+ *  `keptViewId`, another view of the result, each value says whether a row of that view holds it, `nullsKept` whether it
+ *  has a NULL and `unlistedKept` whether it holds a value past those listed. */
 export interface ResultsDistinctParams { resultId: number; column: number; order: 'count' | 'value'; maxValues: number; search?: string; viewId?: number; keptViewId?: number }
 /** A distinct value: its representative base row (the lowest holding it, so an `in` or `notIn` filter by it compares this
  *  value), its display text (binary as 0x hex, at most `limits.distinct.valueChars` characters and "…") and its count. */
@@ -322,7 +323,7 @@ export interface DistinctValue { row: number; text: string; count: number; kept?
 /** `rows` looked at and whether they were all the result's; `nulls` NULL and unreadable cells; `distinct` the values the
  *  search kept, of which `values` are the first (`truncated` when there were more); `approximate` when a truncated value
  *  compared by its stored prefix. */
-export interface ResultsDistinctResult { rows: number; complete: boolean; nulls: number; distinct: number; truncated: boolean; approximate: boolean; values: DistinctValue[]; nullsKept?: boolean }
+export interface ResultsDistinctResult { rows: number; complete: boolean; nulls: number; distinct: number; truncated: boolean; approximate: boolean; values: DistinctValue[]; nullsKept?: boolean; unlistedKept?: boolean }
 /** `bytes[k]` is row `firstRow + k`'s sum of DATALENGTH over its cells (NULL counts 0; xml and json as their
  *  text, some sql_variant base types estimated: docs/ipc.md, Cell lengths and row sizes); it stops at the rows sealed so
  *  far (`rowsAvailable`), as results.read does. */

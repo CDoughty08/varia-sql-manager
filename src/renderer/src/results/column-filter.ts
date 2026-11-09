@@ -13,7 +13,8 @@ export type ColumnCondition =
   | { readonly kind: 'null' | 'notNull' }
   | { readonly kind: 'all' | 'clear' }
 
-/** Which of a column's filters a condition replaces: its value list (in, notIn, equals, NULL), its range, or its not-NULL. */
+/** Which of a column's filters a condition replaces: its value list (in, notIn, equals, NULL), its range, or its not-NULL.
+ *  The checklist lists NULL as a value, so a value list and a not-NULL replace each other (`sameFilterFamily`). */
 export type ColumnFilterKind = 'values' | 'between' | 'notNull'
 
 /** A notIn of no rows with NULL: Exclude NULLs. */
@@ -25,6 +26,10 @@ export function columnFilterKind(filter: ViewFilter | ResolvedViewFilter, column
   if (filter.op === 'between') return 'between'
   return isNotNullFilter(filter) ? 'notNull' : 'values'
 }
+
+/** Whether a filter of kind `own` is the one a condition of kind `kind` replaces: the same kind, or a value list and a
+ *  not-NULL, which the checklist shows as one list. */
+export const sameFilterFamily = (own: ColumnFilterKind, kind: ColumnFilterKind) => own === kind || (own !== 'between' && kind !== 'between')
 
 export function conditionKind(condition: ColumnCondition): ColumnFilterKind | undefined {
   switch (condition.kind) {
@@ -54,15 +59,17 @@ export type ChecklistOutcome = { readonly condition: ColumnCondition } | { reado
 /**
  * The checklist as a condition. `rows` are the values listed (each its representative row), `unchecked` those cleared;
  * NULL is an entry of its own when the column has NULLs. Every value ticked takes the filter off; otherwise the shorter
- * of keeping the ticked values (`in`) or dropping the cleared ones (`notIn`), keeping on a tie. A truncated list always
- * drops the cleared ones, so the values it did not reach stay shown rather than vanish unseen.
+ * of keeping the ticked values (`in`) or dropping the cleared ones (`notIn`), keeping on a tie. A truncated list says
+ * what happens to the values it did not reach (`unlisted`): `keep` drops the cleared ones so they stay shown, `drop`
+ * keeps the ticked ones so they stay hidden (the column's filter hides every one of them now).
  */
-export function checklistCondition(o: { rows: readonly number[]; unchecked: ReadonlySet<number>; hasNull: boolean; nullChecked: boolean; truncated?: boolean }): ChecklistOutcome {
+export function checklistCondition(o: { rows: readonly number[]; unchecked: ReadonlySet<number>; hasNull: boolean; nullChecked: boolean; unlisted?: 'keep' | 'drop' }): ChecklistOutcome {
   const checked = o.rows.filter(row => !o.unchecked.has(row)), cleared = o.rows.filter(row => o.unchecked.has(row))
   const nullIn = o.hasNull && o.nullChecked, nullOut = o.hasNull && !o.nullChecked
   const keeping = checked.length + (nullIn ? 1 : 0), dropping = cleared.length + (nullOut ? 1 : 0)
   if (keeping === 0) return { error: 'Select at least one value.' }
   if (dropping === 0) return { condition: { kind: 'all' } }
-  const condition: ColumnCondition = keeping <= dropping && !o.truncated ? { kind: 'values', op: 'in', rows: checked, nulls: nullIn } : { kind: 'values', op: 'notIn', rows: cleared, nulls: nullOut }
+  const keep = o.unlisted === 'drop' || (o.unlisted === undefined && keeping <= dropping)
+  const condition: ColumnCondition = keep ? { kind: 'values', op: 'in', rows: checked, nulls: nullIn } : { kind: 'values', op: 'notIn', rows: cleared, nulls: nullOut }
   return condition.rows.length > wire.views.maxFilterValues ? { error: `A filter holds at most ${wire.views.maxFilterValues.toLocaleString('en-US')} values. Select fewer, or clear fewer.` } : { condition }
 }

@@ -7,8 +7,9 @@ namespace Varia.Backend.Results;
 internal enum DistinctOrder { Count, Value }
 
 /// <summary>What results.distinct found: the rows it looked at, the NULL count, every distinct value the search kept
-/// (Distinct) and the first of them (Values) in the order asked; with a kept view, whether it has a NULL.</summary>
-internal sealed record DistinctOutcome(long Rows, long Nulls, long Distinct, bool Approximate, DistinctValue[] Values, bool? NullsKept = null);
+/// (Distinct) and the first of them (Values) in the order asked; with a kept view, whether it has a NULL and whether it
+/// holds a value past those listed.</summary>
+internal sealed record DistinctOutcome(long Rows, long Nulls, long Distinct, bool Approximate, DistinctValue[] Values, bool? NullsKept = null, bool? UnlistedKept = null);
 
 internal static partial class ViewSorter
 {
@@ -19,9 +20,9 @@ internal static partial class ViewSorter
     public const int DistinctValueChars = 256;
 
     /// <summary>What results.distinct holds while it runs, charged to the result's budget: the column's key (as a filter's,
-    /// 16 bytes a row and a NULL bit), the rows it groups (4 bytes a row), up to one group a row (12 bytes) and a kept view's
-    /// row marks (1 byte a row).</summary>
-    public static long DistinctWorkingBytes(long rows) => WorkingBytes(rows, 1) + 17L * rows + 4096;
+    /// 16 bytes a row and a NULL bit), the rows it groups (4 bytes a row), up to one group a row (a count and a kept mark, 5
+    /// bytes), a kept view's row marks (1 byte a row) and the count order's ranking (4 bytes a group).</summary>
+    public static long DistinctWorkingBytes(long rows) => WorkingBytes(rows, 1) + 14L * rows + 4096;
 
     /// <summary>A column's distinct values over a view's rows (or the sealed rows), each with its count and representative
     /// base row: the lowest base row holding it, so an In or NotIn filter by those rows compares exactly these values.
@@ -72,34 +73,52 @@ internal static partial class ViewSorter
         if (count > 1) Array.Sort(values, 0, count, new Comparer([key], null, token));
         var matcher = search is null ? null : ResultSearcher.MatcherFor(set.Columns[column], set.Wires[column], search);
         var scratch = new ResultSearcher.Scratch();
-        var groups = new List<(int Row, long Count, bool Kept)>();
+        // Groups in value order, in place: the representative rows over the front of `values` (a group's slot is never past
+        // its first row), their counts and kept marks beside them.
+        var counts = new int[count];
+        var held = marks is null ? null : new bool[count];
+        var groups = 0;
         for (int start = 0, steps = 0; start < count; steps++)
         {
             // Counted in groups looked at, not kept: a search that keeps few must still notice a cancel.
             if ((steps & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+            var first = values[start];
             var end = start + 1;
-            var held = marks is not null && marks[values[start]];
-            for (; end < count && key.Compare(values[start], values[end]) == 0; end++) held |= marks is not null && marks[values[end]];
-            if (search is null || (matcher is not null && matcher.Matches(source.Cell(values[start], column), scratch)))
-                groups.Add((values[start], end - start, held));
+            var any = marks is not null && marks[first];
+            for (; end < count && key.Compare(first, values[end]) == 0; end++) any |= marks is not null && marks[values[end]];
+            if (search is null || (matcher is not null && matcher.Matches(source.Cell(first, column), scratch)))
+            {
+                values[groups] = first;
+                counts[groups] = end - start;
+                if (held is not null) held[groups] = any;
+                groups++;
+            }
             start = end;
         }
+        // Most frequent first: the group's place in value order breaks count ties, so equal counts stay in it.
+        int[]? ranked = null;
         if (order == DistinctOrder.Count)
         {
-            // Groups are in value order: the index breaks count ties so equal counts stay in it.
-            var indexed = new (int Row, long Count, bool Kept, int Index)[groups.Count];
-            for (var i = 0; i < indexed.Length; i++) indexed[i] = (groups[i].Row, groups[i].Count, groups[i].Kept, i);
-            Array.Sort(indexed, (a, b) => a.Count != b.Count ? b.Count.CompareTo(a.Count) : a.Index.CompareTo(b.Index));
-            for (var i = 0; i < indexed.Length; i++) groups[i] = (indexed[i].Row, indexed[i].Count, indexed[i].Kept);
+            ranked = new int[groups];
+            for (var i = 0; i < groups; i++) ranked[i] = i;
+            Array.Sort(ranked, (a, b) => counts[a] != counts[b] ? counts[b].CompareTo(counts[a]) : a.CompareTo(b));
         }
-        var listed = Math.Min(maxValues, groups.Count);
+        var listed = Math.Min(maxValues, groups);
         var answer = new DistinctValue[listed];
         for (var i = 0; i < listed; i++)
         {
-            var (row, many, held) = groups[i];
-            answer[i] = new DistinctValue(row, Display(source, row, column, set.Wires[column]), many, marks is null ? null : held);
+            var g = ranked?[i] ?? i;
+            answer[i] = new DistinctValue(values[g], Display(source, values[g], column, set.Wires[column]), counts[g], held is null ? null : held[g]);
         }
-        return new DistinctOutcome(looked, nulls, groups.Count, approximate, answer, nullsKept);
+        // Whether the kept view holds a value past those listed: a checklist that drops what it clears would show it, one
+        // that keeps what it ticks would not.
+        bool? unlistedKept = null;
+        if (held is not null)
+        {
+            unlistedKept = false;
+            for (var i = listed; i < groups && unlistedKept == false; i++) unlistedKept = held[ranked?[i] ?? i];
+        }
+        return new DistinctOutcome(looked, nulls, groups, approximate, answer, nullsKept, unlistedKept);
     }
 
     /// <summary>A cell's grid text, cut to <see cref="DistinctValueChars"/> characters with "…": binary as 0x and hex, and

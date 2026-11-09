@@ -1524,7 +1524,7 @@ it holds (`Results/DistinctValues.cs`); the renderer receives at most 4,096 valu
 
 - **`results.distinct { resultId, column, order: 'count' | 'value', maxValues: 1 – 4,096, search?: 1 – 1,024 characters,
   viewId?, keptViewId? }`** answers `{ rows, complete, nulls, distinct, truncated, approximate, values: [{ row, text, count,
-  kept? }], nullsKept? }`. The
+  kept? }], nullsKept?, unlistedKept? }`. The
   column must be the result's (`INVALID_PARAMS`). Through a view it groups the view's rows (`VIEW_NOT_FOUND` when it is
   gone), else the rows sealed when it ran; `complete` says those were every row of a finished set. `count` orders the
   values most frequent first, ties in value order; `value` orders them as a sort does. `distinct` counts every value the
@@ -1538,11 +1538,12 @@ it holds (`Results/DistinctValues.cs`); the renderer receives at most 4,096 valu
 - **`search`** keeps the values whose display text contains it, compared as [Search in results](#search-in-results)
   compares a cell (the collation's locale and Ignore flags for character columns, hex for binary, case ignored otherwise).
 - **`keptViewId`**, another view of the same result (`VIEW_NOT_FOUND` when it is gone), marks each listed value `kept`
-  when any row of that view holds it (equal as above, whichever row) and says in `nullsKept` whether that view has a NULL
-  in the column. The marks cover every value listed, however many the view keeps, so a checklist over one view shows what
+  when any row of that view holds it (equal as above, whichever row), says in `nullsKept` whether that view has a NULL in
+  the column, and in `unlistedKept` whether it holds a value past those listed. The marks cover every value listed, however many the view keeps, so a checklist over one view shows what
   a filtered view keeps of each value. Main relays the marks only when they were asked for, on every value and NULL.
 - **Work.** One key per row for the column (as a filter builds it), the rows grouped by a stable sort, and up to one group
-  a row, and a kept view's row marks: `DistinctWorkingBytes` (about 38 bytes a row) is charged to the result's query budget while it runs (`TOO_LARGE`
+  a row (its representative over the grouped rows' own array, a count and a kept mark), a kept view's row marks and the
+  count order's ranking: `DistinctWorkingBytes` (about 35 bytes a row) is charged to the result's query budget while it runs (`TOO_LARGE`
   without room) and returned when it ends. The worker's `cancel` stops it (`CANCELLED`). Main checks the answer before
   forwarding it: rows below 2³¹, at most `maxValues` values, `truncated` exactly when `distinct` exceeds them, and the
   column inside the result's when its descriptor named the columns.
@@ -1554,11 +1555,12 @@ it holds (`Results/DistinctValues.cs`); the renderer receives at most 4,096 valu
   or in the backend once typing pauses when the list was truncated), Select all and Select none, NULL as an entry, and
   custom conditions (equals, does not equal, between two listed values, is NULL, is not NULL). OK applies an `in` or
   `notIn` filter by representative rows, whichever names fewer (keeping on a tie), replacing the column's value-list
-  filter; every value ticked takes that filter off. A truncated list always applies `notIn`, so values it never showed
-  stay shown. Between replaces the column's range filter and is not NULL its Exclude NULLs; Clear filter takes all of
-  the column's filters off. The popover opens in the grid's own window (a popped-out Results panel's), and a second press
-  on the open funnel closes it. There is no contains or starts-with condition: the filters compare whole values by rows, and
-  a text filter op would need its own backend filter.
+  filter and its Exclude NULLs (the checklist lists NULL as a value, so it also lists over the rows that filter hid);
+  every value ticked takes both off. A truncated list leaves the values it never showed as the grid shows them: `notIn`
+  when the grid shows any of them (or the column has no value filter), else `in`. Between replaces the column's range
+  filter; Clear filter takes all of the column's filters off. The popover opens in the grid's own window (a popped-out
+  Results panel's), and a second press on the open funnel closes it. There is no contains or starts-with condition: the
+  filters compare whole values by rows, and a text filter op would need its own backend filter.
 
 ## Copy and Save Results As
 

@@ -136,7 +136,7 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
   const apply = () => {
     let chosen: ColumnCondition | undefined
     if (condition === 'list') {
-      const outcome = checklistCondition({ rows: [...known.keys()], unchecked, hasNull: (full?.nulls ?? 0) > 0, nullChecked, truncated: full?.truncated ?? false })
+      const outcome = checklistCondition({ rows: [...known.keys()], unchecked, hasNull: (full?.nulls ?? 0) > 0, nullChecked, ...unlisted ? { unlisted } : {} })
       if ('error' in outcome) return setError(outcome.error)
       chosen = outcome.condition
     } else if (condition === 'null' || condition === 'notNull') chosen = { kind: condition }
@@ -164,6 +164,8 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
   const left = Math.max(8, Math.min(anchor.right - width, innerWidth - width - 8))
   const below = innerHeight - anchor.bottom - 10, above = anchor.top - 10, down = below >= 420 || below >= above
   const place = down ? { left, width, top: anchor.bottom + 2, maxHeight: Math.max(160, below) } : { left, width, bottom: innerHeight - anchor.top + 2, maxHeight: above }
+  // A truncated list's values past it stay as the grid shows them: hidden when the column's filter hides all of them.
+  const unlisted = full?.truncated ? full.unlistedKept === false ? 'drop' as const : 'keep' as const : undefined
   const titleId = `column-filter-${tabId}-${index}-${column}`
   const list = condition === 'list'
   const note = !full ? undefined
@@ -203,7 +205,7 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
       </label>)}
       {full && !entries.length && !showNull && <p className="column-filter-note">No values match.</p>}
     </div>
-    {note && <p className="column-filter-note">{note}{full?.truncated ? ' Values not listed stay shown.' : ''}{full?.approximate ? ' Long values were compared by their first characters.' : ''}</p>}
+    {note && <p className="column-filter-note">{note}{unlisted === 'drop' ? ' Values not listed stay hidden.' : unlisted === 'keep' ? ' Values not listed will be shown.' : ''}{full?.approximate ? ' Long values were compared by their first characters.' : ''}</p>}
     <div className="column-filter-condition">
       <select aria-label="Condition" value={condition} onChange={event => { setError(undefined); setCondition(event.target.value as Condition) }}>
         {conditions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}

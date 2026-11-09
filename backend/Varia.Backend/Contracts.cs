@@ -165,8 +165,9 @@ internal sealed record DistinctValue(int Row, string Text, long Count, bool? Kep
 /// <summary>Rows looked at (the view's, or the rows sealed when it ran) and whether they were all the result's; Nulls counts
 /// NULL and unreadable cells; Distinct the values the search kept, of which Values are the first in the order asked
 /// (Truncated when there were more); Approximate when a truncated value compared by its stored prefix; with a KeptViewId,
-/// NullsKept says whether that view has a NULL (or unreadable) cell in the column.</summary>
-internal sealed record ResultsDistinctResult(long Rows, bool Complete, long Nulls, long Distinct, bool Truncated, bool Approximate, DistinctValue[] Values, bool? NullsKept = null);
+/// NullsKept says whether that view has a NULL (or unreadable) cell in the column and UnlistedKept whether it holds a value
+/// past those listed.</summary>
+internal sealed record ResultsDistinctResult(long Rows, bool Complete, long Nulls, long Distinct, bool Truncated, bool Approximate, DistinctValue[] Values, bool? NullsKept = null, bool? UnlistedKept = null);
 /// <summary>results.rowBytes: Bytes[k] is row FirstRow + k's sum of DATALENGTH over its cells (NULL counts 0; xml and json
 /// as their text, some sql_variant base types estimated: docs/ipc.md, Cell lengths and row sizes); it stops at the rows sealed
 /// so far. Estimated lists, in order, the rows of the range whose sum includes an estimate.</summary>

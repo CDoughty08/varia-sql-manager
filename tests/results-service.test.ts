@@ -1146,20 +1146,24 @@ describe('results service filters', () => {
     expect(service.applyColumnFilter('t1', 0, 1, { kind: 'values', op: 'in', rows: [0, 3], nulls: false })).toBe(true)
     expect(filters()).toEqual([{ op: 'in', column: 1, rows: [0, 3], nulls: false }])
     expect(service.sortOf('t1', 0)?.filters.map(item => item.label)).toEqual(['(No column name): filtering…'])
-    // The checklist's notIn replaces its in; not NULL and between are kinds of their own.
+    // The checklist's notIn replaces its in, and not NULL replaces both (the checklist lists NULL as a value); between is
+    // a kind of its own.
     service.applyColumnFilter('t1', 0, 1, { kind: 'values', op: 'notIn', rows: [4], nulls: true })
+    expect(filters()).toEqual([{ op: 'notIn', column: 1, rows: [4], nulls: true }])
     service.applyColumnFilter('t1', 0, 1, { kind: 'notNull' })
     service.applyColumnFilter('t1', 0, 1, { kind: 'between', rows: [2, 6] })
     service.applyColumnFilter('t1', 0, 0, { kind: 'equals', row: 1 })
-    expect(filters()).toEqual([{ op: 'notIn', column: 1, rows: [4], nulls: true }, { op: 'notIn', column: 1, rows: [], nulls: true }, { op: 'between', column: 1, rows: [2, 6] }, { op: 'in', column: 0, rows: [1], nulls: false }])
+    expect(filters()).toEqual([{ op: 'notIn', column: 1, rows: [], nulls: true }, { op: 'between', column: 1, rows: [2, 6] }, { op: 'in', column: 0, rows: [1], nulls: false }])
     expect(filteredColumns(service.sortOf('t1', 0))).toEqual(new Set([0, 1]))
     service.applyColumnFilter('t1', 0, 1, { kind: 'notEquals', row: 5 })
     service.applyColumnFilter('t1', 0, 1, { kind: 'null' })
-    expect(filters()?.slice(2)).toEqual([{ op: 'in', column: 0, rows: [1], nulls: false }, { op: 'in', column: 1, rows: [], nulls: true }])
+    expect(filters()).toEqual([{ op: 'between', column: 1, rows: [2, 6] }, { op: 'in', column: 0, rows: [1], nulls: false }, { op: 'in', column: 1, rows: [], nulls: true }])
     expect(service.sortOf('t1', 0)?.filters.at(-1)?.label).toBe('(No column name) is NULL')
-    // Every value ticked takes the value list off; Clear takes the column's every filter off.
+    // A checklist with only NULL cleared is a not-NULL, which every value ticked takes off again, as it does a value list.
+    service.applyColumnFilter('t1', 0, 1, { kind: 'values', op: 'notIn', rows: [], nulls: true })
     service.applyColumnFilter('t1', 0, 1, { kind: 'all' })
-    expect(filters()).toEqual([{ op: 'notIn', column: 1, rows: [], nulls: true }, { op: 'between', column: 1, rows: [2, 6] }, { op: 'in', column: 0, rows: [1], nulls: false }])
+    expect(filters()).toEqual([{ op: 'between', column: 1, rows: [2, 6] }, { op: 'in', column: 0, rows: [1], nulls: false }])
+    service.applyColumnFilter('t1', 0, 1, { kind: 'notNull' })
     service.applyColumnFilter('t1', 0, 1, { kind: 'clear' })
     expect(filters()).toEqual([{ op: 'in', column: 0, rows: [1], nulls: false }])
     const calls = handle.sort.mock.calls.length
@@ -1192,5 +1196,13 @@ describe('results service filters', () => {
     expect(others.distinct).toHaveBeenCalledWith(1, { order: 'value', search: 'a', kept: expect.objectContaining({ viewId: 2 }) })
     expect(values.result.values.map(value => value.row)).toEqual([0, 2])
     expect(others.close).toHaveBeenCalled()
+    // The column's not-NULL is the checklist's too: the list leaves it out, so NULL can be ticked again.
+    handle.sort.mockResolvedValueOnce({ ...shown, viewId: 4 })
+    service.applyColumnFilter('t1', 0, 1, { kind: 'values', op: 'notIn', rows: [], nulls: true })
+    await settle()
+    await settle()
+    handle.sort.mockResolvedValueOnce({ ...others, viewId: 5 })
+    await service.columnValues('t1', 0, 1, { order: 'count' })
+    expect(handle.sort).toHaveBeenLastCalledWith([], { filters: [{ op: 'notIn', column: 0, rows: [], nulls: true }] })
   })
 })

@@ -12,7 +12,7 @@ import type { DocumentService, TextDocument } from '../services/documents'
 import type { ResultClient, ResultHandle, ResultView } from './ResultClient'
 import type { ResultKey } from './worker-protocol'
 import { completionSentence, formatCount, plural } from './status'
-import { columnFilterKind, conditionFilter, conditionKind, type ColumnCondition } from './column-filter'
+import { columnFilterKind, conditionFilter, conditionKind, sameFilterFamily, type ColumnCondition } from './column-filter'
 import { retainedPlanLimits, type PlanExecutionContext, type RetainedPlansService, type SnapshotSource } from '../plans/RetainedPlansService'
 import { orderPlanEntries } from '../plans/sources'
 
@@ -668,7 +668,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const run = this.runs.get(tabId), set = run?.sets[index], sort = run?.sorts.get(index)
     if (!run || !set || !this.filterable(set)) throw new Error('These results are no longer available.')
     if (sort?.sorting) throw new Error('The results are still being sorted or filtered. Try again when they are shown.')
-    const filters = sort?.filters ?? [], others = filters.filter(item => columnFilterKind(item.filter, column) !== 'values')
+    const filters = sort?.filters ?? [], others = filters.filter(item => { const own = columnFilterKind(item.filter, column); return own === undefined || own === 'between' })
     const ask = { order: o.order, ...o.search === undefined ? {} : { search: o.search }, ...o.signal ? { signal: o.signal } : {} }
     if (others.length === filters.length) return { result: await (sort?.view ?? set.handle).distinct(column, ask) }
     // A view without the column's value list, closed once its values are read; the grid's view marks what it keeps of
@@ -687,7 +687,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const run = this.runs.get(tabId), set = run?.sets[index]
     if (!run || !set || !this.filterable(set) || !Number.isInteger(column) || column < 0 || column >= set.descriptor.columns.length) return false
     const filters = run.sorts.get(index)?.filters ?? [], kind = conditionKind(condition)
-    const others = filters.filter(item => { const own = columnFilterKind(item.filter, column); return own === undefined || (kind !== undefined && own !== kind) })
+    const others = filters.filter(item => { const own = columnFilterKind(item.filter, column); return own === undefined || (kind !== undefined && !sameFilterFamily(own, kind)) })
     const filter = conditionFilter(condition, column)
     if (!filter) {
       if (others.length !== filters.length) this.applyView(tabId, run, index, run.sorts.get(index)?.keys ?? [], others, 'filter')

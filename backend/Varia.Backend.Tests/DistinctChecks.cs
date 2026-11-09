@@ -126,6 +126,15 @@ internal static class DistinctChecks
         var some = Distinct(set, 0, DistinctOrder.Value, max: 100);
         check(set.SealedSnapshot().Length > 1 && some.Distinct == 5000 && some.Values.Length == 100 && some.Values[0] is { Text: "0", Row: 0, Count: 2 } && some.Values[99].Text == "99",
             "values past the cap are left out, and Distinct still counts all of them: " + some.Distinct);
+        // Whether the kept view holds a value past the listed ones decides what a checklist may do with them.
+        var first = store.AddView(set, Enumerable.Range(0, 100).ToArray(), [], false, true, 0, null);
+        var listedOnly = ViewSorter.DistinctValues(set, set.SealedSnapshot(), null, 0, DistinctOrder.Value, null, 100, CancellationToken.None, first);
+        var past = store.AddView(set, [0, 4999], [], false, true, 0, null);
+        var beyond = ViewSorter.DistinctValues(set, set.SealedSnapshot(), null, 0, DistinctOrder.Value, null, 100, CancellationToken.None, past);
+        var counted = ViewSorter.DistinctValues(set, set.SealedSnapshot(), null, 0, DistinctOrder.Count, null, 100, CancellationToken.None, past);
+        check(listedOnly.UnlistedKept == false && listedOnly.Values.All(value => value.Kept == true) && beyond.UnlistedKept == true
+            && beyond.Values.Count(value => value.Kept == true) == 1 && counted.UnlistedKept == true && Distinct(set, 0, max: 100).UnlistedKept is null,
+            "a kept view says whether it holds a value past those listed, in either order");
         var longText = new string('x', 300) + "\U0001F600";
         var wide = Fill(store, [new("text", "nvarchar(max)", "text", Collation: Bin2), new("bin", "varbinary(max)", "binary")], [[longText, Enumerable.Repeat((byte)0xAB, 200).ToArray()]]);
         var text = Distinct(wide, 0).Values[0].Text;
@@ -155,7 +164,7 @@ internal static class DistinctChecks
         check(viewed is { Rows: 2, Distinct: 1, Truncated: false } && viewed.Values is [{ Row: 0, Text: "b", Count: 1 }],
             "results.distinct reads through a filtered view and searches its values");
         var marks = Call<ResultsDistinctResult>("results.distinct", new { resultId = set.ResultId, column = 0, order = "count", maxValues = 10, keptViewId = view.ViewId });
-        check(marks.Values is [{ Text: "A", Kept: false }, { Text: "b", Kept: true }] && marks.NullsKept == false && result.NullsKept is null,
+        check(marks.Values is [{ Text: "A", Kept: false }, { Text: "b", Kept: true }] && marks.NullsKept == false && marks.UnlistedKept == false && result.NullsKept is null && result.UnlistedKept is null,
             "results.distinct with a kept view marks each value that view holds");
         var codes = new[]
         {

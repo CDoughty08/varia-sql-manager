@@ -591,8 +591,8 @@ export class ResultsPortHost {
   }
 
   /** Distinct values of a column of a result this renderer owns (a view id is checked against its result by the backend),
-   *  cancelled and counted like a sort. The answer is bounded before the renderer sees it: its values' rows are rows of the
-   *  result and the column is one the descriptor named. */
+   *  cancelled and counted like a sort. The answer is bounded before the renderer sees it: the column is one the descriptor
+   *  named, the values at most those asked for (rows within a filter's bounds), and kept marks exactly when asked for. */
   private distinct(request: Extract<PortRequest, { t: 'distinct' }>): void {
     const { rid } = request
     if (this.sorting.has(rid)) return this.end(rid, 'INVALID_REQUEST', 'The results request was invalid.')
@@ -613,7 +613,7 @@ export class ResultsPortHost {
       const parsed = distinctResultSchema.safeParse(result)
       // Kept marks come exactly when they were asked for: every value's and NULL's, or none.
       const marked = request.keptViewId !== undefined
-      if (!parsed.success || parsed.data.values.length > request.maxValues || (parsed.data.nullsKept !== undefined) !== marked || parsed.data.values.some(value => (value.kept !== undefined) !== marked))
+      if (!parsed.success || parsed.data.values.length > request.maxValues || (parsed.data.nullsKept !== undefined) !== marked || (parsed.data.unlistedKept !== undefined) !== marked || parsed.data.values.some(value => (value.kept !== undefined) !== marked))
         return this.end(rid, 'BACKEND_ERROR', 'The column\'s values could not be listed.')
       this.post({ t: 'end', rid, ok: true, result: parsed.data })
     }, error => {

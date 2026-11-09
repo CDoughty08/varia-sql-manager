@@ -664,15 +664,17 @@ describe('ResultsPortHost', () => {
     port().send({ ...ask, rid: 3, keptViewId: 5 })
     port().send({ ...ask, rid: 4, keptViewId: 5 })
     port().send({ ...ask, rid: 5 })
-    expect(distincts.map(distinct => distinct.params.keptViewId)).toEqual([5, 5, 5, undefined])
-    const marked = { rows: 5, complete: true, nulls: 1, distinct: 2, truncated: false, approximate: false, values: [{ row: 0, text: 'a', count: 2, kept: true }, { row: 3, text: 'b', count: 1, kept: false }], nullsKept: false }
+    port().send({ ...ask, rid: 6, keptViewId: 5 })
+    expect(distincts.map(distinct => distinct.params.keptViewId)).toEqual([5, 5, 5, undefined, 5])
+    const marked = { rows: 5, complete: true, nulls: 1, distinct: 2, truncated: false, approximate: false, values: [{ row: 0, text: 'a', count: 2, kept: true }, { row: 3, text: 'b', count: 1, kept: false }], nullsKept: false, unlistedKept: false }
     distincts[0].resolve(marked)
     // A value without its mark, marks without NULL's, and marks nobody asked for: none reaches the renderer.
     distincts[1].resolve({ ...marked, values: [marked.values[0], { row: 3, text: 'b', count: 1 }] })
     distincts[2].resolve({ ...marked, nullsKept: undefined })
     distincts[3].resolve(marked)
+    distincts[4].resolve({ ...marked, unlistedKept: undefined })
     await settle()
-    expect(codes(port())).toEqual([[2, 'INVALID_REQUEST'], [1, 'ok'], [3, 'BACKEND_ERROR'], [4, 'BACKEND_ERROR'], [5, 'BACKEND_ERROR']])
+    expect(codes(port())).toEqual([[2, 'INVALID_REQUEST'], [1, 'ok'], [3, 'BACKEND_ERROR'], [4, 'BACKEND_ERROR'], [5, 'BACKEND_ERROR'], [6, 'BACKEND_ERROR']])
     expect(port().ends().find(end => end.rid === 1)).toEqual({ t: 'end', rid: 1, ok: true, result: marked })
   })
   it('cancels a distinct-values request on the worker\'s cancel and when the port closes', async () => {
