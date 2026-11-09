@@ -774,9 +774,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .results-search > button:disabled { opacity: 0.4; }
 .results-search .results-segments button { height: 16px; padding: 0 3px; }
 @media (max-width: 1180px) {
+  .output-toolbar { gap: 4px; }
+  .output-views button { padding: 0 6px; }
   .results-toolbar-label, .results-search-icon, .results-search > button { display: none; }
   .results-toolbar { gap: 2px; padding-left: 6px; }
   .results-segments button { padding: 0 3px; }
+  .results-segments button.results-icon-toggle { padding: 0 3px; }
   .results-search { padding-left: 4px; }
   .results-search input { min-width: 24px; }
 }

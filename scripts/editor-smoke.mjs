@@ -340,6 +340,9 @@ try {
   await drag(documentTab(page, beforeDrag[1]), { x: pinnedTarget.x + 4, y: pinnedTarget.y + pinnedTarget.height / 2 })
   await expect.poll(async () => (await pinnedOrder()).slice(0, 2)).toEqual([beforeDrag[1], beforeDrag[0]])
 
+  // This check uses the expanded row controls; compact groups put them in the tab-options popover.
+  const beforeShelfSplit = await page.evaluate(() => [innerWidth, innerHeight])
+  await resizeContent(application, page, 1440, beforeShelfSplit[1])
   // Row choices belong to their editor group. A new split starts with one row and expands independently.
   await selectOpenDocument(page, end)
   await page.keyboard.press('Control+\\')
@@ -365,6 +368,7 @@ try {
     await closeDocumentButton(page, name).click()
   }
   await expect.poll(pair).toEqual([firstTab, secondTab])
+  await resizeContent(application, page, ...beforeShelfSplit)
   console.log('Editor checks: tabs reorder by keys and dragging, pinned and query shelves stack independently with Ctrl+scroll, overflow and End reach hidden tabs, and editor groups keep independent row counts.')
 
   // Clean tabs keep their metadata and F2 entry point when Dockview replaces a native wrapper during a split or move.
