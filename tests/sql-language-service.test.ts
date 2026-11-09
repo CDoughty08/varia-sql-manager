@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import type { ApiResult, BackendState, ConnectionInfo, VariaApi } from '../src/shared/contracts'
 import { languageLimits, type LanguageCompletions, type LanguageHover, type LanguageStatus } from '../src/shared/language-service'
+import { limits as ipcLimits } from '../src/shared/ipc/wire/protocol'
 import { SqlLanguageService } from '../src/renderer/src/languages/SqlLanguageService'
 import { ConnectionService } from '../src/renderer/src/services/connections'
 import { BackendStateService } from '../src/renderer/src/services/backend'
@@ -299,9 +300,233 @@ describe('SQL language editor integration', () => {
     f.service.dispose(); f.service.dispose()
     answer.resolve({ ok: true, value: { contents: 'late' } })
     expect(await result).toBeNull()
-    expect(f.api.languageClose.mock.calls.map(([id]) => id)).toEqual([a.id, b.id])
+    await vi.waitFor(() => expect(f.api.languageClose.mock.calls.map(([id]) => id)).toEqual([a.id, b.id, b.id]))
     expect(f.unregisterCompletion).toHaveBeenCalledTimes(1)
     expect(f.unregisterHover).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['completion', 'close'], ['completion', 'dispose'], ['hover', 'close'], ['hover', 'dispose'], ['refresh', 'close'], ['refresh', 'dispose']
+  ] as const)('cleans up a delayed %s dispatch after %s overtakes it', async (feature, change) => {
+    const f = await fixture(); f.addConnection('a')
+    const tab = f.documents.create('late.sql', 'Customer', 'master', 'a'), dispatch = deferred<void>()
+    let backendDocumentOpen = false
+    const open = async () => { await dispatch.promise; backendDocumentOpen = true }
+    f.api.languageComplete.mockImplementationOnce(async () => { await open(); return { ok: true, value: completions } })
+    f.api.languageHover.mockImplementationOnce(async () => { await open(); return { ok: true, value: { contents: 'Customer table' } } })
+    f.api.languageRefresh.mockImplementationOnce(async () => { await open(); return { ok: true, value: { refreshed: true } } })
+    f.api.languageClose.mockImplementation(async () => {
+      const closed = backendDocumentOpen
+      backendDocumentOpen = false
+      return { ok: true, value: { closed } }
+    })
+    const request = feature === 'completion' ? f.complete(tab.id).then(result => { expect(result.suggestions).toEqual([]) })
+      : feature === 'hover' ? f.getHover(tab.id).then(result => { expect(result).toBeNull() })
+      : f.service.refreshCache(tab.id).then(result => { expect(result).toBe(false) })
+    const apiRequest = feature === 'completion' ? f.api.languageComplete : feature === 'hover' ? f.api.languageHover : f.api.languageRefresh
+    await vi.waitFor(() => expect(apiRequest).toHaveBeenCalledTimes(1))
+    if (change === 'close') await f.documents.close(tab.id)
+    else f.service.dispose()
+    // The control-lane close runs immediately, before the queued request has created any backend state.
+    expect(f.api.languageClose).toHaveBeenCalledTimes(1)
+    expect(backendDocumentOpen).toBe(false)
+    dispatch.resolve()
+    await request
+    await vi.waitFor(() => expect(f.api.languageClose).toHaveBeenCalledTimes(2))
+    expect(backendDocumentOpen).toBe(false)
+  })
+
+  it('finishes delayed old-context cleanup before opening its replacement binding', async () => {
+    const f = await fixture(), tab = f.documents.create('late.sql', 'Customer', 'master')
+    const dispatch = deferred<void>(), oldToken = cancellationSource(), events: string[] = []
+    let backendDatabase: string | undefined
+    f.api.languageComplete.mockImplementation(async request => {
+      if (request.context.database === 'master') await dispatch.promise
+      backendDatabase = request.context.database
+      events.push(`open:${backendDatabase}`)
+      return { ok: true, value: { items: [{ label: backendDatabase! }], isIncomplete: false } }
+    })
+    f.api.languageClose.mockImplementation(async () => {
+      events.push(`close:${backendDatabase}`)
+      const closed = backendDatabase !== undefined
+      backendDatabase = undefined
+      return { ok: true, value: { closed } }
+    })
+    const old = f.complete(tab.id, position, oldToken.token)
+    f.documents.update(tab.id, { database: 'other' })
+    oldToken.cancel()
+    const latest = f.complete(tab.id)
+    expect(events).toEqual(['close:undefined'])
+    expect(f.api.languageComplete).toHaveBeenCalledTimes(1)
+    dispatch.resolve()
+    expect((await old).suggestions).toEqual([])
+    expect((await latest).suggestions.map(item => item.label)).toEqual(['other'])
+    expect(events).toEqual(['close:undefined', 'open:master', 'close:master', 'open:other'])
+    expect(backendDatabase).toBe('other')
+  })
+
+  it('drains forty cached documents after disposal without exhausting the reserved control capacity', async () => {
+    const f = await fixture(), acceptedCloses: (() => void)[] = [], backendDocuments = new Set<string>()
+    let pendingRequests: number = ipcLimits.pending.requests, peakPending = pendingRequests, releaseCloses = false
+    f.api.languageComplete.mockImplementation(async request => {
+      backendDocuments.add(request.documentId)
+      return { ok: true, value: completions }
+    })
+    f.api.languageClose.mockImplementation(documentId => {
+      if (pendingRequests >= ipcLimits.pending.requests + ipcLimits.pending.control)
+        return Promise.resolve({ ok: false, code: 'TOO_MANY_REQUESTS', error: 'Too many pending backend requests.' })
+      pendingRequests++
+      peakPending = Math.max(peakPending, pendingRequests)
+      const close = () => { backendDocuments.delete(documentId); pendingRequests--; return { ok: true as const, value: { closed: true } } }
+      return releaseCloses ? Promise.resolve(close()) : new Promise(resolve => acceptedCloses.push(() => { resolve(close()) }))
+    })
+    const tabs = Array.from({ length: 40 }, (_, index) => f.documents.create(`${index}.sql`, 'Customer', 'master'))
+    for (const tab of tabs) await f.complete(tab.id)
+    f.service.dispose()
+    expect(acceptedCloses).toHaveLength(4)
+    releaseCloses = true
+    acceptedCloses.forEach(finish => finish())
+    await vi.waitFor(() => expect(backendDocuments.size).toBe(0))
+    expect(f.api.languageClose).toHaveBeenCalledTimes(40)
+    expect(peakPending - ipcLimits.pending.requests).toBe(4)
+    expect(f.service.getSnapshot().cleanupError).toBeUndefined()
+  })
+
+  it('releases cleanup RPC slots while older document requests still wait for dispatch', async () => {
+    const f = await fixture(), dispatch = deferred<void>()
+    f.api.languageComplete.mockImplementationOnce(() => dispatch.promise.then(() => ({ ok: true, value: completions })))
+      .mockImplementationOnce(() => dispatch.promise.then(() => ({ ok: true, value: completions })))
+      .mockImplementationOnce(() => dispatch.promise.then(() => ({ ok: true, value: completions })))
+      .mockImplementationOnce(() => dispatch.promise.then(() => ({ ok: true, value: completions })))
+    const waiting = Array.from({ length: 4 }, (_, index) => f.documents.create(`waiting-${index}.sql`, 'Customer', 'master'))
+    const requests = waiting.map(tab => f.complete(tab.id))
+    const cached = f.documents.create('cached.sql', 'Customer', 'master')
+    await f.complete(cached.id)
+    f.service.dispose()
+    await vi.waitFor(() => expect(f.api.languageClose).toHaveBeenCalledWith(cached.id))
+    dispatch.resolve()
+    await Promise.all(requests)
+    await vi.waitFor(() => expect(f.api.languageClose).toHaveBeenCalledTimes(9))
+  })
+
+  it('retries explicit predispatch refusals before allowing a new context to bind', async () => {
+    vi.useFakeTimers()
+    const f = await fixture(), tab = f.documents.create('retry.sql', 'Customer', 'master')
+    await f.complete(tab.id)
+    f.api.languageClose.mockResolvedValueOnce({ ok: false, code: 'TOO_MANY_REQUESTS', error: 'Too many pending backend requests.' })
+      .mockResolvedValueOnce({ ok: false, code: 'TOO_MANY_REQUESTS', error: 'Too many pending backend requests.' })
+    f.documents.update(tab.id, { database: 'other' })
+    const latest = f.complete(tab.id)
+    await vi.advanceTimersByTimeAsync(249)
+    expect(f.api.languageClose).toHaveBeenCalledTimes(1)
+    expect(f.api.languageComplete).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(501)
+    expect((await latest).suggestions).toHaveLength(1)
+    expect(f.api.languageClose).toHaveBeenCalledTimes(3)
+    expect(f.api.languageComplete.mock.calls[1][0].context.database).toBe('other')
+    expect(f.service.getSnapshot().cleanupError).toBeUndefined()
+  })
+
+  it.each(['TIMEOUT', 'BACKEND_LOST'] as const)('does not replay cleanup after %s leaves dispatch uncertain or its backend ended', async code => {
+    vi.useFakeTimers()
+    const f = await fixture(), tab = f.documents.create('once.sql', 'Customer', 'master')
+    await f.complete(tab.id)
+    f.api.languageClose.mockResolvedValueOnce({ ok: false, code, error: 'The request could not be confirmed.' })
+    await f.documents.close(tab.id)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(f.api.languageClose).toHaveBeenCalledTimes(1)
+    expect(f.service.getSnapshot().cleanupError).toBeUndefined()
+  })
+
+  it('bounds persistent refusals and keeps their actionable warning until the backend generation ends', async () => {
+    vi.useFakeTimers()
+    const f = await fixture(configured, true), tab = f.documents.create('busy.sql', 'Customer', 'master')
+    const remaining = f.documents.create('remaining.sql', '', 'master')
+    await f.complete(tab.id)
+    f.api.languageClose.mockResolvedValue({ ok: false, code: 'TOO_MANY_REQUESTS', error: 'Too many pending backend requests.' })
+    await f.documents.close(tab.id)
+    await vi.advanceTimersByTimeAsync(5001)
+    expect(f.service.getSnapshot().cleanupError).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(25_000)
+    const attempts = f.api.languageClose.mock.calls.length, warning = f.service.getSnapshot().cleanupError
+    expect(attempts).toBeGreaterThan(1)
+    expect(attempts).toBeLessThanOrEqual(16)
+    expect(warning).toContain('Restart SQL Backend when it is safe to stop queries')
+    await vi.advanceTimersByTimeAsync(60_000)
+    await f.service.refresh()
+    expect(f.api.languageClose).toHaveBeenCalledTimes(attempts)
+    expect(f.service.availability(remaining.id)).toEqual({ label: 'IntelliSense unavailable', detail: warning })
+    f.backend!.receive({ status: 'unresponsive', generation: 1, silentMs: 20_000 })
+    f.backend!.receive({ status: 'ready', generation: 1, pid: 1, runtime: 'test', platform: 'test' })
+    expect(f.service.getSnapshot().cleanupError).toBe(warning)
+    f.backend!.receive({ status: 'starting', generation: 2 })
+    expect(f.service.getSnapshot().cleanupError).toBeUndefined()
+  })
+
+  it('abandons refused cleanup after its backend generation releases the document', async () => {
+    vi.useFakeTimers()
+    const f = await fixture(configured, true), tab = f.documents.create('old-generation.sql', 'Customer', 'master')
+    await f.complete(tab.id)
+    f.api.languageClose.mockResolvedValue({ ok: false, code: 'TOO_MANY_REQUESTS', error: 'Too many pending backend requests.' })
+    await f.documents.close(tab.id)
+    await vi.advanceTimersByTimeAsync(249)
+    f.backend!.receive({ status: 'starting', generation: 2 })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(f.api.languageClose).toHaveBeenCalledTimes(1)
+    expect(f.service.getSnapshot().cleanupError).toBeUndefined()
+  })
+
+  it('does not send final cleanup to a replacement backend when an old document request settles', async () => {
+    vi.useFakeTimers()
+    const f = await fixture(configured, true), tab = f.documents.create('old-request.sql', 'Customer', 'master')
+    const answer = deferred<ApiResult<LanguageCompletions>>()
+    f.api.languageComplete.mockReturnValueOnce(answer.promise)
+    const completing = f.complete(tab.id)
+    await f.documents.close(tab.id)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(f.api.languageClose).toHaveBeenCalledTimes(1)
+    f.backend!.receive({ status: 'ready', generation: 2, pid: 2, runtime: 'test', platform: 'test' })
+    f.api.languageClose.mockResolvedValue({ ok: false, code: 'TOO_MANY_REQUESTS', error: 'Too many pending backend requests.' })
+    answer.resolve({ ok: true, value: completions })
+    expect((await completing).suggestions).toEqual([])
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(f.api.languageClose).toHaveBeenCalledTimes(1)
+    expect(f.service.getSnapshot().cleanupError).toBeUndefined()
+  })
+
+  it('drops obsolete cleanup queued behind occupied RPC slots before dispatch to a replacement backend', async () => {
+    vi.useFakeTimers()
+    const f = await fixture(configured, true)
+    const tabs = Array.from({ length: 5 }, (_, index) => f.documents.create(`old-queued-${index}.sql`, 'Customer', 'master'))
+    for (const tab of tabs) await f.complete(tab.id)
+    const release = deferred<ApiResult<{ closed: boolean }>>()
+    f.api.languageClose.mockReturnValue(release.promise)
+    for (const tab of tabs) await f.documents.close(tab.id)
+    expect(f.api.languageClose).toHaveBeenCalledTimes(4)
+    f.backend!.receive({ status: 'ready', generation: 2, pid: 2, runtime: 'test', platform: 'test' })
+    f.api.languageClose.mockResolvedValue({ ok: false, code: 'TOO_MANY_REQUESTS', error: 'Too many pending backend requests.' })
+    release.resolve({ ok: true, value: { closed: true } })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(f.api.languageClose).toHaveBeenCalledTimes(4)
+    expect(f.api.languageClose).not.toHaveBeenCalledWith(tabs[4].id)
+    expect(f.service.getSnapshot().cleanupError).toBeUndefined()
+  })
+
+  it('counts time waiting for a cleanup RPC slot against an explicitly refused retry budget', async () => {
+    vi.useFakeTimers()
+    const f = await fixture(), refused = f.documents.create('refused.sql', 'Customer', 'master')
+    const occupied = Array.from({ length: 4 }, (_, index) => f.documents.create(`occupied-${index}.sql`, 'Customer', 'master'))
+    for (const tab of [refused, ...occupied]) await f.complete(tab.id)
+    const release = deferred<ApiResult<{ closed: boolean }>>()
+    f.api.languageClose.mockImplementation(id => id === refused.id
+      ? Promise.resolve({ ok: false, code: 'TOO_MANY_REQUESTS', error: 'Too many pending backend requests.' }) : release.promise)
+    await f.documents.close(refused.id)
+    for (const tab of occupied) await f.documents.close(tab.id)
+    await vi.advanceTimersByTimeAsync(30_001)
+    release.resolve({ ok: true, value: { closed: true } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(f.api.languageClose.mock.calls.filter(([id]) => id === refused.id)).toHaveLength(1)
+    expect(f.service.getSnapshot().cleanupError).toContain('Some IntelliSense connections could not close')
   })
 
   it('closes a used document even if its connection context changed before closing', async () => {

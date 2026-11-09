@@ -7,6 +7,7 @@ import { archiveUrl, executableName, hostRid, markerName, prepareSqlToolsService
 const folders: string[] = []
 afterEach(async () => { for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true }) })
 const digest = (value: string) => createHash('sha256').update(value).digest('hex')
+type PreparationMarker = { version: string; rid: string; archiveSha256: string; files: { path: string; sha256: string }[] }
 async function fixture() {
   await mkdir('artifacts', { recursive: true })
   const root = await mkdtemp(join(resolve('artifacts'), 'sqltools-build-test-')); folders.push(root)
@@ -94,6 +95,28 @@ describe('bundled SQL Tools Service preparation', () => {
     const marker = JSON.parse(await readFile(join(output, markerName), 'utf8'))
     await writeFile(join(output, markerName), JSON.stringify({ ...marker, rid: 'osx-arm64' }))
     expect(await sqlToolsServiceProblems(output, f.rid, f.manifest)).toEqual(['SQL Tools Service does not match the pinned version and target.'])
+  })
+  it.each<[string, (marker: PreparationMarker) => unknown]>([
+    ['null marker', () => null],
+    ['array marker', () => []],
+    ['invalid marker digest', marker => ({ ...marker, archiveSha256: 'not a digest' })],
+    ['null file entry', marker => ({ ...marker, files: [null, ...marker.files.slice(1)] })],
+    ['array file entry', marker => ({ ...marker, files: [[], ...marker.files.slice(1)] })],
+    ['missing file digest', marker => ({ ...marker, files: marker.files.map(({ path }) => ({ path })) })],
+    ['invalid file digest', marker => ({ ...marker, files: marker.files.map(file => ({ ...file, sha256: 'not a digest' })) })],
+    ['duplicate file path', marker => ({ ...marker, files: [...marker.files, marker.files[0]] })],
+    ['unsafe file path', marker => ({ ...marker, files: [{ ...marker.files[0], path: '../escape.dll' }, ...marker.files.slice(1)] })],
+    ['multiline file path', marker => ({ ...marker, files: [{ ...marker.files[0], path: 'one.dll\ntwo.dll' }, ...marker.files.slice(1)] })]
+  ])('repairs a prepared cache with a %s without downloading again', async (name, invalidate) => {
+    const f = await fixture(), output = await prepareSqlToolsService(f)
+    const marker = JSON.parse(await readFile(join(output, markerName), 'utf8')) as PreparationMarker
+    await writeFile(join(output, markerName), JSON.stringify(invalidate(marker)))
+    // Missing files and missing digests must never compare equal and make an empty cache look verified.
+    if (name === 'missing file digest') await Promise.all(marker.files.map(file => rm(join(output, file.path))))
+    expect((await sqlToolsServiceProblems(output, f.rid, f.manifest)).length).toBeGreaterThan(0)
+    await expect(prepareSqlToolsService(f)).resolves.toBe(output)
+    expect(await sqlToolsServiceProblems(output, f.rid, f.manifest)).toEqual([])
+    expect(f.downloadArchive).toHaveBeenCalledOnce(); expect(f.extractArchive).toHaveBeenCalledTimes(2)
   })
   it('copies each target beside the backend and prepares it at development and packaging entry points', async () => {
     const pkg = JSON.parse(await readFile('package.json', 'utf8'))

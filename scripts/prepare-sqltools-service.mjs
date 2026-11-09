@@ -65,23 +65,32 @@ export async function sqlToolsServiceProblems(folder, rid = hostRid(), manifest 
   const problems = []
   let marker
   try { marker = JSON.parse(await readFile(join(folder, markerName), 'utf8')) } catch { return ['SQL Tools Service preparation marker is missing or invalid.'] }
+  const record = value => value !== null && typeof value === 'object' && !Array.isArray(value)
+  const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+  if (!record(marker) || typeof marker.version !== 'string' || typeof marker.rid !== 'string' || !digest(marker.archiveSha256))
+    return ['SQL Tools Service preparation marker is missing or invalid.']
   const entry = manifest.platforms[rid]
   if (!entry || marker.version !== manifest.version || marker.rid !== rid || marker.archiveSha256 !== entry.sha256)
     return ['SQL Tools Service does not match the pinned version and target.']
   if (!Array.isArray(marker.files) || marker.files.length < 3 || marker.files.length > 8192) return ['SQL Tools Service file inventory is invalid.']
+  const expected = new Set()
+  for (const file of marker.files) {
+    if (!record(file) || typeof file.path !== 'string' || !digest(file.sha256) || expected.has(file.path))
+      return ['SQL Tools Service file inventory is invalid.']
+    try {
+      const paths = safeArchiveEntries(file.path)
+      if (paths.length !== 1 || paths[0] !== file.path) throw new Error('Invalid inventory path.')
+      inside(folder, join(folder, file.path))
+    } catch { return ['SQL Tools Service file inventory is invalid.'] }
+    expected.add(file.path)
+  }
   let actual
   try { actual = new Map((await inventory(folder)).map(file => [file.path, file.sha256])) }
   catch { return ['SQL Tools Service distribution contains missing, unreadable or non-regular files.'] }
   for (const required of [executableName(rid), 'MicrosoftSqlToolsServiceLayer.dll', 'MicrosoftSqlToolsServiceLayer.runtimeconfig.json', 'Notice.txt', 'LICENSE.SqlToolsService.txt'])
-    if (!marker.files.some(file => file.path === required)) problems.push(`SQL Tools Service is missing ${required}.`)
-  for (const file of marker.files) {
-    try {
-      safeArchiveEntries(file.path)
-      inside(folder, join(folder, file.path))
-      if (actual.get(file.path) !== file.sha256) problems.push(`SQL Tools Service file failed verification: ${file.path}.`)
-    } catch { problems.push(`SQL Tools Service file is missing or invalid: ${String(file.path)}.`) }
-  }
-  const expected = new Set(marker.files.map(file => file.path))
+    if (!expected.has(required)) problems.push(`SQL Tools Service is missing ${required}.`)
+  for (const file of marker.files)
+    if (!actual.has(file.path) || actual.get(file.path) !== file.sha256) problems.push(`SQL Tools Service file failed verification: ${file.path}.`)
   for (const file of actual.keys()) if (!expected.has(file)) problems.push(`SQL Tools Service contains an unexpected file: ${file}.`)
   return problems
 }

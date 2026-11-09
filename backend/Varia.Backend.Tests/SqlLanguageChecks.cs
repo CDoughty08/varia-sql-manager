@@ -161,6 +161,7 @@ internal static class SqlLanguageChecks
 
         var restarted = new List<FakeClient>();
         await RefreshChecks(check, settings);
+        await RetirementChecks(check, settings);
         using (var sql = new SqlToolsLanguageService(_ => null, createClient: notify => { var next = new FakeClient { Notification = notify }; restarted.Add(next); return next; }))
         {
             var request = Request();
@@ -181,6 +182,7 @@ internal static class SqlLanguageChecks
 
         var tooMany = SqlToolsLanguageService.ReadCompletions(Element(Enumerable.Range(0, 501).Select(index => new { label = "column" + index })));
         check(tooMany.Items.Count == 500 && tooMany.IsIncomplete, "completion output is bounded and advertises truncation");
+        CompletionSelection(check);
         var badRange = SqlToolsLanguageService.ReadCompletions(Element(new[] { new { label = "bad", textEdit = new { range = new { start = new { line = 99, character = 0 }, end = new { line = 99, character = 1 } }, newText = "bad" } } }), "SELECT ");
         check(badRange.Items.Count == 0, "completion edits outside the synchronized document are refused");
         check(await Code(() => { SqlToolsLanguageService.Validate(Request(text: new string('x', 250_001))); return Task.CompletedTask; }) == "INVALID_PARAMS", "backend independently bounds SQL language documents");
@@ -201,6 +203,134 @@ internal static class SqlLanguageChecks
         check(await Code(() => { service.LanguageConnectionString(new("sqlserver", entra)); return Task.CompletedTask; }) == "AUTH_UNSUPPORTED", "external language process refuses Entra modes until token sharing is implemented");
         check(service.LaneOf("language.close") == Varia.Backend.Protocol.RequestLane.Control, "language close can cancel requests without waiting for a metadata lane");
         check(service.LaneOf("language.refresh") == Varia.Backend.Protocol.RequestLane.Control, "language refresh can supersede a pending completion without waiting for a metadata lane");
+    }
+
+    private static void CompletionSelection(Action<bool, string> check)
+    {
+        foreach (var (prefix, target) in new[] { ("Zzz", "ZzzTail"), ("ZzzTail", "ZzzTail"), ("zzzt", "ZzzTail"), ("ZT", "ZzzTail"),
+            ("[Customer K", "Customer Key"), ("[ZzzTail]", "ZzzTail"), ("[A]]K", "A]Key"), ("\"A\"\"K", "A\"Key"), ("🙂", "Rocket🙂") })
+        {
+            var line = "SELECT f." + prefix + " FROM dbo.WideFixture AS f;";
+            var text = "-- prior line\r\n" + line;
+            var cursor = "SELECT f.".Length + prefix.Length;
+            var labels = Enumerable.Range(0, 600).Select(index => "Alpha" + index.ToString("D3", System.Globalization.CultureInfo.InvariantCulture)).Append(target);
+            var items = Element(labels.Select(label => new { label, textEdit = new { range = new LanguageRange(new(1, 9), new(1, cursor)), newText = label } }));
+            var result = SqlToolsLanguageService.ReadCompletions(items, text, new(1, cursor));
+            check(result.Items.Count == 500 && result.IsIncomplete && result.Items[0].Label == target && result.Items[0].TextEdit?.NewText == target,
+                "completion truncation retains matching identifiers beyond the original cap with UTF-16, quoting and fuzzy prefixes: " + prefix);
+        }
+        const string fallback = "SELECT Zzz";
+        var plain = Element(Enumerable.Range(0, 600).Select(index => new { label = "Alpha" + index }).Append(new { label = "ZzzTail" }));
+        check(SqlToolsLanguageService.ReadCompletions(plain, fallback, new(0, fallback.Length)).Items[0].Label == "ZzzTail",
+            "completion truncation also ranks the typed identifier when a server omits text edits");
+        var verbose = Element(Enumerable.Range(0, 100).Select(index => new { label = "Alpha" + index, documentation = new string('d', 16_384) })
+            .Append(new { label = "ZzzTail", documentation = "target" }));
+        var bounded = SqlToolsLanguageService.ReadCompletions(verbose, fallback, new(0, fallback.Length));
+        check(bounded.Items[0].Label == "ZzzTail" && bounded.IsIncomplete && bounded.Items.Sum(item => item.Label.Length + (item.Documentation?.Length ?? 0)) <= 1_000_000,
+            "matching declarations also survive the aggregate completion character budget without increasing it");
+    }
+
+    private static async Task RetirementChecks(Action<bool, string> check, string settings)
+    {
+        var clients = new List<FakeClient>();
+        using (var sql = new SqlToolsLanguageService(_ => settings, createClient: notify =>
+            { var next = new FakeClient { Notification = notify }; clients.Add(next); return next; }))
+        {
+            var first = Request(context: new("sqlserver", Guid.NewGuid().ToString(), "One"));
+            var same = Request(context: first.Context);
+            var sibling = Request(context: new("sqlserver", Guid.NewGuid().ToString(), "Two"));
+            await sql.CompleteAsync(first, default);
+            await sql.CompleteAsync(same, default);
+            await sql.CompleteAsync(sibling, default);
+            var original = clients[0];
+            await sql.CloseAsync(first.DocumentId, default);
+            check(!original.Disposed && clients.Count == 1, "closing one of two context owners retains the shared language child");
+
+            original.HoldCompletion = true;
+            original.CompletionHeld = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            original.ReleaseCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            original.DisconnectObserved = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            var active = sql.CompleteAsync(sibling with { Version = 2 }, default);
+            await original.CompletionHeld.Task.WaitAsync(CheckWait);
+            var closing = sql.CloseAsync(same.DocumentId, default);
+            await original.DisconnectObserved.Task.WaitAsync(CheckWait);
+            var calls = original.Calls.Count;
+            var nextRequest = Request(context: sibling.Context);
+            var queued = sql.CompleteAsync(nextRequest, default);
+            check(!closing.IsCompleted && !original.Disposed && !queued.IsCompleted && original.Calls.Count == calls,
+                "last-context close waits for unrelated active work while new work waits outside the retirement usage count");
+            original.ReleaseCompletion.TrySetResult();
+            check((await active.WaitAsync(CheckWait)).Items.Count == 1 && (await closing.WaitAsync(CheckWait)).Closed,
+                "language retirement allows already admitted sibling completion to finish successfully");
+            check((await queued.WaitAsync(CheckWait)).Items.Count == 1 && original.Disposed && clients.Count == 2,
+                "work queued behind retirement initializes a fresh child");
+            await sql.CompleteAsync(sibling with { Version = 3 }, default);
+            check(clients[1].Calls.Any(call => call.Method == "textDocument/didOpen"
+                && call.Parameters.GetProperty("textDocument").GetProperty("uri").GetString() == "varia-sql://query/" + sibling.DocumentId),
+                "remaining documents lazily resynchronize their text after child retirement");
+        }
+
+        clients.Clear();
+        using (var sql = new SqlToolsLanguageService(_ => null, createClient: notify =>
+            { var next = new FakeClient { Notification = notify }; clients.Add(next); return next; }))
+        {
+            var pinned = Request();
+            await sql.CompleteAsync(pinned, default);
+            for (var index = 0; index < SqlToolsLanguageService.MaxDocuments; index++)
+            {
+                var temporary = Request();
+                await sql.CompleteAsync(temporary, default);
+                await sql.CloseAsync(temporary.DocumentId, default);
+            }
+            check(clients.Count == 1 && clients[0].Disposed, "offline parse caches are retired after bounded document churn even with a pinned context owner");
+            await sql.CompleteAsync(pinned, default);
+            check(clients.Count == 2, "a pinned offline document resumes in a fresh child after bounded cache cleanup");
+        }
+
+        clients.Clear();
+        using (var sql = new SqlToolsLanguageService(_ => settings, createClient: notify =>
+            { var next = new FakeClient { Notification = notify }; clients.Add(next); return next; }))
+        {
+            var first = Request(context: new("sqlserver", Guid.NewGuid().ToString(), "One"));
+            var sibling = Request(context: first.Context with { Database = "Two" });
+            await sql.CompleteAsync(first, default);
+            await sql.CompleteAsync(sibling, default);
+            var original = clients[0];
+            original.HoldCompletion = true;
+            original.CompletionHeld = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            original.DisconnectObserved = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            var active = sql.CompleteAsync(sibling with { Version = 2 }, default);
+            await original.CompletionHeld.Task.WaitAsync(CheckWait);
+            var closing = sql.CloseAsync(first.DocumentId, default);
+            await original.DisconnectObserved.Task.WaitAsync(CheckWait);
+            var duplicate = sql.CloseAsync(first.DocumentId, default);
+            var queued = sql.CompleteAsync(Request(context: sibling.Context), default);
+            sql.Dispose();
+            var cancelled = 0;
+            foreach (var work in new[] { active, queued })
+                try { await work.WaitAsync(CheckWait); }
+                catch (OperationCanceledException) { cancelled++; }
+            check(cancelled == 2 && (await closing.WaitAsync(CheckWait)).Closed && !(await duplicate.WaitAsync(CheckWait)).Closed && original.Disposed,
+                "concurrent close, duplicate close and disposal settle active work and retirement waiters without deadlocking");
+        }
+
+        var provider = new StubProvider("sqlserver") { CloseRelease = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        using (var broker = new LanguageServiceBroker([provider]))
+        {
+            var request = Request();
+            await broker.CompleteAsync(request, default);
+            var closing = broker.CloseAsync(request.DocumentId, default);
+            await provider.CloseStarted.Task.WaitAsync(CheckWait);
+            check((await closing.WaitAsync(CheckWait)).Closed && !provider.CloseRelease.Task.IsCompleted,
+                "broker accepts slow document cleanup before the provider's idle retirement finishes");
+            var replacement = request with { Context = new("sqlserver", Guid.NewGuid().ToString(), "Two") };
+            var next = broker.CompleteAsync(replacement, default);
+            var refresh = broker.RefreshAsync(new(replacement.DocumentId, replacement.Version, replacement.Text, replacement.Context), default);
+            check(!next.IsCompleted && !refresh.IsCompleted && provider.Requests == 1, "requests registered after an accepted close wait for the next binding");
+            provider.CloseRelease.TrySetResult();
+            check((await next.WaitAsync(CheckWait)).Items.Count == 0 && (await refresh.WaitAsync(CheckWait)).Refreshed && provider.Requests == 2,
+                "new context work resumes after accepted-close cleanup instead of receiving a stale binding error");
+        }
     }
 
     private static async Task RefreshChecks(Action<bool, string> check, string settings)
@@ -336,6 +466,9 @@ internal static class SqlLanguageChecks
         public bool AutoReady = true;
         public bool AutoRefreshReady = true;
         public bool HoldCompletion;
+        public TaskCompletionSource? CompletionHeld;
+        public TaskCompletionSource? ReleaseCompletion;
+        public TaskCompletionSource? DisconnectObserved;
         public bool HoldInitialize;
         public int NullCompletionsRemaining;
         public bool AlwaysNullCompletions;
@@ -362,12 +495,18 @@ internal static class SqlLanguageChecks
                     return Element(true);
                 case "textDocument/completion":
                     CompletionRequested.TrySetResult();
-                    if (HoldCompletion) await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    if (HoldCompletion)
+                    {
+                        CompletionHeld?.TrySetResult();
+                        if (ReleaseCompletion is { } release) await release.Task.WaitAsync(token);
+                        else await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    }
                     if (AlwaysNullCompletions || NullCompletionsRemaining-- > 0) return Element(null);
                     parsedVersion = documentVersion;
                     if (EmptyCompletions) return Element(Array.Empty<object>());
                     using (var json = JsonDocument.Parse("""{"items":[{"label":"dbo.People","kind":7,"documentation":{"kind":"markdown","value":"A table"},"textEdit":{"range":{"start":{"line":0,"character":7},"end":{"line":0,"character":7}},"newText":"[dbo].[People]"},"command":{"command":"do-not-forward"}}],"isIncomplete":false}""")) return json.RootElement.Clone();
                 case "textDocument/hover": return parsedVersion != documentVersion ? Element(null) : Element(new { contents = new object[] { new { language = "sql", value = "int" }, new { value = "A column" } } });
+                case "connection/disconnect": DisconnectObserved?.TrySetResult(); return Element(true);
                 default: return Element(true);
             }
         }
@@ -403,11 +542,19 @@ internal static class SqlLanguageChecks
         public int Requests;
         public int Closes;
         public int Resets;
+        public readonly TaskCompletionSource CloseStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource? CloseRelease;
         public LanguageProviderStatus Status() => new(Id, true, true, true, Refresh: true);
         public Task<LanguageCompletionResult> CompleteAsync(LanguageRequest request, CancellationToken token) { Requests++; return Task.FromResult(new LanguageCompletionResult([], false)); }
         public Task<LanguageHover?> HoverAsync(LanguageRequest request, CancellationToken token) => Task.FromResult<LanguageHover?>(null);
         public Task<LanguageRefreshResult> RefreshAsync(LanguageRefreshRequest request, CancellationToken token) => Task.FromResult(new LanguageRefreshResult(true));
-        public Task<LanguageCloseResult> CloseAsync(string documentId, CancellationToken token) { Closes++; return Task.FromResult(new LanguageCloseResult(true)); }
+        public async Task<LanguageCloseResult> CloseAsync(string documentId, CancellationToken token)
+        {
+            Closes++;
+            CloseStarted.TrySetResult();
+            if (CloseRelease is { } release) await release.Task.WaitAsync(token);
+            return new(true);
+        }
         public Task ForgetConnectionAsync(string connectionId) => Task.CompletedTask;
         public void Reset() { Resets++; }
         public void Dispose() { }

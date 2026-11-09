@@ -50,7 +50,7 @@ internal sealed class LanguageServiceBroker(IEnumerable<ILanguageServiceProvider
             throw new RequestException("INVALID_PARAMS", "This database language provider does not support cache refresh.");
         lock (gate)
         {
-            if (documents.TryGetValue(request.DocumentId, out var binding))
+            if (documents.TryGetValue(request.DocumentId, out var binding) && !binding.Closing)
             {
                 if (binding.Context is not null && binding.Context != request.Context)
                     throw new RequestException("STALE", "The language refresh refers to an older connection context.");
@@ -75,17 +75,26 @@ internal sealed class LanguageServiceBroker(IEnumerable<ILanguageServiceProvider
             throw new RequestException("INVALID_PARAMS", "This database language provider is not installed.");
         Binding binding;
         long epoch;
-        lock (gate)
+        while (true)
         {
-            ObjectDisposedException.ThrowIf(disposed, this);
-            if (suspensions != 0) throw new RequestException("BUSY", "SQL language services are paused while a database management action finishes.");
-            if (!documents.TryGetValue(request.DocumentId, out binding!))
+            Task? closing;
+            lock (gate)
             {
-                if (documents.Count >= MaxDocuments) throw new RequestException("BUSY", "Too many SQL language documents are open. Close unused query tabs.");
-                binding = new();
-                documents.Add(request.DocumentId, binding);
+                ObjectDisposedException.ThrowIf(disposed, this);
+                if (suspensions != 0) throw new RequestException("BUSY", "SQL language services are paused while a database management action finishes.");
+                if (!documents.TryGetValue(request.DocumentId, out binding!))
+                {
+                    if (documents.Count >= MaxDocuments) throw new RequestException("BUSY", "Too many SQL language documents are open. Close unused query tabs.");
+                    binding = new();
+                    documents.Add(request.DocumentId, binding);
+                }
+                closing = binding.Closing ? binding.CloseTask : null;
+                epoch = binding.Epoch;
             }
-            epoch = binding.Epoch;
+            if (closing is null) break;
+            // An accepted close can still be retiring an idle language process. A newly registered request belongs
+            // to the next binding; requests registered before Closing retain the old binding and reject as stale.
+            await closing.WaitAsync(deadline.Token);
         }
         await binding.Serial.WaitAsync(deadline.Token);
         try

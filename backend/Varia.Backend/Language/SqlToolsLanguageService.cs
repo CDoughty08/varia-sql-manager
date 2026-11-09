@@ -26,6 +26,10 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
     private ILspClient? startingClient;
     private int generation;
     private int totalCharacters;
+    private int operations;
+    private int closedDocuments;
+    private TaskCompletionSource? idle;
+    private TaskCompletionSource? retirement;
     private bool disposed;
 
     private sealed class Document(string id)
@@ -90,7 +94,7 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
     public async Task<LanguageCompletionResult> CompleteAsync(LanguageRequest request, CancellationToken token)
     {
         var result = await RequestAsync("textDocument/completion", request, token);
-        return ReadCompletions(result, request.Text);
+        return ReadCompletions(result, request.Text, request.Position);
     }
 
     public async Task<LanguageHover?> HoverAsync(LanguageRequest request, CancellationToken token)
@@ -112,6 +116,7 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
         var settings = connectionString(request.Context);
         var document = GetDocument(request.DocumentId);
         using var operation = CancellationTokenSource.CreateLinkedTokenSource(token);
+        operation.CancelAfter(TimeSpan.FromSeconds(25));
         token = operation.Token;
         await document.Serial.WaitAsync(token);
         try
@@ -127,6 +132,7 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
                 document.ConnectionId = request.Context.ConnectionId;
                 document.Active = operation;
             }
+            using var usage = await EnterOperationAsync(token);
             settings = connectionString(request.Context);
             var current = await GetClientAsync(token);
             await SynchronizeAsync(current, document, request, settings, token);
@@ -157,6 +163,87 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
         catch (TimeoutException) { throw new RequestException("TIMEOUT", "SQL language service timed out. Try IntelliSense again."); }
         catch (Exception) { throw new RequestException("BACKEND_UNAVAILABLE", "SQL language service stopped or returned an invalid response. Try IntelliSense again; reinstall Varia if it keeps failing."); }
         finally { lock (gate) document.Active = null; document.Serial.Release(); }
+    }
+
+    private async Task<Operation?> EnterOperationAsync(CancellationToken token, bool cleanup = false)
+    {
+        while (true)
+        {
+            Task waiting;
+            lock (gate)
+            {
+                if (disposed && cleanup) return null;
+                ObjectDisposedException.ThrowIf(disposed, this);
+                token.ThrowIfCancellationRequested();
+                if (retirement is null)
+                {
+                    if (operations++ == 0) idle = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                    return new(this);
+                }
+                waiting = retirement.Task;
+            }
+            // Waiting for retirement must not keep that same retirement from reaching idle.
+            await waiting.WaitAsync(token);
+        }
+    }
+
+    private sealed class Operation(SqlToolsLanguageService owner) : IDisposable
+    {
+        private int ended;
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref ended, 1) != 0) return;
+            lock (owner.gate)
+                if (--owner.operations == 0) { owner.idle?.TrySetResult(); owner.idle = null; }
+        }
+    }
+
+    private Task? RetireClosedContext(Document document)
+    {
+        lock (gate)
+        {
+            if (disposed || document.Generation != generation || document.ContextKey is null) return null;
+            // Upstream keeps binding contexts after disconnect, and didClose also retains offline parse state.
+            // Retire the last owner of a context, or after bounded owner churn under a pinned sibling context.
+            if (++closedDocuments < MaxDocuments && documents.Values.Any(other => !ReferenceEquals(other, document)
+                && !other.Closing && other.ContextKey == document.ContextKey)) return null;
+            return RetireClient();
+        }
+    }
+
+    private Task RetireClient()
+    {
+        // Called under gate. Keep admissions blocked until disposal, including when idle is already reached.
+        if (retirement is { } pending) return pending.Task;
+        var finished = retirement = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var wait = idle?.Task ?? Task.CompletedTask;
+        var epoch = generation;
+        _ = Task.Run(async () =>
+        {
+            await wait;
+            ILspClient? previous = null, starting = null;
+            lock (gate)
+            {
+                if (!disposed && generation == epoch)
+                {
+                    generation++;
+                    closedDocuments = 0;
+                    starting = startingClient;
+                    previous = client;
+                    startingClient = null;
+                    client = null;
+                }
+            }
+            // LspClient stops the child before releasing stream handles; a handle cleanup failure must not strand admission.
+            try { starting?.Dispose(); } catch (Exception) { }
+            try { previous?.Dispose(); } catch (Exception) { }
+            lock (gate)
+            {
+                if (ReferenceEquals(retirement, finished)) retirement = null;
+                finished.TrySetResult();
+            }
+        });
+        return finished.Task;
     }
 
     private static async Task<JsonElement> CompletionAsync(ILspClient current, Document document, LanguageRequest request, object position, CancellationToken token)
@@ -232,6 +319,7 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
                     client = created;
                     startingClient = null;
                     Interlocked.Increment(ref generation);
+                    closedDocuments = 0;
                 }
                 return created;
             }
@@ -266,6 +354,7 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
             if (document.Generation != 0 && document.ContextKey != contextKey)
             {
                 await CloseRemoteAsync(current, document.Uri, token);
+                _ = RetireClosedContext(document);
                 document.Generation = 0;
                 document.ContextKey = null;
             }
@@ -379,19 +468,29 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
             await document.Serial.WaitAsync(CancellationToken.None);
             try
             {
-                lock (gate)
+                Task? retired;
+                using (var usage = await EnterOperationAsync(CancellationToken.None, cleanup: true))
                 {
-                    if (!documents.TryGetValue(id, out var found) || !ReferenceEquals(found, document)) return new(false);
-                    documents.Remove(id);
-                    totalCharacters -= document.Text.Length;
-                    document.Text = "";
+                    if (usage is null) return new(true);
+                    ILspClient? current;
+                    lock (gate)
+                    {
+                        if (!documents.TryGetValue(id, out var found) || !ReferenceEquals(found, document)) return new(true);
+                        documents.Remove(id);
+                        totalCharacters -= document.Text.Length;
+                        document.Text = "";
+                        current = document.Generation == generation ? client : null;
+                        retired = RetireClosedContext(document);
+                    }
+                    if (current is not null && !current.Completion.IsCompleted)
+                    {
+                        using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                        try { await CloseRemoteAsync(current, document.Uri, budget.Token); }
+                        catch { lock (gate) retired = RetireClient(); }
+                    }
                 }
-                var current = client;
-                if (document.Generation == Volatile.Read(ref generation) && current is not null && !current.Completion.IsCompleted)
-                {
-                    try { await CloseRemoteAsync(current, document.Uri, token); }
-                    catch { current.Dispose(); } // Process termination is also a complete release of its documents/connections.
-                }
+                // Release our own usage before waiting for every admitted operation to leave the child.
+                if (retired is not null) await retired;
                 return new(true);
             }
             finally { document.Serial.Release(); }
@@ -461,14 +560,19 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
         return new(line, text.Length - start);
     }
 
-    internal static LanguageCompletionResult ReadCompletions(JsonElement result, string? text = null)
+    internal static LanguageCompletionResult ReadCompletions(JsonElement result, string? text = null, LanguagePosition? position = null)
     {
         var array = result.ValueKind == JsonValueKind.Array ? result : Property(result, "items");
         if (array.ValueKind != JsonValueKind.Array) return new([], false);
         var items = new List<LanguageCompletionItem>();
         var characters = 0;
         var incomplete = Property(result, "isIncomplete").ValueKind == JsonValueKind.True;
-        foreach (var item in array.EnumerateArray())
+        var prefix = text is not null && position is not null ? CompletionPrefix(array, text, position) : "";
+        // STS returns every declaration even after typing a complete identifier. Rank before applying our bounded
+        // response limits, or a name beyond the first 500 declarations can never reach Monaco's own filtering.
+        IEnumerable<JsonElement> candidates = array.EnumerateArray();
+        if (prefix.Length != 0) candidates = candidates.OrderBy(item => CompletionRank(item, prefix));
+        foreach (var item in candidates)
         {
             if (items.Count == MaxCompletionItems) { incomplete = true; break; }
             var label = String(item, "label");
@@ -490,6 +594,62 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
             items.Add(completion);
         }
         return new(items, incomplete);
+    }
+
+    private static string CompletionPrefix(JsonElement array, string text, LanguagePosition position)
+    {
+        if (!PositionInText(text, position)) return "";
+        var line = 0;
+        var start = 0;
+        for (var at = 0; at < text.Length && line < position.Line; at++)
+        {
+            if (text[at] is not ('\r' or '\n')) continue;
+            if (text[at] == '\r' && at + 1 < text.Length && text[at + 1] == '\n') at++;
+            start = at + 1;
+            line++;
+        }
+        var before = text.Substring(start, position.Character);
+        var end = text.IndexOfAny(['\r', '\n'], start);
+        var lineLength = (end < 0 ? text.Length : end) - start;
+        foreach (var item in array.EnumerateArray())
+        {
+            var edit = Property(item, "textEdit");
+            var range = ReadRange(Property(edit, "range")) ?? ReadRange(Property(edit, "replace"));
+            if (range is not null && range.Start.Line == position.Line && range.End.Line == position.Line
+                && range.Start.Character <= position.Character && range.End.Character >= position.Character && range.End.Character <= lineLength)
+                return UnquoteCompletion(before[range.Start.Character..]);
+        }
+        var word = before.Length;
+        while (word > 0 && (char.IsLetterOrDigit(before[word - 1]) || before[word - 1] is '_' or '@' or '#' or '$')) word--;
+        return before[word..];
+    }
+
+    private static string UnquoteCompletion(string value)
+    {
+        if (value.StartsWith('[')) return (value.EndsWith(']') ? value[1..^1] : value[1..]).Replace("]]", "]", StringComparison.Ordinal);
+        if (value.StartsWith('"')) return (value.EndsWith('"') && value.Length > 1 ? value[1..^1] : value[1..]).Replace("\"\"", "\"", StringComparison.Ordinal);
+        return value;
+    }
+
+    private static int CompletionRank(JsonElement item, string prefix)
+    {
+        var rank = 4;
+        foreach (var value in new[] { String(item, "filterText"), String(item, "label"), String(item, "insertText"), String(Property(item, "textEdit"), "newText") })
+        {
+            if (string.IsNullOrEmpty(value) || value.Length > 16_384) continue;
+            var candidate = UnquoteCompletion(value);
+            if (candidate.Equals(prefix, StringComparison.OrdinalIgnoreCase)) return 0;
+            if (candidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) rank = Math.Min(rank, 1);
+            else if (candidate.Contains(prefix, StringComparison.OrdinalIgnoreCase)) rank = Math.Min(rank, 2);
+            else if (prefix.Length <= candidate.Length)
+            {
+                var matched = 0;
+                foreach (var character in candidate)
+                    if (char.ToUpperInvariant(character) == char.ToUpperInvariant(prefix[matched]) && ++matched == prefix.Length) break;
+                if (matched == prefix.Length) rank = Math.Min(rank, 3);
+            }
+        }
+        return rank;
     }
 
     private static JsonElement Property(JsonElement value, string name) => value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out var property) ? property : default;
@@ -527,6 +687,9 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
             totalCharacters = 0;
             startingClient?.Dispose();
             client?.Dispose();
+            startingClient = null;
+            client = null;
+            retirement?.TrySetResult();
         }
         foreach (var waiter in connecting.Values) { waiter.Complete.TrySetCanceled(); waiter.Ready.TrySetCanceled(); }
         connecting.Clear();
@@ -539,6 +702,7 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
         lock (gate)
         {
             Interlocked.Increment(ref generation);
+            closedDocuments = 0;
             startingClient?.Dispose();
             client?.Dispose();
             startingClient = null;

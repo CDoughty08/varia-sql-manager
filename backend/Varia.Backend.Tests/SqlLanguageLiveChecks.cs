@@ -70,6 +70,9 @@ internal static class SqlLanguageLiveChecks
             var firstFixture = await Sql("CREATE TABLE dbo.LanguageFixture (FirstOnly int NOT NULL, SharedName nvarchar(64) NULL); CREATE TABLE dbo.EditedFixture (EditedOnly bigint NOT NULL);", firstDatabase);
             var secondFixture = await Sql("CREATE TABLE dbo.LanguageFixture (SecondOnly bigint NOT NULL, SharedName nvarchar(64) NULL);", secondDatabase);
             check(firstFixture.Status == "completed" && secondFixture.Status == "completed", "language live fixtures create only test-owned tables in marked scratch databases");
+            var wideColumns = string.Join(", ", Enumerable.Range(0, 600).Select(index => "Alpha" + index.ToString("D3", CultureInfo.InvariantCulture) + " int NULL"));
+            check((await Sql("CREATE TABLE dbo.WideLanguageFixture (" + wideColumns + ", ZzzTail int NULL);", firstDatabase)).Status == "completed",
+                "completion-limit regression creates a 601-column table only in its marked scratch database");
 
             using var service = new SqlService();
             async Task<T> Call<T>(string method, object parameters) => (T)await service.DispatchAsync(method, JsonSerializer.SerializeToElement(parameters, Json), Json);
@@ -92,6 +95,13 @@ internal static class SqlLanguageLiveChecks
             check(Has(systemColumns, "database_id"), "first public completion request waits for system-catalog binding and returns database_id");
             await Call<LanguageCloseResult>("language.close", new LanguageCloseArgs(systemDocument));
             await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(masterConnection.Id), Json), Json);
+            var wideDocument = Guid.NewGuid().ToString();
+            var wide = await Complete(Request(wideDocument, 1, "SELECT w. FROM dbo.WideLanguageFixture AS w;", firstConnection, "SELECT w.".Length));
+            check(wide.Items.Count == SqlToolsLanguageService.MaxCompletionItems && wide.IsIncomplete, "wide live catalogs still respect the completion response cap");
+            var widePrefix = await Complete(Request(wideDocument, 2, "SELECT w.Zzz FROM dbo.WideLanguageFixture AS w;", firstConnection, "SELECT w.Zzz".Length));
+            var wideExact = await Complete(Request(wideDocument, 3, "SELECT w.ZzzTail FROM dbo.WideLanguageFixture AS w;", firstConnection, "SELECT w.ZzzTail".Length));
+            check(Has(widePrefix, "ZzzTail") && Has(wideExact, "ZzzTail"), "prefix and exact completion retain a live column beyond STS's first 500 declarations");
+            await Call<LanguageCloseResult>("language.close", new LanguageCloseArgs(wideDocument));
             var tableRequest = Request(firstId, 1, "SELECT * FROM dbo.Lang", firstConnection);
             var tables = await Complete(tableRequest);
             check(tables.Items.Any(item => item.Label.Contains("LanguageFixture", StringComparison.OrdinalIgnoreCase)), "real SQL Tools Service completes a fixture table from live database metadata");

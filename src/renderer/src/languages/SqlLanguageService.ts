@@ -9,12 +9,14 @@ import type { ConnectionService } from '../services/connections'
 import type { BackendStateService } from '../services/backend'
 
 type LanguageApi = Pick<VariaApi, 'languageStatus' | 'languageComplete' | 'languageHover' | 'languageClose' | 'languageRefresh'>
+type CloseResult = Awaited<ReturnType<LanguageApi['languageClose']>>
 type ActivityPhase = 'loading' | 'refreshing'
-interface Snapshot { readonly status?: LanguageStatus; readonly checking: boolean; readonly error?: string; readonly documentErrors: ReadonlyMap<string, string>; readonly activities: ReadonlyMap<string, ActivityPhase> }
+interface Snapshot { readonly status?: LanguageStatus; readonly checking: boolean; readonly error?: string; readonly cleanupError?: string; readonly documentErrors: ReadonlyMap<string, string>; readonly activities: ReadonlyMap<string, ActivityPhase> }
 interface Capture { readonly request: LanguageRequest; readonly key: string; readonly epoch: number; readonly model: Monaco.editor.ITextModel }
 interface PendingRequest { readonly token: Monaco.CancellationToken; readonly settled: Promise<void> }
 interface RefreshWork { capture: Capture; readonly token: Monaco.CancellationToken; readonly cancel: () => void; work: Promise<boolean>; settled: Promise<void> }
 const noCancellation: Monaco.CancellationToken = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) }
+const cleanupLimits = { requests: 4, attempts: 16, deadlineMs: 30_000, retryMs: 250, maxRetryMs: 2000 }
 // LSP's CompletionItemKind numbering differs from Monaco's numbering.
 const kindNames = ['Text', 'Method', 'Function', 'Constructor', 'Field', 'Variable', 'Class', 'Interface', 'Module', 'Property', 'Unit', 'Value', 'Enum', 'Keyword', 'Snippet', 'Color', 'File', 'Reference', 'Folder', 'EnumMember', 'Constant', 'Struct', 'Event', 'Operator', 'TypeParameter'] as const
 
@@ -25,8 +27,12 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
   private readonly epochs = new Map<string, number>()
   private readonly contexts = new Map<string, string>()
   private readonly pending = new Map<string, PendingRequest>()
+  private readonly inFlight = new Map<string, Set<Promise<unknown>>>()
   private readonly waiters = new Set<() => void>()
   private readonly closing = new Map<string, Promise<void>>()
+  private readonly closeQueue: (() => void)[] = []
+  private readonly urgentCloses: (() => void)[] = []
+  private closeRequests = 0
   private readonly refreshing = new Map<string, RefreshWork>()
   private readonly activities = new Map<symbol, { capture: Capture; token: Monaco.CancellationToken; phase: ActivityPhase; visible: boolean }>()
   private disposed = false
@@ -36,6 +42,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
   private statusWake?: () => void
   private backendEpoch = 0
   private backendState = ''
+  private backendGeneration?: number
   constructor(monaco: typeof Monaco, private readonly api: LanguageApi,
     private readonly documents: DocumentService, private readonly connections: ConnectionService, backend?: BackendStateService) {
     super({ checking: false, documentErrors: new Map(), activities: new Map() })
@@ -57,7 +64,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
           if (refreshing && !await this.waitFor(refreshing.settled, token)) return { suggestions: [] }
           if (!this.current(capture, token)) return { suggestions: [] }
           this.used.add(capture.request.documentId)
-          const result = await api.languageComplete(capture.request)
+          const result = await this.track(capture.request.documentId, api.languageComplete(capture.request))
           if (!this.current(capture, token)) return { suggestions: [] }
           if (!result.ok) { this.failure(capture.request.documentId, result.error); return { suggestions: [] } }
           this.failure(capture.request.documentId)
@@ -98,7 +105,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
           if (refreshing && !await this.waitFor(refreshing.settled, token)) return null
           if (!this.current(capture, token)) return null
           this.used.add(capture.request.documentId)
-          const result = await api.languageHover(capture.request)
+          const result = await this.track(capture.request.documentId, api.languageHover(capture.request))
           if (!this.current(capture, token)) return null
           if (!result.ok) { this.failure(capture.request.documentId, result.error); return null }
           this.failure(capture.request.documentId)
@@ -118,6 +125,12 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
         const state = backend.getSnapshot().state, key = `${state.status}:${'generation' in state ? state.generation : ''}`
         if (key === this.backendState) return
         this.backendState = key
+        const generation = 'generation' in state ? state.generation : state.status === 'failed' ? state.lost?.generation : undefined
+        if (generation !== undefined) {
+          if (this.backendGeneration !== undefined && generation !== this.backendGeneration && this.getSnapshot().cleanupError)
+            this.publish({ ...this.getSnapshot(), cleanupError: undefined })
+          this.backendGeneration = generation
+        }
         this.backendEpoch++
         this.statusSequence++
         this.statusRequest = undefined
@@ -206,7 +219,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
         if (!this.current(refresh.capture, actionToken)) return false
         const { version, text, context } = refresh.capture.request
         this.used.add(documentId)
-        const result = await this.api.languageRefresh({ documentId, version, text, context })
+        const result = await this.track(documentId, this.api.languageRefresh({ documentId, version, text, context }))
         if (!this.current(refresh.capture, actionToken)) return false
         if (!result.ok) throw new Error(result.error)
         this.failure(documentId)
@@ -233,7 +246,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
     if (activity === 'refreshing') return { label: 'IntelliSense refreshing', detail: 'Refreshing schema suggestions for this query’s connection and database.' }
     if (activity === 'loading') return { label: 'IntelliSense loading', detail: 'Loading SQL language information for this query.' }
     if (snapshot.checking && !snapshot.status) return { label: 'IntelliSense starting', detail: 'Checking the SQL language provider.' }
-    const error = snapshot.documentErrors.get(documentId) ?? snapshot.error
+    const error = snapshot.cleanupError ?? snapshot.documentErrors.get(documentId) ?? snapshot.error
     if (error) return { label: 'IntelliSense unavailable', detail: error }
     const provider = snapshot.status?.providers.find(provider => provider.id === id)
     if (!snapshot.status) return { label: 'IntelliSense starting', detail: 'Checking the SQL language provider.' }
@@ -343,10 +356,68 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
   }
   private close(id: string): void {
     const previous = this.closing.get(id)
-    const close = async () => { try { await this.api.languageClose(id) } catch { /* Backend loss already released the document. */ } }
-    const pending = previous ? previous.then(close) : close()
+    const inFlight = [...this.inFlight.get(id) ?? []]
+    const generation = this.backendGeneration
+    const cleanup = async () => {
+      await this.closeRemote(id, generation, inFlight.length > 0)
+      if (inFlight.length) {
+        // Control-lane close may pass a language request still waiting for metadata dispatch. Close again after it
+        // settles, keeping new-context requests behind this barrier so cleanup cannot close their replacement binding.
+        await Promise.allSettled(inFlight)
+        await this.closeRemote(id, generation)
+      }
+    }
+    const pending = previous ? previous.then(cleanup) : cleanup()
     this.closing.set(id, pending)
     void pending.finally(() => { if (this.closing.get(id) === pending) this.closing.delete(id) })
+  }
+  private async closeRemote(id: string, generation: number | undefined, urgent = false): Promise<void> {
+    const deadline = Date.now() + cleanupLimits.deadlineMs
+    const exhausted = () => this.publish({ ...this.getSnapshot(), cleanupError: 'Some IntelliSense connections could not close because the SQL backend stayed busy. Restart SQL Backend when it is safe to stop queries and end their sessions.' })
+    for (let attempt = 0; ; attempt++) {
+      if (generation !== this.backendGeneration) return
+      const result = await this.closeAttempt(id, generation, urgent && attempt === 0, attempt ? deadline : undefined)
+      if (generation !== this.backendGeneration) return
+      if (result === 'expired') { exhausted(); return }
+      // Only this main-process refusal proves the request was never dispatched. A timeout may already be cleaning up.
+      if (!result || result.ok || result.code !== 'TOO_MANY_REQUESTS') return
+      const delay = Math.min(cleanupLimits.retryMs * 2 ** attempt, cleanupLimits.maxRetryMs, deadline - Date.now())
+      if (attempt + 1 >= cleanupLimits.attempts || delay <= 0) {
+        exhausted()
+        return
+      }
+      await new Promise<void>(resolve => { setTimeout(resolve, delay) })
+    }
+  }
+  private closeAttempt(id: string, generation: number | undefined, urgent: boolean, deadline?: number): Promise<CloseResult | 'expired' | undefined> {
+    return new Promise(resolve => {
+      const finish = (result?: CloseResult | 'expired') => { this.closeRequests--; resolve(result); this.drainCloseQueue() }
+      const run = () => {
+        this.closeRequests++
+        if (generation !== this.backendGeneration) { finish(); return }
+        if (deadline !== undefined && Date.now() >= deadline) { finish('expired'); return }
+        try { void this.api.languageClose(id).then(finish, () => finish()) }
+        catch { finish() }
+      }
+      const queue = urgent ? this.urgentCloses : this.closeQueue
+      queue.push(run)
+      this.drainCloseQueue()
+    })
+  }
+  private drainCloseQueue(): void {
+    while (this.closeRequests < cleanupLimits.requests) {
+      const next = this.urgentCloses.shift() ?? this.closeQueue.shift()
+      if (!next) break
+      next()
+    }
+  }
+  private track<T>(id: string, work: Promise<T>): Promise<T> {
+    let inFlight = this.inFlight.get(id)
+    if (!inFlight) this.inFlight.set(id, inFlight = new Set())
+    inFlight.add(work)
+    const settled = () => { inFlight.delete(work); if (!inFlight.size) this.inFlight.delete(id) }
+    void work.then(settled, settled)
+    return work
   }
   private failure(id: string, error?: string): void {
     if (this.disposed || this.getSnapshot().documentErrors.get(id) === error) return
