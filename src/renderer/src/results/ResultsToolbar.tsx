@@ -2,6 +2,7 @@ import { useEffect, useRef, type KeyboardEvent } from 'react'
 import type { CommandId } from '../../../shared/commands/catalog'
 import type { ViewSortMode } from '../../../shared/contracts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
+import { useCommandEnabled } from '../core/useCommand'
 import type { WhitespaceMode } from '../grid/whitespace'
 import Icon from '../Icon'
 import { searchBoxKeyAction, searchCount, type SearchMode } from './search'
@@ -79,8 +80,11 @@ function ResultsSearchBox({ tabId }: { tabId: string }) {
  * ARIA toolbar pattern: one Tab stop, Left and Right (Home, End) move between them; the search box is a Tab stop of its own.
  */
 export default function ResultsToolbar({ tabId }: { tabId: string }) {
-  const { commands, settings } = useWorkbench()
+  const { commands, settings, results } = useWorkbench()
   const values = useServiceSnapshot(settings).values
+  // The addressed query can update while another query is active; the command hook also follows global busy state.
+  useServiceSnapshot(results)
+  const canClose = useCommandEnabled('output.closeResults', { tabId })
   const whitespace = values['queryResults.grid.whitespace'], sortText = values['queryResults.grid.sortText']
   const profile = values['queryResults.grid.columnProfile'], rowSize = values['queryResults.grid.rowSize']
   // Off (or Value) runs the command of the choice that is on, which turns it off.
@@ -91,7 +95,7 @@ export default function ResultsToolbar({ tabId }: { tabId: string }) {
   }
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
-    const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button')], at = items.indexOf(event.target as HTMLButtonElement)
+    const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')], at = items.indexOf(event.target as HTMLButtonElement)
     if (at < 0) return
     const next = event.key === 'ArrowRight' ? (at + 1) % items.length : event.key === 'ArrowLeft' ? (at + items.length - 1) % items.length
       : event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : -1
@@ -118,6 +122,10 @@ export default function ResultsToolbar({ tabId }: { tabId: string }) {
         onClick={() => void commands.execute('output.toggleColumnProfile', undefined, 'toolbar')}><Icon name="graph" /></button>
       <button type="button" className="results-icon-toggle" aria-label="Row size" aria-pressed={rowSize} tabIndex={-1} title="Row size: a bar behind each row number; hover it for the exact bytes"
         onClick={() => void commands.execute('output.toggleRowSize', undefined, 'toolbar')}><Icon name="list-flat" /></button>
+    </div>
+    <div className="results-segments" role="group" aria-label="Results">
+      <button type="button" className="results-icon-toggle" aria-label="Close Results" tabIndex={-1} disabled={!canClose}
+        title="Close all results for this query to free memory; keep Messages" onClick={() => void commands.execute('output.closeResults', { tabId }, 'toolbar')}><Icon name="close" /></button>
     </div>
   </div>
 }

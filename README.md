@@ -60,6 +60,19 @@ On Ubuntu 24.04 and later, AppArmor may block the unprivileged user namespaces n
 2. Open a new query, write SQL, and select **Execute** or press **F5**. A selection runs instead of the full document.
 3. Inspect the results and messages, or browse and script objects in Object Explorer.
 
+The Execute button says **Execute selection** with its line range when text is selected; **Entire query** means the
+whole document will run. Click the status bar's **Ln/Col** to go to a line, or **INS/OVR** to switch insert/overtype mode.
+Each editor group's **+**, or a double-click on empty tab-strip space, opens a query in that group. **Reopen Closed Query**
+(Ctrl+Shift+T; Cmd+Shift+T on macOS) restores a bounded, in-memory unsaved copy without its old connection or saved-file
+association; see [editor groups](docs/editor-groups.md).
+
+In Connect, single-click or Space selects a saved connection for editing; Enter or double-click connects. Object
+Explorer's recovery rows offer **Retry**, **Continue loading**, and **Filter** actions. Search Objects opened from a
+database starts with that database's visible, removable scope.
+
+The [result grid tools](docs/results-tools.md) include **Copy Column Name**, keyboard-accessible **Fit Column**, and
+**Close Results** beside the results. Located SQL errors offer **Go to line** while the source text is unchanged.
+
 Certificate validation is enabled by default. For a trusted server with a self-signed certificate, enable **Trust server certificate** in the connection dialog. On Linux and macOS, Windows authentication requires the system Kerberos library, a valid ticket from `kinit`, and a server name or SPN configured for Kerberos. Entra Integrated authentication is available on Windows only. Remembered passwords are encrypted using the operating system's credential storage; on Linux this requires an available keyring.
 
 Press **F1** or **Ctrl+Shift+P** (**⌘Shift+P** on macOS) for the command palette. See the [command reference](docs/commands.md) for shortcuts and available commands.

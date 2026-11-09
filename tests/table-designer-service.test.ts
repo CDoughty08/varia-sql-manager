@@ -395,7 +395,7 @@ describe('table designer', () => {
     expect(selectorPress(press(1), 'win32', false)).toBeUndefined()
   })
   it('turns the text-only commands off while a designer is active, and the editor keys with them', async () => {
-    const { context, designers, id } = designer()
+    const { context, designers, id, commands } = designer()
     await settled()
     designers.setCell(id, 0, 'name', 'Id')
     const keys = context.getState()
@@ -413,9 +413,11 @@ describe('table designer', () => {
       expect(live && evaluateWhen(compileWhen(descriptor.precondition ?? 'true'), focused), command).toBe(false)
     }
     // The Query menu acts on the active query, its keys (Ctrl+U) included: a designer is connected but is not one.
-    const queryCommands = commandIds.filter(command => commandDescriptor(command).category === 'Query')
+    const queryCommands = commandIds.filter(command => commandDescriptor(command).category === 'Query' && !command.startsWith('output.'))
     expect(queryCommands).toEqual(expect.arrayContaining(['query.changeDatabase', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'query.execute']))
     for (const command of queryCommands) expect(evaluateWhen(compileWhen(commandDescriptor(command).precondition ?? 'true'), focused), command).toBe(false)
+    // Output actions validate their addressed result/source in their handlers, including from another panel's menu.
+    for (const command of ['output.closeResults', 'output.revealError'] as const) expect(commands.isEnabled(command), command).toBe(false)
   })
   it('leaves a designer out of Disconnect All Queries: it has no session to close and keeps its server', async () => {
     const { designers, id, documents, targets, api, context } = designer()

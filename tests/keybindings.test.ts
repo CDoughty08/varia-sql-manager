@@ -19,6 +19,9 @@ const commandFor = (input: KeyEventLike, platform: Platform, values: Partial<Con
 }
 
 describe('editor group and tab keys', () => {
+  it('reopens the last closed query with Ctrl+Shift+T or Cmd+Shift+T', () => {
+    for (const platform of platforms) expect(commandFor(event('T', 'KeyT', { shiftKey: true, ...platform === 'darwin' ? { metaKey: true } : { ctrlKey: true } }), platform)).toBe('file.reopenClosed')
+  })
   it('close a focused tab with Delete or Backspace, which stay text keys elsewhere, and leave AltGr arrows alone', () => {
     for (const platform of ['win32', 'linux', 'darwin'] as const) {
       expect(commandFor(event('Delete', 'Delete'), platform, { documentTabFocus: true, activePanel: 'editor' })).toBe('file.close')
@@ -217,12 +220,12 @@ describe('default keybindings', () => {
     const groups = ['editor.splitRight', 'editor.splitDown', 'editor.moveToNextGroup', 'editor.moveToPreviousGroup', 'editor.focusNextGroup', 'editor.focusPreviousGroup']
     const monitor = ['activity.refresh', 'activity.nextPane', 'activity.previousPane', 'activity.close']
     for (const platform of ['win32', 'linux'] as const) {
-      expect(defaultRules(platform).map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAll', 'file.close', 'file.close', 'file.close', 'file.close', 'window.close', 'edit.undo', 'edit.redo', 'edit.redo', ...clipboard,
+      expect(defaultRules(platform).map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAll', 'file.close', 'file.close', 'file.close', 'file.close', 'file.reopenClosed', 'window.close', 'edit.undo', 'edit.redo', 'edit.redo', ...clipboard,
         'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane', 'query.execute', 'query.execute', 'query.execute', 'query.cancel', 'query.includeActualPlan', 'query.estimatePlan', 'query.includeClientStatistics', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu',
         'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.focusSearch', 'explorer.rename', 'explorer.delete', 'tableDesigner.properties', 'ssis.refreshOperations', 'ssis.refreshProperties', 'explorer.peek', 'explorer.peek', 'explorer.openPeekTab', 'explorer.openPeekTab', 'peek.refresh',
         'query.changeDatabase', 'document.next', 'document.next', 'document.previous', 'document.previous', 'document.moveLeft', 'document.moveRight', 'document.rename', ...groups, 'editor.toggleWordWrap', 'editor.toggleOvertype', ...native, ...editing, ...monitor, 'options.focusSearch', ...display, ...output, ...platform === 'win32' ? ['workbench.search'] : [], ...search])
     }
-    expect(defaultRules('darwin').map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.saveAll', 'file.close', 'file.close', 'file.close', 'edit.undo', 'edit.redo', ...clipboard, 'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane',
+    expect(defaultRules('darwin').map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.saveAll', 'file.close', 'file.close', 'file.close', 'file.reopenClosed', 'edit.undo', 'edit.redo', ...clipboard, 'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane',
       'query.execute', 'query.execute', 'query.estimatePlan', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.focusSearch', 'explorer.rename', 'explorer.delete', 'explorer.delete', 'explorer.properties', 'tableDesigner.properties', 'ssis.refreshOperations', 'ssis.refreshProperties', 'explorer.peek', 'explorer.peek', 'explorer.openPeekTab', 'explorer.openPeekTab', 'peek.refresh', 'query.changeDatabase',
       'document.next', 'document.previous', 'document.moveLeft', 'document.moveRight', 'document.rename', ...groups, ...native, ...macEditing, 'activity.open', ...monitor,
       'preferences.options', 'options.focusSearch', ...display, ...macOutput, ...search])
@@ -257,8 +260,8 @@ describe('default keybindings', () => {
     const legacy: Readonly<Record<string, CommandId>> = { n: 'file.new', o: 'file.open', s: 'file.save', w: 'file.close' }
     // SSMS's Save All took Ctrl+Shift+S from Save As, which keeps ⇧⌘S on macOS (where Save All is ⌥⌘S).
     const saveKeys: Readonly<Record<Platform, CommandId>> = { win32: 'file.saveAll', linux: 'file.saveAll', darwin: 'file.saveAs' }
-    // Ctrl/⌘+Shift+F focuses Object Explorer's search box (SSMS's Find in Files, which Varia lacks).
-    const palette: Readonly<Record<string, CommandId>> = { p: 'workbench.quickOpen', 'shift+p': 'workbench.showCommands', u: 'query.changeDatabase', r: 'view.toggleResultsPane', 'shift+f': 'explorer.focusSearch' }
+    // Ctrl/⌘+Shift+F focuses Object Explorer's search box; Ctrl/⌘+Shift+T reopens a closed query.
+    const palette: Readonly<Record<string, CommandId>> = { p: 'workbench.quickOpen', 'shift+p': 'workbench.showCommands', u: 'query.changeDatabase', r: 'view.toggleResultsPane', 'shift+f': 'explorer.focusSearch', 'shift+t': 'file.reopenClosed' }
     // Go To Line is Ctrl+G in the editor; Make Uppercase and Lowercase need its text focused, which editorFocus alone is not.
     const added: Readonly<Record<Platform, Readonly<Record<string, CommandId>>>> = { win32: { e: 'query.execute', g: 'edit.goToLine', m: 'query.includeActualPlan', l: 'query.estimatePlan' }, linux: { e: 'query.execute', g: 'edit.goToLine', m: 'query.includeActualPlan', l: 'query.estimatePlan' }, darwin: { l: 'query.estimatePlan' } }
     // SSMS's search box key; Linux and macOS quit with it.

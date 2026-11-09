@@ -812,7 +812,23 @@ try {
   expect(await clipped()).toBe(false)
   await page.mouse.move(border.x, border.y + 200)
   await expect(matching(grid(), gridPart.borderHover)).toHaveCount(0)
-  console.log('Results checks: a column border resizes its column, Escape restores it, and a double-click fits it.')
+  // The column menu copies metadata only; its Fit command also works from the keyboard and preserves other widths.
+  const idWidth = await widthOf(header('id')), fittedName = await header('name').boundingBox()
+  await page.mouse.move(fittedName.x + fittedName.width - 1, fittedName.y + fittedName.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(fittedName.x, fittedName.y + fittedName.height / 2, { steps: 5 })
+  await page.mouse.up()
+  await expect.poll(() => widthOf(header('name'))).toBeLessThan(initial / 2)
+  await header('name').click({ button: 'right' })
+  const columnMenu = page.getByRole('menu', { name: 'Query output', exact: true })
+  await columnMenu.getByRole('menuitem', { name: 'Copy Column Name', exact: true }).click()
+  expect(await clipboard()).toBe('name')
+  await page.keyboard.press('Shift+F10')
+  await columnMenu.getByRole('menuitem', { name: 'Fit Column', exact: true }).click()
+  await expect.poll(() => widthOf(header('name'))).toBeCloseTo(initial, 0)
+  expect(await widthOf(header('id'))).toBeCloseTo(idWidth, 0)
+  expect(await clipped()).toBe(false)
+  console.log('Results checks: column borders resize and fit, Escape restores sizing, and keyboard menus fit a column or copy only its name.')
 
   // 8. Save Results As: the grid's menu writes CSV through main's dialog, the extension picks tab-delimited text or JSON,
   // Ctrl+S in the grid opens the dialog, a long save shows its strip and Escape cancels it leaving no file, and a save
@@ -1350,11 +1366,8 @@ try {
   expect(await page.evaluate(() => document.activeElement !== document.body)).toBe(true)
   // A small run after the store emptied shows up again and closing it empties the ring.
   const closeResults = async () => {
-    await page.keyboard.press('F1')
-    await page.keyboard.type('close results')
-    await expect(quickInputActive(page)).toContainText('Query: Close Results')
-    await page.keyboard.press('Enter')
-    await expect(quickInput(page)).toHaveCount(0)
+    await resultsToolbar(page).getByRole('button', { name: 'Close Results', exact: true }).click()
+    await expect(outputTab(/^Results/)).toBeFocused()
   }
   await run('-- varia-fake: sets=W1*10 memory=0.1')
   await expect(resultsMemory).toHaveText('26 MB / 256 MB')
@@ -1394,7 +1407,7 @@ try {
   await page.keyboard.press('Shift+F10')
   const outputMenu = page.getByRole('menu', { name: 'Query output', exact: true })
   await expect(outputMenu).toBeVisible()
-  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Highlight', 'Compare with Previous Result', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size'])
+  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Highlight', 'Compare with Previous Result', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Results'])
   await page.keyboard.press('Escape')
   // Shift+F10 right after a click opens at the cell just clicked, though the grid paints it as active only on its next
   // frame: below it (or above, when there is no room), from its left edge (or to its right edge, near the window's).
@@ -1414,6 +1427,24 @@ try {
   await expect(cell(4, 2)).toHaveAttribute('aria-selected', 'false')
   await page.keyboard.press('Escape')
   await expect(outputMenu).toHaveCount(0)
+
+  await cell(3, 2).click({ button: 'right' })
+  await outputMenu.getByRole('menuitem', { name: 'Close Results', exact: true }).click()
+  await expect(page.locator('[data-result-grid]')).toHaveCount(0)
+  await expect(outputTab(/^Results/)).toBeFocused()
+  await outputTab(/^Messages/).click()
+  await expect(messageLines(page).first()).toBeVisible()
+
+  // Messages has its own copy of the output tabs, which leaves when Close Results selects the Results panel.
+  await run('-- varia-fake: sets=N1*3 messages=1')
+  await outputTab(/^Messages/).click()
+  await messages(page).click({ button: 'right' })
+  await outputMenu.getByRole('menuitem', { name: 'Close Results', exact: true }).click()
+  await expect(page.locator('[data-result-grid]')).toHaveCount(0)
+  await expect(outputTab(/^Results/)).toHaveAttribute('aria-selected', 'true')
+  await expect(outputTab(/^Results/)).toBeFocused()
+  await outputTab(/^Messages/).click()
+  await expect(messageLines(page).first()).toBeVisible()
 
   // 13b. Column profile and row size: the results toolbar's Profile opens a card per column, computed by the backend over
   // the set (results.profile), and closes from the panel; Row size draws a bar behind each row number with its bytes in
@@ -1641,13 +1672,17 @@ try {
     while (next && next.getBoundingClientRect().width === 0) next = next.nextElementSibling
     return !!next && search.getBoundingClientRect().right <= next.getBoundingClientRect().left + 0.5
   })
-  // With the box empty every group fits the toolbar, the Show toggles last.
-  const fits = () => page.evaluate(() => {
-    const tools = document.querySelector('[role="toolbar"][aria-label="Results tools"]')
+  // Compact mode hides the magnifier even after Monaco loads its more specific codicon display rule.
+  await expect(resultsToolbar(page).locator(part.resultsSearchIcon)).toBeHidden()
+  // With the box empty every group fits, including Close Results. Report geometry and fonts on a failure.
+  const toolsLayout = await resultsToolbar(page).evaluate(tools => {
     const last = [...tools.children].filter(child => child.getBoundingClientRect().width > 0).at(-1)
-    return last.getBoundingClientRect().right <= tools.getBoundingClientRect().right + 0.5
+    const right = tools.getBoundingClientRect().right, lastRight = last.getBoundingClientRect().right
+    return { fits: lastRight <= right + 0.5, right, lastRight, width: tools.clientWidth, scroll: tools.scrollWidth, font: getComputedStyle(tools).font,
+      groups: [...tools.children].filter(child => child.getBoundingClientRect().width > 0).map(child => ({ name: child.getAttribute('aria-label'), width: child.getBoundingClientRect().width })) }
   })
-  expect(await fits()).toBe(true)
+  expect(toolsLayout.fits, JSON.stringify(toolsLayout)).toBe(true)
+  await expect(resultsToolbar(page).getByRole('button', { name: 'Close Results', exact: true })).toBeInViewport({ ratio: 1 })
   await cell(0, 0).click()
   await page.keyboard.press('Control+F')
   await expect(searchBox).toBeFocused()

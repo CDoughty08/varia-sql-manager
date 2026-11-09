@@ -19,6 +19,8 @@ interface DocumentEntry { model: editor.ITextModel; subscription: Disposable; vi
 /** A text document opened from a value: its tab name, its text, and what it holds. */
 export interface TextDocument { readonly name: string; readonly text: string; readonly kind: Exclude<DocumentKind, 'sql'>; readonly file?: QueryDocument['file']; readonly eol?: LineEnding }
 export interface DocumentSnapshot { readonly documents: readonly QueryDocument[]; readonly activeId: string; readonly busy: boolean }
+export const closedQueryLimits = { count: 20, characters: 4_000_000 } as const
+interface ClosedQuery { readonly name: string; readonly baseName?: string; readonly text: string; readonly database: string; readonly lastServer?: string; readonly eol: LineEnding; readonly viewState?: editor.ICodeEditorViewState }
 type DocumentPatch = Partial<Pick<QueryDocument, 'name' | 'connectionId' | 'database' | 'file' | 'sessionNotice' | 'lastServer' | 'includeActualPlan' | 'includeLivePlan' | 'includeClientStatistics'>>
 type DocumentApi = Pick<VariaApi, 'saveSqlFile' | 'closeQuerySession'>
 /**
@@ -50,6 +52,8 @@ export interface DocumentOptions {
   readonly matchBrackets?: () => boolean
   /** A new query's line ending (the platform's); without it, Monaco's default (LF). */
   readonly newLineEnding?: LineEnding
+  /** A closed query remembers its server's name, never its live connection or SQL session. */
+  readonly server?: (connectionId: string) => string | undefined
 }
 /** The document options Tools › Options sets. Keep tabs (SSMS's default) inserts tab characters. */
 export function settingsDocumentOptions(values: () => SettingsValues): Required<Pick<DocumentOptions, 'modelOptions' | 'matchBrackets'>> {
@@ -78,6 +82,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
    * panel). It lapses when focus moves elsewhere first (`dropPendingFocus`), so an editor area shown later takes no focus.
    */
   private pendingFocus = ''
+  private pendingReveal?: { readonly id: string; readonly line: number; readonly revision: number }
   private textFocus?: (id: string) => boolean
   /** The document a closing active one hands over to: the next in its own editor group (`useCloseSuccessor`). */
   private successor?: (closing: string) => string | undefined
@@ -85,6 +90,8 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   private readonly matching = new Map<editor.IStandaloneCodeEditor, boolean>()
   private disposed = false
   private queryCounter = 1
+  private readonly closedQueries: ClosedQuery[] = []
+  private closedCharacters = 0
   /** `frame` schedules the next chunk of a large text document: an animation frame in the app. */
   constructor(private createModel: ModelFactory, private api: DocumentApi, private events: EventBus, private frame: (callback: () => void) => void = callback => { requestAnimationFrame(() => callback()) },
     private readonly options: DocumentOptions = {}) {
@@ -93,6 +100,33 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   get(id: string): QueryDocument | undefined { return this.getSnapshot().documents.find(document => document.id === id) }
   get active(): QueryDocument | undefined { return this.get(this.getSnapshot().activeId) }
   getModel(id: string): editor.ITextModel | undefined { return this.entries.get(id)?.model }
+  canReopenClosed(): boolean { return !this.disposed && this.closedQueries.length > 0 }
+  /** Reopens a safe unsaved copy: no file registration, connection, results, or previous SQL session follows it. */
+  reopenClosed(): QueryDocument | undefined {
+    if (this.disposed || this.getSnapshot().busy) return
+    const closed = this.closedQueries.pop()
+    if (!closed) return
+    this.closedCharacters -= closed.text.length
+    const { name, text, database, eol, viewState, baseName, lastServer } = closed
+    const document = this.add(name, text, database, undefined, true, undefined, undefined, false, eol,
+      { ...baseName !== undefined ? { baseName } : {}, ...lastServer ? { lastServer } : {} }, viewState)
+    this.focusActive()
+    return document
+  }
+  private keepClosed(id: string, entry: DocumentEntry): void {
+    const document = this.get(id)
+    if (!isQueryDocument(document) || !document || entry.model.getValueLength() > closedQueryLimits.characters) return
+    const view = this.editorOf(id) ?? (this.follower?.getModel() === entry.model ? this.follower : undefined)
+    if (view) this.rememberView(view)
+    const state = entry.viewState
+    // Only the first caret and viewport: contributions can retain large folding or extension state.
+    const viewState = state ? { ...state, cursorState: state.cursorState.slice(0, 1), contributionsState: {} } : undefined
+    const text = entry.model.getValue(), lastServer = document.connectionId ? this.options.server?.(document.connectionId) : document.lastServer
+    this.closedQueries.push({ name: document.name, ...document.baseName !== undefined ? { baseName: document.baseName } : {}, text, database: document.database,
+      ...lastServer ? { lastServer } : {}, eol: entry.model.getEOL() === '\r\n' ? 'crlf' : 'lf', viewState })
+    this.closedCharacters += text.length
+    while (this.closedQueries.length > closedQueryLimits.count || this.closedCharacters > closedQueryLimits.characters) this.closedCharacters -= this.closedQueries.shift()!.text.length
+  }
   /** Whether the document is a custom one (a table designer): no model, and its provider saves and closes it. */
   isCustom(id: string): boolean { return this.customs.has(id) }
   private provider(id: string): CustomDocumentProvider | undefined { const kind = this.customs.get(id); return kind ? this.providers.get(kind) : undefined }
@@ -149,7 +183,28 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     else this.pendingFocus = id
   }
   /** Focus went somewhere other than the editor area (Object Explorer, a toast): a focus still waiting for an editor lapses. */
-  dropPendingFocus(): void { this.pendingFocus = '' }
+  dropPendingFocus(): void { this.pendingFocus = ''; this.pendingReveal = undefined }
+  /** Reveals an execution's source only while its model still has that revision; a hidden group's editor can arrive later. */
+  revealLine(id: string, line: number, revision: number): boolean {
+    const entry = this.entries.get(id)
+    if (this.disposed || !entry || entry.model.getVersionId() !== revision || !Number.isInteger(line) || line < 1 || line > entry.model.getLineCount()) return false
+    this.pendingReveal = { id, line, revision }
+    this.pendingFocus = id
+    this.activate(id)
+    const view = this.editorOf(id) ?? (this.follower?.getModel() === entry.model ? this.follower : undefined)
+    if (view) this.applyPendingReveal(view, id)
+    this.focusActive()
+    return true
+  }
+  private applyPendingReveal(instance: editor.IStandaloneCodeEditor, id: string): void {
+    const pending = this.pendingReveal
+    if (!pending || pending.id !== id) return
+    this.pendingReveal = undefined
+    const model = this.entries.get(id)?.model
+    if (!model || instance.getModel() !== model || model.getVersionId() !== pending.revision) { if (this.pendingFocus === id) this.pendingFocus = ''; return }
+    instance.setPosition({ lineNumber: pending.line, column: 1 })
+    instance.revealLineInCenter(pending.line)
+  }
   /** Which document shows after the active one closes; without one (or when it names none open), the next in order. */
   useCloseSuccessor(successor: (closing: string) => string | undefined): Disposable {
     this.successor = successor
@@ -250,7 +305,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   /** Whether a large value is still being appended to the document: its text is not all there yet. */
   isFilling(id: string): boolean { return !!this.entries.get(id)?.fill }
   private add(name: string, text: string, database: string, connectionId: string | undefined, unsaved: boolean, file: QueryDocument['file'], kind?: Exclude<DocumentKind, 'sql'>, plain = false, eol?: LineEnding,
-    extra: Pick<QueryDocument, 'baseName' | 'lastServer' | 'pinned'> = {}): QueryDocument {
+    extra: Pick<QueryDocument, 'baseName' | 'lastServer' | 'pinned'> = {}, viewState?: editor.ICodeEditorViewState): QueryDocument {
     if (this.disposed) throw new Error('The document service is disposed.')
     const id = crypto.randomUUID()
     const model = this.createModel(text, documentUri(id), kindInfo[kind ?? 'sql'].language)
@@ -260,6 +315,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     if (eol) model.setEOL(eol === 'crlf' ? 1 : 0)
     const document: QueryDocument = { id, name, database, connectionId, file, dirty: unsaved && !!text, savedVersionId: unsaved && text ? null : model.getAlternativeVersionId(), ...kind ? { kind } : {}, ...extra }
     const subscription = model.onDidChangeContent(() => {
+      if (this.pendingReveal?.id === id) this.dropPendingFocus()
       const current = this.get(id), fill = this.entries.get(id)?.fill
       if (!current) return
       if (fill) { if (!fill.appending) fill.userEdited = true; return }
@@ -267,7 +323,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
       // SQL never enters a React snapshot; ordinary typing only publishes a dirty transition.
       if (dirty !== current.dirty) this.replace(id, { dirty })
     })
-    this.entries.set(id, { model, subscription, plain })
+    this.entries.set(id, { model, subscription, plain, viewState })
     const current = this.getSnapshot(), documents = [...current.documents]
     const firstUnpinned = document.pinned ? documents.findIndex(tab => !tab.pinned) : -1
     documents.splice(firstUnpinned < 0 ? documents.length : firstUnpinned, 0, document)
@@ -314,9 +370,11 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     this.shown.set(instance, entry ? id : '')
     instance.setModel(entry?.model ?? null)
     if (entry?.viewState) instance.restoreViewState(entry.viewState)
+    this.applyPendingReveal(instance, id)
   }
   activate(id: string): void {
     if (id && !this.entries.has(id) && !this.customs.has(id)) return
+    if (this.pendingReveal && this.pendingReveal.id !== id) this.dropPendingFocus()
     if (id === this.getSnapshot().activeId) {
       this.events.emit({ type: 'documents.activated', tabId: id })
       return
@@ -378,6 +436,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
       this.rememberView(instance)
       this.showModel(instance, id)
     }
+    this.applyPendingReveal(instance, id)
     if (this.pendingFocus === id) this.focusActive()
   }
   /** The editor no longer shows documents (its group closed): where it was is kept, and it lets go of the model. */
@@ -475,6 +534,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     if (isQueryDocument(this.get(id))) await this.endSession(id, transaction)
     if (this.disposed || this.entries.get(id) !== entry) return
     if (version !== entry.model.getVersionId()) throw new Error('The query changed while closing. Close it again to review the latest changes.')
+    this.keepClosed(id, entry)
     const current = this.getSnapshot(), next = this.closing(id)
     this.unshow(id, current.activeId === id ? next.activeId : undefined)
     entry.subscription.dispose()
@@ -496,6 +556,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   }
   /** A closing document leaves the editors: the following one moves to `next`, a group's shows nothing until its group shows another. */
   private unshow(id: string, next: string | undefined): void {
+    if (this.pendingReveal?.id === id) this.dropPendingFocus()
     for (const [instance, shown] of this.shown) {
       if (instance === this.follower) { if (next !== undefined) this.showModel(instance, next) }
       else if (shown === id) this.showModel(instance, '')
@@ -503,6 +564,9 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   }
   dispose(): void {
     this.disposed = true
+    this.pendingReveal = undefined
+    this.closedQueries.length = 0
+    this.closedCharacters = 0
     this.textFocus = undefined
     this.customs.clear()
     for (const instance of this.shown.keys()) instance.setModel(null)

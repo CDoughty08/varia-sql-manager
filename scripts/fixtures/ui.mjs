@@ -4,6 +4,7 @@
 // names in `part`, `gridPart` and `queryFacts`, used only from here and from page code that receives them as arguments.
 // tests/smoke-selectors.test.ts keeps Varia's class names out of the suites and checks that each one here still exists
 // in the renderer.
+import { expect } from '@playwright/test'
 
 /**
  * CSS selectors for page code (pass them in as arguments: they are plain strings) and for the parts without a role or
@@ -13,6 +14,7 @@ export const part = {
   menubar: '[role="menubar"][aria-label="Application menu"]',
   toolbar: '[role="toolbar"][aria-label="Standard"]',
   queryBar: '[role="toolbar"][aria-label="SQL Editor"]',
+  queryScope: '.query-scope',
   documentTabs: '[role="tablist"][aria-label="Query documents"]',
   tabShelfRows: '.query-shelf-rows',
   statusBar: 'footer[aria-label="Status bar"]',
@@ -62,6 +64,7 @@ export const part = {
   // Query output
   outputPanel: 'section[data-output-panel]',
   outputAnnouncer: '[data-output-announcer]',
+  resultsSearchIcon: '.results-search-icon',
   /** The results search box's count, drawn only: the toolbar's live region says the settled count (resultsSearchAnnouncer). */
   resultsSearchCount: '.results-search-count',
   outputToolbar: '.output-toolbar',
@@ -334,6 +337,7 @@ export const toolbarButton = (page, name) => toolbar(page).getByRole('button', n
 /** A query's own bar (SSMS's SQL Editor toolbar): Execute, Cancel, and the Connection group with the server and database lists. */
 export const queryBar = page => page.getByRole('toolbar', { name: 'SQL Editor', exact: true })
 export const queryBarButton = (page, name) => queryBar(page).getByRole('button', named(name))
+export const queryScope = page => queryBar(page).locator(part.queryScope)
 export const queryConnection = page => queryBar(page).getByRole('group', { name: 'Connection', exact: true })
 /** The active query's server and database lists: in its query bar, or in the classic toolbar when that is on. */
 export const queryServer = page => page.getByLabel('Query server', { exact: true })
@@ -385,6 +389,16 @@ export const editorGroups = page => page.locator(part.editorGroup)
 /** The grid or floating editor group showing a particular query. Query editors stay in the main window. */
 export const editorGroupForDocument = (page, name) => page.getByRole('region', { name: `Editor group: ${name}`, exact: true })
 export const editorGroupTabs = group => group.getByRole('tablist', { name: 'Query documents', exact: true }).getByRole('tab')
+export const newQueryInGroupButton = group => group.getByRole('button', { name: 'New query in this group', exact: true })
+/** A visible empty part of a tab strip, excluding tabs and their shelf controls. */
+export const emptyQueryStripPoint = group => group.getByRole('tablist', { name: 'Query documents', exact: true }).evaluate(strip => {
+  const box = strip.getBoundingClientRect(), y = box.top + Math.min(12, box.height / 2)
+  for (let x = box.right - 8; x > box.left + 8; x -= 12) {
+    const hit = strip.ownerDocument.elementFromPoint(x, y)
+    if (hit && strip.contains(hit) && !hit.closest('.dv-tab, button, input, [role="group"]')) return { x, y }
+  }
+  return null
+})
 /** One editor group's independent pinned or unpinned shelf, its row controls, and its row count. */
 export const tabShelf = (scope, pinned = false) => scope.locator(`[data-shelf-controls="${pinned ? 'pinned' : 'unpinned'}"]`)
 export const tabShelfControls = (scope, pinned = false) => scope.getByRole('group', { name: `${pinned ? 'Pinned' : 'Unpinned'} tab rows`, exact: true })
@@ -400,16 +414,20 @@ export const openDocument = documentTab
 /** Selects a document through its tab or its shelf's overflow list when the tab is outside the shown rows. */
 export const selectOpenDocument = async (page, name) => {
   const tab = documentTab(page, name)
-  if (await tab.getAttribute('data-tab-overflow') !== null) {
-    const section = await tab.getAttribute('data-tab-shelf') === 'pinned' ? 'pinned' : 'query'
-    const strip = tab.locator('xpath=ancestor::*[@role="tablist"][1]')
-    const overflow = strip.getByRole('button', { name: new RegExp(`^Show \\d+ more ${section} tabs?$`) })
-    const options = strip.getByRole('button', { name: `${section === 'pinned' ? 'Pinned' : 'Query'} tab options`, exact: true })
-    await overflow.or(options).click()
-    await strip.getByRole('group', { name: `More ${section} tabs`, exact: true }).getByRole('button', named(name)).click()
-    return
-  }
-  await tab.click()
+  // A close or resize can promote the tab after its overflow flag is read, disabling the old opener. Retry the whole
+  // choice with short ordinary clicks, so Playwright re-reads the shelf instead of waiting on a now-obsolete button.
+  await expect(async () => {
+    if (await tab.getAttribute('data-tab-overflow') !== null) {
+      const section = await tab.getAttribute('data-tab-shelf') === 'pinned' ? 'pinned' : 'query'
+      const strip = tab.locator('xpath=ancestor::*[@role="tablist"][1]')
+      const overflow = strip.getByRole('button', { name: new RegExp(`^Show \\d+ more ${section} tabs?$`) })
+      const options = strip.getByRole('button', { name: `${section === 'pinned' ? 'Pinned' : 'Query'} tab options`, exact: true })
+      const choice = strip.getByRole('group', { name: `More ${section} tabs`, exact: true }).getByRole('button', named(name))
+      if (!await choice.isVisible()) await overflow.or(options).click({ timeout: 2000 })
+      await choice.click({ timeout: 2000 })
+    } else await tab.click({ timeout: 2000 })
+    await expect(tab).toHaveAttribute('aria-selected', 'true', { timeout: 2000 })
+  }).toPass({ timeout: 15000, intervals: [100, 250, 500] })
 }
 export const pinDocumentButton = (page, name, pinned = false) => documentTabs(page).getByRole('button', { name: `${pinned ? 'Unpin' : 'Pin'} ${name}`, exact: true })
 /** Rename Tab's text box, in the tab being renamed. */

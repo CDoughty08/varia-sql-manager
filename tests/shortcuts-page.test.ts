@@ -236,6 +236,8 @@ describe('Options OK', () => {
     expect(result).toEqual({ ok: false, stage: 'shortcuts', message: 'Shortcuts were not saved: your saved shortcuts finished loading after you began editing, so your changes were made to the defaults. Choose Cancel and open Options again to edit them.' })
   })
   it('finds a gesture clash OK must refuse, on the platform it is on', () => {
+    // Blank-strip New Query and tab Rename share a double-click but are separate pointer targets, so Options can save.
+    for (const platform of ['win32', 'linux', 'darwin'] as const) expect(gestureClash(emptyShortcutFile, platform), platform).toBeUndefined()
     // #213: no choice the Mouse view offers clashes today, so the check guards future choices; the validator stands in.
     expect(gestureClash(file([], { gestures: { 'grid.addToSelection': 'alt' } }), 'win32')).toBeUndefined()
     const clashing = (_platform: Platform, choices: ReadonlyMap<string, unknown>) => choices.size ? [{ id: 'grid.addToSelection' as const, severity: 'error' as const, code: 'clash' as const, message: 'One press would do both.' }] : []

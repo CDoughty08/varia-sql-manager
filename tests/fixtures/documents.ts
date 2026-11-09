@@ -110,6 +110,10 @@ export class TestEditor {
   viewState: editor.ICodeEditorViewState | null = null
   readonly options: Record<string, unknown>[] = []
   focused = 0
+  position?: { lineNumber: number; column: number }
+  revealedLine?: number
+  setPosition(position: { lineNumber: number; column: number }): void { this.position = position }
+  revealLineInCenter(line: number): void { this.revealedLine = line }
   focus(): void { this.focused++ }
   updateOptions(options: Record<string, unknown>): void { this.options.push(options) }
   getModel(): editor.ITextModel | null { return this.model }

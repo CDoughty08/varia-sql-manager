@@ -22,7 +22,10 @@ The same search runs in two places, with the same options and results:
   concise, with index counts, result limits and timing under Search and index details. Index progress, errors and
   incomplete indexes remain visible. Escape or a click outside dismisses a popover; Escape returns focus to its button.
 - **The Search Objects tab** (View › Search Objects…, a server or database node's menu, or the palette), with a server picker
-  when more than one server is connected, which can also search *All servers* (see *All servers* below). Its hits are one tab stop on the selected hit: a click selects a hit, ↑ ↓,
+  when more than one server is connected, which can also search *All servers* (see *All servers* below). Opening it from a
+  database's menu scopes results to that database, shown in a removable Database chip. Clear the chip to search every
+  database; choosing another server or All servers also clears the scope. The index still covers the whole server.
+  Its hits are one tab stop on the selected hit: a click selects a hit, ↑ ↓,
   Page Up, Page Down (to the last hit in view first, then a page on), Home and End move the selection, and a double-click or Enter reveals the hit in Object Explorer, which
   shows without taking focus, so the keys go on walking the hits. ↑ on the first hit, and Escape, return to the box.
   Beside the hits, behind a sash, is the *details pane* (below them when the tab is narrower than 760 px): see

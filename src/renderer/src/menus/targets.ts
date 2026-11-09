@@ -53,6 +53,10 @@ export interface OutputTarget {
   readonly tabId: string
   readonly view: OutputView
   readonly resultIndex: number
+  /** The header or cell column captured when the menu opened (zero-based, without the row-number column). */
+  readonly column?: number
+  /** Refuses commands after this grid was replaced by another execution at the same result index. */
+  readonly result?: { readonly generation: number; readonly resultId: number }
   readonly selectedText: string
   readonly element: HTMLElement
 }
@@ -166,6 +170,11 @@ export interface TargetHit {
   readonly anchor?: Element
 }
 export type TargetProvider = (element: Element) => MenuTarget | null
+interface TargetRegistration {
+  readonly provider: TargetProvider
+  /** A composite widget keeps keyboard focus on its owner rather than an inner action button. */
+  readonly focus?: () => HTMLElement | undefined
+}
 export interface MenuTargetOptions {
   /** The bound query editor's container and the query it shows, when there is one. */
   readonly editor?: () => { readonly container: Element; readonly tabId: string } | undefined
@@ -184,12 +193,22 @@ export function selectedTextIn(element: Element): string {
   if (!selection?.anchorNode || !selection.focusNode || !element.contains(selection.anchorNode) || !element.contains(selection.focusNode)) return ''
   return selection.toString()
 }
+/** Grid columns count past the row-number column, which has ARIA index 1. */
+function outputColumn(element: Element, view: HTMLElement): number | undefined {
+  const cell = element.closest('[aria-colindex]'), value = cell?.getAttribute('aria-colindex')
+  const column = value && /^\d+$/.test(value) ? Number(value) - 2 : -1
+  return cell && view.contains(cell) && Number.isSafeInteger(column) && column >= 0 ? column : undefined
+}
 /** The Query Output view `element` is in: OutputPane marks each with its query, view, and result set. */
 export function outputTarget(element: Element): OutputTarget | undefined {
   const view = element.closest<HTMLElement>('[data-output-view]')
   const kind = view?.getAttribute('data-output-view') ?? '', tabId = view?.getAttribute('data-tab-id') ?? '', resultIndex = Number(view?.getAttribute('data-result-index') ?? 0)
   if (!view || !outputViews.has(kind) || !tabId || !Number.isInteger(resultIndex) || resultIndex < 0) return undefined
-  return { kind: 'output', tabId, view: kind as OutputView, resultIndex, selectedText: kind === 'grid' ? '' : selectedTextIn(view), element: view }
+  const column = kind === 'grid' ? outputColumn(element, view) : undefined
+  const generation = Number(view.getAttribute('data-result-generation')), resultId = Number(view.getAttribute('data-result-id'))
+  const result = kind === 'grid' && Number.isSafeInteger(generation) && generation > 0 && Number.isSafeInteger(resultId) && resultId > 0 ? { generation, resultId } : undefined
+  return { kind: 'output', tabId, view: kind as OutputView, resultIndex, selectedText: kind === 'grid' ? '' : selectedTextIn(view), element: view,
+    ...(column !== undefined ? { column } : {}), ...(result ? { result } : {}) }
 }
 
 /**
@@ -199,11 +218,11 @@ export function outputTarget(element: Element): OutputTarget | undefined {
  * where nothing has a menu. Providers run at event time, so a target is never stale.
  */
 export class MenuTargetService {
-  private readonly providers = new WeakMap<Element, TargetProvider>()
+  private readonly providers = new WeakMap<Element, TargetRegistration>()
   private readonly revealers = new WeakMap<Element, (item: Element) => void>()
   constructor(private readonly options: MenuTargetOptions = {}) {}
 
-  register(element: Element, provider: TargetProvider): void { this.providers.set(element, provider) }
+  register(element: Element, provider: TargetProvider, focus?: () => HTMLElement | undefined): void { this.providers.set(element, { provider, ...focus ? { focus } : {} }) }
   /** A widget with its own layout reveals its active descendant before the menu measures it. */
   registerReveal(widget: Element, reveal: (item: Element) => void): () => void {
     this.revealers.set(widget, reveal)
@@ -227,31 +246,33 @@ export class MenuTargetService {
       // Outlined while its menu is open: focus is in the menu, and Chromium hides an unfocused field's selection.
       if (field) return { target: inputTarget(field, this.options.commandEnabled ?? documentCommandEnabled), element: field, focus: field, mark: field }
       for (let node: Element | null = element; node; node = node.parentElement) {
-        const provider = this.providers.get(node)
-        if (provider) return this.hit(provider, node, element)
+        const registration = this.providers.get(node)
+        if (registration) return this.hit(registration, node, element)
       }
       const editor = this.options.editor?.()
       if (editor?.container.contains(element)) return element.closest(editorChrome) || !editor.tabId ? null : { target: { kind: 'editor', tabId: editor.tabId }, element: editor.container }
       // Dockview's focusable tab element wraps the panel's own tab content (a workspace pane's, or a document's), which
       // registers the target.
       const tab = element.closest('.dv-tab')?.querySelector('[data-pane-tab], [data-tab-id]')
-      const provider = tab && this.providers.get(tab)
-      if (provider) return this.hit(provider, tab, element)
+      const registration = tab && this.providers.get(tab)
+      if (registration) return this.hit(registration, tab, element)
       const output = outputTarget(element)
       if (!output) return undefined
       // Keyboard menus open below the grid's active cell, else its first cell.
       const anchor = output.view === 'grid' ? gridAnchor(output.element) ?? output.element.querySelector('.rg-c.is-act') ?? output.element.querySelector('.rg-c') ?? undefined : undefined
-      return { target: output, element: output.element, focus: output.element, ...(anchor ? { anchor } : {}) }
+      const column = output.column ?? (anchor ? outputColumn(anchor, output.element) : undefined)
+      const target = column === undefined ? output : { ...output, column }
+      return { target, element: output.element, focus: output.element, ...(anchor ? { anchor } : {}) }
     } catch (error) { onUnexpectedError(error); return undefined }
   }
 
-  private hit(provider: TargetProvider, registered: Element, from: Element): TargetHit | null {
+  private hit({ provider, focus: registeredFocus }: TargetRegistration, registered: Element, from: Element): TargetHit | null {
     const target = provider(registered)
     if (!target) return null
     const tab = registered.closest<HTMLElement>('.dv-tab') ?? undefined
     // The focusable part that was clicked (a tab's button), else the registered element or the Dockview tab around it.
     const inner = from.closest<HTMLElement>(focusable)
-    const focus = inner && registered.contains(inner) ? inner : registered.matches(focusable) ? registered as HTMLElement : tab
+    const focus = registeredFocus?.() ?? (inner && registered.contains(inner) ? inner : registered.matches(focusable) ? registered as HTMLElement : tab)
     return { target, element: tab ?? registered, mark: tab ?? registered, ...(focus ? { focus } : {}) }
   }
 }

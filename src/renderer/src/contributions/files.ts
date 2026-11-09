@@ -13,15 +13,24 @@ const frame = (callback: () => void) => { if (typeof requestAnimationFrame === '
  * File commands act on the tab a toolbar button or query tab menu names (`tabId`), otherwise on the active query. New
  * Query with Object Explorer focused opens on the selected node's server and database, as in SSMS.
  */
-export function filesContribution({ files, commands, documents, context, explorer, connections, recentFiles, quickInput, recovery }: Pick<Workbench, 'files' | 'commands' | 'documents'> & {
+export function filesContribution({ files, commands, documents, context, explorer, connections, recentFiles, quickInput, recovery, editorGroups }: Pick<Workbench, 'files' | 'commands' | 'documents'> & {
   readonly context: Pick<Workbench['context'], 'get'>; readonly explorer: Pick<Workbench['explorer'], 'queryTarget'>; readonly connections: Pick<Workbench['connections'], 'get'>
   readonly recentFiles?: ExternalStore<readonly RecentFile[]>; readonly quickInput?: Pick<Workbench['quickInput'], 'pick'>
   readonly recovery?: Pick<Workbench['recovery'], 'getSnapshot' | 'refresh' | 'openDialog' | 'flush'>
+  readonly editorGroups?: Pick<Workbench['editorGroups'], 'getSnapshot'>
 }, api: Pick<VariaApi, 'writeClipboardText' | 'revealSqlFile'> & Partial<Pick<VariaApi, 'clearRecentFiles'>>): Disposable {
   // The tab menu, or a key pressed on a focused tab (Delete, Ctrl+W), names its tab; otherwise the active document.
   const tabOf = (context?: CommandArgs) => context?.tabId ?? documents.getSnapshot().activeId
   const fileOf = (context?: CommandArgs) => documents.get(tabOf(context))?.file
-  const newQuery = () => {
+  const newQuery = (args?: CommandArgs) => {
+    if (args?.editorGroup) {
+      const group = editorGroups?.getSnapshot().groups.find(group => group.id === args.editorGroup)
+      if (!group) return
+      const source = group.active ? documents.get(group.active) : documents.active
+      files.newFile(source?.connectionId, source?.database)
+      documents.focusActive()
+      return
+    }
     const target = context.get().activePanel === 'explorer' ? explorer.queryTarget() : undefined
     if (!target) { files.newFile(); return }
     files.newFile(target.connectionId, target.database ?? connections.get(target.connectionId)?.database)
@@ -40,6 +49,7 @@ export function filesContribution({ files, commands, documents, context, explore
   }
   const registrations = [
     commands.register('file.new', { when: () => files.canRun(), run: newQuery }),
+    commands.register('file.reopenClosed', { when: () => files.canRun() && documents.canReopenClosed(), run: () => { documents.reopenClosed() } }),
     commands.register('file.open', { when: () => files.canRun(), run: () => files.open() }),
     commands.register('file.save', { when: context => files.canSave(context?.tabId), run: context => files.save(context?.tabId) }),
     commands.register('file.saveAs', { when: context => files.canSave(context?.tabId), run: context => files.save(context?.tabId, true) }),

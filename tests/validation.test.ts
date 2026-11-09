@@ -231,6 +231,9 @@ describe('IPC validation', () => {
       expect(queryEventSchema.safeParse({ type: 'resultSet.opened', descriptor: { ...descriptor, columns: [{ ...column, collation }] } }).success, JSON.stringify(collation)).toBe(false)
   })
   it('validates query events from the backend strictly', () => {
+    expect(queryEventSchema.safeParse({ type: 'messages', messages: [{ text: 'SQL error', kind: 'error', line: 16 }] }).success).toBe(true)
+    for (const line of [0, -1, 1.5, 2_147_483_648, '16', null])
+      expect(queryEventSchema.safeParse({ type: 'messages', messages: [{ text: 'SQL error', kind: 'error', line }] }).success).toBe(false)
     expect(queryEventSchema.safeParse({ type: 'messages', messages: [{ text: 'a', kind: 'info' }, { text: 'printed', kind: 'print' }, { text: 'Warning: Null value is eliminated by an aggregate or other SET operation.', kind: 'server' }, { text: 'Msg 8134, Level 16, State 1, Line 1\nDivide by zero error encountered.', kind: 'error' }] }).success).toBe(true)
     for (const messages of [[], ['a'], [{ text: 'a', kind: 'warning' }], [{ text: 'a', kind: 'info', extra: 1 }], [{ text: 'x'.repeat(1_000_001), kind: 'info' }]])
       expect(queryEventSchema.safeParse({ type: 'messages', messages }).success, JSON.stringify(messages).slice(0, 60)).toBe(false)

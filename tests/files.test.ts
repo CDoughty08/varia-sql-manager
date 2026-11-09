@@ -7,6 +7,7 @@ import { filesContribution, watchExternalChanges } from '../src/renderer/src/con
 import { deferred, documentFixture, type SaveResponse } from './fixtures/documents'
 import { connectionInfo, connectionOptions, manualTimers } from './fixtures/workbench'
 import { contextRecord } from '../src/shared/commands/context-keys'
+import type { EditorGroupSnapshot } from '../src/renderer/src/services/editor-groups'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
@@ -34,13 +35,44 @@ function fixture() {
   const explorer: { panel: '' | 'explorer'; target?: { connectionId: string; database?: string } } = { panel: '' }
   const context = { get: () => contextRecord('win32', { activePanel: explorer.panel }) }
   const connections = { get: (id: string) => id === 'server-b' ? { ...connectionInfo('server-b'), options: connectionOptions, database: 'sales' } : undefined }
-  const contribution = filesContribution({ files, commands, documents: doc.documents, context, connections, explorer: { queryTarget: () => explorer.target } }, { writeClipboardText: async () => ({ ok: true, value: undefined }), revealSqlFile: async () => ({ ok: true, value: undefined }) })
+  const groups = { groups: [] as EditorGroupSnapshot['groups'], activeGroup: '' }
+  const contribution = filesContribution({ files, commands, documents: doc.documents, context, connections, explorer: { queryTarget: () => explorer.target }, editorGroups: { getSnapshot: () => groups } }, { writeClipboardText: async () => ({ ok: true, value: undefined }), revealSqlFile: async () => ({ ok: true, value: undefined }) })
   doc.documents.create('SQLQuery1.sql', '', 'master', 'server-a')
   cleanups.push(() => { contribution.dispose(); commands.dispose(); files.dispose(); doc.documents.dispose() })
-  return { ...doc, api, queries, files, commands, contribution, explorer, options }
+  return { ...doc, api, queries, files, commands, contribution, explorer, options, groups }
 }
 
 describe('file commands', () => {
+  it('creates a group-header query on that group\'s shown server and database despite focus elsewhere', async () => {
+    const { documents, commands, groups, explorer } = fixture()
+    const shown = documents.create('group.sql', 'SELECT 1', 'Orders', 'server-b')
+    documents.create('elsewhere.sql', '', 'master', 'server-a')
+    groups.groups = [{ id: 'g2', active: shown.id, documents: [shown.id], floating: false }]
+    explorer.panel = 'explorer'
+    explorer.target = { connectionId: 'server-a', database: 'WrongDatabase' }
+    await commands.run('file.new', { editorGroup: 'g2' })
+    expect(documents.active).toMatchObject({ connectionId: 'server-b', database: 'Orders' })
+    const before = documents.getSnapshot().documents.length
+    await commands.run('file.new', { editorGroup: 'gone' })
+    expect(documents.getSnapshot().documents).toHaveLength(before)
+  })
+  it('reopens only a successful close as a detached copy, releases its file and keeps close guards', async () => {
+    const { documents, commands, model, api } = fixture()
+    const file = openedFile('closed-file')
+    const original = documents.create(file.name, file.content, 'Orders', 'server-a', false, file)
+    model(original.id).edit('SELECT changed')
+    api.confirmClose.mockResolvedValueOnce({ ok: true, value: 'cancel' })
+    await commands.run('file.close')
+    expect(commands.canRun('file.reopenClosed')).toBe(false)
+    await commands.run('file.close')
+    expect(api.releaseSqlFile).toHaveBeenCalledWith('closed-file')
+    expect(commands.canRun('file.reopenClosed')).toBe(true)
+    await commands.run('file.reopenClosed')
+    expect(documents.active).toMatchObject({ name: file.name, database: 'Orders', dirty: true })
+    expect([documents.active?.file, documents.active?.connectionId]).toEqual([undefined, undefined])
+    expect(model(documents.active!.id).getValue()).toBe('SELECT changed')
+    expect(commands.canRun('file.reopenClosed')).toBe(false)
+  })
   it.each(['Actual.SQLPLAN', 'Exported.xml'])('opens %s as a disconnected plan and keeps its file registration and line endings', async name => {
     const { documents, api, commands, model } = fixture()
     api.openSqlFiles.mockResolvedValueOnce({ ok: true, value: [{ ...openedFile('plan', 'C:/' + name), kind: 'sqlplan', content: '<ShowPlanXML/>', eol: 'crlf' }] })
