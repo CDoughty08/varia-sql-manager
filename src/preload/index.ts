@@ -17,6 +17,11 @@ const request = <M extends RpcMethod>(method: M, params: RpcMethods[M]['params']
 const connectRequest = <M extends 'connections.connect' | 'connections.databases'>(method: M, params: RpcMethods[M]['params'], context?: ConnectContext): Promise<ApiResult<RpcMethods[M]['result']>> => ipcRenderer.invoke('varia:request', method, params, context)
 
 const api: VariaApi = {
+  languageStatus: () => request('language.status', {}),
+  languageComplete: params => request('language.complete', params),
+  languageHover: params => request('language.hover', params),
+  languageRefresh: params => request('language.refresh', params),
+  languageClose: documentId => request('language.close', { documentId }),
   parsePlan: xml => request('plans.parse', { xml }),
   estimatePlan: params => request('plans.estimate', params),
   platform: process.platform,

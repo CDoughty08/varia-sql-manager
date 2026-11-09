@@ -32,7 +32,8 @@ env:
 # the benchmarks run side by side, so a failure in one hides nothing in the others and the run takes as long as its
 # longest job. Every pull request runs every platform, drafts included: the repository is public, so runners cost nothing.
 # What a public repository does pay in is concurrency (20 jobs at once across the account, 5 of them macOS), so a pull request
-# runs 12 jobs: no job repeats another's work. Report-only work stays off pull requests: Linux's 1024x768 repeats of suites the
+# runs 13 jobs: a third Windows smoke shard keeps language-service coverage within the per-shard time budget; no job repeats
+# another's work. Report-only work stays off pull requests: Linux's 1024x768 repeats of suites the
 # Windows shards already run at that size run on main only, and the desktop benchmarks run daily (bench-desktop.yml).
 # docs/ci.md measures all of this and holds the rules.
 jobs:
@@ -86,7 +87,7 @@ jobs:
         group: [1, 2, 3]
     runs-on: ubuntu-24.04
     # Room for every timed step below (tests/ci-workflow.test.ts) plus the setup before them.
-    timeout-minutes: 35
+    timeout-minutes: 40
     services:
       sql:
         image: mcr.microsoft.com/mssql/server:2022-latest
@@ -115,7 +116,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      # Only group 1 runs node (the live vitest suites and the Kerberos check); the others run only dotnet.
+      # Only group 1 runs node (live vitest, bundled SQL Tools Service and Kerberos); the others run only dotnet.
       - uses: actions/setup-node@v7
         if: matrix.group == 1
         with:
@@ -139,6 +140,13 @@ jobs:
         if: matrix.group == 1 && (success() || failure())
         timeout-minutes: 5
         run: npx vitest run tests/*-live.test.ts
+      - name: Bundled SQL language service against SQL Server
+        # Runs after other checks fail too, provided their Release build exists; the SQL container is disposable.
+        if: matrix.group == 1 && (success() || failure()) && hashFiles('backend/Varia.Backend.Tests/bin/Release/net10.0/Varia.Backend.Tests.dll') != ''
+        timeout-minutes: 5
+        run: |
+          node scripts/prepare-sqltools-service.mjs --rid linux-x64
+          dotnet run --no-build --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --sql-language-live
       - name: Integrated authentication without a Kerberos ticket
         # Linux connects with integrated authentication through GSSAPI (SqlClient's managed SNI). With no ticket, the backend
         # must say to run kinit (AUTH_KERBEROS) with the failure's details, not refuse the mode or show SqlClient's bare
@@ -214,6 +222,10 @@ jobs:
       - name: Electron smoke tests
         timeout-minutes: 25
         run: xvfb-run -a -s "-screen 0 1600x1000x24" node scripts/smoke-shards.mjs ${{ matrix.shard }}/3
+      - name: Live SQL language widgets and window focus
+        if: matrix.shard == 3 && (success() || failure()) && steps.build.outcome == 'success' && steps.display.outcome == 'success'
+        timeout-minutes: 5
+        run: xvfb-run -a -s "-screen 0 1600x1000x24" node scripts/language-services-live-smoke.mjs
       - name: Scripting smoke test on a 1024x768 display
         # Windows runners have a 1024x768 display, and Script As dialogs and nested submenus must fit it everywhere. The Windows
         # shards run this suite at that size on every pull request, so Linux repeats it on main only. After a smoke failure
@@ -237,14 +249,14 @@ jobs:
           retention-days: 7
 
   smoke-windows:
-    name: Smoke (Windows ${{ matrix.shard }}/2)
+    name: Smoke (Windows ${{ matrix.shard }}/3)
     # The smoke suites assert Windows/Linux window chrome (controls overlay, hidden menu bar, Ctrl shortcuts), so on macOS
     # they fail at the first check; they run there once its native menu bar and Cmd shortcuts are covered.
     if: github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3]
     runs-on: windows-latest
     # Room for every timed step below (tests/ci-workflow.test.ts) plus the setup before them.
     timeout-minutes: 45
@@ -268,7 +280,7 @@ jobs:
         run: npm run build:smoke
       - name: Electron smoke tests
         timeout-minutes: 25
-        run: node scripts/smoke-shards.mjs ${{ matrix.shard }}/2
+        run: node scripts/smoke-shards.mjs ${{ matrix.shard }}/3
       - name: Upload smoke-test screenshots
         if: failure()
         uses: actions/upload-artifact@v7

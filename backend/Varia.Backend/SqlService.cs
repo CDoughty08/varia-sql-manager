@@ -11,6 +11,7 @@ using Varia.Backend.Activity;
 using Varia.Backend.Entra;
 using Varia.Backend.Explorer;
 using Varia.Backend.Live;
+using Varia.Backend.Language;
 using Varia.Backend.Protocol;
 using Varia.Backend.Results;
 using Varia.Backend.Plans;
@@ -26,6 +27,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     public static readonly string[] MethodNames =
     [
         "plans.parse", "plans.estimate",
+        "language.status", "language.complete", "language.hover", "language.refresh", "language.close",
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
@@ -84,6 +86,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private readonly LiveService live;
     private readonly SessionActions sessionActions;
     private readonly EntraService entra;
+    private readonly LanguageServiceBroker language;
     private readonly object sessionGate = new();
     private readonly ServerDiscovery discovery = new();
     private readonly ResultStore store;
@@ -166,6 +169,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         Methods = hooks ? [.. MethodNames, SynthesizeMethod] : MethodNames;
         // Registers the Entra provider with SqlClient before any connection string can name it.
         entra = EntraService.Shared;
+        language = new LanguageServiceBroker([new SqlToolsLanguageService(LanguageConnectionString)]);
         Open = async (connection, token) =>
         {
             await entra.OpenPooledAsync(connection, token, OpenConnection);
@@ -305,7 +309,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         // Kill Process takes no metadata slot: it runs at once under its own gates, as object actions do under theirs.
         "activity.kill" => RequestLane.Actions,
         "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.rowIds" or "entra.cache.clear"
-            or "live.update" => RequestLane.Control,
+            or "live.update" or "language.status" or "language.refresh" or "language.close" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
         _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
         _ => RequestLane.Metadata
@@ -339,7 +343,12 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "connections.databases" => await DiscoverDatabasesAsync(Read<ConnectOptions>(parameters, json), Token(context)),
         "connections.discover" => await discovery.DiscoverAsync(Read<DiscoveryArgs>(parameters, json)),
         "connections.preview" => ConnectionSettings.Preview(Read<ConnectOptions>(parameters, json)),
-        "connections.disconnect" => Disconnect(Read<ConnectionArgs>(parameters, json)),
+        "connections.disconnect" => await DisconnectAsync(Read<ConnectionArgs>(parameters, json)),
+        "language.status" => GetLanguageStatus(parameters, json),
+        "language.complete" => await language.CompleteAsync(Read<LanguageRequest>(parameters, json), Token(context)),
+        "language.hover" => (object?)await language.HoverAsync(Read<LanguageRequest>(parameters, json), Token(context)) ?? null!,
+        "language.refresh" => await language.RefreshAsync(Read<LanguageRefreshRequest>(parameters, json), Token(context)),
+        "language.close" => await language.CloseAsync(Read<LanguageCloseArgs>(parameters, json).DocumentId, Token(context)),
         "connections.identity" => await IdentityAsync(Read<IdentityArgs>(parameters, json), Token(context)),
         "databases.list" => await DatabasesAsync(Read<ConnectionArgs>(parameters, json), Token(context)),
         "tables.columns" => await ColumnsAsync(Read<TableArgs>(parameters, json), Token(context)),
@@ -372,7 +381,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "actions.describe" => await actions.DescribeAsync(Read<ActionDescribeArgs>(parameters, json), Token(context)),
         "actions.script" => await actions.ScriptAsync(Read<ActionArgs>(parameters, json), Token(context)),
         // A long step's 3211 progress goes out as droppable action.progress EVENTs on the request (ActionProgress).
-        "actions.execute" => await actions.ExecuteAsync(Read<ActionArgs>(parameters, json), Token(context), context is null ? null : value => context.SendEvent(value, droppable: true)),
+        "actions.execute" => await ExecuteActionWithLanguagePausedAsync(Read<ActionArgs>(parameters, json), Token(context), context is null ? null : value => context.SendEvent(value, droppable: true)),
         "entra.cache.clear" => ClearEntra(Read<EntraCacheArgs>(parameters, json)),
         "ssis.describe" => await ssis.DescribeAsync(Read<SsisDescribeArgs>(parameters, json), Token(context)),
         "ssis.execute" => await ssisActions.ExecuteAsync(Read<SsisExecuteArgs>(parameters, json), Token(context)),
@@ -567,7 +576,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         return new(identity.State == KerberosState.Valid ? KerberosProbe.Bounded(identity.Principal) : null);
     }
 
-    private object Disconnect(ConnectionArgs args)
+    private async Task<object> DisconnectAsync(ConnectionArgs args)
     {
         var removed = connections.TryRemove(args.ConnectionId, out var connectionString);
         profiles.TryRemove(args.ConnectionId, out _);
@@ -595,6 +604,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 using var connection = new SqlConnection(pooled);
                 SqlConnection.ClearPool(connection);
             }
+        await language.ForgetConnectionAsync(args.ConnectionId);
         return new { Disconnected = removed };
     }
 
@@ -703,6 +713,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// server stays connected. Clearing them closes the idle ones; busy ones are discarded when they return. True when it cleared a pool.</summary>
     public bool ClearPoolsFor(string connectionId, string database)
     {
+        language.Reset();
         if (!pools.TryGetValue(connectionId, out var used)) return false;
         var cleared = false;
         foreach (var pooled in used.Keys)
@@ -2149,6 +2160,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     public void Dispose()
     {
         memoryTimer?.Dispose();
+        language.Dispose();
         explorer.Dispose();
         search.Dispose();
         scripting.Dispose();

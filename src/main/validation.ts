@@ -10,6 +10,7 @@ import { scriptRequestSchema } from '../shared/scripting/schema.ts'
 import { actionDescribeSchema, actionExecuteRequestSchema, actionExecuteResultSchema, actionScriptRequestSchema } from '../shared/actions/schema.ts'
 import { ssisCatalogSetupSchema, ssisDescribeSchema, ssisExecuteSchema } from '../shared/ssis/schema.ts'
 import { activityDetailsRequestSchema, activityKillRequestSchema } from '../shared/activity/schema.ts'
+import { languageCloseSchema, languageRequestSchema, languageCompletionsSchema, languageHoverSchema, languageStatusSchema, languageRefreshRequestSchema, languageRefreshResultSchema } from '../shared/language-service'
 
 // Identifiers are used verbatim by the backend, so they are never trimmed here (a database may be named ' x').
 const name = z.string().min(1).max(128).refine(value => value.trim().length > 0)
@@ -18,6 +19,11 @@ const tooLargeScript = 'The script is too large to execute (limit: 1,000,000 cha
 const connectionId = z.uuid()
 const database = name
 export const requestSchemas = {
+  'language.status': z.object({}).strict(),
+  'language.complete': languageRequestSchema,
+  'language.hover': languageRequestSchema,
+  'language.refresh': languageRefreshRequestSchema,
+  'language.close': languageCloseSchema,
   'plans.parse': planParseSchema,
   'plans.estimate': estimatedPlanRequestSchema,
   'system.health': z.object({}).strict(),
@@ -58,6 +64,11 @@ export const requestSchemas = {
 const principal = z.string().min(1).max(256).regex(/^[^\p{Cc}\p{Cf}]+$/u)
 /** Answers main checks before the renderer sees them: the backend is trusted, but these come from native code. */
 export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
+  'language.status': languageStatusSchema,
+  'language.complete': languageCompletionsSchema,
+  'language.hover': languageHoverSchema,
+  'language.refresh': languageRefreshResultSchema,
+  'language.close': z.object({ closed: z.boolean() }).strict(),
   'plans.parse': planDocumentSchema,
   'plans.estimate': estimatedPlanResultSchema,
   'connections.identity': z.object({ principal: principal.optional() }).strict(),

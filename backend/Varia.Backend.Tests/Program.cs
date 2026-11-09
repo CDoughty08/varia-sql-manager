@@ -2,6 +2,12 @@ using System.Text.Json;
 using Varia.Backend;
 using Varia.Backend.Tests;
 
+if (args is [LspTransportChecks.FixtureArgument])
+{
+    await LspTransportChecks.FixtureAsync();
+    return;
+}
+
 // The child processes of ConnectionFailureChecks' native Kerberos checks.
 if (args is [ConnectionFailureChecks.ProbeArgument])
 {
@@ -38,6 +44,24 @@ void Check(bool condition, string name)
     Interlocked.Increment(ref passed);
 }
 // CI's live jobs (`--live-group k/n`) run only their share of the live suites (LiveGroups), and no offline checks: Check (ubuntu) runs those.
+if (args is ["--lsp-transport-checks"])
+{
+    await LspTransportChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " LSP transport checks.");
+    return;
+}
+if (args is ["--sql-language-checks"])
+{
+    await SqlLanguageChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " SQL language checks.");
+    return;
+}
+if (args is ["--sql-language-live"])
+{
+    await SqlLanguageLiveChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " live SQL language checks.");
+    return;
+}
 var liveGroup = LiveGroups.Parse(args);
 // Focused SQL Server lanes: their scratch and permission checks are required, never an offline-only or skipped success.
 if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--server-files-live" or "--seams-live" or "--new-database-live" or "--action-progress-live" or "--attach-live" or "--restore-live" or "--logins-live" or "--login-listing-live" or "--database-state-live" or "--delete-live" or "--detach-live" or "--rename-database-live" or "--login-actions-live" or "--login-delete-live" or "--login-properties-live" or "--securables-live" or "--login-kinds-live")])
@@ -281,6 +305,8 @@ if (liveGroup is null)
     // The offline suites, timed (OfflineSuites: weights, lanes and the suites that must run alone).
     static Func<Task> Sync(Action run) => () => { run(); return Task.CompletedTask; };
     (string Name, Func<Task> Run)[] offlineSuites = [
+        ("LspTransport", () => LspTransportChecks.RunAsync(Check)),
+        ("SqlLanguage", () => SqlLanguageChecks.RunAsync(Check)),
         ("Protocol", Sync(() => ProtocolChecks.Run(Check))),
         ("Page", Sync(() => PageChecks.Run(Check))),
         ("Host", Sync(() => HostChecks.Run(Check))),

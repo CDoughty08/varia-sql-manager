@@ -1,5 +1,6 @@
 import { isAbsolute, join } from 'node:path'
 import type { SpawnSpec } from './connection'
+import { sqlToolsEnvironment } from './sqltools-runtime'
 
 /** The packaged self-contained backend, or the framework-dependent build under `dotnet` in development (Release for
  *  smoke tests, so they exercise the build CI checks). No credentials or ports ever go into the arguments.
@@ -7,7 +8,8 @@ import type { SpawnSpec } from './connection'
  *  which runs tests/fixtures/backend.mjs under the absolute VARIA_TEST_NODE. `locale` (the OS's) reaches the backend as
  *  VARIA_LOCALE: scripts date their headers in it, as SSMS does, and macOS GUI launches have no LANG to read. */
 export function backendSpawnSpec(options: { packaged: boolean; root: string; resourcesPath: string; platform: NodeJS.Platform; smokeTest: boolean; env?: NodeJS.ProcessEnv; locale?: string }): SpawnSpec {
-  const o = { ...options, env: options.locale ? { ...options.env ?? process.env, VARIA_LOCALE: options.locale } : options.env }
+  const runtimeEnv = sqlToolsEnvironment(options)
+  const o = { ...options, env: options.locale ? { ...runtimeEnv, VARIA_LOCALE: options.locale } : runtimeEnv }
   if (o.packaged) return { command: join(o.resourcesPath, 'backend', o.platform === 'win32' ? 'Varia.Backend.exe' : 'Varia.Backend'), args: [], cwd: o.resourcesPath, env: withoutTestHooks(o.env), packaged: true }
   const fake = o.smokeTest ? o.env?.VARIA_TEST_BACKEND : undefined
   if (fake) {

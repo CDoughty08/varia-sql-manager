@@ -36,7 +36,7 @@ describe('menu model', () => {
       expect(outline('edit.advanced', platform)).toEqual(['edit.makeUppercase', 'edit.makeLowercase', '-', 'editor.toggleWhitespace', 'editor.toggleWordWrap', '-', 'edit.commentLines', 'edit.uncommentLines',
         'edit.toggleLineComment', '-', 'edit.increaseIndent', 'edit.decreaseIndent'])
       expect(outline('edit.bookmarks', platform)).toEqual(['edit.toggleBookmark', '-', 'edit.previousBookmark', 'edit.nextBookmark', '-', 'edit.clearBookmarks', '-', 'edit.previousBookmarkInDocument', 'edit.nextBookmarkInDocument'])
-      expect(outline('edit.intellisense', platform)).toEqual(['edit.insertSnippet', 'edit.surroundWith'])
+      expect(outline('edit.intellisense', platform)).toEqual(['edit.insertSnippet', 'edit.surroundWith', '-', 'edit.refreshIntelliSense'])
       expect(outline('view', platform)).toEqual(['workbench.showCommands', 'workbench.quickOpen', 'workbench.search', 'explorer.searchObjects', '-', 'layout.save', 'layout.load', 'layout.reset', '-', 'activity.open', 'ssis.allOperations', '-', 'submenu:view.theme', '-',
         'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', '-', 'developer.reloadWindow', 'developer.toggleDevTools'])
       expect(outline('query', platform)).toEqual(['submenu:query.connection', 'query.changeDatabase', '-', 'query.execute', 'query.cancel', 'query.includeActualPlan', 'query.includeLivePlan', 'query.estimatePlan', 'query.estimateSessionPlan', 'query.includeClientStatistics', 'query.resetClientStatistics'])
@@ -295,14 +295,15 @@ describe('application menu template', () => {
     expect(item(template('win32').items, 'window.close')).toMatchObject({ label: 'Exit', role: 'quit', accelerator: 'Alt+F4' })
     expect(item(template('linux').items, 'window.close')).toMatchObject({ label: 'Quit', role: 'quit', accelerator: 'Ctrl+Q' })
   })
-  it('never gives Reload a key: Ctrl+R and ⌘R toggle the results pane', () => {
+  it('never gives Reload a key: Ctrl/⌘+R toggles results and Ctrl/⌘+Shift+R refreshes IntelliSense', () => {
     const reloadKeys = /^(?:Ctrl|Cmd|CmdOrCtrl|CommandOrControl|Control|Command)\+(?:Shift\+)?R$/i
     for (const platform of platforms) {
       const entries = flatten(template(platform).items)
       const reload = entries.filter(entry => entry.role === 'reload' || entry.role === 'forceReload' || entry.id?.startsWith('developer.reloadWindow'))
       expect(reload.map(entry => [entry.id, entry.role, entry.accelerator]), platform).toEqual([['developer.reloadWindow', undefined, undefined]])
       const keyed = entries.filter(entry => typeof entry.accelerator === 'string' && reloadKeys.test(entry.accelerator))
-      expect(keyed.map(entry => [entry.id, entry.role, entry.registerAccelerator]), platform).toEqual([['view.toggleResultsPane', undefined, false]])
+      expect(keyed.map(entry => [entry.id, entry.role, entry.registerAccelerator]), platform).toEqual([['edit.refreshIntelliSense', undefined, false], ['view.toggleResultsPane', undefined, false]])
+      expect(item(template(platform).items, 'edit.refreshIntelliSense')).toMatchObject({ accelerator: platform === 'darwin' ? 'Cmd+Shift+R' : 'Ctrl+Shift+R', registerAccelerator: false })
     }
     expect(item(template('darwin').items, 'view.toggleResultsPane')).toMatchObject({ label: 'Show Results Pane', type: 'checkbox', accelerator: 'Cmd+R' })
   })

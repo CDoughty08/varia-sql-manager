@@ -668,6 +668,12 @@ export const commandCatalog = {
     keybindings: [{ key: 'mod+k mod+s', native: true, bridge: true }],
     menus: [{ menu: 'edit.intellisense', group: '1_snippets', order: 2, mnemonic: 's' }, { menu: 'editor.context', group: '0_snippets', order: 2, mnemonic: 's' }]
   },
+  'edit.refreshIntelliSense': {
+    title: 'Refresh Local Cache', category: 'Edit', icon: 'refresh', keywords: ['intellisense', 'schema', 'metadata', 'cache'],
+    precondition: 'backendReady && !documentBusy', unavailableHint: 'Connect a SQL query to refresh its IntelliSense cache.',
+    keybindings: [{ key: 'mod+shift+r', when: 'editorFocus && !inputFocus' }],
+    menus: [{ menu: 'edit.intellisense', group: '2_cache', order: 1, mnemonic: 'r' }]
+  },
   // SSMS's Activity Monitor (docs/activity-monitor.md): one per connection, opened from a server's menu, View or the
   // palette. SSMS's Ctrl+Alt+A is AltGr on Windows and Linux layouts (reservedReason), so only macOS has its key, ⌥⌘A.
   'activity.open': {

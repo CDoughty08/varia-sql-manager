@@ -1,6 +1,7 @@
 appId: com.varia.sqlmanager
 productName: Varia SQL Manager
 afterPack: build/after-pack.cjs
+beforePack: build/sqltools-service-check.cjs
 directories:
   output: dist
 files:
@@ -11,6 +12,9 @@ extraResources:
 artifactName: Varia-SQL-Manager-${version}-${os}-${arch}.${ext}
 win:
   target: [nsis, portable]
+  extraResources:
+    - from: artifacts/sqltools-service/win-${arch}
+      to: sqltools-service
 nsis:
   oneClick: false
   perMachine: false
@@ -22,8 +26,14 @@ portable:
 mac:
   target: [dmg, zip]
   identity: null
+  extraResources:
+    - from: artifacts/sqltools-service/osx-${arch}
+      to: sqltools-service
 linux:
   target: AppImage
+  extraResources:
+    - from: artifacts/sqltools-service/linux-${arch}
+      to: sqltools-service
   category: Development
   # electron-builder's default desktop entry runs AppRun --no-sandbox; main refuses to run without the sandbox.
   executableArgs: []

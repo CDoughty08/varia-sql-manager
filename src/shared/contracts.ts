@@ -27,6 +27,7 @@ import type { LiveEnd, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult }
 import type { ActivityDetailsRequest, ActivityDetailsResult, ActivityKillRequest, ActivityKillResult } from './activity/schema.ts'
 import type { PlanDocument } from './plans'
 import type { ShortcutFile } from './commands/shortcut-schema'
+import type { DatabaseProviderId, LanguageRequest, LanguageCompletions, LanguageHover, LanguageStatus, LanguageRefreshRequest, LanguageRefreshResult } from './language-service'
 
 export interface AdvancedConnectionOptions {
   commandTimeout: number
@@ -80,6 +81,8 @@ export interface ConnectionOptions {
  * server profile probed at connect, and are absent when the probe failed.
  */
 export interface ConnectionInfo {
+  /** Older SQL Server connections omit this. Language features default those connections to sqlserver. */
+  providerId?: DatabaseProviderId
   id: string; server: string; database: string; serverVersion: string; displayName?: string; color?: string; commandTimeout?: number; historyWarning?: string; generation: number
   /** Set by main: the saved entry's environment label, which a connect without one kept. */
   environment?: string
@@ -363,6 +366,11 @@ export interface ExplorerChildrenResult {
  *  Windows, while the default credential cache holds a valid ticket; absent on Windows and without a ticket or GSSAPI. */
 export interface IntegratedIdentity { principal?: string }
 export interface RpcMethods {
+  'language.status': { params: Record<string, never>; result: LanguageStatus }
+  'language.complete': { params: LanguageRequest; result: LanguageCompletions }
+  'language.hover': { params: LanguageRequest; result: LanguageHover }
+  'language.refresh': { params: LanguageRefreshRequest; result: LanguageRefreshResult }
+  'language.close': { params: { documentId: string }; result: { closed: boolean } }
   'plans.parse': { params: { xml: string }; result: PlanDocument }
   'plans.estimate': { params: EstimatedPlanRequest; result: EstimatedPlanResult }
   'system.health': { params: Record<string, never>; result: BackendHealth }
@@ -533,6 +541,11 @@ export interface ShortcutsApi {
 }
 
 export interface VariaApi {
+  languageStatus(): Promise<ApiResult<LanguageStatus>>
+  languageComplete(request: LanguageRequest): Promise<ApiResult<LanguageCompletions>>
+  languageHover(request: LanguageRequest): Promise<ApiResult<LanguageHover>>
+  languageRefresh(request: LanguageRefreshRequest): Promise<ApiResult<LanguageRefreshResult>>
+  languageClose(documentId: string): Promise<ApiResult<{ closed: boolean }>>
   parsePlan(xml: string): Promise<ApiResult<PlanDocument>>
   /** Compile only, on a bounded isolated connection; cancel with cancel(requestId). */
   estimatePlan(params: EstimatedPlanRequest): Promise<ApiResult<EstimatedPlanResult>>

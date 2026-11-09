@@ -60,6 +60,8 @@ jobs:
         run: npm run typecheck
       - name: Build application
         run: npx electron-vite build
+      - name: Prepare pinned SQL Tools Service
+        run: npm run sqltools:prepare -- --rid ${{ inputs.rid }}
       # ReadyToRun (the project sets it for a RID-specific publish), restored from packages.lock.json's entry for the RID.
       - name: Publish self-contained backend
         run: dotnet publish backend/Varia.Backend/Varia.Backend.csproj -c Release -r ${{ inputs.rid }} --self-contained true -p:RestoreLockedMode=true -o artifacts/release-backend
