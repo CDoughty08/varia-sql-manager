@@ -201,7 +201,9 @@ describe('context menu model', () => {
     expect(contextCommandIds('documentTab.context')).toEqual(['file.save', 'file.saveAs', 'file.close', 'file.closeOthers', 'file.closeAll', 'file.reopenClosed', 'file.copyPath', 'file.revealInFolder', 'document.moveLeft', 'document.moveRight', 'document.rename', 'editor.splitRight', 'editor.splitDown', 'editor.moveToNextGroup', 'editor.moveToPreviousGroup', 'editor.increaseTabRows', 'editor.decreaseTabRows', 'editor.float', 'editor.dock'])
     expect(contextCommandIds('dockTab.context')).toEqual(['pane.dockLeft', 'pane.dockRight', 'pane.dockTop', 'pane.dockBottom', 'pane.tabWithExplorer', 'pane.tabWithEditor', 'pane.tabWithResults', 'pane.tabWithMessages', 'pane.tabWithPlan', 'pane.float', 'pane.dock', 'pane.moveToNewWindow', 'pane.moveToMainWindow', 'pane.close', 'window.togglePanelTabs'])
     expect(contextCommandIds('input.context')).toEqual(['edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'])
-    for (const menu of contextMenuIds) expect(contextCommandIds(menu), menu).toEqual(commandIds.filter(id => menuIds.some(inner => menuRoots(inner).includes(menu) && commandDescriptor(id).menus?.some(placement => placement.menu === inner))))
+    // Ownership is static: avoid rewalking the whole menu graph for every command in every context menu.
+    const rootsByMenu = new Map(menuIds.map(menu => [menu, new Set(menuRoots(menu))] as const))
+    for (const menu of contextMenuIds) expect(contextCommandIds(menu), menu).toEqual(commandIds.filter(id => commandDescriptor(id).menus?.some(placement => rootsByMenu.get(placement.menu)?.has(menu))))
     expect(contextMenuRequestSchema.safeParse({ token: 1, menu: 'editor.context', x: 0, y: 0, visible: ['query.execute'], disabled: [], checked: [] }).success).toBe(true)
     expect(contextMenuRequestSchema.safeParse({ token: 1, menu: 'editor.context', x: 0, y: 0, visible: ['file.save'], disabled: [], checked: [] }).success).toBe(false)
   })
