@@ -1554,8 +1554,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
-        // Filters hold a key per column they compare and what the one running needs (FilterBytes a row at most).
-        var working = ViewSorter.WorkingBytes(rows, keys.Length + ViewSorter.FilterColumns(filters)) + (filters.Length > 0 ? ViewSorter.FilterBytes * rows : 0);
+        // A key per column the filters compare and per sort key (a Value key on a filtered column is the filter's), and what the
+        // running filter needs (FilterBytes a row at most).
+        var working = ViewSorter.WorkingBytes(rows, ViewSorter.KeyCount(keys, filters)) + (filters.Length > 0 ? ViewSorter.FilterBytes * rows : 0);
         var kept = 4 * rows + ResultStore.ViewOverhead;
         if (!store.TryReserve(set.Budget, working + kept, false, out _))
             throw new RequestException("TOO_LARGE", filters.Length > 0
