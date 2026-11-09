@@ -31,7 +31,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
-        "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.identify", "results.rowIds", "results.findRows", "results.diff", "results.search", "results.profile", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.index", "explorer.search", "results.copy", "results.export",
+        "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.identify", "results.rowIds", "results.findRows", "results.diff", "results.search", "results.profile", "results.pivot", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.index", "explorer.search", "results.copy", "results.export",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
         "ssis.describe", "ssis.execute", "ssis.catalogSetup"
@@ -301,7 +301,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     public RequestLane LaneOf(string method) => method switch
     {
         "query.execute" or "plans.estimate" => RequestLane.Query,
-        "results.read" or "results.copy" or "results.export" or "results.view" or "results.identify" or "results.findRows" or "results.diff" or "results.search" or "results.profile" => RequestLane.Results,
+        "results.read" or "results.copy" or "results.export" or "results.view" or "results.identify" or "results.findRows" or "results.diff" or "results.search" or "results.profile" or "results.pivot" => RequestLane.Results,
         "explorer.children" or "explorer.peek" or "explorer.peekDependencies" or "explorer.index" or "explorer.search" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
         "ssis.describe" or "ssis.execute" or "ssis.catalogSetup" => RequestLane.Ssis,
@@ -369,6 +369,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "results.diff" => await DiffAsync(Read<ResultsDiffArgs>(parameters, json), context),
         "results.search" => await SearchAsync(Read<ResultsSearchArgs>(parameters, json), Token(context)),
         "results.profile" => await ProfileAsync(Read<ResultsProfileArgs>(parameters, json), Token(context)),
+        "results.pivot" => await PivotAsync(Read<ResultsPivotArgs>(parameters, json), context),
         "results.copy" => await jobs.CopyAsync(Read<ResultsCopyArgs>(parameters, json), context),
         "results.export" => await jobs.ExportAsync(Read<ResultsExportArgs>(parameters, json), context),
         "explorer.children" => await explorer.ChildrenAsync(Read<ExplorerChildrenArgs>(parameters, json), Token(context)),
@@ -1816,6 +1817,101 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             }
         }
         finally { store.Return(left.Budget, working + cellBytes); }
+    }
+
+    /// <summary>results.pivot: groups and aggregates a complete result's rows (ResultPivoter), or its view's, off the frame
+    /// loop, charging its keys and figures to the result's query budget while it runs, and stores the pivot as a new result of
+    /// the query, released with its others, or at once when its answer is not sent (a CANCEL or the deadline came first).</summary>
+    private async Task<ResultsPivotResult> PivotAsync(ResultsPivotArgs args, RequestContext? context)
+    {
+        var token = Token(context);
+        if (args.ResultId == 0 || args.ViewId == 0 || args.Rows is not { Length: <= ResultPivoter.MaxRowFields } || args.Values is not { Length: >= 1 and <= ResultPivoter.MaxValues })
+            throw new RequestException("INVALID_PARAMS", "A pivot takes up to 8 row columns and 1 to 16 values.");
+        var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        var spec = PivotSpecOf(args, set);
+        if (!set.IsComplete) throw new RequestException("RESULT_OPEN", "Pivot the results after they finish loading.");
+        var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
+        var pages = set.SealedSnapshot();
+        long rows = 0;
+        foreach (var page in pages) rows += page.Rows;
+        var working = ResultPivoter.WorkingBytes(rows, ResultPivoter.KeyColumns(spec));
+        const string tooLarge = "There is not enough result memory to pivot these rows. Close other results and try again.";
+        if (!store.TryReserve(set.Budget, working, false, out _)) throw new RequestException("TOO_LARGE", tooLarge);
+        long figures = 0;
+        bool Reserve(long bytes)
+        {
+            if (!store.TryReserve(set.Budget, bytes, false, out _)) return false;
+            figures += bytes;
+            return true;
+        }
+        try
+        {
+            PivotModel model;
+            try { model = await Task.Run(() => ResultPivoter.Build(set, pages, view?.Order, spec, token, Reserve), token); }
+            catch (PivotTooLargeException) { throw new RequestException("TOO_LARGE", tooLarge); }
+            if (set.IsReleased) throw Unavailable(args.ResultId);
+            if (view is not null && !store.HasView(view)) throw ViewClosed();
+            var (columns, wires, lengths) = PivotOutput.Shape(set, pages, spec, model);
+            var pivot = store.Open(set.Budget, set.Index, set.BatchNumber, set.Iteration, "pivot", columns, wires, lengths: lengths)
+                ?? throw new RequestException("TOO_LARGE", tooLarge);
+            void Release()
+            {
+                if (store.Release([pivot.ResultId]) > 0) ReportMemory();
+            }
+            try
+            {
+                await Task.Run(() => PivotOutput.Write(pivot, set, pages, spec, model, token), token);
+                var answer = new ResultsPivotResult(pivot.Describe(), model.Rows, model.RowGroups, model.RowGroupsShown, model.ColumnGroups, model.ColumnGroupsShown, model.Approximate);
+                // Main owns the pivot only once it has the answer: one not sent goes at once.
+                if (context is not null) context.Unsent = context.Dropped = Release;
+                return answer;
+            }
+            catch
+            {
+                Release();
+                throw;
+            }
+        }
+        finally { store.Return(set.Budget, working + figures); }
+    }
+
+    /// <summary>A pivot request checked against its result: distinct row columns, a column group that is not one of them, and
+    /// values whose aggregates suit their columns (SUM and AVG only of numbers).</summary>
+    private static PivotSpec PivotSpecOf(ResultsPivotArgs args, ResultSetBuffer set)
+    {
+        var count = set.Columns.Count;
+        bool Shown(int column) => column >= 0 && column < count && !ResultTextWriter.Hidden(set.Columns[column]);
+        for (var i = 0; i < args.Rows.Length; i++)
+            if (!Shown(args.Rows[i]) || Array.IndexOf(args.Rows, args.Rows[i], 0, i) >= 0)
+                throw new RequestException("INVALID_PARAMS", "Each row column must be a distinct column of the result.");
+        if (args.Column is { } grouped && (!Shown(grouped) || args.Rows.Contains(grouped)))
+            throw new RequestException("INVALID_PARAMS", "The column group must be a column of the result that is not a row column.");
+        var values = new PivotValue[args.Values.Length];
+        for (var i = 0; i < values.Length; i++)
+        {
+            var value = args.Values[i] ?? throw new RequestException("INVALID_PARAMS", "A pivot value needs an aggregate.");
+            var aggregate = value.Aggregate switch
+            {
+                "count" => PivotAggregate.Count,
+                "countDistinct" => PivotAggregate.CountDistinct,
+                "sum" => PivotAggregate.Sum,
+                "avg" => PivotAggregate.Avg,
+                "min" => PivotAggregate.Min,
+                "max" => PivotAggregate.Max,
+                _ => throw new RequestException("INVALID_PARAMS", "A pivot value's aggregate is count, countDistinct, sum, avg, min or max.")
+            };
+            if (value.Column is not { } column)
+            {
+                if (aggregate != PivotAggregate.Count) throw new RequestException("INVALID_PARAMS", "Only Count can count rows without a column.");
+                values[i] = new PivotValue(aggregate, -1);
+                continue;
+            }
+            if (!Shown(column)) throw new RequestException("INVALID_PARAMS", "A pivot value's column must be a column of the result.");
+            if (aggregate is PivotAggregate.Sum or PivotAggregate.Avg && !ResultPivoter.IsNumeric(set.Columns[column], set.Wires[column]))
+                throw new RequestException("INVALID_PARAMS", "Sum and Average need a numeric column.");
+            values[i] = new PivotValue(aggregate, column);
+        }
+        return new PivotSpec([.. args.Rows], args.Column ?? -1, values);
     }
 
     /// <summary>The most views one results.viewClose names (src/shared/ipc/wire/protocol.ts limits.views.maxClose).</summary>

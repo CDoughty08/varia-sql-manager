@@ -366,6 +366,7 @@ output.context, for a results grid with selected cells
     &Clear Highlight  ++++
     Clear &All Highlights  ----
   Co&mpare with Previous Result  ++++
+  Pivot Res&ults…  ++++
   ---
   F&it Column  ----
   ---
@@ -410,6 +411,7 @@ output.context, for a results grid without
     &Clear Highlight  ++++
     Clear &All Highlights  ----
   Co&mpare with Previous Result  ----
+  Pivot Res&ults…  ++++
   ---
   F&it Column  ----
   ---

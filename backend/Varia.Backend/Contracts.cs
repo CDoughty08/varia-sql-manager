@@ -126,6 +126,16 @@ internal sealed record ResultsDiffArgs(uint Left, uint Right, bool Exact = false
 /// only by collation (case or trailing spaces, say).</summary>
 internal sealed record ResultsDiffResult(ResultDescriptor Descriptor, string? Key, long Same, long Changed, long Added, long Removed, long Soft, bool Approximate,
     string[] LeftOnly, string[] RightOnly);
+/// <summary>One results.pivot value: Aggregate "count", "countDistinct", "sum", "avg", "min" or "max" of Column; "count"
+/// without a column counts rows.</summary>
+internal sealed record PivotValueArgs(string Aggregate, int? Column = null);
+/// <summary>results.pivot: groups a complete result's rows (ViewId's, in its order, when given) by up to 8 Rows columns and
+/// a Column column, and stores 1 to 16 Values of each group as a new result of the query (PivotOutput).</summary>
+internal sealed record ResultsPivotArgs(uint ResultId, int[] Rows, PivotValueArgs[] Values, int? Column = null, uint? ViewId = null);
+/// <summary>Descriptor is the pivot's result (kind "pivot"); Rows the source rows pivoted; RowGroups and ColumnGroups how many
+/// distinct groups there were, of which the first RowGroupsShown and ColumnGroupsShown are shown; Approximate that a value
+/// compared was a truncated value's stored prefix.</summary>
+internal sealed record ResultsPivotResult(ResultDescriptor Descriptor, long Rows, long RowGroups, long RowGroupsShown, long ColumnGroups, long ColumnGroupsShown, bool Approximate);
 /// <summary>results.search: the cells whose grid text contains Text (1 to 1,024 characters), searched through ViewId's order
 /// when it is given (rows are then view positions). It returns up to MaxMatches (1 to 10,000) of them in whole rows: from
 /// FromRow on, or with Backward the last ones before FromRow.</summary>

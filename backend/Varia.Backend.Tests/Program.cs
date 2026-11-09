@@ -327,6 +327,7 @@ if (liveGroup is null)
         ("Diff", Sync(() => DiffChecks.Run(Check))),
         ("ResultSearch", Sync(() => ResultSearchChecks.Run(Check))),
         ("Profile", Sync(() => ProfileChecks.Run(Check))),
+        ("Pivot", Sync(() => PivotChecks.Run(Check))),
         ("CellLength", Sync(() => CellLengthChecks.Run(Check))),
         ("Text", () => TextChecks.RunAsync(Check)),
         ("Explorer", () => ExplorerChecks.RunAsync(Check)),

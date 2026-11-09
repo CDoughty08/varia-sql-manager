@@ -516,6 +516,8 @@ export const outputStatus = page => outputPane(page).locator(part.outputStatus)
 /** The column profile panel beside a run's grids, and one column's card in it. */
 export const columnProfile = page => page.getByRole('complementary', { name: 'Column profile', exact: true })
 export const profileCard = (page, column) => columnProfile(page).getByRole('region', { name: column, exact: true })
+/** The pivot panel beside the grids (PivotPanel): its source, row groups, column group and values, then Build Pivot. */
+export const pivotPanel = page => page.getByRole('complementary', { name: 'Pivot', exact: true })
 /** A profile card's figures, label to value ("NULLs" → "20 (20%)"). */
 export const profileFigures = card => card.locator('dl > div').evaluateAll(items => Object.fromEntries(items.map(item => [item.querySelector('dt').textContent, item.querySelector('dd').textContent])))
 export const jobProgress = page => outputPane(page).locator(part.jobProgress)

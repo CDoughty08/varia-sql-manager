@@ -2,7 +2,7 @@
 // requests are validated with portRequestSchema; backend payloads main forwards are validated with the schemas below.
 import { z } from 'zod'
 import { clientStatisticsSchema } from '../client-statistics'
-import type { BackendStatus, MemoryOrder, QueryEvent, ResultsCloseResult, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsProfileResult, ResultsReadResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult } from '../contracts'
+import type { BackendStatus, MemoryOrder, QueryEvent, ResultsCloseResult, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsReadResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult } from '../contracts'
 import { maxQueryPlanDocuments } from '../plans'
 import { liveSubscribeParamsSchema, liveUpdateParamsSchema, testLiveSubscribeParamsSchema, testLiveUpdateParamsSchema, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../live/schema'
 import { backendDescriptorSchema } from './descriptors'
@@ -33,6 +33,12 @@ const resolvedFilterSchema = z.union([
   z.object({ op: z.literal('duplicates'), columns: distinctColumns }).strict()
 ])
 
+/** One pivot value: an aggregate of a column; only count may leave the column out (it then counts rows). */
+export const pivotValueSchema = z.union([
+  z.object({ aggregate: z.enum(['count', 'countDistinct', 'sum', 'avg', 'min', 'max']), column }).strict(),
+  z.object({ aggregate: z.literal('count') }).strict()
+])
+
 /** The port schema around a set of live schemas (buildLiveSchemas): the shipped ones, or a test catalogue's. */
 export const buildPortRequestSchema = (live: { subscribe: z.ZodType<LiveSubscribeParams>; update: z.ZodType<LiveUpdateParams> }) => z.discriminatedUnion('t', [
   z.object({ t: z.literal('read'), rid: u31, generation, resultId: u32, firstRow: count, maxRows: z.number().int().min(1).max(65_536), credit: z.number().int().min(limits.credit.min).max(limits.credit.max), viewId: u32.optional() }).strict(),
@@ -59,6 +65,11 @@ export const buildPortRequestSchema = (live: { subscribe: z.ZodType<LiveSubscrib
   }).strict(),
   // Column profiles (results.profile): aggregates over a result's rows or a view's; `cancel` stops one.
   z.object({ t: z.literal('profile'), rid: u31, generation, resultId: u32, columns: z.array(z.number().int().min(0).max(limits.page.maxColumns - 1)).max(limits.profile.maxColumns).refine(columns => new Set(columns).size === columns.length, 'Columns must be distinct.'), viewId: u32.optional() }).strict(),
+  // A pivot (results.pivot) of a result's rows or a view's, stored as a new result the port then owns; `cancel` stops one.
+  z.object({
+    t: z.literal('pivot'), rid: u31, generation, resultId: u32, rows: z.array(column).max(limits.pivot.maxRowFields).refine(columns => new Set(columns).size === columns.length, 'Columns must be distinct.'),
+    column: column.optional(), values: z.array(pivotValueSchema).min(1).max(limits.pivot.maxValues), viewId: u32.optional()
+  }).strict().refine(request => request.column === undefined || !request.rows.includes(request.column), 'The column group is not a row column.'),
   // Live subscriptions (docs/ipc.md): a stream acknowledged with `credit`, ended with `cancel`, changed with liveUpdate.
   z.object({ t: z.literal('live'), rid: u31, generation, params: live.subscribe }).strict(),
   z.object({ t: z.literal('liveUpdate'), rid: u31, generation, params: live.update }).strict()
@@ -116,7 +127,11 @@ export const profileResultSchema = z.object({
     histogram: z.object({ basis: z.enum(['value', 'time', 'chars', 'bytes']), low: z.number(), high: z.number(), counts: z.array(count).length(limits.profile.bins) }).strict().optional()
   }).strict()).max(limits.profile.maxColumns)
 }).strict()
-export type PortEndResult = ResultsDiffResult | ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | ResultsViewResult | ResultsViewCloseResult | ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsSearchResult | ResultsProfileResult | LiveEnd | LiveUpdateResult
+/** A results.pivot answer as the backend sends it (its descriptor without the generation, which main adds). */
+export const pivotResultSchema = z.object({
+  descriptor: backendDescriptorSchema.extend({ kind: z.literal('pivot') }), rows: count, rowGroups: count, rowGroupsShown: count, columnGroups: count, columnGroupsShown: count, approximate: z.boolean()
+}).strict().refine(result => result.rowGroupsShown <= Math.min(result.rowGroups, limits.pivot.maxRowGroups) && result.columnGroupsShown <= Math.min(result.columnGroups, limits.pivot.maxColumnGroups), 'Shown groups are among the groups.')
+export type PortEndResult = ResultsPivotResult | ResultsDiffResult | ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | ResultsViewResult | ResultsViewCloseResult | ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsSearchResult | ResultsProfileResult | LiveEnd | LiveUpdateResult
 
 const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'server', 'print', 'error']), line: z.number().int().min(1).max(2_147_483_647).optional() }).strict()
 const session = { spid: z.number().int().min(0).max(32767), login: z.string().max(128).optional() }

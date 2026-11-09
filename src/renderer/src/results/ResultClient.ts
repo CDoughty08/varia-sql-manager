@@ -1,7 +1,7 @@
 // The renderer's access to stored query results (the PR7 grid contract). Rows stay in the backend; the results worker
 // reads and decodes pages, and the UI thread receives only windows of display text. Live subscriptions run through the
 // same worker and port: their tables are ordinary stored results, opened with the same handles.
-import type { ApiResult, BackendStatus, IdentityBy, QueryEvent, QueryResult, ResultColumn, ResultDescriptor, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ResolvedViewFilter, TruncationReason, VariaApi, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
+import type { ApiResult, BackendStatus, IdentityBy, PivotValueSpec, QueryEvent, QueryResult, ResultColumn, ResultDescriptor, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ResolvedViewFilter, TruncationReason, VariaApi, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport } from '../../../shared/ipc/port-messages'
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
@@ -100,11 +100,18 @@ export interface ResultHandle extends Disposable {
    *  `ResultClient.open`. On a view, compares its result. `context`: unchanged rows around each change (default 1, -1 for
    *  all); `exact`: text compared character for character instead of by collation. */
   diff(right: ResultHandle, o?: { exact?: boolean; context?: number; signal?: AbortSignal }): Promise<ResultsDiffResult>
+  /** Pivots the rows (a view's rows, in its order and with its filters, through a view) in the backend (results.pivot): grouped
+   *  by up to `limits.pivot.maxRowFields` distinct `rows` columns and an optional `column` column by their collation, with
+   *  1 to `limits.pivot.maxValues` values each, stored as a new result whose descriptor the answer carries: open it with
+   *  `ResultClient.open`. The result must have finished loading. */
+  pivot(spec: PivotSpec, o?: { signal?: AbortSignal }): Promise<ResultsPivotResult>
   /** The cells whose grid text contains `text`, searched in the backend over the stored rows (results.search; a view's
    *  positions on a view): every match counted, and a run of up to `maxMatches` in whole rows from `fromRow`, or with
    *  `backward` the last before it. Aborting the signal stops the search. */
   search(text: string, fromRow: number, o?: SearchOptions): Promise<ResultsSearchResult>
 }
+/** A pivot's layout: row-group columns, an optional column-group column and its values. */
+export interface PivotSpec { readonly rows: readonly number[]; readonly column?: number; readonly values: readonly PivotValueSpec[] }
 export interface SearchOptions { readonly maxMatches?: number; readonly backward?: boolean; readonly signal?: AbortSignal }
 /** A sorted view: the rows that were sealed when it was built (`complete` when that was all of them), in key order;
  *  `approximate` when a key compared a stored prefix or an estimated length. It never grows. */
@@ -398,6 +405,25 @@ export class ResultClient implements Disposable {
         const response = await this.request(id => ({ type: 'identity', id, key, request: { method: 'diff', right: right.key.resultId, exact: o.exact ?? false, context } }), o.signal, late)
         if (response.type !== 'identity') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
         return response.result as ResultsDiffResult
+      },
+      pivot: async (spec, o = {}) => {
+        this.usable(state)
+        const columns = state.columns.length, valid = (column: number | undefined) => column !== undefined && Number.isInteger(column) && column >= 0 && column < columns
+        // Main counts a request its schema refuses toward closing the port, so a bad pivot never leaves the page.
+        if (spec.rows.length > wire.pivot.maxRowFields || new Set(spec.rows).size !== spec.rows.length || !spec.rows.every(valid)
+          || (spec.column !== undefined && (!valid(spec.column) || spec.rows.includes(spec.column)))
+          || spec.values.length < 1 || spec.values.length > wire.pivot.maxValues || spec.values.some(value => value.column === undefined ? value.aggregate !== 'count' : !valid(value.column)))
+          throw new ResultError('INVALID_PARAMS', 'A pivot takes up to 8 distinct row columns, a column group that is not one of them, and 1 to 16 values of the result\'s columns.')
+        // A pivot answered just before the abort reached the worker is a stored result nobody holds: it is released.
+        const late = (message: WorkerResponse) => {
+          if (message.type !== 'identity') return
+          const { descriptor } = message.result as ResultsPivotResult
+          void this.release([{ generation: descriptor.generation, resultId: descriptor.resultId }]).catch(() => {})
+        }
+        const request = { method: 'pivot' as const, rows: [...spec.rows], ...(spec.column === undefined ? {} : { column: spec.column }), values: spec.values.map(value => ({ ...value })) }
+        const response = await this.request(id => ({ type: 'identity', id, key: state.key, request }), o.signal, late)
+        if (response.type !== 'identity') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
+        return response.result as ResultsPivotResult
       },
       search: async (text, fromRow, o = {}) => {
         this.usable(state)

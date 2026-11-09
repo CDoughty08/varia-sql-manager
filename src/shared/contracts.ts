@@ -152,8 +152,8 @@ export interface ResultDescriptor {
   index: number
   batchNumber: number
   iteration: number
-  /** `diff`: a unified diff of two other results of the query (results.diff). */
-  kind: 'rows' | 'executionPlan' | 'diff'
+  /** `diff`: a unified diff of two other results of the query (results.diff); `pivot`: a pivot of one (results.pivot). */
+  kind: 'rows' | 'executionPlan' | 'diff' | 'pivot'
   columns: ResultColumn[]
   rowsRead: number
   rowsStored: number
@@ -279,6 +279,19 @@ export interface ResultsDiffResult {
   descriptor: ResultDescriptor; key: string | null; same: number; changed: number; added: number; removed: number; soft: number; approximate: boolean
   leftOnly: string[]; rightOnly: string[]
 }
+/** What a pivot value computes over each cell's rows: COUNT(column) (COUNT(*) without a column), COUNT(DISTINCT column),
+ *  SUM, AVG, MIN or MAX. */
+export type PivotAggregate = 'count' | 'countDistinct' | 'sum' | 'avg' | 'min' | 'max'
+/** One pivot value; only `count` may leave out its column (it then counts rows). */
+export interface PivotValueSpec { aggregate: PivotAggregate; column?: number }
+/** results.pivot: groups a complete result's rows (through `viewId`'s order and filters when given) by up to
+ *  `limits.pivot.maxRowFields` distinct `rows` columns and an optional `column` column (not one of them), and stores 1 to
+ *  `limits.pivot.maxValues` `values` of each group as a new result of the query. SUM and AVG take only numeric columns. */
+export interface ResultsPivotParams { resultId: number; rows: number[]; column?: number; values: PivotValueSpec[]; viewId?: number }
+/** `descriptor` is the pivot's result (kind `pivot`); `rows` the source rows pivoted; `rowGroups` and `columnGroups` the
+ *  distinct groups there were, of which the first `rowGroupsShown` and `columnGroupsShown` are shown; `approximate` that a
+ *  value grouped or compared was a long value's stored prefix. */
+export interface ResultsPivotResult { descriptor: ResultDescriptor; rows: number; rowGroups: number; rowGroupsShown: number; columnGroups: number; columnGroupsShown: number; approximate: boolean }
 /** results.search: the cells whose grid text contains `text` (1 to `limits.search.maxText` characters), through `viewId`'s
  *  order when given (rows are then view positions). Up to `maxMatches` of them come back in whole rows: from `fromRow` on,
  *  or with `backward` the last ones before `fromRow`. Text columns compare by their collation; others ignore case. */
@@ -449,6 +462,8 @@ export interface PortMethods {
   'results.search': { params: ResultsSearchParams; result: ResultsSearchResult }
   /** Aggregates over a result's rows or a view's, for the column profile panel: never rows. */
   'results.profile': { params: ResultsProfileParams; result: ResultsProfileResult }
+  /** A pivot of a result's rows or a view's, grouped by collation, stored as a new result. */
+  'results.pivot': { params: ResultsPivotParams; result: ResultsPivotResult }
   /** A live subscription (docs/ipc.md): its EVENTs are credited, one unacknowledged at a time, and it ends only by CANCEL,
    *  a disconnect, a backend shutdown, a failure or its source ending. */
   'live.subscribe': { params: LiveSubscribeParams; result: LiveEnd }

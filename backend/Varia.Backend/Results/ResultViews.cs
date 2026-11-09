@@ -276,7 +276,7 @@ internal static class ViewSorter
         return kept;
     }
 
-    private static Key Build(ResultSetBuffer set, PageSource source, ViewKey sort, int rows, CancellationToken token, ref bool approximate)
+    internal static Key Build(ResultSetBuffer set, PageSource source, ViewKey sort, int rows, CancellationToken token, ref bool approximate)
     {
         var column = sort.Column;
         var meta = set.Columns[column];
@@ -443,7 +443,7 @@ internal static class ViewSorter
     }
 
     /// <summary>The sealed pages a sort reads, each parsed once, and a row's cell found again by binary search.</summary>
-    private sealed class PageSource
+    internal sealed class PageSource
     {
         private readonly StoredPage[] pages;
         private readonly long[] starts;
@@ -483,7 +483,7 @@ internal static class ViewSorter
         }
     }
 
-    private abstract class Key(int rows)
+    internal abstract class Key(int rows)
     {
         private readonly byte[] nulls = new byte[(rows + 7) / 8];
         public bool Descending { get; set; }
@@ -595,7 +595,7 @@ internal static class ViewSorter
     }
 
     /// <summary>The keys in order, NULL lowest, then the base row, so equal rows keep their order (a stable sort).</summary>
-    private sealed class Comparer(Key[] keys, CancellationToken token) : IComparer<int>
+    internal sealed class Comparer(Key[] keys, CancellationToken token) : IComparer<int>
     {
         private int calls;
 

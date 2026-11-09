@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (286)
+## Commands (287)
 
 ### File
 
@@ -174,6 +174,7 @@ keys it uses are listed below.
 | Clear Highlight (not in the palette) | `output.clearHighlight` | — | — | — | Always | Query Output context menu › Highlight › Clear Highlight |
 | Clear All Highlights (not in the palette) | `output.clearAllHighlights` | — | — | — | Always | Query Output context menu › Highlight › Clear All Highlights |
 | Compare with Previous Result | `output.compareWithPrevious` | — | — | — | Always | Query Output context menu › Compare with Previous Result |
+| Pivot Results… | `output.pivot` | — | — | — | Always | Query Output context menu › Pivot Results… |
 | Compare with Previous Result (Exact Text) | `output.compareWithPreviousExact` | — | — | — | Always | — |
 | Show Column Profile | `output.toggleColumnProfile` | — | — | — | Always; checked when `resultsColumnProfile` | Query Output context menu › Column Profile |
 | Show Row Size in Results | `output.toggleRowSize` | — | — | — | Always; checked when `resultsRowSize` | Query Output context menu › Show Row Size |
@@ -817,6 +818,7 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | `2_sort` | Filt**e**r › | Submenu: Query Output context menu › Filter | `outputView == 'grid'` |
 | `2_sort` | Hi**g**hlight › | Submenu: Query Output context menu › Highlight | `outputView == 'grid'` |
 | `2_sort` | Co**m**pare with Previous Result | `output.compareWithPrevious` | `outputView == 'grid'` |
+| `2_sort` | Pivot Res**u**lts… | `output.pivot` | `outputView == 'grid'` |
 | `2_width` | F**i**t Column | `output.fitColumn` | `outputView == 'grid'` |
 | `3_save` | Sa**v**e Results As… | `output.saveResultsAs` | `outputView == 'grid'` |
 | `4_view` | Show S**p**aces and Tabs | `output.showSpaces` | `outputView == 'grid'` |

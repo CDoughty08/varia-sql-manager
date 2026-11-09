@@ -38,6 +38,7 @@ The code is the reference implementation; this document describes it.
 - [Sorted views](#sorted-views)
 - [Row identities and highlights](#row-identities-and-highlights)
 - [Result diffs](#result-diffs)
+- [Pivots](#pivots)
 - [Search in results](#search-in-results)
 - [Column profiles](#column-profiles)
 - [Messages](#messages)
@@ -241,6 +242,7 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `results.findRows` | port | unary | results | 60 s; where 1 – 10,000 identities are in a result or view |
 | `results.diff` | port | unary | results | 120 s; the unified diff of two results of one query, stored as a new result ([Result diffs](#result-diffs)) |
 | `results.search` | port | unary | results | 120 s; the cells of a result (or a view) containing a text ([Search in results](#search-in-results)) |
+| `results.pivot` | port | unary | results | 120 s; a result's or a view's rows grouped and aggregated, stored as a new result ([Pivots](#pivots)) |
 | `results.profile` | port | unary | results | 120 s; aggregates over a result's or a view's rows ([Column profiles](#column-profiles)) |
 | `live.subscribe` | port | stream of credited EVENTs ([Live subscriptions](#live-subscriptions)) | live (no slot) | none, and no backstop: only CANCEL, a disconnect, a shutdown, a failure or its source ending ends it |
 | `live.update` | port | unary | control | 10 s |
@@ -1441,6 +1443,44 @@ receives a new result to read like any other, never rows to compare.
   only into the run that holds both compared sets; one it refuses is released. `GridView` colours added and removed rows from the tone column and marks the listed cells (`is-chg`,
   `is-soft`) with theme colours only (`resultsGrid.diff*`).
 
+## Pivots
+
+Pivot groups a result's rows and aggregates them in the backend (`Results/ResultPivot.cs`); like a diff, the renderer
+receives a new result to read like any other, never the rows it grouped.
+
+- **`results.pivot { resultId, rows, column?, values, viewId? }`** answers `{ descriptor, rows, rowGroups, rowGroupsShown,
+  columnGroups, columnGroupsShown, approximate }`. `rows` are 0 to 8 distinct row-group columns, in order; `column` is an
+  optional column-group column that is not one of them; `values` are 1 to 16 `{ aggregate, column? }`, the aggregate one of
+  `count`, `countDistinct`, `sum`, `avg`, `min` and `max`, and only `count` may leave out the column (it then counts rows,
+  COUNT(*)). Columns must be within the result, and `sum` and `avg` need an exact or approximate numeric column other than
+  bit (`INVALID_PARAMS`, "Sum and Average need a numeric column."). The result must be complete (`RESULT_OPEN`) and be a
+  query's rows or another pivot. Through a view it reads the view's rows, so its sort and filters apply; `rows` in the
+  answer counts the rows read.
+- **Grouping.** Values group as GROUP BY would, by the sort's comparison ([Sorted views](#sorted-views)): text by its
+  collation, ignoring trailing spaces, exact numerics by value, NULL as a group of its own. Groups come in ascending
+  order, NULL first. `approximate` says a truncated value's stored prefix was grouped or compared.
+- **Aggregates.** COUNT counts non-NULL values (or rows), COUNT DISTINCT distinct non-NULL values by the same equality,
+  MIN and MAX the lowest and highest by the sort's order (copied from the source cell, its type and collation kept). SUM
+  of integers is bigint and of other exact numerics decimal(38, s); AVG of exact numerics is decimal(38, max(s, 6)), not
+  SQL Server's integer AVG; floats sum and average as float. A cell with no rows is 0 for a count and NULL otherwise, as
+  T-SQL's PIVOT; a sum past decimal(38) is an error cell.
+- **The pivot result** (`kind: 'pivot'`, stamped with the generation and owned by main as a diff is) has the row-group
+  columns, then for each column group each value, named by the group's value ("NULL", "(blank)" for empty text, binary as
+  `0x` hex, cut to 128 characters with "…"), or "group · Sum of Amount" when there are several values, then a `Total`
+  column per value over the row group's rows. With no column group the values are named alone ("Count of rows", "Sum of
+  Amount"); with no row groups it is one row. At most 256 column groups show, fewer when the columns would pass a page's
+  4,096, and at most 100,000 row groups or 4,000,000 figures; past them the first groups are kept, each Total still
+  counts every row, and the answer's `…Shown` counts say so. It is a result of the source's query, charged to its
+  budget, released with the query's other results and at once when its answer is not delivered (as a diff).
+- **Work.** One pass sorts the rows by each grouped column's key (`ResultPivoter.WorkingBytes`: the sort keys and 12 bytes
+  a row), then the figures (8 to 16 bytes a cell and value) are charged to the query budget before they are computed
+  (`TOO_LARGE`, "There is not enough result memory to pivot these rows. Close other results and try again."). The worker's
+  `cancel` stops it (`CANCELLED`).
+- **Renderer.** `ResultHandle.pivot(spec, { signal })` validates the spec before sending. `PivotService` keeps each tab's
+  panel (source set, row groups, column group, values) and appends the pivot as the run's last set, named "Pivot of Result
+  N", whose grid strip says what was read and which groups were left out. A new run gives up a pivot in flight, and
+  `addSet` releases one the run cannot take.
+
 ## Search in results
 
 The results toolbar's search box searches every grid of a run in the backend, over the rows it holds
@@ -2347,6 +2387,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Row identities | `results.rowIds` 1 – 16,384 rows; `results.findRows` 1 – 10,000 ids, 100,000 matches (`limits.identity`); 24 bytes a row while identifying, 8 kept, under the query budget | zod and backend |
 | Result diffs | context -1 – 100 rows, 64 one-sided column names each side (`limits.diff`); about 80 bytes a row of both results and 12 a differing cell while aligning, the diff's rows under the query budget | zod and backend |
 | Sorted views | 0 – 16 keys and 0 – 16 filters a view (one at least), 4,096 distinct values a filter, 256 cell ranges a selection, 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key or filtered column while building, 4 bytes a row kept, under the query budget | zod and backend |
+| Pivots | 0 – 8 row columns, 1 – 16 values, 100,000 row groups, 256 column groups, 4,000,000 figures, column-group names cut to 128 characters (`limits.pivot`); a sort key per grouped column and 12 bytes a row while grouping, and the figures, under the query budget | zod and backend |
 | Search in results | 1 – 1,024 characters of text, 1 – 10,000 matches an answer plus its last row's columns (`limits.search`); no budget held | zod and backend |
 | Column profiles | 0 – 32 columns a request (`limits.profile`), 20 buckets, distinct exact to 16,384, values cut to 256 characters; working memory under the query budget | zod and backend |
 | Copy | 64 MiB of UTF-8 (estimated before any work; main cancels past 65 MiB received); DATA ≤ 1 MiB; 16 MiB initial credit; 120 s; one per window | backend and main |

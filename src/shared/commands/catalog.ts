@@ -961,6 +961,11 @@ export const commandCatalog = {
     title: 'Compare with Previous Result', category: 'Query', icon: 'git-compare', keywords: ['diff', 'compare', 'difference', 'changes', 'grid', 'result'],
     menus: [{ menu: 'output.context', group: '2_sort', order: 8, mnemonic: 'm', when: "outputView == 'grid'" }]
   },
+  // Opens the pivot panel on the grid's result (PivotService); Build Pivot there adds the pivot (results.pivot) as a result.
+  'output.pivot': {
+    title: 'Pivot Results…', category: 'Query', icon: 'pivot', keywords: ['pivot', 'group', 'aggregate', 'summarize', 'crosstab', 'count', 'sum', 'average', 'grid', 'result'],
+    menus: [{ menu: 'output.context', group: '2_sort', order: 9, when: "outputView == 'grid'" }]
+  },
   'output.compareWithPreviousExact': {
     title: 'Compare with Previous Result (Exact Text)', category: 'Query', icon: 'git-compare', keywords: ['diff', 'compare', 'difference', 'case', 'collation', 'exact', 'grid']
   },
