@@ -7,7 +7,7 @@ import { setKey, type ResultSetEntry, type TabResults } from '../results/Results
 import { formatCount, plural } from '../results/status'
 import { gridLimits as g } from './constants'
 import ResultGrid from './ResultGrid'
-import { contentHeight, dragSplitter, minGridHeight, mountedRange, setFloors, splitterMoves, stackLayout, stackMinimum } from './stack'
+import { contentHeight, dragSplitter, minGridHeight, mountedRange, revealScrollTop, setFloors, splitterMoves, stackLayout, stackMinimum } from './stack'
 
 let scrollbar: number | undefined
 /** The platform's scroll bar thickness (classic scroll bars take room; overlay ones take none). */
@@ -157,12 +157,15 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
   }, [revealSeq, revealIndex])
   useLayoutEffect(() => {
     const element = stackRef.current, index = stackReveal.current
-    if (!element || index < 0 || index >= layout.offsets.length || collapsed.has(index)) return
+    // A stack just mounted (Find Next while Messages showed) has no height for its first layout: the reveal waits for it.
+    if (!element || index < 0 || index >= layout.offsets.length || collapsed.has(index) || paneHeight <= 0) return
     stackReveal.current = -1
-    const top = layout.offsets[index], bottom = top + layout.heights[index]
-    if (top < element.scrollTop) element.scrollTop = top
-    else if (bottom > element.scrollTop + element.clientHeight) element.scrollTop = Math.max(top, bottom - element.clientHeight)
-  }, [revealSeq, revealIndex, layout, collapsed])
+    const top = revealScrollTop(layout, index, element.scrollTop, element.clientHeight)
+    if (top === undefined) return
+    element.scrollTop = top
+    // The scroll event comes later: the saved position follows now, so a restore before it does not undo the reveal.
+    view.stackScrollTop = element.scrollTop
+  }, [revealSeq, revealIndex, layout, collapsed, paneHeight])
   const splitterDown = (index: number, event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
     event.preventDefault()

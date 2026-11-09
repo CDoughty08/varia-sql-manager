@@ -525,6 +525,26 @@ describe('ResultsPortHost', () => {
     await settle()
     expect(codes(port())).toEqual([...bad.map((_, index) => [index + 1, 'BACKEND_ERROR']), [bad.length + 1, 'ok'], [20, 'BACKEND_ERROR']])
   })
+  it("refuses a search answer naming a column past the result's, from its descriptor, also after a failed close", async () => {
+    const { host, port, searches, backend } = fixture()
+    host.own([{ generation: 1, resultId: 7, columns: [{}, {}, {}, {}] }])
+    host.own([descriptor(7)])
+    const ask = { t: 'search', generation: 1, resultId: 7, text: 'a', fromRow: 0, maxMatches: 10 } as const
+    const answer = { rows: 10, total: 2, first: 0, matchRows: [2, 5], matchColumns: [3, 1], complete: true, approximate: false }
+    port().send({ ...ask, rid: 1 })
+    port().send({ ...ask, rid: 2 })
+    searches[0].resolve({ ...answer, matchColumns: [4000, 1] })
+    searches[1].resolve(answer)
+    await settle()
+    expect(codes(port())).toEqual([[1, 'BACKEND_ERROR'], [2, 'ok']])
+    vi.mocked(backend.close).mockRejectedValueOnce(new BackendError('TOO_MANY_REQUESTS', 'Busy.'))
+    port().send({ t: 'close', rid: 3, generation: 1, resultIds: [7] })
+    await settle()
+    port().send({ ...ask, rid: 4 })
+    searches[2].resolve({ ...answer, matchColumns: [4, 1] })
+    await settle()
+    expect(codes(port()).at(-1)).toEqual([4, 'BACKEND_ERROR'])
+  })
   it('profiles only owned results of the current generation, within the schema bounds, and relays an answer that matches the columns asked', async () => {
     const { host, port, profiles } = fixture()
     host.own([descriptor(7)])

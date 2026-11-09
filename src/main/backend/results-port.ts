@@ -83,8 +83,9 @@ export class ResultsPortHost {
   /** Live streams by subscription id: a second subscribe with the same id is refused. */
   private readonly subscriptions = new Map<string, number>()
   private readonly schema: typeof portRequestSchema
-  /** Result ids the current generation holds for this renderer, oldest first. */
-  private readonly owned = new Set<number>()
+  /** Result ids the current generation holds for this renderer, oldest first, with their column count when a descriptor
+   *  named it (search answers are bounded by it). */
+  private readonly owned = new Map<number, number | undefined>()
   private readonly latestMemory = new Map<MemoryFeature, Extract<PortMessage, { t: 'memory' }>>()
   private port: PortMainLike | undefined
   private generation = 0
@@ -177,13 +178,18 @@ export class ResultsPortHost {
   }
 
   /** Results the renderer may read: from a query summary or event, or the test hooks. */
-  own(descriptors: readonly Pick<ResultDescriptor, 'generation' | 'resultId'>[]): void {
-    for (const { generation, resultId } of descriptors) {
-      if (generation !== this.generation) continue
-      this.owned.delete(resultId)
-      this.owned.add(resultId)
-      if (this.owned.size > this.limits.ownedResults) this.owned.delete(this.owned.values().next().value!)
+  own(descriptors: readonly (Pick<ResultDescriptor, 'generation' | 'resultId'> & { readonly columns?: readonly unknown[] })[]): void {
+    for (const { generation, resultId, columns } of descriptors) {
+      if (generation === this.generation) this.keep(resultId, columns?.length)
     }
+  }
+
+  /** Owns a result as the newest, keeping the column count known before when this one names none. */
+  private keep(resultId: number, columns: number | undefined): void {
+    const known = columns ?? this.owned.get(resultId)
+    this.owned.delete(resultId)
+    this.owned.set(resultId, known)
+    if (this.owned.size > this.limits.ownedResults) this.owned.delete(this.owned.keys().next().value!)
   }
 
   /** Whether this renderer may use the result: the current generation holds it for this renderer (copy and save). */
@@ -429,6 +435,7 @@ export class ResultsPortHost {
     const { rid } = request
     if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
     // Results of an earlier generation are already gone with it.
+    const columns = new Map(request.resultIds.map(id => [id, this.owned.get(id)]))
     const ids = request.generation === this.generation ? request.resultIds.filter(id => this.owned.delete(id)) : []
     if (ids.length === 0 || this.backend.readyGeneration() !== request.generation) {
       this.post({ t: 'end', rid, ok: true, result: { closed: 0, usedBytes: 0 } })
@@ -445,7 +452,7 @@ export class ResultsPortHost {
       this.closing--
       // The backend may not have released them (a TOO_MANY_REQUESTS refusal never reached it): the renderer may close
       // them again, so they stay its own; closing a result the backend already released closes nothing.
-      this.own(ids.map(resultId => ({ generation: request.generation, resultId })))
+      if (request.generation === this.generation) for (const id of ids) this.keep(id, columns.get(id))
       this.fail(rid, error)
     })
   }
@@ -533,6 +540,7 @@ export class ResultsPortHost {
     if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
     if (!this.current(request.generation, request.resultId)) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
     const port = this.port
+    const columns = this.owned.get(request.resultId)
     const params: ResultsSearchParams = { resultId: request.resultId, text: request.text, fromRow: request.fromRow, maxMatches: request.maxMatches }
     if (request.backward) params.backward = true
     if (request.viewId !== undefined) params.viewId = request.viewId
@@ -542,7 +550,7 @@ export class ResultsPortHost {
       if (this.port !== port || this.searching.get(rid) !== search) return
       this.searching.delete(rid)
       const parsed = searchResultSchema.safeParse(result)
-      if (!parsed.success || !searchAnswers(parsed.data, params)) return this.end(rid, 'BACKEND_ERROR', 'The results could not be searched.')
+      if (!parsed.success || !searchAnswers(parsed.data, params, columns)) return this.end(rid, 'BACKEND_ERROR', 'The results could not be searched.')
       this.post({ t: 'end', rid, ok: true, result: parsed.data })
     }, error => {
       if (this.port !== port || this.searching.get(rid) !== search) return
@@ -691,14 +699,16 @@ export class ResultsPortHost {
 }
 
 /** A search answer fits its request: as many columns as rows, matches strictly in (row, column) order and in the rows
- *  searched, after `fromRow` (or before it, backward), and no more than `total` counts with those before them. */
-export function searchAnswers(answer: ResultsSearchResult, request: Pick<ResultsSearchParams, 'fromRow' | 'maxMatches' | 'backward'>): boolean {
-  const { matchRows: rows, matchColumns: columns } = answer
-  if (rows.length !== columns.length || answer.first + rows.length > answer.total || rows.length > request.maxMatches + wire.page.maxColumns) return false
+ *  searched, after `fromRow` (or before it, backward), columns inside the result's (`columns`, when its descriptor named
+ *  them), and no more than `total` counts with those before them. */
+export function searchAnswers(answer: ResultsSearchResult, request: Pick<ResultsSearchParams, 'fromRow' | 'maxMatches' | 'backward'>, columns?: number): boolean {
+  const { matchRows: rows, matchColumns: columnsOf } = answer
+  if (rows.length !== columnsOf.length || answer.first + rows.length > answer.total || rows.length > request.maxMatches + wire.page.maxColumns) return false
   for (let k = 0; k < rows.length; k++) {
     const row = rows[k]
     if (row >= answer.rows || (request.backward ? row >= request.fromRow : row < request.fromRow)) return false
-    if (k > 0 && (row < rows[k - 1] || (row === rows[k - 1] && columns[k] <= columns[k - 1]))) return false
+    if (columns !== undefined && columnsOf[k] >= columns) return false
+    if (k > 0 && (row < rows[k - 1] || (row === rows[k - 1] && columnsOf[k] <= columnsOf[k - 1]))) return false
   }
   return true
 }
