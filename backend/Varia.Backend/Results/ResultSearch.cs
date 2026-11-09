@@ -13,7 +13,7 @@ internal sealed record SearchOutcome(long Searched, long Total, long First, long
 /// their collation, as LIKE '%text%' would: its locale and its Ignore flags (case, accents, kana, width), code-point order
 /// for _BIN and _BIN2, and a locale this runtime does not know by its case flag alone. Every other column compares its
 /// display text ignoring case (numbers, dates, xml, json, uniqueidentifier); binary values match on their 0x… hex. A
-/// truncated cell is searched by its stored prefix, which makes the outcome Approximate.
+/// truncated cell is searched by its stored prefix, which makes the outcome Approximate. Hidden columns (row tone) are skipped.
 /// One pass counts every match and keeps up to MaxMatches of them, in whole rows: forward from FromRow, or backward, the
 /// last ones before FromRow; a run passes MaxMatches by at most the columns of its last row.
 /// The scan stops at checkpoints spaced by work done (cells and bytes compared, so a wide or long-valued result is checked
@@ -43,7 +43,8 @@ internal static class ResultSearcher
     {
         var columns = set.Wires.Count;
         var matchers = new Matcher?[columns];
-        for (var c = 0; c < columns; c++) matchers[c] = MatcherFor(set.Columns[c], set.Wires[c], text);
+        // A hidden column (a diff's or live table's row tone) is not in the grid, so its text never matches.
+        for (var c = 0; c < columns; c++) matchers[c] = ResultTextWriter.Hidden(set.Columns[c]) ? null : MatcherFor(set.Columns[c], set.Wires[c], text);
         var source = new Source(pages, columns, view is null ? 1 : LayoutCacheBytes / (4 * PageView.ScratchLength(Math.Max(1, columns))));
         long rows = view?.Rows ?? source.Rows;
         var found = new List<int>(16);

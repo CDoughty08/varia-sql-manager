@@ -1422,7 +1422,8 @@ The results toolbar's search box searches every grid of a run in the backend, ov
   and bytes compared, so a wide or long-valued row is a checkpoint of its own): CANCEL (a newer search) stops it there,
   and so does the result's release (`RESULT_RELEASED`) or the view's close (`VIEW_NOT_FOUND`), so it never reads pages
   whose budget was returned for longer than one checkpoint.
-- **Matching.** A cell matches when its grid text contains the text. NULL and unreadable cells never match. Character
+- **Matching.** A cell matches when its grid text contains the text. NULL and unreadable cells never match. Hidden columns (a
+  diff's row tone) are not searched. Character
   columns compare by their collation, as `LIKE '%text%'` would: its locale and Ignore flags (case, accents, kana type,
   width), code points for _BIN and _BIN2, and for a locale the runtime does not know its case flag alone. Text made only
   of characters the locale ignores (U+200B, U+00AD) is looked for as written, by code point. Every other

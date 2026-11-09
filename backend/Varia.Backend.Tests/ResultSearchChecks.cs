@@ -41,6 +41,7 @@ internal static class ResultSearchChecks
         Stopping(check);
         Bounded(check);
         Edges(check);
+        DiffTone(check);
     }
 
     private static ResultSetBuffer Fill(ResultStore store)
@@ -299,5 +300,36 @@ internal static class ResultSearchChecks
         var binary = Build(store, [new("blob", "varbinary", "binary"), new("note", "varchar", "text")], [[new byte[] { 0xAB, 0xCD }, "x"]], (_, column) => column == 0);
         check(Find(binary, "q") is { Total: 0, Approximate: false } && Find(binary, "ab") is { Total: 1, Approximate: false } && Find(binary, "ef") is { Total: 0, Approximate: true },
             "a truncated binary cell is skipped for text that is not hex, leaving the outcome exact, and searched by its prefix for hex");
+    }
+
+    /// <summary>A diff result's hidden tone column (its "added 3 5" text) never matches (#367).</summary>
+    private static void DiffTone(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        using var service = new SqlService(store);
+        T Call<T>(string method, object args) => (T)service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult()!;
+        ResultColumn[] columns = [new("id", "int", "text"), new("name", "varchar", "text")];
+        var budget = store.BeginQuery("diff");
+        ResultSetBuffer Side(int index, string[][] rows)
+        {
+            var set = store.Open(budget, index, 1, 1, "rows", columns, [WireKind.Text, WireKind.Text])!;
+            foreach (var row in rows)
+            {
+                set.CountRow();
+                var builder = set.BeginRow()!;
+                foreach (var cell in row) builder.AppendText(cell);
+                set.TryCommitRow();
+            }
+            set.Complete();
+            return set;
+        }
+        var left = Side(0, [["1", "a"], ["2", "b"]]);
+        var right = Side(1, [["1", "a"], ["2", "b"], ["3", "c"]]);
+        var diff = Call<ResultsDiffResult>("results.diff", new { left = left.ResultId, right = right.ResultId });
+        var added = Call<ResultsSearchResult>("results.search", new { resultId = diff.Descriptor.ResultId, text = "added", fromRow = 0, maxMatches = 100 });
+        var three = Call<ResultsSearchResult>("results.search", new { resultId = diff.Descriptor.ResultId, text = "3", fromRow = 0, maxMatches = 100 });
+        var tone = diff.Descriptor.Columns.ToList().FindIndex(ResultTextWriter.Hidden);
+        check(tone >= 0 && diff.Added == 1 && added.Total == 0 && three.Total == 2 && three.MatchColumns.All(column => column != tone),
+            "a search of a diff result skips its hidden tone column: \"added\" matches nothing and a digit only the grid's cells, R2 and id (" + added.Total + ", " + three.Total + ")");
     }
 }
