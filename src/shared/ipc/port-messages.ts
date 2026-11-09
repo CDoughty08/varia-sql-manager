@@ -85,7 +85,7 @@ export type PortMessage =
 /** A results.rowBytes answer as the backend sends it; main also checks it answers the range asked before forwarding it. */
 export const rowBytesResultSchema = z.object({ firstRow: count, bytes: z.array(count).max(limits.rowSizes.maxRows), rowsAvailable: count, estimated: z.array(count).max(limits.rowSizes.maxRows) }).strict()
 /** A results.view answer as the backend sends it. */
-export const viewResultSchema = z.object({ viewId: u32, rows: count, complete: z.boolean(), approximate: z.boolean(), filters: z.array(resolvedFilterSchema).max(limits.views.maxFilters).optional() }).strict()
+export const viewResultSchema = z.object({ viewId: u32, rows: count, baseRows: count, complete: z.boolean(), approximate: z.boolean(), filters: z.array(resolvedFilterSchema).max(limits.views.maxFilters).optional() }).strict()
 export const viewCloseResultSchema = z.object({ closed: z.number().int().min(0).max(limits.views.maxClose) }).strict()
 /** Identity answers as the backend sends them; main also checks they answer what was asked before forwarding them. */
 export const identifyResultSchema = z.object({ column: z.number().int().min(-1).max(limits.page.maxColumns - 1), unique: z.boolean(), approximate: z.boolean(), rows: count }).strict()

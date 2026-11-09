@@ -1315,11 +1315,13 @@ A results grid sorts and filters in the backend, over the rows it already holds 
 re-reads SQL Server. A view is an order of some or all of a result's base rows, read through the same calls as the result
 itself by view position.
 
-- **`results.view { resultId, sort: 0 – 16 keys, filters?: 1 – 16, replaces? }`** answers `{ viewId, rows, complete,
+- **`results.view { resultId, sort: 0 – 16 keys, filters?: 1 – 16, replaces? }`** answers `{ viewId, rows, baseRows, complete,
   approximate, filters? }`, with at least one key or filter (`INVALID_PARAMS`). A key
   is `{ column, descending, mode: 'value' | 'chars' | 'bytes' }`, columns distinct and within the result
-  (`INVALID_PARAMS`). The view covers the rows sealed when it was built (`rows`); `complete` says that was every row of a
-  finished set. `approximate` says a key compared a truncated value's stored prefix or a length that is only an estimate.
+  (`INVALID_PARAMS`). The view covers the rows sealed when it was built (`baseRows`; `rows` is the view's own count, fewer
+  when filters drop rows); `complete` says that was every row of a finished set. A view built while the set streamed is
+  stale: a filtered grid's caption reads its rows of `baseRows` "so far" until the renderer builds it again once the set
+  completes. `approximate` says a key compared a truncated value's stored prefix or a length that is only an estimate.
   `replaces` names a view of the same result that the new one supersedes: it is dropped once the new one is built, and
   left as it was when the sort fails or is cancelled. A result keeps at most 8 views; a ninth drops its oldest.
 - **Order.** A stable sort, as SQL Server's ORDER BY would put the rows: NULL and unreadable cells lowest (first
@@ -1353,7 +1355,7 @@ itself by view position.
 - **`results.viewClose { resultId, viewIds: 1 – 64 }`** answers `{ closed }`. Views end with their result too: a released
   result's views go with it, without a close.
 - **Renderer.** `ResultHandle.sort(keys, { filters, replaces, signal })` validates the keys and filters before sending
-  and returns a `ResultView` handle (`viewId`, `base`, `keys`, `filters` resolved, `rows`, `complete`, `approximate`) that
+  and returns a `ResultView` handle (`viewId`, `base`, `keys`, `filters` resolved, `rows`, `baseRows`, `complete`, `approximate`) that
   reads, measures and copies like any handle; closing it sends `viewClose`, and it ends (released or lost) with its base. `ResultsService` keeps a view
   per grid: a newer sort aborts the running one, and it sends no `replaces`, so the view a grid shows stays readable until
   the grid has read the new one's rows and swapped (`viewShown`), and only then closes. A view of a set still loading is

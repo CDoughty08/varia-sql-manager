@@ -352,11 +352,12 @@ describe('ResultsPortHost', () => {
     port().send({ t: 'view', rid: 8, generation: 1, resultId: 7, sort: [{ ...key, extra: true }] })
     port().send({ t: 'view', rid: 9, generation: 1, resultId: 7, sort: [key] })
     expect(views.map(view => view.params)).toEqual([{ resultId: 7, sort: [key], replaces: 3 }, { resultId: 7, sort: [key] }])
-    views[0].resolve({ viewId: 4, rows: 10, complete: true, approximate: false })
-    views[1].resolve({ viewId: 5, rows: -1, complete: true, approximate: false })
+    views[0].resolve({ viewId: 4, rows: 10, baseRows: 40, complete: true, approximate: false })
+    // A view that does not say how many rows it was built from is refused like a negative count.
+    views[1].resolve({ viewId: 5, rows: 1, complete: true, approximate: false } as never)
     await settle()
     expect(codes(port())).toEqual([[2, 'RESULT_UNAVAILABLE'], [3, 'RESULT_UNAVAILABLE'], [4, 'INVALID_REQUEST'], [5, 'INVALID_REQUEST'], [6, 'INVALID_REQUEST'], [7, 'INVALID_REQUEST'], [8, 'INVALID_REQUEST'], [1, 'ok'], [9, 'BACKEND_ERROR']])
-    expect(port().ends().find(end => end.rid === 1)).toEqual({ t: 'end', rid: 1, ok: true, result: { viewId: 4, rows: 10, complete: true, approximate: false } })
+    expect(port().ends().find(end => end.rid === 1)).toEqual({ t: 'end', rid: 1, ok: true, result: { viewId: 4, rows: 10, baseRows: 40, complete: true, approximate: false } })
     // Reads and row sizes through a view carry its id to the backend.
     read(10, 7, { viewId: 4 })
     expect(reads.at(-1)!.params).toEqual({ resultId: 7, firstRow: 0, maxRows: 100, viewId: 4 })
@@ -385,13 +386,13 @@ describe('ResultsPortHost', () => {
     port().send({ t: 'view', rid: 13, generation: 1, resultId: 7, sort: [], filters: [rows] })
     expect(views.map(view => view.params)).toEqual([{ resultId: 7, sort: [], filters: [cells, rows, dups] }, { resultId: 7, sort: [], filters: [rows] }, { resultId: 7, sort: [], filters: [rows] }])
     const resolved = [{ op: 'in', column: 1, rows: [0, 5], nulls: false }, { op: 'notIn', column: 0, rows: [3], nulls: true }, dups]
-    views[0].resolve({ viewId: 6, rows: 3, complete: true, approximate: false, filters: resolved })
+    views[0].resolve({ viewId: 6, rows: 3, baseRows: 3, complete: true, approximate: false, filters: resolved })
     // A view that answers fewer filters than asked, or a filter still naming cells, is not relayed.
-    views[1].resolve({ viewId: 7, rows: 3, complete: true, approximate: false })
-    views[2].resolve({ viewId: 8, rows: 3, complete: true, approximate: false, filters: [{ op: 'in', column: 1, cells: { ranges: [[0, 1]] } }] })
+    views[1].resolve({ viewId: 7, rows: 3, baseRows: 3, complete: true, approximate: false })
+    views[2].resolve({ viewId: 8, rows: 3, baseRows: 3, complete: true, approximate: false, filters: [{ op: 'in', column: 1, cells: { ranges: [[0, 1]] } }] })
     await settle()
     expect(codes(port())).toEqual([...[2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(rid => [rid, 'INVALID_REQUEST']), [1, 'ok'], [12, 'BACKEND_ERROR'], [13, 'BACKEND_ERROR']])
-    expect(port().ends().find(end => end.rid === 1)).toEqual({ t: 'end', rid: 1, ok: true, result: { viewId: 6, rows: 3, complete: true, approximate: false, filters: resolved } })
+    expect(port().ends().find(end => end.rid === 1)).toEqual({ t: 'end', rid: 1, ok: true, result: { viewId: 6, rows: 3, baseRows: 3, complete: true, approximate: false, filters: resolved } })
   })
   it('cancels a sort on the worker\'s cancel and when the port closes, and closes views of owned results', async () => {
     const { host, backend, port, views } = fixture()
@@ -414,7 +415,7 @@ describe('ResultsPortHost', () => {
     port().hangUp()
     expect(views[1].cancels).toHaveLength(1)
     // Built before the cancel reached the backend: with no port left to own it, main closes the view itself.
-    views[1].resolve({ viewId: 9, rows: 1, complete: true, approximate: false })
+    views[1].resolve({ viewId: 9, rows: 1, baseRows: 1, complete: true, approximate: false })
     await settle()
     expect(backend.viewClose).toHaveBeenLastCalledWith(1, { resultId: 7, viewIds: [9] })
   })

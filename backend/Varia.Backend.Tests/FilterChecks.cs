@@ -38,6 +38,7 @@ internal static class FilterChecks
         Duplicates(check);
         Limits(check);
         HostRequests(check);
+        Streaming(check);
     }
 
     private static int fills;
@@ -139,6 +140,35 @@ internal static class FilterChecks
             "In over many cells of one value is one value");
         check(Build(many, [], Cells(FilterOp.Between, 0, null, (0, ViewSorter.MaxFilterValues + 1))).Order.Length == ViewSorter.MaxFilterValues + 1,
             "Between takes any number of selected values (only its lowest and highest are kept)");
+    }
+
+    /// <summary>A view built while rows stream answers the base rows it looked at (those sealed then), not the set's count.</summary>
+    private static void Streaming(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        using var service = new SqlService(store);
+        var set = store.Open(store.BeginQuery("filters" + Interlocked.Increment(ref fills)), 0, 1, 1, "rows", Columns, Wires) ?? throw new InvalidOperationException("The result set was not kept.");
+        void Add(string?[] row)
+        {
+            set.CountRow();
+            var builder = set.BeginRow()!;
+            foreach (var cell in row)
+            {
+                if (cell is null) builder.AppendNull();
+                else builder.AppendText(cell);
+            }
+            set.TryCommitRow();
+        }
+        foreach (var row in Rows) Add(row);
+        set.Seal();
+        // Rows committed after the seal wait in the builder: the view does not see them.
+        foreach (var row in Rows) Add(row);
+        var view = (ResultsViewResult)service.DispatchAsync("results.view", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, sort = Array.Empty<object>(), filters = new object[] { new { op = "in", column = 3, rows = new[] { 0 } } } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult()!;
+        check(view.BaseRows == Rows.Length && view.Rows == 3 && !view.Complete && set.RowsRead == 2 * Rows.Length,
+            "a view of a streaming set answers the sealed rows it was built from as baseRows, not the rows read since");
+        set.Complete();
+        var whole = (ResultsViewResult)service.DispatchAsync("results.view", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, sort = Array.Empty<object>(), filters = new object[] { new { op = "in", column = 3, rows = new[] { 0 } } } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult()!;
+        check(whole.BaseRows == 2 * Rows.Length && whole.Rows == 6 && whole.Complete, "once the set completes a view is built from all its rows");
     }
 
     private static string? Throws(Action action)
