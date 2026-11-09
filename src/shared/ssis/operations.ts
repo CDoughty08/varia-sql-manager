@@ -89,12 +89,12 @@ export function operationsCommandEntries(): { readonly [K in OperationsCommandId
       menus: [{ menu: 'ssis.operation.context', group: '1_operation', order: 1, mnemonic: 's' }]
     },
     // The document's own F5, as Refresh is in Object Explorer; a query's F5 (editorFocus, or its query bar's) still executes,
-    // and an Activity Monitor's F5 (activityMonitorFocus) is its Refresh Now. The conflict check reads each state key on its
+    // an Activity Monitor's F5 (activityMonitorFocus) is its Refresh Now, and a Peek's (peekFocus, peekTabFocus) refreshes it. The conflict check reads each state key on its
     // own, so the clause also says what holds anyway: an Operations document is never an SSIS properties document.
     'ssis.refreshOperations': {
       title: 'Refresh Operations', category: 'Integration Services', icon: 'refresh', keywords: ['ssis', 'reload', 'update', 'now'], precondition: 'backendReady && activeDocumentIsSsisOperations && ssisOperationsRefreshable',
       unavailableHint: openOperations,
-      keybindings: [{ key: 'f5', when: "activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus" }],
+      keybindings: [{ key: 'f5', when: "activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus" }],
       menus: [{ menu: 'ssis.operation.context', group: '8_view', order: 1, title: 'Refresh', mnemonic: 'r' }]
     },
     'ssis.pauseOperations': {

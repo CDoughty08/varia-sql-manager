@@ -17,21 +17,24 @@ export function scriptingContribution({ commands, scripting, explorer, quickInpu
     when: args => scripting.canRun(verb, nodeOf(args)),
     run: args => scripting.run(verb, destination, nodeOf(args))
   })))
-  /** The verbs and destinations the selection can be scripted with now, grouped by verb as the menu shows them. */
-  const scriptAs = () => {
-    const key = context.getState().explorerScriptTitle, title = key ? scriptAsTitles[key] : 'Script As'
+  /**
+   * The verbs and destinations the selection (or the object  names, with the selection keys it stands in: a Peek tab's)
+   * can be scripted with now, grouped by verb as the menu shows them.
+   */
+  const scriptAs = (args?: CommandArgs) => {
+    const key = args?.state?.explorerScriptTitle ?? context.getState().explorerScriptTitle, title = key ? scriptAsTitles[key] : 'Script As'
     const items: QuickPickItem[] = scriptVerbs.flatMap(verb => scriptDestinations.flatMap(destination => {
       const id = scriptCommandId(verb, destination)
-      return commands.isEnabled(id) ? [{ id, label: `${scriptVerbSpecs[verb].name} to ${scriptDestinationSpecs[destination].title}`, group: scriptVerbTitle(verb), icon: scriptDestinationSpecs[destination].icon }] : []
+      return commands.isEnabled(id, args) ? [{ id, label: `${scriptVerbSpecs[verb].name} to ${scriptDestinationSpecs[destination].title}`, group: scriptVerbTitle(verb), icon: scriptDestinationSpecs[destination].icon }] : []
     }))
     quickInput.show({
       title, ariaLabel: title, placeholder: 'Select a script type and destination', noun: 'scripts', sort: 'none', items,
-      onDidAccept: item => { if (isCommandId(item.id)) void commands.execute(item.id, undefined, 'palette') }
+      onDidAccept: item => { if (isCommandId(item.id)) void commands.execute(item.id, args, 'palette') }
     })
   }
   const registrations = [
     ...scriptCommands,
-    commands.register('explorer.scriptAs', { run: scriptAs }),
+    commands.register('explorer.scriptAs', { run: args => scriptAs(args?.target ? args : undefined) }),
     // SSMS's Modify is ALTER To › New Query Editor Window, for the kinds that offer it.
     commands.register('explorer.modify', {
       when: args => { const node = nodeOf(args); return !!node && scriptMenuState(scriptTarget(node)).modifiable && scripting.canRun('alter', node) },

@@ -83,13 +83,6 @@ internal static class ExplorerRefs
         return catalog.Peek.Kinds.GetValueOrDefault(target.Kind) ?? throw Invalid("Peek describes tables, views, procedures and functions.");
     }
 
-    /// <summary>explorer.peekRows' request, as peekRowsParamsSchema accepts it: GUIDs, and a table or view ref.</summary>
-    public static PeekKindSpec ValidatePeekRows(PeekRowsArgs args, ExplorerCatalog catalog)
-    {
-        var spec = ValidatePeek(new PeekArgs(args.ConnectionId, args.RequestId, args.Target), catalog);
-        return spec.Rows ? spec : throw Invalid("Peek reads rows of tables and views.");
-    }
-
     /// <summary>The ref's shape: the fields its kind's scope requires and forbids, identifiers (the name within the kind's
     /// bound), and a child's parent kind.</summary>
     public static void Object(ObjectRefDto value, ExplorerCatalog catalog)

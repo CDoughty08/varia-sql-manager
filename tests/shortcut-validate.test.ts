@@ -74,8 +74,8 @@ describe('validateShortcut', () => {
     const save = check({ command: 'file.new', key: 'mod+s', scope: 'resultsGrid' })
     expect(save.conflicts.map(rule => rule.command)).toEqual(['output.saveResultsAs'])
     expect(save.narrowerScopes).toEqual([])
-    // Custom clauses are not presets, so they never shadow: a Global F5 conflicts with the SSIS documents' F5.
-    expect(check({ command: 'file.new', key: 'f5' }).conflicts.map(rule => [rule.command, scopeOfWhen(rule.whenSource).id])).toEqual([['ssis.refreshOperations', 'custom'], ['ssis.refreshProperties', 'custom']])
+    // Custom clauses are not presets, so they never shadow: a Global F5 conflicts with the SSIS documents' F5 and Peek's.
+    expect(check({ command: 'file.new', key: 'f5' }).conflicts.map(rule => [rule.command, scopeOfWhen(rule.whenSource).id])).toEqual([['ssis.refreshOperations', 'custom'], ['ssis.refreshProperties', 'custom'], ['peek.refresh', 'custom']])
     expect(check({ command: 'file.new', key: 'mod+k mod+k', scope: 'queryEditor' }).conflicts.map(rule => rule.command)).toEqual(['edit.toggleBookmark'])
   })
   it('refuses with a reason', () => {

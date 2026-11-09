@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (265)
+## Commands (267)
 
 ### File
 
@@ -238,6 +238,8 @@ keys it uses are listed below.
 | Modify | `explorer.modify` | — | — | — | `backendReady && explorerSelectionModifiable && explorerScriptAlter == 'enabled' && !documentBusy` | Object Explorer context menu › Modify; Search Objects result context menu › Modify |
 | Cancel Scripting | `explorer.cancelScripting` | — | — | — | `scriptingRunning` | — |
 | Peek | `explorer.peek` | Alt+F12 (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`), Space (`explorerFocus && !textInputFocus && !explorerTypeAhead`) | Alt+F12 (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`), Space (`explorerFocus && !textInputFocus && !explorerTypeAhead`) | ⌥F12 (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`), Space (`explorerFocus && !textInputFocus && !explorerTypeAhead`) | `backendReady && (explorerSelectionKind == 'table' \|\| explorerSelectionKind == 'view' \|\| explorerSelectionKind == 'procedure' \|\| explorerSelectionKind == 'function')` | Object Explorer context menu › Peek |
+| Open Peek as Tab | `explorer.openPeekTab` | Ctrl+Enter (`peekFocus && !outputGridFocus`), Ctrl+Enter (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`) | Ctrl+Enter (`peekFocus && !outputGridFocus`), Ctrl+Enter (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`) | ⌘↩ (`peekFocus && !outputGridFocus`), ⌘↩ (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`) | `backendReady` | — |
+| Refresh Peek | `peek.refresh` | F5 (`peekFocus \|\| peekTabFocus`) | F5 (`peekFocus \|\| peekTabFocus`) | F5 (`peekFocus \|\| peekTabFocus`) | `backendReady` | — |
 | Copy Name | `explorer.copyName` | — | — | — | `hasConnection` | Object Explorer context menu › Copy Name |
 | Search Objects… | `explorer.searchObjects` | — | — | — | `hasConnection` | View › Search Objects…; Object Explorer context menu › Search Objects… |
 | Rebuild Search Index | `explorer.rebuildIndex` | — | — | — | `hasConnection` | — |
@@ -294,7 +296,7 @@ keys it uses are listed below.
 | All Validations | `ssis.allValidations` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › All Validations |
 | All Operations | `ssis.allOperations` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › All Operations; View › Integration Services Operations |
 | Stop Operation | `ssis.stopOperation` | — | — | — | `backendReady && ssisOperationStoppable` | Integration Services Operations context menu › Stop Operation |
-| Refresh Operations | `ssis.refreshOperations` | F5 (`activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus`) | F5 (`activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus`) | F5 (`activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus`) | `backendReady && activeDocumentIsSsisOperations && ssisOperationsRefreshable` | Integration Services Operations context menu › Refresh |
+| Refresh Operations | `ssis.refreshOperations` | F5 (`activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | F5 (`activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | F5 (`activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | `backendReady && activeDocumentIsSsisOperations && ssisOperationsRefreshable` | Integration Services Operations context menu › Refresh |
 | Pause Operations | `ssis.pauseOperations` | — | — | — | `activeDocumentIsSsisOperations && ssisOperationsPausable`; checked when `ssisOperationsPaused` | Integration Services Operations context menu › Pause |
 | Copy Operations | `ssis.copyOperations` | — | — | — | `activeDocumentIsSsisOperations` | Integration Services Operations context menu › Copy |
 | Copy Operations with Headers | `ssis.copyOperationsWithHeaders` | — | — | — | `activeDocumentIsSsisOperations` | Integration Services Operations context menu › Copy with Headers |
@@ -302,7 +304,7 @@ keys it uses are listed below.
 | Project Properties | `ssis.projectProperties` | — | — | — | `backendReady && ssisVerbProjectProperties == 'enabled'` | Object Explorer context menu › Properties |
 | Package Properties | `ssis.packageProperties` | — | — | — | `backendReady && ssisVerbPackageProperties == 'enabled'` | Object Explorer context menu › Properties |
 | Environment Properties | `ssis.environmentProperties` | — | — | — | `backendReady && ssisVerbEnvironmentProperties == 'enabled'` | Object Explorer context menu › Properties |
-| Refresh Properties | `ssis.refreshProperties` | F5 (`activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus`) | F5 (`activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus`) | F5 (`activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus`) | `backendReady && activeDocumentIsSsis` | — |
+| Refresh Properties | `ssis.refreshProperties` | F5 (`activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | F5 (`activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | F5 (`activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | `backendReady && activeDocumentIsSsis` | — |
 
 ### Tools
 
@@ -874,7 +876,7 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
 | `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
 
-## Context keys (139)
+## Context keys (142)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -901,6 +903,8 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `queryBarFocus` | boolean | focus | Focus is in the active query's bar (Execute, Cancel and its server and database lists); activePanel is then 'editor'. |
 | `activityMonitorFocus` | boolean | focus | Focus is in the active Activity Monitor; activePanel is then 'editor'. |
 | `documentTabFocus` | boolean | focus | Focus is on a document tab in the strip, or in its rename box; activePanel is then 'editor'. |
+| `peekFocus` | boolean | focus | Focus is in Object Explorer's Peek card, which floats outside every pane (activePanel is then ''). |
+| `peekTabFocus` | boolean | focus | Focus is in the active Peek tab; activePanel is then 'editor'. |
 | `quickInputVisible` | boolean | state | The command palette or a picker is open. |
 | `backendStatus` | `'starting'`, `'ready'`, `'unresponsive'`, `'restarting'`, `'failed'`, `'stopped'`, `''` | state | The SQL backend's state; '' before the workbench has heard from main. |
 | `backendReady` | boolean | state | `backendStatus == 'ready'`. |
@@ -930,6 +934,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `restoreRunning` | boolean | state | The active Restore Database document is restoring (Stop cancels the running statement in SQL Server). |
 | `restoreRefreshable` | boolean | state | The active Restore Database document can read the server and the backups again: nothing runs in it and its server is connected. |
 | `activeDocumentIsActivityMonitor` | boolean | state | The active document is an Activity Monitor. |
+| `activeDocumentIsPeek` | boolean | state | The active document is a Peek tab. |
 | `activityPaused` | boolean | state | The active Activity Monitor is paused: it runs no SQL until Resume. |
 | `activitySplit` | boolean | state | The active Activity Monitor shows two panes (Split View). |
 | `activeDocumentIsQuery` | boolean | state | The active document is a query, not an XML, JSON, or execution plan value opened from the results. |
