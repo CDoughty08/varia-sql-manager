@@ -16,6 +16,10 @@ internal sealed record SearchOutcome(long Searched, long Total, long First, long
 /// truncated cell is searched by its stored prefix, which makes the outcome Approximate.
 /// One pass counts every match and keeps up to MaxMatches of them, in whole rows: forward from FromRow, or backward, the
 /// last ones before FromRow; a run passes MaxMatches by at most the columns of its last row.
+/// The scan stops at checkpoints spaced by work done (cells and bytes compared, so a wide or long-valued result is checked
+/// as often as a narrow one): on Stop, and with no outcome once the result is released or the view closed, so a search
+/// never reads pages whose budget has been returned for longer than one checkpoint. What it holds besides the run is one
+/// row's matches and parsed page layouts bounded by LayoutCacheBytes (one in base order, whose rows are in page order).
 /// </summary>
 internal static class ResultSearcher
 {
@@ -23,14 +27,24 @@ internal static class ResultSearcher
     public const int MaxMatches = 10_000;
     /// <summary>The longest search text, in UTF-16 code units (limits.search.maxText).</summary>
     public const int MaxText = 1024;
-    private const int CancelEvery = 1 << 10;
+    /// <summary>Work between checkpoints: each cell compared counts CellWork plus its bytes.</summary>
+    internal const int CheckEvery = 1 << 16;
+    private const int CellWork = 16;
+    /// <summary>The most parsed page layouts (44 bytes per column each) a search through a view keeps at once.</summary>
+    internal const int LayoutCacheBytes = 1 << 20;
 
-    public static SearchOutcome Search(ResultSetBuffer set, StoredPage[] pages, ResultView? view, string text, long fromRow, bool backward, int maxMatches, CancellationToken token)
+    /// <summary>Whether a search must stop without an outcome: its result was released or its view closed.</summary>
+    public static Func<bool> Stopped(ResultStore store, ResultSetBuffer set, ResultView? view) =>
+        () => set.IsReleased || (view is not null && !store.HasView(view));
+
+    /// <returns>The outcome, or null when <paramref name="stopped"/> said so at a checkpoint (or the view names a row past
+    /// <paramref name="pages"/>, which only a release that emptied them can cause).</returns>
+    public static SearchOutcome? Search(ResultSetBuffer set, StoredPage[] pages, ResultView? view, string text, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped = null)
     {
         var columns = set.Wires.Count;
         var matchers = new Matcher?[columns];
         for (var c = 0; c < columns; c++) matchers[c] = MatcherFor(set.Columns[c], set.Wires[c], text);
-        var source = new Source(pages, columns);
+        var source = new Source(pages, columns, view is null ? 1 : LayoutCacheBytes / (4 * PageView.ScratchLength(Math.Max(1, columns))));
         long rows = view?.Rows ?? source.Rows;
         var found = new List<int>(16);
         var keptRows = new List<long>();
@@ -41,17 +55,27 @@ internal static class ResultSearcher
         long total = 0, first = -1, before = 0;
         var approximate = false;
         var scratch = new Scratch();
+        long work = 0;
         for (long position = 0; position < rows; position++)
         {
-            if ((position & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+            if (work <= 0)
+            {
+                token.ThrowIfCancellationRequested();
+                if (stopped?.Invoke() == true) return null;
+                work = CheckEvery;
+            }
             var row = view is null ? position : view.Order[position];
+            if (row >= source.Rows) return null;
             var page = source.ViewOf(row, out var local);
             found.Clear();
+            work -= CellWork;
             for (var c = 0; c < columns; c++)
             {
                 if (matchers[c] is not { } matcher || page.IsNull(c, local)) continue;
                 var truncated = page.IsTruncated(c, local);
-                if (matcher.Matches(page.Span(c, local), scratch)) found.Add(c);
+                var cell = page.Span(c, local);
+                work -= CellWork + cell.Length;
+                if (matcher.Matches(cell, scratch)) found.Add(c);
                 else if (truncated) approximate = true;
             }
             if (found.Count == 0) continue;
@@ -103,7 +127,10 @@ internal static class ResultSearcher
         {
             // SqlCompareOptions: IgnoreCase 1, BinarySort2 16384, BinarySort 32768.
             if ((collation.Options & (16384 | 32768)) != 0) return new OrdinalMatcher(text, StringComparison.Ordinal);
-            if (ViewSorter.Culture(collation) is { } culture) return new CultureMatcher(text, culture.Info, culture.Options);
+            // Text of only ignorable characters (U+200B, U+00AD) is found at 0 in every string by a culture compare: it is
+            // looked for as it is written instead.
+            if (ViewSorter.Culture(collation) is { } culture && culture.Info.Compare(text, string.Empty, culture.Options) != 0)
+                return new CultureMatcher(text, culture.Info, culture.Options);
             return new OrdinalMatcher(text, (collation.Options & 1) != 0 ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
         }
         return new OrdinalMatcher(text, StringComparison.OrdinalIgnoreCase);
@@ -154,44 +181,54 @@ internal static class ResultSearcher
         public override bool Matches(ReadOnlySpan<byte> cell, Scratch scratch) => scratch.Hex(cell).Contains(text, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>The sealed pages a search reads, each parsed when it is first reached, and a row's page found by binary search.</summary>
-    private sealed class Source
+    /// <summary>The sealed pages a search reads, a row's page found by binary search and parsed when reached, its layout kept
+    /// in one of a few slots (direct-mapped by page index) so a wide result's layouts never outgrow the cache.</summary>
+    internal sealed class Source
     {
         private readonly StoredPage[] pages;
         private readonly long[] starts;
-        private readonly int[]?[] layouts;
-        private readonly int[] blobStarts;
+        private readonly int[] slotPages;
+        private readonly int[]?[] slotLayouts;
+        private readonly int[] slotBlobStarts;
         private readonly int columns;
 
-        public Source(StoredPage[] pages, int columns)
+        public Source(StoredPage[] pages, int columns, int slots)
         {
             this.pages = pages;
             this.columns = columns;
             starts = new long[pages.Length];
-            layouts = new int[pages.Length][];
-            blobStarts = new int[pages.Length];
             for (var i = 0; i < pages.Length; i++)
             {
                 starts[i] = pages[i].FirstRow;
                 Rows += pages[i].Rows;
             }
+            slots = Math.Clamp(slots, 1, Math.Max(1, pages.Length));
+            slotPages = new int[slots];
+            Array.Fill(slotPages, -1);
+            slotLayouts = new int[slots][];
+            slotBlobStarts = new int[slots];
         }
 
         public long Rows { get; }
+
+        /// <summary>The bytes of the layouts kept now.</summary>
+        public long LayoutBytes => slotLayouts.Sum(layout => 4L * (layout?.Length ?? 0));
 
         public PageView ViewOf(long row, out int local)
         {
             var index = Array.BinarySearch(starts, row);
             if (index < 0) index = ~index - 1;
             var page = pages[index];
-            if (layouts[index] is not { } layout)
+            var slot = index % slotPages.Length;
+            if (slotPages[slot] != index)
             {
-                var parsed = PageView.Parse(page.Body, columns);
-                layouts[index] = layout = parsed.Layout;
-                blobStarts[index] = parsed.BlobStart;
+                var parsed = PageView.Parse(page.Body, columns, slotLayouts[slot]);
+                slotLayouts[slot] = parsed.Layout;
+                slotBlobStarts[slot] = parsed.BlobStart;
+                slotPages[slot] = index;
             }
             local = (int)(row - page.FirstRow);
-            return PageView.At(page.Body, blobStarts[index], layout, page.FirstRow, page.Rows, columns);
+            return PageView.At(page.Body, slotBlobStarts[slot], slotLayouts[slot]!, page.FirstRow, page.Rows, columns);
         }
     }
 }

@@ -1556,7 +1556,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     }
 
     /// <summary>results.search: finds the cells containing a text (ResultSearcher) off the frame loop, over the rows sealed now
-    /// or a view's; what it holds is a run of at most 10,000 matches and one row's, so it reserves nothing.</summary>
+    /// or a view's; what it holds is a run of at most 10,000 matches and one row's and at most 1 MiB of page layouts, so it
+    /// reserves nothing. It stops at its next checkpoint once the result is released or the view closed.</summary>
     private async Task<ResultsSearchResult> SearchAsync(ResultsSearchArgs args, CancellationToken token)
     {
         if (args.ResultId == 0 || args.Text is not { Length: >= 1 and <= ResultSearcher.MaxText } || args.FromRow is < 0 or > MaxSafeInteger
@@ -1566,9 +1567,11 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var complete = view?.Complete ?? set.IsComplete;
         var pages = set.SealedSnapshot();
-        var found = await Task.Run(() => ResultSearcher.Search(set, pages, view, args.Text, args.FromRow, args.Backward, args.MaxMatches, token), token);
-        if (set.IsReleased) throw Unavailable(args.ResultId);
-        if (view is not null && !store.HasView(view)) throw ViewClosed();
+        var stopped = ResultSearcher.Stopped(store, set, view);
+        var found = await Task.Run(() => ResultSearcher.Search(set, pages, view, args.Text, args.FromRow, args.Backward, args.MaxMatches, token, stopped), token);
+        // A release can also come between FindView and the snapshot (which it empties): the search then answers no outcome.
+        if (set.IsReleased || (found is null && view is null)) throw Unavailable(args.ResultId);
+        if (found is null || (view is not null && !store.HasView(view))) throw ViewClosed();
         return new ResultsSearchResult(found.Searched, found.Total, found.First, found.Rows, found.Columns, complete, found.Approximate);
     }
 
