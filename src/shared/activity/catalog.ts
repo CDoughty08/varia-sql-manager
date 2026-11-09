@@ -92,9 +92,8 @@ export const probeSpecs: { readonly [P in ActivityProbe]: ProbeSpec } = {
     defaultIntervalMs: 30_000, minIntervalMs: 15_000, maxIntervalMs: 60_000, floorMs: 30_000, budgetMs: 10_000, minGapMs: 15_000, maxDutyCycle: 0.2, maxdop1: true, filterMode: 'memory', hidden: 'pause'
   }
 }
-/** The probes the live catalogue declares today, in its order (src/shared/live/catalog.ts builds their entries from this
- *  catalogue). activity.queries joins with Recent Expensive Queries (AM4). */
-export const activityLiveProbes = ['activity.overview', 'activity.sessions', 'activity.resources'] as const satisfies readonly ActivityProbe[]
+/** The probes the live catalogue declares, in its order (src/shared/live/catalog.ts builds their entries from this catalogue). */
+export const activityLiveProbes = ['activity.overview', 'activity.sessions', 'activity.resources', 'activity.queries'] as const satisfies readonly ActivityProbe[]
 /** Probes the live catalogue declares whose sampling arrives later: each opens unavailable with this note and runs no SQL. */
 export const pendingProbes: { readonly [P in ActivityProbe]?: string } = {
   'activity.resources': 'Resource Waits and Data File I/O are not sampled yet; they arrive in a later version of Varia.'

@@ -163,7 +163,8 @@ type ActivityLiveProbe = typeof activityLiveProbes[number]
 const activityDescriptions: { readonly [P in ActivityLiveProbe]: string } = {
   'activity.overview': 'The server at a glance, in seven statements: SQL Server\'s CPU (its schedulers\' non-preemptive time) and scheduler delay, waiting tasks (wait time less signal wait of every type that is not benign), database I/O and its latency (moved only by databases read in both samples, so one dropped or closed takes only its own counts with it), batch requests, compilations and re-compilations, blocked sessions and the longest block, active requests, user sessions and logins, runnable tasks per scheduler and the work queue, memory grants, page life expectancy, deadlocks and lock waits. Rates use the server\'s own clock (ms_ticks), and a restart starts them again; a statement the login may not run leaves only its own series null.',
   'activity.sessions': 'Processes (one row per session, its MARS requests folded), the blocking chains as rows (built in the backend from task waits, each session once) and Active Expensive Queries, from one sample. Rates are per session and per request between samples, keyed by login time and each request\'s id and start time, so a reused id never gives a rate across two sessions and a MARS session\'s requests never stand in for each other. Varia\'s own sessions are marked, and system sessions and Varia\'s pools are hidden unless the filter shows them. Without server state, Processes shows only the monitor\'s own session and the other two tables report PERMISSION_DENIED without running SQL. Its two series follow the Details flyout\'s session (focusSession).',
-  'activity.resources': 'Resource Waits (by category and by type) and Data File I/O, declared now so the frame shapes are fixed.'
+  'activity.resources': 'Resource Waits (by category and by type) and Data File I/O, declared now so the frame shapes are fixed.',
+  'activity.queries': 'Recent Expensive Queries: the plan cache\'s statements that ran since about the previous sample (sys.dm_exec_query_stats, MAXDOP 1), each statement\'s change since its kept totals summed per query_hash, rates over the window since the previous sample. A first sample shows the last 10 minutes\' groups by their plans\' totals, without rates. Statement texts and databases come from a cache filled for the shown rows in batches; a row whose text has not arrived says "Loading text…". Rank chips sort the last sample in memory.'
 }
 
 /** The Activity Monitor's probes as live entries, built from its catalogue (src/shared/activity/catalog.ts), so the two never
@@ -200,7 +201,10 @@ function activityLiveEntries(): { readonly [P in ActivityLiveProbe]: LiveProbeSp
       ...tables.length ? { tables, filterMode: spec.filterMode } : {}
     }
   }
-  return { 'activity.overview': entry('activity.overview'), 'activity.sessions': entry('activity.sessions'), 'activity.resources': entry('activity.resources') }
+  return {
+    'activity.overview': entry('activity.overview'), 'activity.sessions': entry('activity.sessions'), 'activity.resources': entry('activity.resources'),
+    'activity.queries': entry('activity.queries')
+  }
 }
 
 export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {

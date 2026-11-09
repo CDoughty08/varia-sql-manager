@@ -19,12 +19,14 @@ internal sealed class ActivityReader : ILiveSqlReader
 {
     public const string OverviewProbe = "activity.overview";
     public const string SessionsProbe = "activity.sessions";
+    public const string QueriesProbe = "activity.queries";
     private readonly ActivityCatalog catalog;
     private readonly ILiveHost host;
     private readonly string connectionId;
     private readonly Lock gate = new();
     private readonly Dictionary<string, ActivityFilter> filters = new(StringComparer.Ordinal);
     private readonly ActivitySessionRows sessions;
+    private readonly ActivityQueryRows queries;
     /// <summary>Statements that failed for good on this connection, by probe, render and statement: reported each sample, not
     /// run again until a new connection's capability probe.</summary>
     private readonly Dictionary<string, LiveProbeError> skipped = new(StringComparer.Ordinal);
@@ -43,6 +45,7 @@ internal sealed class ActivityReader : ILiveSqlReader
         this.connectionId = connectionId;
         this.catalog = catalog ?? ActivityCatalog.Current;
         sessions = new(this.catalog);
+        queries = new(this.catalog);
         if (args is not null) Apply(args);
     }
 
@@ -93,6 +96,7 @@ internal sealed class ActivityReader : ILiveSqlReader
     public void Reset()
     {
         sessions.Reset();
+        queries.Reset(texts: true);
         clocks.Clear();
         io.Reset();
         // The next connection may reach another server (a failover), with other views and permissions.
@@ -135,7 +139,14 @@ internal sealed class ActivityReader : ILiveSqlReader
         var statements = ActivitySql.Statements(spec.Id, render);
         var results = new Dictionary<string, ActivityResult>(StringComparer.Ordinal);
         var errors = new List<LiveProbeError>();
-        for (var at = 0; at < statements.Count; at++)
+        var isQueries = spec.Id == QueriesProbe;
+        // The query statistics: the sample's time and @since come from its clock; the text statement runs once per batch of the
+        // shown rows' missing texts, after the rows are grouped.
+        long queryTime = 0;
+        DateTime since = default;
+        QuerySample? built = null;
+        var stop = false;
+        for (var at = 0; at < statements.Count && !stop; at++)
         {
             var statement = statements[at];
             // The render is part of the key: the limited sessions statement shares its id with the full one, which may have
@@ -146,27 +157,50 @@ internal sealed class ActivityReader : ILiveSqlReader
                 errors.Add(known);
                 continue;
             }
-            try { results[statement.Id] = await Run(connection, prologue, statement, testText, parameter => Value(statement, parameter), token).ConfigureAwait(false); }
-            catch (SqlException error) when (!token.IsCancellationRequested)
+            if (isQueries && statement.Id == "stats")
             {
-                var value = LiveErrors.From(spec.Id, error);
-                if (LiveErrors.Breaks(value.Code) || value.Code == "LOGIN_FAILED") throw;
-                if (value.Code is "PERMISSION_DENIED" or "NOT_SUPPORTED")
+                queryTime = SampleTime(spec.Id, results, item);
+                since = queries.Since(ServerLocal(results));
+            }
+            List<QueryTextRequest[]>? batches = null;
+            if (isQueries && statement.Id == "text")
+            {
+                if (!results.TryGetValue("stats", out var stats)) continue;
+                built = queries.Apply(stats, queryTime, ServerLocal(results), capabilities.TotalSpills);
+                batches = queries.TextBatches(built);
+            }
+            for (var run = 0; run < (batches?.Count ?? 1); run++)
+            {
+                var values = batches is null ? (Func<ActivityParameter, object>)(parameter => Value(statement, parameter, since)) : ActivityQueryRows.TextValues(batches[run]);
+                try
                 {
-                    errors.Add(skipped[key] = Named(value, spec, [statement]));
-                    continue;
+                    var result = await Run(connection, prologue, statement, testText, values, token).ConfigureAwait(false);
+                    if (batches is null) results[statement.Id] = result;
+                    else queries.AddTexts(batches[run], result);
                 }
-                // A lock wait or another failure: what was read arrives, and the error names the statements left unrun.
-                errors.Add(Named(value, spec, statements.Skip(at)));
-                break;
+                catch (SqlException error) when (!token.IsCancellationRequested)
+                {
+                    var value = LiveErrors.From(spec.Id, error);
+                    if (LiveErrors.Breaks(value.Code) || value.Code == "LOGIN_FAILED") throw;
+                    if (value.Code is "PERMISSION_DENIED" or "NOT_SUPPORTED")
+                    {
+                        errors.Add(skipped[key] = Named(value, spec, [statement]));
+                        break;
+                    }
+                    // A lock wait or another failure: what was read arrives, and the error names the statements left unrun.
+                    errors.Add(Named(value, spec, statements.Skip(at)));
+                    stop = true;
+                    break;
+                }
             }
         }
         // The sessions probe's clock moves with every read, even one that read nothing, so each row's rate spans its own time.
-        var sampleTime = spec.Id == SessionsProbe ? SampleTime(spec.Id, results, item) : 0;
+        var sampleTime = spec.Id == SessionsProbe ? SampleTime(spec.Id, results, item) : queryTime;
         if (results.Count == 0)
             return new(null, [], [errors.Count > 0 ? errors[0] with { Tables = null, Series = null } : LiveErrors.Create(spec.Id, "SQL_ERROR", "The probe read nothing.")], Sampled: false);
 
         if (spec.Id == OverviewProbe) return new(ActivityOverview.Raw([.. spec.Series.Select(series => series.Id)], results, catalog, io), [], errors);
+        if (isQueries) return Queries(spec, queryTime, results, built, errors, capabilities);
         if (spec.Id != SessionsProbe) throw Bug("No reader for this Activity Monitor probe.");
         return Sessions(spec, sampleTime, results, errors, capabilities);
     }
@@ -211,6 +245,25 @@ internal sealed class ActivityReader : ILiveSqlReader
         return new(new LiveRawSample(msTicks, startTicks, [built.FocusCpuRate, built.FocusReadsRate], [null, null]), tables, errors, Status: status, SeriesReset: moved);
     }
 
+    private LiveReaderSample Queries(LiveProbeJson spec, long at, Dictionary<string, ActivityResult> results, QuerySample? built, List<LiveProbeError> errors, ActivityCapabilities capabilities)
+    {
+        var tables = new List<LiveReaderTable>();
+        // The text statement was skipped or never reached: the rows still arrive, their texts loading.
+        if (built is null && results.TryGetValue("stats", out var stats)) built = queries.Apply(stats, at, ServerLocal(results), capabilities.TotalSpills);
+        if (built is not null)
+        {
+            ActivityFilter filter;
+            lock (gate) filter = filters.GetValueOrDefault("recentQueries") ?? ActivityFilter.Compile(catalog, new("recentQueries"));
+            tables.Add(new(Index(spec, "recentQueries"), queries.Rows(built), built.More, row => filter.Matches(queries.Writer.Reader(row))));
+        }
+        // No series: the rates are per row, worked out here.
+        return new(null, tables, errors);
+    }
+
+    /// <summary>The server's local time the probe's clock statement read (GETDATE(), the time query statistics are in).</summary>
+    private static DateTime? ServerLocal(IReadOnlyDictionary<string, ActivityResult> results) =>
+        results.TryGetValue("clock", out var clock) && clock.Rows is [var row, ..] ? clock.Time(row, "server_local_time") : null;
+
     /// <summary>The sample's time on the probe's own clock, in milliseconds: it moves by the server's clock (ms_ticks) between
     /// samples that both read it, else by the schedule's, so a slow round trip never skews a rate. Per-row baselines keep the
     /// time they were read at, so a row (or a statement) missing from a sample yields a rate over its own span when it comes
@@ -223,7 +276,8 @@ internal sealed class ActivityReader : ILiveSqlReader
         long? step = previous is not { } before ? null : msTicks is { } now && before.Ticks is { } then ? now - then : item.TakenAt - before.TakenAt;
         if (item.Gap is "baseline" or "resumed" || restarted || step is not >= 0)
         {
-            sessions.Reset();
+            if (probe == QueriesProbe) queries.Reset();
+            else sessions.Reset();
             step = 0;
         }
         var clock = (previous?.Clock ?? 0) + step.Value;
@@ -245,8 +299,10 @@ internal sealed class ActivityReader : ILiveSqlReader
     }
 
     /// <summary>A statement's parameter values: each cap is the catalogue's limit plus one, so a full result shows truncation.</summary>
-    private object Value(ActivityStatement statement, ActivityParameter parameter) => (statement.Id, parameter.Name) switch
+    private object Value(ActivityStatement statement, ActivityParameter parameter, DateTime since) => (statement.Id, parameter.Name) switch
     {
+        ("stats", "@rowCap") => (int)catalog.Limit("queryStatsRows") + 1,
+        ("stats", "@since") => since,
         ("sessions", "@rowCap") => (int)catalog.Limit("sessions") + 1,
         ("edges", "@edgeCap") => (int)catalog.Limit("blockingEdges") + 1,
         ("activeQueries", "@take") => (int)catalog.Limit("activeQueries") + 1,

@@ -35,7 +35,7 @@ internal static class LiveSchedulerChecks
         check(catalog.Limits is { StatementsPerConnection: 2, Statements: 8, BudgetMs: { Min: 500, Max: 10_000 }, BackoffMs: 60_000, IdleMs: 30_000 },
             "the live limits carry the scheduler's gates (2 per connection, 8 in all), budget range, back-off cap and idle threshold");
         check(catalog.Sources.TryGetValue("activity", out var activity) && activity is { Scope: "server", TestOnly: false } && activity.Probes.SequenceEqual(ActivityCatalog.Current.LiveProbes)
-            && activity.Probes.SequenceEqual([ActivityReader.OverviewProbe, ActivityReader.SessionsProbe, "activity.resources"])
+            && activity.Probes.SequenceEqual([ActivityReader.OverviewProbe, ActivityReader.SessionsProbe, "activity.resources", ActivityReader.QueriesProbe])
             && catalog.Probes[ActivityReader.OverviewProbe] is { IntervalMs: { Default: 2000, Min: 1000, Max: 60_000 }, MaxDutyCycle: 0.2, Permission: "serverState", Gates: { MinMajor: 13 } } overview
             && overview.Gates.Editions.SequenceEqual([1, 2, 3, 4, 8]) && overview.Budget is { Min: 500, Max: 5000 }
             && overview.Series.Select(series => series.Id).SequenceEqual(ActivityCatalog.Current.Probes[ActivityReader.OverviewProbe].Series)

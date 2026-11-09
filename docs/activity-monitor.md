@@ -101,10 +101,9 @@ after 10 cheap samples. Pause stops collecting (no SQL); the charts show a gap a
 
 ## The live source
 
-The live catalogue ([docs/live.md](live.md)) declares `activity.overview`, `activity.sessions`, `activity.resources`, built from this catalogue: the same tables, columns (in
+The live catalogue ([docs/live.md](live.md)) declares `activity.overview`, `activity.sessions`, `activity.resources`, `activity.queries`, built from this catalogue: the same tables, columns (in
 the same order, with the captions as column names, so Copy with Headers and Save write them), keys, facets and series.
 `activity.resources` opens unavailable: Resource Waits and Data File I/O are not sampled yet; they arrive in a later version of Varia.
-`activity.queries` joins the live catalogue with Recent Expensive Queries.
 
 Each probe runs its statements one at a time on the live connection, within one budget. A statement the login may not run
 (PERMISSION_DENIED) or the server lacks (NOT_SUPPORTED) fails alone: the sample goes on, an error beside it names the tables
@@ -401,6 +400,18 @@ Probe `activity.queries`; key `queryHash`; at most 200 rows. Default order: CPU 
 | Last Execution | `lastExecution` | datetime | — | Yes | New | The group's latest execution (server time). |
 | Cached Since | `cachedSince` | datetime | — |  | New | The oldest plan's creation time. |
 | Query Hash | `queryHash` | text | — |  | New | query_hash, which groups the statements. |
+
+The stats statement reads the plan cache's statements that ran since one window before the previous sample (a statement
+that started before it and ended after is read again), at most `queryStatsRows`. Each statement (sql_handle, plan_handle
+and offsets) keeps its totals between samples, at most 20,000 statements, the one seen least recently dropped first; a
+row's values are the changes since those totals, summed per query_hash, so a sum never depends on which rows a window
+happens to include. Rates span the window since the previous sample on the probe's clock. A plan cached since the previous
+sample counts whole; any other statement new to the kept totals counts from its next run. The rows are the groups that
+ran in the window, most CPU first, at most 200. A first sample (and the first after Resume, a restart or a reconnect)
+has no window: it shows the groups that ran in the last 10 minutes, by their plans' total CPU, with the rates blank and
+the per-execution columns from the plans' totals. Statement text and database come from a cache of
+2,000 texts, read for the shown rows that lack one, 50 per statement and 4 statements per sample, most expensive
+first; until its text arrives a row says "Loading text…". A text SQL Server no longer has stays blank.
 
 ## Filters
 
