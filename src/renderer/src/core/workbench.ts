@@ -37,6 +37,7 @@ import { DatabaseListService } from '../services/database-list'
 import { SsisTreeProbe } from '../ssis/SsisTreeProbe'
 import { ResultSelectionService } from '../services/result-selection'
 import { PeekService } from '../explorer/PeekService'
+import { PeekTabService } from '../explorer/PeekTabService'
 import type { ThemeService } from '../services/theme'
 import { queryContribution } from '../contributions/query'
 import { filesContribution, watchExternalChanges } from '../contributions/files'
@@ -173,6 +174,8 @@ export interface Workbench extends Disposable {
   readonly scripting: ScriptingService
   /** Object Explorer's Peek card: the object it shows and its reads. */
   readonly peek: PeekService
+  /** Peek promoted to document tabs: each tab's view. */
+  readonly peekTabs: PeekTabService
   /** Object Explorer's Select Top, Rename and the other object actions. */
   readonly actions: ObjectActionService
   /** The latest STATS progress of the long object actions (restore, backup) this window runs, by request id. */
@@ -301,7 +304,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // A document focuses itself once drawn, unless a dialog, the palette or a menu has focus by then (focusWhenDrawn).
   const focusLater = (focus: () => void) => focusWhenDrawn(nextFrame, focus)
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => focusLater(() => documents.focusActive()) })
-  const peek = new PeekService({ api, connections, scriptingOptions, platform })
+  const peek = new PeekService({ api, connections, scriptingOptions, platform, results })
   const serverFiles = new ServerFilePickerService({ api, connections })
   const longRuns = new LongRunService({ api })
   const dialogs = new ObjectDialogService({
@@ -360,6 +363,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const objectSearch = new ObjectSearchService({
     api, documents, connections, settings,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-object-search="${CSS.escape(id)}"] [data-object-search-focus]`)?.focus())
+  })
+  const peekTabs = new PeekTabService({
+    peek, documents, connections,
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-peek-tab="${CSS.escape(id)}"] [role="tab"][aria-selected="true"]`)?.focus())
   })
   const searchDetails = new SearchDetailsService({ api, peek, connections, searches: objectSearch, scriptingOptions })
   const context = new ContextKeyService({
@@ -473,6 +480,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     shortcuts: userShortcuts,
     scripting,
     peek,
+    peekTabs,
     actions,
     actionProgress,
     dialogs,
@@ -514,6 +522,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       retainedPlans.dispose()
       planReleases.dispose(); planGenerations.dispose(); planEvents.dispose(); planPreparation.dispose()
       queries.dispose()
+      // Before the results: each tab's view releases its Top rows there (the card's are released with it below, or by the results).
+      peekTabs.dispose()
       results.dispose()
       resultMemory.dispose()
       indexMemory.dispose()

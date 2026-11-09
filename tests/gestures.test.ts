@@ -106,6 +106,8 @@ describe('GestureService', () => {
       'grid.addSortKey': event => !!event.shiftKey,
       'global.wheelZoom': event => !!event.ctrlKey,
       'explorer.peekHover': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
+      // New with the catalogue: Ctrl+click (⌘-click) on a row opens it in a Peek tab.
+      'explorer.openPeekTab': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
       // macOS: ⌘, since Control+press is a right-click there (the tab's menu opened instead of the drag starting).
       'dock.floatWhileDragging': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
       'dock.dragFloatingTitleBar': event => !!event.shiftKey,

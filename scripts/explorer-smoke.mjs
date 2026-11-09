@@ -5,7 +5,7 @@ import { randomBytes } from 'node:crypto'
 import { expandExplorerPath, explorerLines, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.mjs'
 import {
-  activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
+  anyResultGrid, closeDocumentButton, documentFrame, documentTab, gridCell, activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
   explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, searchHitApproximate, explorerSublabel, explorerToolbar, itemCount,
   menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, popoutDockButton, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
 } from './fixtures/ui.mjs'
@@ -15,7 +15,8 @@ const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TES
 if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'explorer-profile-'))
-const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile }
+// The backend's test hooks let the stub answer Peek's Top rows with synthetic rows the real results grid reads.
+const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, VARIA_BACKEND_TEST_HOOKS: '1' }
 delete env.ELECTRON_RUN_AS_NODE
 // Playwright adds --no-sandbox on Linux unless chromiumSandbox is set; only root (cloud sessions) needs it, as Chromium will not start sandboxed there.
 const launchOptions = { args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 }
@@ -627,7 +628,7 @@ try {
   await page.keyboard.press('Shift+Tab')
   await expect(peekCard.getByLabel('Definition text', { exact: true })).toBeFocused()
   await page.keyboard.press('Tab')
-  await expect(peekCard.getByRole('button', { name: 'Refresh', exact: true })).toBeFocused()
+  await expect(peekCard.getByRole('button', { name: 'Open as Tab', exact: true })).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(peekCard).toBeHidden()
   await expect(tree()).toBeFocused()
@@ -635,7 +636,7 @@ try {
   await menu('Object Explorer').getByRole('menuitem', { name: 'Peek', exact: true }).click()
   await expect(peekCard).toBeFocused()
   // The tabs: Columns lists the tree's Columns folder, Dependencies both ways (a dependency in this database peeks in the same
-  // card, and Back returns), and Top rows reads only once chosen, showing NULL as the grid does. Arrow keys only move focus:
+  // card, and Back returns), and Top rows runs only once chosen, in the results grid. Arrow keys only move focus:
   // passing Top rows on the way to Dependencies reads nothing.
   const peekTabs = peekCard.getByRole('tablist', { name: 'Peek', exact: true })
   await peekTabs.getByRole('tab', { name: 'Columns', exact: true }).click()
@@ -652,29 +653,63 @@ try {
   await expect(peekTabs.getByRole('tab', { name: 'Dependencies', exact: true })).toHaveAttribute('aria-selected', 'true')
   await expect(peekCard.getByRole('region', { name: 'Uses', exact: true })).toContainText('Crm.dbo.Customers')
   await expect(peekCard.getByRole('region', { name: 'Used by', exact: true })).toContainText('Foreign key')
-  expect(await stubCalls('explorer.peekRows')).toHaveLength(0)
+  const topRowRuns = async () => (await stubCalls('query.execute')).filter(call => call.maxRows === 10)
+  expect(await topRowRuns()).toHaveLength(0)
   await peekCard.getByRole('button', { name: 'Peek dbo.vOrders', exact: true }).click()
   const followed = page.getByRole('dialog', { name: 'Peek: dbo.vOrders', exact: true })
   await expect(followed.getByLabel('Definition text', { exact: true })).toContainText('CREATE VIEW dbo.vOrders')
   await followed.getByRole('button', { name: 'Back', exact: true }).click()
   await expect(peekTabs.getByRole('tab', { name: 'Dependencies', exact: true })).toHaveAttribute('aria-selected', 'true')
   await peekTabs.getByRole('tab', { name: 'Top rows', exact: true }).click()
-  // A failed read offers Retry, which keeps focus in the card (on the tab), so Esc still closes it.
-  await expect(peekCard.getByRole('alert')).toContainText('took longer than 15 seconds')
+  // A failed run offers Retry, which keeps focus in the card (on the tab), so Esc still closes it.
+  await expect(peekCard.getByRole('alert')).toContainText('Query timeout expired.')
   await peekCard.getByRole('button', { name: 'Retry', exact: true }).click()
-  const topRows = peekCard.getByRole('table', { name: 'Top rows', exact: true })
-  await expect(topRows).toContainText('Alice')
+  // Select Top N Rows' script with N = 10, in a session of the card's own that closes once the run ends, in the results grid.
+  const cardRows = anyResultGrid(peekCard)
+  await expect(gridCell(cardRows, 0, 1)).toHaveText('Customer 0000000000 GmbH')
+  await expect(gridCell(cardRows, 9, 0)).toHaveText('9')
   await expect(peekTabs.getByRole('tab', { name: 'Top rows', exact: true })).toBeFocused()
-  // A value the readers could not read shows as NULL, as the grid shows it, with a note.
-  await expect(topRows.getByRole('cell', { name: 'NULL', exact: true })).toHaveCount(2)
-  await expect(peekCard.getByRole('tabpanel')).toContainText('1 value could not be read and show as NULL.')
-  // A cut value ends in an ellipsis, and its tooltip says it was cut; a whole one's is just the value.
-  const cutValue = topRows.getByRole('cell', { name: `${'B'.repeat(256)}…`, exact: true })
-  await expect(cutValue).toHaveAttribute('title', `${'B'.repeat(256)}…\nCut at about 256 characters; Select Top 1000 Rows shows more of it.`)
-  // Screen readers hear the value once, as the cell's name, and only the note as its description.
-  await expect(cutValue).toHaveAccessibleDescription('Cut at about 256 characters; Select Top 1000 Rows shows more of it.')
-  await expect(topRows.getByRole('cell', { name: 'Alice', exact: true })).toHaveAttribute('title', 'Alice')
-  expect((await stubCalls('explorer.peekRows')).at(-1).target).toMatchObject({ kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' })
+  const runs = await topRowRuns()
+  expect(runs).toHaveLength(2)
+  expect(runs[1]).toMatchObject({ database: 'AppData', maxResultSets: 1, sql: expect.stringMatching(/\nSELECT TOP \(10\) \[Id\][\s\S]*\[CustomerName\][\s\S]*FROM \[AppData\]\.\[dbo\]\.\[Orders\]/) })
+  expect(runs[1].sessionId).not.toBe(runs[0].sessionId)
+  expect((await stubCalls('query.session.close')).map(call => call.sessionId)).toEqual(expect.arrayContaining(runs.map(run => run.sessionId)))
+  // Open as Tab: the card becomes a document tab on the tab it showed, with a run of its own, Refresh and Script As (and Properties for a kind that has the dialog).
+  await peekCard.getByRole('button', { name: 'Open as Tab', exact: true }).click()
+  await expect(peekCard).toBeHidden()
+  const peekDocument = documentFrame(page, 'dbo.Orders')
+  await expect(documentTab(page, 'dbo.Orders')).toHaveAttribute('aria-selected', 'true')
+  await expect(gridCell(anyResultGrid(peekDocument), 0, 1)).toHaveText('Customer 0000000000 GmbH')
+  expect(await topRowRuns()).toHaveLength(3)
+  const peekActions = peekDocument.getByRole('group', { name: 'dbo.Orders actions', exact: true })
+  await expect(peekActions.getByRole('button', { name: /^Script As/ })).toBeEnabled()
+  // A table has no Properties dialog yet (databases and logins do), so its tab offers none.
+  await expect(peekActions.getByRole('button', { name: /^Properties/ })).toHaveCount(0)
+  await peekDocument.getByRole('tablist', { name: 'Peek', exact: true }).getByRole('tab', { name: 'Top rows', exact: true }).focus()
+  await page.keyboard.press('F5')
+  await expect.poll(async () => (await topRowRuns()).length).toBe(4)
+  await expect(gridCell(anyResultGrid(peekDocument), 0, 1)).toHaveText('Customer 0000000000 GmbH')
+  await closeDocumentButton(page, 'dbo.Orders').click()
+  await expect(peekDocument).toHaveCount(0)
+  expect((await stubCalls('query.session.close')).map(call => call.sessionId)).toEqual(expect.arrayContaining((await topRowRuns()).map(run => run.sessionId)))
+  // Ctrl+Enter (Cmd+Enter on macOS) moves the open card to a tab, on its Definition here.
+  const tabKey = process.platform === 'darwin' ? 'Meta' : 'Control'
+  await selectRow(peekRow)
+  await page.keyboard.press('Space')
+  await expect(peekCard).toBeFocused()
+  await page.keyboard.press(`${tabKey}+Enter`)
+  await expect(peekCard).toBeHidden()
+  await expect(documentFrame(page, 'dbo.Orders').getByLabel('Definition text', { exact: true })).toContainText('CREATE TABLE [dbo].[Orders]')
+  await closeDocumentButton(page, 'dbo.Orders').click()
+  // Ctrl+click (Cmd+click) on a row opens it in a tab straight away.
+  await peekRow.locator(part.explorerRowText).first().click({ modifiers: [tabKey] })
+  await expect(documentTab(page, 'dbo.Orders')).toHaveAttribute('aria-selected', 'true')
+  await expect(peekCard).toBeHidden()
+  await closeDocumentButton(page, 'dbo.Orders').click()
+  await expect(documentFrame(page, 'dbo.Orders')).toHaveCount(0)
+  await peekRow.click({ button: 'right' })
+  await menu('Object Explorer').getByRole('menuitem', { name: 'Peek', exact: true }).click()
+  await expect(peekCard).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(peekCard).toBeHidden()
   const peekKey = process.platform === 'darwin' ? 'Meta' : 'Control'
@@ -686,7 +721,7 @@ try {
   await expect(tree()).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(peekCard).toBeHidden()
-  console.log('Object Explorer checks: Peek opens on dbo.Orders by Space, the menu and Ctrl+hover, shows its properties and CREATE script, its Columns, Dependencies (followed and back) and Top rows tabs (a cut value says so in its tooltip), and Esc returns to the tree.')
+  console.log('Object Explorer checks: Peek opens on dbo.Orders by Space, the menu and Ctrl+hover, shows its properties and CREATE script, its Columns, Dependencies (followed and back) and Top rows tabs (Top rows in the results grid, its session closed), opens as a tab by its button, Ctrl+Enter and Ctrl+click (Refresh runs it again, closing releases it), and Esc returns to the tree.')
 
   // 9. An offline database is listed, dimmed, with no chevron.
   await select('server-a', 'Databases', 'AppData')

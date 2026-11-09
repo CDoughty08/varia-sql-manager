@@ -89,8 +89,6 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // The backend answers its own 15 s budget (peekLimits.budgetMs) as a TIMEOUT value, inside this deadline.
   'explorer.peek': { kind: 'unary', lane: 'explorer', deadlineMs: 30_000 },
   'explorer.peekDependencies': { kind: 'unary', lane: 'explorer', deadlineMs: 30_000 },
-  // Top rows answers the same budget the same way.
-  'explorer.peekRows': { kind: 'unary', lane: 'explorer', deadlineMs: 30_000 },
   // Copy streams its text as DATA within credit; an export writes the file the user chose and only CANCEL ends it.
   'results.copy': { kind: 'stream', lane: 'results', deadlineMs: 120_000 },
   'results.export': { kind: 'unary', lane: 'results', deadlineMs: 0 },
