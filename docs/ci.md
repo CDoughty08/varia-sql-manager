@@ -8,20 +8,35 @@ with `node scripts/ci-timings.mjs` (add `--steps` for per-step times) before and
 - CI (`.github/workflows/ci.yml`) runs on every PR, drafts included (any base branch, so stacked PRs are tested), every
   push to main and manual runs (a newer push cancels the older run of its PR, or of main; manual runs always finish); the
   repository is public, so its minutes cost nothing, but GitHub runs only 20 of its jobs
-  at once (5 on macOS), so a PR runs at most 12 and no job repeats another's work. Every job starts at once and builds
+  at once (5 on macOS), so a PR runs at most 13 and no job repeats another's work. Every job starts at once and builds
   what it needs, so one failure hides nothing and the run takes as long as its longest job: `npm run check` on Linux,
   Windows and macOS; the live .NET checks on Linux in three groups (`--live-group k/3`, each against its own SQL Server
-  service; the first also runs `tests/*-live.test.ts` and Kerberos); the smoke suites in three shards on Linux (sandboxed,
-  under xvfb, with SQL Server) and two on Windows (`scripts/smoke-shards.mjs`, which splits `test:smoke` by each platform's times
+  service; the first also runs `tests/*-live.test.ts`, the bundled SQL Tools Service against the container and Kerberos); the smoke suites in three shards on Linux (sandboxed,
+  under xvfb, with SQL Server) and three on Windows (`scripts/smoke-shards.mjs`, which splits `test:smoke` by each platform's times
   in its `suiteSeconds`); and the Linux benchmarks (floors enforced). Report-only work stays off PRs: Linux's 1024x768
   repeats of the scripting and results suites (Windows runners' own display is 1024x768) run on main pushes, and the
   Windows and macOS benchmarks run daily and by hand (`bench-desktop.yml`). macOS skips the smoke tests until they cover its window chrome. `tests/ci-workflow.test.ts` holds
   this layout.
+  The Windows suite weights already totaled 719 seconds across two shards against a 360-second budget each. The new
+  language-service UI suite adds a third Windows shard, keeping the budget rather than reducing existing estimates.
   Release builds (`release.yml`, through `package.yml`) package main pushes, tags and manual runs, and a pull request only when
   it changes what packaging reads (its `paths`); Intel macOS packages only for tags, manual runs and a weekly scheduled run on
   main (Intel alone), and installers upload only for tags and manual runs (`tests/release-workflow.test.ts`). A pull request
   over 300 changed files may skip Release builds (GitHub reads only its first 300 for `paths`): run them by hand then. Every workflow a pull request triggers cancels its superseded runs.
   `sql-matrix.yml` (manual runs only) repeats the .NET checks against SQL Server 2017, 2019, 2022 and 2025.
+
+  SQL Tools Service is a build-time dependency pinned in `build/sqltools-service.json` for every release RID. Preparation
+  verifies the official archive's SHA-256 before extraction and retains upstream notices, the component's MIT license and
+  an inventory of file hashes. Development launch/build commands prepare the host's distribution; packaging prepares its
+  exact target and includes the complete runtime beside the backend. Packaged smoke tests check those files and start the
+  bundled language server without a path override. Live group 1 additionally tests schema completion and hover against its
+  disposable SQL Server container; the other live groups remain Node-free. Linux smoke shard 3 also exercises real Monaco
+  completion and hover in split/floating editors against SQL Server 2022 with SQL Login, including focus return from a
+  panel's OS popout, targeted cache refresh and docking back. It reuses that shard's server, build and display, with a
+  five-minute deadline.
+
+  Smoke builds and packaging prepare Electron from its npm-pinned checksums, retrying transient official-download failures
+  within a three-attempt, three-minute budget and seeding the shared archive cache so packaging verifies checksums offline.
 
 ## Where the time goes (baseline, 2026-11-07)
 
@@ -196,8 +211,9 @@ Considered and rejected (do not re-propose without new numbers):
   opens: under `offline-stress.mjs`, 5 to 7 of 15 copies crashed with "Timeout attempting to open the connection", against
   none. The checks assert only that the failure is retryable, which both forms are.
 
-- **One shard per OS, or three.** One shard makes 12 to 13 min jobs (smoke becomes the critical path). Three shards add
-  about 1.5 runner-min and one slot per OS per push.
+- **One shard per OS.** One shard makes 12 to 13 min jobs (smoke becomes the critical path). A third shard added about
+  1.5 runner-min and one slot per OS per push in the original measurements; Windows now needs it to accommodate the
+  language-service UI suite within the 360-second shard budget.
 - **Build once and fan out artifacts.** This needs `needs:` and adds 1 to 3 min of serial wall time before the smoke
   shards, which are the critical path, to save about 2 runner-min.
 - **Caching `node_modules` or the Electron download.** `npm ci` from the npm cache takes 4 to 8 s on Linux. The 637 MB tree
@@ -209,7 +225,7 @@ Considered and rejected (do not re-propose without new numbers):
 
 ## Rules for keeping CI lean
 
-- **Budget per push across all workflows.** A pull request push starts at most 12 CI jobs, 1 of them macOS
+- **Budget per push across all workflows.** A pull request push starts at most 13 CI jobs, 1 of them macOS
   (`tests/ci-workflow.test.ts`), plus at most 3 packaging jobs, and those only when it changes packaging
   (`tests/release-workflow.test.ts`). Two overlapping pushes must fit in 20 slots. GitHub matches a pull request's `paths`
   against its first 300 changed files only, so a pull request over 300 changed files may skip Release builds silently: run

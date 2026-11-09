@@ -46,6 +46,11 @@ the rules that keep it lean.
   cancelled script to leave rows unread (`LiveResultChecks.StoppedEarly`), which no load can fake, and those value timings
   are measured once more when they miss their bound (`LiveResultChecks.OnceMore`). A new live check that walks shared
   server state or times work against a fixed bound needs the same care.
+- SQL IntelliSense: after `npm run build:smoke`, `npm run test:language:live` runs the actual bundled SQL Tools Service
+  against `VARIA_TEST_SQL_SERVER` and requires `VARIA_TEST_SQL_SCRATCH=1` for its two uniquely owned, marked databases.
+  It validates completion, hover after edits, isolation and cleanup. `npm run test:language:ui` exercises the real Monaco
+  widgets through the full application against the same server. Both use bundled discovery without a service-path
+  override; SQL authentication uses the usual test user/password variables. See docs/language-services.md.
 - Microsoft Entra ID needs a tenant, so its live checks run only on request: `VARIA_TEST_ENTRA_SERVER`,
   `VARIA_TEST_ENTRA_SP_CLIENT_ID` and `VARIA_TEST_ENTRA_SP_SECRET` (a service principal with a user in the Azure SQL
   database `VARIA_TEST_ENTRA_DATABASE` names) run the Service Principal checks, and `VARIA_TEST_ENTRA_DEFAULT=1` adds Entra Default after `az login`. Never

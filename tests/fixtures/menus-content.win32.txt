@@ -61,6 +61,8 @@ Edit
   &IntelliSense >
     &Insert Snippet…  Ctrl+K Ctrl+X  +++-
     &Surround With…  Ctrl+K Ctrl+S  +++-
+    ---
+    &Refresh Local Cache  Ctrl+Shift+R  -++-
 View
   &Command Palette…  Ctrl+Shift+P  ++++
   &Go to Query…  Ctrl+P  ++++
