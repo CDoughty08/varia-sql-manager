@@ -131,6 +131,9 @@ try {
   await tabMenuItem('SQLQuery1.sql', 'Rename Tab…')
   await page.keyboard.insertText('Welcome')
   await page.keyboard.press('Enter')
+  // Wait for the rename to land: opening the next tab's menu while this name box is still open renamed the wrong tab on CI.
+  await expect(documentTab(page, 'Welcome')).toBeVisible()
+  await expect(tabNameBox(page)).toHaveCount(0)
   await tabMenuItem('orders.sql', 'Rename Tab…')
   await page.keyboard.insertText('Orders report')
   await page.keyboard.press('Enter')

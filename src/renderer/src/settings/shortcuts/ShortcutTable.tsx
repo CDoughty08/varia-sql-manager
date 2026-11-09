@@ -103,7 +103,8 @@ export default function ShortcutTable({ groups, platform, selected, onSelect, on
   }
   if (gestures?.length) {
     rows.push(<tr key="group:mouse" className="shortcuts-group"><th colSpan={columns.length} scope="colgroup">Mouse</th></tr>)
-    for (const gesture of gestures) rows.push(<tr key={gestureKey + gesture.id} data-row={gestureKey + gesture.id} tabIndex={-1} className="shortcuts-gesture" onClick={onShowMouse} title="Choose to open the Mouse view">
+    // With no command row to hold the grid's one tab stop (a search that matches only gestures), the first gesture row takes it.
+    for (const [index, gesture] of gestures.entries()) rows.push(<tr key={gestureKey + gesture.id} data-row={gestureKey + gesture.id} tabIndex={!current && index === 0 ? 0 : -1} className="shortcuts-gesture" onClick={onShowMouse} title="Choose to open the Mouse view">
       <td className="shortcuts-command">{gesture.changed ? <span className="shortcuts-dot" role="img" aria-label="Changed" /> : <span className="shortcuts-nodot" />}<span className="shortcuts-command-title">{gesture.title}</span></td>
       {byPlatform ? <td colSpan={allPlatforms.length}>{gesture.label}</td> : <><td>{gesture.label}</td><td>{gesture.scopeTitle}</td></>}
       <td className="shortcuts-source-cell"><SourceChip source={gesture.locked ? 'builtin' : gesture.changed ? 'user' : 'default'} lock={gesture.locked} /></td>

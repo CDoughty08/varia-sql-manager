@@ -229,10 +229,6 @@ const normalEntry = (binding: ShortcutBinding): ShortcutBinding => {
   const { scope: _global, ...rest } = binding
   return rest
 }
-const sameKey = (a: ShortcutBinding, b: ShortcutBinding, platform: Platform): boolean => {
-  const left = parses(a.key, platform), right = parses(b.key, platform)
-  return !!left && !!right && sameChords(left, right)
-}
 export function importSummary(draft: ShortcutFile, incoming: ShortcutFile, platform: Platform): ImportSummary {
   const have = new Set(draft.bindings.map(binding => entryKey(normalEntry(binding))))
   const added: ShortcutBinding[] = []
@@ -243,8 +239,11 @@ export function importSummary(draft: ShortcutFile, incoming: ShortcutFile, platf
   const effective = effectiveRules(platform, draft)
   const conflicts: ImportSummary['conflicts'][number][] = []
   let clashes = 0, ignored = 0
-  const applying = added.filter(binding => bindingApplies(binding, platform))
-  for (const [index, binding] of applying.entries()) {
+  // Each entry's key is parsed once, and the additions seen so far are a set of scope and chords: comparing each entry
+  // with every earlier one made a 1,024-entry preview quadratic (#291).
+  const seen = new Set<string>()
+  for (const binding of added) {
+    if (!bindingApplies(binding, platform)) continue
     const chords = parses(binding.key, platform)
     if (!chords) continue
     if (binding.remove) {
@@ -255,7 +254,9 @@ export function importSummary(draft: ShortcutFile, incoming: ShortcutFile, platf
     // The draft's rules are memoised, and the preview names no narrower scope, so each entry is one scan.
     const verdict = validateShortcut(effective.rules, { command: binding.command, key: chords.join(' '), scope: binding.scope ?? 'global' }, platform, { narrowerScopes: false })
     if (verdict.verdict === 'conflict') conflicts.push({ label: keybindingLabel(chords, platform), command: commandDescriptor(binding.command).title, with: verdict.conflicts.map(rule => commandDescriptor(rule.command).title) })
-    if (applying.slice(0, index).some(earlier => !earlier.remove && (earlier.scope ?? 'global') === (binding.scope ?? 'global') && sameKey(earlier, binding, platform))) clashes++
+    const keyed = [binding.scope ?? 'global', ...chords].join(' ')
+    if (seen.has(keyed)) clashes++
+    else seen.add(keyed)
   }
   return {
     shortcuts: incoming.bindings.length, added: added.length, same: incoming.bindings.length - added.length, conflicts, clashes, ignored, unknown: incoming.unknown.length,
