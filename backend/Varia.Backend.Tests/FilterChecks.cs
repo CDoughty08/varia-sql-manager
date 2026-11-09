@@ -96,6 +96,12 @@ internal static class FilterChecks
         var (between, betweenResolved) = Build(set, [], Cells(FilterOp.Between, 3, null, (0, 4)));
         check(Show(between) == "0,1,2,3,5,6" && betweenResolved[0] is { Rows: [0, 3], Nulls: false },
             "Between keeps the rows from the selection's lowest value to its highest, without NULL, resolved to those two rows");
+        // Overlapping and out-of-range cells read each position once (the request's 256 ranges cannot multiply the rows).
+        var (overlapped, overlappedResolved) = Build(set, [], Cells(FilterOp.In, 1, null, [.. Enumerable.Repeat((0L, (long)int.MaxValue), 256)]));
+        check(Show(overlapped) == "0,1,2,3,4,5,6" && overlappedResolved[0] is { Nulls: true, Rows.Length: 3 },
+            "256 overlapping ranges over every row filter once by each distinct value and NULL");
+        check(string.Join(" ", ViewSorter.Merge([(5, 3), (0, 2), (1, 2), (20, 4), (7, 1), (30, 1)], 22)) == "(0, 3) (5, 8) (20, 22)",
+            "cell ranges merge into sorted, disjoint spans clipped to the positions there are");
         check(Show(Build(set, [], betweenResolved).Order) == Show(between) && Show(Build(set, [], resolved).Order) == Show(inCi) && Show(Build(set, [], notResolved).Order) == Show(notIn),
             "resolved filters build the same views again (as the renderer rebuilds them once more rows arrive)");
         var (sortedFilter, _) = Build(set, [new ViewKey(0, true, SortMode.Value)], Cells(FilterOp.In, 1, null, (0, 1)));

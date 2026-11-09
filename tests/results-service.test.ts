@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { ApiResult, ResultColumn, ResultsJobProgress, ResultsJobResult, SavedResults, VariaApi, ViewSortKey, ViewSortMode } from '../src/shared/contracts'
+import type { ApiResult, ResolvedViewFilter, ResultColumn, ResultsJobProgress, ResultsJobResult, SavedResults, VariaApi, ViewSortKey, ViewSortMode } from '../src/shared/contracts'
 import type { ResultHandle, ResultView } from '../src/renderer/src/results/ResultClient'
 import type { DocumentService } from '../src/renderer/src/services/documents'
 import { EventBus } from '../src/renderer/src/core/events'
@@ -873,10 +873,10 @@ describe('results service sorting', () => {
 })
 
 describe('results service filters', () => {
-  const filtered = (rows = 10) => {
+  const filtered = (rows = 10, columns?: ResultColumn[]) => {
     const f = fixture()
     f.service.begin('t1', 'q1')
-    f.service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { rowsAvailable: rows, rowsRead: rows, rowsStored: rows })]) })
+    f.service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { rowsAvailable: rows, rowsRead: rows, rowsStored: rows, ...columns ? { columns } : {} })]) })
     const handle = f.client.handle(1)!
     handle.snapshot = { ...handle.snapshot, rowsAvailable: rows, rowsRead: rows, rowsStored: rows, state: 'complete' }
     // Base row r's value in column c reads "v<r>" ("NULL" for row 9).
@@ -941,6 +941,12 @@ describe('results service filters', () => {
     service.filterSelection('t1', 0, 'notNull')
     expect(handle.sort.mock.lastCall?.[1]?.filters?.at(-1)).toEqual({ op: 'notIn', column: 1, rows: [], nulls: true })
     expect(service.sortOf('t1', 0)?.filters.at(-1)?.label).toBe('(No column name) is not NULL')
+    // Exclude NULLs and Exclude Selected Values on one column are different kinds: neither replaces the other.
+    expect(handle.sort.mock.lastCall?.[1]?.filters).toHaveLength(2)
+    service.filterSelection('t1', 0, 'notIn')
+    expect(handle.sort.mock.lastCall?.[1]?.filters?.map(filter => 'nulls' in filter && filter.nulls === true)).toEqual([true, false])
+    service.filterSelection('t1', 0, 'notNull')
+    expect(handle.sort.mock.lastCall?.[1]?.filters).toHaveLength(2)
     // A selection across columns cannot filter by values, but names the columns for duplicates.
     select([{ top: 0, bottom: 3, left: 0, right: 1 }])
     expect(service.canFilterSelection('t1', 0, 'in')).toBe(false)
@@ -992,6 +998,82 @@ describe('results service filters', () => {
     expect(handle.sort.mock.lastCall?.[1]?.filters).toEqual([{ op: 'duplicates', columns: [0] }])
     expect(f.service.sortOf('t1', 0)?.filters[0].label).toBe('Duplicate rows')
   })
+  it('takes at most 16 filters, saying so, and filters only by selections whose runs of rows fit a request', async () => {
+    const { service, handle, select, flush, tab } = filtered(1000, Array.from({ length: 17 }, (_, at): ResultColumn => ({ name: `c${at}`, dataType: 'int', wire: 'text', nullable: true })))
+    handle.sort.mockImplementation(async (_keys, o) => resolvedView(handle, 1, (o?.filters ?? []).map((filter): ResolvedViewFilter => filter.op === 'duplicates' ? filter : { op: filter.op, column: filter.column, rows: 'rows' in filter ? filter.rows : [0], nulls: 'nulls' in filter ? !!filter.nulls : false })))
+    for (let column = 0; column < 16; column++) {
+      select([{ top: 0, bottom: 0, left: column, right: column }])
+      expect(service.filterSelection('t1', 0, 'in')).toBe(true)
+    }
+    expect(service.sortOf('t1', 0)?.filters).toHaveLength(16)
+    select([{ top: 1, bottom: 1, left: 16, right: 16 }])
+    const calls = handle.sort.mock.calls.length
+    expect(service.filterSelection('t1', 0, 'in')).toBe(false)
+    expect(handle.sort.mock.calls.length).toBe(calls)
+    flush()
+    expect(tab().jobNotice).toBe('Could not filter the results: a grid takes at most 16 filters. Remove one first.')
+    expect(service.sortOf('t1', 0)?.filters).toHaveLength(16)
+    // Replacing a filter of the same kind still works at the limit.
+    select([{ top: 2, bottom: 2, left: 3, right: 3 }])
+    expect(service.filterSelection('t1', 0, 'in')).toBe(true)
+    service.clearFilters('t1', 0)
+    await settle()
+    // Overlapping and adjacent cells join into one run; more separate runs than a request takes cannot filter.
+    select([{ top: 0, bottom: 3, left: 1, right: 1 }, { top: 2, bottom: 5, left: 1, right: 1 }, { top: 6, bottom: 6, left: 1, right: 1 }])
+    service.filterSelection('t1', 0, 'in')
+    expect(handle.sort.mock.lastCall?.[1]?.filters?.at(-1)).toEqual({ op: 'in', column: 1, cells: { ranges: [[0, 7]] } })
+    select(Array.from({ length: 257 }, (_, at) => ({ top: at * 2, bottom: at * 2, left: 1, right: 1 })))
+    expect(service.canFilterSelection('t1', 0, 'notIn')).toBe(false)
+    select(Array.from({ length: 256 }, (_, at) => ({ top: at * 2, bottom: at * 2, left: 1, right: 1 })))
+    expect(service.canFilterSelection('t1', 0, 'notIn')).toBe(true)
+  })
+
+  it('names a view\'s filters only onto that view, reads only labels not yet named, and says a failed replacement could not filter', async () => {
+    const { service, handle, select, flush, tab } = filtered()
+    const reads = vi.fn(handle.getWindow)
+    handle.getWindow = reads
+    let release = () => {}
+    const slow = new Promise<void>(done => { release = done })
+    const read = handle.getWindow
+    handle.getWindow = async (first, count, o) => { await slow; return read(first, count, o) }
+    select([{ top: 2, bottom: 2, left: 1, right: 1 }])
+    const first = [{ op: 'in' as const, column: 1, rows: [2], nulls: false }]
+    handle.sort.mockResolvedValueOnce(resolvedView(handle, 1, first))
+    service.filterSelection('t1', 0, 'in')
+    await settle()
+    await settle()
+    // A second filter starts building before the first one's value is read: the late label leaves the pending filters alone.
+    select([{ top: 0, bottom: 0, left: 0, right: 0 }])
+    const pending = deferred<ResultView>()
+    handle.sort.mockReturnValueOnce(pending.promise)
+    service.filterSelection('t1', 0, 'notNull')
+    release()
+    await settle()
+    await settle()
+    expect(service.sortOf('t1', 0)?.filters.map(item => item.label)).toEqual(['(No column name): filtering…', 'Id is not NULL'])
+    const second = [...first, { op: 'notIn' as const, column: 0, rows: [], nulls: true }]
+    pending.resolve(resolvedView(handle, 2, second))
+    await settle()
+    await settle()
+    await settle()
+    expect(service.sortOf('t1', 0)?.filters.map(item => item.label)).toEqual(["(No column name) = 'v2'", 'Id is not NULL'])
+    // A sort builds the view again without reading the named labels' values again.
+    reads.mockClear()
+    handle.sort.mockResolvedValueOnce(resolvedView(handle, 3, second))
+    service.sortBy('t1', 0, 0, 'ascending')
+    await settle()
+    await settle()
+    expect(reads).not.toHaveBeenCalled()
+    // Replacing a filter on a sorted grid that fails says it could not filter.
+    select([{ top: 4, bottom: 4, left: 1, right: 1 }])
+    handle.sort.mockRejectedValueOnce(new Error('No room.'))
+    service.filterSelection('t1', 0, 'in')
+    await settle()
+    flush()
+    expect(tab().jobNotice).toBe('Could not filter the results: No room.')
+    expect(service.sortOf('t1', 0)?.filters).toHaveLength(2)
+  })
+
   it('names filters by their values, counts and NULL', () => {
     const columns: ResultColumn[] = [{ name: 'Id', dataType: 'int', wire: 'text', nullable: false }, { name: 'Name', dataType: 'nvarchar', wire: 'text', nullable: true }]
     expect(filterLabel({ op: 'in', column: 1, rows: [3], nulls: false }, columns, ["'x'"])).toBe("Name = 'x'")

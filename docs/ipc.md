@@ -1333,17 +1333,17 @@ itself by view position.
   `{ op: 'in' | 'notIn' | 'between', column, rows: 0 – 4,096 base rows, nulls? }` compares the column's values with those
   rows' values (`nulls`: NULL is among `in`'s and `notIn`'s values; `between` takes two rows, its lowest and highest
   value, and keeps no NULL). The same filter can name selected cells instead,
-  `cells: { ranges: 1 – 256 [first, count], viewId? }`, positions in a view (or the result) that the backend reads,
-  reduces to one row per distinct value (at most 4,096, else `TOO_LARGE`; `between` keeps only the lowest and highest) and
+  `cells: { ranges: 1 – 256 [first, count], viewId? }`, positions in a view (or the result) that the backend reads (each
+  once, however the ranges overlap), reduces to one row per distinct value (at most 4,096, else `TOO_LARGE`; `between` keeps only the lowest and highest) and
   answers resolved, `{ op, column, rows, nulls }`, in `filters`, so the renderer builds the same view again from rows. A
   view named that is gone answers `VIEW_NOT_FOUND`. `{ op: 'duplicates', columns }` keeps the rows whose values in those
   distinct columns equal another row's (NULL equal to NULL, as GROUP BY has it), each group together in the order of its
   first row. Values are equal and ordered as the sort compares them, so a column's collation decides which texts match
   (case and trailing spaces under a CI collation) and `2` equals `2.0` in a float column; a truncated value compares by
   its stored prefix (`approximate`).
-- **Memory.** A sort holds 8 to 16 bytes per row and key while it runs (a filter, per column it compares, and 8 bytes a
-  row for the rows it keeps and a selection's rows), and a view keeps 4 bytes a row it shows, all charged to the result's
-  query budget (`TOO_LARGE` past it); what building needed is returned at once, the order when the view is closed,
+- **Memory.** A sort holds 8 to 16 bytes per row and key while it runs (a filter, per column it compares, and 16 bytes a row
+  for the rows it keeps, a selection's rows or duplicates' groups), and a view keeps 4 bytes a row it shows, all charged
+  to the result's query budget (`TOO_LARGE` past it); what building needed is returned at once, the order when the view is closed,
   replaced, or its result released.
 - **Reading through a view.** `results.read`, `results.rowBytes`, `results.copy` and `results.export` take `viewId`;
   rows are then view positions. Read pages are built in view order from the stored cells (flags and truncation kept) and

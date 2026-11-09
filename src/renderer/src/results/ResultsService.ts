@@ -35,7 +35,12 @@ export interface GridSort {
   readonly stale: boolean
 }
 /** A grid filter: what the view is asked for (selected cells until the view resolves them to rows) and its words. */
-export interface GridFilter { readonly filter: ViewFilter; readonly label: string }
+export interface GridFilter {
+  readonly filter: ViewFilter
+  readonly label: string
+  /** The label already says all it will (its values named, or none to name): building the view again reads none. */
+  readonly named?: true
+}
 /** What a selection filters by: its values, other values, the range from its lowest to its highest, or no NULL in its column. */
 export type SelectionFilter = 'in' | 'notIn' | 'between' | 'notNull'
 /** How a header click or a command changes a column's place in the sort. */
@@ -594,10 +599,11 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const { column } = target
     const filter: ViewFilter = kind === 'notNull' ? { op: 'notIn', column, rows: [], nulls: true }
       : { op: kind, column, cells: { ranges: target.ranges, ...target.viewId === undefined ? {} : { viewId: target.viewId } } }
-    const label = kind === 'notNull' ? `${columnName(set.descriptor.columns, column)} is not NULL` : `${columnName(set.descriptor.columns, column)}: filtering…`
-    const same = (item: GridFilter) => item.filter.op !== 'duplicates' && item.filter.column === column && (item.filter.op === filter.op || (kind === 'notNull' && isNotNull(item.filter)))
-    this.applyView(tabId, run, index, run.sorts.get(index)?.keys ?? [], [...(run.sorts.get(index)?.filters ?? []).filter(item => !same(item)), { filter, label }])
-    return true
+    const name = columnName(set.descriptor.columns, column)
+    const item: GridFilter = kind === 'notNull' ? { filter, label: `${name} is not NULL`, named: true } : { filter, label: `${name}: filtering…` }
+    // Exclude NULLs is a notIn of its own: it and Exclude Selected Values on a column each replace only their own kind.
+    const same = (other: GridFilter) => other.filter.op === filter.op && 'column' in other.filter && other.filter.column === column && isNotNull(other.filter) === (kind === 'notNull')
+    return this.addFilter(tabId, run, index, (run.sorts.get(index)?.filters ?? []).filter(other => !same(other)), item)
   }
 
   /** Whether `filterSelection` can filter the grid's selection that way. */
@@ -610,7 +616,16 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const names = set.descriptor.columns
     const label = filterLabel({ op: 'duplicates', columns }, names)
     const filters = (run.sorts.get(index)?.filters ?? []).filter(item => !(item.filter.op === 'duplicates' && sameColumns(item.filter.columns, columns)))
-    this.applyView(tabId, run, index, run.sorts.get(index)?.keys ?? [], [...filters, { filter: { op: 'duplicates', columns }, label }])
+    return this.addFilter(tabId, run, index, filters, { filter: { op: 'duplicates', columns }, label, named: true })
+  }
+
+  /** Adds a filter after the grid's others; a grid that has as many as a view takes says so and keeps them. */
+  private addFilter(tabId: string, run: Run, index: number, others: readonly GridFilter[], item: GridFilter): boolean {
+    if (others.length >= wire.views.maxFilters) {
+      this.notify(tabId, `Could not filter the results: a grid takes at most ${wire.views.maxFilters} filters. Remove one first.`)
+      return false
+    }
+    this.applyView(tabId, run, index, run.sorts.get(index)?.keys ?? [], [...others, item], 'filter')
     return true
   }
 
@@ -620,12 +635,12 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   removeFilter(tabId: string, index: number, at: number): void {
     const run = this.runs.get(tabId), sort = run?.sorts.get(index)
     if (!run || !sort || at < 0 || at >= sort.filters.length) return
-    this.applyView(tabId, run, index, sort.keys, sort.filters.filter((_, position) => position !== at))
+    this.applyView(tabId, run, index, sort.keys, sort.filters.filter((_, position) => position !== at), 'filter')
   }
 
   clearFilters(tabId: string, index: number): void {
     const run = this.runs.get(tabId), sort = run?.sorts.get(index)
-    if (run && sort?.filters.length) this.applyView(tabId, run, index, sort.keys, [])
+    if (run && sort?.filters.length) this.applyView(tabId, run, index, sort.keys, [], 'filter')
   }
 
   /** The text sort mode changed: every grid sorted by a column the mode orders (text, xml, json, binary) sorts again. */
@@ -844,18 +859,17 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    * says why in the toolbar.
    */
   private applySort(tabId: string, run: Run, index: number, keys: readonly ViewSortKey[]): void {
-    this.applyView(tabId, run, index, keys, run.sorts.get(index)?.filters ?? [])
+    this.applyView(tabId, run, index, keys, run.sorts.get(index)?.filters ?? [], 'sort')
   }
 
   /** Builds a grid's view from its keys and filters (see applySort); a filter's selected cells come back as base rows,
    *  whose values then name the filter. */
-  private applyView(tabId: string, run: Run, index: number, keys: readonly ViewSortKey[], filters: readonly GridFilter[]): void {
+  private applyView(tabId: string, run: Run, index: number, keys: readonly ViewSortKey[], filters: readonly GridFilter[], action: 'sort' | 'filter'): void {
     const set = run.sets[index]
     if (!set || this.disposed) return
     run.sorting.get(index)?.abort()
     run.sorting.delete(index)
     const current = run.sorts.get(index)
-    filters = filters.slice(-wire.views.maxFilters)
     if (keys.length === 0 && filters.length === 0) {
       // The view closes once the grid shows the rows in SQL Server's order (viewShown).
       this.setSort(tabId, run, index, undefined)
@@ -875,19 +889,21 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       const held = run.held.get(index) ?? { views: new Set<ResultView>() }
       held.views.add(view)
       run.held.set(index, held)
-      const resolved = filters.map((item, at) => ({ filter: view.filters[at] ?? item.filter, label: item.label }))
+      const resolved = filters.map((item, at): GridFilter => ({ ...item, filter: view.filters[at] ?? item.filter }))
       this.setSort(tabId, run, index, { keys: sort, filters: resolved, applied: resolved, view, sorting: false, approximate: view.approximate, stale: !view.complete })
       this.closeHeld(run, index)
       this.nameFilters(tabId, run, index, set)
       // The set finished while this view was built (refreshSorts skipped it): build it from every row now.
-      if (!view.complete && set.handle.getSnapshot().state === 'complete') this.applyView(tabId, run, index, sort, resolved)
+      if (!view.complete && set.handle.getSnapshot().state === 'complete') this.applyView(tabId, run, index, sort, resolved, action)
     }, (error: unknown) => {
       if (run.sorting.get(index) !== controller || this.runs.get(tabId) !== run) return
       run.sorting.delete(index)
       const last = run.sorts.get(index)
       this.setSort(tabId, run, index, last?.view ? { ...last, keys: last.view.keys, filters: last.applied, sorting: false } : undefined)
+      // Names the filters a rebuild took over before their values were read.
+      this.nameFilters(tabId, run, index, set)
       const reason = error instanceof Error ? error.message : 'The rows could not be sorted.'
-      this.notify(tabId, (filters.length > (current?.applied.length ?? 0) || keys.length === 0 ? 'Could not filter the results: ' : 'Could not sort the results: ') + reason)
+      this.notify(tabId, (action === 'filter' ? 'Could not filter the results: ' : 'Could not sort the results: ') + reason)
     })
   }
 
@@ -901,9 +917,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const blocks = resolveBlocks(selection, rows, columns)
     const column = blocks[0]?.left
     if (column === undefined || blocks.some(block => block.left !== column || block.right !== column)) return undefined
-    const ranges = blocks.map((block): [number, number] => [block.top, block.bottom - block.top + 1])
-    if (kind === 'between' && ranges.reduce((sum, [, count]) => sum + count, 0) < 2) return undefined
-    return { column, ranges: ranges.slice(0, wire.views.maxFilterRanges), ...shown ? { viewId: shown.viewId } : {} }
+    const ranges = mergeRanges(blocks.map((block): [number, number] => [block.top, block.bottom - block.top + 1]))
+    // More separate runs of rows than a filter takes cannot filter by them all.
+    if (ranges.length > wire.views.maxFilterRanges || (kind === 'between' && ranges.reduce((sum, [, count]) => sum + count, 0) < 2)) return undefined
+    return { column, ranges, ...shown ? { viewId: shown.viewId } : {} }
   }
 
   private duplicateColumns(tabId: string, index: number, allColumns: boolean): number[] | undefined {
@@ -930,19 +947,19 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** Names each filter of the grid's view by the values its rows hold: "name = 'x'", "name between 'a' and 'b'". */
   private nameFilters(tabId: string, run: Run, index: number, set: ResultSetEntry): void {
     const sort = run.sorts.get(index)
-    if (!sort?.view) return
-    const view = sort.view, columns = set.descriptor.columns
-    const named = sort.filters.map(async item => {
+    if (!sort?.view || sort.sorting || sort.filters.every(item => item.named)) return
+    const columns = set.descriptor.columns
+    const named = sort.filters.map(async (item): Promise<GridFilter> => {
       const filter = item.filter
-      if (filter.op === 'duplicates' || !('rows' in filter)) return item
+      if (item.named || filter.op === 'duplicates' || !('rows' in filter)) return item
       const wanted = filter.op === 'between' ? filter.rows : filter.rows.length === 1 && !filter.nulls ? filter.rows : []
       const texts = await Promise.all(wanted.map(row => valueText(set.handle, row, filter.column)))
-      return { ...item, label: filterLabel(filter as ResolvedViewFilter, columns, texts) }
+      return { filter, label: filterLabel(filter as ResolvedViewFilter, columns, texts), named: true }
     })
     void Promise.all(named).then(filters => {
-      const now = run.sorts.get(index)
-      if (now?.view !== view || this.runs.get(tabId) !== run) return
-      this.setSort(tabId, run, index, { ...now, filters, applied: filters })
+      // Only onto the same sort: a view building since has its own filters, and names them when it is built.
+      if (run.sorts.get(index) !== sort || this.runs.get(tabId) !== run) return
+      this.setSort(tabId, run, index, { ...sort, filters, applied: filters })
     }, () => { /* Labels keep their words without values. */ })
   }
 
@@ -970,7 +987,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** Views built while rows were still arriving are built again once their set has every row. */
   private refreshSorts(tabId: string, run: Run): void {
     for (const [index, sort] of run.sorts) {
-      if (sort.stale && !sort.sorting && run.sets[index]?.handle.getSnapshot().state === 'complete') this.applyView(tabId, run, index, sort.keys, sort.filters)
+      if (sort.stale && !sort.sorting && run.sets[index]?.handle.getSnapshot().state === 'complete') this.applyView(tabId, run, index, sort.keys, sort.filters, sort.keys.length ? 'sort' : 'filter')
     }
   }
 
@@ -1067,6 +1084,17 @@ function lengthSortable(column: ResultColumn): boolean {
 const columnName = (columns: readonly ResultColumn[], column: number) => columns[column]?.name || noColumnName
 const isNotNull = (filter: ViewFilter) => filter.op === 'notIn' && 'rows' in filter && filter.rows.length === 0 && !!filter.nulls
 const sameColumns = (a: readonly number[], b: readonly number[]) => a.length === b.length && a.every((column, at) => column === b[at])
+
+/** [first, count] ranges sorted, with overlapping and adjacent ones joined. */
+export function mergeRanges(ranges: readonly (readonly [number, number])[]): [number, number][] {
+  const merged: [number, number][] = []
+  for (const [first, count] of [...ranges].sort((a, b) => a[0] - b[0])) {
+    const last = merged.at(-1)
+    if (last && first <= last[0] + last[1]) last[1] = Math.max(last[1], first + count - last[0])
+    else merged.push([first, count])
+  }
+  return merged
+}
 
 /** A value as a filter's words show it: quoted, its first 24 characters, NULL bare. */
 async function valueText(handle: ResultHandle, row: number, column: number): Promise<string | undefined> {

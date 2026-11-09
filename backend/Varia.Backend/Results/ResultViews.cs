@@ -30,7 +30,6 @@ internal sealed record ViewFilter(FilterOp Op, int Column, int[]? Rows, bool Nul
 /// returned when the view is closed, replaced, or its result is released.</summary>
 internal sealed class ResultView(uint viewId, ResultSetBuffer set, int[] order, IReadOnlyList<ViewKey> keys, bool approximate, bool complete, long charged)
 {
-    public IReadOnlyList<ViewFilter> Filters { get; init; } = [];
     public uint ViewId { get; } = viewId;
     public ResultSetBuffer Set { get; } = set;
     /// <summary>The base row shown at each view position.</summary>
@@ -58,6 +57,9 @@ internal static class ViewSorter
     /// <summary>Filters one view takes, distinct values one In or NotIn filter holds, and cell ranges one selection names
     /// (src/shared/ipc/wire/protocol.ts limits.views).</summary>
     public const int MaxFilters = 16, MaxFilterValues = 4096, MaxFilterRanges = 256;
+    /// <summary>Bytes a row one filter holds at most while it runs, besides its column's key: Duplicates' positions (4), group
+    /// starts (up to 8, as their list grows) and the rows it keeps (4); Keep and Pick hold less.</summary>
+    public const int FilterBytes = 16;
     private const int CancelEvery = 1 << 14;
 
     /// <summary>Bytes a sort holds per row and key while it runs: the key's 8- or 16-byte value and a NULL bit.</summary>
@@ -142,52 +144,76 @@ internal static class ViewSorter
     /// <summary>The base rows the cells name, one per distinct non-NULL value in ascending order, and whether one is NULL.</summary>
     private static (int[] Rows, bool Nulls) Pick(Key key, ViewCells cells, int rows, CancellationToken token)
     {
-        var picked = new List<int>();
+        // Overlapping ranges are merged first, so the cells read are at most the positions there are.
+        var spans = Merge(cells.Ranges, cells.Order?.Length ?? rows);
+        long total = 0;
+        foreach (var (first, end) in spans) total += end - first;
+        var picked = new int[total];
+        var count = 0;
         var nulls = false;
-        var seen = 0;
-        var length = cells.Order?.Length ?? rows;
-        foreach (var (first, count) in cells.Ranges)
+        foreach (var (first, end) in spans)
         {
-            var end = Math.Min(length, first + count);
             for (var position = first; position < end; position++)
             {
-                if ((++seen & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
-                var row = cells.Order is { } order ? order[position] : (int)position;
+                if ((position & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+                var row = cells.Order is { } order ? order[position] : position;
                 if (row >= rows) continue;
                 if (key.IsNull(row)) nulls = true;
-                else picked.Add(row);
+                else picked[count++] = row;
             }
         }
-        return (Unique(key, picked, token), nulls);
+        return (Unique(key, picked, count, token), nulls);
+    }
+
+    /// <summary>[first, count] ranges as sorted, disjoint [first, end) spans of the positions below <paramref name="length"/>.</summary>
+    internal static List<(int First, int End)> Merge(IReadOnlyList<(long First, long Count)> ranges, int length)
+    {
+        var spans = new List<(int First, int End)>(ranges.Count);
+        foreach (var (first, count) in ranges)
+        {
+            var end = Math.Min(length, first + count);
+            if (first < end) spans.Add(((int)first, (int)end));
+        }
+        spans.Sort((a, b) => a.First.CompareTo(b.First));
+        var merged = new List<(int First, int End)>(spans.Count);
+        foreach (var span in spans)
+        {
+            if (merged.Count > 0 && span.First <= merged[^1].End) merged[^1] = (merged[^1].First, Math.Max(merged[^1].End, span.End));
+            else merged.Add(span);
+        }
+        return merged;
     }
 
     /// <summary>Rows a request named, checked and reduced to one per distinct value in ascending order.</summary>
     private static (int[] Rows, bool Nulls) Distinct(Key key, int[] named, int rows, CancellationToken token)
     {
-        var picked = new List<int>(named.Length);
+        var picked = new int[named.Length];
+        var count = 0;
         var nulls = false;
         foreach (var row in named)
         {
             if (row < 0 || row >= rows) throw new RequestException("INVALID_PARAMS", "A filter's rows must be rows of the result.");
             if (key.IsNull(row)) nulls = true;
-            else picked.Add(row);
+            else picked[count++] = row;
         }
-        return (Unique(key, picked, token), nulls);
+        return (Unique(key, picked, count, token), nulls);
     }
 
-    private static int[] Unique(Key key, List<int> picked, CancellationToken token)
+    /// <summary>The first <paramref name="count"/> rows, sorted and reduced in place to one per distinct value.</summary>
+    private static int[] Unique(Key key, int[] rows, int count, CancellationToken token)
     {
-        var sorted = picked.ToArray();
-        if (sorted.Length > 1) Array.Sort(sorted, new Comparer([key], token));
-        var unique = new List<int>();
-        foreach (var row in sorted)
-            if (unique.Count == 0 || key.Compare(unique[^1], row) != 0) unique.Add(row);
-        return [.. unique];
+        if (count > 1) Array.Sort(rows, 0, count, new Comparer([key], token));
+        var unique = 0;
+        for (var i = 0; i < count; i++)
+            if (unique == 0 || key.Compare(rows[unique - 1], rows[i]) != 0) rows[unique++] = rows[i];
+        Array.Resize(ref rows, unique);
+        return rows;
     }
 
     private static int[] Keep(int[] order, Key key, FilterOp op, int[] reps, bool nulls, CancellationToken token)
     {
-        var kept = new List<int>();
+        var kept = new int[order.Length];
+        var count = 0;
         for (var i = 0; i < order.Length; i++)
         {
             if ((i & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
@@ -196,9 +222,10 @@ internal static class ViewSorter
             if (key.IsNull(row)) keep = op == FilterOp.In ? nulls : op == FilterOp.NotIn && !nulls;
             else if (op == FilterOp.Between) keep = key.Compare(row, reps[0]) >= 0 && key.Compare(row, reps[1]) <= 0;
             else keep = Contains(key, reps, row) == (op == FilterOp.In);
-            if (keep) kept.Add(row);
+            if (keep) kept[count++] = row;
         }
-        return [.. kept];
+        Array.Resize(ref kept, count);
+        return kept;
     }
 
     private static bool Contains(Key key, int[] reps, int row)
@@ -224,19 +251,29 @@ internal static class ViewSorter
         var equal = new Comparer(columns, token);
         int Same(int a, int b) => equal.Values(order[a], order[b]);
         if (positions.Length > 1) Array.Sort(positions, Comparer<int>.Create((a, b) => Same(a, b) is var c && c != 0 ? c : a.CompareTo(b)));
-        var groups = new List<(int First, int Start, int Count)>();
+        // Each group is a run of positions whose first is its first row's (ties keep their order); a run's start names it.
+        var starts = new List<int>();
+        var total = 0;
         for (var start = 0; start < positions.Length;)
         {
             var end = start + 1;
             while (end < positions.Length && Same(positions[start], positions[end]) == 0) end++;
-            if (end - start > 1) groups.Add((positions[start], start, end - start));
+            if (end - start > 1)
+            {
+                starts.Add(start);
+                total += end - start;
+            }
             start = end;
         }
-        groups.Sort((a, b) => a.First.CompareTo(b.First));
-        var kept = new List<int>();
-        foreach (var (_, start, count) in groups)
-            for (var i = start; i < start + count; i++) kept.Add(order[positions[i]]);
-        return [.. kept];
+        starts.Sort((a, b) => positions[a].CompareTo(positions[b]));
+        var kept = new int[total];
+        var count = 0;
+        foreach (var start in starts)
+        {
+            var first = positions[start];
+            for (var i = start; i < positions.Length && (i == start || Same(first, positions[i]) == 0); i++) kept[count++] = order[positions[i]];
+        }
+        return kept;
     }
 
     private static Key Build(ResultSetBuffer set, PageSource source, ViewKey sort, int rows, CancellationToken token, ref bool approximate)
