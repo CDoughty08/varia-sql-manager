@@ -558,7 +558,7 @@ function buildView(result, sort, filters = []) {
   return {
     filters: resolved,
     viewId: nextViewId++, resultId: result.resultId, columns: result.columns, order, rowAt: position => result.rowAt(order[position]), pageRows: result.pageRows,
-    read: order.length, complete: true, pages: new Map(), sealed: result.complete && rows === result.read
+    read: order.length, baseRows: rows, complete: true, pages: new Map(), sealed: result.complete && rows === result.read
   }
 }
 // results.identify: a row identity per row, the hash of a key column's text or of the whole row's. Text equality here is
@@ -1400,7 +1400,7 @@ async function workbench(id, method, params, credit) {
       result.views ??= new Map()
       result.views.set(view.viewId, view)
       if (params.replaces !== undefined) result.views.delete(params.replaces)
-      return respond(id, { viewId: view.viewId, rows: view.read, complete: view.sealed, approximate: false, ...(params.filters ? { filters: view.filters } : {}) })
+      return respond(id, { viewId: view.viewId, rows: view.read, baseRows: view.baseRows, complete: view.sealed, approximate: false, ...(params.filters ? { filters: view.filters } : {}) })
     }
     case 'results.identify': {
       const result = stored.get(params.resultId)

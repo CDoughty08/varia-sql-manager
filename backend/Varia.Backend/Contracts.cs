@@ -98,9 +98,10 @@ internal sealed record ViewCellsArgs(long[][] Ranges, uint? ViewId = null);
 /// <summary>A filter as the view applied it, its cells resolved to one base row per distinct value (Between: the lowest
 /// and highest).</summary>
 internal sealed record ViewFilterResult(string Op, int? Column = null, int[]? Rows = null, bool? Nulls = null, int[]? Columns = null);
-/// <summary>Rows is the view's row count (the rows sealed when it was built); Complete says those were all the result's rows;
-/// Approximate says a key compared a truncated value's prefix or an estimated length.</summary>
-internal sealed record ResultsViewResult(uint ViewId, long Rows, bool Complete, bool Approximate, ViewFilterResult[]? Filters = null);
+/// <summary>Rows is the view's row count; BaseRows the result's rows it was built from (those sealed then, Rows when it has
+/// no filter); Complete says those were all the result's rows; Approximate says a key compared a truncated value's prefix
+/// or an estimated length.</summary>
+internal sealed record ResultsViewResult(uint ViewId, long Rows, long BaseRows, bool Complete, bool Approximate, ViewFilterResult[]? Filters = null);
 internal sealed record ResultsViewCloseArgs(uint ResultId, uint[] ViewIds);
 internal sealed record ResultsViewCloseResult(int Closed);
 /// <summary>results.identify: how the result's rows are told apart, for highlights. By "auto" picks a unique key column, else

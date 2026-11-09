@@ -1555,8 +1555,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
-        // Filters hold a key per column they compare and what the one running needs (FilterBytes a row at most).
-        var working = ViewSorter.WorkingBytes(rows, keys.Length + ViewSorter.FilterColumns(filters)) + (filters.Length > 0 ? ViewSorter.FilterBytes * rows : 0);
+        // A key per column the filters compare and per sort key (a Value key on a filtered column is the filter's), and what the
+        // running filter needs (FilterBytes a row at most).
+        var working = ViewSorter.WorkingBytes(rows, ViewSorter.KeyCount(keys, filters)) + (filters.Length > 0 ? ViewSorter.FilterBytes * rows : 0);
         var kept = 4 * rows + ResultStore.ViewOverhead;
         if (!store.TryReserve(set.Budget, working + kept, false, out _))
             throw new RequestException("TOO_LARGE", filters.Length > 0
@@ -1573,7 +1574,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var charged = 4L * built.Order.Length + ResultStore.ViewOverhead;
         store.Return(set.Budget, working + kept - charged);
         var view = store.AddView(set, built.Order, keys, built.Approximate, complete, charged, args.Replaces);
-        return new ResultsViewResult(view.ViewId, view.Rows, view.Complete, view.Approximate, args.Filters is null ? null : [.. built.Filters.Select(FilterResult)]);
+        return new ResultsViewResult(view.ViewId, view.Rows, rows, view.Complete, view.Approximate, args.Filters is null ? null : [.. built.Filters.Select(FilterResult)]);
     }
 
     /// <summary>A view request's filters, checked against the result; cells name positions in the result or a view of it.</summary>

@@ -99,7 +99,7 @@ export type WorkerResponse =
   | { readonly type: 'closed'; readonly id: number; readonly closed: number; readonly usedBytes: number }
   | { readonly type: 'rowBytes'; readonly id: number; readonly firstRow: number; readonly bytes: readonly number[]; readonly rowsAvailable: number; readonly estimated: readonly number[] }
   | { readonly type: 'stats'; readonly id: number; readonly bytes: number; readonly pages: number; readonly wireBytes: number; readonly columns: number }
-  | { readonly type: 'view'; readonly id: number; readonly viewId: number; readonly rows: number; readonly complete: boolean; readonly approximate: boolean; readonly filters?: readonly ResolvedViewFilter[] }
+  | { readonly type: 'view'; readonly id: number; readonly viewId: number; readonly rows: number; readonly baseRows: number; readonly complete: boolean; readonly approximate: boolean; readonly filters?: readonly ResolvedViewFilter[] }
   | { readonly type: 'viewClosed'; readonly id: number; readonly closed: number }
   | { readonly type: 'identity'; readonly id: number; readonly result: ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsDiffResult | ResultsPivotResult }
   | { readonly type: 'search'; readonly id: number; readonly result: ResultsSearchResult }

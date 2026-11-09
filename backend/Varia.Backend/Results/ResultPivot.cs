@@ -107,7 +107,7 @@ internal static class ResultPivoter
         ViewSorter.Key KeyOf(int column)
         {
             if (!keys.TryGetValue(column, out var key))
-                keys[column] = key = ViewSorter.Build(set, source, new ViewKey(column, false, SortMode.Value), rows, token, ref approximate);
+                keys[column] = key = ViewSorter.Build(set, source, new ViewKey(column, false, SortMode.Value), null, rows, token, ref approximate);
             return key;
         }
         int[] positions;
@@ -239,7 +239,7 @@ internal static class ResultPivoter
             return (of, reps);
         }
         positions.CopyTo(scratch, 0);
-        var comparer = new ViewSorter.Comparer(keys, token);
+        var comparer = new ViewSorter.Comparer(keys, null, token);
         if (scratch.Length > 1) Array.Sort(scratch, comparer);
         for (var i = 0; i < scratch.Length; i++)
         {

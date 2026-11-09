@@ -122,6 +122,8 @@ export interface ResultView extends ResultHandle {
   /** The view's filters as it applied them (selected cells resolved to base rows), which build it again. */
   readonly filters: readonly ResolvedViewFilter[]
   readonly rows: number
+  /** The base rows it was built from: fewer than the result's while it streamed. */
+  readonly baseRows: number
   readonly complete: boolean
   readonly approximate: boolean
 }
@@ -472,7 +474,7 @@ export class ResultClient implements Disposable {
     if (!this.tracked(base)) state.snapshot = { ...state.snapshot, state: base.snapshot.state }
     else this.views.set(state.id, state)
     const baseHandle = base.handle ?? this.handleFor(base, () => this.release([{ generation: base.key.generation, resultId: base.key.resultId }]))
-    return this.handleFor<ResultView>(state, () => this.closeView(state), () => ({ viewId: response.viewId, base: baseHandle, keys: sort, filters: response.filters ?? [], rows: response.rows, complete: response.complete, approximate: response.approximate }))
+    return this.handleFor<ResultView>(state, () => this.closeView(state), () => ({ viewId: response.viewId, base: baseHandle, keys: sort, filters: response.filters ?? [], rows: response.rows, baseRows: response.baseRows, complete: response.complete, approximate: response.approximate }))
   }
 
   /** results.viewClose: the view's windows and pages go at once; a failure (its result already released) changes nothing. */
