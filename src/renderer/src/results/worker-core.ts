@@ -439,8 +439,8 @@ export class ResultsWorkerCore {
     const rid = this.allocate()
     this.distincts.set(rid, request.id)
     const { generation, resultId, view } = request.key
-    const { column, order, maxValues, search } = request.params
-    this.send({ t: 'distinct', rid, generation, resultId, column, order, maxValues, ...(search === undefined ? {} : { search }), ...(view === undefined ? {} : { viewId: view }) })
+    const { column, order, maxValues, search, keptViewId } = request.params
+    this.send({ t: 'distinct', rid, generation, resultId, column, order, maxValues, ...(search === undefined ? {} : { search }), ...(view === undefined ? {} : { viewId: view }), ...(keptViewId === undefined ? {} : { keptViewId }) })
   }
 
   private identity(request: Extract<WorkerRequest, { type: 'identity' }>): void {

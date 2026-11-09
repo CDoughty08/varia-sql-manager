@@ -738,8 +738,13 @@ export class GridView {
   private pointerDown(event: PointerEvent): void {
     const press = pressButton(event, this.o.platform)
     if (!press) return
+    this.syncPointerFrame()
+    const point = this.point(event)
+    let hit = point.inside ? this.hitAt(point.x, point.y) : undefined
+    // A column's border stays a resize grip over the header buttons drawn at its right end.
+    const onButton = press === 'primary' && hit?.kind !== 'resize'
     // A press on a header's funnel opens its popover; it selects nothing and starts no drag.
-    const funnel = press === 'primary' && this.o.onFilter ? (event.target as Element | null)?.closest?.('.rg-cf') : null
+    const funnel = onButton && this.o.onFilter ? (event.target as Element | null)?.closest?.('.rg-cf') : null
     const filterColumn = funnel ? this.slots.get(funnel.parentElement!)?.header?.column ?? -1 : -1
     if (filterColumn >= 0) {
       event.preventDefault()
@@ -747,17 +752,13 @@ export class GridView {
       return
     }
     // A press on a header's sort button sorts; it selects nothing and starts no drag.
-    const button = press === 'primary' && this.o.onSort ? (event.target as Element | null)?.closest?.('.rg-cs') : null
+    const button = onButton && this.o.onSort ? (event.target as Element | null)?.closest?.('.rg-cs') : null
     const column = button ? this.slots.get(button.parentElement!)?.header?.column ?? -1 : -1
     if (column >= 0) {
       event.preventDefault()
       this.o.onSort!(column, this.gestures.matches('grid.addSortKey', event))
       return
     }
-    this.syncPointerFrame()
-    const point = this.point(event)
-    if (!point.inside) return
-    let hit = this.hitAt(point.x, point.y)
     if (!hit) return
     if (hit.kind === 'resize') {
       if (press === 'primary') { this.startResize(event.pointerId, point.x, hit.column); return }

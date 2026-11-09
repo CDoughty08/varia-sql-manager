@@ -1169,11 +1169,11 @@ describe('results service filters', () => {
     expect(service.sortOf('t1', 0)).toBeUndefined()
   })
 
-  it('lists the values of a column over the rows its other filters keep, and says which ones its own value list keeps', async () => {
+  it('lists the values of a column over the rows its other filters keep, marked by what the grid shows now', async () => {
     const { service, handle } = filtered()
     const answer = (values: { row: number; text: string; count: number }[], nulls = 0) => ({ rows: 10, complete: true, nulls, distinct: values.length, truncated: false, approximate: false, values })
     handle.distinct.mockResolvedValueOnce(answer([{ row: 0, text: 'a', count: 3 }]))
-    expect((await service.columnValues('t1', 0, 1, { order: 'count', kept: true })).result.values).toEqual([{ row: 0, text: 'a', count: 3 }])
+    expect((await service.columnValues('t1', 0, 1, { order: 'count' })).result.values).toEqual([{ row: 0, text: 'a', count: 3 }])
     expect(handle.distinct).toHaveBeenLastCalledWith(1, { order: 'count' })
     // A value list on the column and a not-NULL on another: the list comes from a view of the other filter alone.
     const own = { op: 'in' as const, column: 1, rows: [0], nulls: false }, other = { op: 'notIn' as const, column: 0, rows: [], nulls: true }
@@ -1186,11 +1186,11 @@ describe('results service filters', () => {
     await settle()
     const others = { ...resolvedView(handle, 3, [other]), distinct: vi.fn<ResultHandle['distinct']>(async () => answer([{ row: 0, text: 'a', count: 3 }, { row: 2, text: 'b', count: 4 }], 1)) }
     handle.sort.mockResolvedValueOnce(others)
-    const values = await service.columnValues('t1', 0, 1, { order: 'value', search: 'a', kept: true })
+    const values = await service.columnValues('t1', 0, 1, { order: 'value', search: 'a' })
     expect(handle.sort).toHaveBeenLastCalledWith([], { filters: [{ op: 'notIn', column: 0, rows: [], nulls: true }] })
-    expect(others.distinct).toHaveBeenCalledWith(1, { order: 'value', search: 'a' })
+    // The grid's own view marks each value, whether or not the answer listed every one.
+    expect(others.distinct).toHaveBeenCalledWith(1, { order: 'value', search: 'a', kept: expect.objectContaining({ viewId: 2 }) })
     expect(values.result.values.map(value => value.row)).toEqual([0, 2])
-    expect(values.kept).toEqual({ rows: new Set([0]), nulls: true })
     expect(others.close).toHaveBeenCalled()
   })
 })

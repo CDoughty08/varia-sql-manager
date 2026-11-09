@@ -604,13 +604,17 @@ export class ResultsPortHost {
     const params: ResultsDistinctParams = { resultId: request.resultId, column: request.column, order: request.order, maxValues: request.maxValues }
     if (request.search !== undefined) params.search = request.search
     if (request.viewId !== undefined) params.viewId = request.viewId
+    if (request.keptViewId !== undefined) params.keptViewId = request.keptViewId
     const distinct = this.backend.distinct(request.generation, params)
     this.sorting.set(rid, distinct)
     distinct.done.then(result => {
       if (this.port !== port || this.sorting.get(rid) !== distinct) return
       this.sorting.delete(rid)
       const parsed = distinctResultSchema.safeParse(result)
-      if (!parsed.success || parsed.data.values.length > request.maxValues) return this.end(rid, 'BACKEND_ERROR', 'The column\'s values could not be listed.')
+      // Kept marks come exactly when they were asked for: every value's and NULL's, or none.
+      const marked = request.keptViewId !== undefined
+      if (!parsed.success || parsed.data.values.length > request.maxValues || (parsed.data.nullsKept !== undefined) !== marked || parsed.data.values.some(value => (value.kept !== undefined) !== marked))
+        return this.end(rid, 'BACKEND_ERROR', 'The column\'s values could not be listed.')
       this.post({ t: 'end', rid, ok: true, result: parsed.data })
     }, error => {
       if (this.port !== port || this.sorting.get(rid) !== distinct) return

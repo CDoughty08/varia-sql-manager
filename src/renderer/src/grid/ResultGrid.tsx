@@ -103,7 +103,8 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
       sort: sortRef.current?.keys,
       onSort: (column, add) => results.cycleSort(tabId, index, column, add),
       filtered: filteredRef.current,
-      onFilter: (column, anchor) => setFunnel({ column, anchor })
+      // A press on the open column's funnel closes its popover, as pressing a menu's button again does.
+      onFilter: (column, anchor) => setFunnel(current => current?.column === column ? undefined : { column, anchor })
     })
     viewRef.current = view
     view.setMarks(marksRef.current)
@@ -183,7 +184,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
           : !lost && truncation ? <div className="rg-strip" role="status" title={truncation}>{truncation}</div>
             : highlightNote ? <div className="rg-strip" role="status" title={highlightNote}>{highlightNote}</div> : null}
     {funnel && !lost && funnel.column < entry.descriptor.columns.length && <ColumnFilterPopover key={funnel.column} tabId={tabId} index={index} target={funnel}
-      columnName={entry.descriptor.columns[funnel.column].name || '(No column name)'} filtered={filtered.has(funnel.column)} onClose={closeFunnel} />}
+      columnName={entry.descriptor.columns[funnel.column].name || '(No column name)'} filtered={filtered.has(funnel.column)} grid={rootRef.current!} onClose={closeFunnel} />}
   </div>
 }
 

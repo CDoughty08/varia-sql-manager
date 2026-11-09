@@ -107,6 +107,15 @@ internal static class DistinctChecks
         check(kept.Length == name.Values[0].Count && kept.SequenceEqual([1, 2, 5]), "an In filter by a value's representative row keeps the rows it counted: " + string.Join(",", kept));
         var excluded = ViewSorter.Build(set, set.SealedSnapshot(), [], [new ViewFilter(FilterOp.NotIn, 0, [name.Values[1].Row], true, null, [])], CancellationToken.None).Order;
         check(excluded.SequenceEqual([1, 2, 5]), "NotIn by a representative row with NULL excludes that value and NULL: " + string.Join(",", excluded));
+        // A kept view says which listed values (and whether NULL) a filtered view still holds, matched by value, not row.
+        var filtered = store.AddView(set, excluded, [], false, true, 0, null);
+        var marked = ViewSorter.DistinctValues(set, set.SealedSnapshot(), null, 0, DistinctOrder.Count, null, 10, CancellationToken.None, filtered);
+        check(marked.Values is [{ Text: "A", Kept: true }, { Text: "b", Kept: false }] && marked.NullsKept == false,
+            "a kept view marks the values it holds and not those its filter dropped, nor NULL: " + string.Join(",", marked.Values.Select(value => $"{value.Text}={value.Kept}")));
+        var some = store.AddView(set, [2, 3], [], false, true, 0, null);
+        var partly = ViewSorter.DistinctValues(set, set.SealedSnapshot(), null, 0, DistinctOrder.Value, "a", 10, CancellationToken.None, some);
+        check(partly.Values is [{ Row: 1, Kept: true }] && partly.NullsKept == true && Distinct(set, 0).Values.All(value => value.Kept is null),
+            "a value is kept when any of its rows is (row 2 holds A, listed by row 1), a search keeps the marks, and none are given without a kept view");
     }
 
     private static void Truncation(Action<bool, string> check)
@@ -145,6 +154,9 @@ internal static class DistinctChecks
         var viewed = Call<ResultsDistinctResult>("results.distinct", new { resultId = set.ResultId, column = 1, order = "value", maxValues = 10, viewId = view.ViewId, search = "b" });
         check(viewed is { Rows: 2, Distinct: 1, Truncated: false } && viewed.Values is [{ Row: 0, Text: "b", Count: 1 }],
             "results.distinct reads through a filtered view and searches its values");
+        var marks = Call<ResultsDistinctResult>("results.distinct", new { resultId = set.ResultId, column = 0, order = "count", maxValues = 10, keptViewId = view.ViewId });
+        check(marks.Values is [{ Text: "A", Kept: false }, { Text: "b", Kept: true }] && marks.NullsKept == false && result.NullsKept is null,
+            "results.distinct with a kept view marks each value that view holds");
         var codes = new[]
         {
             Code(new { resultId = set.ResultId, column = 4, order = "count", maxValues = 10 }),
@@ -157,9 +169,11 @@ internal static class DistinctChecks
             Code(new { resultId = set.ResultId, column = 0, order = "count", maxValues = 10, extra = 1 }),
             Code(new { resultId = set.ResultId, column = 0, order = "count", maxValues = 10, viewId = 0 }),
             Code(new { resultId = set.ResultId, column = 0, order = "count", maxValues = 10, viewId = 12345 }),
+            Code(new { resultId = set.ResultId, column = 0, order = "count", maxValues = 10, keptViewId = 0 }),
+            Code(new { resultId = set.ResultId, column = 0, order = "count", maxValues = 10, keptViewId = 12345 }),
             Code(new { resultId = 999, column = 0, order = "count", maxValues = 10 })
         };
-        check(string.Join(",", codes) == "INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS,VIEW_NOT_FOUND,RESULT_NOT_FOUND",
+        check(string.Join(",", codes) == "INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS,VIEW_NOT_FOUND,INVALID_PARAMS,VIEW_NOT_FOUND,RESULT_NOT_FOUND",
             "results.distinct takes a column of the result, count or value, 1 to 4,096 values and 1 to 1,024 search characters: " + string.Join(",", codes));
         var tight = new ResultStore(4096, 4096);
         using var small = new SqlService(tight);

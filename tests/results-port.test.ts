@@ -653,6 +653,27 @@ describe('ResultsPortHost', () => {
       [1, 'ok'], [10, 'BACKEND_ERROR'], [11, 'BACKEND_ERROR'], [12, 'BACKEND_ERROR']])
     expect(port().ends().find(end => end.rid === 1)).toEqual({ t: 'end', rid: 1, ok: true, result: good })
   })
+
+  it('passes a kept view on and relays kept marks only when they were asked for, on every value and NULL', async () => {
+    const { host, port, distincts } = fixture()
+    host.own([{ ...descriptor(7), columns: [{}, {}] }])
+    const ask = { t: 'distinct', generation: 1, resultId: 7, column: 1, order: 'count', maxValues: 2 }
+    port().send({ ...ask, rid: 1, keptViewId: 5 })
+    port().send({ ...ask, rid: 2, keptViewId: 0 })
+    port().send({ ...ask, rid: 3, keptViewId: 5 })
+    port().send({ ...ask, rid: 4, keptViewId: 5 })
+    port().send({ ...ask, rid: 5 })
+    expect(distincts.map(distinct => distinct.params.keptViewId)).toEqual([5, 5, 5, undefined])
+    const marked = { rows: 5, complete: true, nulls: 1, distinct: 2, truncated: false, approximate: false, values: [{ row: 0, text: 'a', count: 2, kept: true }, { row: 3, text: 'b', count: 1, kept: false }], nullsKept: false }
+    distincts[0].resolve(marked)
+    // A value without its mark, marks without NULL's, and marks nobody asked for: none reaches the renderer.
+    distincts[1].resolve({ ...marked, values: [marked.values[0], { row: 3, text: 'b', count: 1 }] })
+    distincts[2].resolve({ ...marked, nullsKept: undefined })
+    distincts[3].resolve(marked)
+    await settle()
+    expect(codes(port())).toEqual([[2, 'INVALID_REQUEST'], [1, 'ok'], [3, 'BACKEND_ERROR'], [4, 'BACKEND_ERROR'], [5, 'BACKEND_ERROR']])
+    expect(port().ends().find(end => end.rid === 1)).toEqual({ t: 'end', rid: 1, ok: true, result: marked })
+  })
   it('cancels a distinct-values request on the worker\'s cancel and when the port closes', async () => {
     const { host, port, distincts } = fixture()
     host.own([descriptor(7)])

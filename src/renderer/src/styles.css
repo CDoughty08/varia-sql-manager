@@ -873,6 +873,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-ch.fb .rg-cs { right: 18px; }
 .rg-ch:hover .rg-cf, .rg-cf.on { visibility: visible; }
 .rg-cf.on { color: var(--varia-resultsGrid-headerForeground); }
+/* A sorted column's idle funnel still covers the header text beside the sort button, without its glyph. */
+.rg-cs.on + .rg-cf, .rg-ch.narrow:hover .rg-cs.on + .rg-cf { visibility: visible; }
+.rg-ch:not(:hover) .rg-cs.on + .rg-cf:not(.on) > span, .rg-ch.narrow .rg-cs.on + .rg-cf:not(.on) > span { visibility: hidden; }
 .rg-ch.narrow .rg-cf { pointer-events: none; }
 .rg-ch.narrow:hover .rg-cf:not(.on) { visibility: hidden; }
 .rg-cf:hover, .rg-cs:hover { color: var(--varia-resultsGrid-headerForeground); }

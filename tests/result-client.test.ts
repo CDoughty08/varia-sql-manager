@@ -486,6 +486,11 @@ describe('ResultClient', () => {
     const viewed = view.distinct(0, { order: 'value', maxValues: 5, search: 'b' })
     expect(await answer({ ...result, distinct: 1, values: [result.values[1]] })).toMatchObject({ t: 'distinct', resultId: 3, column: 0, order: 'value', maxValues: 5, search: 'b', viewId: 2 })
     expect((await viewed).values).toEqual([result.values[1]])
+    // A kept view of the same result goes with the request; the result itself, with no view, is refused.
+    const marked = handle.distinct(0, { order: 'count', kept: view })
+    expect(await answer({ ...result, values: result.values.map(value => ({ ...value, kept: true })), nullsKept: true })).toMatchObject({ t: 'distinct', keptViewId: 2 })
+    expect((await marked).nullsKept).toBe(true)
+    await expect(view.distinct(0, { order: 'count', kept: handle })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     await expect(handle.distinct(1, { order: 'count' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     await expect(handle.distinct(0, { order: 'count', maxValues: 4097 })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     await expect(handle.distinct(0, { order: 'count', search: '' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })

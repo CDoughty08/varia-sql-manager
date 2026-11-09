@@ -1686,13 +1686,14 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private async Task<ResultsDistinctResult> DistinctAsync(ResultsDistinctArgs args, CancellationToken token)
     {
         var order = args.Order switch { "count" => DistinctOrder.Count, "value" => DistinctOrder.Value, _ => (DistinctOrder?)null };
-        if (args.ResultId == 0 || order is null || args.MaxValues is < 1 or > ViewSorter.MaxDistinctValues || args.ViewId == 0
+        if (args.ResultId == 0 || order is null || args.MaxValues is < 1 or > ViewSorter.MaxDistinctValues || args.ViewId == 0 || args.KeptViewId == 0
             || args.Search is { Length: < 1 or > ResultSearcher.MaxText })
             throw new RequestException("INVALID_PARAMS", "Distinct values need a column, an order of count or value, 1 to 4,096 values and at most 1,024 characters of search text.");
         var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
         if (args.Column < 0 || args.Column >= set.Columns.Count)
             throw new RequestException("INVALID_PARAMS", "The column is not one of the result's.");
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
+        var keptView = args.KeptViewId is { } keptId ? FindView(args.ResultId, keptId) : null;
         var complete = view?.Complete ?? set.IsComplete;
         var pages = set.SealedSnapshot();
         long rows = 0;
@@ -1702,10 +1703,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             throw new RequestException("TOO_LARGE", "There is not enough result memory to list this column's values. Close other results and try again.");
         try
         {
-            var found = await Task.Run(() => ViewSorter.DistinctValues(set, pages, view, args.Column, order.Value, args.Search, args.MaxValues, token), token);
+            var found = await Task.Run(() => ViewSorter.DistinctValues(set, pages, view, args.Column, order.Value, args.Search, args.MaxValues, token, keptView), token);
             if (set.IsReleased) throw Unavailable(args.ResultId);
-            if (view is not null && !store.HasView(view)) throw ViewClosed();
-            return new ResultsDistinctResult(found.Rows, complete, found.Nulls, found.Distinct, found.Distinct > found.Values.Length, found.Approximate, found.Values);
+            if ((view is not null && !store.HasView(view)) || (keptView is not null && !store.HasView(keptView))) throw ViewClosed();
+            return new ResultsDistinctResult(found.Rows, complete, found.Nulls, found.Distinct, found.Distinct > found.Values.Length, found.Approximate, found.Values, found.NullsKept);
         }
         finally { store.Return(set.Budget, working); }
     }

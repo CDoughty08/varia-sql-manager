@@ -11,6 +11,9 @@ describe('column filter', () => {
     expect(checklistCondition({ rows: [10, 11], unchecked: new Set([11]), hasNull: false, nullChecked: true })).toEqual({ condition: { kind: 'values', op: 'in', rows: [10], nulls: false } })
     expect(checklistCondition({ rows, unchecked: new Set(), hasNull: true, nullChecked: false })).toEqual({ condition: { kind: 'values', op: 'notIn', rows: [], nulls: true } })
   })
+  it('drops the cleared values of a truncated list, so values it did not reach stay shown', () => {
+    expect(checklistCondition({ rows, unchecked: new Set([11, 12, 13, 14]), hasNull: false, nullChecked: true, truncated: true })).toEqual({ condition: { kind: 'values', op: 'notIn', rows: [11, 12, 13, 14], nulls: false } })
+  })
   it('takes the filter off when everything is ticked and refuses an empty or oversized list', () => {
     expect(checklistCondition({ rows, unchecked: new Set(), hasNull: true, nullChecked: true })).toEqual({ condition: { kind: 'all' } })
     expect(checklistCondition({ rows, unchecked: new Set(rows), hasNull: true, nullChecked: false })).toEqual({ error: 'Select at least one value.' })

@@ -105,7 +105,8 @@ export interface GridController {
 }
 /** A column's distinct values for the funnel's checklist, and, when the column has a value-list filter, the values that
  *  filter keeps now (their representative rows, and whether NULL is among them). */
-export interface ColumnValues { readonly result: ResultsDistinctResult; readonly kept?: { readonly rows: ReadonlySet<number>; readonly nulls: boolean } }
+/** A column's values for the funnel; with the column filtered, each value (and `nullsKept`) says whether the grid shows it. */
+export interface ColumnValues { readonly result: ResultsDistinctResult }
 /** How a run ended: the summary, or main's failure (`code` BACKEND_LOST when the backend stopped), plus a notice to show first. */
 export interface RunEnd { summary?: QueryResult; error?: string; code?: ErrorCode; notice?: string; planContext?: PlanExecutionContext }
 /** Open Value in New Tab's outcome: whether a document opened, and what the banner says (a failure, or that it opened unformatted). */
@@ -663,20 +664,18 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    * the column's own value list drops can be ticked again. With `kept`, a column that has a value-list filter also says
    * which values it keeps now: the same values have the same lowest row in both, so they match by row.
    */
-  async columnValues(tabId: string, index: number, column: number, o: { order: 'count' | 'value'; search?: string; kept?: boolean; signal?: AbortSignal }): Promise<ColumnValues> {
+  async columnValues(tabId: string, index: number, column: number, o: { order: 'count' | 'value'; search?: string; signal?: AbortSignal }): Promise<ColumnValues> {
     const run = this.runs.get(tabId), set = run?.sets[index], sort = run?.sorts.get(index)
     if (!run || !set || !this.filterable(set)) throw new Error('These results are no longer available.')
     if (sort?.sorting) throw new Error('The results are still being sorted or filtered. Try again when they are shown.')
     const filters = sort?.filters ?? [], others = filters.filter(item => columnFilterKind(item.filter, column) !== 'values')
     const ask = { order: o.order, ...o.search === undefined ? {} : { search: o.search }, ...o.signal ? { signal: o.signal } : {} }
     if (others.length === filters.length) return { result: await (sort?.view ?? set.handle).distinct(column, ask) }
-    // A view without the column's value list, closed once its values are read.
+    // A view without the column's value list, closed once its values are read; the grid's view marks what it keeps of
+    // every value listed, so values past what one answer lists never count as dropped.
     const base = others.length > 0 ? await set.handle.sort([], { filters: others.map(item => item.filter), ...o.signal ? { signal: o.signal } : {} }) : undefined
     try {
-      const result = await (base ?? set.handle).distinct(column, ask)
-      if (!o.kept || !sort?.view) return { result }
-      const now = await sort.view.distinct(column, { order: 'value', ...o.signal ? { signal: o.signal } : {} })
-      return { result, kept: { rows: new Set(now.values.map(value => value.row)), nulls: now.nulls > 0 } }
+      return { result: await (base ?? set.handle).distinct(column, { ...ask, ...sort?.view ? { kept: sort.view } : {} }) }
     } finally { void base?.close() }
   }
 

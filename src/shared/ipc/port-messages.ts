@@ -62,7 +62,7 @@ export const buildPortRequestSchema = (live: { subscribe: z.ZodType<LiveSubscrib
   // Distinct values (results.distinct): a column's values and counts over a result's rows or a view's; `cancel` stops one.
   z.object({
     t: z.literal('distinct'), rid: u31, generation, resultId: u32, column, order: z.enum(['count', 'value']), maxValues: z.number().int().min(1).max(limits.distinct.maxValues),
-    search: z.string().min(1).max(limits.search.maxText).optional(), viewId: u32.optional()
+    search: z.string().min(1).max(limits.search.maxText).optional(), viewId: u32.optional(), keptViewId: u32.optional()
   }).strict(),
   // Live subscriptions (docs/ipc.md): a stream acknowledged with `credit`, ended with `cancel`, changed with liveUpdate.
   z.object({ t: z.literal('live'), rid: u31, generation, params: live.subscribe }).strict(),
@@ -124,7 +124,8 @@ export const profileResultSchema = z.object({
 /** A results.distinct answer as the backend sends it; main also checks its rows are rows of the result. */
 export const distinctResultSchema = z.object({
   rows: count, complete: z.boolean(), nulls: count, distinct: count, truncated: z.boolean(), approximate: z.boolean(),
-  values: z.array(z.object({ row: filterRow, text: z.string().max(limits.distinct.valueChars + 1), count: count.min(1) }).strict()).max(limits.distinct.maxValues)
+  values: z.array(z.object({ row: filterRow, text: z.string().max(limits.distinct.valueChars + 1), count: count.min(1), kept: z.boolean().optional() }).strict()).max(limits.distinct.maxValues),
+  nullsKept: z.boolean().optional()
 }).strict().refine(result => result.values.length <= result.distinct && result.truncated === (result.distinct > result.values.length), 'Truncated says some values were left out.')
 export type PortEndResult = ResultsDistinctResult | ResultsDiffResult | ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | ResultsViewResult | ResultsViewCloseResult | ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsSearchResult | ResultsProfileResult | LiveEnd | LiveUpdateResult
 

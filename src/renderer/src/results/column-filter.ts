@@ -54,15 +54,15 @@ export type ChecklistOutcome = { readonly condition: ColumnCondition } | { reado
 /**
  * The checklist as a condition. `rows` are the values listed (each its representative row), `unchecked` those cleared;
  * NULL is an entry of its own when the column has NULLs. Every value ticked takes the filter off; otherwise the shorter
- * of keeping the ticked values (`in`) or dropping the cleared ones (`notIn`), keeping on a tie. A value the list did not
- * reach (a truncated answer) is dropped by `in` and kept by `notIn`.
+ * of keeping the ticked values (`in`) or dropping the cleared ones (`notIn`), keeping on a tie. A truncated list always
+ * drops the cleared ones, so the values it did not reach stay shown rather than vanish unseen.
  */
-export function checklistCondition(o: { rows: readonly number[]; unchecked: ReadonlySet<number>; hasNull: boolean; nullChecked: boolean }): ChecklistOutcome {
+export function checklistCondition(o: { rows: readonly number[]; unchecked: ReadonlySet<number>; hasNull: boolean; nullChecked: boolean; truncated?: boolean }): ChecklistOutcome {
   const checked = o.rows.filter(row => !o.unchecked.has(row)), cleared = o.rows.filter(row => o.unchecked.has(row))
   const nullIn = o.hasNull && o.nullChecked, nullOut = o.hasNull && !o.nullChecked
   const keeping = checked.length + (nullIn ? 1 : 0), dropping = cleared.length + (nullOut ? 1 : 0)
   if (keeping === 0) return { error: 'Select at least one value.' }
   if (dropping === 0) return { condition: { kind: 'all' } }
-  const condition: ColumnCondition = keeping <= dropping ? { kind: 'values', op: 'in', rows: checked, nulls: nullIn } : { kind: 'values', op: 'notIn', rows: cleared, nulls: nullOut }
+  const condition: ColumnCondition = keeping <= dropping && !o.truncated ? { kind: 'values', op: 'in', rows: checked, nulls: nullIn } : { kind: 'values', op: 'notIn', rows: cleared, nulls: nullOut }
   return condition.rows.length > wire.views.maxFilterValues ? { error: `A filter holds at most ${wire.views.maxFilterValues.toLocaleString('en-US')} values. Select fewer, or clear fewer.` } : { condition }
 }

@@ -758,25 +758,35 @@ function profileOf(source, columns) {
   }
 }
 // results.distinct: values grouped as the fake filters compare them (case-insensitively without trailing spaces, numbers
-// as numbers), each shown by its lowest base row; the real backend's collation rules have their own checks.
-function distinctOf(result, source, { column, order, maxValues, search }) {
+// as numbers), each shown by its lowest base row; the real backend's collation rules have their own checks. With a kept
+// view, each value (and NULL) says whether a row of that view holds it.
+function distinctOf(result, source, { column, order, maxValues, search }, keptView) {
   const rows = source === result ? available(result) : source.read
   const baseRow = position => source === result ? position : source.order[position]
+  const textOf = value => value instanceof Uint8Array ? '0x' + Buffer.from(value).toString('hex').toUpperCase() : String(value)
+  const keyOf = text => numericTypes.has(result.columns[column].dataType) ? Number(text) : text.replace(/ +$/, '').toLowerCase()
+  const keptKeys = new Set()
+  let nullsKept = false
+  if (keptView) for (let position = 0; position < keptView.read; position++) {
+    const value = cellValue(result.rowAt(keptView.order[position])[column])
+    if (value === null || value === undefined) nullsKept = true
+    else keptKeys.add(keyOf(textOf(value)))
+  }
   const groups = new Map()
   let nulls = 0
   for (let position = 0; position < rows; position++) {
     const row = baseRow(position), value = cellValue(result.rowAt(row)[column])
     if (value === null || value === undefined) { nulls++; continue }
-    const text = value instanceof Uint8Array ? '0x' + Buffer.from(value).toString('hex').toUpperCase() : String(value)
-    const key = numericTypes.has(result.columns[column].dataType) ? Number(text) : text.replace(/ +$/, '').toLowerCase()
+    const text = textOf(value)
+    const key = keyOf(text)
     const group = groups.get(key)
     if (group) { group.count++; if (row < group.row) Object.assign(group, { row, text }) } else groups.set(key, { key, row, text, count: 1 })
   }
   let values = [...groups.values()].sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
   if (search !== undefined) values = values.filter(value => value.text.toLowerCase().includes(search.toLowerCase()))
   if (order === 'count') values = values.map((value, index) => ({ ...value, index })).sort((a, b) => b.count - a.count || a.index - b.index)
-  const kept = values.slice(0, maxValues).map(({ row, text, count }) => ({ row, text: text.length > 256 ? text.slice(0, 256) + '…' : text, count }))
-  return { rows, complete: source.sealed ?? source.complete, nulls, distinct: values.length, truncated: values.length > kept.length, approximate: false, values: kept }
+  const kept = values.slice(0, maxValues).map(({ key, row, text, count }) => ({ row, text: text.length > 256 ? text.slice(0, 256) + '…' : text, count, ...keptView ? { kept: keptKeys.has(key) } : {} }))
+  return { rows, complete: source.sealed ?? source.complete, nulls, distinct: values.length, truncated: values.length > kept.length, approximate: false, values: kept, ...keptView ? { nullsKept } : {} }
 }
 /** The result, or the view of it a request names; undefined (after answering) when either is gone. */
 function sourceOf(id, resultId, viewId) {
@@ -1422,7 +1432,9 @@ async function workbench(id, method, params, credit) {
       const source = sourceOf(id, params.resultId, params.viewId)
       if (!source) return
       if (params.column >= stored.get(params.resultId).columns.length) return fail(id, 'INVALID_PARAMS', "The column is not one of the result's.")
-      return respond(id, distinctOf(stored.get(params.resultId), source, params))
+      const keptView = params.keptViewId === undefined ? undefined : sourceOf(id, params.resultId, params.keptViewId)
+      if (params.keptViewId !== undefined && !keptView) return
+      return respond(id, distinctOf(stored.get(params.resultId), source, params, keptView))
     }
     case 'results.viewClose': {
       const result = stored.get(params.resultId)

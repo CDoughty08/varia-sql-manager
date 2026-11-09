@@ -1550,6 +1550,12 @@ try {
   await expect(funnel('name')).toContainText('100 values in 100 rows.')
   await funnel('name').getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(funnel('name')).toHaveCount(0)
+  // A second press on the open funnel closes it, as a menu button does.
+  await header('name').hover()
+  await header('name').locator(gridPart.funnelButton).click()
+  await expect(funnel('name')).toBeVisible()
+  await header('name').locator(gridPart.funnelButton).click()
+  await expect(funnel('name')).toHaveCount(0)
   await expect(caption).not.toContainText(' of ')
   await cell(0, 6).click()
   await page.keyboard.press('Alt+ArrowDown')

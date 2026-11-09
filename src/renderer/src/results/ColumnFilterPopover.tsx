@@ -29,8 +29,11 @@ const shown = (value: DistinctValue) => value.text === '' ? '(empty)' : value.te
  * press outside closes it unchanged. It lists the values of the rows the grid's other filters keep, so values the column's
  * own filter dropped can be ticked again.
  */
-export function ColumnFilterPopover({ tabId, index, columnName, target, filtered, onClose }: {
-  tabId: string; index: number; columnName: string; target: ColumnFilterTarget; filtered: boolean; onClose(refocus?: boolean): void
+export function ColumnFilterPopover({ tabId, index, columnName, target, filtered, grid, onClose }: {
+  tabId: string; index: number; columnName: string; target: ColumnFilterTarget; filtered: boolean
+  /** The grid it filters: the popover opens in that grid's window (the main one, or a popout's). */
+  grid: HTMLElement
+  onClose(refocus?: boolean): void
 }) {
   const { results } = useWorkbench()
   const { column, anchor } = target
@@ -40,34 +43,36 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
   const [searched, setSearched] = useState<{ text: string; result: ResultsDistinctResult } | undefined>()
   const [search, setSearch] = useState('')
   /** Values seen, by representative row: the list's and any a search found past it. */
-  const [known, setKnown] = useState<ReadonlyMap<number, DistinctValue>>(new Map())
+  const [known, setKnown] = useState<ReadonlyMap<number, DistinctValue>>(new Map()), knownNow = useRef(known)
   const [unchecked, setUnchecked] = useState<ReadonlySet<number>>(new Set())
   const [nullChecked, setNullChecked] = useState(true)
   const [condition, setCondition] = useState<Condition>('list')
   const [first, setFirst] = useState<number | undefined>()
   const [second, setSecond] = useState<number | undefined>()
   const [error, setError] = useState<string | undefined>()
-  const loadedOnce = useRef(false)
+  const nullsSeen = useRef(false)
 
-  const remember = (values: readonly DistinctValue[]) => setKnown(current => {
-    const next = new Map(current)
-    for (const value of values) next.set(value.row, value)
-    return next
-  })
+  // A value seen for the first time starts ticked unless the column's filter drops it now (its kept mark); one seen
+  // before keeps whatever the checklist says, so a new order or a search never undoes a tick.
+  const remember = (result: ResultsDistinctResult) => {
+    const fresh = result.values.filter(value => !knownNow.current.has(value.row))
+    if (!nullsSeen.current && result.nullsKept !== undefined) { nullsSeen.current = true; setNullChecked(result.nullsKept) }
+    if (!fresh.length) return
+    const next = new Map(knownNow.current)
+    for (const value of fresh) next.set(value.row, value)
+    knownNow.current = next
+    setKnown(next)
+    const dropped = fresh.filter(value => value.kept === false)
+    if (dropped.length) setUnchecked(current => new Set([...current, ...dropped.map(value => value.row)]))
+  }
 
-  // The list, again when its order changes; the first answer also says which values the column's filter keeps now.
+  // The list, again when its order changes.
   useEffect(() => {
-    const abort = new AbortController(), kept = !loadedOnce.current
+    const abort = new AbortController()
     setLoad({ status: 'loading' })
-    results.columnValues(tabId, index, column, { order, kept, signal: abort.signal }).then(answer => {
+    results.columnValues(tabId, index, column, { order, signal: abort.signal }).then(answer => {
       if (abort.signal.aborted) return
-      loadedOnce.current = true
-      remember(answer.result.values)
-      if (answer.kept) {
-        const keep = answer.kept.rows
-        setUnchecked(new Set(answer.result.values.filter(value => !keep.has(value.row)).map(value => value.row)))
-        setNullChecked(answer.kept.nulls)
-      }
+      remember(answer.result)
       setLoad({ status: 'ready', result: answer.result })
     }, (failure: unknown) => {
       if (abort.signal.aborted) return
@@ -85,7 +90,7 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
     const timer = setTimeout(() => {
       results.columnValues(tabId, index, column, { order, search: needle.slice(0, wire.search.maxText), signal: abort.signal }).then(answer => {
         if (abort.signal.aborted) return
-        remember(answer.result.values)
+        remember(answer.result)
         setSearched({ text: needle, result: answer.result })
       }, () => { /* The full list stays shown, filtered by what it has. */ })
     }, searchPauseMs)
@@ -103,12 +108,16 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
 
   useLayoutEffect(() => { searchBox.current?.focus({ preventScroll: true }) }, [])
   useEffect(() => {
-    const doc = card.current?.ownerDocument
-    if (!doc) return
-    const press = (event: PointerEvent) => { if (!card.current?.contains(event.target as Node)) onClose(false) }
+    const doc = grid.ownerDocument
+    // A press on one of this grid's funnels is the grid's to answer: its own column's closes, another's opens that one.
+    const press = (event: PointerEvent) => {
+      const at = event.target as Element | null
+      if (card.current?.contains(at) || (grid.contains(at) && at?.closest('.rg-cf'))) return
+      onClose(false)
+    }
     doc.addEventListener('pointerdown', press, true)
     return () => doc.removeEventListener('pointerdown', press, true)
-  }, [onClose])
+  }, [grid, onClose])
 
   const setAll = (checked: boolean) => {
     setUnchecked(current => {
@@ -127,7 +136,7 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
   const apply = () => {
     let chosen: ColumnCondition | undefined
     if (condition === 'list') {
-      const outcome = checklistCondition({ rows: [...known.keys()], unchecked, hasNull: (full?.nulls ?? 0) > 0, nullChecked })
+      const outcome = checklistCondition({ rows: [...known.keys()], unchecked, hasNull: (full?.nulls ?? 0) > 0, nullChecked, truncated: full?.truncated ?? false })
       if ('error' in outcome) return setError(outcome.error)
       chosen = outcome.condition
     } else if (condition === 'null' || condition === 'notNull') chosen = { kind: condition }
@@ -149,10 +158,12 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
       {choices.map(choice => <option key={choice.row} value={choice.row}>{shown(choice)}</option>)}
     </select>
 
-  // Under the header when it has room (its usual height), else above it when there is more room there.
-  const left = Math.max(8, Math.min(anchor.right - width, window.innerWidth - width - 8))
-  const below = window.innerHeight - anchor.bottom - 10, above = anchor.top - 10, down = below >= 420 || below >= above
-  const place = down ? { left, width, top: anchor.bottom + 2, maxHeight: Math.max(160, below) } : { left, width, bottom: window.innerHeight - anchor.top + 2, maxHeight: above }
+  // Under the header when it has room (its usual height), else above it when there is more room there; measured in the
+  // grid's own window.
+  const view = grid.ownerDocument.defaultView ?? window, innerWidth = view.innerWidth, innerHeight = view.innerHeight
+  const left = Math.max(8, Math.min(anchor.right - width, innerWidth - width - 8))
+  const below = innerHeight - anchor.bottom - 10, above = anchor.top - 10, down = below >= 420 || below >= above
+  const place = down ? { left, width, top: anchor.bottom + 2, maxHeight: Math.max(160, below) } : { left, width, bottom: innerHeight - anchor.top + 2, maxHeight: above }
   const titleId = `column-filter-${tabId}-${index}-${column}`
   const list = condition === 'list'
   const note = !full ? undefined
@@ -192,7 +203,7 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
       </label>)}
       {full && !entries.length && !showNull && <p className="column-filter-note">No values match.</p>}
     </div>
-    {note && <p className="column-filter-note">{note}{full?.approximate ? ' Long values were compared by their first characters.' : ''}</p>}
+    {note && <p className="column-filter-note">{note}{full?.truncated ? ' Values not listed stay shown.' : ''}{full?.approximate ? ' Long values were compared by their first characters.' : ''}</p>}
     <div className="column-filter-condition">
       <select aria-label="Condition" value={condition} onChange={event => { setError(undefined); setCondition(event.target.value as Condition) }}>
         {conditions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
@@ -207,5 +218,5 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
       <button type="submit" className="primary" disabled={!full}>OK</button>
       <button type="button" onClick={() => onClose()}>Cancel</button>
     </div>
-  </form>, document.body)
+  </form>, grid.ownerDocument.body)
 }

@@ -81,8 +81,9 @@ export interface ResultHandle extends Disposable {
    *  in the backend (results.profile): never rows. No columns gives only the rows' byte sizes. */
   profile(columns: readonly number[], signal?: AbortSignal): Promise<ResultsProfileResult>
   /** A column's distinct values with their counts over the rows (a view's rows, through a view), grouped in the backend as
-   *  a filter compares them (results.distinct); each value names a representative base row to filter by. */
-  distinct(column: number, o: { order: ResultsDistinctParams['order']; maxValues?: number; search?: string; signal?: AbortSignal }): Promise<ResultsDistinctResult>
+   *  a filter compares them (results.distinct); each value names a representative base row to filter by. `kept`, a view of
+   *  the same result, has each value (and NULL) say whether a row of that view holds it. */
+  distinct(column: number, o: { order: ResultsDistinctParams['order']; maxValues?: number; search?: string; kept?: ResultHandle; signal?: AbortSignal }): Promise<ResultsDistinctResult>
   /** Releases the result in the backend (results.close); queued while the results port is down. A view's close closes
    *  only the view (results.viewClose). */
   close(): Promise<void>
@@ -366,7 +367,10 @@ export class ResultClient implements Disposable {
         if (!Number.isInteger(maxValues) || maxValues < 1 || maxValues > wire.distinct.maxValues || (o.order !== 'count' && o.order !== 'value'))
           throw new ResultError('INVALID_PARAMS', 'Distinct values need an order of count or value and 1 to 4,096 values.')
         if (o.search !== undefined && (o.search.length < 1 || o.search.length > wire.search.maxText)) throw new ResultError('INVALID_PARAMS', 'Search for 1 to 1,024 characters.')
-        const params = { column, order: o.order, maxValues, ...(o.search === undefined ? {} : { search: o.search }) }
+        const keptViewId = o.kept?.key.view
+        if (o.kept && (keptViewId === undefined || o.kept.key.generation !== state.key.generation || o.kept.key.resultId !== state.key.resultId))
+          throw new ResultError('INVALID_PARAMS', 'Kept values are read through a view of the same result.')
+        const params = { column, order: o.order, maxValues, ...(o.search === undefined ? {} : { search: o.search }), ...(keptViewId === undefined ? {} : { keptViewId }) }
         const response = await this.request(id => ({ type: 'distinct', id, key: state.key, params }), o.signal)
         if (response.type !== 'distinct') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
         return response.result
