@@ -1864,7 +1864,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             if (set.IsReleased) throw Unavailable(args.ResultId);
             if (view is not null && !store.HasView(view)) throw ViewClosed();
             var (columns, wires, lengths) = PivotOutput.Shape(set, pages, spec, model);
-            var pivot = store.Open(set.Budget, set.Index, set.BatchNumber, set.Iteration, "pivot", columns, wires, lengths: lengths)
+            var pivot = store.Open(set.Budget, set.Index, set.BatchNumber, set.Iteration, "pivot", columns, wires, lengths: lengths, derived: true)
                 ?? throw new RequestException("TOO_LARGE", tooLarge);
             void Release()
             {

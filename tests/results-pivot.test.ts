@@ -3,7 +3,7 @@ import type { ResultColumn, ResultsJobProgress, VariaApi } from '../src/shared/c
 import { EventBus } from '../src/renderer/src/core/events'
 import { ResultError } from '../src/renderer/src/results/ResultClient'
 import { PivotService } from '../src/renderer/src/results/PivotService'
-import { aggregateFits, draftSpec, emptyDraft, fitDraft, isNumericColumn, pivotText, valueLabel } from '../src/renderer/src/results/pivot'
+import { aggregateFits, draftSpec, emptyDraft, fitDraft, isNumericColumn, pivotStrip, pivotText, remapDraft, valueLabel } from '../src/renderer/src/results/pivot'
 import { ResultsService, setKey } from '../src/renderer/src/results/ResultsService'
 import { descriptor, fakeResultClient, summaryOf, type FakeHandle } from './fixtures/results'
 import { manualTimers } from './fixtures/workbench'
@@ -23,10 +23,10 @@ function fixture() {
   const pivot = new PivotService(results)
   let next = 1
   /** Runs a query of `count` complete sets of `columns`; `finish: false` leaves it running. */
-  const run = (count: number, o: { finish?: boolean; queryId?: string } = {}) => {
+  const run = (count: number, o: { finish?: boolean; queryId?: string; columns?: ResultColumn[] } = {}) => {
     const queryId = o.queryId ?? 'q1'
     results.begin('t1', queryId)
-    const values = Array.from({ length: count }, (_, index) => descriptor(next++, { index, columns }))
+    const values = Array.from({ length: count }, (_, index) => descriptor(next++, { index, columns: o.columns ?? columns }))
     for (const value of values) client.emit(queryId, { type: 'resultSet.opened', descriptor: value })
     if (o.finish !== false) void results.finish('t1', queryId, { summary: summaryOf(values) })
     return results.getSnapshot().t1.sets.map(set => set.handle as FakeHandle)
@@ -52,6 +52,11 @@ describe('pivot helpers', () => {
     // A diff's tone column is never offered.
     expect(fitDraft({ rows: [1], values: [{ aggregate: 'count' }] }, [columns[0], column('', 'tinyint', { role: 'tone' } as Partial<ResultColumn>)]).rows).toEqual([])
     expect(draftSpec({ rows: [1], column: 0, values: [{ aggregate: 'sum', column: 2 }] })).toEqual({ rows: [1], column: 0, values: [{ aggregate: 'sum', column: 2 }] })
+    // A draft follows its columns by name when they move; one that is gone drops out when fitted.
+    const moved = [columns[2], columns[0], columns[3]]
+    const remapped = remapDraft({ rows: [0], column: 1, values: [{ aggregate: 'sum', column: 2 }, { aggregate: 'count' }] }, columns, moved)
+    expect(remapped).toEqual({ rows: [1], column: -1, values: [{ aggregate: 'sum', column: 0 }, { aggregate: 'count' }] })
+    expect(fitDraft(remapped, moved)).toEqual({ rows: [1], values: [{ aggregate: 'sum', column: 0 }, { aggregate: 'count' }] })
   })
 
   it('says what a pivot read, how many groups it has, and when long values were grouped by a prefix', () => {
@@ -59,6 +64,10 @@ describe('pivot helpers', () => {
     expect(pivotText(info)).toBe('Pivot of Result 1: 1,200 rows in 3 row groups × 4 column groups.')
     expect(pivotText({ ...info, source: 1, sourceLabel: 'Result 2', viewed: true, rows: 1, rowGroups: 1, columnGroups: 0 })).toBe('Pivot of Result 2 (as sorted and filtered): 1 row in 1 row group.')
     expect(pivotText({ ...info, sourceLabel: 'Pivot of Result 1', rows: 2 })).toBe('Pivot of Pivot of Result 1: 2 rows in 3 row groups × 4 column groups.')
+    // The strip keeps what the grid's highlights say after it.
+    expect(pivotStrip(info, 'Some rows here are identical, so a highlight covers each of them.'))
+      .toBe('Pivot of Result 1: 1,200 rows in 3 row groups × 4 column groups. Some rows here are identical, so a highlight covers each of them.')
+    expect(pivotStrip(info, undefined)).toBe(pivotText(info))
     expect(pivotText({ ...info, rowGroups: 100_000, columnGroups: 256, approximate: true }))
       .toBe('Pivot of Result 1: 1,200 rows in 100,000 row groups × 256 column groups. Long values were grouped by the part these results keep.')
   })
@@ -112,6 +121,20 @@ describe('PivotService', () => {
     // A closed tab forgets its panel.
     results.release('t1')
     expect(pivot.getSnapshot().tabs.t1).toBeUndefined()
+  })
+
+  it("keeps a draft on its columns by name when a re-run moves them, and says why a pivot its run refused was not added", async () => {
+    const { results, pivot, run } = fixture()
+    run(1)
+    pivot.open('t1', 0)
+    pivot.setDraft('t1', { rows: [0], column: 1, values: [{ aggregate: 'sum', column: 2 }] })
+    // The query now returns Amount, Region and Year: the draft still groups by Region and Year and sums Amount.
+    const [moved] = run(1, { queryId: 'q2', columns: [columns[2], columns[0], columns[1]] })
+    expect(pivot.getSnapshot().tabs.t1.draft).toEqual({ rows: [1], column: 2, values: [{ aggregate: 'sum', column: 0 }] })
+    vi.spyOn(results, 'addSet').mockReturnValueOnce(undefined)
+    await pivot.run('t1')
+    expect(moved.pivot).toHaveBeenCalledWith({ rows: [1], column: 2, values: [{ aggregate: 'sum', column: 0 }] }, { signal: expect.any(AbortSignal) })
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ running: false, error: 'These results were closed, so the pivot was not added.' })
   })
 
   it('gives up a pivot a new run replaces, releases its late answer, and keeps strips only for pivots a run still shows', async () => {

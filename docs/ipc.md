@@ -1464,16 +1464,18 @@ receives a new result to read like any other, never the rows it grouped.
   order, NULL first. `approximate` says a truncated value's stored prefix was grouped or compared.
 - **Aggregates.** COUNT counts non-NULL values (or rows), COUNT DISTINCT distinct non-NULL values by the same equality,
   MIN and MAX the lowest and highest by the sort's order (copied from the source cell, its type and collation kept). SUM
-  of integers is bigint and of other exact numerics decimal(38, s); AVG of exact numerics is decimal(38, max(s, 6)), not
-  SQL Server's integer AVG; floats sum and average as float. A cell with no rows is 0 for a count and NULL otherwise, as
-  T-SQL's PIVOT; a sum past decimal(38), or an integer sum past bigint's range, is an error cell, where SQL Server's SUM
-  would raise an overflow.
+  of integers (tinyint to bigint) is bigint and of other exact numerics, decimal(p, 0) included, decimal(38, s), summed
+  exactly to all 38 digits (`ResultPivoter.TryScaled`: whole units of the scale in an Int128); AVG of exact numerics is
+  decimal(38, max(s, 6)), not SQL Server's integer AVG, rounded half away from zero; floats sum and average as float. A
+  cell with no rows is 0 for a count and NULL otherwise, as T-SQL's PIVOT; a sum or average past decimal(38)'s digits, or
+  an integer sum past bigint's range, is an error cell, where SQL Server's SUM or AVG would raise an overflow.
 - **The pivot result** (`kind: 'pivot'`, stamped with the generation and owned by main as a diff is) has the row-group
   columns, then for each column group each value, named by the group's value ("NULL", "(blank)" for empty text, binary as
   `0x` hex, cut to 128 characters with "…"; a text value named like the NULL group or Total, or values sharing their first
-  128 characters, are numbered " (2)", " (3)" so no two columns share a name), or "group · Sum of Amount" when there are
-  several values, then a `Total`
-  column per value over the row group's rows. With no column group the values are named alone ("Count of rows", "Sum of
+  128 characters, are numbered " (2)", " (3)"), or "group · Sum of Amount" when there are several values, then a `Total`
+  column per value over the row group's rows. No two columns share a name, ignoring case (`PivotOutput.Unique`): the
+  row-group columns keep the source's names, then the totals theirs, and a column group's column named like one is
+  numbered. With no column group the values are named alone ("Count of rows", "Sum of
   Amount"); with no row groups it is one row. At most 256 column groups show, fewer when the columns would pass a page's
   4,096, at most 100,000 row groups and at most 4,000,000 figures. A pivot past any of these is refused once its groups are
   known, before its figures are reserved, never shown in part (a summary missing groups would mislead): `INVALID_PARAMS`
@@ -1483,15 +1485,19 @@ receives a new result to read like any other, never the rows it grouped.
   columns plus (column groups + 1) × values columns. It is a result of the source's query, charged to its
   budget, released with the query's other results and at once when its answer is not delivered (as a diff). It is
   stored whole or not at all: rows the budget refuses part-way release it with `TOO_LARGE`, and a query whose results
-  were already cut short (its row limit or its budget) stores no pivot, with a `TOO_LARGE` message that names which.
+  were already cut short (its row limit or its budget) stores no pivot, with a `TOO_LARGE` message that names which. The
+  pivot is a derived set (`ResultStore.Open(derived: true)`): a refusal fails only it and never stops its query, so a
+  smaller pivot of the same results can still fit.
 - **Work.** One pass sorts the rows by each grouped column's key (`ResultPivoter.WorkingBytes`: the sort keys and 12 bytes
-  a row), then the figures (8 to 16 bytes a cell and value) are charged to the query budget before they are computed
+  a row); each grouping keeps its groups' first rows only up to its bound and is refused before the next runs. Then the
+  figures (4 to 25 bytes a cell and value) are charged to the query budget before they are computed
   (`TOO_LARGE`, "There is not enough result memory to pivot these rows. Close other results and try again."). The worker's
   `cancel` stops it (`CANCELLED`).
 - **Renderer.** `ResultHandle.pivot(spec, { signal })` validates the spec before sending. `PivotService` keeps each tab's
   panel (source set, row groups, column group, values) and appends the pivot as the run's last set, named "Pivot of Result
   N", whose grid strip says what was read and how many groups it has; a refusal shows in the panel, which keeps the draft. A new run gives up a pivot in flight, and
-  `addSet` releases one the run cannot take.
+  `addSet` releases one the run cannot take (the panel says why when its run is unchanged). A re-run keeps the draft,
+  which follows its columns by name if the query now returns them in another order (`remapDraft`).
 
 ## Search in results
 

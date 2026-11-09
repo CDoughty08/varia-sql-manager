@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Numerics;
 using System.Text;
 
 namespace Varia.Backend.Results;
@@ -31,14 +32,16 @@ internal sealed class PivotModel
     public int Stride => ColumnReps.Length + 1;
 }
 
-/// <summary>One value's figures, a slot per cell: counts, sums (exact as System.Decimal, which flags a sum past its 28
-/// digits as an overflow; approximate as doubles) or the row holding a lowest or highest value.</summary>
-internal sealed class PivotFigures(PivotValue value, int cells, bool exact)
+/// <summary>One value's figures, a slot per cell: counts, sums (exact as whole numbers of the column's smallest unit, so
+/// decimal(38, s) sums keep all 38 digits, flagged as an overflow past them; approximate as doubles) or the row holding a
+/// lowest or highest value. <paramref name="scale"/> is an exact column's scale.</summary>
+internal sealed class PivotFigures(PivotValue value, int cells, bool exact, int scale = 0)
 {
     public PivotValue Value { get; } = value;
     public bool Exact { get; } = exact;
+    public int Scale { get; } = scale;
     public readonly long[] Counts = value.Aggregate is PivotAggregate.Min or PivotAggregate.Max ? [] : new long[cells];
-    public readonly decimal[] Decimals = value.Aggregate is PivotAggregate.Sum or PivotAggregate.Avg && exact ? new decimal[cells] : [];
+    public readonly Int128[] Sums = value.Aggregate is PivotAggregate.Sum or PivotAggregate.Avg && exact ? new Int128[cells] : [];
     public readonly double[] Doubles = value.Aggregate is PivotAggregate.Sum or PivotAggregate.Avg && !exact ? new double[cells] : [];
     public readonly bool[] Overflow = value.Aggregate is PivotAggregate.Sum or PivotAggregate.Avg && exact ? new bool[cells] : [];
     public readonly int[] Best = value.Aggregate is PivotAggregate.Min or PivotAggregate.Max ? Filled(cells) : [];
@@ -119,22 +122,39 @@ internal static class ResultPivoter
         else positions = order;
         var scratch = new int[positions.Length];
 
+        // Each grouping keeps its groups' first rows only up to its bound, still counting past it for the refusal's message,
+        // and is refused before the next grouping runs. The messages name no column or value (the renderer knows which).
         var rowKeys = spec.Rows.Select(KeyOf).ToArray();
-        var (groupOf, rowReps) = Group(rowKeys, positions, rows, scratch, token, all: true);
+        var (groupOf, rowReps, rowGroups) = Group(rowKeys, positions, rows, scratch, token, all: true, MaxRowGroups);
+        if (rowGroups > MaxRowGroups)
+            throw new RequestException("INVALID_PARAMS", string.Format(CultureInfo.InvariantCulture,
+                "The row groups make {0:N0} rows, and a pivot can have at most {1:N0}. Group by fewer columns, or filter the rows first.", rowGroups, MaxRowGroups));
         int[] columnOf;
         List<int> columnReps;
-        if (spec.Column >= 0) (columnOf, columnReps) = Group([KeyOf(spec.Column)], positions, rows, scratch, token, all: false);
+        if (spec.Column >= 0)
+        {
+            var columnLimit = ColumnGroupLimit(spec);
+            (columnOf, columnReps, var counted) = Group([KeyOf(spec.Column)], positions, rows, scratch, token, all: false, columnLimit);
+            if (counted > columnLimit)
+                throw new RequestException("INVALID_PARAMS", string.Format(CultureInfo.InvariantCulture,
+                    "The column group has {0:N0} distinct values, and a pivot can have at most {1:N0} column groups{2}. Choose a column with fewer values, or move it to Rows.",
+                    counted, columnLimit, columnLimit < MaxColumnGroups ? string.Format(CultureInfo.InvariantCulture, " with {0} values", spec.Values.Length) : ""));
+        }
         else (columnOf, columnReps) = ([], []);
 
         var columnGroups = columnReps.Count;
-        Limit(spec, rowReps.Count, columnGroups);
+        var figureCount = (long)rowReps.Count * (columnGroups + 1) * spec.Values.Length;
+        if (figureCount > MaxCells)
+            throw new RequestException("INVALID_PARAMS", string.Format(CultureInfo.InvariantCulture,
+                "This pivot would have {0:N0} figures, and a pivot can have at most {1:N0}. Use fewer values, row groups or column groups.", figureCount, MaxCells));
         var stride = columnGroups + 1;
         var cells = rowReps.Count * stride;
         long bytes = 0;
         foreach (var value in spec.Values) bytes += PivotFigures.CellBytes(value.Aggregate) * cells;
         if (!reserve(bytes)) throw new PivotTooLargeException();
 
-        var figures = spec.Values.Select(value => new PivotFigures(value, cells, value.Column >= 0 && ViewSorter.KindOf(set.Columns[value.Column], set.Wires[value.Column]) == ViewSorter.Kind.Exact)).ToArray();
+        var figures = spec.Values.Select(value => value.Column >= 0 && ViewSorter.KindOf(set.Columns[value.Column], set.Wires[value.Column]) == ViewSorter.Kind.Exact
+            ? new PivotFigures(value, cells, true, Scale(set.Columns[value.Column])) : new PivotFigures(value, cells, false)).ToArray();
         // A row outside the view (no row group) counts nowhere; every other row counts in its cell and its row group's total.
         int CellOf(int row, out int total)
         {
@@ -171,7 +191,7 @@ internal static class ResultPivoter
                     var span = view.Span(value.Column, r);
                     if (item.Exact)
                     {
-                        var parsed = decimal.TryParse(span, NumberStyles.Float, CultureInfo.InvariantCulture, out var number);
+                        var parsed = TryScaled(span, item.Scale, out var number);
                         Add(item, cell, parsed, number);
                         Add(item, totalCell, parsed, number);
                     }
@@ -205,29 +225,11 @@ internal static class ResultPivoter
     /// each column group's values and the totals would pass a page's 4,096 columns.</summary>
     public static int ColumnGroupLimit(PivotSpec spec) => Math.Min(MaxColumnGroups, (PageBuilder.MaxColumns - spec.Rows.Length) / spec.Values.Length - 1);
 
-    /// <summary>Refuses a pivot past its bounds, saying which and how to bring it within them. The messages name no column
-    /// or value (the renderer knows which fields it asked for).</summary>
-    private static void Limit(PivotSpec spec, long rowGroups, long columnGroups)
-    {
-        var invariant = CultureInfo.InvariantCulture;
-        var columnLimit = ColumnGroupLimit(spec);
-        if (columnGroups > columnLimit)
-            throw new RequestException("INVALID_PARAMS", string.Format(invariant,
-                "The column group has {0:N0} distinct values, and a pivot can have at most {1:N0} column groups{2}. Choose a column with fewer values, or move it to Rows.",
-                columnGroups, columnLimit, columnLimit < MaxColumnGroups ? string.Format(invariant, " with {0} values", spec.Values.Length) : ""));
-        if (rowGroups > MaxRowGroups)
-            throw new RequestException("INVALID_PARAMS", string.Format(invariant,
-                "The row groups make {0:N0} rows, and a pivot can have at most {1:N0}. Group by fewer columns, or filter the rows first.", rowGroups, MaxRowGroups));
-        var cells = rowGroups * (columnGroups + 1) * spec.Values.Length;
-        if (cells > MaxCells)
-            throw new RequestException("INVALID_PARAMS", string.Format(invariant,
-                "This pivot would have {0:N0} figures, and a pivot can have at most {1:N0}. Use fewer values, row groups or column groups.", cells, MaxCells));
-    }
-
     /// <summary>Each position's group by the keys' values (equal values, NULL equal to NULL, as GROUP BY), numbered in
     /// ascending order, and each group's first row. With no keys every position is one group, which exists even without rows
-    /// when <paramref name="all"/> (a pivot without row groups has its one row, as an aggregate without GROUP BY does).</summary>
-    private static (int[] Of, List<int> Reps) Group(ViewSorter.Key[] keys, int[] positions, int rows, int[] scratch, CancellationToken token, bool all)
+    /// when <paramref name="all"/> (a pivot without row groups has its one row, as an aggregate without GROUP BY does). Past
+    /// <paramref name="limit"/> groups it keeps no more first rows, only counting them (the pivot is then refused).</summary>
+    private static (int[] Of, List<int> Reps, long Count) Group(ViewSorter.Key[] keys, int[] positions, int rows, int[] scratch, CancellationToken token, bool all, int limit)
     {
         var of = new int[rows];
         Array.Fill(of, -1);
@@ -236,29 +238,82 @@ internal static class ResultPivoter
         {
             if (all) reps.Add(positions.Length > 0 ? positions.Min() : -1);
             foreach (var row in positions) of[row] = 0;
-            return (of, reps);
+            return (of, reps, reps.Count);
         }
         positions.CopyTo(scratch, 0);
         var comparer = new ViewSorter.Comparer(keys, null, token);
         if (scratch.Length > 1) Array.Sort(scratch, comparer);
+        long count = 0;
         for (var i = 0; i < scratch.Length; i++)
         {
             var row = scratch[i];
-            if (i == 0 || comparer.Values(scratch[i - 1], row) != 0) reps.Add(row);
-            of[row] = reps.Count - 1;
+            if (i == 0 || comparer.Values(scratch[i - 1], row) != 0)
+            {
+                count++;
+                if (count <= limit) reps.Add(row);
+            }
+            if (count <= limit) of[row] = (int)count - 1;
         }
-        return (of, reps);
+        return (of, reps, count);
     }
 
-    private static void Add(PivotFigures figures, int cell, bool parsed, decimal number)
+    /// <summary>10^38: a decimal(38, s) holds whole numbers of its smallest unit below it.</summary>
+    internal static readonly Int128 Decimal38 = Int128.Parse("100000000000000000000000000000000000000", CultureInfo.InvariantCulture);
+
+    private static void Add(PivotFigures figures, int cell, bool parsed, Int128 number)
     {
         if (cell < 0) return;
         figures.Counts[cell]++;
         if (!parsed) { figures.Overflow[cell] = true; return; }
         if (figures.Overflow[cell]) return;
-        try { figures.Decimals[cell] += number; }
-        catch (OverflowException) { figures.Overflow[cell] = true; }
+        // Both are below 10^38 in size, so the bound is tested before adding: their sum could pass Int128's range.
+        var current = figures.Sums[cell];
+        if (number > 0 ? current >= Decimal38 - number : current <= -Decimal38 - number) figures.Overflow[cell] = true;
+        else figures.Sums[cell] = current + number;
     }
+
+    /// <summary>An exact numeric's text ("-12.50", as decimal, money and the integers are stored) as a whole number of
+    /// 10^-<paramref name="scale"/>: false for anything else, for more decimals than the scale, or at 10^38 units or more.</summary>
+    internal static bool TryScaled(ReadOnlySpan<byte> text, int scale, out Int128 value)
+    {
+        value = 0;
+        var i = 0;
+        var negative = false;
+        if (i < text.Length && text[i] is (byte)'-' or (byte)'+') negative = text[i++] == '-';
+        int digits = 0, decimals = 0, significant = 0;
+        var point = false;
+        for (; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (c == '.' && !point) { point = true; continue; }
+            if (c is < (byte)'0' or > (byte)'9') return false;
+            digits++;
+            if (point && ++decimals > scale) return false;
+            if (significant == 0 && c == '0') continue;
+            if (++significant > 38) return false;
+            value = value * 10 + (c - '0');
+        }
+        if (digits == 0) return false;
+        for (; decimals < scale; decimals++)
+        {
+            value *= 10;
+            if (value >= Decimal38) return false;
+        }
+        if (value >= Decimal38) return false;
+        if (negative) value = -value;
+        return true;
+    }
+
+    /// <summary>The scale of an exact numeric column's values (decimal(p,s)'s s; money's 4; integers' 0).</summary>
+    internal static int Scale(ResultColumn column) => ViewSorter.TypeName(column) switch
+    {
+        "money" or "smallmoney" => 4,
+        "decimal" or "numeric" => column.Scale ?? 0,
+        _ => 0
+    };
+
+    /// <summary>An integer type, whose SUM is a bigint as SQL Server's is.</summary>
+    internal static bool IsInteger(ResultColumn column) => ViewSorter.TypeName(column) is "tinyint" or "smallint" or "int" or "bigint";
 
     /// <summary>Keeps the lower (or higher) of a cell's row and this one; equal values keep the earlier row.</summary>
     private static void Extreme(int[] best, int cell, int row, ViewSorter.Key key, bool max)
@@ -337,16 +392,8 @@ internal static class PivotOutput
         return truncated || view.IsTruncated(column, at) ? cut.ToString() + "…" : text;
     }
 
-    /// <summary>The scale of an exact numeric column's values (decimal(p,s)'s s; money's 4; integers' 0).</summary>
-    private static int Scale(ResultColumn column) => ViewSorter.TypeName(column) switch
-    {
-        "money" or "smallmoney" => 4,
-        "decimal" or "numeric" => column.Scale ?? 0,
-        _ => 0
-    };
-
-    /// <summary>A value's column: its name and the type its figures have. Counts are bigint; sums keep an exact type's scale
-    /// (as SQL Server's SUM, widened to 38 digits) and floats; averages of exact numerics keep at least 6 decimals; lowest and
+    /// <summary>A value's column: its name and the type its figures have. Counts are bigint; sums of integers are bigint and
+    /// other exact sums keep their scale (as SQL Server's SUM, widened to 38 digits), floats stay floats; averages of exact numerics keep at least 6 decimals; lowest and
     /// highest are the source column's own type, collation included.</summary>
     private static ResultColumn ValueColumn(ResultSetBuffer source, PivotValue value, string name)
     {
@@ -354,9 +401,9 @@ internal static class PivotOutput
         var column = source.Columns[value.Column];
         if (value.Aggregate is PivotAggregate.Min or PivotAggregate.Max) return column with { Name = name, Nullable = true };
         if (ViewSorter.KindOf(column, source.Wires[value.Column]) != ViewSorter.Kind.Exact) return new ResultColumn(name, "float", "text", Precision: 53);
-        var scale = Scale(column);
+        var scale = ResultPivoter.Scale(column);
         if (value.Aggregate == PivotAggregate.Avg) scale = Math.Max(scale, 6);
-        else if (scale == 0) return new ResultColumn(name, "bigint", "text");
+        else if (ResultPivoter.IsInteger(column)) return new ResultColumn(name, "bigint", "text");
         return new ResultColumn(name, "decimal(38," + scale.ToString(CultureInfo.InvariantCulture) + ")", "text", Precision: 38, Scale: scale);
     }
 
@@ -388,7 +435,27 @@ internal static class PivotOutput
                 lengths.Add(copied ? source.Lengths[value.Column] : ColumnLength.Utf16);
             }
         }
+        Unique(columns, spec.Rows.Length, spec.Values.Length);
         return (columns, wires, lengths);
+    }
+
+    /// <summary>Makes every column's name distinct (ignoring case), so no two headers match and a JSON save has no repeated
+    /// key: the row-group columns keep the source's names, then the totals (or, without a column group, the values) keep
+    /// theirs, then the column groups' columns in order; a later name already taken is numbered " (2)", " (3)".</summary>
+    internal static void Unique(List<ResultColumn> columns, int rows, int values)
+    {
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // A number is never one that another column already has as its own name.
+        var names = new HashSet<string>(columns.Select(column => column.Name), StringComparer.OrdinalIgnoreCase);
+        var order = Enumerable.Range(0, rows).Concat(Enumerable.Range(columns.Count - values, values)).Concat(Enumerable.Range(rows, columns.Count - rows - values));
+        foreach (var i in order)
+        {
+            var name = columns[i].Name;
+            if (used.Add(name)) continue;
+            var n = 2;
+            while (names.Contains(name + " (" + n.ToString(CultureInfo.InvariantCulture) + ")") || !used.Add(name + " (" + n.ToString(CultureInfo.InvariantCulture) + ")")) n++;
+            columns[i] = columns[i] with { Name = name + " (" + n.ToString(CultureInfo.InvariantCulture) + ")" };
+        }
     }
 
     /// <summary>Makes the column groups' names distinct, so no two columns share a header (and a JSON save no key): the NULL
@@ -426,7 +493,8 @@ internal static class PivotOutput
                 if (builder is null) break;
                 var truncated = 0;
                 var rep = model.RowReps[g];
-                foreach (var column in spec.Rows) truncated += Copy(builder, access, source, column, rep);
+                // A row group's key shows as its value: a cell that could not be read groups (and shows) as NULL.
+                foreach (var column in spec.Rows) truncated += Copy(builder, access, source, column, rep, error: false);
                 for (var c = 0; c < model.Stride; c++)
                 {
                     var cell = g * model.Stride + c;
@@ -454,40 +522,55 @@ internal static class PivotOutput
         if (count == 0) { builder.AppendNull(); return 0; }
         if (!figures.Exact)
         {
-            var sum = figures.Doubles[cell];
-            builder.EndFormatted(CellFormat.WriteFloat(builder.BeginFormatted(), value.Aggregate == PivotAggregate.Avg ? sum / count : sum));
+            var approximate = figures.Doubles[cell];
+            builder.EndFormatted(CellFormat.WriteFloat(builder.BeginFormatted(), value.Aggregate == PivotAggregate.Avg ? approximate / count : approximate));
             return 0;
         }
-        // An overflow (past System.Decimal's 28 digits) shows as a cell that could not be read, as a failed conversion does.
+        // An overflow (past decimal(38)'s digits) shows as a cell that could not be read, where SQL Server's SUM would fail.
         if (figures.Overflow[cell]) { builder.AppendNull(error: true); return 0; }
-        var total = figures.Decimals[cell];
-        var scale = Scale(source.Columns[value.Column]);
-        decimal shown;
-        try
+        var sum = figures.Sums[cell];
+        var scale = figures.Scale;
+        if (value.Aggregate == PivotAggregate.Avg)
         {
-            shown = value.Aggregate == PivotAggregate.Avg ? Rescale(Math.Round(total / count, Math.Max(scale, 6), MidpointRounding.AwayFromZero), Math.Max(scale, 6)) : Rescale(total, scale);
+            var shown = Math.Max(scale, 6);
+            if (Average(sum, count, scale, shown) is not { } average) { builder.AppendNull(error: true); return 0; }
+            builder.EndFormatted(WriteScaled(builder.BeginFormatted(), average, shown));
+            return 0;
         }
-        catch (OverflowException) { builder.AppendNull(error: true); return 0; }
-        // An integer sum is a bigint, as SQL Server's SUM of bigint: past its range it overflows as SQL Server's would.
-        if (value.Aggregate == PivotAggregate.Sum && scale == 0 && (shown > long.MaxValue || shown < long.MinValue)) { builder.AppendNull(error: true); return 0; }
-        builder.EndFormatted(CellFormat.WriteDecimal(builder.BeginFormatted(), shown));
+        // An integer sum is a bigint, as SQL Server's SUM of an integer: past its range it overflows as SQL Server's would.
+        if (ResultPivoter.IsInteger(source.Columns[value.Column]) && (sum > long.MaxValue || sum < long.MinValue)) { builder.AppendNull(error: true); return 0; }
+        builder.EndFormatted(WriteScaled(builder.BeginFormatted(), sum, scale));
         return 0;
     }
 
-    /// <summary>A value with exactly <paramref name="scale"/> decimals (2.5 at scale 2 is 2.50), as a decimal(38, s) shows.</summary>
-    internal static decimal Rescale(decimal value, int scale)
+    /// <summary>A sum of <paramref name="count"/> values at <paramref name="scale"/> divided by the count at
+    /// <paramref name="shown"/> decimals, rounded half away from zero; null past decimal(38)'s digits.</summary>
+    internal static Int128? Average(Int128 sum, long count, int scale, int shown)
     {
-        var rounded = Math.Round(value, Math.Min(scale, 28), MidpointRounding.AwayFromZero);
-        // Adding a zero with the scale wanted widens a smaller scale; Round already cut a larger one.
-        return scale <= 0 ? rounded : rounded + new decimal(0, 0, 0, false, (byte)Math.Min(scale, 28));
+        var scaled = (BigInteger)sum * BigInteger.Pow(10, shown - scale);
+        var quotient = BigInteger.DivRem(BigInteger.Abs(scaled), count, out var remainder);
+        if (remainder * 2 >= count) quotient++;
+        if (scaled.Sign < 0) quotient = -quotient;
+        if (BigInteger.Abs(quotient) >= (BigInteger)ResultPivoter.Decimal38) return null;
+        return (Int128)quotient;
     }
 
-    /// <summary>Copies a source cell (flags, truncation and size included); returns 1 for a truncated one.</summary>
-    private static int Copy(PageBuilder builder, RowAccess access, ResultSetBuffer source, int column, int row)
+    /// <summary>A whole number of 10^-<paramref name="scale"/> as decimal text with exactly that many decimals (250 at scale 2
+    /// is "2.50"), as a decimal(38, s) shows.</summary>
+    internal static int WriteScaled(Span<byte> destination, Int128 value, int scale)
+    {
+        var digits = Int128.Abs(value).ToString(CultureInfo.InvariantCulture).PadLeft(scale + 1, '0');
+        var text = (value < 0 ? "-" : "") + (scale == 0 ? digits : digits[..^scale] + "." + digits[^scale..]);
+        return Encoding.ASCII.GetBytes(text, destination);
+    }
+
+    /// <summary>Copies a source cell (flags, truncation and size included, the error flag only when <paramref name="error"/>);
+    /// returns 1 for a truncated one.</summary>
+    private static int Copy(PageBuilder builder, RowAccess access, ResultSetBuffer source, int column, int row, bool error = true)
     {
         if (row < 0) { builder.AppendNull(); return 0; }
         var view = access.At(row, out var at, out var lengths);
-        if (view.IsNull(column, at)) { builder.AppendNull(view.IsError(column, at)); return 0; }
+        if (view.IsNull(column, at)) { builder.AppendNull(error && view.IsError(column, at)); return 0; }
         var cut = view.IsTruncated(column, at);
         var span = view.Span(column, at);
         if (view.Wire(column) == WireKind.Binary) builder.AppendBinary(span, cut);

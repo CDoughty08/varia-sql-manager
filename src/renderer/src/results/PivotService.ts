@@ -1,8 +1,9 @@
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
-import { draftSpec, emptyDraft, fitDraft as fitColumns, type PivotDraft, type PivotInfo } from './pivot'
+import type { ResultColumn } from '../../../shared/contracts'
+import { draftSpec, emptyDraft, fitDraft as fitColumns, remapDraft, type PivotDraft, type PivotInfo } from './pivot'
 import type { ResultSetEntry, ResultsService } from './ResultsService'
-import { setKey } from './ResultsService'
+import { resultLimits, setKey } from './ResultsService'
 
 /** One tab's pivot panel: whether it shows, the set it pivots, the draft, and the pivot running or the last failure. */
 export interface PivotTab {
@@ -35,6 +36,8 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
   private readonly running = new Map<string, { readonly abort: AbortController; readonly queryId: string }>()
   /** The run each tab's panel was set up for: a new run starts the draft over. */
   private readonly runs = new Map<string, string>()
+  /** The columns each tab's draft was last fitted to: a draft follows its columns by name when they move. */
+  private readonly fitted = new Map<string, readonly ResultColumn[]>()
   private readonly unsubscribe: () => void
 
   constructor(results: Results) {
@@ -95,8 +98,17 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       const result = await handle.pivot(draftSpec(this.fit(tabId, state.source, state.draft)), { signal: abort.signal })
       const sourceLabel = entry.label ?? `Result ${entry.index + 1}`
       const label = `Pivot of ${sourceLabel}`
-      // Only the run that holds the set takes the pivot; otherwise (a re-run, a closed tab) it is released.
-      if (this.results.addSet(tabId, result.descriptor, label, [setKey(entry.descriptor)]) === undefined) return
+      // Only the run that holds the set takes the pivot; otherwise (a re-run, a closed tab) it is released, and the panel says
+      // why when its run is still the one it pivoted.
+      if (this.results.addSet(tabId, result.descriptor, label, [setKey(entry.descriptor)]) === undefined) {
+        const now = this.results.getSnapshot()[tabId]
+        if (now?.queryId === tab.queryId) {
+          error = now.sets.length >= resultLimits.sets
+            ? `These results already show ${resultLimits.sets.toLocaleString('en-US')} sets, so the pivot was not added. Close Results or run the query again.`
+            : 'These results were closed, so the pivot was not added.'
+        }
+        return
+      }
       const info: PivotInfo = {
         source: entry.index, sourceLabel, viewed: !!sort?.view, rows: result.rows, rowGroups: result.rowGroups,
         columnGroups: result.columnGroups, approximate: result.approximate
@@ -125,8 +137,11 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
   }
 
   private fit(tabId: string, source: number, draft: PivotDraft): PivotDraft {
-    const entry = this.results.getSnapshot()[tabId]?.sets[source]
-    return entry ? fitColumns(draft, entry.descriptor.columns) : draft
+    const columns = this.results.getSnapshot()[tabId]?.sets[source]?.descriptor.columns
+    if (!columns) return draft
+    const previous = this.fitted.get(tabId)
+    this.fitted.set(tabId, columns)
+    return fitColumns(previous && previous !== columns ? remapDraft(draft, previous, columns) : draft, columns)
   }
 
   private update(tabId: string, tab: PivotTab): void {
@@ -140,7 +155,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     return new Map([...info].filter(([key]) => shown.has(key)))
   }
 
-  /** A new run (or a closed tab) gives up its tab's running pivot and starts its panel over on its first set. */
+  /** A new run (or a closed tab) gives up its tab's running pivot; the panel keeps its set while the run has it. */
   private sync(): void {
     const snapshot = this.results.getSnapshot()
     for (const [tabId, item] of this.running) if (snapshot[tabId]?.queryId !== item.queryId) item.abort.abort()
@@ -148,7 +163,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     let tabs: Record<string, PivotTab> | undefined
     for (const [tabId, tab] of Object.entries(current.tabs)) {
       const run = snapshot[tabId]
-      if (!run) { tabs ??= { ...current.tabs }; delete tabs[tabId]; this.runs.delete(tabId); continue }
+      if (!run) { tabs ??= { ...current.tabs }; delete tabs[tabId]; this.runs.delete(tabId); this.fitted.delete(tabId); continue }
       let next = tab
       // A new run keeps the draft (a re-run of the same query pivots the same way) and the set it pivots; the draft is fitted
       // to the set when it runs.
@@ -162,6 +177,9 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
         const first = run.sets.findIndex(item => item.descriptor.kind === 'rows' || item.descriptor.kind === 'pivot')
         if (first >= 0 && first !== next.source) next = { ...next, source: first }
       }
+      // Once the set's columns are known the draft follows them by name, so a re-run that moves them keeps what it grouped.
+      const columns = run.sets[next.source]?.descriptor.columns
+      if (columns && this.fitted.get(tabId) !== columns) next = { ...next, draft: this.fit(tabId, next.source, next.draft) }
       if (next !== tab) { tabs ??= { ...current.tabs }; tabs[tabId] = next }
     }
     if (tabs) this.publish({ tabs, info: this.shown(current.info) })

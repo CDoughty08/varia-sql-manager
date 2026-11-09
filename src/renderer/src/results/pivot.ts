@@ -59,6 +59,21 @@ export function fitDraft(draft: PivotDraft, columns: readonly ResultColumn[]): P
   return { rows, ...(column === undefined ? {} : { column }), values: values.length ? values : emptyDraft.values }
 }
 
+/** The draft's columns moved to where `to` has them by name, for a draft made against `from` (a re-run whose query now
+ *  returns its columns in another order, or another set): a column `to` lacks drops out when the draft is fitted. */
+export function remapDraft(draft: PivotDraft, from: readonly ResultColumn[], to: readonly ResultColumn[]): PivotDraft {
+  const move = (index: number): number => {
+    const name = from[index]?.name
+    if (name === undefined || to[index]?.name === name) return index
+    return to.findIndex(column => column.name === name)
+  }
+  return {
+    rows: draft.rows.map(move),
+    ...(draft.column === undefined ? {} : { column: move(draft.column) }),
+    values: draft.values.map(value => value.column === undefined ? value : { ...value, column: move(value.column) })
+  }
+}
+
 /** The request a draft makes. */
 export function draftSpec(draft: PivotDraft): PivotSpec {
   return { rows: [...draft.rows], ...(draft.column === undefined ? {} : { column: draft.column }), values: draft.values.map(value => ({ ...value })) }
@@ -76,6 +91,11 @@ export interface PivotInfo {
   readonly rowGroups: number
   readonly columnGroups: number
   readonly approximate: boolean
+}
+
+/** A pivot grid's strip: what was pivoted, then what its highlights say, if anything. */
+export function pivotStrip(info: PivotInfo, highlight: string | undefined): string {
+  return highlight ? `${pivotText(info)} ${highlight}` : pivotText(info)
 }
 
 /** The strip: what was pivoted, how many groups, and whether long values were grouped by a prefix. */

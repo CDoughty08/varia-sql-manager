@@ -51,6 +51,7 @@ internal static class PivotChecks
             for (var c = 0; c < row.Length; c++)
             {
                 if (row[c] is not { } cell) builder.AppendNull();
+                else if (cell == Unreadable) builder.AppendNull(error: true);
                 else if (wires[c] == WireKind.Binary) builder.AppendBinary(Encoding.UTF8.GetBytes(cell));
                 else builder.AppendText(cell);
             }
@@ -59,6 +60,9 @@ internal static class PivotChecks
         set.Complete();
         return set;
     }
+
+    /// <summary>A source cell stored as one that could not be read (NULL with the error flag).</summary>
+    private const string Unreadable = "\u0000ERR";
 
     private static ResultSetBuffer Source(ResultStore store, string?[][]? rows = null, ResultColumn[]? columns = null) =>
         Fill(store, store.BeginQuery("pivot" + Guid.NewGuid()), rows ?? SalesRows, columns ?? Sales);
@@ -127,6 +131,15 @@ internal static class PivotChecks
         PivotOutput.Distinguish(clashing, total: true);
         check(string.Join(",", clashing) == "NULL,NULL (2),Total (2),x,x (2),X (3),(blank),Total",
             "column groups get distinct names: the NULL group and Total keep theirs, and a text 'NULL' or 'Total' or values sharing a prefix are numbered: " + string.Join(",", clashing));
+        List<ResultColumn> named = [new("Total", "int", "text"), new("total", "int", "text"), new("x", "bigint", "text"), new("Total", "bigint", "text"), new("Count of rows", "bigint", "text"), new("Count of rows", "bigint", "text")];
+        PivotOutput.Unique(named, rows: 2, values: 2);
+        check(string.Join(",", named.Select(column => column.Name)) == "Total,total (2),x,Total (3),Count of rows,Count of rows (2)",
+            "every column's name is distinct: the row columns keep the source's, then the totals, then the column groups' are numbered: " + string.Join(",", named.Select(column => column.Name)));
+        var (_, clash) = Pivot(store, Source(store, [["a", "Total"], ["b", "x"]], [new("Total", "nvarchar(5)", "text", Collation: CaseInsensitive), new("g", "nvarchar(5)", "text", Collation: CaseInsensitive)]), new PivotSpec([0], 1, [Rows()]));
+        check(Names(clash) == "Total,Total (2),x,Total (3)",
+            "a row column named like a column group or Total keeps its name, and the others are numbered: " + Names(clash));
+        var (_, unreadable) = Pivot(store, Source(store, [[Unreadable, "1"], ["a", "2"]], [new("k", "nvarchar(5)", "text", Collation: CaseInsensitive), new("v", "int", "text")]), new PivotSpec([0], -1, [new(PivotAggregate.Max, 1)]));
+        check(string.Join(";", Text(unreadable)) == "NULL|1;a|2", "a row group of cells that could not be read shows as the NULL group, not as an error: " + string.Join(";", Text(unreadable)));
         var (_, two) = Pivot(store, set, new PivotSpec([], 1, [Rows(), new(PivotAggregate.Sum, 2)]));
         check(Names(two) == "NULL · Count of rows,NULL · Sum of Amount,2024 · Count of rows,2024 · Sum of Amount,2025 · Count of rows,2025 · Sum of Amount,Total · Count of rows,Total · Sum of Amount"
             && string.Join(";", Text(two)) == "1|NULL|3|11.75|2|6.25|6|18.00",
@@ -162,8 +175,8 @@ internal static class PivotChecks
             "a cell without rows counts 0 and sums NULL, as T-SQL's PIVOT has them: " + Text(empty)[0]);
     }
 
-    /// <summary>Exact numerics group as numbers (1.5 and 1.50 together, -0 with 0), integer sums are bigint, and a sum past
-    /// System.Decimal's 28 digits is a cell that could not be read rather than a wrong figure.</summary>
+    /// <summary>Exact numerics group as numbers (1.5 and 1.50 together, -0 with 0), integer sums are bigint, other exact sums
+    /// keep all of decimal(38, s)'s digits, and a sum past them is a cell that could not be read rather than a wrong figure.</summary>
     private static void Numbers(Action<bool, string> check)
     {
         var store = new ResultStore(1L << 30, 1L << 29);
@@ -171,12 +184,26 @@ internal static class PivotChecks
         var set = Source(store, [["1.50", "2147483647"], ["1.5", "2147483647"], ["-0.00", "1"], ["0", "1"], ["50000000000000000000000000000.00", "1"], ["50000000000000000000000000000.00", "1"]], columns);
         var (model, pivot) = Pivot(store, set, new PivotSpec([0], -1, [new(PivotAggregate.Sum, 1), new(PivotAggregate.Sum, 0)]));
         var rows = Text(pivot);
-        check(model.RowGroups == 3 && rows[0] == "-0.00|2|0.00" && rows[1] == "1.50|4294967294|3.00" && rows[2] == "50000000000000000000000000000.00|2|ERR"
-            && pivot.Columns[1].DataType == "bigint",
-            "exact numerics group by value, integer sums widen to bigint, and an overflowing sum is an error cell: " + string.Join(";", rows));
-        var avg = ResultPivoter.Build(set, set.SealedSnapshot(), null, new PivotSpec([], -1, [new(PivotAggregate.Avg, 1)]), CancellationToken.None, _ => true);
-        check(PivotOutput.Rescale(2.5m, 2).ToString(CultureInfo.InvariantCulture) == "2.50" && PivotOutput.Rescale(2.555m, 2).ToString(CultureInfo.InvariantCulture) == "2.56"
-            && avg.Figures[0].Counts[0] == 6, "a figure is shown at its type's scale, rounded half away from zero");
+        check(model.RowGroups == 3 && rows[0] == "-0.00|2|0.00" && rows[1] == "1.50|4294967294|3.00" && rows[2] == "50000000000000000000000000000.00|2|100000000000000000000000000000.00"
+            && pivot.Columns[1].DataType == "bigint" && pivot.Columns[2].DataType == "decimal(38,2)",
+            "exact numerics group by value, integer sums widen to bigint, and decimal sums keep 38 digits, past System.Decimal's 28: " + string.Join(";", rows));
+        var nines = new string('9', 36) + ".99";
+        var (_, edge) = Pivot(store, Source(store, [["1", nines], ["1", "0.01"], ["2", nines], ["2", "-" + nines], ["3", nines]], [new("g", "int", "text"), columns[0]]),
+            new PivotSpec([0], -1, [new(PivotAggregate.Sum, 1), new(PivotAggregate.Avg, 1)]));
+        check(string.Join(";", Text(edge)) == $"1|ERR|ERR;2|0.00|0.000000;3|{nines}|ERR",
+            "a sum reaching decimal(38)'s 10^38 is an error cell, and so is an average whose decimals would pass 38 digits: " + string.Join(";", Text(edge)));
+        var (_, whole) = Pivot(store, Source(store, [["1", "12345678901234567890"], ["1", "1"]], [new("g", "int", "text"), new("d", "decimal(20,0)", "text", Precision: 20, Scale: 0)]),
+            new PivotSpec([0], -1, [new(PivotAggregate.Sum, 1)]));
+        check(whole.Columns[1].DataType == "decimal(38,0)" && Text(whole)[0] == "1|12345678901234567891",
+            "a decimal(p,0) sum is decimal(38,0), not bigint, so it is not held to bigint's range: " + whole.Columns[1].DataType + " " + Text(whole)[0]);
+        static string Scaled(Int128 value, int scale) { var buffer = new byte[64]; return Encoding.ASCII.GetString(buffer, 0, PivotOutput.WriteScaled(buffer, value, scale)); }
+        check(ResultPivoter.TryScaled("-12.5"u8, 2, out var parsed) && parsed == -1250 && ResultPivoter.TryScaled("7"u8, 4, out var seven) && seven == 70000
+            && !ResultPivoter.TryScaled("1.234"u8, 2, out _) && !ResultPivoter.TryScaled("1e5"u8, 2, out _) && !ResultPivoter.TryScaled("-"u8, 0, out _) && !ResultPivoter.TryScaled(""u8, 0, out _)
+            && !ResultPivoter.TryScaled(System.Text.Encoding.ASCII.GetBytes("1" + new string('0', 38)), 0, out _),
+            "exact text parses to whole units of its scale, and anything else, more decimals or 10^38 is refused");
+        check(Scaled(250, 2) == "2.50" && Scaled(-5, 2) == "-0.05" && Scaled(42, 0) == "42" && PivotOutput.Average(5, 2, 0, 6) == 2_500_000 && PivotOutput.Average(-25555, 10, 4, 6) == -255_550
+            && PivotOutput.Average(2, 3, 0, 6) == 666_667 && PivotOutput.Average(-2, 3, 0, 6) == -666_667,
+            "a figure is shown at its type's scale, and an average rounds half away from zero");
         ResultColumn[] big = [new("g", "int", "text"), new("b", "bigint", "text")];
         var (_, wide) = Pivot(store, Source(store, [["1", "9000000000000000000"], ["1", "9000000000000000000"], ["2", "-9223372036854775808"]], big), new PivotSpec([0], -1, [new(PivotAggregate.Sum, 1)]));
         check(string.Join(";", Text(wide)) == "1|ERR;2|-9223372036854775808" && wide.Columns[1].DataType == "bigint",
@@ -352,5 +379,9 @@ internal static class PivotChecks
         try { service.DispatchAsync("results.pivot", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, rows = new[] { 0 }, values = new object[] { new { aggregate = "max", column = 1 } } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); }
         catch (RequestException error) { code = error.Code; }
         check(code == "TOO_LARGE" && store.UsedBytes == used, $"a pivot cut short by the budget is refused and releases what it stored: {code} {store.UsedBytes - used}");
+        // The refusal fails only that pivot: the query is not stopped, so a smaller one still fits.
+        var small = service.DispatchAsync("results.pivot", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, rows = Array.Empty<int>(), values = new object[] { new { aggregate = "count" } } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult() as ResultsPivotResult;
+        check(set.Budget.Stopped == TruncationReason.None && small is { RowGroups: 1 } && small.Descriptor.RowsStored == 1,
+            $"a refused pivot leaves its query able to store a smaller one: {set.Budget.Stopped}");
     }
 }
