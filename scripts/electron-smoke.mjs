@@ -71,7 +71,7 @@ try {
   const failures = []
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
-  await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
   const health = await page.evaluate(() => window.varia.health())
   expect(health.ok).toBe(true)
   expect(health.value.protocolVersion).toBe(2)
@@ -179,7 +179,7 @@ try {
   expect(await application.evaluate(({ clipboard }) => clipboard.readText())).toMatch(/Error: Workbench test fault\.[\s\S]*Component stack:/)
   await shellFailure.getByRole('button', { name: 'Reload', exact: true }).click()
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
-  await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
   await expect(shellFailure).toHaveCount(0)
   await expect(page.locator('.app-header')).toHaveCount(0)
   await expect(page.getByRole('menubar', { name: 'Application menu' })).toBeVisible()
@@ -460,7 +460,7 @@ try {
   await page.screenshot({ path: artifact('empty-workspace.png') })
   await nativeKey('N', ['control'])
   await expect(documentTabs(page).getByRole('tab')).toHaveCount(1)
-  await expect(page.locator('.monaco-editor')).toBeVisible()
+  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible()
 
   // Multi-server routing against the fake backend's fixtures, without external credentials.
   const executions = async () => (await calls()).filter(call => call.method === 'query.execute')
@@ -986,7 +986,7 @@ try {
   const errorSource = messages(page).getByRole('button', { name: 'Go to line 1', exact: true })
   await expect(errorSource).toBeEnabled()
   await errorSource.click()
-  await expect(page.locator('.monaco-editor').filter({ has: page.locator('[role="textbox"]:focus') })).toBeVisible()
+  await expect(page.locator('.monaco-editor[role=code]').filter({ has: page.locator('[role="textbox"]:focus') })).toBeVisible()
   await expect(editorStatus(page)).toContainText('Ln 1')
   await messages(page).focus()
   await page.keyboard.press('Control+a')

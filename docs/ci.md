@@ -34,6 +34,11 @@ with `node scripts/ci-timings.mjs` (add `--steps` for per-step times) before and
   completion and hover in split/floating editors against SQL Server 2022 with SQL Login, including focus return from a
   panel's OS popout, targeted cache refresh and docking back. It reuses that shard's server, build and display, with a
   five-minute deadline.
+  The language widget suite also checks overflowing hover/suggestion placement in short panels and at viewport edges.
+  `language-diagnostics-smoke.mjs` runs with the regular smoke shards and verifies rendered red/yellow squiggles, messages,
+  current-query issue navigation and stale-result cleanup. Its initial budgets are 20 seconds on Linux and 25 on Windows;
+  the local Windows run took 7.3 seconds. The SQL language live suite additionally validates real syntax/binding issues,
+  qualified joined completions and diagnostic cache refresh against marked fixtures.
 
   Smoke builds and packaging prepare Electron from its npm-pinned checksums, retrying transient official-download failures
   within a three-attempt, three-minute budget and seeding the shared archive cache so packaging verifies checksums offline.

@@ -27,7 +27,7 @@ import type { LiveEnd, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult }
 import type { ActivityDetailsRequest, ActivityDetailsResult, ActivityKillRequest, ActivityKillResult } from './activity/schema.ts'
 import type { PlanDocument } from './plans'
 import type { ShortcutFile } from './commands/shortcut-schema'
-import type { DatabaseProviderId, LanguageRequest, LanguageCompletions, LanguageHover, LanguageStatus, LanguageRefreshRequest, LanguageRefreshResult } from './language-service'
+import type { DatabaseProviderId, LanguageRequest, LanguageCompletions, LanguageHover, LanguageStatus, LanguageRefreshRequest, LanguageRefreshResult, LanguageDiagnosticResult } from './language-service'
 
 export interface AdvancedConnectionOptions {
   commandTimeout: number
@@ -369,6 +369,7 @@ export interface RpcMethods {
   'language.status': { params: Record<string, never>; result: LanguageStatus }
   'language.complete': { params: LanguageRequest; result: LanguageCompletions }
   'language.hover': { params: LanguageRequest; result: LanguageHover }
+  'language.diagnostics': { params: LanguageRefreshRequest; result: LanguageDiagnosticResult }
   'language.refresh': { params: LanguageRefreshRequest; result: LanguageRefreshResult }
   'language.close': { params: { documentId: string }; result: { closed: boolean } }
   'plans.parse': { params: { xml: string }; result: PlanDocument }
@@ -544,6 +545,7 @@ export interface VariaApi {
   languageStatus(): Promise<ApiResult<LanguageStatus>>
   languageComplete(request: LanguageRequest): Promise<ApiResult<LanguageCompletions>>
   languageHover(request: LanguageRequest): Promise<ApiResult<LanguageHover>>
+  languageDiagnostics(request: LanguageRefreshRequest): Promise<ApiResult<LanguageDiagnosticResult>>
   languageRefresh(request: LanguageRefreshRequest): Promise<ApiResult<LanguageRefreshResult>>
   languageClose(documentId: string): Promise<ApiResult<{ closed: boolean }>>
   parsePlan(xml: string): Promise<ApiResult<PlanDocument>>

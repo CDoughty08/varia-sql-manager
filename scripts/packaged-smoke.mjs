@@ -68,7 +68,7 @@ try {
     if (!page) await delay(250)
   }
   if (!page) throw new Error('Packaged application did not open its window.')
-  await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 60000 })
+  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 60000 })
   await expect(backendReady(page)).toHaveText('Ready', { timeout: 60000 })
   const health = await page.evaluate(() => window.varia.health())
   expect(health.ok && health.value.protocolVersion).toBe(2)

@@ -11,7 +11,7 @@ import { documentFixture, deferred, TestModel } from './fixtures/documents'
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).reverse().forEach(cleanup => cleanup()); vi.useRealTimers(); vi.restoreAllMocks() })
 const position = { lineNumber: 1, column: 4 } as Monaco.Position
-const configured: LanguageStatus = { providers: [{ id: 'sqlserver', configured: true, completion: true, hover: true, refresh: true }] }
+const configured: LanguageStatus = { providers: [{ id: 'sqlserver', configured: true, completion: true, hover: true, refresh: true, diagnostics: true }] }
 const completions: LanguageCompletions = { items: [{ label: 'Customer', kind: 7 }], isIncomplete: false }
 const token = (): Monaco.CancellationToken => ({ isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) })
 function cancellationSource() {
@@ -34,6 +34,7 @@ async function fixture(status = configured, withBackend = false) {
     languageStatus: vi.fn<VariaApi['languageStatus']>(async () => ({ ok: true, value: status })),
     languageComplete: vi.fn<VariaApi['languageComplete']>(async () => ({ ok: true, value: completions })),
     languageHover: vi.fn<VariaApi['languageHover']>(async () => ({ ok: true, value: { contents: 'Customer table' } })),
+    languageDiagnostics: vi.fn<VariaApi['languageDiagnostics']>(async request => ({ ok: true, value: { version: request.version, items: [], isIncomplete: false } })),
     languageRefresh: vi.fn<VariaApi['languageRefresh']>(async () => ({ ok: true, value: { refreshed: true } })),
     languageClose: vi.fn<VariaApi['languageClose']>(async () => ({ ok: true, value: { closed: true } }))
   }
@@ -41,7 +42,7 @@ async function fixture(status = configured, withBackend = false) {
   const unregisterCompletion = vi.fn(), unregisterHover = vi.fn()
   const monaco = { languages: {
     // Distinct values catch accidentally treating LSP's numeric kind as Monaco's numeric kind.
-    CompletionItemKind: { Text: 100, Class: 700, Keyword: 1400 }, CompletionItemInsertTextRule: { InsertAsSnippet: 4 },
+    CompletionItemKind: { Text: 100, Function: 300, Field: 500, Variable: 600, Class: 700, Property: 1000, Keyword: 1400 }, CompletionItemInsertTextRule: { InsertAsSnippet: 4 },
     registerCompletionItemProvider: vi.fn((_id: string, provider: Monaco.languages.CompletionItemProvider) => { completion = provider; return { dispose: unregisterCompletion } }),
     registerHoverProvider: vi.fn((_id: string, provider: Monaco.languages.HoverProvider) => { hover = provider; return { dispose: unregisterHover } })
   } } as unknown as typeof Monaco
@@ -76,6 +77,44 @@ async function fixture(status = configured, withBackend = false) {
 }
 
 describe('SQL language editor integration', () => {
+  it('invalidates diagnostics in sibling queries sharing a successfully refreshed connection and database', async () => {
+    const f = await fixture()
+    f.addConnection('connection-a')
+    const a = f.documents.create('a.sql', 'SELECT 1', 'first', 'connection-a'), b = f.documents.create('b.sql', 'SELECT 2', 'first', 'connection-a')
+    const c = f.documents.create('c.sql', 'SELECT 3', 'other', 'connection-a')
+    const before = f.service.diagnosticsEpoch(b.id), unrelated = f.service.diagnosticsEpoch(c.id)
+    expect(await f.service.refreshCache(a.id)).toBe(true)
+    expect(f.service.diagnosticsEpoch(b.id)).toBeGreaterThan(before)
+    expect(f.service.diagnosticsEpoch(c.id)).toBe(unrelated)
+  })
+  it('closes again after diagnostics queued behind metadata work settle, preventing an orphaned analysis document', async () => {
+    const f = await fixture(), tab = f.documents.create('query.sql', 'SELECT Missing', 'master')
+    const answer = deferred<Awaited<ReturnType<VariaApi['languageDiagnostics']>>>()
+    f.api.languageDiagnostics.mockReturnValueOnce(answer.promise)
+    const pending = f.service.diagnostics(f.model(tab.id), token())
+    await vi.waitFor(() => expect(f.api.languageDiagnostics).toHaveBeenCalledOnce())
+    expect(f.api.languageDiagnostics.mock.calls[0][0]).toEqual({ documentId: tab.id, version: 1, text: 'SELECT Missing', context: { providerId: 'sqlserver', database: 'master' } })
+    await f.documents.close(tab.id)
+    expect(f.api.languageClose).toHaveBeenCalledWith(tab.id)
+    answer.resolve({ ok: true, value: { version: 1, items: [], isIncomplete: false } })
+    expect(await pending).toBeUndefined()
+    await vi.waitFor(() => expect(f.api.languageClose).toHaveBeenCalledTimes(2))
+  })
+  it('waits for the old diagnostic context cleanup before analyzing the same model in another database', async () => {
+    const f = await fixture(), tab = f.documents.create('query.sql', 'SELECT Missing', 'first')
+    const answer = deferred<Awaited<ReturnType<VariaApi['languageDiagnostics']>>>()
+    f.api.languageDiagnostics.mockReturnValueOnce(answer.promise)
+    const first = f.service.diagnostics(f.model(tab.id), token())
+    await vi.waitFor(() => expect(f.api.languageDiagnostics).toHaveBeenCalledOnce())
+    f.documents.update(tab.id, { database: 'second' })
+    const second = f.service.diagnostics(f.model(tab.id), token())
+    await Promise.resolve()
+    expect(f.api.languageDiagnostics).toHaveBeenCalledOnce()
+    answer.resolve({ ok: true, value: { version: 1, items: [], isIncomplete: false } })
+    expect(await first).toBeUndefined()
+    expect(await second).toMatchObject({ version: 1, items: [] })
+    expect(f.api.languageDiagnostics.mock.calls[1][0].context.database).toBe('second')
+  })
   it('routes a split editor model using its own connection and database while another tab is active', async () => {
     const f = await fixture()
     f.addConnection('connection-a'); f.addConnection('connection-b')
@@ -98,9 +137,27 @@ describe('SQL language editor integration', () => {
     const result = await f.complete(tab.id, { lineNumber: 2, column: 4 } as Monaco.Position)
     expect(f.api.languageComplete.mock.calls[0][0].position).toEqual({ line: 1, character: 3 })
     expect(result).toEqual({ incomplete: true, suggestions: [{ label: 'Customer', kind: 1400, detail: undefined, documentation: undefined,
+      sortText: '1:Customer', filterText: undefined,
       insertText: '${1:Customer}', insertTextRules: 4, range: { startLineNumber: 2, endLineNumber: 2, startColumn: 1, endColumn: 4 } }] })
     await f.complete(tab.id, { lineNumber: 1, column: 6 } as Monaco.Position)
     expect(f.api.languageComplete.mock.calls[1][0].position).toEqual({ line: 0, character: 5 })
+  })
+
+  it('ranks fields before general SQL names for equal matches while preserving provider order and bare-name filtering', async () => {
+    const f = await fixture(), tab = f.documents.create('columns.sql', 'hi', 'master')
+    f.api.languageComplete.mockResolvedValueOnce({ ok: true, value: { isIncomplete: false, items: [
+      { label: 'hiFunction', kind: 3, sortText: '001-function' },
+      { label: '@@hiGlobal', kind: 6, filterText: 'hiGlobal', sortText: '002-global' },
+      { label: 'hiKeyword', kind: 14 },
+      { label: 't.hiColumn', kind: 5, filterText: 'hiColumn', sortText: '999-column' },
+      { label: 'hiProperty', kind: 10, sortText: '998-property' },
+      { label: 'hiOtherColumn', kind: 5 }
+    ] } })
+    const result = await f.complete(tab.id, { lineNumber: 1, column: 3 } as Monaco.Position)
+    const sorted = [...result.suggestions].sort((a, b) => a.sortText! < b.sortText! ? -1 : 1)
+    expect(sorted.map(item => item.label)).toEqual(['hiProperty', 't.hiColumn', 'hiOtherColumn', 'hiFunction', '@@hiGlobal', 'hiKeyword'])
+    expect(result.suggestions.find(item => item.label === 't.hiColumn')).toMatchObject({ filterText: 'hiColumn', sortText: '0:999-column', kind: 500 })
+    expect(result.suggestions.find(item => item.label === '@@hiGlobal')).toMatchObject({ filterText: 'hiGlobal', kind: 600 })
   })
 
   it('renders hover as untrusted Markdown without HTML and rejects invalid hover ranges', async () => {

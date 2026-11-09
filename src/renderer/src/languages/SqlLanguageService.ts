@@ -1,6 +1,6 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import type { VariaApi } from '../../../shared/contracts'
-import { languageLimits, type DatabaseProviderId, type LanguageContext, type LanguageRange, type LanguageRequest, type LanguageStatus } from '../../../shared/language-service'
+import { languageLimits, type DatabaseProviderId, type LanguageContext, type LanguageRange, type LanguageRequest, type LanguageStatus, type LanguageDiagnosticResult } from '../../../shared/language-service'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import { isQueryDocument } from '../documents'
@@ -8,7 +8,7 @@ import type { DocumentService } from '../services/documents'
 import type { ConnectionService } from '../services/connections'
 import type { BackendStateService } from '../services/backend'
 
-type LanguageApi = Pick<VariaApi, 'languageStatus' | 'languageComplete' | 'languageHover' | 'languageClose' | 'languageRefresh'>
+type LanguageApi = Pick<VariaApi, 'languageStatus' | 'languageComplete' | 'languageHover' | 'languageClose' | 'languageRefresh'> & Partial<Pick<VariaApi, 'languageDiagnostics'>>
 type CloseResult = Awaited<ReturnType<LanguageApi['languageClose']>>
 type ActivityPhase = 'loading' | 'refreshing'
 interface Snapshot { readonly status?: LanguageStatus; readonly checking: boolean; readonly error?: string; readonly cleanupError?: string; readonly documentErrors: ReadonlyMap<string, string>; readonly activities: ReadonlyMap<string, ActivityPhase> }
@@ -26,6 +26,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
   private readonly used = new Set<string>()
   private readonly epochs = new Map<string, number>()
   private readonly contexts = new Map<string, string>()
+  private readonly diagnosticContextEpochs = new Map<string, number>()
   private readonly pending = new Map<string, PendingRequest>()
   private readonly inFlight = new Map<string, Set<Promise<unknown>>>()
   private readonly waiters = new Set<() => void>()
@@ -78,6 +79,10 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
                 edit.range.end.line !== position.lineNumber - 1 || edit.range.start.character > position.column - 1 || edit.range.end.character < position.column - 1)) return []
               return [{ label: item.label, kind: monaco.languages.CompletionItemKind[kindNames[(item.kind ?? 1) - 1] ?? 'Text'],
                 detail: item.detail, documentation: item.documentation,
+                // Monaco scores prefix/fuzzy matches first, then uses sortText to break ties. Keep columns ahead of
+                // general SQL names without making a weak column match outrank an exact function or keyword match.
+                sortText: `${item.kind === 5 || item.kind === 10 ? '0' : '1'}:${item.sortText ?? item.label}`,
+                filterText: item.filterText,
                 insertText: edit?.newText ?? item.insertText ?? item.label,
                 insertTextRules: item.insertTextFormat === 2 ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
                 range: edit ? toMonacoRange(edit.range) : range }]
@@ -223,6 +228,11 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
         if (!this.current(refresh.capture, actionToken)) return false
         if (!result.ok) throw new Error(result.error)
         this.failure(documentId)
+        if (result.value.refreshed) {
+          const active = new Set(this.contexts.values())
+          for (const key of this.diagnosticContextEpochs.keys()) if (!active.has(key)) this.diagnosticContextEpochs.delete(key)
+          this.diagnosticContextEpochs.set(refresh.capture.key, (this.diagnosticContextEpochs.get(refresh.capture.key) ?? 0) + 1)
+        }
         return result.value.refreshed
       } catch (error) {
         if (!this.current(refresh.capture, actionToken)) return false
@@ -237,6 +247,37 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
     refresh.settled = refresh.work.then(() => {}, () => {})
     if (!await this.waitFor(refresh.settled, actionToken)) return false
     return refresh.work
+  }
+  /** Diagnostics use the same document/close barriers as completion, even when queued behind metadata work. */
+  async diagnostics(model: Monaco.editor.ITextModel, token: Monaco.CancellationToken): Promise<LanguageDiagnosticResult | undefined> {
+    const capture = this.capture(model, { lineNumber: 1, column: 1 } as Monaco.Position)
+    if (!capture || token.isCancellationRequested || !this.api.languageDiagnostics) return
+    if (!this.getSnapshot().status && !await this.waitFor(this.readStatus(), token)) return
+    if (!this.current(capture, token) || !this.supports(capture, 'diagnostics')) return
+    const oldContext = this.closing.get(capture.request.documentId)
+    if (oldContext && !await this.waitFor(oldContext, token)) return
+    if (!this.current(capture, token)) return
+    const pending = this.begin(`${capture.request.documentId}:diagnostics`, token)
+    if (!pending) throw new Error('SQL analysis is busy. Edit the query or refresh IntelliSense to try again.')
+    try {
+      if (pending.previous && !await this.waitFor(pending.previous, token)) return
+      const closing = this.closing.get(capture.request.documentId)
+      if (closing && !await this.waitFor(closing, token)) return
+      const refreshing = this.refreshing.get(capture.request.documentId)
+      if (refreshing && !await this.waitFor(refreshing.settled, token)) return
+      if (!this.current(capture, token)) return
+      const { documentId, version, text, context } = capture.request
+      this.used.add(documentId)
+      const result = await this.track(documentId, this.api.languageDiagnostics({ documentId, version, text, context }))
+      if (!this.current(capture, token)) return
+      if (!result.ok) throw new Error(result.error)
+      if (result.value.version !== version) return
+      return result.value
+    } finally { pending.finish() }
+  }
+  diagnosticsEpoch(documentId: string): number {
+    const key = this.context(documentId)?.key
+    return this.backendEpoch + (this.epochs.get(documentId) ?? 0) + (key ? this.diagnosticContextEpochs.get(key) ?? 0 : 0)
   }
   /** A small status-bar label with an actionable explanation in its tooltip. */
   availability(documentId: string): { label: string; detail: string } {
@@ -277,7 +318,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
       position: { line: position.lineNumber - 1, character: position.column - 1 }
     } }
   }
-  private supports(capture: Capture, feature: 'completion' | 'hover' | 'refresh'): boolean {
+  private supports(capture: Capture, feature: 'completion' | 'hover' | 'refresh' | 'diagnostics'): boolean {
     const provider = this.getSnapshot().status?.providers.find(provider => provider.id === capture.request.context.providerId)
     return !!provider?.configured && !!provider[feature]
   }

@@ -8,6 +8,7 @@ internal interface ILanguageServiceProvider : IDisposable
     LanguageProviderStatus Status();
     Task<LanguageCompletionResult> CompleteAsync(LanguageRequest request, CancellationToken token);
     Task<LanguageHover?> HoverAsync(LanguageRequest request, CancellationToken token);
+    Task<LanguageDiagnosticResult> DiagnosticsAsync(LanguageRefreshRequest request, CancellationToken token);
     Task<LanguageRefreshResult> RefreshAsync(LanguageRefreshRequest request, CancellationToken token);
     Task<LanguageCloseResult> CloseAsync(string documentId, CancellationToken token);
     Task ForgetConnectionAsync(string connectionId);
@@ -43,6 +44,9 @@ internal sealed class LanguageServiceBroker(IEnumerable<ILanguageServiceProvider
         RequestAsync(request, token, (provider, requestToken) => provider.CompleteAsync(request, requestToken));
     internal Task<LanguageHover?> HoverAsync(LanguageRequest request, CancellationToken token) =>
         RequestAsync(request, token, (provider, requestToken) => provider.HoverAsync(request, requestToken));
+    internal Task<LanguageDiagnosticResult> DiagnosticsAsync(LanguageRefreshRequest request, CancellationToken token) =>
+        RequestAsync(new(request.DocumentId, request.Version, request.Text, request.Context, new(0, 0)), token,
+            (provider, requestToken) => provider.DiagnosticsAsync(request, requestToken));
     internal Task<LanguageRefreshResult> RefreshAsync(LanguageRefreshRequest request, CancellationToken token)
     {
         ValidateId(request.DocumentId);

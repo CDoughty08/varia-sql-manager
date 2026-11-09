@@ -5,13 +5,20 @@ import { editorFontFamily } from '../fonts'
 import { bindExplorerDrop } from '../explorer/drop'
 
 /** A query editor: an editor group's Monaco instance, with Tools › Options applied and Object Explorer drops bound. */
-export interface QueryEditorInstance extends Disposable { readonly instance: editor.IStandaloneCodeEditor }
+export interface QueryEditorInstance extends Disposable { readonly instance: editor.IStandaloneCodeEditor; setVisible(visible: boolean): void }
 
 /** Creates a query editor in `container`. Each editor group has one, which shows the group's active text document. */
 export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorOptions'>, container: HTMLElement): QueryEditorInstance {
+  // Dockview clips panel contents and floats create stacking contexts. Keep Monaco's widgets in the document that
+  // owns this editor, outside those ancestors; fixed positioning lets Monaco constrain them to the window's edges.
+  const overflow = container.ownerDocument.createElement('div')
+  overflow.className = 'monaco-editor editor-overflow-widgets'
+  container.ownerDocument.body.appendChild(overflow)
   const instance = workbench.monaco.editor.create(container, {
     model: null,
     theme: 'varia',
+    overflowWidgetsDomNode: overflow,
+    fixedOverflowWidgets: true,
     // Tools › Options: font size, word wrap, line numbers, drag and drop, current-line highlight. Indentation is the model's.
     ...workbench.editorOptions.monacoOptions(),
     fontFamily: editorFontFamily,
@@ -38,7 +45,20 @@ export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorO
     overtypeCursorStyle: 'block'
   })
   const options = workbench.editorOptions.bindEditor(instance)
+  // The external host needs Monaco's current theme/high-contrast classes too, including after a new model replaces
+  // its view. Observe just that view's class attribute, never the editor's changing text DOM.
+  const classes = new MutationObserver(() => syncClasses())
+  const syncClasses = () => { overflow.className = `${instance.getDomNode()?.className ?? 'monaco-editor'} editor-overflow-widgets` }
+  const watchClasses = () => {
+    classes.disconnect()
+    const view = instance.getDomNode()
+    if (view) classes.observe(view, { attributes: true, attributeFilter: ['class'] })
+    syncClasses()
+  }
+  const model = instance.onDidChangeModel(watchClasses)
+  watchClasses()
   // Object Explorer rows dropped on the editor insert their names.
   const drop = bindExplorerDrop(instance)
-  return { instance, dispose: () => { drop.dispose(); options.dispose(); instance.dispose() } }
+  return { instance, setVisible: visible => { overflow.hidden = !visible },
+    dispose: () => { drop.dispose(); options.dispose(); model.dispose(); classes.disconnect(); instance.dispose(); overflow.remove() } }
 }

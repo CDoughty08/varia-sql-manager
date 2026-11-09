@@ -22,7 +22,7 @@ async function launch() {
   page.setDefaultTimeout(10000)
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
-  await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
   await application.evaluate(({ dialog }) => {
     dialog.showSaveDialog = async () => ({ canceled: true })
     dialog.showOpenDialog = async () => ({ canceled: true, filePaths: [] })

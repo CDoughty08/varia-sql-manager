@@ -99,7 +99,7 @@ const statusBar = readFileSync('src/renderer/src/QueryStatusBar.tsx', 'utf8')
 const factKeys = [...(/interface QueryStatusSegment \{ readonly key: ([^;]+);/.exec(readFileSync('src/renderer/src/results/query-status.ts', 'utf8'))?.[1] ?? '').matchAll(/'(\w+)'/g)].map(([, key]) => key)
 const facts = statusBar.includes('query-status-${segment.key}') ? factKeys.map(key => `query-status-${key}`) : []
 // Monaco's and Dockview's markup, which Varia's stylesheet also selects: their classes change only with the libraries.
-const library = /^(monaco-|dv-|dockview-|codicon|view-lines?$|view-overlays$|find-widget$)/
+const library = /^(monaco-|dv-|dockview-|codicon|view-lines?$|view-overlays$|find-widget$|squiggly-(?:error|warning)$)/
 /**
  * Varia's classes for certain: styled, marked, a query fact, or a hyphenated name its code writes. A plain word that some
  * string holds ('rows', ' of ') is not one, so a class whose word survives in text still counts as gone.

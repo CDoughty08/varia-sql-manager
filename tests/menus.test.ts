@@ -36,7 +36,7 @@ describe('menu model', () => {
       expect(outline('edit.advanced', platform)).toEqual(['edit.makeUppercase', 'edit.makeLowercase', '-', 'editor.toggleWhitespace', 'editor.toggleWordWrap', '-', 'edit.commentLines', 'edit.uncommentLines',
         'edit.toggleLineComment', '-', 'edit.increaseIndent', 'edit.decreaseIndent'])
       expect(outline('edit.bookmarks', platform)).toEqual(['edit.toggleBookmark', '-', 'edit.previousBookmark', 'edit.nextBookmark', '-', 'edit.clearBookmarks', '-', 'edit.previousBookmarkInDocument', 'edit.nextBookmarkInDocument'])
-      expect(outline('edit.intellisense', platform)).toEqual(['edit.insertSnippet', 'edit.surroundWith', '-', 'edit.refreshIntelliSense'])
+      expect(outline('edit.intellisense', platform)).toEqual(['edit.insertSnippet', 'edit.surroundWith', '-', 'edit.refreshIntelliSense', '-', 'edit.nextSqlIssue', 'edit.previousSqlIssue'])
       expect(outline('view', platform)).toEqual(['workbench.showCommands', 'workbench.quickOpen', 'workbench.search', 'explorer.searchObjects', '-', 'layout.save', 'layout.load', 'layout.reset', '-', 'activity.open', 'ssis.allOperations', '-', 'submenu:view.theme', '-',
         'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', '-', 'developer.reloadWindow', 'developer.toggleDevTools'])
       expect(outline('query', platform)).toEqual(['submenu:query.connection', 'query.changeDatabase', '-', 'query.execute', 'query.cancel', 'query.includeActualPlan', 'query.includeLivePlan', 'query.estimatePlan', 'query.estimateSessionPlan', 'query.includeClientStatistics', 'query.resetClientStatistics'])

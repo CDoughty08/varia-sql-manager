@@ -123,7 +123,7 @@ try {
   page.setDefaultTimeout(10000)
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
-  await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
   await application.evaluate(({ dialog }) => {
     globalThis.variaReloadPrompts = 0
     // A reload would ask first (unsaved queries); count the question and cancel it, so a reload attempt shows up.

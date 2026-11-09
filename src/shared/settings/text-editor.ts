@@ -3,6 +3,10 @@ import type { SettingDef } from './types'
 /** Text Editor pages: the query editor's Monaco options and its models' indentation. */
 export const textEditorSettings = [
   {
+    key: 'textEditor.sql.errorChecking', page: 'textEditor.transactSql.intelliSense', group: 'IntelliSense', label: 'Enable error checking', type: 'boolean', default: true,
+    keywords: ['sql', 'diagnostics', 'errors', 'warnings', 'squiggles'], description: 'Checks query syntax and database object references while editing. Red underlines mark errors and yellow underlines mark warnings. Analysis does not execute the query.'
+  },
+  {
     key: 'textEditor.dragAndDrop', page: 'textEditor.general', group: 'Settings', label: 'Enable mouse click to perform drag-and-drop text editing', type: 'boolean', default: true,
     keywords: ['drag', 'drop'], description: 'Selected text can be dragged to move it, or copied with Ctrl held (Option on macOS).'
   },

@@ -21,6 +21,7 @@ export const reviewedImports = [
   'monaco-editor/editor/contrib/bracketMatching/browser/bracketMatching.js',
   'monaco-editor/editor/contrib/wordOperations/browser/wordOperations.js',
   'monaco-editor/editor/contrib/hover/browser/hoverContribution.js',
+  'monaco-editor/editor/contrib/gotoError/browser/gotoError.js',
   'monaco-editor/editor/contrib/suggest/browser/suggestController.js',
   'monaco-editor/features/codicon/register.js'
 ]

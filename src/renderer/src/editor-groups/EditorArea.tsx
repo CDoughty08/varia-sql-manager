@@ -306,7 +306,7 @@ function nameGroupRegions(root: HTMLElement): { refresh(): void; dispose(): void
 const transientFocus = '.menu-layer, [role="dialog"], [role="alertdialog"]'
 /** Reports whether each element that takes focus (transient layers aside) is inside the editor area. */
 function followFocus(root: HTMLElement, report: (inside: boolean) => void): { dispose(): void } {
-  const focused = (event: FocusEvent) => { const target = event.target; if (target instanceof Element && !target.closest(transientFocus)) report(root.contains(target)) }
+  const focused = (event: FocusEvent) => { const target = event.target; if (target instanceof Element && !target.closest(transientFocus)) report(root.contains(target) || !!target.closest('.editor-overflow-widgets')) }
   document.addEventListener('focusin', focused, true)
   return { dispose: () => document.removeEventListener('focusin', focused, true) }
 }
@@ -528,8 +528,9 @@ class EditorAreaController implements Area, EditorGroupHost {
     // Moving the editor's element blurs it: it keeps the keyboard when it had it, or when nothing has it now and the editor
     // area had it last (a menu or the palette closed onto the old panel, which a new document hid), as the single editor
     // kept it across tab switches.
-    const active = document.activeElement, keep = editor.element.contains(active) || ((!active || active === document.body) && this.focusInArea)
+    const active = document.activeElement, keep = editor.element.contains(active) || editor.editor.instance.hasWidgetFocus() || ((!active || active === document.body) && this.focusInArea)
     if (editor.element.parentElement !== slot) slot.append(editor.element)
+    editor.editor.setVisible(true)
     editor.shows = id
     this.workbench.documents.showIn(editor.editor.instance, id)
     if (keep && this.workbench.documents.getSnapshot().activeId === id && !editor.editor.instance.hasWidgetFocus()) this.workbench.documents.focusActive()
@@ -537,7 +538,7 @@ class EditorAreaController implements Area, EditorGroupHost {
   }
   unmount(group: string, slot: HTMLElement): void {
     const editor = this.editors.get(group)
-    if (editor && editor.element.parentElement === slot) this.parking.append(editor.element)
+    if (editor && editor.element.parentElement === slot) { editor.editor.setVisible(false); this.parking.append(editor.element) }
   }
   private dropEditor(group: string): void {
     const editor = this.editors.get(group)

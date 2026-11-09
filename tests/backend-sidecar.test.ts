@@ -102,7 +102,7 @@ describe('real .NET sidecar over protocol v2', () => {
   it('reports optional SQL language support and rejects unavailable providers over the real wire', async () => {
     const connection = backend({ VARIA_SQLTOOLS_SERVICE_PATH: resolve('artifacts', 'missing-sqltools-service', 'never-launch.exe') })
     const status = languageStatusSchema.parse(await call(connection, 'language.status', {}))
-    expect(status.providers).toEqual([{ id: 'sqlserver', configured: false, completion: true, hover: true, refresh: true, reason: expect.stringContaining('VARIA_SQLTOOLS_SERVICE_PATH') }])
+    expect(status.providers).toEqual([{ id: 'sqlserver', configured: false, completion: true, hover: true, refresh: true, diagnostics: true, reason: expect.stringContaining('VARIA_SQLTOOLS_SERVICE_PATH') }])
     const documentId = crypto.randomUUID(), request = { documentId, version: 1, text: 'SELECT 1', context: { providerId: 'sqlserver' as const, connectionId: crypto.randomUUID() }, position: { line: 0, character: 8 } }
     await expect(call(connection, 'language.complete', request)).rejects.toMatchObject({ code: 'BACKEND_UNAVAILABLE' })
     const { position: _position, ...refresh } = request

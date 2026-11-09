@@ -29,7 +29,7 @@ async function launch() {
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
-  await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
 }
 // Unsaved queries make a normal exit ask first; answer Don't Save.
 async function close() {
@@ -433,7 +433,7 @@ try {
   await page.keyboard.press('Escape')
   // A reload of the window does not report the same file again.
   await page.reload()
-  await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
   // The workbench asked main for its options before this call, so its answer is in once this one is; a banner would render within a frame.
   await page.evaluate(async () => { await window.varia.getSettings(); await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))) })
   await expect(banner).toHaveCount(0)
