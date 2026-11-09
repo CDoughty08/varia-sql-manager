@@ -1,5 +1,5 @@
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
-import type { MessageEntry, QueryEvent, QueryResult, QueryStatus, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultsJobProgress, VariaApi, ViewFilter, ViewSortKey, ViewSortMode } from '../../../shared/contracts'
+import type { MessageEntry, QueryEvent, QueryResult, QueryStatus, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultsDistinctResult, ResultsJobProgress, VariaApi, ViewFilter, ViewSortKey, ViewSortMode } from '../../../shared/contracts'
 import type { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
@@ -12,6 +12,7 @@ import type { DocumentService, TextDocument } from '../services/documents'
 import type { ResultClient, ResultHandle, ResultView } from './ResultClient'
 import type { ResultKey } from './worker-protocol'
 import { completionSentence, formatCount, plural } from './status'
+import { columnFilterKind, conditionFilter, conditionKind, type ColumnCondition } from './column-filter'
 import { retainedPlanLimits, type PlanExecutionContext, type RetainedPlansService, type SnapshotSource } from '../plans/RetainedPlansService'
 import { orderPlanEntries } from '../plans/sources'
 
@@ -97,7 +98,14 @@ export interface GridViewState {
 /** `collapsed` holds the sets shown as their caption alone, by index (a set's caption toggles it). */
 export interface TabViewState { stackScrollTop: number; weights?: number[]; focusedIndex: number; grids: Map<number, GridViewState>; collapsed: ReadonlySet<number> }
 /** A mounted grid, for the commands that act on it. */
-export interface GridController { selectAll(): void; repaint(): void; fitColumn(column: number): void }
+export interface GridController {
+  selectAll(): void; repaint(): void; fitColumn(column: number): void
+  /** Opens the header funnel's popover for a column (results grids). */
+  filterColumn?(column: number): void
+}
+/** A column's distinct values for the funnel's checklist, and, when the column has a value-list filter, the values that
+ *  filter keeps now (their representative rows, and whether NULL is among them). */
+export interface ColumnValues { readonly result: ResultsDistinctResult; readonly kept?: { readonly rows: ReadonlySet<number>; readonly nulls: boolean } }
 /** How a run ended: the summary, or main's failure (`code` BACKEND_LOST when the backend stopped), plus a notice to show first. */
 export interface RunEnd { summary?: QueryResult; error?: string; code?: ErrorCode; notice?: string; planContext?: PlanExecutionContext }
 /** Open Value in New Tab's outcome: whether a document opened, and what the banner says (a failure, or that it opened unformatted). */
@@ -638,6 +646,63 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     return true
   }
 
+  /** Whether a grid's column can open the funnel's popover: a result's own column (not a diff's tone) on a mounted grid. */
+  canFilterColumn(tabId: string, index: number, column: number): boolean {
+    const set = this.runs.get(tabId)?.sets[index]
+    return !!set && this.filterable(set) && Number.isInteger(column) && column >= 0 && column < set.descriptor.columns.length && set.descriptor.columns[column].role !== 'tone'
+      && !!this.controllers.get(tabId + ':' + index)?.filterColumn
+  }
+
+  /** Opens the funnel's popover for a column (the grid menu's Filter Column Values, Alt+Down in a grid). */
+  filterColumn(tabId: string, index: number, column: number): void {
+    if (this.canFilterColumn(tabId, index, column)) this.controllers.get(tabId + ':' + index)?.filterColumn?.(column)
+  }
+
+  /**
+   * A column's distinct values for the funnel (results.distinct): over the rows the grid's other filters keep, so values
+   * the column's own value list drops can be ticked again. With `kept`, a column that has a value-list filter also says
+   * which values it keeps now: the same values have the same lowest row in both, so they match by row.
+   */
+  async columnValues(tabId: string, index: number, column: number, o: { order: 'count' | 'value'; search?: string; kept?: boolean; signal?: AbortSignal }): Promise<ColumnValues> {
+    const run = this.runs.get(tabId), set = run?.sets[index], sort = run?.sorts.get(index)
+    if (!run || !set || !this.filterable(set)) throw new Error('These results are no longer available.')
+    if (sort?.sorting) throw new Error('The results are still being sorted or filtered. Try again when they are shown.')
+    const filters = sort?.filters ?? [], others = filters.filter(item => columnFilterKind(item.filter, column) !== 'values')
+    const ask = { order: o.order, ...o.search === undefined ? {} : { search: o.search }, ...o.signal ? { signal: o.signal } : {} }
+    if (others.length === filters.length) return { result: await (sort?.view ?? set.handle).distinct(column, ask) }
+    // A view without the column's value list, closed once its values are read.
+    const base = others.length > 0 ? await set.handle.sort([], { filters: others.map(item => item.filter), ...o.signal ? { signal: o.signal } : {} }) : undefined
+    try {
+      const result = await (base ?? set.handle).distinct(column, ask)
+      if (!o.kept || !sort?.view) return { result }
+      const now = await sort.view.distinct(column, { order: 'value', ...o.signal ? { signal: o.signal } : {} })
+      return { result, kept: { rows: new Set(now.values.map(value => value.row)), nulls: now.nulls > 0 } }
+    } finally { void base?.close() }
+  }
+
+  /**
+   * Applies the funnel's condition to a column: it replaces the column's filter of the same kind (its value list, its
+   * range or its not-NULL), and `clear` takes all of the column's filters off. False when the grid cannot be filtered.
+   */
+  applyColumnFilter(tabId: string, index: number, column: number, condition: ColumnCondition): boolean {
+    const run = this.runs.get(tabId), set = run?.sets[index]
+    if (!run || !set || !this.filterable(set) || !Number.isInteger(column) || column < 0 || column >= set.descriptor.columns.length) return false
+    const filters = run.sorts.get(index)?.filters ?? [], kind = conditionKind(condition)
+    const others = filters.filter(item => { const own = columnFilterKind(item.filter, column); return own === undefined || (kind !== undefined && own !== kind) })
+    const filter = conditionFilter(condition, column)
+    if (!filter) {
+      if (others.length !== filters.length) this.applyView(tabId, run, index, run.sorts.get(index)?.keys ?? [], others, 'filter')
+      return true
+    }
+    if ('rows' in filter && filter.rows.length > wire.views.maxFilterValues) {
+      this.notify(tabId, `Could not filter the results: a filter holds at most ${formatCount(wire.views.maxFilterValues)} values.`)
+      return false
+    }
+    const name = columnName(set.descriptor.columns, column)
+    const item: GridFilter = condition.kind === 'null' || condition.kind === 'notNull' ? { filter, label: `${name} is ${condition.kind === 'null' ? '' : 'not '}NULL`, named: true } : { filter, label: `${name}: filtering…` }
+    return this.addFilter(tabId, run, index, others, item)
+  }
+
   canFilterDuplicates(tabId: string, index: number, allColumns = false): boolean { return !!this.duplicateColumns(tabId, index, allColumns) }
 
   /** Takes one filter off a grid; the others apply again in their order. */
@@ -1127,4 +1192,11 @@ export function filterLabel(filter: ResolvedViewFilter, columns: readonly Result
   if (values === 1 && filter.nulls) return `${name} is ${not ? 'not ' : ''}NULL`
   if (values === 1 && texts[0]) return `${name} ${not ? '≠' : '='} ${texts[0]}`
   return `${name} ${not ? 'not in' : 'in'} (${formatCount(values)} ${plural(values, 'value')})`
+}
+
+/** The columns a grid's filters name one by one (a value list, a range or not NULL): their header funnels show it. */
+export function filteredColumns(sort: GridSort | undefined): ReadonlySet<number> {
+  const columns = new Set<number>()
+  for (const item of sort?.filters ?? []) if (item.filter.op !== 'duplicates') columns.add(item.filter.column)
+  return columns
 }

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ResultsPortHost, toExactArrayBuffer, type FrameLike, type LiveStreamHandle, type PortMainLike, type ReadStream, type ResultsBackend } from '../src/main/backend/results-port'
 import { BackendError } from '../src/main/backend/errors'
 import type { StreamSink } from '../src/main/backend/connection'
-import type { QueryEvent, ResultDescriptor, ResultsDiffParams, ResultsDiffResult, ResultsFindRowsParams, ResultsIdentifyParams, ResultsIdentifyResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsRowBytesParams, ResultsRowIdsParams, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewParams, ResultsViewResult } from '../src/shared/contracts'
+import type { QueryEvent, ResultDescriptor, ResultsDiffParams, ResultsDiffResult, ResultsDistinctParams, ResultsDistinctResult, ResultsFindRowsParams, ResultsIdentifyParams, ResultsIdentifyResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsRowBytesParams, ResultsRowIdsParams, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewParams, ResultsViewResult } from '../src/shared/contracts'
 import { cancelReasons, type CancelReason } from '../src/shared/ipc/wire/protocol'
 import { buildPortRequestSchema, type PortMessage, type portRequestSchema } from '../src/shared/ipc/port-messages'
 import { buildLiveSchemas } from '../src/shared/live/schema'
@@ -37,6 +37,7 @@ interface FakeIdentify { generation: number; params: ResultsIdentifyParams; canc
 interface FakeDiff { generation: number; params: ResultsDiffParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeSearch { generation: number; params: ResultsSearchParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeProfile { generation: number; params: ResultsProfileParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
+interface FakeDistinct { generation: number; params: ResultsDistinctParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeUpdate { generation: number; params: LiveUpdateParams; resolve(value: LiveUpdateResult): void; reject(error: unknown): void }
 
 function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof portRequestSchema } = {}) {
@@ -48,6 +49,7 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
   const diffs: FakeDiff[] = []
   const searches: FakeSearch[] = []
   const profiles: FakeProfile[] = []
+  const distincts: FakeDistinct[] = []
   let ready: number | undefined = 1
   const backend: ResultsBackend = {
     readyGeneration: () => ready,
@@ -98,6 +100,13 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
       profiles.push(profile)
       return { done, cancel: reason => profile.cancels.push(reason) }
     },
+    distinct: (generation, params) => {
+      let resolve!: (value: unknown) => void, reject!: (error: unknown) => void
+      const done = new Promise<ResultsDistinctResult>((onResolve, onReject) => { resolve = onResolve as (value: unknown) => void; reject = onReject })
+      const distinct: FakeDistinct = { generation, params, cancels: [], resolve, reject }
+      distincts.push(distinct)
+      return { done, cancel: reason => distinct.cancels.push(reason) }
+    },
     live: (generation, params, onLive, credit): LiveStreamHandle => {
       let resolve!: (value: LiveEnd) => void, reject!: (error: unknown) => void
       const done = new Promise<LiveEnd>((onResolve, onReject) => { resolve = onResolve; reject = onReject })
@@ -119,7 +128,7 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
     port().send({ t: 'live', rid, generation, params })
     return params
   }
-  return { host, backend, reads, lives, updates, views, identifies, diffs, searches, profiles, ports, port, frame, read, live, setReady: (generation: number | undefined) => { ready = generation } }
+  return { host, backend, reads, lives, updates, views, identifies, diffs, searches, profiles, distincts, ports, port, frame, read, live, setReady: (generation: number | undefined) => { ready = generation } }
 }
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
 const descriptor = (resultId: number, generation = 1): Pick<ResultDescriptor, 'generation' | 'resultId'> => ({ generation, resultId })
@@ -612,6 +621,50 @@ describe('ResultsPortHost', () => {
     port().send({ t: 'profile', rid: 2, generation: 1, resultId: 7, columns: [0] })
     port().hangUp()
     expect(profiles[1].cancels).toHaveLength(1)
+  })
+  it('lists distinct values only for owned results and their columns, within the schema bounds, and relays a well-formed answer', async () => {
+    const { host, port, distincts } = fixture()
+    host.own([{ ...descriptor(7), columns: [{}, {}] }])
+    const ask = { t: 'distinct', generation: 1, resultId: 7, column: 1, order: 'count', maxValues: 2 }
+    port().send({ ...ask, rid: 1, viewId: 4, search: 'ab' })
+    port().send({ ...ask, rid: 2, resultId: 8 })
+    port().send({ ...ask, rid: 3, column: 2 })
+    port().send({ ...ask, rid: 4, maxValues: 4097 })
+    port().send({ ...ask, rid: 5, maxValues: 0 })
+    port().send({ ...ask, rid: 6, order: 'random' })
+    port().send({ ...ask, rid: 7, search: '' })
+    port().send({ ...ask, rid: 8, search: 'x'.repeat(1025) })
+    port().send({ ...ask, rid: 9, extra: true })
+    port().send({ ...ask, rid: 10 })
+    port().send({ ...ask, rid: 11 })
+    port().send({ ...ask, rid: 12 })
+    expect(distincts.map(distinct => distinct.params)).toEqual([
+      { resultId: 7, column: 1, order: 'count', maxValues: 2, search: 'ab', viewId: 4 }, { resultId: 7, column: 1, order: 'count', maxValues: 2 },
+      { resultId: 7, column: 1, order: 'count', maxValues: 2 }, { resultId: 7, column: 1, order: 'count', maxValues: 2 }
+    ])
+    const good = { rows: 5, complete: true, nulls: 1, distinct: 3, truncated: true, approximate: false, values: [{ row: 0, text: 'a', count: 2 }, { row: 3, text: 'b', count: 1 }] }
+    distincts[0].resolve(good)
+    // More values than asked, truncated that does not match, and a negative row: none reaches the renderer.
+    distincts[1].resolve({ ...good, values: [...good.values, { row: 4, text: 'c', count: 1 }] })
+    distincts[2].resolve({ ...good, truncated: false })
+    distincts[3].resolve({ ...good, values: [{ row: -1, text: 'a', count: 2 }] })
+    await settle()
+    expect(codes(port())).toEqual([[2, 'RESULT_UNAVAILABLE'], [3, 'INVALID_REQUEST'], [4, 'INVALID_REQUEST'], [5, 'INVALID_REQUEST'], [6, 'INVALID_REQUEST'], [7, 'INVALID_REQUEST'], [8, 'INVALID_REQUEST'], [9, 'INVALID_REQUEST'],
+      [1, 'ok'], [10, 'BACKEND_ERROR'], [11, 'BACKEND_ERROR'], [12, 'BACKEND_ERROR']])
+    expect(port().ends().find(end => end.rid === 1)).toEqual({ t: 'end', rid: 1, ok: true, result: good })
+  })
+  it('cancels a distinct-values request on the worker\'s cancel and when the port closes', async () => {
+    const { host, port, distincts } = fixture()
+    host.own([descriptor(7)])
+    port().send({ t: 'distinct', rid: 1, generation: 1, resultId: 7, column: 0, order: 'value', maxValues: 10 })
+    port().send({ t: 'cancel', rid: 1 })
+    expect(distincts[0].cancels).toEqual([cancelReasons.user])
+    distincts[0].reject(new BackendError('CANCELLED', 'The request was cancelled.'))
+    await settle()
+    expect(codes(port())).toEqual([[1, 'CANCELLED']])
+    port().send({ t: 'distinct', rid: 2, generation: 1, resultId: 7, column: 0, order: 'value', maxValues: 10 })
+    port().hangUp()
+    expect(distincts[1].cancels).toHaveLength(1)
   })
   it('forwards a row sizes answer only when it is well formed and answers the range asked', async () => {
     const { host, backend, port } = fixture()

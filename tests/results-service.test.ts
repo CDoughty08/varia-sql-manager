@@ -3,7 +3,7 @@ import type { ApiResult, ResolvedViewFilter, ResultColumn, ResultsJobProgress, R
 import type { ResultHandle, ResultView } from '../src/renderer/src/results/ResultClient'
 import type { DocumentService } from '../src/renderer/src/services/documents'
 import { EventBus } from '../src/renderer/src/core/events'
-import { filterLabel, ResultsService, resultLimits, suggestedName } from '../src/renderer/src/results/ResultsService'
+import { filterLabel, filteredColumns, ResultsService, resultLimits, suggestedName } from '../src/renderer/src/results/ResultsService'
 import { selectAll } from '../src/renderer/src/grid/selection'
 import { openEnd } from '../src/renderer/src/grid/constants'
 import { deferred } from './fixtures/documents'
@@ -1131,5 +1131,66 @@ describe('results service filters', () => {
     expect(filterLabel({ op: 'duplicates', columns: [1] }, columns)).toBe('Duplicates in Name')
     // A diff's hidden tone column is not a value: every other column is every row's.
     expect(filterLabel({ op: 'duplicates', columns: [0, 1] }, [...columns, { name: 'tone', dataType: 'tinyint', wire: 'text', nullable: false, role: 'tone' }])).toBe('Duplicate rows')
+  })
+  it('applies the funnel conditions to a column, each replacing the filter of its kind on the column, and opens the funnel through the grid', async () => {
+    const { service, handle } = filtered()
+    handle.sort.mockResolvedValue(resolvedView(handle, 1, []))
+    const filters = () => handle.sort.mock.lastCall?.[1]?.filters
+    expect(service.canFilterColumn('t1', 0, 1)).toBe(false)
+    const filterColumn = vi.fn()
+    service.registerGrid('t1', 0, { selectAll: () => {}, repaint: () => {}, fitColumn: () => {}, filterColumn })
+    expect(service.canFilterColumn('t1', 0, 1)).toBe(true)
+    expect(service.canFilterColumn('t1', 0, 2)).toBe(false)
+    service.filterColumn('t1', 0, 1)
+    expect(filterColumn).toHaveBeenCalledWith(1)
+    expect(service.applyColumnFilter('t1', 0, 1, { kind: 'values', op: 'in', rows: [0, 3], nulls: false })).toBe(true)
+    expect(filters()).toEqual([{ op: 'in', column: 1, rows: [0, 3], nulls: false }])
+    expect(service.sortOf('t1', 0)?.filters.map(item => item.label)).toEqual(['(No column name): filtering…'])
+    // The checklist's notIn replaces its in; not NULL and between are kinds of their own.
+    service.applyColumnFilter('t1', 0, 1, { kind: 'values', op: 'notIn', rows: [4], nulls: true })
+    service.applyColumnFilter('t1', 0, 1, { kind: 'notNull' })
+    service.applyColumnFilter('t1', 0, 1, { kind: 'between', rows: [2, 6] })
+    service.applyColumnFilter('t1', 0, 0, { kind: 'equals', row: 1 })
+    expect(filters()).toEqual([{ op: 'notIn', column: 1, rows: [4], nulls: true }, { op: 'notIn', column: 1, rows: [], nulls: true }, { op: 'between', column: 1, rows: [2, 6] }, { op: 'in', column: 0, rows: [1], nulls: false }])
+    expect(filteredColumns(service.sortOf('t1', 0))).toEqual(new Set([0, 1]))
+    service.applyColumnFilter('t1', 0, 1, { kind: 'notEquals', row: 5 })
+    service.applyColumnFilter('t1', 0, 1, { kind: 'null' })
+    expect(filters()?.slice(2)).toEqual([{ op: 'in', column: 0, rows: [1], nulls: false }, { op: 'in', column: 1, rows: [], nulls: true }])
+    expect(service.sortOf('t1', 0)?.filters.at(-1)?.label).toBe('(No column name) is NULL')
+    // Every value ticked takes the value list off; Clear takes the column's every filter off.
+    service.applyColumnFilter('t1', 0, 1, { kind: 'all' })
+    expect(filters()).toEqual([{ op: 'notIn', column: 1, rows: [], nulls: true }, { op: 'between', column: 1, rows: [2, 6] }, { op: 'in', column: 0, rows: [1], nulls: false }])
+    service.applyColumnFilter('t1', 0, 1, { kind: 'clear' })
+    expect(filters()).toEqual([{ op: 'in', column: 0, rows: [1], nulls: false }])
+    const calls = handle.sort.mock.calls.length
+    expect(service.applyColumnFilter('t1', 0, 1, { kind: 'values', op: 'in', rows: Array.from({ length: 4097 }, (_, row) => row), nulls: false })).toBe(false)
+    expect(handle.sort.mock.calls.length).toBe(calls)
+    service.applyColumnFilter('t1', 0, 0, { kind: 'clear' })
+    expect(service.sortOf('t1', 0)).toBeUndefined()
+  })
+
+  it('lists the values of a column over the rows its other filters keep, and says which ones its own value list keeps', async () => {
+    const { service, handle } = filtered()
+    const answer = (values: { row: number; text: string; count: number }[], nulls = 0) => ({ rows: 10, complete: true, nulls, distinct: values.length, truncated: false, approximate: false, values })
+    handle.distinct.mockResolvedValueOnce(answer([{ row: 0, text: 'a', count: 3 }]))
+    expect((await service.columnValues('t1', 0, 1, { order: 'count', kept: true })).result.values).toEqual([{ row: 0, text: 'a', count: 3 }])
+    expect(handle.distinct).toHaveBeenLastCalledWith(1, { order: 'count' })
+    // A value list on the column and a not-NULL on another: the list comes from a view of the other filter alone.
+    const own = { op: 'in' as const, column: 1, rows: [0], nulls: false }, other = { op: 'notIn' as const, column: 0, rows: [], nulls: true }
+    const shown = { ...resolvedView(handle, 1, [own, other]), distinct: vi.fn<ResultHandle['distinct']>(async () => answer([{ row: 0, text: 'a', count: 3 }], 1)) }
+    handle.sort.mockResolvedValueOnce(shown)
+    service.applyColumnFilter('t1', 0, 1, { kind: 'values', op: 'in', rows: [0], nulls: true })
+    handle.sort.mockResolvedValueOnce({ ...shown, viewId: 2 })
+    service.applyColumnFilter('t1', 0, 0, { kind: 'notNull' })
+    await settle()
+    await settle()
+    const others = { ...resolvedView(handle, 3, [other]), distinct: vi.fn<ResultHandle['distinct']>(async () => answer([{ row: 0, text: 'a', count: 3 }, { row: 2, text: 'b', count: 4 }], 1)) }
+    handle.sort.mockResolvedValueOnce(others)
+    const values = await service.columnValues('t1', 0, 1, { order: 'value', search: 'a', kept: true })
+    expect(handle.sort).toHaveBeenLastCalledWith([], { filters: [{ op: 'notIn', column: 0, rows: [], nulls: true }] })
+    expect(others.distinct).toHaveBeenCalledWith(1, { order: 'value', search: 'a' })
+    expect(values.result.values.map(value => value.row)).toEqual([0, 2])
+    expect(values.kept).toEqual({ rows: new Set([0]), nulls: true })
+    expect(others.close).toHaveBeenCalled()
   })
 })

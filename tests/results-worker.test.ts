@@ -421,6 +421,26 @@ describe('results worker core', () => {
     expect(posted.at(-1)).toMatchObject({ type: 'error', id: 103, code: 'PORT_CLOSED' })
   })
 
+  it('relays distinct values through main by result or view, with a search, cancels them, and fails those asked on a replaced port', () => {
+    const { core, sent, posted } = fixture()
+    core.handle({ type: 'distinct', id: 100, key: { ...key, view: 3 }, params: { column: 1, order: 'count', maxValues: 50, search: 'ab' } })
+    expect(sent.at(-1)).toEqual({ t: 'distinct', rid: 1, generation: 1, resultId: 5, column: 1, order: 'count', maxValues: 50, search: 'ab', viewId: 3 })
+    const result = { rows: 3, complete: true, nulls: 1, distinct: 1, truncated: false, approximate: false, values: [{ row: 0, text: 'ab', count: 2 }] }
+    core.receive({ t: 'end', rid: 1, ok: true, result })
+    expect(posted.at(-1)).toEqual({ type: 'distinct', id: 100, result })
+    core.handle({ type: 'distinct', id: 101, key, params: { column: 0, order: 'value', maxValues: 10 } })
+    expect(sent.at(-1)).toEqual({ t: 'distinct', rid: 2, generation: 1, resultId: 5, column: 0, order: 'value', maxValues: 10 })
+    core.handle({ type: 'cancel', id: 101 })
+    expect(sent.at(-1)).toEqual({ t: 'cancel', rid: 2 })
+    core.receive({ t: 'end', rid: 2, ok: false, code: 'CANCELLED', message: 'The request was cancelled.' })
+    expect(posted.at(-1)).toMatchObject({ type: 'error', id: 101, code: 'CANCELLED' })
+    core.handle({ type: 'distinct', id: 102, key: { ...key, generation: 2 }, params: { column: 0, order: 'value', maxValues: 10 } })
+    expect(posted.at(-1)).toMatchObject({ type: 'error', id: 102, code: 'RESULT_UNAVAILABLE' })
+    core.handle({ type: 'distinct', id: 103, key, params: { column: 0, order: 'value', maxValues: 10 } })
+    core.attach({ postMessage: () => {} })
+    expect(posted.at(-1)).toMatchObject({ type: 'error', id: 103, code: 'PORT_CLOSED' })
+  })
+
   it('formats a whole XML or JSON value in the worker, but never a stored prefix, a NULL, a read error, or malformed text', () => {
     const documentWires: WireKind[] = ['text']
     const values: PageCell[] = ['<a><b>1</b><b>x</b></a>', '{"a":[1,2.50,{"b":null}]}', { value: '<a><b>', truncated: true }, null, { error: true }, '<a><b></a>', 'x'.repeat(70_000)]

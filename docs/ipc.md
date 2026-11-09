@@ -40,6 +40,7 @@ The code is the reference implementation; this document describes it.
 - [Result diffs](#result-diffs)
 - [Search in results](#search-in-results)
 - [Column profiles](#column-profiles)
+- [Distinct values](#distinct-values)
 - [Messages](#messages)
 - [Copy and Save Results As](#copy-and-save-results-as)
 - [Live subscriptions](#live-subscriptions)
@@ -242,6 +243,7 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `results.diff` | port | unary | results | 120 s; the unified diff of two results of one query, stored as a new result ([Result diffs](#result-diffs)) |
 | `results.search` | port | unary | results | 120 s; the cells of a result (or a view) containing a text ([Search in results](#search-in-results)) |
 | `results.profile` | port | unary | results | 120 s; aggregates over a result's or a view's rows ([Column profiles](#column-profiles)) |
+| `results.distinct` | port | unary | results | 120 s; a column's distinct values and their counts over a result's or a view's rows ([Distinct values](#distinct-values)) |
 | `live.subscribe` | port | stream of credited EVENTs ([Live subscriptions](#live-subscriptions)) | live (no slot) | none, and no backstop: only CANCEL, a disconnect, a shutdown, a failure or its source ending ends it |
 | `live.update` | port | unary | control | 10 s |
 | `explorer.children` | invoke; cancelled with `explorerCancel` | unary | explorer | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value |
@@ -1512,6 +1514,43 @@ renderer (`Results/ColumnProfiles.cs`): `results.profile` answers aggregates, ne
   shown handle, and scales them to the profile's `rowBytes.max` once the set is complete (asked again 2 s after a
   failure), or to the largest row read while that is larger.
 
+## Distinct values
+
+The header funnel's popover lists a column's distinct values with their counts, computed in the backend over the rows
+it holds (`Results/DistinctValues.cs`); the renderer receives at most 4,096 values, never rows.
+
+- **`results.distinct { resultId, column, order: 'count' | 'value', maxValues: 1 – 4,096, search?: 1 – 1,024 characters,
+  viewId? }`** answers `{ rows, complete, nulls, distinct, truncated, approximate, values: [{ row, text, count }] }`. The
+  column must be the result's (`INVALID_PARAMS`). Through a view it groups the view's rows (`VIEW_NOT_FOUND` when it is
+  gone), else the rows sealed when it ran; `complete` says those were every row of a finished set. `count` orders the
+  values most frequent first, ties in value order; `value` orders them as a sort does. `distinct` counts every value the
+  search kept, and `values` are the first `maxValues` of them (`truncated` when there were more). NULL and unreadable cells
+  are counted in `nulls`, never a value.
+- **Equality** is the filters' ([Sorted views](#sorted-views)): the column's collation decides which texts are one value
+  (case and trailing spaces under a CI collation), exact numerics are equal by value, and a truncated value compares by
+  its stored prefix (`approximate`). Each value's `row` is the lowest base row holding it, so an `in` or `notIn` filter by
+  those rows keeps or drops exactly the rows counted. `text` is the representative's display text (binary as `0x` hex),
+  cut to 256 characters with "…".
+- **`search`** keeps the values whose display text contains it, compared as [Search in results](#search-in-results)
+  compares a cell (the collation's locale and Ignore flags for character columns, hex for binary, case ignored otherwise).
+- **Work.** One key per row for the column (as a filter builds it), the rows grouped by a stable sort, and up to one group
+  a row: `DistinctWorkingBytes` (about 37 bytes a row) is charged to the result's query budget while it runs (`TOO_LARGE`
+  without room) and returned when it ends. The worker's `cancel` stops it (`CANCELLED`). Main checks the answer before
+  forwarding it: rows below 2³¹, at most `maxValues` values, `truncated` exactly when `distinct` exceeds them, and the
+  column inside the result's when its descriptor named the columns.
+- **Renderer.** `ResultHandle.distinct(column, { order, maxValues, search, signal })` validates the request before the
+  port. `ResultsService.columnValues` asks over the rows the grid's other filters keep (a view built for it without the
+  column's own value list, closed once read), so values the column's filter dropped can be ticked again; when the column
+  has such a filter it also asks the grid's view which values it keeps now, matched by representative row (the same value
+  has the same lowest row in both). The popover (`ColumnFilterPopover`) lists them as a checklist with a search (local,
+  or in the backend once typing pauses when the list was truncated), Select all and Select none, NULL as an entry, and
+  custom conditions (equals, does not equal, between two listed values, is NULL, is not NULL). OK applies an `in` or
+  `notIn` filter by representative rows, whichever names fewer (keeping on a tie), replacing the column's value-list
+  filter; every value ticked takes that filter off. Between replaces the column's range filter and is not NULL its
+  Exclude NULLs; Clear filter takes all of the column's filters off. A value a truncated list never showed is dropped by
+  `in` and kept by `notIn`. There is no contains or starts-with condition: the filters compare whole values by rows, and
+  a text filter op would need its own backend filter.
+
 ## Copy and Save Results As
 
 All Copy and Save text comes from one formatter, `ResultTextWriter` (C#), which reads stored pages in place through
@@ -2349,6 +2388,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Sorted views | 0 – 16 keys and 0 – 16 filters a view (one at least), 4,096 distinct values a filter, 256 cell ranges a selection, 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key or filtered column while building, 4 bytes a row kept, under the query budget | zod and backend |
 | Search in results | 1 – 1,024 characters of text, 1 – 10,000 matches an answer plus its last row's columns (`limits.search`); no budget held | zod and backend |
 | Column profiles | 0 – 32 columns a request (`limits.profile`), 20 buckets, distinct exact to 16,384, values cut to 256 characters; working memory under the query budget | zod and backend |
+| Distinct values | 1 – 4,096 values an answer (`limits.distinct`, the In filter's own limit), values cut to 256 characters, search 1 – 1,024 characters; working memory under the query budget | zod and backend |
 | Copy | 64 MiB of UTF-8 (estimated before any work; main cancels past 65 MiB received); DATA ≤ 1 MiB; 16 MiB initial credit; 120 s; one per window | backend and main |
 | Save Results As | one per window; 1 MiB writes; no deadline; suggested name ≤ 128 characters, path ≤ 32,767 | main and backend |
 | Job progress | EVENTs every ≥ 250 ms; pushed to the renderer ≤ 4 a second | backend and main |

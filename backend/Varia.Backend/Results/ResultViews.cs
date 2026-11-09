@@ -51,7 +51,7 @@ internal sealed class ResultView(uint viewId, ResultSetBuffer set, int[] order, 
 /// _BIN and _BIN2), ignoring trailing spaces as SQL Server does; every other type by its display text's code points.
 /// Each row keeps 8 to 16 bytes per key while sorting (a number, or a prefix of its collation sort key), so most
 /// comparisons never touch the stored cell; ties read it again from its page.</summary>
-internal static class ViewSorter
+internal static partial class ViewSorter
 {
     public const int MaxKeys = 16;
     /// <summary>Filters one view takes, distinct values one In or NotIn filter holds, and cell ranges one selection names
@@ -480,6 +480,15 @@ internal static class ViewSorter
             var index = Array.BinarySearch(starts, (long)row);
             if (index < 0) index = ~index - 1;
             return View(index).Span(column, (int)(row - starts[index]));
+        }
+
+        /// <summary>The page holding row <paramref name="row"/>, and the row's place in it (its flags as well as its cells).</summary>
+        public PageView ViewOf(int row, out int local)
+        {
+            var index = Array.BinarySearch(starts, (long)row);
+            if (index < 0) index = ~index - 1;
+            local = (int)(row - starts[index]);
+            return View(index);
         }
     }
 

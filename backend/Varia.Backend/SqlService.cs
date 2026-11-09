@@ -32,6 +32,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
         "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.identify", "results.rowIds", "results.findRows", "results.diff", "results.search", "results.profile", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.index", "explorer.search", "results.copy", "results.export",
+        "results.distinct",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
         "ssis.describe", "ssis.execute", "ssis.catalogSetup"
@@ -301,7 +302,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     public RequestLane LaneOf(string method) => method switch
     {
         "query.execute" or "plans.estimate" => RequestLane.Query,
-        "results.read" or "results.copy" or "results.export" or "results.view" or "results.identify" or "results.findRows" or "results.diff" or "results.search" or "results.profile" => RequestLane.Results,
+        "results.read" or "results.copy" or "results.export" or "results.view" or "results.identify" or "results.findRows" or "results.diff" or "results.search" or "results.profile" or "results.distinct" => RequestLane.Results,
         "explorer.children" or "explorer.peek" or "explorer.peekDependencies" or "explorer.index" or "explorer.search" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
         "ssis.describe" or "ssis.execute" or "ssis.catalogSetup" => RequestLane.Ssis,
@@ -369,6 +370,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "results.diff" => await DiffAsync(Read<ResultsDiffArgs>(parameters, json), context),
         "results.search" => await SearchAsync(Read<ResultsSearchArgs>(parameters, json), Token(context)),
         "results.profile" => await ProfileAsync(Read<ResultsProfileArgs>(parameters, json), Token(context)),
+        "results.distinct" => await DistinctAsync(Read<ResultsDistinctArgs>(parameters, json), Token(context)),
         "results.copy" => await jobs.CopyAsync(Read<ResultsCopyArgs>(parameters, json), context),
         "results.export" => await jobs.ExportAsync(Read<ResultsExportArgs>(parameters, json), context),
         "explorer.children" => await explorer.ChildrenAsync(Read<ExplorerChildrenArgs>(parameters, json), Token(context)),
@@ -1676,6 +1678,36 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             throw new RequestException("TOO_LARGE", "There is not enough result memory to profile these rows. Close other results and try again.");
         }
         finally { store.Return(set.Budget, working + charges.Extra); }
+    }
+
+    /// <summary>results.distinct: a column's distinct values with their counts (ViewSorter.DistinctValues) over a result's
+    /// sealed rows or a view's, off the frame loop, charging its working memory to the result's query budget while it runs;
+    /// TOO_LARGE when the budget has no room.</summary>
+    private async Task<ResultsDistinctResult> DistinctAsync(ResultsDistinctArgs args, CancellationToken token)
+    {
+        var order = args.Order switch { "count" => DistinctOrder.Count, "value" => DistinctOrder.Value, _ => (DistinctOrder?)null };
+        if (args.ResultId == 0 || order is null || args.MaxValues is < 1 or > ViewSorter.MaxDistinctValues || args.ViewId == 0
+            || args.Search is { Length: < 1 or > ResultSearcher.MaxText })
+            throw new RequestException("INVALID_PARAMS", "Distinct values need a column, an order of count or value, 1 to 4,096 values and at most 1,024 characters of search text.");
+        var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        if (args.Column < 0 || args.Column >= set.Columns.Count)
+            throw new RequestException("INVALID_PARAMS", "The column is not one of the result's.");
+        var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
+        var complete = view?.Complete ?? set.IsComplete;
+        var pages = set.SealedSnapshot();
+        long rows = 0;
+        foreach (var page in pages) rows += page.Rows;
+        var working = ViewSorter.DistinctWorkingBytes(rows);
+        if (!store.TryReserve(set.Budget, working, false, out _))
+            throw new RequestException("TOO_LARGE", "There is not enough result memory to list this column's values. Close other results and try again.");
+        try
+        {
+            var found = await Task.Run(() => ViewSorter.DistinctValues(set, pages, view, args.Column, order.Value, args.Search, args.MaxValues, token), token);
+            if (set.IsReleased) throw Unavailable(args.ResultId);
+            if (view is not null && !store.HasView(view)) throw ViewClosed();
+            return new ResultsDistinctResult(found.Rows, complete, found.Nulls, found.Distinct, found.Distinct > found.Values.Length, found.Approximate, found.Values);
+        }
+        finally { store.Return(set.Budget, working); }
     }
 
     private ResultsViewCloseResult CloseViews(ResultsViewCloseArgs args)
