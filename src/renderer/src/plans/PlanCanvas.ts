@@ -34,7 +34,7 @@ export class PlanCanvas {
   private readonly overviewCells: { x: number; y: number }[]
   private overviewDirty = true
   private readonly pool = new LabelPool<Text>(() => {
-    const sprite = new Text({ text: '', style: this.textStyle })
+    const sprite = new Text({ text: '', style: this.textStyle, roundPixels: true })
     this.labels.addChild(sprite)
     return sprite
   }, sprite => { sprite.visible = false }, sprite => sprite.destroy())
@@ -62,6 +62,7 @@ export class PlanCanvas {
   private readonly adoption: Disposable
   private owner: Window
   private ownerDocument: Document
+  private pixelRatioQuery?: MediaQueryList
   constructor(private readonly options: CanvasOptions) {
     this.index = new SpatialIndex(options.layout.nodes)
     this.placed = new Map(options.layout.nodes.map(node => [node.id, node]))
@@ -76,6 +77,7 @@ export class PlanCanvas {
     this.camera = options.camera ?? { x: 0, y: 0, scale: 1 }
     this.owner = windowOf(options.root)
     this.ownerDocument = options.root.ownerDocument
+    this.watchPixelRatio()
     this.ownerDocument.addEventListener('visibilitychange', this.visibilityChanged)
     this.adoption = windows.onDidAdopt(() => {
       const document = options.root.ownerDocument
@@ -86,6 +88,8 @@ export class PlanCanvas {
       this.owner = windowOf(options.root)
       this.ownerDocument = document
       document.addEventListener('visibilitychange', this.visibilityChanged)
+      this.watchPixelRatio()
+      this.resize()
     })
     this.size = observeResize(options.root, () => this.resize())
     this.visibility = observeIntersection(options.root, entries => {
@@ -105,7 +109,7 @@ export class PlanCanvas {
   private async initialize(): Promise<void> {
     try {
       await this.app.init({ preference: 'webgl', autoStart: false, sharedTicker: false, antialias: true, backgroundAlpha: 0,
-        resolution: Math.min(this.owner.devicePixelRatio || 1, 2), autoDensity: true })
+        resolution: this.owner.devicePixelRatio || 1, autoDensity: true })
       this.ready = true
       if (this.disposed) { this.app.destroy(true, { children: true }); return }
       this.app.canvas.setAttribute('aria-hidden', 'true')
@@ -125,14 +129,24 @@ export class PlanCanvas {
   private contextLost = (event: Event) => { event.preventDefault(); this.dismissHover(); this.cancelFrame(); this.options.failed() }
   private visibilityChanged = () => {
     if (this.ownerDocument.hidden) { this.dismissHover(); this.cancelFrame() }
-    else this.invalidate()
+    else this.resize()
+  }
+  private watchPixelRatio(): void {
+    this.pixelRatioQuery?.removeEventListener('change', this.pixelRatioChanged)
+    this.pixelRatioQuery = this.owner.matchMedia(`(resolution: ${this.owner.devicePixelRatio || 1}dppx)`)
+    this.pixelRatioQuery.addEventListener('change', this.pixelRatioChanged, { once: true })
+  }
+  private pixelRatioChanged = () => {
+    if (this.disposed) return
+    this.watchPixelRatio()
+    this.resize()
   }
   private resize(): void {
     if (this.disposed || !this.ready) return
     this.dismissHover()
     this.width = Math.max(1, this.options.root.clientWidth)
     this.height = Math.max(1, this.options.root.clientHeight)
-    this.app.renderer.resize(this.width, this.height, Math.min(this.owner.devicePixelRatio || 1, 2))
+    this.app.renderer.resize(this.width, this.height, this.owner.devicePixelRatio || 1)
     this.invalidate()
   }
   private cancelFrame(): void { if (this.frame) this.owner.cancelAnimationFrame(this.frame); this.frame = 0 }
@@ -298,6 +312,9 @@ export class PlanCanvas {
   }
   private draw(): void {
     const colors = this.options.colors, area = viewport(this.camera, this.width, this.height)
+    // Pixi's automatic text resolution follows the renderer, not the parent transform.
+    // Rasterize at the displayed size so zoom never stretches a lower-resolution label.
+    const textResolution = this.app.renderer.resolution * this.camera.scale
     if (this.textStyle.fill !== colors.text) this.textStyle.fill = colors.text
     if (this.mutedStyle.fill !== colors.muted) this.mutedStyle.fill = colors.muted
     this.world.position.set(this.camera.x, this.camera.y)
@@ -309,6 +326,7 @@ export class PlanCanvas {
       const style = muted ? this.mutedStyle : this.textStyle
       if (sprite.text !== text) sprite.text = text
       if (sprite.style !== style) sprite.style = style
+      if (sprite.resolution !== textResolution) sprite.resolution = textResolution
       sprite.position.set(x, y); sprite.visible = true
     }
     for (const section of this.options.layout.statements) {
@@ -383,6 +401,7 @@ export class PlanCanvas {
     root.removeEventListener('pointerup', this.up); root.removeEventListener('pointercancel', this.cancelDrag); root.removeEventListener('lostpointercapture', this.cancelDrag)
     root.removeEventListener('pointerleave', this.leaveHover)
     this.ownerDocument.removeEventListener('visibilitychange', this.visibilityChanged)
+    this.pixelRatioQuery?.removeEventListener('change', this.pixelRatioChanged)
     this.pool.dispose(); this.fittedLabels.clear()
     if (this.ready) { this.app.canvas.removeEventListener('webglcontextlost', this.contextLost); this.app.destroy(true, { children: true, texture: true, textureSource: true }) }
     TexturePool.clear(true)
