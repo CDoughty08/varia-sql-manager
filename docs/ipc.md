@@ -38,6 +38,8 @@ The code is the reference implementation; this document describes it.
 - [Sorted views](#sorted-views)
 - [Row identities and highlights](#row-identities-and-highlights)
 - [Result diffs](#result-diffs)
+- [Search in results](#search-in-results)
+- [Column profiles](#column-profiles)
 - [Messages](#messages)
 - [Copy and Save Results As](#copy-and-save-results-as)
 - [Live subscriptions](#live-subscriptions)
@@ -238,6 +240,8 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `results.rowIds` | port | unary | control | 10 s; 1 – 16,384 rows' identities |
 | `results.findRows` | port | unary | results | 60 s; where 1 – 10,000 identities are in a result or view |
 | `results.diff` | port | unary | results | 120 s; the unified diff of two results of one query, stored as a new result ([Result diffs](#result-diffs)) |
+| `results.search` | port | unary | results | 120 s; the cells of a result (or a view) containing a text ([Search in results](#search-in-results)) |
+| `results.profile` | port | unary | results | 120 s; aggregates over a result's or a view's rows ([Column profiles](#column-profiles)) |
 | `live.subscribe` | port | stream of credited EVENTs ([Live subscriptions](#live-subscriptions)) | live (no slot) | none, and no backstop: only CANCEL, a disconnect, a shutdown, a failure or its source ending ends it |
 | `live.update` | port | unary | control | 10 s |
 | `explorer.children` | invoke; cancelled with `explorerCancel` | unary | explorer | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value |
@@ -1401,6 +1405,72 @@ receives a new result to read like any other, never rows to compare.
   was compared. `GridView` colours added and removed rows from the tone column and marks the listed cells (`is-chg`,
   `is-soft`) with theme colours only (`resultsGrid.diff*`).
 
+## Search in results
+
+The results toolbar's search box searches every grid of a run in the backend, over the rows it holds
+(`Results/ResultSearch.cs`), through the order the grid shows; rows never come to the renderer for it.
+
+- **`results.search { resultId, text: 1 – 1,024 characters, fromRow, maxMatches: 1 – 10,000, backward?, viewId? }`**
+  answers `{ rows, total, first, matchRows, matchColumns, complete, approximate }`. It searches the rows sealed now, or a
+  view's positions with `viewId` (`VIEW_NOT_FOUND` when it is gone). One pass counts every match (`total`) and keeps a
+  run of whole rows: from `fromRow` on until it holds `maxMatches`, or with `backward` the last rows before `fromRow` that
+  hold `maxMatches`, so a run passes `maxMatches` by at most its last row's columns. `matchRows[k]`, `matchColumns[k]`
+  are the run's cells in row then column order; `first` counts the matches before the run's first (when the run is
+  empty, those before `fromRow`). `complete`: those rows were all of a finished set; `approximate`: a truncated value was
+  searched by its stored prefix and did not match. A search holds only its run, so it reserves no budget; CANCEL (a newer
+  search) stops it.
+- **Matching.** A cell matches when its grid text contains the text. NULL and unreadable cells never match. Character
+  columns compare by their collation, as `LIKE '%text%'` would: its locale and Ignore flags (case, accents, kana type,
+  width), code points for _BIN and _BIN2, and for a locale the runtime does not know its case flag alone. Every other
+  column compares its display text ignoring case (numbers, dates, xml, json, uniqueidentifier); binary values match their
+  `0x` and uppercase hex, and a column of them is skipped when the text is not hex.
+- **Main** checks the request with the port schema and ownership, and the answer before forwarding it: as many columns as
+  rows, cells strictly in (row, column) order inside the rows searched and on the side of `fromRow` asked, and
+  `first + matches ≤ total`.
+- **Renderer.** `ResultHandle.search(text, fromRow, { maxMatches, backward, signal })` bounds the request before the port.
+  `ResultsSearchService` (`results/search.ts`) runs each tab's search: typing searches once it pauses (200 ms; Enter at
+  once), one grid at a time in run order, through the view a sorted grid shows, and the first match becomes active as
+  soon as a grid has one. Each grid holds one run of up to 10,000 matches; a step past it reads the next run forward or
+  back (or the first or last, when it wraps). A grid that shows other rows (a new run, a sort, a set that finished)
+  searches again, keeping the active match's place. Columns mode matches column names from the descriptors, ignoring
+  case and accents, with no backend call. Grids draw the marks through `GridView` (`grid/marks.ts`) as cell and header
+  classes, never markup; the stack scrolls the grid holding the active match into view (opening it if collapsed), and the
+  grid scrolls the cell. Find in Results (Ctrl+F in a grid), Find Next and Find Previous in Results (F3, Shift+F3) are
+  catalogue commands.
+
+## Column profiles
+
+The column profile panel and the grid's row-size bar describe rows the backend holds without reading them into the
+renderer (`Results/ColumnProfiles.cs`): `results.profile` answers aggregates, never rows.
+
+- **`results.profile { resultId, columns: 0 – 32, viewId? }`** answers `{ rows, complete, rowBytes?, columns }`. Columns
+  are distinct and within the result (`INVALID_PARAMS`); no columns answers only `rowBytes`. Through a view it describes
+  the view's rows (its sort now, its filter once views filter), else the rows sealed when it ran; `complete` says those
+  were every row of a finished set. Main forwards an answer only when it names the columns asked, in order.
+- **Per column** `{ column, values, nulls, distinct, distinctExact, min?, max?, approximate, chars?, bytes?, histogram? }`.
+  Values compare as a sort does ([Sorted views](#sorted-views)): NULL and unreadable cells count as `nulls` and are never
+  `min` or `max`; equality follows the collation, ignoring trailing spaces, and exact numerics are equal by value (1.50
+  and 1.5). `distinct` is exact up to 16,384 values, then a HyperLogLog estimate (about 1 % off; `distinctExact: false`).
+  `min` and `max` are display text, binary as `0x` hex, cut to 256 characters with "…". `chars` and `bytes`
+  (`{ min, max, average, exact }`) come from the stored lengths ([Cell lengths and row sizes](#cell-lengths-and-row-sizes))
+  for text, xml, json (both) and binary columns (bytes); `approximate` says a truncated cell's stored prefix took part.
+  `histogram` is `{ basis, low, high, counts }`, 20 equal buckets from `low` to `high`: numbers by `value`, date and time
+  types by instant (`time`, .NET ticks), text by `chars`, binary by `bytes`; other types have none.
+- **`rowBytes`** is the rows' sizes, `{ min, max, average, exact }` from each page's row sums: the grid's row-size bar
+  scales to its `max`.
+- **Work.** Two passes over the sealed pages, off the frame loop, reading rows in base order through a bitmap of the
+  view's rows. Its working memory (a bit a row, and per column the exact distinct set up to its cap, 16 KiB of estimator
+  registers and the kept values) is charged to the result's query budget while it runs (`TOO_LARGE` when there is no
+  room) and returned when it ends. Longer keys (a long lowest or highest value, a long collation sort key) are charged
+  as the profile meets them, and a refusal ends it with `TOO_LARGE`. With no columns it reads only the pages' row sums,
+  never their bodies. The worker's `cancel` stops it (`CANCELLED`).
+- **Renderer.** `ResultHandle.profile(columns, signal)` validates the columns before sending. The profile panel asks for
+  the shown grid's columns, 32 at a time, through the view the grid shows, and again when its rows or its view change;
+  a newer request cancels the older, each card's NULL share is of the rows its own request saw, and cards stay shown
+  while the same rows are asked again. The row-size bar reads `results.rowBytes` for the rows in view only, through the
+  shown handle, and scales them to the profile's `rowBytes.max` once the set is complete (asked again 2 s after a
+  failure), or to the largest row read while that is larger.
+
 ## Copy and Save Results As
 
 All Copy and Save text comes from one formatter, `ResultTextWriter` (C#), which reads stored pages in place through
@@ -2046,6 +2116,7 @@ crash and window close; a backend loss ends its streams but keeps the port.
 { t: 'rowBytes'; rid; generation; resultId: u32; firstRow: 0..2^53-1; count: 1..16_384; viewId?: u32 }
 { t: 'view'; rid; generation; resultId: u32; sort: ViewSortKey[1..16]; replaces?: u32 }
 { t: 'viewClose'; rid; generation; resultId: u32; viewIds: u32[1..64] }
+{ t: 'search'; rid; generation; resultId: u32; text: string[1..1024]; fromRow; maxMatches: 1..10000; backward?: boolean; viewId?: u32 }
 { t: 'live'; rid; generation; params: live.subscribe params }
 { t: 'liveUpdate'; rid; generation; params: live.update params }
 ```
@@ -2235,6 +2306,8 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Row identities | `results.rowIds` 1 – 16,384 rows; `results.findRows` 1 – 10,000 ids, 100,000 matches (`limits.identity`); 24 bytes a row while identifying, 8 kept, under the query budget | zod and backend |
 | Result diffs | context -1 – 100 rows, 64 one-sided column names each side (`limits.diff`); about 80 bytes a row of both results and 12 a differing cell while aligning, the diff's rows under the query budget | zod and backend |
 | Sorted views | 1 – 16 keys a sort, 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key while sorting, 4 bytes a row kept, under the query budget | zod and backend |
+| Search in results | 1 – 1,024 characters of text, 1 – 10,000 matches an answer plus its last row's columns (`limits.search`); no budget held | zod and backend |
+| Column profiles | 0 – 32 columns a request (`limits.profile`), 20 buckets, distinct exact to 16,384, values cut to 256 characters; working memory under the query budget | zod and backend |
 | Copy | 64 MiB of UTF-8 (estimated before any work; main cancels past 65 MiB received); DATA ≤ 1 MiB; 16 MiB initial credit; 120 s; one per window | backend and main |
 | Save Results As | one per window; 1 MiB writes; no deadline; suggested name ≤ 128 characters, path ≤ 32,767 | main and backend |
 | Job progress | EVENTs every ≥ 250 ms; pushed to the renderer ≤ 4 a second | backend and main |

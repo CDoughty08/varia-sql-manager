@@ -27,6 +27,7 @@ import { HighlightsService } from '../../src/renderer/src/results/HighlightsServ
 import { CompareService } from '../../src/renderer/src/results/CompareService'
 import { highlightsContribution } from '../../src/renderer/src/contributions/highlights'
 import { compareContribution } from '../../src/renderer/src/contributions/compare'
+import { ResultsSearchService } from '../../src/renderer/src/results/search'
 import { browserTimers } from '../../src/renderer/src/core/timers'
 import { explorerContribution } from '../../src/renderer/src/contributions/explorer'
 import { outputContribution } from '../../src/renderer/src/contributions/output'
@@ -338,6 +339,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => callback(), timers: options.timers ?? browserTimers, newId: () => crypto.randomUUID() })
   const highlights = new HighlightsService(results)
   const compare = new CompareService(results)
+  const resultsSearch = new ResultsSearchService({ results, timers: options.timers ?? browserTimers })
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
   const files = new FileService(documents, queries, api, { autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'] })
   const recentFiles = new RecentFilesService(api)
@@ -461,6 +463,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     results,
     highlights,
     compare,
+    resultsSearch,
     settings,
     scripting,
     actions,
@@ -529,6 +532,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     resultSelection.dispose()
     highlights.dispose()
     compare.dispose()
+    resultsSearch.dispose()
     results.dispose()
     explorer.dispose()
     databaseList.dispose()
@@ -569,6 +573,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     databaseList,
     resultSelection,
     results,
+    resultsSearch,
     resultClient,
     settings,
     scripting,

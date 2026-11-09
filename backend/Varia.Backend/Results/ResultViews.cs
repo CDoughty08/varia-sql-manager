@@ -116,7 +116,7 @@ internal static class ViewSorter
         return key;
     }
 
-    private enum Kind { Exact, Approximate, Ticks, Guid, Collated, Ordinal, Chars, Bytes }
+    internal enum Kind { Exact, Approximate, Ticks, Guid, Collated, Ordinal, Chars, Bytes }
 
     private static Kind KindFor(SortMode mode) => mode == SortMode.Chars ? Kind.Chars : Kind.Bytes;
 
@@ -132,7 +132,7 @@ internal static class ViewSorter
     internal static bool IsText(ResultColumn column) => column.Collation is not null || column.Role is "xml" or "json"
         || TypeName(column) is "char" or "varchar" or "nchar" or "nvarchar" or "text" or "ntext" or "sysname" or "xml" or "json";
 
-    private static Kind KindOf(ResultColumn column, WireKind wire)
+    internal static Kind KindOf(ResultColumn column, WireKind wire)
     {
         if (wire == WireKind.Binary) return Kind.Ordinal;
         return TypeName(column) switch

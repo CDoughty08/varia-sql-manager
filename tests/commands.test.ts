@@ -402,7 +402,7 @@ describe('menu state publisher', () => {
     publisher.flush()
     expect(pending.size).toBe(0)
     // Line numbers are on by default, so their palette toggle is checked too.
-    expect(send.mock.lastCall![0].checked).toEqual(['editor.toggleWordWrap', 'editor.toggleLineNumbers'])
+    expect(send.mock.lastCall![0].checked).toEqual(['editor.toggleWordWrap', 'editor.toggleLineNumbers', 'output.toggleRowSize'])
     registration.dispose()
     publisher.dispose()
     expect(pending.size).toBe(0)

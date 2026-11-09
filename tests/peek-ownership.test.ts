@@ -268,6 +268,12 @@ describe('Peek tabs (PeekTabService)', () => {
     peekTabs.view(id)!.follow({ name: 'vOrders', schema: 'Sales', kind: 'view' })
     expect(documents.update).toHaveBeenCalledWith(id, { name: 'Sales.vOrders' })
     expect(peekTabName(node('view', 3, 'Totals'))).toBe('dbo.Totals')
+    // An index is named below its table, as the header names it, so two of the same name stay apart; a database's tab is in it.
+    const index = (table: string): ExplorerMenuNode => ({ id: 4, connectionId, kind: 'index', label: 'IX', lost: false,
+      ref: { type: 'object', object: { kind: 'index', database: 'Sales', parent: { kind: 'table', schema: 'dbo', name: table }, name: 'IX' } } })
+    expect([peekTabName(index('Orders')), peekTabName(index('Returns'))]).toEqual(['dbo.Orders.IX', 'dbo.Returns.IX'])
+    peekTabs.open({ id: 5, connectionId, kind: 'database', label: 'Sales', lost: false, ref: { type: 'object', object: { kind: 'database', name: 'Sales' } } })
+    expect(documents.openCustom).toHaveBeenLastCalledWith('peek', 'Sales', connectionId, 'Sales')
     peekTabs.view(id)!.selectTab('rows')
     peekTabs.dispose()
     expect(providers).toEqual([])

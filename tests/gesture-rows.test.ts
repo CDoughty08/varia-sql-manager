@@ -2,6 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { emptyShortcutFile, type ShortcutFile } from '../src/shared/commands/shortcut-schema'
+import { gestureAvailable, gestureIds } from '../src/shared/commands/gestures'
 import { gestureRows, setGesture } from '../src/renderer/src/settings/shortcuts/gesture-rows'
 import MouseView from '../src/renderer/src/settings/shortcuts/MouseView'
 
@@ -18,7 +19,14 @@ const ids = (rows: readonly { id: string }[]) => rows.map(row => row.id)
 describe('gesture rows', () => {
   it('list every gesture of the platform by group, with its choices, lock and keyboard path', () => {
     const rows = gestureRows(draft(), 'win32', '')
-    expect(rows.map(row => row.kind)).toEqual(['modifier', 'modifier', 'modifier', 'modifier', 'pointerCommand', 'pointerCommand', 'pointerCommand', 'pointerCommand', 'fixed', 'fixed', 'fixed', 'fixed', 'fixed'])
+    expect(ids(rows).sort()).toEqual(gestureIds.filter(id => gestureAvailable(id, 'win32')).sort())
+    const groups = rows.map(row => ['modifier', 'pointerCommand', 'fixed'].indexOf(row.kind))
+    expect(groups).toEqual([...groups].sort((left, right) => left - right))
+    expect(rows.find(row => row.id === 'connections.connect')).toMatchObject({ scopeTitle: 'Connect Dialog', kind: 'fixed', options: [] })
+    expect(rows.find(row => row.id === 'documentTabs.rows')).toMatchObject({
+      scopeTitle: 'Document Tabs', kind: 'fixed', label: 'Ctrl+Wheel', source: 'builtin', options: [],
+      locked: expect.stringContaining('row buttons')
+    })
     // macOS's Control+click is a right-click there only.
     expect(ids(rows)).not.toContain('grid.secondaryClick')
     expect(ids(gestureRows(draft(), 'darwin', ''))).toContain('grid.secondaryClick')
@@ -124,7 +132,7 @@ describe('MouseView', () => {
     const html = render()
     expect(html).toContain('<th scope="row"><span class="mouse-gesture"><span class="mouse-dot" aria-hidden="true"></span><span class="mouse-title">Peek on Hover</span></span></th>')
     expect(html).toContain('aria-describedby="mouse-explorer-peekHover-about"')
-    expect(html).toContain('<span class="mouse-about" id="mouse-explorer-peekHover-about">Peeks a table')
+    expect(html).toContain('<span class="mouse-about" id="mouse-explorer-peekHover-about">Peeks the object')
   })
   it("shows the Options dialog's draft value of the linked setting when it is given", () => {
     // The mocked saved setting is Ctrl+Click; the page's draft says Alt+Click.

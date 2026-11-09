@@ -118,6 +118,33 @@ internal sealed record ResultsDiffArgs(uint Left, uint Right, bool Exact = false
 /// only by collation (case or trailing spaces, say).</summary>
 internal sealed record ResultsDiffResult(ResultDescriptor Descriptor, string? Key, long Same, long Changed, long Added, long Removed, long Soft, bool Approximate,
     string[] LeftOnly, string[] RightOnly);
+/// <summary>results.search: the cells whose grid text contains Text (1 to 1,024 characters), searched through ViewId's order
+/// when it is given (rows are then view positions). It returns up to MaxMatches (1 to 10,000) of them in whole rows: from
+/// FromRow on, or with Backward the last ones before FromRow.</summary>
+internal sealed record ResultsSearchArgs(uint ResultId, string Text, long FromRow, int MaxMatches, bool Backward = false, uint? ViewId = null);
+/// <summary>Rows is how many rows were searched (the rows sealed so far, or the view's); Total counts every match among them;
+/// MatchRows[k] and MatchColumns[k] are the run's matches in row then column order, First the matches before the run's
+/// first (when it is empty, those before FromRow). Complete says the rows searched were all the result's; Approximate that
+/// a truncated value was searched by its stored prefix.</summary>
+internal sealed record ResultsSearchResult(long Rows, long Total, long First, long[] MatchRows, int[] MatchColumns, bool Complete, bool Approximate);
+/// <summary>results.profile: aggregates for 0 to 32 distinct columns over a result's rows, or its view's (ViewId); 0 columns
+/// answers only the rows' byte sizes.</summary>
+internal sealed record ResultsProfileArgs(uint ResultId, int[] Columns, uint? ViewId = null);
+/// <summary>Minimum, maximum and average of a length (characters, DATALENGTH, or a row's bytes); Exact is false when any
+/// figure counted was an estimate.</summary>
+internal sealed record ProfileLengths(long Min, long Max, double Average, bool Exact);
+/// <summary>Counts in equal buckets from Low to High (both included) of a column's values ("value"), instants in .NET
+/// ticks ("time"), characters ("chars") or bytes ("bytes").</summary>
+internal sealed record ProfileHistogram(string Basis, double Low, double High, long[] Counts);
+/// <summary>One column's profile: Values non-NULL cells and Nulls the rest; Distinct, exact unless DistinctExact is false (an
+/// estimate past 16,384); Min and Max as display text (binary as 0x hex), at most 256 characters and "…"; Approximate
+/// when a truncated cell's stored prefix took part. Chars and Bytes are null for columns that are neither text nor
+/// binary, Histogram for those with nothing to bucket.</summary>
+internal sealed record ColumnProfile(int Column, long Values, long Nulls, long Distinct, bool DistinctExact, string? Min, string? Max, bool Approximate,
+    ProfileLengths? Chars, ProfileLengths? Bytes, ProfileHistogram? Histogram);
+/// <summary>Rows profiled (the view's, or the rows sealed when it ran), whether they were all the result's, the rows' byte
+/// sizes (null without rows), and the columns asked for, in order.</summary>
+internal sealed record ResultsProfileResult(long Rows, bool Complete, ProfileLengths? RowBytes, ColumnProfile[] Columns);
 /// <summary>results.rowBytes: Bytes[k] is row FirstRow + k's sum of DATALENGTH over its cells (NULL counts 0; xml and json
 /// as their text, some sql_variant base types estimated: docs/ipc.md, Cell lengths and row sizes); it stops at the rows sealed
 /// so far. Estimated lists, in order, the rows of the range whose sum includes an estimate.</summary>
@@ -187,12 +214,16 @@ internal sealed record ExplorerDatabase(int State, int UserAccess, bool ReadOnly
 internal sealed record ExplorerError(string Code, string Message, bool Retryable, string? Action = null);
 /// <summary>A page of children: static folders first (first page only), then rows. Total is on the first page only.</summary>
 internal sealed record ExplorerChildrenResult(List<ExplorerNode> Nodes, long ElapsedMs, string? Cursor = null, int? Total = null, ExplorerError? Error = null);
-/// <summary>explorer.peek (src/shared/explorer/peek.ts): a table, view, procedure or function's Properties facts and, for
-/// modules, its text. Cancellation is a CANCEL frame for the request (or varia:explorer-cancel), as explorer.children's.</summary>
+/// <summary>explorer.peek (src/shared/explorer/peek.ts): an object's Properties facts and lists and, for modules, its text. Cancellation is a CANCEL frame for the request (or varia:explorer-cancel), as explorer.children's.</summary>
 internal sealed record PeekArgs(string ConnectionId, string RequestId, ObjectRefDto Target);
 /// <summary>Facts: fact id to a string, bool, whole number or null, for the facts the server's band has. Definition: a module's
-/// text, absent when it is encrypted or hidden; DefinitionTruncated is true only when it was cut. Facts are empty with an Error.</summary>
-internal sealed record PeekResult(Dictionary<string, object?> Facts, long ElapsedMs, string? Definition = null, bool? DefinitionTruncated = null, ExplorerError? Error = null);
+/// text, absent when it is encrypted or hidden; DefinitionTruncated is true only when it was cut. Facts are empty with an Error.
+/// Lists: the kind's lists by id. Refused: the optional groups whose statement the login was refused (their facts are absent).</summary>
+internal sealed record PeekResult(Dictionary<string, object?> Facts, long ElapsedMs, string? Definition = null, bool? DefinitionTruncated = null, ExplorerError? Error = null,
+    Dictionary<string, PeekList>? Lists = null, List<string>? Refused = null);
+/// <summary>One of a peek's lists: its rows (values by the list's column formats); Truncated when there were more than the
+/// catalogue keeps; Unread, for a login's User mapping, the databases that could not be read.</summary>
+internal sealed record PeekList(List<object?[]> Rows, bool? Truncated = null, int? Unread = null);
 /// <summary>explorer.peekDependencies (its args are PeekArgs): what the object references and the tables its foreign keys
 /// point at (Uses), and what references it or points at it by a foreign key (UsedBy), each truncated when there were more.
 /// Both lists are empty with an Error.</summary>

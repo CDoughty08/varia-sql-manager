@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (267)
+## Commands (272)
 
 ### File
 
@@ -146,6 +146,9 @@ keys it uses are listed below.
 | Then Sort Ascending (not in the palette) | `output.thenSortAscending` | — | — | — | Always | Query Output context menu › Then Sort Ascending |
 | Then Sort Descending (not in the palette) | `output.thenSortDescending` | — | — | — | Always | Query Output context menu › Then Sort Descending |
 | Clear Sort (not in the palette) | `output.clearSort` | — | — | — | Always | Query Output context menu › Clear Sort |
+| Find in Results | `output.find` | Ctrl+F (`outputGridFocus`) | Ctrl+F (`outputGridFocus`) | ⌘F (`outputGridFocus`) | `hasResults` | — |
+| Find Next in Results | `output.findNext` | F3 (`outputGridFocus`) | F3 (`outputGridFocus`) | ⌘G (`outputGridFocus`), F3 (`outputGridFocus`) | `hasResults` | — |
+| Find Previous in Results | `output.findPrevious` | Shift+F3 (`outputGridFocus`) | Shift+F3 (`outputGridFocus`) | ⇧⌘G (`outputGridFocus`), ⇧F3 (`outputGridFocus`) | `hasResults` | — |
 | Sort Text by Length in Characters | `output.sortTextByChars` | — | — | — | Always; checked when `resultsSortTextChars` | — |
 | Sort Text by Length in Bytes | `output.sortTextByBytes` | — | — | — | Always; checked when `resultsSortTextBytes` | — |
 | Highlight Rows (not in the palette) | `output.highlightRows` | Ctrl+Shift+H (`outputGridFocus`) | Ctrl+Shift+H (`outputGridFocus`) | ⇧⌘H (`outputGridFocus`) | Always | — |
@@ -158,6 +161,8 @@ keys it uses are listed below.
 | Clear All Highlights (not in the palette) | `output.clearAllHighlights` | — | — | — | Always | Query Output context menu › Highlight › Clear All Highlights |
 | Compare with Previous Result | `output.compareWithPrevious` | — | — | — | Always | Query Output context menu › Compare with Previous Result |
 | Compare with Previous Result (Exact Text) | `output.compareWithPreviousExact` | — | — | — | Always | — |
+| Show Column Profile | `output.toggleColumnProfile` | — | — | — | Always; checked when `resultsColumnProfile` | Query Output context menu › Column Profile |
+| Show Row Size in Results | `output.toggleRowSize` | — | — | — | Always; checked when `resultsRowSize` | Query Output context menu › Show Row Size |
 | Open Value in New Tab (not in the palette) | `output.openValue` | — | — | — | Always | — |
 
 ### Connection
@@ -237,7 +242,7 @@ keys it uses are listed below.
 | Script As… | `explorer.scriptAs` | — | — | — | `backendReady && explorerScriptTitle != ''` | — |
 | Modify | `explorer.modify` | — | — | — | `backendReady && explorerSelectionModifiable && explorerScriptAlter == 'enabled' && !documentBusy` | Object Explorer context menu › Modify; Search Objects result context menu › Modify |
 | Cancel Scripting | `explorer.cancelScripting` | — | — | — | `scriptingRunning` | — |
-| Peek | `explorer.peek` | Alt+F12 (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`), Space (`explorerFocus && !textInputFocus && !explorerTypeAhead`) | Alt+F12 (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`), Space (`explorerFocus && !textInputFocus && !explorerTypeAhead`) | ⌥F12 (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`), Space (`explorerFocus && !textInputFocus && !explorerTypeAhead`) | `backendReady && (explorerSelectionKind == 'table' \|\| explorerSelectionKind == 'view' \|\| explorerSelectionKind == 'procedure' \|\| explorerSelectionKind == 'function')` | Object Explorer context menu › Peek |
+| Peek | `explorer.peek` | Alt+F12 (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`), Space (`explorerFocus && !textInputFocus && !explorerTypeAhead`) | Alt+F12 (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`), Space (`explorerFocus && !textInputFocus && !explorerTypeAhead`) | ⌥F12 (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`), Space (`explorerFocus && !textInputFocus && !explorerTypeAhead`) | `backendReady && explorerSelectionPeekable` | Object Explorer context menu › Peek |
 | Open Peek as Tab | `explorer.openPeekTab` | Ctrl+Enter (`peekFocus && !outputGridFocus`), Ctrl+Enter (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`) | Ctrl+Enter (`peekFocus && !outputGridFocus`), Ctrl+Enter (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`) | ⌘↩ (`peekFocus && !outputGridFocus`), ⌘↩ (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`) | `backendReady` | — |
 | Refresh Peek | `peek.refresh` | F5 (`peekFocus \|\| peekTabFocus`) | F5 (`peekFocus \|\| peekTabFocus`) | F5 (`peekFocus \|\| peekTabFocus`) | `backendReady` | — |
 | Copy Name | `explorer.copyName` | — | — | — | `hasConnection` | Object Explorer context menu › Copy Name |
@@ -602,7 +607,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `1_query` | Modif**y** | `explorer.modify` | `explorerSelectionModifiable && explorerNode != 'background'` |
 | `1_query` | Ac**t**ivity Monitor | `activity.open` | `explorerNode == 'server' && !explorerServerLost` |
 | `1_query` | Searc**h** Objects… | `explorer.searchObjects` | `(explorerNode == 'server' && !explorerServerLost) \|\| explorerNode == 'database'` |
-| `1_query` | Pee**k** | `explorer.peek` | `(explorerNode == 'table' \|\| explorerNode == 'view' \|\| explorerNode == 'procedure' \|\| explorerNode == 'function') && !explorerServerLost` |
+| `1_query` | Pee**k** | `explorer.peek` | `explorerNodePeekable && !explorerServerLost` |
 | `2_script` | **S**cript … as › | Submenu: Object Explorer context menu › Script … as | `explorerScriptTitle != '' && explorerNode != 'background'` |
 | `3_filter` | F**i**lter Settings… | `explorer.filter` | `explorerFolderFilterable` |
 | `3_filter` | Remove Fi**l**ter | `explorer.removeFilter` | `explorerFolderFiltered` |
@@ -794,6 +799,8 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | `3_save` | Sa**v**e Results As… | `output.saveResultsAs` | `outputView == 'grid'` |
 | `4_view` | Show S**p**aces and Tabs | `output.showSpaces` | `outputView == 'grid'` |
 | `4_view` | Show All **W**hite Space | `output.showAllWhitespace` | `outputView == 'grid'` |
+| `4_view` | Column Pro**f**ile | `output.toggleColumnProfile` | `outputView == 'grid'` |
+| `4_view` | Show Row Si**z**e | `output.toggleRowSize` | `outputView == 'grid'` |
 
 #### Query Output context menu › Highlight
 
@@ -876,7 +883,7 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
 | `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
 
-## Context keys (142)
+## Context keys (146)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -961,6 +968,8 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `resultsWhitespaceAll` | boolean | state | The results grid marks every white space character, line breaks included (Show All White Space in Results). |
 | `resultsSortTextChars` | boolean | state | Sorted results grids order text columns by their length in characters (Sort Text by Length in Characters). |
 | `resultsSortTextBytes` | boolean | state | Sorted results grids order text and binary columns by their length in bytes (Sort Text by Length in Bytes). |
+| `resultsColumnProfile` | boolean | state | The column profile panel shows beside the results (Show Column Profile). |
+| `resultsRowSize` | boolean | state | A bar behind each row number shows the row's size (Show Row Size in Results). |
 | `hasBookmarks` | boolean | state | An open document has a bookmark. |
 | `activeDocumentHasBookmarks` | boolean | state | The active document has a bookmark. |
 | `anyDocumentDirty` | boolean | state | Some open document has unsaved changes. |
@@ -991,6 +1000,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerScriptDelete` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Script as › DELETE To: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerScriptExecute` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Script as › EXECUTE To: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerSelectionModifiable` | boolean | state | The selected Object Explorer node offers Modify: a T-SQL stored procedure, function, or trigger. |
+| `explorerSelectionPeekable` | boolean | state | The selected Object Explorer node is of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts`). |
 | `explorerActionSelectTop` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Select Top 1000 Rows: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionRename` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Rename: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionDelete` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Delete: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
@@ -1017,6 +1027,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerFolderFilterable` | boolean | target | The menu is for an Object Explorer folder that Filter Settings can filter. |
 | `explorerFolderFiltered` | boolean | target | The menu is for an Object Explorer folder that has a filter. |
 | `explorerFolder` | `''`, `'databases'`, `'systemDatabases'`, `'databaseSnapshots'`, `'serverSecurity'`, `'logins'`, `'serverRoles'`, `'credentials'`, `'cryptographicProviders'`, `'audits'`, `'serverAuditSpecifications'`, `'serverObjects'`, `'backupDevices'`, `'linkedServers'`, `'serverTriggers'`, `'tables'`, `'systemTables'`, `'fileTables'`, `'externalTables'`, `'graphTables'`, `'droppedLedgerTables'`, `'views'`, `'systemViews'`, `'droppedLedgerViews'`, `'externalResources'`, `'externalDataSources'`, `'externalFileFormats'`, `'synonyms'`, `'programmability'`, `'storedProcedures'`, `'systemStoredProcedures'`, `'functions'`, `'tableValuedFunctions'`, `'scalarValuedFunctions'`, `'aggregateFunctions'`, `'databaseTriggers'`, `'assemblies'`, `'types'`, `'userDefinedDataTypes'`, `'userDefinedTableTypes'`, `'userDefinedTypes'`, `'xmlSchemaCollections'`, `'rules'`, `'defaults'`, `'planGuides'`, `'sequences'`, `'storage'`, `'fullTextCatalogs'`, `'partitionSchemes'`, `'partitionFunctions'`, `'fullTextStoplists'`, `'searchPropertyLists'`, `'databaseSecurity'`, `'users'`, `'roles'`, `'databaseRoles'`, `'applicationRoles'`, `'schemas'`, `'asymmetricKeys'`, `'certificates'`, `'symmetricKeys'`, `'alwaysEncryptedKeys'`, `'columnMasterKeys'`, `'columnEncryptionKeys'`, `'databaseAuditSpecifications'`, `'securityPolicies'`, `'columns'`, `'keys'`, `'constraints'`, `'tableTriggers'`, `'indexes'`, `'statistics'`, `'parameters'`, `'integrationServicesCatalogs'`, `'ssisProjects'`, `'ssisEnvironments'`, `'ssisPackages'` | target | The id of the Object Explorer folder the menu is for, from `src/shared/explorer/catalog.ts` ('tables' offers New › Table…), or '' for anything else. |
+| `explorerNodePeekable` | boolean | target | The menu is for an Object Explorer node of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts`). |
 | `explorerFolderInsertable` | boolean | target | The menu is for a Columns folder whose columns have all loaded, so Copy Name copies their list. |
 | `explorerNodeStatus` | `''`, `'disabled'`, `'unavailable'`, `'readOnly'`, `'noAccess'` | target | The status badge of the Object Explorer node the menu is for ('disabled', 'unavailable', 'readOnly' or 'noAccess'), or '' for none. |
 | `explorerServerEngine` | `''`, `'box'`, `'managedInstance'`, `'cloud'` | target | The kind of server the Object Explorer node the menu is for is on: 'box', 'managedInstance' or 'cloud', or '' for the empty area. |

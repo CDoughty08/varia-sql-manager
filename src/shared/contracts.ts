@@ -257,6 +257,37 @@ export interface ResultsDiffResult {
   descriptor: ResultDescriptor; key: string | null; same: number; changed: number; added: number; removed: number; soft: number; approximate: boolean
   leftOnly: string[]; rightOnly: string[]
 }
+/** results.search: the cells whose grid text contains `text` (1 to `limits.search.maxText` characters), through `viewId`'s
+ *  order when given (rows are then view positions). Up to `maxMatches` of them come back in whole rows: from `fromRow` on,
+ *  or with `backward` the last ones before `fromRow`. Text columns compare by their collation; others ignore case. */
+export interface ResultsSearchParams { resultId: number; text: string; fromRow: number; maxMatches: number; backward?: boolean; viewId?: number }
+/** `rows` searched (the rows sealed so far, or the view's); `total` matches among them; the run's matches as
+ *  (`matchRows[k]`, `matchColumns[k]`) in row then column order, `first` the matches before the run's first (when it is empty,
+ *  those before `fromRow`). `complete`: those rows were all the result's; `approximate`: a truncated value was searched by
+ *  its stored prefix. */
+export interface ResultsSearchResult { rows: number; total: number; first: number; matchRows: number[]; matchColumns: number[]; complete: boolean; approximate: boolean }
+/** results.profile: up to `limits.profile.maxColumns` distinct columns of a result, through its view when `viewId` is
+ *  given; no columns answers only the rows' byte sizes. */
+export interface ResultsProfileParams { resultId: number; columns: number[]; viewId?: number }
+/** Lowest, highest and average of a length (characters, DATALENGTH or a row's bytes); `exact` is false when an estimate
+ *  took part. */
+export interface ProfileLengths { min: number; max: number; average: number; exact: boolean }
+/** What a histogram buckets: values (numbers), instants (date and time types, in .NET ticks), characters (text) or bytes
+ *  (binary). */
+export type ProfileBasis = 'value' | 'time' | 'chars' | 'bytes'
+/** `limits.profile.bins` equal buckets from `low` to `high`, both included. */
+export interface ProfileHistogram { basis: ProfileBasis; low: number; high: number; counts: number[] }
+/** One column's aggregates: `values` non-NULL cells, `nulls` the rest; `distinct` by the column's collation, an estimate
+ *  when `distinctExact` is false; `min` and `max` as display text (binary as 0x hex, at most `limits.profile.valueChars`
+ *  characters and "…"; absent without values); `approximate` when a truncated cell's stored prefix took part. `chars` and
+ *  `bytes` only for text and binary columns, `histogram` only for columns with something to bucket. */
+export interface ColumnProfile {
+  column: number; values: number; nulls: number; distinct: number; distinctExact: boolean; min?: string; max?: string; approximate: boolean
+  chars?: ProfileLengths; bytes?: ProfileLengths; histogram?: ProfileHistogram
+}
+/** `rows` profiled (the view's, or the rows sealed when it ran) and whether that was all of them; the rows' byte sizes
+ *  (absent without rows); the columns asked for, in order. */
+export interface ResultsProfileResult { rows: number; complete: boolean; rowBytes?: ProfileLengths; columns: ColumnProfile[] }
 /** `bytes[k]` is row `firstRow + k`'s sum of DATALENGTH over its cells (NULL counts 0; xml and json as their
  *  text, some sql_variant base types estimated: docs/ipc.md, Cell lengths and row sizes); it stops at the rows sealed so
  *  far (`rowsAvailable`), as results.read does. */
@@ -388,6 +419,9 @@ export interface PortMethods {
   'results.findRows': { params: ResultsFindRowsParams; result: ResultsFindRowsResult }
   /** A unified diff of two results of one query, aligned by a key both share or by whole rows, stored as a new result. */
   'results.diff': { params: ResultsDiffParams; result: ResultsDiffResult }
+  'results.search': { params: ResultsSearchParams; result: ResultsSearchResult }
+  /** Aggregates over a result's rows or a view's, for the column profile panel: never rows. */
+  'results.profile': { params: ResultsProfileParams; result: ResultsProfileResult }
   /** A live subscription (docs/ipc.md): its EVENTs are credited, one unacknowledged at a time, and it ends only by CANCEL,
    *  a disconnect, a backend shutdown, a failure or its source ending. */
   'live.subscribe': { params: LiveSubscribeParams; result: LiveEnd }

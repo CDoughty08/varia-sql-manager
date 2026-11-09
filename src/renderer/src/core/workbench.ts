@@ -21,6 +21,7 @@ import { ResultClient } from '../results/ResultClient'
 import { ResultsService } from '../results/ResultsService'
 import { HighlightsService } from '../results/HighlightsService'
 import { CompareService } from '../results/CompareService'
+import { ResultsSearchService } from '../results/search'
 import { MemoryUsageService } from '../results/memory'
 import { documentOwner, documentPage, eitherHidden, LiveService, mainWindowPage } from '../live/LiveService'
 import { QueryPlansService } from '../plans/QueryPlansService'
@@ -131,6 +132,8 @@ export interface Workbench extends Disposable {
   /** Rows highlighted in each query tab's grids, found again by identity after sorts and re-runs. */
   readonly highlights: HighlightsService
   readonly compare: CompareService
+  /** Search in results: each tab's search box, its matches (found in the backend) and column-name matches. */
+  readonly resultsSearch: ResultsSearchService
   /** What the backend holds for results, for the status bar. */
   readonly resultMemory: MemoryUsageService
   readonly indexMemory: MemoryUsageService
@@ -271,6 +274,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     onSortTextChange: listener => settings.subscribe(listener) })
   const highlights = new HighlightsService(results)
   const compare = new CompareService(results)
+  const resultsSearch = new ResultsSearchService({ results })
   const resultMemory = new MemoryUsageService(resultClient, 'results', events)
   const indexMemory = new MemoryUsageService(resultClient, 'index')
   // The backend caps live views per server it reaches; a typed name is the closest this side knows.
@@ -462,6 +466,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     results,
     highlights,
     compare,
+    resultsSearch,
     resultMemory,
     indexMemory,
     live,
@@ -535,6 +540,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       queries.dispose()
       highlights.dispose()
       compare.dispose()
+      resultsSearch.dispose()
       // Before the results: each tab's view releases its Top rows there (the card's are released with it below, or by the results).
       peekTabs.dispose()
       results.dispose()

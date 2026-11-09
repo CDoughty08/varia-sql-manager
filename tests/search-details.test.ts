@@ -5,7 +5,10 @@ import type { ObjectSearchHit } from '../src/shared/explorer/search'
 import type { ScriptingOptions } from '../src/shared/scripting/options'
 import { PeekService } from '../src/renderer/src/explorer/PeekService'
 import { detailsDrag, detailsKey, scriptable, searchDetailsLimits, SearchDetailsService } from '../src/renderer/src/search/SearchDetailsService'
-import { hitKindSpec, hitProperties, matchedLine, scrollKey } from '../src/renderer/src/search/SearchDetails'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { peekSpecs } from '../src/shared/explorer/peek'
+import { hitKindSpec, hitProperties, matchedLine, Properties, scrollKey } from '../src/renderer/src/search/SearchDetails'
 
 const ok = <T>(value: T): ApiResult<T> => ({ ok: true, value })
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -16,6 +19,8 @@ const procedure: ObjectSearchHit = {
   definition: { line: 3, column: 5, preview: '  UPDATE dbo.Orders SET Shipped = 1', range: [9, 10], before: false, after: false, matches: 1, cut: false }
 }
 const trigger: ObjectSearchHit = { object: { kind: 'trigger', database: 'Sales', parent: { kind: 'table', schema: 'dbo', name: 'Orders' }, name: 'trg_Audit' }, folder: 'tableTriggers', label: 'dbo.Orders.trg_Audit' }
+// A rule is a kind Script As writes and Peek does not describe.
+const rule: ObjectSearchHit = { object: { kind: 'rule', database: 'Sales', schema: 'dbo', name: 'rl_Positive' }, folder: 'rules', label: 'dbo.rl_Positive' }
 const column: ObjectSearchHit = { object: { kind: 'column', database: 'Sales', parent: { kind: 'table', schema: 'dbo', name: 'Orders' }, name: 'Id' }, folder: 'columns', label: 'dbo.Orders.Id' }
 
 function setup() {
@@ -86,20 +91,44 @@ describe('Search Objects details pane', () => {
 
   it('scripts any other kind Script As can write, and says when a kind has no definition', async () => {
     const { service, api, pending, settle } = setup()
-    expect(scriptable(trigger)).toBe(true)
+    expect(scriptable(rule)).toBe(true)
     expect(scriptable(column)).toBe(false)
-    service.show('tab', connectionId, trigger)
+    service.show('tab', connectionId, rule)
     expect(service.getSnapshot().documents.tab).not.toHaveProperty('facts')
     settle()
     expect(api.explorerPeek).not.toHaveBeenCalled()
-    expect(api.scriptObjects).toHaveBeenCalledWith(expect.objectContaining({ verb: 'create', targets: [trigger.object] }))
-    pending.script[0]!(ok({ error: { code: 'SCRIPT_FAILED', message: 'The trigger could not be scripted.' } } as never))
+    expect(api.scriptObjects).toHaveBeenCalledWith(expect.objectContaining({ verb: 'create', targets: [rule.object] }))
+    pending.script[0]!(ok({ error: { code: 'SCRIPT_FAILED', message: 'The rule could not be scripted.' } } as never))
     await flush()
-    expect(service.getSnapshot().documents.tab?.definition).toEqual({ status: 'error', message: 'The trigger could not be scripted.' })
+    expect(service.getSnapshot().documents.tab?.definition).toEqual({ status: 'error', message: 'The rule could not be scripted.' })
     service.show('tab', connectionId, column)
     settle()
     expect(service.getSnapshot().documents.tab?.definition).toEqual({ status: 'none' })
     expect(api.scriptObjects).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows only the facts of a hit\'s subtype, and says why a refused group is missing', () => {
+    const render = (hit: ObjectSearchHit, kind: 'type' | 'index', facts: Record<string, string | number | boolean | null>, refused?: string[]) =>
+      renderToStaticMarkup(createElement(Properties, { details: { id: 1, key: 'k', connectionId, hit, kind, facts: { status: 'ready', value: facts }, definition: { status: 'none' }, ...(refused ? { refused } : {}) } }))
+    const alias: ObjectSearchHit = { object: { kind: 'type', database: 'Sales', schema: 'dbo', name: 'Phone' }, folder: 'userDefinedDataTypes', label: 'dbo.Phone', subtype: 'alias' }
+    const markup = render(alias, 'type', { schema: 'dbo', baseType: 'nvarchar(20)', assembly: null, className: null })
+    expect(markup).toContain('nvarchar(20)')
+    expect(markup).not.toContain('Assembly')
+    const index: ObjectSearchHit = { object: { kind: 'index', database: 'Sales', parent: { kind: 'table', schema: 'dbo', name: 'Orders' }, name: 'IX' }, folder: 'indexes', label: 'dbo.Orders.IX', subtype: 'nonclustered' }
+    const usage = peekSpecs.index.groups.find(group => group.id === 'usage')!
+    expect(render(index, 'index', { indexType: 'Nonclustered' }, ['usage'])).toContain(usage.refused)
+    expect(render(index, 'index', { indexType: 'Nonclustered', userSeeks: 3 })).not.toContain(usage.refused)
+  })
+
+  it('reads a trigger\'s facts and text through Peek, as the tree peeks it', async () => {
+    const { service, api, pending, settle } = setup()
+    service.show('tab', connectionId, trigger)
+    settle()
+    expect(api.explorerPeek).toHaveBeenCalledWith(expect.objectContaining({ connectionId, target: trigger.object }))
+    expect(api.scriptObjects).not.toHaveBeenCalled()
+    pending.peek[0]!(ok({ facts: { disabled: false }, definition: 'CREATE TRIGGER trg_Audit ON dbo.Orders AFTER INSERT AS SELECT 1', elapsedMs: 1 }))
+    await flush()
+    expect(service.getSnapshot().documents.tab).toMatchObject({ facts: { status: 'ready', value: { disabled: false } }, definition: { status: 'ready', value: { text: expect.stringContaining('CREATE TRIGGER') } } })
   })
 
   it('reads a table\'s columns when the pane shows them, once per hit', async () => {
@@ -125,7 +154,7 @@ describe('Search Objects details pane', () => {
 
   it('cancels a tab\'s reads on a new hit, a closed tab, a hidden pane or a lost server', async () => {
     const { service, api, settle, close, lose } = setup()
-    service.show('tab', connectionId, trigger)
+    service.show('tab', connectionId, rule)
     settle()
     service.show('tab', connectionId, procedure)
     expect(api.cancelScripting).toHaveBeenCalledWith(['id-1'])

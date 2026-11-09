@@ -8,13 +8,13 @@ matches; a gesture matches when all of its modifiers are held. "Modifier" gestur
 pointing; "Command" gestures run a command that the keyboard also reaches; "Fixed" gestures belong to the platform,
 Chromium, or a library and cannot be remapped. "Choices" are the modifiers the Shortcuts page will offer.
 
-## Gestures (14)
+## Gestures (16)
 
 ### Global
 
 | Gesture | Id | What it does | Kind | Windows | Linux | macOS | Choices or lock | Keyboard |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Zoom | `global.wheelZoom` | Zooms the window. The results grid and Object Explorer leave the wheel to Chromium while Control is held. | Fixed | Ctrl+Wheel anywhere | Ctrl+Wheel anywhere | ⌃ Wheel anywhere | Locked: Chromium zooms the window with Control+wheel and with a trackpad pinch. | Zoom In (`view.zoomIn`), Zoom Out (`view.zoomOut`), Reset Zoom (`view.resetZoom`) |
+| Zoom | `global.wheelZoom` | Zooms the window, except over a document tab shelf where Control+wheel changes its row count. | Fixed | Ctrl+Wheel anywhere | Ctrl+Wheel anywhere | ⌃ Wheel anywhere | Locked: Chromium zooms the window with Control+wheel and with a trackpad pinch. | Zoom In (`view.zoomIn`), Zoom Out (`view.zoomOut`), Reset Zoom (`view.resetZoom`) |
 
 ### Results Grid
 
@@ -30,8 +30,8 @@ Chromium, or a library and cannot be remapped. "Choices" are the modifiers the S
 
 | Gesture | Id | What it does | Kind | Windows | Linux | macOS | Choices or lock | Keyboard |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Peek on Hover | `explorer.peekHover` | Peeks a table, view, procedure or function while the pointer rests on its row. | Modifier | Ctrl+Hover an object | Ctrl+Hover an object | ⌘ Hover an object | Choose: Ctrl / ⌘, Shift / ⇧, Off | Peek (`explorer.peek`) |
-| Open Peek as Tab | `explorer.openPeekTab` | Opens Peek on a table, view, procedure or function in a document tab. | Command | Ctrl+Click an object | Ctrl+Click an object | ⌘ Click an object | Choose: Ctrl / ⌘, Shift / ⇧ | Open Peek as Tab (`explorer.openPeekTab`) |
+| Peek on Hover | `explorer.peekHover` | Peeks the object (a table, procedure, index, login and so on) while the pointer rests on its row. | Modifier | Ctrl+Hover an object | Ctrl+Hover an object | ⌘ Hover an object | Choose: Ctrl / ⌘, Shift / ⇧, Off | Peek (`explorer.peek`) |
+| Open Peek as Tab | `explorer.openPeekTab` | Opens Peek on the object (a table, procedure, index, login and so on) in a document tab. | Command | Ctrl+Click an object | Ctrl+Click an object | ⌘ Click an object | Choose: Ctrl / ⌘, Shift / ⇧ | Open Peek as Tab (`explorer.openPeekTab`) |
 | Insert Name | `explorer.dragName` | Dropping an object in a query inserts its quoted name. | Fixed | Drag an object | Drag an object | Drag an object | Locked: Dragging is the only way to drop text; Copy Name does the same from the keyboard. | Copy Name (`explorer.copyName`) |
 
 ### Panels and Editor Tabs
@@ -52,4 +52,11 @@ Chromium, or a library and cannot be remapped. "Choices" are the modifiers the S
 
 | Gesture | Id | What it does | Kind | Windows | Linux | macOS | Choices or lock | Keyboard |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Change Tab Rows | `documentTabs.rows` | Scrolling down adds rows to the pinned or unpinned shelf under the pointer, and scrolling up removes rows from that shelf alone. | Fixed | Ctrl+Wheel a tab shelf | Ctrl+Wheel a tab shelf | ⌃ Wheel a tab shelf | Locked: Control+wheel changes shelf rows, and the row buttons provide the same action from the keyboard. | — |
 | Rename Tab | `documentTabs.rename` | Opens the rename box on a query tab. | Command | Double-click a query tab | Double-click a query tab | Double-click a query tab | Locked: Only modifier gestures can be remapped in this version; F2 renames a focused tab. | Rename Tab… (`document.rename`) |
+
+### Connect Dialog
+
+| Gesture | Id | What it does | Kind | Windows | Linux | macOS | Choices or lock | Keyboard |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Connect to Saved Connection | `connections.connect` | Connects to the saved connection in the Connect dialog. | Fixed | Double-click a saved connection | Double-click a saved connection | Double-click a saved connection | Locked: Double-clicking submits the Connect dialog; the Connect button also works from the keyboard. | — |

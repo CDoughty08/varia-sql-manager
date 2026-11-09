@@ -7,7 +7,7 @@ import {
   parentKinds, queryIds, schemaGroupList, scopeFields, textFilterOps, type FilterProperty, type KindSpec, type NodeKind, type RefField
 } from './catalog.ts'
 import type { ExplorerCancelParams, ExplorerChildrenParams, ExplorerFilter, ExplorerNodeRef, ObjectRef } from './refs.ts'
-import { isPeekKind, type PeekParams } from './peek.ts'
+import { isPeekKind, peekHas, type PeekParams } from './peek.ts'
 
 // zod's max() counts code points, while sysname holds 128 UTF-16 code units.
 const utf16 = (max: number) => z.string().min(1).refine(value => value.length <= max, `At most ${max} UTF-16 code units.`)
@@ -94,6 +94,9 @@ export const explorerCancelParamsSchema = z.object({
   requestIds: z.array(z.uuid()).min(1).max(explorerLimits.cancelBatch).refine(ids => new Set(ids).size === ids.length, 'Duplicate request id.')
 }).strict() satisfies z.ZodType<ExplorerCancelParams>
 
-/** Peek reads tables, views, procedures and functions (peekKinds), for its properties and its Dependencies tab alike. */
+/** Peek reads the kinds the catalogue describes (peekKinds). */
 export const peekParamsSchema = z.object({ connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema }).strict()
-  .refine(params => isPeekKind(params.target.kind), { path: ['target', 'kind'], message: 'Peek describes tables, views, procedures and functions.' }) satisfies z.ZodType<PeekParams>
+  .refine(params => isPeekKind(params.target.kind), { path: ['target', 'kind'], message: 'Peek does not describe this kind of object.' }) satisfies z.ZodType<PeekParams>
+/** Peek's Dependencies tab, for the kinds whose card has it (peekSpecs' `tabs`). */
+export const peekDependenciesParamsSchema = z.object({ connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema }).strict()
+  .refine(params => isPeekKind(params.target.kind) && peekHas(params.target.kind, 'dependencies'), { path: ['target', 'kind'], message: 'Peek lists no dependencies of this kind of object.' }) satisfies z.ZodType<PeekParams>

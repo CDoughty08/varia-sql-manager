@@ -2,7 +2,7 @@
 // requests are validated with portRequestSchema; backend payloads main forwards are validated with the schemas below.
 import { z } from 'zod'
 import { clientStatisticsSchema } from '../client-statistics'
-import type { BackendStatus, MemoryOrder, QueryEvent, ResultsCloseResult, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsReadResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsViewCloseResult, ResultsViewResult } from '../contracts'
+import type { BackendStatus, MemoryOrder, QueryEvent, ResultsCloseResult, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsProfileResult, ResultsReadResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult } from '../contracts'
 import { maxQueryPlanDocuments } from '../plans'
 import { liveSubscribeParamsSchema, liveUpdateParamsSchema, testLiveSubscribeParamsSchema, testLiveUpdateParamsSchema, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../live/schema'
 import { backendDescriptorSchema } from './descriptors'
@@ -36,6 +36,13 @@ export const buildPortRequestSchema = (live: { subscribe: z.ZodType<LiveSubscrib
   // A unified diff of two results of one query (results.diff), stored as a new result the port then owns.
   z.object({ t: z.literal('diff'), rid: u31, generation, resultId: u32, right: u32, exact: z.boolean(), context: z.number().int().min(-1).max(limits.diff.maxContext) }).strict()
     .refine(request => request.resultId !== request.right, 'A result is not compared with itself.'),
+  // Search (results.search): the cells containing a text, through a view when one is named; `cancel` stops it.
+  z.object({
+    t: z.literal('search'), rid: u31, generation, resultId: u32, text: z.string().min(1).max(limits.search.maxText), fromRow: count,
+    maxMatches: z.number().int().min(1).max(limits.search.maxMatches), backward: z.boolean().optional(), viewId: u32.optional()
+  }).strict(),
+  // Column profiles (results.profile): aggregates over a result's rows or a view's; `cancel` stops one.
+  z.object({ t: z.literal('profile'), rid: u31, generation, resultId: u32, columns: z.array(z.number().int().min(0).max(limits.page.maxColumns - 1)).max(limits.profile.maxColumns).refine(columns => new Set(columns).size === columns.length, 'Columns must be distinct.'), viewId: u32.optional() }).strict(),
   // Live subscriptions (docs/ipc.md): a stream acknowledged with `credit`, ended with `cancel`, changed with liveUpdate.
   z.object({ t: z.literal('live'), rid: u31, generation, params: live.subscribe }).strict(),
   z.object({ t: z.literal('liveUpdate'), rid: u31, generation, params: live.update }).strict()
@@ -75,7 +82,25 @@ export const diffResultSchema = z.object({
   descriptor: backendDescriptorSchema.extend({ kind: z.literal('diff') }), key: z.string().max(512).nullable(), same: count, changed: count, added: count, removed: count, soft: count,
   approximate: z.boolean(), leftOnly: columnNames, rightOnly: columnNames
 }).strict()
-export type PortEndResult = ResultsDiffResult | ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | ResultsViewResult | ResultsViewCloseResult | ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | LiveEnd | LiveUpdateResult
+/** A results.search answer as the backend sends it: a run of at most maxMatches plus one row's columns. Main also checks
+ *  its matches are in order and inside the rows searched before forwarding it. */
+const maxRun = limits.search.maxMatches + limits.page.maxColumns
+export const searchResultSchema = z.object({
+  rows: count, total: count, first: count, matchRows: z.array(count).max(maxRun), matchColumns: z.array(z.number().int().min(0).max(limits.page.maxColumns - 1)).max(maxRun),
+  complete: z.boolean(), approximate: z.boolean()
+}).strict()
+const lengths = z.object({ min: count, max: count, average: z.number().min(0).max(Number.MAX_SAFE_INTEGER), exact: z.boolean() }).strict()
+const profileValue = z.string().max(limits.profile.valueChars + 1).optional()
+/** A results.profile answer as the backend sends it; main also checks it answers the columns asked, in order. */
+export const profileResultSchema = z.object({
+  rows: count, complete: z.boolean(), rowBytes: lengths.optional(),
+  columns: z.array(z.object({
+    column: z.number().int().min(0).max(limits.page.maxColumns - 1), values: count, nulls: count, distinct: count, distinctExact: z.boolean(), min: profileValue, max: profileValue,
+    approximate: z.boolean(), chars: lengths.optional(), bytes: lengths.optional(),
+    histogram: z.object({ basis: z.enum(['value', 'time', 'chars', 'bytes']), low: z.number(), high: z.number(), counts: z.array(count).length(limits.profile.bins) }).strict().optional()
+  }).strict()).max(limits.profile.maxColumns)
+}).strict()
+export type PortEndResult = ResultsDiffResult | ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | ResultsViewResult | ResultsViewCloseResult | ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsSearchResult | ResultsProfileResult | LiveEnd | LiveUpdateResult
 
 const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'server', 'print', 'error']) }).strict()
 const session = { spid: z.number().int().min(0).max(32767), login: z.string().max(128).optional() }

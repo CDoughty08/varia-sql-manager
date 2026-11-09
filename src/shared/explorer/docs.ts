@@ -4,7 +4,7 @@ import {
   schemaGroupRoots, schemaPlacement, scopeFields, statusBadges, statusChipKinds, subfolders, type FolderId, type InsertStyle, type KindSpec, type LaterFolder, type NodeKind, type NodeSubtype
 } from './catalog.ts'
 import { loginChipDocs, statusChipDocs } from './status.ts'
-import { peekKinds, peekLimits, peekSpecs } from './peek.ts'
+import { peekKinds, peekLimits, peekLists, peekListsOf, peekSpecs, peekTabsOf, peekTabTitle } from './peek.ts'
 import { loginDetailWords, loginTypeSubtypes, type LoginType } from '../actions/logins.ts'
 import { glyphSizes } from '../theme/metrics.ts'
 
@@ -233,9 +233,21 @@ export function renderExplorerDocs(): string {
     'Peek (the context menu\'s Peek, Space on the selected row, or resting the pointer on a row with Ctrl held, Cmd on macOS)',
     'opens a card beside the row with the object\'s definition and its properties. One `explorer.peek` request reads the',
     'properties (and a module\'s text) on the Object Explorer pool, in one constant batch per kind (`Explorer/PeekSql.cs`)',
-    `within ${peekLimits.budgetMs.toLocaleString('en-US')} ms; a table's definition comes from Script As (CREATE). A fact whose`,
+    `within ${peekLimits.budgetMs.toLocaleString('en-US')} ms; the definition of a kind without stored text comes from Script As (CREATE). A fact whose`,
     'catalog column is newer than the server is left out. Esc, a click elsewhere or another peek closes the card, and',
-    'cancels a read still running.',
+    'cancels a read still running. Each kind declares its tabs in the catalogue (`peekSpecs`), and the card shows exactly those.',
+    '',
+    'Database-scoped kinds are read in their database, as the tree reads them; a database, a login and a server trigger on the',
+    'server (sys.databases and sys.master_files, so an offline or restoring database still peeks). An index or a trigger is found',
+    'below its table or view. Some kinds have lists, read in the same batch as their facts and shown on tabs of their own, at most',
+    `${peekLimits.listRows.toLocaleString('en-US')} rows each: an index's key and included columns, a trigger's events, a database's files, a login's server roles,`,
+    `and its user mapping, read after the batch in each database the login may enter (at most ${peekLimits.mappingDatabases}, in name order), through`,
+    '`QUOTENAME` as every database statement is, on the same connection; a database it cannot read is counted, not shown. Nothing',
+    'reads LOGINPROPERTY or a password hash. An index\'s usage comes from `sys.dm_db_index_usage_stats` in a statement of its own,',
+    'last in the batch, inside TRY…CATCH: a login without VIEW SERVER STATE gets the other facts and the card says why usage is missing.',
+    '',
+    table(['List', 'Kinds', 'Columns'], (Object.keys(peekLists) as (keyof typeof peekLists)[]).map(id => [peekLists[id].title,
+      codes(peekKinds.filter(kind => peekListsOf(kind).includes(id))), peekLists[id].columns.map(column => column.label).join(', ')])),
     '',
     'Beside Definition, the card has tabs. **Columns** (tables and views) or **Parameters** (procedures and functions) lists the',
     `object's folder with \`explorer.children\`, as the tree does, up to ${peekLimits.members.toLocaleString('en-US')} rows. **Dependencies**`,
@@ -258,8 +270,13 @@ export function renderExplorerDocs(): string {
     'same parts in a document tab with more room, with Refresh, Script As… and, for a kind that has one, the Properties dialog. A',
     'tab owns its reads and its Top rows run as the card does; closing it releases them.',
     '',
-    table(['Kind', 'Definition', 'Group', 'Facts'], peekKinds.flatMap(kind => peekSpecs[kind].groups.map(group => [code(kind), peekSpecs[kind].definition === 'module' ? 'sys.sql_modules' : 'Script As',
-      group.title, group.facts.map(item => item.label + (item.since ? ` (band ${item.since}+)` : '')).join(', ')]))),
+    table(['Kind', 'Definition', 'Tabs'], peekKinds.map(kind => [code(kind),
+      peekSpecs[kind].definition === 'script' ? 'Script As' : kind === 'serverTrigger' ? 'sys.server_sql_modules' : 'sys.sql_modules',
+      peekTabsOf(kind).map(tab => peekTabTitle(kind, tab)).join(', ')])),
+    '',
+    table(['Kind', 'Group', 'Facts'], peekKinds.flatMap(kind => peekSpecs[kind].groups.map(group => [code(kind),
+      group.title + (group.subtypes ? ` (${group.subtypes.join(', ')})` : '') + (group.refused ? ' (may be refused)' : ''),
+      group.facts.map(item => item.label + (item.since ? ` (band ${item.since}+)` : '')).join(', ')]))),
     '',
     '## Limits',
     '',

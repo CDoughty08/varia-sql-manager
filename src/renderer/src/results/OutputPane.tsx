@@ -1,4 +1,4 @@
-import { memo, useEffect, useId, useLayoutEffect, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
+import { memo, useEffect, useId, useLayoutEffect, useState, type CSSProperties, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { outputPaneIds, type OutputPaneId } from '../../../shared/layouts'
 import PaneMenuButton from '../PaneMenuButton'
 import Icon from '../Icon'
@@ -13,6 +13,7 @@ import RetainedPlans from '../plans/RetainedPlans'
 import type { EstimatedPlanState } from '../services/queries'
 import ClientStatisticsPane from '../statistics/ClientStatisticsPane'
 import EmptyState from '../kit/EmptyState'
+import ColumnProfilePanel from './ColumnProfilePanel'
 import MessagesView from './MessagesView'
 import ResultsToolbar from './ResultsToolbar'
 import type { OutputViewName, ResultJob, ResultSetEntry, TabResults } from './ResultsService'
@@ -138,7 +139,10 @@ const viewNames: Record<OutputPaneId, string> = { results: 'Results', messages: 
  * also holds the run summary and the copy and save strips, so they show once, wherever the panels are.
  */
 function OutputPane({ pane, tabId, query, connected, hint }: Props) {
-  const { results, panes, queries, queryPlans, retainedPlans } = useWorkbench()
+  const { results, panes, queries, queryPlans, retainedPlans, settings } = useWorkbench()
+  const profileOpen = useServiceSnapshot(settings).values['queryResults.grid.columnProfile']
+  // The set the profile describes: the grid that last had focus in this tab.
+  const [profiled, setProfiled] = useState<{ tabId: string; index: number } | undefined>(undefined)
   const history = useServiceSnapshot(retainedPlans)
   const [historyOpen, setHistoryOpen] = useState(false)
   const livePlan = useServiceSnapshot(queryPlans)[tabId]
@@ -215,7 +219,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
         {/* The badges are drawn; the names say what they mean ("!" alone is not spoken). */}
         {views.map(view => <button key={view} {...tabProps(view)} aria-label={labels[view]}>{viewNames[view]}{badges[view]}</button>)}
       </div>
-      {showTools && <ResultsToolbar />}
+      {showTools && <ResultsToolbar tabId={tabId} />}
       {pane === 'plan' && <button type="button" aria-pressed={historyOpen} onClick={() => setHistoryOpen(value => !value)}>Plan history ({history.entries.length})</button>}
       {pane === 'plan' && estimated ? <span className="output-status">Estimated{estimated.loading ? ' · Compiling…' : estimated.error ? ' · Unavailable' : ''}</span>
         : leader && tab ? <RunSummaryView tab={tab} now={now} /> : <span className="output-spacer" />}
@@ -231,9 +235,16 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
       : !tab ? <EmptyState className="output-empty" icon={emptyIcons[pane]} title={emptyTitles[pane]} detail={!query ? 'Query results appear here for query tabs.' : hint ?? (connected ? 'Execute a query to view results and messages.' : 'Connect this query to a server to execute it.')} />
       : <div ref={viewRef} className="output-view" role="tabpanel" id={panelId} aria-labelledby={tabIds[pane]}>
         {pane === 'results' ? <>
-          {tab.status === 'closed' ? <EmptyState className="output-empty" detail="Results were closed to free memory. Execute the query again to see them." />
-            : hasSets ? <ResultsStack key={tab.queryId} tabId={tabId} tab={tab} />
-            : <EmptyState className="output-empty" icon="table" detail={tab.status === 'running' ? 'Result sets appear here as the query returns them.' : 'The query returned no result sets.'} />}
+          <div className="results-main" onFocus={(event: FocusEvent<HTMLDivElement>) => {
+            const grid = (event.target as Element).closest('[data-result-grid]')
+            if (grid) setProfiled({ tabId, index: Number(grid.getAttribute('data-result-index')) })
+          }}>
+            {tab.status === 'closed' ? <EmptyState className="output-empty" detail="Results were closed to free memory. Execute the query again to see them." />
+              : hasSets ? <ResultsStack key={tab.queryId} tabId={tabId} tab={tab} />
+              : <EmptyState className="output-empty" icon="table" detail={tab.status === 'running' ? 'Result sets appear here as the query returns them.' : 'The query returned no result sets.'} />}
+            {profileOpen && hasSets && tab.status !== 'closed' && <ColumnProfilePanel key={tab.queryId} tabId={tabId} tab={tab}
+              index={profiled?.tabId === tabId ? profiled.index : results.viewState(tabId).focusedIndex} />}
+          </div>
           {showStrip && <MessagesStrip tabId={tabId} tab={tab} fits={stripFits} maxHeight={stripMax} />}
         </> : pane === 'plan' ? plans.length > 0 || livePlan ? visible.plan && <ResultPlans tabId={tabId} queryId={tab.queryId} plans={plans} visible={visible.plan} order={tab.summary?.planOrder} live={livePlan} />
           : <EmptyState className="output-empty" icon="execution-plan" detail="A plan appears here when the query returns one, as SET SHOWPLAN_XML ON and SET STATISTICS XML ON do." />

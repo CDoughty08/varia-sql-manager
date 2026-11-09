@@ -2,7 +2,7 @@
 // from main through the results port, validates and caches them (decodePage), and answers the UI's windows and cells
 // with display text decoded only for the cells asked for. It also relays live subscriptions between the page and main
 // without decoding anything, and grants each live event's bytes back only once the page says it applied the event.
-import type { BackendStatus, ResultsCloseResult, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsViewCloseResult, ResultsViewResult, WireKind } from '../../../shared/contracts'
+import type { BackendStatus, ResultsCloseResult, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsProfileResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult, WireKind } from '../../../shared/contracts'
 import type { PortEndResult, PortMessage, PortRequest } from '../../../shared/ipc/port-messages'
 import { decodePage, pageMemoryBytes, PageFormatError, type PageView } from '../../../shared/ipc/wire/pages'
 import { CELL_ERROR, CELL_NULL, cellFlags, cellSlice, cellText, displayText, runSlice, textRun, type TextRun } from '../../../shared/ipc/wire/cells'
@@ -103,6 +103,10 @@ export class ResultsWorkerCore {
   private readonly sizes = new Map<number, number>()
   /** results.view requests in flight: the page's id, the result and the view it replaces, by rid. */
   private readonly sorts = new Map<number, { readonly id: number; readonly key: ResultKey; readonly replaces?: number; cancelled?: boolean }>()
+  /** results.search requests in flight: the page's id by rid. */
+  private readonly searches = new Map<number, number>()
+  /** results.profile requests in flight: the page's id by rid. */
+  private readonly profiles = new Map<number, number>()
   /** results.viewClose requests in flight: the page's id by rid. */
   private readonly viewCloses = new Map<number, number>()
   /** Row-identity requests in flight: the page's id by rid. */
@@ -139,7 +143,7 @@ export class ResultsWorkerCore {
     if (this.port && this.port !== port) {
       this.endLives(() => true, 'PORT_CLOSED', portClosed)
       // Main drops answers meant for the old port, so row sizes asked on it would never settle.
-      for (const requests of [this.sizes, this.viewCloses, this.identities]) for (const [rid, id] of [...requests]) {
+      for (const requests of [this.sizes, this.viewCloses, this.profiles, this.searches, this.identities]) for (const [rid, id] of [...requests]) {
         requests.delete(rid)
         this.error(id, 'PORT_CLOSED', portClosed)
       }
@@ -165,6 +169,8 @@ export class ResultsWorkerCore {
       case 'view': return this.view(request)
       case 'viewClose': return this.viewClose(request)
       case 'identity': return this.identity(request)
+      case 'search': return this.search(request)
+      case 'profile': return this.profile(request)
       case 'measure': return this.measure(request)
       case 'stats': this.post({ type: 'stats', id: request.id, bytes: this.cacheBytes, pages: this.cache.size, ...this.cacheShape() }); return
       case 'live': return this.live(request)
@@ -195,7 +201,7 @@ export class ResultsWorkerCore {
   /** The next port rid, skipping those still in use (a live stream may outlive 2^31 reads). */
   private allocate(): number {
     let rid = this.nextRid
-    while (this.reads.has(rid) || this.closes.has(rid) || this.sizes.has(rid) || this.sorts.has(rid) || this.viewCloses.has(rid) || this.identities.has(rid) || this.orphanCloses.has(rid) || this.lives.has(rid) || this.updates.has(rid)) rid = rid >= 2 ** 31 - 1 ? 1 : rid + 1
+    while (this.reads.has(rid) || this.closes.has(rid) || this.sizes.has(rid) || this.profiles.has(rid) || this.searches.has(rid) || this.sorts.has(rid) || this.viewCloses.has(rid) || this.identities.has(rid) || this.orphanCloses.has(rid) || this.lives.has(rid) || this.updates.has(rid)) rid = rid >= 2 ** 31 - 1 ? 1 : rid + 1
     this.nextRid = rid >= 2 ** 31 - 1 ? 1 : rid + 1
     return rid
   }
@@ -324,6 +330,14 @@ export class ResultsWorkerCore {
 
   /** The UI no longer needs a request; reads nobody else waits for are cancelled. */
   private cancel(id: number): void {
+    for (const [rid, search] of this.searches) {
+      // Main answers the cancelled search (CANCELLED), which settles the page's request.
+      if (search === id) return this.send({ t: 'cancel', rid })
+    }
+    for (const [rid, profile] of this.profiles) {
+      // Main answers the cancelled profile (CANCELLED), which settles the page's request.
+      if (profile === id) return this.send({ t: 'cancel', rid })
+    }
     for (const [rid, identity] of this.identities) {
       // Main stops an identify and answers CANCELLED; it lets a range or a search finish, whose answer then settles nothing.
       if (identity === id) return this.send({ t: 'cancel', rid })
@@ -384,6 +398,25 @@ export class ResultsWorkerCore {
     const key: ResultKey = { generation: request.key.generation, resultId: request.key.resultId }
     this.sorts.set(rid, request.replaces === undefined ? { id: request.id, key } : { id: request.id, key, replaces: request.replaces })
     this.send({ t: 'view', rid, generation: key.generation, resultId: key.resultId, sort: request.sort.map(item => ({ column: item.column, descending: item.descending, mode: item.mode })), ...(request.replaces === undefined ? {} : { replaces: request.replaces }) })
+  }
+
+  private search(request: Extract<WorkerRequest, { type: 'search' }>): void {
+    if (!this.port) return this.error(request.id, 'PORT_CLOSED', portClosed)
+    if (this.stale(request.key)) return this.error(request.id, 'RESULT_UNAVAILABLE', resultUnavailable)
+    const rid = this.allocate()
+    const { key } = request
+    this.searches.set(rid, request.id)
+    this.send({ t: 'search', rid, generation: key.generation, resultId: key.resultId, text: request.text, fromRow: request.fromRow, maxMatches: request.maxMatches,
+      ...(request.backward ? { backward: true } : {}), ...(key.view === undefined ? {} : { viewId: key.view }) })
+  }
+
+  private profile(request: Extract<WorkerRequest, { type: 'profile' }>): void {
+    if (!this.port) return this.error(request.id, 'PORT_CLOSED', portClosed)
+    if (this.stale(request.key)) return this.error(request.id, 'RESULT_UNAVAILABLE', resultUnavailable)
+    const rid = this.allocate()
+    this.profiles.set(rid, request.id)
+    const { generation, resultId, view } = request.key
+    this.send({ t: 'profile', rid, generation, resultId, columns: [...request.columns], ...(view === undefined ? {} : { viewId: view }) })
   }
 
   private identity(request: Extract<WorkerRequest, { type: 'identity' }>): void {
@@ -577,6 +610,18 @@ export class ResultsWorkerCore {
       this.post({ type: 'view', id: sort.id, viewId: view.viewId, rows: view.rows, complete: view.complete, approximate: view.approximate })
       return
     }
+    const search = this.searches.get(rid)
+    if (search !== undefined) {
+      this.searches.delete(rid)
+      this.post({ type: 'search', id: search, result: result as ResultsSearchResult })
+      return
+    }
+    const profile = this.profiles.get(rid)
+    if (profile !== undefined) {
+      this.profiles.delete(rid)
+      this.post({ type: 'profile', id: profile, result: result as ResultsProfileResult })
+      return
+    }
     const viewClose = this.viewCloses.get(rid)
     if (viewClose !== undefined) {
       this.viewCloses.delete(rid)
@@ -629,6 +674,16 @@ export class ResultsWorkerCore {
     if (sort) {
       this.sorts.delete(rid)
       return this.error(sort.id, code, message)
+    }
+    const search = this.searches.get(rid)
+    if (search !== undefined) {
+      this.searches.delete(rid)
+      return this.error(search, code, message)
+    }
+    const profile = this.profiles.get(rid)
+    if (profile !== undefined) {
+      this.profiles.delete(rid)
+      return this.error(profile, code, message)
     }
     const viewClose = this.viewCloses.get(rid)
     if (viewClose !== undefined) {
