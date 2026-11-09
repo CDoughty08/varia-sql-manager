@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { gridLimits } from '../src/renderer/src/grid/constants'
 import { stylesheetRules } from './fixtures/css-rules'
-import { contentHeight, dragSplitter, minGridHeight, mountedRange, setFloors, splitterMoves, stackLayout, stackMinimum } from '../src/renderer/src/grid/stack'
+import { contentHeight, dragSplitter, minGridHeight, mountedRange, revealScrollTop, setFloors, splitterMoves, stackLayout, stackMinimum } from '../src/renderer/src/grid/stack'
 
 const min = minGridHeight(15)
 const sum = (values: readonly number[]) => values.reduce((total, value) => total + value, 0)
@@ -219,5 +219,18 @@ describe('stacked result sets', () => {
     expect(focused[0]).toBeDefined()
     expect(focused).not.toEqual(selected)
     expect(focused[0]).not.toBe(selected[0])
+  })
+
+  // #349: a stack mounted with a pending reveal has no height for its first layout; a scroll made then is undone by the
+  // saved position restored once the pane has its height, so the reveal waits for it.
+  it('scrolls a revealed grid into view, as little as it takes, only once the stack has a height', () => {
+    const layout = stackLayout(300, 4, undefined, min)
+    expect(revealScrollTop(stackLayout(0, 4, undefined, min), 3, 0, 0)).toBeUndefined()
+    expect(revealScrollTop(layout, 3, 0, 0)).toBeUndefined()
+    const below = revealScrollTop(layout, 3, 0, 300)!
+    expect(below).toBe(Math.max(layout.offsets[3], layout.offsets[3] + layout.heights[3] - 300))
+    expect(revealScrollTop(layout, 0, below, 300)).toBe(0)
+    expect(revealScrollTop(layout, 3, below, 300)).toBeUndefined()
+    expect(revealScrollTop(layout, 9, 0, 300)).toBeUndefined()
   })
 })

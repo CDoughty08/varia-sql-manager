@@ -7,9 +7,11 @@ import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable } from '../core/types'
+import { toneColumnOf } from '../grid/GridView'
 import { cellKey, type GridMarks } from '../grid/marks'
-import type { ResultHandle } from './ResultClient'
+import { ResultError, type ResultHandle } from './ResultClient'
 import { setKey, type ResultsService, type TabResults } from './ResultsService'
+import { formatCount } from './status'
 
 export type { GridMarks }
 
@@ -19,7 +21,9 @@ export type SearchMode = 'values' | 'columns'
  * One tab's search. `total` counts the matches (values) or matching columns (columns) over every grid, `current` is the
  * active one's place among them (-1 for none). `partial`: a grid was still loading, so more rows may match; `approximate`:
  * a truncated value was searched by its stored prefix. `reveal` changes when the active match should scroll into view
- * (`revealIndex` is its grid); `focus` when the search box should take the focus.
+ * (`revealIndex` is its grid; `revealSelect`: the grid also makes it its active cell, for a step taken from a grid);
+ * `focus` when the search box should take the focus. `announcement` is what the box's live region says: the count once it
+ * has settled for announceDelayMs, so typing and grids arriving one by one do not read out every count in between.
  */
 export interface TabSearch {
   readonly text: string
@@ -35,7 +39,9 @@ export interface TabSearch {
   readonly marks: ReadonlyMap<number, GridMarks>
   readonly reveal: number
   readonly revealIndex: number
+  readonly revealSelect: boolean
   readonly focus: number
+  readonly announcement: string
 }
 
 /** A grid's search: what it searched (`handle`, `signature`), how many matched, and the run of matches held. */
@@ -71,20 +77,29 @@ interface TabState {
   timer?: unknown
   reveal: number
   revealIndex: number
+  revealSelect: boolean
   /** The reveal a grid has carried out. */
   revealed?: number
+  /** The signature a released run read searched again at, so a read that fails again says so instead of looping. */
+  retried?: string
+  announcement: string
+  announceTimer?: unknown
+  announcePending?: string
   focus: number
   /** A focus asked for that no search box has taken yet. */
   focusPending?: boolean
   published?: TabSearch
 }
 
-const idle: TabSearch = { text: '', mode: 'values', status: 'idle', total: 0, current: -1, columns: 0, partial: false, approximate: false, marks: new Map(), reveal: 0, revealIndex: -1, focus: 0 }
+const idle: TabSearch = { text: '', mode: 'values', status: 'idle', total: 0, current: -1, columns: 0, partial: false, approximate: false, marks: new Map(), reveal: 0, revealIndex: -1, revealSelect: false, focus: 0, announcement: '' }
 const isAbort = (error: unknown) => error instanceof DOMException && error.name === 'AbortError'
 /** Column names match ignoring case and accents, as identifiers do under the usual _CI_AI collations. */
 const fold = (text: string) => text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
 /** Typing searches once it pauses this long; Enter searches at once. */
 export const searchDelayMs = 200
+/** The live region speaks a count only once it has stayed the same this long. */
+export const announceDelayMs = 500
+const searchFailed = 'The results could not be searched.'
 
 export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, TabSearch>>> implements Disposable {
   private readonly results: Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'sortOf'>
@@ -121,15 +136,18 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
     this.restart(tabId, tab, 0)
   }
 
-  /** Next (1) or previous (-1) match, wrapping; a search still waiting for typing to pause runs first. */
-  step(tabId: string, delta: 1 | -1): void {
+  /** Next (1) or previous (-1) match, wrapping; a search still waiting for typing to pause runs first. `select`: the step
+   *  came from a grid (F3 there), so the match also becomes the active cell, which the grid announces and Copy copies. */
+  step(tabId: string, delta: 1 | -1, select = false): void {
     const tab = this.tabs.get(tabId)
     if (!tab || !tab.text) return
     if (tab.timer !== undefined) return this.restart(tabId, tab, 0)
     const total = this.total(tab)
     if (total === 0) return
     tab.current = tab.current < 0 ? (delta > 0 ? 0 : total - 1) : (tab.current + delta + total) % total
-    this.reveal(tab)
+    this.reveal(tab, select)
+    // A failed run read said so; this step reads again if it needs to, and says so again if that fails.
+    if (tab.status === 'failed') { tab.status = 'done'; tab.error = undefined }
     this.publishTab(tabId, tab)
     if (tab.mode === 'values') void this.ensureRun(tabId, tab)
   }
@@ -165,7 +183,7 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
     if (this.disposed) return
     this.disposed = true
     this.unsubscribe()
-    for (const tab of this.tabs.values()) this.stop(tab)
+    for (const tab of this.tabs.values()) { this.stop(tab); this.stopAnnouncing(tab) }
     this.tabs.clear()
     this.clearListeners()
   }
@@ -173,7 +191,7 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
   private state(tabId: string): TabState {
     let tab = this.tabs.get(tabId)
     if (!tab) {
-      tab = { text: '', mode: 'values', status: 'idle', current: -1, grids: [], names: new Map(), columnCount: 0, signature: '', reveal: 0, revealIndex: -1, focus: 0 }
+      tab = { text: '', mode: 'values', status: 'idle', current: -1, grids: [], names: new Map(), columnCount: 0, signature: '', reveal: 0, revealIndex: -1, revealSelect: false, focus: 0, announcement: '' }
       this.tabs.set(tabId, tab)
     }
     return tab
@@ -185,6 +203,9 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
     tab.fetch?.abort()
     tab.fetch = undefined
     if (tab.timer !== undefined) { this.timers.clearTimeout(tab.timer); tab.timer = undefined }
+  }
+  private stopAnnouncing(tab: TabState): void {
+    if (tab.announceTimer !== undefined) { this.timers.clearTimeout(tab.announceTimer); tab.announceTimer = undefined }
   }
 
   private restart(tabId: string, tab: TabState, delay: number): void {
@@ -220,7 +241,7 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
     const all = this.results.getSnapshot()
     for (const [tabId, tab] of this.tabs) {
       const results = all[tabId]
-      if (!results) { this.stop(tab); this.tabs.delete(tabId); this.publishAll(); continue }
+      if (!results) { this.stop(tab); this.stopAnnouncing(tab); this.tabs.delete(tabId); this.publishAll(); continue }
       if (!tab.text || tab.timer !== undefined) continue
       if (this.signatureOf(tabId, results) !== tab.signature) {
         this.stop(tab)
@@ -240,10 +261,11 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
       tab.names = new Map()
       tab.columnCount = 0
       for (const set of results?.sets ?? []) {
-        const hits: number[] = []
-        set.descriptor.columns.forEach((column, index) => { if (fold(column.name).includes(query)) hits.push(index) })
+        // A live table's or diff's tone column is hidden: never matched, nor counted among the columns.
+        const hits: number[] = [], tone = toneColumnOf(set.descriptor)
+        set.descriptor.columns.forEach((column, index) => { if (index !== tone && fold(column.name).includes(query)) hits.push(index) })
         tab.names.set(set.index, hits)
-        tab.columnCount += set.descriptor.columns.length
+        tab.columnCount += set.descriptor.columns.length - (tone >= 0 ? 1 : 0)
       }
       tab.status = 'done'
       const total = this.total(tab)
@@ -271,7 +293,7 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
         } catch (error) {
           if (abort.signal.aborted || isAbort(error)) return
           // A released or lost result has nothing to find; any other failure is said once the others are searched.
-          failure ??= error instanceof Error ? error.message : 'The results could not be searched.'
+          failure ??= error instanceof Error ? error.message : searchFailed
           continue
         }
         if (!fresh) continue
@@ -344,17 +366,28 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
       if (abort.signal.aborted) return
       tab.fetch = undefined
       Object.assign(grid, { first: found.first, rows: found.matchRows, columns: found.matchColumns })
+      if (tab.status === 'failed') { tab.status = 'done'; tab.error = undefined }
       this.publishTab(tabId, tab)
     } catch (error) {
       if (abort.signal.aborted || isAbort(error)) return
       tab.fetch = undefined
-      tab.error = error instanceof Error ? error.message : 'The results could not be searched.'
+      // The rows searched went (a sorted view closed once its grid swapped, a result released): search again over what the
+      // grids show now, keeping the place; once per signature, so a read that keeps failing says so instead of looping.
+      if (error instanceof ResultError && error.code === 'RESULT_RELEASED' && tab.retried !== tab.signature && !tab.abort) {
+        tab.retried = tab.signature
+        this.run(tabId, tab, false)
+        return
+      }
+      // Nothing is marked for the active match: the count says the search failed rather than "3 of 8".
+      tab.status = 'failed'
+      tab.error = error instanceof Error ? error.message : searchFailed
       this.publishTab(tabId, tab)
     }
   }
 
-  private reveal(tab: TabState): void {
+  private reveal(tab: TabState, select = false): void {
     tab.reveal++
+    tab.revealSelect = select
     tab.revealIndex = tab.mode === 'columns' ? this.locateColumn(tab)?.index ?? -1 : this.locate(tab)?.grid.index ?? -1
   }
 
@@ -385,9 +418,29 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
     }
     tab.published = {
       text: tab.text, mode: tab.mode, status: tab.status, total: this.total(tab), current: tab.current, columns: tab.columnCount, partial, approximate,
-      ...tab.error ? { error: tab.error } : {}, marks, reveal: tab.reveal, revealIndex: tab.revealIndex, focus: tab.focus
+      ...tab.error ? { error: tab.error } : {}, marks, reveal: tab.reveal, revealIndex: tab.revealIndex, revealSelect: tab.revealSelect, focus: tab.focus,
+      announcement: tab.announcement
     }
+    this.announce(tabId, tab, tab.published)
     this.publishAll()
+  }
+
+  /** Schedules the live region's next words: the settled count, said once it has not changed for announceDelayMs; nothing
+   *  while a search runs, and silence at once when the box is emptied. */
+  private announce(tabId: string, tab: TabState, search: TabSearch): void {
+    const next = searchAnnouncement(search, formatCount)
+    if (tab.announceTimer !== undefined && next === tab.announcePending) return
+    this.stopAnnouncing(tab)
+    if (next === tab.announcement || search.status === 'searching') return
+    if (!next) { tab.announcement = ''; tab.published = { ...search, announcement: '' }; return }
+    tab.announcePending = next
+    tab.announceTimer = this.timers.setTimeout(() => {
+      tab.announceTimer = undefined
+      if (this.disposed || this.tabs.get(tabId) !== tab || !tab.published) return
+      tab.announcement = next
+      tab.published = { ...tab.published, announcement: next }
+      this.publishAll()
+    }, announceDelayMs)
   }
 
   private publishAll(): void {
@@ -395,6 +448,25 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
     for (const [tabId, tab] of this.tabs) if (tab.published) next[tabId] = tab.published
     this.publish(next)
   }
+}
+
+/** What a key does in the search box: Enter and Shift+Enter step (never the Enter that commits an IME composition), Escape
+ *  clears the text or, with none, leaves for the grid. */
+export function searchBoxKeyAction(event: Pick<KeyboardEvent, 'key' | 'shiftKey' | 'altKey' | 'ctrlKey' | 'metaKey' | 'isComposing' | 'keyCode'>, hasText: boolean): 'next' | 'previous' | 'clear' | 'leave' | undefined {
+  if (event.isComposing || event.keyCode === 229 || event.altKey || event.ctrlKey || event.metaKey) return undefined
+  if (event.key === 'Enter') return event.shiftKey ? 'previous' : 'next'
+  if (event.key === 'Escape' && !event.shiftKey) return hasText ? 'clear' : 'leave'
+  return undefined
+}
+
+/** What the live region says for a search: its count and what it counts ("2 of 8 matches"), the failure, or nothing while it
+ *  runs or the box is empty. */
+export function searchAnnouncement(search: Pick<TabSearch, 'text' | 'mode' | 'status' | 'total' | 'current' | 'columns' | 'partial' | 'error'>, format: (n: number) => string): string {
+  if (!search.text || search.status === 'searching') return ''
+  if (search.status === 'failed') return search.error ? `Search failed: ${search.error}` : 'Search failed'
+  if (search.mode === 'columns') return `${format(search.total)} of ${format(search.columns)} columns`
+  if (search.total === 0) return 'No matches'
+  return `${search.current >= 0 ? format(search.current + 1) : '–'} of ${format(search.total)}${search.partial ? '+' : ''} matches`
 }
 
 /** The search box's count: "3 of 1,204" (values), "2 of 40 columns" (columns), "No matches", or nothing before a search. */

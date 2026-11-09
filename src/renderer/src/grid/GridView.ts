@@ -393,10 +393,12 @@ export class GridView {
     this.schedule()
   }
   /** Scrolls the active match into view: its cell, or in columns mode its column at the rows in view. False when the marks
-   *  number rows this grid does not show (a sort it has not swapped to yet). */
-  revealMark(): boolean {
+   *  number rows this grid does not show (a sort it has not swapped to yet). `select` (F3 in a grid): the match also becomes
+   *  the active cell and this grid takes the focus, so the cell is announced and Copy copies it. */
+  revealMark(select = false): boolean {
     const marks = this.searchMarks
     if (marks?.current && marks.handle === this.handle) {
+      if (select) this.selectCell(marks.current.row, marks.current.column)
       this.reveal(marks.current.row, marks.current.column)
       this.outerReveal = { row: marks.current.row, column: marks.current.column, frames: 10 }
       return true
@@ -404,10 +406,15 @@ export class GridView {
     if (marks?.currentColumn !== undefined && marks.currentColumn < this.columns) {
       const rows = this.rows()
       const row = Math.min(Math.max(0, rows - 1), this.viewport?.firstRow ?? this.o.state.selection?.active.row ?? 0)
+      if (select && rows > 0) this.selectCell(row, marks.currentColumn)
       this.reveal(row, marks.currentColumn)
       return true
     }
     return false
+  }
+  private selectCell(row: number, column: number): void {
+    this.select(cellSelection(this.o.resultIndex, row, column))
+    this.root.focus({ preventScroll: true })
   }
 
   /** The grid's highlighted rows, one set per handle it may show (its result's and a sorted view's): it draws the set of the
@@ -1514,8 +1521,10 @@ export function toneColumnOf(descriptor: Pick<ResultDescriptor, 'columns'>): num
 }
 
 /** The first cell, as the current cell of a grid nothing has been selected in. */
-function firstCell(resultIndex: number): GridSelection {
-  const cell = { row: 0, column: 0 }
+function firstCell(resultIndex: number): GridSelection { return cellSelection(resultIndex, 0, 0) }
+/** One cell, selected and active. */
+function cellSelection(resultIndex: number, row: number, column: number): GridSelection {
+  const cell = { row, column }
   return { resultIndex, blocks: [{ kind: 'cells', anchor: cell, focus: cell }], active: cell }
 }
 

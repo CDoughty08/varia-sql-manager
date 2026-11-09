@@ -67,6 +67,8 @@ export function outputContribution({ commands, results, menuTargets, documents, 
   })
   /** The tab search in results acts on: the focused output's, else the active query's. */
   const searchTab = (args?: CommandArgs) => targetOf(args)?.tabId ?? documents.getSnapshot().activeId
+  /** F3 in a grid moves its active cell to the match as well; from the search box or the editor it only scrolls. */
+  const fromGrid = (args?: CommandArgs) => targetOf(args)?.view === 'grid'
   const registrations = [
     commands.register('output.find', {
       run: args => {
@@ -77,8 +79,8 @@ export function outputContribution({ commands, results, menuTargets, documents, 
         resultsSearch.focus(tabId)
       }
     }),
-    commands.register('output.findNext', { run: args => { const tabId = searchTab(args); if (tabId) resultsSearch.step(tabId, 1) } }),
-    commands.register('output.findPrevious', { run: args => { const tabId = searchTab(args); if (tabId) resultsSearch.step(tabId, -1) } }),
+    commands.register('output.findNext', { run: args => { const tabId = searchTab(args); if (tabId) resultsSearch.step(tabId, 1, fromGrid(args)) } }),
+    commands.register('output.findPrevious', { run: args => { const tabId = searchTab(args); if (tabId) resultsSearch.step(tabId, -1, fromGrid(args)) } }),
     commands.register('output.sortAscending', sortCommand('ascending', false)),
     commands.register('output.sortDescending', sortCommand('descending', false)),
     commands.register('output.thenSortAscending', sortCommand('ascending', true)),
