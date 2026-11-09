@@ -5,8 +5,9 @@ import { userInfo } from 'node:os'
 import { explorerRow, explorerStatics } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, backendReady, connectErrorDetails, connectFailure, connectFailureCopyStatus, connectFailureNote, connectFailureSentence, connectOutcome, databaseErrorDetails,
-  environmentPill, explorerLabel, part, queryBar, queryServer, queryStatus, savedConnections, statusBar, toolbarButton
+  documentTab, editorGroups, editorTextbox, environmentPill, explorerLabel, part, queryBar, queryServer, queryStatus, savedConnections, selectOpenDocument, statusBar, toolbarButton
 } from './fixtures/ui.mjs'
+import { resizeContent } from './fixtures/window-resize.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -1158,6 +1159,43 @@ async function environmentLabels() {
   }
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(dialog).toHaveCount(0)
+  // (4e) The longest custom label beside a live SID (#365), in a shelf cell at the normal width and in a narrow split
+  // group: the SID and the tab's buttons stay whole, and the label gives way first, so the query's name keeps at least
+  // three characters' room (or all of a shorter name) while the label keeps a few characters and its ellipsis.
+  const connected = await activeDocument(page).getAttribute('aria-label')
+  await editorTextbox(page).focus()
+  await page.keyboard.insertText('select 1')
+  await page.keyboard.press('F5')
+  await expect(activeDocument(page).locator(part.tabSid)).toHaveText(/^SID \d+$/)
+  const tabFit = () => documentTab(page, connected).evaluate((tab, part) => {
+    const box = element => element.getBoundingClientRect(), em = parseFloat(getComputedStyle(tab).fontSize)
+    const outer = box(tab), sid = box(tab.querySelector(part.tabSid)), name = box(tab.querySelector(part.tabName)), label = box(tab.querySelector(`${part.environmentTag} ${part.statusPill}`))
+    const buttons = [...tab.querySelectorAll('button')].map(box)
+    const clip = box(tab.querySelector(part.tabSid).parentElement)
+    return {
+      sid: sid.width > 0 && sid.left >= clip.left - 0.5 && sid.right <= clip.right + 0.5 && buttons.every(button => sid.right <= button.left + 0.5),
+      name: name.width >= Math.min(tab.querySelector(part.tabName).scrollWidth, 3 * em) - 0.5, label: label.width >= em && label.right <= sid.left + 0.5, buttons: buttons.every(button => button.right <= outer.right + 0.5)
+    }
+  }, part)
+  const fitted = { sid: true, name: true, label: true, buttons: true }
+  await resizeContent(app, page, 1440, 900)
+  await expect.poll(tabFit, { message: '1440 px, one editor group' }).toEqual(fitted)
+  await resizeContent(app, page, 1024, 720)
+  await page.keyboard.press('Control+N')
+  await expect.poll(async () => (await activeDocument(page).getAttribute('aria-label')) !== connected).toBe(true)
+  await selectOpenDocument(page, connected)
+  await editorTextbox(page).focus()
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Backslash' : 'Control+Backslash')
+  await expect(editorGroups(page)).toHaveCount(2)
+  await expect.poll(tabFit, { message: '1024 px, two editor groups' }).toEqual(fitted)
+  // A cell too narrow for the label's few characters beside the SID lets the label go rather than clip the SID.
+  const widenEditor = await narrowBar(430)
+  await expect.poll(() => documentTab(page, connected).evaluate(tab => tab.getBoundingClientRect().width), { message: 'a split cell under 220 px' }).toBeLessThan(220)
+  await expect.poll(tabFit, { message: 'a narrow split cell' }).toMatchObject({ sid: true, buttons: true })
+  await widenEditor()
+  await page.screenshot({ path: resolve('artifacts', 'environment-long-label-tabs.png') })
+  // The query now has unsaved text: the quit below answers Don't Save.
+  await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
   // (5) The page cannot store or send a label main refuses: too long, or with a character that reorders text.
   const forged = await page.evaluate(async () => {
     const base = { server: 'prod-server', database: '', authentication: 'sql', username: 'reader', trustServerCertificate: false, encrypt: 'mandatory' }
