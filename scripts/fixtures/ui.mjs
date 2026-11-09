@@ -385,6 +385,8 @@ export const activeDocument = page => page.locator(part.activeEditorGroup).getBy
 export const activeDocumentName = page => activeDocument(page).getAttribute('aria-label')
 /** The editor groups, the grid's in order and then the floating ones, and the tabs of one. */
 export const editorGroups = page => page.locator(part.editorGroup)
+/** The grid or floating editor group showing a particular query. Query editors stay in the main window. */
+export const editorGroupForDocument = (page, name) => page.getByRole('region', { name: `Editor group: ${name}`, exact: true })
 export const editorGroupTabs = group => group.getByRole('tablist', { name: 'Query documents', exact: true }).getByRole('tab')
 export const documentTabFullyShown = tab => tab.evaluate(tab => {
   const box = tab.getBoundingClientRect(), view = tab.closest('[role="tablist"]').getBoundingClientRect()
@@ -454,6 +456,11 @@ export const executingMark = scope => scope.getByRole('img', { name: 'Executing'
 export const kindIcon = (tab, kind) => tab.getByRole('img', { name: kind, exact: true })
 export const editorTextbox = page => page.locator('.monaco-editor [role="textbox"]')
 export const editorText = page => page.locator('.monaco-editor .view-lines').innerText()
+/** Monaco uses listitem on Windows and option elsewhere for its Suggest entries. */
+export const suggestionOption = (scope, label) => {
+  const name = new RegExp('^' + label.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&') + '(?:,|$)')
+  return scope.getByRole('listbox', { name: 'Suggest', exact: true }).getByRole(process.platform === 'win32' ? 'listitem' : 'option', { name })
+}
 /** The text of the active editor group's editor, where several groups each show a query. */
 export const activeGroupEditorText = page => page.locator(part.activeEditorGroup).locator('.monaco-editor .view-lines').innerText()
 

@@ -21,6 +21,12 @@ being true.
   `requestSchemas` (`src/main/validation.ts`), a `methodPolicies` entry (`src/shared/ipc/methods.ts`), a preload method,
   and a `SqlService.DispatchAsync` case plus its `MethodNames` entry, with its record in `backend/Varia.Backend/Contracts.cs`.
   Unknown methods and unknown members are rejected on both sides; main refuses a backend whose HELLO lacks a method.
+- SQL language features belong to each Monaco model, never the globally active editor. The engine-neutral broker and
+  context contract route to provider-specific adapters; SQL Server authentication, metadata readiness and dialect rules
+  stay in its adapter. Only typed language operations cross IPC. Executables and arguments come from the trusted app;
+  packaged SQL Tools Service is a pinned, checksum-verified build artifact, and the app never downloads one at runtime.
+  Metadata uses independent connections, stale responses are discarded, and management actions release those connections.
+  Service tracing is disabled so upstream exception logging cannot persist document text or connection details.
 - Backend stdout carries protocol v2 frames only (`Console.Out` goes to stderr). Never log SQL text, credentials, or
   connection strings. Passwords never reach disk in clear: not `connections.json`, process arguments, the environment,
   logs, traces or previews. A password the user chose to remember is stored only as Electron `safeStorage` ciphertext
