@@ -48,8 +48,9 @@ function ResultsSearchBox({ tabId }: { tabId: string }) {
     if (action === 'next' || action === 'previous') { resultsSearch.step(tabId, action === 'next' ? 1 : -1); return }
     event.stopPropagation()
     if (action === 'clear') { resultsSearch.clear(tabId); return }
-    // Escape in an empty box goes back to the grid that last had the focus (the one F6 focuses).
-    const grids = [...document.querySelectorAll<HTMLElement>(`[data-result-grid][data-tab-id="${CSS.escape(tabId)}"]`)]
+    // Escape in an empty box goes back to the grid that last had the focus (the one F6 focuses), in the box's own window
+    // (a popped-out Results panel has its own document).
+    const grids = [...event.currentTarget.ownerDocument.querySelectorAll<HTMLElement>(`[data-result-grid][data-tab-id="${CSS.escape(tabId)}"]`)]
     ;(grids.find(grid => grid.dataset.paneFocus === 'selected') ?? grids[0])?.focus()
   }
   const count = searchCount(search, formatCount)

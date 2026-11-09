@@ -394,11 +394,15 @@ export class GridView {
   }
   /** Scrolls the active match into view: its cell, or in columns mode its column at the rows in view. False when the marks
    *  number rows this grid does not show (a sort it has not swapped to yet). `select` (F3 in a grid): the match also becomes
-   *  the active cell and this grid takes the focus, so the cell is announced and Copy copies it. */
+   *  the active cell and this grid takes the focus, so the cell is announced and Copy copies it; only while the focus is
+   *  still in one of the run's grids, so a reveal that waited (for the match's rows, a sort's swap or a search again) never
+   *  takes it from the editor or the search box. */
   revealMark(select = false): boolean {
     const marks = this.searchMarks
+    select &&= this.focusInRun()
     if (marks?.current && marks.handle === this.handle) {
-      if (select) this.selectCell(marks.current.row, marks.current.column)
+      // A hidden column (a diff's or live table's tone) is never the active cell.
+      if (select && marks.current.column < this.columns) this.selectCell(marks.current.row, marks.current.column)
       this.reveal(marks.current.row, marks.current.column)
       this.outerReveal = { row: marks.current.row, column: marks.current.column, frames: 10 }
       return true
@@ -412,6 +416,7 @@ export class GridView {
     }
     return false
   }
+  private focusInRun(): boolean { return focusInRun(this.root, this.root.ownerDocument.activeElement) }
   private selectCell(row: number, column: number): void {
     this.select(cellSelection(this.o.resultIndex, row, column))
     this.root.focus({ preventScroll: true })
@@ -1545,3 +1550,10 @@ const sortMap = (keys: readonly HeaderSortKey[] = []): ReadonlyMap<number, { rea
   new Map(keys.map((key, at) => [key.column, { at, descending: key.descending }]))
 const sameSortMap = (a: ReadonlyMap<number, { readonly at: number; readonly descending: boolean }>, b: ReadonlyMap<number, { readonly at: number; readonly descending: boolean }>) =>
   a.size === b.size && [...a].every(([column, key]) => b.get(column)?.at === key.at && b.get(column)?.descending === key.descending)
+
+/** Whether the focused element is in a grid of `root`'s run: results grids name their tab, and a live grid (no tab) never
+ *  counts. A search step's reveal that waited selects only while this holds, so it never takes the focus from elsewhere. */
+export function focusInRun(root: Pick<HTMLElement, 'dataset'>, active: Pick<Element, 'closest'> | null): boolean {
+  const tabId = root.dataset.tabId
+  return tabId !== undefined && active?.closest<HTMLElement>('[data-result-grid]')?.dataset.tabId === tabId
+}

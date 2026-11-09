@@ -1664,8 +1664,9 @@ try {
   await expect(marked(gridPart.searchMatch)).not.toHaveCount(0)
   await page.keyboard.press('Shift+Enter')
   await expect(searchCount).toHaveText('1 of 8')
-  // Steps from the box leave the grid's active cell where it was.
-  expect((await active()).text).not.toBe('complete 10')
+  // Steps from the box leave the grid's active cell where it was (the cell pressed before Ctrl+F), and the focus in the box.
+  expect(await active()).toMatchObject({ row: 0, column: 0 })
+  await expect(searchBox).toBeFocused()
   // F3 from the grid, on the active match (in view in this short pane, where the first rows may not be), makes the next
   // match the active cell too, so it is announced and Ctrl+C copies it (#347).
   await currentMatch.click()

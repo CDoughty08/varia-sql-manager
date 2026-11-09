@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { focusInRun } from '../src/renderer/src/grid/GridView'
 import { cellKey } from '../src/renderer/src/grid/marks'
 import { ResultError, type ResultHandle, type SearchOptions } from '../src/renderer/src/results/ResultClient'
 import type { GridSort, ResultSetEntry, TabResults } from '../src/renderer/src/results/ResultsService'
@@ -314,6 +315,57 @@ describe('ResultsSearchService', () => {
     expect(search().announcement).toBe('')
     expect(searchAnnouncement({ text: 'x', mode: 'values', status: 'failed', total: 0, current: -1, columns: 0, partial: false, error: 'Lost.' }, String)).toBe('Search failed: Lost.')
     expect(searchAnnouncement({ text: 'x', mode: 'columns', status: 'done', total: 2, current: 0, columns: 7, partial: false }, String)).toBe('2 of 7 columns')
+  })
+
+  it('says a new search\'s count even when it is the same as the last search\'s', async () => {
+    const { service, set, show, answerAll, search, advance } = fixture()
+    show([set(0, ['a'], [[2, 0], [5, 0]])])
+    service.setText('t1', 'x', true)
+    await answerAll()
+    advance(announceDelayMs)
+    expect(search().announcement).toBe('1 of 2 matches')
+    // The live region empties as the new search starts, so the same words are said again once it settles.
+    service.setText('t1', 'xy', true)
+    expect(search().announcement).toBe('')
+    await answerAll()
+    advance(announceDelayMs)
+    expect(search().announcement).toBe('1 of 2 matches')
+  })
+
+  it('leaves a run read that fails while a search again runs to that search, and a step from a grid keeps its select through it', async () => {
+    const { service, searches, set, show, answerAll, search, settle, sorts } = fixture({ maxMatches: 1 })
+    const sets = [set(0, ['a'], [[1, 0], [5, 0], [9, 0]])]
+    show(sets)
+    service.setText('t1', 'x', true)
+    await answerAll()
+    // A sort swaps the grid: the search runs again; F3 in the grid steps outside the held run meanwhile.
+    const view = { key: { generation: 1, resultId: 1, view: 9 }, viewId: 9, search: sets[0].handle.search } as unknown as NonNullable<GridSort['view']>
+    sorts.set(0, { keys: [], view, sorting: false, approximate: false, stale: false })
+    show(sets)
+    expect(searches).toHaveLength(1)
+    service.step('t1', 1, true)
+    expect(searches).toHaveLength(2)
+    // The view that read was closed by the swap: no "Search failed", the search again reads the run when it ends.
+    searches.pop()!.reject(new ResultError('RESULT_RELEASED', 'These results were closed.'))
+    await settle()
+    expect(search()).toMatchObject({ status: 'searching' })
+    expect(search().error).toBeUndefined()
+    const reveal = search().reveal
+    await answerAll()
+    expect(search()).toMatchObject({ status: 'done', current: 1, revealSelect: true, reveal: reveal + 1 })
+    expect(search().marks.get(0)!.current).toEqual({ row: 5, column: 0 })
+  })
+
+  it('selects for a waiting reveal only while the focus is still in one of the run\'s grids', () => {
+    const root = { dataset: { tabId: 't1' } } as unknown as HTMLElement
+    const inGrid = (tabId: string | undefined) => ({ closest: () => (tabId === undefined ? null : { dataset: { tabId } }) }) as unknown as Element
+    expect(focusInRun(root, inGrid('t1'))).toBe(true)
+    // The editor, the search box, another tab's grid, or nothing focused.
+    expect(focusInRun(root, inGrid(undefined))).toBe(false)
+    expect(focusInRun(root, inGrid('t2'))).toBe(false)
+    expect(focusInRun(root, null)).toBe(false)
+    // A live grid names no tab.
+    expect(focusInRun({ dataset: {} } as unknown as HTMLElement, inGrid('t1'))).toBe(false)
   })
 
   it('steps with Enter and clears or leaves with Escape, but not for the Enter that commits an IME composition (#347, #348)', () => {

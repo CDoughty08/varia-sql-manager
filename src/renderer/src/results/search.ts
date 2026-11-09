@@ -215,6 +215,8 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
     tab.names = new Map()
     tab.error = undefined
     tab.status = tab.text ? 'searching' : 'idle'
+    // A new search empties the live region, so a count it settles on is said even when it is the last search's.
+    tab.announcement = ''
     if (!tab.text) { this.publishTab(tabId, tab); return }
     this.publishTab(tabId, tab)
     if (delay > 0) tab.timer = this.timers.setTimeout(() => { tab.timer = undefined; this.run(tabId, tab, true) }, delay)
@@ -306,7 +308,8 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
       const total = this.total(tab)
       if (!fresh) {
         tab.current = total === 0 ? -1 : Math.max(0, Math.min(tab.current, total - 1))
-        if (tab.reveal !== steps && tab.current >= 0) this.reveal(tab)
+        // Shown again as the step showed it: a step from a grid still moves its active cell.
+        if (tab.reveal !== steps && tab.current >= 0) this.reveal(tab, tab.revealSelect)
       }
       tab.status = failure && grids.length === 0 ? 'failed' : 'done'
       tab.error = failure && grids.length === 0 ? failure : undefined
@@ -371,9 +374,12 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
     } catch (error) {
       if (abort.signal.aborted || isAbort(error)) return
       tab.fetch = undefined
+      // A search again is running (a sort swapped the grid, closing the view this read): it reads the active match's run
+      // itself once it ends, so this failure says nothing.
+      if (tab.abort) return
       // The rows searched went (a sorted view closed once its grid swapped, a result released): search again over what the
       // grids show now, keeping the place; once per signature, so a read that keeps failing says so instead of looping.
-      if (error instanceof ResultError && error.code === 'RESULT_RELEASED' && tab.retried !== tab.signature && !tab.abort) {
+      if (error instanceof ResultError && error.code === 'RESULT_RELEASED' && tab.retried !== tab.signature) {
         tab.retried = tab.signature
         this.run(tabId, tab, false)
         return
