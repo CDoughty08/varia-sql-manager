@@ -611,6 +611,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .query-shelf-overflow > button { display: block; width: 100%; padding: 5px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: start; }
 .query-shelf-overflow > button:hover { background: var(--varia-list-hoverBackground); }
 .query-shelf-row-options { display: flex; align-items: center; justify-content: flex-end; }
+/* Compact spacing follows each tab's cell, including narrow columns inside a wide shelf. */
 @container (width < 338px) {
   .query-tab .tab-select { gap: 4px; padding-inline: 4px; }
 }
@@ -624,7 +625,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .document-view { display: flex; flex-direction: column; overflow: hidden; }
 .editor-empty { position: relative; height: 100%; }
 .editor-empty > .editor-group-actions { position: absolute; top: 0; right: 0; height: var(--varia-bar); }
-.query-tab { position: relative; display: flex; align-items: center; flex-shrink: 0; height: 100%; border-right: 1px solid var(--varia-documentTabs-border); border-top: 2px solid transparent; color: var(--varia-documentTabs-inactiveForeground); }
+.query-tab { position: relative; display: flex; align-items: center; flex-shrink: 0; height: 100%; container-type: inline-size; border-right: 1px solid var(--varia-documentTabs-border); border-top: 2px solid transparent; color: var(--varia-documentTabs-inactiveForeground); }
 .query-tab.active { background: var(--varia-documentTabs-activeBackground); border-top-color: var(--varia-tab-activeBorderTop); color: var(--varia-documentTabs-activeForeground); }
 /* The selected tab of a group that is not the active one keeps its fill but not its top border. */
 .editor-groups .dv-groupview:not(.dv-active-group) .query-tab.active:not([style*="border-top-color"]) { border-top-color: transparent; }
@@ -637,7 +638,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .tab-select:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .tab-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab-renaming { padding-right: 6px; }
-.tab-rename { width: 180px; height: 20px; padding: 0 4px; border-color: var(--varia-focusBorder); }
+.tab-rename { flex: 1; min-width: 0; width: 180px; height: 20px; padding: 0 4px; border-color: var(--varia-focusBorder); }
 .tab-select .tab-readonly { font-size: var(--varia-glyph-sm); margin-left: -4px; }
 /* A query's live SQL session, after its name (SID and the server's session id, or a dash without one). */
 .tab-sid { flex: none; margin-left: auto; padding: 1px 4px; border-radius: var(--varia-radius-sm); background: var(--varia-badge-background); color: var(--varia-badge-foreground); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -859,6 +860,18 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-row.tone-muted { background: var(--varia-resultsGrid-rowMutedBackground); color: var(--varia-resultsGrid-rowMutedForeground); }
 /* On a toned row a NULL keeps its color but not its tint, which would leave it too faint to read. */
 .rg-row.tone-error .rg-c.is-null, .rg-row.tone-warning .rg-c.is-null, .rg-row.tone-running .rg-c.is-null, .rg-row.tone-muted .rg-c.is-null { background: none; }
+/* A result diff (results.diff): added and removed rows take their colour over the stripe, as do their numbers; a changed
+   value a stronger one (selection and a search match keep their own); a value equal only by collation is underlined.
+   Before the highlight rules, which share their specificity, so a highlighted diff row shows its highlight. */
+.rg-row.tone-added { background: var(--varia-resultsGrid-diffAddedBackground); }
+.rg-row.tone-removed { background: var(--varia-resultsGrid-diffRemovedBackground); }
+.rg-row.tone-added .rg-c.is-null, .rg-row.tone-removed .rg-c.is-null { background: none; }
+.rg-row.tone-added .rg-c.is-chg:not(.is-sel):not(.is-hit) { background: var(--varia-resultsGrid-diffChangedAddedBackground); }
+.rg-row.tone-removed .rg-c.is-chg:not(.is-sel):not(.is-hit) { background: var(--varia-resultsGrid-diffChangedRemovedBackground); }
+.rg-row.tone-added .rg-c.is-chg.is-null, .rg-row.tone-removed .rg-c.is-chg.is-null { color: var(--varia-resultsGrid-foreground); }
+.rg-c.is-soft { text-decoration: underline dotted var(--varia-resultsGrid-diffSoftUnderline); text-underline-offset: 3px; }
+.rg-rn.tone-added:not(.sel) { background-image: linear-gradient(var(--varia-resultsGrid-diffAddedBackground), var(--varia-resultsGrid-diffAddedBackground)); }
+.rg-rn.tone-removed:not(.sel) { background-image: linear-gradient(var(--varia-resultsGrid-diffRemovedBackground), var(--varia-resultsGrid-diffRemovedBackground)); }
 /* Highlighted rows (grid/highlights.ts): the row takes its colour over the stripe; its number keeps the header under it. */
 .rg-row.hl-yellow { background: var(--varia-resultsGrid-highlightYellowBackground); }
 .rg-row.hl-green { background: var(--varia-resultsGrid-highlightGreenBackground); }
@@ -871,17 +884,6 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-rn.hl-purple:not(.sel) { background-image: linear-gradient(var(--varia-resultsGrid-highlightPurpleBackground), var(--varia-resultsGrid-highlightPurpleBackground)); }
 .rg-rn.hl-red:not(.sel) { background-image: linear-gradient(var(--varia-resultsGrid-highlightRedBackground), var(--varia-resultsGrid-highlightRedBackground)); }
 .rg-rn.hl:not(.sel) { color: var(--varia-resultsGrid-highlightRowNumberForeground); }
-/* A result diff (results.diff): added and removed rows take their colour over the stripe, as do their numbers; a changed
-   value a stronger one (selection keeps its own); a value equal only by collation is underlined. */
-.rg-row.tone-added { background: var(--varia-resultsGrid-diffAddedBackground); }
-.rg-row.tone-removed { background: var(--varia-resultsGrid-diffRemovedBackground); }
-.rg-row.tone-added .rg-c.is-null, .rg-row.tone-removed .rg-c.is-null { background: none; }
-.rg-row.tone-added .rg-c.is-chg:not(.is-sel) { background: var(--varia-resultsGrid-diffChangedAddedBackground); }
-.rg-row.tone-removed .rg-c.is-chg:not(.is-sel) { background: var(--varia-resultsGrid-diffChangedRemovedBackground); }
-.rg-row.tone-added .rg-c.is-chg.is-null, .rg-row.tone-removed .rg-c.is-chg.is-null { color: var(--varia-resultsGrid-foreground); }
-.rg-c.is-soft { text-decoration: underline dotted var(--varia-resultsGrid-diffSoftUnderline); text-underline-offset: 3px; }
-.rg-rn.tone-added:not(.sel) { background-image: linear-gradient(var(--varia-resultsGrid-diffAddedBackground), var(--varia-resultsGrid-diffAddedBackground)); }
-.rg-rn.tone-removed:not(.sel) { background-image: linear-gradient(var(--varia-resultsGrid-diffRemovedBackground), var(--varia-resultsGrid-diffRemovedBackground)); }
 /* Each row's own header is for screen readers; the numbers are drawn in one sticky column beside the rows. */
 .rg-rh { position: absolute; top: 0; left: 0; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .rg-rhs { position: sticky; left: 0; z-index: 1; width: var(--rg-rhw); height: 0; }
@@ -946,7 +948,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .rg-rn.tone-error, .rg-rn.tone-warning, .rg-rn.tone-running { border-left: 3px solid CanvasText; }
   .rg-rn.tone-added { border-left: 3px solid CanvasText; }
   .rg-rn.tone-removed { border-left: 3px dashed CanvasText; }
-  .rg-c.is-chg { outline: 1px solid CanvasText; outline-offset: -2px; }
+  /* The active search match keeps its own outline. */
+  .rg-c.is-chg:not(.is-cur) { outline: 1px solid CanvasText; outline-offset: -2px; }
   .rg-rn.hl { border-left: 3px double CanvasText; }
   .rg-row.tone-muted { color: GrayText; }
   /* Splitters are drawn with a background only, which forced colors would drop. */
@@ -1761,7 +1764,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .status-pill[data-tone="critical"] { background: var(--varia-statusPill-criticalBackground); color: var(--varia-statusPill-criticalForeground); }
 .status-pill[data-tone="info"] { background: var(--varia-statusPill-infoBackground); color: var(--varia-statusPill-infoForeground); }
 .status-pill[data-tone="neutral"] { background: var(--varia-statusPill-neutralBackground); color: var(--varia-statusPill-neutralForeground); }
-/* A connection's environment tag where it labels the connection. A preset's word always fits; a custom label (up to 32
+/* A connection's environment tag where it labels the connection. Preset words stay whole where space allows; a custom label (up to 32
    characters) is bounded and ends in an ellipsis, with the full label in the tooltip and accessible name, so it never
    takes the server's name, the tab or the bar it sits in. */
 .environment-tag { display: inline-flex; flex: none; align-items: center; min-width: 0; max-width: 12em; }
@@ -1773,8 +1776,11 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* Beside the active query's glyph (.oe-active and the gap before it), so the two together keep to that 40%. */
 .explorer-row.active-connection .environment-tag[data-place="explorer"] { max-width: min(40cqw - var(--varia-glyph-sm) - var(--varia-space-1), 12em); }
 .environment-tag[data-place="tab"] { max-width: 10em; }
-/* A custom label gives way beside the tab's name, so the live SID and the tab's buttons keep their room in a shelf cell. */
-.environment-tag[data-place="tab"][data-custom] { flex: 0 1 auto; }
+/* A bounded tab lets either kind yield so its name and session badge retain their space. */
+.query-tab .environment-tag[data-place="tab"] { flex: 0 1 auto; }
+/* A custom label (up to 32 characters) gives way before the name, keeping a few characters and its ellipsis, so the
+   name stays readable beside a long label in a narrow split; its full text is in the tab's description and tooltip. */
+.query-tab .environment-tag[data-place="tab"][data-custom] { flex-shrink: 100; min-width: min(3em, 15cqw); }
 .environment-tag[data-place="tab"], .environment-tag[data-place="list"] { margin-left: 6px; }
 .environment-tag[data-place="list"] { vertical-align: middle; }
 .query-status-environment { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; margin-right: 10px; }

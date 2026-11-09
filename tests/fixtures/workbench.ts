@@ -337,7 +337,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const backend = new BackendStateService(api, connections)
   const resultClient = fakeResultClient()
   const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => callback(), timers: options.timers ?? browserTimers, newId: () => crypto.randomUUID() })
-  const highlights = new HighlightsService(results)
+  const highlights = new HighlightsService(results, { timers: options.timers ?? browserTimers })
   const compare = new CompareService(results)
   const resultsSearch = new ResultsSearchService({ results, timers: options.timers ?? browserTimers })
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
@@ -564,6 +564,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     connections,
     backend,
     editorOptions,
+    editorGroups,
     shellOptions,
     bookmarks,
     editorDialogs,
@@ -598,7 +599,6 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     queries,
     files,
     recentFiles,
-    editorGroups,
     recovery,
     recoveryTimers,
     targets,

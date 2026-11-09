@@ -4,7 +4,7 @@ import { EventBus } from '../src/renderer/src/core/events'
 import { colorAt, highlightColors, type RowHighlights } from '../src/renderer/src/grid/highlights'
 import type { GridSelection } from '../src/renderer/src/grid/selection'
 import type { ResultHandle, ResultView } from '../src/renderer/src/results/ResultClient'
-import { HighlightsService, highlightLimits, mergeRows, trackedColumn } from '../src/renderer/src/results/HighlightsService'
+import { HighlightsService, highlightLimits, highlightText, mergeRows, trackedColumn } from '../src/renderer/src/results/HighlightsService'
 import { ResultsService } from '../src/renderer/src/results/ResultsService'
 import { descriptor, fakeResultClient, summaryOf, type FakeHandle } from './fixtures/results'
 import { manualTimers } from './fixtures/workbench'
@@ -22,7 +22,7 @@ function fixture() {
     onResultsJob: vi.fn<VariaApi['onResultsJob']>(listener => { progress.add(listener); return () => { progress.delete(listener) } })
   }
   const results = new ResultsService({ client, api, events, frame: callback => callback(), timers: timers.timers, newId: () => crypto.randomUUID() })
-  const highlights = new HighlightsService(results)
+  const highlights = new HighlightsService(results, { timers: timers.timers })
   /** Runs the tab's query once more: its one set is result `resultId`, of `count` complete rows. */
   const run = (resultId: number, count = 10, queryId = `q${resultId}`) => {
     results.begin('t1', queryId)
@@ -107,6 +107,8 @@ describe('highlights', () => {
     expect(trackedColumn([column('Name', 'nvarchar'), column('ID'), column('X'), column('ID')], { column: 'ID', dataType: 'int', ordinal: 0 })).toBe(-1)
     expect(trackedColumn([column('Name', 'nvarchar'), column('ID')], { column: 'ID', dataType: 'int', ordinal: 0 })).toBe(1)
     expect(trackedColumn([column('ID', 'nvarchar')], { column: 'ID', dataType: 'int', ordinal: 0 })).toBe(-1)
+    // A re-run that widens the column keeps following it: the backend hashes its values alike.
+    expect(trackedColumn([column('Code', 'nvarchar(60)')], { column: 'Code', dataType: 'nvarchar(50)', ordinal: 0 })).toBe(0)
     // Auto picked the second of two ID columns; the re-run identifies by that one, not the first of the name.
     const { results, highlights, client } = fixture()
     const runWith = (resultId: number) => {
@@ -132,7 +134,7 @@ describe('highlights', () => {
     results.setSelection('t1', 0, rows(0, 1, 1))
     await highlights.highlight('t1', 0, 2)
     const second = run(2, 6, 'q2')
-    vi.mocked(second.findRows).mockRejectedValue(Object.assign(new Error('Too many requests.'), { code: 'TOO_MANY_REQUESTS' }))
+    vi.mocked(second.findRows).mockRejectedValue(Object.assign(new Error('Tell the rows apart first.'), { code: 'IDENTITY_NOT_FOUND' }))
     // The failure's notice publishes the results again, now and when it goes; neither searches again.
     for (let i = 0; i < 5; i++) { await settle(); timers.advance(60_000) }
     expect(second.findRows).toHaveBeenCalledTimes(1)
@@ -144,6 +146,59 @@ describe('highlights', () => {
     await highlights.highlight('t1', 0, 2)
     expect(second.findRows).toHaveBeenCalledTimes(1)
     expect(shown()).toMatchObject({ count: 2, found: 2 })
+  })
+
+  it('tries a search that failed with a passing error again after a backoff, and again when the user highlights', async () => {
+    const { results, highlights, run, shown, timers } = fixture()
+    run(1)
+    results.setSelection('t1', 0, rows(0, 1, 1))
+    await highlights.highlight('t1', 0, 2)
+    const notify = vi.spyOn(results, 'notify')
+    const second = run(2, 6, 'q2')
+    vi.mocked(second.findRows).mockRejectedValue(Object.assign(new Error('The backend is busy.'), { code: 'BUSY' }))
+    await settle()
+    expect(second.findRows).toHaveBeenCalledTimes(1)
+    // Each retry waits longer; after the last the error is said, and nothing more is tried.
+    for (const ms of highlightLimits.retryMs) { timers.advance(ms); await settle() }
+    expect(second.findRows).toHaveBeenCalledTimes(1 + highlightLimits.retryMs.length)
+    expect(notify).toHaveBeenCalledWith('t1', 'Could not find the highlighted rows: The backend is busy.')
+    timers.advance(60_000)
+    await settle()
+    expect(second.findRows).toHaveBeenCalledTimes(1 + highlightLimits.retryMs.length)
+    // The user acting searches again at once, even when the command changes nothing.
+    vi.mocked(second.findRows).mockResolvedValue({ positions: [1], marks: [0], truncated: false, rows: 6 })
+    results.setSelection('t1', 0, undefined)
+    await highlights.highlight('t1', 0, 2)
+    await settle()
+    expect(second.findRows).toHaveBeenCalledTimes(2 + highlightLimits.retryMs.length)
+    expect(shown()).toMatchObject({ count: 1, found: 1 })
+  })
+
+  it('says when the key column is gone, or more rows match than one search draws', async () => {
+    const { results, highlights, run, shown, client } = fixture()
+    run(1)
+    results.setSelection('t1', 0, rows(0, 1, 2))
+    await highlights.highlight('t1', 0, 1)
+    // Re-run without the Id column highlights follow: nothing can be found, and the strip and the command say why.
+    results.begin('t1', 'q2')
+    const value = descriptor(2, { index: 0, rowsRead: 5, rowsStored: 5, rowsAvailable: 5, columns: [{ name: 'Name', dataType: 'nvarchar', wire: 'text', nullable: true }] })
+    client.emit('q2', { type: 'resultSet.opened', descriptor: value })
+    void results.finish('t1', 'q2', { summary: summaryOf([value]) })
+    await settle()
+    const second = results.getSnapshot().t1.sets[0].handle as FakeHandle
+    expect(second.identify).not.toHaveBeenCalled()
+    expect(shown()).toMatchObject({ count: 2, lacks: 'Id' })
+    expect(highlightText(shown())).toBe('2 highlights follow Id, which these results lack. Clear All Highlights to highlight rows here.')
+    const notify = vi.spyOn(results, 'notify')
+    results.setSelection('t1', 0, rows(0, 0, 0))
+    await highlights.highlight('t1', 0, 1)
+    expect(notify).toHaveBeenCalledWith('t1', '2 highlights follow Id, which these results lack. Clear All Highlights to highlight rows here.')
+    // A search that lists only the first matches says so instead of calling the rest missing.
+    const third = run(3, 10, 'q3')
+    vi.mocked(third.findRows).mockResolvedValue({ positions: [1], marks: [0], truncated: true, rows: 10 })
+    await settle()
+    expect(shown()).toMatchObject({ truncated: true, found: 1 })
+    expect(highlightText(shown())).toBe('More than 100,000 rows have these highlights; only the first 100,000 are drawn.')
   })
 
   it('keeps the whole-row fallback, refuses too many rows at once, and forgets a closed tab', async () => {

@@ -10,7 +10,6 @@ import { focusWhenDrawn } from '../core/modal'
 import { documentKind, isCustomKind, isQueryDocument, isTextDocument, kindInfo, type QueryTab } from '../documents'
 import { DockingGuides } from '../docking-guides'
 import { afterPointer } from './pointer'
-import { followTabHost } from './tab-host'
 import TabShelves from './TabShelves'
 import { createQueryEditor, type QueryEditorInstance } from '../editor/create-editor'
 import EnvironmentTag from '../EnvironmentTag'
@@ -162,15 +161,20 @@ function DocumentTab({ api, containerApi }: IDockviewPanelHeaderProps) {
   const session = spid === undefined ? 'No live SQL session' : `SQL session ID ${spid}`
   const description = [environmentTag(environment)?.description, tab?.pinned && 'Pinned', spid !== undefined && session].filter(Boolean).join('. ') || undefined
   const tooltip = tab ? tabTooltip(tab) : ''
-  const hasTab = !!tab
-  const tabHost = useRef<ReturnType<typeof followTabHost> | null>(null)
   useEffect(() => {
-    const node = element.current
-    if (!node) return
-    const host = tabHost.current = followTabHost(node, [listener => containerApi.onDidLayoutChange(listener), listener => api.onDidGroupChange(listener)])
-    return () => { host.dispose(); tabHost.current = null }
-  }, [api, containerApi, hasTab])
-  useEffect(() => { tabHost.current?.update({ tooltip, description }) }, [description, tooltip, hasTab])
+    const update = () => {
+      const host = element.current?.closest<HTMLElement>('.dv-tab')
+      if (!host) return
+      host.dataset.documentTab = ''
+      host.title = tooltip
+      if (description) host.setAttribute('aria-description', description)
+      else host.removeAttribute('aria-description')
+    }
+    update()
+    // Moving or reordering a panel replaces its native tab wrapper while retaining this React header.
+    const layout = containerApi.onDidLayoutChange(update)
+    return () => layout.dispose()
+  }, [containerApi, description, tooltip])
   const name = tab?.name
   // The SID chip stays on whole pixels as its text changes. Shelf columns already keep tab origins on whole pixels.
   const sidText = tab && isQueryDocument(tab) ? String(spid ?? '') : undefined
@@ -590,12 +594,12 @@ class EditorAreaController implements Area, EditorGroupHost {
     this.publish()
     this.focusLater()
   }
-  focusTab(id: string): void {
-    this.root?.querySelector(`.dv-tab [data-tab-id="${CSS.escape(id)}"]`)?.closest<HTMLElement>('.dv-tab')?.focus()
-  }
   focusedDocument(): string | undefined {
     const tab = document.activeElement?.closest('.dv-tab')
     return tab && this.root?.contains(tab) ? tab.querySelector('[data-tab-id]')?.getAttribute('data-tab-id') ?? undefined : undefined
+  }
+  focusTab(id: string): void {
+    this.root?.querySelector<HTMLElement>(`.dv-tab[data-tab-panel-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true })
   }
   capture(place: (id: string) => number | undefined): EditorGroupsLayout | undefined {
     return this.api ? captureEditorGroups(this.api.toJSON(), place) : undefined

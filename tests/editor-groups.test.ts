@@ -172,6 +172,23 @@ describe('the editor group service', () => {
     expect(host.move).not.toHaveBeenCalledWith('a', { float: true })
   })
 
+  it('focuses an open document tab through its editor area and ignores a document that is gone', () => {
+    const { groups, host, docs } = service()
+    const get = vi.spyOn(docs, 'get').mockReturnValue({ id: 'a' } as never)
+    groups.focusTab('a')
+    expect(host.focusTab).not.toHaveBeenCalled()
+    const attached = groups.attach(host)
+    groups.focusTab('a')
+    expect(host.focusTab).toHaveBeenCalledExactlyOnceWith('a')
+    get.mockReturnValue(undefined)
+    groups.focusTab('gone')
+    expect(host.focusTab).toHaveBeenCalledTimes(1)
+    attached.dispose()
+    get.mockReturnValue({ id: 'a' } as never)
+    groups.focusTab('a')
+    expect(host.focusTab).toHaveBeenCalledTimes(1)
+  })
+
   it('publishes only real changes, restores once the editor area attaches, and forgets the area when it goes', () => {
     const { groups, host } = service()
     const listener = vi.fn()

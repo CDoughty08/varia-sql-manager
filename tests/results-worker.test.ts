@@ -300,6 +300,17 @@ describe('results worker core', () => {
     expect(sent.at(-1)).toEqual({ t: 'cancel', rid: 5 })
     core.handle({ type: 'identity', id: 104, key: { ...key, generation: 2 }, request: { method: 'identify', by: 'auto' } })
     expect(posted.at(-1)).toMatchObject({ type: 'error', id: 104, code: 'RESULT_UNAVAILABLE' })
+    // A diff the page gave up whose answer came anyway is a stored result nobody holds: the worker closes it.
+    core.handle({ type: 'identity', id: 106, key, request: { method: 'diff', right: 6, exact: false, context: 1 } })
+    const diffRid = (sent.at(-1) as { rid: number }).rid
+    core.handle({ type: 'cancel', id: 106 })
+    expect(sent.at(-1)).toEqual({ t: 'cancel', rid: diffRid })
+    const postedBefore = posted.length
+    core.receive({ t: 'end', rid: diffRid, ok: true, result: { descriptor: { resultId: 77 } } as never })
+    expect(sent.at(-1)).toMatchObject({ t: 'close', generation: 1, resultIds: [77] })
+    expect(posted.length).toBe(postedBefore)
+    core.receive({ t: 'end', rid: (sent.at(-1) as { rid: number }).rid, ok: true, result: { closed: 1, usedBytes: 0 } as never })
+    expect(posted.length).toBe(postedBefore)
     // Main drops answers meant for a replaced port: a request asked on it fails at once.
     core.attach({ postMessage: () => {} })
     expect(posted.filter(message => message.type === 'error' && (message.id === 101 || message.id === 103)).map(message => (message as { code: string }).code)).toEqual(['PORT_CLOSED', 'PORT_CLOSED'])

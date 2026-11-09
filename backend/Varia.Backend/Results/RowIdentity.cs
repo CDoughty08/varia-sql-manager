@@ -34,7 +34,8 @@ internal static class RowIdentity
     public const long Mask = (1L << 53) - 1;
     private const int CancelEvery = 1 << 12;
 
-    /// <summary>Bytes the check for uniqueness holds per row while it runs (a HashSet entry), on top of the ids.</summary>
+    /// <summary>Bytes the check for uniqueness holds per row while it runs (one HashSet, its entry and bucket, reused by every
+    /// column Auto tries and by the whole-row fallback), on top of the one ids array they all fill.</summary>
     public static long WorkingBytes(long rows) => rows * 24;
 
     public static (int Column, bool Unique, bool Approximate, long[] Ids) Build(ResultSetBuffer set, StoredPage[] pages, IdentityBy by, int column, CancellationToken token)
@@ -44,32 +45,35 @@ internal static class RowIdentity
         if (total > Array.MaxLength) throw new RequestException("TOO_LARGE", "This result has too many rows to tell apart.");
         var rows = (int)total;
         var hasher = new CellHasher(set.Columns, set.Wires);
+        // One array and one set serve every pass, so Auto's candidates and fallback hold no more than WorkingBytes and the ids.
+        var ids = new long[rows];
+        var seen = new HashSet<long>(rows);
         if (by == IdentityBy.Column)
         {
-            var ids = new long[rows];
-            var (unique, approximate) = Fill(hasher, pages, column, ids, stopEarly: false, token);
+            var (unique, approximate) = Fill(hasher, pages, column, ids, stopEarly: false, token, seen);
             return (column, unique, approximate, ids);
         }
         if (by == IdentityBy.Auto)
         {
-            var ids = new long[rows];
             foreach (var candidate in Candidates(set.Columns, set.Wires).Take(MaxCandidates))
             {
-                var (unique, approximate) = Fill(hasher, pages, candidate, ids, stopEarly: true, token);
+                var (unique, approximate) = Fill(hasher, pages, candidate, ids, stopEarly: true, token, seen);
                 if (unique && !approximate) return (candidate, true, false, ids);
             }
         }
-        var rowIds = new long[rows];
-        var (rowsUnique, rowsApproximate) = Fill(hasher, pages, -1, rowIds, stopEarly: false, token);
-        return (-1, rowsUnique, rowsApproximate, rowIds);
+        var (rowsUnique, rowsApproximate) = Fill(hasher, pages, -1, ids, stopEarly: false, token, seen);
+        return (-1, rowsUnique, rowsApproximate, ids);
     }
 
     /// <summary>Hashes each row's identity into <paramref name="ids"/> (column -1: the whole row); whether they were all
     /// distinct (a key column also needs no NULL), and whether a truncated value was hashed. With <paramref name="stopEarly"/>
-    /// it stops at the first NULL, truncated value or repeat, leaving the rest of the array unset.</summary>
-    internal static (bool Unique, bool Approximate) Fill(CellHasher hasher, StoredPage[] pages, int column, long[] ids, bool stopEarly, CancellationToken token)
+    /// it stops at the first NULL, truncated value or repeat, leaving the rest of the array unset. <paramref name="seen"/>, when
+    /// given, is cleared and reused.</summary>
+    internal static (bool Unique, bool Approximate) Fill(CellHasher hasher, StoredPage[] pages, int column, long[] ids, bool stopEarly, CancellationToken token,
+        HashSet<long>? seen = null)
     {
-        var seen = new HashSet<long>(ids.Length);
+        if (seen is null) seen = new HashSet<long>(ids.Length);
+        else seen.Clear();
         var unique = true;
         var approximate = false;
         var columns = hasher.Count;
@@ -181,6 +185,37 @@ internal sealed class CellHasher
     public ulong CellValue(PageView view, int column, int row) =>
         view.IsNull(column, row) ? NullHash : Finish(Value(view.Span(column, row), column, Offset));
 
+    /// <summary>Whether two non-NULL cells hold the same value by this column's rules (<paramref name="other"/> hashes its
+    /// column the same way, and is another hasher, whose buffers it decodes into): what a diff checks rather than trusting
+    /// two hashes, which can collide.</summary>
+    public bool Same(PageView view, int column, int row, CellHasher other, PageView otherView, int otherColumn, int otherRow)
+    {
+        var a = view.Span(column, row);
+        var b = otherView.Span(otherColumn, otherRow);
+        switch (kinds[column])
+        {
+            case Kind.Collated:
+            {
+                var (info, options) = cultures[column]!.Value;
+                return info.Compare(Decode(ViewSorter.TrimEnd(a)), other.Decode(ViewSorter.TrimEnd(b)), options) == 0;
+            }
+            case Kind.Trimmed: return ViewSorter.TrimEnd(a).SequenceEqual(ViewSorter.TrimEnd(b));
+            case Kind.Exact:
+            {
+                var negativeA = NumericParts(a, out var wholeA, out var fractionA);
+                var negativeB = NumericParts(b, out var wholeB, out var fractionB);
+                return negativeA == negativeB && wholeA.SequenceEqual(wholeB) && fractionA.SequenceEqual(fractionB);
+            }
+            case Kind.Guid:
+                return Guid.TryParse(Decode(a[..Math.Min(a.Length, 40)]), out var x) && Guid.TryParse(other.Decode(b[..Math.Min(b.Length, 40)]), out var y) ? x == y : a.SequenceEqual(b);
+            case Kind.Ticks:
+                return DateTimeOffset.TryParse(Decode(a[..Math.Min(a.Length, 64)]), CultureInfo.InvariantCulture, DateTimeStyles.None, out var p)
+                    && DateTimeOffset.TryParse(other.Decode(b[..Math.Min(b.Length, 64)]), CultureInfo.InvariantCulture, DateTimeStyles.None, out var q)
+                    ? p.UtcTicks == q.UtcTicks : a.SequenceEqual(b);
+            default: return a.SequenceEqual(b);
+        }
+    }
+
     /// <summary>The whole row's hash: every visible column's value, in order, NULL apart from any value.</summary>
     public long Row(PageView view, int row, ref bool approximate)
     {
@@ -249,16 +284,23 @@ internal sealed class CellHasher
     /// and 1.5 hash alike.</summary>
     private static ulong Numeric(ulong hash, ReadOnlySpan<byte> text)
     {
-        var negative = text.Length > 0 && text[0] == (byte)'-';
-        if (negative) text = text[1..];
-        var point = text.IndexOf((byte)'.');
-        var whole = (point < 0 ? text : text[..point]).TrimStart((byte)'0');
-        var fraction = (point < 0 ? [] : text[(point + 1)..]).TrimEnd((byte)'0');
-        if (whole.IsEmpty && fraction.IsEmpty) negative = false;
+        var negative = NumericParts(text, out var whole, out var fraction);
         if (negative) hash = Step(hash, (byte)'-');
         hash = Bytes(hash, whole);
         if (!fraction.IsEmpty) { hash = Step(hash, (byte)'.'); hash = Bytes(hash, fraction); }
         return hash;
+    }
+
+    /// <summary>Whether an exact numeric is negative (never zero), its whole digits without leading zeros and its fraction
+    /// without trailing ones.</summary>
+    private static bool NumericParts(ReadOnlySpan<byte> text, out ReadOnlySpan<byte> whole, out ReadOnlySpan<byte> fraction)
+    {
+        var negative = text.Length > 0 && text[0] == (byte)'-';
+        if (negative) text = text[1..];
+        var point = text.IndexOf((byte)'.');
+        whole = (point < 0 ? text : text[..point]).TrimStart((byte)'0');
+        fraction = (point < 0 ? [] : text[(point + 1)..]).TrimEnd((byte)'0');
+        return negative && !(whole.IsEmpty && fraction.IsEmpty);
     }
 
     private ReadOnlySpan<char> Decode(ReadOnlySpan<byte> utf8)

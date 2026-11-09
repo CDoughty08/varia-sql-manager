@@ -2,7 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { activeDocumentName, backendReady, closeDocumentButton, documentTab, documentTabs, editorGroups, editorGroupTabs, floatingEditorGroups, menubar, part, pinDocumentButton, planCanvas, planViewer, quickInput, quickInputActive, selectOpenDocument, tabNameBox, tabShelf, tabShelfControls, tabShelfRows, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, closeDocumentButton, documentTab, documentTabs, editorGroups, editorGroupTabs, editorTextbox, floatingEditorGroups, menubar, part, pinDocumentButton, planCanvas, planViewer, quickInput, quickInputActive, selectOpenDocument, tabNameBox, tabShelf, tabShelfControls, tabShelfRows, unsavedMark } from './fixtures/ui.mjs'
 
 // SSMS's editing commands in the real query editor, over the fake backend (no SQL Server): Comment and Uncomment
 // Selection, Make Uppercase and Lowercase, Increase and Decrease Line Indent from Edit › Advanced, Go To Line, Bookmarks
@@ -316,47 +316,109 @@ try {
   }
   await expect.poll(pair).toEqual([firstTab, secondTab])
   console.log('Editor checks: tabs reorder by keys and dragging, pinned and query shelves stack independently with Ctrl+scroll, overflow and End reach hidden tabs, and editor groups keep independent row counts.')
-  // Keyboard focus on tabs across a split, on CI's compact size: F2 renames a clean query whose tab moved into a new group
-  // (#364), and Ctrl+Tab from a focused tab takes focus to the next query's tab, shown in its strip, so Ctrl+W closes that
-  // one (#363).
-  const focusSize = await page.evaluate(() => [innerWidth, innerHeight])
+
+  // Clean tabs keep their metadata and F2 entry point when Dockview replaces a native wrapper during a split or move.
+  const beforeTabRegressions = await page.evaluate(() => [innerWidth, innerHeight])
   await resizeContent(application, page, 1024, 720)
-  const clean = []
-  for (let opened = 0; opened < 4; opened++) {
+  const cleanTabs = []
+  const newCleanTab = async () => {
+    const before = await order()
     await page.keyboard.press('Control+N')
-    await expect.poll(async () => (await order()).length).toBe(opened + 3)
-    clean.push(await activeDocumentName(page))
+    await expect.poll(async () => (await order()).length).toBe(before.length + 1)
+    const added = (await order()).filter(name => !before.includes(name))
+    expect(added).toHaveLength(1)
+    const name = added[0]
+    await selectOpenDocument(page, name)
+    await documentTab(page, name).focus()
+    await page.keyboard.press('Enter')
+    await expect.poll(() => activeDocumentName(page)).toBe(name)
+    cleanTabs.push(name)
+    return name
   }
-  await textbox().focus()
-  await page.keyboard.press('Control+Backslash')
+  const cleanRename = async name => {
+    const tab = documentTab(page, name)
+    await expect(tab).toHaveAttribute('data-document-tab', '')
+    await expect(tab).toHaveAttribute('title', name)
+    await expect(unsavedMark(tab)).toHaveCount(0)
+    await tab.focus()
+    await page.keyboard.press('F2')
+    await expect(tabNameBox(page)).toHaveValue(name)
+    await page.keyboard.press('Escape')
+    await expect(tab).toBeFocused()
+    await expect(tabNameBox(page)).toHaveCount(0)
+  }
+  const movedClean = await newCleanTab()
+  await page.keyboard.press('Control+\\')
   await expect(editorGroups(page)).toHaveCount(2)
-  expect(await groupNames(1)).toEqual([clean[3]])
-  await documentTab(page, clean[3]).focus()
-  await page.keyboard.press('F2')
-  await expect(tabNameBox(page)).toBeFocused()
-  await expect(tabNameBox(page)).toHaveValue(clean[3])
-  await page.keyboard.press('Escape')
-  await expect(documentTab(page, clean[3])).toBeFocused()
-  await selectOpenDocument(page, clean[0])
-  await documentTab(page, clean[0]).focus()
-  await expect.poll(() => activeDocumentName(page)).toBe(clean[0])
-  await expect(documentTab(page, clean[0])).toBeFocused()
+  await expect.poll(() => groupNames(1)).toEqual([movedClean])
+  await cleanRename(movedClean)
+  const otherClean = await newCleanTab()
+  await selectOpenDocument(page, movedClean)
+  await page.keyboard.press('Control+Alt+ArrowLeft')
+  await expect(editorGroups(page)).toHaveCount(2)
+  await expect.poll(() => groupNames(0)).toContain(movedClean)
+  await expect.poll(() => groupNames(1)).toEqual([otherClean])
+  await cleanRename(movedClean)
+  await page.keyboard.press('Control+Alt+ArrowRight')
+  await expect.poll(() => groupNames(1)).toEqual([otherClean, movedClean])
+  await cleanRename(movedClean)
+  const beforeCleanReorder = await groupNames(1), cleanIndex = beforeCleanReorder.indexOf(movedClean)
+  expect(cleanIndex).toBeGreaterThan(0)
+  const afterCleanReorder = [...beforeCleanReorder]
+  afterCleanReorder.splice(cleanIndex - 1, 2, movedClean, beforeCleanReorder[cleanIndex - 1])
+  await page.keyboard.press('Control+Shift+PageUp')
+  await expect.poll(() => groupNames(1)).toEqual(afterCleanReorder)
+  await cleanRename(movedClean)
+  for (let opened = 0; opened < 4; opened++) await newCleanTab()
+
+  // Ctrl+Tab and its reverse follow the selected tab through a one-column shelf and across groups.
+  const narrowGroup = editorGroups(page).nth(1), cycleOrder = await groupNames(1)
+  expect(cycleOrder).toHaveLength(6)
+  const cycleFirst = documentTab(page, cycleOrder[0]), cycleSecond = documentTab(page, cycleOrder[1])
+  await cycleFirst.focus()
+  await page.keyboard.press('Enter')
+  await expect(cycleFirst).toHaveAttribute('aria-selected', 'true')
+  await expect(cycleSecond).toHaveAttribute('data-tab-overflow', '')
   await page.keyboard.press('Control+Tab')
-  await expect.poll(() => activeDocumentName(page)).toBe(clean[1])
-  await expect(documentTab(page, clean[1])).toBeFocused()
-  const inStrip = name => documentTab(page, name).evaluate(tab => { const box = tab.getBoundingClientRect(), view = tab.closest('[role="tablist"]').getBoundingClientRect(); return getComputedStyle(tab).opacity !== '0' && box.left >= view.left - 1 && box.right <= view.right + 1 && box.top >= view.top - 1 && box.bottom <= view.bottom + 1 })
-  expect(await inStrip(clean[1])).toBe(true)
+  await expect.poll(() => activeDocumentName(page)).toBe(cycleOrder[1])
+  await expect(cycleSecond).toBeFocused()
+  await expect(cycleSecond).not.toHaveAttribute('data-tab-overflow', '')
+  await expect(cycleSecond).toBeInViewport()
+  await page.keyboard.press('Control+Shift+Tab')
+  await expect.poll(() => activeDocumentName(page)).toBe(cycleOrder[0])
+  await expect(cycleFirst).toBeFocused()
+  await expect(cycleFirst).toBeInViewport()
+  await page.keyboard.press('End')
+  await expect.poll(() => activeDocumentName(page)).toBe(cycleOrder.at(-1))
+  await page.keyboard.press('Control+Tab')
+  await expect.poll(() => activeDocumentName(page)).toBe(firstTab)
+  await expect(documentTab(page, firstTab)).toBeFocused()
+  await page.keyboard.press('Control+Shift+Tab')
+  await expect.poll(() => activeDocumentName(page)).toBe(cycleOrder.at(-1))
+  await expect(documentTab(page, cycleOrder.at(-1))).toBeFocused()
+  await cycleFirst.focus()
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Control+Tab')
+  await expect(cycleSecond).toBeFocused()
   await page.keyboard.press('Control+W')
-  await expect(documentTab(page, clean[1])).toHaveCount(0)
-  await expect(documentTab(page, clean[0])).toHaveCount(1)
-  for (const name of [clean[0], clean[2], clean[3]]) {
+  await expect(cycleSecond).toHaveCount(0)
+  await expect(cycleFirst).toHaveCount(1)
+  await selectOpenDocument(page, cycleOrder[0])
+  const narrowEditor = editorTextbox(narrowGroup)
+  await narrowEditor.focus()
+  await page.keyboard.press('Control+Tab')
+  await expect.poll(() => activeDocumentName(page)).not.toBe(cycleOrder[0])
+  await expect(narrowEditor).toBeFocused()
+  for (const name of cleanTabs) {
+    if (!await documentTab(page, name).count()) continue
     await selectOpenDocument(page, name)
     await closeDocumentButton(page, name).click()
   }
   await expect(editorGroups(page)).toHaveCount(1)
+  await resizeContent(application, page, ...beforeTabRegressions)
   await expect.poll(pair).toEqual([firstTab, secondTab])
-  await resizeContent(application, page, ...focusSize)
-  console.log('Editor checks: F2 renames a clean query moved into a new group, and Ctrl+Tab from a focused tab moves focus to the next shown tab, which Ctrl+W closes.')
+  console.log('Editor checks: clean split, moved and reordered tabs retain F2 rename; Ctrl+Tab keeps native tab focus visible across one-column shelves and groups, closes the selected query, and keeps editor focus when cycling from text.')
+
   // Editor groups: Split Editor Right (Ctrl+\) moves the active query into a new group on the right, with its own strip
   // and editor; Ctrl+K Ctrl+Left and Right focus the groups; Move Editor into Previous Group (Ctrl+Alt+Left) joins them
   // again, and the empty group goes.

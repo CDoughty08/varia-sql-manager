@@ -1159,8 +1159,9 @@ async function environmentLabels() {
   }
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(dialog).toHaveCount(0)
-  // (4e) A long custom label beside a live SID (#365): in a shelf cell at the normal width and in a narrow split group,
-  // the label and the query's name share what the SID and the tab's buttons leave, and the SID stays whole in the tab.
+  // (4e) The longest custom label beside a live SID (#365), in a shelf cell at the normal width and in a narrow split
+  // group: the SID and the tab's buttons stay whole, and the label gives way first, so the query's name keeps at least
+  // three characters' room (or all of a shorter name) while the label keeps a few characters and its ellipsis.
   const connected = await activeDocument(page).getAttribute('aria-label')
   await editorTextbox(page).focus()
   await page.keyboard.insertText('select 1')
@@ -1173,7 +1174,7 @@ async function environmentLabels() {
     const clip = box(tab.querySelector(part.tabSid).parentElement)
     return {
       sid: sid.width > 0 && sid.left >= clip.left - 0.5 && sid.right <= clip.right + 0.5 && buttons.every(button => sid.right <= button.left + 0.5),
-      name: name.width >= em, label: label.width >= em && label.right <= sid.left + 0.5, buttons: buttons.every(button => button.right <= outer.right + 0.5)
+      name: name.width >= Math.min(tab.querySelector(part.tabName).scrollWidth, 3 * em) - 0.5, label: label.width >= em && label.right <= sid.left + 0.5, buttons: buttons.every(button => button.right <= outer.right + 0.5)
     }
   }, part)
   const fitted = { sid: true, name: true, label: true, buttons: true }

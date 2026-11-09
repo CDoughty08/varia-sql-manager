@@ -12,10 +12,10 @@ import { checkClientStatistics } from './fixtures/client-statistics.mjs'
 import { enlargeOutput, sizeResultStack } from './fixtures/results-pane.mjs'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
-  activeDocument, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice,
+  activeDocument, anyResultGrid, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice,
   jobProgress, kindIcon, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
   outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, resultsToolbar, resultToggle, statusBar,
-  profileCard, profileFigures, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, unsavedMark
+  profileCard, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, unsavedMark
 } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -1431,6 +1431,14 @@ try {
   await expect.poll(() => profileFigures(profileCard(page, 'id'))).toMatchObject({ NULLs: '0', Distinct: '100 · unique', Min: '0', Max: '99' })
   await expect.poll(() => profileFigures(profileCard(page, 'score'))).toMatchObject({ NULLs: '20 (20%)' })
   expect(await profileFigures(profileCard(page, 'name'))).toHaveProperty('Length')
+  // Running again with the panel open replaces the run's grids rather than leaving the last run's beside them.
+  await run('-- varia-fake: sets=W1*100')
+  await settled()
+  await run('-- varia-fake: sets=W1*100')
+  await settled()
+  await expect(anyResultGrid(page)).toHaveCount(1)
+  await expect(columnProfile(page)).toHaveCount(1)
+  await expect(columnProfile(page)).toContainText('100 rows')
   await columnProfile(page).getByRole('button', { name: 'Close Column Profile', exact: true }).click()
   await expect(columnProfile(page)).toHaveCount(0)
   await expect(show('Profile')).toHaveAttribute('aria-pressed', 'false')
@@ -1614,7 +1622,7 @@ try {
   // (results.search) and the grid marks them, the active one outlined. Enter, Shift+Enter and F3 step through them, a
   // sort searches again through its order, Columns matches column names, and Escape clears it all.
   const searchBox = resultsToolbar(page).getByRole('textbox', { name: 'Search results', exact: true })
-  const searchCount = resultsToolbar(page).getByRole('status')
+  const searchCount = resultsSearchCount(page), searchAnnouncer = resultsSearchAnnouncer(page)
   const searchMode = name => resultsToolbar(page).getByRole('group', { name: 'Search in', exact: true }).getByRole('button', { name, exact: true })
   // Pooled slots out of view keep their last classes while hidden, so only shown marks count.
   const marked = selector => grid().locator(selector).filter({ visible: true })
@@ -1643,22 +1651,43 @@ try {
   await cell(0, 0).click()
   await page.keyboard.press('Control+F')
   await expect(searchBox).toBeFocused()
+  // The live region says each count once it settles, not "Searching…" and every keystroke's count on the way (#347).
+  await searchAnnouncer.evaluate(element => {
+    window.__variaSearchSaid = []
+    window.__variaSearchObserver = new MutationObserver(() => { if (element.textContent) window.__variaSearchSaid.push(element.textContent) })
+    window.__variaSearchObserver.observe(element, { childList: true, characterData: true, subtree: true })
+  })
   // "complete 10" to "complete 19" in "clipped", but for rows 13 and 17, stored as "truncated pre".
   await page.keyboard.type('COMPLETE 1')
   await expect(searchCount).toHaveText('1 of 8')
   await expect(currentMatch).toHaveText('complete 10')
   await expect(currentMatch).toHaveAttribute('aria-colindex', '5')
+  await expect(searchAnnouncer).toHaveText('1 of 8 matches')
+  expect(await page.evaluate(() => { window.__variaSearchObserver.disconnect(); return window.__variaSearchSaid })).toEqual(['1 of 8 matches'])
+  // The Enter that commits an IME composition neither steps nor searches (#348).
+  await searchBox.evaluate(element => element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 229, isComposing: true, bubbles: true, cancelable: true })))
   await page.keyboard.press('Enter')
   await expect(searchCount).toHaveText('2 of 8')
   await expect(currentMatch).toHaveText('complete 11')
   await expect(marked(gridPart.searchMatch)).not.toHaveCount(0)
   await page.keyboard.press('Shift+Enter')
   await expect(searchCount).toHaveText('1 of 8')
-  // F3 from the grid, on the active match (in view in this short pane, where the first rows may not be).
+  // Steps from the box leave the grid's active cell where it was (the cell pressed before Ctrl+F), and the focus in the box.
+  expect(await active()).toMatchObject({ row: 0, column: 0 })
+  await expect(searchBox).toBeFocused()
+  // F3 from the grid, on the active match (in view in this short pane, where the first rows may not be), makes the next
+  // match the active cell too, so it is announced and Ctrl+C copies it (#347).
   await currentMatch.click()
   await page.keyboard.press('F3')
   await expect(searchCount).toHaveText('2 of 8')
   await expect(currentMatch).toHaveText('complete 11')
+  await expect.poll(async () => (await active()).text).toBe('complete 11')
+  await expect(grid()).toBeFocused()
+  await page.keyboard.press('Shift+F3')
+  await expect(searchCount).toHaveText('1 of 8')
+  await expect.poll(async () => (await active()).text).toBe('complete 10')
+  await page.keyboard.press('F3')
+  await expect.poll(async () => (await active()).text).toBe('complete 11')
   // Sorted descending, the matches follow the text order ("complete 19" first); the active one keeps its place.
   // A search again keeps the active match's place without scrolling; a step there and back shows it.
   const stepThereAndBack = async () => {
@@ -1709,9 +1738,14 @@ try {
   await expect(lastMatch).toHaveText('complete 19')
   await expect(lastMatch).toBeInViewport({ ratio: 1 })
   await searchBox.press('Escape')
+  await expect(searchBox).toHaveValue('')
+  await expect(searchBox).toBeFocused()
+  // Escape in the empty box goes back to the grid that last had the focus (#347).
+  await searchBox.press('Escape')
+  await expect(page.locator('[data-result-grid]:focus')).toHaveCount(1)
   await resize(...fullSize)
   await enlargeOutput(page)
-  console.log('Results checks: Ctrl+F searches every grid in the backend, Enter, Shift+Enter and F3 step through the marked matches, a sort searches again in its order, Columns matches column names, and Escape clears it.')
+  console.log('Results checks: Ctrl+F searches every grid in the backend, Enter, Shift+Enter and F3 step through the marked matches (F3 in a grid moving its active cell, an IME Enter doing nothing), the live region says only settled counts, a sort searches again in its order, Columns matches column names, and Escape clears it, then returns to the grid.')
 
   // 14f. Compare with Previous Result: the second result against the first, aligned by ItemId in the backend, adds their
   // unified diff as a third result: a changed row as its old row (−) then its new one (+) with the changed price marked, a
@@ -1743,7 +1777,29 @@ try {
   // The active cell names a changed value and its row's kind for screen readers.
   await cell(1, 5, diff).click()
   await expect(cell(1, 5, diff)).toHaveAttribute('aria-label', '1.75, changed, added row')
-  console.log('Results checks: Compare with Previous Result adds a unified diff of the two results, aligned by their key, with changed, soft, added and removed rows marked.')
+  // Where the features meet: a highlighted removed row shows its highlight over the diff's tone, and a search match on a
+  // changed value shows the match's tint over the changed one.
+  const background = locator => locator.evaluate(element => getComputedStyle(element).backgroundColor)
+  const removedTone = await background(diff.locator(gridPart.removedRow).first())
+  await cell(3, 1, diff).click({ button: 'right' })
+  await outputMenu.getByRole('menuitem', { name: 'Highlight', exact: true }).click()
+  await page.getByRole('menu', { name: 'Highlight', exact: true }).getByRole('menuitem', { name: 'Blue', exact: true }).click()
+  const highlightedRemoved = diff.locator(gridPart.highlightedRow).and(diff.locator(gridPart.removedRow))
+  await expect(highlightedRemoved).toHaveCount(1)
+  await expect.poll(() => background(highlightedRemoved)).not.toBe(removedTone)
+  // The changed value's own tint, measured now that the selection moved off it.
+  const changedTint = await background(cell(1, 5, diff))
+  await searchBox.click()
+  await page.keyboard.type('1.75')
+  const changedMatch = cell(1, 5, diff).and(diff.locator(gridPart.searchMatch))
+  await expect(changedMatch).toHaveCount(1)
+  await expect.poll(() => background(changedMatch)).not.toBe(changedTint)
+  await searchBox.press('Escape')
+  await cell(3, 1, diff).click({ button: 'right' })
+  await outputMenu.getByRole('menuitem', { name: 'Highlight', exact: true }).click()
+  await page.getByRole('menu', { name: 'Highlight', exact: true }).getByRole('menuitem', { name: 'Clear All Highlights', exact: true }).click()
+  await expect(diff.locator(gridPart.highlightedRow)).toHaveCount(0)
+  console.log('Results checks: Compare with Previous Result adds a unified diff of the two results, aligned by their key, with changed, soft, added and removed rows marked; highlights and search matches show over its tones.')
 
   // 15. Panes and tabs: F6 goes to the results and back; Ctrl+R hides and shows them keeping scroll, selection and a
   // resized column; a tab switch restores all three.

@@ -191,26 +191,43 @@ describe('command execution', () => {
     expect(editorOptions.getSnapshot().wordWrap).toBe(true)
     expect(commands.isToggled('editor.toggleWordWrap')).toBe(true)
   })
-  it('moves focus to the next query tab when Ctrl+Tab is pressed on a focused tab, so Close acts on a shown tab (#363)', async () => {
+  it('keeps query cycling in tab focus across groups and wraps in both directions', async () => {
     const { commands, documents, editorGroups } = fixture()
     const tabs = [documents.create('a.sql', '', 'master'), documents.create('b.sql', '', 'master'), documents.create('c.sql', '', 'master')]
-    documents.activate(tabs[0].id)
-    let focused: string | undefined = tabs[0].id
-    const focusTab = vi.fn((id: string) => { focused = id })
-    editorGroups.attach({ move: vi.fn(), focusGroup: vi.fn(), join: vi.fn(), capture: vi.fn(), restore: vi.fn(), focusedDocument: () => focused, focusTab })
+    editorGroups.update({
+      groups: [{ id: 'g1', documents: [tabs[0].id, tabs[1].id], active: tabs[1].id, floating: false }, { id: 'g2', documents: [tabs[2].id], active: tabs[2].id, floating: true }],
+      activeGroup: 'g1'
+    })
+    documents.activate(tabs[1].id)
+    let focused = tabs[1].id
+    vi.spyOn(editorGroups, 'focusedDocument').mockImplementation(() => focused)
+    const focusTab = vi.spyOn(editorGroups, 'focusTab').mockImplementation(id => {
+      expect(documents.active?.id).toBe(id)
+      focused = id
+    })
+    for (const [command, index] of [['document.next', 2], ['document.previous', 1], ['document.previous', 0], ['document.previous', 2], ['document.next', 0]] as const) {
+      await commands.execute(command, undefined, 'keybinding')
+      expect(documents.active?.id).toBe(tabs[index].id)
+      expect(focused).toBe(tabs[index].id)
+    }
+    expect(focusTab.mock.calls.map(([id]) => id)).toEqual([tabs[2].id, tabs[1].id, tabs[0].id, tabs[2].id, tabs[0].id])
+    // A menu can have restored focus to an inactive tab. Cycling still starts from the shown document's place.
+    focused = tabs[2].id
     await commands.execute('document.next', undefined, 'keybinding')
-    expect(documents.active?.id).toBe(tabs[1].id)
-    expect(focusTab).toHaveBeenLastCalledWith(tabs[1].id)
-    expect(editorGroups.focusedDocument()).toBe(tabs[1].id)
-    await commands.execute('document.previous', undefined, 'keybinding')
-    await commands.execute('document.previous', undefined, 'keybinding')
-    expect(focusTab).toHaveBeenLastCalledWith(tabs[2].id)
-    // From the editor's text, focus stays where it is.
-    focused = undefined
-    focusTab.mockClear()
-    await commands.execute('document.next', undefined, 'keybinding')
-    expect(documents.active?.id).toBe(tabs[0].id)
+    expect([documents.active?.id, focused]).toEqual([tabs[1].id, tabs[1].id])
+  })
+  it.each(['document.next', 'document.previous'] as const)('leaves editor focus alone for %s', async command => {
+    const { commands, documents, editorGroups } = fixture()
+    const first = documents.create('a.sql', '', 'master')
+    documents.create('b.sql', '', 'master')
+    const focused = vi.spyOn(editorGroups, 'focusedDocument').mockReturnValue(undefined)
+    const focusTab = vi.spyOn(editorGroups, 'focusTab')
+    const focusActive = vi.spyOn(documents, 'focusActive')
+    await commands.execute(command, undefined, 'keybinding')
+    expect(documents.active?.id).toBe(first.id)
+    expect(focused).toHaveBeenCalledOnce()
     expect(focusTab).not.toHaveBeenCalled()
+    expect(focusActive).not.toHaveBeenCalled()
   })
   it('saves word wrap through settings with Alt+Z, and editorWordWrap follows the stored setting', async () => {
     const { commands, keybindings, api, context, settings } = fixture({ platform: 'linux', settings: { 'textEditor.sql.wordWrap': true } })
