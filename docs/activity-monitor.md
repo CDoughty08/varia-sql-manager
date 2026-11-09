@@ -428,7 +428,7 @@ Resource Waits has Hide benign waits (on by default), which leaves out benign wa
 | Over threshold | `overThreshold` | Files whose read or write latency in the interval reached the warning threshold. |
 
 Data File I/O tones a row warning when its read or write latency reaches 20 ms and error from 50 ms; the files filter carries the
-`activityMonitor.fileLatency*` settings in their place (1 to 10,000 ms).
+`activityMonitor.fileLatency*` settings in their place (1 to 10,000 ms). An error threshold below the warning one acts as the warning one.
 
 Recent Expensive Queries ranks by CPU, Duration, Logical Reads, Physical Reads, Writes, Executions, re-sorted from the last sample without new SQL.
 

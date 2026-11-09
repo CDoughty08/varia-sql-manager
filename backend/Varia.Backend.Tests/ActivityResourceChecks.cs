@@ -87,6 +87,15 @@ internal static class ActivityResourceChecks
         var spanned = rows.Build(WaitResults([Wait("LCK_M_X", 50, 100_000)]), 40_000, Series, 20, 50);
         check(missed.Types is null && missed.Categories is null && Cell(types, spanned.Types!.Single(), "waitRate") == "1000.0",
             "a sample without the wait statistics sends no wait tables, and the next rate spans the ten seconds since the last one read, never two intervals over one");
+
+        // The waiters statement failed alone: rates still arrive, and current waiters are unknown (blank), not none.
+        var noWaiters = rows.Build(new Dictionary<string, ActivityResult> { ["waitStats"] = Result(Statement("waitStats"), [Wait("LCK_M_X", 60, 105_000)]) }, 45_000, Series, 20, 50);
+        var onlyWaiters = rows.Build(new Dictionary<string, ActivityResult> { ["waiters"] = WaitResults([], ("LCK_M_X", 3))["waiters"] }, 50_000, Series, 20, 50);
+        var lockType = noWaiters.Types!.Single();
+        var lockCategory = Row(rows.CategoriesWriter, noWaiters.Categories, "categoryId", "lock")!;
+        check(Cell(types, lockType, "waitRate") == "1000.0" && Cell(types, lockType, "currentWaiters") is null && Cell(rows.CategoriesWriter, lockCategory, "currentWaiters") is null
+            && onlyWaiters.Types is null && onlyWaiters.Categories is null && onlyWaiters.Series.All(value => value is null),
+            "without the waiters statement wait rates still arrive with current waiters blank; without the wait statistics no wait table or series is sent, waiters alone giving no rate");
     }
 
     private static void Categories(Action<bool, string> check)
@@ -122,8 +131,9 @@ internal static class ActivityResourceChecks
         var latest = Row(categories, later.Categories, "categoryId", "lock")!;
         var gone = rows.Build(WaitResults([Wait("LCK_M_S", 3, 2_000), Wait("LCK_M_X", 3, 11_000, 1_000)]), 80_000, Series, 20, 50);
         check(Cell(categories, latest, "waitRate") == "100.0" && Cell(categories, latest, "minuteAverage") == "300.0"
-            && Cell(categories, Row(categories, gone.Categories, "categoryId", "lock")!, "minuteAverage") == "42.9",
-            "the 1-Minute Average weighs each sample by its span (12,000 ms over 40 s is 300 ms/s) and drops samples that ended a minute or more ago (3,000 ms over 70 s)");
+            && Cell(categories, Row(categories, gone.Categories, "categoryId", "lock")!, "minuteAverage") == "33.3",
+            "the 1-Minute Average weighs each sample by its span (12,000 ms over 40 s is 300 ms/s), drops samples that ended a minute or more ago, and counts a sample "
+            + "that began before the minute only for its part inside it (2,000 of 3,000 ms over 60 s)");
     }
 
     /// <summary>A sys.dm_io_virtual_file_stats row (with names unless hidden).</summary>
@@ -176,6 +186,13 @@ internal static class ActivityResourceChecks
             "the files filter's latency thresholds (the activityMonitor.fileLatency* settings) tone the rows in place of the defaults");
 
         // A database dropped and another made under its id, with lower counters: no rate, never a negative one.
+        // The settings are independent: an error threshold below the warning one acts as the warning one, so Over threshold and
+        // every tone still start at the warning threshold (log: 60 ms; data: 30 ms).
+        var inverted = rows.Build(FileResults(File(5, 1, 400, 10_000), File(5, 2, 0, 0, 1_300, 72_100, "LOG"), File(7, 2, 40, 60, named: false)), 25_000, Series, 50, 10);
+        check(Row(files, inverted.Files, "type", "Log")!.Cells[tone].Text == "error" && inverted.FileFacts[Row(files, inverted.Files, "type", "Log")!].OverThreshold
+            && Row(files, inverted.Files, "fileId", "1")!.Cells[tone].Text is null && !inverted.FileFacts[Row(files, inverted.Files, "fileId", "1")!].OverThreshold,
+            "with an error threshold below the warning one, a file under the warning threshold is neither toned nor over threshold, and one past it is an error");
+
         var reused = rows.Build(FileResults(File(5, 1, 3, 9)), 30_000, Series, 20, 50);
         check(Cell(files, reused.Files!.Single(), "readsRate") is null && reused.Files!.Single().Cells[tone].Text is null,
             "a file whose counters went down (its database dropped and another made under its id) has no rate");
@@ -210,7 +227,7 @@ internal static class ActivityResourceChecks
         var ran = new List<string>();
         long ticks = 10_000;
         long lockWait = 1_000;
-        var reader = new ActivityReader(new NoHost(), "c", new ActivityLiveArgs([new ActivityFilterDto("files", LatencyWarningMs: 5)]))
+        var reader = new ActivityReader(new NoHost(), "c", new ActivityLiveArgs([new ActivityFilterDto("files", LatencyWarningMs: 200, LatencyErrorMs: 300)]))
         {
             TestRun = (statement, values) =>
             {
@@ -246,7 +263,7 @@ internal static class ActivityResourceChecks
         check(baseline.Raw!.Values.All(value => value is null) && next.Raw is { MsTicks: 15_000, StartTicks: 1 } raw && raw.Values[lockSeries] == 1_000 && raw.Values[idleSeries] == 10_000
             && tables.SequenceEqual(["waitCategories", "waitTypes", "files"]) && next.Errors.Count == 0,
             "the reader sends the wait series (null on its baseline) with the server's clock, and the three tables");
-        check(categories.View is { } view && categories.Rows.Count(view) == 1 && categories.FacetScope is not null && fileRow.Cells[^1].Text == "error",
-            "the reader applies Hide benign waits by default (Idle hidden), and the files filter's thresholds tone the rows (5 ms warning: 100 ms is an error past 50)");
+        check(categories.View is { } view && categories.Rows.Count(view) == 1 && categories.FacetScope is not null && fileRow.Cells[^1].Text is null,
+            "the reader applies Hide benign waits by default (Idle hidden), and tones rows by the files filter's thresholds, not the defaults (100 ms is under a 200 ms warning)");
     }
 }

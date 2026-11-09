@@ -287,7 +287,7 @@ export function renderActivityMonitorDocs(): string {
     table(['Data File I/O chip', 'Id', 'Shows'], fileViews.map(view => [fileViewTitles[view], code(view), fileViewNotes[view]])),
     '',
     `Data File I/O tones a row warning when its read or write latency reaches ${fileLatencyDefaults.warning} ms and error from ${fileLatencyDefaults.error} ms; the files filter carries the`,
-    `\`activityMonitor.fileLatency*\` settings in their place (1 to ${number(activityLimits.fileLatencyMs)} ms).`,
+    `\`activityMonitor.fileLatency*\` settings in their place (1 to ${number(activityLimits.fileLatencyMs)} ms). An error threshold below the warning one acts as the warning one.`,
     '',
     `Recent Expensive Queries ranks by ${Object.values(rankChips).map(chip => chip.title).join(', ')}, re-sorted from the last sample without new SQL.`,
     '',

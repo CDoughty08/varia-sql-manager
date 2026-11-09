@@ -14,7 +14,8 @@ internal sealed record ActivityResourcesSample(List<LiveRow>? Categories, List<L
 /// a type new since the last sample counts from zero (the statement leaves out types that never waited), and a type whose
 /// counters went down means the statistics were cleared, so that sample has no rate at all. A first sample, the first after
 /// a pause, a restart or a lost connection has none either (Reset). Types roll up to the catalogue's categories (benign
-/// names in Idle, Unknown shown); the 1-Minute Average is the time-weighted mean of the samples in the last minute. File
+/// names in Idle, Unknown shown); the 1-Minute Average is the time-weighted mean of the last minute, each sample counted only
+/// for the part of its interval inside it. File
 /// rates are per file, keyed by database and file id (LiveKeyedDeltas, so a reused id whose counters went down starts
 /// again), with latencies as stall per I/O in the interval, toned by the files filter's thresholds. Pure apart from those
 /// baselines, so the offline checks feed it rows. Nothing is logged.</summary>
@@ -140,11 +141,13 @@ internal sealed class ActivityResourceRows
         previous = current;
         previousAt = at;
 
-        // The minute's mean: wait time over the time the samples in the last minute span.
+        // The minute's mean: wait time over the last minute. A sample whose interval starts before it (a long interval, or one
+        // after failed samples) counts only for the part inside it, as if its waits were spread evenly over its interval.
         if (rated) minute.Enqueue(new(at, elapsed, categoryWait));
-        var window = catalog.Limit("waitAverageMs");
-        while (minute.TryPeek(out var oldest) && oldest.At <= at - window) minute.Dequeue();
-        var spanned = minute.Sum(entry => entry.Span);
+        var start = at - catalog.Limit("waitAverageMs");
+        while (minute.TryPeek(out var oldest) && oldest.At <= start) minute.Dequeue();
+        double Inside(Interval entry) => (double)Math.Min(entry.Span, entry.At - start) / entry.Span;
+        var spanned = minute.Sum(entry => entry.Span * Inside(entry));
 
         for (var i = 0; i < series.Count; i++)
         {
@@ -164,7 +167,7 @@ internal sealed class ActivityResourceRows
             categories.Set(cells, "category", LiveCell.Of(catalog.WaitLabels.GetValueOrDefault(id, id)));
             categories.Set(cells, "waitRate", ActivityRowWriter.Decimal(rate, 1));
             categories.Set(cells, "signalRate", ActivityRowWriter.Decimal(rated ? categorySignal[category] * 1000 / elapsed : null, 1));
-            categories.Set(cells, "minuteAverage", ActivityRowWriter.Decimal(spanned > 0 ? minute.Sum(entry => entry.WaitMs[category]) * 1000 / spanned : null, 1));
+            categories.Set(cells, "minuteAverage", ActivityRowWriter.Decimal(spanned > 0 ? minute.Sum(entry => entry.WaitMs[category] * Inside(entry)) * 1000 / spanned : null, 1));
             categories.Set(cells, "averageWaiters", ActivityRowWriter.Decimal(rate / 1000, 3));
             categories.Set(cells, "currentWaiters", LiveCell.Of((long?)categoryWaiters[category]));
             categories.Set(cells, "cumulativeSeconds", ActivityRowWriter.Decimal(categoryCumulative[category] / 1000, 3));
@@ -218,7 +221,9 @@ internal sealed class ActivityResourceRows
             double? writeLatency = r[3] is > 0 && r[5] is { } writeStall ? writeStall / r[3]!.Value : null;
             double? response = r[2] is { } reads && r[3] is { } writes && reads + writes > 0 && r[4] is { } stallRead && r[5] is { } stallWrite ? (stallRead + stallWrite) / (reads + writes) : null;
             var worst = Math.Max(readLatency ?? 0, writeLatency ?? 0);
-            var tone = worst >= errorMs ? "latencyError" : worst >= warningMs ? "latencyWarning" : null;
+            // Settings are independent, so an error threshold below the warning one acts as the warning one: a file is over
+            // threshold (and toned) only from the warning threshold.
+            var tone = worst < warningMs ? null : worst >= Math.Max(warningMs, errorMs) ? "latencyError" : "latencyWarning";
             var (typeId, typeLabel) = Type(io.Text(raw, "type_desc"));
 
             var cells = files.New();

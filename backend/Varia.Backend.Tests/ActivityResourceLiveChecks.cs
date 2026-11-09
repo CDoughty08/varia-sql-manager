@@ -68,7 +68,7 @@ internal static class ActivityResourceLiveChecks
                 + categories.Length + " categories, " + types.Length + " types");
             var master = files.Where(row => row["ioDatabaseId"] == "1").ToList();
             check(master.Any(row => row["ioType"] == "Rows") && master.Any(row => row["ioType"] == "Log") && master.All(row => row["ioDatabase"] == "master" && row["ioFileName"] is { Length: > 0 }
-                && row["ioSizeMb"] is not null && row["ioReadsRate"] is not null) && files.All(row => row.ContainsKey("ioTone") && row["ioTone"] is null or "warning" or "error"),
+                && row["ioSizeMb"] is not null && row["ioReadsRate"] is not null) && files.All(row => row["ioTone"] is null or "warning" or "error"),
                 "Data File I/O shows master's data and log files with names, sizes and rates, and each row's tone (none, warning or error)");
         }
         finally

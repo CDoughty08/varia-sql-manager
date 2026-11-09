@@ -45,8 +45,8 @@
 // unknown one, so suites that do not look at status chips see one refused subscription per connection and nothing else.
 // The activity source (the Activity Monitor) runs no SQL either: its overview samples every series of the catalogue from
 // a slow wave (blocked sessions only with the control file activity-blocked; with activity-failing each sample fails as
-// BLOCKED, as a probe that waited out its lock timeout does), the resources probe opens unavailable as the
-// real one does until it is sampled, and on server 'no-permission' the overview opens unavailable (PERMISSION_DENIED);
+// BLOCKED, as a probe that waited out its lock timeout does), a probe the catalogue lists in pendingProbes opens unavailable
+// as the real one does (none today), and on server 'no-permission' the overview opens unavailable (PERMISSION_DENIED);
 // a connection to that server reports its login, as the server profile does, so the monitor offers Copy GRANT statement.
 // The SSIS tree's ssis.catalog source samples every 200 ms whatever its interval, its fingerprints counting the extra/ssis*
 // rows.
