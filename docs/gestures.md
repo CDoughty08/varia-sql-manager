@@ -8,7 +8,7 @@ matches; a gesture matches when all of its modifiers are held. "Modifier" gestur
 pointing; "Command" gestures run a command that the keyboard also reaches; "Fixed" gestures belong to the platform,
 Chromium, or a library and cannot be remapped. "Choices" are the modifiers the Shortcuts page will offer.
 
-## Gestures (14)
+## Gestures (15)
 
 ### Global
 
@@ -53,3 +53,9 @@ Chromium, or a library and cannot be remapped. "Choices" are the modifiers the S
 | Gesture | Id | What it does | Kind | Windows | Linux | macOS | Choices or lock | Keyboard |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Rename Tab | `documentTabs.rename` | Opens the rename box on a query tab. | Command | Double-click a query tab | Double-click a query tab | Double-click a query tab | Locked: Only modifier gestures can be remapped in this version; F2 renames a focused tab. | Rename Tab… (`document.rename`) |
+
+### Connect Dialog
+
+| Gesture | Id | What it does | Kind | Windows | Linux | macOS | Choices or lock | Keyboard |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Connect to Saved Connection | `connections.connect` | Connects to the saved connection in the Connect dialog. | Fixed | Double-click a saved connection | Double-click a saved connection | Double-click a saved connection | Locked: Double-clicking submits the Connect dialog; the Connect button also works from the keyboard. | — |

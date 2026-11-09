@@ -29,7 +29,8 @@ export const gestureScopes = {
   objectExplorer: 'Object Explorer',
   panels: 'Panels and Editor Tabs',
   popouts: 'Popout Windows',
-  documentTabs: 'Document Tabs'
+  documentTabs: 'Document Tabs',
+  connectionDialog: 'Connect Dialog'
 } as const
 export type GestureScope = keyof typeof gestureScopes
 
@@ -96,6 +97,11 @@ export const gestureCatalog = {
     title: 'Zoom', description: 'Zooms the window. The results grid and Object Explorer leave the wheel to Chromium while Control is held.',
     kind: 'fixed', scope: 'global', action: 'wheel', target: 'anywhere', modifiers: ['ctrl'], keyboard: ['view.zoomIn', 'view.zoomOut', 'view.resetZoom'],
     locked: 'Chromium zooms the window with Control+wheel and with a trackpad pinch.'
+  },
+  'connections.connect': {
+    title: 'Connect to Saved Connection', description: 'Connects to the saved connection in the Connect dialog.',
+    kind: 'fixed', scope: 'connectionDialog', action: 'doubleClick', target: 'a saved connection', modifiers: [],
+    locked: 'Double-clicking submits the Connect dialog; the Connect button also works from the keyboard.'
   },
   'explorer.peekHover': {
     title: 'Peek on Hover', description: 'Peeks a table, view, procedure or function while the pointer rests on its row.',

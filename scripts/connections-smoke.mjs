@@ -747,8 +747,11 @@ async function rememberPassword() {
   await dialog.screenshot({ path: resolve('artifacts', 'connect-remember-password.png') })
   expect(await page.evaluate(async () => JSON.stringify(await window.varia.loadConnectionLibrary()))).not.toContain(marker)
   expect(await page.evaluate(() => document.body.innerHTML)).not.toContain(marker)
-  // (4) An empty Password connects with main's injected one.
-  await connected(dialog)
+  // (4) Double-clicking a recent connection selects it and connects with main's injected password, even after editing the form.
+  await dialog.getByLabel('Server Name', { exact: true }).fill('other-server')
+  await dialog.getByLabel('Login', { exact: true }).fill('other-reader')
+  await savedConnections(dialog, 'password-check').dblclick()
+  await expect(dialog).toHaveCount(0)
   expect((await calls()).filter(call => call.method === 'connections.connect' && call.params.server === 'password-check').map(call => call.params.password)).toEqual(['<redacted>', '<redacted>'])
   // (5) A forged request naming the entry gets no password for another server or a weaker certificate check.
   const forged = await page.evaluate(async profileId => {
@@ -767,7 +770,10 @@ async function rememberPassword() {
   await app.close(); app = undefined
   await launch(options, 'fake')
   dialog = await remembered()
-  await connected(dialog)
+  await dialog.getByRole('button', { name: 'Favorite password-check', exact: true }).click()
+  await expect(savedConnections(dialog, 'password-check')).toHaveCount(2)
+  await savedConnections(dialog, 'password-check').first().dblclick()
+  await expect(dialog).toHaveCount(0)
   // (6b) An untrusted certificate: trusting it changes the certificate settings the remembered password was saved for, and
   // main gives a password only to those, so the fix checks the box and asks for the password instead of connecting.
   await writeFile(join(control, 'untrusted-certificate'), '')
