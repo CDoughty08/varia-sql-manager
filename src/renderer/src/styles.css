@@ -2268,6 +2268,30 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .activity-pane-tabs [role="tab"][aria-selected="true"], .activity-pane-tabs [role="tab"][aria-selected="true"]:hover:not(:disabled) { color: var(--varia-panelTitle-activeForeground); box-shadow: inset 0 -2px 0 var(--varia-panelTitle-activeBorder); }
 .activity-pane-tabs [role="tab"]:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .activity-pane-body { display: flex; flex: 1; min-height: 0; overflow: auto; }
+/* A pane with a grid: its toolbar, the grid (which scrolls itself) and a status line. */
+.activity-pane-content { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.activity-pane-tools { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1) var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-2); border-bottom: 1px solid var(--varia-panel-border); }
+.activity-tools-separator { width: 1px; height: 18px; background: var(--varia-panel-border); }
+.activity-tools-spacer { flex: 1; }
+.activity-tool { display: inline-flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-control); padding: 0 var(--varia-space-2); }
+.activity-tool[data-filtered] { color: var(--varia-list-activeSelectionForeground); }
+.activity-filter-box { display: inline-flex; align-items: center; gap: var(--varia-space-1); color: var(--varia-descriptionForeground); }
+.activity-filter-box input { width: 22ch; height: var(--varia-control); padding: 0 var(--varia-space-2); }
+.activity-column-filters { position: relative; }
+.activity-popover { position: absolute; top: calc(100% + 4px); right: 0; z-index: 20; display: flex; flex-direction: column; gap: var(--varia-space-2); width: 300px; max-height: 360px; padding: var(--varia-space-2); border: 1px solid var(--varia-widget-border); border-radius: var(--varia-radius-lg); background: var(--varia-editorWidget-background); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); }
+.activity-popover-row { display: flex; align-items: center; gap: var(--varia-space-2); }
+.activity-popover-row select { flex: 1; }
+.activity-popover-values { display: flex; flex-direction: column; gap: 2px; min-height: 0; overflow: auto; }
+.activity-popover-values .checkbox-label { display: flex; align-items: center; gap: var(--varia-space-2); }
+.activity-popover-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-popover-count { color: var(--varia-descriptionForeground); font-variant-numeric: tabular-nums; }
+.activity-popover-actions { display: flex; justify-content: flex-end; gap: var(--varia-space-2); }
+.activity-pane-grid { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.activity-pane-notice { flex: none; margin: var(--varia-space-1) var(--varia-space-2); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-lg); }
+.activity-pane-rows { position: relative; display: flex; flex: 1; min-height: 0; }
+.activity-pane-grid[data-stale] .activity-pane-rows { opacity: 0.6; }
+.activity-pane-loading { position: absolute; inset: 0; z-index: 4; padding: var(--varia-space-2); background: var(--varia-resultsGrid-background); }
+.activity-pane-status { flex: none; margin: 0; padding: 0 var(--varia-space-2); height: var(--varia-status); line-height: var(--varia-status); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-top: 1px solid var(--varia-panel-border); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
 /* Two rows of four tiles under 960 px of document (where eight still leave SSMS's names whole; D-am §3.2 says 1,100,
    which at a 1,280 px window pushes the panes out of the document), four rows of two under 560 px. */
 @container (max-width: 960px) { .activity-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); } }

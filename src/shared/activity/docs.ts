@@ -13,6 +13,10 @@ export const copyKeys = {
 } as const
 /** The monitor's commands and keys the document section lists (Windows and Linux, then macOS); tests/activity-catalog.test.ts
  *  checks them against the commands catalogue, which this file cannot import in plain Node. */
+/** What a pane whose grid has arrived shows, for the Panes table. */
+const shownPaneNotes: { readonly [P in (typeof activityPanes)[number]]?: string } = {
+  processes: 'A live grid of sessions with view chips, toggles, column filters and a filter box (below).'
+}
 export const documentCommands = {
   'activity.open': { title: 'Activity Monitor', other: '—', darwin: '⌥⌘A' },
   'activity.togglePause': { title: 'Pause', other: '—', darwin: '—' },
@@ -149,7 +153,14 @@ export function renderActivityMonitorDocs(): string {
     'other shows swaps them. The Blocking tab counts blocked sessions. A pane whose grid has not arrived says so, and its',
     'probe stays paused: no SQL runs for a pane nobody can read.',
     '',
-    table(['Pane', 'Now'], pendingPanes.map(pane => [paneSpecs[pane].title, pendingPaneNote(pane)])),
+    table(['Pane', 'Now'], activityPanes.map(pane => [paneSpecs[pane].title, pendingPanes.includes(pane) ? pendingPaneNote(pane) : shownPaneNotes[pane] ?? 'Shown.'])),
+    '',
+    `Processes shows the sessions probe's rows in a live grid (one row per session, toned blocked, blocking, rolling back,`,
+    `system or departed). Its toolbar holds the view chips, the System sessions and Varia's own toggles, Column filters (a`,
+    'column, then its values with their counts from the facets, (Blanks) and (Non-blanks)), the filter box (sent when typing',
+    'pauses, on Enter or on leaving it; Escape puts back what was sent) and Clear filters, which keeps the toggles. All of them',
+    `travel as the source's args and the backend filters the sample, so the SQL never changes. A status line counts the`,
+    'sessions shown and says what is hidden or cut; the pane keeps its last rows, dimmed, with the reason when a sample fails.',
     '',
     table(['Command', 'Id', 'Windows and Linux', 'macOS'], Object.entries(documentCommands).map(([id, command]) => [command.title, code(id), command.other, command.darwin])),
     '',

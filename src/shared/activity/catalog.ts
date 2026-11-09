@@ -435,7 +435,6 @@ export const defaultPanes = { primary: 'processes', secondary: 'waits' } as cons
  *  (no SQL runs for a pane nobody can read). Processes, Blocking and Active Expensive Queries arrive with the sessions
  *  grids, Resource Waits and Data File I/O with the resources probe, Recent Expensive Queries with query statistics. */
 export const pendingPanes: readonly ActivityPane[] = [
-  'processes',
   'blocking',
   'waits',
   'fileIo',

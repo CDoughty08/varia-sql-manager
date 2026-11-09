@@ -26,6 +26,7 @@ import { scaledRing, type RingReader } from '../live/ring'
 import { freshness, pillStatus } from '../live/status'
 import { splitLimits, type MonitorState, type PaneSlot } from './ActivityMonitorService'
 import { tileName } from '../kit/Tile'
+import ProcessesPane from './panes/ProcessesPane'
 import { chartScaleOf, latestValue, monitorFacts, monitorNotice, nextAnnouncement, overviewProbe, seriesIndex, tileReadings, type Announcement, type TileReading } from './tiles'
 
 const noHandle = { subscribe: () => () => {}, getSnapshot: () => undefined }
@@ -68,7 +69,7 @@ export default function ActivityMonitor({ documentId }: { readonly documentId: s
       {state.expanded.length > 0 && <section className="activity-charts" aria-label="Charts" data-activity-region="charts">
         {state.expanded.map(index => <ExpandedChart key={index} index={index} handle={handle} state={state} link={link} />)}
       </section>}
-      <Panes state={state} ring={ring} />
+      <Panes state={state} ring={ring} handle={handle} snapshot={snapshot} />
     </div>
   </DocumentFrame>
 }
@@ -190,7 +191,7 @@ function ExpandedChart({ index, handle, state, link }: { readonly index: number;
 }
 
 /** The panes: one slot, or two side by side (stacked in a narrow document) with a splitter between them. */
-function Panes({ state, ring }: { readonly state: MonitorState; readonly ring: RingReader | undefined }) {
+function Panes({ state, ring, handle, snapshot }: { readonly state: MonitorState; readonly ring: RingReader | undefined; readonly handle: LiveHandle; readonly snapshot: LiveSnapshot }) {
   const { activity } = useWorkbench()
   const box = useRef<HTMLDivElement>(null)
   const [wide, setWide] = useState(false)
@@ -230,18 +231,19 @@ function Panes({ state, ring }: { readonly state: MonitorState; readonly ring: R
   const style = !state.split ? undefined : wide ? { gridTemplateColumns: `minmax(0, ${first}fr) auto minmax(0, ${100 - first}fr)` }
     : { gridTemplateRows: `minmax(${paneFloor}px, ${first}fr) auto minmax(${paneFloor}px, ${100 - first}fr)`, minHeight: 2 * paneFloor + splitterSize }
   return <div ref={box} className="activity-panes" data-orientation={orientation} data-split={state.split ? '' : undefined} style={style}>
-    <Pane state={state} slot="primary" blocked={blocked} />
+    <Pane state={state} slot="primary" blocked={blocked} handle={handle} snapshot={snapshot} />
     {state.split && <>
       <div className="activity-splitter" role="separator" tabIndex={0} aria-orientation={wide ? 'vertical' : 'horizontal'} aria-label="Resize the panes"
         aria-valuemin={splitLimits.minimum * 100} aria-valuemax={splitLimits.maximum * 100} aria-valuenow={Math.round(state.splitRatio * 100)} onPointerDown={drag} onKeyDown={splitterKey} />
-      <Pane state={state} slot="secondary" blocked={blocked} />
+      <Pane state={state} slot="secondary" blocked={blocked} handle={handle} snapshot={snapshot} />
     </>}
   </div>
 }
 
 /** One pane slot: a tab per pane (the badge on Blocking counts blocked sessions), and the chosen pane's body. */
-function Pane({ state, slot, blocked }: { readonly state: MonitorState; readonly slot: PaneSlot; readonly blocked: number }) {
+function Pane({ state, slot, blocked, handle, snapshot }: { readonly state: MonitorState; readonly slot: PaneSlot; readonly blocked: number; readonly handle: LiveHandle; readonly snapshot: LiveSnapshot }) {
   const { activity } = useWorkbench()
+  const facts = useSyncExternalStore(activity.facts.subscribe, () => activity.factsOf(state.id))
   const list = useRef<HTMLDivElement>(null)
   const current = state[slot], base = `activity-${state.id}-${slot}`
   const choose = (pane: ActivityPane, focus: boolean) => {
@@ -264,6 +266,7 @@ function Pane({ state, slot, blocked }: { readonly state: MonitorState; readonly
       </button>)}
     </div>
     <div className="activity-pane-body" role="tabpanel" id={`${base}-panel`} aria-labelledby={`${base}-${current}`}>
+      {current === 'processes' && <ProcessesPane state={state} handle={handle} snapshot={snapshot} facts={facts} labelledBy={`${base}-${current}`} />}
       {pendingPanes.includes(current) && <EmptyState icon="pulse" title={paneSpecs[current].title} detail={pendingPaneNote(current)} />}
     </div>
   </section>
