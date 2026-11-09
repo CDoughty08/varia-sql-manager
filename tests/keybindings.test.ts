@@ -209,7 +209,9 @@ describe('default keybindings', () => {
     // macOS has ⌘G and F3 for Find Next, as Monaco does.
     const macEditing = ['edit.findNext', 'edit.findNext', 'edit.findPrevious', 'edit.findPrevious', 'edit.goToLine', 'edit.makeUppercase', 'edit.makeLowercase', ...bookmarksAndSnippets]
     const clipboard = ['edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'], display = ['view.zoomIn', 'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.toggleDevTools']
-    const output = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs']
+    // Search in results in a grid: Ctrl+F, then F3 and Shift+F3 (on macOS also ⌘G and ⇧⌘G, as Find Next has).
+    const output = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findPrevious']
+    const macOutput = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findNext', 'output.findPrevious', 'output.findPrevious']
     // A Search Objects result's Copy Name (the clipboard's key, which the list runs) and Copy Fully Qualified Name.
     const search = ['search.copyName', 'search.copyQualifiedName']
     const groups = ['editor.splitRight', 'editor.splitDown', 'editor.moveToNextGroup', 'editor.moveToPreviousGroup', 'editor.focusNextGroup', 'editor.focusPreviousGroup']
@@ -223,7 +225,7 @@ describe('default keybindings', () => {
     expect(defaultRules('darwin').map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.saveAll', 'file.close', 'file.close', 'file.close', 'edit.undo', 'edit.redo', ...clipboard, 'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane',
       'query.execute', 'query.execute', 'query.estimatePlan', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.focusSearch', 'explorer.rename', 'explorer.delete', 'explorer.delete', 'explorer.properties', 'tableDesigner.properties', 'ssis.refreshOperations', 'ssis.refreshProperties', 'explorer.peek', 'explorer.peek', 'explorer.openPeekTab', 'explorer.openPeekTab', 'peek.refresh', 'query.changeDatabase',
       'document.next', 'document.previous', 'document.moveLeft', 'document.moveRight', 'document.rename', ...groups, ...native, ...macEditing, 'activity.open', ...monitor,
-      'preferences.options', 'options.focusSearch', ...display, ...output, ...search])
+      'preferences.options', 'options.focusSearch', ...display, ...macOutput, ...search])
     expect(defaultRules('win32').find(rule => rule.command === 'window.close')?.chords).toEqual(['alt+f4'])
     expect(defaultRules('linux').find(rule => rule.command === 'window.close')?.chords).toEqual(['ctrl+q'])
   })

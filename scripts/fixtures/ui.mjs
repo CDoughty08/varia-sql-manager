@@ -285,6 +285,12 @@ export const gridPart = {
   sortButton: '.rg-cs',
   sortedButton: '.rg-cs.on',
   sortOrder: '.rg-co',
+  /** Search in results' marks (GridView's marks), drawn only: a matched cell, the active match, a column header a
+   *  column-name search matches, and cells and headers it leaves out. The active cell's label says "search match". */
+  searchMatch: '.rg-c.is-hit',
+  searchCurrent: '.rg-c.is-cur',
+  searchColumn: '.rg-ch.hit, .rg-ch.cur',
+  searchDimmedHeader: '.rg-ch.dim',
   borderHover: '.rg-border-hover',
   /** A live grid's row tones (LiveGrid), drawn with no ARIA of their own: the active cell's label names the tone. */
   toneError: '.tone-error',

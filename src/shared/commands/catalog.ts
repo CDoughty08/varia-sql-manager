@@ -836,6 +836,20 @@ export const commandCatalog = {
     title: 'Clear Sort', category: 'Query', keywords: ['order', 'unsort', 'original', 'grid'], palette: false,
     menus: [{ menu: 'output.context', group: '2_sort', order: 5, mnemonic: 'r', when: "outputView == 'grid'" }]
   },
+  // Search in results (the results toolbar's search box, results.search): Find in Results puts the focus in the box, as
+  // Ctrl+F does in a grid; Find Next and Previous step through the matches of every grid, as F3 and Shift+F3 do there.
+  'output.find': {
+    title: 'Find in Results', category: 'Query', icon: 'search', keywords: ['search', 'find', 'grid', 'values', 'columns', 'filter'], precondition: 'hasResults',
+    unavailableHint: 'Execute a query that returns results first.', keybindings: [{ key: 'mod+f', when: 'outputGridFocus' }]
+  },
+  'output.findNext': {
+    title: 'Find Next in Results', category: 'Query', keywords: ['search', 'next', 'match', 'grid'], precondition: 'hasResults', unavailableHint: 'Execute a query that returns results first.',
+    keybindings: [{ win: 'f3', linux: 'f3', mac: 'mod+g', when: 'outputGridFocus' }, { mac: 'f3', when: 'outputGridFocus' }]
+  },
+  'output.findPrevious': {
+    title: 'Find Previous in Results', category: 'Query', keywords: ['search', 'previous', 'match', 'grid'], precondition: 'hasResults', unavailableHint: 'Execute a query that returns results first.',
+    keybindings: [{ win: 'shift+f3', linux: 'shift+f3', mac: 'mod+shift+g', when: 'outputGridFocus' }, { mac: 'shift+f3', when: 'outputGridFocus' }]
+  },
   // The results toolbar's Sort text by choices (queryResults.grid.sortText); each goes back to Value when it is already on.
   'output.sortTextByChars': {
     title: 'Sort Text by Length in Characters', category: 'Query', icon: 'symbol-ruler', keywords: ['sort', 'length', 'len', 'characters', 'text', 'grid'], toggled: 'resultsSortTextChars'

@@ -754,6 +754,24 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .results-segments button.results-icon-toggle { padding: 0 4px; }
 .results-segments button[aria-pressed="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-panelTitle-activeForeground); font-weight: 600; transition: none; }
 @media (forced-colors: active) { .results-segments button[aria-pressed="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; } }
+/* Search in results: the box, its count, Previous and Next, and Data or Columns. Its input gives way first in a narrow
+   panel, never below what the box holds, so its buttons never run under the groups after it; past that the toolbar clips
+   its last groups. A narrow window (a 1024-wide display) drops the groups' icons, the box's magnifier and its Previous and
+   Next (Enter, Shift+Enter, F3 and Shift+F3 still step), and tightens the buttons, so every group fits while the box is empty. */
+.results-search { display: flex; flex: 0 1 300px; align-items: center; gap: 3px; height: 24px; padding: 0 2px 0 6px; border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); background: var(--varia-input-background); color: var(--varia-descriptionForeground); }
+.results-search:focus-within { border-color: var(--varia-focusBorder); box-shadow: 0 0 0 1px var(--varia-focusBorder); }
+.results-search input { flex: 1 1 0; width: 0; min-width: 32px; border: 0; outline: none; background: none; color: var(--varia-input-foreground); font: inherit; font-size: var(--varia-size-xs); }
+.results-search-count { flex-shrink: 0; font-size: var(--varia-size-xs); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.results-search > button { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 20px; height: 18px; border-radius: var(--varia-radius-sm); }
+.results-search > button:disabled { opacity: 0.4; }
+.results-search .results-segments button { height: 16px; padding: 0 3px; }
+@media (max-width: 1180px) {
+  .results-toolbar-label, .results-search-icon, .results-search > button { display: none; }
+  .results-toolbar { gap: 2px; padding-left: 6px; }
+  .results-segments button { padding: 0 3px; }
+  .results-search { padding-left: 4px; }
+  .results-search input { min-width: 24px; }
+}
 .job-strip { display: flex; min-width: 0; align-items: center; gap: 6px; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); white-space: nowrap; }
 /* Strips give way to a narrow window: a long file name is cut short, while Cancel and the status line keep their room. */
 .output-toolbar > .job-strip { flex-shrink: 1; min-width: 72px; }
@@ -864,6 +882,15 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg:not(:focus-within) .rg-c.is-sel, .rg:not(:focus-within) .rg-c.is-sel.is-trunc::after { background: var(--varia-resultsGrid-inactiveSelectionBackground); }
 /* NULL's tint is too faint on the unfocused selection's fill; it takes the grid's text color there. */
 .rg:not(:focus-within) .rg-c.is-sel.is-null { color: var(--varia-resultsGrid-foreground); }
+/* Search in results (GridView's marks): matches tinted, the active one outlined, and columns a column-name search leaves out
+   faded, in the warning hue the search marks share with truncation (the theme has no search tokens yet). A selected match
+   keeps the selection's fill, with the outline when it is the active one. */
+.rg-c.is-hit { background: var(--varia-banner-warningBackground); }
+.rg-c.is-cur { box-shadow: inset 0 0 0 2px var(--varia-warningForeground); }
+.rg-c.is-dim, .rg-ch.dim { opacity: 0.4; }
+.rg-ch.hit { background: var(--varia-banner-warningBackground); }
+.rg-ch.cur { background: var(--varia-banner-warningBackground); box-shadow: inset 0 -2px 0 var(--varia-warningForeground); }
+@media (forced-colors: active) { .rg-c.is-hit { forced-color-adjust: none; background: Mark; color: MarkText; } .rg-c.is-cur, .rg-ch.cur { outline: 2px solid Highlight; outline-offset: -2px; } }
 /* Only the focused grid shows its active cell's outline, as in SSMS; the others show their selection. */
 .rg:focus-within .rg-c.is-act { outline: 1px solid var(--varia-resultsGrid-activeCellBorder); outline-offset: -1px; }
 .rg:focus-visible .rg-c.is-act { outline-width: 2px; outline-offset: -2px; }

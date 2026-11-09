@@ -342,6 +342,27 @@ describe('results worker core', () => {
     expect(posted.at(-1)).toMatchObject({ type: 'error', id: 94, code: 'PORT_CLOSED' })
   })
 
+  it('searches through main by view position, relays the answer and failures, and cancels a search the page gave up', () => {
+    const { core, sent, posted } = fixture()
+    core.handle({ type: 'search', id: 100, key: { ...key, view: 3 }, text: 'abc', fromRow: 0, maxMatches: 50, backward: false })
+    expect(sent.at(-1)).toEqual({ t: 'search', rid: 1, generation: 1, resultId: 5, text: 'abc', fromRow: 0, maxMatches: 50, viewId: 3 })
+    const result = { rows: 64, total: 2, first: 0, matchRows: [4, 9], matchColumns: [1, 0], complete: true, approximate: false }
+    core.receive({ t: 'end', rid: 1, ok: true, result })
+    expect(posted.at(-1)).toEqual({ type: 'search', id: 100, result })
+    core.handle({ type: 'search', id: 101, key, text: 'abc', fromRow: 30, maxMatches: 50, backward: true })
+    expect(sent.at(-1)).toEqual({ t: 'search', rid: 2, generation: 1, resultId: 5, text: 'abc', fromRow: 30, maxMatches: 50, backward: true })
+    core.receive({ t: 'end', rid: 2, ok: false, code: 'VIEW_NOT_FOUND', message: 'This sorted view was closed.' })
+    expect(posted.at(-1)).toMatchObject({ type: 'error', id: 101, code: 'VIEW_NOT_FOUND' })
+    core.handle({ type: 'search', id: 102, key, text: 'abc', fromRow: 0, maxMatches: 50, backward: false })
+    core.handle({ type: 'cancel', id: 102 })
+    expect(sent.at(-1)).toEqual({ t: 'cancel', rid: 3 })
+    core.handle({ type: 'search', id: 103, key: { ...key, generation: 2 }, text: 'abc', fromRow: 0, maxMatches: 50, backward: false })
+    expect(posted.at(-1)).toMatchObject({ type: 'error', id: 103, code: 'RESULT_UNAVAILABLE' })
+    // Main drops answers meant for a replaced port, so a search asked on it fails at once.
+    core.handle({ type: 'search', id: 104, key, text: 'abc', fromRow: 0, maxMatches: 50, backward: false })
+    core.attach({ postMessage: () => {} })
+    expect(posted.filter(message => message.type === 'error').map(message => (message as { id: number }).id)).toEqual(expect.arrayContaining([102, 104]))
+  })
   it('relays column profiles through main by result or view, cancels them, and fails those asked on a replaced port', () => {
     const { core, sent, posted } = fixture()
     core.handle({ type: 'profile', id: 100, key: { ...key, view: 3 }, columns: [1, 0] })

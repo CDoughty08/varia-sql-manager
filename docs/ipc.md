@@ -36,6 +36,7 @@ The code is the reference implementation; this document describes it.
 - [Result store and memory budget](#result-store-and-memory-budget)
 - [Cell lengths and row sizes](#cell-lengths-and-row-sizes)
 - [Sorted views](#sorted-views)
+- [Search in results](#search-in-results)
 - [Column profiles](#column-profiles)
 - [Messages](#messages)
 - [Copy and Save Results As](#copy-and-save-results-as)
@@ -233,6 +234,7 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `results.rowBytes` | port | unary | control | 10 s; each row's bytes for 1 – 16,384 sealed rows ([Cell lengths and row sizes](#cell-lengths-and-row-sizes)) |
 | `results.view` | port | unary | results | 120 s; a sorted view of a result's sealed rows ([Sorted views](#sorted-views)) |
 | `results.viewClose` | port | unary | control | 10 s |
+| `results.search` | port | unary | results | 120 s; the cells of a result (or a view) containing a text ([Search in results](#search-in-results)) |
 | `results.profile` | port | unary | results | 120 s; aggregates over a result's or a view's rows ([Column profiles](#column-profiles)) |
 | `live.subscribe` | port | stream of credited EVENTs ([Live subscriptions](#live-subscriptions)) | live (no slot) | none, and no backstop: only CANCEL, a disconnect, a shutdown, a failure or its source ending ends it |
 | `live.update` | port | unary | control | 10 s |
@@ -1337,6 +1339,39 @@ Server. A view is an order of a result's base rows, read through the same calls 
   or binary column when it changes. A view main sees built after its port went (a reload) is closed by main. Copy, Save Results As and opening a value follow the
   grid's order through its view; Save waits until a running or pending sort is built.
 
+## Search in results
+
+The results toolbar's search box searches every grid of a run in the backend, over the rows it holds
+(`Results/ResultSearch.cs`), through the order the grid shows; rows never come to the renderer for it.
+
+- **`results.search { resultId, text: 1 – 1,024 characters, fromRow, maxMatches: 1 – 10,000, backward?, viewId? }`**
+  answers `{ rows, total, first, matchRows, matchColumns, complete, approximate }`. It searches the rows sealed now, or a
+  view's positions with `viewId` (`VIEW_NOT_FOUND` when it is gone). One pass counts every match (`total`) and keeps a
+  run of whole rows: from `fromRow` on until it holds `maxMatches`, or with `backward` the last rows before `fromRow` that
+  hold `maxMatches`, so a run passes `maxMatches` by at most its last row's columns. `matchRows[k]`, `matchColumns[k]`
+  are the run's cells in row then column order; `first` counts the matches before the run's first (when the run is
+  empty, those before `fromRow`). `complete`: those rows were all of a finished set; `approximate`: a truncated value was
+  searched by its stored prefix and did not match. A search holds only its run, so it reserves no budget; CANCEL (a newer
+  search) stops it.
+- **Matching.** A cell matches when its grid text contains the text. NULL and unreadable cells never match. Character
+  columns compare by their collation, as `LIKE '%text%'` would: its locale and Ignore flags (case, accents, kana type,
+  width), code points for _BIN and _BIN2, and for a locale the runtime does not know its case flag alone. Every other
+  column compares its display text ignoring case (numbers, dates, xml, json, uniqueidentifier); binary values match their
+  `0x` and uppercase hex, and a column of them is skipped when the text is not hex.
+- **Main** checks the request with the port schema and ownership, and the answer before forwarding it: as many columns as
+  rows, cells strictly in (row, column) order inside the rows searched and on the side of `fromRow` asked, and
+  `first + matches ≤ total`.
+- **Renderer.** `ResultHandle.search(text, fromRow, { maxMatches, backward, signal })` bounds the request before the port.
+  `ResultsSearchService` (`results/search.ts`) runs each tab's search: typing searches once it pauses (200 ms; Enter at
+  once), one grid at a time in run order, through the view a sorted grid shows, and the first match becomes active as
+  soon as a grid has one. Each grid holds one run of up to 10,000 matches; a step past it reads the next run forward or
+  back (or the first or last, when it wraps). A grid that shows other rows (a new run, a sort, a set that finished)
+  searches again, keeping the active match's place. Columns mode matches column names from the descriptors, ignoring
+  case and accents, with no backend call. Grids draw the marks through `GridView` (`grid/marks.ts`) as cell and header
+  classes, never markup; the stack scrolls the grid holding the active match into view (opening it if collapsed), and the
+  grid scrolls the cell. Find in Results (Ctrl+F in a grid), Find Next and Find Previous in Results (F3, Shift+F3) are
+  catalogue commands.
+
 ## Column profiles
 
 The column profile panel and the grid's row-size bar describe rows the backend holds without reading them into the
@@ -2015,6 +2050,7 @@ crash and window close; a backend loss ends its streams but keeps the port.
 { t: 'rowBytes'; rid; generation; resultId: u32; firstRow: 0..2^53-1; count: 1..16_384; viewId?: u32 }
 { t: 'view'; rid; generation; resultId: u32; sort: ViewSortKey[1..16]; replaces?: u32 }
 { t: 'viewClose'; rid; generation; resultId: u32; viewIds: u32[1..64] }
+{ t: 'search'; rid; generation; resultId: u32; text: string[1..1024]; fromRow; maxMatches: 1..10000; backward?: boolean; viewId?: u32 }
 { t: 'live'; rid; generation; params: live.subscribe params }
 { t: 'liveUpdate'; rid; generation; params: live.update params }
 ```
@@ -2202,6 +2238,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | FOR XML / FOR JSON value | 2,097,152 characters, the rest marks it truncated | backend |
 | Row sizes a request | `results.rowBytes`: 1 – 16,384 rows (`rowSizes.maxRows`) | zod and backend |
 | Sorted views | 1 – 16 keys a sort, 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key while sorting, 4 bytes a row kept, under the query budget | zod and backend |
+| Search in results | 1 – 1,024 characters of text, 1 – 10,000 matches an answer plus its last row's columns (`limits.search`); no budget held | zod and backend |
 | Column profiles | 0 – 32 columns a request (`limits.profile`), 20 buckets, distinct exact to 16,384, values cut to 256 characters; working memory under the query budget | zod and backend |
 | Copy | 64 MiB of UTF-8 (estimated before any work; main cancels past 65 MiB received); DATA ≤ 1 MiB; 16 MiB initial credit; 120 s; one per window | backend and main |
 | Save Results As | one per window; 1 MiB writes; no deadline; suggested name ≤ 128 characters, path ≤ 32,767 | main and backend |

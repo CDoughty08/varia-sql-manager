@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (259)
+## Commands (262)
 
 ### File
 
@@ -146,6 +146,9 @@ keys it uses are listed below.
 | Then Sort Ascending (not in the palette) | `output.thenSortAscending` | — | — | — | Always | Query Output context menu › Then Sort Ascending |
 | Then Sort Descending (not in the palette) | `output.thenSortDescending` | — | — | — | Always | Query Output context menu › Then Sort Descending |
 | Clear Sort (not in the palette) | `output.clearSort` | — | — | — | Always | Query Output context menu › Clear Sort |
+| Find in Results | `output.find` | Ctrl+F (`outputGridFocus`) | Ctrl+F (`outputGridFocus`) | ⌘F (`outputGridFocus`) | `hasResults` | — |
+| Find Next in Results | `output.findNext` | F3 (`outputGridFocus`) | F3 (`outputGridFocus`) | ⌘G (`outputGridFocus`), F3 (`outputGridFocus`) | `hasResults` | — |
+| Find Previous in Results | `output.findPrevious` | Shift+F3 (`outputGridFocus`) | Shift+F3 (`outputGridFocus`) | ⇧⌘G (`outputGridFocus`), ⇧F3 (`outputGridFocus`) | `hasResults` | — |
 | Sort Text by Length in Characters | `output.sortTextByChars` | — | — | — | Always; checked when `resultsSortTextChars` | — |
 | Sort Text by Length in Bytes | `output.sortTextByBytes` | — | — | — | Always; checked when `resultsSortTextBytes` | — |
 | Show Column Profile | `output.toggleColumnProfile` | — | — | — | Always; checked when `resultsColumnProfile` | Query Output context menu › Column Profile |

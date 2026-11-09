@@ -230,6 +230,15 @@ export interface ResultsViewParams { resultId: number; sort: ViewSortKey[]; repl
 export interface ResultsViewResult { viewId: number; rows: number; complete: boolean; approximate: boolean }
 export interface ResultsViewCloseParams { resultId: number; viewIds: number[] }
 export interface ResultsViewCloseResult { closed: number }
+/** results.search: the cells whose grid text contains `text` (1 to `limits.search.maxText` characters), through `viewId`'s
+ *  order when given (rows are then view positions). Up to `maxMatches` of them come back in whole rows: from `fromRow` on,
+ *  or with `backward` the last ones before `fromRow`. Text columns compare by their collation; others ignore case. */
+export interface ResultsSearchParams { resultId: number; text: string; fromRow: number; maxMatches: number; backward?: boolean; viewId?: number }
+/** `rows` searched (the rows sealed so far, or the view's); `total` matches among them; the run's matches as
+ *  (`matchRows[k]`, `matchColumns[k]`) in row then column order, `first` the matches before the run's first (when it is empty,
+ *  those before `fromRow`). `complete`: those rows were all the result's; `approximate`: a truncated value was searched by
+ *  its stored prefix. */
+export interface ResultsSearchResult { rows: number; total: number; first: number; matchRows: number[]; matchColumns: number[]; complete: boolean; approximate: boolean }
 /** results.profile: up to `limits.profile.maxColumns` distinct columns of a result, through its view when `viewId` is
  *  given; no columns answers only the rows' byte sizes. */
 export interface ResultsProfileParams { resultId: number; columns: number[]; viewId?: number }
@@ -377,6 +386,7 @@ export interface PortMethods {
   'results.rowBytes': { params: ResultsRowBytesParams; result: ResultsRowBytesResult }
   'results.view': { params: ResultsViewParams; result: ResultsViewResult }
   'results.viewClose': { params: ResultsViewCloseParams; result: ResultsViewCloseResult }
+  'results.search': { params: ResultsSearchParams; result: ResultsSearchResult }
   /** Aggregates over a result's rows or a view's, for the column profile panel: never rows. */
   'results.profile': { params: ResultsProfileParams; result: ResultsProfileResult }
   /** A live subscription (docs/ipc.md): its EVENTs are credited, one unacknowledged at a time, and it ends only by CANCEL,

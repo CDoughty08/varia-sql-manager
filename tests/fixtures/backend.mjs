@@ -518,6 +518,48 @@ function buildView(result, sort) {
     read: rows, complete: true, pages: new Map(), sealed: result.complete && rows === result.read
   }
 }
+// results.search: the cells of a result (or a view's positions) whose display text contains the text, ignoring case;
+// binary values as 0x and uppercase hex, NULL and failed reads never. The real backend's collation rules have their own
+// checks. One pass counts every match and keeps a run of whole rows, forward from fromRow or the last before it.
+function searchResult(source, { text, fromRow, maxMatches, backward }) {
+  const needle = text.toLowerCase(), rows = source.sealed === undefined ? available(source) : source.read, columns = source.columns.length
+  const display = cell => {
+    const value = cell !== null && typeof cell === 'object' && !(cell instanceof Uint8Array) ? cell.value : cell
+    if (value === null || value === undefined) return null
+    return value instanceof Uint8Array ? '0x' + Buffer.from(value).toString('hex').toUpperCase() : String(value)
+  }
+  let total = 0, before = 0
+  const kept = []
+  for (let row = 0; row < rows; row++) {
+    const cells = source.rowAt(row), found = []
+    for (let column = 0; column < columns; column++) {
+      const shown = display(cells[column])
+      if (shown !== null && shown.toLowerCase().includes(needle)) found.push(column)
+    }
+    if (!found.length) continue
+    if (!backward && row >= fromRow && kept.length < maxMatches) {
+      if (kept.length === 0) before = total
+      for (const column of found) kept.push([row, column])
+    } else if (backward && row < fromRow) {
+      for (const column of found) kept.push([row, column])
+      // The oldest rows go while the rest still hold maxMatches.
+      while (kept.length > maxMatches) {
+        const first = kept[0][0], count = kept.filter(([at]) => at === first).length
+        if (kept.length - count < maxMatches) break
+        kept.splice(0, count)
+      }
+    }
+    total += found.length
+  }
+  const first = backward ? kept.length ? total - kept.length - countFrom(source, needle, display, fromRow, rows) : 0 : kept.length ? before : total
+  return { rows, total, first, matchRows: kept.map(([row]) => row), matchColumns: kept.map(([, column]) => column), complete: source.complete && (source.sealed ?? source.complete), approximate: false }
+}
+/** Matches at or after `fromRow` (a backward run's first counts the matches before it). */
+function countFrom(source, needle, display, fromRow, rows) {
+  let count = 0
+  for (let row = fromRow; row < rows; row++) for (const cell of source.rowAt(row)) { const shown = display(cell); if (shown !== null && shown.toLowerCase().includes(needle)) count++ }
+  return count
+}
 // results.rowBytes and results.profile: a cell's bytes are its text's UTF-8 bytes (a binary cell's own), and a profile
 // compares as the fake views sort, ordinally; the real backend's DATALENGTH rules and collations have their own checks.
 const cellValue = cell => cell !== null && typeof cell === 'object' && !(cell instanceof Uint8Array) ? (cell.error ? null : cell.value) : cell
@@ -1110,6 +1152,10 @@ async function workbench(id, method, params, credit) {
       result.views.set(view.viewId, view)
       if (params.replaces !== undefined) result.views.delete(params.replaces)
       return respond(id, { viewId: view.viewId, rows: view.read, complete: view.sealed, approximate: false })
+    }
+    case 'results.search': {
+      const source = sourceOf(id, params.resultId, params.viewId)
+      return source && respond(id, searchResult(source, params))
     }
     case 'results.rowBytes': {
       const source = sourceOf(id, params.resultId, params.viewId)
