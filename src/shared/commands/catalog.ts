@@ -857,6 +857,41 @@ export const commandCatalog = {
   'output.sortTextByBytes': {
     title: 'Sort Text by Length in Bytes', category: 'Query', icon: 'symbol-ruler', keywords: ['sort', 'length', 'datalength', 'bytes', 'text', 'binary', 'grid'], toggled: 'resultsSortTextBytes'
   },
+  // Highlights (results PR 8): the selected rows of a grid whose result has every row take a colour, kept on each row by its
+  // identity (a unique key column, else the whole row) through sorts and re-runs. Highlight Rows uses the last colour
+  // picked (yellow at first); a colour every selected row already has comes off.
+  'output.highlightRows': {
+    title: 'Highlight Rows', category: 'Query', icon: 'symbol-color', keywords: ['highlight', 'mark', 'color', 'row', 'grid', 'flag'], palette: false,
+    keybindings: [{ key: 'mod+shift+h', when: 'outputGridFocus' }]
+  },
+  'output.highlightYellow': {
+    title: 'Highlight Rows Yellow', category: 'Query', keywords: ['highlight', 'mark', 'color', 'yellow', 'row', 'grid'], palette: false,
+    menus: [{ menu: 'output.highlight', group: '1_colors', order: 1, title: 'Yellow', mnemonic: 'y', when: "outputView == 'grid'" }]
+  },
+  'output.highlightGreen': {
+    title: 'Highlight Rows Green', category: 'Query', keywords: ['highlight', 'mark', 'color', 'green', 'row', 'grid'], palette: false,
+    menus: [{ menu: 'output.highlight', group: '1_colors', order: 2, title: 'Green', mnemonic: 'g', when: "outputView == 'grid'" }]
+  },
+  'output.highlightBlue': {
+    title: 'Highlight Rows Blue', category: 'Query', keywords: ['highlight', 'mark', 'color', 'blue', 'row', 'grid'], palette: false,
+    menus: [{ menu: 'output.highlight', group: '1_colors', order: 3, title: 'Blue', mnemonic: 'b', when: "outputView == 'grid'" }]
+  },
+  'output.highlightPurple': {
+    title: 'Highlight Rows Purple', category: 'Query', keywords: ['highlight', 'mark', 'color', 'purple', 'row', 'grid'], palette: false,
+    menus: [{ menu: 'output.highlight', group: '1_colors', order: 4, title: 'Purple', mnemonic: 'p', when: "outputView == 'grid'" }]
+  },
+  'output.highlightRed': {
+    title: 'Highlight Rows Red', category: 'Query', keywords: ['highlight', 'mark', 'color', 'red', 'row', 'grid'], palette: false,
+    menus: [{ menu: 'output.highlight', group: '1_colors', order: 5, title: 'Red', mnemonic: 'r', when: "outputView == 'grid'" }]
+  },
+  'output.clearHighlight': {
+    title: 'Clear Highlight', category: 'Query', keywords: ['highlight', 'unmark', 'row', 'grid'], palette: false,
+    menus: [{ menu: 'output.highlight', group: '2_clear', order: 1, mnemonic: 'c', when: "outputView == 'grid'" }]
+  },
+  'output.clearAllHighlights': {
+    title: 'Clear All Highlights', category: 'Query', icon: 'clear-all', keywords: ['highlight', 'unmark', 'reset', 'grid'], palette: false,
+    menus: [{ menu: 'output.highlight', group: '2_clear', order: 2, mnemonic: 'a', when: "outputView == 'grid'" }]
+  },
   // The results toolbar's Profile and Row size toggles (queryResults.grid.columnProfile, queryResults.grid.rowSize).
   'output.toggleColumnProfile': {
     title: 'Show Column Profile', category: 'Query', icon: 'graph', keywords: ['profile', 'stats', 'statistics', 'distinct', 'nulls', 'histogram', 'grid', 'column'],

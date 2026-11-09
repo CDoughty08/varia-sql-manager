@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ResultsPortHost, toExactArrayBuffer, type FrameLike, type LiveStreamHandle, type PortMainLike, type ReadStream, type ResultsBackend } from '../src/main/backend/results-port'
 import { BackendError } from '../src/main/backend/errors'
 import type { StreamSink } from '../src/main/backend/connection'
-import type { QueryEvent, ResultDescriptor, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsRowBytesParams, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewParams, ResultsViewResult } from '../src/shared/contracts'
+import type { QueryEvent, ResultDescriptor, ResultsFindRowsParams, ResultsIdentifyParams, ResultsIdentifyResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsRowBytesParams, ResultsRowIdsParams, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewParams, ResultsViewResult } from '../src/shared/contracts'
 import { cancelReasons, type CancelReason } from '../src/shared/ipc/wire/protocol'
 import { buildPortRequestSchema, type PortMessage, type portRequestSchema } from '../src/shared/ipc/port-messages'
 import { buildLiveSchemas } from '../src/shared/live/schema'
@@ -33,6 +33,7 @@ class FakePort implements PortMainLike {
 interface FakeRead { generation: number; params: ResultsReadParams; sink: StreamSink; credit: number; credits: number[]; cancels: number[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeLive { generation: number; params: LiveSubscribeParams; onLive: (event: LiveEvent, bytes: number) => void; credit: number; credits: number[]; cancels: number[]; resolve(value: LiveEnd): void; reject(error: unknown): void }
 interface FakeView { generation: number; params: ResultsViewParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
+interface FakeIdentify { generation: number; params: ResultsIdentifyParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeSearch { generation: number; params: ResultsSearchParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeProfile { generation: number; params: ResultsProfileParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeUpdate { generation: number; params: LiveUpdateParams; resolve(value: LiveUpdateResult): void; reject(error: unknown): void }
@@ -42,6 +43,7 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
   const lives: FakeLive[] = []
   const updates: FakeUpdate[] = []
   const views: FakeView[] = []
+  const identifies: FakeIdentify[] = []
   const searches: FakeSearch[] = []
   const profiles: FakeProfile[] = []
   let ready: number | undefined = 1
@@ -56,6 +58,15 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
     },
     close: vi.fn(async (_generation: number, resultIds: number[]) => ({ closed: resultIds.length, usedBytes: 0 })),
     rowBytes: vi.fn(async (_generation: number, params: ResultsRowBytesParams) => ({ firstRow: params.firstRow, bytes: [4, 8], rowsAvailable: 2, estimated: [1] })),
+    identify: (generation, params) => {
+      let resolve!: (value: unknown) => void, reject!: (error: unknown) => void
+      const done = new Promise<ResultsIdentifyResult>((onResolve, onReject) => { resolve = onResolve as (value: unknown) => void; reject = onReject })
+      const identify: FakeIdentify = { generation, params, cancels: [], resolve, reject }
+      identifies.push(identify)
+      return { done, cancel: reason => identify.cancels.push(reason) }
+    },
+    rowIds: vi.fn(async (_generation: number, params: ResultsRowIdsParams) => ({ firstRow: params.firstRow, ids: [7, 9], rows: 2 })),
+    findRows: vi.fn(async (_generation: number, params: ResultsFindRowsParams) => ({ positions: [0, 5], marks: [0, params.ids.length - 1], truncated: false, rows: 6 })),
     view: (generation, params) => {
       let resolve!: (value: unknown) => void, reject!: (error: unknown) => void
       const done = new Promise<ResultsViewResult>((onResolve, onReject) => { resolve = onResolve as (value: unknown) => void; reject = onReject })
@@ -99,7 +110,7 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
     port().send({ t: 'live', rid, generation, params })
     return params
   }
-  return { host, backend, reads, lives, updates, views, searches, profiles, ports, port, frame, read, live, setReady: (generation: number | undefined) => { ready = generation } }
+  return { host, backend, reads, lives, updates, views, identifies, searches, profiles, ports, port, frame, read, live, setReady: (generation: number | undefined) => { ready = generation } }
 }
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
 const descriptor = (resultId: number, generation = 1): Pick<ResultDescriptor, 'generation' | 'resultId'> => ({ generation, resultId })
@@ -368,6 +379,46 @@ describe('ResultsPortHost', () => {
     views[1].resolve({ viewId: 9, rows: 1, complete: true, approximate: false })
     await settle()
     expect(backend.viewClose).toHaveBeenLastCalledWith(1, { resultId: 7, viewIds: [9] })
+  })
+  it('identifies, reads and finds row identities only for owned results of the current generation, within bounds', async () => {
+    const { host, backend, port, identifies } = fixture()
+    host.own([descriptor(7)])
+    port().send({ t: 'identify', rid: 1, generation: 1, resultId: 7, by: 'auto' })
+    port().send({ t: 'identify', rid: 2, generation: 1, resultId: 8, by: 'auto' })
+    port().send({ t: 'identify', rid: 3, generation: 1, resultId: 7, by: 'column' })
+    port().send({ t: 'identify', rid: 4, generation: 1, resultId: 7, by: 'row', column: 1 })
+    port().send({ t: 'identify', rid: 5, generation: 1, resultId: 7, by: 'key' })
+    port().send({ t: 'identify', rid: 6, generation: 1, resultId: 7, by: 'column', column: 2 })
+    expect(identifies.map(item => item.params)).toEqual([{ resultId: 7, by: 'auto' }, { resultId: 7, by: 'column', column: 2 }])
+    identifies[0].resolve({ column: -1, unique: false, approximate: false, rows: 4 })
+    // An answer for another column than the one asked is the backend's mistake.
+    identifies[1].resolve({ column: 3, unique: true, approximate: false, rows: 4 })
+    port().send({ t: 'rowIds', rid: 7, generation: 1, resultId: 7, firstRow: 0, count: 2, viewId: 4 })
+    port().send({ t: 'rowIds', rid: 8, generation: 1, resultId: 7, firstRow: 0, count: 16_385 })
+    port().send({ t: 'findRows', rid: 9, generation: 1, resultId: 7, ids: [1, 2 ** 53 - 1] })
+    port().send({ t: 'findRows', rid: 10, generation: 1, resultId: 7, ids: [] })
+    port().send({ t: 'findRows', rid: 11, generation: 1, resultId: 7, ids: [-1] })
+    port().send({ t: 'findRows', rid: 12, generation: 1, resultId: 7, ids: Array.from({ length: 10_001 }, (_, id) => id) })
+    port().send({ t: 'findRows', rid: 13, generation: 2, resultId: 7, ids: [1] })
+    await settle()
+    expect(backend.rowIds).toHaveBeenCalledWith(1, { resultId: 7, firstRow: 0, count: 2, viewId: 4 })
+    expect(backend.findRows).toHaveBeenCalledWith(1, { resultId: 7, ids: [1, 2 ** 53 - 1] })
+    expect(codes(port())).toEqual([[2, 'RESULT_UNAVAILABLE'], [3, 'INVALID_REQUEST'], [4, 'INVALID_REQUEST'], [5, 'INVALID_REQUEST'], [8, 'INVALID_REQUEST'], [10, 'INVALID_REQUEST'], [11, 'INVALID_REQUEST'], [12, 'INVALID_REQUEST'], [13, 'RESULT_UNAVAILABLE'], [1, 'ok'], [6, 'BACKEND_ERROR'], [7, 'ok'], [9, 'ok']])
+    expect(port().ends().find(end => end.rid === 9)).toEqual({ t: 'end', rid: 9, ok: true, result: { positions: [0, 5], marks: [0, 1], truncated: false, rows: 6 } })
+    // Answers that name a mark not asked, positions out of order or past the rows, or more ids than asked are refused.
+    vi.mocked(backend.findRows)
+      .mockResolvedValueOnce({ positions: [0], marks: [2], truncated: false, rows: 6 })
+      .mockResolvedValueOnce({ positions: [3, 1], marks: [0, 0], truncated: false, rows: 6 })
+      .mockResolvedValueOnce({ positions: [6], marks: [0], truncated: false, rows: 6 })
+    vi.mocked(backend.rowIds).mockResolvedValueOnce({ firstRow: 0, ids: [1, 2, 3], rows: 9 })
+    for (const rid of [14, 15, 16]) port().send({ t: 'findRows', rid, generation: 1, resultId: 7, ids: [1, 2] })
+    port().send({ t: 'rowIds', rid: 17, generation: 1, resultId: 7, firstRow: 0, count: 2 })
+    await settle()
+    expect(codes(port()).slice(-4)).toEqual([[14, 'BACKEND_ERROR'], [15, 'BACKEND_ERROR'], [16, 'BACKEND_ERROR'], [17, 'BACKEND_ERROR']])
+    // The worker's cancel stops an identify, as it does a sort.
+    port().send({ t: 'identify', rid: 18, generation: 1, resultId: 7, by: 'row' })
+    port().send({ t: 'cancel', rid: 18 })
+    expect(identifies[2].cancels).toEqual([cancelReasons.user])
   })
   it("searches only owned results of the current generation, within the schema bounds, and cancels on the worker's cancel", async () => {
     const { host, port, searches } = fixture()

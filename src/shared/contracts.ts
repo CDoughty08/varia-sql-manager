@@ -230,6 +230,22 @@ export interface ResultsViewParams { resultId: number; sort: ViewSortKey[]; repl
 export interface ResultsViewResult { viewId: number; rows: number; complete: boolean; approximate: boolean }
 export interface ResultsViewCloseParams { resultId: number; viewIds: number[] }
 export interface ResultsViewCloseResult { closed: number }
+/** How results.identify tells a result's rows apart: a unique key column it picks (else the whole row), a given column,
+ *  or every value in the row. */
+export type IdentityBy = 'auto' | 'column' | 'row'
+/** results.identify (highlights): `column` only with `by: 'column'`. The result must have finished loading. */
+export interface ResultsIdentifyParams { resultId: number; by: IdentityBy; column?: number }
+/** `column` is the key column, -1 for the whole row; `unique`, that no two rows share an identity; `approximate`, that a
+ *  truncated value's stored prefix was hashed. */
+export interface ResultsIdentifyResult { column: number; unique: boolean; approximate: boolean; rows: number }
+/** Identities (below 2^53; -1 for a row past those identified) of up to `limits.identity.maxRows` rows or view positions. */
+export interface ResultsRowIdsParams { resultId: number; firstRow: number; count: number; viewId?: number }
+export interface ResultsRowIdsResult { firstRow: number; ids: number[]; rows: number }
+/** Every row (view position with `viewId`) whose identity is one of `ids`. */
+export interface ResultsFindRowsParams { resultId: number; ids: number[]; viewId?: number }
+/** `positions` ascend; `marks[k]` is the index in `ids` of position k's identity; `truncated`, that more rows matched
+ *  than `limits.identity.maxMatches`. */
+export interface ResultsFindRowsResult { positions: number[]; marks: number[]; truncated: boolean; rows: number }
 /** results.search: the cells whose grid text contains `text` (1 to `limits.search.maxText` characters), through `viewId`'s
  *  order when given (rows are then view positions). Up to `maxMatches` of them come back in whole rows: from `fromRow` on,
  *  or with `backward` the last ones before `fromRow`. Text columns compare by their collation; others ignore case. */
@@ -386,6 +402,10 @@ export interface PortMethods {
   'results.rowBytes': { params: ResultsRowBytesParams; result: ResultsRowBytesResult }
   'results.view': { params: ResultsViewParams; result: ResultsViewResult }
   'results.viewClose': { params: ResultsViewCloseParams; result: ResultsViewCloseResult }
+  /** Row identities for highlights (and the diff): a key column's values or whole rows, hashed by their collation. */
+  'results.identify': { params: ResultsIdentifyParams; result: ResultsIdentifyResult }
+  'results.rowIds': { params: ResultsRowIdsParams; result: ResultsRowIdsResult }
+  'results.findRows': { params: ResultsFindRowsParams; result: ResultsFindRowsResult }
   'results.search': { params: ResultsSearchParams; result: ResultsSearchResult }
   /** Aggregates over a result's rows or a view's, for the column profile panel: never rows. */
   'results.profile': { params: ResultsProfileParams; result: ResultsProfileResult }

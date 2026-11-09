@@ -52,6 +52,8 @@ internal sealed class ResultStore
     /// <summary>Bookkeeping charged per view on top of its order array.</summary>
     public const long ViewOverhead = 256;
     private uint nextViewId = 1;
+    /// <summary>Each result's row identities (results.identify), at most one per result.</summary>
+    private readonly Dictionary<uint, ResultIdentity> identities = [];
     private readonly Func<(long Load, long Threshold)> memory;
     private uint nextId = 1;
     private long used;
@@ -281,6 +283,32 @@ internal sealed class ResultStore
         return closed.Count;
     }
 
+    /// <summary>Keeps <paramref name="identity"/> as its result's row identities, replacing any it had; the caller reserved its
+    /// charge, which is returned when it goes. Throws RESULT_RELEASED, returning the charge, when the result went meanwhile.</summary>
+    public void SetIdentity(ResultIdentity identity)
+    {
+        var set = identity.Set;
+        ResultIdentity? replaced;
+        lock (gate)
+        {
+            if (!sets.ContainsKey(set.ResultId) || set.IsReleased)
+            {
+                Return(set.Budget, identity.Charged);
+                throw new RequestException("RESULT_RELEASED", "These results were closed. Execute the query again to see them.");
+            }
+            identities.Remove(set.ResultId, out replaced);
+            identities[set.ResultId] = identity;
+        }
+        if (replaced is not null) Return(set.Budget, replaced.Charged);
+    }
+
+    public ResultIdentity? FindIdentity(uint resultId)
+    {
+        lock (gate) return identities.GetValueOrDefault(resultId);
+    }
+
+    public int IdentityCount { get { lock (gate) return identities.Count; } }
+
     /// <summary>Releases the given ids (unknown and repeated ids are skipped) and returns how many were released.</summary>
     public int Release(IEnumerable<uint> resultIds)
     {
@@ -313,6 +341,8 @@ internal sealed class ResultStore
     /// <summary>The views of the sets just released, removed with them.</summary>
     private List<ResultView> DropViewsLocked(List<ResultSetBuffer> released)
     {
+        // Identities go with their result too; Return takes no lock.
+        foreach (var set in released) if (identities.Remove(set.ResultId, out var identity)) Return(set.Budget, identity.Charged);
         if (released.Count == 0 || views.Count == 0) return [];
         var gone = released.ToHashSet();
         var dropped = views.Values.Where(view => gone.Contains(view.Set)).ToList();

@@ -210,8 +210,8 @@ describe('default keybindings', () => {
     const macEditing = ['edit.findNext', 'edit.findNext', 'edit.findPrevious', 'edit.findPrevious', 'edit.goToLine', 'edit.makeUppercase', 'edit.makeLowercase', ...bookmarksAndSnippets]
     const clipboard = ['edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'], display = ['view.zoomIn', 'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.toggleDevTools']
     // Search in results in a grid: Ctrl+F, then F3 and Shift+F3 (on macOS also ⌘G and ⇧⌘G, as Find Next has).
-    const output = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findPrevious']
-    const macOutput = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findNext', 'output.findPrevious', 'output.findPrevious']
+    const output = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findPrevious', 'output.highlightRows']
+    const macOutput = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.find', 'output.findNext', 'output.findNext', 'output.findPrevious', 'output.findPrevious', 'output.highlightRows']
     // A Search Objects result's Copy Name (the clipboard's key, which the list runs) and Copy Fully Qualified Name.
     const search = ['search.copyName', 'search.copyQualifiedName']
     const groups = ['editor.splitRight', 'editor.splitDown', 'editor.moveToNextGroup', 'editor.moveToPreviousGroup', 'editor.focusNextGroup', 'editor.focusPreviousGroup']

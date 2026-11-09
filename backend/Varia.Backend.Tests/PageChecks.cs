@@ -176,10 +176,22 @@ internal static class PageChecks
         for (var i = 0; i < wires.Length; i++) builder.AppendText(new string('w', 100));
         builder.CommitRow();
         var grown = builder.WorkingBytes;
-        long sum = 0;
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 10_000; i++) sum += builder.WorkingBytes;
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        static long Sum(PageBuilder builder)
+        {
+            long sum = 0;
+            for (var i = 0; i < 10_000; i++) sum += builder.WorkingBytes;
+            return sum;
+        }
+        // The runtime may allocate on this thread the first time the loop runs (tiering it up, or on-stack replacement
+        // while other suites keep the CPUs busy), so it is measured again after a first run; a real allocation per read
+        // shows in every run.
+        long sum = 0, allocated = long.MaxValue;
+        for (var attempt = 0; attempt < 3 && allocated != 0; attempt++)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            sum = Sum(builder);
+            allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        }
         check(allocated == 0 && sum == 10_000 * grown && grown > start, "a page builder's working bytes are summed per row without allocating (" + allocated + " bytes for 10,000 reads)");
     }
 

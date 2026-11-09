@@ -336,6 +336,15 @@ output.context, for a results grid with selected cells
   &Then Sort Ascending  ++++
   Then &Sort Descending  ++++
   Clea&r Sort  ----
+  Hi&ghlight >
+    &Yellow  ++++
+    &Green  ++++
+    &Blue  ++++
+    &Purple  ++++
+    &Red  ++++
+    ---
+    &Clear Highlight  ++++
+    Clear &All Highlights  ----
   ---
   Sa&ve Results As…  ⌘S  ----
   ---
@@ -354,6 +363,15 @@ output.context, for a results grid without
   &Then Sort Ascending  ----
   Then &Sort Descending  ----
   Clea&r Sort  ----
+  Hi&ghlight >
+    &Yellow  ++++
+    &Green  ++++
+    &Blue  ++++
+    &Purple  ++++
+    &Red  ++++
+    ---
+    &Clear Highlight  ++++
+    Clear &All Highlights  ----
   ---
   Sa&ve Results As…  ⌘S  ----
   ---

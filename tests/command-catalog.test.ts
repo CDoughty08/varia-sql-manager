@@ -56,7 +56,7 @@ describe('command catalogue', () => {
   it('is the renderer\'s command id type', () => {
     expectTypeOf<CommandId>().toEqualTypeOf<RendererCommandId>()
     // Includes generated Script As commands and internal lifecycle commands.
-    expect(commandIds).toHaveLength(262)
+    expect(commandIds).toHaveLength(270)
     expect(commandIds.filter(id => id.startsWith('explorer.script') && id.includes('To'))).toEqual([...scriptCommandIds])
   })
   it('has a handler for every command once all contributions have run', () => {

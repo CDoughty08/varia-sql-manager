@@ -279,6 +279,28 @@ describe('results worker core', () => {
     expect(posted.at(-1)).toMatchObject({ type: 'error', id: 73, code: 'PORT_CLOSED' })
   })
 
+  it('relays row identity requests to main by view, their answers and failures to the page, and cancels an identify', () => {
+    const { core, sent, posted } = fixture()
+    core.handle({ type: 'identity', id: 100, key: { ...key, view: 3 }, request: { method: 'identify', by: 'column', column: 2 } })
+    expect(sent.at(-1)).toEqual({ t: 'identify', rid: 1, generation: 1, resultId: 5, by: 'column', column: 2 })
+    core.receive({ t: 'end', rid: 1, ok: true, result: { column: 2, unique: true, approximate: false, rows: 9 } })
+    expect(posted.at(-1)).toEqual({ type: 'identity', id: 100, result: { column: 2, unique: true, approximate: false, rows: 9 } })
+    core.handle({ type: 'identity', id: 101, key: { ...key, view: 3 }, request: { method: 'rowIds', firstRow: 4, count: 2 } })
+    expect(sent.at(-1)).toEqual({ t: 'rowIds', rid: 2, generation: 1, resultId: 5, firstRow: 4, count: 2, viewId: 3 })
+    core.handle({ type: 'identity', id: 102, key, request: { method: 'findRows', ids: [7, 8] } })
+    expect(sent.at(-1)).toEqual({ t: 'findRows', rid: 3, generation: 1, resultId: 5, ids: [7, 8] })
+    core.receive({ t: 'end', rid: 3, ok: false, code: 'IDENTITY_NOT_FOUND', message: 'Tell the rows apart first.' })
+    expect(posted.at(-1)).toMatchObject({ type: 'error', id: 102, code: 'IDENTITY_NOT_FOUND' })
+    core.handle({ type: 'identity', id: 103, key, request: { method: 'identify', by: 'auto' } })
+    core.handle({ type: 'cancel', id: 103 })
+    expect(sent.at(-1)).toEqual({ t: 'cancel', rid: 4 })
+    core.handle({ type: 'identity', id: 104, key: { ...key, generation: 2 }, request: { method: 'identify', by: 'auto' } })
+    expect(posted.at(-1)).toMatchObject({ type: 'error', id: 104, code: 'RESULT_UNAVAILABLE' })
+    // Main drops answers meant for a replaced port: a request asked on it fails at once.
+    core.attach({ postMessage: () => {} })
+    expect(posted.filter(message => message.type === 'error' && (message.id === 101 || message.id === 103)).map(message => (message as { code: string }).code)).toEqual(['PORT_CLOSED', 'PORT_CLOSED'])
+  })
+
   it('sorts through main, caches a view\'s pages apart from its result\'s, and reads and sizes rows by view position', () => {
     const { core, sent, posted, window, reads, serve, answer } = fixture()
     const sort = [{ column: 0, descending: true, mode: 'value' as const }]

@@ -23,6 +23,8 @@ import { ExplorerService } from '../../src/renderer/src/explorer/ExplorerService
 import { DatabaseListService } from '../../src/renderer/src/services/database-list'
 import { ResultSelectionService } from '../../src/renderer/src/services/result-selection'
 import { ResultsService } from '../../src/renderer/src/results/ResultsService'
+import { HighlightsService } from '../../src/renderer/src/results/HighlightsService'
+import { highlightsContribution } from '../../src/renderer/src/contributions/highlights'
 import { ResultsSearchService } from '../../src/renderer/src/results/search'
 import { browserTimers } from '../../src/renderer/src/core/timers'
 import { explorerContribution } from '../../src/renderer/src/contributions/explorer'
@@ -333,6 +335,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const backend = new BackendStateService(api, connections)
   const resultClient = fakeResultClient()
   const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => callback(), timers: options.timers ?? browserTimers, newId: () => crypto.randomUUID() })
+  const highlights = new HighlightsService(results)
   const resultsSearch = new ResultsSearchService({ results, timers: options.timers ?? browserTimers })
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
   const files = new FileService(documents, queries, api, { autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'] })
@@ -455,6 +458,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     menuTargets,
     resultSelection,
     results,
+    highlights,
     resultsSearch,
     settings,
     scripting,
@@ -484,6 +488,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     menusContribution(workbench),
     explorerContribution(workbench, api),
     outputContribution(workbench, api),
+    highlightsContribution(workbench),
     shellContribution(workbench, host),
     paletteContribution(workbench, history),
     themeContribution(workbench, api, options.timers),
@@ -520,6 +525,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     recentFiles.dispose()
     queries.dispose()
     resultSelection.dispose()
+    highlights.dispose()
     resultsSearch.dispose()
     results.dispose()
     explorer.dispose()

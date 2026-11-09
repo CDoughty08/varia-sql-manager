@@ -1251,6 +1251,36 @@
           "description": "(Varia) Text of live grid rows toned muted. Default $textTertiary (Dark #a3a9b5, Light #4d5461).",
           "markdownDescription": "(Varia) Text of live grid rows toned muted. Default `$textTertiary` (Dark `#a3a9b5`, Light `#4d5461`)."
         },
+        "resultsGrid.highlightYellowBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Rows highlighted yellow: the results grid menu, Highlight › Yellow. Default $yellow/14 (Dark #d8bf5e24, Light #8f6b0024).",
+          "markdownDescription": "(Varia) Rows highlighted yellow: the results grid menu, Highlight › Yellow. Default `$yellow/14` (Dark `#d8bf5e24`, Light `#8f6b0024`)."
+        },
+        "resultsGrid.highlightGreenBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Rows highlighted green: the results grid menu, Highlight › Green. Default $green/14 (Dark #6fbf8a24, Light #2e7d4f24).",
+          "markdownDescription": "(Varia) Rows highlighted green: the results grid menu, Highlight › Green. Default `$green/14` (Dark `#6fbf8a24`, Light `#2e7d4f24`)."
+        },
+        "resultsGrid.highlightBlueBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Rows highlighted blue: the results grid menu, Highlight › Blue. Default $blue/14 (Dark #6ea4ea24, Light #2563a824).",
+          "markdownDescription": "(Varia) Rows highlighted blue: the results grid menu, Highlight › Blue. Default `$blue/14` (Dark `#6ea4ea24`, Light `#2563a824`)."
+        },
+        "resultsGrid.highlightPurpleBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Rows highlighted purple: the results grid menu, Highlight › Purple. Default $purple/14 (Dark #ab95ea24, Light #7a4bbf24).",
+          "markdownDescription": "(Varia) Rows highlighted purple: the results grid menu, Highlight › Purple. Default `$purple/14` (Dark `#ab95ea24`, Light `#7a4bbf24`)."
+        },
+        "resultsGrid.highlightRedBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Rows highlighted red: the results grid menu, Highlight › Red. Default $red/14 (Dark #e6676724, Light #c42b3c24).",
+          "markdownDescription": "(Varia) Rows highlighted red: the results grid menu, Highlight › Red. Default `$red/14` (Dark `#e6676724`, Light `#c42b3c24`)."
+        },
+        "resultsGrid.highlightRowNumberForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Row numbers of highlighted rows, over their highlight colour. Default $textStrong (Dark #f5f6f8, Light #0a0c10).",
+          "markdownDescription": "(Varia) Row numbers of highlighted rows, over their highlight colour. Default `$textStrong` (Dark `#f5f6f8`, Light `#0a0c10`)."
+        },
         "resultsGrid.rowNumberForeground": {
           "$ref": "#/definitions/value",
           "description": "(Varia) Row numbers. Default $textMuted (Dark #9298a4, Light #5c6370).",

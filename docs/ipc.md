@@ -36,6 +36,7 @@ The code is the reference implementation; this document describes it.
 - [Result store and memory budget](#result-store-and-memory-budget)
 - [Cell lengths and row sizes](#cell-lengths-and-row-sizes)
 - [Sorted views](#sorted-views)
+- [Row identities and highlights](#row-identities-and-highlights)
 - [Search in results](#search-in-results)
 - [Column profiles](#column-profiles)
 - [Messages](#messages)
@@ -234,6 +235,9 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `results.rowBytes` | port | unary | control | 10 s; each row's bytes for 1 – 16,384 sealed rows ([Cell lengths and row sizes](#cell-lengths-and-row-sizes)) |
 | `results.view` | port | unary | results | 120 s; a sorted view of a result's sealed rows ([Sorted views](#sorted-views)) |
 | `results.viewClose` | port | unary | control | 10 s |
+| `results.identify` | port | unary | results | 120 s; tells a complete result's rows apart ([Row identities and highlights](#row-identities-and-highlights)) |
+| `results.rowIds` | port | unary | control | 10 s; 1 – 16,384 rows' identities |
+| `results.findRows` | port | unary | results | 60 s; where 1 – 10,000 identities are in a result or view |
 | `results.search` | port | unary | results | 120 s; the cells of a result (or a view) containing a text ([Search in results](#search-in-results)) |
 | `results.profile` | port | unary | results | 120 s; aggregates over a result's or a view's rows ([Column profiles](#column-profiles)) |
 | `live.subscribe` | port | stream of credited EVENTs ([Live subscriptions](#live-subscriptions)) | live (no slot) | none, and no backstop: only CANCEL, a disconnect, a shutdown, a failure or its source ending ends it |
@@ -1339,6 +1343,33 @@ Server. A view is an order of a result's base rows, read through the same calls 
   or binary column when it changes. A view main sees built after its port went (a reload) is closed by main. Copy, Save Results As and opening a value follow the
   grid's order through its view; Save waits until a running or pending sort is built.
 
+## Row identities and highlights
+
+Highlights (the grid menu's Highlight submenu and Ctrl+Shift+H) follow their rows by an identity the backend computes over
+the rows it holds (`Results/RowIdentity.cs`); the renderer never compares rows.
+
+- **`results.identify { resultId, by: 'auto' | 'column' | 'row', column? }`** answers `{ column, unique, approximate, rows }`.
+  The set must be complete (`RESULT_OPEN`, "Highlight rows after this result set finishes loading."). `auto` picks a key
+  column: of up to 16 candidates (names ending in id, key or guid first, then integer, uniqueidentifier and decimal
+  columns, then short character and date columns) the first with no NULL, no truncated value and no duplicate; with none it
+  uses the whole row (`column: -1`). `column` uses the given column (`unique` says whether it had duplicates), `row` the whole
+  row. An identity is a 53-bit hash of each cell's normalized value: character columns by their collation's sort key with
+  trailing spaces trimmed (code points for _BIN and _BIN2), exact numerics by their canonical digits, uniqueidentifier by its
+  bytes, datetimeoffset by its UTC instant, others by their stored bytes; so it matches rows equal under the collation.
+  `approximate` says a hashed value was a truncated prefix. A second identify replaces the first. It holds 24 bytes a row
+  while it runs and keeps 8, charged to the query budget (`TOO_LARGE`) and freed with the result.
+- **`results.rowIds { resultId, firstRow, count: 1 – 16,384, viewId? }`** answers `{ firstRow, ids, rows }`, an id per row
+  (by view position with `viewId`), -1 past the identified rows. Without an identify first: `IDENTITY_NOT_FOUND`.
+- **`results.findRows { resultId, ids: 1 – 10,000 in 0 – 2⁵³ − 1, viewId? }`** answers `{ positions, marks, truncated, rows }`:
+  the ascending positions (view positions with `viewId`) of the rows whose identity is in `ids`, each with the index in
+  `ids` it matched, at most 100,000 (`truncated`).
+- **Renderer.** `HighlightsService` keeps highlights per tab and result set index: the first highlight identifies the set
+  (`auto`) and fixes how its rows are told apart (the key column's name, or the whole row); a re-run of the tab's query
+  identifies its new set the same way once complete and finds the highlighted ids there, and a sorted view finds them by
+  view position. It colours at most 10,000 rows a command and keeps 10,000 a set. `GridView` draws the positions it is
+  given by binary search per painted row, with theme colours (`resultsGrid.highlight*Background`). Highlights live only in
+  the renderer's memory: they do not survive a reload, hot exit or closing the tab.
+
 ## Search in results
 
 The results toolbar's search box searches every grid of a run in the backend, over the rows it holds
@@ -2237,6 +2268,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Descriptors per summary | 8 MiB (bounded per set by names, types and 96 bytes per column) | backend |
 | FOR XML / FOR JSON value | 2,097,152 characters, the rest marks it truncated | backend |
 | Row sizes a request | `results.rowBytes`: 1 – 16,384 rows (`rowSizes.maxRows`) | zod and backend |
+| Row identities | `results.rowIds` 1 – 16,384 rows; `results.findRows` 1 – 10,000 ids, 100,000 matches (`limits.identity`); 24 bytes a row while identifying, 8 kept, under the query budget | zod and backend |
 | Sorted views | 1 – 16 keys a sort, 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key while sorting, 4 bytes a row kept, under the query budget | zod and backend |
 | Search in results | 1 – 1,024 characters of text, 1 – 10,000 matches an answer plus its last row's columns (`limits.search`); no budget held | zod and backend |
 | Column profiles | 0 – 32 columns a request (`limits.profile`), 20 buckets, distinct exact to 16,384, values cut to 256 characters; working memory under the query budget | zod and backend |
@@ -2313,7 +2345,7 @@ access, choose Help › Clear Entra ID Token Cache, then connect again." The sam
 
 | Origin | Codes |
 | --- | --- |
-| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN` |
+| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN` |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
 | Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads, scripting, object actions and SSIS requests), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs), `STALE` (a shortcuts save based on an older revision), `DUPLICATE_REQUEST` and `NOT_FOUND` (live streams of the results port); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |

@@ -1,6 +1,6 @@
 // Messages between the UI thread (ResultClient) and the results worker. The worker also owns the results port to main
 // (src/shared/ipc/port-messages.ts).
-import type { BackendStatus, QueryEvent, ResultsSearchResult, ResultsProfileResult, ViewSortKey, WireKind } from '../../../shared/contracts'
+import type { BackendStatus, IdentityBy, QueryEvent, ResultsFindRowsResult, ResultsIdentifyResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ViewSortKey, WireKind } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport } from '../../../shared/ipc/port-messages'
 import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
@@ -8,6 +8,12 @@ import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpd
 /** A result is named by its backend generation and its id within that generation; `view` names one of its sorted views
  *  (results.view), whose rows are read by view position. */
 export interface ResultKey { readonly generation: number; readonly resultId: number; readonly view?: number }
+
+/** One row-identity request: tell the rows apart, read a range's identities, or find the rows with some identities. */
+export type IdentityRequest =
+  | { readonly method: 'identify'; readonly by: IdentityBy; readonly column?: number }
+  | { readonly method: 'rowIds'; readonly firstRow: number; readonly count: number }
+  | { readonly method: 'findRows'; readonly ids: readonly number[] }
 
 /** Cell flags in a window: NULL, truncated where the backend stored it (a prefix), read error, over the window's text
  *  budget, and cut at the window's maxCellChars. */
@@ -63,6 +69,9 @@ export type WorkerRequest =
    *  supersedes, whose pages go once it is built. */
   | { readonly type: 'view'; readonly id: number; readonly key: ResultKey; readonly sort: readonly ViewSortKey[]; readonly replaces?: number }
   | { readonly type: 'viewClose'; readonly id: number; readonly key: ResultKey; readonly viewIds: readonly number[] }
+  /** Row identities (results.identify, rowIds, findRows), relayed to main as they are; `key.view` reads through a view.
+   *  `cancel` with the same id stops an identify. */
+  | { readonly type: 'identity'; readonly id: number; readonly key: ResultKey; readonly request: IdentityRequest }
   /** The cells of `key` (its view's positions when it names one) containing `text` (results.search); `cancel` with the same
    *  id stops it. */
   | { readonly type: 'search'; readonly id: number; readonly key: ResultKey; readonly text: string; readonly fromRow: number; readonly maxMatches: number; readonly backward: boolean }
@@ -88,6 +97,7 @@ export type WorkerResponse =
   | { readonly type: 'stats'; readonly id: number; readonly bytes: number; readonly pages: number; readonly wireBytes: number; readonly columns: number }
   | { readonly type: 'view'; readonly id: number; readonly viewId: number; readonly rows: number; readonly complete: boolean; readonly approximate: boolean }
   | { readonly type: 'viewClosed'; readonly id: number; readonly closed: number }
+  | { readonly type: 'identity'; readonly id: number; readonly result: ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult }
   | { readonly type: 'search'; readonly id: number; readonly result: ResultsSearchResult }
   | { readonly type: 'profile'; readonly id: number; readonly result: ResultsProfileResult }
   | { readonly type: 'error'; readonly id: number; readonly code: ErrorCode; readonly message: string }

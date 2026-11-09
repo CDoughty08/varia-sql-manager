@@ -1394,7 +1394,7 @@ try {
   await page.keyboard.press('Shift+F10')
   const outputMenu = page.getByRole('menu', { name: 'Query output', exact: true })
   await expect(outputMenu).toBeVisible()
-  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size'])
+  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Highlight', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size'])
   await page.keyboard.press('Escape')
   // Shift+F10 right after a click opens at the cell just clicked, though the grid paints it as active only on its next
   // frame: below it (or above, when there is no room), from its left edge (or to its right edge, near the window's).
@@ -1571,7 +1571,46 @@ try {
   await expect(cell(5, 0)).toHaveText('5')
   console.log('Results checks: header sort buttons sort ascending, descending and by a further key, narrow headers keep selecting, the menu sorts, Copy follows the order, and Clear Sort restores it.')
 
-  // 14d. Search in results: Ctrl+F in a grid puts the focus in the toolbar's search box; the backend finds the cells
+  // 14d. Highlights: Ctrl+Shift+H colours the selected rows (yellow at first) and the grid's Highlight submenu picks a
+  // colour; each follows its row by the key the backend picked (id) through a sort and a re-run of the query, and the row
+  // header names it for screen readers. Clear All Highlights takes them off.
+  const highlighted = () => grid().locator(gridPart.highlightedRow)
+  const rowHeaderAt = row => grid().locator(`[role="row"][aria-rowindex="${row + 2}"] > ${gridPart.rowHeader}`)
+  const highlightMenu = async (row, name) => {
+    await cell(row, 1).click({ button: 'right' })
+    await outputMenu.getByRole('menuitem', { name: 'Highlight', exact: true }).click()
+    await page.getByRole('menu', { name: 'Highlight', exact: true }).getByRole('menuitem', { name, exact: true }).click()
+  }
+  await cell(1, 0).click()
+  await page.keyboard.press('Control+Shift+H')
+  await expect(rowHeaderAt(1)).toHaveAttribute('aria-description', 'Highlighted yellow')
+  await highlightMenu(3, 'Green')
+  await expect(rowHeaderAt(3)).toHaveAttribute('aria-description', 'Highlighted green')
+  await expect(highlighted()).toHaveCount(2)
+  // Sorted by id descending, ids 3 and 1 are rows 17 and 19 of 20: the highlights moved with them.
+  await menuSort(0, 'Sort Descending')
+  await expect(cell(0, 0)).toHaveText('19')
+  await page.keyboard.press('Control+End')
+  await expect(cell(18, 0)).toHaveText('1')
+  await expect(rowHeaderAt(18)).toHaveAttribute('aria-description', 'Highlighted yellow')
+  await expect(rowHeaderAt(16)).toHaveAttribute('aria-description', 'Highlighted green')
+  await expect(rowHeaderAt(17)).not.toHaveAttribute('aria-description', /./)
+  // The same query again: its new result's rows are told apart by id, and the highlights find their rows there.
+  await run('-- varia-fake: sets=N1*20')
+  await expect(rowHeaderAt(1)).toHaveAttribute('aria-description', 'Highlighted yellow')
+  await expect(rowHeaderAt(3)).toHaveAttribute('aria-description', 'Highlighted green')
+  // Ctrl+Shift+H uses the colour last picked (green); again on rows that all have it, it takes it off.
+  await cell(1, 0).click()
+  await page.keyboard.press('Control+Shift+H')
+  await expect(rowHeaderAt(1)).toHaveAttribute('aria-description', 'Highlighted green')
+  await page.keyboard.press('Control+Shift+H')
+  await expect(rowHeaderAt(1)).not.toHaveAttribute('aria-description', /./)
+  await expect(highlighted()).toHaveCount(1)
+  await highlightMenu(0, 'Clear All Highlights')
+  await expect(highlighted()).toHaveCount(0)
+  console.log('Results checks: Highlight Rows and the Highlight submenu colour rows, which keep their colours through a sort and a re-run, and Clear All Highlights clears them.')
+
+  // 14e. Search in results: Ctrl+F in a grid puts the focus in the toolbar's search box; the backend finds the cells
   // (results.search) and the grid marks them, the active one outlined. Enter, Shift+Enter and F3 step through them, a
   // sort searches again through its order, Columns matches column names, and Escape clears it all.
   const searchBox = resultsToolbar(page).getByRole('textbox', { name: 'Search results', exact: true })

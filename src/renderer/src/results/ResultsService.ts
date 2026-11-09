@@ -719,7 +719,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   }
 
   /** A save's outcome: announced, and shown in the toolbar until the next run or save, or for a few seconds. */
-  private notify(tabId: string, text: string): void {
+  /** Shows `text` in the tab's results toolbar for a few seconds and reads it out. */
+  notify(tabId: string, text: string): void {
     const run = this.runs.get(tabId)
     if (!run) return
     this.announce(tabId, text)
