@@ -67,11 +67,15 @@ internal sealed class RowAccess
     public long Rows { get; }
 
     /// <summary>The page holding a row, and the row's index within it.</summary>
-    public PageView At(long row, out int index)
+    public PageView At(long row, out int index) => At(row, out index, out _);
+
+    /// <summary>The page holding a row, the row's index within it, and the page's lengths sidecar.</summary>
+    public PageView At(long row, out int index, out PageLengths lengths)
     {
         var page = Array.BinarySearch(starts, row);
         if (page < 0) page = ~page - 1;
         var stored = pages[page];
+        lengths = stored.Lengths;
         if (parsed[page] is not { } layout)
         {
             var first = PageView.Parse(stored.Body, columns);
@@ -83,7 +87,8 @@ internal sealed class RowAccess
 }
 
 /// <summary>Aligns two complete results (results.diff). Columns pair by name (case-insensitively, in the first result's
-/// order). Rows match by a key: the first candidate (RowIdentity.Candidates over the shared columns) that is unique, NULL-free
+/// order) when both hold text or both binary; a pair's values compare by the first result's column type and collation, so
+/// a column whose type or collation changed between the results still matches. Rows match by a key: the first candidate (RowIdentity.Candidates over the shared columns) that is unique, NULL-free
 /// and untruncated in both results, else by their shared columns' values together, the k-th copy of a row matching the
 /// k-th copy in the other result. Values compare as SQL Server would (CellHasher): numbers by value, text by its column's
 /// collation, unless <c>exact</c>, which compares text character for character.</summary>
@@ -105,9 +110,13 @@ internal static class ResultDiffer
     /// <summary>Differing cells charged at a time, through Compare's <c>reserve</c>.</summary>
     public const int CellChunk = 1 << 16;
 
-    /// <summary>The shared columns: each visible column of the first result with a visible column of the same name in the
-    /// second, in the first result's order.</summary>
-    public static (int Left, int Right)[] Pairs(IReadOnlyList<ResultColumn> left, IReadOnlyList<ResultColumn> right)
+    /// <summary>The most shared columns a diff compares: the unified result adds a marker, two row numbers and a tone.</summary>
+    public const int MaxPairs = PageBuilder.MaxColumns - 4;
+
+    /// <summary>The shared columns: each visible column of the first result with a visible column of the same name and wire
+    /// (text or binary) in the second, in the first result's order. A column whose wire differs is one-sided: the unified
+    /// result's cells take the second result's wire, which a first result's binary value could not be stored in.</summary>
+    public static (int Left, int Right)[] Pairs(IReadOnlyList<ResultColumn> left, IReadOnlyList<ResultColumn> right, IReadOnlyList<WireKind>? leftWires = null, IReadOnlyList<WireKind>? rightWires = null)
     {
         var used = new bool[right.Count];
         var pairs = new List<(int, int)>();
@@ -117,6 +126,7 @@ internal static class ResultDiffer
             for (var r = 0; r < right.Count; r++)
             {
                 if (used[r] || ResultTextWriter.Hidden(right[r]) || !string.Equals(left[l].Name, right[r].Name, StringComparison.OrdinalIgnoreCase)) continue;
+                if (leftWires is not null && rightWires is not null && leftWires[l] != rightWires[r]) continue;
                 used[r] = true;
                 pairs.Add((l, r));
                 break;
@@ -131,14 +141,19 @@ internal static class ResultDiffer
     public static DiffModel Compare(ResultSetBuffer left, StoredPage[] leftPages, ResultSetBuffer right, StoredPage[] rightPages, bool exact, CancellationToken token,
         Func<long, bool>? reserve = null)
     {
-        var pairs = Pairs(left.Columns, right.Columns);
+        var pairs = Pairs(left.Columns, right.Columns, left.Wires, right.Wires);
         if (pairs.Length == 0) throw new RequestException("INVALID_PARAMS", "These results have no column names in common, so they cannot be compared.");
+        if (pairs.Length > MaxPairs)
+            throw new RequestException("INVALID_PARAMS", "These results share more than " + MaxPairs.ToString("N0", CultureInfo.InvariantCulture) + " columns, more than a diff can show.");
         long leftTotal = 0, rightTotal = 0;
         foreach (var page in leftPages) leftTotal += page.Rows;
         foreach (var page in rightPages) rightTotal += page.Rows;
         if (leftTotal > int.MaxValue / 2 || rightTotal > int.MaxValue / 2) throw new RequestException("TOO_LARGE", "These results have too many rows to compare.");
         var leftHasher = new CellHasher(left.Columns, left.Wires);
-        var rightHasher = new CellHasher(right.Columns, right.Wires);
+        // The second result's shared columns hash by the first's type and collation, so equal values hash alike in both.
+        var compared = right.Columns.ToArray();
+        foreach (var (l, r) in pairs) compared[r] = compared[r] with { DataType = left.Columns[l].DataType, Collation = left.Columns[l].Collation };
+        var rightHasher = new CellHasher(compared, right.Wires);
         var leftIds = new long[leftTotal];
         var rightIds = new long[rightTotal];
         var keyPair = -1;
@@ -257,10 +272,10 @@ internal static class ResultDiffer
             }
             if (leftView.IsTruncated(lc, l) || rightView.IsTruncated(rc, r)) approximate = true;
             if (leftView.Span(lc, l).SequenceEqual(rightView.Span(rc, r))) continue;
-            var text = leftHasher.IsText(lc) && rightHasher.IsText(rc);
+            var text = leftHasher.IsText(lc);
             // Values of other types that differ only in form (2.0 and 2.00) are the same value; text equal by its collation
-            // is a soft difference, or a change when compared exactly.
-            var equal = leftHasher.CellValue(leftView, lc, l) == rightHasher.CellValue(rightView, rc, r);
+            // is a soft difference, or a change when compared exactly. Values compare, not their hashes, which can collide.
+            var equal = leftHasher.Same(leftView, lc, l, rightHasher, rightView, rc, r);
             if (equal && !text) continue;
             if (!equal || exact) { cells.Add(p); hard = true; }
             else cells.Add(~p);
@@ -274,8 +289,9 @@ internal static class ResultDiffer
 /// them with <c>context</c> -1). Its columns are a marker ("Change": " ", "−" or "+"), each row's number in the first result ("R1")
 /// and the second ("R2"), the shared columns (the second result's names and types), and a hidden tone column: "added" or
 /// "removed" ("same" for an unchanged row with soft differences), then the differing cells as column indexes, a soft one with
-/// a leading "~". Rows stop when the query's
-/// budget is full; the result then says why it was truncated.</summary>
+/// a leading "~". Each data cell's bytes are its source cell's, so the row-size bar sums the values shown, not the marker,
+/// row numbers or tone. Rows stop when the query's budget is full, never between a changed row's two halves; the result
+/// then says why it was truncated.</summary>
 internal static class UnifiedDiff
 {
     public const string Removed = "−", Added = "+";
@@ -286,7 +302,8 @@ internal static class UnifiedDiff
         new("R1", "bigint", "text"),
         new("R2", "bigint", "text"),
         .. model.Pairs.Select(pair => right.Columns[pair.Right]),
-        new("", "nvarchar(400)", "text", Role: "tone", MaxLength: 400)
+        // Unbounded: a row can differ in every shared column, and each is listed.
+        new("", "nvarchar(max)", "text", Role: "tone")
     ];
 
     public static IReadOnlyList<WireKind> Wires(ResultSetBuffer right, DiffModel model) =>
@@ -318,8 +335,8 @@ internal static class UnifiedDiff
     /// completes it.</summary>
     public static void Write(ResultSetBuffer set, ResultSetBuffer left, StoredPage[] leftPages, ResultSetBuffer right, StoredPage[] rightPages, DiffModel model, int context, CancellationToken token)
     {
-        var leftAccess = new RowAccess(leftPages, left.Wires.Count);
-        var rightAccess = new RowAccess(rightPages, right.Wires.Count);
+        var sides = (Left: new Side(new RowAccess(leftPages, left.Wires.Count), model.Pairs, true, left.Lengths, right.Lengths),
+            Right: new Side(new RowAccess(rightPages, right.Wires.Count), model.Pairs, false, right.Lengths, right.Lengths));
         var shown = Shown(model, context);
         var tone = new System.Text.StringBuilder(64);
         var counter = 0;
@@ -333,11 +350,10 @@ internal static class UnifiedDiff
                 var cells = model.CellsOf(entry);
                 var stored = entry.Kind switch
                 {
-                    DiffKind.Same => Row(set, rightAccess, entry.Right, model.Pairs, false, " ", entry.Left, entry.Right, cells.IsEmpty ? null : Tone(tone, "same", cells)),
-                    DiffKind.Added => Row(set, rightAccess, entry.Right, model.Pairs, false, Added, -1, entry.Right, "added"),
-                    DiffKind.Removed => Row(set, leftAccess, entry.Left, model.Pairs, true, Removed, entry.Left, -1, "removed"),
-                    _ => Row(set, leftAccess, entry.Left, model.Pairs, true, Removed, entry.Left, -1, Tone(tone, "removed", cells))
-                        && Row(set, rightAccess, entry.Right, model.Pairs, false, Added, -1, entry.Right, Tone(tone, "added", cells))
+                    DiffKind.Same => Row(set, sides.Right, entry.Right, " ", entry.Left, entry.Right, cells.IsEmpty ? null : Tone(tone, "same", cells)),
+                    DiffKind.Added => Row(set, sides.Right, entry.Right, Added, -1, entry.Right, "added"),
+                    DiffKind.Removed => Row(set, sides.Left, entry.Left, Removed, entry.Left, -1, "removed"),
+                    _ => Pair(set, sides, entry, Tone(tone, "removed", cells), Tone(tone, "added", cells))
                 };
                 if (!stored) break;
             }
@@ -354,13 +370,49 @@ internal static class UnifiedDiff
             tone.Append(' ');
             if (cell < 0) tone.Append('~').Append((~cell + 3).ToString(CultureInfo.InvariantCulture));
             else tone.Append((cell + 3).ToString(CultureInfo.InvariantCulture));
-            if (tone.Length > 380) break;
         }
         return tone.ToString();
     }
 
-    /// <summary>Copies one source row's shared cells behind its marker and row numbers; false once the set stores no more.</summary>
-    private static bool Row(ResultSetBuffer set, RowAccess access, int row, (int Left, int Right)[] pairs, bool leftSide, string marker, int leftRow, int rightRow, string? tone)
+    /// <summary>One result's side of the diff: its rows, which of each pair's columns is its, its columns' byte rules, and
+    /// the unified result's (the second result's).</summary>
+    private sealed record Side(RowAccess Access, (int Left, int Right)[] Pairs, bool IsLeft, IReadOnlyList<ColumnLength> Rules, IReadOnlyList<ColumnLength> Shown)
+    {
+        public int Column(int pair) => IsLeft ? Pairs[pair].Left : Pairs[pair].Right;
+    }
+
+    /// <summary>A changed entry's two rows, "−" then "+": the budget is asked for room for both before either is written,
+    /// so the result never holds one half of a change.</summary>
+    private static bool Pair(ResultSetBuffer set, (Side Left, Side Right) sides, DiffEntry entry, string removedTone, string addedTone)
+    {
+        var bytes = RowBound(sides.Left, entry.Left, removedTone) + RowBound(sides.Right, entry.Right, addedTone);
+        if (!set.TryReserveRows(bytes))
+        {
+            set.CountRow();
+            set.CountRow();
+            return false;
+        }
+        return Row(set, sides.Left, entry.Left, Removed, entry.Left, -1, removedTone)
+            && Row(set, sides.Right, entry.Right, Added, -1, entry.Right, addedTone);
+    }
+
+    /// <summary>At most what one row of the unified result stores: its cells' bytes, the marker, row numbers and tone, each
+    /// cell's offset and a lengths entry for each.</summary>
+    private static long RowBound(Side side, int row, string tone)
+    {
+        var view = side.Access.At(row, out var at);
+        long bytes = 3 + 2 * CellFormat.MaxFixedBytes + 3L * tone.Length;
+        for (var p = 0; p < side.Pairs.Length; p++)
+        {
+            var c = side.Column(p);
+            if (!view.IsNull(c, at)) bytes += view.Span(c, at).Length;
+        }
+        return bytes + (4L + PageLengths.CellBytes) * (side.Pairs.Length + 4) + 4;
+    }
+
+    /// <summary>Copies one source row's shared cells behind its marker and row numbers, each measured with its source cell's
+    /// characters and bytes; false once the set stores no more.</summary>
+    private static bool Row(ResultSetBuffer set, Side side, int row, string marker, int leftRow, int rightRow, string? tone)
     {
         set.CountRow();
         var builder = set.BeginRow();
@@ -368,19 +420,27 @@ internal static class UnifiedDiff
         builder.AppendText(marker);
         Number(builder, leftRow);
         Number(builder, rightRow);
-        var view = access.At(row, out var at);
+        var view = side.Access.At(row, out var at, out var lengths);
         var truncated = 0;
-        foreach (var (left, right) in pairs)
+        for (var p = 0; p < side.Pairs.Length; p++)
         {
-            var c = leftSide ? left : right;
-            if (view.IsNull(c, at)) builder.AppendNull(view.IsError(c, at));
+            var c = side.Column(p);
+            if (view.IsNull(c, at)) { builder.AppendNull(view.IsError(c, at)); continue; }
+            var cut = view.IsTruncated(c, at);
+            if (cut) truncated++;
+            var span = view.Span(c, at);
+            if (view.Wire(c) == WireKind.Binary) builder.AppendBinary(span, cut);
+            else builder.AppendUtf8(span, cut);
+            var rule = side.Rules[c];
+            CellSize size;
+            if (lengths.TryCell(at, c, out var kept)) size = new CellSize(kept.Chars, kept.Bytes, kept.Exact && !rule.Estimated);
             else
             {
-                var cut = view.IsTruncated(c, at);
-                if (cut) truncated++;
-                if (view.Wire(c) == WireKind.Binary) builder.AppendBinary(view.Span(c, at), cut);
-                else builder.AppendUtf8(view.Span(c, at), cut);
+                size = rule.Derive(span, view.Wire(c));
+                if (cut) size = size with { Exact = false };
             }
+            // Kept beside the page when the unified column's own rule would not give the source's size again.
+            builder.Measure(size.Chars, size.Bytes, keep: rule.Rule == LengthRule.Recorded || !ReferenceEquals(rule, side.Shown[side.Pairs[p].Right]), exact: size.Exact);
         }
         if (tone is null) builder.AppendNull();
         else builder.AppendText(tone);

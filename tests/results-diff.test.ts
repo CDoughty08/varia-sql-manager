@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import type { ResultsJobProgress, VariaApi } from '../src/shared/contracts'
 import { EventBus } from '../src/renderer/src/core/events'
@@ -69,6 +70,50 @@ describe('result diffs', () => {
     run(2, { queryId: 'q3' })
     await compare.compare('t1', 1)
     expect(compare.getSnapshot().size).toBe(1)
+  })
+
+  it('releases a diff a newer run or a closed tab cannot take, and gives up a comparison when a run starts', async () => {
+    const { client, results, compare, run } = fixture()
+    const [first] = run(2)
+    // Scenario A: F5 while the comparison runs. The new run gives it up (its signal aborts) and its late answer is released.
+    let answer!: (value: Awaited<ReturnType<FakeHandle['diff']>>) => void
+    let signal: AbortSignal | undefined
+    vi.mocked(first.diff).mockImplementationOnce((_right, o) => { signal = o?.signal; return new Promise(resolve => { answer = resolve }) })
+    const comparing = compare.compare('t1', 1)
+    run(2, { queryId: 'q2', finish: false })
+    expect(signal?.aborted).toBe(true)
+    answer({ descriptor: descriptor(950, { index: 2, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    await comparing
+    expect(client.released()).toContain(950)
+    expect(results.getSnapshot().t1.sets).toHaveLength(2)
+    // Scenario B: the new run finished before the answer: its sets are not the ones compared, so it does not take the diff.
+    void results.finish('t1', 'q2', { summary: summaryOf(results.getSnapshot().t1.sets.map(set => set.descriptor)) })
+    expect(results.addSet('t1', descriptor(951, { index: 2, kind: 'diff' }), 'Differences: Result 1 → Result 2', [setKey(first.key)])).toBeUndefined()
+    expect(client.released()).toContain(951)
+    expect(results.getSnapshot().t1.sets).toHaveLength(2)
+    // A closed tab takes none either.
+    results.release('t1')
+    expect(results.addSet('t1', descriptor(952, { index: 2, kind: 'diff' }), 'Differences', [])).toBeUndefined()
+    expect(client.released()).toContain(952)
+  })
+
+  it('draws highlights and search matches over a diff\'s tones (styles.css order and selectors)', () => {
+    const css = readFileSync(new URL('../src/renderer/src/styles.css', import.meta.url), 'utf8')
+    const at = (rule: string) => { const index = css.indexOf(rule); expect(index, rule).toBeGreaterThanOrEqual(0); return index }
+    // Same specificity: the rule that comes later wins, so the highlight rules follow the diff tone rules.
+    expect(at('.rg-row.tone-added {')).toBeLessThan(at('.rg-row.hl-yellow {'))
+    expect(at('.rg-rn.tone-removed:not(.sel) {')).toBeLessThan(at('.rg-rn.hl-yellow:not(.sel) {'))
+    // A changed cell's tint, more specific than a search match's, leaves a match its own.
+    expect(css).toContain('.rg-row.tone-added .rg-c.is-chg:not(.is-sel):not(.is-hit) {')
+    expect(css).toContain('.rg-row.tone-removed .rg-c.is-chg:not(.is-sel):not(.is-hit) {')
+    // Under forced colours a changed cell's outline leaves the active match's outline alone.
+    expect(css).toContain('.rg-c.is-chg:not(.is-cur) { outline')
+    expect(css).not.toMatch(/\.rg-c\.is-chg \{ outline/)
+  })
+
+  it('says when values were compared by their stored prefix', () => {
+    const info = { left: 0, right: 1, key: 'Id', exact: false, same: 1, changed: 0, added: 0, removed: 0, soft: 0, leftOnly: [], rightOnly: [], approximate: true }
+    expect(compareText(info)).toBe('Result 1 → Result 2, rows matched by Id: 0 changed rows, 0 added rows, 0 removed rows, 1 unchanged. Long values were compared by the part these results keep, so a difference past it does not show.')
   })
 
   it('reads a diff row\'s differing cells from its tone text', () => {

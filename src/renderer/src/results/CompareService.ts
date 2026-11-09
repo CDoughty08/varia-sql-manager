@@ -20,6 +20,8 @@ export interface CompareInfo {
   readonly soft: number
   readonly leftOnly: readonly string[]
   readonly rightOnly: readonly string[]
+  /** A value compared was a long value's stored prefix, so a difference past it does not show. */
+  readonly approximate: boolean
 }
 /** Each diff set's comparison, by its set key. */
 export type CompareSnapshot = ReadonlyMap<string, CompareInfo>
@@ -36,12 +38,19 @@ const names = (entry: ResultSetEntry) => new Set(entry.descriptor.columns.filter
  * The diff's rows are aligned entries (ResultDiff.cs's DiffModel); a side-by-side view would render the same entries.
  */
 export class CompareService extends SnapshotStore<CompareSnapshot> implements Disposable {
-  private readonly results: Pick<ResultsService, 'getSnapshot' | 'addSet' | 'notify'>
-  private readonly running = new Map<string, AbortController>()
+  private readonly results: Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'notify'>
+  /** Comparisons in flight by tab, with the run they compare: a newer run (or none) gives them up. */
+  private readonly running = new Map<string, { readonly abort: AbortController; readonly queryId: string }>()
+  private readonly unsubscribe: () => void
 
-  constructor(results: Pick<ResultsService, 'getSnapshot' | 'addSet' | 'notify'>) {
+  constructor(results: Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'notify'>) {
     super(new Map())
     this.results = results
+    this.unsubscribe = results.subscribe(() => {
+      if (this.running.size === 0) return
+      const snapshot = this.results.getSnapshot()
+      for (const [tabId, item] of this.running) if (snapshot[tabId]?.queryId !== item.queryId) item.abort.abort()
+    })
   }
 
   /** The set a grid's set is compared with: the nearest set before it of rows, with every row and a column name in common. */
@@ -67,15 +76,16 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     if (left === undefined || !tab || this.running.has(tabId)) return
     const from = tab.sets[left], to = tab.sets[index]
     const abort = new AbortController()
-    this.running.set(tabId, abort)
+    const item = { abort, queryId: tab.queryId }
+    this.running.set(tabId, item)
     try {
       const result = await from.handle.diff(to.handle, { exact: o.exact ?? false, signal: abort.signal })
-      if (abort.signal.aborted) return
       const label = `Differences: ${from.label ?? `Result ${left + 1}`} → ${to.label ?? `Result ${index + 1}`}`
-      if (this.results.addSet(tabId, result.descriptor, label) === undefined) return
+      // Only the run that holds both sets takes the diff; otherwise (a re-run, a closed tab) it is released.
+      if (this.results.addSet(tabId, result.descriptor, label, [setKey(from.descriptor), setKey(to.descriptor)]) === undefined) return
       const info: CompareInfo = {
         left, right: index, key: result.key, exact: o.exact ?? false, same: result.same, changed: result.changed, added: result.added, removed: result.removed,
-        soft: result.soft, leftOnly: result.leftOnly, rightOnly: result.rightOnly
+        soft: result.soft, leftOnly: result.leftOnly, rightOnly: result.rightOnly, approximate: result.approximate
       }
       // Only diffs some run still shows are kept.
       const shown = new Set(Object.values(this.results.getSnapshot()).flatMap(run => run.sets.map(entry => setKey(entry.descriptor))))
@@ -84,12 +94,13 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     } catch (error) {
       if (!abort.signal.aborted) this.results.notify(tabId, error instanceof Error ? error.message : 'The results could not be compared.')
     } finally {
-      if (this.running.get(tabId) === abort) this.running.delete(tabId)
+      if (this.running.get(tabId) === item) this.running.delete(tabId)
     }
   }
 
   dispose(): void {
-    for (const abort of this.running.values()) abort.abort()
+    this.unsubscribe()
+    for (const item of this.running.values()) item.abort.abort()
     this.running.clear()
     this.clearListeners()
   }
@@ -102,6 +113,7 @@ export function compareText(info: CompareInfo): string {
   const by = info.key ? `rows matched by ${info.key}` : 'whole rows matched'
   const parts = [`Result ${info.left + 1} → Result ${info.right + 1}, ${by}${info.exact ? ', text compared exactly' : ''}: ${count(info.changed, 'changed row')}, ${count(info.added, 'added row')}, ${count(info.removed, 'removed row')}, ${formatCount(info.same)} unchanged.`]
   if (info.soft > 0) parts.push(`${count(info.soft, 'value differs', 'values differ')} only by collation (case or trailing spaces), underlined.`)
+  if (info.approximate) parts.push('Long values were compared by the part these results keep, so a difference past it does not show.')
   const others = [...info.leftOnly.map(name => `${name} (Result ${info.left + 1})`), ...info.rightOnly.map(name => `${name} (Result ${info.right + 1})`)]
   if (others.length > 0) parts.push(`Not compared: ${others.join(', ')}.`)
   return parts.join(' ')

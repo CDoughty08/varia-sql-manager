@@ -357,7 +357,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "results.identify" => await IdentifyAsync(Read<ResultsIdentifyArgs>(parameters, json), Token(context)),
         "results.rowIds" => RowIds(Read<ResultsRowIdsArgs>(parameters, json)),
         "results.findRows" => await FindRowsAsync(Read<ResultsFindRowsArgs>(parameters, json), Token(context)),
-        "results.diff" => await DiffAsync(Read<ResultsDiffArgs>(parameters, json), Token(context)),
+        "results.diff" => await DiffAsync(Read<ResultsDiffArgs>(parameters, json), context),
         "results.search" => await SearchAsync(Read<ResultsSearchArgs>(parameters, json), Token(context)),
         "results.profile" => await ProfileAsync(Read<ResultsProfileArgs>(parameters, json), Token(context)),
         "results.copy" => await jobs.CopyAsync(Read<ResultsCopyArgs>(parameters, json), context),
@@ -1686,9 +1686,11 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     public const int MaxDiffContext = 100, MaxDiffColumnNames = 64;
 
     /// <summary>results.diff: aligns two complete results of one query off the frame loop (ResultDiffer), charging its working
-    /// memory to their query budget, and stores the unified diff as a new result of the query, released with its others.</summary>
-    private async Task<ResultsDiffResult> DiffAsync(ResultsDiffArgs args, CancellationToken token)
+    /// memory to their query budget, and stores the unified diff as a new result of the query, released with its others, or
+    /// at once when its answer is not sent (a CANCEL or the deadline came first).</summary>
+    private async Task<ResultsDiffResult> DiffAsync(ResultsDiffArgs args, RequestContext? context)
     {
+        var token = Token(context);
         if (args.Left == 0 || args.Right == 0 || args.Left == args.Right || args.Context is < -1 or > MaxDiffContext)
             throw new RequestException("INVALID_PARAMS", "Two different results and a context of -1 to 100 rows are required.");
         var left = store.Find(args.Left) ?? throw Unavailable(args.Left);
@@ -1723,6 +1725,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 store.Release(set.ResultId);
                 throw;
             }
+            if (context is not null) context.Unsent = context.Dropped = () => store.Release([set.ResultId]);
             var (same, changed, added, removed, soft) = model.Counts();
             var paired = model.Pairs;
             string[] OneSided(IReadOnlyList<ResultColumn> columns, Func<(int Left, int Right), int> side) =>

@@ -25,6 +25,7 @@ internal static class IdentityChecks
     {
         Hashing(check);
         Picking(check);
+        Memory(check);
         Host(check);
     }
 
@@ -47,6 +48,25 @@ internal static class IdentityChecks
     }
 
     private static long[] Ids(ResultSetBuffer set, IdentityBy by, int column = -1) => RowIdentity.Build(set, set.SealedSnapshot(), by, column, CancellationToken.None).Ids;
+
+    /// <summary>Auto trying every candidate and falling back to whole rows allocates no more than results.identify reserves
+    /// (WorkingBytes plus the ids it keeps): one ids array and one set serve every pass.</summary>
+    private static void Memory(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        const int rows = 40_000;
+        // Every candidate column repeats a value at its last row, so each is filled to the end before it fails.
+        var columns = Enumerable.Range(0, RowIdentity.MaxCandidates + 1).Select(c => new ResultColumn("Key" + c.ToString(System.Globalization.CultureInfo.InvariantCulture) + "Id", "int", "text")).ToArray();
+        var data = Enumerable.Range(0, rows).Select(r => columns.Select(_ => (string?)(r == rows - 1 ? "0" : r.ToString(System.Globalization.CultureInfo.InvariantCulture))).ToArray()).ToArray();
+        var set = Fill(store, data, columns, [.. columns.Select(_ => WireKind.Text)]);
+        var pages = set.SealedSnapshot();
+        RowIdentity.Build(set, pages, IdentityBy.Auto, -1, CancellationToken.None);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var built = RowIdentity.Build(set, pages, IdentityBy.Auto, -1, CancellationToken.None);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        var reserved = RowIdentity.WorkingBytes(rows) + 8L * rows;
+        check(built.Column == -1 && allocated <= reserved, "Auto's candidates and whole-row fallback allocate within what results.identify reserves (" + allocated + " of " + reserved + " bytes)");
+    }
 
     /// <summary>Values SQL Server compares equal hash alike; others apart.</summary>
     private static void Hashing(Action<bool, string> check)

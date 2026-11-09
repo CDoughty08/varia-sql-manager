@@ -76,6 +76,11 @@ internal sealed class RequestContext : IDisposable
     /// to own, such as stored results, is released instead of being left without an owner.</summary>
     public Action? Unsent { get; set; }
 
+    /// <summary>Called when the handler's result is dropped because a CANCEL or the deadline answered the request first, for
+    /// a handler whose result main never learns of otherwise (results.diff), so what it stored is released. A query's
+    /// results reached main in its events, so query.execute does not set it.</summary>
+    public Action? Dropped { get; set; }
+
     /// <summary>True exactly once; the caller that wins writes the RESPONSE.</summary>
     public bool TrySettle() => Interlocked.Exchange(ref settled, 1) == 0;
 

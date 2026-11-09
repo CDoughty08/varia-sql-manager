@@ -67,9 +67,11 @@ interface RowSlot {
   row: number; top: number; width: number; odd: boolean; headerSel: boolean; shown: boolean
   /** 0 for none, else 1 + the tone's index in rowTones. */
   tone: number
+  /** The tone text last parsed, and its tone (0 for none, else 1 + its index in rowTones). */
+  toneText: string
+  toneOf: number
   /** A diff row's differing cells, as its tone column lists them after the tone (column numbers, a soft one with "~"), and
-   *  their bits (CHG or SOFT) by column, parsed when the text changes. */
-  cellText: string
+   *  their bits (CHG or SOFT) by column, parsed with the tone text. */
   cellMarks: ReadonlyMap<number, number> | undefined
   /** 0 for none, else 1 + the highlight's index in highlightColors. */
   highlight: number
@@ -921,7 +923,7 @@ export class GridView {
       mark.el.append(mark.text)
       this.marksRows.append(mark.el)
     }
-    const slot: RowSlot = { el, header, number, ...mark ? { mark } : {}, cells: [], pin: this.createCell(el), row: -1, top: Number.NaN, width: -1, odd: false, headerSel: false, shown: false, tone: 0, highlight: 0, cellText: '', cellMarks: undefined }
+    const slot: RowSlot = { el, header, number, ...mark ? { mark } : {}, cells: [], pin: this.createCell(el), row: -1, top: Number.NaN, width: -1, odd: false, headerSel: false, shown: false, tone: 0, highlight: 0, toneText: '', toneOf: 0, cellMarks: undefined }
     this.slots.set(el, { row: slot })
     this.rowsEl.append(el)
     if (withCells) for (let index = 0; index < this.cellsPerRow; index++) slot.cells.push(this.createCell(el, slot))
@@ -1261,10 +1263,15 @@ export class GridView {
       if (top !== slot.top) { slot.top = top; slot.el.style.top = top + 'px'; if (slot.mark) slot.mark.el.style.top = top + 'px' }
       if (!slot.shown) { slot.shown = true; slot.el.style.display = ''; if (slot.mark) slot.mark.el.style.display = '' }
     }
-    const toneText = this.toneOf(row, tile), space = toneText.indexOf(' ')
-    const odd = row % 2 === 1, tone = toneIndex.get(space < 0 ? toneText : toneText.slice(0, space)) ?? 0, highlight = colorAt(this.highlights, row)
-    const cellText = space < 0 ? '' : toneText.slice(space + 1)
-    if (cellText !== slot.cellText) { slot.cellText = cellText; slot.cellMarks = cellMarksOf(cellText) }
+    // A row's tone text is parsed only when it differs from the one the slot last painted (scrolling repaints rows).
+    const toneText = this.toneOf(row, tile)
+    if (toneText !== slot.toneText) {
+      const space = toneText.indexOf(' ')
+      slot.toneText = toneText
+      slot.toneOf = toneIndex.get(space < 0 ? toneText : toneText.slice(0, space)) ?? 0
+      slot.cellMarks = space < 0 ? undefined : cellMarksOf(toneText.slice(space + 1))
+    }
+    const odd = row % 2 === 1, tone = slot.toneOf, highlight = colorAt(this.highlights, row)
     if (odd !== slot.odd || tone !== slot.tone || highlight !== slot.highlight) {
       slot.odd = odd
       slot.el.className = rowClasses[odd ? 1 : 0][tone][highlight]
