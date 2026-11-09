@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { activityIntervalsSeconds, grantStatement, serverStatePermission, tileSpecs, unavailableMessage } from '../src/shared/activity/catalog'
 import { liveProbes } from '../src/shared/live/catalog'
 import { defaultSettings, settingDef, settingDefs } from '../src/shared/settings/catalog'
-import { chartScaleOf, crossings, latestValue, monitorFacts, monitorNotice, nextAnnouncement, overviewNotice, seriesIndex, tileReading, tileReadings, tileTone, toneAnnouncement } from '../src/renderer/src/activity/tiles'
+import { chartScaleOf, crossings, gridRows, latestValue, monitorFacts, monitorNotice, nextAnnouncement, overviewNotice, seriesIndex, tileReading, tileReadings, tileTone, toneAnnouncement } from '../src/renderer/src/activity/tiles'
 import type { LiveSnapshot } from '../src/renderer/src/live/LiveService'
 import { MetricRing, scaledRing } from '../src/renderer/src/live/ring'
 import { freshness, pillStatus } from '../src/renderer/src/live/status'
@@ -179,5 +179,17 @@ describe('Activity Monitor layout rules', () => {
     // Copy GRANT statement's outcome goes inside the error, in line with its sentence.
     const markup = renderToStaticMarkup(createElement(InlineError, { className: 'activity-banner', message: 'Needs a permission.', copy: false, children: createElement('p', { className: 'activity-note' }, 'Copied.') }))
     expect(markup).toMatch(/^<div class="inline-error activity-banner">.*<div class="inline-error-body"><p class="inline-error-message" role="alert">Needs a permission.<\/p><p class="activity-note">Copied.<\/p><\/div><\/div>$/)
+  })
+})
+
+describe('expanded chart rows', () => {
+  it('counts the rows any number of charts take in the columns the grid resolved, so each row keeps its floor', () => {
+    expect(gridRows(2, '600px 600px')).toBe(1)
+    expect(gridRows(8, '438.5px 438.5px')).toBe(4)
+    expect(gridRows(8, '400px 400px 400px')).toBe(3)
+    // auto-fit reports collapsed tracks as 0px; they never add a row.
+    expect(gridRows(1, '900px 0px')).toBe(1)
+    expect(gridRows(3, 'none')).toBe(3)
+    expect(gridRows(0, '')).toBe(1)
   })
 })
