@@ -208,8 +208,9 @@ Considered and rejected (do not re-propose without new numbers):
   opens: under `offline-stress.mjs`, 5 to 7 of 15 copies crashed with "Timeout attempting to open the connection", against
   none. The checks assert only that the failure is retryable, which both forms are.
 
-- **One shard per OS, or three.** One shard makes 12 to 13 min jobs (smoke becomes the critical path). Three shards add
-  about 1.5 runner-min and one slot per OS per push.
+- **One shard per OS.** One shard makes 12 to 13 min jobs (smoke becomes the critical path). A third shard added about
+  1.5 runner-min and one slot per OS per push in the original measurements; Windows now needs it to accommodate the
+  language-service UI suite within the 360-second shard budget.
 - **Build once and fan out artifacts.** This needs `needs:` and adds 1 to 3 min of serial wall time before the smoke
   shards, which are the critical path, to save about 2 runner-min.
 - **Caching `node_modules` or the Electron download.** `npm ci` from the npm cache takes 4 to 8 s on Linux. The 637 MB tree
@@ -221,7 +222,7 @@ Considered and rejected (do not re-propose without new numbers):
 
 ## Rules for keeping CI lean
 
-- **Budget per push across all workflows.** A pull request push starts at most 12 CI jobs, 1 of them macOS
+- **Budget per push across all workflows.** A pull request push starts at most 13 CI jobs, 1 of them macOS
   (`tests/ci-workflow.test.ts`), plus at most 3 packaging jobs, and those only when it changes packaging
   (`tests/release-workflow.test.ts`). Two overlapping pushes must fit in 20 slots. GitHub matches a pull request's `paths`
   against its first 300 changed files only, so a pull request over 300 changed files may skip Release builds silently: run

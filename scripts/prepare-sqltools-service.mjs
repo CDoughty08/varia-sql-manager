@@ -94,14 +94,42 @@ export async function sqlToolsServiceProblems(folder, rid = hostRid(), manifest 
   for (const file of actual.keys()) if (!expected.has(file)) problems.push(`SQL Tools Service contains an unexpected file: ${file}.`)
   return problems
 }
-async function download(url, destination) {
-  const response = await fetch(url, { signal: AbortSignal.timeout(180_000), headers: { 'User-Agent': 'Varia-SQL-Manager-build' } })
-  if (!response.ok || !response.body) throw new Error(`SQL Tools Service download failed (HTTP ${response.status}).`)
-  let bytes = 0
-  await pipeline(Readable.fromWeb(response.body), new Transform({ transform(chunk, _encoding, callback) {
-    bytes += chunk.length
-    callback(bytes > 256 * 1024 * 1024 ? new Error('SQL Tools Service archive exceeds the download limit.') : null, chunk)
-  } }), createWriteStream(destination, { flags: 'wx' }))
+class DownloadError extends Error {
+  constructor(message, retryable = false) { super(message); this.retryable = retryable }
+}
+function retryableDownload(error) {
+  if (error instanceof DownloadError) return error.retryable
+  if (error instanceof TypeError || error?.name === 'TimeoutError' || error?.name === 'AbortError') return true
+  return ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'ENOTFOUND', 'EPIPE', 'ERR_STREAM_PREMATURE_CLOSE',
+    'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET'].includes(error?.code)
+}
+/** Retry only transient transport failures; both URLs serve the same official asset and preparation still checks its pin. */
+export async function downloadSqlToolsArchive(url, destination) {
+  const signal = AbortSignal.timeout(180_000), alternate = new URL(url), limit = 256 * 1024 * 1024
+  alternate.searchParams.set('download', '1')
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const response = await fetch(attempt === 0 ? url : alternate.href, { signal, headers: { 'User-Agent': 'Varia-SQL-Manager-build' } })
+      if (!response.ok || !response.body) {
+        await response.body?.cancel().catch(() => {})
+        throw new DownloadError(`SQL Tools Service download failed (HTTP ${response.status}).`, response.status === 408 || response.status === 429 || response.status >= 500 && response.status <= 599)
+      }
+      const length = response.headers.get('content-length')
+      if (length !== null && /^\d+$/.test(length) && Number(length) > limit) {
+        await response.body.cancel().catch(() => {})
+        throw new DownloadError('SQL Tools Service archive exceeds the download limit.')
+      }
+      let bytes = 0
+      await pipeline(Readable.fromWeb(response.body), new Transform({ transform(chunk, _encoding, callback) {
+        bytes += chunk.length
+        callback(bytes > limit ? new DownloadError('SQL Tools Service archive exceeds the download limit.') : null, chunk)
+      } }), createWriteStream(destination, { flags: 'wx' }), { signal })
+      return
+    } catch (error) {
+      await rm(destination, { force: true })
+      if (attempt === 2 || signal.aborted || !retryableDownload(error)) throw error
+    }
+  }
 }
 async function extract(archive, folder) {
   const { stdout } = await exec('tar', ['-tf', archive], { maxBuffer: 8 * 1024 * 1024 })
@@ -110,7 +138,7 @@ async function extract(archive, folder) {
 }
 /** An explicit local archive is useful for offline builds; its digest must still match the checked-in manifest. */
 export async function prepareSqlToolsService({ rid = hostRid(), root = projectRoot, archivePath, manifest = sqlToolsManifest,
-  downloadArchive = download, extractArchive = extract } = {}) {
+  downloadArchive = downloadSqlToolsArchive, extractArchive = extract } = {}) {
   if (!Object.hasOwn(manifest.platforms, rid)) throw new Error(`Unsupported SQL Tools Service target: ${rid}.`)
   if (await sha256(join(root, manifest.license.file)) !== manifest.license.sha256) throw new Error('The pinned SQL Tools Service license failed verification.')
   const artifacts = join(root, 'artifacts'), output = inside(artifacts, join(artifacts, 'sqltools-service', rid))

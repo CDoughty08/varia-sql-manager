@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, posix, resolve } from 'node:path'
-import { archiveUrl, executableName, hostRid, markerName, prepareSqlToolsService, safeArchiveEntries, sha256, sqlToolsManifest, sqlToolsServiceProblems, type SqlToolsManifest } from '../scripts/prepare-sqltools-service.mjs'
+import { archiveUrl, downloadSqlToolsArchive, executableName, hostRid, markerName, prepareSqlToolsService, safeArchiveEntries, sha256, sqlToolsManifest, sqlToolsServiceProblems, type SqlToolsManifest } from '../scripts/prepare-sqltools-service.mjs'
 
 const folders: string[] = []
-afterEach(async () => { for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true }) })
+afterEach(async () => { vi.unstubAllGlobals(); for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true }) })
 const digest = (value: string) => createHash('sha256').update(value).digest('hex')
 type PreparationMarker = { version: string; rid: string; archiveSha256: string; files: { path: string; sha256: string }[] }
 async function fixture() {
@@ -23,6 +23,79 @@ async function fixture() {
   })
   return { root, manifest, downloadArchive, extractArchive, rid: 'win-x64' }
 }
+
+describe('SQL Tools Service download retries', () => {
+  async function destination() {
+    await mkdir('artifacts', { recursive: true })
+    const root = await mkdtemp(join(resolve('artifacts'), 'sqltools-download-test-')); folders.push(root)
+    return join(root, 'archive.partial')
+  }
+  const url = archiveUrl('linux-x64'), alternate = `${url}?download=1`
+  it.each([408, 429, 500, 504])('retries HTTP %s from the same official asset within one shared budget', async status => {
+    const output = await destination(), cancel = vi.fn(), firstBody = new ReadableStream({ cancel })
+    const fetch = vi.fn().mockResolvedValueOnce(new Response(firstBody, { status })).mockResolvedValueOnce(new Response('verified archive bytes'))
+    vi.stubGlobal('fetch', fetch)
+    await downloadSqlToolsArchive(url, output)
+    expect(fetch.mock.calls.map(call => call[0])).toEqual([url, alternate])
+    expect(fetch.mock.calls[0][1].signal).toBe(fetch.mock.calls[1][1].signal)
+    expect(fetch.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
+    expect(cancel).toHaveBeenCalledOnce()
+    expect(await readFile(output, 'utf8')).toBe('verified archive bytes')
+  })
+  it('retries a failed network connection without changing the pinned asset', async () => {
+    const output = await destination(), fetch = vi.fn().mockRejectedValueOnce(new TypeError('fetch failed')).mockResolvedValueOnce(new Response('archive bytes'))
+    vi.stubGlobal('fetch', fetch)
+    await downloadSqlToolsArchive(url, output)
+    expect(fetch.mock.calls.map(call => call[0])).toEqual([url, alternate])
+    expect(await readFile(output, 'utf8')).toBe('archive bytes')
+  })
+  it('refuses a terminal HTTP error without retrying', async () => {
+    const output = await destination(), fetch = vi.fn().mockResolvedValue(new Response('not found', { status: 404 }))
+    vi.stubGlobal('fetch', fetch)
+    await expect(downloadSqlToolsArchive(url, output)).rejects.toThrow('HTTP 404')
+    expect(fetch).toHaveBeenCalledOnce()
+    await expect(access(output)).rejects.toThrow()
+  })
+  it('removes an interrupted stream before retrying, so partial bytes cannot prefix the archive', async () => {
+    const output = await destination()
+    let partialObserved = false
+    const body = new ReadableStream({
+      async pull(controller) {
+        if (!partialObserved) {
+          controller.enqueue(new TextEncoder().encode('partial archive'))
+          await vi.waitFor(async () => { expect(await readFile(output, 'utf8')).toBe('partial archive') })
+          partialObserved = true
+          controller.error(Object.assign(new Error('connection reset'), { code: 'ECONNRESET' }))
+        }
+      }
+    })
+    const fetch = vi.fn().mockResolvedValueOnce(new Response(body)).mockImplementationOnce(async () => {
+      await expect(access(output)).rejects.toThrow()
+      return new Response('complete archive')
+    })
+    vi.stubGlobal('fetch', fetch)
+    await downloadSqlToolsArchive(url, output)
+    expect(partialObserved).toBe(true)
+    expect(fetch.mock.calls.map(call => call[0])).toEqual([url, alternate])
+    expect(await readFile(output, 'utf8')).toBe('complete archive')
+  })
+  it('stops after three transient failures and leaves no partial file', async () => {
+    const output = await destination(), fetch = vi.fn().mockImplementation(async () => new Response('unavailable', { status: 503 }))
+    vi.stubGlobal('fetch', fetch)
+    await expect(downloadSqlToolsArchive(url, output)).rejects.toThrow('HTTP 503')
+    expect(fetch.mock.calls.map(call => call[0])).toEqual([url, alternate, alternate])
+    await expect(access(output)).rejects.toThrow()
+  })
+  it('keeps the download size limit terminal and removes its partial file', async () => {
+    const output = await destination(), fetch = vi.fn().mockResolvedValueOnce(new Response('oversized archive', {
+      headers: { 'Content-Length': String(256 * 1024 * 1024 + 1) }
+    }))
+    vi.stubGlobal('fetch', fetch)
+    await expect(downloadSqlToolsArchive(url, output)).rejects.toThrow('download limit')
+    expect(fetch).toHaveBeenCalledOnce()
+    await expect(access(output)).rejects.toThrow()
+  })
+})
 
 describe('bundled SQL Tools Service preparation', () => {
   it('pins all shipped targets to one immutable official release and preserves its verified MIT license', async () => {

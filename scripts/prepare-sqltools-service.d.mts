@@ -11,6 +11,7 @@ export function executableName(rid: string): string
 export function hostRid(platform?: NodeJS.Platform, arch?: string): string
 export function archiveUrl(rid: string, manifest?: SqlToolsManifest): string
 export function sha256(path: string): Promise<string>
+export function downloadSqlToolsArchive(url: string, destination: string): Promise<void>
 export function safeArchiveEntries(listing: string): string[]
 export function sqlToolsServiceProblems(folder: string, rid?: string, manifest?: SqlToolsManifest): Promise<string[]>
 export function prepareSqlToolsService(options?: {

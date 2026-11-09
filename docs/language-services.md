@@ -6,7 +6,7 @@ Installed applications include the matching self-contained runtime for Windows x
 
 ## Source builds and packaging
 
-`npm run dev`, `npm run build`, `npm start`, and `npm run build:smoke` prepare the pinned runtime before launching or building. The first preparation downloads the upstream archive; subsequent runs verify and reuse the local copy. `npm run package` prepares its target platform in `beforePack`, and release CI explicitly prepares it before packaging.
+`npm run dev`, `npm run build`, `npm start`, and `npm run build:smoke` prepare the pinned runtime before launching or building. The first preparation downloads the upstream archive; subsequent runs verify and reuse the local copy. Transient download failures allow up to three attempts for the same official asset within one three-minute budget, retaining its pinned checksum. `npm run package` prepares its target platform in `beforePack`, and release CI explicitly prepares it before packaging.
 
 ```sh
 npm ci
