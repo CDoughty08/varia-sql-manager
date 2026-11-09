@@ -7,7 +7,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { crashRenderer } from './fixtures/dialog-lifecycle.mjs'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
-import { activeDocumentName, activeGroupEditorText, backendReady, documentTab, documentTabs, editorGroups, editorGroupTabs, editorTextbox, floatingEditorGroups, gridCell, menubar, outputStatus, pinDocumentButton, queryStatus, quickInputBox, quickInputRows, resultGrid, tabNameBox, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocumentName, activeGroupEditorText, backendReady, documentTab, documentTabs, editorGroups, editorGroupTabs, editorTextbox, floatingEditorGroups, gridCell, menubar, outputStatus, pinDocumentButton, queryStatus, quickInputBox, quickInputRows, resultGrid, selectOpenDocument, tabNameBox, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'hot-exit-profile-'))
@@ -149,9 +149,9 @@ try {
   expect((await application.evaluate(() => globalThis.variaHotExit.saveDefaults))[1]).toBe(join(folder, 'Orders report.sql'))
 
   // Totals moves first, and Month end is the active tab as the app quits; nothing asks to save.
-  await documentTab(page, 'Totals').click()
+  await selectOpenDocument(page, 'Totals')
   for (let step = 0; step < 3; step++) await page.keyboard.press('Control+Shift+PageUp')
-  await documentTab(page, 'Month end').click()
+  await selectOpenDocument(page, 'Month end')
   await pinDocumentButton(page, 'Totals').click()
   await expect(documentTab(page, 'Totals')).toBeFocused()
   expect(await activeDocumentName(page)).toBe('Month end')
@@ -161,10 +161,10 @@ try {
   await expect(tabNameBox(page)).toHaveCount(0)
   expect(await tabNames()).toEqual(['Totals', 'Welcome', 'Orders report', 'Month end'])
   // Two editor groups: Orders report splits to the right (Ctrl+\), and Month end follows it (Ctrl+Alt+Right).
-  await documentTab(page, 'Orders report').click()
+  await selectOpenDocument(page, 'Orders report')
   await page.keyboard.press('Control+\\')
   await expect(editorGroups(page)).toHaveCount(2)
-  await documentTab(page, 'Month end').click()
+  await selectOpenDocument(page, 'Month end')
   await page.keyboard.press('Control+Alt+ArrowRight')
   await expect.poll(() => groupNames(1)).toEqual(['Orders report', 'Month end'])
   expect(await groupNames(0)).toEqual(['Totals', 'Welcome'])
@@ -197,7 +197,7 @@ try {
   await expect(unsavedMark(documentTab(page, 'Month end'))).toBeVisible()
   await expect(unsavedMark(documentTab(page, 'Totals'))).toBeVisible()
   await expect(unsavedMark(documentTab(page, 'Welcome'))).toHaveCount(0)
-  await documentTab(page, 'Orders report').click()
+  await selectOpenDocument(page, 'Orders report')
   await expect.poll(text).toContain('SELECT 2 AS orders')
   await expect(unsavedMark(documentTab(page, 'Orders report'))).toHaveCount(0)
   await expect(page.getByRole('dialog', { name: 'Recover Unsaved Queries', exact: true })).toHaveCount(0)
@@ -238,8 +238,8 @@ try {
   expect((await tabNames())[0]).toBe('Totals')
   console.log('Hot exit checks: every query floating survives a relaunch, and joining them leaves no empty group.')
   // A canceled reload leaves the current page and its pins intact. An accepted reload reopens just the pins.
+  await selectOpenDocument(page, 'Orders report')
   await pinDocumentButton(page, 'Orders report').click()
-  await documentTab(page, 'Orders report').click()
   await page.evaluate(() => window.__variaRecovery.flush())
   const reload = async () => {
     await page.keyboard.press('F1')
@@ -262,13 +262,13 @@ try {
     await reload()
     await expect.poll(() => application.evaluate(() => !!globalThis.variaHotExit.confirmReload)).toBe(true)
     // The first unload has reached the confirmation. A change now must reach the second unload's checkpoint.
-    await documentTab(page, 'Totals').click()
+    await selectOpenDocument(page, 'Totals')
     await editorTextbox(page).focus()
     await page.keyboard.press('Control+End')
     await page.keyboard.insertText('\nSELECT 33 AS before_reload_confirmation')
     await expect.poll(text).toContain('SELECT 33 AS before_reload_confirmation')
     await page.evaluate(() => window.__variaRecovery.flush())
-    await documentTab(page, 'Orders report').click()
+    await selectOpenDocument(page, 'Orders report')
     await application.evaluate(() => {
       globalThis.variaHotExit.holdConfirmation = false
       globalThis.variaHotExit.confirmReload()
@@ -295,7 +295,7 @@ try {
   await recover.getByRole('button', { name: 'Later', exact: true }).click()
   expect(await activeDocumentName(page)).toBe('Orders report')
   await expect.poll(text).toContain('SELECT 2 AS orders')
-  await documentTab(page, 'Totals').click()
+  await selectOpenDocument(page, 'Totals')
   await expect.poll(text).toContain('SELECT 3 AS totals')
   await expect.poll(text).toContain('SELECT 33 AS before_reload_confirmation')
   await expect(unsavedMark(documentTab(page, 'Totals'))).toBeVisible()
@@ -304,7 +304,7 @@ try {
   expect(await page.evaluate(() => window.varia.updateSettings({
     'environment.documents.hotExit': false, 'environment.documents.detectExternalChanges': true
   }))).toMatchObject({ ok: true })
-  await documentTab(page, 'Orders report').click()
+  await selectOpenDocument(page, 'Orders report')
   await editorTextbox(page).focus()
   await page.keyboard.press('Control+A')
   await page.keyboard.insertText('SELECT 4 AS pinned_orders')
@@ -364,7 +364,7 @@ try {
   await recoverAgain.getByRole('button', { name: 'Later', exact: true }).click()
 
   // Save from the restored dirty pin sees the disk change made while the app was closed.
-  await documentTab(page, 'Orders report').click()
+  await selectOpenDocument(page, 'Orders report')
   await expect.poll(text).toContain('SELECT 4 AS pinned_orders')
   await editorTextbox(page).focus()
   await page.keyboard.press('Control+S')
@@ -393,7 +393,7 @@ try {
   await expect(recoverBeforeCrash.getByRole('checkbox', { name: 'Recover Month end', exact: true })).toBeVisible()
   await recoverBeforeCrash.getByRole('button', { name: 'Later', exact: true }).click()
   expect(await page.evaluate(() => window.varia.updateSettings({ 'environment.autoRecover.enabled': false }))).toMatchObject({ ok: true })
-  await documentTab(page, 'Totals').click()
+  await selectOpenDocument(page, 'Totals')
   await editorTextbox(page).focus()
   await page.keyboard.press('Control+A')
   await page.keyboard.insertText('SELECT 6 AS before_renderer_crash')

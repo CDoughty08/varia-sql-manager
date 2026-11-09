@@ -101,6 +101,9 @@ describe('deferred focus in the workbench', () => {
     // A document service that focused itself through nextFrame and modalOpen alone pulled focus out of the palette.
     const source = readFileSync(new URL('../src/renderer/src/core/workbench.ts', import.meta.url), 'utf8')
     expect(source.match(/nextFrame\(\(\) =>[^\n]*/g) ?? []).toEqual([])
+    // A pending Float, Dock, Join or group-focus frame must leave a newly opened quick input in control.
+    const groups = readFileSync(new URL('../src/renderer/src/editor-groups/EditorArea.tsx', import.meta.url), 'utf8')
+    expect(groups.match(/requestAnimationFrame\(\(\) =>[^\n]*documents\.focusActive/g) ?? []).toEqual([])
   })
 })
 

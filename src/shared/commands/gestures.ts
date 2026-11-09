@@ -94,7 +94,7 @@ export const gestureCatalog = {
     locked: 'Double-clicking a column border fits it, as in SSMS.'
   },
   'global.wheelZoom': {
-    title: 'Zoom', description: 'Zooms the window. The results grid and Object Explorer leave the wheel to Chromium while Control is held.',
+    title: 'Zoom', description: 'Zooms the window, except over a document tab shelf where Control+wheel changes its row count.',
     kind: 'fixed', scope: 'global', action: 'wheel', target: 'anywhere', modifiers: ['ctrl'], keyboard: ['view.zoomIn', 'view.zoomOut', 'view.resetZoom'],
     locked: 'Chromium zooms the window with Control+wheel and with a trackpad pinch.'
   },
@@ -139,6 +139,11 @@ export const gestureCatalog = {
     title: 'Move Back into Main Window', description: 'Docks a popout window\'s panel back into the main window.',
     kind: 'pointerCommand', scope: 'popouts', action: 'doubleClick', target: 'a popout tab', modifiers: ['ctrl'],
     choices: [['ctrl'], ['alt'], ['shift'], []], darwin: { modifiers: ['meta'], choices: [['meta'], ['alt'], ['shift'], []] }, keyboard: ['pane.moveToMainWindow']
+  },
+  'documentTabs.rows': {
+    title: 'Change Tab Rows', description: 'Scrolling down adds rows to the pinned or unpinned shelf under the pointer, and scrolling up removes rows from that shelf alone.',
+    kind: 'fixed', scope: 'documentTabs', action: 'wheel', target: 'a tab shelf', modifiers: ['ctrl'],
+    locked: 'Control+wheel changes shelf rows, and the row buttons provide the same action from the keyboard.'
   },
   'documentTabs.rename': {
     title: 'Rename Tab', description: 'Opens the rename box on a query tab.',

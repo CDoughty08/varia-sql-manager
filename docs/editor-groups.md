@@ -8,8 +8,8 @@ its own Monaco editor, and groups split side by side, stack, or float over the e
 
 - The editor area (`src/renderer/src/editor-groups/EditorArea.tsx`) is a Dockview instance nested in the workspace's
   "Query editor" panel. Every open document is one of its panels; the panel id is the document id. Dockview's tab
-  element is the document's tab (role `tab`, name, selection, roving focus). Each strip is a `tablist` named "Query
-  documents". Left, Right, Home and End on a focused tab choose the tab they reach (focus restored by a closing menu,
+  element is the document's tab (role `tab`, name, selection, roving focus). Each group's pinned and unpinned shelves
+  share a `tablist` named "Query documents". Left, Right, Home and End on a focused tab choose the tab they reach (focus restored by a closing menu,
   or a right-click, chooses nothing), and Delete or Backspace there is File › Close (catalogue keys, which KeybindingService takes
   before Dockview's own). Keys pressed on a focused tab (Delete, Ctrl+W, F2, Split Editor, the moves) act on that tab,
   shown or not: KeybindingService passes the focused tab as the command's `tabId` (`keyArgs`) to the query tab menu's commands
@@ -58,10 +58,15 @@ its own Monaco editor, and groups split side by side, stack, or float over the e
   Move Left and Move Right (Ctrl+Shift+PageUp/PageDown) move a tab along its own group's strip. Move Editor into Next
   Group past the last group opens a new group on the right, as VS Code does. Split Editor needs another tab in the
   document's group; the palette's greyed row says so.
-- Pinning works per group, as in VS Code: a text tab's pin button pins it, and pinned tabs come first in their own
-  group's strip (`EditorAreaController.keepPinsFirst`, after every layout change and reconcile). Move Left and Right
-  never take a tab across that boundary. A pinned tab dragged into another group stays pinned and goes first there.
-  Pins survive hot exit and Reload Window with the groups (docs/hot-exit.md).
+- Each editor group puts pinned text tabs on a separate shelf above its unpinned tabs. The shelves use their layout
+  and pin buttons to show the distinction, without visible section labels. Hold Ctrl and scroll down over either
+  shelf to add rows there, or scroll up to remove rows. Each shelf's row buttons provide the same action from the
+  keyboard, and its overflow button lists tabs that are out of view. Row counts are independent for both shelves
+  and for different editor groups.
+- Pinned tabs stay first in their group's document order (`EditorAreaController.keepPinsFirst`, after every layout
+  change and reconcile). Move Left and Right never take a tab across that boundary. A pinned tab dragged into
+  another group stays pinned and joins that group's pinned shelf. Pins survive hot exit and Reload Window with the
+  groups (docs/hot-exit.md).
 - Closing a group's shown document shows the next one in that group (the one before at the strip's end), as VS Code
   does: `DocumentService` asks `EditorGroupService.successor`, so the active document changes once. A group left empty
   goes, and the next document in order shows. A tab closed while it had focus hands focus to the tab shown next.

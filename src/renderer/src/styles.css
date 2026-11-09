@@ -598,6 +598,22 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .editor-groups-dock { --dv-tabs-and-actions-container-height: var(--varia-bar); --dv-tab-font-size: var(--varia-size-sm); --dv-floating-titlebar-height: 16px; }
 .editor-groups .dv-tabs-and-actions-container { background: var(--varia-documentTabs-background); }
 .editor-groups .dv-tab { padding: 0; background: none; }
+.editor-groups .query-shelves-header { align-items: flex-start; }
+.editor-groups .dv-tabs-container.query-shelves.dv-tabs-container--wrap { position: relative; flex: 1 1 0; min-width: 0; overflow: hidden; scrollbar-width: none; container-type: inline-size; }
+.editor-groups .query-shelves-header > .dv-void-container { flex: none; width: 0; }
+.editor-groups .query-shelves > .dv-tab { position: absolute; min-width: 0; box-sizing: border-box; }
+.editor-groups .query-shelves > .dv-tab[data-tab-overflow] { opacity: 0; pointer-events: none; }
+.query-shelf { position: absolute; left: 0; right: 0; pointer-events: none; border-bottom: 1px solid var(--varia-documentTabs-border); }
+.query-shelf-controls { position: absolute; right: 0; top: 0; display: flex; align-items: center; justify-content: flex-end; width: var(--shelf-controls-width); height: var(--varia-bar); background: var(--varia-documentTabs-background); pointer-events: auto; }
+.query-shelf-controls .icon-button { width: 26px; min-width: 0; padding: 3px; }
+.query-shelf-rows { width: 20px; text-align: center; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.query-shelf-overflow { position: fixed; inset: auto; position-area: bottom span-left; position-try-fallbacks: flip-block, flip-inline; margin: 0; min-width: 220px; max-width: min(480px, 90vw); max-height: 50vh; overflow: auto; padding: 3px; pointer-events: auto; color: var(--varia-menu-foreground); background: var(--varia-menu-background); border: 1px solid var(--varia-menu-border); border-radius: var(--varia-radius-sm); box-shadow: var(--varia-shadow-menu) var(--varia-widget-shadow); }
+.query-shelf-overflow > button { display: block; width: 100%; padding: 5px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: start; }
+.query-shelf-overflow > button:hover { background: var(--varia-list-hoverBackground); }
+.query-shelf-row-options { display: flex; align-items: center; justify-content: flex-end; }
+@container (width < 338px) {
+  .query-tab .tab-select { gap: 4px; padding-inline: 4px; }
+}
 /* A document tab's keyboard ring is a 1px inset outline, as the single strip drew it: the strip would clip the default ring,
    and forced colours drop box shadows. */
 .editor-groups .dv-tab:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; box-shadow: none; }
@@ -617,15 +633,15 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .query-tab.active { border-top-color: Highlight; forced-color-adjust: none; }
   .editor-groups .dv-groupview:not(.dv-active-group) .query-tab.active { border-top-color: GrayText; }
 }
-.tab-select { display: flex; align-items: center; gap: 8px; height: calc(var(--varia-bar) - 3px); border: 0; border-radius: 0; padding: 0 10px 0 13px; color: inherit; }
+.tab-select { display: flex; flex: 1; min-width: 0; overflow: hidden; align-items: center; gap: 8px; height: calc(var(--varia-bar) - 3px); border: 0; border-radius: 0; padding: 0 10px 0 13px; color: inherit; }
 .tab-select:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
-.tab-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.tab-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab-renaming { padding-right: 6px; }
 .tab-rename { width: 180px; height: 20px; padding: 0 4px; border-color: var(--varia-focusBorder); }
 .tab-select .tab-readonly { font-size: var(--varia-glyph-sm); margin-left: -4px; }
 /* A query's live SQL session, after its name (SID and the server's session id, or a dash without one). */
-.tab-sid { flex: none; padding: 1px 4px; border-radius: var(--varia-radius-sm); background: var(--varia-badge-background); color: var(--varia-badge-foreground); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.tab-pin, .tab-close { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 4px; color: var(--varia-documentTabs-closeForeground); }
+.tab-sid { flex: none; margin-left: auto; padding: 1px 4px; border-radius: var(--varia-radius-sm); background: var(--varia-badge-background); color: var(--varia-badge-foreground); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tab-pin, .tab-close { display: flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 4px; color: var(--varia-documentTabs-closeForeground); }
 .tab-close { margin-right: 6px; }
 .tab-pin .codicon { font-size: var(--varia-glyph-sm); }
 .tab-close .codicon { font-size: var(--varia-glyph-sm); }
