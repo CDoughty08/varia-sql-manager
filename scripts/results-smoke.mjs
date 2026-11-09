@@ -1463,15 +1463,20 @@ try {
   }
   const filterList = outputPane(page).getByRole('group', { name: 'Filters of Result 1', exact: true })
   const caption = page.locator(part.resultCaption)
+  // Clicking a far column scrolls the grid sideways, and a narrow window then leaves id out of the rendered columns. Each
+  // menu opens on a cell already in view, since a scroll closes it.
+  const idInView = () => scroller().evaluate(element => { element.scrollLeft = 0 })
   await cell(0, 6).click()
   await filterMenu(0, 6, 'Filter for Selected Values')
   await expect(caption).toContainText('34 of 100 rows')
   await expect(filterList).toContainText("active = '1'")
-  await expect(cell(1, 0)).toHaveText('3')
   await filterMenu(0, 7, 'Exclude NULLs')
   await expect(caption).toContainText('27 of 100 rows')
   await expect(filterList).toContainText('score is not NULL')
+  await idInView()
+  await expect(cell(1, 0)).toHaveText('3')
   // Ids 3, 6 and 12 selected in the filtered grid: Between keeps ids 3 to 12 that pass the other filters.
+  await idInView()
   await cell(1, 0).click()
   await cell(3, 0).click({ modifiers: ['Shift'] })
   await filterMenu(3, 0, 'Filter Between Lowest and Highest Selected')
@@ -1484,6 +1489,7 @@ try {
   await cell(0, 6).click()
   await filterMenu(0, 6, 'Filter for Duplicates in Selected Columns')
   await expect(filterList).toContainText('Duplicates in active')
+  await idInView()
   await expect(cell(2, 0)).toHaveText('12')
   await expect(cell(3, 0)).toHaveText('5')
   await expect(caption).toContainText('8 of 100 rows')
@@ -1492,6 +1498,7 @@ try {
   await expect(filterList).toHaveCount(0)
   await expect(caption).toContainText('100 rows')
   await expect(caption).not.toContainText(' of ')
+  await idInView()
   await expect(cell(1, 0)).toHaveText('1')
   console.log('Results checks: the Filter submenu filters by selected values, NULL, a range and duplicates; the caption counts the rows and removes and clears filters.')
 
