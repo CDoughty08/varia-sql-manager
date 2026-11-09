@@ -28,6 +28,8 @@ Varia targets SQL Server 2016 through 2025 and runs on Windows, Linux, and macOS
 
 ## Getting started
 
+See the [changelog](CHANGELOG.md) for release highlights and upgrade notes.
+
 Download a build from [GitHub Releases](https://github.com/CDoughty08/varia-sql-manager/releases): the Windows x64 Setup or Portable executable, Linux x64 AppImage, or macOS DMG or ZIP for Apple Silicon or Intel. These builds include the .NET backend and do not require the SDK. They are currently unsigned; macOS builds are also not notarized, so the operating system may warn or block them. On Linux, the AppImage requires FUSE and an available desktop/keyring for encrypted remembered passwords.
 
 The Windows Setup opens a wizard where you choose installation for your account or all users and confirm the installation. For unattended deployment, run `Varia-SQL-Manager-<version>-Windows-x64-Setup.exe --silent` (the standard NSIS `/S` flag also works). Silent installations default to the current user for a fresh install; `/allusers` requests an all-users installation and may require elevation. The Portable executable runs without an installation; it extracts the application to a temporary directory and uses the normal user profile for settings and saved connections. The Linux AppImage and extracted macOS ZIP can likewise run without an installer.
@@ -95,7 +97,7 @@ To run optional live tests, set `VARIA_TEST_SQL_SERVER` and, for SQL authenticat
 
 ## Creating a release
 
-Release builds package and smoke-test every push to main, and pull requests that change packaging (docs/ci.md). To get installers without a release, run the **Release builds** Actions workflow manually: its installers are available as workflow artifacts for seven days. After merging the desired changes, update the version in `package.json` and `package-lock.json` together, then push a matching tag (for example, `v0.1.0` for version `0.1.0`). The tag triggers all platform builds; once they and their packaged-app smoke checks pass, the workflow publishes a GitHub Release with the installers, the update manifest (`varia-update.json`, which installed copies check) and GitHub-generated release notes. A version with a prerelease suffix (such as `v0.2.0-beta.1`) is published as a prerelease. Existing releases are not overwritten: resolve or remove an existing release before rerunning its release job.
+Release builds package and smoke-test every push to main, and pull requests that change packaging (docs/ci.md). To get installers without a release, run the **Release builds** Actions workflow manually: its installers are available as workflow artifacts for seven days. Prepare a release by updating `package.json` and `package-lock.json` together and recording the changes in [CHANGELOG.md](CHANGELOG.md). After merging those changes, push a matching tag (for example, `v0.7.0` for version `0.7.0`). The tag triggers all platform builds; once they and their packaged-app smoke checks pass, the workflow publishes a GitHub Release with the installers, the update manifest (`varia-update.json`, which installed copies check) and GitHub-generated release notes. Prepend the changelog's release highlights to the published notes. A version with a prerelease suffix (such as `v0.7.0-beta.1`) is published as a prerelease. Existing releases are not overwritten: resolve or remove an existing release before rerunning its release job.
 
 ## Architecture
 
