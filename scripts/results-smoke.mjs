@@ -3,7 +3,7 @@
 // Save Results As, XML, JSON and plan values in their own tabs, Messages, lifecycle, the memory indicator, the grid's
 // menu, styling, panes and tabs. Then, with VARIA_TEST_SQL_SERVER set, part B repeats the essentials against that
 // server through the Release backend. No assertion depends on absolute pixel sizes.
-import { electron, expect, within } from './fixtures/smoke.mjs'
+import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
@@ -2139,19 +2139,25 @@ try {
   // of 100,000 rows matches the server's rows; a FOR XML PATH value opens in its own tab; and a SQL error sits between
   // the messages printed around it.
   if (process.env.VARIA_TEST_SQL_SERVER) {
-    await within(application.close(), 10000).catch(() => {})
-    child?.kill()
+    await application.close().catch(() => {})
     const liveProfile = await mkdtemp(resolve('artifacts', 'results-live-profile-')), liveSaves = await mkdtemp(resolve('artifacts', 'results-live-save-'))
     cleanups.push(() => rm(liveProfile, { recursive: true, force: true }), () => rm(liveSaves, { recursive: true, force: true }))
     const liveEnv = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: liveProfile }
     delete liveEnv.ELECTRON_RUN_AS_NODE
     application = await electron.launch({ args: ['.'], env: liveEnv, chromiumSandbox: process.getuid?.() !== 0 })
     child = application.process()
+    child.stderr?.on('data', chunk => { for (const line of chunk.toString().split(/\r?\n/)) if (line.startsWith('Results close prompt: ')) console.error(line) })
     page = await application.firstWindow()
     page.setDefaultTimeout(30000)
     page.on('pageerror', error => failures.push(error.message))
     await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive())
-    await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
+    await application.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async (...args) => {
+        const { title, buttons } = args.at(-1)
+        if (title !== 'Unsaved query') process.stderr.write('Results close prompt: ' + JSON.stringify({ title, buttons }) + '\n')
+        return { response: 1, checkboxChecked: false }
+      }
+    })
     await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
     await connectLive(page, expect)
     await enlargeOutput(page)
@@ -2308,6 +2314,8 @@ try {
     await queryTabs().nth(1).click()
     await page.keyboard.press('Control+W')
     await expect(queryTabs()).toHaveCount(1)
+    // Results can publish completion before the query service releases its execution reservation.
+    await expect(queryBarButton(page, 'Cancel')).toBeDisabled()
     expect(failures).toEqual([])
     console.log('Results live checks passed: rows show while a million stream, Cancel keeps them, Save Results As and Copy match the server, FOR XML opens in a tab, errors keep their order, and the memory indicator survives a close racing a summary.')
   }
@@ -2316,8 +2324,7 @@ try {
   throw error
 } finally {
   clearTimeout(watchdog)
-  await within(application.close(), 10000).catch(() => {})
-  child?.kill()
+  await application.close().catch(() => {})
   await rm(profile, { recursive: true, force: true }).catch(() => {})
   await rm(control, { recursive: true, force: true }).catch(() => {})
   for (const cleanup of cleanups) await cleanup().catch(() => {})

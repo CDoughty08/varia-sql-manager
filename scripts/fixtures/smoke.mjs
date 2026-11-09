@@ -81,8 +81,16 @@ export async function boundedClose(application, close, ms = closeMs) {
   if (!hung) return
   closing.catch(() => {})
   console.error(`The app did not close within ${ms / 1000} s: killed it, and the suite fails. Its own error, if any, follows.`)
-  application.process()?.kill('SIGKILL')
   process.exitCode = 1
+  const child = application.process()
+  // Playwright detaches POSIX apps into their own group; descendants can keep its stdio open after the leader dies.
+  if (process.platform !== 'win32' && child?.pid) {
+    try {
+      process.kill(-child.pid, 'SIGKILL')
+      return
+    } catch { /* The group may already be gone; try its leader. */ }
+  }
+  try { child?.kill('SIGKILL') } catch { /* Already gone. */ }
 }
 
 /** Emulates reduced motion in every window, and has firstWindow() return a window only once it applies there. */
