@@ -3,7 +3,7 @@ import { nextFrame } from '../core/frame'
 import { observeResize } from '../core/windows'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
-import { setKey, type ResultSetEntry, type TabResults } from '../results/ResultsService'
+import { setKey, type GridSort, type ResultSetEntry, type TabResults } from '../results/ResultsService'
 import { formatCount, plural } from '../results/status'
 import { gridLimits as g } from './constants'
 import ResultGrid from './ResultGrid'
@@ -44,23 +44,34 @@ export function batchText(batchNumber: number, iteration: number, totalBatches: 
  * A set's caption: Collapse, its name, rows (counting while they stream) and columns, the batch it came from, and Save
  * Results As for it. It renders for each set in view, so a set's facts show before its grid mounts.
  */
-const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, totalBatches, onToggle }: { tabId: string; entry: ResultSetEntry; collapsed: boolean; totalBatches: number; onToggle(index: number): void }) {
-  const { commands } = useWorkbench()
+const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, totalBatches, sort, onToggle }: { tabId: string; entry: ResultSetEntry; collapsed: boolean; totalBatches: number; sort?: GridSort; onToggle(index: number): void }) {
+  const { commands, results } = useWorkbench()
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
   const { descriptor } = entry, rows = snapshot.rowsAvailable, columns = descriptor.columns.length, name = entry.label ?? `Result ${entry.index + 1}`
-  const facts = [`${formatCount(rows)} ${plural(rows, 'row')}`, `${formatCount(columns)} ${plural(columns, 'column')}`]
+  // A filtered grid counts the rows its view kept of those it was built from.
+  const filtered = sort?.view && sort.applied.length > 0 ? sort.view.rows : undefined
+  const facts = [filtered === undefined ? `${formatCount(rows)} ${plural(rows, 'row')}` : `${formatCount(filtered)} of ${formatCount(rows)} ${plural(rows, 'row')}`, `${formatCount(columns)} ${plural(columns, 'column')}`]
   if (descriptor.kind === 'executionPlan') facts.push('execution plan')
   const batch = batchText(descriptor.batchNumber, descriptor.iteration, totalBatches)
   const held = snapshot.state !== 'lost' && snapshot.state !== 'released'
   const save = (event: MouseEvent<HTMLButtonElement>) => {
     void commands.execute('output.saveResultsAs', { target: { kind: 'output', tabId, view: 'grid', resultIndex: entry.index, selectedText: '', element: event.currentTarget } }, 'toolbar')
   }
+  // A Remove or Clear button that goes with its filters hands focus to the caption, not the page.
+  const toggleRef = useRef<HTMLButtonElement>(null)
   return <div className="rs-caption">
-    <button type="button" className="rs-caption-toggle" aria-expanded={!collapsed} onClick={() => onToggle(entry.index)}>
+    <button ref={toggleRef} type="button" className="rs-caption-toggle" aria-expanded={!collapsed} onClick={() => onToggle(entry.index)}>
       <Icon name={collapsed ? 'chevron-right' : 'chevron-down'} /><span className="rs-caption-name">{name}</span>
     </button>
     {/* Rows change while the set streams; the grid's own label announces its counts. */}
     <span className="rs-caption-facts" aria-live="off">{facts.join(' · ')}</span>
+    {sort && sort.filters.length > 0 && <span className="rs-filters" role="group" aria-label={`Filters of ${name}`}>
+      {sort.filters.map((item, at) => <span key={at} className="rs-filter" title={item.label}>
+        <Icon name="filter" /><span className="rs-filter-text">{item.label}</span>
+        <button type="button" className="icon-button rs-filter-remove" aria-label={`Remove filter ${item.label}`} title="Remove filter" onClick={() => { if (at === sort.filters.length - 1) toggleRef.current?.focus(); results.removeFilter(tabId, entry.index, at) }}><Icon name="close" /></button>
+      </span>)}
+      {sort.filters.length > 1 && <button type="button" className="rs-filters-clear" onClick={() => { toggleRef.current?.focus(); results.clearFilters(tabId, entry.index) }}>Clear filters</button>}
+    </span>}
     {batch && <span className="rs-caption-batch">{batch}</span>}
     {held && <button type="button" className="icon-button rs-caption-save" aria-label={`Save ${name} As…`} title={`Save ${name} As…`} onClick={save}><Icon name="save-as" /></button>}
   </div>
@@ -205,7 +216,7 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
     if (!entry) continue
     const shut = collapsed.has(index)
     items.push(<div key={`item-${setKey(entry.descriptor)}`} className="rs-item" data-collapsed={shut || undefined} style={{ top: layout.offsets[index], height: layout.heights[index] }}>
-      {!bare && <ResultCaption tabId={tabId} entry={entry} collapsed={shut} totalBatches={tab.totalBatches} onToggle={toggle} />}
+      {!bare && <ResultCaption tabId={tabId} entry={entry} collapsed={shut} totalBatches={tab.totalBatches} sort={tab.sorts.get(index)} onToggle={toggle} />}
       {!shut && mounted.has(index) && <ResultGrid tabId={tabId} entry={entry} count={count} focused={index === Math.min(focused, count - 1)} budget={tab.summary?.budget} sort={tab.sorts.get(index)} onFocus={focus} onWide={wide} />}
     </div>)
     if (index < count - 1) {

@@ -41,8 +41,9 @@ function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: n
 }
 
 /** The React shell of one grid: its root and scroller, strips and overlay. GridView renders and handles everything inside. */
-/** The sort's keys as a string: a new order puts the grid back at its first row; the same keys sorted again keep its place. */
-const keysOf = (sort: GridSort | undefined) => sort?.keys.map(key => `${key.column}${key.descending ? 'd' : 'a'}`).join(',') ?? ''
+/** The sort's keys and filters as a string: a new order or other rows put the grid back at its first row; the same view
+ *  built again (once every row is in) keeps its place. */
+const keysOf = (sort: GridSort | undefined) => (sort?.keys.map(key => `${key.column}${key.descending ? 'd' : 'a'}`).join(',') ?? '') + '|' + JSON.stringify(sort?.filters.map(item => item.filter) ?? [])
 
 function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, onWide }: ResultGridProps) {
   const { results, resultClient, commands, platform, gridStats, panes, settings, resultsSearch, highlights, compare } = useWorkbench()

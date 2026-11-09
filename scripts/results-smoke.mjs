@@ -1407,7 +1407,7 @@ try {
   await page.keyboard.press('Shift+F10')
   const outputMenu = page.getByRole('menu', { name: 'Query output', exact: true })
   await expect(outputMenu).toBeVisible()
-  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Highlight', 'Compare with Previous Result', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Results'])
+  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Filter', 'Highlight', 'Compare with Previous Result', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Results'])
   await page.keyboard.press('Escape')
   // Shift+F10 right after a click opens at the cell just clicked, though the grid paints it as active only on its next
   // frame: below it (or above, when there is no room), from its left edge (or to its right edge, near the window's).
@@ -1482,6 +1482,58 @@ try {
   await show('Row size').click()
   await expect(rowNumber(0)).toHaveAttribute('title', /^Row 1: /)
   console.log('Results checks: the column profile panel shows the figures the backend computes for each column, and the row-size bar shows and hides with its bytes.')
+
+  // 13c. Filters: the grid menu's Filter submenu filters by the selected cells' values, without NULL, between the lowest and
+  // highest selected value and to duplicates; the caption counts the rows kept and lists each filter, named by its values,
+  // with a Remove button, and Clear filters takes them all off. W1's active is 1 for every third id; its score is NULL for
+  // ids ending in 4 or 9.
+  const filterMenu = async (row, column, name) => {
+    await cell(row, column).click({ button: 'right' })
+    await outputMenu.getByRole('menuitem', { name: 'Filter', exact: true }).click()
+    await page.getByRole('menu', { name: 'Filter', exact: true }).getByRole('menuitem', { name, exact: true }).click()
+  }
+  const filterList = outputPane(page).getByRole('group', { name: 'Filters of Result 1', exact: true })
+  const caption = page.locator(part.resultCaption)
+  // Clicking a far column scrolls the grid sideways, and a narrow window then leaves id out of the rendered columns. Each
+  // menu opens on a cell already in view, since a scroll closes it.
+  const idInView = () => scroller().evaluate(element => { element.scrollLeft = 0 })
+  await cell(0, 6).click()
+  await filterMenu(0, 6, 'Filter for Selected Values')
+  await expect(caption).toContainText('34 of 100 rows')
+  await expect(filterList).toContainText("active = '1'")
+  await filterMenu(0, 7, 'Exclude NULLs')
+  await expect(caption).toContainText('27 of 100 rows')
+  await expect(filterList).toContainText('score is not NULL')
+  await idInView()
+  await expect(cell(1, 0)).toHaveText('3')
+  // Ids 3, 6 and 12 selected in the filtered grid: Between keeps ids 3 to 12 that pass the other filters.
+  await idInView()
+  await cell(1, 0).click()
+  await cell(3, 0).click({ modifiers: ['Shift'] })
+  await filterMenu(3, 0, 'Filter Between Lowest and Highest Selected')
+  await expect(filterList).toContainText("id between '3' and '12'")
+  await expect(caption).toContainText('3 of 100 rows')
+  // Without the first filter, ids 3 to 12 with a score: 3, 5, 6, 7, 8, 10, 11, 12.
+  await filterList.getByRole('button', { name: "Remove filter active = '1'", exact: true }).click()
+  await expect(caption).toContainText('8 of 100 rows')
+  // Duplicates in active: every row repeats a value, each group together in the order of its first row (1s, then 0s).
+  await cell(0, 6).click()
+  await filterMenu(0, 6, 'Filter for Duplicates in Selected Columns')
+  await expect(filterList).toContainText('Duplicates in active')
+  await idInView()
+  await expect(cell(2, 0)).toHaveText('12')
+  await expect(cell(3, 0)).toHaveText('5')
+  await expect(caption).toContainText('8 of 100 rows')
+  await page.screenshot({ path: resolve('artifacts', 'results-filters.png') })
+  await filterList.getByRole('button', { name: 'Clear filters', exact: true }).click()
+  await expect(filterList).toHaveCount(0)
+  // The focused button went with the filters: focus is on the result's caption, not lost to the page.
+  await expect(outputPane(page).getByRole('button', { name: 'Result 1', exact: true })).toBeFocused()
+  await expect(caption).toContainText('100 rows')
+  await expect(caption).not.toContainText(' of ')
+  await idInView()
+  await expect(cell(1, 0)).toHaveText('1')
+  console.log('Results checks: the Filter submenu filters by selected values, NULL, a range and duplicates; the caption counts the rows and removes and clears filters.')
 
   // 14. Styling: NULL, truncation, read errors and the selection (focused or not) take their tokens; a theme change
   // recolours the same nodes.

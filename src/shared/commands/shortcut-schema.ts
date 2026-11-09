@@ -101,6 +101,19 @@ function isForeignBinding(value: Record<string, unknown>): boolean {
  * on its size. Never throws.
  */
 export function readShortcutFile(raw: unknown, options: ShortcutReadOptions = {}): ShortcutReadResult {
+  // Reading what this read wrote must change nothing, or main would bump the revision (and refuse a save as STALE) on a
+  // file it just wrote. Near the caps, which record keeps the last place in `unknown` or among the gestures can depend on
+  // records a damaged file loses, so read the result again until it settles (one more read in practice).
+  let result = readOnce(raw, options)
+  for (let pass = 0; result.ok && pass < 3; pass++) {
+    const next = readOnce(result.file, options)
+    if (!next.ok || JSON.stringify(next.file) === JSON.stringify(result.file)) break
+    result = { ok: true, file: next.file, problems: [...result.problems, ...next.problems] }
+  }
+  return result
+}
+
+function readOnce(raw: unknown, options: ShortcutReadOptions): ShortcutReadResult {
   if (!isRecord(raw)) return { ok: false, error: 'invalid' }
   if (typeof raw.version === 'number' && raw.version > shortcutFileVersion) return { ok: false, error: 'newer' }
   if (raw.version !== shortcutFileVersion) return { ok: false, error: 'invalid' }
@@ -115,19 +128,83 @@ export function readShortcutFile(raw: unknown, options: ShortcutReadOptions = {}
     unknown.push(value)
     return true
   }
+  /** The original index of each record the file kept in `unknown`, which hold its first places in order. */
+  const kept: number[] = []
+  /**
+   * Keeps a restored record the bindings or gestures cap left no room for in `unknown`, at its original place among the
+   * file's kept records. The file kept it, so it outranks a record this read moved there: when `unknown` is full the last
+   * moved one is dropped instead.
+   */
+  const keepRestored = (value: unknown, index: number) => {
+    const what = `Unknown record ${index + 1}`
+    if (unknown.length >= shortcutLimits.unknown && moved.length) {
+      const last = moved.pop()!
+      unknown.splice(last.index, 1)
+      problems.push(`${last.what} was dropped: the file keeps at most ${shortcutLimits.unknown} unknown records.`)
+    }
+    if (unknown.length >= shortcutLimits.unknown) { problems.push(`${what} was dropped: the file keeps at most ${shortcutLimits.unknown} unknown records.`); return }
+    if (!unknownRecordSchema.safeParse(value).success) { problems.push(`${what} was dropped: an unknown record is limited to ${shortcutLimits.unknownBytes} bytes.`); return }
+    const at = kept.filter(original => original < index).length
+    unknown.splice(at, 0, value)
+    kept.splice(at, 0, index)
+    for (const record of moved) if (record.index >= at) record.index++
+  }
   // An earlier or older build kept these for a build that understands them: a binding that now parses and a gesture choice
   // now offered go back where they belong (after the file's own entries, in their order), so a downgrade and an upgrade
-  // lose nothing. The rest stay verbatim.
-  const restoredBindings: ShortcutBinding[] = []
-  const restoredGestures: [string, string][] = []
-  if (Array.isArray(raw.unknown)) raw.unknown.forEach((value, index) => {
+  // lose nothing. The rest stay verbatim, and so does a record the bindings or gestures cap leaves no room for: it is not
+  // damage, and dropping it would lose it on the next write. The file's own entries are counted first, so such a record
+  // keeps its place in `unknown`.
+  const bindingReads = Array.isArray(raw.bindings) ? raw.bindings.map(value => shortcutBindingSchema.safeParse(value)) : []
+  const ownBindings = Math.min(bindingReads.filter(parsed => parsed.success).length, shortcutLimits.bindings)
+  const offered = (id: string, choice: string) => !options.gestures || options.gestures.get(id)?.includes(choice) === true
+  /** The file's own gestures that stay live (a choice this build does not offer moves to `unknown` instead). */
+  const ownGestureIds = new Set(isRecord(raw.gestures) ? Object.entries(raw.gestures).filter(([id, choice]) =>
+    isGestureIdText(id) && typeof choice === 'string' && gestureChoicePattern.test(choice) && offered(id, choice)).map(([id]) => id) : [])
+  const ownGestures = Math.min(ownGestureIds.size, shortcutLimits.gestures)
+  /** The file's own well-formed gestures with a choice this build does not offer: each moves to `unknown` while it has room. */
+  const unofferedGestures = options.gestures && isRecord(raw.gestures) ? Object.entries(raw.gestures).filter(([id, choice]) =>
+    isGestureIdText(id) && typeof choice === 'string' && gestureChoicePattern.test(choice) && !offered(id, choice)).length : 0
+  const rawUnknown = Array.isArray(raw.unknown) ? raw.unknown : []
+  const kinds = rawUnknown.map(value => {
     const binding = isRecord(value) ? shortcutBindingSchema.safeParse(value) : undefined
-    if (binding?.success) { restoredBindings.push(binding.data as ShortcutBinding); return }
+    if (binding?.success) return { kind: 'binding' as const, binding: binding.data as ShortcutBinding }
     if (options.gestures && isRecord(value) && Object.keys(value).length === 2 && typeof value.gesture === 'string' && typeof value.choice === 'string' &&
-      isGestureIdText(value.gesture) && options.gestures.get(value.gesture)?.includes(value.choice)) { restoredGestures.push([value.gesture, value.choice]); return }
-    keepUnknown(value, `Unknown record ${index + 1}`, false)
+      isGestureIdText(value.gesture) && options.gestures.get(value.gesture)?.includes(value.choice)) return { kind: 'gesture' as const, id: value.gesture, choice: value.choice }
+    return { kind: 'other' as const }
   })
-  else if (raw.unknown !== undefined) problems.push('The unknown records were dropped: they were not a list.')
+  const bindingRoom = Math.max(0, shortcutLimits.bindings - ownBindings)
+  const restorableBindings = kinds.filter(item => item.kind === 'binding').length
+  const restorableGestures = new Set(kinds.flatMap(item => item.kind === 'gesture' && !ownGestureIds.has(item.id) ? [item.id] : [])).size
+  // How many restored gestures fit. An unoffered own choice stays live when `unknown` is full, taking a gesture slot, and
+  // every restored gesture that does not fit stays in `unknown`, filling it further: settle both together, so reading the
+  // file this read writes decides the same way (a restore that later found no room would change the file on every read).
+  const others = kinds.filter(item => item.kind === 'other').length + Math.max(0, restorableBindings - bindingRoom)
+  let gestureRoom = Math.min(restorableGestures, Math.max(0, shortcutLimits.gestures - ownGestures))
+  for (let settled = false; !settled;) {
+    const keptCount = Math.min(shortcutLimits.unknown, others + restorableGestures - gestureRoom)
+    const live = Math.max(0, unofferedGestures - (shortcutLimits.unknown - keptCount))
+    const room = Math.min(restorableGestures, Math.max(0, shortcutLimits.gestures - ownGestures - live))
+    settled = room >= gestureRoom
+    gestureRoom = Math.min(gestureRoom, room)
+  }
+  const restoredGestureIds = new Set<string>()
+  const restoredBindings: { binding: ShortcutBinding; value: unknown; index: number }[] = []
+  const restoredGestures: { id: string; choice: string; value: unknown; index: number }[] = []
+  rawUnknown.forEach((value, index) => {
+    const item = kinds[index]
+    if (item.kind === 'binding' && restoredBindings.length < bindingRoom) { restoredBindings.push({ binding: item.binding, value, index }); return }
+    if (item.kind === 'gesture') {
+      // The file's own setting (or an earlier restored one) wins over one kept for later, which is dropped below.
+      const shadowed = ownGestureIds.has(item.id) || restoredGestureIds.has(item.id)
+      if (shadowed || restoredGestureIds.size < gestureRoom) {
+        if (!shadowed) restoredGestureIds.add(item.id)
+        restoredGestures.push({ id: item.id, choice: item.choice, value, index })
+        return
+      }
+    }
+    if (keepUnknown(value, `Unknown record ${index + 1}`, false)) kept.push(index)
+  })
+  if (raw.unknown !== undefined && !Array.isArray(raw.unknown)) problems.push('The unknown records were dropped: they were not a list.')
 
   let scheme = 'default'
   if (raw.scheme !== undefined) {
@@ -136,19 +213,22 @@ export function readShortcutFile(raw: unknown, options: ShortcutReadOptions = {}
   }
 
   const bindings: ShortcutBinding[] = []
+  /** Foreign bindings move to `unknown` after the gestures: an unoffered choice the room above counted on goes first. */
+  const foreign: { value: unknown; what: string }[] = []
   if (Array.isArray(raw.bindings)) raw.bindings.forEach((value, index) => {
     const what = `Shortcut ${index + 1}`
-    const parsed = shortcutBindingSchema.safeParse(value)
+    const parsed = bindingReads[index]
     if (parsed.success) {
       if (bindings.length < shortcutLimits.bindings) bindings.push(parsed.data as ShortcutBinding)
       else problems.push(`${what} was dropped: the file keeps at most ${shortcutLimits.bindings} shortcuts.`)
-    } else if (isRecord(value) && isForeignBinding(value)) keepUnknown(value, what)
+    } else if (isRecord(value) && isForeignBinding(value)) foreign.push({ value, what })
     else problems.push(`${what} was dropped: it is not a shortcut.`)
   })
   else if (raw.bindings !== undefined) problems.push('The shortcuts were dropped: they were not a list.')
-  restoredBindings.forEach((binding, index) => {
+  // Counted above, so these fit; should one not, it stays in `unknown` rather than being lost.
+  restoredBindings.forEach(({ binding, value, index }) => {
     if (bindings.length < shortcutLimits.bindings) bindings.push(binding)
-    else problems.push(`Restored shortcut ${index + 1} was dropped: the file keeps at most ${shortcutLimits.bindings} shortcuts.`)
+    else keepRestored(value, index)
   })
 
   const gestures: Record<string, string> = Object.create(null)
@@ -162,13 +242,15 @@ export function readShortcutFile(raw: unknown, options: ShortcutReadOptions = {}
     else gestures[id] = choice
   })
   else if (raw.gestures !== undefined) problems.push('The gesture settings were dropped: they were not an object.')
-  // The file's own setting wins over one kept for later.
-  restoredGestures.forEach(([id, choice], index) => {
+  // The file's own setting wins over one kept for later. Counted above, so these fit; should one not, it goes back to its
+  // place in `unknown`, ahead of a record this read moved there.
+  restoredGestures.forEach(({ id, choice, value, index }) => {
     if (Object.hasOwn(gestures, id)) return
     if (Object.keys(gestures).length < shortcutLimits.gestures) gestures[id] = choice
-    else problems.push(`Restored gesture ${index + 1} was dropped: the file keeps at most ${shortcutLimits.gestures} gestures.`)
+    else keepRestored(value, index)
   })
 
+  foreign.forEach(({ value, what }) => keepUnknown(value, what))
   for (const key of Object.keys(raw)) if (!['version', 'scheme', 'bindings', 'gestures', 'unknown'].includes(key)) keepUnknown({ [key]: raw[key] }, 'A member this build does not know')
   let file: ShortcutFile = { version: shortcutFileVersion, scheme, bindings, gestures: { ...gestures }, unknown }
   // Moving records to `unknown` wraps each in a few bytes, so a file just under the limit can come out over it: a file that

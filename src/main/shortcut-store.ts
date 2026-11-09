@@ -133,9 +133,11 @@ export class ShortcutStore {
   load(): Promise<ShortcutsLoad> {
     return this.serial(async () => {
       await this.refresh(this.loaded)
-      const notice = this.notice ?? (this.newer ? shortcutSentences.newer : undefined)
-      const noticeId = this.notice !== undefined ? this.noticeId : this.newerNoticeId
-      return { ...this.snapshot(), salvaged: this.notice !== undefined, ...(notice ? { notice, noticeId } : {}) }
+      // A newer version's file wins over a pending set-aside: every save fails while it is there, so a pending notice could
+      // never be cleared, and its id (already shown) would hide the newer one (#315).
+      const notice = this.newer ? shortcutSentences.newer : this.notice
+      const noticeId = this.newer ? this.newerNoticeId : this.noticeId
+      return { ...this.snapshot(), salvaged: !this.newer && this.notice !== undefined, ...(notice ? { notice, noticeId } : {}) }
     })
   }
 
@@ -170,7 +172,9 @@ export class ShortcutStore {
     let read: Read
     try { read = await readStored(this.path) } catch { if (!this.loaded) this.readFailed = true; throw new Error(shortcutSentences.unreadable) }
     let next: ShortcutFile
-    if (read.kind === 'newer' && !this.newer) this.newerNoticeId = ++this.noticeCounter
+    // The set-aside file is gone, replaced by a newer version's: its notice no longer applies, and must not come back once
+    // that file goes away.
+    if (read.kind === 'newer' && !this.newer) { this.newerNoticeId = ++this.noticeCounter; this.notice = undefined }
     this.newer = read.kind === 'newer'
     if (read.kind === 'missing' || read.kind === 'newer') next = emptyShortcutFile
     else if (read.kind === 'ok') next = read.file

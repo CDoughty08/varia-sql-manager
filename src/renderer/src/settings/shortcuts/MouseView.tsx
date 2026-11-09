@@ -28,7 +28,11 @@ const domId = (id: string) => 'mouse-' + id.replace(/\./g, '-')
 
 function Binding({ row, platform, onPick }: { row: GestureRow; platform: Platform; onPick(token: string): void }) {
   if (!row.options.length) return <span className="mouse-binding-text">{row.label} {row.target}</span>
-  const described = [domId(row.id) + '-about', row.problems.length ? domId(row.id) + '-problems' : ''].filter(Boolean).join(' ')
+  // Everything Details says about the row, since the changed dot is hidden and the note is the only reason a default value can be Reset.
+  const described = [
+    domId(row.id) + '-about', row.otherPlatform ? domId(row.id) + '-other' : '', row.keys.length ? domId(row.id) + '-keyboard' : '',
+    row.problems.length ? domId(row.id) + '-problems' : ''
+  ].filter(Boolean).join(' ')
   return <span className="mouse-binding">
     <select id={domId(row.id)} value={row.currentToken} aria-label={`${row.title}: modifier`} aria-describedby={described}
       aria-invalid={row.problems.some(problem => problem.severity === 'error') || undefined} onChange={event => onPick(event.target.value)}>
@@ -42,15 +46,17 @@ function Binding({ row, platform, onPick }: { row: GestureRow; platform: Platfor
 /** The commands that do the same from the keyboard, with their keys in the draft (a key remapped on the page shows here before OK). */
 function KeyboardPath({ row }: { row: GestureRow }) {
   if (!row.keys.length) return null
-  return <span className="mouse-keyboard">Keyboard: {row.keys.map(({ command, label }, index) => <Fragment key={command}>{index > 0 && ', '}{commandDescriptor(command).title}{label && <> <Keybinding label={label} /></>}</Fragment>)}</span>
+  return <span className="mouse-keyboard" id={domId(row.id) + '-keyboard'}>Keyboard: {row.keys.map(({ command, label }, index) => <Fragment key={command}>{index > 0 && ', '}{commandDescriptor(command).title}{label && <> <Keybinding label={label} /></>}</Fragment>)}</span>
 }
 
 /** What a row is and how else to reach it, under its control: read with the dropdown (`aria-describedby`), not with every cell. */
 function Details({ row }: { row: GestureRow }) {
   return <span className="mouse-details">
     <span className="mouse-about" id={domId(row.id) + '-about'}>{row.description}</span>
+    {/* The key a hand-edited shortcuts.json uses, and what an id search matched; here rather than in the row header, which is read with every cell. */}
+    <span className="mouse-about mouse-id">Id: <code>{row.id}</code></span>
     {row.locked && <span className="mouse-reason">{row.locked}</span>}
-    {row.otherPlatform && <span className="mouse-reason">This file sets a choice for this gesture that only another platform offers, so the default applies here. Reset removes it.</span>}
+    {row.otherPlatform && <span className="mouse-reason" id={domId(row.id) + '-other'}>This file sets a choice for this gesture that only another platform offers, so the default applies here. Reset removes it.</span>}
     <KeyboardPath row={row} />
     {row.problems.length > 0 && <span className="mouse-problems" id={domId(row.id) + '-problems'}>
       {row.problems.map(problem => <span key={problem.code + (problem.other ?? '')} className="mouse-problem" data-severity={problem.severity}>

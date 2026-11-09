@@ -23,8 +23,10 @@ internal sealed class RequestContext : IDisposable
     private readonly Func<RequestContext, object, int>? sendCreditedEvent;
     private readonly object gate = new();
     private readonly long started = Environment.TickCount64;
+    private readonly Action<RequestContext>? cancelled;
     private int settled;
     private int reason;
+    private int announced;
     private long credit;
     private uint sequence;
     private TaskCompletionSource? creditWaiter;
@@ -45,12 +47,13 @@ internal sealed class RequestContext : IDisposable
         this.sendData = sendData;
         this.sendEvent = sendEvent;
         this.sendCreditedEvent = sendCreditedEvent;
+        this.cancelled = cancelled;
         registration = source.Token.Register(() =>
         {
             // A header deadline cancels with no reason recorded; claim it, so a later CANCEL cannot relabel the outcome.
             Interlocked.CompareExchange(ref reason, (int)CancelReason.Expired, 0);
             WakeCreditWaiter();
-            cancelled?.Invoke(this);
+            Announce();
         });
         if (deadlineMs > 0) source.CancelAfter(TimeSpan.FromMilliseconds(deadlineMs));
     }
@@ -81,12 +84,21 @@ internal sealed class RequestContext : IDisposable
     /// results reached main in its events, so query.execute does not set it.</summary>
     public Action? Dropped { get; set; }
 
+    /// <summary>Tells the host the request was cancelled, once, whichever of a CANCEL or the deadline comes first.</summary>
+    private void Announce()
+    {
+        if (Interlocked.Exchange(ref announced, 1) == 0) cancelled?.Invoke(this);
+    }
+
     /// <summary>True exactly once; the caller that wins writes the RESPONSE.</summary>
     public bool TrySettle() => Interlocked.Exchange(ref settled, 1) == 0;
 
     public void Cancel(CancelReason why)
     {
         if (Interlocked.CompareExchange(ref reason, (int)why, 0) != 0) return;
+        // Answer before cancelling the token: its callbacks run newest first, so a handler awaiting it would resume (often
+        // inline) and settle with its result ahead of the CANCELLED answer main has already acted on, leaking what it stored.
+        Announce();
         try { source.Cancel(); }
         catch (ObjectDisposedException) { /* The handler finished concurrently. */ }
     }

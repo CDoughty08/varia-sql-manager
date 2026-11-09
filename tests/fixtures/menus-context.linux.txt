@@ -345,6 +345,17 @@ output.context, for a results grid with selected cells
   &Then Sort Ascending  ++++
   Then &Sort Descending  ++++
   Clea&r Sort  ----
+  Filt&er >
+    Filter for &Selected Values  ++++
+    &Exclude Selected Values  ++++
+    Filter &Between Lowest and Highest Selected  ----
+    ---
+    Exclude &NULLs  ++++
+    ---
+    Filter for &Duplicates in Selected Columns  ++++
+    Filter for Duplicate &Rows  ++++
+    ---
+    &Clear Filters  ----
   Hi&ghlight >
     &Yellow  ++++
     &Green  ++++
@@ -378,6 +389,17 @@ output.context, for a results grid without
   &Then Sort Ascending  ----
   Then &Sort Descending  ----
   Clea&r Sort  ----
+  Filt&er >
+    Filter for &Selected Values  ----
+    &Exclude Selected Values  ----
+    Filter &Between Lowest and Highest Selected  ----
+    ---
+    Exclude &NULLs  ----
+    ---
+    Filter for &Duplicates in Selected Columns  ----
+    Filter for Duplicate &Rows  ++++
+    ---
+    &Clear Filters  ----
   Hi&ghlight >
     &Yellow  ++++
     &Green  ++++
