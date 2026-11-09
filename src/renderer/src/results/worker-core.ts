@@ -404,7 +404,7 @@ export class ResultsWorkerCore {
     const rid = this.allocate()
     const key: ResultKey = { generation: request.key.generation, resultId: request.key.resultId }
     this.sorts.set(rid, request.replaces === undefined ? { id: request.id, key } : { id: request.id, key, replaces: request.replaces })
-    this.send({ t: 'view', rid, generation: key.generation, resultId: key.resultId, sort: request.sort.map(item => ({ column: item.column, descending: item.descending, mode: item.mode })), ...(request.replaces === undefined ? {} : { replaces: request.replaces }) })
+    this.send({ t: 'view', rid, generation: key.generation, resultId: key.resultId, sort: request.sort.map(item => ({ column: item.column, descending: item.descending, mode: item.mode })), ...(request.filters ? { filters: [...request.filters] } : {}), ...(request.replaces === undefined ? {} : { replaces: request.replaces }) })
   }
 
   private search(request: Extract<WorkerRequest, { type: 'search' }>): void {
@@ -617,7 +617,7 @@ export class ResultsWorkerCore {
         this.orphanCloses.add(close)
         return this.send({ t: 'viewClose', rid: close, generation: sort.key.generation, resultId: sort.key.resultId, viewIds: [view.viewId] })
       }
-      this.post({ type: 'view', id: sort.id, viewId: view.viewId, rows: view.rows, complete: view.complete, approximate: view.approximate })
+      this.post({ type: 'view', id: sort.id, viewId: view.viewId, rows: view.rows, complete: view.complete, approximate: view.approximate, ...(view.filters ? { filters: view.filters } : {}) })
       return
     }
     const search = this.searches.get(rid)

@@ -850,6 +850,38 @@ export const commandCatalog = {
     title: 'Find Previous in Results', category: 'Query', keywords: ['search', 'previous', 'match', 'grid'], precondition: 'hasResults', unavailableHint: 'Execute a query that returns results first.',
     keybindings: [{ win: 'shift+f3', linux: 'shift+f3', mac: 'mod+shift+g', when: 'outputGridFocus' }, { mac: 'shift+f3', when: 'outputGridFocus' }]
   },
+  // Filtering a grid (results.view, results PR 4): by the selected cells of one column (their values, other values, or the
+  // range from their lowest to their highest, equal as the column's collation says), without NULL in the active cell's
+  // column, or to the rows that repeat in the selected columns or in every column. Filters show in the result's caption,
+  // where each comes off on its own; Clear Filters takes them all off.
+  'output.filterSelection': {
+    title: 'Filter for Selected Values', category: 'Query', icon: 'filter', keywords: ['filter', 'in', 'equal', 'where', 'values', 'grid'], palette: false,
+    menus: [{ menu: 'output.filter', group: '1_values', order: 1, mnemonic: 's', when: "outputView == 'grid'" }]
+  },
+  'output.excludeSelection': {
+    title: 'Exclude Selected Values', category: 'Query', keywords: ['filter', 'not', 'exclude', 'where', 'values', 'grid'], palette: false,
+    menus: [{ menu: 'output.filter', group: '1_values', order: 2, mnemonic: 'e', when: "outputView == 'grid'" }]
+  },
+  'output.filterBetween': {
+    title: 'Filter Between Lowest and Highest Selected', category: 'Query', keywords: ['filter', 'between', 'range', 'min', 'max', 'grid'], palette: false,
+    menus: [{ menu: 'output.filter', group: '1_values', order: 3, mnemonic: 'b', when: "outputView == 'grid'" }]
+  },
+  'output.excludeNulls': {
+    title: 'Exclude NULLs', category: 'Query', keywords: ['filter', 'null', 'nulls', 'exclude', 'grid'], palette: false,
+    menus: [{ menu: 'output.filter', group: '2_nulls', order: 1, mnemonic: 'n', when: "outputView == 'grid'" }]
+  },
+  'output.filterDuplicates': {
+    title: 'Filter for Duplicates in Selected Columns', category: 'Query', keywords: ['filter', 'duplicates', 'repeated', 'group', 'having', 'grid'], palette: false,
+    menus: [{ menu: 'output.filter', group: '3_duplicates', order: 1, mnemonic: 'd', when: "outputView == 'grid'" }]
+  },
+  'output.filterDuplicateRows': {
+    title: 'Filter for Duplicate Rows', category: 'Query', keywords: ['filter', 'duplicates', 'repeated', 'rows', 'distinct', 'grid'], palette: false,
+    menus: [{ menu: 'output.filter', group: '3_duplicates', order: 2, mnemonic: 'r', when: "outputView == 'grid'" }]
+  },
+  'output.clearFilters': {
+    title: 'Clear Filters', category: 'Query', icon: 'clear-all', keywords: ['filter', 'unfilter', 'all', 'reset', 'grid'], palette: false,
+    menus: [{ menu: 'output.filter', group: '4_clear', order: 1, mnemonic: 'c', when: "outputView == 'grid'" }]
+  },
   // The results toolbar's Sort text by choices (queryResults.grid.sortText); each goes back to Value when it is already on.
   'output.sortTextByChars': {
     title: 'Sort Text by Length in Characters', category: 'Query', icon: 'symbol-ruler', keywords: ['sort', 'length', 'len', 'characters', 'text', 'grid'], toggled: 'resultsSortTextChars'
@@ -895,7 +927,7 @@ export const commandCatalog = {
   // Compares the grid's result with the run's result before it (results.diff) and adds their unified diff as a result.
   'output.compareWithPrevious': {
     title: 'Compare with Previous Result', category: 'Query', icon: 'git-compare', keywords: ['diff', 'compare', 'difference', 'changes', 'grid', 'result'],
-    menus: [{ menu: 'output.context', group: '2_sort', order: 7, mnemonic: 'm', when: "outputView == 'grid'" }]
+    menus: [{ menu: 'output.context', group: '2_sort', order: 8, mnemonic: 'm', when: "outputView == 'grid'" }]
   },
   'output.compareWithPreviousExact': {
     title: 'Compare with Previous Result (Exact Text)', category: 'Query', icon: 'git-compare', keywords: ['diff', 'compare', 'difference', 'case', 'collation', 'exact', 'grid']

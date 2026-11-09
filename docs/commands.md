@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (272)
+## Commands (279)
 
 ### File
 
@@ -149,6 +149,13 @@ keys it uses are listed below.
 | Find in Results | `output.find` | Ctrl+F (`outputGridFocus`) | Ctrl+F (`outputGridFocus`) | ⌘F (`outputGridFocus`) | `hasResults` | — |
 | Find Next in Results | `output.findNext` | F3 (`outputGridFocus`) | F3 (`outputGridFocus`) | ⌘G (`outputGridFocus`), F3 (`outputGridFocus`) | `hasResults` | — |
 | Find Previous in Results | `output.findPrevious` | Shift+F3 (`outputGridFocus`) | Shift+F3 (`outputGridFocus`) | ⇧⌘G (`outputGridFocus`), ⇧F3 (`outputGridFocus`) | `hasResults` | — |
+| Filter for Selected Values (not in the palette) | `output.filterSelection` | — | — | — | Always | Query Output context menu › Filter › Filter for Selected Values |
+| Exclude Selected Values (not in the palette) | `output.excludeSelection` | — | — | — | Always | Query Output context menu › Filter › Exclude Selected Values |
+| Filter Between Lowest and Highest Selected (not in the palette) | `output.filterBetween` | — | — | — | Always | Query Output context menu › Filter › Filter Between Lowest and Highest Selected |
+| Exclude NULLs (not in the palette) | `output.excludeNulls` | — | — | — | Always | Query Output context menu › Filter › Exclude NULLs |
+| Filter for Duplicates in Selected Columns (not in the palette) | `output.filterDuplicates` | — | — | — | Always | Query Output context menu › Filter › Filter for Duplicates in Selected Columns |
+| Filter for Duplicate Rows (not in the palette) | `output.filterDuplicateRows` | — | — | — | Always | Query Output context menu › Filter › Filter for Duplicate Rows |
+| Clear Filters (not in the palette) | `output.clearFilters` | — | — | — | Always | Query Output context menu › Filter › Clear Filters |
 | Sort Text by Length in Characters | `output.sortTextByChars` | — | — | — | Always; checked when `resultsSortTextChars` | — |
 | Sort Text by Length in Bytes | `output.sortTextByBytes` | — | — | — | Always; checked when `resultsSortTextBytes` | — |
 | Highlight Rows (not in the palette) | `output.highlightRows` | Ctrl+Shift+H (`outputGridFocus`) | Ctrl+Shift+H (`outputGridFocus`) | ⇧⌘H (`outputGridFocus`) | Always | — |
@@ -794,6 +801,7 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | `2_sort` | **T**hen Sort Ascending | `output.thenSortAscending` | `outputView == 'grid'` |
 | `2_sort` | Then **S**ort Descending | `output.thenSortDescending` | `outputView == 'grid'` |
 | `2_sort` | Clea**r** Sort | `output.clearSort` | `outputView == 'grid'` |
+| `2_sort` | F**i**lter › | Submenu: Query Output context menu › Filter | `outputView == 'grid'` |
 | `2_sort` | Hi**g**hlight › | Submenu: Query Output context menu › Highlight | `outputView == 'grid'` |
 | `2_sort` | Co**m**pare with Previous Result | `output.compareWithPrevious` | `outputView == 'grid'` |
 | `3_save` | Sa**v**e Results As… | `output.saveResultsAs` | `outputView == 'grid'` |
@@ -813,6 +821,18 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | `1_colors` | **R**ed | `output.highlightRed` | `outputView == 'grid'` |
 | `2_clear` | **C**lear Highlight | `output.clearHighlight` | `outputView == 'grid'` |
 | `2_clear` | Clear **A**ll Highlights | `output.clearAllHighlights` | `outputView == 'grid'` |
+
+#### Query Output context menu › Filter
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_values` | Filter for **S**elected Values | `output.filterSelection` | `outputView == 'grid'` |
+| `1_values` | **E**xclude Selected Values | `output.excludeSelection` | `outputView == 'grid'` |
+| `1_values` | Filter **B**etween Lowest and Highest Selected | `output.filterBetween` | `outputView == 'grid'` |
+| `2_nulls` | Exclude **N**ULLs | `output.excludeNulls` | `outputView == 'grid'` |
+| `3_duplicates` | Filter for **D**uplicates in Selected Columns | `output.filterDuplicates` | `outputView == 'grid'` |
+| `3_duplicates` | Filter for Duplicate **R**ows | `output.filterDuplicateRows` | `outputView == 'grid'` |
+| `4_clear` | **C**lear Filters | `output.clearFilters` | `outputView == 'grid'` |
 
 #### Panel tab context menu (`dockTab.context`)
 

@@ -495,8 +495,9 @@ const decodedPageAt = result => row => decodePage(pageOf(result, Math.floor(row 
 // backend's collation-aware order is checked by its own checks.
 let nextViewId = 1
 const numericTypes = new Set(['tinyint', 'smallint', 'int', 'bigint', 'decimal', 'numeric', 'float', 'real', 'money', 'smallmoney', 'bit'])
-function buildView(result, sort) {
-  const rows = available(result), order = Array.from({ length: rows }, (_, row) => row)
+function buildView(result, sort, filters = []) {
+  const rows = available(result)
+  let order = Array.from({ length: rows }, (_, row) => row)
   // Shapes' cells: text, NULL, bytes, a stored prefix ({ value, truncated }) or a failed read ({ error }), which sorts as NULL.
   const cellOf = (row, column) => {
     const cell = result.rowAt(row)[column], value = cell !== null && typeof cell === 'object' && !(cell instanceof Uint8Array) ? cell.value : cell
@@ -513,10 +514,48 @@ function buildView(result, sort) {
     }
     return descending ? -order : order
   }
-  order.sort((a, b) => { for (const key of sort) { const order = compareKey(a, b, key); if (order) return order } return a - b })
+  // Filters (results.view's filters): values equal and ordered case-insensitively without trailing spaces (a CI
+  // collation), numbers as numbers; the real backend's collation and type rules are checked by its own checks.
+  const valueOf = (row, column) => { const text = cellOf(row, column); return text === null ? null : numericTypes.has(result.columns[column].dataType) ? Number(text) : text.replace(/ +$/, '').toLowerCase() }
+  const compareValues = (x, y) => x < y ? -1 : x > y ? 1 : 0
+  const resolved = []
+  for (const filter of filters) {
+    if (filter.op === 'duplicates') {
+      const keyOf = row => JSON.stringify(filter.columns.map(column => valueOf(row, column)))
+      const groups = new Map()
+      for (const row of order) { const key = keyOf(row); groups.set(key, [...(groups.get(key) ?? []), row]) }
+      order = [...groups.values()].filter(group => group.length > 1).flat()
+      resolved.push(filter)
+      continue
+    }
+    let picked = filter.rows ?? []
+    if (filter.cells) {
+      const source = filter.cells.viewId === undefined ? undefined : result.views?.get(filter.cells.viewId)
+      if (filter.cells.viewId !== undefined && !source) throw Object.assign(new Error('This sorted view was closed. Sort the results again.'), { code: 'VIEW_NOT_FOUND' })
+      picked = filter.cells.ranges.flatMap(([first, count]) => Array.from({ length: Math.max(0, Math.min(count, (source?.order.length ?? rows) - first)) }, (_, at) => source ? source.order[first + at] : first + at))
+    }
+    const nulls = !!filter.nulls || picked.some(row => valueOf(row, filter.column) === null)
+    const reps = []
+    for (const row of picked.filter(row => valueOf(row, filter.column) !== null).sort((a, b) => compareValues(valueOf(a, filter.column), valueOf(b, filter.column)) || a - b)) {
+      if (!reps.length || valueOf(reps.at(-1), filter.column) !== valueOf(row, filter.column)) reps.push(row)
+    }
+    if (filter.op === 'between') {
+      if (!reps.length) throw Object.assign(new Error('Select at least one value that is not NULL to filter between.'), { code: 'INVALID_PARAMS' })
+      const low = valueOf(reps[0], filter.column), high = valueOf(reps.at(-1), filter.column)
+      order = order.filter(row => { const value = valueOf(row, filter.column); return value !== null && compareValues(value, low) >= 0 && compareValues(value, high) <= 0 })
+      resolved.push({ op: 'between', column: filter.column, rows: [reps[0], reps.at(-1)], nulls: false })
+      continue
+    }
+    if (reps.length > 4096) throw Object.assign(new Error('Select at most 4,096 different values to filter by.'), { code: 'TOO_LARGE' })
+    const values = new Set(reps.map(row => valueOf(row, filter.column)))
+    order = order.filter(row => { const value = valueOf(row, filter.column); return (value === null ? nulls : values.has(value)) === (filter.op === 'in') })
+    resolved.push({ op: filter.op, column: filter.column, rows: reps, nulls })
+  }
+  if (sort.length) order.sort((a, b) => { for (const key of sort) { const order = compareKey(a, b, key); if (order) return order } return a - b })
   return {
+    filters: resolved,
     viewId: nextViewId++, resultId: result.resultId, columns: result.columns, order, rowAt: position => result.rowAt(order[position]), pageRows: result.pageRows,
-    read: rows, complete: true, pages: new Map(), sealed: result.complete && rows === result.read
+    read: order.length, complete: true, pages: new Map(), sealed: result.complete && rows === result.read
   }
 }
 // results.identify: a row identity per row, the hash of a key column's text or of the whole row's. Text equality here is
@@ -1267,11 +1306,12 @@ async function workbench(id, method, params, credit) {
     case 'results.view': {
       const result = stored.get(params.resultId)
       if (!result) return missing(id, params.resultId)
-      const view = buildView(result, params.sort)
+      let view
+      try { view = buildView(result, params.sort, params.filters) } catch (error) { return fail(id, error.code ?? 'BACKEND_ERROR', error.message) }
       result.views ??= new Map()
       result.views.set(view.viewId, view)
       if (params.replaces !== undefined) result.views.delete(params.replaces)
-      return respond(id, { viewId: view.viewId, rows: view.read, complete: view.sealed, approximate: false })
+      return respond(id, { viewId: view.viewId, rows: view.read, complete: view.sealed, approximate: false, ...(params.filters ? { filters: view.filters } : {}) })
     }
     case 'results.identify': {
       const result = stored.get(params.resultId)

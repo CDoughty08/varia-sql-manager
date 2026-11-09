@@ -89,10 +89,18 @@ internal sealed record ResultsRowBytesArgs(uint ResultId, long FirstRow, int Cou
 internal sealed record ViewSortArgs(int Column, bool Descending, string Mode);
 /// <summary>results.view: a view of a result sorted by 1 to 16 keys (distinct columns); Replaces names a view of the same
 /// result that it supersedes (closed once this one exists).</summary>
-internal sealed record ResultsViewArgs(uint ResultId, ViewSortArgs[] Sort, uint? Replaces = null);
+internal sealed record ResultsViewArgs(uint ResultId, ViewSortArgs[] Sort, uint? Replaces = null, ViewFilterArgs[]? Filters = null);
+/// <summary>One results.view filter (ViewFilter): Op "in", "notIn" or "between" on Column, with its values as base Rows
+/// (and Nulls) or as the selected Cells; or Op "duplicates" on Columns.</summary>
+internal sealed record ViewFilterArgs(string Op, int? Column = null, int[]? Rows = null, bool? Nulls = null, ViewCellsArgs? Cells = null, int[]? Columns = null);
+/// <summary>Selected cells: 1 to 256 [first, count] ranges of positions in ViewId's order, or in the result's own.</summary>
+internal sealed record ViewCellsArgs(long[][] Ranges, uint? ViewId = null);
+/// <summary>A filter as the view applied it, its cells resolved to one base row per distinct value (Between: the lowest
+/// and highest).</summary>
+internal sealed record ViewFilterResult(string Op, int? Column = null, int[]? Rows = null, bool? Nulls = null, int[]? Columns = null);
 /// <summary>Rows is the view's row count (the rows sealed when it was built); Complete says those were all the result's rows;
 /// Approximate says a key compared a truncated value's prefix or an estimated length.</summary>
-internal sealed record ResultsViewResult(uint ViewId, long Rows, bool Complete, bool Approximate);
+internal sealed record ResultsViewResult(uint ViewId, long Rows, bool Complete, bool Approximate, ViewFilterResult[]? Filters = null);
 internal sealed record ResultsViewCloseArgs(uint ResultId, uint[] ViewIds);
 internal sealed record ResultsViewCloseResult(int Closed);
 /// <summary>results.identify: how the result's rows are told apart, for highlights. By "auto" picks a unique key column, else

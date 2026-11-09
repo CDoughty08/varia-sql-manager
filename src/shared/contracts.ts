@@ -223,12 +223,27 @@ export interface ResultsRowBytesParams { resultId: number; firstRow: number; cou
  *  columns, by each cell's characters or bytes (other columns sort by value). */
 export type ViewSortMode = 'value' | 'chars' | 'bytes'
 export interface ViewSortKey { column: number; descending: boolean; mode: ViewSortMode }
-/** results.view: 1 to `limits.views.maxKeys` keys on distinct columns; `replaces` names a view of the same result that
- *  this one supersedes. */
-export interface ResultsViewParams { resultId: number; sort: ViewSortKey[]; replaces?: number }
-/** `rows` is the view's row count (the rows sealed when it was built), `complete` that they were all the result's rows,
- *  `approximate` that a key compared a truncated value's stored prefix or an estimated length. */
-export interface ResultsViewResult { viewId: number; rows: number; complete: boolean; approximate: boolean }
+/** Selected cells a filter takes its values from: [first, count] ranges of positions in a view (`viewId`) or the result. */
+export interface ViewCells { ranges: [number, number][]; viewId?: number }
+/** A results.view filter. `in`, `notIn` and `between` compare a column's values, by its type and collation as the sort does,
+ *  with those of base `rows` (one per distinct value; `between`'s lowest and highest) and, for `in` and `notIn`, NULL when
+ *  `nulls` is set; or with the selected `cells`, which the view resolves to rows. `duplicates` keeps the rows whose values
+ *  in `columns` repeat (NULL equal to NULL), each group together. */
+export type ViewFilter =
+  | { op: 'in' | 'notIn' | 'between'; column: number; rows: number[]; nulls?: boolean }
+  | { op: 'in' | 'notIn' | 'between'; column: number; cells: ViewCells }
+  | { op: 'duplicates'; columns: number[] }
+/** A filter as a view applied it: cells resolved to base rows, which build the same filter again. */
+export type ResolvedViewFilter =
+  | { op: 'in' | 'notIn' | 'between'; column: number; rows: number[]; nulls: boolean }
+  | { op: 'duplicates'; columns: number[] }
+/** results.view: up to `limits.views.maxKeys` keys on distinct columns and up to `limits.views.maxFilters` filters (at least
+ *  one of either), the filters first; `replaces` names a view of the same result that this one supersedes. */
+export interface ResultsViewParams { resultId: number; sort: ViewSortKey[]; filters?: ViewFilter[]; replaces?: number }
+/** `rows` is the view's row count (the rows sealed when it was built that its filters kept), `complete` that they were
+ *  built from all the result's rows, `approximate` that a key compared a truncated value's stored prefix or an estimated
+ *  length; `filters`, when the request had them, are those filters resolved. */
+export interface ResultsViewResult { viewId: number; rows: number; complete: boolean; approximate: boolean; filters?: ResolvedViewFilter[] }
 export interface ResultsViewCloseParams { resultId: number; viewIds: number[] }
 export interface ResultsViewCloseResult { closed: number }
 /** How results.identify tells a result's rows apart: a unique key column it picks (else the whole row), a given column,
