@@ -308,9 +308,10 @@ describe('results worker core', () => {
     const postedBefore = posted.length
     core.receive({ t: 'end', rid: diffRid, ok: true, result: { descriptor: { resultId: 77 } } as never })
     expect(sent.at(-1)).toMatchObject({ t: 'close', generation: 1, resultIds: [77] })
-    expect(posted.length).toBe(postedBefore)
+    // The page, which still waits for the request to end (to release a late diff itself), hears it was cancelled.
+    expect(posted.slice(postedBefore)).toEqual([expect.objectContaining({ type: 'error', id: 106, code: 'CANCELLED' })])
     core.receive({ t: 'end', rid: (sent.at(-1) as { rid: number }).rid, ok: true, result: { closed: 1, usedBytes: 0 } as never })
-    expect(posted.length).toBe(postedBefore)
+    expect(posted.length).toBe(postedBefore + 1)
     // Main drops answers meant for a replaced port: a request asked on it fails at once.
     core.attach({ postMessage: () => {} })
     expect(posted.filter(message => message.type === 'error' && (message.id === 101 || message.id === 103)).map(message => (message as { code: string }).code)).toEqual(['PORT_CLOSED', 'PORT_CLOSED'])

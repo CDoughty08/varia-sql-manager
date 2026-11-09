@@ -110,6 +110,12 @@ internal static class DiffChecks
         using var service = new SqlService(store);
         var diff = (ResultsDiffResult)service.DispatchAsync("results.diff", JsonSerializer.SerializeToElement(new { left = left.ResultId, right = right.ResultId }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult()!;
         check(diff.LeftOnly is ["v"] && diff.RightOnly is ["v"] && diff is { Removed: 1, Added: 1, Same: 1 }, "results.diff lists such a column as not compared on both sides");
+        var (onlyBinary, onlyText) = Pair(store, [["a"]], [["a"]], [text[1]], [binary[1]]);
+        string? message = null;
+        try { ResultDiffer.Compare(onlyBinary, onlyBinary.SealedSnapshot(), onlyText, onlyText.SealedSnapshot(), false, CancellationToken.None); }
+        catch (RequestException error) { message = error.Message; }
+        check(message == "The columns these results share hold binary data in one and text in the other, so they cannot be compared.",
+            "results whose only shared column differs in kind say so, rather than that they share no names: " + message);
 
         var wide = Enumerable.Range(0, ResultDiffer.MaxPairs + 1).Select(i => new ResultColumn("c" + i.ToString(System.Globalization.CultureInfo.InvariantCulture), "int", "text")).ToArray();
         var row = wide.Select(_ => (string?)"1").ToArray();
@@ -155,8 +161,16 @@ internal static class DiffChecks
         var (left, right) = Pair(store, [Row("1")], [Row("2")], columns, columns);
         var model = ResultDiffer.Compare(left, left.SealedSnapshot(), right, right.SealedSnapshot(), false, CancellationToken.None);
         var tones = Text(Unified(store, left, right, model)).Select(row => row.Split('|')[^1]).ToArray();
-        var expected = string.Join(" ", Enumerable.Range(1, width).Select(c => (c + 3).ToString(System.Globalization.CultureInfo.InvariantCulture)));
-        check(tones.Length == 2 && tones[0] == "removed " + expected && tones[1] == "added " + expected, "a row's tone lists every differing column, however many: " + tones[0].Length + " characters");
+        check(tones is ["removed 4-153", "added 4-153"], "a row's tone lists a run of adjacent differing columns as a range: " + string.Join(" / ", tones));
+        // Runs of either kind, and a tone too long for what the grid reads of a cell, cut at a whole entry.
+        var builder = new StringBuilder();
+        check(UnifiedDiff.Tone(builder, "same", [0, 1, ~2, ~3, 5]) == "same 3-4 ~5-6 8", "a soft run is listed apart from a changed one");
+        var scattered = Enumerable.Range(0, 2000).Where(c => c % 2 == 0).ToArray();
+        var cut = UnifiedDiff.Tone(builder, "removed", scattered);
+        var tokens = cut.Split(' ');
+        check(cut.Length <= UnifiedDiff.MaxToneChars && UnifiedDiff.MaxToneChars < 512 && tokens[^1] == "…" && tokens[1..^1].All(token => int.TryParse(token, out _))
+            && int.Parse(tokens[^2], System.Globalization.CultureInfo.InvariantCulture) == scattered[tokens.Length - 3] + 3,
+            "a tone longer than the grid reads of a cell stops at a whole entry and ends with an ellipsis: " + cut.Length + " characters");
     }
 
     /// <summary>When the budget fills, it never does so between a changed row's "−" and "+" rows.</summary>
