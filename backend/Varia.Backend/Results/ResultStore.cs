@@ -54,7 +54,7 @@ internal sealed class ResultStore
     private uint nextViewId = 1;
     /// <summary>Each result's row identities (results.identify), at most one per result.</summary>
     private readonly Dictionary<uint, ResultIdentity> identities = [];
-    private readonly Func<(long Load, long Threshold)> memory;
+    private readonly Func<(long Load, long Threshold)>? memory;
     private uint nextId = 1;
     private long used;
     private long liveUsed;
@@ -62,25 +62,33 @@ internal sealed class ResultStore
     private long freedSinceCompact;
     private int collecting;
 
-    /// <param name="memory">The operating system's memory load and its high-load threshold, in bytes.</param>
+    /// <param name="memory">The memory load and its high-load threshold, in bytes (<see cref="OperatingSystemMemory"/> in the
+    /// process). Null stores up to the budgets whatever the machine's load: the checks build their stores so, because their
+    /// budget assertions otherwise fail whenever the machine running them is busy (above 90 % load under parallel lanes).</param>
     public ResultStore(long globalBytes, long queryBytes, Func<(long Load, long Threshold)>? memory = null)
     {
         if (globalBytes <= 0 || queryBytes <= 0) throw new ArgumentOutOfRangeException(nameof(globalBytes));
         GlobalBytes = globalBytes;
         QueryBytes = Math.Min(queryBytes, globalBytes);
-        this.memory = memory ?? SystemMemory;
+        this.memory = memory;
         LiveBytes = globalBytes / 4;
     }
 
     /// <summary>A quarter of the memory available to the process (container-aware), within 256 MiB to 2 GiB, half of it
-    /// per query. <paramref name="globalOverride"/> (VARIA_RESULT_BUDGET_BYTES, test hooks only) replaces the global figure.</summary>
+    /// per query, storing nothing more under high system memory load. <paramref name="globalOverride"/>
+    /// (VARIA_RESULT_BUDGET_BYTES, test hooks only) replaces the global figure and turns the memory-load check off, so the
+    /// tests that set it see the budget they chose and its truncation reasons however busy the machine is.</summary>
     public static ResultStore FromSystem(long? globalOverride = null)
     {
-        var global = globalOverride is > 0 ? globalOverride.Value : Math.Clamp(GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / 4, 256L << 20, 2L << 30);
-        return new ResultStore(global, global / 2);
+        if (globalOverride is > 0) return new ResultStore(globalOverride.Value, globalOverride.Value / 2);
+        var global = Math.Clamp(GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / 4, 256L << 20, 2L << 30);
+        return new ResultStore(global, global / 2, OperatingSystemMemory);
     }
 
-    private static (long, long) SystemMemory()
+    /// <summary>Whether reservations checked at a seal stop under high memory load.</summary>
+    internal bool ChecksSystemMemory => memory is not null;
+
+    internal static (long Load, long Threshold) OperatingSystemMemory()
     {
         var info = GC.GetGCMemoryInfo();
         return (info.MemoryLoadBytes, info.HighMemoryLoadThresholdBytes);
@@ -208,6 +216,7 @@ internal sealed class ResultStore
 
     public bool IsSystemMemoryLow()
     {
+        if (memory is null) return false;
         var (load, threshold) = memory();
         return threshold > 0 && load >= threshold;
     }

@@ -1157,7 +1157,8 @@ Results stay in backend memory, never on disk (`ResultStore`).
 - **Budget.** Global: a quarter of the memory available to the process (container-aware `TotalAvailableMemoryBytes`),
   within 256 MiB – 2 GiB. One query may use half of it. Nothing more is stored while the operating system reports high
   memory load (checked at every page seal). `VARIA_RESULT_BUDGET_BYTES` replaces the global figure only with the test
-  hooks.
+  hooks, and turns the memory-load check off so tests see their budget's truncation reasons on a busy machine (the offline
+  checks' stores never check it unless given a probe).
 - **Charges.** Each sealed page costs its length plus 96 bytes plus its cell lengths ([Cell lengths and row sizes](#cell-lengths-and-row-sizes)); a result set's metadata 512 bytes plus 2 per name
   character and 64 per column, reserved like rows; the page builder's working space is reserved in 256 KiB steps and
   returned when the set ends. A failed reservation rolls back the current row, so pages never hold partial rows; later
