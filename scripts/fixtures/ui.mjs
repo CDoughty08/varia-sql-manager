@@ -63,6 +63,7 @@ export const part = {
   // Query output
   outputPanel: 'section[data-output-panel]',
   outputAnnouncer: '[data-output-announcer]',
+  resultsSearchIcon: '.results-search-icon',
   /** The results search box's count, drawn only: the toolbar's live region says the settled count (resultsSearchAnnouncer). */
   resultsSearchCount: '.results-search-count',
   outputToolbar: '.output-toolbar',

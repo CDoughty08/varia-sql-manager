@@ -776,7 +776,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 @media (max-width: 1180px) {
   .output-toolbar { gap: 4px; }
   .output-views button { padding: 0 6px; }
-  .results-toolbar-label, .results-search-icon, .results-search > button { display: none; }
+  .results-toolbar-label, .results-toolbar .results-search > .results-search-icon, .results-search > button { display: none; }
   .results-toolbar { gap: 2px; padding-left: 6px; }
   .results-segments button { padding: 0 3px; }
   .results-segments button.results-icon-toggle { padding: 0 3px; }

@@ -1661,13 +1661,17 @@ try {
     while (next && next.getBoundingClientRect().width === 0) next = next.nextElementSibling
     return !!next && search.getBoundingClientRect().right <= next.getBoundingClientRect().left + 0.5
   })
-  // With the box empty every group fits the toolbar, the Show toggles last.
-  const fits = () => page.evaluate(() => {
-    const tools = document.querySelector('[role="toolbar"][aria-label="Results tools"]')
+  // Compact mode hides the magnifier even after Monaco loads its more specific codicon display rule.
+  await expect(resultsToolbar(page).locator(part.resultsSearchIcon)).toBeHidden()
+  // With the box empty every group fits, including Close Results. Report geometry and fonts on a failure.
+  const toolsLayout = await resultsToolbar(page).evaluate(tools => {
     const last = [...tools.children].filter(child => child.getBoundingClientRect().width > 0).at(-1)
-    return last.getBoundingClientRect().right <= tools.getBoundingClientRect().right + 0.5
+    const right = tools.getBoundingClientRect().right, lastRight = last.getBoundingClientRect().right
+    return { fits: lastRight <= right + 0.5, right, lastRight, width: tools.clientWidth, scroll: tools.scrollWidth, font: getComputedStyle(tools).font,
+      groups: [...tools.children].filter(child => child.getBoundingClientRect().width > 0).map(child => ({ name: child.getAttribute('aria-label'), width: child.getBoundingClientRect().width })) }
   })
-  expect(await fits()).toBe(true)
+  expect(toolsLayout.fits, JSON.stringify(toolsLayout)).toBe(true)
+  await expect(resultsToolbar(page).getByRole('button', { name: 'Close Results', exact: true })).toBeInViewport({ ratio: 1 })
   await cell(0, 0).click()
   await page.keyboard.press('Control+F')
   await expect(searchBox).toBeFocused()
