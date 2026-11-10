@@ -116,7 +116,7 @@ describe('live catalogue', () => {
     expect(productionSourceIds).toEqual(liveSourceIds.filter(id => !liveSources[id].testOnly))
     expect(liveSources['debug.synthetic']).toMatchObject({ testOnly: true, scope: 'none' })
     expect(productionSourceIds).toEqual(['activity', 'explorer', 'ssis.catalog', 'ssis.operations', 'query.plan'])
-    expect(liveSources.activity).toMatchObject({ testOnly: false, scope: 'server', probes: ['activity.overview', 'activity.sessions', 'activity.resources'] })
+    expect(liveSources.activity).toMatchObject({ testOnly: false, scope: 'server', probes: ['activity.overview', 'activity.sessions', 'activity.resources', 'activity.queries'] })
     // Object Explorer's status chips: database states need no permission (a low-privilege login still gets them), the
     // DMV probes need server state, the Agent probe skips Express and the availability probe runs only where Always On can.
     expect(liveSources.explorer).toMatchObject({ testOnly: false, scope: 'server', probes: ['explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability'] })
@@ -139,7 +139,7 @@ describe('live catalogue', () => {
     expect(liveProbes['activity.overview']).toMatchObject({ intervalMs: { default: 2000, min: 1000 }, maxDutyCycle: 0.2, permission: 'serverState', gates: { minMajor: 13 } })
   })
   it('builds the Activity Monitor\'s probes from its own catalogue: tables, columns in order, keys, facets, series and gates', () => {
-    expect(activityLiveProbes).toEqual(['activity.overview', 'activity.sessions', 'activity.resources'])
+    expect(activityLiveProbes).toEqual(['activity.overview', 'activity.sessions', 'activity.resources', 'activity.queries'])
     for (const id of activityLiveProbes) {
       const live = liveProbes[id], spec = probeSpecs[id]
       expect(live, id).toMatchObject({ source: activitySource, label: spec.title, intervalMs: { default: spec.defaultIntervalMs, min: spec.minIntervalMs, max: spec.maxIntervalMs },
@@ -165,7 +165,10 @@ describe('live catalogue', () => {
     expect([liveColumnId('sessions', 'login'), liveColumnId('blocking', 'sessionId'), liveColumnId('activeQueries', 'cpuMs'), liveColumnId('waitCategories', 'waitRate'), liveColumnId('waitTypes', 'waitRate'), liveColumnId('files', 'file')])
       .toEqual(['login', 'chainSessionId', 'activeCpuMs', 'waitRate', 'typeWaitRate', 'ioFile'])
     // Without server state, only the sessions probe runs (the monitor's own session); it reports what the login may do.
-    expect([liveProbes['activity.overview'].permission, liveProbes['activity.sessions'].permission, liveProbes['activity.resources'].permission]).toEqual(['serverState', undefined, 'serverState'])
+    expect([liveProbes['activity.overview'].permission, liveProbes['activity.sessions'].permission, liveProbes['activity.resources'].permission, liveProbes['activity.queries'].permission]).toEqual(['serverState', undefined, 'serverState', 'serverState'])
+    // Query statistics sample every 30 s by default, at most every 15 s, Refresh Now at most every 15 s; one table keyed by query_hash, no series.
+    expect(liveProbes['activity.queries']).toMatchObject({ intervalMs: { default: 30_000, min: 15_000, max: 60_000 }, minGapMs: 15_000, budgetMs: { max: 10_000 }, filterMode: 'memory' })
+    expect([liveProbes['activity.queries'].series, liveProbes['activity.queries'].tables?.map(table => [table.id, table.key, table.rowCap])]).toEqual([undefined, [['recentQueries', ['queryHash'], 200]]])
     expect(liveProbes['activity.sessions'].status).toEqual(Object.keys(activityStatuses))
     expect(liveProbes['activity.resources'].description).toContain(pendingProbes['activity.resources'])
     // The opened frame carries a pending probe's note.
