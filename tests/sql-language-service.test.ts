@@ -3,7 +3,7 @@ import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import type { ApiResult, BackendState, ConnectionInfo, VariaApi } from '../src/shared/contracts'
 import { languageLimits, languageRequestSchema, type LanguageCompletions, type LanguageHover, type LanguageStatus } from '../src/shared/language-service'
 import { limits as ipcLimits } from '../src/shared/ipc/wire/protocol'
-import { SqlLanguageService } from '../src/renderer/src/languages/SqlLanguageService'
+import { pendingLimits, SqlLanguageService } from '../src/renderer/src/languages/SqlLanguageService'
 import { SqlDiagnosticsService, sqlDiagnosticDebounceMs } from '../src/renderer/src/languages/SqlDiagnosticsService'
 import { ConnectionService } from '../src/renderer/src/services/connections'
 import { BackendStateService } from '../src/renderer/src/services/backend'
@@ -1025,6 +1025,43 @@ describe('SQL language features in Peek', () => {
     peek.editor.dispose()
     expect(f.api.languageClose.mock.calls.map(([id]) => id)).toEqual([firstId, thirdId])
     for (const map of Object.values(bookkeeping(f.service))) expect(map.size).toBe(0)
+  })
+
+  it('keeps Peek hovers still in flight from taking the request slots query tabs need', async () => {
+    const f = await fixture()
+    f.addConnection(peekConnection)
+    const peek = peekFixture()
+    cleanups.push(() => peek.editor.dispose())
+    const replies: ReturnType<typeof deferred<Awaited<ReturnType<VariaApi['languageHover']>>>>[] = []
+    f.api.languageHover.mockImplementation(() => { const reply = deferred<Awaited<ReturnType<VariaApi['languageHover']>>>(); replies.push(reply); return reply.promise })
+    // A slow server: each Peek hover hangs, and the user moves on (another object, Back, F5), so each is cancelled and its
+    // model disposed while its IPC is still pending.
+    const hovers: Promise<unknown>[] = []
+    for (let index = 0; index < pendingLimits.documents + 2; index++) {
+      const model = peek.show(String(index), `CREATE VIEW dbo.V${index} AS SELECT ${index} AS N`)
+      const cancel = cancellationSource()
+      hovers.push(Promise.resolve(f.hover.provideHover(model, position, cancel.token)))
+      await Promise.resolve()
+      cancel.cancel()
+    }
+    await vi.waitFor(() => expect(f.api.languageHover).toHaveBeenCalledTimes(pendingLimits.peek))
+    // Peek's own cap holds: the rest never reached the backend.
+    expect(f.api.languageHover).toHaveBeenCalledTimes(pendingLimits.peek)
+    // A query tab still gets completion and hover.
+    const tab = f.documents.create('query.sql', 'SELECT Cus', 'master')
+    expect((await f.complete(tab.id)).suggestions.map(item => item.label)).toEqual(['Customer'])
+    const queryHover = f.getHover(tab.id)
+    await vi.waitFor(() => expect(f.api.languageHover).toHaveBeenCalledTimes(pendingLimits.peek + 1))
+    replies.at(-1)!.resolve({ ok: true, value: { contents: 'Customer table' } })
+    expect(await queryHover).toMatchObject({ contents: [{ value: 'Customer table' }] })
+    // Once Peek's requests settle, a new Peek model is served again.
+    for (const reply of replies.slice(0, pendingLimits.peek)) reply.resolve({ ok: true, value: null })
+    await Promise.all(hovers)
+    const next = peek.show('next', 'CREATE VIEW dbo.Next AS SELECT 1 AS N')
+    const nextHover = f.hover.provideHover(next, position, token())
+    await vi.waitFor(() => expect(f.api.languageHover).toHaveBeenCalledTimes(pendingLimits.peek + 2))
+    replies.at(-1)!.resolve({ ok: true, value: { contents: 'Next' } })
+    expect(await nextHover).toMatchObject({ contents: [{ value: 'Next' }] })
   })
 
   it('drops a hover still in flight when Peek moves on, and closes the document again once that request settles', async () => {

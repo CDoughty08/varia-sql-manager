@@ -15,9 +15,12 @@ type ActivityPhase = 'loading' | 'refreshing'
 interface Snapshot { readonly status?: LanguageStatus; readonly checking: boolean; readonly error?: string; readonly cleanupError?: string; readonly documentErrors: ReadonlyMap<string, string>; readonly activities: ReadonlyMap<string, ActivityPhase> }
 /** `peek`: the model is a Peek definition's (read-only), which gets hover but neither completion nor diagnostics. */
 interface Capture { readonly request: LanguageRequest; readonly key: string; readonly epoch: number; readonly model: Monaco.editor.ITextModel; readonly peek: boolean }
-interface PendingRequest { readonly token: Monaco.CancellationToken; readonly settled: Promise<void> }
+interface PendingRequest { readonly token: Monaco.CancellationToken; readonly settled: Promise<void>; readonly peek: boolean }
 interface RefreshWork { capture: Capture; readonly token: Monaco.CancellationToken; readonly cancel: () => void; work: Promise<boolean>; settled: Promise<void> }
 const noCancellation: Monaco.CancellationToken = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) }
+// Requests still in flight, cancelled or not. Each Peek navigation makes a new document, so Peek's requests have a cap of
+// their own: a burst of them on a slow server never takes the slots query tabs' completion, hover and analysis need.
+export const pendingLimits = { documents: 8, peek: 2 } as const
 const cleanupLimits = { requests: 4, attempts: 16, deadlineMs: 30_000, retryMs: 250, maxRetryMs: 2000 }
 // LSP's CompletionItemKind numbering differs from Monaco's numbering.
 const kindNames = ['Text', 'Method', 'Function', 'Constructor', 'Field', 'Variable', 'Class', 'Interface', 'Module', 'Property', 'Unit', 'Value', 'Enum', 'Keyword', 'Snippet', 'Color', 'File', 'Reference', 'Folder', 'EnumMember', 'Constant', 'Struct', 'Event', 'Operator', 'TypeParameter'] as const
@@ -108,7 +111,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
         if (!capture || token.isCancellationRequested) return null
         if (!this.getSnapshot().status && !await this.waitFor(this.readStatus(), token)) return null
         if (!this.current(capture, token) || !this.supports(capture, 'hover')) return null
-        const pending = this.begin(`${capture.request.documentId}:hover`, token)
+        const pending = this.begin(`${capture.request.documentId}:hover`, token, capture.peek)
         if (!pending) return null
         const foreground = this.beginForeground(capture.request.documentId)
         const activity = this.activity(capture, token, 'loading')
@@ -409,16 +412,21 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
       this.backendEpoch + (this.epochs.get(id) ?? 0) === capture.epoch
   }
   /** Keep canceled IPC work in the barrier until it really settles, so only its latest successor reaches the backend. */
-  private begin(key: string, token: Monaco.CancellationToken): { previous?: Promise<void>; finish: () => void } | undefined {
+  private begin(key: string, token: Monaco.CancellationToken, peek = false): { previous?: Promise<void>; finish: () => void } | undefined {
     const previous = this.pending.get(key)
-    if (previous ? !previous.token.isCancellationRequested : this.pending.size >= 8) return
+    if (previous ? !previous.token.isCancellationRequested : this.pendingCount(peek) >= (peek ? pendingLimits.peek : pendingLimits.documents)) return
     let finish!: () => void
     const done = new Promise<void>(resolve => { finish = resolve })
     const settled = previous ? Promise.all([previous.settled, done]).then(() => {}) : done
-    const request: PendingRequest = { token, settled }
+    const request: PendingRequest = { token, settled, peek }
     this.pending.set(key, request)
     void settled.then(() => { if (this.pending.get(key) === request) this.pending.delete(key) })
     return { previous: previous?.settled, finish }
+  }
+  private pendingCount(peek: boolean): number {
+    let count = 0
+    for (const request of this.pending.values()) if (request.peek === peek) count++
+    return count
   }
   /** Cancellation ends the editor's wait without removing the predecessor's actual in-flight work from its barrier. */
   private waitFor(work: Promise<void>, token: Monaco.CancellationToken): Promise<boolean> {
