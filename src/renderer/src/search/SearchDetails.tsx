@@ -1,12 +1,14 @@
-import { useLayoutEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { kindSpecs, type KindSpec } from '../../../shared/explorer/catalog.ts'
 import { peekSpecs } from '../../../shared/explorer/peek.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import type { ObjectSearchHit } from '../../../shared/explorer/search.ts'
 import { scriptCommandId } from '../../../shared/scripting/catalog.ts'
+import { isSqlScope } from '../../../shared/theme/registry'
+import type { SyntaxStyle } from '../../../shared/theme/types'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
+import { onUnexpectedError } from '../core/errors'
 import ExplorerIcon from '../explorer/ExplorerIcon'
-import { useRuns } from '../explorer/PeekCard'
 import { formatPeekValue } from '../explorer/peek-format'
 import { peekMessages } from '../explorer/PeekService'
 import Icon from '../Icon'
@@ -14,6 +16,56 @@ import Segmented from '../kit/Segmented'
 import { argsFor } from '../menus/targets'
 import { searchHitTarget } from './hit-actions'
 import { columnsOf, type DefinitionPart, type SearchDetails as Details } from './SearchDetailsService'
+
+/** Lines of a definition that are coloured; longer text shows the rest plain, so a huge module never stalls the pane. */
+const colouredLines = 3000
+
+/** A run of definition text in one SQL scope's colour. */
+interface Run { readonly text: string; readonly style?: SyntaxStyle }
+
+/**
+ * Monaco's SQL tokens for the first `colouredLines` lines, merged into runs; the rest of the text is one plain run. SQL's
+ * tokenizer loads lazily (start.tsx registers it), and tokenize answers plain text until it has: colorize waits for it,
+ * and the runs are made again once it is there.
+ */
+function useRuns(text: string | undefined): readonly Run[] {
+  const { monaco, theme } = useWorkbench()
+  const { active } = useServiceSnapshot(theme)
+  const [sqlLoaded, setSqlLoaded] = useState(false)
+  useEffect(() => {
+    let live = true
+    monaco.editor.colorize('', 'sql', {}).then(() => { if (live) setSqlLoaded(true) }, onUnexpectedError)
+    return () => { live = false }
+  }, [monaco])
+  return useMemo(() => {
+    if (text === undefined) return []
+    try {
+      const lines = text.split('\n')
+      const head = lines.slice(0, colouredLines), tokens = monaco.editor.tokenize(head.join('\n'), 'sql')
+      const runs: Run[] = []
+      const push = (piece: string, style?: SyntaxStyle) => {
+        const last = runs[runs.length - 1]
+        if (last && last.style === style) runs[runs.length - 1] = { text: last.text + piece, ...(style ? { style } : {}) }
+        else runs.push({ text: piece, ...(style ? { style } : {}) })
+      }
+      head.forEach((line, index) => {
+        const lineTokens = tokens[index] ?? []
+        lineTokens.forEach((token, at) => {
+          const end = lineTokens[at + 1]?.offset ?? line.length
+          const scope = token.type.replace(/\.sql$/, '')
+          push(line.slice(token.offset, end), isSqlScope(scope) ? active.syntax[scope] : undefined)
+        })
+        if (!lineTokens.length) push(line)
+        if (index < lines.length - 1) push('\n')
+      })
+      if (lines.length > colouredLines) push(lines.slice(colouredLines).join('\n'))
+      return runs
+    } catch (error) {
+      onUnexpectedError(error)
+      return [{ text }]
+    }
+  }, [text, monaco, active, sqlLoaded])
+}
 
 const views = [{ value: 'definition', label: 'Definition' }, { value: 'columns', label: 'Columns' }] as const
 

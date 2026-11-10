@@ -7,8 +7,30 @@ import { bindExplorerDrop } from '../explorer/drop'
 /** A query editor: an editor group's Monaco instance, with Tools › Options applied and Object Explorer drops bound. */
 export interface QueryEditorInstance extends Disposable { readonly instance: editor.IStandaloneCodeEditor }
 
-/** Creates a query editor in `container`. Each editor group has one, which shows the group's active text document. */
-export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorOptions'>, container: HTMLElement): QueryEditorInstance {
+/**
+ * What sets a query editor that only shows text (Peek's definition) apart from an editor group's: everything else (Tools ›
+ * Options, the font, Find, the `varia` theme, and the SQL language features every model gets) is the same.
+ */
+export interface QueryEditorUse {
+  /**
+   * Read-only, with the words Monaco shows when the user tries to type: no Object Explorer drops, and Tab moves focus, as in
+   * any read-only field, so a dialog's focus loop still works.
+   */
+  readonly readOnly?: { readonly message: string }
+  /** A card's editor: less padding and no indicator margin (bookmarks live only in query documents). */
+  readonly compact?: boolean
+  /** The accessible name of the editor's text. */
+  readonly ariaLabel?: string
+  /** A Monaco context key set on this editor alone, so Monaco keybindings (Varia's chord bridge) can leave it out. */
+  readonly contextKey?: string
+}
+
+/**
+ * Creates a query editor in `container`. Each editor group has one, which shows the group's active text document; Peek has
+ * one per card or tab, read-only (`use`).
+ */
+export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorOptions'>, container: HTMLElement, use: QueryEditorUse = {}): QueryEditorInstance {
+  const readOnly = use.readOnly
   const instance = workbench.monaco.editor.create(container, {
     model: null,
     theme: 'varia',
@@ -20,9 +42,9 @@ export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorO
     minimap: { enabled: false },
     automaticLayout: true,
     scrollBeyondLastLine: false,
-    padding: { top: 16 },
+    padding: { top: use.compact ? 4 : 16 },
     // SSMS's indicator margin: bookmarks show there.
-    glyphMargin: true,
+    glyphMargin: !use.compact,
     // SSMS's Comment Selection writes --SELECT, with no space, and leaves empty lines alone.
     comments: { insertSpace: false, ignoreEmptyLines: true },
     // Quick Find starts from a single-line selection, and looks in a multi-line one, as SSMS's Look in: Selection does.
@@ -35,10 +57,13 @@ export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorO
     // clipboard): core/primary-selection.ts keeps Linux's PRIMARY selection out.
     selectionClipboard: false,
     // OVR (the Insert key) shows a block caret, as Visual Studio does.
-    overtypeCursorStyle: 'block'
+    overtypeCursorStyle: 'block',
+    ...readOnly ? { readOnly: true, readOnlyMessage: { value: readOnly.message }, tabFocusMode: true } : {},
+    ...use.ariaLabel ? { ariaLabel: use.ariaLabel } : {}
   })
   const options = workbench.editorOptions.bindEditor(instance)
-  // Object Explorer rows dropped on the editor insert their names.
-  const drop = bindExplorerDrop(instance)
-  return { instance, dispose: () => { drop.dispose(); options.dispose(); instance.dispose() } }
+  // Object Explorer rows dropped on the editor insert their names, where it takes text.
+  const drop = readOnly ? undefined : bindExplorerDrop(instance)
+  if (use.contextKey) instance.createContextKey(use.contextKey, true)
+  return { instance, dispose: () => { drop?.dispose(); options.dispose(); instance.dispose() } }
 }

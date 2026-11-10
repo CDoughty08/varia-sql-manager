@@ -568,6 +568,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .peek-follow:hover .peek-item-name { text-decoration: underline; }
 /* Top rows: the results grid fills the panel, which does not scroll itself. */
 .peek-grid { display: flex; flex-direction: column; overflow: hidden; }
+/* Peek's definition: the query editor (peek-editor.ts) fills the panel and scrolls itself. */
+.peek-editor { position: relative; flex: 1; min-height: 0; }
+.peek-editor-host { position: absolute; inset: 0; }
+.peek-grid > .peek-note { flex-shrink: 0; }
 .peek-rows { display: flex; flex: 1; flex-direction: column; min-height: 0; }
 /* A promoted tab: the card's body with the room of a document. */
 .peek-tab-body { display: flex; flex: 1; flex-direction: column; min-height: 0; border-top: 1px solid var(--varia-editorWidget-border); }

@@ -5,9 +5,9 @@ import { randomBytes } from 'node:crypto'
 import { expandExplorerPath, explorerLines, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.mjs'
 import {
-  anyResultGrid, closeDocumentButton, documentFrame, documentTab, gridCell, activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
+  anyResultGrid, closeDocumentButton, documentFrame, documentTab, gridCell, activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, editorTextIn, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
   explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, searchHitApproximate, explorerSublabel, explorerToolbar, itemCount,
-  menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, popoutDockButton, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
+  menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, peekDefinitionText, popoutDockButton, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
 } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
@@ -44,6 +44,10 @@ const clipboard = () => application.evaluate(({ clipboard }) => clipboard.readTe
 const tree = () => explorerTree(page)
 const textbox = () => page.locator('.monaco-editor [role="textbox"]')
 const editorText = () => editorTextOf(page)
+/** Monaco draws spaces and tabs as no-break spaces, and only the lines in view: short texts compare with white space collapsed. */
+const normalized = text => text.replace(/\s+/g, ' ').trim()
+/** The stub's CREATE script for dbo.Orders (explorer-stub.mjs), which Peek shows and Script to New Query opens. */
+const ordersScript = 'CREATE TABLE [dbo].[Orders](\n\t[Id] [int] NOT NULL\n)\nGO\n'
 const tabs = () => documentTabs(page).getByRole('tab')
 const toolbarButton = name => explorerToolbar(page).getByRole('button', { name, exact: true })
 const menu = name => page.getByRole('menu', { name, exact: true })
@@ -651,13 +655,25 @@ try {
   await expect(peekCard).toBeFocused()
   await expect(peekCard.getByRole('region', { name: 'Storage', exact: true })).toContainText('12,345')
   await expect(peekCard.getByRole('region', { name: 'General', exact: true })).toContainText('Non temporal table')
-  await expect(peekCard.getByLabel('Definition text', { exact: true })).toContainText('CREATE TABLE [dbo].[Orders]')
+  // The definition is in the query editor (Monaco, read-only): typing changes nothing.
+  await expect(peekCard.getByRole('tabpanel')).toContainText('CREATE TABLE [dbo].[Orders]')
+  await expect.poll(async () => normalized(await editorTextIn(peekCard))).toBe(normalized(ordersScript))
   const peeked = (await stubCalls('explorer.peek')).at(-1)
   expect(peeked.target).toMatchObject({ kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' })
   expect((await stubCalls('scripting.script')).at(-1)).toMatchObject({ verb: 'create', targets: [{ kind: 'table', name: 'Orders' }] })
   // Tab wraps within the card, so Esc keeps reaching it.
   await page.keyboard.press('Shift+Tab')
-  await expect(peekCard.getByLabel('Definition text', { exact: true })).toBeFocused()
+  await expect(peekDefinitionText(peekCard)).toBeFocused()
+  await page.keyboard.type('x')
+  expect(normalized(await editorTextIn(peekCard))).toBe(normalized(ordersScript))
+  // F5 in Peek's editor refreshes the Peek; it never executes the query tab behind the card.
+  const peekReads = (await stubCalls('explorer.peek')).length, executes = (await stubCalls('query.execute')).length
+  await page.keyboard.press('F5')
+  await expect.poll(async () => (await stubCalls('explorer.peek')).length).toBe(peekReads + 1)
+  expect(await stubCalls('query.execute')).toHaveLength(executes)
+  await expect.poll(async () => normalized(await editorTextIn(peekCard))).toBe(normalized(ordersScript))
+  await peekDefinitionText(peekCard).focus()
+  // A read-only editor lets Tab move focus, so the card's loop still wraps.
   await page.keyboard.press('Tab')
   await expect(peekCard.getByRole('button', { name: 'Open as Tab', exact: true })).toBeFocused()
   await page.keyboard.press('Escape')
@@ -688,7 +704,7 @@ try {
   expect(await topRowRuns()).toHaveLength(0)
   await peekCard.getByRole('button', { name: 'Peek dbo.vOrders', exact: true }).click()
   const followed = page.getByRole('dialog', { name: 'Peek: dbo.vOrders', exact: true })
-  await expect(followed.getByLabel('Definition text', { exact: true })).toContainText('CREATE VIEW dbo.vOrders')
+  await expect(followed.getByRole('tabpanel')).toContainText('CREATE VIEW dbo.vOrders')
   await followed.getByRole('button', { name: 'Back', exact: true }).click()
   await expect(peekTabs.getByRole('tab', { name: 'Dependencies', exact: true })).toHaveAttribute('aria-selected', 'true')
   await peekTabs.getByRole('tab', { name: 'Top rows', exact: true }).click()
@@ -730,7 +746,18 @@ try {
   await expect(peekCard).toBeFocused()
   await page.keyboard.press(`${tabKey}+Enter`)
   await expect(peekCard).toBeHidden()
-  await expect(documentFrame(page, 'dbo.Orders').getByLabel('Definition text', { exact: true })).toContainText('CREATE TABLE [dbo].[Orders]')
+  const definitionTab = documentFrame(page, 'dbo.Orders')
+  await expect(peekDefinitionText(definitionTab)).toHaveCount(1)
+  await expect.poll(async () => normalized(await editorTextIn(definitionTab))).toBe(normalized(ordersScript))
+  // Script to New Query opens the whole definition in a real query tab.
+  const queriesBefore = await documentTabs(page).getByRole('tab').count()
+  await definitionTab.getByRole('button', { name: 'Script to New Query', exact: true }).click()
+  await expect(documentTabs(page).getByRole('tab')).toHaveCount(queriesBefore + 1)
+  await expect.poll(async () => normalized(await queryEditorText(page))).toContain(normalized(ordersScript))
+  const scripted = await activeDocumentName(page)
+  expect(scripted).not.toBe('dbo.Orders')
+  await closeDocumentButton(page, scripted).click()
+  await expect(documentTabs(page).getByRole('tab')).toHaveCount(queriesBefore)
   await closeDocumentButton(page, 'dbo.Orders').click()
   // Ctrl+click (Cmd+click) on a row opens it in a tab straight away.
   await peekRow.locator(part.explorerRowText).first().click({ modifiers: [tabKey] })
