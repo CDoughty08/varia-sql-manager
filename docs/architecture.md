@@ -108,6 +108,10 @@ being true.
   menus and the palette run it through `varia:run-role`. Two-part chords that Varia owns are `bridge` keybindings,
   registered with Monaco from the catalogue by `registerEditorBridge`; Monaco dispatches them. After catalogue changes,
   regenerate `docs/commands.md` with `npx vitest run tests/commands-docs.test.ts -u`.
+  Peek's definition is the query editor itself (`createQueryEditor` with `peekEditorUse`, `explorer/peek-editor.ts`), never
+  a copy of it: read-only, one per card or tab, a model per definition disposed as the view moves on. Its focus key is
+  `peekEditorFocus`, never `editorFocus`, and its Monaco context key `variaPeekEditor` keeps the bridge's chords off it, so no
+  query command acts on it.
   User shortcuts reach the renderer only through `ShortcutsService` (`src/renderer/src/core/ShortcutsService.ts`), which
   hands `effectiveRules` to `KeybindingService.setRules` (labels, menus, the palette and the editor bridge follow) and the
   file's gestures to `GestureService.setModifiers`; the Shortcuts page records keys only through `KeybindingService.capture`.

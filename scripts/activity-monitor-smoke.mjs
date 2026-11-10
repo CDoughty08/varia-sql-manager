@@ -163,7 +163,7 @@ try {
   await expect.poll(async () => (await handles()).length).toBe(1)
   const [{ id }] = await handles()
   const subscribed = await calls('live.subscribe')
-  expect(subscribed.at(-1).params).toMatchObject({ source: 'activity', args: { filters: [{ table: 'sessions', view: 'all', showSystem: false, showVaria: false }] }, probes: [{ probe: 'activity.overview', intervalMs: 2000 }, { probe: 'activity.sessions', intervalMs: 2000 }, { probe: 'activity.resources', intervalMs: 5000, paused: true }] })
+  expect(subscribed.at(-1).params).toMatchObject({ source: 'activity', args: { filters: [{ table: 'sessions', view: 'all', showSystem: false, showVaria: false }] }, probes: [{ probe: 'activity.overview', intervalMs: 2000 }, { probe: 'activity.sessions', intervalMs: 2000 }, { probe: 'activity.resources', intervalMs: 5000, paused: true }, { probe: 'activity.queries', intervalMs: 30000, paused: true }] })
   expect(subscribed.at(-1).params.probes.slice(0, 2).map(probe => probe.paused)).toEqual([undefined, undefined])
   // The View menu and the palette open the same monitor: one per connection.
   await queryTabs().filter({ hasText: 'SQLQuery1' }).click()

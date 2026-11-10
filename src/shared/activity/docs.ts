@@ -93,6 +93,26 @@ function columnsTable(columns: readonly ColumnSpec[]): string {
     [column.caption, code(column.id), column.type, columnUnit(column), column.visible ? 'Yes' : '', parityLabel[column.parity], column.note + (column.capability ? ` Needs ${code(column.capability)}.` : '')]))
 }
 
+/** How the query statistics probe builds Recent Expensive Queries (backend/Varia.Backend/Activity/ActivityQueries.cs). */
+const recentQueriesNotes = [
+  'The stats statement reads the plan cache\'s statements whose last execution ended since the previous sample (its start',
+  'plus its elapsed time, so a statement that ran longer than a window is read when it ends), newest end first, at most',
+  `\`queryStatsRows\`. Each statement (sql_handle, plan_handle and offsets) keeps its totals between samples, at most ${number(activityLimits.queryDeltaKeys)}`,
+  'statements, the one seen least recently dropped first; a row\'s values are the changes since those totals, summed per',
+  'query_hash, so a sum never depends on which rows a window happens to include. Rates span the window since the previous',
+  'sample on the probe\'s clock. A plan cached since the previous sample counts whole; any other statement new to the kept',
+  'totals counts its last execution (the `last_*` columns), which ended in the window, and so does one whose totals were',
+  'kept before a sample cut at `queryStatsRows`, which may have missed a run; its next runs count from the totals kept then.',
+  `The rows are the groups that ran in the window, most CPU first, at most ${number(activityLimits.shownHashes)}. Plan Count, Max Duration and Cached Since`,
+  'come from every kept statement of the group, not only those that ran in the window. A first sample (and the first after',
+  'Resume, a restart, a reconnect, a sample that timed out after its totals moved on, or the server\'s local time stepping',
+  'back, as when daylight saving ends) has no window: it shows the groups that ran in the last 10',
+  'minutes, by their plans\' total CPU, with the rates blank and the per-execution columns from the plans\' totals. Statement',
+  `text and database come from a cache of ${number(activityLimits.textCache)} texts, read for the shown rows that lack one, ${number(activityLimits.textBatch)} per statement and`,
+  `${number(activityLimits.textBatchesPerTick)} statements per sample, most expensive first; until its text arrives a row says "Loading text…", which the`,
+  'filter box does not match. A text SQL Server no longer has, or one the login may not read, stays blank.'
+]
+
 export function renderActivityMonitorDocs(): string {
   const overview = probeSpecs['activity.overview'], queries = activityIntervalDefaults.queriesIntervalSeconds
   const benignLabels = benignCategories.map(id => waitCategories.find(category => category.id === id)!.label).join(', ')
@@ -193,7 +213,7 @@ export function renderActivityMonitorDocs(): string {
     `The live catalogue ([docs/live.md](live.md)) declares ${activityLiveProbes.map(code).join(', ')}, built from this catalogue: the same tables, columns (in`,
     'the same order, with the captions as column names, so Copy with Headers and Save write them), keys, facets and series.',
     ...Object.entries(pendingProbes).map(([probe, note]) => `${code(probe)} opens unavailable: ${note}`),
-    `${activityProbes.filter(probe => !(activityLiveProbes as readonly string[]).includes(probe)).map(code).join(', ')} joins the live catalogue with Recent Expensive Queries.`,
+    ...activityProbes.filter(probe => !(activityLiveProbes as readonly string[]).includes(probe)).map(probe => `${code(probe)} is not in the live catalogue yet.`),
     '',
     'Each probe runs its statements one at a time on the live connection, within one budget. A statement the login may not run',
     '(PERMISSION_DENIED) or the server lacks (NOT_SUPPORTED) fails alone: the sample goes on, an error beside it names the tables',
@@ -281,7 +301,7 @@ export function renderActivityMonitorDocs(): string {
         spec.tones ? `Row tones: ${spec.tones.map(tone => `${tone} (${rowTones[tone]})`).join(', ')}.` : '',
         spec.departedLinger ? 'A selected row whose session ended stays one more sample, toned departed.' : ''
       ].filter(Boolean).join(' ')
-      return [`### ${spec.title} (${code(id)})`, '', facts, '', columnsTable(spec.columns), '']
+      return [`### ${spec.title} (${code(id)})`, '', facts, '', columnsTable(spec.columns), '', ...id === 'recentQueries' ? [...recentQueriesNotes, ''] : []]
     }),
     '## Filters',
     '',

@@ -20,8 +20,10 @@ internal sealed record ViewCells(int[]? Order, (long First, long Count)[] Ranges
 /// <summary>One results.view filter. In, NotIn and Between compare Column's values with those of base rows (Rows: one row per
 /// distinct value; Between's lowest and highest), or of the cells a selection named (Cells), which building the view
 /// resolves to rows; Nulls says NULL is among In's and NotIn's values. Duplicates compares Columns. Equality and order are
-/// the sort's (<see cref="ViewSorter"/>): a column's collation decides which texts are equal.</summary>
-internal sealed record ViewFilter(FilterOp Op, int Column, int[]? Rows, bool Nulls, ViewCells? Cells, int[] Columns);
+/// the sort's (<see cref="ViewSorter"/>): a column's collation decides which texts are equal.
+/// A distinct snapshot's checklist (<see cref="Snapshot"/>) arrives already resolved: In or NotIn with its values' rows in
+/// value order, one a value, however many.</summary>
+internal sealed record ViewFilter(FilterOp Op, int Column, int[]? Rows, bool Nulls, ViewCells? Cells, int[] Columns, uint? Snapshot = null);
 
 /// <summary>A view of one stored result: its rows in another order (and, later, only some of them), as base row numbers.
 /// Reads through it build pages in view order from the stored ones (<see cref="ViewPages"/>), so the renderer caches and
@@ -62,7 +64,7 @@ internal static partial class ViewSorter
     /// <summary>Bytes a row one filter holds at most while it runs, besides its column's key: Duplicates' positions (4), group
     /// starts (up to 8, as their list grows) and the rows it keeps (4); Keep and Pick hold less.</summary>
     public const int FilterBytes = 16;
-    private const int CancelEvery = 1 << 14;
+    internal const int CancelEvery = 1 << 14;
 
     /// <summary>Bytes a sort holds per row and key while it runs: the key's 8- or 16-byte value and a NULL bit.</summary>
     public static long WorkingBytes(long rows, int keys) => rows * (16L * keys + 4) + rows / 8 * keys;
@@ -122,6 +124,13 @@ internal static partial class ViewSorter
                 continue;
             }
             var key = ValueKey(filter.Column);
+            if (filter.Snapshot is not null)
+            {
+                // A checklist's rows are its snapshot's: already one a value, in this key's order, and below the rows sealed.
+                order = Keep(order, key, filter.Op, filter.Rows!, filter.Nulls, token);
+                resolved[f] = filter;
+                continue;
+            }
             var (reps, nulls) = filter.Cells is { } cells ? Pick(key, cells, rows, token) : Distinct(key, filter.Rows!, rows, token);
             nulls |= filter.Nulls;
             if (filter.Op == FilterOp.Between)

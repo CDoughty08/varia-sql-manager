@@ -489,39 +489,80 @@ describe('ResultClient', () => {
     await expect(handle.profile([0, 0])).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
   })
 
-  it('lists the distinct values of a column through a result or its view and refuses bad requests before the port', async () => {
+  it('keeps a column\'s distinct snapshot, reads, ticks and closes it through its result, and refuses bad requests before the port', async () => {
     const { client, worker, handOver } = fixture()
     handOver()
     await client.ready()
     worker().toWorker({ t: 'backend', generation: 1, status: 'ready' })
     const handle = client.open(descriptor())
-    const answer = async (result: unknown) => {
+    const answer = async (t: string, result: unknown) => {
       await settle()
-      const request = worker().fromWorker.findLast(item => item.t === 'distinct')!
+      const request = worker().fromWorker.findLast(item => item.t === t)!
       worker().toWorker({ t: 'end', rid: request.rid, ok: true, result: result as ResultsDistinctResult })
       return request
     }
-    const result = { rows: 10, complete: true, nulls: 2, distinct: 2, truncated: false, approximate: false, values: [{ row: 0, text: 'a', count: 5 }, { row: 4, text: 'b', count: 3 }] }
-    const listing = handle.distinct(0, { order: 'count' })
-    expect(await answer(result)).toEqual(expect.objectContaining({ t: 'distinct', generation: 1, resultId: 3, column: 0, order: 'count', maxValues: 4096 }))
-    expect(await listing).toEqual(result)
+    const summary = { snapshotId: 9, rows: 10, complete: true, nulls: 2, distinct: 2, approximate: false, checked: 2, nullsChecked: true }
+    const opening = handle.distinct(0)
+    expect(await answer('distinct', summary)).toEqual({ t: 'distinct', rid: expect.any(Number), generation: 1, resultId: 3, column: 0 })
+    const list = await opening
+    expect(list).toMatchObject({ generation: 1, resultId: 3, snapshotId: 9, column: 0, summary })
+    const window = { total: 2, offset: 0, checked: 2, nullsChecked: true, values: [{ group: 0, row: 0, text: 'a', count: 5, checked: true }, { group: 1, row: 4, text: 'b', count: 3, checked: true }] }
+    const reading = list.read({ order: 'value', offset: 0, count: 128, search: 'b' })
+    expect(await answer('distinctRead', window)).toEqual({ t: 'distinctRead', rid: expect.any(Number), generation: 1, resultId: 3, snapshotId: 9, order: 'value', offset: 0, count: 128, search: 'b' })
+    expect(await reading).toEqual(window)
+    const ticking = list.tick({ checked: false, all: true, search: 'b', nulls: false })
+    expect(await answer('distinctTick', { checked: 1, nullsChecked: false })).toEqual({ t: 'distinctTick', rid: expect.any(Number), generation: 1, resultId: 3, snapshotId: 9, checked: false, all: true, search: 'b', nulls: false })
+    expect(await ticking).toEqual({ checked: 1, nullsChecked: false })
+    // A snapshot read through a view belongs to the result: it outlives the view, and its requests name no view.
     const sorting = handle.sort([{ column: 0, descending: true, mode: 'value' }])
     await settle()
     const sort = worker().fromWorker.findLast(item => item.t === 'view')!
     worker().toWorker({ t: 'end', rid: sort.rid, ok: true, result: { viewId: 2, rows: 10, baseRows: 10, complete: true, approximate: false } })
     const view = await sorting
-    const viewed = view.distinct(0, { order: 'value', maxValues: 5, search: 'b' })
-    expect(await answer({ ...result, distinct: 1, values: [result.values[1]] })).toMatchObject({ t: 'distinct', resultId: 3, column: 0, order: 'value', maxValues: 5, search: 'b', viewId: 2 })
-    expect((await viewed).values).toEqual([result.values[1]])
-    // A kept view of the same result goes with the request; the result itself, with no view, is refused.
-    const marked = handle.distinct(0, { order: 'count', kept: view })
-    expect(await answer({ ...result, values: result.values.map(value => ({ ...value, kept: true })), nullsKept: true, unlistedKept: false })).toMatchObject({ t: 'distinct', keptViewId: 2 })
-    expect((await marked).nullsKept).toBe(true)
-    await expect(view.distinct(0, { order: 'count', kept: handle })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
-    await expect(handle.distinct(1, { order: 'count' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
-    await expect(handle.distinct(0, { order: 'count', maxValues: 4097 })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
-    await expect(handle.distinct(0, { order: 'count', search: '' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
-    await expect(handle.distinct(0, { order: 'random' as 'count' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    const viewed = view.distinct(0, { kept: view })
+    expect(await answer('distinct', { ...summary, snapshotId: 10 })).toMatchObject({ t: 'distinct', resultId: 3, column: 0, viewId: 2, keptViewId: 2 })
+    const fromView = await viewed
+    const closingView = view.close()
+    await answer('viewClose', { closed: 1 })
+    await closingView
+    const after = fromView.read({ order: 'count', offset: 128, count: 1 })
+    expect(await answer('distinctRead', { ...window, offset: 128, total: 2, values: [] })).not.toHaveProperty('viewId')
+    expect((await after).values).toEqual([])
+    const closing = list.close()
+    expect(await answer('distinctClose', { closed: 1 })).toEqual({ t: 'distinctClose', rid: expect.any(Number), generation: 1, resultId: 3, snapshotIds: [9] })
+    await closing
+    const closes = worker().fromWorker.filter(item => item.t === 'distinctClose').length
+    await list.close()
+    expect(worker().fromWorker.filter(item => item.t === 'distinctClose').length).toBe(closes)
+    // A snapshot answered after its open was given up (the cancel crossed the answer) is closed, not left in the backend.
+    const abort = new AbortController()
+    const given = handle.distinct(0, { signal: abort.signal })
+    await settle()
+    const asked = worker().fromWorker.findLast(item => item.t === 'distinct')!
+    abort.abort()
+    await expect(given).rejects.toMatchObject({ name: 'AbortError' })
+    await settle()
+    expect(worker().fromWorker.at(-1)).toEqual({ t: 'cancel', rid: asked.rid })
+    worker().toWorker({ t: 'end', rid: asked.rid, ok: true, result: { ...summary, snapshotId: 11 } })
+    await settle()
+    expect(worker().fromWorker.at(-1)).toEqual({ t: 'distinctClose', rid: expect.any(Number), generation: 1, resultId: 3, snapshotIds: [11] })
+    // Refused before the port: a column the result lacks, a kept handle that is no view, and windows or ticks out of bounds.
+    await expect(handle.distinct(0, { kept: handle })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.distinct(1)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(fromView.read({ order: 'count', offset: 0, count: 513 })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(fromView.read({ order: 'count', offset: -1, count: 1 })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(fromView.read({ order: 'random' as 'count', offset: 0, count: 1 })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(fromView.read({ order: 'count', offset: 0, count: 1, search: '' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(fromView.tick({ checked: true })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(fromView.tick({ checked: true, all: true, groups: [1] })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(fromView.tick({ checked: true, groups: [1], search: 'x' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(fromView.tick({ checked: true, groups: Array.from({ length: 513 }, (_, at) => at) })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    // A groups filter goes to the backend as it was asked, without what a view said of it.
+    const filtering = handle.sort([], { filters: [{ op: 'groups', column: 0, snapshotId: 10, keep: true, values: 1, nulls: false, row: 4 } as never] })
+    await settle()
+    expect(worker().fromWorker.findLast(item => item.t === 'view')).toMatchObject({ filters: [{ op: 'groups', column: 0, snapshotId: 10 }] })
+    expect(worker().fromWorker.findLast(item => item.t === 'view')!.filters?.[0]).not.toHaveProperty('keep')
+    void filtering.catch(() => undefined)
   })
 
   it('bounds the text of the windows a result remembers', async () => {

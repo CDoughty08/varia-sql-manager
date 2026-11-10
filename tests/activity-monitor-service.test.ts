@@ -34,8 +34,8 @@ describe('Activity Monitor document', () => {
       connectionId: 'c1', source: 'activity',
       // Processes' filter goes with the subscription, so its first sample is already filtered.
       args: { filters: [{ table: 'sessions', view: 'all', showSystem: false, showVaria: false }] },
-      // The tiles' overview and Processes' sessions sample; Resource Waits' grid is still to come, so its probe waits, paused.
-      probes: [{ probe: 'activity.overview', intervalMs: 2000, paused: false }, { probe: 'activity.sessions', intervalMs: 2000, paused: false }, { probe: 'activity.resources', intervalMs: 5000, paused: true }]
+      // The tiles' overview and Processes' sessions sample; the other panes' grids are still to come, so their probes wait, paused.
+      probes: [{ probe: 'activity.overview', intervalMs: 2000, paused: false }, { probe: 'activity.sessions', intervalMs: 2000, paused: false }, { probe: 'activity.resources', intervalMs: 5000, paused: true }, { probe: 'activity.queries', intervalMs: 30_000, paused: true }]
     })
     expect(liveViews.last.owner.key).toBe(`tab:${id}`)
     // Opening it again activates the same tab and subscribes nothing new; another server gets its own.

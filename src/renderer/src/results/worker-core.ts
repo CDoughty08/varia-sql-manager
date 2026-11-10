@@ -2,7 +2,7 @@
 // from main through the results port, validates and caches them (decodePage), and answers the UI's windows and cells
 // with display text decoded only for the cells asked for. It also relays live subscriptions between the page and main
 // without decoding anything, and grants each live event's bytes back only once the page says it applied the event.
-import type { BackendStatus, ResultsCloseResult, ResultsDiffResult, ResultsDistinctResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult, WireKind } from '../../../shared/contracts'
+import type { BackendStatus, ResultsCloseResult, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult, WireKind } from '../../../shared/contracts'
 import type { PortEndResult, PortMessage, PortRequest } from '../../../shared/ipc/port-messages'
 import { decodePage, pageMemoryBytes, PageFormatError, type PageView } from '../../../shared/ipc/wire/pages'
 import { CELL_ERROR, CELL_NULL, cellFlags, cellSlice, cellText, displayText, runSlice, textRun, type TextRun } from '../../../shared/ipc/wire/cells'
@@ -11,7 +11,7 @@ import type { LiveEnd, LiveEvent, LiveUpdateResult } from '../../../shared/live/
 import { gridLimits as g } from '../grid/constants'
 import { displayColumns } from '../grid/measure'
 import { formatJson, formatXml } from './doc-format'
-import { FLAG_CAPPED, FLAG_OVER_BUDGET, type MeasureRequest, type ResultKey, type ValueFormat, type WindowRequest, type WorkerRequest, type WorkerResponse } from './worker-protocol'
+import { FLAG_CAPPED, FLAG_OVER_BUDGET, type DistinctAnswer, type MeasureRequest, type ResultKey, type ValueFormat, type WindowRequest, type WorkerRequest, type WorkerResponse } from './worker-protocol'
 
 /** The parts of a MessagePort the core uses. */
 export interface PortLike { postMessage(message: unknown): void }
@@ -107,7 +107,7 @@ export class ResultsWorkerCore {
   private readonly searches = new Map<number, number>()
   /** results.profile requests in flight: the page's id by rid. */
   private readonly profiles = new Map<number, number>()
-  /** results.distinct requests in flight: the page's id by rid. */
+  /** Distinct snapshot requests in flight (results.distinct and its windows, ticks and close): the page's id by rid. */
   private readonly distincts = new Map<number, number>()
   /** results.viewClose requests in flight: the page's id by rid. */
   private readonly viewCloses = new Map<number, number>()
@@ -439,8 +439,16 @@ export class ResultsWorkerCore {
     const rid = this.allocate()
     this.distincts.set(rid, request.id)
     const { generation, resultId, view } = request.key
-    const { column, order, maxValues, search, keptViewId } = request.params
-    this.send({ t: 'distinct', rid, generation, resultId, column, order, maxValues, ...(search === undefined ? {} : { search }), ...(view === undefined ? {} : { viewId: view }), ...(keptViewId === undefined ? {} : { keptViewId }) })
+    const asked = request.request
+    switch (asked.kind) {
+      case 'open': return this.send({ t: 'distinct', rid, generation, resultId, column: asked.column, ...(view === undefined ? {} : { viewId: view }), ...(asked.keptViewId === undefined ? {} : { keptViewId: asked.keptViewId }) })
+      case 'read': return this.send({ t: 'distinctRead', rid, generation, resultId, snapshotId: asked.snapshotId, order: asked.order, offset: asked.offset, count: asked.count, ...(asked.search === undefined ? {} : { search: asked.search }) })
+      case 'tick': return this.send({
+        t: 'distinctTick', rid, generation, resultId, snapshotId: asked.snapshotId, checked: asked.checked, ...(asked.groups ? { groups: [...asked.groups] } : {}), ...(asked.all ? { all: true as const } : {}),
+        ...(asked.search === undefined ? {} : { search: asked.search }), ...(asked.nulls === undefined ? {} : { nulls: asked.nulls })
+      })
+      case 'close': return this.send({ t: 'distinctClose', rid, generation, resultId, snapshotIds: [...asked.snapshotIds] })
+    }
   }
 
   private identity(request: Extract<WorkerRequest, { type: 'identity' }>): void {
@@ -658,7 +666,7 @@ export class ResultsWorkerCore {
     const distinct = this.distincts.get(rid)
     if (distinct !== undefined) {
       this.distincts.delete(rid)
-      this.post({ type: 'distinct', id: distinct, result: result as ResultsDistinctResult })
+      this.post({ type: 'distinct', id: distinct, result: result as DistinctAnswer })
       return
     }
     const viewClose = this.viewCloses.get(rid)

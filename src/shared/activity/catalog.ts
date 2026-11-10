@@ -92,9 +92,8 @@ export const probeSpecs: { readonly [P in ActivityProbe]: ProbeSpec } = {
     defaultIntervalMs: 30_000, minIntervalMs: 15_000, maxIntervalMs: 60_000, floorMs: 30_000, budgetMs: 10_000, minGapMs: 15_000, maxDutyCycle: 0.2, maxdop1: true, filterMode: 'memory', hidden: 'pause'
   }
 }
-/** The probes the live catalogue declares today, in its order (src/shared/live/catalog.ts builds their entries from this
- *  catalogue). activity.queries joins with Recent Expensive Queries (AM4). */
-export const activityLiveProbes = ['activity.overview', 'activity.sessions', 'activity.resources'] as const satisfies readonly ActivityProbe[]
+/** The probes the live catalogue declares, in its order (src/shared/live/catalog.ts builds their entries from this catalogue). */
+export const activityLiveProbes = ['activity.overview', 'activity.sessions', 'activity.resources', 'activity.queries'] as const satisfies readonly ActivityProbe[]
 /** Probes the live catalogue declares whose sampling arrives later: each opens unavailable with this note and runs no SQL. */
 export const pendingProbes: { readonly [P in ActivityProbe]?: string } = {
   'activity.resources': 'Resource Waits and Data File I/O are not sampled yet; they arrive in a later version of Varia.'
@@ -389,14 +388,14 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
       c('logicalReadsRate', 'Logical Reads/sec', 'decimal', '/s', true, 'ssms', 'Per second over the sample window.'),
       c('logicalWritesRate', 'Logical Writes/sec', 'decimal', '/s', true, 'ssms', 'Per second over the sample window.'),
       c('averageDurationMs', 'Average Duration (ms)', 'decimal', 'ms', true, 'ssms', 'Elapsed time per execution in the sample window.'),
-      c('maxDurationMs', 'Max Duration (ms)', 'decimal', 'ms', true, 'new', 'The longest execution since the plan was cached.'),
+      c('maxDurationMs', 'Max Duration (ms)', 'decimal', 'ms', true, 'new', 'The longest execution of the group\'s plans the monitor has seen, since each was cached.'),
       c('rowsPerExecution', 'Rows/Execution', 'decimal', 'count', true, 'new', 'Rows per execution.'),
       c('avgGrantKb', 'Avg Grant (KB)', 'decimal', 'KB', false, 'new', 'Memory grant per execution.'),
       c('spills', 'Spills', 'bigint', 'count', false, 'new', 'Pages spilled in the window.', 'totalSpills'),
-      c('planCount', 'Plan Count', 'int', 'count', true, 'ssms', 'Distinct plans (query_plan_hash) in the group.'),
+      c('planCount', 'Plan Count', 'int', 'count', true, 'ssms', 'Distinct plans (query_plan_hash) of the group seen since sampling started or resumed, idle ones included.'),
       c('database', 'Database', 'text', '', true, 'ssms', 'The plan\'s database.'),
       c('lastExecution', 'Last Execution', 'datetime', '', true, 'new', 'The group\'s latest execution (server time).'),
-      c('cachedSince', 'Cached Since', 'datetime', '', false, 'new', 'The oldest plan\'s creation time.'),
+      c('cachedSince', 'Cached Since', 'datetime', '', false, 'new', 'The creation time of the oldest plan of the group the monitor has seen.'),
       c('queryHash', 'Query Hash', 'text', '', false, 'new', 'query_hash, which groups the statements.')
     ]
   }
