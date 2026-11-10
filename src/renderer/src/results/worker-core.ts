@@ -2,7 +2,7 @@
 // from main through the results port, validates and caches them (decodePage), and answers the UI's windows and cells
 // with display text decoded only for the cells asked for. It also relays live subscriptions between the page and main
 // without decoding anything, and grants each live event's bytes back only once the page says it applied the event.
-import type { BackendStatus, ResultsCloseResult, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsProfileResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult, WireKind } from '../../../shared/contracts'
+import type { BackendStatus, ResultsCloseResult, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult, WireKind } from '../../../shared/contracts'
 import type { PortEndResult, PortMessage, PortRequest } from '../../../shared/ipc/port-messages'
 import { decodePage, pageMemoryBytes, PageFormatError, type PageView } from '../../../shared/ipc/wire/pages'
 import { CELL_ERROR, CELL_NULL, cellFlags, cellSlice, cellText, displayText, runSlice, textRun, type TextRun } from '../../../shared/ipc/wire/cells'
@@ -11,7 +11,7 @@ import type { LiveEnd, LiveEvent, LiveUpdateResult } from '../../../shared/live/
 import { gridLimits as g } from '../grid/constants'
 import { displayColumns } from '../grid/measure'
 import { formatJson, formatXml } from './doc-format'
-import { FLAG_CAPPED, FLAG_OVER_BUDGET, type MeasureRequest, type ResultKey, type ValueFormat, type WindowRequest, type WorkerRequest, type WorkerResponse } from './worker-protocol'
+import { FLAG_CAPPED, FLAG_OVER_BUDGET, type DistinctAnswer, type MeasureRequest, type ResultKey, type ValueFormat, type WindowRequest, type WorkerRequest, type WorkerResponse } from './worker-protocol'
 
 /** The parts of a MessagePort the core uses. */
 export interface PortLike { postMessage(message: unknown): void }
@@ -107,13 +107,15 @@ export class ResultsWorkerCore {
   private readonly searches = new Map<number, number>()
   /** results.profile requests in flight: the page's id by rid. */
   private readonly profiles = new Map<number, number>()
+  /** Distinct snapshot requests in flight (results.distinct and its windows, ticks and close): the page's id by rid. */
+  private readonly distincts = new Map<number, number>()
   /** results.viewClose requests in flight: the page's id by rid. */
   private readonly viewCloses = new Map<number, number>()
   /** Row-identity requests in flight: the page's id by rid. */
   private readonly identities = new Map<number, number>()
-  /** The diffs among them, by rid: their generation, and whether the page gave them up. A diff answered after its cancel
-   *  is a stored result nobody holds, so it is closed. */
-  private readonly diffs = new Map<number, { readonly generation: number; cancelled: boolean }>()
+  /** The diffs and pivots among them, by rid: their generation, and whether the page gave them up. One answered after its
+   *  cancel is a stored result nobody holds, so it is closed. */
+  private readonly diffs = new Map<number, { readonly generation: number; cancelled: boolean; readonly cancelledText: string }>()
   /** The worker's own viewCloses (a view built after its sort was given up), whose rids stay taken until main answers. */
   private readonly orphanCloses = new Set<number>()
   private readonly lives = new Map<number, Live>()
@@ -146,7 +148,7 @@ export class ResultsWorkerCore {
     if (this.port && this.port !== port) {
       this.endLives(() => true, 'PORT_CLOSED', portClosed)
       // Main drops answers meant for the old port, so row sizes asked on it would never settle.
-      for (const requests of [this.sizes, this.viewCloses, this.profiles, this.searches, this.identities]) for (const [rid, id] of [...requests]) {
+      for (const requests of [this.sizes, this.viewCloses, this.profiles, this.distincts, this.searches, this.identities]) for (const [rid, id] of [...requests]) {
         requests.delete(rid)
         this.error(id, 'PORT_CLOSED', portClosed)
       }
@@ -175,6 +177,7 @@ export class ResultsWorkerCore {
       case 'identity': return this.identity(request)
       case 'search': return this.search(request)
       case 'profile': return this.profile(request)
+      case 'distinct': return this.distinct(request)
       case 'measure': return this.measure(request)
       case 'stats': this.post({ type: 'stats', id: request.id, bytes: this.cacheBytes, pages: this.cache.size, ...this.cacheShape() }); return
       case 'live': return this.live(request)
@@ -205,7 +208,7 @@ export class ResultsWorkerCore {
   /** The next port rid, skipping those still in use (a live stream may outlive 2^31 reads). */
   private allocate(): number {
     let rid = this.nextRid
-    while (this.reads.has(rid) || this.closes.has(rid) || this.sizes.has(rid) || this.profiles.has(rid) || this.searches.has(rid) || this.sorts.has(rid) || this.viewCloses.has(rid) || this.identities.has(rid) || this.orphanCloses.has(rid) || this.lives.has(rid) || this.updates.has(rid)) rid = rid >= 2 ** 31 - 1 ? 1 : rid + 1
+    while (this.reads.has(rid) || this.closes.has(rid) || this.sizes.has(rid) || this.profiles.has(rid) || this.distincts.has(rid) || this.searches.has(rid) || this.sorts.has(rid) || this.viewCloses.has(rid) || this.identities.has(rid) || this.orphanCloses.has(rid) || this.lives.has(rid) || this.updates.has(rid)) rid = rid >= 2 ** 31 - 1 ? 1 : rid + 1
     this.nextRid = rid >= 2 ** 31 - 1 ? 1 : rid + 1
     return rid
   }
@@ -342,6 +345,10 @@ export class ResultsWorkerCore {
       // Main answers the cancelled profile (CANCELLED), which settles the page's request.
       if (profile === id) return this.send({ t: 'cancel', rid })
     }
+    for (const [rid, distinct] of this.distincts) {
+      // Main answers the cancelled request (CANCELLED), which settles the page's request.
+      if (distinct === id) return this.send({ t: 'cancel', rid })
+    }
     for (const [rid, identity] of this.identities) {
       // Main stops an identify and answers CANCELLED; it lets a range or a search finish, whose answer then settles nothing.
       if (identity !== id) continue
@@ -426,6 +433,24 @@ export class ResultsWorkerCore {
     this.send({ t: 'profile', rid, generation, resultId, columns: [...request.columns], ...(view === undefined ? {} : { viewId: view }) })
   }
 
+  private distinct(request: Extract<WorkerRequest, { type: 'distinct' }>): void {
+    if (!this.port) return this.error(request.id, 'PORT_CLOSED', portClosed)
+    if (this.stale(request.key)) return this.error(request.id, 'RESULT_UNAVAILABLE', resultUnavailable)
+    const rid = this.allocate()
+    this.distincts.set(rid, request.id)
+    const { generation, resultId, view } = request.key
+    const asked = request.request
+    switch (asked.kind) {
+      case 'open': return this.send({ t: 'distinct', rid, generation, resultId, column: asked.column, ...(view === undefined ? {} : { viewId: view }), ...(asked.keptViewId === undefined ? {} : { keptViewId: asked.keptViewId }) })
+      case 'read': return this.send({ t: 'distinctRead', rid, generation, resultId, snapshotId: asked.snapshotId, order: asked.order, offset: asked.offset, count: asked.count, ...(asked.search === undefined ? {} : { search: asked.search }) })
+      case 'tick': return this.send({
+        t: 'distinctTick', rid, generation, resultId, snapshotId: asked.snapshotId, checked: asked.checked, ...(asked.groups ? { groups: [...asked.groups] } : {}), ...(asked.all ? { all: true as const } : {}),
+        ...(asked.search === undefined ? {} : { search: asked.search }), ...(asked.nulls === undefined ? {} : { nulls: asked.nulls })
+      })
+      case 'close': return this.send({ t: 'distinctClose', rid, generation, resultId, snapshotIds: [...asked.snapshotIds] })
+    }
+  }
+
   private identity(request: Extract<WorkerRequest, { type: 'identity' }>): void {
     if (!this.port) return this.error(request.id, 'PORT_CLOSED', portClosed)
     if (this.stale(request.key)) return this.error(request.id, 'RESULT_UNAVAILABLE', resultUnavailable)
@@ -435,8 +460,14 @@ export class ResultsWorkerCore {
     if (body.method === 'identify') this.send({ t: 'identify', rid, generation, resultId, by: body.by, ...(body.column === undefined ? {} : { column: body.column }) })
     else if (body.method === 'rowIds') this.send({ t: 'rowIds', rid, generation, resultId, firstRow: body.firstRow, count: body.count, ...viewId })
     else if (body.method === 'findRows') this.send({ t: 'findRows', rid, generation, resultId, ids: [...body.ids], ...viewId })
-    else {
-      this.diffs.set(rid, { generation, cancelled: false })
+    else if (body.method === 'pivot') {
+      this.diffs.set(rid, { generation, cancelled: false, cancelledText: 'The pivot was cancelled.' })
+      this.send({
+        t: 'pivot', rid, generation, resultId, rows: [...body.rows], ...(body.column === undefined ? {} : { column: body.column }),
+        values: body.values.map(value => value.column === undefined ? { aggregate: 'count' as const } : { aggregate: value.aggregate, column: value.column }), ...viewId
+      })
+    } else {
+      this.diffs.set(rid, { generation, cancelled: false, cancelledText: 'The comparison was cancelled.' })
       this.send({ t: 'diff', rid, generation, resultId, right: body.right, exact: body.exact, context: body.context })
     }
   }
@@ -632,6 +663,12 @@ export class ResultsWorkerCore {
       this.post({ type: 'profile', id: profile, result: result as ResultsProfileResult })
       return
     }
+    const distinct = this.distincts.get(rid)
+    if (distinct !== undefined) {
+      this.distincts.delete(rid)
+      this.post({ type: 'distinct', id: distinct, result: result as DistinctAnswer })
+      return
+    }
     const viewClose = this.viewCloses.get(rid)
     if (viewClose !== undefined) {
       this.viewCloses.delete(rid)
@@ -648,10 +685,10 @@ export class ResultsWorkerCore {
       if (diff?.cancelled) {
         const close = this.allocate()
         this.orphanCloses.add(close)
-        this.send({ t: 'close', rid: close, generation: diff.generation, resultIds: [(result as ResultsDiffResult).descriptor.resultId] })
-        return this.error(identity, 'CANCELLED', 'The comparison was cancelled.')
+        this.send({ t: 'close', rid: close, generation: diff.generation, resultIds: [(result as ResultsDiffResult | ResultsPivotResult).descriptor.resultId] })
+        return this.error(identity, 'CANCELLED', diff.cancelledText)
       }
-      this.post({ type: 'identity', id: identity, result: result as ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsDiffResult })
+      this.post({ type: 'identity', id: identity, result: result as ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsDiffResult | ResultsPivotResult })
       return
     }
     const sizes = this.sizes.get(rid)
@@ -704,6 +741,11 @@ export class ResultsWorkerCore {
     if (profile !== undefined) {
       this.profiles.delete(rid)
       return this.error(profile, code, message)
+    }
+    const distinct = this.distincts.get(rid)
+    if (distinct !== undefined) {
+      this.distincts.delete(rid)
+      return this.error(distinct, code, message)
     }
     const viewClose = this.viewCloses.get(rid)
     if (viewClose !== undefined) {

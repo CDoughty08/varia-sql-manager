@@ -159,3 +159,9 @@ export function monitorFacts(connection: { readonly server: string; readonly pro
     ...connection.login ? [{ label: 'Login', value: connection.login }] : []
   ]
 }
+
+/** How many rows a grid lays its items in, from the columns its template resolved to (auto-fit, so the width decides). */
+export function gridRows(count: number, template: string): number {
+  const columns = template.trim() === '' || template === 'none' ? 1 : template.trim().split(/\s+/).length
+  return Math.max(1, Math.ceil(count / Math.max(1, columns)))
+}

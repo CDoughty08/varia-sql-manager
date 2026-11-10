@@ -22,6 +22,7 @@ export interface FakeHandle extends ResultHandle {
   readonly sort: ReturnType<typeof vi.fn<ResultHandle['sort']>>
   readonly search: ReturnType<typeof vi.fn<ResultHandle['search']>>
   readonly profile: ReturnType<typeof vi.fn<ResultHandle['profile']>>
+  readonly distinct: ReturnType<typeof vi.fn<ResultHandle['distinct']>>
 }
 
 /**
@@ -32,6 +33,7 @@ export function fakeResultClient() {
   const listeners = new Map<string, Set<(event: QueryEvent) => void>>()
   const generationListeners = new Set<(generation: number) => void>()
   const handles = new Map<string, FakeHandle>()
+  let snapshots = 0
   const keyOf = (value: { generation: number; resultId: number }) => `${value.generation}:${value.resultId}`
   const settle = (handle: FakeHandle, value: ResultDescriptor, final: boolean) => {
     handle.snapshot = {
@@ -70,8 +72,26 @@ export function fakeResultClient() {
           }),
           key: 'Id', same: 1, changed: 1, added: 1, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: []
         })),
+        // A pivot is result 800 + this one's id: its row columns and a Count of rows, two row groups of three rows.
+        pivot: vi.fn<ResultHandle['pivot']>(async spec => ({
+          descriptor: descriptor(800 + value.resultId, {
+            generation: value.generation, index: value.index, kind: 'pivot', rowsRead: 2, rowsStored: 2, rowsAvailable: 2, state: 'complete',
+            columns: [...spec.rows.map(column => value.columns[column]), { name: 'Count of rows', dataType: 'bigint', wire: 'text', nullable: false }] as ResultColumn[]
+          }),
+          rows: 3, rowGroups: 2, columnGroups: 0, approximate: false
+        })),
         search: vi.fn<ResultHandle['search']>(async () => ({ rows: 0, total: 0, first: 0, matchRows: [], matchColumns: [], complete: true, approximate: false })),
         profile: vi.fn<ResultHandle['profile']>(async columns => ({ rows: handle.snapshot.rowsAvailable, complete: handle.snapshot.state === 'complete', columns: columns.map(column => ({ column, values: 0, nulls: 0, distinct: 0, distinctExact: true, approximate: false })) })),
+        // Distinct snapshots: none of their values unless a test says otherwise; each closes once.
+        distinct: vi.fn<ResultHandle['distinct']>(async column => {
+          const summary = { snapshotId: ++snapshots, rows: handle.snapshot.rowsAvailable, complete: handle.snapshot.state === 'complete', nulls: 0, distinct: 0, approximate: false, checked: 0, nullsChecked: true }
+          return {
+            generation: value.generation, resultId: value.resultId, snapshotId: summary.snapshotId, column, summary,
+            read: vi.fn(async (o: { offset: number }) => ({ total: 0, offset: o.offset, values: [], checked: 0, nullsChecked: true })),
+            tick: vi.fn(async () => ({ checked: 0, nullsChecked: true })),
+            close: vi.fn(async () => undefined)
+          }
+        }),
         dispose: vi.fn()
       }
       settle(handle, value, false)
