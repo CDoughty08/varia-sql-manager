@@ -804,10 +804,19 @@ function snapshotOf(result, source, column, keptView) {
 const snapshotSummary = snapshot => ({ snapshotId: snapshot.snapshotId, rows: snapshot.rows, complete: snapshot.complete, nulls: snapshot.nulls, distinct: snapshot.groups.length, approximate: false, ...ticksOf(snapshot) })
 const ticksOf = snapshot => ({ checked: snapshot.ticks.filter(Boolean).length, nullsChecked: snapshot.nullTicked })
 /** The groups whose text contains the search, in value order. */
-const matchesOf = (snapshot, search) => snapshot.groups.flatMap((group, at) => group.text.toLowerCase().includes(search.toLowerCase()) ? [at] : [])
+function matchesOf(snapshot, search) {
+  if (snapshot.search?.text !== search) snapshot.search = { text: search, groups: snapshot.groups.flatMap((group, at) => group.text.toLowerCase().includes(search.toLowerCase()) ? [at] : []), byCount: undefined }
+  return snapshot.search.groups
+}
+/** A search's matches in count order, kept with the search as the real backend keeps them. */
+function countMatches(snapshot, search) {
+  const groups = matchesOf(snapshot, search)
+  if (!snapshot.search.byCount) { const matched = new Set(groups); snapshot.search.byCount = snapshot.byCount.filter(group => matched.has(group)) }
+  return snapshot.search.byCount
+}
 function readSnapshot(snapshot, { order, offset, count, search }) {
-  const matched = search === undefined ? undefined : new Set(matchesOf(snapshot, search))
-  const listed = (order === 'count' ? snapshot.byCount : snapshot.groups.map((_, group) => group)).filter(group => !matched || matched.has(group))
+  snapshot.valueOrder ??= snapshot.groups.map((_, group) => group)
+  const listed = search === undefined ? order === 'count' ? snapshot.byCount : snapshot.valueOrder : order === 'count' ? countMatches(snapshot, search) : matchesOf(snapshot, search)
   const values = listed.slice(offset, offset + count).map(group => {
     const { row, text, count: rows } = snapshot.groups[group]
     return { group, row, text: text.length > 256 ? text.slice(0, 256) + '…' : text, count: rows, checked: snapshot.ticks[group] }

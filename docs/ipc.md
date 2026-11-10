@@ -2816,6 +2816,9 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | Grid: `frame()` during a 3 s wheel scroll over 1,000,000 rows, p95 | ≤ 3 ms | ≤ 8 ms | 0.7 – 0.9 ms | 0.8 ms |
 | Grid: animation-frame interval during that scroll, p95 / largest gap | ≤ 17.5 / 50 ms | gap ≤ 150 ms | 16.7 / 16.8 ms | 16.8 / 16.8 ms |
 | Grid: scroll bar jump to a random row of 1,000,000 → painted, p95 | ≤ 50 ms | ≤ 250 ms | 64 – 71 ms | 66 – 67 ms |
+| Grid: header funnel over 1,000,000 distinct values, Alt+Down → first values listed (the fake backend groups them) | ≤ 4,000 ms | reported only | 3,316 ms (Windows, 24 CPUs) | not measured |
+| Grid: funnel checklist scroll bar jump over 1,000,000 values → listed, p95 | ≤ 50 ms | ≤ 500 ms | 61 ms (Windows, 24 CPUs) | not measured |
+| Grid: funnel search over 1,000,000 values / OK with 1,111 ticked → grid filtered | ≤ 600 / 1,000 ms | reported only | 323 / 948 ms (Windows, 24 CPUs; the search includes its 200 ms debounce) | not measured |
 | Grid: `frame()` after a scroll bar jump, 300 columns, p95 | ≤ 8 ms | ≤ 16 ms | 2.3 – 3.1 ms | 2.5 – 3.3 ms |
 | Grid: main-thread task time per scroll bar jump, 300 columns / 300 bit columns, p95 | ≤ 50 / 50 ms | ≤ 170 / 260 ms | 73 – 85 / 102 – 128 ms | 75 – 76 / 99 – 129 ms |
 | Grid: UI long tasks over 50 ms in those two jump segments (one retry each) | 0 | ≤ 50 | 7 – 23 | 4 – 16 |
