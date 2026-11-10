@@ -7,11 +7,11 @@ import { computeContextKeys, focusFacts, type FocusElement } from '../src/render
 import { KeybindingService, type KeyDownEvent } from '../src/renderer/src/core/keybindings'
 import { createQueryEditor } from '../src/renderer/src/editor/create-editor'
 import { bridgeWhen } from '../src/renderer/src/editor/keybinding-bridge'
-import { inPeekEditor, PeekEditor, peekEditorAttribute, peekEditorContextKey, peekEditorHasTextFocus, peekEditorUse, peekModelContext } from '../src/renderer/src/explorer/peek-editor'
+import { editorIdAttribute, inPeekEditorWidgets, PeekEditor, peekEditorAttribute, peekEditorContextKey, peekEditorHasTextFocus, peekEditorUse, peekModelContext } from '../src/renderer/src/explorer/peek-editor'
 import type { QueryEditorInstance } from '../src/renderer/src/editor/create-editor'
 import type { DocumentSnapshot } from '../src/renderer/src/services/documents'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
-import { PeekBody } from '../src/renderer/src/explorer/PeekCard'
+import { leavesFind, nextStop, PeekBody } from '../src/renderer/src/explorer/PeekCard'
 import type { OpenPeek } from '../src/renderer/src/explorer/PeekService'
 
 /** Just enough DOM for the editor host: elements that know their document and parent. */
@@ -28,16 +28,16 @@ class FakeElement {
 class FakeDocument { createElement(): FakeElement { return new FakeElement(this) } }
 
 function fakeMonaco() {
-  const models: { value: string; uri: string; disposed: boolean; dispose(): void }[] = []
+  const models: { value: string; uri: string; disposed: boolean; options: unknown[]; dispose(): void }[] = []
   const editors: { container: FakeElement; model: unknown; disposed: boolean; models: unknown[] }[] = []
   const monaco = {
-    editor: { createModel: (value: string, _language: string, uri: unknown) => { const model = { value, uri: String(uri), disposed: false, dispose() { model.disposed = true } }; models.push(model); return model as never } },
+    editor: { createModel: (value: string, _language: string, uri: unknown) => { const model = { value, uri: String(uri), disposed: false, options: [] as unknown[], dispose() { model.disposed = true }, updateOptions(options: unknown) { model.options.push(options) } }; models.push(model); return model as never } },
     Uri: { parse: (value: string) => value }
   }
   const create = (container: HTMLElement): QueryEditorInstance => {
     const entry = { container: container as unknown as FakeElement, model: null as unknown, disposed: false, models: [] as unknown[] }
     editors.push(entry)
-    const instance = { getModel: () => entry.model, setModel: (model: unknown) => { entry.model = model; entry.models.push(model) } }
+    const instance = { getId: () => `editor-${editors.length}`, getModel: () => entry.model, setModel: (model: unknown) => { entry.model = model; entry.models.push(model) } }
     return { instance: instance as never, contains: () => false, setVisible: () => {}, dispose: () => { entry.disposed = true } }
   }
   return { monaco, create, models, editors }
@@ -55,6 +55,8 @@ describe('Peek editor', () => {
     const host = editors[0]!.container
     expect(host.parentElement).toBe(slot)
     expect(host.attributes.has(peekEditorAttribute)).toBe(true)
+    // Named after its editor, as that editor's widget host is, so the card knows its own widgets.
+    expect(host.attributes.get(editorIdAttribute)).toBe('editor-1')
     expect(models.map(model => model.uri)).toEqual(['varia-sql://peek/m1'])
     expect(peekModelContext(models[0]!)).toEqual({ documentId: 'm1', connectionId: 'c1', database: 'Sales' })
     expect(editors[0]!.model).toBe(models[0])
@@ -94,6 +96,16 @@ describe('Peek editor', () => {
     expect(models).toHaveLength(4)
   })
 
+  it('gives each model Tools > Options tabs, as a query has, so its tabs draw as wide as after Script to New Query', () => {
+    const { monaco, create, models } = fakeMonaco()
+    let tabSize = 4
+    const peek = new PeekEditor({ monaco, create, modelOptions: () => ({ tabSize, indentSize: tabSize, insertSpaces: false }) })
+    const slot = new FakeDocument().createElement()
+    peek.show(slot as never, text('1'))
+    tabSize = 8
+    peek.show(slot as never, text('2'))
+    expect(models.map(model => model.options)).toEqual([[{ tabSize: 4, indentSize: 4, insertSpaces: false }], [{ tabSize: 8, indentSize: 8, insertSpaces: false }]])
+  })
   it('makes the editor again in another window, since Monaco binds to the window it was made in, keeping the model', () => {
     const { monaco, create, models, editors } = fakeMonaco()
     const peek = new PeekEditor({ monaco, create })
@@ -214,13 +226,54 @@ describe('Peek editor keys', () => {
     expect(peekEditorHasTextFocus(peekElement('tab', 'find'))).toBe(false)
     expect(peekEditorHasTextFocus(null)).toBe(false)
   })
-  it('counts a press on a Peek editor or its body-level widget host as a press on Peek, and any other press as outside', () => {
-    const element = (inside: boolean) => ({ closest: (selector: string) => inside && selector === `[${peekEditorAttribute}]` ? {} : null })
-    expect(inPeekEditor(element(true) as never)).toBe(true)
-    expect(inPeekEditor(element(false) as never)).toBe(false)
+  it('counts a press on the widget host of the card\'s own Peek editor as inside the card, and another view\'s or anything else as outside', () => {
+    const widgets = (id: string | undefined) => ({ closest: (selector: string) => id !== undefined && selector === `.editor-overflow-widgets[${peekEditorAttribute}]` ? { getAttribute: (name: string) => name === editorIdAttribute ? id : null } : null })
+    const card = { querySelectorAll: (selector: string) => selector === `[${peekEditorAttribute}][${editorIdAttribute}]` ? [{ getAttribute: () => 'editor-1' }] : [] }
+    expect(inPeekEditorWidgets(widgets('editor-1') as never, card as never)).toBe(true)
+    // A promoted tab's Peek editor is another view's: a press there closes the card.
+    expect(inPeekEditorWidgets(widgets('editor-2') as never, card as never)).toBe(false)
+    expect(inPeekEditorWidgets(widgets(undefined) as never, card as never)).toBe(false)
     // A text node's element decides.
-    expect(inPeekEditor({ parentElement: element(true) } as never)).toBe(true)
-    expect(inPeekEditor(null)).toBe(false)
+    expect(inPeekEditorWidgets({ parentElement: widgets('editor-1') } as never, card as never)).toBe(true)
+    expect(inPeekEditorWidgets(null, card as never)).toBe(false)
+    expect(inPeekEditorWidgets(widgets('editor-1') as never, null)).toBe(false)
+  })
+})
+
+describe('Peek card focus loop', () => {
+  // Stops in document order by index; `at` elements compare by their position too.
+  const element = (position: number, inFind = false) => ({ position, closest: (selector: string) => inFind && selector === '.find-widget' ? {} : null,
+    compareDocumentPosition(other: { position: number }) { return other.position > this.position ? 4 : 2 } })
+  const stops = [element(1), element(2), element(5)] as never as HTMLElement[]
+  it('moves Tab to the next stop and wraps, from a stop, from the definition text between stops, and from the card itself', () => {
+    expect(nextStop(stops, stops[0]!, false, false)).toBe(stops[1])
+    expect(nextStop(stops, stops[2]!, false, false)).toBe(stops[0])
+    expect(nextStop(stops, stops[0]!, true, false)).toBe(stops[2])
+    // The definition's text sits between the second and third stops: Tab goes on to the third, Shift+Tab back to the second.
+    const text = element(3) as never as Element
+    expect(nextStop(stops, text, false, false)).toBe(stops[2])
+    expect(nextStop(stops, text, true, false)).toBe(stops[1])
+    // Past the last stop it wraps to the first, never out of the card.
+    expect(nextStop(stops, element(9) as never, false, false)).toBe(stops[0])
+    expect(nextStop(stops, null, false, true)).toBe(stops[0])
+    expect(nextStop(stops, null, true, true)).toBe(stops[2])
+    // Find's own inputs keep the browser's Tab, until it leaves Find from its edge: then on through the card, never out of it.
+    expect(nextStop(stops, element(4, true) as never, false, false)).toBe('native')
+    expect(nextStop(stops, element(4, true) as never, false, false, true)).toBe(stops[2])
+    expect(nextStop(stops, element(4, true) as never, true, false, true)).toBe(stops[1])
+    expect(nextStop([], text, false, false)).toBeUndefined()
+  })
+})
+
+describe('Leaving Peek\'s Find widget', () => {
+  const control = (hidden = false) => ({ closest: () => null, checkVisibility: () => !hidden })
+  it('is Tab from its last shown control, or Shift+Tab from its first, skipping the Replace controls a read-only editor hides', () => {
+    const input = control(), toggle = control(), close = control(), replace = control(true)
+    const widget = { querySelectorAll: () => [input, toggle, close, replace] } as never as Element
+    expect(leavesFind(widget, close as never, false)).toBe(true)
+    expect(leavesFind(widget, toggle as never, false)).toBe(false)
+    expect(leavesFind(widget, input as never, true)).toBe(true)
+    expect(leavesFind(widget, close as never, true)).toBe(false)
   })
 })
 

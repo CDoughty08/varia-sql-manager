@@ -29,6 +29,9 @@ import type { PlanDocument } from './plans'
 import type { ShortcutFile } from './commands/shortcut-schema'
 import type { DatabaseProviderId, LanguageRequest, LanguageCompletions, LanguageHover, LanguageStatus, LanguageRefreshRequest, LanguageRefreshResult, LanguageDiagnosticResult } from './language-service'
 
+/** The longest text `writeClipboardText` takes (main checks it): 8 Mi characters. */
+export const maxClipboardText = 8_388_608
+
 export interface AdvancedConnectionOptions {
   commandTimeout: number
   connectTimeout: number
@@ -719,6 +722,7 @@ export interface VariaApi {
   takeSession(): Promise<ApiResult<RestoredSession>>
   finishSessionRestore(generation: number): Promise<ApiResult<void>>
   /** Writes text to the clipboard through main, which works while the window is unfocused; there is no read. */
+  /** At most `maxClipboardText` characters: main refuses a longer text. */
   writeClipboardText(text: string): Promise<ApiResult<void>>
   /** Brings one of the page's popout windows (by the `varia-popout-<uuid>` name it opened it with) to the top, restored, without
    *  activating it, so keyboard focus stays in the main window. */

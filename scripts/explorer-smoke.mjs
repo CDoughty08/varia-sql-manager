@@ -7,7 +7,7 @@ import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.
 import {
   anyResultGrid, closeDocumentButton, documentFrame, documentTab, gridCell, activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, editorTextIn, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
   explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, searchHitApproximate, explorerSublabel, explorerToolbar, itemCount,
-  menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, peekDefinitionText, popoutDockButton, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
+  menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, popoutDockButton, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
 } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
@@ -666,6 +666,18 @@ try {
   await expect(peekDefinitionText(peekCard)).toBeFocused()
   await page.keyboard.type('x')
   expect(normalized(await editorTextIn(peekCard))).toBe(normalized(ordersScript))
+  // Find is Monaco's own in Peek: Ctrl+F (Cmd+F) opens it on the definition; Esc closes it and leaves the card open.
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+F' : 'Control+F')
+  await expect(peekCard.locator('.find-widget.visible')).toBeVisible()
+  // Tab past Find's last control (Close: a read-only editor shows no Replace) goes on through the card, never out of it.
+  await peekCard.locator('.find-widget').getByRole('button', { name: /^Close/ }).focus()
+  await page.keyboard.press('Tab')
+  await expect.poll(() => peekCard.evaluate(card => card.contains(document.activeElement) && !document.activeElement.closest('.find-widget'))).toBe(true)
+  await peekCard.locator('.find-widget .find-part textarea').focus()
+  await page.keyboard.press('Escape')
+  await expect(peekCard.locator('.find-widget.visible')).toHaveCount(0)
+  await expect(peekCard).toBeVisible()
+  await peekDefinitionText(peekCard).focus()
   // F5 in Peek's editor refreshes the Peek; it never executes the query tab behind the card.
   const peekReads = (await stubCalls('explorer.peek')).length, executes = (await stubCalls('query.execute')).length
   await page.keyboard.press('F5')
@@ -1432,6 +1444,37 @@ try {
       const window = BrowserWindow.getAllWindows().find(item => item.webContents.getURL() === 'about:blank')
       delete window.moveTop; delete window.showInactive; delete window.isMinimized
     })
+    // Peek in the popout: its card and query editor are made in that window, where the text shows, takes focus and finds.
+    await explorerTree(popout).focus()
+    await expect.poll(popoutActive).toBe('dbo.table1')
+    await popout.keyboard.press('Space')
+    const popoutPeek = popout.getByRole('dialog', { name: 'Peek: dbo.table1', exact: true })
+    await expect(popoutPeek).toBeFocused()
+    await expect.poll(async () => normalized(await editorTextIn(popoutPeek))).toBe(normalized('CREATE TABLE [dbo].[table1](\n\t[Id] [int] NOT NULL\n)\nGO\n'))
+    await peekDefinitionText(popoutPeek).focus()
+    await expect(peekDefinitionText(popoutPeek)).toBeFocused()
+    const modifier = process.platform === 'darwin' ? 'Meta' : 'Control'
+    await application.evaluate(({ clipboard }) => clipboard.writeText('before'))
+    await popout.keyboard.press(`${modifier}+A`)
+    await popout.keyboard.press(`${modifier}+C`)
+    await expect.poll(async () => normalized(await application.evaluate(({ clipboard }) => clipboard.readText()))).toBe(normalized('CREATE TABLE [dbo].[table1](\n\t[Id] [int] NOT NULL\n)\nGO\n'))
+    // Find shows only when the editor has width: a slim popout's card stacks Properties under the definition to leave it room.
+    await popout.keyboard.press(`${modifier}+F`)
+    await expect(popoutPeek.locator('.find-widget.visible')).toBeVisible()
+    await expect(popoutPeek.locator('.find-widget .find-part textarea')).toBeFocused()
+    await popout.keyboard.type('Id')
+    await expect(popoutPeek.locator('.find-widget .matchesCount')).toHaveText(/^1 of 1$/)
+    await popout.keyboard.press('Escape')
+    await expect(popoutPeek.locator('.find-widget.visible')).toHaveCount(0)
+    await expect(peekDefinitionText(popoutPeek)).toBeFocused()
+    // Esc in the editor first clears the Ctrl+A selection, as Monaco does everywhere; the next Esc closes the card.
+    await popout.keyboard.press('Escape')
+    await expect(popoutPeek).toBeVisible()
+    await popout.keyboard.press('Escape')
+    await expect(popoutPeek).toBeHidden()
+    await expect(peekEditorWidgetHosts(popout)).toHaveCount(0)
+    await expect(peekEditorWidgetHosts(page)).toHaveCount(0)
+    console.log('Object Explorer checks: Peek in a popped-out Object Explorer stacks Properties under the definition in a slim window, whose editor, made in that window, copies, takes focus and finds.')
     await popoutDockButton(popout).click()
     await expect(tree()).toBeVisible()
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+W' : 'Control+F4')

@@ -28,7 +28,9 @@ internal static class PeekLiveChecks
         var before = limits.DefinitionPageChars - 1 - header.Length;
         var after = limits.DefinitionPageChars + limits.DefinitionPageChars / 2;
         var expected = header + new string('a', before) + "\U0001F600" + new string('b', after) + "\nSELECT 1;";
-        // Built on the server, so the script stays small; 0x3DD800DE is U+1F600's UTF-16LE pair whatever the collation.
+        // Built on the server, so the script stays small; 0x3DD800DE is U+1F600's UTF-16LE pair whatever the collation. The scratch
+        // database is Latin1_General_100_CS_AS_SC, where SUBSTRING counts the pair as one character: without the page query's BIN2
+        // collation the pages would not line up and these checks fail.
         var created = await sql("DECLARE @body nvarchar(max) = N'CREATE PROCEDURE dbo.PeekLong AS' + NCHAR(10) + N'--' + REPLICATE(CONVERT(nvarchar(max), N'a'), " + before
             + ") + CONVERT(nvarchar(2), 0x3DD800DE) + REPLICATE(CONVERT(nvarchar(max), N'b'), " + after + ") + NCHAR(10) + N'SELECT 1;';\nEXEC (@body);\n", database);
         try

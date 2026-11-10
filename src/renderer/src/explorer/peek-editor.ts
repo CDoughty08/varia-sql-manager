@@ -1,5 +1,6 @@
 import type { editor } from 'monaco-editor'
 import type { Disposable } from '../core/types'
+import type { ModelOptions } from '../services/documents'
 import type { QueryEditorInstance, QueryEditorUse } from '../editor/create-editor'
 
 /** The Monaco context key Peek's editor sets on itself: Varia's chord bridge leaves it out, as query-tab commands do. */
@@ -17,10 +18,17 @@ export const peekEditorUse: QueryEditorUse = {
   widgetHostAttribute: peekEditorAttribute
 }
 
-/** Whether a pressed element belongs to a Peek editor, its body-level widget host included. */
-export function inPeekEditor(target: EventTarget | null): boolean {
+/** The attribute naming the Monaco editor a host belongs to, on its body-level widget host and on Peek's editor host alike. */
+export const editorIdAttribute = 'data-query-editor-id'
+
+/**
+ * Whether a pressed element is in the body-level widget host of a Peek editor inside `scope` (the card): its hover and
+ * message widgets live outside the card, while another view's Peek editor (a promoted tab's) is not this card's.
+ */
+export function inPeekEditorWidgets(target: EventTarget | null, scope: Element | null | undefined): boolean {
   const element = target && typeof (target as Element).closest === 'function' ? target as Element : (target as Node | null)?.parentElement
-  return !!element?.closest(`[${peekEditorAttribute}]`)
+  const id = element?.closest(`.editor-overflow-widgets[${peekEditorAttribute}]`)?.getAttribute(editorIdAttribute)
+  return !!id && !!scope && [...scope.querySelectorAll(`[${peekEditorAttribute}][${editorIdAttribute}]`)].some(host => host.getAttribute(editorIdAttribute) === id)
 }
 
 /**
@@ -54,6 +62,8 @@ export interface PeekEditorOptions {
   readonly monaco: PeekEditorMonaco
   /** `createQueryEditor` with `peekEditorUse`: the same editor editor groups use. */
   readonly create: (container: HTMLElement) => QueryEditorInstance
+  /** Tools › Options › Text Editor › Transact-SQL › Tabs, applied to each model as `DocumentService` applies it to a query's. */
+  readonly modelOptions?: () => ModelOptions
   readonly newId?: () => string
 }
 
@@ -90,6 +100,7 @@ export class PeekEditor implements Disposable {
       element.setAttribute(peekEditorAttribute, '')
       slot.append(element)
       host = this.host = { element, editor: this.options.create(element) }
+      element.setAttribute(editorIdAttribute, host.editor.instance.getId())
     } else if (host.element.parentElement !== slot) slot.append(host.element)
     const shown = this.shown
     if (shown && shown.key === text.key && shown.text === text.text) {
@@ -98,6 +109,7 @@ export class PeekEditor implements Disposable {
     }
     const documentId = this.newId()
     const model = this.options.monaco.editor.createModel(text.text, 'sql', this.options.monaco.Uri.parse(`varia-sql://peek/${documentId}`))
+    if (this.options.modelOptions) model.updateOptions(this.options.modelOptions())
     modelContexts.set(model, { documentId, connectionId: text.connectionId, ...text.database === undefined ? {} : { database: text.database } })
     this.shown = { key: text.key, text: text.text, model }
     host.editor.instance.setModel(model)

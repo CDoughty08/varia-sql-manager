@@ -221,9 +221,10 @@ export const peekLimits = {
    */
   definitionPageChars: 1_000_000,
   /**
-   * The longest module text Peek reads, in UTF-16 code units: 2^27, the longest batch SQL Server takes at its default 4 KB
-   * packet size (65,536 packets of 4 KB, two bytes a code unit), so no module created at that size is refused. A longer one
-   * says so instead of showing part of it.
+   * The longest module text Peek reads, in UTF-16 code units: 2^27 (256 MB as a JavaScript string, held by the view and its
+   * editor's model; while the last page is joined to the others, the pages and the whole text are briefly both alive, about
+   * twice that). A bound on the renderer's memory, not SQL Server's: a module that long only comes from dynamic SQL or a very
+   * large batch. A longer one says so instead of showing part of it.
    */
   definitionMaxChars: 134_217_728,
   /** The backend's own budget for a peek; past it the reply is a TIMEOUT value. */

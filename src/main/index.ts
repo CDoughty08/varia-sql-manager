@@ -64,7 +64,7 @@ import { sessionPrompt, sessionPromptRequestSchema } from '../shared/sessions'
 import { confirmOpenConnectionsSchema, openConnectionsAnswer, openConnectionsBox } from './open-connections'
 import { actionMessageBox, actionPromptAnswer, confirmActionBox, noLongRuns, parseLongRuns, reloadDetail, restartDetail } from './action-prompts'
 import type { LongRunState } from '../shared/long-runs.ts'
-import type { ApiResult, OpenedFiles, OpenSqlFile, QueryResult, RecoveredDocument, ReloadAnswer, RpcMethod, RpcMethods } from '../shared/contracts'
+import { maxClipboardText, type ApiResult, type OpenedFiles, type OpenSqlFile, type QueryResult, type RecoveredDocument, type ReloadAnswer, type RpcMethod, type RpcMethods } from '../shared/contracts'
 import { preparePlan } from './plan-request'
 import { memoryEventSchema } from '../shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../shared/explorer/schema.ts'
@@ -89,7 +89,6 @@ const developmentUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : und
 const isRendererUrl = rendererUrlVerifier(developmentUrl)
 // Built pages load from app://varia/ (app-protocol.ts), never file:, whose origin would reach every local file.
 protocol.registerSchemesAsPrivileged([{ scheme: appScheme, privileges: appSchemePrivileges }])
-const maxClipboardText = 8_388_608
 let mainWindow: BrowserWindow | null = null
 let backend: BackendSupervisor
 let resultsPort: ResultsPortHost | undefined
