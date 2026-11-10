@@ -992,6 +992,12 @@ try {
   await expect(planCanvas(planGroup())).toBeFocused()
   await otherGroup().locator('.monaco-editor [role="textbox"]').focus()
   await expect.poll(() => activeDocumentName(page)).toBe(secondTab)
+  // Focus that leaves the query for the plan and comes back within one task, before Monaco reports the blur, still makes
+  // the query active: CI's focus() landed in that window and left the plan active under the caret.
+  const otherText = await otherGroup().locator('.monaco-editor [role="textbox"]').elementHandle()
+  await planCanvas(planGroup()).evaluate((canvas, text) => { canvas.focus(); text.focus() }, otherText)
+  await otherText.dispose()
+  await expect.poll(() => activeDocumentName(page)).toBe(secondTab)
   await xml().click()
   await expect.poll(() => activeDocumentName(page)).toBe(planName)
   await expect(xml()).toHaveAttribute('aria-pressed', 'true')
