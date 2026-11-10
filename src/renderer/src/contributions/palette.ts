@@ -86,7 +86,7 @@ export function paletteContribution(workbench: PaletteWorkbench, history = new C
   }
   /**
    * Search's objects are Search Objects' own search (ObjectSearchService, on the backend's index), asked by name on every
-   * connected server as the user types: nothing here matches an object's name, and the tree is not read. The rows follow the
+   * connected server as the user types: nothing here matches an object's name, the tree is not read, and no index is built. The rows follow the
    * queries and commands as each server answers, with a last row that takes the text to a Search Objects tab.
    */
   function searchObjects(text: string): { search(text: string): void; dispose(): void } | undefined {
@@ -121,8 +121,11 @@ export function paletteContribution(workbench: PaletteWorkbench, history = new C
       items.push({ id: seeAllId, label: seeAllObjects, icon: 'search', group: searchGroups.objects, description: total > hits.size ? `Showing ${count(hits.size)} of ${count(total)} objects` : 'Names and definitions, with filters' })
       found = { text: document.text, hits }
       const failed = groups.find(group => group.error)
+      // Search never builds an index: a server without one says so, with where to build it.
+      const bare = groups.filter(group => group.result?.index.state === 'none' && !snapshot.indexes[group.connectionId]?.requestId)
       const message: QuickInputMessage | undefined = document.error ? { text: document.error, severity: 'error' }
         : failed ? { text: `${failed.label}: ${failed.error}`, severity: 'error' }
+        : bare.length ? { text: `${bare.length === 1 ? `${bare[0]!.label} has` : `${count(bare.length)} servers have`} no search index: ${seeAllObjects} builds it`, severity: 'info' }
         : indexing ? { text: 'Indexing objects: more may be found when it finishes', severity: 'info' } : undefined
       // The same message is the same object, so the live region says it once, not with every key and every answer.
       if (message && !(said && said.text === message.text && said.severity === message.severity)) said = message

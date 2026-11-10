@@ -33,8 +33,9 @@ The same search runs in two places, with the same options and results, and the h
 - **The header's Search** (the search box in the header, View › Search…, Ctrl+Q on Windows) lists objects below the open
   queries and commands it matches itself. The objects are this search's answer, not a filter of what Object Explorer has
   loaded: the text is searched by name only, with Fuzzy Match, on every connected server, as it is typed, and each server
-  answers at most 50 hits, shown with its server and database. Nothing is asked before there is text; typing builds the
-  index of a server that has none. A hit reveals its object in Object Explorer, which takes focus. The last row, *See all
+  answers at most 50 hits, shown with its server and database. Nothing is asked before there is text, and Search never builds
+  an index: a server that has none (`objectExplorer.search.indexOnConnect` is off) answers no hits and is named in a message,
+  until Search Objects or Rebuild Search Index builds it. A hit reveals its object in Object Explorer, which takes focus. The last row, *See all
   in Search Objects*, opens a Search Objects tab with the text and Fuzzy Match on (on All servers when several are
   connected) for every hit, definitions and the filters. New text takes the hits of the text before away at once, so Enter
   never reveals an object the text no longer names; a row stays active on its object as other servers answer. The search

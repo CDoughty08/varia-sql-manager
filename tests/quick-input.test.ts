@@ -851,6 +851,22 @@ describe('Search', () => {
     // The live region keys its text by the message object.
     expect(view().message).toBe(said)
   })
+  it('never builds an index, and names a server that has none', async () => {
+    const { key, quickInput, view, labels, api, connect, settings } = palette()
+    const get = settings.get.bind(settings)
+    vi.spyOn(settings, 'get').mockImplementation((key => key === 'objectExplorer.search.indexOnConnect' ? false : get(key)) as typeof settings.get)
+    api.push(readyBackend())
+    connect(connectionInfo('server-a'))
+    api.explorerSearch.mockImplementation(async () => ({ ok: true, value: { hits: [], total: 0, partial: false, elapsedMs: 0, index: { state: 'none', databases: 0, indexed: 0, objects: 0, modules: 0, cut: 0, skipped: [], definitions: true } } }))
+    await key('workbench.search')
+    quickInput.filter('zzqq')
+    await landed(() => expect(view().message).toEqual({ text: `server-a.example has no search index: ${seeAllObjects} builds it`, severity: 'info' }))
+    expect(api.explorerIndex).not.toHaveBeenCalled()
+    // The row to the tab is where the index is built, as any Search Objects tab builds one.
+    expect(labels()).toEqual([seeAllObjects])
+    quickInput.accept()
+    expect(api.explorerIndex).toHaveBeenCalledTimes(1)
+  })
   it('keeps the active row on its object when a server that lists first answers later', async () => {
     const { key, quickInput, view, api, connect } = palette()
     api.push(readyBackend())

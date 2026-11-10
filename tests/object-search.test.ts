@@ -820,8 +820,6 @@ describe('ObjectSearchService', () => {
     expect(service.getSnapshot().documents[quickSearchId]).toBeUndefined()
     expect(calls.index).toHaveLength(0)
     service.quickSearch('ord')
-    // Typing builds the index of a server that has none, as opening a tab does.
-    expect(calls.index.map(call => call.connectionId)).toEqual(['a', 'b'])
     service.quickSearch('orders')
     expect(calls.search).toHaveLength(0)
     timers.run()
@@ -845,12 +843,28 @@ describe('ObjectSearchService', () => {
     expect(service.getSnapshot().documents[quickSearchId]).toBeUndefined()
     timers.run()
     expect(calls.search).toHaveLength(4)
+    expect(calls.index).toHaveLength(0)
     // A tab's search names no limit: the backend's default stands. It opens exact, or with Fuzzy Match when asked.
     service.open('a', 'orders')
     expect(calls.search.at(-1)).not.toHaveProperty('limit')
     expect(calls.search.at(-1)).not.toHaveProperty('match')
     service.open('a', 'orders', false, undefined, true)
     expect(calls.search.at(-1)).toMatchObject({ text: 'orders', in: 'all', match: 'fuzzy' })
+  })
+  it('never builds an index for the header\'s Search, though it spans the servers as an All servers tab does', () => {
+    // Indexing on connect is off, as its owner chose.
+    const { service, calls, connections, timers } = harness({ indexOnConnect: false })
+    connections.set([connection('a')])
+    service.quickSearch('orders')
+    timers.run()
+    expect(calls.search.at(-1)).toMatchObject({ connectionId: 'a', text: 'orders' })
+    // A server that connects while it is open is searched, and not indexed either.
+    connections.set([connection('a'), connection('b')])
+    expect(calls.search.at(-1)).toMatchObject({ connectionId: 'b', text: 'orders' })
+    expect(calls.index).toHaveLength(0)
+    // An All servers tab is where the indexes are built.
+    service.open(undefined, undefined, true)
+    expect(calls.index.map(call => call.connectionId)).toEqual(['a', 'b'])
   })
   it('hands focus to the box once per Search in Object Explorer, even when the box mounts later', () => {
     const { service } = harness()

@@ -325,8 +325,10 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   }
 
   /**
-   * The header's Search asks for `text`: names only, approximately too (Fuzzy Match), on every connected server, each with an
-   * index if it has none, after the same pause in typing as a tab's. Nothing is asked, or built, before there is text.
+   * The header's Search asks for `text`: names only, approximately too (Fuzzy Match), on every connected server, after the
+   * same pause in typing as a tab's. Nothing is asked before there is text, and it never builds an index: a server without
+   * one (Options › Index objects when a server connects is off) answers no hits until Search Objects or Rebuild Search Index
+   * builds it, as its owner chose.
    */
   quickSearch(text: string): void {
     if (this.disposed) return
@@ -335,7 +337,6 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
       const connectionId = this.liveIds()[0]
       if (!text.trim() || !connectionId) return
       this.putDocument({ id: quickSearchId, connectionId, ...emptyQuery, scope: 'names', fuzzy: true, limit: quickSearchHits, allServers: true })
-      for (const id of this.liveIds()) this.ensureIndex(id)
     } else if (current.text === text) return
     this.setQuery(quickSearchId, { text })
   }
@@ -683,7 +684,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     // A server that connects joins every All servers search (with an index if it has none), asked on its own; one that leaves
     // drops out of it, and the search runs again to name it.
     const spanning = Object.values(this.getSnapshot().documents).filter(document => document.allServers)
-    if (spanning.length) for (const id of ids) this.ensureIndex(id)
+    // The header's Search spans the servers too, but builds nothing.
+    if (spanning.some(document => document.id !== quickSearchId)) for (const id of ids) this.ensureIndex(id)
     for (const document of spanning) {
       if (!document.text.trim()) continue
       if (departed) void this.search(document.id)
