@@ -6,6 +6,18 @@ const request = () => ({ documentId: crypto.randomUUID(), version: 1, text: 'SEL
   context: { providerId: 'sqlserver', connectionId: crypto.randomUUID(), database: ' padded database ' }, position: { line: 1, character: 8 } })
 
 describe('language-service IPC boundary', () => {
+  it('bounds versioned diagnostics and excludes arbitrary server data', () => {
+    const { position: _position, ...value } = request()
+    expect(validateRequest('language.diagnostics', value)).toEqual(value)
+    expect(() => validateRequest('language.diagnostics', { ...value, executable: 'anything' })).toThrow('Invalid request')
+    const item = { range: { start: { line: 0, character: 1 }, end: { line: 0, character: 2 } }, message: 'Missing column.', severity: 1, code: '207', source: 'SQL Tools Service' }
+    expect(validateResult('language.diagnostics', { version: 1, items: [item], isIncomplete: false })).toMatchObject({ version: 1, items: [item] })
+    for (const patch of [{ severity: 0 }, { severity: 5 }, { message: 'x'.repeat(languageLimits.diagnosticMessageCharacters + 1) },
+      { range: { start: { line: -1, character: 0 }, end: { line: 0, character: 0 } } }, { command: 'anything' }])
+      expect(() => validateResult('language.diagnostics', { version: 1, items: [{ ...item, ...patch }], isIncomplete: false })).toThrow()
+    expect(() => validateResult('language.diagnostics', { version: 1, items: Array(languageLimits.diagnostics + 1).fill(item), isIncomplete: true })).toThrow()
+    expect(() => validateResult('language.diagnostics', { version: 0, items: [], isIncomplete: false })).toThrow()
+  })
   it('accepts neutral provider contexts and zero-based UTF-16 positions without trimming names', () => {
     const value = request()
     expect(validateRequest('language.complete', value)).toEqual(value)

@@ -5,7 +5,7 @@ import { editorFontFamily } from '../fonts'
 import { bindExplorerDrop } from '../explorer/drop'
 
 /** A query editor: an editor group's Monaco instance, with Tools › Options applied and Object Explorer drops bound. */
-export interface QueryEditorInstance extends Disposable { readonly instance: editor.IStandaloneCodeEditor }
+export interface QueryEditorInstance extends Disposable { readonly instance: editor.IStandaloneCodeEditor; contains(target: Node | null): boolean; setVisible(visible: boolean): void }
 
 /**
  * What sets a query editor that only shows text (Peek's definition) apart from an editor group's: everything else (Tools ›
@@ -23,17 +23,26 @@ export interface QueryEditorUse {
   readonly ariaLabel?: string
   /** A Monaco context key set on this editor alone, so Monaco keybindings (Varia's chord bridge) can leave it out. */
   readonly contextKey?: string
+  /** Whether its body-level widget host hides with the Query editor pane (default); Peek's card floats outside every pane. */
+  readonly inEditorPane?: boolean
 }
 
 /**
  * Creates a query editor in `container`. Each editor group has one, which shows the group's active text document; Peek has
  * one per card or tab, read-only (`use`).
  */
-export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorOptions'>, container: HTMLElement, use: QueryEditorUse = {}): QueryEditorInstance {
+export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorOptions' | 'panes'>, container: HTMLElement, use: QueryEditorUse = {}): QueryEditorInstance {
   const readOnly = use.readOnly
+  // Dockview clips panel contents and floats create stacking contexts. Keep Monaco's widgets in the document that
+  // owns this editor, outside those ancestors; fixed positioning lets Monaco constrain them to the window's edges.
+  const overflow = container.ownerDocument.createElement('div')
+  overflow.className = 'monaco-editor editor-overflow-widgets'
+  container.ownerDocument.body.appendChild(overflow)
   const instance = workbench.monaco.editor.create(container, {
     model: null,
     theme: 'varia',
+    overflowWidgetsDomNode: overflow,
+    fixedOverflowWidgets: true,
     // Tools › Options: font size, word wrap, line numbers, drag and drop, current-line highlight. Indentation is the model's.
     ...workbench.editorOptions.monacoOptions(),
     fontFamily: editorFontFamily,
@@ -61,9 +70,29 @@ export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorO
     ...readOnly ? { readOnly: true, readOnlyMessage: { value: readOnly.message }, tabFocusMode: true } : {},
     ...use.ariaLabel ? { ariaLabel: use.ariaLabel } : {}
   })
+  overflow.setAttribute('data-query-editor-id', instance.getId())
   const options = workbench.editorOptions.bindEditor(instance)
+  // The external host needs Monaco's current theme/high-contrast classes too, including after a new model replaces
+  // its view. Observe just that view's class attribute, never the editor's changing text DOM.
+  const classes = new MutationObserver(() => syncClasses())
+  const syncClasses = () => { overflow.className = `${instance.getDomNode()?.className ?? 'monaco-editor'} editor-overflow-widgets` }
+  const watchClasses = () => {
+    classes.disconnect()
+    const view = instance.getDomNode()
+    if (view) classes.observe(view, { attributes: true, attributeFilter: ['class'] })
+    syncClasses()
+  }
+  const model = instance.onDidChangeModel(watchClasses)
+  watchClasses()
+  // Closing or tabbing away from the outer Query Editor keeps its inner groups mounted. The body-level host must
+  // follow that pane too, since it no longer inherits the editor container's visibility.
+  let visible = true
+  const syncVisibility = () => { overflow.hidden = !visible || (use.inEditorPane !== false && !workbench.panes.getSnapshot().editor) }
+  const visibility = workbench.panes.subscribe(syncVisibility)
+  syncVisibility()
   // Object Explorer rows dropped on the editor insert their names, where it takes text.
   const drop = readOnly ? undefined : bindExplorerDrop(instance)
   if (use.contextKey) instance.createContextKey(use.contextKey, true)
-  return { instance, dispose: () => { drop?.dispose(); options.dispose(); instance.dispose() } }
+  return { instance, contains: target => container.contains(target) || overflow.contains(target), setVisible: value => { visible = value; syncVisibility() },
+    dispose: () => { visibility(); drop?.dispose(); options.dispose(); model.dispose(); classes.disconnect(); instance.dispose(); overflow.remove() } }
 }

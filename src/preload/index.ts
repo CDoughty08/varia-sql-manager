@@ -20,6 +20,7 @@ const api: VariaApi = {
   languageStatus: () => request('language.status', {}),
   languageComplete: params => request('language.complete', params),
   languageHover: params => request('language.hover', params),
+  languageDiagnostics: params => request('language.diagnostics', params),
   languageRefresh: params => request('language.refresh', params),
   languageClose: documentId => request('language.close', { documentId }),
   parsePlan: xml => request('plans.parse', { xml }),

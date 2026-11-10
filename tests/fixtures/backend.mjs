@@ -13,6 +13,7 @@
 //   untrusted-certificate  server 'password-check' refuses a connect without Trust server certificate, as a self-signed
 //                       certificate does (reason 'certificate')
 //   language-enabled    enables deterministic completion/hover; otherwise the language provider reports unavailable
+//   language-diagnostics enables deterministic SQL error/warning analysis for the diagnostics UI suite only
 //   language-fail       completion/hover refuse requests until removed, to exercise cache refresh recovery in the UI
 //   language-status-fail  availability fails until removed, to exercise same-generation manual recovery
 //   hold/<method>       the method waits while this file exists; a directive with `hold` waits after its sets and
@@ -1255,13 +1256,38 @@ async function workbench(id, method, params, credit) {
       if (await controlled('language-status-fail')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL language provider availability check failed.')
       const configured = await controlled('language-enabled')
       return respond(id, { providers: [{ id: 'sqlserver', configured, completion: true, hover: true,
-        ...configured ? { refresh: true } : { reason: 'SQL language test provider is disabled.' } }] })
+        ...configured ? { refresh: true, diagnostics: await controlled('language-diagnostics') } : { reason: 'SQL language test provider is disabled.' } }] })
+    }
+    case 'language.diagnostics': {
+      if (!await controlled('language-diagnostics')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL diagnostic test provider is disabled.')
+      if (await controlled('language-fail')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL language test provider failed.')
+      const connection = workbenchConnections.get(params.context.connectionId)
+      const context = connection ? `${connection.server}/${params.context.database}` : 'offline'
+      const items = []
+      const lines = params.text.split(/\r\n|\r|\n/)
+      for (let line = 0; line < lines.length; line++) for (const match of lines[line].matchAll(/\b(?:MissingColumn|WarningColumn)\b/g)) {
+        const warning = match[0] === 'WarningColumn'
+        items.push({ range: { start: { line, character: match.index }, end: { line, character: match.index + match[0].length } },
+          message: warning ? `WarningColumn is a test warning (${context}).` : `Invalid column name 'MissingColumn' (${context}).`,
+          severity: warning ? 2 : 1, code: warning ? 'TEST_WARNING' : '207', source: 'SQL Tools test provider' })
+      }
+      return respond(id, { version: params.version, items, isIncomplete: false })
     }
     case 'language.complete': {
       if (!await controlled('language-enabled')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL language test provider is disabled.')
       if (await controlled('language-fail')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL language test provider failed.')
+      if (await controlled('language-ordering')) return respond(id, { items: [
+        { label: 'hiFunction', kind: 3, sortText: '000-function' },
+        { label: '@@hiGlobal', kind: 6, filterText: 'hiGlobal', sortText: '000-global' },
+        { label: 'hiKeyword', kind: 14, sortText: '000-keyword' },
+        { label: 'dbo.hiColumn', kind: 5, insertText: 'hiColumn', filterText: 'hiColumn', sortText: '999-column' },
+        { label: 'hiProperty', kind: 10, sortText: '999-property' },
+        { label: 'hi', kind: 3, sortText: '001-exact' }
+      ], isIncomplete: false })
       const label = params.context.connectionId ? `Customer${params.context.database === 'AppData' ? 'AppData' : 'Master'}` : 'Customer'
-      return respond(id, { items: [{ label, kind: 7, detail: `${params.context.database ?? 'offline'}.${label} (fake language service)`, insertText: label }], isIncomplete: false })
+      const items = [{ label, kind: 7, detail: `${params.context.database ?? 'offline'}.${label} (fake language service)`, insertText: label }]
+      if (await controlled('language-widget-overflow')) items.push(...Array.from({ length: 9 }, (_, index) => ({ label: `${label}${index}`, kind: 5, insertText: `${label}${index}`, sortText: `z${index}` })))
+      return respond(id, { items, isIncomplete: false })
     }
     case 'language.hover': {
       if (!await controlled('language-enabled')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL language test provider is disabled.')
@@ -1269,7 +1295,7 @@ async function workbench(id, method, params, credit) {
       const connection = workbenchConnections.get(params.context.connectionId)
       const contents = connection ? `Customer${params.context.database === 'AppData' ? 'AppData' : 'Master'} table (${connection.server}/${params.context.database}; fake language service).`
         : 'Customer table (fake language service).'
-      return respond(id, { contents })
+      return respond(id, { contents: await controlled('language-widget-overflow') ? `${contents}\n\n| Column | Type | Nullable |\n| --- | --- | --- |\n${Array.from({ length: 9 }, (_, index) => `| CustomerField${index} | nvarchar(100) | YES |`).join('\n')}` : contents })
     }
     case 'language.refresh':
       if (!await controlled('language-enabled')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL language test provider is disabled.')

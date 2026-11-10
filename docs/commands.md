@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (286)
+## Commands (288)
 
 ### File
 
@@ -64,6 +64,8 @@ keys it uses are listed below.
 | Insert Snippet… | `edit.insertSnippet` | Ctrl+K Ctrl+X * | Ctrl+K Ctrl+X * | ⌘K ⌘X * | `activeDocumentIsQuery && !documentBusy` | Edit › IntelliSense › Insert Snippet…; Editor context menu › Insert Snippet… |
 | Surround With… | `edit.surroundWith` | Ctrl+K Ctrl+S * | Ctrl+K Ctrl+S * | ⌘K ⌘S * | `activeDocumentIsQuery && !documentBusy` | Edit › IntelliSense › Surround With…; Editor context menu › Surround With… |
 | Refresh Local Cache | `edit.refreshIntelliSense` | Ctrl+Shift+R (`editorFocus && !inputFocus`) | Ctrl+Shift+R (`editorFocus && !inputFocus`) | ⇧⌘R (`editorFocus && !inputFocus`) | `backendReady && !documentBusy` | Edit › IntelliSense › Refresh Local Cache |
+| Next SQL Issue | `edit.nextSqlIssue` | Alt+F8 * | Alt+F8 * | ⌥F8 * | `activeDocumentIsQuery` | Edit › IntelliSense › Next SQL Issue |
+| Previous SQL Issue | `edit.previousSqlIssue` | Shift+Alt+F8 * | Shift+Alt+F8 * | ⌥⇧F8 * | `activeDocumentIsQuery` | Edit › IntelliSense › Previous SQL Issue |
 
 ### View
 
@@ -477,6 +479,8 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_snippets` | **I**nsert Snippet… | `edit.insertSnippet` | Always |
 | `1_snippets` | **S**urround With… | `edit.surroundWith` | Always |
 | `2_cache` | **R**efresh Local Cache | `edit.refreshIntelliSense` | Always |
+| `3_issues` | **N**ext SQL Issue | `edit.nextSqlIssue` | Always |
+| `3_issues` | **P**revious SQL Issue | `edit.previousSqlIssue` | Always |
 
 #### View (Alt+V)
 

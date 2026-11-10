@@ -456,6 +456,15 @@ export const executingMark = scope => scope.getByRole('img', { name: 'Executing'
 export const kindIcon = (tab, kind) => tab.getByRole('img', { name: kind, exact: true })
 export const editorTextbox = page => page.locator('.monaco-editor [role="textbox"]')
 export const editorText = page => page.locator('.monaco-editor .view-lines').innerText()
+/** A real Monaco editor view, excluding the detached hosts that carry its overflow widgets. */
+export const editorSurface = scope => scope.locator('.monaco-editor[role="code"]')
+export const editorOverflowHosts = scope => scope.locator('.editor-overflow-widgets')
+export const editorHover = (scope, contents) => scope.locator('.monaco-hover').filter({ hasText: contents })
+/** Rendered Monaco marker spans, including the SVG underline paint applied by Monaco's theme. */
+export const editorDiagnosticMarks = (scope, severity = 'error') => editorSurface(scope).locator(severity === 'warning' ? '.squiggly-warning' : '.squiggly-error')
+export const sqlQueryIssues = page => page.getByRole('status', { name: 'SQL query issues', exact: true })
+export const suggestionWidget = scope => scope.locator('[widgetid="editor.widget.suggestWidget"]:visible')
+export const suggestionItems = scope => scope.getByRole('listbox', { name: 'Suggest', exact: true }).getByRole(process.platform === 'win32' ? 'listitem' : 'option')
 /** Monaco uses listitem on Windows and option elsewhere for its Suggest entries. */
 export const suggestionOption = (scope, label) => {
   const name = new RegExp('^' + label.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&') + '(?:,|$)')

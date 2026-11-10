@@ -11,7 +11,8 @@ export const peekEditorUse: QueryEditorUse = {
   readOnly: { message: 'Peek is read-only. Script to New Query or Modify opens the definition in a query tab.' },
   compact: true,
   ariaLabel: 'Definition text',
-  contextKey: peekEditorContextKey
+  contextKey: peekEditorContextKey,
+  inEditorPane: false
 }
 
 /**

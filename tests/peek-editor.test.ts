@@ -38,7 +38,7 @@ function fakeMonaco() {
     const entry = { container: container as unknown as FakeElement, model: null as unknown, disposed: false, models: [] as unknown[] }
     editors.push(entry)
     const instance = { getModel: () => entry.model, setModel: (model: unknown) => { entry.model = model; entry.models.push(model) } }
-    return { instance: instance as never, dispose: () => { entry.disposed = true } }
+    return { instance: instance as never, contains: () => false, setVisible: () => {}, dispose: () => { entry.disposed = true } }
   }
   return { monaco, create, models, editors }
 }
@@ -115,14 +115,20 @@ describe('Peek editor', () => {
     const instance = {
       createContextKey: (key: string, value: unknown) => { contextKeys.push([key, value]) },
       getContainerDomNode: () => ({ addEventListener: (type: string) => { listeners.push(type) }, removeEventListener: () => {} }),
-      dispose: vi.fn()
+      dispose: vi.fn(), getId: () => 'peek-1', getDomNode: () => null, onDidChangeModel: () => ({ dispose: () => {} })
     }
     const unbind = vi.fn()
+    // The Query editor pane is closed: an editor group's widget host hides with it, the Peek card's does not.
+    const hosts: { hidden: boolean; className: string; setAttribute(): void; remove(): void }[] = []
+    const container = { ownerDocument: { createElement: () => { const host = { hidden: false, className: '', setAttribute: () => {}, remove: () => {} }; hosts.push(host); return host }, body: { appendChild: () => {} } } } as unknown as HTMLElement
     const workbench = {
       monaco: { editor: { create: (_container: unknown, options: Record<string, unknown>) => { created = options; return instance } } },
-      editorOptions: { monacoOptions: () => ({ fontSize: 15, lineNumbers: 'on' }), bindEditor: () => ({ dispose: unbind }) }
+      editorOptions: { monacoOptions: () => ({ fontSize: 15, lineNumbers: 'on' }), bindEditor: () => ({ dispose: unbind }) },
+      panes: { getSnapshot: () => ({ editor: false }), subscribe: () => () => {} }
     }
-    const editor = createQueryEditor(workbench as never, {} as HTMLElement, peekEditorUse)
+    vi.stubGlobal('MutationObserver', class { observe() {} disconnect() {} })
+    const editor = createQueryEditor(workbench as never, container, peekEditorUse)
+    expect(hosts[0]!.hidden).toBe(false)
     expect(created).toMatchObject({ theme: 'varia', fontSize: 15, lineNumbers: 'on', readOnly: true, tabFocusMode: true, glyphMargin: false, padding: { top: 4 }, ariaLabel: 'Definition text', contextmenu: false })
     expect(created?.readOnlyMessage).toEqual({ value: expect.stringContaining('Script to New Query') })
     expect(contextKeys).toEqual([[peekEditorContextKey, true]])
@@ -132,10 +138,12 @@ describe('Peek editor', () => {
     expect(instance.dispose).toHaveBeenCalled()
     // An editor group's editor takes drops and keeps its margin, with no read-only options.
     listeners.length = 0
-    createQueryEditor(workbench as never, {} as HTMLElement)
+    createQueryEditor(workbench as never, container)
+    expect(hosts[1]!.hidden).toBe(true)
     expect(created).toMatchObject({ glyphMargin: true, padding: { top: 16 } })
     expect(created).not.toHaveProperty('readOnly')
     expect(listeners.length).toBeGreaterThan(0)
+    vi.unstubAllGlobals()
   })
 })
 

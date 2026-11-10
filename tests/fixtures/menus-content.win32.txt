@@ -63,6 +63,9 @@ Edit
     &Surround With…  Ctrl+K Ctrl+S  +++-
     ---
     &Refresh Local Cache  Ctrl+Shift+R  -++-
+    ---
+    &Next SQL Issue  Alt+F8  ++++
+    &Previous SQL Issue  Shift+Alt+F8  ++++
 View
   &Command Palette…  Ctrl+Shift+P  ++++
   &Go to Query…  Ctrl+P  ++++
