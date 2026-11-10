@@ -15,7 +15,7 @@ import ExplorerIcon from './ExplorerIcon'
 import { selectionContextOf } from './ExplorerService'
 import { inPeekEditor, PeekEditor, peekEditorUse } from './peek-editor'
 import { formatPeekValue, peekObjectName, placePeek } from './peek-format'
-import { peekMessages, type OpenPeek, type PeekDefinition, type PeekDependencies, type PeekMembers, type PeekPart, type PeekRows, type PeekView } from './PeekService'
+import { copyableDefinition, peekMessages, tooLongToCopy, type OpenPeek, type PeekDefinition, type PeekDependencies, type PeekMembers, type PeekPart, type PeekRows, type PeekView } from './PeekService'
 
 /** The view the parts below read and act on: the card's (the Peek service) or a promoted tab's. */
 const PeekViewContext = createContext<PeekView | undefined>(undefined)
@@ -207,7 +207,7 @@ export function PeekBody({ view, open, idPrefix, beforeScript }: { view: PeekVie
   const workbench = useWorkbench(), { commands } = workbench
   const node = open.node
   const definition = open.definition.status === 'ready' ? open.definition.value : undefined
-  const copyable = definition?.text !== undefined
+  const copyable = copyableDefinition(definition?.text)
   const script = scriptCommandId('create', 'newQuery')
   // The node's own selection keys, as a Peek tab's verbs pass them: the shown object may be a followed dependency, not the tree's selection.
   const target: CommandArgs = { target: { kind: 'explorer', node }, state: selectionContextOf(node, { insertable: insertTextFor(node.ref) !== undefined }) }
@@ -229,7 +229,7 @@ export function PeekBody({ view, open, idPrefix, beforeScript }: { view: PeekVie
           <Tabs peek={open} idPrefix={idPrefix} />
           <span className="peek-spacer" />
           {open.tab === 'definition' && <>
-            <button type="button" className="peek-action" disabled={!copyable} onClick={() => { view.copyDefinition().catch(onUnexpectedError) }}>Copy</button>
+            <button type="button" className="peek-action" disabled={!copyable} title={definition?.text !== undefined && !copyable ? tooLongToCopy : undefined} onClick={() => { view.copyDefinition().catch(onUnexpectedError) }}>Copy</button>
             <button type="button" className="peek-action" disabled={!commands.isEnabled(script, target)}
               onClick={() => { beforeScript?.(); void commands.execute(script, target, 'toolbar') }}>Script to New Query</button>
             {modifiable && <button type="button" className="peek-action" disabled={!commands.isEnabled('explorer.modify', target)}

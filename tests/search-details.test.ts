@@ -8,7 +8,7 @@ import { detailsDrag, detailsKey, scriptable, searchDetailsLimits, SearchDetails
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { peekSpecs } from '../src/shared/explorer/peek'
-import { colouredEnd, hitKindSpec, hitProperties, matchedLine, Properties, scrollKey } from '../src/renderer/src/search/SearchDetails'
+import { colouredEnd, shownChars, shownText, hitKindSpec, hitProperties, matchedLine, Properties, scrollKey } from '../src/renderer/src/search/SearchDetails'
 
 const ok = <T>(value: T): ApiResult<T> => ({ ok: true, value })
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -261,5 +261,11 @@ describe('Search Objects details definition colouring', () => {
     expect(colouredEnd('x'.repeat(3_000_000))).toBe(1_000_000)
     expect(colouredEnd('x'.repeat(999_999) + '\u{1F600}' + 'y'.repeat(10))).toBe(999_999)
     expect(colouredEnd(('x'.repeat(1000) + '\n').repeat(3000))).toBe(1_000_000)
+  })
+  it('shows at most 1,000,000 characters of a longer definition, never splitting a surrogate pair', () => {
+    expect(shownChars).toBe(1_000_000)
+    expect(shownText('SELECT 1')).toBe('SELECT 1')
+    expect(shownText('x'.repeat(3_000_000))).toHaveLength(1_000_000)
+    expect(shownText('x'.repeat(999_999) + '\u{1F600}')).toHaveLength(999_999)
   })
 })

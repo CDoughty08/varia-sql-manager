@@ -224,7 +224,6 @@ internal static partial class PeekChecks
         check(CatalogSql.Lint(newest.Text, new SqlRender(13), false, false).Any(problem => problem.Contains("ledger_type")), "a table's band 17 batch fails the lint on a band 13 server");
     }
 
-    /// <summary>Each peek kind with the parent kinds it is found below (none for a kind that is not a child).</summary>
     /// <summary>A text read as the renderer reads it: SUBSTRING's page of <paramref name="size"/> from each offset, trimmed as the backend trims it.</summary>
     private static List<string> Pages(string text, int size)
     {
@@ -238,6 +237,7 @@ internal static partial class PeekChecks
         return pages;
     }
 
+    /// <summary>Each peek kind with the parent kinds it is found below (none for a kind that is not a child).</summary>
     private static IEnumerable<(PeekKindSpec Spec, string? Parent)> Variants(CatalogPeek peek) =>
         peek.Kinds.Values.SelectMany(spec => PeekSql.Parents.TryGetValue(spec.Kind, out var parents) ? parents.Select(parent => (spec, (string?)parent)) : [(spec, null)]);
 
@@ -280,7 +280,7 @@ internal static partial class PeekChecks
         var pages = Pages(whole, 1_000_000);
         check(pages.Count == 3 && pages[0].Length == 999_999 && pages[1].Length == 1_000_000 && pages[2] == "b\U0001F600" && string.Concat(pages) == whole,
             "a long module's pages, each from the offset the last ended at, start with a whole pair and put together the text: " + string.Join(",", pages.Select(page => page.Length)));
-        check(PeekSql.Stamp(new DateTime(2026, 11, 9, 12, 30, 15, 123)) == new DateTimeOffset(2026, 11, 9, 12, 30, 15, 123, TimeSpan.Zero).ToUnixTimeMilliseconds()
+        check(PeekSql.Stamp(new DateTime(2026, 11, 9, 12, 30, 15, 123)) == 1_794_227_415_123L
             && PeekSql.Stamp(new DateTime(2026, 11, 9, 12, 30, 15, 124)) - PeekSql.Stamp(new DateTime(2026, 11, 9, 12, 30, 15, 123)) == 1,
             "a module's stamp is its modify_date in milliseconds since 1970, which tells two edits a millisecond apart");
     }

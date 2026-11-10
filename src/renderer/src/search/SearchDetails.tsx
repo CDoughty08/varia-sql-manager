@@ -21,6 +21,18 @@ import { columnsOf, type DefinitionPart, type SearchDetails as Details } from '.
 const colouredLines = 3000
 /** Characters coloured at most, so a module of millions of characters (Peek's definitions are never cut) is not split or tokenized whole. */
 const colouredChars = 1_000_000
+/**
+ * Characters this pane shows at most: its definition is a <pre>, not an editor, and a text node of tens of millions of
+ * characters stalls layout. Peek's editor (Space) and Script to New Query show all of a longer one.
+ */
+export const shownChars = 1_000_000
+
+/** The part of `text` the pane shows, never ending inside a surrogate pair. */
+export function shownText(text: string): string {
+  if (text.length <= shownChars) return text
+  const code = text.charCodeAt(shownChars - 1)
+  return text.slice(0, code >= 0xd800 && code <= 0xdbff ? shownChars - 1 : shownChars)
+}
 
 /** A run of definition text in one SQL scope's colour. */
 interface Run { readonly text: string; readonly style?: SyntaxStyle }
@@ -126,10 +138,13 @@ export function hitProperties(hit: ObjectSearchHit): readonly { readonly label: 
 }
 
 function Definition({ details, part }: { readonly details: Details; readonly part: DefinitionPart }) {
-  const text = part.status === 'ready' ? part.value.text : undefined
+  const whole = part.status === 'ready' ? part.value.text : undefined
+  const text = useMemo(() => whole === undefined ? undefined : shownText(whole), [whole])
   const runs = useRuns(text)
   const pre = useRef<HTMLPreElement>(null)
-  const line = text === undefined ? undefined : matchedLine(text, details.hit, !!details.kind && peekSpecs[details.kind].definition === 'module')
+  // Found once per text and hit, not on every render (a sash drag renders the pane on each move).
+  const module = !!details.kind && peekSpecs[details.kind].definition === 'module'
+  const line = useMemo(() => text === undefined ? undefined : matchedLine(text, details.hit, module), [text, details.hit, module])
   // The matched line comes into view once per hit and match (a third of the way down), not again as the user scrolls.
   const scrolled = useRef<string | undefined>(undefined)
   useLayoutEffect(() => {
@@ -152,6 +167,7 @@ function Definition({ details, part }: { readonly details: Details; readonly par
       {runs.map((run, index) => run.style
         ? <span key={index} style={{ color: run.style.foreground, fontStyle: run.style.fontStyle.includes('italic') ? 'italic' : undefined, fontWeight: run.style.fontStyle.includes('bold') ? 'bold' : undefined }}>{run.text}</span>
         : run.text)}</pre>
+    {whole !== undefined && whole.length > text.length && <p className="peek-note">The definition is longer than this pane shows ({whole.length.toLocaleString('en-US')} characters). Peek or Script to New Query shows all of it.</p>}
   </>
 }
 

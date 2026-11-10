@@ -9,8 +9,8 @@ import { methodPolicies } from '../src/shared/ipc/methods'
 import { cancellableRequests } from '../src/main/backend/renderer-requests'
 import { definitionLoading, PeekBoundary, PeekListView, Properties } from '../src/renderer/src/explorer/PeekCard'
 import { formatPeekValue, placePeek, cardWidth } from '../src/renderer/src/explorer/peek-format'
-import { PeekService } from '../src/renderer/src/explorer/PeekService'
-import type { ApiResult, ExplorerChildrenResult, QueryResult } from '../src/shared/contracts'
+import { copyableDefinition, PeekService } from '../src/renderer/src/explorer/PeekService'
+import { maxClipboardText, type ApiResult, type ExplorerChildrenResult, type QueryResult } from '../src/shared/contracts'
 import { fakeResults, summary } from './fixtures/peek-results'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import type { ScriptingOptions } from '../src/shared/scripting/options'
@@ -281,6 +281,32 @@ describe('PeekService', () => {
     await flush()
     service.peek(node('procedure', 3, 'Bill'), 'menu')
     expect(api.explorerCancel).toHaveBeenLastCalledWith(['id-4'])
+  })
+  it('copies a whole definition only up to what the clipboard takes', async () => {
+    expect(copyableDefinition('x'.repeat(maxClipboardText))).toBe(true)
+    expect(copyableDefinition('x'.repeat(maxClipboardText + 1))).toBe(false)
+    expect(copyableDefinition(undefined)).toBe(false)
+    const { service, api, resolvePeek } = setup()
+    service.peek(node('procedure'), 'menu')
+    resolvePeek(ok({ facts: {}, definition: 'x'.repeat(maxClipboardText + 1), elapsedMs: 1 }))
+    await flush()
+    await service.copyDefinition()
+    expect(api.writeClipboardText).not.toHaveBeenCalled()
+  })
+  it('keeps "not connected" on a tab whose server went while a page was read, instead of the cancelled page\'s answer', async () => {
+    const { service, api, pages, resolvePeek, lose } = setup()
+    const view = service.createView()
+    view.show(node('procedure'))
+    resolvePeek(ok({ facts: {}, definition: 'CREATE', definitionLength: 12, definitionStamp: 7, elapsedMs: 1 }))
+    await flush()
+    lose()
+    expect(api.explorerCancel).toHaveBeenCalledWith(['id-2'])
+    expect(view.getSnapshot().open?.definition).toEqual({ status: 'error', message: 'The server is not connected.' })
+    pages[0]!({ ok: false, error: 'The operation was cancelled.' })
+    await flush()
+    expect(view.getSnapshot().open?.definition).toEqual({ status: 'error', message: 'The server is not connected.' })
+    expect(api.explorerPeekDefinition).toHaveBeenCalledTimes(1)
+    view.dispose()
   })
   it('says the text changed when a page\'s length or stamp is not the first page\'s, shows a failed page as a value, and reads no text longer than Peek reads', async () => {
     const changed = async (page: Partial<PeekDefinitionResult>) => {

@@ -1,4 +1,4 @@
-import type { ApiResult, ExplorerError, ExplorerNode, VariaApi } from '../../../shared/contracts'
+import { maxClipboardText, type ApiResult, type ExplorerError, type ExplorerNode, type VariaApi } from '../../../shared/contracts'
 import { isPeekKind, peekHas, peekLimits, peekSpecs, peekTabsOf, type PeekDependency, type PeekKind, type PeekResult, type PeekTab } from '../../../shared/explorer/peek.ts'
 import { kindSpecs, type NodeSubtype } from '../../../shared/explorer/catalog.ts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
@@ -15,6 +15,10 @@ import type { ResultsService } from '../results/ResultsService'
 export type PeekSource = 'hover' | 'keyboard' | 'menu'
 /** `loading` may say how much of a long definition's text has come (0 to 1) while its pages are read. */
 export type PeekPart<T> = { readonly status: 'loading'; readonly progress?: number } | { readonly status: 'ready'; readonly value: T } | { readonly status: 'error'; readonly message: string }
+/** Whether Copy can put `text` on the clipboard whole: a longer one is opened by Script to New Query, or selected in the editor. */
+export const copyableDefinition = (text: string | undefined): text is string => text !== undefined && text.length <= maxClipboardText
+/** Copy's tooltip when the definition is longer than the clipboard takes. */
+export const tooLongToCopy = `Longer than Copy takes (${maxClipboardText.toLocaleString('en-US')} characters). Select the text and copy it from the editor, or Script to New Query.`
 /** A definition, always whole: a long module's pages are put together before it is ready. */
 export interface PeekDefinition { readonly text?: string }
 /** The Columns or Parameters folder as the tree lists it: its first page, `more` when the folder has others. */
@@ -85,7 +89,7 @@ export const peekMessages = {
   notConnected: 'The server is not connected.',
   noDefinition: 'The definition is encrypted, or the login does not have VIEW DEFINITION permission on it.',
   definitionChanged: 'The definition changed while Peek read it. Refresh to read it again.',
-  definitionTooLong: `The definition is longer than Peek reads (${peekLimits.definitionMaxChars.toLocaleString('en-US')} characters), the longest batch SQL Server takes at its default packet size.`,
+  definitionTooLong: `The definition is longer than Peek reads (${peekLimits.definitionMaxChars.toLocaleString('en-US')} characters), the most it holds in memory.`,
   noRows: 'It has no rows.',
   noMembers: 'None.',
   noDependencies: 'None found.',
@@ -279,7 +283,9 @@ export class PeekReads {
       const requestId = this.newId()
       requests.definition = requestId
       const result = await settle(this.options.api.explorerPeekDefinition({ connectionId: target.connectionId, requestId, target: target.object, offset }))
-      if (requests.definition === requestId) requests.definition = undefined
+      // A release took the request (and cancelled it): its answer, a cancellation most likely, is not this view's to show.
+      if (requests.definition !== requestId) return
+      requests.definition = undefined
       if (!current()) return
       if (!result.ok || result.value.error) { tell({ definition: { status: 'error', message: result.ok ? result.value.error!.message : result.error } }); return }
       const page = result.value
@@ -460,10 +466,10 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
     if (open && this.reads.isLive(open.node.connectionId)) this.load(open.node, open.kind, open.source, true, { back: open.back, tab: open.tab })
   }
 
-  /** Copies the definition, once the view has all of it. */
+  /** Copies the definition, once the view has all of it and the clipboard takes it (`maxClipboardText`). */
   async copyDefinition(): Promise<void> {
     const definition = this.getSnapshot().open?.definition
-    if (definition?.status !== 'ready' || definition.value.text === undefined) return
+    if (definition?.status !== 'ready' || !copyableDefinition(definition.value.text)) return
     const result = await this.reads.api.writeClipboardText(definition.value.text)
     if (!result.ok) throw new Error(result.error)
   }

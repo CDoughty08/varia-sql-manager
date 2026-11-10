@@ -405,8 +405,8 @@ A definition is never cut. A module's text comes in pages of 1,000,000 character
 properties, the rest one page at a time (`explorer.peekDefinition`), and the tab shows the text once it has all of it. If the
 module changes between pages, the tab says so and Refresh reads it again. While the pages come, the tab says how much has
 come. Closing the card cancels the page still being read.
-Only a text longer than 134,217,728 characters, the longest batch SQL Server takes at its default packet
-size, is not read: the tab says so rather than showing part of it.
+Only a text longer than 134,217,728 characters, the most Peek holds in memory, is not read:
+the tab says so rather than showing part of it.
 
 Beside Definition, the card has tabs. **Columns** (tables and views) or **Parameters** (procedures and functions) lists the
 object's folder with `explorer.children`, as the tree does, up to 1,024 rows. **Dependencies**
