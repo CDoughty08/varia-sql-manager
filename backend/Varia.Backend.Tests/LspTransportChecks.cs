@@ -128,11 +128,14 @@ internal static class LspTransportChecks
         using var killing = new ManualResetEventSlim();
         using var disposeReturned = new ManualResetEventSlim();
         using var exited = new ManualResetEventSlim();
+        using var entered = new CountdownEvent(2);
         bool overtaken = true, killEnded = false;
         await using (var held = new LspClient(path, arguments, kill: child =>
         {
             killing.Set();
-            SpinWait.SpinUntil(() => gate.Waiting == 2 || disposeReturned.IsSet || exited.IsSet, CheckWait);
+            // At least two, not exactly: on a starved pool the request's own write can still be in flight when its answer
+            // stops the transport, and that write then fails and waits here as a third caller.
+            SpinWait.SpinUntil(() => entered.IsSet && gate.Waiting >= 2 || disposeReturned.IsSet || exited.IsSet, CheckWait);
             overtaken = disposeReturned.IsSet || exited.IsSet;
             child.Kill(entireProcessTree: true);
             killEnded = true;
@@ -143,8 +146,8 @@ internal static class LspTransportChecks
             var failing = held.RequestAsync("malformed", null, timeout: CheckWait);
             var started = killing.Wait(CheckWait);
             bool killedBeforeDisposeReturned = false, killedBeforeExit = false;
-            var disposer = new Thread(() => { held.Dispose(); killedBeforeDisposeReturned = killEnded; disposeReturned.Set(); }) { IsBackground = true };
-            var exiter = new Thread(() => gate.Exit(_ => { killedBeforeExit = killEnded; exited.Set(); }, 0)) { IsBackground = true };
+            var disposer = new Thread(() => { entered.Signal(); held.Dispose(); killedBeforeDisposeReturned = killEnded; disposeReturned.Set(); }) { IsBackground = true };
+            var exiter = new Thread(() => { entered.Signal(); gate.Exit(_ => { killedBeforeExit = killEnded; exited.Set(); }, 0); }) { IsBackground = true };
             if (started) { disposer.Start(); exiter.Start(); }
             var settled = started && disposeReturned.Wait(CheckWait) && exited.Wait(CheckWait);
             try { await failing.WaitAsync(CheckWait); } catch (IOException) { }
