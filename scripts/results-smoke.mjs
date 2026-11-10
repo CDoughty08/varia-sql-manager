@@ -1557,7 +1557,9 @@ try {
     await outputMenu.getByRole('menuitem', { name: 'Transpose', exact: true }).click()
     await page.getByRole('menu', { name: 'Transpose', exact: true }).getByRole('menuitem', { name, exact: true }).click()
   }
-  await show('Transpose').click()
+  // A window narrower than 1180 pixels (Windows CI's display) hides the toolbar's Transpose; the grid's menu has it too.
+  if (await show('Transpose').isVisible()) await show('Transpose').click()
+  else await transposeMenu(0, 0, 'All Rows')
   const transposed = grid(1)
   await expect(cell(0, 0, transposed)).toHaveText('id')
   expect(await Promise.all([0, 1, 2].map(column => cell(0, column, transposed).textContent()))).toEqual(['id', '0', '1'])
@@ -1594,7 +1596,7 @@ try {
   await run('-- varia-fake: sets=W1*5000')
   await settled()
   await expect(anyResultGrid(page)).toHaveCount(1)
-  await show('Transpose').click()
+  await transposeMenu(0, 0, 'All Rows')
   await expect(strip(1)).toContainText('Transposed the first 4,095 of 5,000 rows; filter or select rows to transpose others.')
   await run('-- varia-fake: sets=W1*100')
   await settled()
