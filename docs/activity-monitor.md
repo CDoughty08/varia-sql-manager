@@ -34,7 +34,8 @@ interval, window, panes and charts while other tabs show; Tools › Options › 
 with, and the tiles' thresholds.
 
 The eight tiles (below) show their value, unit and secondary figures over a sparkline of the window. A tile's button (or a
-click on the tile) expands its chart under the tiles; at most 2 are expanded, a third replacing the oldest, and the first two
+click on the tile) expands its chart under the tiles; every chart may be expanded at once, each row of charts keeping a
+usable height (the document scrolls when they and the panes do not fit), and the first two
 are expanded on first open, so SSMS's view is there at once. An expanded chart draws the tile's value and its secondary
 series that share its unit, with axes, a crosshair shared by the charts and "View as table" (its last 60 samples). A tile
 past a threshold is outlined in its tone with a glyph, and the crossing is announced once. Without the server-state
@@ -177,7 +178,7 @@ and no pane needs expanding to show data.
 
 ## Tiles
 
-Eight tiles, the first four SSMS's four charts with SSMS's names. Activating a tile expands its chart; at most 2 are
+Eight tiles, the first four SSMS's four charts with SSMS's names. Activating a tile expands its chart; any number may be
 expanded, and the first two are expanded on first open.
 
 | Tile | Value | Secondary | Tint | Parity | Expanded first |

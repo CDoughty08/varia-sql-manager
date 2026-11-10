@@ -20,15 +20,17 @@ internal sealed record ViewCells(int[]? Order, (long First, long Count)[] Ranges
 /// <summary>One results.view filter. In, NotIn and Between compare Column's values with those of base rows (Rows: one row per
 /// distinct value; Between's lowest and highest), or of the cells a selection named (Cells), which building the view
 /// resolves to rows; Nulls says NULL is among In's and NotIn's values. Duplicates compares Columns. Equality and order are
-/// the sort's (<see cref="ViewSorter"/>): a column's collation decides which texts are equal.</summary>
-internal sealed record ViewFilter(FilterOp Op, int Column, int[]? Rows, bool Nulls, ViewCells? Cells, int[] Columns);
+/// the sort's (<see cref="ViewSorter"/>): a column's collation decides which texts are equal.
+/// A distinct snapshot's checklist (<see cref="Snapshot"/>) arrives already resolved: In or NotIn with its values' rows in
+/// value order, one a value, however many.</summary>
+internal sealed record ViewFilter(FilterOp Op, int Column, int[]? Rows, bool Nulls, ViewCells? Cells, int[] Columns, uint? Snapshot = null);
 
 /// <summary>A view of one stored result: its rows in another order (and, later, only some of them), as base row numbers.
 /// Reads through it build pages in view order from the stored ones (<see cref="ViewPages"/>), so the renderer caches and
 /// draws them as it does a result's own. It covers the rows sealed when it was built; a view of a set still loading is
 /// built again by the renderer once more rows arrive. Its order array is charged to the result's query budget and
 /// returned when the view is closed, replaced, or its result is released.</summary>
-internal sealed class ResultView(uint viewId, ResultSetBuffer set, int[] order, IReadOnlyList<ViewKey> keys, bool approximate, bool complete, long charged)
+internal sealed class ResultView(uint viewId, ResultSetBuffer set, int[] order, IReadOnlyList<ViewKey> keys, bool approximate, bool complete, long charged, long baseRows = long.MaxValue)
 {
     public uint ViewId { get; } = viewId;
     public ResultSetBuffer Set { get; } = set;
@@ -39,6 +41,8 @@ internal sealed class ResultView(uint viewId, ResultSetBuffer set, int[] order, 
     public bool Approximate { get; } = approximate;
     /// <summary>The result had finished loading when the view was built: it covers every row.</summary>
     public bool Complete { get; } = complete;
+    /// <summary>The base rows it was built from (those sealed then): a row past them is one it has not looked at.</summary>
+    public long BaseRows { get; } = baseRows;
     internal long Charged { get; } = charged;
     public long Rows => Order.Length;
 }
@@ -51,7 +55,7 @@ internal sealed class ResultView(uint viewId, ResultSetBuffer set, int[] order, 
 /// _BIN and _BIN2), ignoring trailing spaces as SQL Server does; every other type by its display text's code points.
 /// Each row keeps 8 to 16 bytes per key while sorting (a number, or a prefix of its collation sort key), so most
 /// comparisons never touch the stored cell; ties read it again from its page.</summary>
-internal static class ViewSorter
+internal static partial class ViewSorter
 {
     public const int MaxKeys = 16;
     /// <summary>Filters one view takes, distinct values one In or NotIn filter holds, and cell ranges one selection names
@@ -60,7 +64,7 @@ internal static class ViewSorter
     /// <summary>Bytes a row one filter holds at most while it runs, besides its column's key: Duplicates' positions (4), group
     /// starts (up to 8, as their list grows) and the rows it keeps (4); Keep and Pick hold less.</summary>
     public const int FilterBytes = 16;
-    private const int CancelEvery = 1 << 14;
+    internal const int CancelEvery = 1 << 14;
 
     /// <summary>Bytes a sort holds per row and key while it runs: the key's 8- or 16-byte value and a NULL bit.</summary>
     public static long WorkingBytes(long rows, int keys) => rows * (16L * keys + 4) + rows / 8 * keys;
@@ -71,8 +75,9 @@ internal static class ViewSorter
         return (built.Order, built.Approximate);
     }
 
-    /// <summary>Columns whose values a view's filters compare (each needs a key while the view is built).</summary>
-    public static int FilterColumns(IReadOnlyList<ViewFilter> filters)
+    /// <summary>Keys a view holds while it is built: one per column its filters compare and one per sort key, except that a
+    /// Value sort key on a filtered column is that filter's key.</summary>
+    public static int KeyCount(IReadOnlyList<ViewKey> keys, IReadOnlyList<ViewFilter> filters)
     {
         var columns = new HashSet<int>();
         foreach (var filter in filters)
@@ -80,7 +85,10 @@ internal static class ViewSorter
             if (filter.Op == FilterOp.Duplicates) columns.UnionWith(filter.Columns);
             else columns.Add(filter.Column);
         }
-        return columns.Count;
+        var count = columns.Count;
+        foreach (var key in keys)
+            if (key.Mode != SortMode.Value || !columns.Contains(key.Column)) count++;
+        return count;
     }
 
     /// <summary>A view's order: the sealed rows its filters keep, in turn (each over the rows the ones before it kept), then
@@ -94,16 +102,11 @@ internal static class ViewSorter
         var rows = (int)total;
         var source = new PageSource(pages, set.Wires.Count);
         var approximate = false;
-        var built = new Key[keys.Count];
-        for (var k = 0; k < keys.Count; k++)
-        {
-            built[k] = Build(set, source, keys[k], rows, token, ref approximate);
-        }
         var values = new Dictionary<int, Key>();
         Key ValueKey(int column)
         {
             if (!values.TryGetValue(column, out var key))
-                values[column] = key = Build(set, source, new ViewKey(column, false, SortMode.Value), rows, token, ref approximate);
+                values[column] = key = Build(set, source, new ViewKey(column, false, SortMode.Value), null, rows, token, ref approximate);
             return key;
         }
         var order = new int[rows];
@@ -121,6 +124,13 @@ internal static class ViewSorter
                 continue;
             }
             var key = ValueKey(filter.Column);
+            if (filter.Snapshot is not null)
+            {
+                // A checklist's rows are its snapshot's: already one a value, in this key's order, and below the rows sealed.
+                order = Keep(order, key, filter.Op, filter.Rows!, filter.Nulls, token);
+                resolved[f] = filter;
+                continue;
+            }
             var (reps, nulls) = filter.Cells is { } cells ? Pick(key, cells, rows, token) : Distinct(key, filter.Rows!, rows, token);
             nulls |= filter.Nulls;
             if (filter.Op == FilterOp.Between)
@@ -137,8 +147,38 @@ internal static class ViewSorter
             order = Keep(order, key, filter.Op, reps, nulls, token);
             resolved[f] = filter with { Rows = reps, Nulls = nulls, Cells = null };
         }
-        if (keys.Count > 0 && order.Length > 1) Array.Sort(order, new Comparer(built, token));
-        return (order, approximate, resolved);
+        if (keys.Count == 0 || order.Length <= 1) return (order, approximate, resolved);
+        // Sort keys are built after the filters, over only the rows they kept (indexed by their place in kept, which is in
+        // base row order, so ties still keep base row order); a Value key on a filtered column is the filter's own key. The
+        // sorted positions (4 bytes a kept row) fit in the FilterBytes a row the filters reserved and no longer use.
+        int[]? kept = null;
+        if (order.Length < rows)
+        {
+            kept = order;
+            Array.Sort(kept);
+        }
+        var built = new Key[keys.Count];
+        var descending = new bool[keys.Count];
+        for (var k = 0; k < keys.Count; k++)
+        {
+            descending[k] = keys[k].Descending;
+            if (keys[k].Mode == SortMode.Value && values.TryGetValue(keys[k].Column, out var shared)) built[k] = kept is null ? shared : new MappedKey(shared, kept);
+        }
+        // Filter keys no sort key shares are done with: let them go before the sort keys are built.
+        values.Clear();
+        for (var k = 0; k < keys.Count; k++)
+            built[k] ??= Build(set, source, keys[k], kept, rows, token, ref approximate);
+        var comparer = new Comparer(built, descending, token);
+        if (kept is null)
+        {
+            Array.Sort(order, comparer);
+            return (order, approximate, resolved);
+        }
+        var sorted = new int[kept.Length];
+        for (var i = 0; i < sorted.Length; i++) sorted[i] = i;
+        Array.Sort(sorted, comparer);
+        for (var i = 0; i < sorted.Length; i++) sorted[i] = kept[sorted[i]];
+        return (sorted, approximate, resolved);
     }
 
     /// <summary>The base rows the cells name, one per distinct non-NULL value in ascending order, and whether one is NULL.</summary>
@@ -202,7 +242,7 @@ internal static class ViewSorter
     /// <summary>The first <paramref name="count"/> rows, sorted and reduced in place to one per distinct value.</summary>
     private static int[] Unique(Key key, int[] rows, int count, CancellationToken token)
     {
-        if (count > 1) Array.Sort(rows, 0, count, new Comparer([key], token));
+        if (count > 1) Array.Sort(rows, 0, count, new Comparer([key], null, token));
         var unique = 0;
         for (var i = 0; i < count; i++)
             if (unique == 0 || key.Compare(rows[unique - 1], rows[i]) != 0) rows[unique++] = rows[i];
@@ -248,7 +288,7 @@ internal static class ViewSorter
     {
         var positions = new int[order.Length];
         for (var i = 0; i < positions.Length; i++) positions[i] = i;
-        var equal = new Comparer(columns, token);
+        var equal = new Comparer(columns, null, token);
         int Same(int a, int b) => equal.Values(order[a], order[b]);
         if (positions.Length > 1) Array.Sort(positions, Comparer<int>.Create((a, b) => Same(a, b) is var c && c != 0 ? c : a.CompareTo(b)));
         // Each group is a run of positions whose first is its first row's (ties keep their order); a run's start names it.
@@ -276,7 +316,9 @@ internal static class ViewSorter
         return kept;
     }
 
-    private static Key Build(ResultSetBuffer set, PageSource source, ViewKey sort, int rows, CancellationToken token, ref bool approximate)
+    /// <summary>A key over every row (indexed by base row), or over only <paramref name="kept"/>'s rows, in ascending base
+    /// row order (indexed by their place in it). Its direction is the comparer's: keys compare ascending.</summary>
+    internal static Key Build(ResultSetBuffer set, PageSource source, ViewKey sort, int[]? kept, int rows, CancellationToken token, ref bool approximate)
     {
         var column = sort.Column;
         var meta = set.Columns[column];
@@ -284,26 +326,37 @@ internal static class ViewSorter
         // Chars orders character, xml and json columns by length; Bytes those and binary ones (DATALENGTH). Others sort by value.
         var byLength = sort.Mode == SortMode.Chars ? IsText(meta) : sort.Mode == SortMode.Bytes && (wire == WireKind.Binary || IsText(meta));
         var kind = byLength ? KindFor(sort.Mode) : KindOf(meta, wire);
+        var capacity = kept?.Length ?? rows;
         Key key = kind switch
         {
-            Kind.Chars or Kind.Bytes => new LengthKey(rows),
-            Kind.Exact => new NumberKey(rows, source, column, exact: true),
-            Kind.Approximate => new NumberKey(rows, source, column, exact: false),
-            Kind.Ticks => new TicksKey(rows),
-            Kind.Guid => new GuidKey(rows),
-            Kind.Collated when Culture(meta.Collation) is { } culture => new CollatedKey(rows, source, column, culture.Info, culture.Options),
-            _ => new OrdinalKey(rows, source, column, trim: meta.Collation is not null)
+            Kind.Chars or Kind.Bytes => new LengthKey(capacity),
+            Kind.Exact => new NumberKey(capacity, kept, source, column, exact: true),
+            Kind.Approximate => new NumberKey(capacity, kept, source, column, exact: false),
+            Kind.Ticks => new TicksKey(capacity),
+            Kind.Guid => new GuidKey(capacity),
+            Kind.Collated when Culture(meta.Collation) is { } culture => new CollatedKey(capacity, kept, source, column, culture.Info, culture.Options),
+            _ => new OrdinalKey(capacity, kept, source, column, trim: meta.Collation is not null)
         };
-        key.Descending = sort.Descending;
         var lengths = set.Lengths[column];
+        var next = 0;
         foreach (var (index, page) in source.Pages())
         {
             token.ThrowIfCancellationRequested();
-            var view = source.View(index);
             var first = (int)page.FirstRow;
-            for (var r = 0; r < page.Rows; r++)
+            var end = first + page.Rows;
+            int start, stop;
+            if (kept is null) (start, stop) = (first, end);
+            else
             {
-                var row = first + r;
+                start = next;
+                while (next < kept.Length && kept[next] < end) next++;
+                stop = next;
+                if (start == stop) continue;
+            }
+            var view = source.View(index);
+            for (var row = start; row < stop; row++)
+            {
+                var r = (kept is null ? row : kept[row]) - first;
                 if (view.IsNull(column, r)) { key.SetNull(row); continue; }
                 var span = view.Span(column, r);
                 var truncated = view.IsTruncated(column, r);
@@ -443,7 +496,7 @@ internal static class ViewSorter
     }
 
     /// <summary>The sealed pages a sort reads, each parsed once, and a row's cell found again by binary search.</summary>
-    private sealed class PageSource
+    internal sealed class PageSource
     {
         private readonly StoredPage[] pages;
         private readonly long[] starts;
@@ -481,14 +534,26 @@ internal static class ViewSorter
             if (index < 0) index = ~index - 1;
             return View(index).Span(column, (int)(row - starts[index]));
         }
+
+        /// <summary>The page holding row <paramref name="row"/>, and the row's place in it (its flags as well as its cells).</summary>
+        public PageView ViewOf(int row, out int local)
+        {
+            var index = Array.BinarySearch(starts, (long)row);
+            if (index < 0) index = ~index - 1;
+            local = (int)(row - starts[index]);
+            return View(index);
+        }
     }
 
-    private abstract class Key(int rows)
+    /// <summary>A column's values in ascending order, indexed by base row or, built over some rows (<c>map</c>), by their
+    /// place in that list; <see cref="Comparer"/> applies a sort key's direction.</summary>
+    internal abstract class Key(int rows, int[]? map = null)
     {
         private readonly byte[] nulls = new byte[(rows + 7) / 8];
-        public bool Descending { get; set; }
         public void SetNull(int row) => nulls[row >> 3] |= (byte)(1 << (row & 7));
-        public bool IsNull(int row) => (nulls[row >> 3] & (1 << (row & 7))) != 0;
+        public virtual bool IsNull(int row) => (nulls[row >> 3] & (1 << (row & 7))) != 0;
+        /// <summary>The base row at an index, where a comparison reads the stored cell again.</summary>
+        protected int Row(int index) => map is null ? index : map[index];
         public abstract void Set(int row, ReadOnlySpan<byte> cell);
         /// <summary>Two non-NULL rows, ascending.</summary>
         public abstract int Compare(int a, int b);
@@ -503,7 +568,7 @@ internal static class ViewSorter
 
     /// <summary>A number's double; for exact numerics, equal doubles (rounding is monotonic, so unequal ones already order
     /// the values) compare their text exactly.</summary>
-    private sealed class NumberKey(int rows, PageSource source, int column, bool exact) : Key(rows)
+    private sealed class NumberKey(int rows, int[]? map, PageSource source, int column, bool exact) : Key(rows, map)
     {
         private readonly double[] values = new double[rows];
         public override void Set(int row, ReadOnlySpan<byte> cell) =>
@@ -512,7 +577,7 @@ internal static class ViewSorter
         {
             var compared = values[a].CompareTo(values[b]);
             if (compared != 0 || !exact) return compared;
-            return CompareNumericText(source.Cell(a, column), source.Cell(b, column));
+            return CompareNumericText(source.Cell(Row(a), column), source.Cell(Row(b), column));
         }
     }
 
@@ -547,7 +612,7 @@ internal static class ViewSorter
 
     /// <summary>Code-point order (UTF-8 bytes order as code points do), for binary values, _BIN and _BIN2 text and types
     /// with no collation.</summary>
-    private sealed class OrdinalKey(int rows, PageSource source, int column, bool trim) : Key(rows)
+    private sealed class OrdinalKey(int rows, int[]? map, PageSource source, int column, bool trim) : Key(rows, map)
     {
         private readonly ulong[] prefixes = new ulong[rows];
         public override void Set(int row, ReadOnlySpan<byte> cell) => prefixes[row] = Prefix(trim ? TrimEnd(cell) : cell);
@@ -555,15 +620,15 @@ internal static class ViewSorter
         {
             var compared = prefixes[a].CompareTo(prefixes[b]);
             if (compared != 0) return compared;
-            var left = source.Cell(a, column);
-            var right = source.Cell(b, column);
+            var left = source.Cell(Row(a), column);
+            var right = source.Cell(Row(b), column);
             if (trim) { left = TrimEnd(left); right = TrimEnd(right); }
             return Math.Sign(left.SequenceCompareTo(right));
         }
     }
 
     /// <summary>A collation's order: the first 8 bytes of each value's sort key, and the full comparison for equal prefixes.</summary>
-    private sealed class CollatedKey(int rows, PageSource source, int column, CompareInfo info, CompareOptions options) : Key(rows)
+    private sealed class CollatedKey(int rows, int[]? map, PageSource source, int column, CompareInfo info, CompareOptions options) : Key(rows, map)
     {
         private readonly ulong[] prefixes = new ulong[rows];
         private char[] left = new char[256], right = new char[256];
@@ -582,8 +647,8 @@ internal static class ViewSorter
         {
             var compared = prefixes[a].CompareTo(prefixes[b]);
             if (compared != 0) return compared;
-            var x = Decode(TrimEnd(source.Cell(a, column)), ref left);
-            var y = Decode(TrimEnd(source.Cell(b, column)), ref right);
+            var x = Decode(TrimEnd(source.Cell(Row(a), column)), ref left);
+            var y = Decode(TrimEnd(source.Cell(Row(b), column)), ref right);
             return Math.Sign(info.Compare(x, y, options));
         }
 
@@ -594,8 +659,18 @@ internal static class ViewSorter
         }
     }
 
-    /// <summary>The keys in order, NULL lowest, then the base row, so equal rows keep their order (a stable sort).</summary>
-    private sealed class Comparer(Key[] keys, CancellationToken token) : IComparer<int>
+    /// <summary>A key built over every row, read through a list of base rows: a filter's key serving a sort key that is
+    /// built over only the rows the filters kept.</summary>
+    private sealed class MappedKey(Key inner, int[] map) : Key(0)
+    {
+        public override bool IsNull(int row) => inner.IsNull(map[row]);
+        public override void Set(int row, ReadOnlySpan<byte> cell) => throw new InvalidOperationException("A mapped key is built by its own.");
+        public override int Compare(int a, int b) => inner.Compare(map[a], map[b]);
+    }
+
+    /// <summary>The keys in order, each descending where <paramref name="descending"/> says (null: all ascending), NULL
+    /// lowest, then the index, so equal rows keep their order (a stable sort).</summary>
+    internal sealed class Comparer(Key[] keys, bool[]? descending, CancellationToken token) : IComparer<int>
     {
         private int calls;
 
@@ -613,14 +688,15 @@ internal static class ViewSorter
                 calls = 0;
                 token.ThrowIfCancellationRequested();
             }
-            foreach (var key in keys)
+            for (var k = 0; k < keys.Length; k++)
             {
+                var key = keys[k];
                 var nullA = key.IsNull(a);
                 var nullB = key.IsNull(b);
                 int compared;
                 if (nullA || nullB) compared = nullA == nullB ? 0 : nullA ? -1 : 1;
                 else compared = key.Compare(a, b);
-                if (compared != 0) return key.Descending ? -compared : compared;
+                if (compared != 0) return descending is not null && descending[k] ? -compared : compared;
             }
             return 0;
         }

@@ -46,7 +46,7 @@ const active = () => page.evaluate(({ grid, cell: cellPart, tones }) => {
 
 try {
   await expect(backendReady(page, /\.NET 10\./)).toHaveText('Ready', { timeout: 30000 })
-  await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
 
   step = 'tones'
   // Twelve items a sample, moving on by one id each time: the lowest id leaves at the top, a new one arrives at the bottom.

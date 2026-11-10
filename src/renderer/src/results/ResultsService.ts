@@ -1,5 +1,5 @@
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
-import type { MessageEntry, QueryEvent, QueryResult, QueryStatus, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultsJobProgress, VariaApi, ViewFilter, ViewSortKey, ViewSortMode } from '../../../shared/contracts'
+import type { MessageEntry, QueryEvent, QueryResult, QueryStatus, ResolvedGroupsFilter, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultsJobProgress, VariaApi, ViewFilter, ViewSortKey, ViewSortMode } from '../../../shared/contracts'
 import type { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
@@ -9,9 +9,10 @@ import { gridLimits as g } from '../grid/constants'
 import { copyPlan, noColumnName, resolveBlocks, selectAll, type GridSelection } from '../grid/selection'
 import { kindInfo } from '../documents'
 import type { DocumentService, TextDocument } from '../services/documents'
-import type { ResultClient, ResultHandle, ResultView } from './ResultClient'
+import type { DistinctList, ResultClient, ResultHandle, ResultView } from './ResultClient'
 import type { ResultKey } from './worker-protocol'
 import { completionSentence, formatCount, plural } from './status'
+import { columnFilterKind, conditionFilter, conditionKind, sameFilterFamily, type ColumnCondition } from './column-filter'
 import { retainedPlanLimits, type PlanExecutionContext, type RetainedPlansService, type SnapshotSource } from '../plans/RetainedPlansService'
 import { orderPlanEntries } from '../plans/sources'
 
@@ -40,6 +41,8 @@ export interface GridFilter {
   readonly label: string
   /** The label already says all it will (its values named, or none to name): building the view again reads none. */
   readonly named?: true
+  /** A `groups` filter's distinct snapshot, which the grid keeps while a filter of its sort names it and then closes. */
+  readonly list?: DistinctList
 }
 /** What a selection filters by: its values, other values, the range from its lowest to its highest, or no NULL in its column. */
 export type SelectionFilter = 'in' | 'notIn' | 'between' | 'notNull'
@@ -97,7 +100,11 @@ export interface GridViewState {
 /** `collapsed` holds the sets shown as their caption alone, by index (a set's caption toggles it). */
 export interface TabViewState { stackScrollTop: number; weights?: number[]; focusedIndex: number; grids: Map<number, GridViewState>; collapsed: ReadonlySet<number> }
 /** A mounted grid, for the commands that act on it. */
-export interface GridController { selectAll(): void; repaint(): void; fitColumn(column: number): void }
+export interface GridController {
+  selectAll(): void; repaint(): void; fitColumn(column: number): void
+  /** Opens the header funnel's popover for a column (results grids). */
+  filterColumn?(column: number): void
+}
 /** How a run ended: the summary, or main's failure (`code` BACKEND_LOST when the backend stopped), plus a notice to show first. */
 export interface RunEnd { summary?: QueryResult; error?: string; code?: ErrorCode; notice?: string; planContext?: PlanExecutionContext }
 /** Open Value in New Tab's outcome: whether a document opened, and what the banner says (a failure, or that it opened unformatted). */
@@ -628,14 +635,74 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     return this.addFilter(tabId, run, index, filters, { filter: { op: 'duplicates', columns }, label, named: true })
   }
 
-  /** Adds a filter after the grid's others; a grid that has as many as a view takes says so and keeps them. */
-  private addFilter(tabId: string, run: Run, index: number, others: readonly GridFilter[], item: GridFilter): boolean {
+  /** Adds a filter after the grid's others, or at `at` among them (where the one it replaces stood, since filters apply in
+   *  order and a duplicates filter after it counts only the rows it keeps); a grid that has as many as a view takes says
+   *  so and keeps them. */
+  private addFilter(tabId: string, run: Run, index: number, others: readonly GridFilter[], item: GridFilter, at = others.length): boolean {
     if (others.length >= wire.views.maxFilters) {
       this.notify(tabId, `Could not filter the results: a grid takes at most ${wire.views.maxFilters} filters. Remove one first.`)
       return false
     }
-    this.applyView(tabId, run, index, run.sorts.get(index)?.keys ?? [], [...others, item], 'filter')
+    this.applyView(tabId, run, index, run.sorts.get(index)?.keys ?? [], [...others.slice(0, at), item, ...others.slice(at)], 'filter')
     return true
+  }
+
+  /** Whether a grid's column can open the funnel's popover: a result's own column (not a diff's tone) on a mounted grid. */
+  canFilterColumn(tabId: string, index: number, column: number): boolean {
+    const set = this.runs.get(tabId)?.sets[index]
+    return !!set && this.filterable(set) && Number.isInteger(column) && column >= 0 && column < set.descriptor.columns.length && set.descriptor.columns[column].role !== 'tone'
+      && !!this.controllers.get(tabId + ':' + index)?.filterColumn
+  }
+
+  /** Opens the funnel's popover for a column (the grid menu's Filter Column Values, Alt+Down in a grid). */
+  filterColumn(tabId: string, index: number, column: number): void {
+    if (this.canFilterColumn(tabId, index, column)) this.controllers.get(tabId + ':' + index)?.filterColumn?.(column)
+  }
+
+  /**
+   * A column's distinct values for the funnel, kept in the backend as a snapshot (results.distinct): over the rows the
+   * grid's other filters keep, so values the column's own value list drops can be ticked again. When the column has such a
+   * filter the grid's view starts each value ticked only when it keeps it, as it does NULL. The view built for it is closed
+   * once the snapshot is; the snapshot is the caller's to close, or to hand to `applyColumnFilter`.
+   */
+  async columnValues(tabId: string, index: number, column: number, o: { signal?: AbortSignal } = {}): Promise<DistinctList> {
+    const run = this.runs.get(tabId), set = run?.sets[index], sort = run?.sorts.get(index)
+    if (!run || !set || !this.filterable(set)) throw new Error('These results are no longer available.')
+    if (sort?.sorting) throw new Error('The results are still being sorted or filtered. Try again when they are shown.')
+    const filters = sort?.filters ?? [], others = filters.filter(item => { const own = columnFilterKind(item.filter, column); return own === undefined || own === 'between' })
+    const signal = o.signal ? { signal: o.signal } : {}
+    if (others.length === filters.length) return (sort?.view ?? set.handle).distinct(column, signal)
+    const base = others.length > 0 ? await set.handle.sort([], { filters: others.map(item => item.filter), ...signal }) : undefined
+    try {
+      return await (base ?? set.handle).distinct(column, { ...signal, ...sort?.view ? { kept: sort.view } : {} })
+    } finally { void base?.close() }
+  }
+
+  /**
+   * Applies the funnel's condition to a column: it replaces the column's filter of the same kind (its value list, its
+   * range or its not-NULL), and `clear` takes all of the column's filters off. False when the grid cannot be filtered.
+   */
+  applyColumnFilter(tabId: string, index: number, column: number, condition: ColumnCondition): boolean {
+    const run = this.runs.get(tabId), set = run?.sets[index]
+    if (!run || !set || !this.filterable(set) || !Number.isInteger(column) || column < 0 || column >= set.descriptor.columns.length) return false
+    const filters = run.sorts.get(index)?.filters ?? [], kind = conditionKind(condition)
+    const others = filters.filter(item => { const own = columnFilterKind(item.filter, column); return own === undefined || (kind !== undefined && !sameFilterFamily(own, kind)) })
+    const filter = conditionFilter(condition, column)
+    if (!filter) {
+      if (others.length !== filters.length) this.applyView(tabId, run, index, run.sorts.get(index)?.keys ?? [], others, 'filter')
+      return true
+    }
+    if ('rows' in filter && filter.rows.length > wire.views.maxFilterValues) {
+      this.notify(tabId, `Could not filter the results: a filter holds at most ${formatCount(wire.views.maxFilterValues)} values.`)
+      return false
+    }
+    if (condition.kind === 'list' && (condition.list.column !== column || set.handle.key.resultId !== condition.list.resultId || set.handle.key.generation !== condition.list.generation)) return false
+    const name = columnName(set.descriptor.columns, column)
+    const item: GridFilter = condition.kind === 'null' || condition.kind === 'notNull' ? { filter, label: `${name} is ${condition.kind === 'null' ? '' : 'not '}NULL`, named: true }
+      : { filter, label: `${name}: filtering…`, ...condition.kind === 'list' ? { list: condition.list } : {} }
+    // In the place of the first filter it replaces: before it, every filter is one of the others.
+    const replaced = filters.findIndex(item => !others.includes(item))
+    return this.addFilter(tabId, run, index, others, item, replaced < 0 ? others.length : replaced)
   }
 
   canFilterDuplicates(tabId: string, index: number, allColumns = false): boolean { return !!this.duplicateColumns(tabId, index, allColumns) }
@@ -960,12 +1027,19 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const columns = set.descriptor.columns
     const named = sort.filters.map(async (item): Promise<GridFilter> => {
       const filter = item.filter
-      if (item.named || filter.op === 'duplicates' || !('rows' in filter)) return item
+      if (item.named || filter.op === 'duplicates') return item
+      if (filter.op === 'groups') {
+        if (!('keep' in filter)) return item
+        const resolved = filter as ResolvedGroupsFilter
+        const texts = resolved.row === undefined || resolved.nulls ? [] : [await valueText(set.handle, resolved.row, resolved.column)]
+        return texts.every(text => text !== undefined) ? { ...item, label: filterLabel(resolved, columns, texts), named: true } : { ...item, label: filterLabel(resolved, columns, texts) }
+      }
+      if (!('rows' in filter)) return item
       const wanted = filter.op === 'between' ? filter.rows : filter.rows.length === 1 && !filter.nulls ? filter.rows : []
       const texts = await Promise.all(wanted.map(row => valueText(set.handle, row, filter.column)))
       const label = filterLabel(filter as ResolvedViewFilter, columns, texts)
       // A value that could not be read is read again the next time the view is built.
-      return texts.every(text => text !== undefined) ? { filter, label, named: true } : { filter, label }
+      return texts.every(text => text !== undefined) ? { ...item, filter, label, named: true } : { ...item, filter, label }
     })
     void Promise.all(named).then(filters => {
       // Only onto the same sort: a view building since has its own filters, and names them when it is built.
@@ -988,6 +1062,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   }
 
   private setSort(tabId: string, run: Run, index: number, sort: GridSort | undefined): void {
+    // A snapshot no filter of the grid's sort names any more (asked for, or applied) is closed: it went with its filter.
+    const lists = (value: GridSort | undefined) => new Set([...value?.filters ?? [], ...value?.applied ?? []].flatMap(item => item.list ? [item.list] : []))
+    const kept = lists(sort)
+    for (const list of lists(run.sorts.get(index))) if (!kept.has(list)) void list.close()
     const next = new Map(run.sorts)
     if (sort) next.set(index, sort)
     else next.delete(index)
@@ -1123,8 +1201,17 @@ export function filterLabel(filter: ResolvedViewFilter, columns: readonly Result
   if (filter.op === 'duplicates') return filter.columns.length === columns.filter(column => column.role !== 'tone').length ? 'Duplicate rows' : `Duplicates in ${filter.columns.map(column => columnName(columns, column)).join(' + ')}`
   const name = columnName(columns, filter.column)
   if (filter.op === 'between') return texts[0] && texts[1] ? `${name} between ${texts[0]} and ${texts[1]}` : `${name} between 2 values`
-  const values = filter.rows.length + (filter.nulls ? 1 : 0), not = filter.op === 'notIn'
+  const values = (filter.op === 'groups' ? filter.values : filter.rows.length) + (filter.nulls ? 1 : 0), not = filter.op === 'notIn' || (filter.op === 'groups' && !filter.keep)
+  // A checklist that keeps nothing it names drops nothing either.
+  if (values === 0) return `${name}: every value`
   if (values === 1 && filter.nulls) return `${name} is ${not ? 'not ' : ''}NULL`
   if (values === 1 && texts[0]) return `${name} ${not ? '≠' : '='} ${texts[0]}`
   return `${name} ${not ? 'not in' : 'in'} (${formatCount(values)} ${plural(values, 'value')})`
+}
+
+/** The columns a grid's filters name one by one (a value list, a range or not NULL): their header funnels show it. */
+export function filteredColumns(sort: GridSort | undefined): ReadonlySet<number> {
+  const columns = new Set<number>()
+  for (const item of sort?.filters ?? []) if (item.filter.op !== 'duplicates') columns.add(item.filter.column)
+  return columns
 }

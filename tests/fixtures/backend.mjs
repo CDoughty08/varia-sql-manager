@@ -13,6 +13,7 @@
 //   untrusted-certificate  server 'password-check' refuses a connect without Trust server certificate, as a self-signed
 //                       certificate does (reason 'certificate')
 //   language-enabled    enables deterministic completion/hover; otherwise the language provider reports unavailable
+//   language-diagnostics enables deterministic SQL error/warning analysis for the diagnostics UI suite only
 //   language-fail       completion/hover refuse requests until removed, to exercise cache refresh recovery in the UI
 //   language-status-fail  availability fails until removed, to exercise same-generation manual recovery
 //   hold/<method>       the method waits while this file exists; a directive with `hold` waits after its sets and
@@ -531,6 +532,17 @@ function buildView(result, sort, filters = []) {
       resolved.push(filter)
       continue
     }
+    if (filter.op === 'groups') {
+      // A checklist's snapshot: the rows of the values it ticks, frozen by the first view that uses it.
+      const snapshot = result.snapshots?.get(filter.snapshotId)
+      if (!snapshot) throw Object.assign(new Error('This column\'s value list was closed. Open the column\'s filter again.'), { code: 'VIEW_NOT_FOUND' })
+      if (snapshot.column !== filter.column) throw Object.assign(new Error('A groups filter\'s value list is of another column.'), { code: 'INVALID_PARAMS' })
+      const frozen = freezeSnapshot(snapshot)
+      const named = new Set(frozen.groups.map(group => snapshot.groups[group].key))
+      order = order.filter(row => { const value = valueOf(row, filter.column); return (value === null ? frozen.nulls : named.has(value)) === frozen.keep })
+      resolved.push({ op: 'groups', column: filter.column, snapshotId: filter.snapshotId, keep: frozen.keep, values: frozen.groups.length, nulls: frozen.nulls, ...frozen.groups.length === 1 ? { row: snapshot.groups[frozen.groups[0]].row } : {} })
+      continue
+    }
     let picked = filter.rows ?? []
     if (filter.cells) {
       const source = filter.cells.viewId === undefined ? undefined : result.views?.get(filter.cells.viewId)
@@ -558,7 +570,7 @@ function buildView(result, sort, filters = []) {
   return {
     filters: resolved,
     viewId: nextViewId++, resultId: result.resultId, columns: result.columns, order, rowAt: position => result.rowAt(order[position]), pageRows: result.pageRows,
-    read: order.length, complete: true, pages: new Map(), sealed: result.complete && rows === result.read
+    read: order.length, baseRows: rows, complete: true, pages: new Map(), sealed: result.complete && rows === result.read
   }
 }
 // results.identify: a row identity per row, the hash of a key column's text or of the whole row's. Text equality here is
@@ -671,6 +683,69 @@ function buildDiff(left, right, exact, context) {
     leftOnly: oneSided(left, 0), rightOnly: oneSided(right, 1)
   }
 }
+// results.pivot: a result's (or a view's) rows grouped by the row columns and the column group, values compared ordinally
+// (numbers by value), NULL first; each column group's values, then a Total per value. The real backend's collations,
+// types and limits have their own checks (PivotChecks).
+const pivotLabels = { count: 'Count', countDistinct: 'Distinct Count', sum: 'Sum', avg: 'Average', min: 'Min', max: 'Max' }
+function buildPivot(source, { rows: rowColumns, column: groupColumn, values }) {
+  const rows = source.sealed === undefined ? available(source) : source.read
+  const typeOf = at => source.columns[at].dataType.split('(')[0].trim().toLowerCase()
+  const approximate = at => typeOf(at) === 'float' || typeOf(at) === 'real'
+  const integer = at => ['tinyint', 'smallint', 'int', 'bigint'].includes(typeOf(at))
+  // An exact column's scale, as PivotOutput keeps it: money's 4, decimal(p,s)'s s, integers' 0.
+  const scaleOf = at => typeOf(at) === 'money' || typeOf(at) === 'smallmoney' ? 4 : typeOf(at) === 'decimal' || typeOf(at) === 'numeric' ? Number(/,\s*(\d+)\s*\)/.exec(source.columns[at].dataType)?.[1] ?? 0) : 0
+  const raw = (row, at) => { const value = cellValue(source.rowAt(row)[at]); return value === null || value === undefined ? null : value instanceof Uint8Array ? '0x' + Buffer.from(value).toString('hex').toUpperCase() : String(value) }
+  const compare = at => (a, b) => a === b ? 0 : a === null ? -1 : b === null ? 1 : numericTypes.has(typeOf(at)) ? Number(a) - Number(b) : a < b ? -1 : 1
+  const keyOf = (row, columns) => JSON.stringify(columns.map(at => raw(row, at)))
+  const groupsOf = columns => {
+    const first = new Map()
+    for (let row = 0; row < rows; row++) { const key = keyOf(row, columns); if (!first.has(key)) first.set(key, row) }
+    const keys = [...first.keys()].sort((a, b) => { const x = JSON.parse(a), y = JSON.parse(b); for (let i = 0; i < columns.length; i++) { const d = compare(columns[i])(x[i], y[i]); if (d) return d } return 0 })
+    return { keys, first, index: new Map(keys.map((key, at) => [key, at])) }
+  }
+  const rowGroups = groupsOf(rowColumns)
+  const columnLimit = Math.min(256, Math.floor((4096 - rowColumns.length) / values.length) - 1)
+  if (rowColumns.length === 0 && rowGroups.keys.length === 0) { rowGroups.keys.push('[]'); rowGroups.index.set('[]', 0) }
+  const columnGroups = groupColumn === undefined ? { keys: [], first: new Map(), index: new Map() } : groupsOf([groupColumn])
+  if (columnGroups.keys.length > columnLimit) return { error: `The column group has ${columnGroups.keys.length.toLocaleString('en-US')} distinct values, and a pivot can have at most ${columnLimit} column groups. Choose a column with fewer values, or move it to Rows.` }
+  const width = columnGroups.keys.length + 1
+  const cells = Array.from({ length: rowGroups.keys.length * width }, () => values.map(() => []))
+  for (let row = 0; row < rows; row++) {
+    const g = rowGroups.index.get(keyOf(row, rowColumns)), c = groupColumn === undefined ? -1 : columnGroups.index.get(keyOf(row, [groupColumn]))
+    for (const at of c < 0 ? [g * width + width - 1] : [g * width + c, g * width + width - 1]) values.forEach((_, v) => cells[at][v].push(row))
+  }
+  const figure = (value, members) => {
+    if (value.column === undefined) return String(members.length)
+    const present = members.filter(row => raw(row, value.column) !== null)
+    if (value.aggregate === 'count') return String(present.length)
+    if (value.aggregate === 'countDistinct') return String(new Set(present.map(row => raw(row, value.column).replace(/ +$/, '').toLowerCase())).size)
+    if (!present.length) return null
+    if (value.aggregate === 'min' || value.aggregate === 'max') {
+      const order = compare(value.column), best = present.reduce((a, b) => (value.aggregate === 'min' ? order(raw(b, value.column), raw(a, value.column)) < 0 : order(raw(b, value.column), raw(a, value.column)) > 0) ? b : a)
+      return source.rowAt(best)[value.column]
+    }
+    const sum = present.reduce((total, row) => total + Number(raw(row, value.column)), 0)
+    const figure = value.aggregate === 'sum' ? sum : sum / present.length
+    if (approximate(value.column)) return String(figure)
+    return figure.toFixed(value.aggregate === 'sum' ? scaleOf(value.column) : Math.max(scaleOf(value.column), 6))
+  }
+  const label = value => value.column === undefined ? 'Count of rows' : `${pivotLabels[value.aggregate]} of ${source.columns[value.column].name}`
+  const typeFor = value => value.column === undefined || value.aggregate === 'count' || value.aggregate === 'countDistinct' ? 'bigint'
+    : value.aggregate === 'min' || value.aggregate === 'max' ? source.columns[value.column].dataType : approximate(value.column) ? 'float'
+    : value.aggregate === 'sum' && integer(value.column) ? 'bigint' : `decimal(38,${value.aggregate === 'sum' ? scaleOf(value.column) : Math.max(scaleOf(value.column), 6)})`
+  const groupName = key => { const value = JSON.parse(key)[0]; return value === null ? 'NULL' : value.trim() === '' ? '(blank)' : value.slice(0, 128) }
+  const columns = [...rowColumns.map(at => source.columns[at])]
+  for (const key of columnGroups.keys) for (const value of values) columns.push(column(values.length > 1 ? `${groupName(key)} \u00b7 ${label(value)}` : groupName(key), typeFor(value)))
+  for (const value of values) columns.push(column(groupColumn === undefined ? label(value) : values.length > 1 ? `Total \u00b7 ${label(value)}` : 'Total', typeFor(value)))
+  const out = rowGroups.keys.map((key, g) => {
+    const first = rowGroups.first.get(key)
+    const cellsOf = Array.from({ length: width }, (_, c) => values.map((value, v) => figure(value, cells[g * width + c][v])))
+    return [...rowColumns.map(at => source.rowAt(first)[at]), ...cellsOf.flat()]
+  })
+  return {
+    set: { columns, rows: out, kind: 'pivot' }, rows, rowGroups: rowGroups.keys.length, columnGroups: columnGroups.keys.length, approximate: false
+  }
+}
 // results.search: the cells of a result (or a view's positions) whose display text contains the text, ignoring case;
 // binary values as 0x and uppercase hex, NULL and failed reads never. The real backend's collation rules have their own
 // checks. One pass counts every match and keeps a run of whole rows, forward from fromRow or the last before it.
@@ -757,6 +832,70 @@ function profileOf(source, columns) {
     })
   }
 }
+// results.distinct: a snapshot of a column's values grouped as the fake filters compare them (case-insensitively without
+// trailing spaces, numbers as numbers), each shown by its lowest base row, in value order and count order, with the
+// checklist's ticks; the real backend's collation rules have their own checks. With a kept view, each value (and NULL)
+// starts ticked when a row of that view holds it. Snapshots live on their result and go with it.
+let nextSnapshotId = 1
+function snapshotOf(result, source, column, keptView) {
+  const rows = source === result ? available(result) : source.read
+  const baseRow = position => source === result ? position : source.order[position]
+  const textOf = value => value instanceof Uint8Array ? '0x' + Buffer.from(value).toString('hex').toUpperCase() : String(value)
+  const keyOf = text => numericTypes.has(result.columns[column].dataType) ? Number(text) : text.replace(/ +$/, '').toLowerCase()
+  const keptKeys = new Set()
+  let nullTicked = !keptView
+  if (keptView) for (let position = 0; position < keptView.read; position++) {
+    const value = cellValue(result.rowAt(keptView.order[position])[column])
+    if (value === null || value === undefined) nullTicked = true
+    else keptKeys.add(keyOf(textOf(value)))
+  }
+  const byKey = new Map()
+  let nulls = 0
+  for (let position = 0; position < rows; position++) {
+    const row = baseRow(position), value = cellValue(result.rowAt(row)[column])
+    if (value === null || value === undefined) { nulls++; continue }
+    const text = textOf(value)
+    const key = keyOf(text)
+    const group = byKey.get(key)
+    if (group) { group.count++; if (row < group.row) Object.assign(group, { row, text }) } else byKey.set(key, { key, row, text, count: 1 })
+  }
+  const groups = [...byKey.values()].sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
+  const byCount = groups.map((_, group) => group).sort((a, b) => groups[b].count - groups[a].count || a - b)
+  const ticks = groups.map(group => !keptView || keptKeys.has(group.key))
+  return { snapshotId: nextSnapshotId++, column, rows, complete: !!(source.sealed ?? source.complete), nulls, groups, byCount, ticks, nullTicked }
+}
+const snapshotSummary = snapshot => ({ snapshotId: snapshot.snapshotId, rows: snapshot.rows, complete: snapshot.complete, nulls: snapshot.nulls, distinct: snapshot.groups.length, approximate: false, ...ticksOf(snapshot) })
+const ticksOf = snapshot => ({ checked: snapshot.ticks.filter(Boolean).length, nullsChecked: snapshot.nullTicked })
+/** The groups whose text contains the search, in value order. */
+function matchesOf(snapshot, search) {
+  if (snapshot.search?.text !== search) snapshot.search = { text: search, groups: snapshot.groups.flatMap((group, at) => group.text.toLowerCase().includes(search.toLowerCase()) ? [at] : []), byCount: undefined }
+  return snapshot.search.groups
+}
+/** A search's matches in count order, kept with the search as the real backend keeps them. */
+function countMatches(snapshot, search) {
+  const groups = matchesOf(snapshot, search)
+  if (!snapshot.search.byCount) { const matched = new Set(groups); snapshot.search.byCount = snapshot.byCount.filter(group => matched.has(group)) }
+  return snapshot.search.byCount
+}
+function readSnapshot(snapshot, { order, offset, count, search }) {
+  snapshot.valueOrder ??= snapshot.groups.map((_, group) => group)
+  const listed = search === undefined ? order === 'count' ? snapshot.byCount : snapshot.valueOrder : order === 'count' ? countMatches(snapshot, search) : matchesOf(snapshot, search)
+  const values = listed.slice(offset, offset + count).map(group => {
+    const { row, text, count: rows } = snapshot.groups[group]
+    return { group, row, text: text.length > 256 ? text.slice(0, 256) + '…' : text, count: rows, checked: snapshot.ticks[group] }
+  })
+  return { total: listed.length, offset, values, ...ticksOf(snapshot) }
+}
+/** The filter a snapshot's ticks make, fixed from the first view on: the fewer of the ticked (kept) and cleared (dropped)
+ *  values, dropping while rows still arrive. */
+function freezeSnapshot(snapshot) {
+  if (snapshot.frozen) return snapshot.frozen
+  const ticked = snapshot.ticks.filter(Boolean).length
+  const keep = snapshot.complete && ticked <= snapshot.groups.length - ticked
+  snapshot.frozen = { keep, groups: snapshot.ticks.flatMap((tick, group) => tick === keep ? [group] : []), nulls: (keep ? snapshot.nullTicked : !snapshot.nullTicked) && snapshot.nulls > 0 }
+  return snapshot.frozen
+}
+
 /** The result, or the view of it a request names; undefined (after answering) when either is gone. */
 function sourceOf(id, resultId, viewId) {
   const result = stored.get(resultId)
@@ -1255,13 +1394,38 @@ async function workbench(id, method, params, credit) {
       if (await controlled('language-status-fail')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL language provider availability check failed.')
       const configured = await controlled('language-enabled')
       return respond(id, { providers: [{ id: 'sqlserver', configured, completion: true, hover: true,
-        ...configured ? { refresh: true } : { reason: 'SQL language test provider is disabled.' } }] })
+        ...configured ? { refresh: true, diagnostics: await controlled('language-diagnostics') } : { reason: 'SQL language test provider is disabled.' } }] })
+    }
+    case 'language.diagnostics': {
+      if (!await controlled('language-diagnostics')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL diagnostic test provider is disabled.')
+      if (await controlled('language-fail')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL language test provider failed.')
+      const connection = workbenchConnections.get(params.context.connectionId)
+      const context = connection ? `${connection.server}/${params.context.database}` : 'offline'
+      const items = []
+      const lines = params.text.split(/\r\n|\r|\n/)
+      for (let line = 0; line < lines.length; line++) for (const match of lines[line].matchAll(/\b(?:MissingColumn|WarningColumn)\b/g)) {
+        const warning = match[0] === 'WarningColumn'
+        items.push({ range: { start: { line, character: match.index }, end: { line, character: match.index + match[0].length } },
+          message: warning ? `WarningColumn is a test warning (${context}).` : `Invalid column name 'MissingColumn' (${context}).`,
+          severity: warning ? 2 : 1, code: warning ? 'TEST_WARNING' : '207', source: 'SQL Tools test provider' })
+      }
+      return respond(id, { version: params.version, items, isIncomplete: false })
     }
     case 'language.complete': {
       if (!await controlled('language-enabled')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL language test provider is disabled.')
       if (await controlled('language-fail')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL language test provider failed.')
+      if (await controlled('language-ordering')) return respond(id, { items: [
+        { label: 'hiFunction', kind: 3, sortText: '000-function' },
+        { label: '@@hiGlobal', kind: 6, filterText: 'hiGlobal', sortText: '000-global' },
+        { label: 'hiKeyword', kind: 14, sortText: '000-keyword' },
+        { label: 'dbo.hiColumn', kind: 5, insertText: 'hiColumn', filterText: 'hiColumn', sortText: '999-column' },
+        { label: 'hiProperty', kind: 10, sortText: '999-property' },
+        { label: 'hi', kind: 3, sortText: '001-exact' }
+      ], isIncomplete: false })
       const label = params.context.connectionId ? `Customer${params.context.database === 'AppData' ? 'AppData' : 'Master'}` : 'Customer'
-      return respond(id, { items: [{ label, kind: 7, detail: `${params.context.database ?? 'offline'}.${label} (fake language service)`, insertText: label }], isIncomplete: false })
+      const items = [{ label, kind: 7, detail: `${params.context.database ?? 'offline'}.${label} (fake language service)`, insertText: label }]
+      if (await controlled('language-widget-overflow')) items.push(...Array.from({ length: 9 }, (_, index) => ({ label: `${label}${index}`, kind: 5, insertText: `${label}${index}`, sortText: `z${index}` })))
+      return respond(id, { items, isIncomplete: false })
     }
     case 'language.hover': {
       if (!await controlled('language-enabled')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL language test provider is disabled.')
@@ -1269,7 +1433,7 @@ async function workbench(id, method, params, credit) {
       const connection = workbenchConnections.get(params.context.connectionId)
       const contents = connection ? `Customer${params.context.database === 'AppData' ? 'AppData' : 'Master'} table (${connection.server}/${params.context.database}; fake language service).`
         : 'Customer table (fake language service).'
-      return respond(id, { contents })
+      return respond(id, { contents: await controlled('language-widget-overflow') ? `${contents}\n\n| Column | Type | Nullable |\n| --- | --- | --- |\n${Array.from({ length: 9 }, (_, index) => `| CustomerField${index} | nvarchar(100) | YES |`).join('\n')}` : contents })
     }
     case 'language.refresh':
       if (!await controlled('language-enabled')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL language test provider is disabled.')
@@ -1343,7 +1507,7 @@ async function workbench(id, method, params, credit) {
       result.views ??= new Map()
       result.views.set(view.viewId, view)
       if (params.replaces !== undefined) result.views.delete(params.replaces)
-      return respond(id, { viewId: view.viewId, rows: view.read, complete: view.sealed, approximate: false, ...(params.filters ? { filters: view.filters } : {}) })
+      return respond(id, { viewId: view.viewId, rows: view.read, baseRows: view.baseRows, complete: view.sealed, approximate: false, ...(params.filters ? { filters: view.filters } : {}) })
     }
     case 'results.identify': {
       const result = stored.get(params.resultId)
@@ -1382,6 +1546,16 @@ async function workbench(id, method, params, credit) {
       const { set: _set, ...counts } = diff
       return respond(id, { descriptor: describe(result), ...counts, approximate: false })
     }
+    case 'results.pivot': {
+      const source = sourceOf(id, params.resultId, params.viewId)
+      if (!source) return
+      const result = stored.get(params.resultId)
+      if (!result.complete) return fail(id, 'RESULT_OPEN', 'Pivot this result after it finishes loading.')
+      const built = buildPivot(source, params)
+      if (built.error) return fail(id, 'INVALID_PARAMS', built.error)
+      const { set, ...counts } = built
+      return respond(id, { descriptor: describe(storeResult(set, result.index)), ...counts })
+    }
     case 'results.search': {
       const source = sourceOf(id, params.resultId, params.viewId)
       return source && respond(id, searchResult(source, params))
@@ -1396,6 +1570,37 @@ async function workbench(id, method, params, credit) {
       const source = sourceOf(id, params.resultId, params.viewId)
       if (!source) return
       return respond(id, profileOf(source, params.columns))
+    }
+    case 'results.distinct': {
+      const source = sourceOf(id, params.resultId, params.viewId)
+      if (!source) return
+      const result = stored.get(params.resultId)
+      if (params.column >= result.columns.length) return fail(id, 'INVALID_PARAMS', "The column is not one of the result's.")
+      const keptView = params.keptViewId === undefined ? undefined : sourceOf(id, params.resultId, params.keptViewId)
+      if (params.keptViewId !== undefined && !keptView) return
+      result.snapshots ??= new Map()
+      if (result.snapshots.size >= 24) return fail(id, 'TOO_LARGE', 'These results keep as many value lists as they can. Remove some column filters and try again.')
+      const snapshot = snapshotOf(result, source, params.column, keptView)
+      result.snapshots.set(snapshot.snapshotId, snapshot)
+      return respond(id, snapshotSummary(snapshot))
+    }
+    case 'results.distinctRead': case 'results.distinctTick': {
+      const result = stored.get(params.resultId)
+      if (!result) return missing(id, params.resultId)
+      const snapshot = result.snapshots?.get(params.snapshotId)
+      if (!snapshot) return fail(id, 'VIEW_NOT_FOUND', "This column's value list was closed. Open the column's filter again.")
+      if (method === 'results.distinctRead') return respond(id, readSnapshot(snapshot, params))
+      if (snapshot.frozen) return fail(id, 'INVALID_PARAMS', "These values already filter the grid. Open the column's filter again to change them.")
+      if (params.groups?.some(group => group >= snapshot.groups.length)) return fail(id, 'INVALID_PARAMS', "A value to tick is not one of the list's.")
+      for (const group of params.all ? params.search === undefined ? snapshot.groups.map((_, at) => at) : matchesOf(snapshot, params.search) : params.groups ?? []) snapshot.ticks[group] = params.checked
+      if (params.nulls !== undefined) snapshot.nullTicked = params.nulls
+      return respond(id, ticksOf(snapshot))
+    }
+    case 'results.distinctClose': {
+      const result = stored.get(params.resultId)
+      let closed = 0
+      for (const snapshotId of params.snapshotIds) if (result?.snapshots?.delete(snapshotId)) closed++
+      return respond(id, { closed })
     }
     case 'results.viewClose': {
       const result = stored.get(params.resultId)

@@ -24,6 +24,7 @@ from Microsoft's documentation, so Varia keeps its own.
   - Editor Tab and Status Bar (`textEditor.editorTabAndStatusBar`)
   - Transact-SQL
     - General (`textEditor.transactSql.general`)
+    - IntelliSense (`textEditor.transactSql.intelliSense`)
     - Tabs (`textEditor.transactSql.tabs`)
 - Query Execution
   - SQL Server
@@ -146,6 +147,12 @@ The query window's status bar: where it is, and what it shows. A property grid: 
 | `textEditor.sql.wordWrap` | Word wrap | Boolean | False |  | All | At once | Wraps long lines at the edge of the editor instead of scrolling. Edit › Advanced › Word Wrap changes it too (Alt+Z on Windows and Linux). |
 | `textEditor.sql.viewWhiteSpace` | View white space | Boolean | False |  | All | At once | Shows spaces as dots and tabs as arrows. Edit › Advanced › View White Space changes it; as in SSMS, Options has no row for it. Not shown in Options. |
 | `textEditor.sql.lineNumbers` | Line numbers | Boolean | True | False (SSMS 18–20; SSMS 22 not verified) | All | At once | Shows line numbers beside the query text. |
+
+### Text Editor › Transact-SQL › IntelliSense
+
+| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `textEditor.sql.errorChecking` | Enable error checking | Boolean | True |  | All | At once | Checks query syntax and database object references while editing. Red underlines mark errors and yellow underlines mark warnings. Analysis does not execute the query. |
 
 ### Text Editor › Transact-SQL › Tabs
 
@@ -298,4 +305,4 @@ How Varia follows the SSIS Catalog (SSISDB) as it changes. Not in SSMS.
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (109 today).
+A patch holds at most one entry per setting (110 today).

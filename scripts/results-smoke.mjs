@@ -15,7 +15,7 @@ import {
   activeDocument, anyResultGrid, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice,
   jobProgress, kindIcon, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
   outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, resultsToolbar, resultToggle, statusBar,
-  profileCard, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, unsavedMark
+  pivotPanel, profileCard, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, unsavedMark
 } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -297,6 +297,25 @@ try {
   expect(wheeled.client.uiUnits).toBeLessThanOrEqual(16 * 1024 * 1024)
   expect(wheeled.client.workerBytes).toBeLessThanOrEqual(64 * 1024 * 1024)
   expect(wheeled.nodes).toBeLessThanOrEqual(1500)
+  // The header funnel over the million names (one each): the checklist lists them all a window at a time, its scroll bar
+  // reaches the last (by value, as count order ties), it draws only the rows in view, a search runs in the backend, and
+  // Cancel closes it.
+  await page.keyboard.press('Control+Home')
+  await expect(cell(0, 0)).toHaveText('0')
+  await cell(0, 1).click()
+  await page.keyboard.press('Alt+ArrowDown')
+  const names = page.getByRole('dialog', { name: 'Filter name', exact: true })
+  await expect(names).toContainText('1,000,000 values in 1,000,000 rows. 1,000,000 ticked.', { timeout: 60000 })
+  const valueList = names.getByRole('group', { name: 'Values', exact: true })
+  await valueList.evaluate(list => { list.scrollTop = list.scrollHeight })
+  await expect(names.getByRole('checkbox', { name: 'Société 0000999995 SARL (1)', exact: true })).toBeChecked()
+  expect(await valueList.getByRole('checkbox').count()).toBeLessThan(100)
+  await names.getByRole('searchbox', { name: 'Search values', exact: true }).fill('0000999995')
+  await expect(names).toContainText('1 of 1,000,000 values match.')
+  await expect(names.getByRole('checkbox', { name: 'Société 0000999995 SARL (1)', exact: true })).toBeChecked()
+  await names.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(names).toHaveCount(0)
+  console.log('Results checks: the header funnel lists a million values a window at a time, reaches the last by its scroll bar and searches them in the backend.')
 
   // 3. Wide results: End and Ctrl+→ bring the last column into view, the DOM stays small, and the row numbers stay at
   // the grid's left edge however far it scrolls, with native and with virtual scrolling.
@@ -1407,7 +1426,7 @@ try {
   await page.keyboard.press('Shift+F10')
   const outputMenu = page.getByRole('menu', { name: 'Query output', exact: true })
   await expect(outputMenu).toBeVisible()
-  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Filter', 'Highlight', 'Compare with Previous Result', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Results'])
+  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Filter', 'Highlight', 'Compare with Previous Result', 'Pivot Results…', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Results'])
   await page.keyboard.press('Escape')
   // Shift+F10 right after a click opens at the cell just clicked, though the grid paints it as active only on its next
   // frame: below it (or above, when there is no room), from its left edge (or to its right edge, near the window's).
@@ -1483,6 +1502,52 @@ try {
   await expect(rowNumber(0)).toHaveAttribute('title', /^Row 1: /)
   console.log('Results checks: the column profile panel shows the figures the backend computes for each column, and the row-size bar shows and hides with its bytes.')
 
+  // 13b2. Pivot: the results toolbar's Pivot opens the panel on the grid; a row group (active: 1 for every third id) with a
+  // Count of rows and a Max of id, built in the backend (results.pivot), adds the pivot as the run's next result.
+  await expect(show('Pivot')).toHaveAttribute('aria-pressed', 'false')
+  await show('Pivot').click()
+  const pivoting = pivotPanel(page)
+  await expect(pivoting).toBeVisible()
+  await expect(show('Pivot')).toHaveAttribute('aria-pressed', 'true')
+  await pivoting.getByRole('combobox', { name: 'Add row group', exact: true }).selectOption({ label: 'active' })
+  await expect(pivoting.getByRole('button', { name: 'Remove row group active', exact: true })).toBeVisible()
+  await pivoting.getByRole('button', { name: 'Add value', exact: true }).click()
+  await pivoting.getByRole('combobox', { name: 'Value 2 aggregate', exact: true }).selectOption({ label: 'Max' })
+  await expect(pivoting.getByRole('combobox', { name: 'Value 2 column', exact: true })).toHaveValue('0')
+  // Sum and Average take only numbers: the text name column is not offered for them.
+  await pivoting.getByRole('combobox', { name: 'Value 1 aggregate', exact: true }).selectOption({ label: 'Sum' })
+  await expect(pivoting.getByRole('combobox', { name: 'Value 1 column', exact: true }).getByRole('option', { name: 'name', exact: true })).toBeDisabled()
+  await pivoting.getByRole('combobox', { name: 'Value 1 aggregate', exact: true }).selectOption({ label: 'Count' })
+  await pivoting.getByRole('combobox', { name: 'Value 1 column', exact: true }).selectOption({ label: '(Rows)' })
+  await pivoting.getByRole('button', { name: 'Build Pivot', exact: true }).click()
+  const pivoted = grid(1)
+  await expect(cell(1, 2, pivoted)).toHaveText('99')
+  for (const name of ['active', 'Count of rows', 'Max of id']) await expect(pivoted.getByRole('columnheader', { name: new RegExp(`^${name}`) })).toHaveCount(1)
+  expect(await Promise.all([0, 1].map(row => Promise.all([0, 1, 2].map(column => cell(row, column, pivoted).textContent()))))).toEqual([['0', '66', '98'], ['1', '34', '99']])
+  await expect(strip(1)).toContainText('Pivot of Result 1: 100 rows in 2 row groups.')
+  await expect(page.getByRole('button', { name: 'Pivot of Result 1', exact: true })).toBeVisible()
+  await expect(pivoting.getByRole('combobox', { name: 'Pivot source', exact: true }).getByRole('option', { name: 'Pivot of Result 1', exact: true })).toHaveCount(1)
+  await page.screenshot({ path: resolve('artifacts', 'results-pivot.png') })
+  await pivoting.getByRole('button', { name: 'Close Pivot', exact: true }).click()
+  await expect(pivotPanel(page)).toHaveCount(0)
+  await expect(show('Pivot')).toHaveAttribute('aria-pressed', 'false')
+  // A pivot past its bounds is refused, not shown in part: 300 ids as column groups say so in the panel, which keeps the
+  // draft, and add no result. Running again releases the pivot with the run's other results.
+  await run('-- varia-fake: sets=W1*300')
+  await settled()
+  await expect(anyResultGrid(page)).toHaveCount(1)
+  await show('Pivot').click()
+  await expect(pivoting.getByRole('button', { name: 'Remove row group active', exact: true })).toBeVisible()
+  await pivoting.getByRole('combobox', { name: 'Column group', exact: true }).selectOption({ label: 'id' })
+  await pivoting.getByRole('button', { name: 'Build Pivot', exact: true }).click()
+  await expect(pivoting.getByRole('status')).toContainText('The column group has 300 distinct values, and a pivot can have at most 256 column groups.')
+  await expect(anyResultGrid(page)).toHaveCount(1)
+  await pivoting.getByRole('button', { name: 'Close Pivot', exact: true }).click()
+  await run('-- varia-fake: sets=W1*100')
+  await settled()
+  await expect(anyResultGrid(page)).toHaveCount(1)
+  console.log('Results checks: Pivot groups the rows of a grid by a column in the backend and adds the counts and maxima as a new result, offering Sum only for numeric columns and refusing a pivot past its bounds in the panel.')
+
   // 13c. Filters: the grid menu's Filter submenu filters by the selected cells' values, without NULL, between the lowest and
   // highest selected value and to duplicates; the caption counts the rows kept and lists each filter, named by its values,
   // with a Remove button, and Clear filters takes them all off. W1's active is 1 for every third id; its score is NULL for
@@ -1534,6 +1599,83 @@ try {
   await idInView()
   await expect(cell(1, 0)).toHaveText('1')
   console.log('Results checks: the Filter submenu filters by selected values, NULL, a range and duplicates; the caption counts the rows and removes and clears filters.')
+
+  // 13d. The header funnel (results.distinct): its popover lists a column's distinct values with their counts as a
+  // checklist; OK filters by the values ticked, the funnel stays filled while its column is filtered, Alt+Down opens it
+  // for the active cell's column, NULL is an entry, a search narrows the list, a custom condition filters between two
+  // values, the list reflects what the column's filter keeps, Clear filter takes the column's filters off and Escape
+  // closes it unchanged. In W1, active is 1 for every third id (34 rows) and 0 for the rest (66).
+  const funnel = name => page.getByRole('dialog', { name: `Filter ${name}`, exact: true })
+  // A wide header's funnel opens on a click (a narrow one leaves clicks to selecting its column); Cancel changes nothing.
+  await idInView()
+  await header('name').hover()
+  await header('name').locator(gridPart.funnelButton).click()
+  await expect(funnel('name').getByRole('checkbox', { name: 'Customer 0000000001 GmbH (1)', exact: true })).toBeChecked()
+  await expect(funnel('name').getByRole('searchbox', { name: 'Search values', exact: true })).toBeFocused()
+  await expect(funnel('name')).toContainText('100 values in 100 rows.')
+  await funnel('name').getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(funnel('name')).toHaveCount(0)
+  // A second press on the open funnel closes it, as a menu button does.
+  await header('name').hover()
+  await header('name').locator(gridPart.funnelButton).click()
+  await expect(funnel('name')).toBeVisible()
+  await header('name').locator(gridPart.funnelButton).click()
+  await expect(funnel('name')).toHaveCount(0)
+  await expect(caption).not.toContainText(' of ')
+  await cell(0, 6).click()
+  await page.keyboard.press('Alt+ArrowDown')
+  await expect(funnel('active').getByRole('checkbox', { name: '0 (66)', exact: true })).toBeChecked()
+  await funnel('active').getByRole('checkbox', { name: '1 (34)', exact: true }).uncheck()
+  await funnel('active').getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(funnel('active')).toHaveCount(0)
+  await expect(caption).toContainText('66 of 100 rows')
+  await expect(filterList).toContainText("active = '0'")
+  await expect(header('active').locator(gridPart.funnelOn)).toBeVisible()
+  // Score in the 66 rows: NULL for ids ending in 4 or 9 that are not a multiple of 3, 13 of them.
+  await cell(0, 7).click()
+  await page.keyboard.press('Alt+ArrowDown')
+  const score = funnel('score')
+  await expect(score.getByRole('checkbox', { name: 'NULL (13)', exact: true })).toBeChecked()
+  await score.getByRole('searchbox', { name: 'Search values', exact: true }).fill('zzz')
+  await expect(score).toContainText('No values match.')
+  await score.getByRole('searchbox', { name: 'Search values', exact: true }).fill('')
+  await score.getByRole('button', { name: 'Select none', exact: true }).click()
+  await expect(score.getByRole('checkbox', { name: 'NULL (13)', exact: true })).not.toBeChecked()
+  await score.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(score.getByRole('alert')).toHaveText('Select at least one value.')
+  await score.getByRole('checkbox', { name: 'NULL (13)', exact: true }).check()
+  await score.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(caption).toContainText('13 of 100 rows')
+  await expect(filterList).toContainText('score is NULL')
+  // The grid has the focus back: Alt+Down opens score again, whose Clear filter takes its filter off.
+  await page.keyboard.press('Alt+ArrowDown')
+  await score.getByRole('button', { name: 'Clear filter', exact: true }).click()
+  await expect(caption).toContainText('66 of 100 rows')
+  await expect(header('score').locator(gridPart.funnelOn)).toHaveCount(0)
+  // A custom condition, from the ids the 66 rows hold: id between 2 and 13 keeps 2, 4, 5, 7, 8, 10, 11 and 13.
+  await idInView()
+  await cell(0, 0).click()
+  await page.keyboard.press('Alt+ArrowDown')
+  await funnel('id').getByRole('combobox', { name: 'Condition', exact: true }).selectOption({ label: 'Between' })
+  await expect(funnel('id').getByRole('checkbox').first()).toBeDisabled()
+  await funnel('id').getByRole('combobox', { name: 'Lowest value', exact: true }).selectOption({ label: '2' })
+  await funnel('id').getByRole('combobox', { name: 'Highest value', exact: true }).selectOption({ label: '13' })
+  await funnel('id').getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(caption).toContainText('8 of 100 rows')
+  await expect(filterList).toContainText("id between '2' and '13'")
+  // Active's list now covers the ids 2 to 13 (its own filter left out), with only the value its filter keeps ticked.
+  await cell(0, 6).click()
+  await page.keyboard.press('Alt+ArrowDown')
+  await expect(funnel('active').getByRole('checkbox', { name: '0 (8)', exact: true })).toBeChecked()
+  await expect(funnel('active').getByRole('checkbox', { name: '1 (4)', exact: true })).not.toBeChecked()
+  await page.screenshot({ path: resolve('artifacts', 'results-funnel.png') })
+  await page.keyboard.press('Escape')
+  await expect(funnel('active')).toHaveCount(0)
+  await expect(grid()).toBeFocused()
+  await expect(caption).toContainText('8 of 100 rows')
+  await filterList.getByRole('button', { name: 'Clear filters', exact: true }).click()
+  await expect(caption).not.toContainText(' of ')
+  console.log('Results checks: the header funnel lists distinct values with counts, filters by the values ticked, NULL, a search, a range and Clear filter, and opens with Alt+Down.')
 
   // 14. Styling: NULL, truncation, read errors and the selection (focused or not) take their tokens; a theme change
   // recolours the same nodes.

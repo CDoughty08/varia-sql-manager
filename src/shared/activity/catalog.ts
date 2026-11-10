@@ -551,8 +551,6 @@ export const tileSpecs: readonly TileSpec[] = [
     thresholds: [{ series: 'runnablePerScheduler', warning: 1 }, { series: 'workQueue', error: 1 }] },
   { caption: 'Memory Grants Pending', series: 'grantsPending', value: 'instant', secondary: ['pageLifeExpectancy', 'deadlocks'], parity: 'new', thresholds: [{ series: 'grantsPending', warning: 1 }] }
 ]
-/** At most this many tiles have their chart expanded at once. */
-export const maxExpandedTiles = 2
 /** The Resource Waits chart: the five largest categories, each a categorical hue, and the rest as Other (gray). Benign
  *  categories (Idle) are never charted: their time is threads waiting for work. */
 export const waitsChartSeries = 5

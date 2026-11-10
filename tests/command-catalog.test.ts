@@ -56,7 +56,7 @@ describe('command catalogue', () => {
   it('is the renderer\'s command id type', () => {
     expectTypeOf<CommandId>().toEqualTypeOf<RendererCommandId>()
     // Includes generated Script As commands and internal lifecycle commands.
-    expect(commandIds).toHaveLength(286)
+    expect(commandIds).toHaveLength(290)
     expect(commandIds.filter(id => id.startsWith('explorer.script') && id.includes('To'))).toEqual([...scriptCommandIds])
   })
   it('has a handler for every command once all contributions have run', () => {
@@ -234,7 +234,7 @@ describe('context keys', () => {
   it('keep focus samples consistent with the key definitions', () => {
     for (const sample of focusSamples) {
       const record = contextRecord('linux', sample.keys)
-      expect(record.textInputFocus, sample.name).toBe(record.editorTextFocus || record.inputFocus)
+      expect(record.textInputFocus, sample.name).toBe(record.editorTextFocus || record.inputFocus || record.peekEditorFocus)
       if (record.editorTextFocus) expect(record.editorFocus, sample.name).toBe(true)
       expect(Object.keys(sample.keys).every(key => contextKeys[key as keyof typeof contextKeys].scope === 'focus'), sample.name).toBe(true)
     }

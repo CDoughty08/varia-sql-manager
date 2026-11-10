@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ResultClient, WindowCache, type PortMessageEvent, type RowWindow, type WindowLike, type WorkerLike } from '../src/renderer/src/results/ResultClient'
 import { ResultsWorkerCore } from '../src/renderer/src/results/worker-core'
 import type { WorkerRequest, WorkerResponse } from '../src/renderer/src/results/worker-protocol'
-import type { ApiResult, QueryResult, ResultDescriptor, ResultsProfileResult } from '../src/shared/contracts'
+import type { ApiResult, QueryResult, ResultDescriptor, ResultsDistinctResult, ResultsProfileResult } from '../src/shared/contracts'
 import type { PortMessage, PortRequest } from '../src/shared/ipc/port-messages'
 import type { LiveEvent, LiveSubscribeParams } from '../src/shared/live/schema'
 import { columnViewBytes, encodePage } from '../src/shared/ipc/wire/pages'
@@ -283,7 +283,7 @@ describe('ResultClient', () => {
     expect(await answer('identify', { column: 1, unique: true, approximate: false, rows: 10 })).toMatchObject({ t: 'identify', generation: 1, resultId: 3, by: 'auto' })
     expect(await identifying).toEqual({ column: 1, unique: true, approximate: false, rows: 10 })
     const sorting = handle.sort([{ column: 0, descending: true, mode: 'value' }])
-    await answer('view', { viewId: 2, rows: 10, complete: true, approximate: false })
+    await answer('view', { viewId: 2, rows: 10, baseRows: 10, complete: true, approximate: false })
     const view = await sorting
     const reading = view.rowIds(4, 2)
     expect(await answer('rowIds', { firstRow: 4, ids: [11, 12], rows: 10 })).toMatchObject({ resultId: 3, firstRow: 4, count: 2, viewId: 2 })
@@ -325,6 +325,33 @@ describe('ResultClient', () => {
     await settle()
     expect(worker().fromWorker.findLast(item => item.t === 'close')).toMatchObject({ generation: 1, resultIds: [10] })
     expect((client as unknown as { pending: Map<number, unknown> }).pending.size).toBe(0)
+    // A pivot names distinct row columns of the result, a column group apart from them and 1 to 16 values; it reads through a view.
+    const pivotBefore = worker().fromWorker.length
+    for (const spec of [
+      { rows: [0, 0], values: [{ aggregate: 'count' as const }] },
+      { rows: [99], values: [{ aggregate: 'count' as const }] },
+      { rows: [0], column: 0, values: [{ aggregate: 'count' as const }] },
+      { rows: [0], values: [] },
+      { rows: [0], values: [{ aggregate: 'sum' as const }] },
+      { rows: [0], values: [{ aggregate: 'max' as const, column: -1 }] },
+      { rows: [0, 1, 2, 3, 4, 5, 6, 7, 8], values: [{ aggregate: 'count' as const }] },
+      { rows: [], values: Array.from({ length: 17 }, () => ({ aggregate: 'count' as const })) }
+    ]) await expect(handle.pivot(spec)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    expect(worker().fromWorker.length).toBe(pivotBefore)
+    const pivoting = view.pivot({ rows: [], column: 0, values: [{ aggregate: 'max', column: 0 }] })
+    const pivotAnswer = { descriptor: descriptor({ resultId: 11, kind: 'pivot' }), rows: 10, rowGroups: 2, columnGroups: 3, approximate: false }
+    expect(await answer('pivot', pivotAnswer)).toMatchObject({ t: 'pivot', generation: 1, resultId: 3, rows: [], column: 0, values: [{ aggregate: 'max', column: 0 }], viewId: 2 })
+    expect(await pivoting).toEqual(pivotAnswer)
+    // A pivot given up whose answer comes anyway is closed.
+    const giveUp = new AbortController()
+    const abandoned = handle.pivot({ rows: [0], values: [{ aggregate: 'count' }] }, { signal: giveUp.signal })
+    await settle()
+    const pivotAsked = worker().fromWorker.findLast(item => item.t === 'pivot')!
+    giveUp.abort()
+    await expect(abandoned).rejects.toMatchObject({ name: 'AbortError' })
+    worker().toWorker({ t: 'end', rid: pivotAsked.rid, ok: true, result: { ...pivotAnswer, descriptor: descriptor({ resultId: 12, kind: 'pivot' }) } } as never)
+    await settle()
+    expect(worker().fromWorker.findLast(item => item.t === 'close')).toMatchObject({ generation: 1, resultIds: [12] })
   })
 
   it('sorts a result into a view read by position, replaces and closes views, and drops them with their result', async () => {
@@ -336,13 +363,13 @@ describe('ResultClient', () => {
     const answerView = async (viewId: number, approximate = false) => {
       await settle()
       const request = worker().fromWorker.findLast(item => item.t === 'view')!
-      worker().toWorker({ t: 'end', rid: request.rid, ok: true, result: { viewId, rows: 10, complete: true, approximate } })
+      worker().toWorker({ t: 'end', rid: request.rid, ok: true, result: { viewId, rows: 10, baseRows: 60, complete: true, approximate } })
       return request
     }
     const sorting = handle.sort([{ column: 0, descending: true, mode: 'value' }])
     expect(await answerView(2)).toMatchObject({ t: 'view', generation: 1, resultId: 3, sort: [{ column: 0, descending: true, mode: 'value' }] })
     const view = await sorting
-    expect([view.viewId, view.rows, view.complete, view.approximate, view.base === handle]).toEqual([2, 10, true, false, true])
+    expect([view.viewId, view.rows, view.baseRows, view.complete, view.approximate, view.base === handle]).toEqual([2, 10, 60, true, false, true])
     expect(view.getSnapshot()).toMatchObject({ rowsAvailable: 10, state: 'complete' })
     expect(client.trackedViews).toBe(1)
     const pending = view.getWindow(0, 4)
@@ -379,7 +406,7 @@ describe('ResultClient', () => {
     await settle()
     const asked = worker().fromWorker.findLast(item => item.t === 'view')!
     expect(asked).toMatchObject({ sort: [], filters: [{ op: 'between', column: 0, cells: { ranges: [[0, 3]] } }] })
-    worker().toWorker({ t: 'end', rid: asked.rid, ok: true, result: { viewId: 7, rows: 2, complete: true, approximate: false, filters: [{ op: 'between', column: 0, rows: [0, 2], nulls: false }] } })
+    worker().toWorker({ t: 'end', rid: asked.rid, ok: true, result: { viewId: 7, rows: 2, baseRows: 2, complete: true, approximate: false, filters: [{ op: 'between', column: 0, rows: [0, 2], nulls: false }] } })
     const filteredView = await filtering
     expect([filteredView.rows, filteredView.filters]).toEqual([2, [{ op: 'between', column: 0, rows: [0, 2], nulls: false }]])
     expect(view.filters).toEqual([])
@@ -414,7 +441,7 @@ describe('ResultClient', () => {
     expect(await searching).toEqual(result)
     const sorting = handle.sort([{ column: 0, descending: true, mode: 'value' }])
     await settle()
-    worker().toWorker({ t: 'end', rid: worker().fromWorker.findLast(item => item.t === 'view')!.rid, ok: true, result: { viewId: 2, rows: 10, complete: true, approximate: false } })
+    worker().toWorker({ t: 'end', rid: worker().fromWorker.findLast(item => item.t === 'view')!.rid, ok: true, result: { viewId: 2, rows: 10, baseRows: 10, complete: true, approximate: false } })
     const view = await sorting
     const backward = view.search('4', 7, { backward: true, maxMatches: 5 })
     await settle()
@@ -453,13 +480,89 @@ describe('ResultClient', () => {
     const sorting = handle.sort([{ column: 0, descending: true, mode: 'value' }])
     await settle()
     const sort = worker().fromWorker.findLast(item => item.t === 'view')!
-    worker().toWorker({ t: 'end', rid: sort.rid, ok: true, result: { viewId: 2, rows: 10, complete: true, approximate: false } })
+    worker().toWorker({ t: 'end', rid: sort.rid, ok: true, result: { viewId: 2, rows: 10, baseRows: 10, complete: true, approximate: false } })
     const view = await sorting
     const viewed = view.profile([])
     expect(await answer({ rows: 10, complete: true, columns: [] })).toMatchObject({ t: 'profile', resultId: 3, columns: [], viewId: 2 })
     expect((await viewed).columns).toEqual([])
     await expect(handle.profile([1])).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     await expect(handle.profile([0, 0])).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+  })
+
+  it('keeps a column\'s distinct snapshot, reads, ticks and closes it through its result, and refuses bad requests before the port', async () => {
+    const { client, worker, handOver } = fixture()
+    handOver()
+    await client.ready()
+    worker().toWorker({ t: 'backend', generation: 1, status: 'ready' })
+    const handle = client.open(descriptor())
+    const answer = async (t: string, result: unknown) => {
+      await settle()
+      const request = worker().fromWorker.findLast(item => item.t === t)!
+      worker().toWorker({ t: 'end', rid: request.rid, ok: true, result: result as ResultsDistinctResult })
+      return request
+    }
+    const summary = { snapshotId: 9, rows: 10, complete: true, nulls: 2, distinct: 2, approximate: false, checked: 2, nullsChecked: true }
+    const opening = handle.distinct(0)
+    expect(await answer('distinct', summary)).toEqual({ t: 'distinct', rid: expect.any(Number), generation: 1, resultId: 3, column: 0 })
+    const list = await opening
+    expect(list).toMatchObject({ generation: 1, resultId: 3, snapshotId: 9, column: 0, summary })
+    const window = { total: 2, offset: 0, checked: 2, nullsChecked: true, values: [{ group: 0, row: 0, text: 'a', count: 5, checked: true }, { group: 1, row: 4, text: 'b', count: 3, checked: true }] }
+    const reading = list.read({ order: 'value', offset: 0, count: 128, search: 'b' })
+    expect(await answer('distinctRead', window)).toEqual({ t: 'distinctRead', rid: expect.any(Number), generation: 1, resultId: 3, snapshotId: 9, order: 'value', offset: 0, count: 128, search: 'b' })
+    expect(await reading).toEqual(window)
+    const ticking = list.tick({ checked: false, all: true, search: 'b', nulls: false })
+    expect(await answer('distinctTick', { checked: 1, nullsChecked: false })).toEqual({ t: 'distinctTick', rid: expect.any(Number), generation: 1, resultId: 3, snapshotId: 9, checked: false, all: true, search: 'b', nulls: false })
+    expect(await ticking).toEqual({ checked: 1, nullsChecked: false })
+    // A snapshot read through a view belongs to the result: it outlives the view, and its requests name no view.
+    const sorting = handle.sort([{ column: 0, descending: true, mode: 'value' }])
+    await settle()
+    const sort = worker().fromWorker.findLast(item => item.t === 'view')!
+    worker().toWorker({ t: 'end', rid: sort.rid, ok: true, result: { viewId: 2, rows: 10, baseRows: 10, complete: true, approximate: false } })
+    const view = await sorting
+    const viewed = view.distinct(0, { kept: view })
+    expect(await answer('distinct', { ...summary, snapshotId: 10 })).toMatchObject({ t: 'distinct', resultId: 3, column: 0, viewId: 2, keptViewId: 2 })
+    const fromView = await viewed
+    const closingView = view.close()
+    await answer('viewClose', { closed: 1 })
+    await closingView
+    const after = fromView.read({ order: 'count', offset: 128, count: 1 })
+    expect(await answer('distinctRead', { ...window, offset: 128, total: 2, values: [] })).not.toHaveProperty('viewId')
+    expect((await after).values).toEqual([])
+    const closing = list.close()
+    expect(await answer('distinctClose', { closed: 1 })).toEqual({ t: 'distinctClose', rid: expect.any(Number), generation: 1, resultId: 3, snapshotIds: [9] })
+    await closing
+    const closes = worker().fromWorker.filter(item => item.t === 'distinctClose').length
+    await list.close()
+    expect(worker().fromWorker.filter(item => item.t === 'distinctClose').length).toBe(closes)
+    // A snapshot answered after its open was given up (the cancel crossed the answer) is closed, not left in the backend.
+    const abort = new AbortController()
+    const given = handle.distinct(0, { signal: abort.signal })
+    await settle()
+    const asked = worker().fromWorker.findLast(item => item.t === 'distinct')!
+    abort.abort()
+    await expect(given).rejects.toMatchObject({ name: 'AbortError' })
+    await settle()
+    expect(worker().fromWorker.at(-1)).toEqual({ t: 'cancel', rid: asked.rid })
+    worker().toWorker({ t: 'end', rid: asked.rid, ok: true, result: { ...summary, snapshotId: 11 } })
+    await settle()
+    expect(worker().fromWorker.at(-1)).toEqual({ t: 'distinctClose', rid: expect.any(Number), generation: 1, resultId: 3, snapshotIds: [11] })
+    // Refused before the port: a column the result lacks, a kept handle that is no view, and windows or ticks out of bounds.
+    await expect(handle.distinct(0, { kept: handle })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.distinct(1)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(fromView.read({ order: 'count', offset: 0, count: 513 })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(fromView.read({ order: 'count', offset: -1, count: 1 })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(fromView.read({ order: 'random' as 'count', offset: 0, count: 1 })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(fromView.read({ order: 'count', offset: 0, count: 1, search: '' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(fromView.tick({ checked: true })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(fromView.tick({ checked: true, all: true, groups: [1] })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(fromView.tick({ checked: true, groups: [1], search: 'x' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(fromView.tick({ checked: true, groups: Array.from({ length: 513 }, (_, at) => at) })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    // A groups filter goes to the backend as it was asked, without what a view said of it.
+    const filtering = handle.sort([], { filters: [{ op: 'groups', column: 0, snapshotId: 10, keep: true, values: 1, nulls: false, row: 4 } as never] })
+    await settle()
+    expect(worker().fromWorker.findLast(item => item.t === 'view')).toMatchObject({ filters: [{ op: 'groups', column: 0, snapshotId: 10 }] })
+    expect(worker().fromWorker.findLast(item => item.t === 'view')!.filters?.[0]).not.toHaveProperty('keep')
+    void filtering.catch(() => undefined)
   })
 
   it('bounds the text of the windows a result remembers', async () => {

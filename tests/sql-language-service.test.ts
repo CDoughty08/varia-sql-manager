@@ -4,6 +4,7 @@ import type { ApiResult, BackendState, ConnectionInfo, VariaApi } from '../src/s
 import { languageLimits, type LanguageCompletions, type LanguageHover, type LanguageStatus } from '../src/shared/language-service'
 import { limits as ipcLimits } from '../src/shared/ipc/wire/protocol'
 import { SqlLanguageService } from '../src/renderer/src/languages/SqlLanguageService'
+import { SqlDiagnosticsService, sqlDiagnosticDebounceMs } from '../src/renderer/src/languages/SqlDiagnosticsService'
 import { ConnectionService } from '../src/renderer/src/services/connections'
 import { BackendStateService } from '../src/renderer/src/services/backend'
 import { documentFixture, deferred, TestModel } from './fixtures/documents'
@@ -11,7 +12,7 @@ import { documentFixture, deferred, TestModel } from './fixtures/documents'
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).reverse().forEach(cleanup => cleanup()); vi.useRealTimers(); vi.restoreAllMocks() })
 const position = { lineNumber: 1, column: 4 } as Monaco.Position
-const configured: LanguageStatus = { providers: [{ id: 'sqlserver', configured: true, completion: true, hover: true, refresh: true }] }
+const configured: LanguageStatus = { providers: [{ id: 'sqlserver', configured: true, completion: true, hover: true, refresh: true, diagnostics: true }] }
 const completions: LanguageCompletions = { items: [{ label: 'Customer', kind: 7 }], isIncomplete: false }
 const token = (): Monaco.CancellationToken => ({ isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) })
 function cancellationSource() {
@@ -34,6 +35,7 @@ async function fixture(status = configured, withBackend = false) {
     languageStatus: vi.fn<VariaApi['languageStatus']>(async () => ({ ok: true, value: status })),
     languageComplete: vi.fn<VariaApi['languageComplete']>(async () => ({ ok: true, value: completions })),
     languageHover: vi.fn<VariaApi['languageHover']>(async () => ({ ok: true, value: { contents: 'Customer table' } })),
+    languageDiagnostics: vi.fn<VariaApi['languageDiagnostics']>(async request => ({ ok: true, value: { version: request.version, items: [], isIncomplete: false } })),
     languageRefresh: vi.fn<VariaApi['languageRefresh']>(async () => ({ ok: true, value: { refreshed: true } })),
     languageClose: vi.fn<VariaApi['languageClose']>(async () => ({ ok: true, value: { closed: true } }))
   }
@@ -41,7 +43,7 @@ async function fixture(status = configured, withBackend = false) {
   const unregisterCompletion = vi.fn(), unregisterHover = vi.fn()
   const monaco = { languages: {
     // Distinct values catch accidentally treating LSP's numeric kind as Monaco's numeric kind.
-    CompletionItemKind: { Text: 100, Class: 700, Keyword: 1400 }, CompletionItemInsertTextRule: { InsertAsSnippet: 4 },
+    CompletionItemKind: { Text: 100, Function: 300, Field: 500, Variable: 600, Class: 700, Property: 1000, Keyword: 1400 }, CompletionItemInsertTextRule: { InsertAsSnippet: 4 },
     registerCompletionItemProvider: vi.fn((_id: string, provider: Monaco.languages.CompletionItemProvider) => { completion = provider; return { dispose: unregisterCompletion } }),
     registerHoverProvider: vi.fn((_id: string, provider: Monaco.languages.HoverProvider) => { hover = provider; return { dispose: unregisterHover } })
   } } as unknown as typeof Monaco
@@ -58,6 +60,7 @@ async function fixture(status = configured, withBackend = false) {
     const value = docs.model(id)
     return Object.assign(value, {
       getLanguageId: () => value.language,
+      isDisposed: () => value.disposed,
       getWordUntilPosition: (at: Monaco.Position) => {
         const word = value.getWordAtPosition(at)
         return { word: word?.word ?? '', startColumn: word?.startColumn ?? at.column, endColumn: at.column }
@@ -76,6 +79,184 @@ async function fixture(status = configured, withBackend = false) {
 }
 
 describe('SQL language editor integration', () => {
+  it('pauses background analysis immediately until overlapping foreground IPC really settles, then restores markers', async () => {
+    const f = await fixture()
+    vi.useFakeTimers()
+    const tab = f.documents.create('foreground.sql', 'SELECT Missing', 'master')
+    const oldAnalysis = deferred<Awaited<ReturnType<VariaApi['languageDiagnostics']>>>()
+    const completion = deferred<Awaited<ReturnType<VariaApi['languageComplete']>>>()
+    const hover = deferred<Awaited<ReturnType<VariaApi['languageHover']>>>()
+    const issue = { range: { start: { line: 0, character: 7 }, end: { line: 0, character: 14 } }, message: 'Invalid column.', severity: 1 }
+    f.api.languageDiagnostics.mockReturnValueOnce(oldAnalysis.promise).mockImplementation(async request => ({ ok: true,
+      value: { version: request.version, items: [issue], isIncomplete: false } }))
+    f.api.languageComplete.mockReturnValueOnce(completion.promise)
+    f.api.languageHover.mockReturnValueOnce(hover.promise)
+    const setModelMarkers = vi.fn()
+    const diagnostics = new SqlDiagnosticsService({ editor: { setModelMarkers }, MarkerSeverity: { Error: 8, Warning: 4, Info: 2, Hint: 1 } } as unknown as typeof Monaco,
+      f.service, f.documents, f.connections, { enabled: () => true, subscribe: () => () => {} })
+    cleanups.push(() => diagnostics.dispose())
+    await vi.advanceTimersByTimeAsync(sqlDiagnosticDebounceMs)
+    expect(f.api.languageDiagnostics).toHaveBeenCalledOnce()
+    const cancel = cancellationSource(), busy: boolean[] = []
+    const unsubscribe = f.service.subscribe(() => { const value = f.service.isForegroundBusy(tab.id); if (busy.at(-1) !== value) busy.push(value) })
+    cleanups.push(unsubscribe)
+    const completed = f.complete(tab.id, position, cancel.token), hovered = f.getHover(tab.id)
+    expect(f.service.isForegroundBusy(tab.id)).toBe(true)
+    expect(diagnostics.status(tab.id)?.label).toBe('SQL analysis paused')
+    expect(f.api.languageComplete).toHaveBeenCalledOnce()
+    expect(f.api.languageHover).toHaveBeenCalledOnce()
+    cancel.cancel()
+    oldAnalysis.resolve({ ok: false, error: 'Foreground request superseded analysis.', code: 'STALE' })
+    await vi.advanceTimersByTimeAsync(sqlDiagnosticDebounceMs)
+    expect(diagnostics.status(tab.id)?.label).toBe('SQL analysis paused')
+    expect(f.api.languageDiagnostics).toHaveBeenCalledOnce()
+    completion.resolve({ ok: true, value: completions })
+    expect((await completed).suggestions).toEqual([])
+    expect(f.service.isForegroundBusy(tab.id)).toBe(true)
+    hover.resolve({ ok: true, value: { contents: 'SQL hover' } })
+    await hovered
+    expect(f.service.isForegroundBusy(tab.id)).toBe(false)
+    expect(busy).toEqual([true, false])
+    await vi.advanceTimersByTimeAsync(sqlDiagnosticDebounceMs)
+    expect(f.api.languageDiagnostics).toHaveBeenCalledTimes(2)
+    expect(diagnostics.status(tab.id)?.label).toBe('SQL: 1 error')
+    expect(setModelMarkers.mock.calls.filter(call => call[0] === f.model(tab.id)).at(-1)?.[2]).toHaveLength(1)
+  })
+  it('keeps canceled refresh work foreground until its actual IPC finishes', async () => {
+    const f = await fixture(), answer = deferred<Awaited<ReturnType<VariaApi['languageRefresh']>>>(), cancel = cancellationSource()
+    vi.useFakeTimers()
+    f.addConnection('connection-a')
+    const tab = f.documents.create('refresh.sql', 'SELECT 1', 'master', 'connection-a')
+    f.api.languageRefresh.mockReturnValueOnce(answer.promise)
+    const refresh = f.service.refreshCache(tab.id, cancel.token)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(f.service.isForegroundBusy(tab.id)).toBe(true)
+    cancel.cancel()
+    expect(await refresh).toBe(false)
+    expect(f.service.isForegroundBusy(tab.id)).toBe(true)
+    answer.resolve({ ok: true, value: { refreshed: true } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(f.service.isForegroundBusy(tab.id)).toBe(false)
+  })
+  it.each(['close', 'dispose'] as const)('releases foreground accounting after %s and a late IPC response', async change => {
+    const f = await fixture(), answer = deferred<Awaited<ReturnType<VariaApi['languageComplete']>>>()
+    const tab = f.documents.create('late.sql', 'SEL', 'master')
+    f.api.languageComplete.mockReturnValueOnce(answer.promise)
+    const work = f.complete(tab.id)
+    expect(f.service.isForegroundBusy(tab.id)).toBe(true)
+    if (change === 'close') await f.documents.close(tab.id)
+    else { f.service.dispose(); expect(f.service.isForegroundBusy(tab.id)).toBe(false) }
+    answer.resolve({ ok: true, value: completions })
+    expect((await work).suggestions).toEqual([])
+    expect(f.service.isForegroundBusy(tab.id)).toBe(false)
+  })
+  it('invalidates diagnostics in sibling queries sharing a successfully refreshed connection and database', async () => {
+    const f = await fixture()
+    f.addConnection('connection-a')
+    const a = f.documents.create('a.sql', 'SELECT 1', 'first', 'connection-a'), b = f.documents.create('b.sql', 'SELECT 2', 'first', 'connection-a')
+    const c = f.documents.create('c.sql', 'SELECT 3', 'other', 'connection-a')
+    const before = f.service.diagnosticsEpoch(b.id), unrelated = f.service.diagnosticsEpoch(c.id)
+    expect(await f.service.refreshCache(a.id)).toBe(true)
+    expect(f.service.diagnosticsEpoch(b.id)).toBeGreaterThan(before)
+    expect(f.service.diagnosticsEpoch(c.id)).toBe(unrelated)
+  })
+  it('rechecks sibling markers when refresh succeeds after its initiating query was edited', async () => {
+    const f = await fixture()
+    vi.useFakeTimers()
+    f.addConnection('connection-a')
+    const a = f.documents.create('a.sql', 'SELECT Missing', 'first', 'connection-a'), b = f.documents.create('b.sql', 'SELECT Missing', 'first', 'connection-a')
+    const setModelMarkers = vi.fn()
+    const diagnostics = new SqlDiagnosticsService({ editor: { setModelMarkers }, MarkerSeverity: { Error: 8, Warning: 4, Info: 2, Hint: 1 } } as unknown as typeof Monaco,
+      f.service, f.documents, f.connections, { enabled: () => true, subscribe: () => () => {} })
+    cleanups.push(() => diagnostics.dispose())
+    const markers = (id: string) => setModelMarkers.mock.calls.filter(call => call[0] === f.model(id)).at(-1)?.[2] ?? []
+    f.api.languageDiagnostics.mockImplementation(async request => ({ ok: true, value: { version: request.version,
+      items: [{ range: { start: { line: 0, character: 7 }, end: { line: 0, character: 14 } }, message: 'Invalid column.', severity: 1 }], isIncomplete: false } }))
+    await vi.advanceTimersByTimeAsync(sqlDiagnosticDebounceMs)
+    expect(markers(b.id)).toHaveLength(1)
+    const answer = deferred<ApiResult<{ refreshed: boolean }>>()
+    f.api.languageRefresh.mockReturnValueOnce(answer.promise)
+    const refresh = f.service.refreshCache(a.id)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(f.api.languageRefresh).toHaveBeenCalledOnce()
+    f.models.get(`varia-sql://query/${a.id}`)!.edit('SELECT Corrected')
+    expect(await refresh).toBe(false)
+    f.api.languageDiagnostics.mockImplementation(async request => ({ ok: true, value: { version: request.version, items: [], isIncomplete: false } }))
+    answer.resolve({ ok: true, value: { refreshed: true } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(markers(b.id)).toEqual([])
+    expect(diagnostics.status(b.id)?.label).toBe('Checking SQL')
+    await vi.advanceTimersByTimeAsync(sqlDiagnosticDebounceMs)
+    expect(diagnostics.status(b.id)?.label).toBe('SQL: no issues')
+    expect(f.api.languageDiagnostics.mock.calls.filter(([request]) => request.documentId === b.id)).toHaveLength(2)
+  })
+  it.each(['context', 'close', 'cancel'] as const)('invalidates the refreshed context after its initiating query changes by %s', async change => {
+    const f = await fixture()
+    f.addConnection('connection-a')
+    const a = f.documents.create('a.sql', 'SELECT 1', 'first', 'connection-a'), b = f.documents.create('b.sql', 'SELECT 2', 'first', 'connection-a')
+    const c = f.documents.create('c.sql', 'SELECT 3', 'other', 'connection-a'), cancel = cancellationSource()
+    const before = f.service.diagnosticsEpoch(b.id), unrelated = f.service.diagnosticsEpoch(c.id), changed = vi.fn()
+    const unsubscribe = f.service.subscribe(changed)
+    cleanups.push(unsubscribe)
+    const answer = deferred<ApiResult<{ refreshed: boolean }>>()
+    f.api.languageRefresh.mockReturnValueOnce(answer.promise)
+    const refresh = f.service.refreshCache(a.id, cancel.token)
+    await vi.waitFor(() => expect(f.api.languageRefresh).toHaveBeenCalledOnce())
+    if (change === 'context') f.documents.update(a.id, { database: 'other' })
+    if (change === 'close') await f.documents.close(a.id)
+    if (change === 'cancel') cancel.cancel()
+    expect(await refresh).toBe(false)
+    changed.mockClear()
+    answer.resolve({ ok: true, value: { refreshed: true } })
+    await vi.waitFor(() => expect(f.service.diagnosticsEpoch(b.id)).toBeGreaterThan(before))
+    expect(f.service.diagnosticsEpoch(c.id)).toBe(unrelated)
+    expect(changed).toHaveBeenCalled()
+  })
+  it.each(['backend', 'dispose'] as const)('ignores late refresh invalidation after %s changes', async change => {
+    const f = await fixture(configured, true)
+    f.addConnection('connection-a')
+    const a = f.documents.create('a.sql', 'SELECT 1', 'first', 'connection-a'), b = f.documents.create('b.sql', 'SELECT 2', 'first', 'connection-a')
+    const answer = deferred<ApiResult<{ refreshed: boolean }>>()
+    f.api.languageRefresh.mockReturnValueOnce(answer.promise)
+    const refresh = f.service.refreshCache(a.id)
+    await vi.waitFor(() => expect(f.api.languageRefresh).toHaveBeenCalledOnce())
+    if (change === 'backend') f.backend!.receive({ status: 'unresponsive', generation: 1, silentMs: 1 })
+    else f.service.dispose()
+    expect(await refresh).toBe(false)
+    const before = f.service.diagnosticsEpoch(b.id)
+    answer.resolve({ ok: true, value: { refreshed: true } })
+    for (let count = 0; count < 5; count++) await Promise.resolve()
+    expect(f.service.diagnosticsEpoch(b.id)).toBe(before)
+    expect(f.service.isForegroundBusy(a.id)).toBe(false)
+  })
+  it('closes again after diagnostics queued behind metadata work settle, preventing an orphaned analysis document', async () => {
+    const f = await fixture(), tab = f.documents.create('query.sql', 'SELECT Missing', 'master')
+    const answer = deferred<Awaited<ReturnType<VariaApi['languageDiagnostics']>>>()
+    f.api.languageDiagnostics.mockReturnValueOnce(answer.promise)
+    const pending = f.service.diagnostics(f.model(tab.id), token())
+    await vi.waitFor(() => expect(f.api.languageDiagnostics).toHaveBeenCalledOnce())
+    expect(f.api.languageDiagnostics.mock.calls[0][0]).toEqual({ documentId: tab.id, version: 1, text: 'SELECT Missing', context: { providerId: 'sqlserver', database: 'master' } })
+    await f.documents.close(tab.id)
+    expect(f.api.languageClose).toHaveBeenCalledWith(tab.id)
+    answer.resolve({ ok: true, value: { version: 1, items: [], isIncomplete: false } })
+    expect(await pending).toBeUndefined()
+    await vi.waitFor(() => expect(f.api.languageClose).toHaveBeenCalledTimes(2))
+  })
+  it('waits for the old diagnostic context cleanup before analyzing the same model in another database', async () => {
+    const f = await fixture(), tab = f.documents.create('query.sql', 'SELECT Missing', 'first')
+    const answer = deferred<Awaited<ReturnType<VariaApi['languageDiagnostics']>>>()
+    f.api.languageDiagnostics.mockReturnValueOnce(answer.promise)
+    const first = f.service.diagnostics(f.model(tab.id), token())
+    await vi.waitFor(() => expect(f.api.languageDiagnostics).toHaveBeenCalledOnce())
+    f.documents.update(tab.id, { database: 'second' })
+    const second = f.service.diagnostics(f.model(tab.id), token())
+    await Promise.resolve()
+    expect(f.api.languageDiagnostics).toHaveBeenCalledOnce()
+    answer.resolve({ ok: true, value: { version: 1, items: [], isIncomplete: false } })
+    expect(await first).toBeUndefined()
+    expect(await second).toMatchObject({ version: 1, items: [] })
+    expect(f.api.languageDiagnostics.mock.calls[1][0].context.database).toBe('second')
+  })
   it('routes a split editor model using its own connection and database while another tab is active', async () => {
     const f = await fixture()
     f.addConnection('connection-a'); f.addConnection('connection-b')
@@ -98,9 +279,27 @@ describe('SQL language editor integration', () => {
     const result = await f.complete(tab.id, { lineNumber: 2, column: 4 } as Monaco.Position)
     expect(f.api.languageComplete.mock.calls[0][0].position).toEqual({ line: 1, character: 3 })
     expect(result).toEqual({ incomplete: true, suggestions: [{ label: 'Customer', kind: 1400, detail: undefined, documentation: undefined,
+      sortText: '1:Customer', filterText: undefined,
       insertText: '${1:Customer}', insertTextRules: 4, range: { startLineNumber: 2, endLineNumber: 2, startColumn: 1, endColumn: 4 } }] })
     await f.complete(tab.id, { lineNumber: 1, column: 6 } as Monaco.Position)
     expect(f.api.languageComplete.mock.calls[1][0].position).toEqual({ line: 0, character: 5 })
+  })
+
+  it('ranks fields before general SQL names for equal matches while preserving provider order and bare-name filtering', async () => {
+    const f = await fixture(), tab = f.documents.create('columns.sql', 'hi', 'master')
+    f.api.languageComplete.mockResolvedValueOnce({ ok: true, value: { isIncomplete: false, items: [
+      { label: 'hiFunction', kind: 3, sortText: '001-function' },
+      { label: '@@hiGlobal', kind: 6, filterText: 'hiGlobal', sortText: '002-global' },
+      { label: 'hiKeyword', kind: 14 },
+      { label: 't.hiColumn', kind: 5, filterText: 'hiColumn', sortText: '999-column' },
+      { label: 'hiProperty', kind: 10, sortText: '998-property' },
+      { label: 'hiOtherColumn', kind: 5 }
+    ] } })
+    const result = await f.complete(tab.id, { lineNumber: 1, column: 3 } as Monaco.Position)
+    const sorted = [...result.suggestions].sort((a, b) => a.sortText! < b.sortText! ? -1 : 1)
+    expect(sorted.map(item => item.label)).toEqual(['hiProperty', 't.hiColumn', 'hiOtherColumn', 'hiFunction', '@@hiGlobal', 'hiKeyword'])
+    expect(result.suggestions.find(item => item.label === 't.hiColumn')).toMatchObject({ filterText: 'hiColumn', sortText: '0:999-column', kind: 500 })
+    expect(result.suggestions.find(item => item.label === '@@hiGlobal')).toMatchObject({ filterText: 'hiGlobal', kind: 600 })
   })
 
   it('renders hover as untrusted Markdown without HTML and rejects invalid hover ranges', async () => {

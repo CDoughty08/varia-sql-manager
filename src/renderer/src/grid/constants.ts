@@ -32,8 +32,8 @@ export const gridLimits = {
   messagesStripLine: 26, messagesStripOpen: 26 + 10 + 62 + 1,
   /** The space between a header's name and its SQL type (.rg-ct's margin). */
   typeGap: 6,
-  /** Below this width a header's sort button would cover where a click selects the column: it only shows a sorted
-   *  column's arrow there, and the grid's menu sorts. */
+  /** Below this width a header's sort button (and funnel) would cover where a click selects the column: they only show a
+   *  sorted column's arrow and a filtered column's funnel there, and the grid's menu sorts and filters. */
   sortButtonMinWidth: 64,
   selectionBlocks: 64, dragThreshold: 4, resizeZoneLeft: 4, resizeZoneRight: 3,
   /** How far a live grid looks, either way, for a row that survived when the active row left its table (swap.ts). */

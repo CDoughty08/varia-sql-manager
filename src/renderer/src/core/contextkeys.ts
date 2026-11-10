@@ -20,6 +20,7 @@ import type { InputModeSnapshot } from './input-mode'
 import type { NotificationSnapshot } from './notifications'
 import type { UpdateState } from '../../../shared/updates'
 import { onUnexpectedError } from './errors'
+import { peekEditorAttribute } from '../explorer/peek-editor'
 import type { Disposable, ExternalStore } from './types'
 import type { SettingsValues } from '../../../shared/settings/catalog'
 
@@ -27,7 +28,7 @@ export interface FocusFacts {
   readonly editorFocus: boolean; readonly editorTextFocus: boolean; readonly inputFocus: boolean; readonly activePanel: 'explorer' | 'editor' | 'output' | ''; readonly outputGridFocus: boolean
   readonly searchHitsFocus: boolean
   readonly designerFocus: boolean; readonly queryBarFocus: boolean; readonly activityMonitorFocus: boolean; readonly documentTabFocus: boolean
-  readonly peekFocus: boolean; readonly peekTabFocus: boolean
+  readonly peekFocus: boolean; readonly peekTabFocus: boolean; readonly peekEditorFocus: boolean
   readonly messagesFocus: boolean; readonly explorerFocus: boolean; readonly explorerTypeAhead: boolean; readonly optionsDialogFocus: boolean
 }
 /** A table designer's state for its commands: TableDesignerService publishes one per open designer. */
@@ -49,26 +50,29 @@ export interface SsisOperationsKeys { readonly stoppable: boolean; readonly paus
 export interface SsisOperationsContextState { readonly byDocument: Readonly<Record<string, SsisOperationsKeys>> }
 /** The parts of a DOM element and of the editor that `focusFacts` reads, so tests can pass plain objects. */
 export interface FocusElement { matches(selector: string): boolean; closest(selector: string): { getAttribute(name: string): string | null } | null }
-export interface FocusEditor<E> { getContainerDomNode(): { contains(node: E): boolean }; hasTextFocus(): boolean }
+export interface FocusEditor<E> { getContainerDomNode(): { contains(node: E): boolean }; getId?(): string; hasTextFocus(): boolean }
 
-const noFocus: FocusFacts = { editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '', outputGridFocus: false, searchHitsFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false, peekFocus: false, peekTabFocus: false,
+const noFocus: FocusFacts = { editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '', outputGridFocus: false, searchHitsFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false, peekFocus: false, peekTabFocus: false, peekEditorFocus: false,
   messagesFocus: false, explorerFocus: false, explorerTypeAhead: false, optionsDialogFocus: false }
 const panels: ReadonlySet<string> = new Set(['explorer', 'editor'])
 
-/** Focus keys for the focused element. The find widget is inside the editor, so its inputs give editorFocus and inputFocus. */
+/** Focus keys for editor text and owned widgets, including widgets hosted outside the editor container. */
 export function focusFacts<E extends FocusElement>(element: E | null, editor: FocusEditor<E> | undefined): FocusFacts {
   if (!element) return noFocus
   const editorTextFocus = !!editor?.hasTextFocus()
-  const editorFocus = editorTextFocus || !!editor?.getContainerDomNode().contains(element)
+  // Monaco defers widget blur; ownership of the browser's focused element is current when its next key arrives.
+  const editorId = editor?.getId?.()
+  const editorFocus = editorTextFocus || !!editor?.getContainerDomNode().contains(element) ||
+    !!editorId && element.closest('[data-query-editor-id]')?.getAttribute('data-query-editor-id') === editorId
   const inputFocus = !editorTextFocus && (element.matches('input, textarea, select') || !!element.closest('[contenteditable]:not([contenteditable="false"])'))
   // DockWorkspace marks each pane host, and the mark moves with floating groups.
   const pane = element.closest('[data-pane]')?.getAttribute('data-pane') ?? ''
   const tree = element.closest('[data-explorer-tree]')
   return {
-    editorFocus, editorTextFocus, inputFocus, activePanel: isOutputPane(pane) ? 'output' : panels.has(pane) ? pane as FocusFacts['activePanel'] : '', outputGridFocus: !!element.closest('[data-result-grid]'),
+    editorFocus, editorTextFocus, inputFocus, activePanel: isOutputPane(pane) ? 'output' : panels.has(pane) ? pane as FocusFacts['activePanel'] : editorFocus ? 'editor' : '', outputGridFocus: !!element.closest('[data-result-grid]'),
     searchHitsFocus: !!element.closest('[data-search-hits]'),
     designerFocus: !!element.closest('[data-designer]'), queryBarFocus: !!element.closest('[data-query-bar]'), activityMonitorFocus: !!element.closest('[data-activity-monitor]'),
-    documentTabFocus: !!element.closest('[data-document-tab]'), peekFocus: !!element.closest('[data-peek-card]'), peekTabFocus: !!element.closest('[data-peek-tab]'), messagesFocus: !!element.closest('[data-output-view="messages"]'),
+    documentTabFocus: !!element.closest('[data-document-tab]'), peekFocus: !!element.closest('[data-peek-card]'), peekTabFocus: !!element.closest('[data-peek-tab]'), peekEditorFocus: !!element.closest(`[${peekEditorAttribute}]`), messagesFocus: !!element.closest('[data-output-view="messages"]'),
     // The tree marks itself while type-ahead collects a name (ExplorerTree), so Space types rather than peeks.
     explorerFocus: !!tree, explorerTypeAhead: tree?.getAttribute('data-type-ahead') != null, optionsDialogFocus: !!element.closest('[data-options-dialog]')
   }
@@ -140,7 +144,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
   const operations = active ? inputs.ssis?.byDocument[active.id] : undefined
   const groups = inputs.editorGroups?.groups ?? [], activeGroup = active ? groups.find(group => group.documents.includes(active.id)) : undefined
   return contextRecord(inputs.platform, {
-    ...focus, textInputFocus: focus.editorTextFocus || focus.inputFocus,
+    ...focus, textInputFocus: focus.editorTextFocus || focus.inputFocus || focus.peekEditorFocus,
     quickInputVisible: inputs.quickInputVisible, backendStatus: inputs.backendStatus, backendReady: inputs.backendStatus === 'ready', editorWordWrap: inputs.wordWrap,
     editorWhitespace: !!inputs.whitespace, editorLineNumbers: !!inputs.lineNumbers,
     resultsWhitespaceSpaces: inputs.resultsWhitespace === 'spaces', resultsWhitespaceAll: inputs.resultsWhitespace === 'all',

@@ -90,7 +90,7 @@ describe('highlights', () => {
     expect(third.findRows).toHaveBeenCalled()
     expect(shown()).toMatchObject({ count: 1, found: 0 })
     // A sorted view of the set finds its rows by view position.
-    const view = { ...third, base: third, viewId: 4, keys: [], rows: 1, complete: true, approximate: false, findRows: vi.fn<ResultHandle['findRows']>(async () => ({ positions: [0], marks: [0], truncated: false, rows: 1 })) } as unknown as ResultView
+    const view = { ...third, base: third, viewId: 4, keys: [], rows: 1, baseRows: 1, complete: true, approximate: false, findRows: vi.fn<ResultHandle['findRows']>(async () => ({ positions: [0], marks: [0], truncated: false, rows: 1 })) } as unknown as ResultView
     vi.mocked(third.sort).mockResolvedValueOnce(view)
     results.sortBy('t1', 0, 0, 'descending')
     await settle()

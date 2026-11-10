@@ -38,7 +38,7 @@ async function launch(options = launchOptions, runtime) {
   page.setDefaultTimeout(10000)
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page, runtime)).toBeVisible({ timeout: 30000 })
-  await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
 }
 async function open() {
   await toolbarButton(page, 'Connect').click()

@@ -91,16 +91,19 @@ internal sealed record ViewSortArgs(int Column, bool Descending, string Mode);
 /// result that it supersedes (closed once this one exists).</summary>
 internal sealed record ResultsViewArgs(uint ResultId, ViewSortArgs[] Sort, uint? Replaces = null, ViewFilterArgs[]? Filters = null);
 /// <summary>One results.view filter (ViewFilter): Op "in", "notIn" or "between" on Column, with its values as base Rows
-/// (and Nulls) or as the selected Cells; or Op "duplicates" on Columns.</summary>
-internal sealed record ViewFilterArgs(string Op, int? Column = null, int[]? Rows = null, bool? Nulls = null, ViewCellsArgs? Cells = null, int[]? Columns = null);
+/// (and Nulls) or as the selected Cells; Op "duplicates" on Columns; or Op "groups" on Column: the values a distinct
+/// snapshot of that column (SnapshotId) ticks.</summary>
+internal sealed record ViewFilterArgs(string Op, int? Column = null, int[]? Rows = null, bool? Nulls = null, ViewCellsArgs? Cells = null, int[]? Columns = null, uint? SnapshotId = null);
 /// <summary>Selected cells: 1 to 256 [first, count] ranges of positions in ViewId's order, or in the result's own.</summary>
 internal sealed record ViewCellsArgs(long[][] Ranges, uint? ViewId = null);
 /// <summary>A filter as the view applied it, its cells resolved to one base row per distinct value (Between: the lowest
-/// and highest).</summary>
-internal sealed record ViewFilterResult(string Op, int? Column = null, int[]? Rows = null, bool? Nulls = null, int[]? Columns = null);
-/// <summary>Rows is the view's row count (the rows sealed when it was built); Complete says those were all the result's rows;
-/// Approximate says a key compared a truncated value's prefix or an estimated length.</summary>
-internal sealed record ResultsViewResult(uint ViewId, long Rows, bool Complete, bool Approximate, ViewFilterResult[]? Filters = null);
+/// and highest). A "groups" filter comes back as it was asked, with whether it keeps (else drops) the Values it names, NULL
+/// among them (Nulls), and the one value's representative Row when it names exactly one besides NULL.</summary>
+internal sealed record ViewFilterResult(string Op, int? Column = null, int[]? Rows = null, bool? Nulls = null, int[]? Columns = null, uint? SnapshotId = null, bool? Keep = null, int? Values = null, int? Row = null);
+/// <summary>Rows is the view's row count; BaseRows the result's rows it was built from (those sealed then, Rows when it has
+/// no filter); Complete says those were all the result's rows; Approximate says a key compared a truncated value's prefix
+/// or an estimated length.</summary>
+internal sealed record ResultsViewResult(uint ViewId, long Rows, long BaseRows, bool Complete, bool Approximate, ViewFilterResult[]? Filters = null);
 internal sealed record ResultsViewCloseArgs(uint ResultId, uint[] ViewIds);
 internal sealed record ResultsViewCloseResult(int Closed);
 /// <summary>results.identify: how the result's rows are told apart, for highlights. By "auto" picks a unique key column, else
@@ -126,6 +129,16 @@ internal sealed record ResultsDiffArgs(uint Left, uint Right, bool Exact = false
 /// only by collation (case or trailing spaces, say).</summary>
 internal sealed record ResultsDiffResult(ResultDescriptor Descriptor, string? Key, long Same, long Changed, long Added, long Removed, long Soft, bool Approximate,
     string[] LeftOnly, string[] RightOnly);
+/// <summary>One results.pivot value: Aggregate "count", "countDistinct", "sum", "avg", "min" or "max" of Column; "count"
+/// without a column counts rows.</summary>
+internal sealed record PivotValueArgs(string Aggregate, int? Column = null);
+/// <summary>results.pivot: groups a complete result's rows (ViewId's, in its order, when given) by up to 8 Rows columns and
+/// a Column column, and stores 1 to 16 Values of each group as a new result of the query (PivotOutput).</summary>
+internal sealed record ResultsPivotArgs(uint ResultId, int[] Rows, PivotValueArgs[] Values, int? Column = null, uint? ViewId = null);
+/// <summary>Descriptor is the pivot's result (kind "pivot"); Rows the source rows pivoted; RowGroups and ColumnGroups how many
+/// distinct groups it has (all shown: a pivot past its bounds is refused); Approximate that a value compared was a truncated
+/// value's stored prefix.</summary>
+internal sealed record ResultsPivotResult(ResultDescriptor Descriptor, long Rows, long RowGroups, long ColumnGroups, bool Approximate);
 /// <summary>results.search: the cells whose grid text contains Text (1 to 1,024 characters), searched through ViewId's order
 /// when it is given (rows are then view positions). It returns up to MaxMatches (1 to 10,000) of them in whole rows: from
 /// FromRow on, or with Backward the last ones before FromRow.</summary>
@@ -153,6 +166,30 @@ internal sealed record ColumnProfile(int Column, long Values, long Nulls, long D
 /// <summary>Rows profiled (the view's, or the rows sealed when it ran), whether they were all the result's, the rows' byte
 /// sizes (null without rows), and the columns asked for, in order.</summary>
 internal sealed record ResultsProfileResult(long Rows, bool Complete, ProfileLengths? RowBytes, ColumnProfile[] Columns);
+/// <summary>results.distinct: keeps one column's distinct values over a result's rows, or its view's (ViewId), as a
+/// snapshot read by window. KeptViewId, another view of the result, starts each value (and NULL) ticked when one of that
+/// view's rows holds it; without it every value starts ticked.</summary>
+internal sealed record ResultsDistinctArgs(uint ResultId, int Column, uint? ViewId = null, uint? KeptViewId = null);
+/// <summary>The snapshot's id; rows grouped (the view's, or the rows sealed when it ran) and whether they were all the
+/// result's; Nulls counts NULL and unreadable cells; Distinct the values; Approximate when a truncated value compared by
+/// its stored prefix; Checked the values ticked and NullsChecked NULL's tick.</summary>
+internal sealed record ResultsDistinctResult(uint SnapshotId, long Rows, bool Complete, long Nulls, long Distinct, bool Approximate, long Checked, bool NullsChecked);
+/// <summary>results.distinctRead: 1 to 512 values from Offset in Order ("count" or "value"), among those whose display text
+/// contains Search (1 to 1,024 characters) when given.</summary>
+internal sealed record ResultsDistinctReadArgs(uint ResultId, uint SnapshotId, string Order, long Offset, int Count, string? Search = null);
+/// <summary>A distinct value: its group (its place in value order), its representative base row (the lowest holding it),
+/// its display text (binary as 0x hex, at most 256 characters and "…"), how many rows hold it, and its tick.</summary>
+internal sealed record DistinctValue(int Group, int Row, string Text, long Count, bool Checked);
+/// <summary>Total counts the values the search kept (every value without one); Values are the window asked, at most Count
+/// of them from Offset; Checked and NullsChecked are the ticks as results.distinct reports them.</summary>
+internal sealed record ResultsDistinctReadResult(long Total, long Offset, DistinctValue[] Values, long Checked, bool NullsChecked);
+/// <summary>results.distinctTick: ticks (Checked) or clears 1 to 512 Groups, or every value (All), only those whose text
+/// contains Search with one; Nulls sets NULL's tick, alone or with either.</summary>
+internal sealed record ResultsDistinctTickArgs(uint ResultId, uint SnapshotId, bool Checked, int[]? Groups = null, bool? All = null, string? Search = null, bool? Nulls = null);
+internal sealed record ResultsDistinctTickResult(long Checked, bool NullsChecked);
+/// <summary>results.distinctClose: 1 to 64 snapshot ids of one result.</summary>
+internal sealed record ResultsDistinctCloseArgs(uint ResultId, uint[] SnapshotIds);
+internal sealed record ResultsDistinctCloseResult(int Closed);
 /// <summary>results.rowBytes: Bytes[k] is row FirstRow + k's sum of DATALENGTH over its cells (NULL counts 0; xml and json
 /// as their text, some sql_variant base types estimated: docs/ipc.md, Cell lengths and row sizes); it stops at the rows sealed
 /// so far. Estimated lists, in order, the rows of the range whose sum includes an estimate.</summary>

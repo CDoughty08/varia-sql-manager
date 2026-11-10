@@ -30,7 +30,7 @@ async function launch(fresh = false) {
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
-  await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
 }
 // Unsaved queries make a normal exit ask first; answer Don't Save.
 async function close() {
@@ -99,7 +99,7 @@ try {
   await expect(optionsNotes(dialog()).first()).toHaveText('Color theme: View › Theme')
   for (const name of ['Text Editor', 'Transact-SQL', 'Query Execution', 'Query Results', 'SQL Server Object Explorer']) await node(name).click()
   expect(await treeNames()).toEqual([
-    'Environment', '  General', '  AutoRecover', '  Documents', '  Fonts and Colors', '  Shortcuts', '  Product Updates', '  Live Data', '  Object Explorer', 'Text Editor', '  General', '  Editor Tab and Status Bar', '  Transact-SQL', '    General', '    Tabs', 'Query Execution', '  SQL Server', '    General', '    Advanced',
+    'Environment', '  General', '  AutoRecover', '  Documents', '  Fonts and Colors', '  Shortcuts', '  Product Updates', '  Live Data', '  Object Explorer', 'Text Editor', '  General', '  Editor Tab and Status Bar', '  Transact-SQL', '    General', '    IntelliSense', '    Tabs', 'Query Execution', '  SQL Server', '    General', '    Advanced',
     'Query Results', '  SQL Server', '    Results to Grid', 'SQL Server Object Explorer', '  Commands', '  Scripting', 'Activity Monitor',
     'SQL Server Integration Services'
   ])
@@ -424,7 +424,7 @@ try {
   await expect(field('Execution time-out')).toHaveValue('30')
   await page.keyboard.press('Escape')
   await page.reload()
-  await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
   // The workbench asked main for its settings before this call, so its answer is in once this one is.
   await page.evaluate(async () => { await window.varia.getSettings(); await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))) })
   await expect(banner).toHaveCount(0)

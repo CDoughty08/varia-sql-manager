@@ -22,7 +22,7 @@ async function launch() {
   page.setDefaultTimeout(10000)
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
-  await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
   await application.evaluate(({ dialog }) => {
     dialog.showSaveDialog = async () => ({ canceled: true })
     dialog.showOpenDialog = async () => ({ canceled: true, filePaths: [] })
@@ -293,8 +293,17 @@ try {
   const listed = await calls('explorer.children')
   await explorer.click()
   await expect(explorerTree(page)).toBeFocused()
-  await page.keyboard.press('F5')
+  const beforeRefresh = await calls('query.execute')
+  await textbox().focus()
+  // Dispatch in the focus turn, before Monaco's deferred widget-blur event. An event-derived editor focus flag can
+  // otherwise steal this F5 from the tree and execute SQL even though the browser already focused Object Explorer.
+  await explorerTree(page).evaluate(tree => {
+    tree.focus()
+    tree.dispatchEvent(new KeyboardEvent('keydown', { key: 'F5', code: 'F5', bubbles: true, cancelable: true }))
+    tree.dispatchEvent(new KeyboardEvent('keyup', { key: 'F5', code: 'F5', bubbles: true, cancelable: true }))
+  })
   await expect.poll(() => calls('explorer.children')).toBeGreaterThan(listed)
+  expect(await calls('query.execute')).toBe(beforeRefresh)
   const executed = await calls('query.execute')
   await textbox().focus()
   await page.keyboard.press('F5')

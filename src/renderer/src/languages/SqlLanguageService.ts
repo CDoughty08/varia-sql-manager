@@ -1,6 +1,6 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import type { VariaApi } from '../../../shared/contracts'
-import { languageLimits, type DatabaseProviderId, type LanguageContext, type LanguageRange, type LanguageRequest, type LanguageStatus } from '../../../shared/language-service'
+import { languageLimits, type DatabaseProviderId, type LanguageContext, type LanguageRange, type LanguageRequest, type LanguageStatus, type LanguageDiagnosticResult } from '../../../shared/language-service'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import { isQueryDocument } from '../documents'
@@ -8,7 +8,7 @@ import type { DocumentService } from '../services/documents'
 import type { ConnectionService } from '../services/connections'
 import type { BackendStateService } from '../services/backend'
 
-type LanguageApi = Pick<VariaApi, 'languageStatus' | 'languageComplete' | 'languageHover' | 'languageClose' | 'languageRefresh'>
+type LanguageApi = Pick<VariaApi, 'languageStatus' | 'languageComplete' | 'languageHover' | 'languageClose' | 'languageRefresh'> & Partial<Pick<VariaApi, 'languageDiagnostics'>>
 type CloseResult = Awaited<ReturnType<LanguageApi['languageClose']>>
 type ActivityPhase = 'loading' | 'refreshing'
 interface Snapshot { readonly status?: LanguageStatus; readonly checking: boolean; readonly error?: string; readonly cleanupError?: string; readonly documentErrors: ReadonlyMap<string, string>; readonly activities: ReadonlyMap<string, ActivityPhase> }
@@ -26,6 +26,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
   private readonly used = new Set<string>()
   private readonly epochs = new Map<string, number>()
   private readonly contexts = new Map<string, string>()
+  private readonly diagnosticContextEpochs = new Map<string, number>()
   private readonly pending = new Map<string, PendingRequest>()
   private readonly inFlight = new Map<string, Set<Promise<unknown>>>()
   private readonly waiters = new Set<() => void>()
@@ -34,6 +35,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
   private readonly urgentCloses: (() => void)[] = []
   private closeRequests = 0
   private readonly refreshing = new Map<string, RefreshWork>()
+  private readonly foreground = new Map<string, number>()
   private readonly activities = new Map<symbol, { capture: Capture; token: Monaco.CancellationToken; phase: ActivityPhase; visible: boolean }>()
   private disposed = false
   private statusSequence = 0
@@ -55,6 +57,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
         if (!this.current(capture, token) || !this.supports(capture, 'completion')) return { suggestions: [] }
         const pending = this.begin(`${capture.request.documentId}:completion`, token)
         if (!pending) return { suggestions: [], incomplete: true }
+        const foreground = this.beginForeground(capture.request.documentId)
         const activity = this.activity(capture, token, 'loading')
         try {
           if (pending.previous && !await this.waitFor(pending.previous, token)) return { suggestions: [] }
@@ -78,6 +81,10 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
                 edit.range.end.line !== position.lineNumber - 1 || edit.range.start.character > position.column - 1 || edit.range.end.character < position.column - 1)) return []
               return [{ label: item.label, kind: monaco.languages.CompletionItemKind[kindNames[(item.kind ?? 1) - 1] ?? 'Text'],
                 detail: item.detail, documentation: item.documentation,
+                // Monaco scores prefix/fuzzy matches first, then uses sortText to break ties. Keep columns ahead of
+                // general SQL names without making a weak column match outrank an exact function or keyword match.
+                sortText: `${item.kind === 5 || item.kind === 10 ? '0' : '1'}:${item.sortText ?? item.label}`,
+                filterText: item.filterText,
                 insertText: edit?.newText ?? item.insertText ?? item.label,
                 insertTextRules: item.insertTextFormat === 2 ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
                 range: edit ? toMonacoRange(edit.range) : range }]
@@ -86,7 +93,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
         } catch (error) {
           if (this.current(capture, token)) this.failure(capture.request.documentId, message(error))
           return { suggestions: [] }
-        } finally { activity.dispose(); pending.finish() }
+        } finally { activity.dispose(); pending.finish(); foreground.dispose() }
       }
     }), monaco.languages.registerHoverProvider('sql', {
       provideHover: async (model, position, token) => {
@@ -96,6 +103,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
         if (!this.current(capture, token) || !this.supports(capture, 'hover')) return null
         const pending = this.begin(`${capture.request.documentId}:hover`, token)
         if (!pending) return null
+        const foreground = this.beginForeground(capture.request.documentId)
         const activity = this.activity(capture, token, 'loading')
         try {
           if (pending.previous && !await this.waitFor(pending.previous, token)) return null
@@ -115,7 +123,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
         } catch (error) {
           if (this.current(capture, token)) this.failure(capture.request.documentId, message(error))
           return null
-        } finally { activity.dispose(); pending.finish() }
+        } finally { activity.dispose(); pending.finish(); foreground.dispose() }
       }
     }))
     const reconcile = () => this.reconcile()
@@ -198,6 +206,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
     if (token.isCancellationRequested) controller.abort()
     const pending = this.begin(`${documentId}:refresh`, actionToken)
     if (!pending) { cleanup(); throw new Error('IntelliSense is busy. Try refreshing again when the current requests finish.') }
+    const foreground = this.beginForeground(documentId)
     const refresh: RefreshWork = { capture, token: actionToken, cancel: () => controller.abort(), work: Promise.resolve(false), settled: Promise.resolve() }
     this.refreshing.set(documentId, refresh)
     refresh.work = Promise.resolve().then(async () => {
@@ -219,7 +228,16 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
         if (!this.current(refresh.capture, actionToken)) return false
         const { version, text, context } = refresh.capture.request
         this.used.add(documentId)
+        const backendEpoch = this.backendEpoch
         const result = await this.track(documentId, this.api.languageRefresh({ documentId, version, text, context }))
+        // An edit or a closed query cancels the caller's wait, but an already-dispatched refresh still changes the
+        // shared metadata context. Notify sibling models even when the initiating query no longer accepts its result.
+        if (!this.disposed && backendEpoch === this.backendEpoch && result.ok && result.value.refreshed) {
+          const active = new Set(this.contexts.values())
+          for (const key of this.diagnosticContextEpochs.keys()) if (!active.has(key)) this.diagnosticContextEpochs.delete(key)
+          this.diagnosticContextEpochs.set(refresh.capture.key, (this.diagnosticContextEpochs.get(refresh.capture.key) ?? 0) + 1)
+          this.publish({ ...this.getSnapshot() })
+        }
         if (!this.current(refresh.capture, actionToken)) return false
         if (!result.ok) throw new Error(result.error)
         this.failure(documentId)
@@ -229,7 +247,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
         this.failure(documentId, message(error))
         throw error
       } finally {
-        activity?.dispose(); pending.finish(); cleanup()
+        activity?.dispose(); pending.finish(); cleanup(); foreground.dispose()
         if (this.refreshing.get(documentId) === refresh) this.refreshing.delete(documentId)
       }
     })
@@ -237,6 +255,52 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
     refresh.settled = refresh.work.then(() => {}, () => {})
     if (!await this.waitFor(refresh.settled, actionToken)) return false
     return refresh.work
+  }
+  /** Diagnostics use the same document/close barriers as completion, even when queued behind metadata work. */
+  async diagnostics(model: Monaco.editor.ITextModel, token: Monaco.CancellationToken): Promise<LanguageDiagnosticResult | undefined> {
+    const capture = this.capture(model, { lineNumber: 1, column: 1 } as Monaco.Position)
+    if (!capture || token.isCancellationRequested || !this.api.languageDiagnostics) return
+    if (!this.getSnapshot().status && !await this.waitFor(this.readStatus(), token)) return
+    if (!this.current(capture, token) || !this.supports(capture, 'diagnostics')) return
+    const oldContext = this.closing.get(capture.request.documentId)
+    if (oldContext && !await this.waitFor(oldContext, token)) return
+    if (!this.current(capture, token)) return
+    const pending = this.begin(`${capture.request.documentId}:diagnostics`, token)
+    if (!pending) throw new Error('SQL analysis is busy. Edit the query or refresh IntelliSense to try again.')
+    try {
+      if (pending.previous && !await this.waitFor(pending.previous, token)) return
+      const closing = this.closing.get(capture.request.documentId)
+      if (closing && !await this.waitFor(closing, token)) return
+      const refreshing = this.refreshing.get(capture.request.documentId)
+      if (refreshing && !await this.waitFor(refreshing.settled, token)) return
+      if (!this.current(capture, token)) return
+      const { documentId, version, text, context } = capture.request
+      this.used.add(documentId)
+      const result = await this.track(documentId, this.api.languageDiagnostics({ documentId, version, text, context }))
+      if (!this.current(capture, token)) return
+      if (!result.ok) throw new Error(result.error)
+      if (result.value.version !== version) return
+      return result.value
+    } finally { pending.finish() }
+  }
+  diagnosticsEpoch(documentId: string): number {
+    const key = this.context(documentId)?.key
+    return this.backendEpoch + (this.epochs.get(documentId) ?? 0) + (key ? this.diagnosticContextEpochs.get(key) ?? 0 : 0)
+  }
+  isForegroundBusy(documentId: string): boolean { return this.foreground.has(documentId) }
+  /** Background analysis yields immediately, including while a canceled foreground IPC still owns backend work. */
+  private beginForeground(documentId: string): Disposable {
+    const previous = this.foreground.get(documentId) ?? 0
+    this.foreground.set(documentId, previous + 1)
+    if (!previous) this.publish({ ...this.getSnapshot() })
+    let ended = false
+    return { dispose: () => {
+      if (ended) return
+      ended = true
+      const remaining = (this.foreground.get(documentId) ?? 1) - 1
+      if (remaining) this.foreground.set(documentId, remaining)
+      else if (this.foreground.delete(documentId) && !this.disposed) this.publish({ ...this.getSnapshot() })
+    } }
   }
   /** A small status-bar label with an actionable explanation in its tooltip. */
   availability(documentId: string): { label: string; detail: string } {
@@ -277,7 +341,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
       position: { line: position.lineNumber - 1, character: position.column - 1 }
     } }
   }
-  private supports(capture: Capture, feature: 'completion' | 'hover' | 'refresh'): boolean {
+  private supports(capture: Capture, feature: 'completion' | 'hover' | 'refresh' | 'diagnostics'): boolean {
     const provider = this.getSnapshot().status?.providers.find(provider => provider.id === capture.request.context.providerId)
     return !!provider?.configured && !!provider[feature]
   }
@@ -433,7 +497,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
     this.statusRequest = undefined
     for (const refresh of this.refreshing.values()) refresh.cancel()
     for (const cancel of this.waiters) cancel()
-    this.refreshing.clear(); this.activities.clear()
+    this.refreshing.clear(); this.activities.clear(); this.foreground.clear()
     this.pending.clear()
     this.bindings.forEach(binding => binding.dispose())
     for (const id of this.used) this.close(id)
