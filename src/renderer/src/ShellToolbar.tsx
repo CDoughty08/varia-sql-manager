@@ -15,7 +15,7 @@ import { lostHint, withKey } from './query-context'
 export function CommandCentre() {
   const { commands } = useWorkbench()
   const key = useKeybindingLabel('workbench.search')
-  return <button type="button" className="command-centre" aria-label="Search" aria-keyshortcuts={key?.aria} title={withKey('Search open queries, commands and loaded objects', key)}
+  return <button type="button" className="command-centre" aria-label="Search" aria-keyshortcuts={key?.aria} title={withKey('Search open queries, commands and objects', key)}
     onClick={event => void commands.execute('workbench.search', { anchor: event.currentTarget }, 'toolbar')}>
     <Icon name="search" /><span className="command-centre-text">Search commands, queries and objects</span><span className="command-centre-short">Search</span>{key && <kbd>{key.text}</kbd>}
   </button>

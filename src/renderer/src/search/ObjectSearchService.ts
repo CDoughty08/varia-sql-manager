@@ -36,6 +36,8 @@ export interface SearchQueryState {
   readonly types: readonly SearchType[]
   /** A database-menu search is scoped until its chip is cleared or its server changes. */
   readonly database?: string
+  /** The most hits each server answers, when fewer than the backend's default will do. */
+  readonly limit?: number
 }
 /** One server's part of an All servers search: its answer, or why it has none. */
 export interface ServerAnswer {
@@ -98,6 +100,10 @@ export interface ObjectSearchOptions {
 export const searchTitle = 'Search Objects'
 /** The search Object Explorer's box runs: the same search as a tab's, on the server of the explorer's selection. */
 export const explorerSearchId = 'explorer'
+/** The header's Search (Ctrl+Q): the same search again, by name on every connected server, while its widget is open with text. */
+export const quickSearchId = 'quick'
+/** The hits each server answers the header's Search: the rest are a Search Objects tab away. */
+export const quickSearchHits = 50
 /** A list's selected hit: its search, the search's server, and the hit's index in the result. */
 export interface FocusedHit { readonly searchId: string; readonly connectionId: string; readonly index: number; readonly hit: ObjectSearchHit }
 
@@ -318,6 +324,24 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     } else this.setConnection(explorerSearchId, target)
   }
 
+  /**
+   * The header's Search asks for `text`: names only, approximately too (Fuzzy Match), on every connected server, each with an
+   * index if it has none, after the same pause in typing as a tab's. Nothing is asked, or built, before there is text.
+   */
+  quickSearch(text: string): void {
+    if (this.disposed) return
+    const current = this.getSnapshot().documents[quickSearchId]
+    if (!current) {
+      const connectionId = this.liveIds()[0]
+      if (!text.trim() || !connectionId) return
+      this.putDocument({ id: quickSearchId, connectionId, ...emptyQuery, scope: 'names', fuzzy: true, limit: quickSearchHits, allServers: true })
+      for (const id of this.liveIds()) this.ensureIndex(id)
+    } else if (current.text === text) return
+    this.setQuery(quickSearchId, { text })
+  }
+  /** The header's Search closed: its search is cancelled and forgotten. */
+  endQuickSearch(): void { this.closed(quickSearchId) }
+
   /** Search in Object Explorer: the box takes focus once it is shown. */
   focusPane(): void {
     if (!this.disposed) this.publish({ ...this.getSnapshot(), paneFocus: this.getSnapshot().paneFocus + 1 })
@@ -500,14 +524,15 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
 
   private query(document: SearchDocumentState): SearchQueryState {
     return { text: document.text, caseSensitive: document.caseSensitive, wholeWord: document.wholeWord, regex: document.regex, fuzzy: document.fuzzy, scope: document.scope, types: document.types,
-      ...document.database !== undefined ? { database: document.database } : {} }
+      ...document.database !== undefined ? { database: document.database } : {}, ...document.limit !== undefined ? { limit: document.limit } : {} }
   }
 
   private ask(connectionId: string, requestId: string, asked: SearchQueryState) {
     const kinds = searchTypeKinds(asked.types)
     return this.o.api.explorerSearch({
       connectionId, requestId, text: asked.text, caseSensitive: asked.caseSensitive, wholeWord: asked.wholeWord, regex: asked.regex, in: asked.scope, ...kinds ? { kinds } : {},
-      ...asked.fuzzy && !asked.regex ? { match: 'fuzzy' as const } : {}, ...asked.database !== undefined ? { database: asked.database } : {}
+      ...asked.fuzzy && !asked.regex ? { match: 'fuzzy' as const } : {}, ...asked.database !== undefined ? { database: asked.database } : {},
+      ...asked.limit !== undefined ? { limit: asked.limit } : {}
     })
   }
 

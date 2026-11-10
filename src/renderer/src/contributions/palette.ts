@@ -1,9 +1,13 @@
 import { commandDescriptor, commandIds, isCommandId, type CommandId } from '../../../shared/commands/catalog'
+import type { ObjectSearchHit } from '../../../shared/explorer/search.ts'
 import { commandTitle } from '../../../shared/settings/catalog'
+import { onUnexpectedError } from '../core/errors'
 import type { Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { CommandHistory } from '../quickinput/history'
-import { quickInputLimits, type QuickInputAnchor, type QuickPickItem, type QuickPickOptions } from '../quickinput/QuickInputService'
+import type { QuickInputAnchor, QuickInputMessage, QuickPickAnswerItem, QuickPickItem, QuickPickOptions } from '../quickinput/QuickInputService'
+import { hitIcon } from '../search/hit-actions'
+import { quickSearchId, serverGroups } from '../search/ObjectSearchService'
 
 /**
  * Quick access modes by prefix: commands, help, and no prefix, which is Go to Query, or Search when the header's search
@@ -19,11 +23,15 @@ const recentLimit = 10
  */
 const keepsQuickInput: ReadonlySet<CommandId> = new Set(['workbench.showCommands', 'workbench.quickOpen', 'workbench.search', 'edit.undo', 'edit.redo', 'edit.selectAll', 'edit.delete'])
 type Picker = Omit<QuickPickOptions<QuickPickItem>, 'value' | 'prefix' | 'anchor' | 'onDidChangeValue' | 'onDidHide'>
-export type PaletteWorkbench = Pick<Workbench, 'commands' | 'keybindings' | 'quickInput' | 'documents' | 'connections' | 'events'> & Partial<Pick<Workbench, 'settings' | 'explorer'>>
-/** What no prefix searches: open queries (Go to Query), or open queries, commands and loaded objects (Search). */
+export type PaletteWorkbench = Pick<Workbench, 'commands' | 'keybindings' | 'quickInput' | 'documents' | 'connections' | 'events'> & Partial<Pick<Workbench, 'settings' | 'explorer' | 'objectSearch'>>
+/** What no prefix searches: open queries (Go to Query), or open queries, commands and the servers' objects (Search). */
 type Scope = 'queries' | 'search'
 /** The groups Search lists, in this order. */
-export const searchGroups = { queries: 'open queries', commands: 'commands', objects: 'Object Explorer' } as const
+export const searchGroups = { queries: 'open queries', commands: 'commands', objects: 'objects' } as const
+/** Search's last row: the same text in a Search Objects tab, with every hit, definitions and the filters. */
+export const seeAllObjects = 'See all in Search Objects'
+const seeAllId = 'objects:all'
+const count = (value: number) => value.toLocaleString('en-US')
 
 /**
  * The command palette (F1, mod+Shift+P), Go to Query (mod+P) and Search (the header's search box): one quick input whose
@@ -38,6 +46,8 @@ export function paletteContribution(workbench: PaletteWorkbench, history = new C
   let token = 0, mode: QuickAccessMode | undefined, scope: Scope = 'queries'
   /** The search box, while the widget it opened is open: every mode stays below it. Keys open the widget centred. */
   let anchor: QuickInputAnchor | undefined
+  /** What the open Search's object rows stand for, by row id, and the text they answer. */
+  let found: { readonly text: string; readonly hits: ReadonlyMap<string, { readonly connectionId: string; readonly hit: ObjectSearchHit }> } = { text: '', hits: new Map() }
 
   const commandItems = (): QuickPickItem[] => commandIds.filter(id => commandDescriptor(id).palette !== false && commands.has(id)).map(id => {
       // Titles follow settings ("Select Top 50 Rows").
@@ -74,24 +84,73 @@ export function paletteContribution(workbench: PaletteWorkbench, history = new C
       onDidAccept: item => { documents.activate(item.id); documents.focusActive() }
     }
   }
-  // Each row's id says which list it is from; the objects are read from the tree as it is now, never loaded for the list.
+  /**
+   * Search's objects are Search Objects' own search (ObjectSearchService, on the backend's index), asked by name on every
+   * connected server as the user types: nothing here matches an object's name, and the tree is not read. The rows follow the
+   * queries and commands as each server answers, with a last row that takes the text to a Search Objects tab.
+   */
+  function searchObjects(text: string): { search(text: string): void; dispose(): void } | undefined {
+    const { objectSearch } = workbench
+    if (!objectSearch) return undefined
+    let shown: unknown, wasIndexing = false
+    const push = () => {
+      const snapshot = objectSearch.getSnapshot(), document = snapshot.documents[quickSearchId]
+      const indexing = connections.getSnapshot().some(connection => snapshot.indexes[connection.id]?.requestId)
+      // Index progress publishes several times a second; the rows change only with the search, or when a build starts or ends.
+      if (document === shown && indexing === wasIndexing) return
+      shown = document
+      wasIndexing = indexing
+      if (!document?.text.trim()) { found = { text: '', hits: new Map() }; quickInput.setAnswer({ items: [] }); return }
+      const hits = new Map<string, { connectionId: string; hit: ObjectSearchHit }>(), items: QuickPickAnswerItem[] = [], groups = serverGroups(document)
+      for (const group of groups) for (const hit of group.hits) {
+        const id = `object:${hits.size}`
+        hits.set(id, { connectionId: group.connectionId, hit })
+        items.push({
+          id, label: hit.label, description: [group.label, hit.object.database].filter(Boolean).join(' › '), icon: hitIcon(hit), group: searchGroups.objects,
+          ...hit.range ? { ranges: [[hit.range[0], hit.range[0] + hit.range[1]]] } : {}
+        })
+      }
+      const total = document.result?.total ?? 0
+      items.push({ id: seeAllId, label: seeAllObjects, icon: 'search', group: searchGroups.objects, description: total > hits.size ? `Showing ${count(hits.size)} of ${count(total)} objects` : 'Names and definitions, with filters' })
+      found = { text: document.text, hits }
+      const failed = groups.find(group => group.error)
+      const message: QuickInputMessage | undefined = document.error ? { text: document.error, severity: 'error' }
+        : failed ? { text: `${failed.label}: ${failed.error}`, severity: 'error' }
+        : indexing ? { text: 'Indexing objects: more may be found when it finishes', severity: 'info' } : undefined
+      // Answered once the search that ran is for the text as it is now; until then the rows are the answer before.
+      const answered = !document.requestId && document.asked?.text === document.text
+      quickInput.setAnswer({ items, busy: !answered && !document.error, ...message ? { message } : {} })
+    }
+    const unsubscribe = objectSearch.subscribe(push)
+    objectSearch.quickSearch(text)
+    return { search: value => objectSearch.quickSearch(value), dispose: () => { unsubscribe(); objectSearch.endQuickSearch() } }
+  }
+  /** Reveal in Object Explorer, as a Search Objects hit's: the tree loads and expands its way to the object, and takes focus as F8 gives it. */
+  const revealObject = (connectionId: string, hit: ObjectSearchHit) => {
+    const { objectSearch, explorer } = workbench
+    if (!objectSearch || !explorer) return
+    void commands.execute('window.explorer', undefined, 'palette')
+    void objectSearch.reveal(explorer, connectionId, hit).then(outcome => { if (!outcome.ok && !outcome.cancelled) commands.reportError(outcome.message) }, onUnexpectedError)
+  }
+  const openSearchObjects = (text: string) => {
+    const live = connections.live()
+    try { workbench.objectSearch?.open(live.length > 1 ? undefined : live[0]?.id, text, live.length > 1) }
+    catch (error) { commands.reportError(error instanceof Error ? error.message : 'Search Objects could not open.') }
+  }
+  // Each row's id says which list it is from.
   const searchPicker = (): Picker => {
     const queries = queryItems().map(item => ({ ...item, id: 'query:' + item.id, group: searchGroups.queries }))
-    const found = [...queries, ...commandItems().map(item => ({ ...item, id: 'command:' + item.id, group: searchGroups.commands }))]
-    // One object past what the widget keeps, so it says that only the first ones can be searched.
-    const objects = workbench.explorer?.loadedObjects(Math.max(0, quickInputLimits.items - found.length) + 1) ?? []
     return {
-      ariaLabel: 'Search', placeholder: 'Search open queries, commands and loaded Object Explorer objects (type > for commands, ? for help)', noun: 'items', sort: 'grouped', matchOnDescription: true,
-      items: [...found, ...objects.map((object): QuickPickItem => ({ id: 'object:' + object.id, label: object.label, description: object.path, icon: object.icon, group: searchGroups.objects }))],
+      ariaLabel: 'Search', placeholder: 'Search open queries, commands and objects (type > for commands, ? for help)', noun: 'items', sort: 'grouped', matchOnDescription: true,
+      items: [...queries, ...commandItems().map(item => ({ ...item, id: 'command:' + item.id, group: searchGroups.commands }))],
       // The previous query, as in Go to Query, so Enter switches back.
       activeId: queries[1]?.id,
       onDidAccept: item => {
         const at = item.id.indexOf(':'), kind = item.id.slice(0, at), id = item.id.slice(at + 1)
         if (kind === 'query') { documents.activate(id); documents.focusActive() }
         else if (kind === 'command') runCommand(id)
-        // Object Explorer comes forward with focus on the node, as F8 brings it forward. Its folders open as clicks would
-        // open them, which resumes a folder's loading that a collapse interrupted.
-        else if (kind === 'object' && workbench.explorer?.reveal(Number(id))) void commands.execute('window.explorer', undefined, 'palette')
+        else if (item.id === seeAllId) openSearchObjects(found.text)
+        else if (kind === 'object') { const object = found.hits.get(item.id); if (object) revealObject(object.connectionId, object.hit) }
       }
     }
   }
@@ -115,11 +174,14 @@ export function paletteContribution(workbench: PaletteWorkbench, history = new C
     mode = next
     scope = nextScope
     const picker = next === '>' ? commandPicker() : next === '?' ? helpPicker() : scope === 'search' ? searchPicker() : queryPicker()
+    let objects: ReturnType<typeof searchObjects>
     quickInput.show({
       ...picker, value, prefix: next, ...anchor ? { anchor } : {},
-      onDidChangeValue: text => { if (quickAccessMode(text) !== next) open(text) },
-      onDidHide: () => { if (session === token) mode = undefined }
+      onDidChangeValue: text => { if (quickAccessMode(text) !== next) open(text); else objects?.search(text) },
+      onDidHide: () => { objects?.dispose(); if (session === token) mode = undefined }
     })
+    // After the widget shows, so the mode this one replaced has ended its own search first.
+    if (next === '' && scope === 'search' && quickInput.visible && session === token) objects = searchObjects(value)
   }
 
   const registrations = [

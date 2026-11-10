@@ -245,6 +245,14 @@ try {
         if (node.type === 'folder' && node.folder === 'databases') nodes.push({ ref: { type: 'object', object: { kind: 'database', name: 'AppData' } }, label: 'AppData', icon: 'database', hasChildren: true })
         return { ok: true, value: { nodes, total: nodes.length, elapsedMs: 1 } }
       }
+      // Search Objects' index: the AppData database, found by a part of its name.
+      const index = { state: 'ready', databases: 1, indexed: 1, objects: 1, modules: 0, cut: 0, skipped: [], definitions: true }
+      if (method === 'explorer.index') return { ok: true, value: { status: index, elapsedMs: 1 } }
+      if (method === 'explorer.search') {
+        const at = 'appdata'.indexOf(params.text.toLowerCase())
+        const hits = at < 0 ? [] : [{ object: { kind: 'database', name: 'AppData' }, folder: 'databases', label: 'AppData', range: [at, params.text.length] }]
+        return { ok: true, value: { hits, total: hits.length, partial: false, elapsedMs: 1, index } }
+      }
       if (method === 'query.session.close') return { ok: true, value: { closed: true } }
       if (method === 'query.session.state') return { ok: true, value: { transactionCount: 0, checked: true } }
       // Rows live in the backend's result store, which a stub does not have; the summary's messages carry the target.
@@ -354,13 +362,9 @@ try {
   await expect(textbox()).toBeFocused()
   console.log('Palette checks: database picker, chord pass-through, F5 by focus, F8 focus, double-click and held Enter guards, the current server kept, and Go to Query.')
 
-  // 12b. The header's search box opens Search over open queries, commands, and the objects Object Explorer has loaded;
-  // a found object's folders open, it is selected, and Object Explorer takes focus.
-  const databases = await explorerRow(page, 'server-a', 'Databases')
-  await databases.click()
-  await page.keyboard.press('ArrowRight')
-  await expect(await explorerRow(page, 'server-a', 'Databases', 'AppData')).toBeVisible()
-  await page.keyboard.press('ArrowLeft')
+  // 12b. The header's search box opens Search over open queries, commands, and the servers' objects, which Search Objects'
+  // index answers (the tree has loaded none of them); a found object's folders load and open, it is selected, and Object
+  // Explorer takes focus.
   await textbox().focus()
   // View › Search (and Ctrl+Q) opens Search where F1 opens the palette, centred at the top; the search box drops it down
   // below itself.
@@ -374,15 +378,17 @@ try {
   await expect(combobox('Search')).toBeFocused()
   const [dropped, box] = [await widget().boundingBox(), await searchBox(page).boundingBox()]
   expect([Math.abs(centre(dropped) - centre(box)) < 1, dropped.y >= box.y + box.height, dropped.y - (box.y + box.height) < 8]).toEqual([true, true, true])
-  await page.keyboard.insertText('AppData')
-  const found = quickInputRows(page).filter({ hasText: 'server-a › Databases' })
+  await page.keyboard.insertText('appdat')
+  // The index's hit, with its server, then the way to the Search Objects tab.
+  const found = quickInput(page).getByRole('option', { name: /^AppData, server-a/ })
   await expect(found).toHaveCount(1)
+  await expect(quickInputRows(page).last()).toContainText('See all in Search Objects')
   await found.click()
   await expect(widget()).toHaveCount(0)
   const appData = await explorerRow(page, 'server-a', 'Databases', 'AppData')
   await expect(appData).toHaveAttribute('aria-selected', 'true')
   await expect(explorerTree(page)).toBeFocused()
-  console.log('Palette checks: the header\'s search box drops Search down below itself, finds a loaded Object Explorer object and brings it forward.')
+  console.log('Palette checks: the header\'s search box drops Search down below itself, finds an object Object Explorer has not loaded through Search Objects and reveals it.')
 
   // 13. Behind a modal dialog, workbench keys neither run nor are consumed, and Edit › Undo (how ⌘Z arrives on macOS)
   // does not reach into the editor behind it.

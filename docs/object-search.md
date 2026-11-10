@@ -4,7 +4,7 @@ Search Objects searches every object a server's login can see, not just the node
 Object Explorer lists, from logins and databases down to columns and parameters. It matches names, and it can also match text
 inside definitions (procedures, functions, views and triggers, and constraint, computed column and plan guide expressions).
 
-The same search runs in two places, with the same options and results:
+The same search runs in two places, with the same options and results, and the header's Search asks it too:
 
 - **Object Explorer's search box**, at the top of the pane. Search in Object Explorer (Ctrl+Shift+F, Cmd+Shift+F on macOS,
   or the palette) focuses it and selects its text, so typing replaces it and End keeps it. It searches the server of the
@@ -30,6 +30,13 @@ The same search runs in two places, with the same options and results:
   shows without taking focus, so the keys go on walking the hits. ↑ on the first hit, and Escape, return to the box.
   Beside the hits, behind a sash, is the *details pane* (below them when the tab is narrower than 760 px): see
   *The details pane* below.
+- **The header's Search** (the search box in the header, View › Search…, Ctrl+Q on Windows) lists objects below the open
+  queries and commands it matches itself. The objects are this search's answer, not a filter of what Object Explorer has
+  loaded: the text is searched by name only, with Fuzzy Match, on every connected server, as it is typed, and each server
+  answers at most 50 hits, shown with its server and database. Nothing is asked before there is text; typing builds the
+  index of a server that has none. A hit reveals its object in Object Explorer, which takes focus. The last row, *See all
+  in Search Objects*, opens a Search Objects tab with the text (on All servers when several are connected) for every hit,
+  definitions and the filters. The search ends when the widget closes or changes mode.
 - **In both,** the hits are a listbox whose options announce the selected one, and each has a context menu (right-click,
   which selects the hit, or Shift+F10 and the context-menu key on the selected hit). See *A hit's menu* below.
 

@@ -1,3 +1,4 @@
+import { kindSpecs, type ExplorerIcon, type KindSpec } from '../../../shared/explorer/catalog.ts'
 import { insertTextFor } from '../../../shared/explorer/refs.ts'
 import type { ObjectSearchHit } from '../../../shared/explorer/search.ts'
 import type { Platform } from '../../../shared/commands/keybindings'
@@ -5,6 +6,17 @@ import { onUnexpectedError } from '../core/errors'
 import type { Workbench } from '../core/workbench'
 import { selectionContextOf } from '../explorer/ExplorerService'
 import type { SearchHitTarget } from '../menus/targets'
+
+/** A hit's kind as this build's catalogue has it; a kind it does not know (a newer backend's) shows as a plain object. */
+export function hitKindSpec(kind: string): Pick<KindSpec, 'title' | 'icon' | 'subtypeIcons'> {
+  return Object.hasOwn(kindSpecs, kind) ? kindSpecs[kind as keyof typeof kindSpecs] : unknownKindSpec
+}
+const unknownKindSpec: Pick<KindSpec, 'title' | 'icon'> = { title: 'Object', icon: 'file' }
+/** The icon Object Explorer draws the hit's node with. */
+export function hitIcon(hit: Pick<ObjectSearchHit, 'object' | 'subtype'>): ExplorerIcon {
+  const spec = hitKindSpec(hit.object.kind)
+  return (hit.subtype && spec.subtypeIcons?.[hit.subtype]) || spec.icon
+}
 
 /**
  * A hit's context menu target: the object as a menu node on the search's server, and its selection keys, which its menu's Object

@@ -5,6 +5,9 @@ import type { DatabaseInfo } from '../src/shared/contracts'
 import { databaseItems } from '../src/renderer/src/contributions/query'
 import { CommandHistory, historyKey } from '../src/renderer/src/quickinput/history'
 import { QuickInputService, quickInputLimits, type QuickPickItem, type QuickPickOptions } from '../src/renderer/src/quickinput/QuickInputService'
+import { seeAllObjects } from '../src/renderer/src/contributions/palette'
+import { quickSearchHits, quickSearchId } from '../src/renderer/src/search/ObjectSearchService'
+import type { ObjectSearchHit } from '../src/shared/explorer/search'
 import { quickInputKeyAction, resultStatus, type QuickInputKeyEvent } from '../src/renderer/src/quickinput/view-model'
 import { deferred, TestEditor } from './fixtures/documents'
 import { connectionInfo, connectionOptions, fakeFocus, manualTimers, memoryStorage, readyBackend, workbenchFixture } from './fixtures/workbench'
@@ -61,6 +64,33 @@ describe('quick input sessions', () => {
     service.hide('cancel')
     expect(focus.restored).toEqual(['grid'])
     expect(hidden).toEqual(['first replace', 'second cancel'])
+  })
+  it('shows a provider\'s own matches after the filtered rows, unfiltered and in its order, and keeps the active row as they land', () => {
+    const { service, view, labels, active } = controller(), accepted: string[] = []
+    service.show(options({ sort: 'grouped', items: [{ id: 'alpha', label: 'alpha', group: 'letters' }, { id: 'beta', label: 'beta', group: 'letters' }], onDidAccept: item => { accepted.push(item.id) } }))
+    service.filter('a')
+    service.move('next')
+    expect(active()).toBe('beta')
+    service.setAnswer({ busy: true, message: { text: 'Indexing', severity: 'info' }, items: [
+      { id: 'x', label: 'zzz', group: 'found', ranges: [[1, 2], [2, 9]] }, { id: 'y', label: 'yyy', group: 'found' }, { label: 'no id' } as unknown as QuickPickItem] })
+    // Not matched against "a", after the filtered rows, under their own group; a range past the label is dropped.
+    expect(view().rows.map(row => [row.group, row.item.label, row.ranges])).toEqual([['letters', 'alpha', [[0, 1]]], [undefined, 'beta', [[3, 4]]], ['found', 'zzz', [[1, 2]]], [undefined, 'yyy', []]])
+    expect(view()).toMatchObject({ busy: true, message: { text: 'Indexing', severity: 'info' } })
+    expect(active()).toBe('beta')
+    // They stay through typing until the provider replaces them, and the filter's first row is active again.
+    service.filter('al')
+    expect(labels()).toEqual(['alpha', 'zzz', 'yyy'])
+    service.move('last')
+    service.setAnswer({ items: [{ id: 'y', label: 'yyy', group: 'found' }] })
+    expect(labels()).toEqual(['alpha', 'yyy'])
+    expect(active()).toBe('y')
+    expect(view()).toMatchObject({ busy: false, message: undefined })
+    service.accept()
+    expect(accepted).toEqual(['y'])
+    // The next picker starts without them, and with none open there is nothing to answer.
+    service.setAnswer({ items: [{ id: 'x', label: 'zzz' }] })
+    service.show(options())
+    expect(labels()).toEqual(['alpha', 'beta', 'gamma'])
   })
   it('moves through rows with wrapping, paging, first, and last', () => {
     const { service, active } = controller()
@@ -683,46 +713,64 @@ describe('Go to Query', () => {
 })
 
 describe('Search', () => {
-  it('finds open queries, commands and loaded Object Explorer objects in that order, and brings a found object forward', async () => {
-    const { key, quickInput, view, labels, documents, explorer, api, connect, host } = palette()
+  it('finds open queries and commands itself and asks Search Objects for the objects, loaded in the tree or not, and reveals a found one', async () => {
+    const { key, quickInput, view, labels, documents, explorer, api, connect, host, objectSearch } = palette()
     const a = documents.create('Orders report.sql', '', 'master')
     documents.create('b.sql', '', 'master')
     documents.activate(a.id)
     api.push(readyBackend())
     connect(connectionInfo('server-a'))
-    const find = async (label: string) => { let id: number | undefined; await vi.waitFor(() => { id = explorer.getSnapshot().rows.nodes.find(node => node?.label === label)?.id; expect(id).toBeDefined() }); return id! }
-    const databases = await find('Databases')
-    for (const label of ['Databases', 'AppData', 'Tables']) explorer.expand(await find(label))
-    const orders = await find('dbo.Orders')
-    explorer.collapse(databases)
-    expect(explorer.getSnapshot().rows.nodes.some(node => node?.label === 'dbo.Orders')).toBe(false)
-    const loads = api.explorerChildren.mock.calls.length
+    const orders: ObjectSearchHit = { object: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' }, folder: 'tables', label: 'dbo.Orders', range: [4, 6] }
+    api.explorerSearch.mockImplementation(async params => {
+      const hits = params.text === 'orders' ? [orders] : []
+      return { ok: true, value: { hits, total: hits.length * 75, partial: false, elapsedMs: 0, index: { state: 'ready', databases: 1, indexed: 1, objects: 1, modules: 0, cut: 0, skipped: [], definitions: true } } }
+    })
     await key('workbench.search')
     expect(view()).toMatchObject({ visible: true, ariaLabel: 'Search', prefix: '' })
     // The previous query is active, as in Go to Query.
     expect(view().rows[view().activeIndex].item.label).toBe('b.sql')
+    // Nothing is asked before there is text, and the tree, which has loaded no table, is not what is searched.
+    expect(api.explorerSearch).not.toHaveBeenCalled()
+    expect(explorer.getSnapshot().rows.nodes.some(node => node?.label === 'dbo.Orders')).toBe(false)
     quickInput.filter('orders')
     // Commands match too (o-r-d-e-r-s from the start of Operations, and spread through Restore Files and Filegroups), between the queries and the objects.
-    expect(view().rows.map(row => [row.group, row.item.label])).toEqual([['open queries', 'Orders report.sql'], ['commands', 'Integration Services: Copy Operations with Headers'], [undefined, 'Object Explorer: Restore Files and Filegroups…'], ['Object Explorer', 'dbo.Orders']])
-    expect(view().rows[3].item).toMatchObject({ icon: 'table', description: 'server-a.example › Databases › AppData › Tables' })
-    // Folders are not objects of their own (an object in one matches by its path), and nothing is loaded for a search.
-    quickInput.filter('tables')
-    expect(view().rows.filter(row => row.group === 'Object Explorer').map(row => row.item.label)).toEqual(['dbo.Orders'])
-    expect(api.explorerChildren.mock.calls).toHaveLength(loads)
+    const local = [['open queries', 'Orders report.sql'], ['commands', 'Integration Services: Copy Operations with Headers'], [undefined, 'Object Explorer: Restore Files and Filegroups…']]
+    // The queries and commands are there at once, with the way to Search Objects; the progress bar runs until the servers answer.
+    expect(view().rows.map(row => [row.group, row.item.label])).toEqual([...local, ['objects', seeAllObjects]])
+    expect(view().busy).toBe(true)
+    await vi.waitFor(() => expect(view().rows.map(row => [row.group, row.item.label])).toEqual([...local, ['objects', 'dbo.Orders'], [undefined, seeAllObjects]]))
+    // Search Objects' own search: names only, approximately too, a few hits from each server.
+    expect(api.explorerSearch.mock.calls.at(-1)![0]).toMatchObject({ text: 'orders', in: 'names', match: 'fuzzy', limit: quickSearchHits })
+    expect(view().busy).toBe(false)
+    // The row shows what the search matched, not what the widget's own matcher would.
+    expect(view().rows[3]).toMatchObject({ item: { icon: 'table', description: 'server-a.example › AppData' }, ranges: [[4, 10]] })
+    expect(view().rows[4].item.description).toBe('Showing 1 of 75 objects')
+    // An answer that lands leaves the active row where it was.
+    expect(view().activeIndex).toBe(0)
     quickInput.filter('new query')
     expect(view().rows[0]).toMatchObject({ group: 'commands', item: { label: 'File: New Query' } })
+    await vi.waitFor(() => expect(view().rows.filter(row => row.item.group === 'objects').map(row => row.item.label)).toEqual([seeAllObjects]))
     quickInput.filter('orders')
+    await vi.waitFor(() => expect(view().rows[3]?.item.label).toBe('dbo.Orders'))
     // Past the commands, to the object.
     quickInput.move('next')
     quickInput.move('next')
     quickInput.move('next')
     quickInput.accept()
-    await settle()
-    // Its folders open again, it is selected, and Object Explorer comes forward with focus, as F8 brings it.
-    expect(explorer.getSnapshot().selected).toBe(orders)
-    expect(explorer.getSnapshot().rows.nodes.some(node => node?.label === 'dbo.Orders')).toBe(true)
+    // Reveal in Object Explorer: its folders load and open, it is selected, and Object Explorer comes forward with focus, as F8 brings it.
+    await vi.waitFor(() => { const { selected, rows } = explorer.getSnapshot(); expect(rows.nodes.find(node => node?.id === selected)?.label).toBe('dbo.Orders') })
     expect(vi.mocked(host.reveal).mock.calls.at(-1)).toEqual(['explorer', { focus: true }])
     expect(labels()).toEqual([])
+    // The search ends with the widget.
+    expect(objectSearch.getSnapshot().documents[quickSearchId]).toBeUndefined()
+    // The last row takes the text to a Search Objects tab.
+    await key('workbench.search')
+    quickInput.filter('orders')
+    await vi.waitFor(() => expect(view().rows[3]?.item.label).toBe('dbo.Orders'))
+    quickInput.move('previous')
+    expect(view().rows[view().activeIndex].item.label).toBe(seeAllObjects)
+    quickInput.accept()
+    expect(objectSearch.getSnapshot().documents[documents.getSnapshot().activeId]).toMatchObject({ text: 'orders', scope: 'all', fuzzy: false })
   })
   it('switches to commands by prefix and back, and Go to Query or F1 take over', async () => {
     const { key, quickInput, view, documents } = palette()
@@ -746,15 +794,48 @@ describe('Search', () => {
     quickInput.filter('')
     expect(view()).toMatchObject({ ariaLabel: 'Go to Query' })
   })
-  it('says when there are more loaded objects than it can search', async () => {
-    const { key, view, explorer, quickInput } = palette()
-    const loaded = vi.spyOn(explorer, 'loadedObjects').mockImplementation(limit => Array.from({ length: limit }, (_, index) => ({ id: index + 1, label: `dbo.T${index}`, path: 'server-a › Databases › AppData › Tables', icon: 'table' as const })))
+  it('searches objects only in Search with a server connected, and stops when the mode changes', async () => {
+    const { key, quickInput, view, labels, api, connect, objectSearch, documents } = palette()
+    documents.create('a.sql', '', 'master')
+    // No server: queries and commands only.
     await key('workbench.search')
-    expect(view().message).toEqual({ text: `Only the first ${quickInputLimits.items.toLocaleString('en-US')} items can be searched`, severity: 'info' })
-    loaded.mockImplementation(() => [])
+    quickInput.filter('a.s')
+    expect(labels()).toEqual(['a.sql'])
+    expect(objectSearch.getSnapshot().documents[quickSearchId]).toBeUndefined()
     quickInput.hide('cancel')
+    api.push(readyBackend())
+    connect(connectionInfo('server-a'))
+    // Go to Query and the command palette never ask.
+    await key('workbench.quickOpen')
+    quickInput.filter('a.s')
+    expect(objectSearch.getSnapshot().documents[quickSearchId]).toBeUndefined()
     await key('workbench.search')
-    expect(view().message).toBeUndefined()
+    quickInput.filter('a.s')
+    expect(objectSearch.getSnapshot().documents[quickSearchId]).toMatchObject({ text: 'a.s', allServers: true, scope: 'names', fuzzy: true })
+    expect(labels()).toEqual(['a.sql', seeAllObjects])
+    // Emptying the box takes the object rows away at once.
+    quickInput.filter('')
+    expect(labels()).not.toContain(seeAllObjects)
+    quickInput.filter('a.s')
+    quickInput.filter('>a.s')
+    expect(view()).toMatchObject({ ariaLabel: 'Command Palette' })
+    expect(objectSearch.getSnapshot().documents[quickSearchId]).toBeUndefined()
+    expect(labels()).not.toContain(seeAllObjects)
+    // Back in Search, the text is searched again.
+    quickInput.filter('a.s')
+    expect(objectSearch.getSnapshot().documents[quickSearchId]).toMatchObject({ text: 'a.s' })
+    quickInput.hide('cancel')
+    expect(objectSearch.getSnapshot().documents[quickSearchId]).toBeUndefined()
+  })
+  it('says when a server could not be searched', async () => {
+    const { key, quickInput, view, api, connect } = palette()
+    api.push(readyBackend())
+    connect(connectionInfo('server-a'))
+    api.explorerSearch.mockImplementation(async () => ({ ok: false, error: 'The search failed.' }))
+    await key('workbench.search')
+    quickInput.filter('orders')
+    await vi.waitFor(() => expect(view().message).toEqual({ text: 'server-a.example: The search failed.', severity: 'error' }))
+    expect(view().busy).toBe(false)
   })
   it('drops down from the search box it was opened from, in every mode, and opens where F1 does from a key', async () => {
     const { key, commands, quickInput, view } = palette()

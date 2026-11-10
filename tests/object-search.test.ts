@@ -14,7 +14,7 @@ import {
 import { SnapshotStore } from '../src/renderer/src/core/store'
 import type { Timers } from '../src/renderer/src/core/timers'
 import type { LiveConnection } from '../src/renderer/src/services/connections'
-import { explorerSearchId, hitServer, mergeAnswers, ObjectSearchService, revealPaths, serverGroups, shownHits, unknownKindReveal, type ObjectSearchOptions, type RevealHost } from '../src/renderer/src/search/ObjectSearchService'
+import { explorerSearchId, hitServer, mergeAnswers, ObjectSearchService, quickSearchHits, quickSearchId, revealPaths, serverGroups, shownHits, unknownKindReveal, type ObjectSearchOptions, type RevealHost } from '../src/renderer/src/search/ObjectSearchService'
 import { searchHitTarget } from '../src/renderer/src/search/hit-actions'
 import { insertTextFor } from '../src/shared/explorer/refs'
 import { indexSummary, searchHitPath } from '../src/renderer/src/search/ObjectSearch'
@@ -811,6 +811,44 @@ describe('ObjectSearchService', () => {
     expect(service.getSnapshot().documents[explorerSearchId]?.connectionId).toBe('a')
   })
 
+  it('runs the header\'s Search as one more search: by name, approximately too, a few hits from every connected server, until it ends', async () => {
+    const { service, calls, pendingSearch, connections, timers } = harness({ indexOnConnect: false })
+    // Nothing is asked, or built, with no server or no text.
+    service.quickSearch('orders')
+    connections.set([connection('a'), connection('b')])
+    service.quickSearch('  ')
+    expect(service.getSnapshot().documents[quickSearchId]).toBeUndefined()
+    expect(calls.index).toHaveLength(0)
+    service.quickSearch('ord')
+    // Typing builds the index of a server that has none, as opening a tab does.
+    expect(calls.index.map(call => call.connectionId)).toEqual(['a', 'b'])
+    service.quickSearch('orders')
+    expect(calls.search).toHaveLength(0)
+    timers.run()
+    expect(calls.search).toHaveLength(2)
+    for (const [index, connectionId] of ['a', 'b'].entries()) {
+      expect(calls.search[index]).toMatchObject({ connectionId, text: 'orders', in: 'names', match: 'fuzzy', limit: quickSearchHits, caseSensitive: false, wholeWord: false, regex: false })
+      expect(calls.search[index]).not.toHaveProperty('kinds')
+    }
+    // The same text again asks nothing.
+    service.quickSearch('orders')
+    timers.run()
+    expect(calls.search).toHaveLength(2)
+    pendingSearch[0]({ ok: true, value: { hits: [hit], total: 1, partial: false, elapsedMs: 1, index: status() } })
+    await settle()
+    expect(serverGroups(service.getSnapshot().documents[quickSearchId]).map(group => [group.connectionId, group.hits.length, !!group.pending])).toEqual([['a', 1, false], ['b', 0, true]])
+    // Emptied, it shows nothing; ended, the search still on its way is cancelled and it is forgotten.
+    service.quickSearch('order')
+    timers.run()
+    service.endQuickSearch()
+    expect(calls.cancel.at(-1)).toEqual(calls.search.slice(-2).map(call => call.requestId))
+    expect(service.getSnapshot().documents[quickSearchId]).toBeUndefined()
+    timers.run()
+    expect(calls.search).toHaveLength(4)
+    // A tab's search names no limit: the backend's default stands.
+    service.open('a', 'orders')
+    expect(calls.search.at(-1)).not.toHaveProperty('limit')
+  })
   it('hands focus to the box once per Search in Object Explorer, even when the box mounts later', () => {
     const { service } = harness()
     expect(service.takePaneFocus()).toBe(false)

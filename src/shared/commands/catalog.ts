@@ -1034,7 +1034,7 @@ export const commandCatalog = {
     title: 'Toggle Panel Tabs', category: 'View', icon: 'layout', keywords: ['panel', 'tab', 'header', 'dock', 'drag'], toggled: 'panelTabsVisible',
     menus: [{ menu: 'window', group: '1_panes', order: 7, title: 'Panel Tabs', mnemonic: 't' }, { menu: 'dockTab.context', group: '3_tabs', order: 1, title: 'Show Panel Tabs', mnemonic: 's' }]
   },
-  // The header's search box: open queries, commands, and the Object Explorer nodes already loaded. SSMS 22's search box
+  // The header's search box: open queries, commands, and the servers' objects (Search Objects' search). SSMS 22's search box
   // (the Visual Studio shell's) is Ctrl+Q; Linux and macOS keep that key for quitting.
   'workbench.search': {
     title: 'Search…', category: 'View', icon: 'search', keywords: ['find', 'objects', 'tables', 'goto', 'launch'],
