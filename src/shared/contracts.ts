@@ -315,9 +315,9 @@ export interface ResultsProfileResult { rows: number; complete: boolean; rowByte
  *  `count` (most frequent first, ties by value) or `value`, at most `maxValues` (1 to `limits.distinct.maxValues`) of them;
  *  `search` keeps the values whose display text contains it, compared as the results search compares a cell. With
  *  `keptViewId`, another view of the result, each value says whether a row of that view holds it, `nullsKept` whether it
- *  has a NULL and `unlistedKept` whether it holds a value past those listed; when it holds some, `unlistedHeld` or
- *  `unlistedDropped` names the representative rows of the fewer of those past values it holds or does not (neither when
- *  both are more than one filter holds). */
+ *  has a NULL and `unlistedKept` whether it holds a value past those listed; `unlistedHeld` and `unlistedDropped` name
+ *  the representative rows of those past values it holds and does not hold, each when one filter holds them. Rows sealed
+ *  after that view was built count as held. */
 export interface ResultsDistinctParams { resultId: number; column: number; order: 'count' | 'value'; maxValues: number; search?: string; viewId?: number; keptViewId?: number }
 /** A distinct value: its representative base row (the lowest holding it, so an `in` or `notIn` filter by it compares this
  *  value), its display text (binary as 0x hex, at most `limits.distinct.valueChars` characters and "…") and its count. */

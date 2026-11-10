@@ -129,8 +129,8 @@ export const distinctResultSchema = z.object({
   nullsKept: z.boolean().optional(), unlistedKept: z.boolean().optional(),
   unlistedHeld: filterRows.optional(), unlistedDropped: filterRows.optional()
 }).strict().refine(result => result.values.length <= result.distinct && result.truncated === (result.distinct > result.values.length), 'Truncated says some values were left out.')
-  .refine(result => (result.unlistedHeld === undefined && result.unlistedDropped === undefined) || (result.unlistedKept === true && (result.unlistedHeld === undefined || result.unlistedDropped === undefined)),
-    'Past values are named only when the kept view holds some, and on one side.')
+  .refine(result => result.unlistedKept !== undefined ? result.unlistedHeld === undefined || (result.unlistedHeld.length > 0) === result.unlistedKept : result.unlistedHeld === undefined && result.unlistedDropped === undefined,
+    'Past values are named only with kept marks, the held ones exactly when the kept view holds some.')
 export type PortEndResult = ResultsDistinctResult | ResultsDiffResult | ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | ResultsViewResult | ResultsViewCloseResult | ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsSearchResult | ResultsProfileResult | LiveEnd | LiveUpdateResult
 
 const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'server', 'print', 'error']), line: z.number().int().min(1).max(2_147_483_647).optional() }).strict()

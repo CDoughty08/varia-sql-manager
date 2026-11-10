@@ -166,8 +166,9 @@ internal sealed record DistinctValue(int Row, string Text, long Count, bool? Kep
 /// NULL and unreadable cells; Distinct the values the search kept, of which Values are the first in the order asked
 /// (Truncated when there were more); Approximate when a truncated value compared by its stored prefix; with a KeptViewId,
 /// NullsKept says whether that view has a NULL (or unreadable) cell in the column, UnlistedKept whether it holds a value
-/// past those listed, and when it does, UnlistedHeld or UnlistedDropped the representative rows of the fewer of those past
-/// values it holds or does not hold (absent when they are more than one filter holds).</summary>
+/// past those listed, and UnlistedHeld and UnlistedDropped the representative rows of those past values it holds and does
+/// not hold, each absent when they are more than one filter holds. A view built while the set loaded holds the rows sealed
+/// after it.</summary>
 internal sealed record ResultsDistinctResult(long Rows, bool Complete, long Nulls, long Distinct, bool Truncated, bool Approximate, DistinctValue[] Values, bool? NullsKept = null, bool? UnlistedKept = null,
     int[]? UnlistedHeld = null, int[]? UnlistedDropped = null);
 /// <summary>results.rowBytes: Bytes[k] is row FirstRow + k's sum of DATALENGTH over its cells (NULL counts 0; xml and json

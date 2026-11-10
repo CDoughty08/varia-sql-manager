@@ -8,8 +8,8 @@ internal enum DistinctOrder { Count, Value }
 
 /// <summary>What results.distinct found: the rows it looked at, the NULL count, every distinct value the search kept
 /// (Distinct) and the first of them (Values) in the order asked; with a kept view, whether it has a NULL, whether it holds a
-/// value past those listed, and when it holds some, the representative rows of the fewer of those past values it holds
-/// (UnlistedHeld) or does not (UnlistedDropped) when they fit one filter.</summary>
+/// value past those listed, and the representative rows of those past values it holds (UnlistedHeld) and of those it does
+/// not (UnlistedDropped), each when it fits one filter.</summary>
 internal sealed record DistinctOutcome(long Rows, long Nulls, long Distinct, bool Approximate, DistinctValue[] Values, bool? NullsKept = null, bool? UnlistedKept = null,
     int[]? UnlistedHeld = null, int[]? UnlistedDropped = null);
 
@@ -24,7 +24,7 @@ internal static partial class ViewSorter
     /// <summary>What results.distinct holds while it runs, charged to the result's budget: the column's key (as a filter's,
     /// 16 bytes a row and a NULL bit), the rows it groups (4 bytes a row), up to one group a row (a count and a kept mark, 5
     /// bytes), a kept view's row marks (1 byte a row) and the count order's ranking (4 bytes a group), and the answer (up
-    /// to 1 KiB a value listed: its text and its encoding).</summary>
+    /// to 1 KiB a value listed: its text and its encoding; the past values' rows, at most two filters' worth).</summary>
     public static long DistinctWorkingBytes(long rows, int maxValues) => WorkingBytes(rows, 1) + 14L * rows + 1024L * maxValues + 4096;
 
     /// <summary>A column's distinct values over a view's rows (or the sealed rows), each with its count and representative
@@ -56,7 +56,8 @@ internal static partial class ViewSorter
             if (key.IsNull(row)) nulls++;
             else values[count++] = row;
         }
-        // The kept view's rows; one outside the listed rows can only hold a value nobody listed.
+        // The kept view's rows; one outside the listed rows can only hold a value nobody listed. Rows sealed after the kept
+        // view was built (a set still loading) count as kept: that view has not judged them, and its rebuild may show them.
         bool[]? marks = null;
         bool? nullsKept = null;
         if (kept is not null)
@@ -68,6 +69,12 @@ internal static partial class ViewSorter
                 if ((i & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
                 var row = kept.Order[i];
                 if (row >= rows) continue;
+                marks[row] = true;
+                if (key.IsNull(row)) nullsKept = true;
+            }
+            for (var row = (int)Math.Min(kept.BaseRows, rows); row < rows; row++)
+            {
+                if ((row & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
                 marks[row] = true;
                 if (key.IsNull(row)) nullsKept = true;
             }
@@ -118,32 +125,32 @@ internal static partial class ViewSorter
             var g = ranked?[i] ?? i;
             answer[i] = new DistinctValue(values[g], Display(source, values[g], column, set.Wires[column]), counts[g], held is null ? null : held[g]);
         }
-        // Whether the kept view holds a value past those listed and, when it holds some, which: the fewer side's rows, so a
-        // checklist can leave every value it never listed as the kept view has it (keeping the held ones or dropping the
-        // others) within one filter's values.
+        // Whether the kept view holds a value past those listed, and which: the held and the dropped ones' rows, each when it
+        // fits one filter, so a checklist can leave every value it never listed as the kept view has it by keeping the held
+        // ones with the ticked values or dropping the others with the cleared ones, whichever fits and names fewer.
         bool? unlistedKept = null;
         int[]? unlistedHeld = null, unlistedDropped = null;
         if (held is not null)
         {
-            var past = groups - listed;
             var heldPast = 0;
             for (var i = listed; i < groups; i++)
             {
                 if ((i & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
                 if (held[ranked?[i] ?? i]) heldPast++;
             }
+            var droppedPast = groups - listed - heldPast;
             unlistedKept = heldPast > 0;
-            var keptSide = heldPast <= past - heldPast;
-            var side = keptSide ? heldPast : past - heldPast;
-            if (heldPast > 0 && side <= MaxFilterValues)
+            if (heldPast <= MaxFilterValues) unlistedHeld = new int[heldPast];
+            if (droppedPast <= MaxFilterValues) unlistedDropped = new int[droppedPast];
+            if (unlistedHeld is not null || unlistedDropped is not null)
             {
-                var sideRows = new int[side];
-                for (int i = listed, n = 0; n < side; i++)
+                for (int i = listed, h = 0, d = 0; i < groups; i++)
                 {
+                    if ((i & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
                     var g = ranked?[i] ?? i;
-                    if (held[g] == keptSide) sideRows[n++] = values[g];
+                    if (held[g]) { if (unlistedHeld is not null) unlistedHeld[h++] = values[g]; }
+                    else if (unlistedDropped is not null) unlistedDropped[d++] = values[g];
                 }
-                if (keptSide) unlistedHeld = sideRows; else unlistedDropped = sideRows;
             }
         }
         return new DistinctOutcome(looked, nulls, groups, approximate, answer, nullsKept, unlistedKept, unlistedHeld, unlistedDropped);

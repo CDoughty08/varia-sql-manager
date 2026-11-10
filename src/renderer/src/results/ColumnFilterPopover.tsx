@@ -5,7 +5,7 @@ import { codiconClass } from '../../../shared/icons'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { useWorkbench } from '../core/WorkbenchContext'
 import { trapFocus } from '../trap-focus'
-import { checklistCondition, unlistedValues, type ColumnCondition } from './column-filter'
+import { checklistCondition, columnFilterKind, unlistedValues, type ColumnCondition } from './column-filter'
 import { ColumnValuesScope } from './ResultsService'
 import { formatCount, plural } from './status'
 
@@ -176,8 +176,10 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
   const left = Math.max(8, Math.min(anchor.right - width, innerWidth - width - 8))
   const below = innerHeight - anchor.bottom - 10, above = anchor.top - 10, down = below >= 420 || below >= above
   const place = down ? { left, width, top: anchor.bottom + 2, maxHeight: Math.max(160, below) } : { left, width, bottom: innerHeight - anchor.top + 2, maxHeight: above }
-  // A truncated list's values past it stay as the grid shows them, unless the grid's view names too many of them.
+  // Values the list never showed stay as the grid shows them, unless the grid's view names too many of them.
   const unlisted = full ? unlistedValues(full, known) : undefined
+  // The column's own range limits the values listed, so Equals and Between can choose only within it.
+  const ranged = !!results.sortOf(tabId, index)?.filters.some(item => columnFilterKind(item.filter, column) === 'between')
   const titleId = `column-filter-${tabId}-${index}-${column}`
   const list = condition === 'list'
   const note = !full ? undefined
@@ -214,7 +216,7 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
       {entries.map(value => <Item key={value.row} value={value} checked={!unchecked.has(value.row)} disabled={!list} onToggle={toggle} />)}
       {full && !entries.length && !showNull && <p className="column-filter-note">No values match.</p>}
     </div>
-    {note && <p className="column-filter-note">{note}{!unlisted ? '' : unlisted.exact ? ' Values not listed stay as the grid shows them.' : ' Values not listed will all be shown.'}{full?.approximate ? ' Long values were compared by their first characters.' : ''}</p>}
+    {note && <p className="column-filter-note">{note}{!unlisted?.truncated ? '' : unlisted.held || unlisted.dropped ? ' Values not listed stay as the grid shows them.' : ' Values not listed will all be shown.'}{unlisted && !unlisted.complete ? ' Values in rows still arriving will be shown.' : ''}{full?.approximate ? ' Long values were compared by their first characters.' : ''}</p>}
     <div className="column-filter-condition">
       <select aria-label="Condition" value={condition} onChange={event => { setError(undefined); setCondition(event.target.value as Condition) }}>
         {conditions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
@@ -222,6 +224,7 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
       {(condition === 'equals' || condition === 'notEquals') && valueSelect('Value', first, setFirst)}
       {condition === 'between' && <>{valueSelect('Lowest value', first, setFirst)}{valueSelect('Highest value', second, setSecond)}</>}
     </div>
+    {ranged && condition !== 'list' && condition !== 'null' && condition !== 'notNull' && <p className="column-filter-note">The column's range limits the values listed. Clear filter to choose others.</p>}
     {error && <p className="column-filter-note error" role="alert">{error}</p>}
     <div className="column-filter-actions">
       {filtered && <button type="button" onClick={clear}>Clear filter</button>}

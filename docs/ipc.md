@@ -1539,16 +1539,18 @@ it holds (`Results/DistinctValues.cs`); the renderer receives at most 4,096 valu
   compares a cell (the collation's locale and Ignore flags for character columns, hex for binary, case ignored otherwise).
 - **`keptViewId`**, another view of the same result (`VIEW_NOT_FOUND` when it is gone), marks each listed value `kept`
   when any row of that view holds it (equal as above, whichever row), says in `nullsKept` whether that view has a NULL in
-  the column, and in `unlistedKept` whether it holds a value past those listed. When it holds some, `unlistedHeld` or
-  `unlistedDropped` lists the representative rows of the fewer of those past values it holds or does not hold (an empty
-  `unlistedDropped` when it holds them all), when they fit one filter (4,096); neither when both sides are larger. The marks cover every value listed, however many the view keeps, so a checklist over one view shows what
+  the column, and in `unlistedKept` whether it holds a value past those listed. `unlistedHeld` and `unlistedDropped` list
+  the representative rows of those past values it holds and of those it does not hold, each when it fits one filter
+  (4,096). A view built while the set was loading has not looked at the rows sealed after it, so their values count as
+  held. The marks cover every value listed, however many the view keeps, so a checklist over one view shows what
   a filtered view keeps of each value. Main relays the marks only when they were asked for, on every value and NULL.
 - **Work.** One key per row for the column (as a filter builds it), the rows grouped by a stable sort, and up to one group
   a row (its representative over the grouped rows' own array, a count and a kept mark), a kept view's row marks and the
   count order's ranking, and the answer (1 KiB a value asked for): `DistinctWorkingBytes` (about 35 bytes a row) is charged to the result's query budget while it runs (`TOO_LARGE`
   without room) and returned when it ends. The worker's `cancel` stops it (`CANCELLED`), within one group too. Main checks
   the answer before forwarding it: rows below 2³¹, at most `maxValues` values, `truncated` exactly when `distinct` exceeds
-  them, kept marks exactly when asked for, past values named only on one side and only when some are kept, and the column
+  them, kept marks exactly when asked for, past values named only with them (the held ones non-empty exactly when some
+  are kept), and the column
   inside the result's when its descriptor named the columns.
 - **Renderer.** `ResultHandle.distinct(column, { order, maxValues, search, kept, signal })` validates the request before
   the port (`kept` must be a view of the same result). `ResultsService.columnValues` asks over the rows the grid's other
@@ -1561,10 +1563,13 @@ it holds (`Results/DistinctValues.cs`); the renderer receives at most 4,096 valu
   `notIn` filter by representative rows, whichever names fewer (keeping on a tie), replacing the column's value-list
   filter and its Exclude NULLs (the checklist lists NULL as a value, so it also lists over the rows that filter hid);
   every value ticked takes both off. A truncated list leaves the values it never showed as the grid shows them: `in` with
-  the ticked values and the past ones the grid holds, or `notIn` with the cleared values and the past ones it drops, from
-  the kept marks (all shown when the column has no value filter, all hidden when the grid holds none of them). When the
-  grid holds and drops too many of them for one filter either way, `notIn` shows them all and the popover says so; every
-  value ticked takes the filter off only when no past value stays hidden. Between replaces the column's range
+  the ticked values and the past ones the grid holds, or `notIn` with the cleared values and the past ones it drops,
+  whichever fits one filter and names fewer (all shown when the column has no value filter). When neither side can be
+  named, `notIn` shows them all and the popover says so; every value ticked takes the filter off only when no past value
+  stays hidden. While rows still arrive only `notIn` applies, so their values stay shown. OK puts the new filter where the
+  one it replaces stood, since filters apply in order (a duplicates filter counts only the rows before it kept). The
+  base view's build stops when the popover closes. With a range on the column, Equals and Between choose only within
+  it, and the popover says so. Between replaces the column's range
   filter; Clear filter takes all of the column's filters off. The popover opens in the grid's own window (a popped-out
   Results panel's), and a second press on the open funnel closes it. There is no contains or starts-with condition: the
   filters compare whole values by rows, and a text filter op would need its own backend filter.

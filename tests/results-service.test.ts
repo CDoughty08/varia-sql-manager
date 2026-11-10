@@ -1157,8 +1157,14 @@ describe('results service filters', () => {
     expect(filteredColumns(service.sortOf('t1', 0))).toEqual(new Set([0, 1]))
     service.applyColumnFilter('t1', 0, 1, { kind: 'notEquals', row: 5 })
     service.applyColumnFilter('t1', 0, 1, { kind: 'null' })
-    expect(filters()).toEqual([{ op: 'between', column: 1, rows: [2, 6] }, { op: 'in', column: 0, rows: [1], nulls: false }, { op: 'in', column: 1, rows: [], nulls: true }])
-    expect(service.sortOf('t1', 0)?.filters.at(-1)?.label).toBe('(No column name) is NULL')
+    // A replacement takes the place of the filter it replaces: filters apply in order.
+    expect(filters()).toEqual([{ op: 'in', column: 1, rows: [], nulls: true }, { op: 'between', column: 1, rows: [2, 6] }, { op: 'in', column: 0, rows: [1], nulls: false }])
+    expect(service.sortOf('t1', 0)?.filters[0]?.label).toBe('(No column name) is NULL')
+    service.filterDuplicates('t1', 0, true)
+    service.applyColumnFilter('t1', 0, 0, { kind: 'equals', row: 1 })
+    expect(filters()?.map(filter => filter.op)).toEqual(['in', 'between', 'in', 'duplicates'])
+    expect(filters()?.[2]).toEqual({ op: 'in', column: 0, rows: [1], nulls: false })
+    service.removeFilter('t1', 0, 3)
     // A checklist with only NULL cleared is a not-NULL, which every value ticked takes off again, as it does a value list.
     service.applyColumnFilter('t1', 0, 1, { kind: 'values', op: 'notIn', rows: [], nulls: true })
     service.applyColumnFilter('t1', 0, 1, { kind: 'all' })
@@ -1217,5 +1223,14 @@ describe('results service filters', () => {
     scope.release()
     await settle()
     expect(shared.close).toHaveBeenCalledTimes(1)
+    // Released while it builds, the view's build is stopped, and the view closed if it is built anyway.
+    let signal: AbortSignal | undefined, finish: (view: ResultHandle) => void = () => {}
+    const late = { ...others, viewId: 7, close: vi.fn(async () => undefined) }
+    void scope.view(handle, [], given => { signal = given; return new Promise<ResultHandle>(resolve => { finish = resolve }) })
+    scope.release()
+    expect(signal?.aborted).toBe(true)
+    finish(late)
+    await settle()
+    expect(late.close).toHaveBeenCalledTimes(1)
   })
 })

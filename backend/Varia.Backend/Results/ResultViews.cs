@@ -28,7 +28,7 @@ internal sealed record ViewFilter(FilterOp Op, int Column, int[]? Rows, bool Nul
 /// draws them as it does a result's own. It covers the rows sealed when it was built; a view of a set still loading is
 /// built again by the renderer once more rows arrive. Its order array is charged to the result's query budget and
 /// returned when the view is closed, replaced, or its result is released.</summary>
-internal sealed class ResultView(uint viewId, ResultSetBuffer set, int[] order, IReadOnlyList<ViewKey> keys, bool approximate, bool complete, long charged)
+internal sealed class ResultView(uint viewId, ResultSetBuffer set, int[] order, IReadOnlyList<ViewKey> keys, bool approximate, bool complete, long charged, long baseRows = long.MaxValue)
 {
     public uint ViewId { get; } = viewId;
     public ResultSetBuffer Set { get; } = set;
@@ -39,6 +39,8 @@ internal sealed class ResultView(uint viewId, ResultSetBuffer set, int[] order, 
     public bool Approximate { get; } = approximate;
     /// <summary>The result had finished loading when the view was built: it covers every row.</summary>
     public bool Complete { get; } = complete;
+    /// <summary>The base rows it was built from (those sealed then): a row past them is one it has not looked at.</summary>
+    public long BaseRows { get; } = baseRows;
     internal long Charged { get; } = charged;
     public long Rows => Order.Length;
 }

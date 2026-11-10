@@ -789,12 +789,11 @@ function distinctOf(result, source, { column, order, maxValues, search }, keptVi
   return { rows, complete: source.sealed ?? source.complete, nulls, distinct: values.length, truncated: values.length > kept.length, approximate: false, values: kept, ...keptView ? { nullsKept, ...unlistedOf(values.slice(maxValues), keptKeys) } : {} }
 }
 
-// The kept view's values past those listed: whether it holds any, and the fewer side's rows when one filter holds them.
+// The kept view's values past those listed: whether it holds any, and the held and dropped ones' rows, each when one filter
+// holds them.
 function unlistedOf(past, keptKeys) {
   const held = past.filter(value => keptKeys.has(value.key)), dropped = past.filter(value => !keptKeys.has(value.key))
-  if (!held.length) return { unlistedKept: false }
-  const side = held.length <= dropped.length ? held : dropped
-  return { unlistedKept: true, ...side.length > 4096 ? {} : side === held ? { unlistedHeld: held.map(value => value.row) } : { unlistedDropped: dropped.map(value => value.row) } }
+  return { unlistedKept: held.length > 0, ...held.length > 4096 ? {} : { unlistedHeld: held.map(value => value.row) }, ...dropped.length > 4096 ? {} : { unlistedDropped: dropped.map(value => value.row) } }
 }
 /** The result, or the view of it a request names; undefined (after answering) when either is gone. */
 function sourceOf(id, resultId, viewId) {

@@ -111,24 +111,26 @@ export interface ColumnValues { readonly result: ResultsDistinctResult }
  * not once a search pause, again only when those filters or the result change, and released with the popover.
  */
 export class ColumnValuesScope {
-  private base?: { readonly handle: ResultHandle; readonly filters: readonly GridFilter[]; readonly view: Promise<ResultHandle> }
+  private base?: { readonly handle: ResultHandle; readonly filters: readonly GridFilter[]; readonly view: Promise<ResultHandle>; readonly abort: AbortController }
 
-  view(handle: ResultHandle, filters: readonly GridFilter[], build: () => Promise<ResultHandle>): Promise<ResultHandle> {
+  view(handle: ResultHandle, filters: readonly GridFilter[], build: (signal: AbortSignal) => Promise<ResultHandle>): Promise<ResultHandle> {
     const base = this.base
     if (base && base.handle === handle && base.filters.length === filters.length && base.filters.every((item, at) => item === filters[at])) return base.view
     this.release()
-    const view = build()
-    const next = { handle, filters: [...filters], view }
+    const abort = new AbortController()
+    const view = build(abort.signal)
+    const next = { handle, filters: [...filters], view, abort }
     this.base = next
     // A view that failed to build is not kept, so the next list tries again.
     view.catch(() => { if (this.base === next) this.base = undefined })
     return view
   }
 
-  /** Closes the view it holds (once built); a later list builds another. */
+  /** Stops the view it is building, or closes the one it holds; a later list builds another. */
   release(): void {
     const base = this.base
     this.base = undefined
+    base?.abort.abort()
     void base?.view.then(view => view.close(), () => undefined)
   }
 }
@@ -662,13 +664,15 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     return this.addFilter(tabId, run, index, filters, { filter: { op: 'duplicates', columns }, label, named: true })
   }
 
-  /** Adds a filter after the grid's others; a grid that has as many as a view takes says so and keeps them. */
-  private addFilter(tabId: string, run: Run, index: number, others: readonly GridFilter[], item: GridFilter): boolean {
+  /** Adds a filter after the grid's others, or at `at` among them (where the one it replaces stood, since filters apply in
+   *  order and a duplicates filter after it counts only the rows it keeps); a grid that has as many as a view takes says
+   *  so and keeps them. */
+  private addFilter(tabId: string, run: Run, index: number, others: readonly GridFilter[], item: GridFilter, at = others.length): boolean {
     if (others.length >= wire.views.maxFilters) {
       this.notify(tabId, `Could not filter the results: a grid takes at most ${wire.views.maxFilters} filters. Remove one first.`)
       return false
     }
-    this.applyView(tabId, run, index, run.sorts.get(index)?.keys ?? [], [...others, item], 'filter')
+    this.applyView(tabId, run, index, run.sorts.get(index)?.keys ?? [], [...others.slice(0, at), item, ...others.slice(at)], 'filter')
     return true
   }
 
@@ -701,7 +705,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     // every value listed, so values past what one answer lists never count as dropped.
     const build = (signal?: AbortSignal) => set.handle.sort([], { filters: others.map(item => item.filter), ...signal ? { signal } : {} })
     const owned = others.length > 0 && !o.scope ? await build(o.signal) : undefined
-    const base = owned ?? (others.length > 0 ? await o.scope!.view(set.handle, others, () => build()) : undefined)
+    const base = owned ?? (others.length > 0 ? await o.scope!.view(set.handle, others, build) : undefined)
     try {
       return { result: await (base ?? set.handle).distinct(column, { ...ask, ...sort?.view ? { kept: sort.view } : {} }) }
     } finally { void owned?.close() }
@@ -727,7 +731,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     }
     const name = columnName(set.descriptor.columns, column)
     const item: GridFilter = condition.kind === 'null' || condition.kind === 'notNull' ? { filter, label: `${name} is ${condition.kind === 'null' ? '' : 'not '}NULL`, named: true } : { filter, label: `${name}: filtering…` }
-    return this.addFilter(tabId, run, index, others, item)
+    // In the place of the first filter it replaces: before it, every filter is one of the others.
+    const replaced = filters.findIndex(item => !others.includes(item))
+    return this.addFilter(tabId, run, index, others, item, replaced < 0 ? others.length : replaced)
   }
 
   canFilterDuplicates(tabId: string, index: number, allColumns = false): boolean { return !!this.duplicateColumns(tabId, index, allColumns) }

@@ -674,10 +674,10 @@ describe('ResultsPortHost', () => {
     distincts[2].resolve({ ...marked, nullsKept: undefined })
     distincts[3].resolve(marked)
     distincts[4].resolve({ ...marked, unlistedKept: undefined })
-    // Past values named only when the kept view holds some, and on one side.
+    // Past values named only with kept marks, the held ones exactly when the kept view holds some.
     distincts[5].resolve({ ...marked, unlistedHeld: [4] })
-    distincts[6].resolve({ ...marked, unlistedKept: true, unlistedHeld: [4], unlistedDropped: [] })
-    distincts[7].resolve({ ...marked, unlistedKept: true, unlistedDropped: [4] })
+    distincts[6].resolve({ ...marked, unlistedKept: true, unlistedHeld: [] })
+    distincts[7].resolve({ ...marked, unlistedKept: true, unlistedHeld: [4], unlistedDropped: [] })
     await settle()
     expect(codes(port())).toEqual([[2, 'INVALID_REQUEST'], [1, 'ok'], [3, 'BACKEND_ERROR'], [4, 'BACKEND_ERROR'], [5, 'BACKEND_ERROR'], [6, 'BACKEND_ERROR'], [7, 'BACKEND_ERROR'], [8, 'BACKEND_ERROR'], [9, 'ok']])
     expect(port().ends().find(end => end.rid === 1)).toEqual({ t: 'end', rid: 1, ok: true, result: marked })

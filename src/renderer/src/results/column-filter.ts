@@ -54,22 +54,22 @@ export function conditionFilter(condition: ColumnCondition, column: number): Vie
 }
 
 /**
- * What a truncated list's OK does with the values it never listed: keeps `rows` with the ticked ones (`in`) or drops them
- * with the cleared ones (`notIn`), so each stays as the grid shows it now. `exact` is false when the grid's view holds and
- * drops too many of them for one filter either way, and they will all be shown.
+ * The values a list never showed (past its cap, or in rows still arriving) and how OK can leave each as the grid shows it:
+ * `held` the rows of those the grid shows, which an `in` keeps with the ticked values, and `dropped` the rows of those it
+ * hides, which a `notIn` drops with the cleared ones. Undefined when that side cannot be named: more than one filter holds,
+ * or (for `held`) values still to arrive, which an `in` would hide. Neither named: a `notIn` shows them all.
  */
-export interface Unlisted { readonly op: 'in' | 'notIn'; readonly rows: readonly number[]; readonly exact: boolean }
+export interface Unlisted { readonly held?: readonly number[]; readonly dropped?: readonly number[]; readonly truncated: boolean; readonly complete: boolean }
 
-/** A list's unlisted values from its answer's kept marks (undefined when it listed every value); rows the checklist knows
- *  (a search found them) are its own, so they are left out. */
+/** A list's unlisted values from its answer's kept marks (undefined when it listed every value of every row); rows the
+ *  checklist knows (a search or another order found them) are its own, so they are left out. */
 export function unlistedValues(result: ResultsDistinctResult, known: { has(row: number): boolean }): Unlisted | undefined {
-  if (!result.truncated) return undefined
-  // No kept marks: the column has no value filter, so the grid shows them all.
-  if (result.unlistedKept === undefined) return { op: 'notIn', rows: [], exact: true }
-  if (!result.unlistedKept) return { op: 'in', rows: [], exact: true }
-  if (result.unlistedHeld) return { op: 'in', rows: result.unlistedHeld.filter(row => !known.has(row)), exact: true }
-  if (result.unlistedDropped) return { op: 'notIn', rows: result.unlistedDropped.filter(row => !known.has(row)), exact: true }
-  return { op: 'notIn', rows: [], exact: false }
+  if (!result.truncated && result.complete) return undefined
+  const own = (rows: readonly number[] | undefined) => rows?.filter(row => !known.has(row))
+  // Not truncated: nothing past the list. No kept marks: the column has no value filter, so the grid shows them all.
+  const held = !result.truncated ? [] : result.unlistedKept === undefined ? undefined : own(result.unlistedHeld)
+  const dropped = !result.truncated || result.unlistedKept === undefined ? [] : own(result.unlistedDropped)
+  return { ...result.complete && held ? { held } : {}, ...dropped ? { dropped } : {}, truncated: result.truncated, complete: result.complete }
 }
 
 /** What the checklist's OK does, or why it cannot: nothing ticked, or more values than one filter holds. */
@@ -78,17 +78,22 @@ export type ChecklistOutcome = { readonly condition: ColumnCondition } | { reado
 /**
  * The checklist as a condition. `rows` are the values listed (each its representative row), `unchecked` those cleared;
  * NULL is an entry of its own when the column has NULLs. Every value ticked takes the filter off; otherwise the shorter
- * of keeping the ticked values (`in`) or dropping the cleared ones (`notIn`), keeping on a tie. A truncated list's
- * `unlisted` decides instead, and adds the rows it names, so the values it did not reach stay as the grid shows them.
+ * of keeping the ticked values (`in`) or dropping the cleared ones (`notIn`) that fits one filter, keeping on a tie. With
+ * `unlisted` each side also names its unlisted rows, and only a side it can name is a choice, so the values the list did
+ * not show stay as the grid shows them.
  */
 export function checklistCondition(o: { rows: readonly number[]; unchecked: ReadonlySet<number>; hasNull: boolean; nullChecked: boolean; unlisted?: Unlisted }): ChecklistOutcome {
   const checked = o.rows.filter(row => !o.unchecked.has(row)), cleared = o.rows.filter(row => o.unchecked.has(row))
   const nullIn = o.hasNull && o.nullChecked, nullOut = o.hasNull && !o.nullChecked
   const keeping = checked.length + (nullIn ? 1 : 0), dropping = cleared.length + (nullOut ? 1 : 0)
   if (keeping === 0) return { error: 'Select at least one value.' }
-  // Every value ticked shows every row only when the values not listed are all shown too.
-  if (dropping === 0 && (!o.unlisted || (o.unlisted.op === 'notIn' && !o.unlisted.rows.length))) return { condition: { kind: 'all' } }
-  const keep = o.unlisted ? o.unlisted.op === 'in' : keeping <= dropping, extra = o.unlisted?.rows ?? []
-  const condition: ColumnCondition = keep ? { kind: 'values', op: 'in', rows: [...checked, ...extra], nulls: nullIn } : { kind: 'values', op: 'notIn', rows: [...cleared, ...extra], nulls: nullOut }
-  return condition.rows.length > wire.views.maxFilterValues ? { error: `A filter holds at most ${wire.views.maxFilterValues.toLocaleString('en-US')} values. Select fewer, or clear fewer.` } : { condition }
+  const held = o.unlisted ? o.unlisted.held : [], dropped = o.unlisted ? o.unlisted.dropped : []
+  // Every value ticked shows every row only when the values not listed are all shown too (or none can be named).
+  if (dropping === 0 && (dropped?.length === 0 || (!held && !dropped))) return { condition: { kind: 'all' } }
+  const choices: { condition: ColumnCondition & { kind: 'values' }; size: number }[] = []
+  if (held) choices.push({ condition: { kind: 'values', op: 'in', rows: [...checked, ...held], nulls: nullIn }, size: keeping + held.length })
+  if (dropped || !held) choices.push({ condition: { kind: 'values', op: 'notIn', rows: [...cleared, ...dropped ?? []], nulls: nullOut }, size: dropping + (dropped?.length ?? 0) })
+  const fits = choices.filter(choice => choice.condition.rows.length <= wire.views.maxFilterValues)
+  if (!fits.length) return { error: `A filter holds at most ${wire.views.maxFilterValues.toLocaleString('en-US')} values. ${o.unlisted?.truncated ? 'With the values not listed kept as the grid shows them, this names more.' : 'Select fewer, or clear fewer.'}` }
+  return { condition: fits.reduce((best, choice) => choice.size < best.size ? choice : best).condition }
 }

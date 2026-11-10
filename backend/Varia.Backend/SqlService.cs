@@ -1574,7 +1574,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         // A filtered view keeps only its rows' order.
         var charged = 4L * built.Order.Length + ResultStore.ViewOverhead;
         store.Return(set.Budget, working + kept - charged);
-        var view = store.AddView(set, built.Order, keys, built.Approximate, complete, charged, args.Replaces);
+        var view = store.AddView(set, built.Order, keys, built.Approximate, complete, charged, args.Replaces, rows);
         return new ResultsViewResult(view.ViewId, view.Rows, rows, view.Complete, view.Approximate, args.Filters is null ? null : [.. built.Filters.Select(FilterResult)]);
     }
 
