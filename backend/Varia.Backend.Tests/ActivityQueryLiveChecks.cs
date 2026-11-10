@@ -45,10 +45,11 @@ internal static class ActivityQueryLiveChecks
             + string.Join(",", first.Errors.Select(error => error.Code)));
 
         var marker = "varia_am5_" + Guid.NewGuid().ToString("N");
-        await using (var worker = host.Connection(info.Id))
+        await using var worker = host.Connection(info.Id);
+        await host.OpenAsync(worker, CancellationToken.None);
+        async Task RunMarker(int runs)
         {
-            await host.OpenAsync(worker, CancellationToken.None);
-            for (var run = 0; run < Runs; run++)
+            for (var run = 0; run < runs; run++)
             {
                 // A parameter makes it one prepared statement, so every run shares one plan and one query_hash; the marker is a column
                 // name, since a statement's text (its offsets) leaves out a trailing comment.
@@ -57,6 +58,7 @@ internal static class ActivityQueryLiveChecks
                 await command.ExecuteScalarAsync();
             }
         }
+        await RunMarker(Runs);
 
         var second = await Read(null);
         var table = second.Tables.SingleOrDefault();
@@ -80,5 +82,16 @@ internal static class ActivityQueryLiveChecks
         check(cpu.Count > 0 && cpu.Zip(cpu.Skip(1)).All(pair => pair.First >= pair.Second), "the rows arrive most CPU in the window first");
         check(rows.Count <= ActivityCatalog.Current.Limit("shownHashes") && rows.All(entry => Cell(entry, "query") is not ActivityQueryRows.Loading || rows.Count > ActivityCatalog.Current.Limit("textBatch") * ActivityCatalog.Current.Limit("textBatchesPerTick")),
             "at most shownHashes rows, each with its text once the sample's text statements have run");
+
+        // The plan is cached and its totals kept now: more runs are measured from those totals, through the stats statement's
+        // filter on each execution's end, not counted whole.
+        await RunMarker(5);
+        var third = await Read(null);
+        var later = third.Tables.SingleOrDefault()?.Rows ?? [];
+        var again = later.Find(entry => Cell(entry, "query")?.Contains(marker, StringComparison.Ordinal) == true);
+        if (again is null && third.Tables.SingleOrDefault() is { More: > 0 })
+            Console.WriteLine("Activity Monitor query statistics live checks: this run's statement was outranked on a busy server in the third sample; its row check skipped.");
+        else check(third is { Sampled: true, Errors: [] } && again is not null && Number(Cell(again, "executionsPerMinute")) > 0 && Number(Cell(again, "rowsPerExecution")) == 1,
+            "five more runs of the cached statement are measured from its kept totals in the next sample: " + (again is null ? "not ranked" : Cell(again, "executionsPerMinute") + "/min"));
     }
 }

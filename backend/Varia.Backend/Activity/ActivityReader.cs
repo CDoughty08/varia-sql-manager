@@ -204,21 +204,34 @@ internal sealed class ActivityReader : ILiveSqlReader
         if (clock is not null) results["clock"] = clock;
         var at = SampleTime(spec.Id, results, item);
         if (stop) return Nothing(spec, errors);
-        var since = queries.Since(ServerLocal(results), at);
+        var since = queries.Since(ServerLocal(results));
         var (stats, statsStop) = await Attempt(connection, prologue, spec, render, statements, statsAt,
             parameter => parameter.Name == "@since" ? since : Value(statements[statsAt], parameter), testText, errors, token).ConfigureAwait(false);
         if (stats is null) return Nothing(spec, errors);
         var built = queries.Apply(stats, at, ServerLocal(results), capabilities.TotalSpills);
-        if (!statsStop)
+        // A text statement refused for good is reported each sample, as Attempt would, without grouping texts it will not read.
+        var refused = skipped.TryGetValue(SkipKey(spec, statements[textAt], render), out var refusal);
+        if (refusal is not null) errors.Add(refusal);
+        if (!statsStop && !refused)
         {
-            foreach (var batch in queries.TextBatches(built))
+            try
             {
-                var (texts, _) = await Attempt(connection, prologue, spec, render, statements, textAt, ActivityQueryRows.TextValues(batch), testText, errors, token).ConfigureAwait(false);
-                if (texts is null) break;
-                queries.AddTexts(batch, texts);
+                foreach (var batch in queries.TextBatches(built))
+                {
+                    var (texts, _) = await Attempt(connection, prologue, spec, render, statements, textAt, ActivityQueryRows.TextValues(batch), testText, errors, token).ConfigureAwait(false);
+                    if (texts is null) break;
+                    queries.AddTexts(batch, texts);
+                }
             }
+            catch
+            {
+                // The sample ends without rows (the budget ran out, the connection broke) after the totals moved on: they start
+                // again, so the next sample shows no rates rather than a window that leaves this one's work out.
+                queries.Reset();
+                throw;
+            }
+            refused = skipped.ContainsKey(SkipKey(spec, statements[textAt], render));
         }
-        var refused = skipped.ContainsKey(SkipKey(spec, statements[textAt], render));
         ActivityFilter filter;
         lock (gate) filter = filters.GetValueOrDefault("recentQueries") ?? ActivityFilter.Compile(catalog, new("recentQueries"));
         var rows = queries.Rows(built, refused);

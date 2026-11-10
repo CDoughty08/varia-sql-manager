@@ -408,10 +408,12 @@ plus its elapsed time, so a statement that ran longer than a window is read when
 statements, the one seen least recently dropped first; a row's values are the changes since those totals, summed per
 query_hash, so a sum never depends on which rows a window happens to include. Rates span the window since the previous
 sample on the probe's clock. A plan cached since the previous sample counts whole; any other statement new to the kept
-totals counts from its next run, and so does one whose totals were kept before a sample cut at `queryStatsRows`, which
-may have missed a run. The rows are the groups that ran in the window, most CPU first, at most 200. Plan Count, Max
-Duration and Cached Since come from every kept statement of the group, not only those that ran in the window. A first
-sample (and the first after Resume, a restart or a reconnect) has no window: it shows the groups that ran in the last 10
+totals counts its last execution (the `last_*` columns), which ended in the window, and so does one whose totals were
+kept before a sample cut at `queryStatsRows`, which may have missed a run; its next runs count from the totals kept then.
+The rows are the groups that ran in the window, most CPU first, at most 200. Plan Count, Max Duration and Cached Since
+come from every kept statement of the group, not only those that ran in the window. A first sample (and the first after
+Resume, a restart, a reconnect, a sample that timed out after its totals moved on, or the server's local time stepping
+back, as when daylight saving ends) has no window: it shows the groups that ran in the last 10
 minutes, by their plans' total CPU, with the rates blank and the per-execution columns from the plans' totals. Statement
 text and database come from a cache of 2,000 texts, read for the shown rows that lack one, 50 per statement and
 4 statements per sample, most expensive first; until its text arrives a row says "Loading text…", which the

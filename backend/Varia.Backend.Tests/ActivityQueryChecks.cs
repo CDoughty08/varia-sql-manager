@@ -26,6 +26,7 @@ internal static class ActivityQueryChecks
         Cuts(check);
         Batching(check);
         Reader(check);
+        Timeout(check);
     }
 
     private static ActivityStatement Statement(string id, ActivityRender? render = null) =>
@@ -43,14 +44,16 @@ internal static class ActivityQueryChecks
 
     /// <summary>A stats row: statement <paramref name="id"/> of query hash <paramref name="hash"/> under plan <paramref name="plan"/>,
     /// with totals scaled from its executions (each 10 ms of CPU, 20 ms elapsed, 100 logical reads, 2 physical, 1 write, 5 rows,
-    /// 1,024 KB of grant, 3 spilled pages).</summary>
+    /// 1,024 KB of grant, 3 spilled pages), the last execution one of them.</summary>
     private static Dictionary<string, object?> Row(int id, int hash, long executions, int plan = 1, DateTime? created = null, DateTime? lastRun = null, long cpuEach = 10_000, long maxElapsed = 50_000) => new()
     {
         ["query_hash"] = Bytes(hash), ["query_plan_hash"] = Bytes(plan), ["sql_handle"] = Bytes(id, 44), ["plan_handle"] = Bytes(id * 100 + plan, 64),
         ["statement_start_offset"] = 0, ["statement_end_offset"] = -1, ["creation_time"] = created ?? Noon.AddHours(-1), ["last_execution_time"] = lastRun ?? Noon,
         ["execution_count"] = executions, ["total_worker_time"] = executions * cpuEach, ["total_elapsed_time"] = executions * 20_000, ["total_logical_reads"] = executions * 100,
         ["total_physical_reads"] = executions * 2, ["total_logical_writes"] = executions, ["total_rows"] = executions * 5, ["total_grant_kb"] = executions * 1_024,
-        ["max_elapsed_time"] = maxElapsed, ["total_spills"] = executions * 3
+        ["max_elapsed_time"] = maxElapsed, ["total_spills"] = executions * 3,
+        ["last_worker_time"] = cpuEach, ["last_elapsed_time"] = 20_000L, ["last_logical_reads"] = 100L, ["last_physical_reads"] = 2L, ["last_logical_writes"] = 1L, ["last_rows"] = 5L,
+        ["last_grant_kb"] = 1_024L, ["last_spills"] = 3L
     };
 
     private static string? Cell(ActivityQueryRows rows, LiveRow row, string column) => rows.Writer.Reader(row)(column);
@@ -108,7 +111,7 @@ internal static class ActivityQueryChecks
         var stats = Statement("stats");
         var rows = new ActivityQueryRows(Catalog);
         // First sample: hash 7 has two statements (two plans), hash 8 one; no window, so no rates.
-        var since = rows.Since(Noon, 0);
+        var since = rows.Since(Noon);
         var first = rows.Apply(Result(stats, [Row(1, 7, 10, plan: 1), Row(2, 7, 10, plan: 2), Row(3, 8, 100)]), 0, Noon, spills: true);
         var firstRows = rows.Rows(first);
         check(since == Noon - ActivityQueryRows.FirstLookback && first.WindowMs is null && firstRows.Count == 2 && Cell(rows, firstRows[0], "queryHash") == "0x0800000000000000"
@@ -118,9 +121,9 @@ internal static class ActivityQueryChecks
 
         // 30 s later: hash 7's first statement ran 30 more times (its second did not run, so the stats statement does not read
         // it), hash 8 not at all; a plan of hash 9 was cached in the window, and a statement of hash 10 that the kept totals never
-        // saw ran in it, from an old plan.
+        // saw ran in it, from an old plan: its last execution, which ended in the window, counts.
         var later = Noon.AddSeconds(30);
-        var second = rows.Since(later, 30_000);
+        var second = rows.Since(later);
         var window = rows.Apply(Result(stats,
         [
             Row(1, 7, 40, plan: 1, lastRun: later, maxElapsed: 30_000), Row(4, 9, 6, created: Noon.AddSeconds(10), lastRun: later, cpuEach: 1_000_000),
@@ -128,9 +131,9 @@ internal static class ActivityQueryChecks
         ]), 30_000, later, spills: true);
         var shown = rows.Rows(window);
         string? Of(string hash, string column) => shown.Where(row => Cell(rows, row, "queryHash") == hash).Select(row => Cell(rows, row, column)).SingleOrDefault();
-        const string Seven = "0x0700000000000000", Nine = "0x0900000000000000";
-        check(second == Noon - ActivityQueryRows.Overlap && window.WindowMs == 30_000 && shown.Select(row => Cell(rows, row, "queryHash")).SequenceEqual([Nine, Seven]),
-            "a later sample reads from the previous one's clock (less a small overlap), shows only the groups that ran in the window, most CPU first, and leaves out a statement it has no totals for (counted from its next run): "
+        const string Seven = "0x0700000000000000", Nine = "0x0900000000000000", Ten = "0x0A00000000000000";
+        check(second == Noon - ActivityQueryRows.Overlap && window.WindowMs == 30_000 && shown.Select(row => Cell(rows, row, "queryHash")).SequenceEqual([Nine, Seven, Ten]),
+            "a later sample reads from the previous one's clock (less a small overlap) and shows only the groups that ran in the window, most CPU first: "
             + string.Join(",", shown.Select(row => Cell(rows, row, "queryHash"))));
         // Hash 7: 30 executions in 30 s, 300 ms of CPU: 60/min, 10 ms/s, 100 logical reads/s.
         check(Of(Seven, "executionsPerMinute") == "60.0" && Of(Seven, "cpuRate") == "10.0" && Of(Seven, "avgCpuMs") == "10.0" && Of(Seven, "logicalReadsRate") == "100.0"
@@ -144,6 +147,9 @@ internal static class ActivityQueryChecks
             + Of(Seven, "planCount") + " " + Of(Seven, "maxDurationMs"));
         check(Of(Nine, "executionsPerMinute") == "12.0" && Of(Nine, "cpuRate") == "200.0",
             "a plan cached since the previous sample counts whole: its 6 executions are the window's");
+        check(Of(Ten, "executionsPerMinute") == "2.0" && Of(Ten, "avgCpuMs") == "10.0" && Of(Ten, "cpuRate") == "0.3",
+            "a statement of an old plan with no kept totals counts its last execution, which ended in the window (an expensive report's one run shows), not its plan's whole totals: "
+            + Of(Ten, "executionsPerMinute") + " " + Of(Ten, "cpuRate"));
 
         // A login that may not read the texts: rows without one are blank, not loading; the filter box never matches the
         // placeholder.
@@ -164,24 +170,30 @@ internal static class ActivityQueryChecks
         // A reset (baseline, resume, restart) starts again as a first sample.
         rows.Reset();
         var again = rows.Apply(Result(stats, [Row(1, 7, 50, lastRun: later)]), 60_000, later, spills: true);
-        check(again.WindowMs is null && rows.Since(later.AddSeconds(30), 90_000) == later - ActivityQueryRows.Overlap && rows.Baselines == 1, "after a reset the next sample is a first sample again, its baselines only what it read");
+        check(again.WindowMs is null && rows.Since(later.AddSeconds(30)) == later - ActivityQueryRows.Overlap && rows.Baselines == 1, "after a reset the next sample is a first sample again, its baselines only what it read");
     }
 
     private static void Clock(Action<bool, string> check)
     {
-        // The server's local time steps back an hour (daylight saving ends) between two samples 30 s apart on the probe's clock:
-        // @since follows the window, not the previous sample's later local time, so the statements that ran are still read, and
-        // a plan cached in the window still counts whole.
+        // The server's local time steps back an hour (daylight saving ends) between two samples: the times kept before the step
+        // look later than any since, so the sample starts again as a first sample (no rates) rather than charge them to a window.
         var stats = Statement("stats");
         var rows = new ActivityQueryRows(Catalog);
         rows.Apply(Result(stats, [Row(1, 7, 10)]), 0, Noon, spills: true);
         var back = Noon.AddHours(-1).AddSeconds(30);
-        var since = rows.Since(back, 30_000);
-        var sample = rows.Apply(Result(stats, [Row(1, 7, 40, lastRun: back), Row(2, 8, 6, created: back.AddSeconds(-10), lastRun: back)]), 30_000, back, spills: true);
+        var since = rows.Since(back);
+        var restarted = rows.Apply(Result(stats, [Row(1, 7, 40, lastRun: back)]), 30_000, back, spills: true);
+        check(since == back - ActivityQueryRows.FirstLookback && restarted.WindowMs is null && rows.Baselines == 1,
+            "when the server's local time steps back past the previous sample's, the sample starts again as a first sample: " + since.ToString("O"));
+
+        // 30 s later: statement 1 ran 10 more times; a plan cached at 11:40 old time, last run at 11:50 old time (both later than
+        // now), is read but neither counted whole nor by its last execution: it did not run in the window.
+        var later = back.AddSeconds(30);
+        var sample = rows.Apply(Result(stats, [Row(1, 7, 50, lastRun: later), Row(6, 11, 100, created: Noon.AddMinutes(-20), lastRun: Noon.AddMinutes(-10))]), 60_000, later, spills: true);
         var shown = rows.Rows(sample);
-        check(since == back.AddSeconds(-30) - ActivityQueryRows.Overlap && shown.Count == 2 && shown.All(row => Cell(rows, row, "executionsPerMinute") is not null),
-            "when the server's local time steps back between samples, @since and the cached-in-window test follow the probe's clock, so the window's statements are read and counted: " + since.ToString("O"));
-        check(rows.Since(Noon.AddSeconds(60), 60_000) == back - ActivityQueryRows.Overlap, "a clock that moved forward reads from the previous sample's own time");
+        check(rows.Since(later.AddSeconds(30)) == later - ActivityQueryRows.Overlap && sample.WindowMs == 30_000 && shown is [var only] && Cell(rows, only, "queryHash") == "0x0700000000000000"
+            && Cell(rows, only, "executionsPerMinute") == "20.0",
+            "after the step the window is measured again, and a statement whose times are from before the step is not charged to it: " + string.Join(",", shown.Select(row => Cell(rows, row, "queryHash"))));
 
         // The filter predicate one sample built keeps that sample's loading rows, whatever later samples build.
         var cells = rows.FilterCells();
@@ -189,16 +201,20 @@ internal static class ActivityQueryChecks
         rows.Rows(sample);
         check(!shown.Any(row => filter.Matches(cells(row))), "a sample's filter predicate keeps its own rows' loading state after the next sample's rows are built");
 
-        // The row's statement's text is gone (its plan left the cache): another statement of the group is asked for.
+        // The row's statement's text is gone (its plan left the cache): another statement of the group is asked for, and shown.
         var text = Statement("text");
-        var batches = rows.TextBatches(sample);
-        var mine = batches.SelectMany(batch => batch).Single(request => QueryStatement.HashText(request.Statement.Hash) == "0x0700000000000000");
-        var group = new[] { mine };
-        rows.AddTexts(group, Result(text, []));
-        var twoPlans = rows.Apply(Result(stats, [Row(1, 7, 50, lastRun: back.AddSeconds(30)), Row(3, 7, 5, plan: 2, lastRun: back.AddSeconds(29))]), 60_000, back.AddSeconds(30), spills: true);
-        var asked = rows.TextBatches(twoPlans).SelectMany(batch => batch).Where(request => QueryStatement.HashText(request.Statement.Hash) == "0x0700000000000000").ToList();
-        check(asked is [{ Statement.Key: var other }] && !other.Equals(mine.Statement.Key),
-            "when SQL Server no longer has the row's statement's text, the text of another statement of the group is asked for");
+        var mine = rows.TextBatches(sample).SelectMany(batch => batch).Single(request => QueryStatement.HashText(request.Statement.Hash) == "0x0700000000000000");
+        rows.AddTexts([mine], Result(text, []));
+        var next = later.AddSeconds(30);
+        var twoPlans = rows.Apply(Result(stats, [Row(1, 7, 60, lastRun: next), Row(3, 7, 5, plan: 2, lastRun: next.AddSeconds(-1))]), 90_000, next, spills: true);
+        var loading = rows.Rows(twoPlans).Single();
+        var asked = rows.TextBatches(twoPlans).SelectMany(batch => batch).ToList();
+        check(asked is [{ Statement.Key: var other }] && !other.Equals(mine.Statement.Key) && Cell(rows, loading, "query") == ActivityQueryRows.Loading,
+            "when SQL Server no longer has the row's statement's text, the row loads while another statement of the group is asked for");
+        rows.AddTexts([.. asked], Result(text, [new() { ["slot"] = 0, ["statement_text"] = "SELECT other", ["database_name"] = "Sales" }]));
+        var filled = rows.Rows(twoPlans).Single();
+        check(Cell(rows, filled, "query") == "SELECT other" && Cell(rows, filled, "database") == "Sales" && rows.TextBatches(twoPlans).Count == 0,
+            "the row then shows that statement's text and database, and asks for no more");
     }
 
     private static void Cuts(Action<bool, string> check)
@@ -216,8 +232,8 @@ internal static class ActivityQueryChecks
         var after = Noon.AddSeconds(60);
         var next = rows.Rows(rows.Apply(Result(stats, [Row(1, 7, 30, lastRun: after), Row(2, 8, 100, lastRun: after)]), 60_000, after, spills: true));
         string? Rate(string hash) => next.Where(row => Cell(rows, row, "queryHash") == hash).Select(row => Cell(rows, row, "executionsPerMinute")).SingleOrDefault();
-        check(cut.More >= 1 && Rate("0x0700000000000000") == "20.0" && Rate("0x0800000000000000") is null,
-            "after a cut sample, a statement read in it keeps its rate, while one it left out starts again rather than charging 90 executions to one window: "
+        check(cut.More >= 1 && Rate("0x0700000000000000") == "20.0" && Rate("0x0800000000000000") == "2.0",
+            "after a cut sample, a statement read in it keeps its rate, while one it left out counts only its last execution rather than charging 90 executions to one window: "
             + Rate("0x0700000000000000") + " " + Rate("0x0800000000000000"));
     }
 
@@ -350,5 +366,57 @@ internal static class ActivityQueryChecks
             && again.Tables.Single().Rows is [var lone] && Column(lone, "query") is null,
             "a refused text statement leaves rows without a text blank (never Loading text… for ever), keeps the texts it had, and is reported each sample without running again: "
             + string.Join(",", refusedRows.Select(row => Column(row, "queryHash") + "=" + Column(row, "query"))));
+    }
+
+    private static void Timeout(Action<bool, string> check)
+    {
+        // The budget runs out during a text statement, after the totals moved on: the sample ends (TIMEOUT), and the next sample
+        // starts again without rates rather than measure a window that leaves the lost one's work out.
+        var local = Noon;
+        long ticks = 10_000;
+        using var budget = new CancellationTokenSource();
+        var cancelTexts = false;
+        var stats = new List<Dictionary<string, object?>>();
+        Task<ActivityResult> Run(ActivityStatement statement, IReadOnlyDictionary<string, object> values)
+        {
+            if (statement.Id == "text" && cancelTexts)
+            {
+                budget.Cancel();
+                throw ConnectionFailureChecks.Sql(0, 0, 11, "server", "Operation cancelled by user.");
+            }
+            IEnumerable<Dictionary<string, object?>> rows = statement.Id switch
+            {
+                "capabilities" => [new() { ["spid"] = 99, ["server_state"] = 1, ["alter_any_connection"] = 0, ["view_any_definition"] = 0, ["spills"] = 1 }],
+                "clock" => [new() { ["ms_ticks"] = ticks, ["sqlserver_start_time_ms_ticks"] = 1L, ["server_local_time"] = local }],
+                "stats" => stats,
+                _ => []
+            };
+            return Task.FromResult(Result(statement, rows));
+        }
+        var reader = new ActivityReader(new ActivitySourceChecks.NoHost(), "c") { TestRun = Run };
+        var spec = LiveCatalog.Current.Probes[ActivityReader.QueriesProbe];
+        reader.Unavailable(spec, new ServerProfile(17, "17.0.1000.0", 3, "app_user", false, true, false));
+        using var connection = new SqlConnection();
+        reader.SessionAsync(connection, "", "VIEW SERVER PERFORMANCE STATE", CancellationToken.None).GetAwaiter().GetResult();
+        LiveReaderSample Read(CancellationToken token) =>
+            reader.ReadAsync(connection, "", new LiveDue(new LiveProbeState(spec, 30_000), null, null, null, null, new Dictionary<int, LiveTrackArgs>(), TakenAt: ticks), null, token).GetAwaiter().GetResult();
+        stats.Add(Row(1, 1, 10));
+        Read(CancellationToken.None);
+        ticks += 30_000;
+        local = local.AddSeconds(30);
+        stats.Clear();
+        stats.Add(Row(2, 2, 10, lastRun: local, created: local.AddSeconds(-5)));
+        cancelTexts = true;
+        var thrown = false;
+        try { Read(budget.Token); }
+        catch (SqlException) { thrown = true; }
+        cancelTexts = false;
+        ticks += 30_000;
+        local = local.AddSeconds(30);
+        stats.Clear();
+        stats.Add(Row(2, 2, 15, lastRun: local, created: local.AddSeconds(-35)));
+        var after = Read(CancellationToken.None);
+        check(thrown && after.Tables.Single().Rows is { Count: 1 } shown && shown.All(row => row.Cells[spec.Tables[0].Columns.FindIndex(column => column.Id == "cpuRate")].Text is null),
+            "a sample that ends during its text statements (the budget ran out) leaves the next one without rates, never a window that hides the lost one's work");
     }
 }

@@ -251,7 +251,7 @@ internal static partial class ActivitySql
         {
             "query_hash", "query_plan_hash", "sql_handle", "plan_handle", "statement_start_offset", "statement_end_offset", "creation_time", "last_execution_time", "execution_count",
             "total_worker_time", "total_elapsed_time", "total_logical_reads", "total_physical_reads", "total_logical_writes", "total_rows", "total_grant_kb", "max_elapsed_time",
-            "last_worker_time", "last_elapsed_time", "last_logical_reads", "last_physical_reads", "last_logical_writes", "last_rows"
+            "last_worker_time", "last_elapsed_time", "last_logical_reads", "last_physical_reads", "last_logical_writes", "last_rows", "last_grant_kb"
         };
         if (spills) columns.AddRange(["total_spills", "last_spills"]);
         var stats = new ActivityStatement("activity.queries", "stats",

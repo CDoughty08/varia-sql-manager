@@ -76,10 +76,14 @@ internal readonly struct StatementKey(byte[] sql, int start, int end, byte[]? pl
 
 /// <summary>One sys.dm_exec_query_stats row as the query statistics probe reads it: a statement of a cached plan with its
 /// query_hash and query_plan_hash (binary(8), kept as numbers) and its totals since the plan was cached.</summary>
-internal sealed record QueryStatement(StatementKey Key, ulong Hash, ulong? PlanHash, DateTime? Created, DateTime? LastRun, double[] Totals, long? MaxElapsedUs)
+internal sealed record QueryStatement(StatementKey Key, ulong Hash, ulong? PlanHash, DateTime? Created, DateTime? LastRun, double[] Totals, long? MaxElapsedUs, double[]? Last = null)
 {
+    /// <summary>When the last execution ended: its start (last_execution_time) plus its elapsed time.</summary>
+    public DateTime? LastEnd => LastRun is { } start && Last is { } last ? start.AddTicks((long)last[Elapsed] * 10) : null;
+
     // Totals' places: execution_count, total_worker_time (µs), total_elapsed_time (µs), total_logical_reads, total_physical_reads,
-    // total_logical_writes, total_rows, total_grant_kb, total_spills.
+    // total_logical_writes, total_rows, total_grant_kb, total_spills. Last holds the last execution's in the same places (one
+    // execution).
     public const int Executions = 0, Worker = 1, Elapsed = 2, LogicalReads = 3, PhysicalReads = 4, Writes = 5, Rows = 6, Grant = 7, Spills = 8, Count = 9;
 
     /// <summary>A binary(8) hash as the grid shows it (0x and 16 hex digits).</summary>
@@ -91,11 +95,19 @@ internal sealed record QueryStatement(StatementKey Key, ulong Hash, ulong? PlanH
 internal sealed class QueryGroup(ulong hash)
 {
     public ulong Hash { get; } = hash;
-    public List<QueryStatement> Statements { get; } = [];
+    private readonly List<QueryStatement> statements = [];
+    public IReadOnlyList<QueryStatement> Statements => statements;
     public double[] Window { get; } = new double[QueryStatement.Count];
     public double[] Totals { get; } = new double[QueryStatement.Count];
-    /// <summary>The statement whose text and database the row shows: the group's most recent execution.</summary>
-    public QueryStatement Shown => Statements.MaxBy(statement => statement.LastRun ?? DateTime.MinValue)!;
+    /// <summary>The statement whose text and database the row shows: the group's most recent execution (the first of equals),
+    /// kept as statements are added, since a group of ad hoc statements can hold thousands.</summary>
+    public QueryStatement Shown { get; private set; } = null!;
+
+    public void Add(QueryStatement statement)
+    {
+        statements.Add(statement);
+        if (statements.Count == 1 || (statement.LastRun ?? DateTime.MinValue) > (Shown.LastRun ?? DateTime.MinValue)) Shown = statement;
+    }
 }
 
 /// <summary>What one query statistics sample built: the groups the pane shows (ranked, at most shownHashes), how many more
@@ -222,26 +234,19 @@ internal sealed class ActivityQueryRows(ActivityCatalog catalog)
         if (texts) this.texts.Clear();
     }
 
-    /// <summary>The stats statement's @since for a sample at <paramref name="at"/> on the probe's clock whose clock statement
-    /// read <paramref name="now"/> (the server's local time): the previous sample's server time less <see cref="Overlap"/>,
-    /// which the stats statement compares with each statement's last execution's end; a first sample reads
-    /// <see cref="FirstLookback"/>.</summary>
-    public DateTime Since(DateTime? now, long at)
+    /// <summary>The stats statement's @since for a sample whose clock statement read <paramref name="now"/> (the server's local
+    /// time): the previous sample's server time less <see cref="Overlap"/>, which the stats statement compares with each
+    /// statement's last execution's end; a first sample reads <see cref="FirstLookback"/>. When the server's local time stepped
+    /// back past the previous sample's (daylight saving ended, the clock was set back), the times the statistics kept before
+    /// the step look later than any since, so no window can be measured from them: the sample starts again as a first sample.</summary>
+    public DateTime Since(DateTime? now)
     {
+        if (previous is { Local: { } before } && now is { } moved && moved < before - Overlap) Reset();
         DateTime since;
-        if (Previous(now, at) is { } then) since = then - Overlap;
+        if (previous is { Local: { } then }) since = then - Overlap;
         else if (now is { } current) since = current - FirstLookback;
         else since = SqlMin;
         return since < SqlMin ? SqlMin : since;
-    }
-
-    /// <summary>The previous sample's time in the server's local time. GETDATE() can step back (a daylight saving change, a
-    /// clock set back) while the probe's clock (ms_ticks) does not, so it is never later than now less the window: else the
-    /// statements would seem to have ended before the previous sample, and none would be read until the clock caught up.</summary>
-    private DateTime? Previous(DateTime? now, long at)
-    {
-        if (previous is not { Local: { } then } before) return null;
-        return now is { } current && at >= before.At && current - TimeSpan.FromMilliseconds(at - before.At) is var stepped && stepped < then ? stepped : then;
     }
 
     /// <summary>Builds a sample from the stats statement's rows. <paramref name="at"/> is the sample's time on the probe's clock
@@ -249,7 +254,7 @@ internal sealed class ActivityQueryRows(ActivityCatalog catalog)
     public QuerySample Apply(ActivityResult stats, long at, DateTime? now, bool spills)
     {
         long? window = previous is { } before && at > before.At ? at - before.At : null;
-        var cachedAfter = window is not null ? Previous(now, at) : null;
+        var cachedAfter = window is not null ? previous!.Value.Local : null;
         var cap = (int)catalog.Limit("queryStatsRows");
         // Statistics rows past their cap are a cut: the window's sums miss what was not read, and so would the next one's.
         var truncated = stats.Rows.Count > cap;
@@ -259,11 +264,13 @@ internal sealed class ActivityQueryRows(ActivityCatalog catalog)
         foreach (var row in stats.Rows.Take(cap))
         {
             if (Read(stats, row, spills) is not { } statement || !seen.Add(statement.Key)) continue;
-            // A plan cached since the previous sample ran wholly in the window; any other statement new to the baselines counts
-            // from its next run.
-            var delta = deltas.Apply(statement, whole: cachedAfter is { } cutoff && statement.Created >= cutoff);
+            // A plan cached since the previous sample (and not after the server's clock: a time from before a step back) ran
+            // wholly in the window. Any other statement without kept totals that apply counts its last execution, which ended in
+            // the window; earlier runs in the window are not known, and its next runs count from the totals kept now.
+            var delta = deltas.Apply(statement, whole: cachedAfter is { } cutoff && statement.Created >= cutoff && (now is not { } clock || statement.Created <= clock + Overlap));
+            if (delta is null && cachedAfter is { } after && statement.LastEnd >= after && (now is not { } read || statement.LastEnd <= read + Overlap)) delta = statement.Last;
             if (!groups.TryGetValue(statement.Hash, out var group)) groups[statement.Hash] = group = new(statement.Hash);
-            group.Statements.Add(statement);
+            group.Add(statement);
             for (var i = 0; i < QueryStatement.Count; i++)
             {
                 group.Totals[i] += statement.Totals[i];
@@ -291,7 +298,13 @@ internal sealed class ActivityQueryRows(ActivityCatalog catalog)
             stats.Double(row, "total_physical_reads") ?? 0, stats.Double(row, "total_logical_writes") ?? 0, stats.Double(row, "total_rows") ?? 0, stats.Double(row, "total_grant_kb") ?? 0,
             spills ? stats.Double(row, "total_spills") ?? 0 : 0
         ];
-        return new(key, BinaryPrimitives.ReadUInt64BigEndian(hash), planHash, stats.Time(row, "creation_time"), stats.Time(row, "last_execution_time"), totals, stats.Long(row, "max_elapsed_time"));
+        double[] last =
+        [
+            1, stats.Double(row, "last_worker_time") ?? 0, stats.Double(row, "last_elapsed_time") ?? 0, stats.Double(row, "last_logical_reads") ?? 0,
+            stats.Double(row, "last_physical_reads") ?? 0, stats.Double(row, "last_logical_writes") ?? 0, stats.Double(row, "last_rows") ?? 0, stats.Double(row, "last_grant_kb") ?? 0,
+            spills ? stats.Double(row, "last_spills") ?? 0 : 0
+        ];
+        return new(key, BinaryPrimitives.ReadUInt64BigEndian(hash), planHash, stats.Time(row, "creation_time"), stats.Time(row, "last_execution_time"), totals, stats.Long(row, "max_elapsed_time"), last);
     }
 
     /// <summary>The shown rows' statements whose text is not cached, most expensive first, in text statements of textBatch slots,
@@ -306,7 +319,8 @@ internal sealed class ActivityQueryRows(ActivityCatalog catalog)
             // The row's statement first; when SQL Server no longer has its text, another statement of the group whose text it
             // may have, so the row is not left blank while one exists.
             if (group.Statements.Any(statement => texts.Contains(statement.Key) && Text(statement.Key)?.Statement is not null)) continue;
-            var next = group.Statements.OrderByDescending(statement => ReferenceEquals(statement, group.Shown)).FirstOrDefault(statement => !texts.Contains(statement.Key));
+            var shown = group.Shown;
+            var next = !texts.Contains(shown.Key) ? shown : group.Statements.FirstOrDefault(statement => !texts.Contains(statement.Key));
             if (next is not null && keys.Add(next.Key)) wanted.Add(next);
         }
         return [.. wanted.Take(size * (int)catalog.Limit("textBatchesPerTick")).Chunk(size).Select(chunk => chunk.Select((statement, slot) => new QueryTextRequest(slot, statement)).ToArray())];
@@ -373,9 +387,13 @@ internal sealed class ActivityQueryRows(ActivityCatalog catalog)
             double? Each(int total, double scale = 1) => executions > 0 ? basis[total] / executions / scale : null;
             double? Rate(int total, double perMs) => sample.WindowMs is { } ms ? group.Window[total] * perMs / ms : null;
             var shown = group.Shown;
-            var text = Text(shown.Key) ?? group.Statements.Select(statement => Text(statement.Key)).FirstOrDefault(found => found?.Statement is not null);
+            // The row's statement's text, else (SQL Server no longer has it) another statement's of the group. A row loads while
+            // a statement of the group has no text asked for yet.
+            var own = Text(shown.Key);
+            var text = own?.Statement is not null ? own : group.Statements.Select(statement => Text(statement.Key)).FirstOrDefault(found => found?.Statement is not null) ?? own;
+            var waiting = text?.Statement is null && !textsRefused && group.Statements.Any(statement => !texts.Contains(statement.Key));
             var known = facts.GetValueOrDefault(group.Hash);
-            writer.Set(cells, "query", LiveCell.Of(text is null && !textsRefused ? Loading : text?.Statement));
+            writer.Set(cells, "query", LiveCell.Of(waiting ? Loading : text?.Statement));
             writer.Set(cells, "executionsPerMinute", ActivityRowWriter.Decimal(Rate(QueryStatement.Executions, 60_000), 1));
             writer.Set(cells, "cpuRate", ActivityRowWriter.Decimal(Rate(QueryStatement.Worker, 1), 1));
             writer.Set(cells, "avgCpuMs", ActivityRowWriter.Decimal(Each(QueryStatement.Worker, 1_000), 1));
@@ -393,7 +411,7 @@ internal sealed class ActivityQueryRows(ActivityCatalog catalog)
             writer.Set(cells, "cachedSince", ActivityRowWriter.Time(known.CachedSince));
             writer.Set(cells, "queryHash", LiveCell.Of(QueryStatement.HashText(group.Hash)));
             var row = new LiveRow(cells);
-            if (text is null && !textsRefused) loading.Add(row);
+            if (waiting) loading.Add(row);
             rows.Add(row);
         }
         return rows;
