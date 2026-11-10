@@ -400,7 +400,8 @@ definition a model of its own carrying the view's connection and database and it
 as soon as the view shows another object, goes Back or refreshes; closing the card or tab disposes the editor. SQL language
 features serve that model as they serve a query's: hovering a name shows what IntelliSense knows of it in the view's
 database. Completion and analysis markers stay off, since the text is read-only, and disposing the model closes its
-language document. Its focus key is `peekEditorFocus`, never `editorFocus`, so query
+language document. As for a query, a definition longer than 250,000 characters gets no hover.
+Its focus key is `peekEditorFocus`, never `editorFocus`, so query
 commands (Execute, Parse and the rest) leave it alone, and F5 refreshes the Peek; Find, Copy and Select All are Monaco's
 own. **Script to New Query** and, for a kind that offers it, **Modify** open the definition in a query tab through Script As.
 A definition is never cut. A module's text comes in pages of 1,000,000 characters: the first with the

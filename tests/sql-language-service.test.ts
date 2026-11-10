@@ -1027,6 +1027,26 @@ describe('SQL language features in Peek', () => {
     for (const map of Object.values(bookkeeping(f.service))) expect(map.size).toBe(0)
   })
 
+  it('drops a hover still in flight when Peek moves on, and closes the document again once that request settles', async () => {
+    const f = await fixture()
+    f.addConnection(peekConnection)
+    const peek = peekFixture()
+    cleanups.push(() => peek.editor.dispose())
+    const first = peek.show('1', 'CREATE VIEW dbo.V AS SELECT 1 AS One')
+    const id = peekModelContext(first)!.documentId
+    const reply = deferred<Awaited<ReturnType<VariaApi['languageHover']>>>()
+    f.api.languageHover.mockReturnValueOnce(reply.promise)
+    const hover = f.hover.provideHover(first, position, token())
+    await vi.waitFor(() => expect(f.api.languageHover).toHaveBeenCalledOnce())
+    peek.show('2', 'CREATE VIEW dbo.W AS SELECT 2 AS Two')
+    expect(f.api.languageClose).toHaveBeenCalledWith(id)
+    reply.resolve({ ok: true, value: { contents: 'stale' } })
+    expect(await hover).toBeNull()
+    // The close raced the request, so it goes again once the request is done, as for a closed query.
+    await vi.waitFor(() => expect(f.api.languageClose.mock.calls.map(([closed]) => closed)).toEqual([id, id]))
+    for (const map of Object.values(bookkeeping(f.service))) expect(map.has(id)).toBe(false)
+  })
+
   it('stops serving a Peek model whose connection is lost, and closes what it opened', async () => {
     const f = await fixture()
     f.addConnection(peekConnection)
