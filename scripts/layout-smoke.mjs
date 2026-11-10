@@ -40,9 +40,9 @@ async function dialogs(settings = {}) {
 async function ready(editorVisible = true) {
   page = await application.firstWindow()
   await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
-  await expect(page.locator('.monaco-editor')).toHaveCount(1, { timeout: 30000 })
-  if (editorVisible) await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
-  else await expect(page.locator('.monaco-editor')).toBeHidden()
+  await expect(page.locator('.monaco-editor[role=code]')).toHaveCount(1, { timeout: 30000 })
+  if (editorVisible) await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
+  else await expect(page.locator('.monaco-editor[role=code]')).toBeHidden()
   await expect(layoutError(page)).toHaveCount(0)
   await dialogs()
 }
@@ -148,7 +148,7 @@ try {
   console.log('Layout checks: panels alone in a group hide their tabs and move through their ⋯ menus.')
   await typeSql('SELECT 42 AS preserved;')
   const typed = await text()
-  await page.evaluate(() => { globalThis.layoutEditor = document.querySelector('.monaco-editor') })
+  await page.evaluate(() => { globalThis.layoutEditor = document.querySelector('.monaco-editor[role=code]') })
   const originalWidth = (await pane('explorer').boundingBox()).width
   const vertical = page.locator('.dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash.dv-enabled').first()
   await drag(vertical, 90, 0)
@@ -246,7 +246,7 @@ try {
   await expect(page.getByRole('dialog').getByRole('status')).toContainText('Layout loaded.')
   await done()
   await expect(pane('explorer')).toBeVisible()
-  expect(await page.evaluate(() => globalThis.layoutEditor === document.querySelector('.monaco-editor'))).toBe(true)
+  expect(await page.evaluate(() => globalThis.layoutEditor === document.querySelector('.monaco-editor[role=code]'))).toBe(true)
   expect(await text()).toBe(typed)
   await application.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('edit.undo').click())
   await expect.poll(text).not.toBe(typed)
@@ -256,14 +256,14 @@ try {
     tabs: getComputedStyle(document.querySelector(part.documentTabs + ' ' + part.tabName)).userSelect,
     heading: getComputedStyle(document.querySelector(part.explorerToolbar)).userSelect,
     status: getComputedStyle(document.querySelector(part.statusBar)).userSelect,
-    editor: getComputedStyle(document.querySelector('.monaco-editor')).userSelect
+    editor: getComputedStyle(document.querySelector('.monaco-editor[role=code]')).userSelect
   }), part)
   expect(selectionRules).toEqual({ tabs: 'none', heading: 'none', status: 'none', editor: 'text' })
   await closePaneButton(page, 'editor').click()
   await expect(pane('editor')).toBeHidden()
   await windowPane('editor')
   await expect(pane('editor')).toBeVisible()
-  expect(await page.evaluate(() => globalThis.layoutEditor === document.querySelector('.monaco-editor'))).toBe(true)
+  expect(await page.evaluate(() => globalThis.layoutEditor === document.querySelector('.monaco-editor[role=code]'))).toBe(true)
   expect(await text()).toBe(typed)
   await application.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('edit.undo').click())
   await expect.poll(text).not.toBe(typed)

@@ -307,6 +307,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .oe-actions button { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; color: var(--varia-objectExplorer-actionForeground); }
 /* Monaco draws the drop position of an Object Explorer drag with this class; its own dnd.css is not loaded. */
 .monaco-editor .dnd-target { border-right: 2px solid var(--varia-focusBorder); }
+/* Only the widgets take input; the document-level host never covers the panels underneath it. Keep it below menus,
+   dialogs and the palette, above Dockview's floating groups. Monaco owns widget sizing and viewport placement. */
+.editor-overflow-widgets.monaco-editor { position: fixed; inset: 0; z-index: 16000; background: transparent; pointer-events: none; }
+.editor-overflow-widgets > div > * { pointer-events: auto; }
 /* A bookmark in the indicator (glyph) margin: Edit › Bookmarks. */
 .monaco-editor .varia-bookmark { color: var(--varia-editorBookmark-foreground); }
 .filter-dialog { width: min(640px, calc(100vw - 40px)); }

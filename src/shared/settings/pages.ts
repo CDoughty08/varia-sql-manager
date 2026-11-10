@@ -20,6 +20,7 @@ export const settingPages = [
   { id: 'textEditor.editorTabAndStatusBar', title: 'Editor Tab and Status Bar', parent: 'textEditor', layout: 'propertyGrid', description: 'The query window\'s status bar: where it is, and what it shows.' },
   { id: 'textEditor.transactSql', title: 'Transact-SQL', parent: 'textEditor' },
   { id: 'textEditor.transactSql.general', title: 'General', parent: 'textEditor.transactSql', layout: 'form' },
+  { id: 'textEditor.transactSql.intelliSense', title: 'IntelliSense', parent: 'textEditor.transactSql', layout: 'form' },
   { id: 'textEditor.transactSql.tabs', title: 'Tabs', parent: 'textEditor.transactSql', layout: 'form' },
   { id: 'queryExecution', title: 'Query Execution' },
   { id: 'queryExecution.sqlServer', title: 'SQL Server', parent: 'queryExecution' },

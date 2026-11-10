@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, posix, resolve } from 'node:path'
-import { archiveUrl, downloadSqlToolsArchive, executableName, hostRid, markerName, prepareSqlToolsService, safeArchiveEntries, sha256, sqlToolsManifest, sqlToolsServiceProblems, type SqlToolsManifest } from '../scripts/prepare-sqltools-service.mjs'
+import { archiveUrl, downloadSqlToolsArchive, executableName, hostRid, markerName, prepareSqlToolsService, renamePreparedArtifact, safeArchiveEntries, sha256, sqlToolsManifest, sqlToolsServiceProblems, type SqlToolsManifest } from '../scripts/prepare-sqltools-service.mjs'
 
 const folders: string[] = []
-afterEach(async () => { vi.unstubAllGlobals(); for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true }) })
+afterEach(async () => { vi.unstubAllGlobals(); vi.useRealTimers(); for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true }) })
 const digest = (value: string) => createHash('sha256').update(value).digest('hex')
 type PreparationMarker = { version: string; rid: string; archiveSha256: string; files: { path: string; sha256: string }[] }
 async function fixture() {
@@ -121,6 +121,36 @@ describe('SQL Tools Service download retries', () => {
     await expect(downloadSqlToolsArchive(url, output)).rejects.toThrow('download limit')
     expect(fetch).toHaveBeenCalledOnce()
     await expect(access(output)).rejects.toThrow()
+  })
+})
+
+describe('verified SQL Tools Service artifact publication', () => {
+  const failure = (code: string) => Object.assign(new Error(code), { code })
+  it('retries brief Windows sharing violations while publishing the same verified artifact', async () => {
+    vi.useFakeTimers()
+    const move = vi.fn().mockRejectedValueOnce(failure('EPERM')).mockRejectedValueOnce(failure('EBUSY')).mockRejectedValueOnce(failure('EACCES')).mockResolvedValue(undefined)
+    const published = renamePreparedArtifact('verified.staging', 'distribution', 'win32', move)
+    await vi.runAllTimersAsync()
+    await expect(published).resolves.toBeUndefined()
+    expect(move.mock.calls).toEqual(Array(4).fill(['verified.staging', 'distribution']))
+  })
+  it('bounds retries and preserves a persistent Windows publication failure', async () => {
+    vi.useFakeTimers()
+    const error = failure('EPERM'), move = vi.fn().mockRejectedValue(error)
+    const published = expect(renamePreparedArtifact('verified.staging', 'distribution', 'win32', move)).rejects.toBe(error)
+    await vi.runAllTimersAsync()
+    await published
+    expect(move).toHaveBeenCalledTimes(8)
+  })
+  it.each(['ENOENT', 'EXDEV', 'ENOTDIR', 'ENOSPC', 'EIO'])('does not retry a terminal %s publication error', async code => {
+    const error = failure(code), move = vi.fn().mockRejectedValue(error)
+    await expect(renamePreparedArtifact('verified.staging', 'distribution', 'win32', move)).rejects.toBe(error)
+    expect(move).toHaveBeenCalledOnce()
+  })
+  it.each(['linux', 'darwin'] as const)('does not retry permission errors on %s', async platform => {
+    const error = failure('EPERM'), move = vi.fn().mockRejectedValue(error)
+    await expect(renamePreparedArtifact('verified.staging', 'distribution', platform, move)).rejects.toBe(error)
+    expect(move).toHaveBeenCalledOnce()
   })
 })
 

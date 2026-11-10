@@ -28,6 +28,7 @@ const expectedTree = [
   '  Editor Tab and Status Bar (textEditor.editorTabAndStatusBar)',
   '  Transact-SQL',
   '    General (textEditor.transactSql.general)',
+  '    IntelliSense (textEditor.transactSql.intelliSense)',
   '    Tabs (textEditor.transactSql.tabs)',
   'Query Execution',
   '  SQL Server',

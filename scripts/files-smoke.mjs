@@ -87,7 +87,7 @@ try {
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
-  await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
   await stubDialogs()
 
   // 0. The command line's file opens in its own tab, after the first query; closing it leaves that query active.
@@ -461,14 +461,14 @@ try {
   await page.evaluate(() => {
     const data = new DataTransfer()
     data.items.add(new File(['SELECT 1'], 'forged.sql'))
-    document.querySelector('.monaco-editor').dispatchEvent(new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true }))
+    document.querySelector('.monaco-editor[role=code]').dispatchEvent(new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true }))
   })
   await page.waitForTimeout(500)
   await expect(tabs()).toHaveCount(count)
   const dropped = join(folder, 'dropped.sql')
   await writeFile(dropped, 'SELECT 5 AS dropped')
   const cdp = await application.context().newCDPSession(page)
-  const box = await page.locator('.monaco-editor').boundingBox()
+  const box = await page.locator('.monaco-editor[role=code]').boundingBox()
   const at = { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) }
   const data = { items: [], files: [dropped], dragOperationsMask: 1 }
   const dropFile = async () => { for (const type of ['dragEnter', 'dragOver', 'drop']) await cdp.send('Input.dispatchDragEvent', { type, ...at, data }) }
