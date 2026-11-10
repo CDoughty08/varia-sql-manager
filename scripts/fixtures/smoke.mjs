@@ -69,15 +69,54 @@ const running = new Set()
 const killTree = pid => { try { execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* Already gone. */ } }
 if (process.platform === 'win32') process.on('exit', () => { for (const pid of running) killTree(pid) })
 
+/** How long the app's output pipes may stay open after it exited before the fixture closes them itself. */
+export const pipeGraceMs = 5_000
+
+/** The names (never the arguments, which may hold secrets) of the processes still in POSIX process group `pgid`. */
+function processGroup(pgid) {
+  try {
+    return execFileSync('ps', ['-A', '-o', 'pid=,pgid=,comm='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+      .split('\n').map(line => line.trim().split(/\s+/)).filter(([pid, group]) => group === String(pgid) && pid !== String(pgid)).map(([, , comm]) => comm)
+  } catch { return [] }
+}
+
+/**
+ * Playwright's app.close() returns on the launched process's 'close' event, which Node raises only once its stdio pipes
+ * have closed too, not on 'exit'. A descendant that inherited them (Chromium's helpers inherit stdout and stderr on Linux) and
+ * outlived main by a moment held close() for its full 45 s although main had exited with code 0. So once the leader has
+ * exited, its pipes get `graceMs` to close; then the fixture names and ends what is left of its process group and closes
+ * its own ends of the pipes, which raises 'close'. The app did close, so this does not fail the suite.
+ * Returns the function that stops watching.
+ */
+export function releasePipesAfterExit(child, graceMs = pipeGraceMs) {
+  if (!child?.once) return () => {}
+  let timer
+  const release = () => {
+    const pid = child.pid
+    const left = process.platform !== 'win32' && pid ? processGroup(pid) : []
+    if (process.platform !== 'win32' && pid) { try { process.kill(-pid, 'SIGKILL') } catch { /* The group is already gone. */ } }
+    for (const stream of [child.stdin, child.stdout, child.stderr]) stream?.destroy()
+    console.log(`The app exited (${child.signalCode ? 'signal ' + child.signalCode : 'code ' + child.exitCode}), but its output pipes were still open ${graceMs / 1000} s later` +
+      (left.length ? `, held by ${left.join(', ')}` : '') + ': closed them.')
+  }
+  const exited = () => { timer = setTimeout(release, graceMs) }
+  const closed = () => clearTimeout(timer)
+  if (child.exitCode !== null && child.exitCode !== undefined || child.signalCode) exited()
+  else child.once('exit', exited)
+  child.once('close', closed)
+  return () => { clearTimeout(timer); child.off('exit', exited); child.off('close', closed) }
+}
+
 /**
  * Closes the app within `ms`. A close that never finished (a prompt nobody answers, a wedged main) used to hang its suite to
  * the job's 25 minute timeout, hiding the error that sent the suite to its finally block. Past `ms` this kills the app,
  * fails the suite through the exit code, and returns without throwing, so that error still propagates and prints.
  */
 export async function boundedClose(application, close, ms = closeMs) {
+  const stopWatching = releasePipesAfterExit(application.process())
   const closing = Promise.resolve().then(close)
   let hung = false
-  await within(closing, ms, () => { hung = true })
+  await within(closing, ms, () => { hung = true }).finally(stopWatching)
   if (!hung) return
   closing.catch(() => {})
   console.error(`The app did not close within ${ms / 1000} s: killed it, and the suite fails. Its own error, if any, follows.`)

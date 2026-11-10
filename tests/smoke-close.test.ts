@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { boundedClose } from '../scripts/fixtures/smoke.mjs'
+import { EventEmitter } from 'node:events'
+import { boundedClose, releasePipesAfterExit } from '../scripts/fixtures/smoke.mjs'
 
 const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
 let exitCode: typeof process.exitCode
@@ -9,6 +10,7 @@ beforeEach(() => {
   vi.useFakeTimers()
   vi.spyOn(process, 'kill').mockReturnValue(true)
   vi.spyOn(console, 'error').mockImplementation(() => {})
+  vi.spyOn(console, 'log').mockImplementation(() => {})
 })
 
 afterEach(() => {
@@ -94,5 +96,62 @@ describe('smoke close backstop', () => {
     expect(child.kill).not.toHaveBeenCalled()
     expect(process.exitCode).toBe(7)
     expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+/** A launched process whose 'close' follows 'exit' only once its three pipes are closed, as Node's ChildProcess does. */
+const exitingChild = () => {
+  const child = Object.assign(new EventEmitter(), { pid: 4321, kill: vi.fn(() => true), exitCode: null as number | null, signalCode: null as NodeJS.Signals | null, stdin: null as unknown, stdout: null as unknown, stderr: null as unknown })
+  let open = 3
+  const pipe = () => ({ destroy: vi.fn(() => { if (--open === 0 && child.exitCode !== null) child.emit('close', child.exitCode, null) }) })
+  child.stdin = pipe(); child.stdout = pipe(); child.stderr = pipe()
+  const exit = (code: number) => { child.exitCode = code; child.emit('exit', code, null) }
+  return { child, exit }
+}
+
+describe('smoke close after the app exited', () => {
+  it.each(['linux', 'win32'] as const)('closes the pipes a descendant still holds after a clean exit on %s, without failing the suite', async value => {
+    usePlatform(value)
+    const { child, exit } = exitingChild()
+    process.exitCode = undefined
+    // Playwright's close() settles on the child's 'close', which a descendant holding stdout delays past the exit.
+    const closing = boundedClose({ process: () => child as never }, () => new Promise(resolve => child.once('close', resolve)), 45_000)
+    await vi.advanceTimersByTimeAsync(10)
+    exit(0)
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect((child.stdout as { destroy: () => void }).destroy).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    await closing
+    if (value === 'linux') expect(process.kill).toHaveBeenCalledExactlyOnceWith(-child.pid, 'SIGKILL')
+    else expect(process.kill).not.toHaveBeenCalled()
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('its output pipes were still open'))
+    expect(console.error).not.toHaveBeenCalled()
+    expect(process.exitCode).toBeUndefined()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('leaves pipes that close with the exit alone and stops watching', async () => {
+    usePlatform('linux')
+    const { child, exit } = exitingChild()
+    const closing = boundedClose({ process: () => child as never }, () => new Promise(resolve => child.once('close', resolve)), 45_000)
+    await vi.advanceTimersByTimeAsync(0)
+    exit(0)
+    child.emit('close', 0, null)
+    await closing
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect((child.stdout as { destroy: () => void }).destroy).not.toHaveBeenCalled()
+    expect(process.kill).not.toHaveBeenCalled()
+    expect(child.listenerCount('exit') + child.listenerCount('close')).toBe(0)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('starts the grace at once for an app that had already exited', async () => {
+    usePlatform('win32')
+    const { child, exit } = exitingChild()
+    exit(0)
+    const stop = releasePipesAfterExit(child as never, 100)
+    await vi.advanceTimersByTimeAsync(100)
+    expect((child.stdout as { destroy: () => void }).destroy).toHaveBeenCalledOnce()
+    stop()
   })
 })
