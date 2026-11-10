@@ -394,9 +394,10 @@ last in the batch, inside TRY…CATCH: a login without VIEW SERVER STATE gets th
 | Server roles | `login` | Role, Fixed role |
 | User mapping | `login` | Database, User, Default schema |
 
-**Definition** shows the text in the query editor itself (`createQueryEditor`, read-only), so Tools › Options, Find and
-the SQL language features reach it as they reach a query. Each card or tab has one editor, and each definition a model of
-its own carrying the view's connection and database, disposed as soon as the view shows another object, goes Back or
+**Definition** shows the text in the query editor itself (`createQueryEditor`, read-only), so Tools › Options, the theme
+and Find reach it as they reach a query, and so will editor features added later. Each card or tab has one editor, and each
+definition a model of its own carrying the view's connection and database (`peekModelContext`, for SQL language features
+to read once they serve Peek; today they serve query documents only), disposed as soon as the view shows another object, goes Back or
 refreshes; closing the card or tab disposes the editor. Its focus key is `peekEditorFocus`, never `editorFocus`, so query
 commands (Execute, Parse and the rest) leave it alone, and F5 refreshes the Peek; Find, Copy and Select All are Monaco's
 own. **Script to New Query** and, for a kind that offers it, **Modify** open the definition in a query tab through Script As.

@@ -7,7 +7,7 @@ import { computeContextKeys, focusFacts, type FocusElement } from '../src/render
 import { KeybindingService, type KeyDownEvent } from '../src/renderer/src/core/keybindings'
 import { createQueryEditor } from '../src/renderer/src/editor/create-editor'
 import { bridgeWhen } from '../src/renderer/src/editor/keybinding-bridge'
-import { PeekEditor, peekEditorAttribute, peekEditorContextKey, peekEditorHasTextFocus, peekEditorUse, peekModelContext } from '../src/renderer/src/explorer/peek-editor'
+import { inPeekEditor, PeekEditor, peekEditorAttribute, peekEditorContextKey, peekEditorHasTextFocus, peekEditorUse, peekModelContext } from '../src/renderer/src/explorer/peek-editor'
 import type { QueryEditorInstance } from '../src/renderer/src/editor/create-editor'
 import type { DocumentSnapshot } from '../src/renderer/src/services/documents'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
@@ -119,8 +119,12 @@ describe('Peek editor', () => {
     }
     const unbind = vi.fn()
     // The Query editor pane is closed: an editor group's widget host hides with it, the Peek card's does not.
-    const hosts: { hidden: boolean; className: string; setAttribute(): void; remove(): void }[] = []
-    const container = { ownerDocument: { createElement: () => { const host = { hidden: false, className: '', setAttribute: () => {}, remove: () => {} }; hosts.push(host); return host }, body: { appendChild: () => {} } } } as unknown as HTMLElement
+    const hosts: { hidden: boolean; className: string; attributes: Record<string, string>; setAttribute(name: string, value: string): void; remove(): void }[] = []
+    const container = { ownerDocument: { createElement: () => {
+      const host = { hidden: false, className: '', attributes: {} as Record<string, string>, setAttribute(name: string, value: string) { this.attributes[name] = value }, remove: () => {} }
+      hosts.push(host)
+      return host
+    }, body: { appendChild: () => {} } } } as unknown as HTMLElement
     const workbench = {
       monaco: { editor: { create: (_container: unknown, options: Record<string, unknown>) => { created = options; return instance } } },
       editorOptions: { monacoOptions: () => ({ fontSize: 15, lineNumbers: 'on' }), bindEditor: () => ({ dispose: unbind }) },
@@ -129,6 +133,8 @@ describe('Peek editor', () => {
     vi.stubGlobal('MutationObserver', class { observe() {} disconnect() {} })
     const editor = createQueryEditor(workbench as never, container, peekEditorUse)
     expect(hosts[0]!.hidden).toBe(false)
+    // Its widget host is marked as Peek's, so a press on a hover or message widget does not close the card.
+    expect(hosts[0]!.attributes).toEqual({ 'data-query-editor-id': 'peek-1', [peekEditorAttribute]: '' })
     expect(created).toMatchObject({ theme: 'varia', fontSize: 15, lineNumbers: 'on', readOnly: true, tabFocusMode: true, glyphMargin: false, padding: { top: 4 }, ariaLabel: 'Definition text', contextmenu: false })
     expect(created?.readOnlyMessage).toEqual({ value: expect.stringContaining('Script to New Query') })
     expect(contextKeys).toEqual([[peekEditorContextKey, true]])
@@ -140,6 +146,7 @@ describe('Peek editor', () => {
     listeners.length = 0
     createQueryEditor(workbench as never, container)
     expect(hosts[1]!.hidden).toBe(true)
+    expect(hosts[1]!.attributes).toEqual({ 'data-query-editor-id': 'peek-1' })
     expect(created).toMatchObject({ glyphMargin: true, padding: { top: 16 } })
     expect(created).not.toHaveProperty('readOnly')
     expect(listeners.length).toBeGreaterThan(0)
@@ -206,6 +213,14 @@ describe('Peek editor keys', () => {
     expect(peekEditorHasTextFocus(peekElement('card', 'text'))).toBe(true)
     expect(peekEditorHasTextFocus(peekElement('tab', 'find'))).toBe(false)
     expect(peekEditorHasTextFocus(null)).toBe(false)
+  })
+  it('counts a press on a Peek editor or its body-level widget host as a press on Peek, and any other press as outside', () => {
+    const element = (inside: boolean) => ({ closest: (selector: string) => inside && selector === `[${peekEditorAttribute}]` ? {} : null })
+    expect(inPeekEditor(element(true) as never)).toBe(true)
+    expect(inPeekEditor(element(false) as never)).toBe(false)
+    // A text node's element decides.
+    expect(inPeekEditor({ parentElement: element(true) } as never)).toBe(true)
+    expect(inPeekEditor(null)).toBe(false)
   })
 })
 

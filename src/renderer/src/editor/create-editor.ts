@@ -9,7 +9,7 @@ export interface QueryEditorInstance extends Disposable { readonly instance: edi
 
 /**
  * What sets a query editor that only shows text (Peek's definition) apart from an editor group's: everything else (Tools ›
- * Options, the font, Find, the `varia` theme, and the SQL language features every model gets) is the same.
+ * Options, the font, Find, the `varia` theme) is the same.
  */
 export interface QueryEditorUse {
   /**
@@ -25,6 +25,8 @@ export interface QueryEditorUse {
   readonly contextKey?: string
   /** Whether its body-level widget host hides with the Query editor pane (default); Peek's card floats outside every pane. */
   readonly inEditorPane?: boolean
+  /** An attribute set on that widget host, so its owner can tell a press on the editor's widgets from one outside it. */
+  readonly widgetHostAttribute?: string
 }
 
 /**
@@ -71,6 +73,7 @@ export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorO
     ...use.ariaLabel ? { ariaLabel: use.ariaLabel } : {}
   })
   overflow.setAttribute('data-query-editor-id', instance.getId())
+  if (use.widgetHostAttribute) overflow.setAttribute(use.widgetHostAttribute, '')
   const options = workbench.editorOptions.bindEditor(instance)
   // The external host needs Monaco's current theme/high-contrast classes too, including after a new model replaces
   // its view. Observe just that view's class attribute, never the editor's changing text DOM.
