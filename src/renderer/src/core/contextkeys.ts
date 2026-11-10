@@ -168,7 +168,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     includeLivePlan: isQueryDocument(active) && !!active?.includeLivePlan,
     includeClientStatistics: isQueryDocument(active) && !!active?.includeClientStatistics,
     scriptingRunning: !!inputs.scriptingRunning, hasNotifications: !!inputs.notifications,
-    updateBusy: inputs.update?.status === 'checking' || inputs.update?.status === 'downloading', updateReady: inputs.update?.status === 'ready',
+    updateBusy: inputs.update?.status === 'checking' || inputs.update?.status === 'downloading' || inputs.update?.status === 'preparing', updateReady: inputs.update?.status === 'ready',
     updateAvailable: inputs.update?.status === 'available' && inputs.update.size !== undefined
   })
 }

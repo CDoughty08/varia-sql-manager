@@ -242,9 +242,17 @@ being true.
   most 30 s per lock. Never log names, values, SQL or messages.
 - Updates live in `src/shared/updates.ts` (feed, manifest schema, states, failure words); only main fetches (its own
   in-memory session, `net` through the system proxy and certificate store), verifies size and SHA-512 against the
-  release's `varia-update.json` (written by `scripts/update-manifest.mjs` in the release job), and installs, only after
+  release's `varia-update-v2.json` (written by `scripts/update-manifest.mjs` in the release job), and installs, only after
   Restart to Update's quit has closed the windows and stopped the backend (`src/main/update-install.ts`). The page gets
   only `UpdateState` and asks with argument-free calls; it never names a URL or path. docs/updates.md describes it.
+  The release job keeps writing `varia-update.json` in its first shape: builds up to 0.7.0 refuse a manifest with a kind
+  or field they do not know, so a new kind goes only in the current manifest, which leaves out what a build cannot use
+  instead of refusing the release. An installed
+  Windows copy whose folder the user can write stages a release beside itself while it runs and swaps it in at restart,
+  through the update helper (`backend/Varia.Updater`, `src/main/update-staging.ts`): the helper takes paths only from
+  main, works only in the one folder beside the installation that main stages in, checks the archive's SHA-512 again
+  before unpacking it, and asks for no elevation; anything it cannot do falls back to the installer, for that release in
+  every later run too (`failed.json`). macOS builds do not update themselves until they are code signed.
 - Settings live only in `src/shared/settings/` (pages in `pages.ts`, definitions per area, aggregated by `catalog.ts`;
   the Scripting page's entries come from `src/shared/scripting/options.ts`), with defaults, bounds, platforms and zod
   schemas built from the definitions. Only main reads and writes `settings.json` (`SettingsStore`: overrides only, read

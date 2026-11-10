@@ -1,21 +1,27 @@
 import { createHash } from 'node:crypto'
 import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { classifyUpdateError, httpFailure, UpdateFailure, Updater, type UpdaterOptions, type UpdateSettings } from '../src/main/updater'
-import { assetFor, compareVersions, updateLimits, updateManifestSchema, updateStatusText, type UpdateManifest, type UpdateState } from '../src/shared/updates'
+import { classifyUpdateError, httpFailure, UpdateFailure, Updater, type UpdaterOptions, type UpdateSettings, type UpdateStaging } from '../src/main/updater'
+import { assetFor, compareVersions, legacyAssetKinds, stagedAssetFor, updateFeedUrl, updateLimits, updateManifestSchema, updateStatusText, type UpdateManifest, type UpdateState } from '../src/shared/updates'
 
 const payload = Buffer.from('Varia SQL Manager 1.1.0 installer bytes '.repeat(400))
 const sha512 = (bytes: Buffer) => createHash('sha512').update(bytes).digest('base64')
+// The same release as an archive, which an installed Windows build stages.
+const archive = Buffer.from('Varia SQL Manager 1.1.0 archive bytes '.repeat(300))
 const manifest = (version = '1.1.0', bytes = payload): UpdateManifest => ({
-  schema: 1, version, assets: [
+  schema: 2, version, assets: [
     { name: `Varia-SQL-Manager-${version}-Windows-x64-Setup.exe`, kind: 'win-setup', arch: 'x64', size: bytes.length, sha512: sha512(bytes) },
     { name: `Varia-SQL-Manager-${version}-Windows-x64-Portable.exe`, kind: 'win-portable', arch: 'x64', size: bytes.length, sha512: sha512(bytes) },
     { name: `Varia-SQL-Manager-${version}-linux-x86_64.AppImage`, kind: 'linux-appimage', arch: 'x64', size: bytes.length, sha512: sha512(bytes) },
     { name: `Varia-SQL-Manager-${version}-mac-arm64.dmg`, kind: 'mac-dmg', arch: 'arm64', size: bytes.length, sha512: sha512(bytes) }
   ]
 })
+const withArchive = (version = '1.1.0'): UpdateManifest => {
+  const value = manifest(version)
+  return { ...value, assets: [...value.assets, { name: `Varia-SQL-Manager-${version}-win-x64.zip`, kind: 'win-zip', arch: 'x64', size: archive.length, sha512: sha512(archive) }] }
+}
 
 /** setTimeout by hand: `fire(ms)` runs the timers that were set for exactly `ms`. */
 function manualTimers() {
@@ -81,24 +87,53 @@ describe('update versions and manifests', () => {
     expect(compareVersions('1.0.0-alpha', '1.0.0-alpha.1')).toBeLessThan(0)
     expect(compareVersions('1.0.0-1', '1.0.0-alpha')).toBeLessThan(0)
   })
-  it('accepts only a strict manifest of release file names', () => {
-    expect(updateManifestSchema.safeParse(manifest()).success).toBe(true)
+  it('keeps only files with a release name, a bounded size and a checksum, and refuses a manifest that is not one', () => {
+    expect(updateManifestSchema.parse(manifest())).toEqual(manifest())
     const bad = (change: (value: UpdateManifest) => unknown) => updateManifestSchema.safeParse(change(structuredClone(manifest()))).success
-    expect(bad(value => ({ ...value, extra: 1 }))).toBe(false)
-    expect(bad(value => { value.assets[0] = { ...value.assets[0]!, name: '../Varia-SQL-Manager-1.1.0.exe' }; return value })).toBe(false)
-    expect(bad(value => { value.assets[0] = { ...value.assets[0]!, name: 'Varia-SQL-Manager-1.1.0/x.exe' }; return value })).toBe(false)
-    expect(bad(value => { value.assets[0] = { ...value.assets[0]!, size: updateLimits.assetBytes + 1 }; return value })).toBe(false)
-    expect(bad(value => { value.assets[0] = { ...value.assets[0]!, sha512: 'abc' }; return value })).toBe(false)
+    expect(bad(value => ({ ...value, schema: 1 }))).toBe(false)
     expect(bad(value => ({ ...value, version: '1.1' }))).toBe(false)
+    expect(bad(value => ({ ...value, assets: 'none' }))).toBe(false)
+    // A file this build could never safely download is not offered; the others still are.
+    const without = (change: (asset: UpdateManifest['assets'][number]) => unknown) => {
+      const value = structuredClone(manifest()) as { assets: unknown[] }
+      value.assets[0] = change(manifest().assets[0]!)
+      const parsed = updateManifestSchema.parse(value)
+      expect(parsed.assets).toEqual(manifest().assets.slice(1))
+      expect(assetFor(parsed, 'nsis', 'x64')).toBeUndefined()
+      expect(assetFor(parsed, 'portable', 'x64')).toBeDefined()
+    }
+    without(asset => ({ ...asset, name: '../Varia-SQL-Manager-1.1.0.exe' }))
+    without(asset => ({ ...asset, name: 'Varia-SQL-Manager-1.1.0/x.exe' }))
+    without(asset => ({ ...asset, name: 'Varia-SQL-Manager-1.1.0.msi' }))
+    without(asset => ({ ...asset, size: updateLimits.assetBytes + 1 }))
+    without(asset => ({ ...asset, size: 0 }))
+    without(asset => ({ ...asset, sha512: 'abc' }))
+    without(asset => ({ ...asset, arch: 'universal' }))
+  })
+  // Builds up to 0.7.0 refused a manifest with anything they did not know, so a new kind of file would have stopped every
+  // one of them from updating. A later release's additions are now left out instead.
+  it('leaves out what a later release adds: fields, and files of kinds it does not know', () => {
+    const later = { ...manifest(), channel: 'stable', releasedAt: '2027-01-02T03:04:05+01:00', assets: [...manifest().assets.map(asset => ({ ...asset, signature: 'x' })), { name: 'whatever', kind: 'win-msix', arch: 'x64' }, 'not an asset'] }
+    const parsed = updateManifestSchema.parse(later)
+    expect(parsed).toEqual(manifest())
+    expect(updateManifestSchema.safeParse({ ...manifest(), assets: Array.from({ length: updateLimits.assets + 1 }, () => ({ kind: 'win-msix' })) }).success).toBe(false)
+  })
+  it('reads the manifest that carries the archive, leaving the first one to the builds that refuse a new kind', () => {
+    expect(updateFeedUrl).toMatch(/\/releases\/latest\/download\/varia-update-v2\.json$/)
+    expect(legacyAssetKinds).toEqual(['win-setup', 'win-portable', 'linux-appimage', 'mac-dmg', 'mac-zip'])
+    expect(stagedAssetFor(withArchive(), 'nsis', 'x64')?.name).toBe('Varia-SQL-Manager-1.1.0-win-x64.zip')
+    expect(stagedAssetFor(withArchive(), 'nsis', 'arm64')).toBeUndefined()
+    expect(stagedAssetFor(withArchive(), 'portable', 'x64')).toBeUndefined()
+    expect(stagedAssetFor(manifest(), 'nsis', 'x64')).toBeUndefined()
   })
   it('picks the file for the build\'s kind and architecture', () => {
-    const value = manifest()
+    const value = withArchive()
     expect(assetFor(value, 'nsis', 'x64')?.kind).toBe('win-setup')
     expect(assetFor(value, 'portable', 'x64')?.kind).toBe('win-portable')
     expect(assetFor(value, 'appimage', 'x64')?.kind).toBe('linux-appimage')
-    expect(assetFor(value, 'dmg', 'arm64')?.kind).toBe('mac-dmg')
-    expect(assetFor(value, 'dmg', 'x64')).toBeUndefined()
-    expect(assetFor(value, 'unsupported', 'x64')).toBeUndefined()
+    expect(assetFor(value, 'appimage', 'arm64')).toBeUndefined()
+    // macOS builds are unsupported: the release's disk image is never theirs to download.
+    expect(assetFor(value, 'unsupported', 'arm64')).toBeUndefined()
   })
   it('says what the status bar shows, and hides what it need not', () => {
     const base = { currentVersion: '1.0.0', kind: 'nsis', enabled: true } as const
@@ -108,7 +143,7 @@ describe('update versions and manifests', () => {
     expect(updateStatusText({ ...base, status: 'checking', manual: true })).toBe('Checking for updates…')
     expect(updateStatusText({ ...base, status: 'downloading', version: '1.1.0', received: 50, total: 200 })).toBe('Downloading update 25%')
     expect(updateStatusText({ ...base, status: 'ready', version: '1.1.0' })).toBe('Restart to update to 1.1.0')
-    expect(updateStatusText({ ...base, kind: 'dmg', status: 'ready', version: '1.1.0' })).toBe('Update 1.1.0 downloaded')
+    expect(updateStatusText({ ...base, status: 'preparing', version: '1.1.0' })).toBe('Preparing update…')
   })
 })
 
@@ -294,6 +329,56 @@ describe('Updater', () => {
     expect(await instance.arm()).toBe(false)
     expect(instance.state).toMatchObject({ status: 'error', code: 'integrity', during: 'install' })
   })
+  // The file is run from a folder other programs can write to: its size alone does not say it is still the release's.
+  it('hashes the verified file again at Restart to Update, and does not install one that changed without changing size', async () => {
+    const { instance } = updater({ manifest: [json(manifest())], asset: [file(payload)] })
+    await instance.check(false)
+    const changed = Buffer.from(payload)
+    changed[changed.length - 1] ^= 1
+    await writeFile(instance.readyFile!.file, changed)
+    expect(await instance.arm()).toBe(false)
+    expect(instance.takeArmed()).toBeUndefined()
+    expect(instance.state).toMatchObject({ status: 'error', code: 'integrity', during: 'install', version: '1.1.0' })
+  })
+  // The status bar still offers the restart while the feed is read again: choosing it then must not answer "nothing ready".
+  it('waits for a quiet re-check of the feed, then restarts to update', async () => {
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    let checks = 0
+    const { instance } = updater({}, { fetch: async url => {
+      if (!url.endsWith('.json')) return file(payload)
+      if (++checks === 2) await gate
+      return json(manifest())
+    } })
+    await instance.check(false)
+    const recheck = instance.check(false)
+    const armed = instance.arm()
+    release()
+    expect(await recheck).toMatchObject({ status: 'ready' })
+    expect(await armed).toBe(true)
+    expect(instance.takeArmed()).toMatchObject({ version: '1.1.0' })
+  })
+  it('has nothing to restart into once a newer release has no file for this build', async () => {
+    const newer = { ...manifest('1.2.0'), assets: manifest('1.2.0').assets.filter(asset => asset.kind !== 'win-setup') }
+    const { instance } = updater({ manifest: [json(manifest()), json(newer)], asset: [file(payload)] })
+    await instance.check(false)
+    expect(await instance.arm()).toBe(true)
+    expect(await instance.check(false)).toMatchObject({ status: 'available', version: '1.2.0' })
+    expect(instance.readyFile).toBeUndefined()
+    expect(instance.takeArmed()).toBeUndefined()
+    expect(await instance.arm()).toBe(false)
+  })
+  it('lets Restart to Update be chosen twice, and starts no check while it verifies', async () => {
+    const { instance, requests } = updater({ manifest: [json(manifest())], asset: [file(payload)] })
+    await instance.check(false)
+    const [first, second, checked] = [instance.arm(), instance.arm(), instance.check(true)]
+    expect(await first).toBe(true)
+    expect(await second).toBe(true)
+    expect(await checked).toMatchObject({ status: 'ready' })
+    expect(requests).toHaveLength(2)
+    expect(await instance.arm()).toBe(true)
+    expect(instance.takeArmed()).toMatchObject({ version: '1.1.0', staged: false })
+  })
   it('shares one check between callers, and keeps a ready update when a later check fails', async () => {
     const { instance, requests } = updater({ manifest: [json(manifest()), new Error('net::ERR_INTERNET_DISCONNECTED')], asset: [file(payload)] })
     const [a, b] = [instance.check(true), instance.check(true)]
@@ -337,5 +422,179 @@ describe('Updater', () => {
   it('keeps its failures to fixed sentences', () => {
     const failure = new UpdateFailure('proxy', 'net::ERR_TUNNEL_CONNECTION_FAILED')
     expect(failure.message).toBe('Your network\'s proxy refused the connection to GitHub.')
+  })
+})
+
+/** Staging as the helper does it, without the helper: what is staged, and what was asked of it. */
+function fakeStaging(change: Partial<UpdateStaging> = {}) {
+  const calls: string[] = []
+  const held: { staged?: { version: string; sha512: string }; failure?: { version: string; reported: boolean } } = {}
+  const staging: UpdateStaging = {
+    available: async () => true,
+    staged: async (version, hash) => held.staged?.version === version && held.staged.sha512 === hash,
+    stage: async (path, version, hash) => {
+      calls.push(`stage ${basename(path)}`)
+      expect(await readFile(path)).toEqual(archive)
+      held.staged = { version, sha512: hash }
+    },
+    clear: async () => { calls.push('clear'); delete held.staged },
+    remove: async () => { calls.push('remove'); delete held.staged; delete held.failure },
+    failure: async () => held.failure,
+    markFailed: async (version, reported) => { calls.push(`failed ${version}`); held.failure = { version, reported } },
+    ...change
+  }
+  return { staging, calls, held }
+}
+
+describe('Updater, staging the release beside the installation', () => {
+  it('downloads the archive, unpacks it while Varia runs, and keeps only the unpacked copy', async () => {
+    const { staging, calls } = fakeStaging()
+    const { instance, states, requests } = updater({ manifest: [json(withArchive())], asset: [file(archive)] }, { staging })
+    expect(await instance.check(false)).toMatchObject({ status: 'ready', version: '1.1.0' })
+    expect(requests[1]).toBe('https://feed.test/download/v1.1.0/Varia-SQL-Manager-1.1.0-win-x64.zip')
+    expect([...new Set(states.map(item => item.status))]).toEqual(['checking', 'downloading', 'preparing', 'ready'])
+    expect(calls).toEqual(['stage Varia-SQL-Manager-1.1.0-win-x64.zip'])
+    expect(instance.readyFile).toMatchObject({ version: '1.1.0', staged: true, sha512: sha512(archive) })
+    await expect.poll(() => readdir(join(dir, 'updates'))).toEqual([])
+    expect(await instance.arm()).toBe(true)
+    expect(instance.takeArmed()).toMatchObject({ version: '1.1.0', staged: true })
+  })
+  it('uses the installer where the installation cannot be staged, or the release has no archive', async () => {
+    const elsewhere = fakeStaging({ available: async () => false })
+    const first = updater({ manifest: [json(withArchive())], asset: [file(payload)] }, { staging: elsewhere.staging })
+    expect(await first.instance.check(false)).toMatchObject({ status: 'ready' })
+    expect(first.requests[1]).toMatch(/Windows-x64-Setup\.exe$/)
+    expect(first.instance.readyFile?.staged).toBe(false)
+    expect(elsewhere.calls).toEqual([])
+    const without = fakeStaging()
+    const second = updater({ manifest: [json(manifest())], asset: [file(payload)] }, { staging: without.staging })
+    expect(await second.instance.check(false)).toMatchObject({ status: 'ready' })
+    expect(second.instance.readyFile?.staged).toBe(false)
+    expect(without.calls).toEqual([])
+  })
+  it('falls back to the installer when the archive cannot be unpacked, without an error', async () => {
+    const { staging, calls, held } = fakeStaging({ stage: async () => { throw new Error('The update could not be unpacked.') } })
+    const { instance, states, requests } = updater({ manifest: [json(withArchive())], asset: [file(archive), file(payload)] }, { staging })
+    expect(await instance.check(true)).toMatchObject({ status: 'ready', version: '1.1.0' })
+    expect(requests.slice(1).map(url => url.split('/').at(-1))).toEqual(['Varia-SQL-Manager-1.1.0-win-x64.zip', 'Varia-SQL-Manager-1.1.0-Windows-x64-Setup.exe'])
+    expect(states.some(item => item.status === 'error')).toBe(false)
+    expect(calls).toEqual(['clear', 'failed 1.1.0'])
+    // Recorded as already said: it fell back by itself, and the next run has nothing to report.
+    expect(held.failure).toEqual({ version: '1.1.0', reported: true })
+    expect(instance.readyFile).toMatchObject({ staged: false, file: join(dir, 'updates', 'Varia-SQL-Manager-1.1.0-Windows-x64-Setup.exe') })
+    await expect.poll(() => readdir(join(dir, 'updates'))).toEqual(['Varia-SQL-Manager-1.1.0-Windows-x64-Setup.exe'])
+  })
+  // Otherwise every check would download the archive, fail to unpack it, and download the installer.
+  it('does not stage a release again once it could not be unpacked, in this run or the next', async () => {
+    const { staging, calls } = fakeStaging({ stage: async () => { calls.push('stage'); throw new Error('The update could not be unpacked.') } })
+    const first = updater({ manifest: [json(withArchive()), json(withArchive())], asset: [file(archive), new Response('', { status: 503 }), file(payload)] }, { staging })
+    expect(await first.instance.check(true)).toMatchObject({ status: 'error', code: 'server', during: 'download' })
+    expect(await first.instance.check(true)).toMatchObject({ status: 'ready', version: '1.1.0' })
+    expect(first.requests.filter(url => !url.endsWith('.json')).map(url => url.split('/').at(-1))).toEqual(['Varia-SQL-Manager-1.1.0-win-x64.zip', 'Varia-SQL-Manager-1.1.0-Windows-x64-Setup.exe', 'Varia-SQL-Manager-1.1.0-Windows-x64-Setup.exe'])
+    expect(calls.filter(call => call === 'stage')).toHaveLength(1)
+    // The next run: the installer that is already there, verified, is what installs. Nothing is downloaded or staged.
+    const next = updater({ manifest: [json(withArchive())] }, { staging })
+    next.instance.start()
+    expect(await next.instance.check(false)).toMatchObject({ status: 'ready', version: '1.1.0' })
+    expect(next.requests).toHaveLength(1)
+    expect(next.states.some(item => item.status === 'error')).toBe(false)
+    expect(next.instance.readyFile?.staged).toBe(false)
+    expect(calls.filter(call => call === 'stage')).toHaveLength(1)
+    // A newer release is staged again.
+    const later = updater({ manifest: [json(withArchive('1.2.0'))], asset: [file(archive)] }, { staging })
+    await later.instance.check(false)
+    expect(calls.filter(call => call === 'stage')).toHaveLength(2)
+  })
+  it('uses an archive an earlier run downloaded, and keeps it when Varia closes while it is being unpacked', async () => {
+    let unpacking!: () => void
+    const started = new Promise<void>(resolve => { unpacking = resolve })
+    const { staging, calls } = fakeStaging({ stage: (_path, _version, _hash, signal) => new Promise<void>((_resolve, reject) => { unpacking(); signal.addEventListener('abort', () => reject(new Error('aborted'))) }) })
+    const first = updater({ manifest: [json(withArchive())], asset: [file(archive), file(payload)] }, { staging })
+    const checking = first.instance.check(false)
+    await started
+    first.instance.dispose()
+    expect(await checking).toMatchObject({ status: 'preparing' })
+    // Closing is not a failure to unpack: nothing is recorded, the installer is not fetched, and the archive stays.
+    expect(first.requests).toHaveLength(2)
+    expect(calls).toEqual([])
+    expect(await readdir(join(dir, 'updates'))).toEqual(['Varia-SQL-Manager-1.1.0-win-x64.zip'])
+    const next = fakeStaging()
+    const second = updater({ manifest: [json(withArchive())] }, { staging: next.staging })
+    expect(await second.instance.check(false)).toMatchObject({ status: 'ready', version: '1.1.0' })
+    expect(second.requests).toHaveLength(1)
+    expect(next.calls).toEqual(['stage Varia-SQL-Manager-1.1.0-win-x64.zip'])
+  })
+  it('reports a failed archive download as a download failure, without fetching the installer too', async () => {
+    const { staging } = fakeStaging()
+    const { instance, requests } = updater({ manifest: [json(withArchive())], asset: [new Response('', { status: 503 })] }, { staging })
+    expect(await instance.check(true)).toMatchObject({ status: 'error', code: 'server', during: 'download', version: '1.1.0' })
+    expect(requests).toHaveLength(2)
+  })
+  it('uses a release an earlier run staged without downloading it again', async () => {
+    const { staging, held, calls } = fakeStaging()
+    held.staged = { version: '1.1.0', sha512: sha512(archive) }
+    const { instance, requests } = updater({ manifest: [json(withArchive())] }, { staging })
+    expect(await instance.check(false)).toMatchObject({ status: 'ready', version: '1.1.0' })
+    expect(requests).toHaveLength(1)
+    expect(calls).toEqual([])
+    expect(instance.readyFile?.staged).toBe(true)
+  })
+  it('offers the archive\'s size while Automatically download updates is off, and stages on Download Update', async () => {
+    const { staging } = fakeStaging()
+    const { instance } = updater({ manifest: [json(withArchive())], asset: [file(archive)] }, { staging, settings: () => ({ checkAutomatically: true, downloadAutomatically: false }) })
+    expect(await instance.check(false)).toMatchObject({ status: 'available', size: archive.length })
+    expect(await instance.download()).toMatchObject({ status: 'ready' })
+    expect(instance.readyFile?.staged).toBe(true)
+  })
+  it('does not restart into a staged release that is no longer there', async () => {
+    const { staging, held, calls } = fakeStaging()
+    const { instance } = updater({ manifest: [json(withArchive())], asset: [file(archive)] }, { staging })
+    await instance.check(false)
+    delete held.staged
+    calls.length = 0
+    expect(await instance.arm()).toBe(false)
+    expect(instance.takeArmed()).toBeUndefined()
+    expect(instance.state).toMatchObject({ status: 'error', code: 'integrity', during: 'install' })
+    // What is left of it is removed, as the message says.
+    expect(calls).toEqual(['clear'])
+  })
+  // The helper put the old version back (a file was in use) and started it: this run says so, and installs with the installer.
+  it('says that the last restart could not swap the release in, and installs it with the installer instead', async () => {
+    const { staging, held, calls } = fakeStaging()
+    held.failure = { version: '1.1.0', reported: false }
+    held.staged = { version: '1.1.0', sha512: sha512(archive) }
+    const { instance, requests } = updater({ manifest: [json(withArchive())], asset: [file(payload)] }, { staging })
+    instance.start()
+    await expect.poll(() => instance.state).toMatchObject({ status: 'error', code: 'staged', during: 'install', manual: false, version: '1.1.0' })
+    expect(calls).toEqual(['clear', 'failed 1.1.0'])
+    expect(await instance.check(false)).toMatchObject({ status: 'ready', version: '1.1.0' })
+    expect(requests[1]).toMatch(/Windows-x64-Setup\.exe$/)
+    expect(instance.readyFile?.staged).toBe(false)
+    // Closed without restarting: the run after that says nothing more, and still installs with the installer it has.
+    const next = updater({ manifest: [json(withArchive())] }, { staging })
+    next.instance.start()
+    expect(await next.instance.check(false)).toMatchObject({ status: 'ready', version: '1.1.0' })
+    expect(next.states.some(item => item.status === 'error')).toBe(false)
+    expect(next.requests).toHaveLength(1)
+    expect(next.instance.readyFile?.staged).toBe(false)
+    expect(calls).toEqual(['clear', 'failed 1.1.0'])
+  })
+  it('says nothing of a failed swap that a later restart got past', async () => {
+    const { staging, held, calls } = fakeStaging()
+    held.failure = { version: '1.0.0', reported: false }
+    const { instance, states } = updater({ manifest: [json(withArchive())], asset: [file(archive)] }, { staging })
+    instance.start()
+    expect(await instance.check(false)).toMatchObject({ status: 'ready', version: '1.1.0' })
+    expect(instance.readyFile?.staged).toBe(true)
+    expect(states.some(item => item.status === 'error')).toBe(false)
+    expect(calls).toEqual(['stage Varia-SQL-Manager-1.1.0-win-x64.zip'])
+  })
+  it('removes everything staging left once the running version is the latest', async () => {
+    const { staging, calls, held } = fakeStaging()
+    held.failure = { version: '1.0.0', reported: true }
+    const { instance } = updater({ manifest: [json(withArchive('1.0.0'))] }, { staging })
+    expect(await instance.check(false)).toMatchObject({ status: 'upToDate' })
+    await expect.poll(() => calls).toEqual(['remove'])
+    expect(held.failure).toBeUndefined()
   })
 })

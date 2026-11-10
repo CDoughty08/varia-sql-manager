@@ -90,3 +90,71 @@ foreach ($flag in @('--silent', '/S')) {
   }
 }
 Write-Host 'Interactive installer choices, explicit confirmation, and silent flags passed.'
+
+# The staged update (docs/updates.md) against that installation: its own helper unpacks this build's archive beside it,
+# then a copy of the helper swaps it in, as Restart to Update does once Varia has closed. The helper has no console, so
+# each run is waited for.
+function Invoke-Helper($path, $arguments) {
+  $process = Start-Process -FilePath $path -ArgumentList $arguments -WorkingDirectory $installDir -PassThru
+  if (-not $process.WaitForExit(300000)) { $process.Kill($true); throw "The update helper timed out: $($arguments[0])" }
+  return $process.ExitCode
+}
+$appName = 'Varia SQL Manager.exe'
+$helper = Join-Path $installDir 'resources\updater\Varia.Updater.exe'
+if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) { throw 'The installation has no update helper.' }
+$archive = (Resolve-Path "dist/Varia-SQL-Manager-$version-win-x64.zip").Path
+$stream = [IO.File]::OpenRead($archive)
+try { $sha512 = [Convert]::ToBase64String([Security.Cryptography.SHA512]::Create().ComputeHash($stream)) } finally { $stream.Dispose() }
+$root = Join-Path (Split-Path -Parent $installDir) ('.' + (Split-Path -Leaf $installDir) + '.update')
+$common = @('--root', "`"$root`"", '--install', "`"$installDir`"", '--exe', "`"$appName`"", '--version', $version)
+$log = { if (Test-Path -LiteralPath (Join-Path $root 'update.log')) { Get-Content -LiteralPath (Join-Path $root 'update.log') | Write-Host } }
+$marker = Join-Path $installDir 'from-the-installer.txt'
+Set-Content -LiteralPath $marker -Value 'replaced by the swap'
+$code = Invoke-Helper $helper (@('stage', '--archive', "`"$archive`"", '--sha512', $sha512) + $common)
+if ($code -ne 0) { & $log; throw "Staging failed: $code" }
+$staged = Join-Path $root 'app'
+foreach ($name in @($appName, "Uninstall $appName", 'resources\app.asar', 'resources\updater\Varia.Updater.exe', 'resources\backend\Varia.Backend.exe')) {
+  if (-not (Test-Path -LiteralPath (Join-Path $staged $name) -PathType Leaf)) { throw "The staged release lacks $name." }
+}
+if ((Get-Content -LiteralPath (Join-Path $root 'staged.json') | ConvertFrom-Json).version -ne $version) { throw 'The staged marker does not name the version.' }
+if (-not (Test-Path -LiteralPath $marker)) { throw 'Staging changed the installation.' }
+$swapper = Join-Path $root 'Varia.Updater.exe'
+Copy-Item -LiteralPath $helper -Destination $swapper
+$code = Invoke-Helper $swapper (@('swap', '--pid', '0', '--from', $version, '--no-start') + $common)
+if ($code -ne 0) { & $log; throw "The swap failed: $code" }
+if (Test-Path -LiteralPath $marker) { throw 'The swap left the old installation in place.' }
+# Every file of the packaged application is in the installation, at its size: what 7-Zip archived is what the helper
+# unpacked. Setup's additions (the uninstaller, the elevation helper) came across from the installation it replaced.
+function Assert-Application($what) {
+  $unpacked = (Resolve-Path 'dist/win-unpacked').Path
+  $files = @(Get-ChildItem -LiteralPath $unpacked -Recurse -File)
+  if ($files.Count -lt 50) { throw "dist/win-unpacked holds only $($files.Count) files." }
+  foreach ($file in $files) {
+    $relative = $file.FullName.Substring($unpacked.Length + 1)
+    $installed = Get-Item -LiteralPath (Join-Path $installDir $relative) -ErrorAction SilentlyContinue
+    if ($null -eq $installed -or $installed.Length -ne $file.Length) { throw "The $what installation's $relative is missing or not the packaged file's size." }
+  }
+  foreach ($name in @($appName, "Uninstall $appName", 'resources\elevate.exe', 'resources\updater\Varia.Updater.exe')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $installDir $name) -PathType Leaf)) { throw "The $what installation lacks $name." }
+  }
+}
+Assert-Application 'swapped'
+if ((Test-Path -LiteralPath $staged) -or (Test-Path -LiteralPath (Join-Path $root 'old')) -or (Test-Path -LiteralPath (Join-Path $root 'staged.json')) -or (Test-Path -LiteralPath (Join-Path $root 'failed.json')) -or (Test-Path -LiteralPath (Join-Path $root 'swap.json'))) { throw 'The swap left staged or old files, or its journal, behind.' }
+if ($null -ne (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce' -ErrorAction SilentlyContinue).VariaSqlManagerUpdate) { throw 'The swap left its sign-in recovery registered.' }
+# A swap cut short between its renames (the power went): the sign-in recovery puts the staged release in place.
+$code = Invoke-Helper $helper (@('stage', '--archive', "`"$archive`"", '--sha512', $sha512) + $common)
+if ($code -ne 0) { & $log; throw "Staging again failed: $code" }
+Copy-Item -LiteralPath $helper -Destination $swapper -Force
+# A scanner may still be reading what the swap just put there, and Windows renames no folder with a file open.
+$deadline = (Get-Date).AddSeconds(60)
+while ($true) {
+  try { Move-Item -LiteralPath $installDir -Destination (Join-Path $root 'old'); break }
+  catch [System.IO.IOException], [System.UnauthorizedAccessException] { if ((Get-Date) -ge $deadline) { throw }; Start-Sleep -Milliseconds 250 }
+}
+Set-Content -LiteralPath (Join-Path $root 'swap.json') -Value (@{ installDir = $installDir; exe = $appName; version = $version; from = $version } | ConvertTo-Json -Compress)
+$process = Start-Process -FilePath $swapper -ArgumentList 'recover' -WorkingDirectory $root -PassThru
+if (-not $process.WaitForExit(300000)) { $process.Kill($true); throw 'The recovery timed out.' }
+if ($process.ExitCode -ne 0) { & $log; throw "The recovery failed: $($process.ExitCode)" }
+Assert-Application 'recovered'
+if ((Test-Path -LiteralPath (Join-Path $root 'old')) -or (Test-Path -LiteralPath (Join-Path $root 'swap.json'))) { throw 'The recovery left the old version or its journal behind.' }
+Write-Host 'Staged update: the installed helper unpacked this build beside the installation, swapped it in, and finished an interrupted swap.'

@@ -76,8 +76,9 @@ import type { CommandId } from '../shared/commands/catalog'
 import { sanitizeLabel } from '../shared/theme/format'
 import type { ResolvedTheme, ThemeState } from '../shared/theme/types'
 import { Updater } from './updater'
-import { applyUpdate, installTargetFor, removeReplacedPortable, testUpdateTarget, type InstallTarget } from './update-install'
-import { assetUrl, releasesPageUrl, updateErrors, updateFeedUrl, type InstallKind } from '../shared/updates'
+import { applyUpdate, installTargetFor, relaunchEnv, removeReplacedPortable, testUpdateTarget, type InstallTarget } from './update-install'
+import { applyStaged, helperStaging } from './update-staging'
+import { assetUrl, releasesPageUrl, updateErrors, updateFeedUrl, updateManifestName, type InstallKind } from '../shared/updates'
 
 // First, before Chromium reads its command line for the DevTools handler: a packaged build never opens a debugging port,
 // except for its own smoke tests on a throwaway profile, where it decrypts no saved password (sandbox-guard.ts).
@@ -452,6 +453,8 @@ function confirmUnresponsiveClose(window: BrowserWindow, quit: boolean): void {
   unresponsivePrompt ??= oneDialog(async () => window.isDestroyed() ? { response: 1 } : !rendererUnresponsive ? { response: -1 }
     : dialog.showMessageBox(window, { type: 'warning', title: 'Workbench not responding', message: 'Close Varia SQL Manager?', detail: lossDetailsFor(pageGeneration).unresponsive, buttons: ['Close', 'Wait'], defaultId: 1, cancelId: 1, noLink: true }),
   { response: 1 }).then(({ response }) => {
+    // Wait: a Restart to Update that started this quit installs nothing at a later exit.
+    if (response === 1) updater?.disarm()
     if (window.isDestroyed() || response === 1) return
     if (response === 0) closeApproved = true
     if (quit) app.quit()
@@ -1186,10 +1189,11 @@ function startUpdater(settingsLoaded: Promise<unknown>): void {
   const feed = testUpdateFeed
   updater = new Updater({
     currentVersion: app.getVersion(), kind: target.kind, arch: process.arch, enabled: app.isPackaged || !!feed,
-    feedUrl: feed ? new URL('varia-update.json', feed).href : updateFeedUrl,
+    feedUrl: feed ? new URL(updateManifestName, feed).href : updateFeedUrl,
     assetUrl: feed ? (version, name) => new URL(`download/v${encodeURIComponent(version)}/${encodeURIComponent(name)}`, feed).href : assetUrl,
     fetch: (url, init) => network.fetch(url, { ...init, cache: 'no-store', redirect: 'follow' }), secureOnly: !feed,
     downloadDir: target.downloadDir, privateDir: target.privateDir,
+    ...(target.staging ? { staging: helperStaging(target.staging, { env: process.env }) } : {}),
     settings: () => ({ checkAutomatically: settings.current()['environment.updates.checkAutomatically'], downloadAutomatically: settings.current()['environment.updates.downloadAutomatically'] }),
     publish: state => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:updates-changed', state) }
   })
@@ -1203,8 +1207,14 @@ async function installArmedUpdate(): Promise<void> {
   updater?.dispose()
   if (!armed || !kind) return
   try {
-    if (testUpdateFeed) await writeFile(join(app.getPath('userData'), 'update-applied.json'), JSON.stringify({ kind, version: armed.version, file: basename(armed.file) }))
-    else await applyUpdate(kind, armed.file, armed.version, { env: process.env, currentVersion: app.getVersion(), openPath: path => shell.openPath(path) })
+    if (testUpdateFeed) await writeFile(join(app.getPath('userData'), 'update-applied.json'), JSON.stringify({ kind, version: armed.version, file: basename(armed.file), staged: armed.staged }))
+    else if (armed.staged && updateTarget?.staging) {
+      // The swap could not be started: Restart to Update still restarts, into this version, which reports the failure
+      // and installs the release with the installer instead (applyStaged left the record).
+      try { await applyStaged(updateTarget.staging, { version: armed.version, currentVersion: app.getVersion(), pid: process.pid }, { env: relaunchEnv(process.env) }) }
+      catch { app.relaunch() }
+    }
+    else await applyUpdate(kind, armed.file, armed.version, { env: process.env, currentVersion: app.getVersion() })
   } catch {
     dialog.showErrorBox('Varia SQL Manager update', `${updateErrors.install.message} ${updateErrors.install.hint}\n\n${releasesPageUrl}`)
   }

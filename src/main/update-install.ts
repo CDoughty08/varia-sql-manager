@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { rename, rm } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import type { InstallKind } from '../shared/updates'
+import type { StagingPaths } from './update-staging'
 
 /** How this copy was started, as far as updates care. */
 export interface LaunchFacts {
@@ -18,13 +19,15 @@ export interface InstallTarget {
   /** Where the update downloads to: the portable app and the AppImage are swapped in place, so theirs is their own folder. */
   readonly downloadDir: string
   readonly privateDir: boolean
+  /** The installed Windows build that carries the update helper: a release can be unpacked beside it while it runs. */
+  readonly staging?: StagingPaths
 }
 
 /**
  * The installed (NSIS) build has electron-builder's uninstaller beside it, named after the executable (both come from
  * electron-builder.yml's productName, which the packaged package.json lacks, so app.getName() is the npm name); the portable build's launcher names itself in
- * PORTABLE_EXECUTABLE_FILE; an AppImage's runtime sets APPIMAGE; a packaged macOS app runs from its bundle. Anything else
- * (an unpacked folder, a development run) cannot update itself.
+ * PORTABLE_EXECUTABLE_FILE; an AppImage's runtime sets APPIMAGE. Anything else (an unpacked folder, a development run)
+ * cannot update itself, and neither can a macOS build: it is not code signed, so it only points to the releases page.
  */
 export function installTargetFor(facts: LaunchFacts): InstallTarget {
   const updates = join(facts.userData, 'updates')
@@ -33,28 +36,31 @@ export function installTargetFor(facts: LaunchFacts): InstallTarget {
   if (facts.platform === 'win32') {
     const portable = facts.env.PORTABLE_EXECUTABLE_FILE
     if (portable && /\.exe$/i.test(portable)) return { kind: 'portable', downloadDir: dirname(portable), privateDir: false }
-    if (existsSync(join(dirname(facts.execPath), `Uninstall ${basename(facts.execPath)}`))) return { kind: 'nsis', downloadDir: updates, privateDir: true }
-    return unsupported
+    const installDir = dirname(facts.execPath), exe = basename(facts.execPath)
+    if (!existsSync(join(installDir, `Uninstall ${exe}`))) return unsupported
+    const helper = join(installDir, 'resources', 'updater', 'Varia.Updater.exe')
+    // The staging folder's name starts with a dot, so the installer's "is Varia running from the installation's folder"
+    // check (a prefix match on that folder) never takes the helper running there for the application.
+    // An installation at a drive's root has no folder beside it.
+    const staging = existsSync(helper) && basename(installDir) ? { staging: { installDir, exe, helper, root: join(dirname(installDir), `.${basename(installDir)}.update`) } } : {}
+    return { kind: 'nsis', downloadDir: updates, privateDir: true, ...staging }
   }
   if (facts.platform === 'linux') {
     const image = facts.env.APPIMAGE
     return image && /\.AppImage$/.test(image) ? { kind: 'appimage', downloadDir: dirname(image), privateDir: false } : unsupported
   }
-  if (facts.platform === 'darwin' && /\.app\/Contents\/MacOS\/[^/]+$/.test(facts.execPath)) return { kind: 'dmg', downloadDir: updates, privateDir: true }
   return unsupported
 }
 
 /** Smoke runs (a loopback test feed): any kind but unsupported, downloading to the profile; nothing installs. */
 export function testUpdateTarget(kind: string | undefined, userData: string): InstallTarget {
-  const kinds: readonly InstallKind[] = ['nsis', 'portable', 'appimage', 'dmg', 'unsupported']
+  const kinds: readonly InstallKind[] = ['nsis', 'portable', 'appimage', 'unsupported']
   return { kind: kinds.find(candidate => candidate === kind) ?? 'nsis', downloadDir: join(userData, 'updates'), privateDir: true }
 }
 
 export interface ApplyHost {
   readonly env: NodeJS.ProcessEnv
   readonly currentVersion: string
-  /** Opens the disk image in Finder (shell.openPath); resolves to an error message, empty on success. */
-  readonly openPath: (path: string) => Promise<string>
   readonly spawn?: (command: string, args: readonly string[], options: SpawnOptions) => ReturnType<typeof spawn>
 }
 
@@ -75,21 +81,16 @@ export function relaunchEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 /**
- * Installs a verified update once the app has closed (its windows are gone and the backend has stopped):
+ * Installs a verified update once the app has closed (its windows are gone and the backend has stopped). A staged release
+ * is swapped in instead (`applyStaged` in update-staging.ts); otherwise:
  * - the installer runs silently (`--updated /S`) into the same folder and mode as before, elevating itself when that is
  *   per-machine, then starts Varia (`--force-run`);
  * - the portable executable is swapped: Windows lets a running file be renamed, so the old one becomes `.old` (removed
  *   at the next start) and the new one takes its name, then starts;
- * - the AppImage is replaced (renamed to the new version when its name carried the old one), then starts;
- * - the disk image opens in Finder for the app to be dragged to Applications, as an unsigned app cannot replace itself.
+ * - the AppImage is replaced (renamed to the new version when its name carried the old one), then starts.
  */
 export async function applyUpdate(kind: InstallKind, file: string, version: string, host: ApplyHost): Promise<void> {
   if (kind === 'nsis') return launch(host, file, ['--updated', '/S', '--force-run'], relaunchEnv(host.env))
-  if (kind === 'dmg') {
-    const error = await host.openPath(file)
-    if (error) throw new Error(error)
-    return
-  }
   if (kind === 'portable') {
     const target = host.env.PORTABLE_EXECUTABLE_FILE
     if (!target) throw new Error('The portable executable is unknown.')
