@@ -281,7 +281,8 @@ export class PeekReads {
   private async readPages(target: PeekTarget, first: PeekResult, requests: Requests, current: () => boolean, tell: (change: PeekChange) => void, maxChars?: number): Promise<void> {
     const length = first.definitionLength!, stamp = first.definitionStamp
     if (maxChars === undefined && length > peekLimits.definitionMaxChars) { tell({ definition: { status: 'error', message: peekMessages.definitionTooLong } }); return }
-    const wanted = Math.min(length, maxChars ?? length)
+    // A page ends a code unit short rather than split a surrogate pair: one short of `maxChars` is enough, never worth a page more.
+    const wanted = maxChars !== undefined && maxChars < length ? maxChars - 1 : length
     const pages = [first.definition ?? '']
     let offset = pages[0]!.length
     if (offset < wanted) tell({ definition: { status: 'loading', progress: offset / wanted } })

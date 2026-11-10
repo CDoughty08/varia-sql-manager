@@ -8,13 +8,13 @@ import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable, ExternalStore } from '../core/types'
 import { peekMessages, type PeekChange, type PeekDefinition, type PeekPart, type PeekReader, type PeekTarget } from '../explorer/PeekService'
+import { hitKey } from './ObjectSearchService'
 
 /**
  * Characters the details pane shows at most: its definition is a <pre>, not an editor, and a text node of tens of millions of
  * characters stalls layout. Peek's editor (Space) and Script to New Query show all of a longer one, which is read only this far.
  */
 export const shownChars = 1_000_000
-import { hitKey } from './ObjectSearchService'
 
 export const searchDetailsLimits = {
   /** How long the selection rests before the pane reads it, so arrowing through the hits starts no reads on the way. */
