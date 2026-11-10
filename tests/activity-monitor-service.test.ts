@@ -156,7 +156,7 @@ describe('Activity Monitor document', () => {
     expect(shownPanes({ ...state, split: false })).toEqual(['processes'])
     expect(probeSettings(state).map(entry => entry.probe)).toEqual([...activityLiveProbes])
   })
-  it('keeps the panes apart, splits and unsplits, and expands at most two charts, the oldest giving way', () => {
+  it('keeps the panes apart, splits and unsplits, and expands any number of charts, each toggling alone', () => {
     const { activity, connect, liveViews, context } = monitorFixture()
     connect(connectionInfo('c1'))
     const id = activity.open('c1')
@@ -174,8 +174,11 @@ describe('Activity Monitor document', () => {
     activity.setPane(id, 'primary', 'blocking')
     expect(liveViews.last.calls).toEqual([])
     activity.toggleTile(id, 4)
-    expect(activity.get(id)?.expanded).toEqual([1, 4])
-    activity.toggleTile(id, 1)
+    expect(activity.get(id)?.expanded).toEqual([0, 1, 4])
+    // Every tile may be expanded: an eighth never closes the first.
+    for (const index of [2, 3, 5, 6, 7]) activity.toggleTile(id, index)
+    expect(activity.get(id)?.expanded).toEqual([0, 1, 4, 2, 3, 5, 6, 7])
+    for (const index of [0, 1, 2, 3, 5, 6, 7]) activity.toggleTile(id, index)
     expect(activity.get(id)?.expanded).toEqual([4])
     activity.toggleTile(id, 99)
     activity.setWindow(id, 60)

@@ -1,8 +1,8 @@
 // The Activity Monitor document: a header (state, interval, chart window, cost, Pause, Refresh, Split View), eight tiles
-// with sparklines, up to two expanded charts, and the panes in one or two slots. Everything it shows comes from its live
+// with sparklines, any of them expanded as a chart, and the panes in one or two slots. Everything it shows comes from its live
 // handle and from ActivityMonitorService, which keeps the monitor's choices across tab switches; it draws, and runs
 // catalogue commands or service methods, nothing else.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import {
   activityIntervalsSeconds, activityPanes, chartWindowsMinutes, grantStatement, paneSpecs, pendingPaneNote, pendingPanes, probeSpecs, serverStatePermission, seriesSpecs, tileSpecs,
   type ActivityPane
@@ -27,7 +27,7 @@ import { freshness, pillStatus } from '../live/status'
 import { splitLimits, type MonitorState, type PaneSlot } from './ActivityMonitorService'
 import { tileName } from '../kit/Tile'
 import ProcessesPane from './panes/ProcessesPane'
-import { chartScaleOf, latestValue, monitorFacts, monitorNotice, nextAnnouncement, overviewProbe, seriesIndex, tileReadings, type Announcement, type TileReading } from './tiles'
+import { chartScaleOf, gridRows, latestValue, monitorFacts, monitorNotice, nextAnnouncement, overviewProbe, seriesIndex, tileReadings, type Announcement, type TileReading } from './tiles'
 
 const noHandle = { subscribe: () => () => {}, getSnapshot: () => undefined }
 /** Where the panes sit side by side: below it they stack (D-am §3.2). */
@@ -66,9 +66,9 @@ export default function ActivityMonitor({ documentId }: { readonly documentId: s
     <div className="activity-body">
       <Banner snapshot={snapshot} documentId={documentId} login={connection?.login} version={connection?.productVersion ?? connection?.serverVersion} edition={connection?.engineEdition} />
       <Tiles documentId={documentId} state={state} handle={handle} readings={readings} snapshot={snapshot} />
-      {state.expanded.length > 0 && <section className="activity-charts" aria-label="Charts" data-activity-region="charts">
+      {state.expanded.length > 0 && <Charts count={state.expanded.length}>
         {state.expanded.map(index => <ExpandedChart key={index} index={index} handle={handle} state={state} link={link} />)}
-      </section>}
+      </Charts>}
       <Panes state={state} ring={ring} handle={handle} snapshot={snapshot} />
     </div>
   </DocumentFrame>
@@ -169,6 +169,24 @@ function Sparkline({ handle, series, title, windowMinutes }: { readonly handle: 
   const chartHandle = useChartHandle(handle, factor)
   const entries = useMemo<ChartSeries[]>(() => [{ index: seriesIndex(series), label: title, color: chartSeriesColors[0], style: 'area' }], [series, title])
   return <LiveChart handle={chartHandle} probe={overviewProbe} title={title} series={entries} scale={scale} window={{ spanMs: windowMinutes * 60_000, end: 'live' }} variant="sparkline" labels="none" surface="tile.background" className="activity-sparkline" />
+}
+
+/** The expanded charts, any number of them: each row keeps a chart's floor (styles.css reads --activity-chart-rows), so
+ *  the charts never shrink into the panes; a document too short for all of them scrolls. */
+function Charts({ count, children }: { readonly count: number; readonly children: ReactNode }) {
+  const box = useRef<HTMLElement>(null)
+  const [rows, setRows] = useState(1)
+  useLayoutEffect(() => {
+    const element = box.current
+    if (!element) return
+    const measure = () => setRows(gridRows(count, getComputedStyle(element).gridTemplateColumns))
+    measure()
+    if (typeof ResizeObserver !== 'function') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [count])
+  return <section ref={box} className="activity-charts" aria-label="Charts" data-activity-region="charts" style={{ '--activity-chart-rows': rows } as CSSProperties}>{children}</section>
 }
 
 /** A tile's chart, expanded: its value and secondary series over the window, with axes, the linked crosshair and "View as

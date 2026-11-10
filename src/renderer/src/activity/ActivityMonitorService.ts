@@ -4,7 +4,7 @@
 // subscription in step with them: a probe runs only while a pane that reads it is shown, and the live layer pauses the
 // whole view while its tab is hidden.
 import {
-  activityLiveProbes, activityPanes, chartWindowsMinutes, defaultChartWindowMinutes, defaultPanes, maxExpandedTiles, paneProbes, probeIntervalMs, tileSpecs,
+  activityLiveProbes, activityPanes, chartWindowsMinutes, defaultChartWindowMinutes, defaultPanes, paneProbes, probeIntervalMs, tileSpecs,
   activityIntervalsSeconds, activityIntervalDefaults, activityLimits, probeSpecs, sessionToggles, viewChips, type ActivityPane, type ActivityProbe, type ActivityTable, type ChartWindowMinutes, type ViewChip
 } from '../../../shared/activity/catalog'
 import type { ActivityColumnFilter } from '../../../shared/activity/schema'
@@ -41,7 +41,7 @@ export interface MonitorState {
   readonly secondary: ActivityPane
   /** The first pane's share of the panes area in split view. */
   readonly splitRatio: number
-  /** Tiles whose chart is expanded (tileSpecs indexes), oldest first; at most maxExpandedTiles. */
+  /** Tiles whose chart is expanded (tileSpecs indexes), in the order they were expanded; any number of them. */
   readonly expanded: readonly number[]
   /** Bumps when the monitor subscribes again (Retry), so the view takes the new handle. */
   readonly generation: number
@@ -116,7 +116,7 @@ export function initialMonitor(id: string, server: string, values: SettingsValue
     id, server, primary, secondary: secondary === primary ? activityPanes.find(item => item !== primary)! : secondary, split: second !== 'none' && secondary !== primary,
     intervalSeconds: (activityIntervalsSeconds as readonly number[]).includes(interval) ? interval : activityIntervalDefaults.refreshIntervalSeconds,
     windowMinutes: (chartWindowsMinutes as readonly number[]).includes(window) ? window as ChartWindowMinutes : defaultChartWindowMinutes,
-    processes: defaultProcessesFilter, paused: false, splitRatio: splitLimits.default, expanded: tileSpecs.flatMap((tile, index) => tile.defaultExpanded ? [index] : []).slice(0, maxExpandedTiles), generation: 0
+    processes: defaultProcessesFilter, paused: false, splitRatio: splitLimits.default, expanded: tileSpecs.flatMap((tile, index) => tile.defaultExpanded ? [index] : []), generation: 0
   }
 }
 
@@ -285,11 +285,11 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
     const state = this.get(id), next = clampRatio(ratio)
     if (state && state.splitRatio !== next) this.put({ ...state, splitRatio: next })
   }
-  /** Expands or collapses a tile's chart; a third expanded chart takes the place of the oldest. */
+  /** Expands or collapses a tile's chart; the others stay as they are. */
   toggleTile(id: string, index: number): void {
     const state = this.get(id)
     if (!state || !tileSpecs[index]) return
-    const expanded = state.expanded.includes(index) ? state.expanded.filter(item => item !== index) : [...state.expanded, index].slice(-maxExpandedTiles)
+    const expanded = state.expanded.includes(index) ? state.expanded.filter(item => item !== index) : [...state.expanded, index]
     this.put({ ...state, expanded })
   }
 

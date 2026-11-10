@@ -39,6 +39,7 @@ const monacoShadowAllowlist: Readonly<Record<string, string>> = {
   'shift+f3': "Find Previous in Results in a results grid only (outputGridFocus); Monaco's previous match keeps Shift+F3 in editor text",
   'cmd+g': "Find Next in Results on macOS in a results grid only (outputGridFocus); Monaco's ⌘G keeps it in editor text",
   'shift+cmd+g': "Find Previous in Results on macOS in a results grid only (outputGridFocus); Monaco's ⇧⌘G keeps it in editor text",
+  'alt+down': "Filter Column Values in a results grid only (outputGridFocus), Excel's key for a column's filter list: the grid is outside the editor, so Monaco's hover scrolling and input history keep Alt+Down in editor text",
   'shift+escape': "Close Activity Monitor (activityMonitorFocus), SSMS's key: the monitor is outside the editor, so Monaco's Shift+Escape (closing a widget, leaving a snippet) keeps it in editor text"
 }
 

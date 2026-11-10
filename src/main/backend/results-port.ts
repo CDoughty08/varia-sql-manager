@@ -1,5 +1,5 @@
-import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ViewFilter, ResultsCloseResult, ResultsDiffParams, ResultsDiffResult, ResultsFindRowsParams, ResultsFindRowsResult, ResultsIdentifyParams, ResultsIdentifyResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsRowIdsParams, ResultsRowIdsResult, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult } from '../../shared/contracts'
-import { diffResultSchema, findRowsResultSchema, identifyResultSchema, type MemoryFeature, type MemoryReport, type PortEndResult, type PortMessage, type PortRequest, portRequestSchema, profileResultSchema, rowBytesResultSchema, rowIdsResultSchema, searchResultSchema, testPortRequestSchema, viewCloseResultSchema, viewResultSchema } from '../../shared/ipc/port-messages'
+import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsDiffParams, ResultsDiffResult, ResultsDistinctParams, ResultsDistinctResult, ResultsFindRowsParams, ResultsFindRowsResult, ResultsIdentifyParams, ResultsIdentifyResult, ResultsPivotParams, ResultsPivotResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsRowIdsParams, ResultsRowIdsResult, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult, ViewFilter } from '../../shared/contracts'
+import { diffResultSchema, distinctResultSchema, findRowsResultSchema, identifyResultSchema, type MemoryFeature, type MemoryReport, pivotResultSchema, type PortEndResult, type PortMessage, type PortRequest, portRequestSchema, profileResultSchema, rowBytesResultSchema, rowIdsResultSchema, searchResultSchema, testPortRequestSchema, viewCloseResultSchema, viewResultSchema } from '../../shared/ipc/port-messages'
 import { liveDescriptors, liveRetired, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../../shared/live/schema'
 import { cancelReasons, limits as wire, type CancelReason, type ErrorCode } from '../../shared/ipc/wire/protocol'
 import type { StreamSink } from './connection'
@@ -36,10 +36,14 @@ export interface ResultsBackend {
   findRows(generation: number, params: ResultsFindRowsParams): Promise<ResultsFindRowsResult>
   /** Comparing two results may take seconds: the worker's cancel stops it, as it does a sort. */
   diff(generation: number, params: ResultsDiffParams): { readonly done: Promise<ResultsDiffResult>; cancel(reason: CancelReason): void }
+  /** Pivoting a result may take seconds: the worker's cancel stops it, as it does a sort. */
+  pivot(generation: number, params: ResultsPivotParams): { readonly done: Promise<ResultsPivotResult>; cancel(reason: CancelReason): void }
   /** A search reads every stored row: the worker's cancel (a newer search, or the text cleared) stops it. */
   search(generation: number, params: ResultsSearchParams): { readonly done: Promise<ResultsSearchResult>; cancel(reason: CancelReason): void }
   /** A profile reads every row: the worker's cancel (a newer profile, or the panel closed) stops it. */
   profile(generation: number, params: ResultsProfileParams): { readonly done: Promise<ResultsProfileResult>; cancel(reason: CancelReason): void }
+  /** Distinct values read every row of a column: the worker's cancel (a newer request, or the popover closed) stops it. */
+  distinct(generation: number, params: ResultsDistinctParams): { readonly done: Promise<ResultsDistinctResult>; cancel(reason: CancelReason): void }
   live(generation: number, params: LiveSubscribeParams, onLive: (event: LiveEvent, bytes: number) => void, credit: number): LiveStreamHandle
   liveUpdate(generation: number, params: LiveUpdateParams): Promise<LiveUpdateResult>
 }
@@ -266,8 +270,10 @@ export class ResultsPortHost {
       case 'rowIds': return this.rowIds(request)
       case 'findRows': return this.findRows(request)
       case 'diff': return this.diff(request)
+      case 'pivot': return this.pivot(request)
       case 'search': return this.search(request)
       case 'profile': return this.profile(request)
+      case 'distinct': return this.distinct(request)
       case 'live': return this.live(request)
       case 'liveUpdate': return this.liveUpdate(request)
     }
@@ -587,6 +593,39 @@ export class ResultsPortHost {
     })
   }
 
+  /** Distinct values of a column of a result this renderer owns (a view id is checked against its result by the backend),
+   *  cancelled and counted like a sort. The answer is bounded before the renderer sees it: the column is one the descriptor
+   *  named, the values at most those asked for (rows within a filter's bounds), and kept marks exactly when asked for. */
+  private distinct(request: Extract<PortRequest, { t: 'distinct' }>): void {
+    const { rid } = request
+    if (this.sorting.has(rid)) return this.end(rid, 'INVALID_REQUEST', 'The results request was invalid.')
+    if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
+    if (!this.current(request.generation, request.resultId)) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
+    const columns = this.owned.get(request.resultId)
+    if (columns !== undefined && request.column >= columns) return this.end(rid, 'INVALID_REQUEST', 'The results request was invalid.')
+    const port = this.port
+    const params: ResultsDistinctParams = { resultId: request.resultId, column: request.column, order: request.order, maxValues: request.maxValues }
+    if (request.search !== undefined) params.search = request.search
+    if (request.viewId !== undefined) params.viewId = request.viewId
+    if (request.keptViewId !== undefined) params.keptViewId = request.keptViewId
+    const distinct = this.backend.distinct(request.generation, params)
+    this.sorting.set(rid, distinct)
+    distinct.done.then(result => {
+      if (this.port !== port || this.sorting.get(rid) !== distinct) return
+      this.sorting.delete(rid)
+      const parsed = distinctResultSchema.safeParse(result)
+      // Kept marks come exactly when they were asked for: every value's and NULL's, or none.
+      const marked = request.keptViewId !== undefined
+      if (!parsed.success || parsed.data.values.length > request.maxValues || (parsed.data.nullsKept !== undefined) !== marked || (parsed.data.unlistedKept !== undefined) !== marked || parsed.data.values.some(value => (value.kept !== undefined) !== marked))
+        return this.end(rid, 'BACKEND_ERROR', 'The column\'s values could not be listed.')
+      this.post({ t: 'end', rid, ok: true, result: parsed.data })
+    }, error => {
+      if (this.port !== port || this.sorting.get(rid) !== distinct) return
+      this.sorting.delete(rid)
+      this.fail(rid, error)
+    })
+  }
+
   /** Row identities of a result this renderer owns (results.identify); cancelled like a sort, and counted with sorts. */
   private identify(request: Extract<PortRequest, { t: 'identify' }>): void {
     const { rid } = request
@@ -657,6 +696,47 @@ export class ResultsPortHost {
       this.post({ t: 'end', rid, ok: true, result: { ...parsed.data, descriptor } })
     }, error => {
       if (this.port !== port || this.sorting.get(rid) !== diff) return
+      this.sorting.delete(rid)
+      this.fail(rid, error)
+    })
+  }
+
+  /** A pivot of a result this renderer owns (results.pivot; a view id is checked against its result by the backend);
+   *  cancelled like a sort, and counted with sorts. The pivot is a new result: the port owns it once answered, and main
+   *  closes one answered after its port went (a reload). */
+  private pivot(request: Extract<PortRequest, { t: 'pivot' }>): void {
+    const { rid, generation } = request
+    if (this.sorting.has(rid)) return this.end(rid, 'INVALID_REQUEST', 'The results request was invalid.')
+    if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
+    if (!this.current(generation, request.resultId)) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
+    const port = this.port
+    // Copied member by member, so nothing but the schema's members reaches the backend.
+    const params: ResultsPivotParams = {
+      resultId: request.resultId, rows: [...request.rows], values: request.values.map(value => 'column' in value ? { aggregate: value.aggregate, column: value.column } : { aggregate: value.aggregate })
+    }
+    if (request.column !== undefined) params.column = request.column
+    if (request.viewId !== undefined) params.viewId = request.viewId
+    const pivot = this.backend.pivot(generation, params)
+    this.sorting.set(rid, pivot)
+    pivot.done.then(result => {
+      const parsed = pivotResultSchema.safeParse(result)
+      // The result the backend stored, even from an answer its schema refuses: nothing else would close it.
+      const stored = parsed.success ? parsed.data.descriptor.resultId : storedResultId(result)
+      const close = () => { if (stored !== undefined) void this.backend.close(generation, [stored]).catch(() => undefined) }
+      if (this.port !== port || this.sorting.get(rid) !== pivot) return close()
+      this.sorting.delete(rid)
+      // The pivot's columns: its row columns, then each column group's values and each value's total; its figures within the bound.
+      const values = request.values.length, stride = request.column === undefined ? 1 : (parsed.success ? parsed.data.columnGroups : 0) + 1
+      if (!parsed.success || (request.column === undefined && parsed.data.columnGroups !== 0) || parsed.data.descriptor.columns.length !== request.rows.length + stride * values
+        || parsed.data.rowGroups * stride * values > wire.pivot.maxCells) {
+        close()
+        return this.end(rid, 'BACKEND_ERROR', 'The results could not be pivoted.')
+      }
+      const descriptor: ResultDescriptor = { ...parsed.data.descriptor, generation }
+      if (generation === this.generation) this.own([descriptor])
+      this.post({ t: 'end', rid, ok: true, result: { ...parsed.data, descriptor } })
+    }, error => {
+      if (this.port !== port || this.sorting.get(rid) !== pivot) return
       this.sorting.delete(rid)
       this.fail(rid, error)
     })
@@ -749,6 +829,11 @@ export function supervisorResults(supervisor: BackendSupervisor): ResultsBackend
       const done = supervisor.request('results.diff', params, { generation, onSent: sent => { id = sent } })
       return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
     },
+    pivot: (generation, params) => {
+      let id = 0
+      const done = supervisor.request('results.pivot', params, { generation, onSent: sent => { id = sent } })
+      return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
+    },
     search: (generation, params) => {
       let id = 0
       const done = supervisor.request('results.search', params, { generation, onSent: sent => { id = sent } })
@@ -757,6 +842,11 @@ export function supervisorResults(supervisor: BackendSupervisor): ResultsBackend
     profile: (generation, params) => {
       let id = 0
       const done = supervisor.request('results.profile', params, { generation, onSent: sent => { id = sent } })
+      return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
+    },
+    distinct: (generation, params) => {
+      let id = 0
+      const done = supervisor.request('results.distinct', params, { generation, onSent: sent => { id = sent } })
       return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
     },
     live: (generation, params, onLive, credit) => {

@@ -1,5 +1,5 @@
 import { electron, expect } from './fixtures/smoke.mjs'
-import { activeDocumentName, backendReady, documentTab, editorGroupForDocument, editorGroups, editorText, editorTextbox, floatingEditorGroups, movePane, popoutDockButton, popoutTabs, queryDatabase, queryServer, suggestionOption, toolbarButton } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, documentTab, editorGroupForDocument, editorGroups, editorHover, editorOverflowHosts, editorSurface, editorText, editorTextbox, floatingEditorGroups, movePane, paneMenuButton, part, popoutDockButton, popoutTabs, queryDatabase, queryServer, suggestionItems, suggestionOption, suggestionWidget, toolbarButton } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
@@ -23,7 +23,7 @@ async function launch() {
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
-  await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
 }
 async function close() {
   if (!application) return
@@ -44,15 +44,55 @@ async function suggestAndAccept(target = page, scope = target, label = 'Customer
   await target.keyboard.press('Tab')
   await expect.poll(() => text(scope)).toBe(label)
 }
-async function hover(target, scope, contents) {
+async function widgetGeometry(target, widget, scope, outside = false) {
+  await expect(widget).toBeVisible()
+  const box = await editorSurface(scope).boundingBox()
+  await expect.poll(() => widget.evaluate((element, editor) => {
+    const rect = element.getBoundingClientRect(), inset = 6
+    const points = [[rect.left + inset, rect.top + inset], [rect.right - inset, rect.top + inset], [rect.left + inset, rect.bottom - inset], [rect.right - inset, rect.bottom - inset], [rect.left + rect.width / 2, rect.top + rect.height / 2]]
+    return {
+      inViewport: rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight,
+      receivesPointer: points.every(([x, y]) => element.contains(document.elementFromPoint(x, y))),
+      outsideEditor: rect.left < editor.x - 1 || rect.top < editor.y - 1 || rect.right > editor.x + editor.width + 1 || rect.bottom > editor.y + editor.height + 1
+    }
+  }, box)).toMatchObject({ inViewport: true, receivesPointer: true, ...outside ? { outsideEditor: true } : {} })
+}
+async function hover(target, scope, contents, outside = false, screenshot) {
   await target.bringToFront()
   await editorTextbox(scope).focus()
   await target.keyboard.press('Home')
   await target.keyboard.press('ArrowRight')
   await target.keyboard.press(`${mod}+K`)
   await target.keyboard.press(`${mod}+I`)
-  await expect(target.locator('.monaco-hover').filter({ hasText: contents })).toBeVisible()
+  const widget = editorHover(target, contents)
+  await widgetGeometry(target, widget, scope, outside)
+  if (screenshot) await target.screenshot({ path: resolve('artifacts', screenshot) })
   await target.keyboard.press('Escape')
+}
+async function resizeQueryHeight(height) {
+  const surface = editorSurface(page).first(), before = await surface.boundingBox()
+  const sash = page.locator('.dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash.dv-enabled').first()
+  const box = await sash.boundingBox()
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + height - before.height, { steps: 8 })
+  await page.mouse.up()
+  await expect.poll(async () => (await surface.boundingBox()).height).toBeLessThanOrEqual(height + 4)
+}
+async function moveFloatingQuery(name, x, y) {
+  const frame = page.locator('.dv-resize-container').filter({ has: documentTab(page, name) })
+  const before = await frame.boundingBox(), handle = await frame.locator('.dv-floating-titlebar').boundingBox()
+  const area = await page.locator(part.editorArea).boundingBox(), start = Math.max(handle.x + 20, area.x + 20)
+  await page.keyboard.down('Control')
+  try {
+    await page.mouse.move(start, handle.y + handle.height / 2)
+    await page.mouse.down()
+    // Dockview measures from the first move of a drag.
+    await page.mouse.move(start + 1, handle.y + handle.height / 2)
+    await page.mouse.move(start + x - before.x, handle.y + handle.height / 2 + y - before.y, { steps: 10 })
+    await page.mouse.up()
+  } finally { await page.keyboard.up('Control') }
+  await expect.poll(async () => Math.abs((await frame.boundingBox()).x - x)).toBeLessThan(3)
 }
 async function ownContext(documentId, connectionId, database) {
   await expect.poll(async () => (await languageCalls('language.complete')).at(-1)?.params)
@@ -78,6 +118,7 @@ async function connect(server) {
 
 try {
   await launch()
+  await expect.poll(() => editorOverflowHosts(page).evaluateAll(hosts => hosts.every(host => getComputedStyle(host).backgroundColor === 'rgba(0, 0, 0, 0)'))).toBe(true)
   await expect(page.getByLabel('SQL IntelliSense', { exact: true })).toHaveText('IntelliSense off')
   await expect(page.getByLabel('SQL IntelliSense', { exact: true })).toHaveAttribute('title', 'SQL language test provider is disabled.')
   await editorTextbox(page).focus()
@@ -103,6 +144,69 @@ try {
   await hover(page, page, 'Customer table (fake language service).')
   await expect.poll(async () => (await languageCalls('language.hover')).length).toBeGreaterThan(0)
 
+  if (process.platform !== 'darwin') {
+    await editorTextbox(page).focus()
+    await page.keyboard.press(`${mod}+K`)
+    await page.keyboard.press(`${mod}+I`)
+    const widget = editorHover(page, 'Customer table (fake language service).')
+    await expect(widget).toBeVisible()
+    // Keep the pointer stationary: a mouse leave could hide the hover and conceal a leaked external host.
+    await paneMenuButton(page, 'editor').focus()
+    await page.keyboard.press('Space')
+    await expect(page.getByRole('menuitem', { name: 'Close', exact: true })).toBeVisible()
+    await page.keyboard.press('c')
+    await expect(editorSurface(page)).toBeHidden()
+    await expect(widget).toBeHidden()
+    expect(await editorOverflowHosts(page).evaluateAll(hosts => hosts.every(host => host.hidden))).toBe(true)
+    await application.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('window.editor').click())
+    await expect(editorSurface(page)).toBeVisible()
+    await hover(page, page, 'Customer table (fake language service).')
+    console.log('Language checks: closing the outer Query Editor hides its owned hover, and reopening restores its widgets.')
+  }
+
+  // The original clipping bug: the query panel is near its minimum height, with Results immediately underneath. A visible DOM
+  // node alone passes even when clipped, so check every widget corner by hit testing outside the editor's rectangle.
+  const normalHeight = (await editorSurface(page).boundingBox()).height
+  await resizeQueryHeight(110)
+  await writeFile(join(control, 'language-widget-overflow'), '')
+  await hover(page, page, 'Customer table (fake language service).', true, 'language-hover-small-editor.png')
+  await setText(page, page, 'Cus')
+  await page.keyboard.press('Control+Space')
+  await expect(suggestionOption(page, 'Customer0')).toBeVisible()
+  await widgetGeometry(page, suggestionWidget(page), page, true)
+  await page.screenshot({ path: resolve('artifacts', 'language-suggest-small-editor.png') })
+  if (process.platform !== 'darwin') {
+    await page.keyboard.press('Shift+F10')
+    const editorMenu = page.getByRole('menu', { name: 'Query editor', exact: true })
+    await expect(editorMenu).toBeVisible()
+    await widgetGeometry(page, editorMenu, page)
+    await page.keyboard.press('Escape')
+    await page.keyboard.press('Control+Space')
+    await expect(suggestionOption(page, 'Customer0')).toBeVisible()
+  }
+  await page.keyboard.press('Escape')
+  await rm(join(control, 'language-widget-overflow'))
+  await page.keyboard.press('Control+Space')
+  await expect(suggestionOption(page, 'Customer')).toBeVisible()
+  await page.keyboard.press('Tab')
+  await expect.poll(() => text(page)).toBe('Customer')
+  await resizeQueryHeight(normalHeight)
+  console.log('Language checks: real hover and completion widgets stay visible and interactive beyond a small query panel.')
+
+  await writeFile(join(control, 'language-ordering'), '')
+  await setText(page, page, 'h')
+  await page.keyboard.press('Control+Space')
+  await expect(suggestionItems(page).first()).toContainText('dbo.hiColumn')
+  await expect(suggestionItems(page).nth(1)).toContainText('hiProperty')
+  await page.keyboard.press('Tab')
+  await expect.poll(() => text(page)).toBe('hiColumn')
+  await setText(page, page, 'hi')
+  await page.keyboard.press('Control+Space')
+  await expect(suggestionItems(page).first()).toHaveAccessibleName(/^hi(?:,|$)/)
+  await page.keyboard.press('Escape')
+  await rm(join(control, 'language-ordering'))
+  console.log('Language checks: equal prefix matches favor fields over globals, functions and keywords; an exact function match still ranks first.')
+
   const idA = await connect('language-server-a')
   await expect(queryDatabase(page).getByRole('option', { name: 'AppData', exact: true })).toHaveCount(1)
   await queryDatabase(page).selectOption('AppData')
@@ -110,6 +214,21 @@ try {
   await suggestAndAccept(page, page, 'CustomerAppData')
   await expect.poll(async () => (await languageCalls('language.complete')).at(-1)?.params.context).toEqual({ providerId: 'sqlserver', connectionId: idA, database: 'AppData' })
   const documentA = (await languageCalls('language.complete')).at(-1).params.documentId
+  await editorTextbox(page).focus()
+  await page.keyboard.press('Home')
+  await page.keyboard.press('ArrowRight')
+  for (let count = 0; count < 2; count++) {
+    await page.keyboard.press(`${mod}+K`)
+    await page.keyboard.press(`${mod}+I`)
+    await expect(editorHover(page, 'language-server-a/AppData')).toBeVisible()
+  }
+  await expect.poll(() => editorHover(page, 'language-server-a/AppData').evaluate(widget => widget.contains(document.activeElement))).toBe(true)
+  const focusedRefreshes = (await languageCalls('language.refresh')).length
+  await page.keyboard.press(`${mod}+Shift+R`)
+  await expect.poll(async () => (await languageCalls('language.refresh')).length).toBe(focusedRefreshes + 1)
+  expect((await languageCalls('language.refresh')).at(-1).params).toMatchObject({ documentId: documentA, context: { connectionId: idA, database: 'AppData' } })
+  await page.keyboard.press('Escape')
+  console.log('Language checks: a focused external hover keeps query-editor shortcuts and refreshes its own database.')
 
   const idB = await connect('language-server-b')
   expect(idB).not.toBe(idA)
@@ -129,6 +248,7 @@ try {
   await editorTextbox(page).focus()
   await page.keyboard.press(`${mod}+\\`)
   await expect(editorGroups(page)).toHaveCount(2)
+  await expect(editorOverflowHosts(page)).toHaveCount(2)
   const groupA = editorGroupForDocument(page, tabA), groupB = editorGroupForDocument(page, tabB)
   await suggestAndAccept(page, groupA, 'CustomerAppData')
   await ownContext(documentA, idA, 'AppData')
@@ -149,6 +269,19 @@ try {
   await suggestAndAccept(page, floatingB, 'CustomerMaster')
   await ownContext(documentB, idB, 'master')
   await hover(page, floatingB, 'language-server-b/master')
+  const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }))
+  await moveFloatingQuery(tabB, viewport.width - 300, viewport.height - 180)
+  await hover(page, floatingB, 'language-server-b/master', true, 'language-hover-viewport-edge.png')
+  await setText(page, floatingB, 'Cus')
+  await page.keyboard.press('Control+Space')
+  await expect(suggestionOption(page, 'CustomerMaster')).toBeVisible()
+  await widgetGeometry(page, suggestionWidget(page), floatingB, true)
+  await page.screenshot({ path: resolve('artifacts', 'language-suggest-viewport-edge.png') })
+  await page.keyboard.press('Tab')
+  await expect.poll(() => text(floatingB)).toBe('CustomerMaster')
+  await moveFloatingQuery(tabB, -40, 180)
+  await hover(page, floatingB, 'language-server-b/master', false, 'language-hover-left-edge.png')
+  await moveFloatingQuery(tabB, 380, 180)
 
   await writeFile(join(control, 'language-fail'), '')
   await setText(page, floatingB, 'Cus')
@@ -176,6 +309,7 @@ try {
     await page.keyboard.press(`${mod}+\\`)
   }
   await expect(editorGroups(page)).toHaveCount(2)
+  await expect(editorOverflowHosts(page)).toHaveCount(2)
   const opened = application.waitForEvent('window', { timeout: 30000 })
   await movePane(page, 'results', 'window')
   const popout = await opened
@@ -205,6 +339,22 @@ try {
   await suggestAndAccept(page, editorGroupForDocument(page, tabB), 'CustomerMaster')
   await ownContext(documentB, idB, 'master')
   console.log('Language checks: docking Results back preserves both documents and their language contexts.')
+
+  // Hide output to extend the query to the viewport's bottom, then scroll the caret to the last line. Both widgets
+  // must choose the room above it while the other editor group remains visible beside this one.
+  await page.keyboard.press(`${mod}+r`)
+  const bottomB = editorGroupForDocument(page, tabB), windowHeight = await page.evaluate(() => innerHeight)
+  await expect.poll(async () => { const box = await editorSurface(bottomB).boundingBox(); return box.y + box.height }).toBeGreaterThan(windowHeight - 40)
+  await setText(page, bottomB, '\n'.repeat(100) + 'CustomerMaster')
+  await hover(page, bottomB, 'language-server-b/master', false, 'language-hover-bottom-edge.png')
+  await setText(page, bottomB, '\n'.repeat(100) + 'Cus')
+  await page.keyboard.press('Control+Space')
+  await expect(suggestionOption(page, 'CustomerMaster')).toBeVisible()
+  await widgetGeometry(page, suggestionWidget(page), bottomB)
+  await page.screenshot({ path: resolve('artifacts', 'language-suggest-bottom-edge.png') })
+  await page.keyboard.press('Escape')
+  await page.keyboard.press(`${mod}+r`)
+  console.log('Language checks: hover and suggestions remain inside the viewport beside a last-line caret at the bottom edge.')
   expect(failures).toEqual([])
   await close()
   console.log('Language-service suite passed.')

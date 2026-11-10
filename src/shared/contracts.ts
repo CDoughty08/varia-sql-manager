@@ -27,7 +27,7 @@ import type { LiveEnd, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult }
 import type { ActivityDetailsRequest, ActivityDetailsResult, ActivityKillRequest, ActivityKillResult } from './activity/schema.ts'
 import type { PlanDocument } from './plans'
 import type { ShortcutFile } from './commands/shortcut-schema'
-import type { DatabaseProviderId, LanguageRequest, LanguageCompletions, LanguageHover, LanguageStatus, LanguageRefreshRequest, LanguageRefreshResult } from './language-service'
+import type { DatabaseProviderId, LanguageRequest, LanguageCompletions, LanguageHover, LanguageStatus, LanguageRefreshRequest, LanguageRefreshResult, LanguageDiagnosticResult } from './language-service'
 
 export interface AdvancedConnectionOptions {
   commandTimeout: number
@@ -152,8 +152,8 @@ export interface ResultDescriptor {
   index: number
   batchNumber: number
   iteration: number
-  /** `diff`: a unified diff of two other results of the query (results.diff). */
-  kind: 'rows' | 'executionPlan' | 'diff'
+  /** `diff`: a unified diff of two other results of the query (results.diff); `pivot`: a pivot of one (results.pivot). */
+  kind: 'rows' | 'executionPlan' | 'diff' | 'pivot'
   columns: ResultColumn[]
   rowsRead: number
   rowsStored: number
@@ -247,10 +247,11 @@ export type ResolvedViewFilter =
 /** results.view: up to `limits.views.maxKeys` keys on distinct columns and up to `limits.views.maxFilters` filters (at least
  *  one of either), the filters first; `replaces` names a view of the same result that this one supersedes. */
 export interface ResultsViewParams { resultId: number; sort: ViewSortKey[]; filters?: ViewFilter[]; replaces?: number }
-/** `rows` is the view's row count (the rows sealed when it was built that its filters kept), `complete` that they were
- *  built from all the result's rows, `approximate` that a key compared a truncated value's stored prefix or an estimated
- *  length; `filters`, when the request had them, are those filters resolved. */
-export interface ResultsViewResult { viewId: number; rows: number; complete: boolean; approximate: boolean; filters?: ResolvedViewFilter[] }
+/** `rows` is the view's row count (the rows sealed when it was built that its filters kept), `baseRows` the result's rows
+ *  it was built from (those sealed then), `complete` that those were all the result's rows, `approximate` that a key
+ *  compared a truncated value's stored prefix or an estimated length; `filters`, when the request had them, are those
+ *  filters resolved. */
+export interface ResultsViewResult { viewId: number; rows: number; baseRows: number; complete: boolean; approximate: boolean; filters?: ResolvedViewFilter[] }
 export interface ResultsViewCloseParams { resultId: number; viewIds: number[] }
 export interface ResultsViewCloseResult { closed: number }
 /** How results.identify tells a result's rows apart: a unique key column it picks (else the whole row), a given column,
@@ -279,6 +280,19 @@ export interface ResultsDiffResult {
   descriptor: ResultDescriptor; key: string | null; same: number; changed: number; added: number; removed: number; soft: number; approximate: boolean
   leftOnly: string[]; rightOnly: string[]
 }
+/** What a pivot value computes over each cell's rows: COUNT(column) (COUNT(*) without a column), COUNT(DISTINCT column),
+ *  SUM, AVG, MIN or MAX. */
+export type PivotAggregate = 'count' | 'countDistinct' | 'sum' | 'avg' | 'min' | 'max'
+/** One pivot value; only `count` may leave out its column (it then counts rows). */
+export interface PivotValueSpec { aggregate: PivotAggregate; column?: number }
+/** results.pivot: groups a complete result's rows (through `viewId`'s order and filters when given) by up to
+ *  `limits.pivot.maxRowFields` distinct `rows` columns and an optional `column` column (not one of them), and stores 1 to
+ *  `limits.pivot.maxValues` `values` of each group as a new result of the query. SUM and AVG take only numeric columns. */
+export interface ResultsPivotParams { resultId: number; rows: number[]; column?: number; values: PivotValueSpec[]; viewId?: number }
+/** results.pivot's answer: the pivot stored as a new result of the source's query (`descriptor`, kind 'pivot'), the source
+ *  rows it read, how many row groups and column groups it has (every one shown: a pivot past `limits.pivot` is refused), and
+ *  whether a truncated value's stored prefix was grouped or compared. */
+export interface ResultsPivotResult { descriptor: ResultDescriptor; rows: number; rowGroups: number; columnGroups: number; approximate: boolean }
 /** results.search: the cells whose grid text contains `text` (1 to `limits.search.maxText` characters), through `viewId`'s
  *  order when given (rows are then view positions). Up to `maxMatches` of them come back in whole rows: from `fromRow` on,
  *  or with `backward` the last ones before `fromRow`. Text columns compare by their collation; others ignore case. */
@@ -310,6 +324,21 @@ export interface ColumnProfile {
 /** `rows` profiled (the view's, or the rows sealed when it ran) and whether that was all of them; the rows' byte sizes
  *  (absent without rows); the columns asked for, in order. */
 export interface ResultsProfileResult { rows: number; complete: boolean; rowBytes?: ProfileLengths; columns: ColumnProfile[] }
+/** results.distinct: a column's distinct values through `viewId`'s rows when given (else the rows sealed now), ordered by
+ *  `count` (most frequent first, ties by value) or `value`, at most `maxValues` (1 to `limits.distinct.maxValues`) of them;
+ *  `search` keeps the values whose display text contains it, compared as the results search compares a cell. With
+ *  `keptViewId`, another view of the result, each value says whether a row of that view holds it, `nullsKept` whether it
+ *  has a NULL and `unlistedKept` whether it holds a value past those listed; `unlistedHeld` and `unlistedDropped` name
+ *  the representative rows of those past values it holds and does not hold, each when one filter holds them. Rows sealed
+ *  after that view was built count as held. */
+export interface ResultsDistinctParams { resultId: number; column: number; order: 'count' | 'value'; maxValues: number; search?: string; viewId?: number; keptViewId?: number }
+/** A distinct value: its representative base row (the lowest holding it, so an `in` or `notIn` filter by it compares this
+ *  value), its display text (binary as 0x hex, at most `limits.distinct.valueChars` characters and "…") and its count. */
+export interface DistinctValue { row: number; text: string; count: number; kept?: boolean }
+/** `rows` looked at and whether they were all the result's; `nulls` NULL and unreadable cells; `distinct` the values the
+ *  search kept, of which `values` are the first (`truncated` when there were more); `approximate` when a truncated value
+ *  compared by its stored prefix. */
+export interface ResultsDistinctResult { rows: number; complete: boolean; nulls: number; distinct: number; truncated: boolean; approximate: boolean; values: DistinctValue[]; nullsKept?: boolean; unlistedKept?: boolean; unlistedHeld?: number[]; unlistedDropped?: number[] }
 /** `bytes[k]` is row `firstRow + k`'s sum of DATALENGTH over its cells (NULL counts 0; xml and json as their
  *  text, some sql_variant base types estimated: docs/ipc.md, Cell lengths and row sizes); it stops at the rows sealed so
  *  far (`rowsAvailable`), as results.read does. */
@@ -384,6 +413,7 @@ export interface RpcMethods {
   'language.status': { params: Record<string, never>; result: LanguageStatus }
   'language.complete': { params: LanguageRequest; result: LanguageCompletions }
   'language.hover': { params: LanguageRequest; result: LanguageHover }
+  'language.diagnostics': { params: LanguageRefreshRequest; result: LanguageDiagnosticResult }
   'language.refresh': { params: LanguageRefreshRequest; result: LanguageRefreshResult }
   'language.close': { params: { documentId: string }; result: { closed: boolean } }
   'plans.parse': { params: { xml: string }; result: PlanDocument }
@@ -449,6 +479,10 @@ export interface PortMethods {
   'results.search': { params: ResultsSearchParams; result: ResultsSearchResult }
   /** Aggregates over a result's rows or a view's, for the column profile panel: never rows. */
   'results.profile': { params: ResultsProfileParams; result: ResultsProfileResult }
+  /** A pivot of a result's rows or a view's, grouped by collation, stored as a new result. */
+  'results.pivot': { params: ResultsPivotParams; result: ResultsPivotResult }
+  /** A column's distinct values and their counts over a result's rows or a view's, for the header funnel's checklist. */
+  'results.distinct': { params: ResultsDistinctParams; result: ResultsDistinctResult }
   /** A live subscription (docs/ipc.md): its EVENTs are credited, one unacknowledged at a time, and it ends only by CANCEL,
    *  a disconnect, a backend shutdown, a failure or its source ending. */
   'live.subscribe': { params: LiveSubscribeParams; result: LiveEnd }
@@ -559,6 +593,7 @@ export interface VariaApi {
   languageStatus(): Promise<ApiResult<LanguageStatus>>
   languageComplete(request: LanguageRequest): Promise<ApiResult<LanguageCompletions>>
   languageHover(request: LanguageRequest): Promise<ApiResult<LanguageHover>>
+  languageDiagnostics(request: LanguageRefreshRequest): Promise<ApiResult<LanguageDiagnosticResult>>
   languageRefresh(request: LanguageRefreshRequest): Promise<ApiResult<LanguageRefreshResult>>
   languageClose(documentId: string): Promise<ApiResult<{ closed: boolean }>>
   parsePlan(xml: string): Promise<ApiResult<PlanDocument>>

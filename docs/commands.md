@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (286)
+## Commands (290)
 
 ### File
 
@@ -64,6 +64,8 @@ keys it uses are listed below.
 | Insert Snippet… | `edit.insertSnippet` | Ctrl+K Ctrl+X * | Ctrl+K Ctrl+X * | ⌘K ⌘X * | `activeDocumentIsQuery && !documentBusy` | Edit › IntelliSense › Insert Snippet…; Editor context menu › Insert Snippet… |
 | Surround With… | `edit.surroundWith` | Ctrl+K Ctrl+S * | Ctrl+K Ctrl+S * | ⌘K ⌘S * | `activeDocumentIsQuery && !documentBusy` | Edit › IntelliSense › Surround With…; Editor context menu › Surround With… |
 | Refresh Local Cache | `edit.refreshIntelliSense` | Ctrl+Shift+R (`editorFocus && !inputFocus`) | Ctrl+Shift+R (`editorFocus && !inputFocus`) | ⇧⌘R (`editorFocus && !inputFocus`) | `backendReady && !documentBusy` | Edit › IntelliSense › Refresh Local Cache |
+| Next SQL Issue | `edit.nextSqlIssue` | Alt+F8 * | Alt+F8 * | ⌥F8 * | `activeDocumentIsQuery` | Edit › IntelliSense › Next SQL Issue |
+| Previous SQL Issue | `edit.previousSqlIssue` | Shift+Alt+F8 * | Shift+Alt+F8 * | ⌥⇧F8 * | `activeDocumentIsQuery` | Edit › IntelliSense › Previous SQL Issue |
 
 ### View
 
@@ -156,6 +158,7 @@ keys it uses are listed below.
 | Find in Results | `output.find` | Ctrl+F (`outputGridFocus`) | Ctrl+F (`outputGridFocus`) | ⌘F (`outputGridFocus`) | `hasResults` | — |
 | Find Next in Results | `output.findNext` | F3 (`outputGridFocus`) | F3 (`outputGridFocus`) | ⌘G (`outputGridFocus`), F3 (`outputGridFocus`) | `hasResults` | — |
 | Find Previous in Results | `output.findPrevious` | Shift+F3 (`outputGridFocus`) | Shift+F3 (`outputGridFocus`) | ⇧⌘G (`outputGridFocus`), ⇧F3 (`outputGridFocus`) | `hasResults` | — |
+| Filter Column Values… (not in the palette) | `output.filterColumnValues` | Alt+Down (`outputGridFocus`) | Alt+Down (`outputGridFocus`) | ⌥↓ (`outputGridFocus`) | Always | Query Output context menu › Filter › Filter Column Values… |
 | Filter for Selected Values (not in the palette) | `output.filterSelection` | — | — | — | Always | Query Output context menu › Filter › Filter for Selected Values |
 | Exclude Selected Values (not in the palette) | `output.excludeSelection` | — | — | — | Always | Query Output context menu › Filter › Exclude Selected Values |
 | Filter Between Lowest and Highest Selected (not in the palette) | `output.filterBetween` | — | — | — | Always | Query Output context menu › Filter › Filter Between Lowest and Highest Selected |
@@ -174,6 +177,7 @@ keys it uses are listed below.
 | Clear Highlight (not in the palette) | `output.clearHighlight` | — | — | — | Always | Query Output context menu › Highlight › Clear Highlight |
 | Clear All Highlights (not in the palette) | `output.clearAllHighlights` | — | — | — | Always | Query Output context menu › Highlight › Clear All Highlights |
 | Compare with Previous Result | `output.compareWithPrevious` | — | — | — | Always | Query Output context menu › Compare with Previous Result |
+| Pivot Results… | `output.pivot` | — | — | — | Always | Query Output context menu › Pivot Results… |
 | Compare with Previous Result (Exact Text) | `output.compareWithPreviousExact` | — | — | — | Always | — |
 | Show Column Profile | `output.toggleColumnProfile` | — | — | — | Always; checked when `resultsColumnProfile` | Query Output context menu › Column Profile |
 | Show Row Size in Results | `output.toggleRowSize` | — | — | — | Always; checked when `resultsRowSize` | Query Output context menu › Show Row Size |
@@ -477,6 +481,8 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_snippets` | **I**nsert Snippet… | `edit.insertSnippet` | Always |
 | `1_snippets` | **S**urround With… | `edit.surroundWith` | Always |
 | `2_cache` | **R**efresh Local Cache | `edit.refreshIntelliSense` | Always |
+| `3_issues` | **N**ext SQL Issue | `edit.nextSqlIssue` | Always |
+| `3_issues` | **P**revious SQL Issue | `edit.previousSqlIssue` | Always |
 
 #### View (Alt+V)
 
@@ -817,6 +823,7 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | `2_sort` | Filt**e**r › | Submenu: Query Output context menu › Filter | `outputView == 'grid'` |
 | `2_sort` | Hi**g**hlight › | Submenu: Query Output context menu › Highlight | `outputView == 'grid'` |
 | `2_sort` | Co**m**pare with Previous Result | `output.compareWithPrevious` | `outputView == 'grid'` |
+| `2_sort` | Pivot Res**u**lts… | `output.pivot` | `outputView == 'grid'` |
 | `2_width` | F**i**t Column | `output.fitColumn` | `outputView == 'grid'` |
 | `3_save` | Sa**v**e Results As… | `output.saveResultsAs` | `outputView == 'grid'` |
 | `4_view` | Show S**p**aces and Tabs | `output.showSpaces` | `outputView == 'grid'` |
@@ -841,6 +848,7 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
+| `0_column` | Filter Column **V**alues… | `output.filterColumnValues` | `outputView == 'grid'` |
 | `1_values` | Filter for **S**elected Values | `output.filterSelection` | `outputView == 'grid'` |
 | `1_values` | **E**xclude Selected Values | `output.excludeSelection` | `outputView == 'grid'` |
 | `1_values` | Filter **B**etween Lowest and Highest Selected | `output.filterBetween` | `outputView == 'grid'` |

@@ -351,9 +351,10 @@ describe('context keys', () => {
     expect(evaluateWhen(compileWhen(commandDescriptor('query.changeConnection').precondition!), computeContextKeys({ ...base, documents: { ...documents, busy: false } }))).toBe(true)
   })
   it('derive focus keys from the focused element', () => {
-    const element = (tag: 'input' | 'textarea' | 'button' | 'div', options: { pane?: string; editable?: boolean; grid?: boolean; designer?: boolean; queryBar?: boolean; monitor?: boolean; tab?: boolean; hits?: boolean; messages?: boolean; tree?: 'idle' | 'typing'; options?: boolean } = {}): FocusElement & { tag: string } => ({
+    const element = (tag: 'input' | 'textarea' | 'button' | 'div', options: { pane?: string; editorOwner?: string; editable?: boolean; grid?: boolean; designer?: boolean; queryBar?: boolean; monitor?: boolean; tab?: boolean; hits?: boolean; messages?: boolean; tree?: 'idle' | 'typing'; options?: boolean } = {}): FocusElement & { tag: string } => ({
       tag, matches: selector => selector.split(', ').includes(tag),
       closest: selector => selector === '[data-pane]' ? options.pane === undefined ? null : { getAttribute: () => options.pane! }
+        : selector === '[data-query-editor-id]' ? options.editorOwner === undefined ? null : { getAttribute: () => options.editorOwner! }
         : selector === '[data-result-grid]' ? options.grid ? { getAttribute: () => '' } : null : selector === '[data-designer]' ? options.designer ? { getAttribute: () => 'tab' } : null
           : selector === '[data-query-bar]' ? options.queryBar ? { getAttribute: () => '' } : null
           : selector === '[data-activity-monitor]' ? options.monitor ? { getAttribute: () => 'tab' } : null
@@ -371,6 +372,15 @@ describe('context keys', () => {
     expect(focusFacts(element('input', { pane: 'editor', tab: true }), editor(false))).toMatchObject({ documentTabFocus: true, inputFocus: true })
     expect(focusFacts(textArea, editor(true))).toEqual({ editorFocus: true, editorTextFocus: true, inputFocus: false, activePanel: 'editor', outputGridFocus: false, searchHitsFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false, messagesFocus: false, explorerFocus: false, explorerTypeAhead: false, optionsDialogFocus: false, peekFocus: false, peekTabFocus: false })
     expect(focusFacts(findInput, editor(false))).toEqual({ editorFocus: true, editorTextFocus: false, inputFocus: true, activePanel: 'editor', outputGridFocus: false, searchHitsFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false, messagesFocus: false, explorerFocus: false, explorerTypeAhead: false, optionsDialogFocus: false, peekFocus: false, peekTabFocus: false })
+    const externalWidget = element('div', { editorOwner: 'active-editor' }), externalInput = element('input', { editorOwner: 'active-editor' })
+    const externalWidgetEditor = { ...editor(false), getId: () => 'active-editor', hasWidgetFocus: () => true }
+    expect(focusFacts(externalWidget, externalWidgetEditor)).toMatchObject({ editorFocus: true, editorTextFocus: false, inputFocus: false, activePanel: 'editor' })
+    expect(focusFacts(externalInput, externalWidgetEditor)).toMatchObject({ editorFocus: true, editorTextFocus: false, inputFocus: true, activePanel: 'editor' })
+    // Monaco defers widget blur. The focused element already belongs to another surface when its next key arrives.
+    expect(focusFacts(element('div', { pane: 'explorer', tree: 'idle' }), externalWidgetEditor)).toMatchObject({ editorFocus: false, editorTextFocus: false, activePanel: 'explorer' })
+    expect(focusFacts(element('div', { pane: 'results', grid: true }), externalWidgetEditor)).toMatchObject({ editorFocus: false, editorTextFocus: false, activePanel: 'output' })
+    expect(focusFacts(element('input', { options: true }), externalWidgetEditor)).toMatchObject({ editorFocus: false, inputFocus: true, activePanel: '' })
+    expect(focusFacts(element('div', { editorOwner: 'other-editor' }), externalWidgetEditor)).toMatchObject({ editorFocus: false, activePanel: '' })
     expect(focusFacts(element('button', { pane: 'explorer' }), editor(false))).toEqual({ editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: 'explorer', outputGridFocus: false, searchHitsFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false, messagesFocus: false, explorerFocus: false, explorerTypeAhead: false, optionsDialogFocus: false, peekFocus: false, peekTabFocus: false })
     // Object Explorer's Peek card is drawn into the body, outside every pane: Explorer's Delete, F2 and F5 never reach the
     // tree's selection from inside it.

@@ -25,7 +25,9 @@ import { ResultSelectionService } from '../../src/renderer/src/services/result-s
 import { ResultsService } from '../../src/renderer/src/results/ResultsService'
 import { HighlightsService } from '../../src/renderer/src/results/HighlightsService'
 import { CompareService } from '../../src/renderer/src/results/CompareService'
+import { PivotService } from '../../src/renderer/src/results/PivotService'
 import { highlightsContribution } from '../../src/renderer/src/contributions/highlights'
+import { pivotContribution } from '../../src/renderer/src/contributions/pivot'
 import { compareContribution } from '../../src/renderer/src/contributions/compare'
 import { ResultsSearchService } from '../../src/renderer/src/results/search'
 import { browserTimers } from '../../src/renderer/src/core/timers'
@@ -341,6 +343,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => callback(), timers: options.timers ?? browserTimers, newId: () => crypto.randomUUID() })
   const highlights = new HighlightsService(results, { timers: options.timers ?? browserTimers })
   const compare = new CompareService(results)
+  const pivot = new PivotService(results)
   const resultsSearch = new ResultsSearchService({ results, timers: options.timers ?? browserTimers })
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
   const files = new FileService(documents, queries, api, { autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'] })
@@ -434,8 +437,10 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const menuTargets = new MenuTargetService({ commandEnabled: () => true })
   const menus = new MenuService({ platform, commands, context, keybindings, theme, recentFiles, settings: () => settings.getSnapshot().values, focus: focus.adapter, modalOpen: options.modal ?? (() => false), timers: options.timers, targets: menuTargets })
   const sqlLanguage = { refreshCache: vi.fn(async (_id?: string) => true) }
+  const sqlDiagnostics = { getSnapshot: () => ({ documents: new Map() }), subscribe: (_listener: () => void) => () => {}, status: (_id: string) => undefined }
   const workbench = {
     sqlLanguage,
+    sqlDiagnostics,
     platform,
     commands,
     context,
@@ -467,6 +472,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     results,
     highlights,
     compare,
+    pivot,
     resultsSearch,
     settings,
     scripting,
@@ -500,6 +506,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     messagesContribution(workbench),
     highlightsContribution(workbench),
     compareContribution(workbench),
+    pivotContribution(workbench),
     shellContribution(workbench, host),
     paletteContribution(workbench, history),
     themeContribution(workbench, api, options.timers),
@@ -538,6 +545,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     resultSelection.dispose()
     highlights.dispose()
     compare.dispose()
+    pivot.dispose()
     resultsSearch.dispose()
     results.dispose()
     explorer.dispose()

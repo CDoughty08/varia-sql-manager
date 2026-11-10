@@ -53,6 +53,7 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'language.status': control,
   'language.complete': { kind: 'unary', lane: 'metadata', deadlineMs: 30_000 },
   'language.hover': { kind: 'unary', lane: 'metadata', deadlineMs: 30_000 },
+  'language.diagnostics': { kind: 'unary', lane: 'metadata', deadlineMs: 30_000 },
   // Refresh cancels obsolete language work before rebuilding metadata, so it must reach an occupied metadata lane.
   'language.refresh': { kind: 'unary', lane: 'control', deadlineMs: 30_000 },
   'language.close': control,
@@ -98,6 +99,10 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'results.search': { kind: 'unary', lane: 'results', deadlineMs: 120_000 },
   // Profiles stored rows in memory off the frame loop, two passes over the pages; Stop and a newer profile cancel it.
   'results.profile': { kind: 'unary', lane: 'results', deadlineMs: 120_000 },
+  // Groups and aggregates stored rows in memory off the frame loop, then stores the pivot as a result; Stop cancels it.
+  'results.pivot': { kind: 'unary', lane: 'results', deadlineMs: 120_000 },
+  // Groups a column's stored values in memory off the frame loop, as a filter compares them; a newer request cancels it.
+  'results.distinct': { kind: 'unary', lane: 'results', deadlineMs: 120_000 },
   // The backend answers its own 40 s budget as a TIMEOUT value; main cancels it from the renderer (varia:explorer-cancel).
   'explorer.children': { kind: 'unary', lane: 'explorer', deadlineMs: 45_000 },
   // A build reads every database (each within its own 120 s budget) and only Stop (varia:explorer-cancel), a newer build or a

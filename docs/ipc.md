@@ -38,8 +38,10 @@ The code is the reference implementation; this document describes it.
 - [Sorted views](#sorted-views)
 - [Row identities and highlights](#row-identities-and-highlights)
 - [Result diffs](#result-diffs)
+- [Pivots](#pivots)
 - [Search in results](#search-in-results)
 - [Column profiles](#column-profiles)
+- [Distinct values](#distinct-values)
 - [Messages](#messages)
 - [Copy and Save Results As](#copy-and-save-results-as)
 - [Live subscriptions](#live-subscriptions)
@@ -241,7 +243,9 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `results.findRows` | port | unary | results | 60 s; where 1 – 10,000 identities are in a result or view |
 | `results.diff` | port | unary | results | 120 s; the unified diff of two results of one query, stored as a new result ([Result diffs](#result-diffs)) |
 | `results.search` | port | unary | results | 120 s; the cells of a result (or a view) containing a text ([Search in results](#search-in-results)) |
+| `results.pivot` | port | unary | results | 120 s; a result's or a view's rows grouped and aggregated, stored as a new result ([Pivots](#pivots)) |
 | `results.profile` | port | unary | results | 120 s; aggregates over a result's or a view's rows ([Column profiles](#column-profiles)) |
+| `results.distinct` | port | unary | results | 120 s; a column's distinct values and their counts over a result's or a view's rows ([Distinct values](#distinct-values)) |
 | `live.subscribe` | port | stream of credited EVENTs ([Live subscriptions](#live-subscriptions)) | live (no slot) | none, and no backstop: only CANCEL, a disconnect, a shutdown, a failure or its source ending ends it |
 | `live.update` | port | unary | control | 10 s |
 | `explorer.children` | invoke; cancelled with `explorerCancel` | unary | explorer | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value |
@@ -1315,11 +1319,13 @@ A results grid sorts and filters in the backend, over the rows it already holds 
 re-reads SQL Server. A view is an order of some or all of a result's base rows, read through the same calls as the result
 itself by view position.
 
-- **`results.view { resultId, sort: 0 – 16 keys, filters?: 1 – 16, replaces? }`** answers `{ viewId, rows, complete,
+- **`results.view { resultId, sort: 0 – 16 keys, filters?: 1 – 16, replaces? }`** answers `{ viewId, rows, baseRows, complete,
   approximate, filters? }`, with at least one key or filter (`INVALID_PARAMS`). A key
   is `{ column, descending, mode: 'value' | 'chars' | 'bytes' }`, columns distinct and within the result
-  (`INVALID_PARAMS`). The view covers the rows sealed when it was built (`rows`); `complete` says that was every row of a
-  finished set. `approximate` says a key compared a truncated value's stored prefix or a length that is only an estimate.
+  (`INVALID_PARAMS`). The view covers the rows sealed when it was built (`baseRows`; `rows` is the view's own count, fewer
+  when filters drop rows); `complete` says that was every row of a finished set. A view built while the set streamed is
+  stale: a filtered grid's caption reads its rows of `baseRows` "so far" until the renderer builds it again once the set
+  completes. `approximate` says a key compared a truncated value's stored prefix or a length that is only an estimate.
   `replaces` names a view of the same result that the new one supersedes: it is dropped once the new one is built, and
   left as it was when the sort fails or is cancelled. A result keeps at most 8 views; a ninth drops its oldest.
 - **Order.** A stable sort, as SQL Server's ORDER BY would put the rows: NULL and unreadable cells lowest (first
@@ -1342,7 +1348,8 @@ itself by view position.
   (case and trailing spaces under a CI collation) and `2` equals `2.0` in a float column; a truncated value compares by
   its stored prefix (`approximate`).
 - **Memory.** A sort holds 8 to 16 bytes per row and key while it runs (a filter, per column it compares, and 16 bytes a row
-  for the rows it keeps, a selection's rows or duplicates' groups), and a view keeps 4 bytes a row it shows, all charged
+  for the rows it keeps, a selection's rows or duplicates' groups; a `value` sort key on a filtered column is that filter's
+  key and is charged once, and other sort keys are built over only the rows the filters kept), and a view keeps 4 bytes a row it shows, all charged
   to the result's query budget (`TOO_LARGE` past it); what building needed is returned at once, the order when the view is closed,
   replaced, or its result released.
 - **Reading through a view.** `results.read`, `results.rowBytes`, `results.copy` and `results.export` take `viewId`;
@@ -1353,7 +1360,7 @@ itself by view position.
 - **`results.viewClose { resultId, viewIds: 1 – 64 }`** answers `{ closed }`. Views end with their result too: a released
   result's views go with it, without a close.
 - **Renderer.** `ResultHandle.sort(keys, { filters, replaces, signal })` validates the keys and filters before sending
-  and returns a `ResultView` handle (`viewId`, `base`, `keys`, `filters` resolved, `rows`, `complete`, `approximate`) that
+  and returns a `ResultView` handle (`viewId`, `base`, `keys`, `filters` resolved, `rows`, `baseRows`, `complete`, `approximate`) that
   reads, measures and copies like any handle; closing it sends `viewClose`, and it ends (released or lost) with its base. `ResultsService` keeps a view
   per grid: a newer sort aborts the running one, and it sends no `replaces`, so the view a grid shows stays readable until
   the grid has read the new one's rows and swapped (`viewShown`), and only then closes. A view of a set still loading is
@@ -1441,6 +1448,59 @@ receives a new result to read like any other, never rows to compare.
   only into the run that holds both compared sets; one it refuses is released. `GridView` colours added and removed rows from the tone column and marks the listed cells (`is-chg`,
   `is-soft`) with theme colours only (`resultsGrid.diff*`).
 
+## Pivots
+
+Pivot groups a result's rows and aggregates them in the backend (`Results/ResultPivot.cs`); like a diff, the renderer
+receives a new result to read like any other, never the rows it grouped.
+
+- **`results.pivot { resultId, rows, column?, values, viewId? }`** answers `{ descriptor, rows, rowGroups, columnGroups,
+  approximate }`. `rows` are 0 to 8 distinct row-group columns, in order; `column` is an
+  optional column-group column that is not one of them; `values` are 1 to 16 `{ aggregate, column? }`, the aggregate one of
+  `count`, `countDistinct`, `sum`, `avg`, `min` and `max`, and only `count` may leave out the column (it then counts rows,
+  COUNT(*)). Columns must be within the result, and `sum` and `avg` need an exact or approximate numeric column other than
+  bit (`INVALID_PARAMS`, "Sum and Average need a numeric column."). The result must be complete (`RESULT_OPEN`) and be a
+  query's rows or another pivot (`INVALID_PARAMS` for a diff or any other kind). Through a view it reads the view's rows, so its sort and filters apply; `rows` in the
+  answer counts the rows read.
+- **Grouping.** Values group as GROUP BY would, by the sort's comparison ([Sorted views](#sorted-views)): text by its
+  collation, ignoring trailing spaces, exact numerics by value, NULL as a group of its own. Groups come in ascending
+  order, NULL first. `approximate` says a truncated value's stored prefix was grouped or compared.
+- **Aggregates.** COUNT counts non-NULL values (or rows), COUNT DISTINCT distinct non-NULL values by the same equality,
+  MIN and MAX the lowest and highest by the sort's order (copied from the source cell, its type and collation kept). SUM
+  of integers (tinyint to bigint) is bigint and of other exact numerics, decimal(p, 0) included, decimal(38, s), summed
+  exactly to all 38 digits (`ResultPivoter.TryScaled`: whole units of the scale in an Int128); AVG of exact numerics is
+  decimal(38, max(s, 6)), not SQL Server's integer AVG, rounded half away from zero; floats sum and average as float. A
+  cell with no rows is 0 for a count and NULL otherwise, as T-SQL's PIVOT; a sum or average past decimal(38)'s digits, or
+  an integer sum past bigint's range, is an error cell, where SQL Server's SUM or AVG would raise an overflow.
+- **The pivot result** (`kind: 'pivot'`, stamped with the generation and owned by main as a diff is) has the row-group
+  columns, then for each column group each value, named by the group's value ("NULL", "(blank)" for empty text, binary as
+  `0x` hex, cut to 128 characters with "…"; a text value named like the NULL group or Total, or values sharing their first
+  128 characters, are numbered " (2)", " (3)"), or "group · Sum of Amount" when there are several values, then a `Total`
+  column per value over the row group's rows. No two columns share a name, ignoring case (`PivotOutput.Unique`): the
+  row-group columns keep the source's names, then the totals theirs, and a column group's column named like one is
+  numbered. With no column group the values are named alone ("Count of rows", "Sum of
+  Amount"); with no row groups it is one row. At most 256 column groups show, fewer when the columns would pass a page's
+  4,096, at most 100,000 row groups and at most 4,000,000 figures. A pivot past any of these is refused once its groups are
+  known, before its figures are reserved, never shown in part (a summary missing groups would mislead): `INVALID_PARAMS`
+  with a message that names the bound and the count and says what to change ("The column group has 1,204 distinct values,
+  and a pivot can have at most 256 column groups. Choose a column with fewer values, or move it to Rows."). The messages
+  name no column or value. Main checks the answer's shape against the request: a row per row group, and exactly the row
+  columns plus (column groups + 1) × values columns. It is a result of the source's query, charged to its
+  budget, released with the query's other results and at once when its answer is not delivered (as a diff). It is
+  stored whole or not at all: rows the budget refuses part-way release it with `TOO_LARGE`, and a query whose results
+  were already cut short (its row limit or its budget) stores no pivot, with a `TOO_LARGE` message that names which. The
+  pivot is a derived set (`ResultStore.Open(derived: true)`): a refusal fails only it and never stops its query, so a
+  smaller pivot of the same results can still fit.
+- **Work.** One pass sorts the rows by each grouped column's key (`ResultPivoter.WorkingBytes`: the sort keys and 12 bytes
+  a row); each grouping keeps its groups' first rows only up to its bound and is refused before the next runs. Then the
+  figures (4 to 25 bytes a cell and value) are charged to the query budget before they are computed
+  (`TOO_LARGE`, "There is not enough result memory to pivot these rows. Close other results and try again."). The worker's
+  `cancel` stops it (`CANCELLED`).
+- **Renderer.** `ResultHandle.pivot(spec, { signal })` validates the spec before sending. `PivotService` keeps each tab's
+  panel (source set, row groups, column group, values) and appends the pivot as the run's last set, named "Pivot of Result
+  N", whose grid strip says what was read and how many groups it has; a refusal shows in the panel, which keeps the draft. A new run gives up a pivot in flight, and
+  `addSet` releases one the run cannot take (the panel says why when its run is unchanged). A re-run keeps the draft,
+  which follows its columns by name if the query now returns them in another order (`remapDraft`).
+
 ## Search in results
 
 The results toolbar's search box searches every grid of a run in the backend, over the rows it holds
@@ -1511,6 +1571,63 @@ renderer (`Results/ColumnProfiles.cs`): `results.profile` answers aggregates, ne
   while the same rows are asked again. The row-size bar reads `results.rowBytes` for the rows in view only, through the
   shown handle, and scales them to the profile's `rowBytes.max` once the set is complete (asked again 2 s after a
   failure), or to the largest row read while that is larger.
+
+## Distinct values
+
+The header funnel's popover lists a column's distinct values with their counts, computed in the backend over the rows
+it holds (`Results/DistinctValues.cs`); the renderer receives at most 4,096 values, never rows.
+
+- **`results.distinct { resultId, column, order: 'count' | 'value', maxValues: 1 – 4,096, search?: 1 – 1,024 characters,
+  viewId?, keptViewId? }`** answers `{ rows, complete, nulls, distinct, truncated, approximate, values: [{ row, text, count,
+  kept? }], nullsKept?, unlistedKept?, unlistedHeld?, unlistedDropped? }`. The
+  column must be the result's (`INVALID_PARAMS`). Through a view it groups the view's rows (`VIEW_NOT_FOUND` when it is
+  gone), else the rows sealed when it ran; `complete` says those were every row of a finished set. `count` orders the
+  values most frequent first, ties in value order; `value` orders them as a sort does. `distinct` counts every value the
+  search kept, and `values` are the first `maxValues` of them (`truncated` when there were more). NULL and unreadable cells
+  are counted in `nulls`, never a value.
+- **Equality** is the filters' ([Sorted views](#sorted-views)): the column's collation decides which texts are one value
+  (case and trailing spaces under a CI collation), exact numerics are equal by value, and a truncated value compares by
+  its stored prefix (`approximate`). Each value's `row` is the lowest base row holding it, so an `in` or `notIn` filter by
+  those rows keeps or drops exactly the rows counted. `text` is the representative's display text (binary as `0x` hex),
+  cut to 256 characters with "…".
+- **`search`** keeps the values whose display text contains it, compared as [Search in results](#search-in-results)
+  compares a cell (the collation's locale and Ignore flags for character columns, hex for binary, case ignored otherwise).
+- **`keptViewId`**, another view of the same result (`VIEW_NOT_FOUND` when it is gone), marks each listed value `kept`
+  when any row of that view holds it (equal as above, whichever row), says in `nullsKept` whether that view has a NULL in
+  the column, and in `unlistedKept` whether it holds a value past those listed. `unlistedHeld` and `unlistedDropped` list
+  the representative rows of those past values it holds and of those it does not hold, each when it fits one filter
+  (4,096). A view built while the set was loading has not looked at the rows sealed after it, so their values count as
+  held. The marks cover every value listed, however many the view keeps, so a checklist over one view shows what
+  a filtered view keeps of each value. Main relays the marks only when they were asked for, on every value and NULL.
+- **Work.** One key per row for the column (as a filter builds it), the rows grouped by a stable sort, and up to one group
+  a row (its representative over the grouped rows' own array, a count and a kept mark), a kept view's row marks and the
+  count order's ranking, and the answer (1 KiB a value asked for): `DistinctWorkingBytes` (about 35 bytes a row) is charged to the result's query budget while it runs (`TOO_LARGE`
+  without room) and returned when it ends. The worker's `cancel` stops it (`CANCELLED`), within one group too. Main checks
+  the answer before forwarding it: rows below 2³¹, at most `maxValues` values, `truncated` exactly when `distinct` exceeds
+  them, kept marks exactly when asked for, past values named only with them (the held ones non-empty exactly when some
+  are kept), and the column
+  inside the result's when its descriptor named the columns.
+- **Renderer.** `ResultHandle.distinct(column, { order, maxValues, search, kept, signal })` validates the request before
+  the port (`kept` must be a view of the same result). `ResultsService.columnValues` asks over the rows the grid's other
+  filters keep (a view built for it without the column's own value list, shared by the popover's list and searches through
+  a `ColumnValuesScope` and closed with the popover), so values the column's filter
+  dropped can be ticked again; when the column has such a filter the grid's view marks which values it keeps now, and a
+  value first seen (in the list or a search) starts ticked only when it is kept. The popover (`ColumnFilterPopover`) lists them as a checklist with a search (local,
+  or in the backend once typing pauses when the list was truncated), Select all and Select none, NULL as an entry, and
+  custom conditions (equals, does not equal, between two listed values, is NULL, is not NULL). OK applies an `in` or
+  `notIn` filter by representative rows, whichever names fewer (keeping on a tie), replacing the column's value-list
+  filter and its Exclude NULLs (the checklist lists NULL as a value, so it also lists over the rows that filter hid);
+  every value ticked takes both off. A truncated list leaves the values it never showed as the grid shows them: `in` with
+  the ticked values and the past ones the grid holds, or `notIn` with the cleared values and the past ones it drops,
+  whichever fits one filter and names fewer (all shown when the column has no value filter). When neither side can be
+  named, `notIn` shows them all and the popover says so; every value ticked takes the filter off only when no past value
+  stays hidden. While rows still arrive only `notIn` applies, so their values stay shown. OK puts the new filter where the
+  one it replaces stood, since filters apply in order (a duplicates filter counts only the rows before it kept). The
+  base view's build stops when the popover closes. With a range on the column, Equals and Between choose only within
+  it, and the popover says so. Between replaces the column's range
+  filter; Clear filter takes all of the column's filters off. The popover opens in the grid's own window (a popped-out
+  Results panel's), and a second press on the open funnel closes it. There is no contains or starts-with condition: the
+  filters compare whole values by rows, and a text filter op would need its own backend filter.
 
 ## Copy and Save Results As
 
@@ -2347,8 +2464,10 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Row identities | `results.rowIds` 1 – 16,384 rows; `results.findRows` 1 – 10,000 ids, 100,000 matches (`limits.identity`); 24 bytes a row while identifying, 8 kept, under the query budget | zod and backend |
 | Result diffs | context -1 – 100 rows, 64 one-sided column names each side (`limits.diff`); about 80 bytes a row of both results and 12 a differing cell while aligning, the diff's rows under the query budget | zod and backend |
 | Sorted views | 0 – 16 keys and 0 – 16 filters a view (one at least), 4,096 distinct values a filter, 256 cell ranges a selection, 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key or filtered column while building, 4 bytes a row kept, under the query budget | zod and backend |
+| Pivots | 0 – 8 row columns, 1 – 16 values, 100,000 row groups, 256 column groups, 4,000,000 figures, refused past any of them (`INVALID_PARAMS`), column-group names cut to 128 characters (`limits.pivot`); a sort key per grouped column and 12 bytes a row while grouping, and the figures, under the query budget | zod and backend |
 | Search in results | 1 – 1,024 characters of text, 1 – 10,000 matches an answer plus its last row's columns (`limits.search`); no budget held | zod and backend |
 | Column profiles | 0 – 32 columns a request (`limits.profile`), 20 buckets, distinct exact to 16,384, values cut to 256 characters; working memory under the query budget | zod and backend |
+| Distinct values | 1 – 4,096 values an answer (`limits.distinct`, the In filter's own limit), values cut to 256 characters, search 1 – 1,024 characters; working memory under the query budget | zod and backend |
 | Copy | 64 MiB of UTF-8 (estimated before any work; main cancels past 65 MiB received); DATA ≤ 1 MiB; 16 MiB initial credit; 120 s; one per window | backend and main |
 | Save Results As | one per window; 1 MiB writes; no deadline; suggested name ≤ 128 characters, path ≤ 32,767 | main and backend |
 | Job progress | EVENTs every ≥ 250 ms; pushed to the renderer ≤ 4 a second | backend and main |

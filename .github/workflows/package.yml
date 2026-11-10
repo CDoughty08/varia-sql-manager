@@ -89,6 +89,8 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           command -v xvfb-run || { sudo apt-get update && sudo apt-get install -y xvfb; }
       - name: Smoke test packaged application
+        # Also bounds synchronous startup/filesystem stalls before the harness can service its own timers.
+        timeout-minutes: 10
         shell: bash
         env:
           VARIA_PACKAGED_EXECUTABLE: ${{ inputs.executable }}

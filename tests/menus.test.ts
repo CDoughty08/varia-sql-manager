@@ -36,7 +36,7 @@ describe('menu model', () => {
       expect(outline('edit.advanced', platform)).toEqual(['edit.makeUppercase', 'edit.makeLowercase', '-', 'editor.toggleWhitespace', 'editor.toggleWordWrap', '-', 'edit.commentLines', 'edit.uncommentLines',
         'edit.toggleLineComment', '-', 'edit.increaseIndent', 'edit.decreaseIndent'])
       expect(outline('edit.bookmarks', platform)).toEqual(['edit.toggleBookmark', '-', 'edit.previousBookmark', 'edit.nextBookmark', '-', 'edit.clearBookmarks', '-', 'edit.previousBookmarkInDocument', 'edit.nextBookmarkInDocument'])
-      expect(outline('edit.intellisense', platform)).toEqual(['edit.insertSnippet', 'edit.surroundWith', '-', 'edit.refreshIntelliSense'])
+      expect(outline('edit.intellisense', platform)).toEqual(['edit.insertSnippet', 'edit.surroundWith', '-', 'edit.refreshIntelliSense', '-', 'edit.nextSqlIssue', 'edit.previousSqlIssue'])
       expect(outline('view', platform)).toEqual(['workbench.showCommands', 'workbench.quickOpen', 'workbench.search', 'explorer.searchObjects', '-', 'layout.save', 'layout.load', 'layout.reset', '-', 'activity.open', 'ssis.allOperations', '-', 'submenu:view.theme', '-',
         'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', '-', 'developer.reloadWindow', 'developer.toggleDevTools'])
       expect(outline('query', platform)).toEqual(['submenu:query.connection', 'query.changeDatabase', '-', 'query.execute', 'query.cancel', 'query.includeActualPlan', 'query.includeLivePlan', 'query.estimatePlan', 'query.estimateSessionPlan', 'query.includeClientStatistics', 'query.resetClientStatistics'])
@@ -201,7 +201,9 @@ describe('context menu model', () => {
     expect(contextCommandIds('documentTab.context')).toEqual(['file.save', 'file.saveAs', 'file.close', 'file.closeOthers', 'file.closeAll', 'file.reopenClosed', 'file.copyPath', 'file.revealInFolder', 'document.moveLeft', 'document.moveRight', 'document.rename', 'editor.splitRight', 'editor.splitDown', 'editor.moveToNextGroup', 'editor.moveToPreviousGroup', 'editor.increaseTabRows', 'editor.decreaseTabRows', 'editor.float', 'editor.dock'])
     expect(contextCommandIds('dockTab.context')).toEqual(['pane.dockLeft', 'pane.dockRight', 'pane.dockTop', 'pane.dockBottom', 'pane.tabWithExplorer', 'pane.tabWithEditor', 'pane.tabWithResults', 'pane.tabWithMessages', 'pane.tabWithPlan', 'pane.float', 'pane.dock', 'pane.moveToNewWindow', 'pane.moveToMainWindow', 'pane.close', 'window.togglePanelTabs'])
     expect(contextCommandIds('input.context')).toEqual(['edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'])
-    for (const menu of contextMenuIds) expect(contextCommandIds(menu), menu).toEqual(commandIds.filter(id => menuIds.some(inner => menuRoots(inner).includes(menu) && commandDescriptor(id).menus?.some(placement => placement.menu === inner))))
+    // Ownership is static: avoid rewalking the whole menu graph for every command in every context menu.
+    const rootsByMenu = new Map(menuIds.map(menu => [menu, new Set(menuRoots(menu))] as const))
+    for (const menu of contextMenuIds) expect(contextCommandIds(menu), menu).toEqual(commandIds.filter(id => commandDescriptor(id).menus?.some(placement => rootsByMenu.get(placement.menu)?.has(menu))))
     expect(contextMenuRequestSchema.safeParse({ token: 1, menu: 'editor.context', x: 0, y: 0, visible: ['query.execute'], disabled: [], checked: [] }).success).toBe(true)
     expect(contextMenuRequestSchema.safeParse({ token: 1, menu: 'editor.context', x: 0, y: 0, visible: ['file.save'], disabled: [], checked: [] }).success).toBe(false)
   })
@@ -365,13 +367,13 @@ describe('menu state', () => {
       // Sorting a grid: its menu and its headers' sort buttons; Sort text by is the results toolbar's and the palette's.
       'output.sortAscending', 'output.sortDescending', 'output.thenSortAscending', 'output.thenSortDescending', 'output.clearSort', 'output.sortTextByChars', 'output.sortTextByBytes',
       // The grid menu's Filter submenu.
-      'output.filterSelection', 'output.excludeSelection', 'output.filterBetween', 'output.excludeNulls', 'output.filterDuplicates', 'output.filterDuplicateRows', 'output.clearFilters',
+      'output.filterColumnValues', 'output.filterSelection', 'output.excludeSelection', 'output.filterBetween', 'output.excludeNulls', 'output.filterDuplicates', 'output.filterDuplicateRows', 'output.clearFilters',
       // The grid menu's Highlight submenu and its key.
       'output.highlightRows', 'output.highlightYellow', 'output.highlightGreen', 'output.highlightBlue', 'output.highlightPurple', 'output.highlightRed', 'output.clearHighlight', 'output.clearAllHighlights',
       // Search in results: the results toolbar's search box, its keys in a grid, and the palette.
       'output.find', 'output.findNext', 'output.findPrevious',
       // The results toolbar's Profile and Row size toggles, also in the grid's menu.
-      'output.toggleColumnProfile', 'output.toggleRowSize', 'output.compareWithPrevious', 'output.compareWithPreviousExact']
+      'output.toggleColumnProfile', 'output.toggleRowSize', 'output.compareWithPrevious', 'output.compareWithPreviousExact', 'output.pivot']
     expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))
     // Query › Connection is a native submenu too.
     for (const id of ['preferences.colorTheme', 'connection.connect', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'file.closeAll', 'view.toggleResultsPane'] as const) expect(menuCommandIds).toContain(id)
