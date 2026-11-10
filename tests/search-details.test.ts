@@ -8,7 +8,7 @@ import { detailsDrag, detailsKey, scriptable, searchDetailsLimits, SearchDetails
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { peekSpecs } from '../src/shared/explorer/peek'
-import { hitKindSpec, hitProperties, matchedLine, Properties, scrollKey } from '../src/renderer/src/search/SearchDetails'
+import { colouredEnd, shownChars, shownText, hitKindSpec, hitProperties, matchedLine, Properties, scrollKey } from '../src/renderer/src/search/SearchDetails'
 
 const ok = <T>(value: T): ApiResult<T> => ({ ok: true, value })
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -89,6 +89,16 @@ describe('Search Objects details pane', () => {
     expect(service.getSnapshot().documents.tab?.definition).toEqual({ status: 'ready', value: { text: 'CREATE TABLE [dbo].[Orders]' } })
   })
 
+  it('reads a long module only as far as the pane shows, keeping its whole length for the note', async () => {
+    const { service, pending, settle } = setup()
+    service.show('tab', connectionId, procedure)
+    settle()
+    const start = 'x'.repeat(shownChars)
+    // No further page is asked for: the fake api has no explorerPeekDefinition, so asking would fail the read.
+    pending.peek[0]!(ok({ facts: {}, definition: start, definitionLength: shownChars * 50, definitionStamp: 7, elapsedMs: 2 }))
+    await flush()
+    expect(service.getSnapshot().documents.tab?.definition).toEqual({ status: 'ready', value: { text: start, length: shownChars * 50 } })
+  })
   it('scripts any other kind Script As can write, and says when a kind has no definition', async () => {
     const { service, api, pending, settle } = setup()
     expect(scriptable(rule)).toBe(true)
@@ -251,5 +261,21 @@ describe('Search Objects details pane', () => {
     expect(hitKindSpec('futureKind')).toMatchObject({ title: 'Object', icon: 'file' })
     expect(hitKindSpec('toString')).toMatchObject({ title: 'Object' })
     expect(hitKindSpec('table')).toMatchObject({ title: 'Table', icon: 'table' })
+  })
+})
+
+describe('Search Objects details definition colouring', () => {
+  it('colours at most 3,000 lines or 1,000,000 characters of a definition that is never cut, never splitting a surrogate pair', () => {
+    expect(colouredEnd('SELECT 1')).toBe(8)
+    expect(colouredEnd('a\n'.repeat(5000))).toBe(6000)
+    expect(colouredEnd('x'.repeat(3_000_000))).toBe(1_000_000)
+    expect(colouredEnd('x'.repeat(999_999) + '\u{1F600}' + 'y'.repeat(10))).toBe(999_999)
+    expect(colouredEnd(('x'.repeat(1000) + '\n').repeat(3000))).toBe(1_000_000)
+  })
+  it('shows at most 1,000,000 characters of a longer definition, never splitting a surrogate pair', () => {
+    expect(shownChars).toBe(1_000_000)
+    expect(shownText('SELECT 1')).toBe('SELECT 1')
+    expect(shownText('x'.repeat(3_000_000))).toHaveLength(1_000_000)
+    expect(shownText('x'.repeat(999_999) + '\u{1F600}')).toHaveLength(999_999)
   })
 })

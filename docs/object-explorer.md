@@ -403,6 +403,12 @@ to read once they serve Peek; today they serve query documents only), disposed a
 refreshes; closing the card or tab disposes the editor. Its focus key is `peekEditorFocus`, never `editorFocus`, so query
 commands (Execute, Parse and the rest) leave it alone, and F5 refreshes the Peek; Find, Copy and Select All are Monaco's
 own. **Script to New Query** and, for a kind that offers it, **Modify** open the definition in a query tab through Script As.
+A definition is never cut. A module's text comes in pages of 1,000,000 characters: the first with the
+properties, the rest one page at a time (`explorer.peekDefinition`), and the tab shows the text once it has all of it. If the
+module changes between pages, the tab says so and Refresh reads it again. While the pages come, the tab says how much has
+come. Closing the card cancels the page still being read.
+Only a text longer than 134,217,728 characters, the most Peek holds in memory, is not read:
+the tab says so rather than showing part of it.
 
 Beside Definition, the card has tabs. **Columns** (tables and views) or **Parameters** (procedures and functions) lists the
 object's folder with `explorer.children`, as the tree does, up to 1,024 rows. **Dependencies**

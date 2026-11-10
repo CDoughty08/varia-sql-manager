@@ -2,15 +2,15 @@ import { describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { explorerCatalogJson, maxBand, minBand } from '../src/shared/explorer/catalog'
-import { isPeekKind, isPeekListTab, peekCatalogBlock, peekFacts, peekFormats, peekHas, peekKinds, peekLimits, peekLists, peekListsOf, peekSpecs, peekTabsOf, peekTabTitle, type PeekDependenciesResult, type PeekResult } from '../src/shared/explorer/peek'
-import { peekDependenciesParamsSchema, peekParamsSchema } from '../src/shared/explorer/schema'
+import { isPeekKind, isPeekListTab, peekCatalogBlock, peekFacts, peekFormats, peekHas, peekKinds, peekLimits, peekLists, peekListsOf, peekSpecs, peekTabsOf, peekTabTitle, type PeekDefinitionResult, type PeekDependenciesResult, type PeekResult } from '../src/shared/explorer/peek'
+import { peekDefinitionParamsSchema, peekDependenciesParamsSchema, peekParamsSchema } from '../src/shared/explorer/schema'
 import { requestSchemas } from '../src/main/validation'
 import { methodPolicies } from '../src/shared/ipc/methods'
 import { cancellableRequests } from '../src/main/backend/renderer-requests'
-import { PeekBoundary, PeekListView, Properties } from '../src/renderer/src/explorer/PeekCard'
+import { definitionLoading, PeekBoundary, PeekListView, Properties } from '../src/renderer/src/explorer/PeekCard'
 import { formatPeekValue, placePeek, cardWidth } from '../src/renderer/src/explorer/peek-format'
-import { PeekService } from '../src/renderer/src/explorer/PeekService'
-import type { ApiResult, ExplorerChildrenResult, QueryResult } from '../src/shared/contracts'
+import { copyableDefinition, PeekService, type PeekChange } from '../src/renderer/src/explorer/PeekService'
+import { maxClipboardText, type ApiResult, type ExplorerChildrenResult, type QueryResult } from '../src/shared/contracts'
 import { fakeResults, summary } from './fixtures/peek-results'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import type { ScriptingOptions } from '../src/shared/scripting/options'
@@ -70,6 +70,25 @@ describe('explorer.peek requests', () => {
     expect((methodPolicies['explorer.peek'] as { deadlineMs: number }).deadlineMs).toBeGreaterThanOrEqual(2 * peekLimits.budgetMs)
     expect(cancellableRequests('explorer.peek', { explorer: 'explorer', scripting: 'scripting', actions: 'actions', ssis: 'ssis', activity: 'activity', connections: 'connections' })).toBe('explorer')
   })
+  it('reads a later page of a module kind\'s text, past the first code unit and below the longest text Peek reads, on the explorer lane and cancellable', () => {
+    const target = { kind: 'procedure', database: 'Sales', schema: 'dbo', name: 'Customer' }
+    const page = (change: Record<string, unknown>) => peekDefinitionParamsSchema.safeParse({ connectionId, requestId, target, offset: peekLimits.definitionPageChars, ...change }).success
+    expect(page({})).toBe(true)
+    expect(page({ target: { kind: 'serverTrigger', name: 't' } })).toBe(true)
+    expect(page({ offset: peekLimits.definitionMaxChars - 1 })).toBe(true)
+    expect(page({ target: { ...target, kind: 'table' } })).toBe(false)
+    expect(page({ target: { kind: 'login', name: 'sa' } })).toBe(false)
+    expect(page({ offset: 0 })).toBe(false)
+    expect(page({ offset: 1.5 })).toBe(false)
+    expect(page({ offset: peekLimits.definitionMaxChars })).toBe(false)
+    expect(page({ offset: undefined })).toBe(false)
+    expect(page({ extra: 1 })).toBe(false)
+    expect(requestSchemas['explorer.peekDefinition']).toBe(peekDefinitionParamsSchema)
+    expect(methodPolicies['explorer.peekDefinition']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 30_000 })
+    expect(cancellableRequests('explorer.peekDefinition', { explorer: 'explorer', scripting: 'scripting', actions: 'actions', ssis: 'ssis', activity: 'activity', connections: 'connections' })).toBe('explorer')
+    // A page is at most 3 bytes a code unit as UTF-8: far under the protocol's 16 MiB reply.
+    expect(peekLimits.definitionPageChars * 3).toBeLessThan(16 * 1024 * 1024 / 4)
+  })
 })
 
 describe('Peek card layout and values', () => {
@@ -106,8 +125,10 @@ describe('PeekService', () => {
   function setup(platform = 'win32') {
     let resolvePeek: (value: ApiResult<PeekResult>) => void = () => {}
     let resolveScript: (value: ApiResult<{ text?: string; database: string; warnings: string[]; commands: number; elapsedMs: number }>) => void = () => {}
+    const pages: ((value: ApiResult<PeekDefinitionResult>) => void)[] = []
     const api = {
       explorerPeek: vi.fn(() => new Promise<ApiResult<PeekResult>>(resolve => { resolvePeek = resolve })),
+      explorerPeekDefinition: vi.fn((_params: { requestId: string; offset: number }) => new Promise<ApiResult<PeekDefinitionResult>>(resolve => { pages.push(resolve) })),
       explorerCancel: vi.fn(async () => ok({ cancelled: 1 })),
       scriptObjects: vi.fn(() => new Promise<never>(resolve => { resolveScript = resolve as never })),
       cancelScripting: vi.fn(async () => ok({ cancelled: 1 })),
@@ -123,7 +144,7 @@ describe('PeekService', () => {
       timers: { setTimeout: (callback, ms) => { timers.callback = callback; timers.ms = ms; return 1 }, clearTimeout: () => { timers.callback = undefined } },
       newId: () => `id-${++ids}`, platform
     })
-    return { service, api, timers, resolvePeek: (value: ApiResult<PeekResult>) => resolvePeek(value), resolveScript: (text: string) => resolveScript(ok({ text, database: 'Sales', warnings: [], commands: 1, elapsedMs: 1 })),
+    return { service, api, timers, pages, resolvePeek: (value: ApiResult<PeekResult>) => resolvePeek(value), resolveScript: (text: string) => resolveScript(ok({ text, database: 'Sales', warnings: [], commands: 1, elapsedMs: 1 })),
       lose: () => { live = []; for (const listener of listeners) listener() } }
   }
   const flush = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -214,14 +235,127 @@ describe('PeekService', () => {
     expect(service.getSnapshot().open).toMatchObject({ rowId: 2, source: 'hover' })
     expect(api.explorerPeek).toHaveBeenCalledTimes(3)
   })
-  it('copies a definition only when the card has all of it', async () => {
-    const { service, api, resolvePeek } = setup()
+  it('reads a long module\'s text in pages, one at a time from where the last ended, and shows and copies it only once it is whole', async () => {
+    const { service, api, pages, resolvePeek } = setup()
     service.peek(node('procedure'), 'menu')
-    resolvePeek(ok({ facts: {}, definition: 'CREATE PROCEDURE dbo.Customer AS', definitionTruncated: true, elapsedMs: 1 }))
+    resolvePeek(ok({ facts: { schema: 'dbo' }, definition: 'CREATE PROC', definitionLength: 26, definitionStamp: 7, elapsedMs: 1 }))
     await flush()
-    expect(service.getSnapshot().open?.definition).toMatchObject({ status: 'ready', value: { truncated: true } })
+    expect(service.getSnapshot().open).toMatchObject({ facts: { status: 'ready' }, definition: { status: 'loading', progress: 11 / 26 } })
+    expect(definitionLoading(11 / 26)).toBe('Loading the definition… 42%')
+    expect(definitionLoading()).toBe('Loading the definition…')
+    expect(api.explorerPeekDefinition).toHaveBeenCalledTimes(1)
+    expect(api.explorerPeekDefinition).toHaveBeenLastCalledWith({ connectionId, requestId: 'id-2', target: { kind: 'procedure', database: 'Sales', schema: 'dbo', name: 'Customer' }, offset: 11 })
     await service.copyDefinition()
     expect(api.writeClipboardText).not.toHaveBeenCalled()
+    pages[0]!(ok({ text: 'EDURE dbo.', length: 26, stamp: 7, elapsedMs: 1 }))
+    await flush()
+    expect(api.explorerPeekDefinition).toHaveBeenCalledTimes(2)
+    expect(api.explorerPeekDefinition).toHaveBeenLastCalledWith(expect.objectContaining({ requestId: 'id-3', offset: 21 }))
+    expect(service.getSnapshot().open?.definition).toEqual({ status: 'loading', progress: 21 / 26 })
+    // A page shorter than a whole page (one that ended before a split pair) only moves the next offset along.
+    pages[1]!(ok({ text: 'C AS', length: 26, stamp: 7, elapsedMs: 1 }))
+    await flush()
+    expect(service.getSnapshot().open?.definition).toMatchObject({ status: 'loading' })
+    expect(api.explorerPeekDefinition).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 25 }))
+    pages[2]!(ok({ text: '1', length: 26, stamp: 7, elapsedMs: 1 }))
+    await flush()
+    expect(service.getSnapshot().open?.definition).toEqual({ status: 'ready', value: { text: 'CREATE PROCEDURE dbo.C AS1' } })
+    await service.copyDefinition()
+    expect(api.writeClipboardText).toHaveBeenCalledWith('CREATE PROCEDURE dbo.C AS1')
+    expect(api.explorerCancel).not.toHaveBeenCalled()
+  })
+  it('reads a long module only as far as a reader asks, telling the start with the whole length, even past what Peek reads', async () => {
+    const { service, api, pages, resolvePeek } = setup()
+    const target = { connectionId, object: { kind: 'procedure' as const, database: 'Sales', schema: 'dbo', name: 'Customer' }, kind: 'procedure' as const }
+    const changes: PeekChange[] = []
+    const reader = service.read(target, false, change => { changes.push(change) }, 15)
+    resolvePeek(ok({ facts: {}, definition: 'CREATE PROC', definitionLength: 26, definitionStamp: 7, elapsedMs: 1 }))
+    await flush()
+    expect(changes.at(-1)).toEqual({ definition: { status: 'loading', progress: 11 / 14 } })
+    pages[0]!(ok({ text: 'EDURE dbo.', length: 26, stamp: 7, elapsedMs: 1 }))
+    await flush()
+    expect(changes.at(-1)).toEqual({ definition: { status: 'ready', value: { text: 'CREATE PROCEDURE dbo.', length: 26 } } })
+    expect(api.explorerPeekDefinition).toHaveBeenCalledTimes(1)
+    reader.release(false)
+    // A first page as long as the reader wants asks for no more, nor one a code unit short of it (it ended before a pair it
+    // would split); nor does a text longer than Peek reads, whose start shows.
+    for (const [length, wants] of [[26, 5], [26, 12], [peekLimits.definitionMaxChars + 1, 5]] as const) {
+      const told: PeekChange[] = []
+      const short = service.read(target, false, change => { told.push(change) }, wants)
+      resolvePeek(ok({ facts: {}, definition: 'CREATE PROC', definitionLength: length, definitionStamp: 7, elapsedMs: 1 }))
+      await flush()
+      expect(told.at(-1)).toEqual({ definition: { status: 'ready', value: { text: 'CREATE PROC', length } } })
+      short.release(false)
+    }
+    expect(api.explorerPeekDefinition).toHaveBeenCalledTimes(1)
+  })
+  it('cancels the page still being read when the card closes or moves on, and drops a late page', async () => {
+    const { service, api, pages, resolvePeek } = setup()
+    service.peek(node('procedure'), 'menu')
+    resolvePeek(ok({ facts: {}, definition: 'CREATE', definitionLength: 12, definitionStamp: 7, elapsedMs: 1 }))
+    await flush()
+    service.close()
+    expect(api.explorerCancel).toHaveBeenCalledWith(['id-2'])
+    pages[0]!(ok({ text: ' PROC', length: 12, stamp: 7, elapsedMs: 1 }))
+    await flush()
+    expect(api.explorerPeekDefinition).toHaveBeenCalledTimes(1)
+    expect(service.getSnapshot().open).toBeUndefined()
+    // Another object replaces the read the same way.
+    service.peek(node('procedure', 2, 'Ship'), 'menu')
+    resolvePeek(ok({ facts: {}, definition: 'CREATE', definitionLength: 12, definitionStamp: 7, elapsedMs: 1 }))
+    await flush()
+    service.peek(node('procedure', 3, 'Bill'), 'menu')
+    expect(api.explorerCancel).toHaveBeenLastCalledWith(['id-4'])
+  })
+  it('copies a whole definition only up to what the clipboard takes', async () => {
+    expect(copyableDefinition('x'.repeat(maxClipboardText))).toBe(true)
+    expect(copyableDefinition('x'.repeat(maxClipboardText + 1))).toBe(false)
+    expect(copyableDefinition(undefined)).toBe(false)
+    const { service, api, resolvePeek } = setup()
+    service.peek(node('procedure'), 'menu')
+    resolvePeek(ok({ facts: {}, definition: 'x'.repeat(maxClipboardText + 1), elapsedMs: 1 }))
+    await flush()
+    await service.copyDefinition()
+    expect(api.writeClipboardText).not.toHaveBeenCalled()
+  })
+  it('keeps "not connected" on a tab whose server went while a page was read, instead of the cancelled page\'s answer', async () => {
+    const { service, api, pages, resolvePeek, lose } = setup()
+    const view = service.createView()
+    view.show(node('procedure'))
+    resolvePeek(ok({ facts: {}, definition: 'CREATE', definitionLength: 12, definitionStamp: 7, elapsedMs: 1 }))
+    await flush()
+    lose()
+    expect(api.explorerCancel).toHaveBeenCalledWith(['id-2'])
+    expect(view.getSnapshot().open?.definition).toEqual({ status: 'error', message: 'The server is not connected.' })
+    pages[0]!({ ok: false, error: 'The operation was cancelled.' })
+    await flush()
+    expect(view.getSnapshot().open?.definition).toEqual({ status: 'error', message: 'The server is not connected.' })
+    expect(api.explorerPeekDefinition).toHaveBeenCalledTimes(1)
+    view.dispose()
+  })
+  it('says the text changed when a page\'s length or stamp is not the first page\'s, shows a failed page as a value, and reads no text longer than Peek reads', async () => {
+    const changed = async (page: Partial<PeekDefinitionResult>) => {
+      const { service, pages, resolvePeek } = setup()
+      service.peek(node('procedure'), 'menu')
+      resolvePeek(ok({ facts: {}, definition: 'CREATE', definitionLength: 12, definitionStamp: 7, elapsedMs: 1 }))
+      await flush()
+      pages[0]!(ok({ text: ' PROC', length: 12, stamp: 7, elapsedMs: 1, ...page }))
+      await flush()
+      return service.getSnapshot().open?.definition
+    }
+    const message = 'The definition changed while Peek read it. Refresh to read it again.'
+    expect(await changed({ stamp: 8 })).toEqual({ status: 'error', message })
+    expect(await changed({ length: 13 })).toEqual({ status: 'error', message })
+    expect(await changed({ text: undefined })).toEqual({ status: 'error', message })
+    expect(await changed({ text: '' })).toEqual({ status: 'error', message })
+    expect(await changed({ text: ' PROCEDURE  x' })).toEqual({ status: 'error', message })
+    expect(await changed({ error: { code: 'NOT_FOUND', message: 'dbo.Customer was not found.', retryable: false } })).toEqual({ status: 'error', message: 'dbo.Customer was not found.' })
+    const { service, api, resolvePeek } = setup()
+    service.peek(node('procedure'), 'menu')
+    resolvePeek(ok({ facts: {}, definition: 'CREATE', definitionLength: peekLimits.definitionMaxChars + 1, definitionStamp: 7, elapsedMs: 1 }))
+    await flush()
+    expect(service.getSnapshot().open?.definition).toMatchObject({ status: 'error', message: expect.stringContaining('longer than Peek reads (134,217,728 characters)') })
+    expect(api.explorerPeekDefinition).not.toHaveBeenCalled()
   })
   it('closes when its server disconnects, and refuses lost or disconnected nodes', () => {
     const { service, api, lose } = setup()
@@ -480,7 +614,7 @@ describe('Peek tabs', () => {
     expect(methodPolicies['explorer.peekDependencies']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 30_000 })
     expect(cancellableRequests('explorer.peekDependencies', { explorer: 'explorer', scripting: 'scripting', actions: 'actions', ssis: 'ssis', activity: 'activity', connections: 'connections' })).toBe('explorer')
     const embedded = JSON.parse(explorerCatalogJson()) as { peek: Record<string, unknown> & { kinds: Record<string, unknown>[] } }
-    expect(Object.keys(embedded.peek).sort()).toEqual(['budgetMs', 'definitionChars', 'dependencies', 'kinds', 'listRows', 'mappingDatabases'])
+    expect(Object.keys(embedded.peek).sort()).toEqual(['budgetMs', 'definitionMaxChars', 'definitionPageChars', 'dependencies', 'kinds', 'listRows', 'mappingDatabases'])
     expect(embedded.peek.kinds.every(kind => !('rows' in kind))).toBe(true)
   })
   it('reads dependencies apart from the properties, only once their tab is chosen, so that either can fail alone', async () => {

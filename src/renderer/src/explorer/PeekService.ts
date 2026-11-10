@@ -1,4 +1,4 @@
-import type { ApiResult, ExplorerError, ExplorerNode, VariaApi } from '../../../shared/contracts'
+import { maxClipboardText, type ApiResult, type ExplorerError, type ExplorerNode, type VariaApi } from '../../../shared/contracts'
 import { isPeekKind, peekHas, peekLimits, peekSpecs, peekTabsOf, type PeekDependency, type PeekKind, type PeekResult, type PeekTab } from '../../../shared/explorer/peek.ts'
 import { kindSpecs, type NodeSubtype } from '../../../shared/explorer/catalog.ts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
@@ -13,8 +13,18 @@ import type { ResultsService } from '../results/ResultsService'
 
 /** How a peek was asked for: a hover opens the card without moving focus; the keyboard and the menu focus it. */
 export type PeekSource = 'hover' | 'keyboard' | 'menu'
-export type PeekPart<T> = { readonly status: 'loading' } | { readonly status: 'ready'; readonly value: T } | { readonly status: 'error'; readonly message: string }
-export interface PeekDefinition { readonly text?: string; readonly truncated?: boolean }
+/** `loading` may say how much of a long definition's text has come (0 to 1) while its pages are read. */
+export type PeekPart<T> = { readonly status: 'loading'; readonly progress?: number } | { readonly status: 'ready'; readonly value: T } | { readonly status: 'error'; readonly message: string }
+/** Whether Copy can put `text` on the clipboard whole: a longer one is opened by Script to New Query, or selected in the editor. */
+export const copyableDefinition = (text: string | undefined): text is string => text !== undefined && text.length <= maxClipboardText
+/** Copy's tooltip when the definition is longer than the clipboard takes. */
+export const tooLongToCopy = `Longer than Copy takes (${maxClipboardText.toLocaleString('en-US')} characters). Select the text and copy it from the editor, or Script to New Query.`
+/** A definition, always whole: a long module's pages are put together before it is ready. */
+export interface PeekDefinition {
+  readonly text?: string
+  /** The module's whole length, when `text` is only its start: a reader that asked for at most so many characters (`read`). */
+  readonly length?: number
+}
 /** The Columns or Parameters folder as the tree lists it: its first page, `more` when the folder has others. */
 export interface PeekMembers { readonly nodes: readonly ExplorerNode[]; readonly more: boolean }
 export interface PeekDependencies {
@@ -64,7 +74,7 @@ export interface PeekReader { release(keep: boolean): void }
 export type PeekResults = Pick<ResultsService, 'begin' | 'finish' | 'release'>
 
 export interface PeekServiceOptions {
-  readonly api: Pick<VariaApi, 'explorerPeek' | 'explorerPeekDependencies' | 'explorerChildren' | 'explorerCancel' | 'scriptObjects' | 'cancelScripting' | 'writeClipboardText'
+  readonly api: Pick<VariaApi, 'explorerPeek' | 'explorerPeekDependencies' | 'explorerPeekDefinition' | 'explorerChildren' | 'explorerCancel' | 'scriptObjects' | 'cancelScripting' | 'writeClipboardText'
     | 'tableColumns' | 'execute' | 'closeQuerySession'>
   readonly connections: ExternalStore<readonly { readonly id: string; readonly lost?: boolean }[]>
   /** Tools › Options › Scripting, which a table's CREATE script follows, as Script As does. */
@@ -82,6 +92,8 @@ export interface PeekServiceOptions {
 export const peekMessages = {
   notConnected: 'The server is not connected.',
   noDefinition: 'The definition is encrypted, or the login does not have VIEW DEFINITION permission on it.',
+  definitionChanged: 'The definition changed while Peek read it. Refresh to read it again.',
+  definitionTooLong: `The definition is longer than Peek reads (${peekLimits.definitionMaxChars.toLocaleString('en-US')} characters), the most it holds in memory.`,
   noRows: 'It has no rows.',
   noMembers: 'None.',
   noDependencies: 'None found.',
@@ -95,8 +107,11 @@ type ScriptReply = Awaited<ReturnType<VariaApi['scriptObjects']>>
  * those it was made with, and it is younger than `peekLimits.scriptCacheMs`.
  */
 interface CachedScript { readonly connectionId: string; readonly text: string; readonly modified: string; readonly optionsKey: string; readonly at: number }
-/** A read's requests still running: the properties read, the table's script, and (a view's only) its tabs' reads. */
-type Requests = { peek?: string; script?: ScriptJob } & { [tab in TabPart]?: string }
+/**
+ * A read's requests still running: the properties read, the page of a long module's text being read, the table's script, and
+ * (a view's only) its tabs' reads.
+ */
+type Requests = { peek?: string; definition?: string; script?: ScriptJob } & { [tab in TabPart]?: string }
 /** A table's script request: a view's, or one a replaced view left running so that its script can be cached. */
 interface ScriptJob {
   readonly requestId: string
@@ -158,22 +173,24 @@ export class PeekReads {
 
   /**
    * Reads `target`'s properties and definition for a caller other than a view (a Search Objects tab's details pane), sharing
-   * the kept and background scripts. `update` gets each part as it arrives, until the reader is released.
+   * the kept and background scripts. `update` gets each part as it arrives, until the reader is released. With `maxChars`, a
+   * long module's pages stop once that much text is in (the pane shows no more), and its definition carries the whole length.
    */
-  read(target: PeekTarget, fresh: boolean, update: (change: PeekChange) => void): PeekReader {
+  read(target: PeekTarget, fresh: boolean, update: (change: PeekChange) => void, maxChars?: number): PeekReader {
     const requests: Requests = {}
     let released = this.disposed
     const reader: PeekReader = { release: keep => { if (released) return; released = true; this.release(requests, keep) } }
-    if (!released) this.begin(target, fresh, requests, () => !this.disposed && !released, update)
+    if (!released) this.begin(target, fresh, requests, () => !this.disposed && !released, update, maxChars)
     return reader
   }
 
   /**
-   * Starts reading `target`'s properties (explorer.peek) and its definition: a module's text comes with them; a table's from
+   * Starts reading `target`'s properties (explorer.peek) and its definition: a module's text comes with them, and a text longer
+   * than one reply in further pages (`readPages`); a table's from
    * Script As CREATE, taken from the window's cache while the table's modified time still matches (never when `fresh`), or
    * from a replaced read's script still running for it. The reads' ids go in `requests`; `update` runs while `current()`.
    */
-  begin(target: PeekTarget, fresh: boolean, requests: Requests, current: () => boolean, update: (change: PeekChange) => void): void {
+  begin(target: PeekTarget, fresh: boolean, requests: Requests, current: () => boolean, update: (change: PeekChange) => void, maxChars?: number): void {
     const { connectionId, object, kind } = target
     // A scripted kind Script As cannot write (an index of a table type, a dropped ledger table) has no definition to show, as a
     // module without text has none: it is not asked for one, which it would refuse.
@@ -230,8 +247,11 @@ export class PeekReads {
       // A login's modified time misses its role memberships and CONNECT permission, which its script holds: it is never kept.
       const value = result.value, modified = kind !== 'login' && typeof value.facts.modified === 'string' ? value.facts.modified : undefined
       tell({ facts: { status: 'ready', value: value.facts }, ...(value.lists ? { lists: value.lists } : {}), ...(value.refused ? { refused: value.refused } : {}),
-        ...(key === undefined ? { definition: { status: 'ready', value: value.definition === undefined ? {} : { text: value.definition, ...(value.definitionTruncated ? { truncated: true } : {}) } } } : {}) })
-      if (key === undefined) return
+        ...(key === undefined && value.definitionLength === undefined ? { definition: { status: 'ready', value: value.definition === undefined ? {} : { text: value.definition } } } : {}) })
+      if (key === undefined) {
+        if (value.definitionLength !== undefined) void this.readPages(target, value, requests, current, tell, maxChars).catch(onUnexpectedError)
+        return
+      }
       if (job && modified !== undefined) {
         if (job.modified !== undefined && job.modified !== modified) {
           // A taken-over script began before the table last changed: it is scripted again.
@@ -252,15 +272,51 @@ export class PeekReads {
   }
 
   /**
-   * A read ends (a view's, or a reader's): the properties and tab reads are cancelled, and so is the table's script unless
+   * Reads the rest of a module's text after the peek's first page, one page at a time (each asked for once the last is in, so at
+   * most one is running, its id in `requests.definition` for `release` to cancel), and tells the whole text once it has every
+   * page. A length or stamp that differs from the first page's means the module changed in between: the pages would not fit, so
+   * it says so instead. A text longer than Peek reads is not read at all. With `maxChars` the pages stop once that much is in, and
+   * the start read so far is told with the whole length (a text longer than Peek reads included: only its start is read).
+   */
+  private async readPages(target: PeekTarget, first: PeekResult, requests: Requests, current: () => boolean, tell: (change: PeekChange) => void, maxChars?: number): Promise<void> {
+    const length = first.definitionLength!, stamp = first.definitionStamp
+    if (maxChars === undefined && length > peekLimits.definitionMaxChars) { tell({ definition: { status: 'error', message: peekMessages.definitionTooLong } }); return }
+    // A page ends a code unit short rather than split a surrogate pair: one short of `maxChars` is enough, never worth a page more.
+    const wanted = maxChars !== undefined && maxChars < length ? maxChars - 1 : length
+    const pages = [first.definition ?? '']
+    let offset = pages[0]!.length
+    if (offset < wanted) tell({ definition: { status: 'loading', progress: offset / wanted } })
+    while (offset < wanted) {
+      if (!current()) return
+      const requestId = this.newId()
+      requests.definition = requestId
+      const result = await settle(this.options.api.explorerPeekDefinition({ connectionId: target.connectionId, requestId, target: target.object, offset }))
+      // A release took the request (and cancelled it): its answer, a cancellation most likely, is not this view's to show.
+      if (requests.definition !== requestId) return
+      requests.definition = undefined
+      if (!current()) return
+      if (!result.ok || result.value.error) { tell({ definition: { status: 'error', message: result.ok ? result.value.error!.message : result.error } }); return }
+      const page = result.value
+      if (page.length !== length || page.stamp !== stamp || !page.text) { tell({ definition: { status: 'error', message: peekMessages.definitionChanged } }); return }
+      pages.push(page.text)
+      offset += page.text.length
+      if (offset < wanted) tell({ definition: { status: 'loading', progress: offset / wanted } })
+    }
+    if (offset < length && offset >= wanted) { tell({ definition: { status: 'ready', value: { text: pages.join(''), length } } }); return }
+    if (offset !== length) { tell({ definition: { status: 'error', message: peekMessages.definitionChanged } }); return }
+    tell({ definition: { status: 'ready', value: { text: pages.join('') } } })
+  }
+
+  /**
+   * A read ends (a view's, or a reader's): the properties, definition page and tab reads are cancelled, and so is the table's script unless
    * `keep` and the facts gave its modified time, when it finishes in the background to be cached (the oldest background
    * script gives way past the limit).
    */
   release(requests: Requests, keep: boolean): void {
-    const { peek, script, members, dependencies } = requests
-    for (const name of ['peek', 'script', 'members', 'dependencies'] as const) requests[name] = undefined
+    const { peek, definition, script, members, dependencies } = requests
+    for (const name of ['peek', 'definition', 'script', 'members', 'dependencies'] as const) requests[name] = undefined
     try {
-      const reads = [peek, members, dependencies].filter((request): request is string => request !== undefined)
+      const reads = [peek, definition, members, dependencies].filter((request): request is string => request !== undefined)
       if (reads.length) report(this.options.api.explorerCancel(reads))
       if (!script || script.done) return
       if (!keep || script.modified === undefined || this.disposed) { this.cancelScript(script); return }
@@ -419,10 +475,10 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
     if (open && this.reads.isLive(open.node.connectionId)) this.load(open.node, open.kind, open.source, true, { back: open.back, tab: open.tab })
   }
 
-  /** Copies the definition, once the view has all of it: a cut module is copied whole by Script to New Query. */
+  /** Copies the definition, once the view has all of it and the clipboard takes it (`maxClipboardText`). */
   async copyDefinition(): Promise<void> {
     const definition = this.getSnapshot().open?.definition
-    if (definition?.status !== 'ready' || definition.value.text === undefined || definition.value.truncated) return
+    if (definition?.status !== 'ready' || !copyableDefinition(definition.value.text)) return
     const result = await this.reads.api.writeClipboardText(definition.value.text)
     if (!result.ok) throw new Error(result.error)
   }
@@ -633,8 +689,8 @@ export class PeekService extends PeekView {
    * Reads `target`'s properties and definition for a caller other than a view (a Search Objects tab's details pane), sharing
    * the card's kept and background scripts. `update` gets each part as it arrives, until the reader is released.
    */
-  read(target: PeekTarget, fresh: boolean, update: (change: PeekChange) => void): PeekReader {
-    return this.disposed ? { release: () => {} } : this.reads.read(target, fresh, update)
+  read(target: PeekTarget, fresh: boolean, update: (change: PeekChange) => void, maxChars?: number): PeekReader {
+    return this.disposed ? { release: () => {} } : this.reads.read(target, fresh, update, maxChars)
   }
 
   override close(): void {

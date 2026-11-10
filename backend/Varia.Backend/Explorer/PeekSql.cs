@@ -366,12 +366,43 @@ internal static class PeekSql
     internal static string UsedBy(SqlRender render) => Listing(UsedByRows, render);
 
     /// <summary>The helper columns after a kind's facts, in order: a table's or index's count of compression settings, a module's
-    /// EXECUTE AS principal name, the parts of a type's words, and a module kind's text.</summary>
-    public static IReadOnlyList<string> Extras(PeekKindSpec spec) => [.. Kinds[spec.Kind].Helpers.Select(helper => helper.Column), .. spec.Module ? new[] { "definition" } : []];
+    /// EXECUTE AS principal name, the parts of a type's words, and a module kind's text (its first page), whole length and stamp.</summary>
+    public static IReadOnlyList<string> Extras(PeekKindSpec spec) => [.. Kinds[spec.Kind].Helpers.Select(helper => helper.Column), .. spec.Module ? ModuleColumns : []];
+
+    private static readonly string[] ModuleColumns = ["definition", "definitionLength", "definitionStamp"];
+    // A binary collation without supplementary characters makes LEFT and SUBSTRING count UTF-16 code units, as JavaScript and
+    // .NET strings do, whatever the database's collation; DATALENGTH halved is the same count.
+    private const string ModuleText = "m.definition COLLATE Latin1_General_100_BIN2";
+    private const string ModuleLength = "CONVERT(bigint, DATALENGTH(m.definition)) / 2";
+
+    /// <summary>explorer.peekDefinition's batch for a module kind (and a trigger's parent kind): the peek's lookup, then one row of
+    /// @take code units of the text from @offset, its whole length and the module's modify_date, from the kind's own FROM.</summary>
+    public static string DefinitionPage(PeekKindSpec spec, string? parentKind = null)
+    {
+        if (!spec.Module || !Kinds.TryGetValue(spec.Kind, out var sql)) throw new InvalidOperationException("Peek reads no module text of " + spec.Kind + ".");
+        return Lookup(spec.Kind, parentKind) + "SELECT SUBSTRING(" + ModuleText + ", @offset + 1, @take) AS [text], " + ModuleLength + " AS [length], o.modify_date AS [stamp] " + sql.From + ";\n";
+    }
+
+    /// <summary>The page after the lookup's row: null when the module is gone.</summary>
+    public static async Task<PeekDefinitionResult?> ReadDefinitionPageAsync(SqlDataReader reader, int offset, CancellationToken token)
+    {
+        if (!await reader.ReadAsync(token)) return null;
+        var length = reader.IsDBNull(1) ? 0 : reader.GetInt64(1);
+        var stamp = Stamp(reader.GetDateTime(2));
+        return new(reader.IsDBNull(0) ? null : Trim(reader.GetString(0), offset, length), length, stamp, 0);
+    }
+
+    /// <summary>A modify_date as the renderer compares it: milliseconds since 1970, which a JavaScript number holds exactly.</summary>
+    internal static long Stamp(DateTime value) => new DateTimeOffset(DateTime.SpecifyKind(value, DateTimeKind.Utc)).ToUnixTimeMilliseconds();
+
+    /// <summary>A page that started at <paramref name="offset"/> of a text <paramref name="length"/> long, without a high surrogate
+    /// at its end when more text follows: the next page then starts with the whole pair.</summary>
+    internal static string Trim(string page, int offset, long length) =>
+        page.Length > 0 && offset + page.Length < length && char.IsHighSurrogate(page[^1]) ? page[..^1] : page;
 
     /// <summary>The kind's batch for the band (and an index's or trigger's parent kind), on a cloud server or not. Facts newer than
     /// the band are left out of the text and the reply.</summary>
-    public static Batch Render(PeekKindSpec spec, SqlRender render, int definitionChars, string? parentKind = null, bool cloud = false)
+    public static Batch Render(PeekKindSpec spec, SqlRender render, int definitionPageChars, string? parentKind = null, bool cloud = false)
     {
         if (!Kinds.TryGetValue(spec.Kind, out var sql)) throw new InvalidOperationException("Peek has no batch for " + spec.Kind + ".");
         var facts = spec.FactsFor(render.Band);
@@ -379,8 +410,13 @@ internal static class PeekSql
         foreach (var fact in facts.Where(fact => !fact.Optional))
             columns.Add((fact.Id, sql.Facts.GetValueOrDefault(fact.Id) ?? Common.GetValueOrDefault(fact.Id) ?? throw new InvalidOperationException("Peek has no column for " + spec.Kind + "." + fact.Id + ".")));
         columns.AddRange(sql.Helpers);
-        // One code unit past the limit tells the reader the text was cut.
-        if (spec.Module) columns.Add(("definition", "LEFT(m.definition, " + (definitionChars + 1).ToString(CultureInfo.InvariantCulture) + ")"));
+        // The first page of the text, with its whole length and stamp: a longer text comes in pages (DefinitionPage).
+        if (spec.Module)
+        {
+            columns.Add(("definition", "LEFT(" + ModuleText + ", " + definitionPageChars.ToString(CultureInfo.InvariantCulture) + ")"));
+            columns.Add(("definitionLength", ModuleLength));
+            columns.Add(("definitionStamp", "o.modify_date"));
+        }
         var text = new StringBuilder(Lookup(spec.Kind, parentKind)).Append("SELECT ");
         text.AppendJoin(", ", columns.Select(column => column.Expression + " AS [" + column.Column + "]"));
         text.Append(' ').Append(cloud && spec.Kind == "database" ? CloudDatabaseFrom : sql.From).Append(";\n");
@@ -404,7 +440,7 @@ internal static class PeekSql
     }
 
     /// <summary>The rest of a peek's batch after the lookup's row: the fact row as PeekResult carries it (each fact by its format,
-    /// the codes SSMS words, the module text cut to the catalogue's limit), each list up to the catalogue's rows, User mapping's
+    /// the codes SSMS words, the module text's first page, with its length and stamp when the text is longer), each list up to the catalogue's rows, User mapping's
     /// databases (returned apart for the service to read), and the optional group, or its refusal. Null when the row is gone.</summary>
     public static async Task<(PeekResult Result, MappingList Mapping)?> ReadAsync(SqlDataReader reader, PeekKindSpec spec, Batch batch, int band, CatalogPeek limits, CancellationToken token)
     {
@@ -414,12 +450,17 @@ internal static class PeekSql
         var bandFacts = spec.FactsFor(band);
         foreach (var fact in bandFacts.Where(fact => !fact.Optional)) facts[fact.Id] = Value(fact, raw);
         string? definition = null;
-        bool? cut = null;
+        long? definitionLength = null;
+        long? definitionStamp = null;
         if (spec.Module && raw["definition"] is string text)
         {
-            var (kept, wasCut) = Cut(text, limits.DefinitionChars);
-            definition = kept;
-            cut = wasCut ? true : null;
+            var length = Convert.ToInt64(raw["definitionLength"], CultureInfo.InvariantCulture);
+            definition = Trim(text, 0, length);
+            if (definition.Length < length)
+            {
+                definitionLength = length;
+                definitionStamp = Stamp((DateTime)raw["definitionStamp"]!);
+            }
         }
         Dictionary<string, PeekList>? lists = spec.ListSpecs.Count > 0 ? new(StringComparer.Ordinal) : null;
         foreach (var list in batch.Lists)
@@ -459,7 +500,7 @@ internal static class PeekSql
                 foreach (var fact in bandFacts.Where(fact => fact.Optional)) facts[fact.Id] = Value(fact, optional);
             }
         }
-        return (new(facts, 0, definition, cut, Lists: lists, Refused: refused), new(databases, Math.Max(total, databases.Count)));
+        return (new(facts, 0, definition, definitionLength, definitionStamp, Lists: lists, Refused: refused), new(databases, Math.Max(total, databases.Count)));
     }
 
     private static Dictionary<string, object?> Raw(SqlDataReader reader, IReadOnlyList<string> columns)
@@ -560,13 +601,6 @@ internal static class PeekSql
         "TT" => "tableType",
         _ => null
     };
-
-    /// <summary>Module text kept to <paramref name="max"/> code units, never ending inside a surrogate pair.</summary>
-    internal static (string Text, bool Cut) Cut(string text, int max)
-    {
-        if (text.Length <= max) return (text, false);
-        return (text[..(char.IsHighSurrogate(text[max - 1]) ? max - 1 : max)], true);
-    }
 
     private static object? Value(PeekFactSpec fact, Dictionary<string, object?> raw)
     {
