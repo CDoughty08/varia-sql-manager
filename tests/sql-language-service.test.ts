@@ -957,7 +957,7 @@ function peekFixture() {
     return model.asModel()
   } } }
   let shown: unknown = null
-  const create = (): QueryEditorInstance => ({ instance: { getModel: () => shown, setModel: (model: unknown) => { shown = model } } as never,
+  const create = (): QueryEditorInstance => ({ instance: { getId: () => 'peek-editor', getModel: () => shown, setModel: (model: unknown) => { shown = model } } as never,
     contains: () => false, setVisible: () => {}, dispose: () => {} })
   const element = () => ({ parentElement: null as unknown, className: '', setAttribute() {}, remove() {} })
   const slot = { ownerDocument: { createElement: element }, append(child: { parentElement: unknown }) { child.parentElement = slot } }
