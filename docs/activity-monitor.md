@@ -104,7 +104,6 @@ after 10 cheap samples. Pause stops collecting (no SQL); the charts show a gap a
 
 The live catalogue ([docs/live.md](live.md)) declares `activity.overview`, `activity.sessions`, `activity.resources`, `activity.queries`, built from this catalogue: the same tables, columns (in
 the same order, with the captions as column names, so Copy with Headers and Save write them), keys, facets and series.
-`activity.resources` opens unavailable: Resource Waits and Data File I/O are not sampled yet; they arrive in a later version of Varia.
 
 Each probe runs its statements one at a time on the live connection, within one budget. A statement the login may not run
 (PERMISSION_DENIED) or the server lacks (NOT_SUPPORTED) fails alone: the sample goes on, an error beside it names the tables
@@ -335,7 +334,7 @@ Probe `activity.resources`; key `categoryId`; at most 24 rows. Default order: Wa
 | 1-Minute Average (ms/sec) | `minuteAverage` | decimal | ms/s | Yes | Fixed | The mean of the last 60 s. SSMS's Recent Wait Time is a weighted average over an unstated window. |
 | Average Waiter Count | `averageWaiters` | decimal | count | Yes | SSMS | Wait time per second divided by 1,000. |
 | Current Waiters | `currentWaiters` | int | count | Yes | New | Tasks waiting in the category now. |
-| Cumulative Wait Time (sec) | `cumulativeSeconds` | decimal | s | Yes | SSMS | Since SQL Server started or the statistics were cleared. |
+| Cumulative Wait Time (sec) | `cumulativeSeconds` | decimal | s | Yes | SSMS | Wait time less signal wait since SQL Server started or the statistics were cleared. |
 | Top Wait Type | `topWaitType` | text | — | Yes | New | The category's largest wait type in the interval. |
 
 ### Wait types (`waitTypes`)
@@ -344,15 +343,15 @@ Probe `activity.resources`; key `waitType`; at most 2,000 rows. Default order: W
 
 | Column | Id | Type | Unit | Shown | Parity | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| Wait Type | `waitType` | text | — | Yes | New | Types with time in the interval or a task waiting now. |
+| Wait Type | `waitType` | text | — | Yes | New | Types with time in the interval or a task waiting now; on a sample with no rate (the first, or after a restart or a clear), every type with time since SQL Server started. |
 | Category | `category` | text | — | Yes | New | Its wait category. |
 | Wait Time (ms/sec) | `waitRate` | decimal | ms/s | Yes | New | Wait time less signal wait, per second. |
 | Signal (ms/sec) | `signalRate` | decimal | ms/s | Yes | New | Signal wait per second. |
 | Waits/sec | `waitsRate` | decimal | /s | Yes | New | Waits that ended per second. |
-| Average Wait (ms) | `averageWaitMs` | decimal | ms | Yes | New | Wait time per wait in the interval. |
+| Average Wait (ms) | `averageWaitMs` | decimal | ms | Yes | New | Wait time (signal wait included) per wait that ended in the interval. |
 | Max Wait (ms) | `maxWaitMs` | bigint | ms | Yes | New | The longest wait since SQL Server started. |
 | Current Waiters | `currentWaiters` | int | count | Yes | New | Tasks waiting on it now. |
-| Cumulative (sec) | `cumulativeSeconds` | decimal | s | Yes | New | Since SQL Server started or the statistics were cleared. |
+| Cumulative (sec) | `cumulativeSeconds` | decimal | s | Yes | New | Wait time less signal wait since SQL Server started or the statistics were cleared. |
 | Benign | `benign` | bool | — | Yes | New | A wait for work: on Varia's benign list or in Query Store's Idle category. It never counts in Waiting Tasks, and Hide benign waits hides it. |
 
 ### Data File I/O (`files`)
@@ -437,6 +436,16 @@ case-insensitively against Login, Database, Application, Host Name, Command, Wai
 Column value filters (Alt+Down on a header) offer (All), (Blanks), (Non-blanks) and each value with its count for Login, Database, Application, Host Name, Wait Type, Command, Status.
 Several values in one column match any of them; filters on several columns must all match.
 Resource Waits has Hide benign waits (on by default), which leaves out benign wait types and the Idle category.
+
+| Data File I/O chip | Id | Shows |
+| --- | --- | --- |
+| All | `all` | Every file. |
+| Rows | `rows` | Data files (Rows). Without VIEW ANY DEFINITION the server hides file types, so this shows none. |
+| Log | `log` | Log files. Without VIEW ANY DEFINITION the server hides file types, so this shows none. |
+| Over threshold | `overThreshold` | Files whose read or write latency in the interval reached the warning threshold. |
+
+Data File I/O tones a row warning when its read or write latency reaches 20 ms and error from 50 ms; the files filter carries the
+`activityMonitor.fileLatency*` settings in their place (1 to 10,000 ms). An error threshold below the warning one acts as the warning one.
 
 Recent Expensive Queries ranks by CPU, Duration, Logical Reads, Physical Reads, Writes, Executions, re-sorted from the last sample without new SQL.
 
@@ -724,3 +733,5 @@ the session too: without it every other session answers `ended`, and nothing is 
 | `cancelTombstones` | 64 | Cancelled Details ids main remembers, so a read cancelled before it was sent is refused |
 | `cancelTombstoneMs` | 60,000 | Milliseconds main remembers them |
 | `sessionId` | 32,767 | The largest session id |
+| `fileLatencyMs` | 10,000 | The largest latency threshold a files filter may carry (`activityMonitor.fileLatency*`) |
+| `waitAverageMs` | 60,000 | Milliseconds of samples the 1-Minute Average of Resource Waits spans |

@@ -1723,7 +1723,7 @@ A subscription names one **source** and 1 to 8 of its **probes**, each with its 
 `src/shared/live/catalog.ts` declares every source and probe and what they emit; it generates [docs/live.md](live.md) and the
 backend's embedded `Live/live-catalog.json` (`npx vitest run tests/live-catalog.test.ts -u`), and the schemas in
 `src/shared/live/schema.ts` are built from it. The production schemas accept only sources that are not test-only: the
-Activity Monitor's `activity` (server DMVs: `activity.overview`, `activity.sessions`, `activity.resources`, declared but not sampled yet, and `activity.queries`), Object Explorer's `explorer` (the
+Activity Monitor's `activity` (server DMVs: `activity.overview`, `activity.sessions`, `activity.resources` and `activity.queries`), Object Explorer's `explorer` (the
 status chips: database states, restore progress, running Agent jobs, availability group health) and the SSIS tree's
 `ssis.catalog` (scope `ssisdb`; its `ssis.catalogProbe` fingerprints the catalog for Object Explorer). The test source `debug.synthetic` is accepted only by main's test schemas (`ResultsPortHost` with
 `testSources`, set only in unpackaged smoke runs) and by a backend with `VARIA_BACKEND_TEST_HOOKS=1`, as
