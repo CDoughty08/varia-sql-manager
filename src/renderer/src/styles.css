@@ -307,6 +307,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .oe-actions button { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; color: var(--varia-objectExplorer-actionForeground); }
 /* Monaco draws the drop position of an Object Explorer drag with this class; its own dnd.css is not loaded. */
 .monaco-editor .dnd-target { border-right: 2px solid var(--varia-focusBorder); }
+/* Only the widgets take input; the document-level host never covers the panels underneath it. Keep it below menus,
+   dialogs and the palette, above Dockview's floating groups. Monaco owns widget sizing and viewport placement. */
+.editor-overflow-widgets.monaco-editor { position: fixed; inset: 0; z-index: 16000; background: transparent; pointer-events: none; }
+.editor-overflow-widgets > div > * { pointer-events: auto; }
 /* A bookmark in the indicator (glyph) margin: Edit › Bookmarks. */
 .monaco-editor .varia-bookmark { color: var(--varia-editorBookmark-foreground); }
 .filter-dialog { width: min(640px, calc(100vw - 40px)); }
@@ -781,11 +785,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .output-toolbar { gap: 4px; }
   .output-views button { padding: 0 6px; }
   .results-toolbar-label, .results-toolbar .results-search > .results-search-icon, .results-search > button { display: none; }
-  .results-toolbar { gap: 2px; padding-left: 6px; }
+  /* A 1024-wide window (CI's displays) fits every group with Linux's wider fonts: the box gives up its width first. */
+  .results-toolbar { gap: 1px; padding-left: 6px; }
   .results-segments button { padding: 0 3px; }
   .results-segments button.results-icon-toggle { padding: 0 3px; }
   .results-search { padding-left: 4px; }
-  .results-search input { min-width: 24px; }
+  .results-search input { min-width: 12px; }
 }
 .job-strip { display: flex; min-width: 0; align-items: center; gap: 6px; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); white-space: nowrap; }
 /* Strips give way to a narrow window: a long file name is cut short, while Cancel and the status line keep their room. */
@@ -866,7 +871,37 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-ch.narrow .rg-cs { pointer-events: none; }
 .rg-ch.narrow:hover .rg-cs:not(.on) { visibility: hidden; }
 .rg-cs.on { color: var(--varia-resultsGrid-headerForeground); }
-.rg-ch.sel .rg-cs { color: inherit; }
+.rg-ch.sel .rg-cs, .rg-ch.sel .rg-cf { color: inherit; }
+/* A header's funnel (results grids): at the header's right end, the sort button left of it; it shows while hovered and
+   stays, filled, while its column has a filter. */
+.rg-cf { position: absolute; top: 0; right: 0; display: flex; align-items: center; justify-content: center; width: 18px; height: 21px; background: inherit; color: var(--varia-resultsGrid-headerDescriptionForeground); visibility: hidden; cursor: pointer; }
+.rg-ch.fb .rg-cs { right: 18px; }
+.rg-ch:hover .rg-cf, .rg-cf.on { visibility: visible; }
+.rg-cf.on { color: var(--varia-resultsGrid-headerForeground); }
+/* A sorted column's idle funnel still covers the header text beside the sort button, without its glyph. */
+.rg-cs.on + .rg-cf, .rg-ch.narrow:hover .rg-cs.on + .rg-cf { visibility: visible; }
+.rg-ch:not(:hover) .rg-cs.on + .rg-cf:not(.on) > span, .rg-ch.narrow .rg-cs.on + .rg-cf:not(.on) > span { visibility: hidden; }
+.rg-ch.narrow .rg-cf { pointer-events: none; }
+.rg-ch.narrow:hover .rg-cf:not(.on) { visibility: hidden; }
+.rg-cf:hover, .rg-cs:hover { color: var(--varia-resultsGrid-headerForeground); }
+/* The header funnel's popover (ColumnFilterPopover): a checklist of a column's distinct values, under the header. */
+.column-filter { position: fixed; z-index: 13000; display: flex; flex-direction: column; gap: var(--varia-space-2); box-sizing: border-box; min-height: 0; padding: var(--varia-space-2) var(--varia-space-3) var(--varia-space-3); overflow: hidden; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); font: var(--varia-size-sm)/var(--varia-line-sm) var(--varia-font-ui); animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease); }
+.column-filter-head { display: flex; align-items: center; gap: var(--varia-space-2); }
+.column-filter-head h2 { flex: 1 1 auto; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-md); font-weight: 600; }
+.column-filter select { max-width: 100%; font: inherit; color: var(--varia-input-foreground); background: var(--varia-input-background); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); }
+.column-filter-search { display: flex; align-items: center; gap: 4px; height: 24px; padding: 0 6px; border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); background: var(--varia-input-background); color: var(--varia-descriptionForeground); }
+.column-filter-search:focus-within { border-color: var(--varia-focusBorder); box-shadow: 0 0 0 1px var(--varia-focusBorder); }
+.column-filter-search input { flex: 1 1 0; width: 0; border: 0; outline: none; background: none; color: var(--varia-input-foreground); font: inherit; }
+.column-filter-bulk, .column-filter-actions, .column-filter-condition { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); }
+.column-filter-gap { flex: 1 1 auto; }
+.column-filter-list { flex: 1 1 auto; min-height: 60px; max-height: 260px; overflow: auto; border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-sm); padding: 2px 0; }
+.column-filter-item { display: flex; align-items: center; gap: var(--varia-space-2); padding: 1px var(--varia-space-2); cursor: default; }
+.column-filter-item:hover { background: var(--varia-list-hoverBackground); }
+.column-filter-item.null .column-filter-text, .column-filter-item.empty .column-filter-text { font-style: italic; color: var(--varia-descriptionForeground); }
+.column-filter-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; unicode-bidi: isolate; }
+.column-filter-count { flex-shrink: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; }
+.column-filter-note { margin: 0; padding: 2px var(--varia-space-2); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.column-filter-note.error { color: var(--varia-errorForeground); }
 .rg-co { font-size: var(--varia-size-xs); }
 .rg-co:empty { display: none; }
 .rg-ch.sel { background: var(--varia-resultsGrid-headerSelectionBackground); color: var(--varia-resultsGrid-headerSelectionForeground); }
@@ -2441,3 +2476,22 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .index-status button { color: inherit; background: transparent; border: 1px solid currentColor; padding: 0 var(--varia-space-1); font-size: var(--varia-size-xs); line-height: 14px; }
 .index-status button.index-status-text { border-color: transparent; padding: 0; cursor: pointer; }
 .index-status button.index-status-text:hover { text-decoration: underline; }
+/* The pivot panel (PivotPanel): the column profile's frame, with its draft's fields stacked. */
+.results-main > .pivot-panel { flex: 0 0 280px; }
+.pivot-body { flex: 1; min-height: 0; overflow: auto; padding: 6px 8px; }
+.pivot-field { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; color: var(--varia-descriptionForeground); }
+.pivot-panel select { min-width: 0; height: 24px; padding: 0 6px; font-size: var(--varia-size-xs); }
+.pivot-field select { flex: 1; }
+.pivot-section { margin-bottom: 10px; }
+.pivot-section > select { width: 100%; }
+.pivot-section h3 { margin: 0 0 4px; font-size: var(--varia-size-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--varia-descriptionForeground); }
+.pivot-hint { margin: 2px 0 4px; color: var(--varia-descriptionForeground); }
+.pivot-list { margin: 0 0 4px; padding: 0; list-style: none; }
+.pivot-list li { display: flex; align-items: center; gap: 2px; min-width: 0; margin-bottom: 3px; }
+.pivot-list .icon-button { width: 22px; height: 22px; padding: 3px; }
+.pivot-name { flex: 1; min-width: 0; overflow: hidden; padding: 2px 6px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); text-overflow: ellipsis; white-space: nowrap; }
+.pivot-value select:first-child { flex: 0 0 96px; }
+.pivot-value select:nth-child(2) { flex: 1; }
+.pivot-section > button { display: inline-flex; align-items: center; gap: 4px; }
+.pivot-foot { display: flex; flex-shrink: 0; flex-direction: column; gap: 4px; padding: 6px 8px; border-top: 1px solid var(--varia-panel-border); }
+.pivot-foot > button { align-self: flex-end; }

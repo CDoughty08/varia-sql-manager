@@ -1,6 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { activeDocumentName, backendReady, documentTab, editorGroupForDocument, editorGroups, editorText, editorTextbox, floatingEditorGroups, movePane, popoutDockButton, popoutTabs, queryDatabase, queryServer, suggestionOption, toolbarButton } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp } from 'node:fs/promises'
+import { appendFileSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 // Real Monaco -> preload -> backend -> bundled SQL Tools Service -> SQL Server. This suite reads system metadata only.
@@ -10,16 +11,67 @@ const username = process.env.VARIA_TEST_SQL_USER, password = process.env.VARIA_T
 if (username && !password) throw new Error('VARIA_TEST_SQL_PASSWORD is required with VARIA_TEST_SQL_USER.')
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'language-live-profile-'))
+const closeTrace = resolve(profile, 'close-stages.jsonl')
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 let application, page
 const failures = []
 const watchdog = setTimeout(() => { console.error('Live language UI check exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 300000)
+let closeTracing = false, closeRecords = 0, closeReported = false
+
+function recordClose(stage, details = {}) {
+  if (closeRecords++ >= 16) return
+  try { appendFileSync(closeTrace, JSON.stringify({ at: new Date().toISOString(), stage, ...details }) + '\n') } catch { /* Diagnostics must not prevent cleanup. */ }
+}
+function reportCloseTrace() {
+  if (closeReported) return
+  closeReported = true
+  try { console.error('Live language UI close stages:\n' + readFileSync(closeTrace, 'utf8').slice(0, 32_768)) } catch { console.error('Live language UI close stages unavailable.') }
+}
 
 async function close() {
   if (!application) return
-  await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
-  await application.close()
-  application = undefined
+  const child = application.process()
+  if (!closeTracing) {
+    closeTracing = true
+    child?.once('exit', (code, signal) => recordClose('child-exit', { code, signal }))
+    child?.once('close', (code, signal) => recordClose('child-close', { code, signal }))
+  }
+  try {
+    // Playwright disconnects main's inspector after asking it to quit. Persist stages before that disconnect so a
+    // timed-out close can distinguish a refused quit, backend shutdown, and an exited leader with open child pipes.
+    await application.evaluate(({ app, BrowserWindow, dialog }, file) => {
+      if (globalThis.variaLanguageCloseTrace) return
+      globalThis.variaLanguageCloseTrace = true
+      const fs = process.getBuiltinModule('node:fs')
+      let records = 0
+      const record = (stage, details = {}) => {
+        if (records++ >= 80) return
+        try { fs.appendFileSync(file, JSON.stringify({ at: new Date().toISOString(), stage, ...details }) + '\n') } catch { /* Best-effort diagnostics. */ }
+      }
+      record('close-requested', { windows: BrowserWindow.getAllWindows().length })
+      for (const event of ['before-quit', 'will-quit', 'quit']) app.on(event, value => record(event, { prevented: !!value?.defaultPrevented }))
+      process.once('exit', () => record('main-exit'))
+      for (const window of BrowserWindow.getAllWindows()) {
+        const id = window.id
+        for (const event of ['close', 'closed', 'unresponsive', 'responsive']) window.on(event, value => record('window-' + event, { id, prevented: !!value?.defaultPrevented }))
+        window.webContents.on('will-prevent-unload', () => record('will-prevent-unload', { id }))
+        window.webContents.on('render-process-gone', () => record('renderer-gone', { id }))
+      }
+      dialog.showMessageBox = async (_window, options) => {
+        const category = ['Unsaved query', 'Uncommitted transactions', 'Query executing', 'Workbench stopped', 'Reload workbench'].includes(options?.title) ? options.title : 'other'
+        record('message-box', { category, response: 1 })
+        return { response: 1, checkboxChecked: false }
+      }
+    }, closeTrace)
+    await application.close()
+    recordClose('close-returned', { failed: !!process.exitCode, exitCode: child?.exitCode ?? null, signalCode: child?.signalCode ?? null })
+    if (process.exitCode) reportCloseTrace()
+    application = undefined
+  } catch (error) {
+    recordClose('close-rejected', { exitCode: child?.exitCode ?? null, signalCode: child?.signalCode ?? null })
+    reportCloseTrace()
+    throw error
+  }
 }
 async function caret(target, offset) {
   await target.keyboard.press(`${mod}+Home`)
@@ -165,7 +217,7 @@ try {
   console.log('Live language UI: docking Results back and switching editors preserves both live database contexts.')
   expect(failures).toEqual([])
   await close()
-  console.log('Live SQL language UI check passed.')
+  if (!process.exitCode) console.log('Live SQL language UI check passed.')
 } catch (error) {
   console.error(error)
   if (page) await page.screenshot({ path: resolve('artifacts', 'language-live-failure.png') }).catch(() => {})

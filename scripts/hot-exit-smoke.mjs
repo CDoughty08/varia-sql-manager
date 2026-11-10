@@ -65,7 +65,7 @@ async function launch(args, holdPath) {
   // Electron owns beforeunload and its native Reload dialog. Do not let Playwright dismiss it first.
   page.on('dialog', () => {})
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
-  if (!holdPath) await expect(page.locator('.monaco-editor').first()).toBeVisible({ timeout: 30000 })
+  if (!holdPath) await expect(page.locator('.monaco-editor[role=code]').first()).toBeVisible({ timeout: 30000 })
 }
 const tabNames = () => documentTabs(page).getByRole('tab').evaluateAll(tabs => tabs.map(tab => tab.getAttribute('aria-label')))
 // Monaco draws spaces as no-break spaces.

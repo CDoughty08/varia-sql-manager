@@ -130,7 +130,7 @@ try {
   page.setDefaultTimeout(10000)
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
-  await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
   await application.evaluate(({ dialog }) => {
     globalThis.variaReloadPrompts = 0
     // A reload would ask first (unsaved queries); count the question and cancel it, so a reload attempt shows up.
@@ -178,10 +178,11 @@ try {
   await menubarItem('Query').click()
   await expect(openMenus()).toHaveCount(0)
   await expect(textbox()).toBeFocused()
-  // A press outside closes the menu.
+  // The backend segment is inert; the status bar's centre can land on Go to Line on a narrow display.
   await menubarItem('View').click()
-  await statusBar(page).click()
+  await backendReady(page, 'fake').click()
   await expect(openMenus()).toHaveCount(0)
+  await expect(page.getByRole('dialog')).toHaveCount(0)
   console.log('Menus checks: mouse open, hover switching, item activation, disabled items, and outside clicks.')
 
   // 2. The menubar by keyboard: F10 (from the page and from the operating system) focuses File, arrows move between
@@ -1014,7 +1015,7 @@ try {
   await expect(grid.getByRole('columnheader').nth(2)).toContainText('(No column name)')
   // A right-click selects the cell under it first; Copy copies its value.
   await cell(1, 2).click({ button: 'right', force: true })
-  expect(await outputLabels()).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Filter', 'Highlight', 'Compare with Previous Result', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Results'])
+  expect(await outputLabels()).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Filter', 'Highlight', 'Compare with Previous Result', 'Pivot Results…', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Results'])
   await expect(selected()).toHaveCount(1)
   await expect(cell(1, 2)).toHaveAttribute('aria-selected', 'true')
   await outputMenu.getByRole('menuitem', { name: 'Copy', exact: true }).click()

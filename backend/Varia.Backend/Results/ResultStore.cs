@@ -120,8 +120,10 @@ internal sealed class ResultStore
     /// metadata, so it is charged without a check (an append table's restart, LiveAppendTable): no one else can take those
     /// bytes in between, and while a lease holds the released set the store is over by one set's metadata at most.</param>
     /// <param name="lengths">Each column's byte rule (ColumnPlan.Lengths); without them text counts as UTF-16.</param>
+    /// <param name="derived">A set made from stored results (<see cref="ResultSetBuffer.Derived"/>): a refusal returns null
+    /// without stopping the query.</param>
     public ResultSetBuffer? Open(QueryBudget query, int index, int batchNumber, int iteration, string kind, IReadOnlyList<ResultColumn> columns, IReadOnlyList<WireKind> wires, bool transfer = false,
-        IReadOnlyList<ColumnLength>? lengths = null)
+        IReadOnlyList<ColumnLength>? lengths = null, bool derived = false)
     {
         // A live set's pages stay off the large object heap; see LiveBudget.
         var sealBytes = query.Live is null ? PageBuilder.SealBytes : LiveSealBytes;
@@ -130,7 +132,7 @@ internal sealed class ResultStore
         if (transfer) Force(query, metadata);
         else if (!TryReserve(query, metadata, false, out var reason))
         {
-            query.Stop(reason);
+            if (!derived) query.Stop(reason);
             return null;
         }
         lock (gate)
@@ -140,7 +142,7 @@ internal sealed class ResultStore
                 Return(query, metadata);
                 throw new RequestException("BACKEND_ERROR", "Result identifiers are exhausted. Restart the SQL backend.");
             }
-            var set = new ResultSetBuffer(this, query, nextId++, index, batchNumber, iteration, kind, columns, wires, metadata, sealBytes, lengths);
+            var set = new ResultSetBuffer(this, query, nextId++, index, batchNumber, iteration, kind, columns, wires, metadata, sealBytes, lengths) { Derived = derived };
             sets[set.ResultId] = set;
             return set;
         }
@@ -238,7 +240,7 @@ internal sealed class ResultStore
     /// caller has reserved from the set's budget: they are returned when the view goes. <paramref name="replaces"/> names a
     /// view of the same set this one supersedes; past <see cref="MaxViewsPerResult"/> the set's oldest view goes. Throws
     /// RESULT_RELEASED, returning the charge, when the set was released while the view was built.</summary>
-    public ResultView AddView(ResultSetBuffer set, int[] order, IReadOnlyList<ViewKey> keys, bool approximate, bool complete, long charged, uint? replaces)
+    public ResultView AddView(ResultSetBuffer set, int[] order, IReadOnlyList<ViewKey> keys, bool approximate, bool complete, long charged, uint? replaces, long baseRows = long.MaxValue)
     {
         List<ResultView> dropped = [];
         ResultView view;
@@ -257,7 +259,7 @@ internal sealed class ResultStore
                 views.Remove(own[i].ViewId);
                 dropped.Add(own[i]);
             }
-            view = new ResultView(nextViewId++, set, order, keys, approximate, complete, charged);
+            view = new ResultView(nextViewId++, set, order, keys, approximate, complete, charged, baseRows);
             views[view.ViewId] = view;
         }
         foreach (var item in dropped) Return(item.Set.Budget, item.Charged);

@@ -37,7 +37,7 @@ async function launch(extra = {}, profile = undefined) {
   page = await app.firstWindow()
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
   return profile
 }
 /** Quits without the unsaved-query prompts (they would wait for a hidden dialog), killing the app if it hangs. */
@@ -195,7 +195,7 @@ try {
   step = 'reload'
   // 6. A workbench reload ends the generation with the page that owned it; the new page shows no banner.
   await page.reload()
-  await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
   const reloaded = await ready(2)
   expect(reloaded.pid).not.toBe(first.pid)
   await expect(backendReady(page)).toHaveText('Ready')

@@ -98,9 +98,10 @@ internal sealed record ViewCellsArgs(long[][] Ranges, uint? ViewId = null);
 /// <summary>A filter as the view applied it, its cells resolved to one base row per distinct value (Between: the lowest
 /// and highest).</summary>
 internal sealed record ViewFilterResult(string Op, int? Column = null, int[]? Rows = null, bool? Nulls = null, int[]? Columns = null);
-/// <summary>Rows is the view's row count (the rows sealed when it was built); Complete says those were all the result's rows;
-/// Approximate says a key compared a truncated value's prefix or an estimated length.</summary>
-internal sealed record ResultsViewResult(uint ViewId, long Rows, bool Complete, bool Approximate, ViewFilterResult[]? Filters = null);
+/// <summary>Rows is the view's row count; BaseRows the result's rows it was built from (those sealed then, Rows when it has
+/// no filter); Complete says those were all the result's rows; Approximate says a key compared a truncated value's prefix
+/// or an estimated length.</summary>
+internal sealed record ResultsViewResult(uint ViewId, long Rows, long BaseRows, bool Complete, bool Approximate, ViewFilterResult[]? Filters = null);
 internal sealed record ResultsViewCloseArgs(uint ResultId, uint[] ViewIds);
 internal sealed record ResultsViewCloseResult(int Closed);
 /// <summary>results.identify: how the result's rows are told apart, for highlights. By "auto" picks a unique key column, else
@@ -126,6 +127,16 @@ internal sealed record ResultsDiffArgs(uint Left, uint Right, bool Exact = false
 /// only by collation (case or trailing spaces, say).</summary>
 internal sealed record ResultsDiffResult(ResultDescriptor Descriptor, string? Key, long Same, long Changed, long Added, long Removed, long Soft, bool Approximate,
     string[] LeftOnly, string[] RightOnly);
+/// <summary>One results.pivot value: Aggregate "count", "countDistinct", "sum", "avg", "min" or "max" of Column; "count"
+/// without a column counts rows.</summary>
+internal sealed record PivotValueArgs(string Aggregate, int? Column = null);
+/// <summary>results.pivot: groups a complete result's rows (ViewId's, in its order, when given) by up to 8 Rows columns and
+/// a Column column, and stores 1 to 16 Values of each group as a new result of the query (PivotOutput).</summary>
+internal sealed record ResultsPivotArgs(uint ResultId, int[] Rows, PivotValueArgs[] Values, int? Column = null, uint? ViewId = null);
+/// <summary>Descriptor is the pivot's result (kind "pivot"); Rows the source rows pivoted; RowGroups and ColumnGroups how many
+/// distinct groups it has (all shown: a pivot past its bounds is refused); Approximate that a value compared was a truncated
+/// value's stored prefix.</summary>
+internal sealed record ResultsPivotResult(ResultDescriptor Descriptor, long Rows, long RowGroups, long ColumnGroups, bool Approximate);
 /// <summary>results.search: the cells whose grid text contains Text (1 to 1,024 characters), searched through ViewId's order
 /// when it is given (rows are then view positions). It returns up to MaxMatches (1 to 10,000) of them in whole rows: from
 /// FromRow on, or with Backward the last ones before FromRow.</summary>
@@ -153,6 +164,23 @@ internal sealed record ColumnProfile(int Column, long Values, long Nulls, long D
 /// <summary>Rows profiled (the view's, or the rows sealed when it ran), whether they were all the result's, the rows' byte
 /// sizes (null without rows), and the columns asked for, in order.</summary>
 internal sealed record ResultsProfileResult(long Rows, bool Complete, ProfileLengths? RowBytes, ColumnProfile[] Columns);
+/// <summary>results.distinct: one column's distinct values over a result's rows, or its view's (ViewId), ordered by "count"
+/// (most frequent first) or "value", at most MaxValues (1 to 4,096) of them; Search (1 to 1,024 characters) keeps the
+/// values whose display text contains it. KeptViewId, another view of the result, has each value say whether one of that
+/// view's rows holds it.</summary>
+internal sealed record ResultsDistinctArgs(uint ResultId, int Column, string Order, int MaxValues, string? Search = null, uint? ViewId = null, uint? KeptViewId = null);
+/// <summary>A distinct value: its representative base row (the lowest holding it), its display text (binary as 0x hex, at
+/// most 256 characters and "…"), how many rows hold it, and with a KeptViewId whether a row of that view holds it.</summary>
+internal sealed record DistinctValue(int Row, string Text, long Count, bool? Kept = null);
+/// <summary>Rows looked at (the view's, or the rows sealed when it ran) and whether they were all the result's; Nulls counts
+/// NULL and unreadable cells; Distinct the values the search kept, of which Values are the first in the order asked
+/// (Truncated when there were more); Approximate when a truncated value compared by its stored prefix; with a KeptViewId,
+/// NullsKept says whether that view has a NULL (or unreadable) cell in the column, UnlistedKept whether it holds a value
+/// past those listed, and UnlistedHeld and UnlistedDropped the representative rows of those past values it holds and does
+/// not hold, each absent when they are more than one filter holds. A view built while the set loaded holds the rows sealed
+/// after it.</summary>
+internal sealed record ResultsDistinctResult(long Rows, bool Complete, long Nulls, long Distinct, bool Truncated, bool Approximate, DistinctValue[] Values, bool? NullsKept = null, bool? UnlistedKept = null,
+    int[]? UnlistedHeld = null, int[]? UnlistedDropped = null);
 /// <summary>results.rowBytes: Bytes[k] is row FirstRow + k's sum of DATALENGTH over its cells (NULL counts 0; xml and json
 /// as their text, some sql_variant base types estimated: docs/ipc.md, Cell lengths and row sizes); it stops at the rows sealed
 /// so far. Estimated lists, in order, the rows of the range whose sum includes an estimate.</summary>

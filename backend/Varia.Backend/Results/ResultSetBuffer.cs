@@ -92,6 +92,10 @@ internal sealed class ResultSetBuffer
     /// <summary>Records why a row was not stored; the first reason sticks.</summary>
     public void Skip(TruncationReason reason) => Interlocked.CompareExchange(ref truncated, (int)reason, 0);
 
+    /// <summary>A set made from stored results (a pivot), not read from the server: a refusal fails only this set, which its
+    /// caller then releases whole, and never stops its query from storing more, so a smaller pivot can still fit.</summary>
+    public bool Derived { get; init; }
+
     /// <summary>The builder for the next row, or null when this set stores nothing more (released, or its query stopped).</summary>
     public PageBuilder? BeginRow()
     {
@@ -194,7 +198,7 @@ internal sealed class ResultSetBuffer
             return true;
         }
         Skip(reason);
-        Budget.Stop(reason);
+        if (!Derived) Budget.Stop(reason);
         return false;
     }
 

@@ -1,6 +1,6 @@
 // Messages between the UI thread (ResultClient) and the results worker. The worker also owns the results port to main
 // (src/shared/ipc/port-messages.ts).
-import type { BackendStatus, IdentityBy, QueryEvent, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ResolvedViewFilter, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
+import type { BackendStatus, IdentityBy, PivotValueSpec, QueryEvent, ResolvedViewFilter, ResultsDiffResult, ResultsDistinctParams, ResultsDistinctResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport } from '../../../shared/ipc/port-messages'
 import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
@@ -16,6 +16,8 @@ export type IdentityRequest =
   | { readonly method: 'findRows'; readonly ids: readonly number[] }
   /** results.diff: this result (the earlier) against `right` (the later), of the same generation. */
   | { readonly method: 'diff'; readonly right: number; readonly exact: boolean; readonly context: number }
+  /** results.pivot: this result's rows (its view's, when the key names one) grouped and aggregated, stored as a new result. */
+  | { readonly method: 'pivot'; readonly rows: readonly number[]; readonly column?: number; readonly values: readonly PivotValueSpec[] }
 
 /** Cell flags in a window: NULL, truncated where the backend stored it (a prefix), read error, over the window's text
  *  budget, and cut at the window's maxCellChars. */
@@ -79,6 +81,9 @@ export type WorkerRequest =
   | { readonly type: 'search'; readonly id: number; readonly key: ResultKey; readonly text: string; readonly fromRow: number; readonly maxMatches: number; readonly backward: boolean }
   /** A column profile (results.profile) of `key`'s rows, through its view when it names one; `cancel` with the same id stops it. */
   | { readonly type: 'profile'; readonly id: number; readonly key: ResultKey; readonly columns: readonly number[] }
+  /** A column's distinct values (results.distinct) over `key`'s rows, through its view when it names one; `cancel` with the
+   *  same id stops it. */
+  | { readonly type: 'distinct'; readonly id: number; readonly key: ResultKey; readonly params: Omit<ResultsDistinctParams, 'resultId' | 'viewId'> }
   /** A live subscription (docs/ipc.md, Live subscriptions); `cancel` with the same id ends it. */
   | { readonly type: 'live'; readonly id: number; readonly params: LiveSubscribeParams }
   /** A change to the running subscription whose request id is `live`. */
@@ -97,11 +102,12 @@ export type WorkerResponse =
   | { readonly type: 'closed'; readonly id: number; readonly closed: number; readonly usedBytes: number }
   | { readonly type: 'rowBytes'; readonly id: number; readonly firstRow: number; readonly bytes: readonly number[]; readonly rowsAvailable: number; readonly estimated: readonly number[] }
   | { readonly type: 'stats'; readonly id: number; readonly bytes: number; readonly pages: number; readonly wireBytes: number; readonly columns: number }
-  | { readonly type: 'view'; readonly id: number; readonly viewId: number; readonly rows: number; readonly complete: boolean; readonly approximate: boolean; readonly filters?: readonly ResolvedViewFilter[] }
+  | { readonly type: 'view'; readonly id: number; readonly viewId: number; readonly rows: number; readonly baseRows: number; readonly complete: boolean; readonly approximate: boolean; readonly filters?: readonly ResolvedViewFilter[] }
   | { readonly type: 'viewClosed'; readonly id: number; readonly closed: number }
-  | { readonly type: 'identity'; readonly id: number; readonly result: ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsDiffResult }
+  | { readonly type: 'identity'; readonly id: number; readonly result: ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsDiffResult | ResultsPivotResult }
   | { readonly type: 'search'; readonly id: number; readonly result: ResultsSearchResult }
   | { readonly type: 'profile'; readonly id: number; readonly result: ResultsProfileResult }
+  | { readonly type: 'distinct'; readonly id: number; readonly result: ResultsDistinctResult }
   | { readonly type: 'error'; readonly id: number; readonly code: ErrorCode; readonly message: string }
   | { readonly type: 'query'; readonly queryId: string; readonly event: QueryEvent }
   | ({ readonly type: 'memory'; readonly feature: MemoryFeature } & MemoryReport)
