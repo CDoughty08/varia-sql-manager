@@ -3,7 +3,7 @@ import {
   activityBands, activityEditions, activityIntervalDefaults, activityIntervalsSeconds, activityLimits, activityLiveProbes, activityLoadGuard, activityPanes, activityPoolSuffix, activityProbes, activitySource,
   activityStatuses, activityTables, benignCategories, benignWaits, blockerLabels, liveColumnId, liveColumnPrefixes, pendingProbes,
   chartWindowsMinutes, defaultChartWindowMinutes, defaultPanes, detailsSections, detailsTexts, killOutcomes, paneSpecs, pendingPaneNote, pendingPanes, probeSeries, probeSpecs, rankChips, rowTones, seriesSpecs, sessionToggles, tableSpecs, tileSpecs, unavailableMessage, variaSessionKinds,
-  viewChipNotes, viewChips, viewChipTitles, waitCategories, waitExceptions, waitsChartSeries, waitToggles, type ColumnSpec, type ThresholdSpec
+  viewChipNotes, viewChips, viewChipTitles, fileLatencyDefaults, fileViewNotes, fileViews, fileViewTitles, waitCategories, waitExceptions, waitsChartSeries, waitToggles, type ColumnSpec, type ThresholdSpec
 } from './catalog.ts'
 
 /** The results grid's copy keys the Differences section cites; tests/activity-catalog.test.ts checks them against the commands catalogue. */
@@ -13,6 +13,10 @@ export const copyKeys = {
 } as const
 /** The monitor's commands and keys the document section lists (Windows and Linux, then macOS); tests/activity-catalog.test.ts
  *  checks them against the commands catalogue, which this file cannot import in plain Node. */
+/** What a pane whose grid has arrived shows, for the Panes table. */
+const shownPaneNotes: { readonly [P in (typeof activityPanes)[number]]?: string } = {
+  processes: 'A live grid of sessions with view chips, toggles, column filters and a filter box (below).'
+}
 export const documentCommands = {
   'activity.open': { title: 'Activity Monitor', other: '—', darwin: '⌥⌘A' },
   'activity.togglePause': { title: 'Pause', other: '—', darwin: '—' },
@@ -81,7 +85,9 @@ const limitNotes: Readonly<Record<keyof typeof activityLimits, string>> = {
   cancelIds: 'Details reads one cancel may name',
   cancelTombstones: 'Cancelled Details ids main remembers, so a read cancelled before it was sent is refused',
   cancelTombstoneMs: 'Milliseconds main remembers them',
-  sessionId: 'The largest session id'
+  sessionId: 'The largest session id',
+  fileLatencyMs: 'The largest latency threshold a files filter may carry (`activityMonitor.fileLatency*`)',
+  waitAverageMs: 'Milliseconds of samples the 1-Minute Average of Resource Waits spans'
 }
 
 function columnsTable(columns: readonly ColumnSpec[]): string {
@@ -170,7 +176,15 @@ export function renderActivityMonitorDocs(): string {
     'other shows swaps them. The Blocking tab counts blocked sessions. A pane whose grid has not arrived says so, and its',
     'probe stays paused: no SQL runs for a pane nobody can read.',
     '',
-    table(['Pane', 'Now'], pendingPanes.map(pane => [paneSpecs[pane].title, pendingPaneNote(pane)])),
+    table(['Pane', 'Now'], activityPanes.map(pane => [paneSpecs[pane].title, pendingPanes.includes(pane) ? pendingPaneNote(pane) : shownPaneNotes[pane] ?? 'Shown.'])),
+    '',
+    `Processes shows the sessions probe's rows in a live grid (one row per session, toned blocked, blocking, rolling back,`,
+    `system or departed). Its toolbar holds the view chips, the System sessions and Varia's own toggles, Column filters (a`,
+    'column, then its values with their counts from the facets, (Blanks) and (Non-blanks)), the filter box (sent when typing',
+    'pauses, on Enter or on leaving it; Escape puts back what was sent) and Clear filters, which keeps the toggles. All of them',
+    `travel as the source's args and the backend filters the sample, so the SQL never changes. A status line counts the`,
+    'sessions shown and says what is hidden or cut; the pane keeps its last rows, dimmed, with the reason when a sample fails.',
+    `A chosen value the facets no longer list stays in Column filters, checked, with a dash for its count; a column takes at most ${number(activityLimits.columnFilterValues)} values, and the panel closes on Escape or a click outside. With no rows yet the pane says whether it waits for a sample, is paused or has stopped.`,
     '',
     table(['Command', 'Id', 'Windows and Linux', 'macOS'], Object.entries(documentCommands).map(([id, command]) => [command.title, code(id), command.other, command.darwin])),
     '',
@@ -302,6 +316,11 @@ export function renderActivityMonitorDocs(): string {
     `Column value filters (Alt+Down on a header) offer (All), (Blanks), (Non-blanks) and each value with its count for ${tableSpecs.sessions.facetColumns!.map(column => tableSpecs.sessions.columns.find(spec => spec.id === column)!.caption).join(', ')}.`,
     'Several values in one column match any of them; filters on several columns must all match.',
     `Resource Waits has ${waitToggles.hideBenign.title} (${waitToggles.hideBenign.default ? 'on' : 'off'} by default), which leaves out benign wait types and the ${benignLabels} category.`,
+    '',
+    table(['Data File I/O chip', 'Id', 'Shows'], fileViews.map(view => [fileViewTitles[view], code(view), fileViewNotes[view]])),
+    '',
+    `Data File I/O tones a row warning when its read or write latency reaches ${fileLatencyDefaults.warning} ms and error from ${fileLatencyDefaults.error} ms; the files filter carries the`,
+    `\`activityMonitor.fileLatency*\` settings in their place (1 to ${number(activityLimits.fileLatencyMs)} ms). An error threshold below the warning one acts as the warning one.`,
     '',
     `Recent Expensive Queries ranks by ${Object.values(rankChips).map(chip => chip.title).join(', ')}, re-sorted from the last sample without new SQL.`,
     '',
