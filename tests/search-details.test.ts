@@ -8,7 +8,7 @@ import { detailsDrag, detailsKey, scriptable, searchDetailsLimits, SearchDetails
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { peekSpecs } from '../src/shared/explorer/peek'
-import { hitKindSpec, hitProperties, matchedLine, Properties, scrollKey } from '../src/renderer/src/search/SearchDetails'
+import { colouredEnd, hitKindSpec, hitProperties, matchedLine, Properties, scrollKey } from '../src/renderer/src/search/SearchDetails'
 
 const ok = <T>(value: T): ApiResult<T> => ({ ok: true, value })
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -251,5 +251,15 @@ describe('Search Objects details pane', () => {
     expect(hitKindSpec('futureKind')).toMatchObject({ title: 'Object', icon: 'file' })
     expect(hitKindSpec('toString')).toMatchObject({ title: 'Object' })
     expect(hitKindSpec('table')).toMatchObject({ title: 'Table', icon: 'table' })
+  })
+})
+
+describe('Search Objects details definition colouring', () => {
+  it('colours at most 3,000 lines or 1,000,000 characters of a definition that is never cut, never splitting a surrogate pair', () => {
+    expect(colouredEnd('SELECT 1')).toBe(8)
+    expect(colouredEnd('a\n'.repeat(5000))).toBe(6000)
+    expect(colouredEnd('x'.repeat(3_000_000))).toBe(1_000_000)
+    expect(colouredEnd('x'.repeat(999_999) + '\u{1F600}' + 'y'.repeat(10))).toBe(999_999)
+    expect(colouredEnd(('x'.repeat(1000) + '\n').repeat(3000))).toBe(1_000_000)
   })
 })

@@ -7,7 +7,7 @@ import { peekDefinitionParamsSchema, peekDependenciesParamsSchema, peekParamsSch
 import { requestSchemas } from '../src/main/validation'
 import { methodPolicies } from '../src/shared/ipc/methods'
 import { cancellableRequests } from '../src/main/backend/renderer-requests'
-import { PeekBoundary, PeekListView, Properties } from '../src/renderer/src/explorer/PeekCard'
+import { definitionLoading, PeekBoundary, PeekListView, Properties } from '../src/renderer/src/explorer/PeekCard'
 import { formatPeekValue, placePeek, cardWidth } from '../src/renderer/src/explorer/peek-format'
 import { PeekService } from '../src/renderer/src/explorer/PeekService'
 import type { ApiResult, ExplorerChildrenResult, QueryResult } from '../src/shared/contracts'
@@ -240,7 +240,9 @@ describe('PeekService', () => {
     service.peek(node('procedure'), 'menu')
     resolvePeek(ok({ facts: { schema: 'dbo' }, definition: 'CREATE PROC', definitionLength: 26, definitionStamp: 7, elapsedMs: 1 }))
     await flush()
-    expect(service.getSnapshot().open).toMatchObject({ facts: { status: 'ready' }, definition: { status: 'loading' } })
+    expect(service.getSnapshot().open).toMatchObject({ facts: { status: 'ready' }, definition: { status: 'loading', progress: 11 / 26 } })
+    expect(definitionLoading(11 / 26)).toBe('Loading the definition… 42%')
+    expect(definitionLoading()).toBe('Loading the definition…')
     expect(api.explorerPeekDefinition).toHaveBeenCalledTimes(1)
     expect(api.explorerPeekDefinition).toHaveBeenLastCalledWith({ connectionId, requestId: 'id-2', target: { kind: 'procedure', database: 'Sales', schema: 'dbo', name: 'Customer' }, offset: 11 })
     await service.copyDefinition()
@@ -249,7 +251,7 @@ describe('PeekService', () => {
     await flush()
     expect(api.explorerPeekDefinition).toHaveBeenCalledTimes(2)
     expect(api.explorerPeekDefinition).toHaveBeenLastCalledWith(expect.objectContaining({ requestId: 'id-3', offset: 21 }))
-    expect(service.getSnapshot().open?.definition.status).toBe('loading')
+    expect(service.getSnapshot().open?.definition).toEqual({ status: 'loading', progress: 21 / 26 })
     // A page shorter than a whole page (one that ended before a split pair) only moves the next offset along.
     pages[1]!(ok({ text: 'C AS', length: 26, stamp: 7, elapsedMs: 1 }))
     await flush()
@@ -301,7 +303,7 @@ describe('PeekService', () => {
     service.peek(node('procedure'), 'menu')
     resolvePeek(ok({ facts: {}, definition: 'CREATE', definitionLength: peekLimits.definitionMaxChars + 1, definitionStamp: 7, elapsedMs: 1 }))
     await flush()
-    expect(service.getSnapshot().open?.definition).toMatchObject({ status: 'error', message: expect.stringContaining('Script to New Query opens all of it') })
+    expect(service.getSnapshot().open?.definition).toMatchObject({ status: 'error', message: expect.stringContaining('longer than Peek reads (134,217,728 characters)') })
     expect(api.explorerPeekDefinition).not.toHaveBeenCalled()
   })
   it('closes when its server disconnects, and refuses lost or disconnected nodes', () => {

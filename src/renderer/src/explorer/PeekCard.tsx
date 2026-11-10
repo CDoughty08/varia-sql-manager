@@ -39,11 +39,15 @@ function Definition({ part, editor, open }: { part: PeekPart<PeekDefinition>; ed
     try { editor.show(here, { key: String(open.id), text, connectionId: open.node.connectionId, ...object?.database === undefined ? {} : { database: object.database } }) } catch (error) { onUnexpectedError(error) }
     return () => editor.hide(here)
   }, [editor, text, open.id, open.node.connectionId, object?.database])
-  if (part.status === 'loading') return <p className="peek-note" role="status">Loading the definition…</p>
+  if (part.status === 'loading') return <p className="peek-note" role="status">{definitionLoading(part.progress)}</p>
   if (part.status === 'error') return <p className="peek-note error" role="alert">{part.message}</p>
   if (text === undefined) return <p className="peek-note">{peekMessages.noDefinition}</p>
   return <div ref={slot} className="peek-editor" />
 }
+
+/** The Definition tab's loading line; a long text's pages say how much has come. */
+export const definitionLoading = (progress?: number): string =>
+  progress === undefined ? 'Loading the definition…' : `Loading the definition… ${Math.floor(progress * 100)}%`
 
 export function Properties({ peek }: { peek: OpenPeek }) {
   const { facts } = peek

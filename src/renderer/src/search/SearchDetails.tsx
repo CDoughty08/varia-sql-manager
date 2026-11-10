@@ -19,15 +19,29 @@ import { columnsOf, type DefinitionPart, type SearchDetails as Details } from '.
 
 /** Lines of a definition that are coloured; longer text shows the rest plain, so a huge module never stalls the pane. */
 const colouredLines = 3000
+/** Characters coloured at most, so a module of millions of characters (Peek's definitions are never cut) is not split or tokenized whole. */
+const colouredChars = 1_000_000
 
 /** A run of definition text in one SQL scope's colour. */
 interface Run { readonly text: string; readonly style?: SyntaxStyle }
 
 /**
- * Monaco's SQL tokens for the first `colouredLines` lines, merged into runs; the rest of the text is one plain run. SQL's
+ * Monaco's SQL tokens for the first `colouredLines` lines (at most `colouredChars`), merged into runs; the rest of the text is one plain run. SQL's
  * tokenizer loads lazily (start.tsx registers it), and tokenize answers plain text until it has: colorize waits for it,
  * and the runs are made again once it is there.
  */
+/** Where the coloured head ends: after `colouredLines` lines, or at `colouredChars` (never inside a surrogate pair). */
+export function colouredEnd(text: string): number {
+  let end = 0
+  for (let line = 0; line < colouredLines && end < text.length; line++) {
+    const next = text.indexOf('\n', end)
+    end = next < 0 ? text.length : next + 1
+  }
+  if (end <= colouredChars) return end
+  const code = text.charCodeAt(colouredChars - 1)
+  return code >= 0xd800 && code <= 0xdbff ? colouredChars - 1 : colouredChars
+}
+
 function useRuns(text: string | undefined): readonly Run[] {
   const { monaco, theme } = useWorkbench()
   const { active } = useServiceSnapshot(theme)
@@ -40,8 +54,8 @@ function useRuns(text: string | undefined): readonly Run[] {
   return useMemo(() => {
     if (text === undefined) return []
     try {
-      const lines = text.split('\n')
-      const head = lines.slice(0, colouredLines), tokens = monaco.editor.tokenize(head.join('\n'), 'sql')
+      const cut = colouredEnd(text)
+      const head = text.slice(0, cut).split('\n'), tokens = monaco.editor.tokenize(head.join('\n'), 'sql')
       const runs: Run[] = []
       const push = (piece: string, style?: SyntaxStyle) => {
         const last = runs[runs.length - 1]
@@ -56,9 +70,9 @@ function useRuns(text: string | undefined): readonly Run[] {
           push(line.slice(token.offset, end), isSqlScope(scope) ? active.syntax[scope] : undefined)
         })
         if (!lineTokens.length) push(line)
-        if (index < lines.length - 1) push('\n')
+        if (index < head.length - 1) push('\n')
       })
-      if (lines.length > colouredLines) push(lines.slice(colouredLines).join('\n'))
+      if (cut < text.length) push(text.slice(cut))
       return runs
     } catch (error) {
       onUnexpectedError(error)

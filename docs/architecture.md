@@ -150,7 +150,7 @@ being true.
   never ends inside a surrogate pair. A page whose length or stamp differs from the first page's means the module changed
   in between, and the part says so instead of showing pages that do not fit. Closing, replacing or refreshing the view
   cancels the page being read. The one bound is `peekLimits.definitionMaxChars` (the longest batch SQL Server takes at its
-  default packet size): a longer text is not read, and the part says to use Script to New Query, never showing part of it.
+  default packet size): a longer text is not read, and the part says so, never showing part of it.
 - Search Objects' index (`backend/Varia.Backend/Search/`, docs/object-search.md) lives only in backend memory, one per
   connection, never on disk, and is dropped on disconnect; its limits are `objectSearchLimits` in
   `src/shared/explorer/search.ts`, mirrored in C# (`tests/object-search.test.ts`), with everything it holds (records, names

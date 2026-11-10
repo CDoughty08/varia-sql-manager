@@ -13,7 +13,8 @@ import type { ResultsService } from '../results/ResultsService'
 
 /** How a peek was asked for: a hover opens the card without moving focus; the keyboard and the menu focus it. */
 export type PeekSource = 'hover' | 'keyboard' | 'menu'
-export type PeekPart<T> = { readonly status: 'loading' } | { readonly status: 'ready'; readonly value: T } | { readonly status: 'error'; readonly message: string }
+/** `loading` may say how much of a long definition's text has come (0 to 1) while its pages are read. */
+export type PeekPart<T> = { readonly status: 'loading'; readonly progress?: number } | { readonly status: 'ready'; readonly value: T } | { readonly status: 'error'; readonly message: string }
 /** A definition, always whole: a long module's pages are put together before it is ready. */
 export interface PeekDefinition { readonly text?: string }
 /** The Columns or Parameters folder as the tree lists it: its first page, `more` when the folder has others. */
@@ -84,7 +85,7 @@ export const peekMessages = {
   notConnected: 'The server is not connected.',
   noDefinition: 'The definition is encrypted, or the login does not have VIEW DEFINITION permission on it.',
   definitionChanged: 'The definition changed while Peek read it. Refresh to read it again.',
-  definitionTooLong: `The definition is longer than Peek reads (${peekLimits.definitionMaxChars.toLocaleString('en-US')} characters). Script to New Query opens all of it.`,
+  definitionTooLong: `The definition is longer than Peek reads (${peekLimits.definitionMaxChars.toLocaleString('en-US')} characters), the longest batch SQL Server takes at its default packet size.`,
   noRows: 'It has no rows.',
   noMembers: 'None.',
   noDependencies: 'None found.',
@@ -272,6 +273,7 @@ export class PeekReads {
     if (length > peekLimits.definitionMaxChars) { tell({ definition: { status: 'error', message: peekMessages.definitionTooLong } }); return }
     const pages = [first.definition ?? '']
     let offset = pages[0]!.length
+    tell({ definition: { status: 'loading', progress: offset / length } })
     while (offset < length) {
       if (!current()) return
       const requestId = this.newId()
@@ -284,6 +286,7 @@ export class PeekReads {
       if (page.length !== length || page.stamp !== stamp || !page.text) { tell({ definition: { status: 'error', message: peekMessages.definitionChanged } }); return }
       pages.push(page.text)
       offset += page.text.length
+      if (offset < length) tell({ definition: { status: 'loading', progress: offset / length } })
     }
     if (offset !== length) { tell({ definition: { status: 'error', message: peekMessages.definitionChanged } }); return }
     tell({ definition: { status: 'ready', value: { text: pages.join('') } } })
