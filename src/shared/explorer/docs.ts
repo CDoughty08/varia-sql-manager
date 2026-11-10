@@ -7,6 +7,7 @@ import { loginChipDocs, statusChipDocs } from './status.ts'
 import { peekKinds, peekLimits, peekLists, peekListsOf, peekSpecs, peekTabsOf, peekTabTitle } from './peek.ts'
 import { loginDetailWords, loginTypeSubtypes, type LoginType } from '../actions/logins.ts'
 import { glyphSizes } from '../theme/metrics.ts'
+import { languageLimits } from '../language-service.ts'
 
 const cell = (value: string) => value.replaceAll('|', '\\|')
 const row = (cells: readonly string[]) => '| ' + cells.map(cell).join(' | ') + ' |'
@@ -253,9 +254,12 @@ export function renderExplorerDocs(): string {
     '',
     '**Definition** shows the text in the query editor itself (`createQueryEditor`, read-only), so Tools › Options, the theme',
     "and Find reach it as they reach a query, and so will editor features added later. Each card or tab has one editor, and each",
-    "definition a model of its own carrying the view's connection and database (`peekModelContext`, for SQL language features",
-    'to read once they serve Peek; today they serve query documents only), disposed as soon as the view shows another object, goes Back or',
-    'refreshes; closing the card or tab disposes the editor. Its focus key is `peekEditorFocus`, never `editorFocus`, so query',
+    "definition a model of its own carrying the view's connection and database and its own UUID (`peekModelContext`), disposed",
+    'as soon as the view shows another object, goes Back or refreshes; closing the card or tab disposes the editor. SQL language',
+    "features serve that model as they serve a query's: hovering a name shows what IntelliSense knows of it in the view's",
+    'database. Completion and analysis markers stay off, since the text is read-only, and disposing the model closes its',
+    `language document. As for a query, a definition longer than ${languageLimits.documentCharacters.toLocaleString('en-US')} characters gets no hover.`,
+    'Its focus key is `peekEditorFocus`, never `editorFocus`, so query',
     'commands (Execute, Parse and the rest) leave it alone, and F5 refreshes the Peek; Find, Copy and Select All are Monaco\'s',
     "own. **Script to New Query** and, for a kind that offers it, **Modify** open the definition in a query tab through Script As.",
     `A definition is never cut. A module's text comes in pages of ${peekLimits.definitionPageChars.toLocaleString('en-US')} characters: the first with the`,
