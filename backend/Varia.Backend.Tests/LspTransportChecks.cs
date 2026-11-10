@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Varia.Backend.Common;
 using Varia.Backend.Language;
 
 namespace Varia.Backend.Tests;
@@ -119,6 +120,35 @@ internal static class LspTransportChecks
                 try { await request.WaitAsync(CheckWait); }
                 catch (Exception error) when (error is IOException or ObjectDisposedException) { }
             check(refused, "LSP pending requests have a strict capacity and disposal releases all slots");
+        }
+        // .NET's tree kill stops the child (SIGSTOP), lists its children and then kills it. A Dispose that found another
+        // thread's stop under way used to return at once and release the process handle, and the backend's exit could land
+        // inside the kill; either left the child stopped for good. Both now wait at the gate until the kill has ended.
+        var gate = new ExitGate();
+        using var killing = new ManualResetEventSlim();
+        using var disposeReturned = new ManualResetEventSlim();
+        using var exited = new ManualResetEventSlim();
+        bool overtaken = true, killEnded = false;
+        await using (var held = new LspClient(path, arguments, kill: child =>
+        {
+            killing.Set();
+            SpinWait.SpinUntil(() => gate.Waiting == 2 || disposeReturned.IsSet || exited.IsSet, CheckWait);
+            overtaken = disposeReturned.IsSet || exited.IsSet;
+            child.Kill(entireProcessTree: true);
+            killEnded = true;
+        }, exitGate: gate))
+        {
+            await held.RequestAsync("echo", new { }, timeout: StartupWait);
+            // The reader stops the transport on the malformed answer, with the child still running.
+            var failing = held.RequestAsync("malformed", null, timeout: CheckWait);
+            var started = killing.Wait(CheckWait);
+            bool killedBeforeDisposeReturned = false, killedBeforeExit = false;
+            var disposer = new Thread(() => { held.Dispose(); killedBeforeDisposeReturned = killEnded; disposeReturned.Set(); }) { IsBackground = true };
+            var exiter = new Thread(() => gate.Exit(_ => { killedBeforeExit = killEnded; exited.Set(); }, 0)) { IsBackground = true };
+            if (started) { disposer.Start(); exiter.Start(); }
+            var settled = started && disposeReturned.Wait(CheckWait) && exited.Wait(CheckWait);
+            try { await failing.WaitAsync(CheckWait); } catch (IOException) { }
+            check(settled && !overtaken && killedBeforeDisposeReturned && killedBeforeExit, "LSP disposal and the backend's exit wait for a tree kill another thread has under way");
         }
     }
 

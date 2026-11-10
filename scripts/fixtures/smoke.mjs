@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { readdirSync, readFileSync } from 'node:fs'
 import { _electron, expect as baseExpect } from '@playwright/test'
 import { ignoreCrashedTargetReplies } from './playwright-races.mjs'
 
@@ -69,42 +70,23 @@ const running = new Set()
 const killTree = pid => { try { execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* Already gone. */ } }
 if (process.platform === 'win32') process.on('exit', () => { for (const pid of running) killTree(pid) })
 
-/** How long the app's output pipes may stay open after it exited before the fixture closes them itself. */
-export const pipeGraceMs = 5_000
-
-/** The names (never the arguments, which may hold secrets) of the processes still in POSIX process group `pgid`. */
-function processGroup(pgid) {
-  try {
-    return execFileSync('ps', ['-A', '-o', 'pid=,pgid=,comm='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
-      .split('\n').map(line => line.trim().split(/\s+/)).filter(([pid, group]) => group === String(pgid) && pid !== String(pgid)).map(([, , comm]) => comm)
-  } catch { return [] }
-}
-
 /**
- * Playwright's app.close() returns on the launched process's 'close' event, which Node raises only once its stdio pipes
- * have closed too, not on 'exit'. A descendant that inherited them (Chromium's helpers inherit stdout and stderr on Linux) and
- * outlived main by a moment held close() for its full 45 s although main had exited with code 0. So once the leader has
- * exited, its pipes get `graceMs` to close; then the fixture names and ends what is left of its process group and closes
- * its own ends of the pipes, which raises 'close'. The app did close, so this does not fail the suite.
- * Returns the function that stops watching.
+ * Linux: the processes in a process group as `name pid state` (state T is stopped), at most 20. Playwright's close waits for
+ * the app's pipes, which the backend and its language server inherit, so a close that hangs after main exited names its holder.
  */
-export function releasePipesAfterExit(child, graceMs = pipeGraceMs) {
-  if (!child?.once) return () => {}
-  let timer
-  const release = () => {
-    const pid = child.pid
-    const left = process.platform !== 'win32' && pid ? processGroup(pid) : []
-    if (process.platform !== 'win32' && pid) { try { process.kill(-pid, 'SIGKILL') } catch { /* The group is already gone. */ } }
-    for (const stream of [child.stdin, child.stdout, child.stderr]) stream?.destroy()
-    console.log(`The app exited (${child.signalCode ? 'signal ' + child.signalCode : 'code ' + child.exitCode}), but its output pipes were still open ${graceMs / 1000} s later` +
-      (left.length ? `, held by ${left.join(', ')}` : '') + ': closed them.')
-  }
-  const exited = () => { timer = setTimeout(release, graceMs) }
-  const closed = () => clearTimeout(timer)
-  if (child.exitCode !== null && child.exitCode !== undefined || child.signalCode) exited()
-  else child.once('exit', exited)
-  child.once('close', closed)
-  return () => { clearTimeout(timer); child.off('exit', exited); child.off('close', closed) }
+export function groupMembers(group) {
+  const members = []
+  try {
+    for (const pid of readdirSync('/proc')) {
+      if (!/^\d+$/.test(pid) || members.length >= 20) continue
+      try {
+        const stat = readFileSync(`/proc/${pid}/stat`, 'utf8'), end = stat.lastIndexOf(')')
+        const [state, , pgid] = stat.slice(end + 2).split(' ')
+        if (Number(pgid) === group) members.push(`${stat.slice(stat.indexOf('(') + 1, end)} ${pid} ${state}`)
+      } catch { /* It exited meanwhile. */ }
+    }
+  } catch { /* No /proc on this platform. */ }
+  return members
 }
 
 /**
@@ -113,10 +95,9 @@ export function releasePipesAfterExit(child, graceMs = pipeGraceMs) {
  * fails the suite through the exit code, and returns without throwing, so that error still propagates and prints.
  */
 export async function boundedClose(application, close, ms = closeMs) {
-  const stopWatching = releasePipesAfterExit(application.process())
   const closing = Promise.resolve().then(close)
   let hung = false
-  await within(closing, ms, () => { hung = true }).finally(stopWatching)
+  await within(closing, ms, () => { hung = true })
   if (!hung) return
   closing.catch(() => {})
   console.error(`The app did not close within ${ms / 1000} s: killed it, and the suite fails. Its own error, if any, follows.`)
@@ -124,6 +105,8 @@ export async function boundedClose(application, close, ms = closeMs) {
   const child = application.process()
   // Playwright detaches POSIX apps into their own group; descendants can keep its stdio open after the leader dies.
   if (process.platform !== 'win32' && child?.pid) {
+    const members = groupMembers(child.pid)
+    if (members.length) console.error(`Still running in the app's process group (main ${(child.exitCode ?? child.signalCode ?? null) === null ? 'has not exited' : 'exited'}): ${members.join(', ')}`)
     try {
       process.kill(-child.pid, 'SIGKILL')
       return
