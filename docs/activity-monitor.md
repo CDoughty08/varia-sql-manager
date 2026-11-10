@@ -102,9 +102,8 @@ after 10 cheap samples. Pause stops collecting (no SQL); the charts show a gap a
 
 ## The live source
 
-The live catalogue ([docs/live.md](live.md)) declares `activity.overview`, `activity.sessions`, `activity.resources`, built from this catalogue: the same tables, columns (in
+The live catalogue ([docs/live.md](live.md)) declares `activity.overview`, `activity.sessions`, `activity.resources`, `activity.queries`, built from this catalogue: the same tables, columns (in
 the same order, with the captions as column names, so Copy with Headers and Save write them), keys, facets and series.
-`activity.queries` joins the live catalogue with Recent Expensive Queries.
 
 Each probe runs its statements one at a time on the live connection, within one budget. A statement the login may not run
 (PERMISSION_DENIED) or the server lacks (NOT_SUPPORTED) fails alone: the sample goes on, an error beside it names the tables
@@ -392,15 +391,32 @@ Probe `activity.queries`; key `queryHash`; at most 200 rows. Default order: CPU 
 | Logical Reads/sec | `logicalReadsRate` | decimal | /s | Yes | SSMS | Per second over the sample window. |
 | Logical Writes/sec | `logicalWritesRate` | decimal | /s | Yes | SSMS | Per second over the sample window. |
 | Average Duration (ms) | `averageDurationMs` | decimal | ms | Yes | SSMS | Elapsed time per execution in the sample window. |
-| Max Duration (ms) | `maxDurationMs` | decimal | ms | Yes | New | The longest execution since the plan was cached. |
+| Max Duration (ms) | `maxDurationMs` | decimal | ms | Yes | New | The longest execution of the group's plans the monitor has seen, since each was cached. |
 | Rows/Execution | `rowsPerExecution` | decimal | count | Yes | New | Rows per execution. |
 | Avg Grant (KB) | `avgGrantKb` | decimal | KB |  | New | Memory grant per execution. |
 | Spills | `spills` | bigint | count |  | New | Pages spilled in the window. Needs `totalSpills`. |
-| Plan Count | `planCount` | int | count | Yes | SSMS | Distinct plans (query_plan_hash) in the group. |
+| Plan Count | `planCount` | int | count | Yes | SSMS | Distinct plans (query_plan_hash) of the group seen since sampling started or resumed, idle ones included. |
 | Database | `database` | text | — | Yes | SSMS | The plan's database. |
 | Last Execution | `lastExecution` | datetime | — | Yes | New | The group's latest execution (server time). |
-| Cached Since | `cachedSince` | datetime | — |  | New | The oldest plan's creation time. |
+| Cached Since | `cachedSince` | datetime | — |  | New | The creation time of the oldest plan of the group the monitor has seen. |
 | Query Hash | `queryHash` | text | — |  | New | query_hash, which groups the statements. |
+
+The stats statement reads the plan cache's statements whose last execution ended since the previous sample (its start
+plus its elapsed time, so a statement that ran longer than a window is read when it ends), newest end first, at most
+`queryStatsRows`. Each statement (sql_handle, plan_handle and offsets) keeps its totals between samples, at most 20,000
+statements, the one seen least recently dropped first; a row's values are the changes since those totals, summed per
+query_hash, so a sum never depends on which rows a window happens to include. Rates span the window since the previous
+sample on the probe's clock. A plan cached since the previous sample counts whole; any other statement new to the kept
+totals counts its last execution (the `last_*` columns), which ended in the window, and so does one whose totals were
+kept before a sample cut at `queryStatsRows`, which may have missed a run; its next runs count from the totals kept then.
+The rows are the groups that ran in the window, most CPU first, at most 200. Plan Count, Max Duration and Cached Since
+come from every kept statement of the group, not only those that ran in the window. A first sample (and the first after
+Resume, a restart, a reconnect, a sample that timed out after its totals moved on, or the server's local time stepping
+back, as when daylight saving ends) has no window: it shows the groups that ran in the last 10
+minutes, by their plans' total CPU, with the rates blank and the per-execution columns from the plans' totals. Statement
+text and database come from a cache of 2,000 texts, read for the shown rows that lack one, 50 per statement and
+4 statements per sample, most expensive first; until its text arrives a row says "Loading text…", which the
+filter box does not match. A text SQL Server no longer has, or one the login may not read, stays blank.
 
 ## Filters
 

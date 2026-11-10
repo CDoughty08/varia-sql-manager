@@ -369,6 +369,7 @@ if (liveGroup is null)
         ("Activity", Sync(() => ActivityChecks.Run(Check))),
         ("ActivitySource", Sync(() => ActivitySourceChecks.Run(Check))),
         ("ActivityResource", Sync(() => ActivityResourceChecks.Run(Check))),
+        ("ActivityQuery", Sync(() => ActivityQueryChecks.Run(Check))),
         ("ActivityAction", () => ActivityActionChecks.RunAsync(Check, json)),
         ("SsisOperations", Sync(() => SsisOperationsChecks.Run(Check)))
     ];
@@ -824,6 +825,7 @@ try
     await Suite("Activity", () => ActivityLiveChecks.RunAsync(Check, service, info));
     await Suite("ActivitySource", () => ActivitySourceLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("ActivityResources", () => ActivityResourceLiveChecks.RunAsync(Check, service, info, json));
+    await Suite("ActivityQuery", () => ActivityQueryLiveChecks.RunAsync(Check, service, info));
     await Suite("ActivityAction", () => ActivityActionLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("SsisCreate", () => SsisCreateLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("Entra", () => EntraChecks.LiveAsync(Check, Live("master"), json));
