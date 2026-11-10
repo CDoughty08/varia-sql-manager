@@ -15,6 +15,49 @@ internal static class PeekLiveChecks
     private static async Task<PeekDependenciesResult> Dependencies(SqlService service, string connectionId, ObjectRefDto target, JsonSerializerOptions json) =>
         (PeekDependenciesResult)await service.DispatchAsync("explorer.peekDependencies", JsonSerializer.SerializeToElement(new PeekArgs(connectionId, Guid.NewGuid().ToString(), target), json), json);
 
+    private static async Task<PeekDefinitionResult> DefinitionPage(SqlService service, string connectionId, ObjectRefDto target, int offset, JsonSerializerOptions json) =>
+        (PeekDefinitionResult)await service.DispatchAsync("explorer.peekDefinition", JsonSerializer.SerializeToElement(new PeekDefinitionArgs(connectionId, Guid.NewGuid().ToString(), target, offset), json), json);
+
+    /// <summary>A module longer than one page, read as the renderer reads it: the peek's first page, then explorer.peekDefinition
+    /// from where each page ended, compared whole with the text that made it. A surrogate pair straddles the first page's end, so
+    /// the first page ends before it and the second starts with it whole; every page answers the same length and stamp.</summary>
+    private static async Task LongDefinitionAsync(Action<bool, string> check, SqlService service, string connectionId, string database, Func<string, string, Task<SqlRun>> sql, JsonSerializerOptions json)
+    {
+        var limits = ExplorerCatalog.Current.Peek;
+        const string header = "CREATE PROCEDURE dbo.PeekLong AS\n--";
+        var before = limits.DefinitionPageChars - 1 - header.Length;
+        var after = limits.DefinitionPageChars + limits.DefinitionPageChars / 2;
+        var expected = header + new string('a', before) + "\U0001F600" + new string('b', after) + "\nSELECT 1;";
+        // Built on the server, so the script stays small; 0x3DD800DE is U+1F600's UTF-16LE pair whatever the collation.
+        var created = await sql("DECLARE @body nvarchar(max) = N'CREATE PROCEDURE dbo.PeekLong AS' + NCHAR(10) + N'--' + REPLICATE(CONVERT(nvarchar(max), N'a'), " + before
+            + ") + CONVERT(nvarchar(2), 0x3DD800DE) + REPLICATE(CONVERT(nvarchar(max), N'b'), " + after + ") + NCHAR(10) + N'SELECT 1;';\nEXEC (@body);\n", database);
+        try
+        {
+            check(created.Status == "completed", "the long procedure is created: " + created.Error);
+            var target = new ObjectRefDto("procedure", database, "dbo", "PeekLong");
+            var peek = await Peek(service, connectionId, target, json);
+            var first = peek.Definition ?? "";
+            check(peek is { Error: null, DefinitionLength: { } length, DefinitionStamp: not null } && length == expected.Length && first.Length == limits.DefinitionPageChars - 1 && expected.StartsWith(first, StringComparison.Ordinal),
+                "a module longer than a page peeks with its first page, which ends before a pair it would split, and the whole text's length: " + (peek.Error?.Message ?? first.Length + "/" + peek.DefinitionLength));
+            var text = new System.Text.StringBuilder(first);
+            var problems = new List<string>();
+            for (var page = 0; text.Length < expected.Length && page < 8; page++)
+            {
+                var next = await DefinitionPage(service, connectionId, target, text.Length, json);
+                if (next.Error is not null || next.Text is not { Length: > 0 } part || next.Length != expected.Length || next.Stamp != peek.DefinitionStamp) { problems.Add(next.Error?.Message ?? "page at " + text.Length); break; }
+                if (part.Length > limits.DefinitionPageChars || char.IsLowSurrogate(part[0])) problems.Add("page at " + text.Length + " is " + part.Length + " long");
+                text.Append(part);
+            }
+            check(problems.Count == 0 && text.ToString() == expected,
+                "its pages, each from where the last ended, carry the same length and stamp and put together the text whole: " + string.Join(", ", problems) + " (" + text.Length + "/" + expected.Length + ")");
+            var past = await DefinitionPage(service, connectionId, target, expected.Length, json);
+            var gone = await DefinitionPage(service, connectionId, target with { Name = "NoSuchLong" }, 5, json);
+            check(past is { Error: null, Text: "", Length: var pastLength } && pastLength == expected.Length && gone.Error?.Code == "NOT_FOUND",
+                "a page past the end is empty, and a page of a module that is gone is NOT_FOUND: " + (past.Error?.Message ?? past.Text?.Length.ToString()) + " " + gone.Error?.Code);
+        }
+        finally { await sql("DROP PROCEDURE IF EXISTS dbo.PeekLong;", database); }
+    }
+
     public static async Task SystemAsync(Action<bool, string> check, SqlService service, string connectionId, int major, JsonSerializerOptions json)
     {
         var options = service.Explorer.Options;
@@ -51,7 +94,7 @@ internal static class PeekLiveChecks
             + string.Join(" | ", errors.Take(5)));
 
         var view = await Peek(service, connectionId, objects, json);
-        check(view is { Error: null, Definition: { } text, DefinitionTruncated: null } && text.Contains("CREATE VIEW", StringComparison.OrdinalIgnoreCase)
+        check(view is { Error: null, Definition: { } text, DefinitionLength: null, DefinitionStamp: null } && text.Contains("CREATE VIEW", StringComparison.OrdinalIgnoreCase)
             && view.Facts["schema"] as string == "sys" && view.Facts["systemObject"] is true && view.Facts["created"] is string { Length: 19 } created && created[10] == 'T',
             "sys.objects peeks as a system view in sys with its text and a yyyy-MM-ddTHH:mm:ss creation date");
         var procedure = await Peek(service, connectionId, help, json);
@@ -144,6 +187,7 @@ internal static class PeekLiveChecks
         JsonSerializerOptions json, Func<Task<string>> memoryOptimized, Func<Task> dropMemoryOptimized, Func<string, string> ownLogin)
     {
         await KindsAsync(check, service, connectionId, database, major, sql, json, ownLogin("peek"), ownLogin("peeku"));
+        await LongDefinitionAsync(check, service, connectionId, database, sql, json);
         try { await MemoryOptimizedAsync(check, service, connectionId, sql, json, memoryOptimized); }
         finally { await dropMemoryOptimized(); }
         // Hostile names, dropped afterwards so the fixture checks that follow see the database as the fixtures made it.
@@ -234,7 +278,7 @@ internal static class PeekLiveChecks
             const string revert = "END TRY\nBEGIN CATCH\nREVERT;\nTHROW;\nEND CATCH;\nREVERT;\n";
             var granted = await sql("CREATE USER [peek_low] WITHOUT LOGIN;\nGRANT VIEW DEFINITION TO [peek_low];\n", database);
             var band = Math.Min(major, ExplorerCatalog.MaxBand);
-            var lowFacts = await sql(asLow + PeekSql.Render(ExplorerCatalog.Current.Peek.Kinds["table"], new SqlRender(band), ExplorerCatalog.Current.Peek.DefinitionChars).Text + revert, database);
+            var lowFacts = await sql(asLow + PeekSql.Render(ExplorerCatalog.Current.Peek.Kinds["table"], new SqlRender(band), ExplorerCatalog.Current.Peek.DefinitionPageChars).Text + revert, database);
             var lowDependencies = await sql(asLow + PeekSql.Dependencies("table", new SqlRender(band)) + revert, database);
             check(granted.Status == "completed" && lowFacts.Status == "completed" && lowDependencies.Status != "completed" && lowDependencies.Error is { } refused && refused.Contains("sql_expression_dependencies", StringComparison.Ordinal),
                 "a user who is not db_owner reads Peek's facts batch, and only the dependencies batch is refused: " + (lowFacts.Error ?? lowDependencies.Error ?? lowDependencies.Status));
@@ -409,7 +453,7 @@ internal static class PeekLiveChecks
             // Usage refused alone: a login that may not read server state (impersonated as a login, since a user without one is
             // refused every server-scoped view with 15562 instead) gets the index's other facts and lists, and a refused row.
             var band = Math.Min(major, ExplorerCatalog.MaxBand);
-            var batch = PeekSql.Render(ExplorerCatalog.Current.Peek.Kinds["index"], new SqlRender(band), ExplorerCatalog.Current.Peek.DefinitionChars, "table");
+            var batch = PeekSql.Render(ExplorerCatalog.Current.Peek.Kinds["index"], new SqlRender(band), ExplorerCatalog.Current.Peek.DefinitionPageChars, "table");
             var usagePassword = "Vx9!" + Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(12));
             var madeUsage = await sql("CREATE LOGIN " + usageBracketed + " WITH PASSWORD = N'" + usagePassword + "', CHECK_POLICY = OFF;\n", "master");
             var granted = madeUsage.Status == "completed" ? await sql("CREATE USER [peek_usage] FOR LOGIN " + usageBracketed + ";\nGRANT VIEW DEFINITION TO [peek_usage];\n", database) : madeUsage;

@@ -226,10 +226,17 @@ internal sealed record ExplorerChildrenResult(List<ExplorerNode> Nodes, long Ela
 /// <summary>explorer.peek (src/shared/explorer/peek.ts): an object's Properties facts and lists and, for modules, its text. Cancellation is a CANCEL frame for the request (or varia:explorer-cancel), as explorer.children's.</summary>
 internal sealed record PeekArgs(string ConnectionId, string RequestId, ObjectRefDto Target);
 /// <summary>Facts: fact id to a string, bool, whole number or null, for the facts the server's band has. Definition: a module's
-/// text, absent when it is encrypted or hidden; DefinitionTruncated is true only when it was cut. Facts are empty with an Error.
-/// Lists: the kind's lists by id. Refused: the optional groups whose statement the login was refused (their facts are absent).</summary>
-internal sealed record PeekResult(Dictionary<string, object?> Facts, long ElapsedMs, string? Definition = null, bool? DefinitionTruncated = null, ExplorerError? Error = null,
-    Dictionary<string, PeekList>? Lists = null, List<string>? Refused = null);
+/// text, absent when it is encrypted or hidden, or only its first page when DefinitionLength is set: the whole text's length in
+/// UTF-16 code units, with DefinitionStamp, its modify_date in Unix ms (explorer.peekDefinition reads the rest). Facts are empty
+/// with an Error. Lists: the kind's lists by id. Refused: the optional groups whose statement the login was refused (their facts are absent).</summary>
+internal sealed record PeekResult(Dictionary<string, object?> Facts, long ElapsedMs, string? Definition = null, long? DefinitionLength = null, long? DefinitionStamp = null,
+    ExplorerError? Error = null, Dictionary<string, PeekList>? Lists = null, List<string>? Refused = null);
+/// <summary>explorer.peekDefinition: a page of a module kind's text from Offset (UTF-16 code units, past explorer.peek's first page,
+/// below the catalogue's longest text). Cancellation as explorer.peek's.</summary>
+internal sealed record PeekDefinitionArgs(string ConnectionId, string RequestId, ObjectRefDto Target, int Offset);
+/// <summary>At most the catalogue's page of text from the offset (absent when the module has no visible text now), never ending
+/// inside a surrogate pair before the end, with the whole text's length and modify_date (Unix ms) now. Length and Stamp are 0 with an Error.</summary>
+internal sealed record PeekDefinitionResult(string? Text, long Length, long Stamp, long ElapsedMs, ExplorerError? Error = null);
 /// <summary>One of a peek's lists: its rows (values by the list's column formats); Truncated when there were more than the
 /// catalogue keeps; Unread, for a login's User mapping, the databases that could not be read.</summary>
 internal sealed record PeekList(List<object?[]> Rows, bool? Truncated = null, int? Unread = null);

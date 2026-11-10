@@ -42,10 +42,7 @@ function Definition({ part, editor, open }: { part: PeekPart<PeekDefinition>; ed
   if (part.status === 'loading') return <p className="peek-note" role="status">Loading the definition…</p>
   if (part.status === 'error') return <p className="peek-note error" role="alert">{part.message}</p>
   if (text === undefined) return <p className="peek-note">{peekMessages.noDefinition}</p>
-  return <>
-    <div ref={slot} className="peek-editor" />
-    {part.value.truncated && <p className="peek-note">The definition is longer than Peek shows. Script it to see all of it.</p>}
-  </>
+  return <div ref={slot} className="peek-editor" />
 }
 
 export function Properties({ peek }: { peek: OpenPeek }) {
@@ -206,7 +203,7 @@ export function PeekBody({ view, open, idPrefix, beforeScript }: { view: PeekVie
   const workbench = useWorkbench(), { commands } = workbench
   const node = open.node
   const definition = open.definition.status === 'ready' ? open.definition.value : undefined
-  const copyable = definition?.text !== undefined && !definition.truncated
+  const copyable = definition?.text !== undefined
   const script = scriptCommandId('create', 'newQuery')
   // The node's own selection keys, as a Peek tab's verbs pass them: the shown object may be a followed dependency, not the tree's selection.
   const target: CommandArgs = { target: { kind: 'explorer', node }, state: selectionContextOf(node, { insertable: insertTextFor(node.ref) !== undefined }) }
@@ -228,7 +225,7 @@ export function PeekBody({ view, open, idPrefix, beforeScript }: { view: PeekVie
           <Tabs peek={open} idPrefix={idPrefix} />
           <span className="peek-spacer" />
           {open.tab === 'definition' && <>
-            <button type="button" className="peek-action" disabled={!copyable} title={definition?.truncated ? 'The definition is cut; Script to New Query has all of it.' : undefined} onClick={() => { view.copyDefinition().catch(onUnexpectedError) }}>Copy</button>
+            <button type="button" className="peek-action" disabled={!copyable} onClick={() => { view.copyDefinition().catch(onUnexpectedError) }}>Copy</button>
             <button type="button" className="peek-action" disabled={!commands.isEnabled(script, target)}
               onClick={() => { beforeScript?.(); void commands.execute(script, target, 'toolbar') }}>Script to New Query</button>
             {modifiable && <button type="button" className="peek-action" disabled={!commands.isEnabled('explorer.modify', target)}

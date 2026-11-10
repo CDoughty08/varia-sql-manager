@@ -138,7 +138,6 @@ function Definition({ details, part }: { readonly details: Details; readonly par
       {runs.map((run, index) => run.style
         ? <span key={index} style={{ color: run.style.foreground, fontStyle: run.style.fontStyle.includes('italic') ? 'italic' : undefined, fontWeight: run.style.fontStyle.includes('bold') ? 'bold' : undefined }}>{run.text}</span>
         : run.text)}</pre>
-    {part.value.truncated && <p className="peek-note">The definition is longer than the pane shows. Script it to see all of it.</p>}
   </>
 }
 
