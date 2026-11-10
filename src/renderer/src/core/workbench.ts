@@ -24,6 +24,7 @@ import { ResultClient } from '../results/ResultClient'
 import { ResultsService } from '../results/ResultsService'
 import { HighlightsService } from '../results/HighlightsService'
 import { CompareService } from '../results/CompareService'
+import { PivotService } from '../results/PivotService'
 import { ResultsSearchService } from '../results/search'
 import { MemoryUsageService } from '../results/memory'
 import { documentOwner, documentPage, eitherHidden, LiveService, mainWindowPage } from '../live/LiveService'
@@ -61,6 +62,7 @@ import { explorerContribution } from '../contributions/explorer'
 import { outputContribution } from '../contributions/output'
 import { messagesContribution } from '../contributions/messages'
 import { highlightsContribution } from '../contributions/highlights'
+import { pivotContribution } from '../contributions/pivot'
 import { compareContribution } from '../contributions/compare'
 import { scriptingContribution } from '../contributions/scripting'
 import { settingsContribution } from '../contributions/settings'
@@ -138,6 +140,7 @@ export interface Workbench extends Disposable {
   /** Rows highlighted in each query tab's grids, found again by identity after sorts and re-runs. */
   readonly highlights: HighlightsService
   readonly compare: CompareService
+  readonly pivot: PivotService
   /** Search in results: each tab's search box, its matches (found in the backend) and column-name matches. */
   readonly resultsSearch: ResultsSearchService
   /** What the backend holds for results, for the status bar. */
@@ -283,6 +286,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     onSortTextChange: listener => settings.subscribe(listener) })
   const highlights = new HighlightsService(results)
   const compare = new CompareService(results)
+  const pivot = new PivotService(results)
   const resultsSearch = new ResultsSearchService({ results })
   const resultMemory = new MemoryUsageService(resultClient, 'results', events)
   const indexMemory = new MemoryUsageService(resultClient, 'index')
@@ -477,6 +481,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     results,
     highlights,
     compare,
+    pivot,
     resultsSearch,
     resultMemory,
     indexMemory,
@@ -551,6 +556,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       queries.dispose()
       highlights.dispose()
       compare.dispose()
+      pivot.dispose()
       resultsSearch.dispose()
       // Before the results: each tab's view releases its Top rows there (the card's are released with it below, or by the results).
       peekTabs.dispose()
@@ -624,6 +630,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     messagesContribution(workbench),
     highlightsContribution(workbench),
     compareContribution(workbench),
+    pivotContribution(workbench),
     paletteContribution(workbench),
     themeContribution(workbench, api),
     backendContribution(workbench),

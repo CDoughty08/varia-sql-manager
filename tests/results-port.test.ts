@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ResultsPortHost, toExactArrayBuffer, type FrameLike, type LiveStreamHandle, type PortMainLike, type ReadStream, type ResultsBackend } from '../src/main/backend/results-port'
 import { BackendError } from '../src/main/backend/errors'
 import type { StreamSink } from '../src/main/backend/connection'
-import type { QueryEvent, ResultDescriptor, ResultsDiffParams, ResultsDiffResult, ResultsDistinctParams, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsFindRowsParams, ResultsIdentifyParams, ResultsIdentifyResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsRowBytesParams, ResultsRowIdsParams, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewParams, ResultsViewResult } from '../src/shared/contracts'
+import type { QueryEvent, ResultDescriptor, ResultsDiffParams, ResultsDiffResult, ResultsDistinctParams, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsFindRowsParams, ResultsIdentifyParams, ResultsIdentifyResult, ResultsPivotParams, ResultsPivotResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsRowBytesParams, ResultsRowIdsParams, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewParams, ResultsViewResult } from '../src/shared/contracts'
 import { cancelReasons, type CancelReason } from '../src/shared/ipc/wire/protocol'
 import { buildPortRequestSchema, type PortMessage, type portRequestSchema } from '../src/shared/ipc/port-messages'
 import { buildLiveSchemas } from '../src/shared/live/schema'
@@ -35,6 +35,7 @@ interface FakeLive { generation: number; params: LiveSubscribeParams; onLive: (e
 interface FakeView { generation: number; params: ResultsViewParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeIdentify { generation: number; params: ResultsIdentifyParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeDiff { generation: number; params: ResultsDiffParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
+interface FakePivot { generation: number; params: ResultsPivotParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeSearch { generation: number; params: ResultsSearchParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeProfile { generation: number; params: ResultsProfileParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeDistinct { generation: number; params: ResultsDistinctParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
@@ -48,6 +49,7 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
   const views: FakeView[] = []
   const identifies: FakeIdentify[] = []
   const diffs: FakeDiff[] = []
+  const pivots: FakePivot[] = []
   const searches: FakeSearch[] = []
   const profiles: FakeProfile[] = []
   const distincts: FakeDistinct[] = []
@@ -77,6 +79,13 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
       const diff: FakeDiff = { generation, params, cancels: [], resolve, reject }
       diffs.push(diff)
       return { done, cancel: reason => diff.cancels.push(reason) }
+    },
+    pivot: (generation, params) => {
+      let resolve!: (value: unknown) => void, reject!: (error: unknown) => void
+      const done = new Promise<ResultsPivotResult>((onResolve, onReject) => { resolve = onResolve as (value: unknown) => void; reject = onReject })
+      const pivot: FakePivot = { generation, params, cancels: [], resolve, reject }
+      pivots.push(pivot)
+      return { done, cancel: reason => pivot.cancels.push(reason) }
     },
     rowIds: vi.fn(async (_generation: number, params: ResultsRowIdsParams) => ({ firstRow: params.firstRow, ids: [7, 9], rows: 2 })),
     findRows: vi.fn(async (_generation: number, params: ResultsFindRowsParams) => ({ positions: [0, 5], marks: [0, params.ids.length - 1], truncated: false, rows: 6 })),
@@ -139,7 +148,7 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
     port().send({ t: 'live', rid, generation, params })
     return params
   }
-  return { host, backend, reads, lives, updates, views, identifies, diffs, searches, profiles, distincts, distinctReads, ports, port, frame, read, live, setReady: (generation: number | undefined) => { ready = generation } }
+  return { host, backend, reads, lives, updates, views, identifies, diffs, pivots, searches, profiles, distincts, distinctReads, ports, port, frame, read, live, setReady: (generation: number | undefined) => { ready = generation } }
 }
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
 const descriptor = (resultId: number, generation = 1): Pick<ResultDescriptor, 'generation' | 'resultId'> => ({ generation, resultId })
@@ -515,6 +524,54 @@ describe('ResultsPortHost', () => {
     diffs[3].resolve(answer(22))
     await settle()
     expect(backend.close).toHaveBeenLastCalledWith(1, [22])
+  })
+  it('pivots only owned results of the current generation within the schema bounds, owns the pivot it answers, and closes one refused or answered after its port went', async () => {
+    const { host, backend, port, pivots } = fixture()
+    host.own([descriptor(7)])
+    const pivotDescriptor = (resultId: number, columns = 2) => ({
+      resultId, index: 1, batchNumber: 1, iteration: 1, kind: 'pivot', columns: Array.from({ length: columns }, () => ({ name: 'c', dataType: 'bigint', wire: 'text', nullable: true })),
+      rowsRead: 2, rowsStored: 2, rowsAvailable: 2, bytesStored: 10, truncatedCells: 0, state: 'complete', incomplete: false
+    })
+    const answer = (resultId: number) => ({ descriptor: pivotDescriptor(resultId), rows: 5, rowGroups: 2, columnGroups: 0, approximate: false })
+    const ask = { generation: 1, resultId: 7, rows: [0], values: [{ aggregate: 'count' }] }
+    port().send({ t: 'pivot', rid: 1, ...ask, column: 1, viewId: 3, values: [{ aggregate: 'sum', column: 2 }] })
+    port().send({ t: 'pivot', rid: 2, ...ask, resultId: 8 })
+    port().send({ t: 'pivot', rid: 3, ...ask, generation: 2 })
+    port().send({ t: 'pivot', rid: 4, ...ask, rows: [0, 0] })
+    port().send({ t: 'pivot', rid: 5, ...ask, column: 0 })
+    port().send({ t: 'pivot', rid: 6, ...ask, values: [] })
+    port().send({ t: 'pivot', rid: 7, ...ask, values: [{ aggregate: 'sum' }] })
+    port().send({ t: 'pivot', rid: 8, ...ask, rows: [0, 1, 2, 3, 4, 5, 6, 7, 8] })
+    port().send({ t: 'pivot', rid: 9, ...ask, values: Array.from({ length: 17 }, () => ({ aggregate: 'count' })) })
+    port().send({ t: 'pivot', rid: 10, ...ask, values: [{ aggregate: 'median', column: 1 }] })
+    expect(pivots.map(item => item.params)).toEqual([{ resultId: 7, rows: [0], column: 1, viewId: 3, values: [{ aggregate: 'sum', column: 2 }] }])
+    pivots[0].resolve(answer(30))
+    await settle()
+    expect(codes(port())).toEqual([[2, 'RESULT_UNAVAILABLE'], [3, 'RESULT_UNAVAILABLE'], [4, 'INVALID_REQUEST'], [5, 'INVALID_REQUEST'], [6, 'INVALID_REQUEST'], [7, 'INVALID_REQUEST'], [8, 'INVALID_REQUEST'], [9, 'INVALID_REQUEST'], [10, 'INVALID_REQUEST'], [1, 'ok']])
+    expect(port().ends().find(end => end.rid === 1)).toEqual({ t: 'end', rid: 1, ok: true, result: { ...answer(30), descriptor: { ...pivotDescriptor(30), generation: 1 } } })
+    expect(host.owns(1, 30)).toBe(true)
+    // A pivot answered with too few columns, the wrong kind or more shown groups than groups is refused, and the result it stored closed.
+    port().send({ t: 'pivot', rid: 11, ...ask, values: [{ aggregate: 'count' }, { aggregate: 'max', column: 1 }] })
+    pivots[1].resolve(answer(31))
+    port().send({ t: 'pivot', rid: 12, ...ask })
+    pivots[2].resolve({ ...answer(32), descriptor: { ...pivotDescriptor(32), kind: 'rows' } })
+    port().send({ t: 'pivot', rid: 13, ...ask })
+    pivots[3].resolve({ ...answer(33), rowGroups: 3 })
+    await settle()
+    expect(codes(port()).slice(-3)).toEqual([[11, 'BACKEND_ERROR'], [12, 'BACKEND_ERROR'], [13, 'BACKEND_ERROR']])
+    for (const resultId of [31, 32, 33]) {
+      expect(host.owns(1, resultId)).toBe(false)
+      expect(backend.close).toHaveBeenCalledWith(1, [resultId])
+    }
+    // The worker's cancel stops one; answered after the page reloaded, no port owns the pivot, so main closes it.
+    port().send({ t: 'pivot', rid: 14, ...ask })
+    port().send({ t: 'cancel', rid: 14 })
+    expect(pivots[4].cancels).toEqual([cancelReasons.user])
+    port().send({ t: 'pivot', rid: 15, ...ask })
+    host.open({ postMessage() {} })
+    pivots[5].resolve(answer(34))
+    await settle()
+    expect(backend.close).toHaveBeenLastCalledWith(1, [34])
   })
   it("searches only owned results of the current generation, within the schema bounds, and cancels on the worker's cancel", async () => {
     const { host, port, searches } = fixture()

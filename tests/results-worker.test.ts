@@ -312,6 +312,16 @@ describe('results worker core', () => {
     expect(posted.slice(postedBefore)).toEqual([expect.objectContaining({ type: 'error', id: 106, code: 'CANCELLED' })])
     core.receive({ t: 'end', rid: (sent.at(-1) as { rid: number }).rid, ok: true, result: { closed: 1, usedBytes: 0 } as never })
     expect(posted.length).toBe(postedBefore + 1)
+    // A pivot goes to main by view; one given up whose answer came anyway is closed, as a diff is.
+    core.handle({ type: 'identity', id: 107, key: { ...key, view: 3 }, request: { method: 'pivot', rows: [0], column: 1, values: [{ aggregate: 'count' }] } })
+    const pivotRid = (sent.at(-1) as { rid: number }).rid
+    expect(sent.at(-1)).toEqual({ t: 'pivot', rid: pivotRid, generation: 1, resultId: 5, rows: [0], column: 1, values: [{ aggregate: 'count' }], viewId: 3 })
+    core.handle({ type: 'cancel', id: 107 })
+    expect(sent.at(-1)).toEqual({ t: 'cancel', rid: pivotRid })
+    core.receive({ t: 'end', rid: pivotRid, ok: true, result: { descriptor: { resultId: 78 } } as never })
+    expect(sent.at(-1)).toMatchObject({ t: 'close', generation: 1, resultIds: [78] })
+    expect(posted.at(-1)).toMatchObject({ type: 'error', id: 107, code: 'CANCELLED' })
+    core.receive({ t: 'end', rid: (sent.at(-1) as { rid: number }).rid, ok: true, result: { closed: 1, usedBytes: 0 } as never })
     // Main drops answers meant for a replaced port: a request asked on it fails at once.
     core.attach({ postMessage: () => {} })
     expect(posted.filter(message => message.type === 'error' && (message.id === 101 || message.id === 103)).map(message => (message as { code: string }).code)).toEqual(['PORT_CLOSED', 'PORT_CLOSED'])
