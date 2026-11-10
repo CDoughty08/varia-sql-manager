@@ -9,7 +9,7 @@ import { methodPolicies } from '../src/shared/ipc/methods'
 import { cancellableRequests } from '../src/main/backend/renderer-requests'
 import { definitionLoading, PeekBoundary, PeekListView, Properties } from '../src/renderer/src/explorer/PeekCard'
 import { formatPeekValue, placePeek, cardWidth } from '../src/renderer/src/explorer/peek-format'
-import { copyableDefinition, PeekService } from '../src/renderer/src/explorer/PeekService'
+import { copyableDefinition, PeekService, type PeekChange } from '../src/renderer/src/explorer/PeekService'
 import { maxClipboardText, type ApiResult, type ExplorerChildrenResult, type QueryResult } from '../src/shared/contracts'
 import { fakeResults, summary } from './fixtures/peek-results'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
@@ -263,6 +263,30 @@ describe('PeekService', () => {
     await service.copyDefinition()
     expect(api.writeClipboardText).toHaveBeenCalledWith('CREATE PROCEDURE dbo.C AS1')
     expect(api.explorerCancel).not.toHaveBeenCalled()
+  })
+  it('reads a long module only as far as a reader asks, telling the start with the whole length, even past what Peek reads', async () => {
+    const { service, api, pages, resolvePeek } = setup()
+    const target = { connectionId, object: { kind: 'procedure' as const, database: 'Sales', schema: 'dbo', name: 'Customer' }, kind: 'procedure' as const }
+    const changes: PeekChange[] = []
+    const reader = service.read(target, false, change => { changes.push(change) }, 15)
+    resolvePeek(ok({ facts: {}, definition: 'CREATE PROC', definitionLength: 26, definitionStamp: 7, elapsedMs: 1 }))
+    await flush()
+    expect(changes.at(-1)).toEqual({ definition: { status: 'loading', progress: 11 / 15 } })
+    pages[0]!(ok({ text: 'EDURE dbo.', length: 26, stamp: 7, elapsedMs: 1 }))
+    await flush()
+    expect(changes.at(-1)).toEqual({ definition: { status: 'ready', value: { text: 'CREATE PROCEDURE dbo.', length: 26 } } })
+    expect(api.explorerPeekDefinition).toHaveBeenCalledTimes(1)
+    reader.release(false)
+    // A first page as long as the reader wants asks for no more; nor does a text longer than Peek reads, whose start shows.
+    for (const length of [26, peekLimits.definitionMaxChars + 1]) {
+      const told: PeekChange[] = []
+      const short = service.read(target, false, change => { told.push(change) }, 5)
+      resolvePeek(ok({ facts: {}, definition: 'CREATE PROC', definitionLength: length, definitionStamp: 7, elapsedMs: 1 }))
+      await flush()
+      expect(told.at(-1)).toEqual({ definition: { status: 'ready', value: { text: 'CREATE PROC', length } } })
+      short.release(false)
+    }
+    expect(api.explorerPeekDefinition).toHaveBeenCalledTimes(1)
   })
   it('cancels the page still being read when the card closes or moves on, and drops a late page', async () => {
     const { service, api, pages, resolvePeek } = setup()

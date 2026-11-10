@@ -150,7 +150,8 @@ being true.
   never ends inside a surrogate pair. A page whose length or stamp differs from the first page's means the module changed
   in between, and the part says so instead of showing pages that do not fit. Closing, replacing or refreshing the view
   cancels the page being read. The one bound is `peekLimits.definitionMaxChars` (2^27 code units), a bound on the renderer's
-  memory: a longer text is not read, and the part says so, never showing part of it.
+  memory (about twice that for a moment, while the pages are joined): a longer text is not read, and the part says so, never
+  showing part of it. Search Objects' details pane, which shows at most `shownChars`, reads a module's pages only that far.
 - Search Objects' index (`backend/Varia.Backend/Search/`, docs/object-search.md) lives only in backend memory, one per
   connection, never on disk, and is dropped on disconnect; its limits are `objectSearchLimits` in
   `src/shared/explorer/search.ts`, mirrored in C# (`tests/object-search.test.ts`), with everything it holds (records, names

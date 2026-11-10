@@ -8,6 +8,12 @@ import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable, ExternalStore } from '../core/types'
 import { peekMessages, type PeekChange, type PeekDefinition, type PeekPart, type PeekReader, type PeekTarget } from '../explorer/PeekService'
+
+/**
+ * Characters the details pane shows at most: its definition is a <pre>, not an editor, and a text node of tens of millions of
+ * characters stalls layout. Peek's editor (Space) and Script to New Query show all of a longer one, which is read only this far.
+ */
+export const shownChars = 1_000_000
 import { hitKey } from './ObjectSearchService'
 
 export const searchDetailsLimits = {
@@ -80,7 +86,7 @@ export interface SearchDetailsSnapshot {
 
 export interface SearchDetailsOptions {
   readonly api: Pick<VariaApi, 'scriptObjects' | 'cancelScripting' | 'explorerChildren' | 'explorerCancel'>
-  readonly peek: { read(target: PeekTarget, fresh: boolean, update: (change: PeekChange) => void): PeekReader }
+  readonly peek: { read(target: PeekTarget, fresh: boolean, update: (change: PeekChange) => void, maxChars?: number): PeekReader }
   readonly connections: ExternalStore<readonly { readonly id: string; readonly lost?: boolean }[]>
   /** The search documents, so a closed tab's details go with it. */
   readonly searches: ExternalStore<{ readonly documents: Readonly<Record<string, unknown>> }>
@@ -216,7 +222,9 @@ export class SearchDetailsService extends SnapshotStore<SearchDetailsSnapshot> i
 
   private readPeek(documentId: string, details: SearchDetails, kind: PeekKind, fresh: boolean): void {
     const reads = this.readsOf(documentId)
-    reads.peek = this.options.peek.read({ connectionId: details.connectionId, object: details.hit.object, kind, ...(details.hit.subtype === undefined ? {} : { subtype: details.hit.subtype }) }, fresh, change => this.update(documentId, details.id, change))
+    // A long module is read only as far as the pane shows: its later pages would cost time and memory for nothing.
+    reads.peek = this.options.peek.read({ connectionId: details.connectionId, object: details.hit.object, kind, ...(details.hit.subtype === undefined ? {} : { subtype: details.hit.subtype }) }, fresh,
+      change => this.update(documentId, details.id, change), shownChars)
   }
 
   private readScript(documentId: string, details: SearchDetails): void {

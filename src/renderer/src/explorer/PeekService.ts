@@ -20,7 +20,11 @@ export const copyableDefinition = (text: string | undefined): text is string => 
 /** Copy's tooltip when the definition is longer than the clipboard takes. */
 export const tooLongToCopy = `Longer than Copy takes (${maxClipboardText.toLocaleString('en-US')} characters). Select the text and copy it from the editor, or Script to New Query.`
 /** A definition, always whole: a long module's pages are put together before it is ready. */
-export interface PeekDefinition { readonly text?: string }
+export interface PeekDefinition {
+  readonly text?: string
+  /** The module's whole length, when `text` is only its start: a reader that asked for at most so many characters (`read`). */
+  readonly length?: number
+}
 /** The Columns or Parameters folder as the tree lists it: its first page, `more` when the folder has others. */
 export interface PeekMembers { readonly nodes: readonly ExplorerNode[]; readonly more: boolean }
 export interface PeekDependencies {
@@ -169,13 +173,14 @@ export class PeekReads {
 
   /**
    * Reads `target`'s properties and definition for a caller other than a view (a Search Objects tab's details pane), sharing
-   * the kept and background scripts. `update` gets each part as it arrives, until the reader is released.
+   * the kept and background scripts. `update` gets each part as it arrives, until the reader is released. With `maxChars`, a
+   * long module's pages stop once that much text is in (the pane shows no more), and its definition carries the whole length.
    */
-  read(target: PeekTarget, fresh: boolean, update: (change: PeekChange) => void): PeekReader {
+  read(target: PeekTarget, fresh: boolean, update: (change: PeekChange) => void, maxChars?: number): PeekReader {
     const requests: Requests = {}
     let released = this.disposed
     const reader: PeekReader = { release: keep => { if (released) return; released = true; this.release(requests, keep) } }
-    if (!released) this.begin(target, fresh, requests, () => !this.disposed && !released, update)
+    if (!released) this.begin(target, fresh, requests, () => !this.disposed && !released, update, maxChars)
     return reader
   }
 
@@ -185,7 +190,7 @@ export class PeekReads {
    * Script As CREATE, taken from the window's cache while the table's modified time still matches (never when `fresh`), or
    * from a replaced read's script still running for it. The reads' ids go in `requests`; `update` runs while `current()`.
    */
-  begin(target: PeekTarget, fresh: boolean, requests: Requests, current: () => boolean, update: (change: PeekChange) => void): void {
+  begin(target: PeekTarget, fresh: boolean, requests: Requests, current: () => boolean, update: (change: PeekChange) => void, maxChars?: number): void {
     const { connectionId, object, kind } = target
     // A scripted kind Script As cannot write (an index of a table type, a dropped ledger table) has no definition to show, as a
     // module without text has none: it is not asked for one, which it would refuse.
@@ -244,7 +249,7 @@ export class PeekReads {
       tell({ facts: { status: 'ready', value: value.facts }, ...(value.lists ? { lists: value.lists } : {}), ...(value.refused ? { refused: value.refused } : {}),
         ...(key === undefined && value.definitionLength === undefined ? { definition: { status: 'ready', value: value.definition === undefined ? {} : { text: value.definition } } } : {}) })
       if (key === undefined) {
-        if (value.definitionLength !== undefined) void this.readPages(target, value, requests, current, tell).catch(onUnexpectedError)
+        if (value.definitionLength !== undefined) void this.readPages(target, value, requests, current, tell, maxChars).catch(onUnexpectedError)
         return
       }
       if (job && modified !== undefined) {
@@ -270,15 +275,17 @@ export class PeekReads {
    * Reads the rest of a module's text after the peek's first page, one page at a time (each asked for once the last is in, so at
    * most one is running, its id in `requests.definition` for `release` to cancel), and tells the whole text once it has every
    * page. A length or stamp that differs from the first page's means the module changed in between: the pages would not fit, so
-   * it says so instead. A text longer than Peek reads is not read at all.
+   * it says so instead. A text longer than Peek reads is not read at all. With `maxChars` the pages stop once that much is in, and
+   * the start read so far is told with the whole length (a text longer than Peek reads included: only its start is read).
    */
-  private async readPages(target: PeekTarget, first: PeekResult, requests: Requests, current: () => boolean, tell: (change: PeekChange) => void): Promise<void> {
+  private async readPages(target: PeekTarget, first: PeekResult, requests: Requests, current: () => boolean, tell: (change: PeekChange) => void, maxChars?: number): Promise<void> {
     const length = first.definitionLength!, stamp = first.definitionStamp
-    if (length > peekLimits.definitionMaxChars) { tell({ definition: { status: 'error', message: peekMessages.definitionTooLong } }); return }
+    if (maxChars === undefined && length > peekLimits.definitionMaxChars) { tell({ definition: { status: 'error', message: peekMessages.definitionTooLong } }); return }
+    const wanted = Math.min(length, maxChars ?? length)
     const pages = [first.definition ?? '']
     let offset = pages[0]!.length
-    tell({ definition: { status: 'loading', progress: offset / length } })
-    while (offset < length) {
+    if (offset < wanted) tell({ definition: { status: 'loading', progress: offset / wanted } })
+    while (offset < wanted) {
       if (!current()) return
       const requestId = this.newId()
       requests.definition = requestId
@@ -292,8 +299,9 @@ export class PeekReads {
       if (page.length !== length || page.stamp !== stamp || !page.text) { tell({ definition: { status: 'error', message: peekMessages.definitionChanged } }); return }
       pages.push(page.text)
       offset += page.text.length
-      if (offset < length) tell({ definition: { status: 'loading', progress: offset / length } })
+      if (offset < wanted) tell({ definition: { status: 'loading', progress: offset / wanted } })
     }
+    if (offset < length && offset >= wanted) { tell({ definition: { status: 'ready', value: { text: pages.join(''), length } } }); return }
     if (offset !== length) { tell({ definition: { status: 'error', message: peekMessages.definitionChanged } }); return }
     tell({ definition: { status: 'ready', value: { text: pages.join('') } } })
   }
@@ -680,8 +688,8 @@ export class PeekService extends PeekView {
    * Reads `target`'s properties and definition for a caller other than a view (a Search Objects tab's details pane), sharing
    * the card's kept and background scripts. `update` gets each part as it arrives, until the reader is released.
    */
-  read(target: PeekTarget, fresh: boolean, update: (change: PeekChange) => void): PeekReader {
-    return this.disposed ? { release: () => {} } : this.reads.read(target, fresh, update)
+  read(target: PeekTarget, fresh: boolean, update: (change: PeekChange) => void, maxChars?: number): PeekReader {
+    return this.disposed ? { release: () => {} } : this.reads.read(target, fresh, update, maxChars)
   }
 
   override close(): void {

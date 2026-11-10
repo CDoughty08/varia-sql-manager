@@ -15,17 +15,13 @@ import Icon from '../Icon'
 import Segmented from '../kit/Segmented'
 import { argsFor } from '../menus/targets'
 import { searchHitTarget } from './hit-actions'
-import { columnsOf, type DefinitionPart, type SearchDetails as Details } from './SearchDetailsService'
+import { columnsOf, shownChars, type DefinitionPart, type SearchDetails as Details } from './SearchDetailsService'
 
 /** Lines of a definition that are coloured; longer text shows the rest plain, so a huge module never stalls the pane. */
 const colouredLines = 3000
 /** Characters coloured at most, so a module of millions of characters (Peek's definitions are never cut) is not split or tokenized whole. */
 const colouredChars = 1_000_000
-/**
- * Characters this pane shows at most: its definition is a <pre>, not an editor, and a text node of tens of millions of
- * characters stalls layout. Peek's editor (Space) and Script to New Query show all of a longer one.
- */
-export const shownChars = 1_000_000
+export { shownChars }
 
 /** The part of `text` the pane shows, never ending inside a surrogate pair. */
 export function shownText(text: string): string {
@@ -139,6 +135,8 @@ export function hitProperties(hit: ObjectSearchHit): readonly { readonly label: 
 
 function Definition({ details, part }: { readonly details: Details; readonly part: DefinitionPart }) {
   const whole = part.status === 'ready' ? part.value.text : undefined
+  // A long module comes only as far as the pane shows, with its whole length.
+  const length = part.status === 'ready' ? part.value.length ?? whole?.length : undefined
   const text = useMemo(() => whole === undefined ? undefined : shownText(whole), [whole])
   const runs = useRuns(text)
   const pre = useRef<HTMLPreElement>(null)
@@ -167,7 +165,7 @@ function Definition({ details, part }: { readonly details: Details; readonly par
       {runs.map((run, index) => run.style
         ? <span key={index} style={{ color: run.style.foreground, fontStyle: run.style.fontStyle.includes('italic') ? 'italic' : undefined, fontWeight: run.style.fontStyle.includes('bold') ? 'bold' : undefined }}>{run.text}</span>
         : run.text)}</pre>
-    {whole !== undefined && whole.length > text.length && <p className="peek-note">The definition is longer than this pane shows ({whole.length.toLocaleString('en-US')} characters). Peek or Script to New Query shows all of it.</p>}
+    {length !== undefined && length > text.length && <p className="peek-note">The definition is longer than this pane shows ({length.toLocaleString('en-US')} characters). Peek or Script to New Query shows all of it.</p>}
   </>
 }
 
