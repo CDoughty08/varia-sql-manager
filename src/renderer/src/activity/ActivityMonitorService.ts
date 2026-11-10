@@ -5,15 +5,22 @@
 // whole view while its tab is hidden.
 import {
   activityLiveProbes, activityPanes, chartWindowsMinutes, defaultChartWindowMinutes, defaultPanes, paneProbes, probeIntervalMs, tileSpecs,
-  activityIntervalsSeconds, activityIntervalDefaults, type ActivityPane, type ActivityProbe, type ChartWindowMinutes
+  activityIntervalsSeconds, activityIntervalDefaults, activityLimits, probeSpecs, sessionToggles, viewChips, type ActivityPane, type ActivityProbe, type ActivityTable, type ChartWindowMinutes, type ViewChip
 } from '../../../shared/activity/catalog'
+import type { ActivityColumnFilter } from '../../../shared/activity/schema'
+import type { LiveFacet, LiveArgs } from '../../../shared/live/schema'
+
+/** The activity source's args as the live layer sends them (src/shared/activity/schema.ts's ActivityLiveArgs, mutable). */
+type ActivityArgs = Extract<LiveArgs, { focusSession?: number }>
+type ActivityFilterArgs = NonNullable<ActivityArgs['filters']>[number]
+import type { LiveGridState } from '../live/LiveGrid'
 import type { LiveProbeId } from '../../../shared/live/catalog'
 import type { SettingsValues } from '../../../shared/settings/catalog'
 import type { ActivityContextState } from '../core/contextkeys'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
 import type { Disposable, ExternalStore } from '../core/types'
-import type { LiveHandle, LiveOwner, LiveSpec } from '../live/LiveService'
+import type { AppliedTick, LiveHandle, LiveOwner, LiveSpec } from '../live/LiveService'
 import type { ConnectionService } from '../services/connections'
 import type { CustomDocumentProvider, DocumentService } from '../services/documents'
 import type { TileTone } from '../../../shared/theme/tones'
@@ -38,6 +45,47 @@ export interface MonitorState {
   readonly expanded: readonly number[]
   /** Bumps when the monitor subscribes again (Retry), so the view takes the new handle. */
   readonly generation: number
+  /** Processes' view chip, toggles, filter box and column value filters, sent as the source's args (the backend filters). */
+  readonly processes: ProcessesFilter
+}
+export interface ProcessesFilter {
+  readonly view: ViewChip
+  readonly showSystem: boolean
+  readonly showVaria: boolean
+  readonly text: string
+  /** One per facet column, each with at least one choice. */
+  readonly columnFilters: readonly ActivityColumnFilter[]
+}
+export const defaultProcessesFilter: ProcessesFilter = { view: 'all', showSystem: sessionToggles.showSystem.default, showVaria: sessionToggles.showVaria.default, text: '', columnFilters: [] }
+
+/** What the samples told a monitor beyond its rows: each table's facets (column → values with counts, merged as they
+ *  change) and the sessions probe's status values (serverState, canKill), until it subscribes again. */
+export interface MonitorFacts {
+  readonly facets: { readonly [T in ActivityTable]?: Readonly<Record<string, LiveFacet>> }
+  readonly status: Readonly<Record<string, number | string>>
+}
+export interface ActivityFactsSnapshot { readonly byMonitor: Readonly<Record<string, MonitorFacts>> }
+const noFacts: MonitorFacts = { facets: {}, status: {} }
+
+/** A Processes filter as the backend's `ActivityFilter` (src/shared/activity/schema.ts), bounded as the schema bounds it. */
+export function processesActivityFilter(filter: ProcessesFilter): ActivityFilterArgs {
+  const text = filter.text.trim().slice(0, activityLimits.filterText)
+  const columnFilters = filter.columnFilters.filter(column => column.values?.length || column.blanks || column.nonBlanks).slice(0, activityLimits.columnFilters)
+    .map(column => ({
+      column: column.column,
+      ...column.values?.length ? { values: column.values.slice(0, activityLimits.columnFilterValues).map(value => value.slice(0, activityLimits.columnFilterChars)) } : {},
+      ...column.blanks ? { blanks: true } : {}, ...column.nonBlanks ? { nonBlanks: true } : {}
+    }))
+  return { table: 'sessions', view: filter.view, showSystem: filter.showSystem, showVaria: filter.showVaria, ...text ? { text } : {}, ...columnFilters.length ? { columnFilters } : {} }
+}
+/** The monitor's live args: Processes' filter (the other tables keep the catalogue's defaults until their panes filter). */
+export const monitorArgs = (state: Pick<MonitorState, 'processes'>): ActivityArgs => ({ filters: [processesActivityFilter(state.processes)] })
+
+/** Merges a sample's facets (only the columns whose values changed come) into what the monitor knew. */
+export function mergeFacets(known: Readonly<Record<string, LiveFacet>> | undefined, changed: readonly LiveFacet[]): Readonly<Record<string, LiveFacet>> {
+  const next: Record<string, LiveFacet> = { ...known }
+  for (const facet of changed) next[facet.column] = facet
+  return next
 }
 export interface ActivityMonitorSnapshot { readonly monitors: Readonly<Record<string, MonitorState>> }
 
@@ -68,7 +116,7 @@ export function initialMonitor(id: string, server: string, values: SettingsValue
     id, server, primary, secondary: secondary === primary ? activityPanes.find(item => item !== primary)! : secondary, split: second !== 'none' && secondary !== primary,
     intervalSeconds: (activityIntervalsSeconds as readonly number[]).includes(interval) ? interval : activityIntervalDefaults.refreshIntervalSeconds,
     windowMinutes: (chartWindowsMinutes as readonly number[]).includes(window) ? window as ChartWindowMinutes : defaultChartWindowMinutes,
-    paused: false, splitRatio: splitLimits.default, expanded: tileSpecs.flatMap((tile, index) => tile.defaultExpanded ? [index] : []), generation: 0
+    processes: defaultProcessesFilter, paused: false, splitRatio: splitLimits.default, expanded: tileSpecs.flatMap((tile, index) => tile.defaultExpanded ? [index] : []), generation: 0
   }
 }
 
@@ -86,6 +134,9 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
   /** Nothing to save, so Save All has nothing of it to save either. */
   readonly inSaveAll = false
   private readonly handles = new Map<string, LiveHandle>()
+  private readonly ticks = new Map<string, Disposable>()
+  private readonly gridStates = new Map<string, LiveGridState>()
+  private readonly factsStore = new (class extends SnapshotStore<ActivityFactsSnapshot> { set(value: ActivityFactsSnapshot) { this.publish(value) } clear() { this.clearListeners() } })({ byMonitor: {} })
   /** Each monitor's tile tones as last shown, so a view remounted by a tab switch never repeats a crossing already said. */
   private readonly tones = new Map<string, readonly (TileTone | undefined)[]>()
   private readonly registration: Disposable
@@ -100,6 +151,33 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
   /** The monitors' context keys (activityPaused, activitySplit) for the active document. */
   get context(): ExternalStore<ActivityContextState> { return this.contextStore }
   get(id: string): MonitorState | undefined { return this.getSnapshot().monitors[id] }
+  /** Facets and status values per monitor: a store of its own, so a sample that changes neither redraws nothing. */
+  get facts(): ExternalStore<ActivityFactsSnapshot> { return this.factsStore }
+  factsOf(id: string): MonitorFacts { return this.factsStore.getSnapshot().byMonitor[id] ?? noFacts }
+  /** A pane grid's scroll, widths and selection, kept across tab switches and pane changes. */
+  gridState(id: string, pane: ActivityPane): LiveGridState {
+    const key = id + '/' + pane
+    let state = this.gridStates.get(key)
+    if (!state) this.gridStates.set(key, state = { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: false })
+    return state
+  }
+
+  /** Changes Processes' filter; the backend filters the next sample (live.update args), and the SQL stays the same. */
+  setProcessesFilter(id: string, change: Partial<ProcessesFilter>): void {
+    const state = this.get(id)
+    if (!state) return
+    const view = change.view !== undefined && (viewChips as readonly string[]).includes(change.view) ? change.view : state.processes.view
+    const processes: ProcessesFilter = { ...state.processes, ...change, view }
+    const before = JSON.stringify(monitorArgs(state)), after = JSON.stringify(monitorArgs({ processes }))
+    if (before === after && processes.text === state.processes.text) return
+    this.put({ ...state, processes })
+    if (before !== after) this.handles.get(id)?.setArgs(monitorArgs({ processes }))
+  }
+  /** Clear filters: the view chip, the filter box and the column filters; the toggles stay as chosen. */
+  clearProcessesFilter(id: string): void {
+    const state = this.get(id)
+    if (state) this.setProcessesFilter(id, { view: 'all', text: '', columnFilters: [] })
+  }
   handle(id: string): LiveHandle | undefined { return this.handles.get(id) }
   /** The open monitor of a connection: its document follows the connection, so a reconnect keeps it. */
   monitorOf(connectionId: string): string | undefined {
@@ -130,8 +208,36 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
     const state = this.get(id), connectionId = this.options.documents.get(id)?.connectionId
     if (!state || !connectionId) return
     // A paused monitor subscribes paused (Retry while paused): pausing after it opened would let a sample run first.
-    const handle = this.options.live.open({ connectionId, source: 'activity', probes: probeSettings(state), ...state.paused ? { paused: true } : {} }, this.options.owner(id))
+    const handle = this.options.live.open({ connectionId, source: 'activity', args: monitorArgs(state), probes: probeSettings(state), ...state.paused ? { paused: true } : {} }, this.options.owner(id))
     this.handles.set(id, handle)
+    this.ticks.set(id, handle.onTick(applied => this.noteTick(id, applied)))
+  }
+
+  /** Keeps what a sample says beyond its rows: facets (merged per table, as only changed columns come) and status values. */
+  private noteTick(id: string, { tick }: AppliedTick): void {
+    let facts = this.factsOf(id), changed = false
+    for (const sample of tick.samples) {
+      const spec = probeSpecs[sample.probe as ActivityProbe] as (typeof probeSpecs)[ActivityProbe] | undefined
+      if (!spec) continue
+      for (const entry of sample.tables ?? []) {
+        const table = spec.tables[entry.table] as ActivityTable | undefined
+        if (!table || !entry.facets?.length) continue
+        facts = { ...facts, facets: { ...facts.facets, [table]: mergeFacets(facts.facets[table], entry.facets) } }
+        changed = true
+      }
+      if (sample.status?.length) {
+        facts = { ...facts, status: { ...facts.status, ...Object.fromEntries(sample.status.map(entry => [entry.id, entry.value])) } }
+        changed = true
+      }
+    }
+    if (changed) this.setFacts(id, facts)
+  }
+  private setFacts(id: string, facts: MonitorFacts | undefined): void {
+    const byMonitor = { ...this.factsStore.getSnapshot().byMonitor }
+    if (!facts && !(id in byMonitor)) return
+    if (facts) byMonitor[id] = facts
+    else delete byMonitor[id]
+    this.factsStore.set({ byMonitor })
   }
 
   /** Subscribes again (Retry after an error, or after the view ended): history starts over with a new handle. */
@@ -140,6 +246,10 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
     if (!state) return
     this.handles.get(id)?.dispose()
     this.handles.delete(id)
+    this.ticks.get(id)?.dispose()
+    this.ticks.delete(id)
+    // A new subscription sends its facets and status values again.
+    this.setFacts(id, undefined)
     this.put({ ...state, generation: state.generation + 1 })
     this.startView(id)
   }
@@ -224,6 +334,10 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
     const handle = this.handles.get(id)
     this.handles.delete(id)
     this.tones.delete(id)
+    this.ticks.get(id)?.dispose()
+    this.ticks.delete(id)
+    for (const key of [...this.gridStates.keys()]) if (key.startsWith(id + '/')) this.gridStates.delete(key)
+    this.setFacts(id, undefined)
     try { handle?.dispose() } catch (error) { onUnexpectedError(error) }
     if (!this.get(id)) return
     const monitors = { ...this.getSnapshot().monitors }
@@ -237,6 +351,9 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
     this.disposed = true
     for (const handle of this.handles.values()) handle.dispose()
     this.handles.clear()
+    for (const tick of this.ticks.values()) tick.dispose()
+    this.ticks.clear()
+    this.factsStore.clear()
     this.registration.dispose()
     this.clearListeners()
     this.contextStore.clear()
