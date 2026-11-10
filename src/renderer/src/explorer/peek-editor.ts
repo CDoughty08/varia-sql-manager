@@ -17,10 +17,17 @@ export const peekEditorUse: QueryEditorUse = {
   widgetHostAttribute: peekEditorAttribute
 }
 
-/** Whether a pressed element belongs to a Peek editor, its body-level widget host included. */
-export function inPeekEditor(target: EventTarget | null): boolean {
+/** The attribute naming the Monaco editor a host belongs to, on its body-level widget host and on Peek's editor host alike. */
+export const editorIdAttribute = 'data-query-editor-id'
+
+/**
+ * Whether a pressed element is in the body-level widget host of a Peek editor inside `scope` (the card): its hover and
+ * message widgets live outside the card, while another view's Peek editor (a promoted tab's) is not this card's.
+ */
+export function inPeekEditorWidgets(target: EventTarget | null, scope: Element | null | undefined): boolean {
   const element = target && typeof (target as Element).closest === 'function' ? target as Element : (target as Node | null)?.parentElement
-  return !!element?.closest(`[${peekEditorAttribute}]`)
+  const id = element?.closest(`.editor-overflow-widgets[${peekEditorAttribute}]`)?.getAttribute(editorIdAttribute)
+  return !!id && !!scope && [...scope.querySelectorAll(`[${peekEditorAttribute}][${editorIdAttribute}]`)].some(host => host.getAttribute(editorIdAttribute) === id)
 }
 
 /**
@@ -88,6 +95,7 @@ export class PeekEditor implements Disposable {
       element.setAttribute(peekEditorAttribute, '')
       slot.append(element)
       host = this.host = { element, editor: this.options.create(element) }
+      element.setAttribute(editorIdAttribute, host.editor.instance.getId())
     } else if (host.element.parentElement !== slot) slot.append(host.element)
     const shown = this.shown
     if (shown && shown.key === text.key && shown.text === text.text) {

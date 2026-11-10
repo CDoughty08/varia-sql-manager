@@ -13,7 +13,7 @@ import Icon from '../Icon'
 import { useKeybindingsRevision } from '../core/useCommand'
 import ExplorerIcon from './ExplorerIcon'
 import { selectionContextOf } from './ExplorerService'
-import { inPeekEditor, PeekEditor, peekEditorUse } from './peek-editor'
+import { inPeekEditorWidgets, PeekEditor, peekEditorUse } from './peek-editor'
 import { formatPeekValue, peekObjectName, placePeek } from './peek-format'
 import { peekMessages, type OpenPeek, type PeekDefinition, type PeekDependencies, type PeekMembers, type PeekPart, type PeekRows, type PeekView } from './PeekService'
 
@@ -46,6 +46,31 @@ function Definition({ part, editor, open }: { part: PeekPart<PeekDefinition>; ed
     <div ref={slot} className="peek-editor" />
     {part.value.truncated && <p className="peek-note">The definition is longer than Peek shows. Script it to see all of it.</p>}
   </>
+}
+
+/**
+ * The card's tab stops in order: its buttons and tabbable elements, without those Monaco keeps in the DOM but hides (a closed
+ * Find widget slides out of view, aria-hidden, yet stays focusable), so the loop never hands focus to them or out of the card.
+ */
+export function cardStops(card: Element): HTMLElement[] {
+  return [...card.querySelectorAll<HTMLElement>('button:not([disabled]):not([tabindex="-1"]), [tabindex="0"]')]
+    .filter(stop => !stop.closest('[aria-hidden="true"]') && stop.checkVisibility?.({ visibilityProperty: true }) !== false)
+}
+
+/**
+ * Where Tab (Shift+Tab when `back`) moves from `at` within the card's `stops`: the next stop in document order, wrapping at
+ * either end, so focus stays in the card. Focus on the definition's text (not itself a stop) moves to the stop after or before
+ * it. 'native' leaves the key to the browser inside Monaco's Find widget, whose inputs and buttons Tab walks by themselves.
+ */
+export function nextStop(stops: readonly HTMLElement[], at: Element | null, back: boolean, onCard: boolean): HTMLElement | undefined | 'native' {
+  if (!stops.length) return undefined
+  if (onCard || !at) return back ? stops[stops.length - 1] : stops[0]
+  if (at.closest('.find-widget')) return 'native'
+  const index = stops.indexOf(at as HTMLElement)
+  if (index >= 0) return stops[(index + (back ? -1 : 1) + stops.length) % stops.length]
+  // DOCUMENT_POSITION_FOLLOWING (4): the stop comes after `at`.
+  const after = (stop: HTMLElement) => (at.compareDocumentPosition(stop) & 4) !== 0
+  return back ? [...stops].reverse().find(stop => !after(stop)) ?? stops[stops.length - 1] : stops.find(after) ?? stops[0]
 }
 
 export function Properties({ peek }: { peek: OpenPeek }) {
@@ -202,7 +227,7 @@ export function peekName(open: OpenPeek): string {
  * right. `beforeScript` runs before a script opens in a query tab (the card closes itself first). `idPrefix` keeps each body's
  * tab ids its own. The body owns its view's editor (`PeekEditor`), which goes with it.
  */
-export function PeekBody({ view, open, idPrefix, beforeScript }: { view: PeekView; open: OpenPeek; idPrefix: string; beforeScript?: () => void }) {
+export function PeekBody({ view, open, idPrefix, beforeScript, inEditorPane = false }: { view: PeekView; open: OpenPeek; idPrefix: string; beforeScript?: () => void; inEditorPane?: boolean }) {
   const workbench = useWorkbench(), { commands } = workbench
   const node = open.node
   const definition = open.definition.status === 'ready' ? open.definition.value : undefined
@@ -214,10 +239,11 @@ export function PeekBody({ view, open, idPrefix, beforeScript }: { view: PeekVie
   // Made in an effect, not during render, so StrictMode's replayed effects never leave the body with a disposed editor.
   const [editor, setEditor] = useState<PeekEditor | undefined>(undefined)
   useEffect(() => {
-    const made = new PeekEditor({ monaco: workbench.monaco, create: container => createQueryEditor(workbench, container, peekEditorUse) })
+    // A promoted tab lives in the Query editor pane, so its widgets hide with that pane; the card floats outside every pane.
+    const made = new PeekEditor({ monaco: workbench.monaco, create: container => createQueryEditor(workbench, container, { ...peekEditorUse, inEditorPane }) })
     setEditor(made)
     return () => made.dispose()
-  }, [workbench])
+  }, [workbench, inEditorPane])
   // The model of a definition the view has moved on from goes at once, even while another tab shows.
   const shownKey = definition?.text === undefined ? undefined : String(open.id)
   useEffect(() => { editor?.keep(shownKey) }, [editor, shownKey])
@@ -318,7 +344,7 @@ function PeekCardView() {
   // (hover, read-only message) live outside the card, in a host of their own, and count as inside.
   useEffect(() => {
     if (!open || !doc) return
-    const press = (event: PointerEvent) => { if (!card.current?.contains(event.target as Node) && !inPeekEditor(event.target)) service.close() }
+    const press = (event: PointerEvent) => { if (!card.current?.contains(event.target as Node) && !inPeekEditorWidgets(event.target, card.current)) service.close() }
     doc.addEventListener('pointerdown', press, true)
     return () => doc.removeEventListener('pointerdown', press, true)
   }, [open?.id, doc, service])
@@ -332,11 +358,11 @@ function PeekCardView() {
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(true); return }
     if (event.key !== 'Tab' || !card.current) return
-    const stops = [...card.current.querySelectorAll<HTMLElement>('button:not([disabled]):not([tabindex="-1"]), [tabindex="0"]')]
-    const first = stops[0], last = stops[stops.length - 1], at = card.current.ownerDocument.activeElement
-    if (!first || !last) { event.preventDefault(); return }
-    if (event.shiftKey && (at === first || at === card.current)) { event.preventDefault(); last.focus() }
-    else if (!event.shiftKey && at === last) { event.preventDefault(); first.focus() }
+    const at = card.current.ownerDocument.activeElement
+    const next = nextStop(cardStops(card.current), at, event.shiftKey, at === card.current)
+    if (next === 'native') return
+    event.preventDefault()
+    next?.focus()
   }
   const node = open?.node
   const name = open ? peekName(open) : ''
