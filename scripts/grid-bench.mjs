@@ -6,7 +6,7 @@ import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { within } from './fixtures/smoke.mjs'
-import { backendReady, documentTabs, gridCell, gridCellSelector, gridPart, jobNotice, outputStatus, part, statusBar, toolbarButton } from './fixtures/ui.mjs'
+import { backendReady, documentTabs, gridCell, gridCellSelector, gridPart, jobNotice, outputPane, outputStatus, part, statusBar, toolbarButton } from './fixtures/ui.mjs'
 
 // End-to-end results grid benchmarks (npm run bench:grid): the built app in test mode at 1600 × 1000 (or the screen, if
 // smaller), its grids fed by the fake backend's synthetic sets (tests/fixtures/backend.mjs, `-- varia-fake:` scripts).
@@ -240,6 +240,55 @@ try {
   record('grid.cache.uiWindows', cached.uiWindows, 'windows', 'after a sweep of 50 views and 300 jumps')
   record('grid.cache.uiMiUnits', cached.uiUnits / 1048576, 'Mi units', 'after a sweep of 50 views and 300 jumps')
   record('grid.cache.workerMiB', cached.workerBytes / 1048576, 'MiB', `${cached.workerPages} pages after a sweep of 50 views and 300 jumps`)
+
+  // The header funnel over a million distinct values (name): the snapshot stays in the backend, and the checklist reads
+  // only the windows it shows, so opening, scrolling, searching and Select all/none keep the UI free of long tasks.
+  await segment('a million distinct values')
+  const funnel = page.getByRole('dialog', { name: 'Filter name', exact: true })
+  const values = funnel.getByRole('group', { name: 'Values', exact: true })
+  await cell(0, 1).click()
+  const opening = performance.now()
+  await page.keyboard.press('Alt+ArrowDown')
+  await expect(funnel).toContainText('1,000,000 values in 1,000,000 rows.', { timeout: 60000 })
+  await expect(values.getByRole('checkbox').first()).toBeVisible()
+  record('grid.funnel.openMs', performance.now() - opening, 'ms', 'Alt+Down → the first values of 1,000,000 listed')
+  /** Moves the checklist's scroll bar to a fraction of its range and resolves, in ms, once no row in view is still read. */
+  const scrollValues = top => values.evaluate(async (list, top) => {
+    const started = performance.now(), box = list.getBoundingClientRect()
+    list.scrollTop = top * (list.scrollHeight - list.clientHeight)
+    for (;;) {
+      await new Promise(done => requestAnimationFrame(done))
+      const rows = [...list.querySelectorAll(':scope > div > *')].filter(row => { const at = row.getBoundingClientRect(); return at.bottom > box.top && at.top < box.bottom })
+      if (rows.length && rows.every(row => row.querySelector('input[type="checkbox"]'))) return performance.now() - started
+      if (performance.now() - started > 15000) throw new Error(`The checklist did not list its values after a jump to ${top}.`)
+    }
+  }, top)
+  const listJumps = []
+  for (const top of fractions(100, 0.002)) listJumps.push(await scrollValues(top))
+  record('grid.funnel.jumpP95Ms', percentile(listJumps, 95), 'ms', `100 scroll bar jumps over 1,000,000 values, median ${percentile(listJumps, 50).toFixed(0)} ms, max ${Math.max(...listJumps).toFixed(0)} ms`)
+  const searching = performance.now()
+  await funnel.getByRole('searchbox', { name: 'Search values', exact: true }).fill('0000777')
+  await expect(funnel).toContainText('1,000 of 1,000,000 values match.', { timeout: 30000 })
+  record('grid.funnel.searchMs', performance.now() - searching, 'ms', 'a search matching 1,000 of 1,000,000 values, typed → counted (with the 200 ms debounce)')
+  await funnel.getByRole('button', { name: 'Select none', exact: true }).click()
+  await expect(funnel).toContainText('999,000 ticked.')
+  await funnel.getByRole('searchbox', { name: 'Search values', exact: true }).fill('')
+  await expect(funnel).toContainText('1,000,000 values in 1,000,000 rows. 999,000 ticked.')
+  await funnel.getByRole('button', { name: 'Select all', exact: true }).click()
+  await expect(funnel).toContainText('1,000,000 ticked.')
+  await funnel.getByRole('button', { name: 'Select none', exact: true }).click()
+  await expect(funnel).toContainText(' 0 ticked.')
+  await funnel.getByRole('searchbox', { name: 'Search values', exact: true }).fill('0000777')
+  await expect(funnel).toContainText('1,000 of 1,000,000 values match.', { timeout: 30000 })
+  await funnel.getByRole('button', { name: 'Select all', exact: true }).click()
+  await expect(funnel).toContainText('1,000 ticked.')
+  const filtering = performance.now()
+  await funnel.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(funnel).toHaveCount(0)
+  await expect(page.locator(part.resultCaption)).toContainText('1,000 of 1,000,000 rows', { timeout: 60000 })
+  await outputPane(page).getByRole('group', { name: 'Filters of Result 1', exact: true }).getByRole('button', { name: 'Clear filters', exact: true }).click()
+  await expect(page.locator(part.resultCaption)).not.toContainText(' of ')
+  record('grid.funnel.filterMs', performance.now() - filtering, 'ms', 'OK → the grid filtered to the 1,000 values ticked of 1,000,000')
 
   /**
    * Scroll bar jumps in grid 0 to fresh rows and columns: frame() times, and each jump's main-thread task time from the

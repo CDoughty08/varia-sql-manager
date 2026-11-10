@@ -33,6 +33,7 @@ export function fakeResultClient() {
   const listeners = new Map<string, Set<(event: QueryEvent) => void>>()
   const generationListeners = new Set<(generation: number) => void>()
   const handles = new Map<string, FakeHandle>()
+  let snapshots = 0
   const keyOf = (value: { generation: number; resultId: number }) => `${value.generation}:${value.resultId}`
   const settle = (handle: FakeHandle, value: ResultDescriptor, final: boolean) => {
     handle.snapshot = {
@@ -73,8 +74,16 @@ export function fakeResultClient() {
         })),
         search: vi.fn<ResultHandle['search']>(async () => ({ rows: 0, total: 0, first: 0, matchRows: [], matchColumns: [], complete: true, approximate: false })),
         profile: vi.fn<ResultHandle['profile']>(async columns => ({ rows: handle.snapshot.rowsAvailable, complete: handle.snapshot.state === 'complete', columns: columns.map(column => ({ column, values: 0, nulls: 0, distinct: 0, distinctExact: true, approximate: false })) })),
-        // Distinct values: none unless a test says otherwise.
-        distinct: vi.fn<ResultHandle['distinct']>(async () => ({ rows: handle.snapshot.rowsAvailable, complete: handle.snapshot.state === 'complete', nulls: 0, distinct: 0, truncated: false, approximate: false, values: [] })),
+        // Distinct snapshots: none of their values unless a test says otherwise; each closes once.
+        distinct: vi.fn<ResultHandle['distinct']>(async column => {
+          const summary = { snapshotId: ++snapshots, rows: handle.snapshot.rowsAvailable, complete: handle.snapshot.state === 'complete', nulls: 0, distinct: 0, approximate: false, checked: 0, nullsChecked: true }
+          return {
+            generation: value.generation, resultId: value.resultId, snapshotId: summary.snapshotId, column, summary,
+            read: vi.fn(async (o: { offset: number }) => ({ total: 0, offset: o.offset, values: [], checked: 0, nullsChecked: true })),
+            tick: vi.fn(async () => ({ checked: 0, nullsChecked: true })),
+            close: vi.fn(async () => undefined)
+          }
+        }),
         dispose: vi.fn()
       }
       settle(handle, value, false)

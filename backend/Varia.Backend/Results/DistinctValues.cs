@@ -2,40 +2,189 @@ using System.Text;
 
 namespace Varia.Backend.Results;
 
-/// <summary>How results.distinct orders a column's values: most frequent first (ties by value), or by value as the sort
+/// <summary>How a distinct snapshot lists a column's values: most frequent first (ties by value), or by value as the sort
 /// orders them.</summary>
 internal enum DistinctOrder { Count, Value }
 
-/// <summary>What results.distinct found: the rows it looked at, the NULL count, every distinct value the search kept
-/// (Distinct) and the first of them (Values) in the order asked; with a kept view, whether it has a NULL, whether it holds a
-/// value past those listed, and the representative rows of those past values it holds (UnlistedHeld) and of those it does
-/// not (UnlistedDropped), each when it fits one filter.</summary>
-internal sealed record DistinctOutcome(long Rows, long Nulls, long Distinct, bool Approximate, DistinctValue[] Values, bool? NullsKept = null, bool? UnlistedKept = null,
-    int[]? UnlistedHeld = null, int[]? UnlistedDropped = null);
+/// <summary>One value of a snapshot's window: its group (its place in value order), its representative base row, its
+/// display text, how many rows hold it and whether the checklist ticks it.</summary>
+internal sealed record DistinctEntry(int Group, int Row, string Text, int Count, bool Checked);
+
+/// <summary>
+/// A column's distinct values over a view's rows (or the sealed rows), kept for the header funnel's checklist
+/// (results.distinct): the groups in value order (each its representative base row, the lowest holding it, and its count),
+/// their count order, the checklist's tick for each value and for NULL, and the last search's matching groups in both
+/// orders. Windows of it are read (results.distinctRead) and ticked (results.distinctTick) by group, and a <c>groups</c>
+/// view filter keeps or drops the rows of the values it ticks; the first such filter freezes it, so a view built again
+/// keeps the same rows. Its memory (<see cref="ViewSorter.DistinctSnapshotBytes"/>) is charged to the result's query budget
+/// and returned when it is closed or its result released. Every member that reads or changes its ticks or search takes its
+/// lock; the groups never change once built.
+/// </summary>
+internal sealed class DistinctSnapshot
+{
+    private readonly object gate = new();
+    private readonly ViewSorter.PageSource source;
+    private readonly int[] reps, counts, byCount;
+    private readonly bool[] ticks;
+    private int ticked;
+    private bool nullTicked;
+    private (FilterOp Op, int[] Rows, bool Nulls)? frozen;
+    private string? searchText;
+    private int[]? matchValue, matchCount;
+
+    internal DistinctSnapshot(ResultSetBuffer set, int column, ViewSorter.PageSource source, int[] reps, int[] counts, int[] byCount, bool[] ticks, long rows, long nulls, bool nullTicked, bool complete, bool approximate)
+    {
+        Set = set;
+        Column = column;
+        this.source = source;
+        this.reps = reps;
+        this.counts = counts;
+        this.byCount = byCount;
+        this.ticks = ticks;
+        foreach (var tick in ticks) if (tick) ticked++;
+        Rows = rows;
+        Nulls = nulls;
+        this.nullTicked = nullTicked;
+        Complete = complete;
+        Approximate = approximate;
+    }
+
+    public uint SnapshotId { get; internal set; }
+    public ResultSetBuffer Set { get; }
+    public int Column { get; }
+    /// <summary>Rows grouped (the view's, or the rows sealed when it was built).</summary>
+    public long Rows { get; }
+    /// <summary>NULL and unreadable cells among them, never a value.</summary>
+    public long Nulls { get; }
+    public int Distinct => reps.Length;
+    /// <summary>The rows grouped were every row of a finished set: no value can arrive later.</summary>
+    public bool Complete { get; }
+    /// <summary>A truncated value compared by its stored prefix.</summary>
+    public bool Approximate { get; }
+    internal long Charged { get; set; }
+
+    public (int Checked, bool NullChecked) Ticks { get { lock (gate) return (ticked, nullTicked); } }
+
+    /// <summary>Up to <paramref name="count"/> values from <paramref name="offset"/> in the order asked, among those whose
+    /// display text contains <paramref name="search"/> when given; <c>Total</c> counts those values.</summary>
+    public (int Total, DistinctEntry[] Values, int Checked, bool NullChecked) Read(DistinctOrder order, int offset, int count, string? search, CancellationToken token)
+    {
+        lock (gate)
+        {
+            var matched = search is null ? null : Matches(search, token);
+            var list = matched is null ? (order == DistinctOrder.Count ? byCount : null) : order == DistinctOrder.Count ? matchCount! : matchValue!;
+            var total = list?.Length ?? reps.Length;
+            var take = Math.Max(0, Math.Min(count, total - offset));
+            var values = new DistinctEntry[take];
+            var wire = Set.Wires[Column];
+            for (var i = 0; i < take; i++)
+            {
+                var group = list?[offset + i] ?? offset + i;
+                values[i] = new DistinctEntry(group, reps[group], ViewSorter.Display(source, reps[group], Column, wire), counts[group], ticks[group]);
+            }
+            return (total, values, ticked, nullTicked);
+        }
+    }
+
+    /// <summary>Ticks or clears the groups named, or every value (those matching <paramref name="search"/> with one), and
+    /// NULL when <paramref name="nulls"/> says; INVALID_PARAMS for a group it does not have or once a filter froze it.</summary>
+    public (int Checked, bool NullChecked) Tick(bool check, int[]? groups, bool all, string? search, bool? nulls, CancellationToken token)
+    {
+        lock (gate)
+        {
+            if (frozen is not null) throw new RequestException("INVALID_PARAMS", "These values already filter the grid. Open the column's filter again to change them.");
+            if (groups is not null && groups.Any(group => group < 0 || group >= reps.Length))
+                throw new RequestException("INVALID_PARAMS", "A value to tick is not one of the list's.");
+            if (all && search is null)
+            {
+                Array.Fill(ticks, check);
+                ticked = check ? reps.Length : 0;
+            }
+            else
+            {
+                foreach (var group in all ? Matches(search!, token) : groups ?? [])
+                {
+                    if (ticks[group] == check) continue;
+                    ticks[group] = check;
+                    ticked += check ? 1 : -1;
+                }
+            }
+            if (nulls is { } tick) nullTicked = tick;
+            return (ticked, nullTicked);
+        }
+    }
+
+    /// <summary>The filter its ticks make, fixed from the first call on: <c>In</c> with the ticked values' rows when the
+    /// snapshot saw every row and they are no more than the cleared ones, else <c>NotIn</c> with the cleared ones (so values
+    /// in rows that arrive later stay shown); the rows are in value order, one a value, as a filter's own resolve to.</summary>
+    public (FilterOp Op, int[] Rows, bool Nulls) Freeze()
+    {
+        lock (gate)
+        {
+            if (frozen is { } done) return done;
+            var keep = Complete && ticked <= reps.Length - ticked;
+            var rows = new int[keep ? ticked : reps.Length - ticked];
+            for (int group = 0, at = 0; group < reps.Length; group++)
+                if (ticks[group] == keep) rows[at++] = reps[group];
+            frozen = (keep ? FilterOp.In : FilterOp.NotIn, rows, keep ? nullTicked && Nulls > 0 : !nullTicked);
+            return frozen.Value;
+        }
+    }
+
+    /// <summary>The groups whose display text contains the search, in value order, kept until another search; the count
+    /// order's alongside. Called under the lock.</summary>
+    private int[] Matches(string search, CancellationToken token)
+    {
+        if (search == searchText) return matchValue!;
+        var matcher = ResultSearcher.MatcherFor(Set.Columns[Column], Set.Wires[Column], search);
+        var scratch = new ResultSearcher.Scratch();
+        var hit = new bool[reps.Length];
+        var found = 0;
+        for (var group = 0; group < reps.Length; group++)
+        {
+            if ((group & (ViewSorter.CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+            if (matcher is not null && matcher.Matches(source.Cell(reps[group], Column), scratch)) { hit[group] = true; found++; }
+        }
+        var byValue = new int[found];
+        var ranked = new int[found];
+        for (int group = 0, at = 0; group < reps.Length; group++) if (hit[group]) byValue[at++] = group;
+        for (int i = 0, at = 0; i < byCount.Length; i++) if (hit[byCount[i]]) ranked[at++] = byCount[i];
+        (searchText, matchValue, matchCount) = (search, byValue, ranked);
+        return byValue;
+    }
+}
 
 internal static partial class ViewSorter
 {
-    /// <summary>The most values one results.distinct answers (limits.distinct.maxValues), the In filter's own limit, so a
-    /// checklist built from an answer always fits one filter.</summary>
-    public const int MaxDistinctValues = MaxFilterValues;
+    /// <summary>Values one results.distinctRead answers and groups one results.distinctTick names (limits.distinct.maxWindow).</summary>
+    public const int MaxDistinctWindow = 512;
+    /// <summary>Distinct snapshots one result keeps at most (limits.distinct.maxSnapshots): a grid's filters and an open
+    /// popover's list.</summary>
+    public const int MaxDistinctSnapshots = 24;
     /// <summary>Characters of a value's display text returned (limits.distinct.valueChars); a longer one ends in "…".</summary>
     public const int DistinctValueChars = 256;
 
-    /// <summary>What results.distinct holds while it runs, charged to the result's budget: the column's key (as a filter's,
-    /// 16 bytes a row and a NULL bit), the rows it groups (4 bytes a row), up to one group a row (a count and a kept mark, 5
-    /// bytes), a kept view's row marks (1 byte a row) and the count order's ranking (4 bytes a group), and the answer (up
-    /// to 1 KiB a value listed: its text and its encoding; the past values' rows, at most two filters' worth).</summary>
-    public static long DistinctWorkingBytes(long rows, int maxValues) => WorkingBytes(rows, 1) + 14L * rows + 1024L * maxValues + 4096;
+    /// <summary>What building a distinct snapshot holds while it runs, charged to the result's budget: the column's key (as a
+    /// filter's, 16 bytes a row and a NULL bit), the rows it groups (4 bytes a row), up to one group a row (a count, a kept
+    /// mark and a tick, 6 bytes), a kept view's row marks (1 byte a row), and the snapshot it keeps, at most one group a row
+    /// (<see cref="DistinctSnapshotBytes"/>).</summary>
+    public static long DistinctWorkingBytes(long rows) => WorkingBytes(rows, 1) + 11L * rows + DistinctSnapshotBytes(rows);
 
-    /// <summary>A column's distinct values over a view's rows (or the sealed rows), each with its count and representative
-    /// base row: the lowest base row holding it, so an In or NotIn filter by those rows compares exactly these values.
-    /// Values are equal as a filter compares them (<see cref="Build(ResultSetBuffer, StoredPage[], IReadOnlyList{ViewKey},
-    /// IReadOnlyList{ViewFilter}, CancellationToken)"/>): the column's collation decides which texts are one value, and a
-    /// truncated value compares by its stored prefix (Approximate). NULL and unreadable cells are counted apart. A search
-    /// keeps the values whose display text contains it, as the results search matches a cell. With <paramref name="kept"/>,
-    /// another view of the result, each value says whether a row of that view holds it (equal as above), so a checklist
-    /// over one view can show what a filtered view keeps of every value it lists.</summary>
-    public static DistinctOutcome DistinctValues(ResultSetBuffer set, StoredPage[] pages, ResultView? view, int column, DistinctOrder order, string? search, int maxValues, CancellationToken token, ResultView? kept = null)
+    /// <summary>What a snapshot of <paramref name="groups"/> values keeps: its representative rows, counts and count order
+    /// (4 bytes each a group), its ticks (1), a search's matches in both orders and their marks (9), and a frozen filter's
+    /// rows (4): 26 bytes a group, and its bookkeeping.</summary>
+    public static long DistinctSnapshotBytes(long groups) => 26L * groups + 4096;
+
+    /// <summary>
+    /// A column's distinct values over a view's rows (or the sealed rows), each with its count and representative base row:
+    /// the lowest base row holding it, so a filter by those rows compares exactly these values. Values are equal as a filter
+    /// compares them (<see cref="Build(ResultSetBuffer, StoredPage[], IReadOnlyList{ViewKey}, IReadOnlyList{ViewFilter},
+    /// CancellationToken)"/>): the column's collation decides which texts are one value, and a truncated value compares by
+    /// its stored prefix (Approximate). NULL and unreadable cells are counted apart. Each value starts ticked, or with
+    /// <paramref name="kept"/>, another view of the result, ticked when a row of that view holds it (equal as above), so a
+    /// checklist over one view starts as a filtered view shows it; NULL likewise.
+    /// </summary>
+    public static DistinctSnapshot DistinctValues(ResultSetBuffer set, StoredPage[] pages, ResultView? view, int column, bool complete, CancellationToken token, ResultView? kept = null)
     {
         long total = 0;
         foreach (var page in pages) total += page.Rows;
@@ -56,109 +205,68 @@ internal static partial class ViewSorter
             if (key.IsNull(row)) nulls++;
             else values[count++] = row;
         }
-        // The kept view's rows; one outside the listed rows can only hold a value nobody listed. Rows sealed after the kept
-        // view was built (a set still loading) count as kept: that view has not judged them, and its rebuild may show them.
+        // The kept view's rows. Rows sealed after it was built (a set still loading) count as kept: that view has not judged
+        // them, and its rebuild may show them.
         bool[]? marks = null;
-        bool? nullsKept = null;
+        var nullTicked = true;
         if (kept is not null)
         {
             marks = new bool[rows];
-            nullsKept = false;
+            nullTicked = false;
             for (var i = 0; i < kept.Order.Length; i++)
             {
                 if ((i & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
                 var row = kept.Order[i];
                 if (row >= rows) continue;
                 marks[row] = true;
-                if (key.IsNull(row)) nullsKept = true;
+                if (key.IsNull(row)) nullTicked = true;
             }
             for (var row = (int)Math.Min(kept.BaseRows, rows); row < rows; row++)
             {
                 if ((row & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
                 marks[row] = true;
-                if (key.IsNull(row)) nullsKept = true;
+                if (key.IsNull(row)) nullTicked = true;
             }
         }
         // Ties fall back to the base row, so each run of equal values starts with the lowest row holding it.
         if (count > 1) Array.Sort(values, 0, count, new Comparer([key], null, token));
-        var matcher = search is null ? null : ResultSearcher.MatcherFor(set.Columns[column], set.Wires[column], search);
-        var scratch = new ResultSearcher.Scratch();
         // Groups in value order, in place: the representative rows over the front of `values` (a group's slot is never past
-        // its first row), their counts and kept marks beside them.
+        // its first row), their counts and ticks beside them.
         var counts = new int[count];
-        var held = marks is null ? null : new bool[count];
+        var ticks = new bool[count];
         var groups = 0;
         for (int start = 0, steps = 0; start < count; steps++)
         {
-            // Counted in groups looked at, not kept: a search that keeps few must still notice a cancel.
             if ((steps & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
             var first = values[start];
             var end = start + 1;
-            var any = marks is not null && marks[first];
+            var any = marks is null || marks[first];
             for (; end < count && key.Compare(first, values[end]) == 0; end++)
             {
                 // One value can hold most rows, and comparing long texts under a collation is slow.
                 if ((end & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
                 any |= marks is not null && marks[values[end]];
             }
-            if (search is null || (matcher is not null && matcher.Matches(source.Cell(first, column), scratch)))
-            {
-                values[groups] = first;
-                counts[groups] = end - start;
-                if (held is not null) held[groups] = any;
-                groups++;
-            }
+            values[groups] = first;
+            counts[groups] = end - start;
+            ticks[groups] = any;
+            groups++;
             start = end;
         }
+        Array.Resize(ref values, groups);
+        Array.Resize(ref counts, groups);
+        Array.Resize(ref ticks, groups);
         // Most frequent first: the group's place in value order breaks count ties, so equal counts stay in it.
-        int[]? ranked = null;
-        if (order == DistinctOrder.Count)
-        {
-            ranked = new int[groups];
-            for (var i = 0; i < groups; i++) ranked[i] = i;
-            Array.Sort(ranked, (a, b) => counts[a] != counts[b] ? counts[b].CompareTo(counts[a]) : a.CompareTo(b));
-        }
-        var listed = Math.Min(maxValues, groups);
-        var answer = new DistinctValue[listed];
-        for (var i = 0; i < listed; i++)
-        {
-            var g = ranked?[i] ?? i;
-            answer[i] = new DistinctValue(values[g], Display(source, values[g], column, set.Wires[column]), counts[g], held is null ? null : held[g]);
-        }
-        // Whether the kept view holds a value past those listed, and which: the held and the dropped ones' rows, each when it
-        // fits one filter, so a checklist can leave every value it never listed as the kept view has it by keeping the held
-        // ones with the ticked values or dropping the others with the cleared ones, whichever fits and names fewer.
-        bool? unlistedKept = null;
-        int[]? unlistedHeld = null, unlistedDropped = null;
-        if (held is not null)
-        {
-            var heldPast = 0;
-            for (var i = listed; i < groups; i++)
-            {
-                if ((i & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
-                if (held[ranked?[i] ?? i]) heldPast++;
-            }
-            var droppedPast = groups - listed - heldPast;
-            unlistedKept = heldPast > 0;
-            if (heldPast <= MaxFilterValues) unlistedHeld = new int[heldPast];
-            if (droppedPast <= MaxFilterValues) unlistedDropped = new int[droppedPast];
-            if (unlistedHeld is not null || unlistedDropped is not null)
-            {
-                for (int i = listed, h = 0, d = 0; i < groups; i++)
-                {
-                    if ((i & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
-                    var g = ranked?[i] ?? i;
-                    if (held[g]) { if (unlistedHeld is not null) unlistedHeld[h++] = values[g]; }
-                    else if (unlistedDropped is not null) unlistedDropped[d++] = values[g];
-                }
-            }
-        }
-        return new DistinctOutcome(looked, nulls, groups, approximate, answer, nullsKept, unlistedKept, unlistedHeld, unlistedDropped);
+        var ranked = new int[groups];
+        for (var i = 0; i < groups; i++) ranked[i] = i;
+        Array.Sort(ranked, (a, b) => counts[a] != counts[b] ? counts[b].CompareTo(counts[a]) : a.CompareTo(b));
+        token.ThrowIfCancellationRequested();
+        return new DistinctSnapshot(set, column, source, values, counts, ranked, ticks, looked, nulls, nullTicked, complete, approximate);
     }
 
     /// <summary>A cell's grid text, cut to <see cref="DistinctValueChars"/> characters with "…": binary as 0x and hex, and
     /// a truncated stored value marked too.</summary>
-    private static string Display(PageSource source, int row, int column, WireKind wire)
+    internal static string Display(PageSource source, int row, int column, WireKind wire)
     {
         var view = source.ViewOf(row, out var local);
         var cell = view.Span(column, local);
