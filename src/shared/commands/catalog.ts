@@ -840,7 +840,7 @@ export const commandCatalog = {
   // The results toolbar's White space choices; each turns the grid's marks off when it is already on (queryResults.grid.whitespace).
   'output.showSpaces': {
     title: 'Show Spaces and Tabs in Results', category: 'Query', icon: 'whitespace', keywords: ['whitespace', 'spaces', 'tabs', 'grid'], toggled: 'resultsWhitespaceSpaces',
-    menus: [{ menu: 'output.context', group: '4_view', order: 1, title: 'Show Spaces and Tabs', mnemonic: 'p', when: "outputView == 'grid'" }]
+    menus: [{ menu: 'output.context', group: '4_view', order: 1, title: 'Show Spaces and Tabs', mnemonic: 'b', when: "outputView == 'grid'" }]
   },
   'output.showAllWhitespace': {
     title: 'Show All White Space in Results', category: 'Query', icon: 'whitespace', keywords: ['whitespace', 'crlf', 'nbsp', 'invisible', 'grid'],
@@ -980,6 +980,21 @@ export const commandCatalog = {
   'output.pivot': {
     title: 'Pivot Results…', category: 'Query', icon: 'pivot', keywords: ['pivot', 'group', 'aggregate', 'summarize', 'crosstab', 'count', 'sum', 'average', 'grid', 'result'],
     menus: [{ menu: 'output.context', group: '2_sort', order: 9, when: "outputView == 'grid'" }]
+  },
+  // Transposes the grid's rows as it shows them (results.transpose): its columns become rows, its rows columns, added as a
+  // result (TransposeService). Selected Rows takes only the selected rows (a record view); Using Column as Headers names the
+  // columns by the active cell's column.
+  'output.transpose': {
+    title: 'Transpose Results', category: 'Query', icon: 'transpose', keywords: ['transpose', 'rotate', 'swap', 'flip', 'columns', 'rows', 'record', 'grid', 'result'],
+    menus: [{ menu: 'output.transposeMenu', group: '1_rows', order: 1, title: 'All Rows', mnemonic: 'a', when: 'outputGridTransposable' }]
+  },
+  'output.transposeSelectedRows': {
+    title: 'Transpose Selected Rows', category: 'Query', icon: 'transpose', keywords: ['transpose', 'rotate', 'record', 'selected', 'rows', 'details', 'grid'],
+    menus: [{ menu: 'output.transposeMenu', group: '1_rows', order: 2, title: 'Selected Rows', mnemonic: 's', when: 'outputGridTransposable' }]
+  },
+  'output.transposeWithHeaders': {
+    title: 'Transpose Using Column as Headers', category: 'Query', icon: 'transpose', keywords: ['transpose', 'rotate', 'headers', 'names', 'column', 'grid'],
+    menus: [{ menu: 'output.transposeMenu', group: '2_headers', order: 1, title: 'Using Column as Headers', mnemonic: 'h', when: 'outputGridTransposable' }]
   },
   'output.compareWithPreviousExact': {
     title: 'Compare with Previous Result (Exact Text)', category: 'Query', icon: 'git-compare', keywords: ['diff', 'compare', 'difference', 'case', 'collation', 'exact', 'grid']

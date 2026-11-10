@@ -18,7 +18,7 @@ describe('menu targets', () => {
       { kind: 'searchHit', searchId: 's', index: 0, hit: { object: hitObject, folder: 'tables', label: 'dbo.Orders' }, pane: false, node: { lost: false, kind: 'table', connectionId: 'c', label: 'dbo.Orders', ref: { type: 'object', object: hitObject } }, state: { explorerScriptTitle: 'table' } }
     ]
     expect(targets.map(target => menuForTarget[target.kind])).toEqual(contextMenuIds)
-    const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, explorerFolder: '', explorerFolderInsertable: false, explorerNodePeekable: false, explorerNodeStatus: '', explorerServerEngine: '', explorerServerLinux: false, outputView: '', pane: '', paneFloating: false, panePopout: false, documentTabFloating: false, searchHitSchema: false }
+    const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, explorerFolder: '', explorerFolderInsertable: false, explorerNodePeekable: false, explorerNodeStatus: '', explorerServerEngine: '', explorerServerLinux: false, outputView: '', outputGridTransposable: false, pane: '', paneFloating: false, panePopout: false, documentTabFloating: false, searchHitSchema: false }
     expect(targets.map(targetKeys)).toEqual([none, { ...none, explorerNode: 'table', explorerNodePeekable: true }, none, none, { ...none, outputView: 'messages' }, { ...none, pane: 'results', paneFloating: true }, none, none, { ...none, searchHitSchema: true }])
     expect(targetKeys(undefined)).toEqual(none)
     // The empty area below the servers, and a server lost with its backend generation.
@@ -222,6 +222,10 @@ describe('menu target service', () => {
     expect(clicked).toMatchObject({ column: 1 })
     active.setAttribute('aria-colindex', '1')
     expect(service.targetFor(dom(grid))!.target).not.toHaveProperty('column')
+    // Its result kind offers Transpose for rows, pivots and transposes, never a diff (or an unmarked grid).
+    expect(targetKeys(service.targetFor(dom(grid))!.target).outputGridTransposable).toBe(false)
+    const transposable = (kind: string) => { grid.setAttribute('data-result-kind', kind); return targetKeys(service.targetFor(dom(grid))!.target).outputGridTransposable }
+    expect(['rows', 'pivot', 'transpose', 'diff'].map(transposable)).toEqual([true, true, true, false])
   })
   it('reads a text field\'s facts again once it has focus', () => {
     let undo = false

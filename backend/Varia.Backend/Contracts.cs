@@ -139,6 +139,14 @@ internal sealed record ResultsPivotArgs(uint ResultId, int[] Rows, PivotValueArg
 /// distinct groups it has (all shown: a pivot past its bounds is refused); Approximate that a value compared was a truncated
 /// value's stored prefix.</summary>
 internal sealed record ResultsPivotResult(ResultDescriptor Descriptor, long Rows, long RowGroups, long ColumnGroups, bool Approximate);
+/// <summary>results.transpose: a complete result's shown columns as rows and its rows (ViewId's, in its order and with its
+/// filters, when given; only the Rows [first, count] position ranges when given) as columns, named by HeaderColumn's values
+/// or "Row N", stored as a new result of the query (ResultTransposer).</summary>
+internal sealed record ResultsTransposeArgs(uint ResultId, uint? ViewId = null, long[][]? Rows = null, int? HeaderColumn = null);
+/// <summary>Descriptor is the transpose's result (kind "transpose"); Rows the source rows it could take (the view's or the
+/// selection's); Transposed the first of them it took (its columns past "Column"; fewer when Rows passes the column or cell
+/// limit); Columns the source columns transposed (its rows).</summary>
+internal sealed record ResultsTransposeResult(ResultDescriptor Descriptor, long Rows, int Transposed, int Columns);
 /// <summary>results.search: the cells whose grid text contains Text (1 to 1,024 characters), searched through ViewId's order
 /// when it is given (rows are then view positions). It returns up to MaxMatches (1 to 10,000) of them in whole rows: from
 /// FromRow on, or with Backward the last ones before FromRow.</summary>

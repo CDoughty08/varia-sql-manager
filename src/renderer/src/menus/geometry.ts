@@ -47,6 +47,18 @@ export function placeMenu(anchor: Anchor, size: Size, viewport: Size, avoid?: Re
   return { x, y, maxHeight: Math.max(0, Math.min(maxHeight, vh - m - y)) }
 }
 
+/**
+ * `placeMenu` for a menu that may scroll: one taller than its room gets a scroll bar, which widens it, so placed by its
+ * narrower width a menu aligned to the right of what it opens below would end past it. `widthAt` measures the menu's width
+ * with a height limit (its scroll bar included); a menu that scrolls is placed again by that width.
+ */
+export function placeScrollingMenu(anchor: Anchor, size: Size, viewport: Size, avoid: Rect | undefined, widthAt: (maxHeight: number) => number): Placement {
+  const placed = placeMenu(anchor, size, viewport, avoid)
+  if (placed.maxHeight >= size.height) return placed
+  const width = widthAt(placed.maxHeight)
+  return width > size.width ? placeMenu(anchor, { width, height: size.height }, viewport, avoid) : placed
+}
+
 const cross = (a: Point, b: Point, p: Point) => (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)
 /**
  * Whether the pointer at `p` is still heading from `exit` (where it left the submenu's parent item) into the open

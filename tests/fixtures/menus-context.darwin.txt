@@ -369,12 +369,17 @@ output.context, for a results grid with selected cells
     Clear &All Highlights  ----
   Co&mpare with Previous Result  ++++
   Pivot Res&ults…  ++++
+  Trans&pose >
+    &All Rows  ++++
+    &Selected Rows  ++++
+    ---
+    Using Column as &Headers  ++++
   ---
   F&it Column  ----
   ---
   Sa&ve Results As…  ⌘S  ----
   ---
-  Show S&paces and Tabs [ ]  ++++
+  Show Spaces and Ta&bs [ ]  ++++
   Show All &White Space [ ]  ++++
   Column Pro&file [ ]  ++++
   Show Row Si&ze [x]  ++++
@@ -416,12 +421,17 @@ output.context, for a results grid without
     Clear &All Highlights  ----
   Co&mpare with Previous Result  ----
   Pivot Res&ults…  ++++
+  Trans&pose >
+    &All Rows  ++++
+    &Selected Rows  ----
+    ---
+    Using Column as &Headers  ----
   ---
   F&it Column  ----
   ---
   Sa&ve Results As…  ⌘S  ----
   ---
-  Show S&paces and Tabs [ ]  ++++
+  Show Spaces and Ta&bs [ ]  ++++
   Show All &White Space [ ]  ++++
   Column Pro&file [ ]  ++++
   Show Row Si&ze [x]  ++++

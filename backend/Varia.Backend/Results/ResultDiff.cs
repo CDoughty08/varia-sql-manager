@@ -72,8 +72,23 @@ internal sealed class RowAccess
     /// <summary>The page holding a row, the row's index within it, and the page's lengths sidecar.</summary>
     public PageView At(long row, out int index, out PageLengths lengths)
     {
+        var page = PageOf(row, out index);
+        return Page(page, out lengths);
+    }
+
+    /// <summary>The index of the page holding a row, and the row's index within it: a caller that reads one row many times
+    /// finds its page once and then reads it through <see cref="Page"/>.</summary>
+    public int PageOf(long row, out int index)
+    {
         var page = Array.BinarySearch(starts, row);
         if (page < 0) page = ~page - 1;
+        index = (int)(row - pages[page].FirstRow);
+        return page;
+    }
+
+    /// <summary>A page by its index (from <see cref="PageOf"/>), parsed once, and its lengths sidecar.</summary>
+    public PageView Page(int page, out PageLengths lengths)
+    {
         var stored = pages[page];
         lengths = stored.Lengths;
         if (parsed[page] is not { } layout)
@@ -81,7 +96,6 @@ internal sealed class RowAccess
             var first = PageView.Parse(stored.Body, columns);
             parsed[page] = layout = (first.Layout, first.BlobStart);
         }
-        index = (int)(row - stored.FirstRow);
         return PageView.At(stored.Body, layout.BlobStart, layout.Layout, stored.FirstRow, stored.Rows, columns);
     }
 }
