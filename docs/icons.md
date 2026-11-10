@@ -9,7 +9,7 @@ half pixels, so they are sharp at 100 % zoom where the icon's box starts on a wh
 same name. Icons are sized with the `--varia-glyph-*` tokens ([metrics](themes/metrics.md)) and coloured
 with theme keys; Microsoft's SSMS icons are never used.
 
-## Varia's icons (23)
+## Varia's icons (24)
 
 | Id | Use |
 | --- | --- |
@@ -34,6 +34,7 @@ with theme keys; Microsoft's SSMS icons are never used.
 | `ssis-package` | Integration Services packages (planned). |
 | `drive` | Drives in the server file picker. |
 | `ssis-environment` | Integration Services environments (planned). |
+| `transpose` | Transpose: the results toolbar's Transpose button and the Transpose commands. |
 | `pivot` | Pivot: the results toolbar's Pivot toggle and the Pivot command. |
 | `fuzzy-match` | The Fuzzy Match toggle in Search Objects (an approximately-equal sign). |
 

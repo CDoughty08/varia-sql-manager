@@ -39,6 +39,10 @@ export const limits = {
   /** results.pivot: row-group columns and values one pivot takes, and the row groups, column groups and figures (cells
    *  times values) it can have: a pivot past any of them is refused, never shown in part (ResultPivoter in C#). */
   pivot: { maxRowFields: 8, maxValues: 16, maxRowGroups: 100_000, maxColumnGroups: 256, maxCells: 4_000_000 },
+  /** results.transpose: source rows one takes (they become columns, so a page's columns less "Column"), cells it holds
+   *  (fewer rows for a wide result), and row ranges one request names. Past the rows or cells it takes the first ones and
+   *  says so (ResultTransposer in C#). */
+  transpose: { maxRows: 4095, maxCells: 4_000_000, maxRanges: 256 },
   /** Distinct snapshots: values one results.distinctRead answers and groups one results.distinctTick names
    *  (ViewSorter.MaxDistinctWindow in C#), snapshots one result keeps (MaxDistinctSnapshots), ids one results.distinctClose
    *  takes, and characters of a value's text (DistinctValueChars). A snapshot itself has no cap but the result's budget. */

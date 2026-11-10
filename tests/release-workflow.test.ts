@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { backendSpawnSpec } from '../src/main/backend/spawn-spec'
 
@@ -27,7 +28,7 @@ describe('Release builds', () => {
     expect(triggers(release)).toMatch(/\n {2}push:\n {4}branches: \[main\]\n {4}tags: \['v\*'\]\n {2}schedule:\n {4}- cron: '[^']+'\n {2}workflow_dispatch:/)
     // Everything electron-builder, the fuses and the packaged smoke tests read, and nothing every pull request touches:
     // the smoke selectors (scripts/fixtures/ui.mjs) and main's index changed in a third of recent pull requests.
-    for (const path of ['.github/workflows/release.yml', '.github/workflows/package.yml', 'electron-builder.yml', 'build/**', 'package-lock.json', 'scripts/packaged-smoke.mjs', 'scripts/packaged-contents.mjs', 'scripts/portable-smoke.mjs', 'scripts/windows-installer-smoke.ps1', 'scripts/update-manifest.mjs', 'src/main/app-protocol.ts', 'src/main/backend/spawn-spec.ts', 'src/main/update-install.ts', 'scripts/appimage-check.mjs']) expect(releasePaths).toContain(path)
+    for (const path of ['.github/workflows/release.yml', '.github/workflows/package.yml', 'electron-builder.yml', 'build/**', 'package-lock.json', 'scripts/packaged-smoke.mjs', 'scripts/packaged-contents.mjs', 'scripts/portable-smoke.mjs', 'scripts/windows-installer-smoke.ps1', 'scripts/update-manifest.mjs', 'src/main/app-protocol.ts', 'src/main/backend/spawn-spec.ts', 'src/main/update-install.ts', 'src/main/update-staging.ts', 'backend/Varia.Updater/**', 'scripts/appimage-check.mjs']) expect(releasePaths).toContain(path)
     expect(releasePaths).toContain('src/main/backend/sqltools-runtime.ts')
     expect(releasePaths).toContain('scripts/prepare-electron.mjs')
     for (const path of releasePaths) expect(path, path).not.toMatch(/^(src\/\*\*|src\/main\/index\.ts|scripts\/fixtures|package\.json|tests\/)/)
@@ -49,13 +50,40 @@ describe('Release builds', () => {
   it('keeps the packaged checks, and leaves out the work CI already did or nobody uses', () => {
     // Each packaged check runs on every packaging run: a condition on the ref or the event would quietly drop it before tags.
     const steps = pack.slice(pack.indexOf('\n    steps:\n')).split(/\n {6}- /).slice(1)
-    for (const marker of ['scripts/packaged-smoke.mjs', 'scripts/portable-smoke.mjs', 'windows-installer-smoke.ps1', 'scripts/update-manifest.mjs dist', 'Check release assets', 'Package application', 'Publish self-contained backend', 'Prepare pinned SQL Tools Service']) {
+    for (const marker of ['scripts/packaged-smoke.mjs', 'scripts/portable-smoke.mjs', 'windows-installer-smoke.ps1', 'scripts/update-manifest.mjs dist', 'Check release assets', 'Package application', 'Publish self-contained backend', 'Publish update helper', 'Prepare pinned SQL Tools Service']) {
       const step = steps.find(candidate => candidate.includes(marker))
       expect(step, marker).toBeDefined()
       expect(/\n {8}if: (.*)/.exec(step!)?.[1] ?? '', marker).not.toMatch(/github\.ref|github\.event_name/)
     }
     expect(pack).toMatch(/- name: Type check\n {8}if: startsWith\(github\.ref, 'refs\/tags\/'\)\n/)
     expect(pack).toMatch(/- name: Upload release assets\n {8}if: startsWith\(github\.ref, 'refs\/tags\/'\) \|\| github\.event_name == 'workflow_dispatch'\n/)
+  })
+  // The installed Windows build updates by unpacking the release's archive with the helper in its resources: a release
+  // without either, or a helper built after packaging, would leave every copy on the installer.
+  it('publishes the update helper before packaging, and releases the Windows archive with the installers', () => {
+    expect(pack.indexOf('- name: Publish update helper')).toBeGreaterThan(-1)
+    expect(pack.indexOf('- name: Publish update helper')).toBeLessThan(pack.indexOf('- name: Package application'))
+    expect(pack).toMatch(/dotnet publish backend\/Varia\.Updater\/Varia\.Updater\.csproj -c Release -r \$\{\{ inputs\.rid \}\} -o artifacts\/updater\n/)
+    expect(pack).toContain('"dist/Varia-SQL-Manager-$version-win-x64.zip", "dist/win-unpacked/resources/updater/Varia.Updater.exe"')
+    const windows = release.slice(release.indexOf('rid: win-x64'), release.indexOf('- runner: ubuntu'))
+    expect(windows).toMatch(/target: --win nsis portable zip --x64\n/)
+    expect(windows).toMatch(/asset: \|\n {14}dist\/\*\.exe\n {14}dist\/\*\.zip\n/)
+    // The installer smoke stages and swaps the archive, compares the result with the packaged files, then recovers.
+    // It also has the helper refuse a folder that is not the installation's staging folder, and answer what main asks.
+    expect(readFileSync('scripts/windows-installer-smoke.ps1', 'utf8')).toMatch(/\$code -ne 2 -or \(Test-Path -LiteralPath \$elsewhere\)[\s\S]*'check', '--sha512'[\s\S]*\$code -ne 3[\s\S]*'stage', '--archive'[\s\S]*AreAccessRulesProtected[\s\S]*'swap', '--pid'[\s\S]*Assert-Application 'swapped'[\s\S]*-ArgumentList 'recover'[\s\S]*Assert-Application 'recovered'/)
+    // Uninstalling takes the staging folder with it: the uninstaller asks the helper, before the application's files go,
+    // and the installer smoke uninstalls a copy with a release staged.
+    expect(readFileSync('build/installer.nsh', 'utf8')).toMatch(/!macro customUnInstall\n {2}IfFileExists "\$INSTDIR\\resources\\updater\\Varia\.Updater\.exe" 0 varia_staging_done\n {4}ExecWait '"\$INSTDIR\\resources\\updater\\Varia\.Updater\.exe" uninstall --install "\$INSTDIR"'\n/)
+    expect(readFileSync('scripts/windows-installer-smoke.ps1', 'utf8')).toMatch(/'\/S', '\/currentuser', "_\?=\$installDir"[\s\S]*Test-Path -LiteralPath \$exe[\s\S]*Test-Path -LiteralPath \$root\) \{ throw/)
+    // electron-builder only warns about a missing extraResources folder: packaging refuses instead.
+    const { updaterProblem } = createRequire(import.meta.url)('../build/updater-check.cjs')
+    expect(readFileSync('build/sqltools-service-check.cjs', 'utf8')).toMatch(/updaterProblem\(context\.electronPlatformName, context\.packager\.projectDir\)\n {2}if \(problem\) throw new Error\(problem\)/)
+    expect(updaterProblem('win32', join('artifacts', 'no-such-project'))).toMatch(/dotnet publish backend\/Varia\.Updater/)
+    expect(updaterProblem('linux', join('artifacts', 'no-such-project'))).toBeNull()
+    expect(updaterProblem('darwin', join('artifacts', 'no-such-project'))).toBeNull()
+    const project = readFileSync('backend/Varia.Updater/Varia.Updater.csproj', 'utf8')
+    expect(project).toContain('<PublishAot Condition="\'$(RuntimeIdentifier)\' != \'\'">true</PublishAot>')
+    expect(project).toContain('<TreatWarningsAsErrors>true</TreatWarningsAsErrors>')
   })
   // What the docs say about packaging must match the workflow: the weekly Intel run, and the paths filter's 300-file limit.
   it('documents the weekly Intel run and the paths filter\'s 300-file limit', () => {

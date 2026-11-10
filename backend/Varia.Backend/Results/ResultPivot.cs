@@ -386,11 +386,17 @@ internal static class PivotOutput
         var view = access.At(row, out var at);
         if (view.IsNull(column, at)) return "NULL";
         var span = view.Span(column, at);
-        var text = view.Wire(column) == WireKind.Binary ? "0x" + Convert.ToHexString(span[..Math.Min(span.Length, ResultPivoter.MaxLabelChars / 2)]) + (span.Length > ResultPivoter.MaxLabelChars / 2 ? "…" : "")
-            : Encoding.UTF8.GetString(span);
-        if (text.Trim().Length == 0) return "(blank)";
+        if (view.Wire(column) == WireKind.Binary)
+            return "0x" + Convert.ToHexString(span[..Math.Min(span.Length, ResultPivoter.MaxLabelChars / 2)]) + (span.Length > ResultPivoter.MaxLabelChars / 2 ? "…" : "");
+        // Only the first characters are kept: decode a prefix that holds more than them (four bytes a character at most),
+        // cut at a character boundary, not a value of megabytes (a transpose names up to 4,095 columns this way).
+        var take = Math.Min(span.Length, 4 * (ResultPivoter.MaxLabelChars + 1));
+        while (take < span.Length && take > 0 && (span[take] & 0xc0) == 0x80) take--;
+        var text = Encoding.UTF8.GetString(span[..take]);
+        // Blank only when the whole value is: a long run of spaces may still end in text.
+        if (text.AsSpan().Trim().Length == 0 && (take == span.Length || Encoding.UTF8.GetString(span).AsSpan().Trim().Length == 0)) return "(blank)";
         var cut = CellFormat.Prefix(text, ResultPivoter.MaxLabelChars, out var truncated);
-        return truncated || view.IsTruncated(column, at) ? cut.ToString() + "…" : text;
+        return truncated || take < span.Length || view.IsTruncated(column, at) ? cut.ToString() + "…" : text;
     }
 
     /// <summary>A value's column: its name and the type its figures have. Counts are bigint; sums of integers are bigint and
@@ -443,21 +449,8 @@ internal static class PivotOutput
     /// <summary>Makes every column's name distinct (ignoring case), so no two headers match and a JSON save has no repeated
     /// key: the row-group columns keep the source's names, then the totals (or, without a column group, the values) keep
     /// theirs, then the column groups' columns in order; a later name already taken is numbered " (2)", " (3)".</summary>
-    internal static void Unique(List<ResultColumn> columns, int rows, int values)
-    {
-        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        // A number is never one that another column already has as its own name.
-        var names = new HashSet<string>(columns.Select(column => column.Name), StringComparer.OrdinalIgnoreCase);
-        var order = Enumerable.Range(0, rows).Concat(Enumerable.Range(columns.Count - values, values)).Concat(Enumerable.Range(rows, columns.Count - rows - values));
-        foreach (var i in order)
-        {
-            var name = columns[i].Name;
-            if (used.Add(name)) continue;
-            var n = 2;
-            while (names.Contains(name + " (" + n.ToString(CultureInfo.InvariantCulture) + ")") || !used.Add(name + " (" + n.ToString(CultureInfo.InvariantCulture) + ")")) n++;
-            columns[i] = columns[i] with { Name = name + " (" + n.ToString(CultureInfo.InvariantCulture) + ")" };
-        }
-    }
+    internal static void Unique(List<ResultColumn> columns, int rows, int values) =>
+        ColumnNames.Unique(columns, Enumerable.Range(0, rows).Concat(Enumerable.Range(columns.Count - values, values)).Concat(Enumerable.Range(rows, columns.Count - rows - values)));
 
     /// <summary>Makes the column groups' names distinct, so no two columns share a header (and a JSON save no key): the NULL
     /// group keeps "NULL" and Total keeps "Total"; a text value of the same name, or values that share their first 128

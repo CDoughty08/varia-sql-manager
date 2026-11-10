@@ -7,7 +7,8 @@ import { formatBytes } from '../results/status'
 function details(state: UpdateState): { title: string; command?: CommandId } {
   switch (state.status) {
     case 'downloading': return { title: `Downloading Varia SQL Manager ${state.version}: ${formatBytes(state.received)} of ${formatBytes(state.total)}. It installs only when you choose Restart to Update.` }
-    case 'ready': return { title: state.kind === 'dmg' ? `Varia SQL Manager ${state.version} is downloaded and verified. Select to quit and open its disk image.` : `Varia SQL Manager ${state.version} is downloaded and verified. Select to restart and install it.`, command: 'help.restartToUpdate' }
+    case 'preparing': return { title: `Varia SQL Manager ${state.version} is downloaded and verified, and is being unpacked so that restarting to update is quick.` }
+    case 'ready': return { title: `Varia SQL Manager ${state.version} is downloaded and verified. Select to restart and install it.`, command: 'help.restartToUpdate' }
     case 'available': return state.size !== undefined
       ? { title: `Varia SQL Manager ${state.version} is available (${formatBytes(state.size)}). Select to download it.`, command: 'help.downloadUpdate' }
       : { title: `Varia SQL Manager ${state.version} is available. Select to open the releases page.`, command: 'help.releaseNotes' }
@@ -27,7 +28,7 @@ export default function UpdateStatus() {
   const text = updateStatusText(state)
   if (!text) return null
   const { title, command } = details(state)
-  const icon = state.status === 'error' ? 'warning' : state.status === 'downloading' || state.status === 'checking' ? 'cloud-download' : 'sync'
+  const icon = state.status === 'error' ? 'warning' : state.status === 'downloading' || state.status === 'preparing' || state.status === 'checking' ? 'cloud-download' : 'sync'
   const percent = state.status === 'downloading' && state.total ? Math.floor(state.received / state.total * 100) : undefined
   const content = <><Icon name={icon} />{state.status === 'error' && <span className="visually-hidden">Warning: </span>}<span>{text}</span></>
   return <span className="update-status" data-status={state.status}>

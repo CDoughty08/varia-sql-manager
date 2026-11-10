@@ -4,8 +4,13 @@ import { z } from 'zod'
 
 /** The public repository whose GitHub releases are the update feed. */
 export const updateRepository = { owner: 'CDoughty08', repo: 'varia-sql-manager' } as const
-/** The manifest every release carries (`scripts/update-manifest.mjs` writes it in the release job). */
-export const updateManifestName = 'varia-update.json'
+/**
+ * The manifest every release carries (`scripts/update-manifest.mjs` writes it in the release job). Builds up to 0.7.0
+ * read `legacyManifestName` and refuse a manifest with a kind or field they do not know, so that file keeps its first
+ * shape for them and everything newer goes in this one.
+ */
+export const updateManifestName = 'varia-update-v2.json'
+export const legacyManifestName = 'varia-update.json'
 const releases = `https://github.com/${updateRepository.owner}/${updateRepository.repo}/releases`
 /**
  * GitHub's "latest release" download link, which skips pre-releases and drafts and redirects to its asset host. It is not
@@ -22,7 +27,8 @@ export const updateLimits = {
   manifestBytes: 65_536,
   /** One downloaded file; a manifest naming a bigger one is refused. */
   assetBytes: 1_073_741_824,
-  assets: 32,
+  /** Files a manifest may list, of any kind; those of a kind or shape this build does not know are left out. */
+  assets: 64,
   nameChars: 128,
   /** The manifest's whole request. */
   manifestTimeoutMs: 30_000,
@@ -38,27 +44,46 @@ export const updateLimits = {
   retryMs: 30 * 60_000
 } as const
 
-/** How this build installs an update; main decides from how it was started (`installKindFor`). */
-export type InstallKind = 'nsis' | 'portable' | 'appimage' | 'dmg' | 'unsupported'
-export type AssetKind = 'win-setup' | 'win-portable' | 'linux-appimage' | 'mac-dmg' | 'mac-zip'
+/**
+ * How this build installs an update; main decides from how it was started (`installTargetFor`). macOS builds are
+ * unsupported: they are not code signed, so they only say that a release exists and point to the releases page.
+ */
+export type InstallKind = 'nsis' | 'portable' | 'appimage' | 'unsupported'
+export const assetKinds = ['win-setup', 'win-zip', 'win-portable', 'linux-appimage', 'mac-dmg', 'mac-zip'] as const
+export type AssetKind = typeof assetKinds[number]
+/** The kinds the first manifest (`legacyManifestName`) may list: builds up to 0.7.0 refuse any other. */
+export const legacyAssetKinds: readonly AssetKind[] = ['win-setup', 'win-portable', 'linux-appimage', 'mac-dmg', 'mac-zip']
 export type AssetArch = 'x64' | 'arm64'
-export const assetKindFor: Readonly<Record<Exclude<InstallKind, 'unsupported'>, AssetKind>> = { nsis: 'win-setup', portable: 'win-portable', appimage: 'linux-appimage', dmg: 'mac-dmg' }
+export const assetKindFor: Readonly<Record<Exclude<InstallKind, 'unsupported'>, AssetKind>> = { nsis: 'win-setup', portable: 'win-portable', appimage: 'linux-appimage' }
+/** The installed Windows build's other file: the application as an archive, unpacked beside the installation while Varia runs. */
+export const stagedAssetKind: AssetKind = 'win-zip'
 
 const version = z.string().max(64).regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/, 'Not a version.')
 // Release file names only: no separators or dots that could leave the download folder.
 export const assetNamePattern = /^Varia-SQL-Manager-[0-9A-Za-z._-]+\.(?:exe|AppImage|dmg|zip)$/
 const sha512 = z.string().regex(/^[A-Za-z0-9+/]{86}==$/, 'Not a base64 SHA-512.')
-export const updateManifestSchema = z.strictObject({
-  schema: z.literal(1),
+const assetSchema = z.object({
+  name: z.string().max(updateLimits.nameChars).regex(assetNamePattern),
+  kind: z.enum(assetKinds),
+  arch: z.enum(['x64', 'arm64']),
+  size: z.int().min(1).max(updateLimits.assetBytes),
+  sha512
+})
+/**
+ * A later release may add fields, and files this build cannot use: a kind or architecture it does not know, a name or
+ * size outside its bounds. Those are left out, not refused, so nothing a release adds for one build stops another from
+ * updating (builds up to 0.7.0 refused the whole manifest). What is kept is still fully checked: a file is only ever
+ * downloaded under a release name, within the size bound and against a well-formed checksum.
+ */
+export const updateManifestSchema = z.object({
+  schema: z.literal(2),
   version,
-  releasedAt: z.iso.datetime().optional(),
-  assets: z.array(z.strictObject({
-    name: z.string().max(updateLimits.nameChars).regex(assetNamePattern),
-    kind: z.enum(['win-setup', 'win-portable', 'linux-appimage', 'mac-dmg', 'mac-zip']),
-    arch: z.enum(['x64', 'arm64']),
-    size: z.int().min(1).max(updateLimits.assetBytes),
-    sha512
-  })).max(updateLimits.assets)
+  // Not used to decide anything: one this build cannot read is not a reason to refuse the release.
+  releasedAt: z.iso.datetime().optional().catch(undefined),
+  assets: z.array(z.unknown()).max(updateLimits.assets).transform(items => items.flatMap(item => {
+    const parsed = assetSchema.safeParse(item)
+    return parsed.success ? [parsed.data] : []
+  }))
 })
 export type UpdateManifest = z.infer<typeof updateManifestSchema>
 export type UpdateAsset = UpdateManifest['assets'][number]
@@ -70,6 +95,10 @@ export const assetUrl = (manifestVersion: string, name: string) => `${releases}/
 export function assetFor(manifest: UpdateManifest, kind: InstallKind, arch: string): UpdateAsset | undefined {
   if (kind === 'unsupported') return undefined
   return manifest.assets.find(asset => asset.kind === assetKindFor[kind] && asset.arch === arch)
+}
+/** The archive an installed Windows build stages from, if the release has one for its architecture. */
+export function stagedAssetFor(manifest: UpdateManifest, kind: InstallKind, arch: string): UpdateAsset | undefined {
+  return kind === 'nsis' ? manifest.assets.find(asset => asset.kind === stagedAssetKind && asset.arch === arch) : undefined
 }
 
 const parts = (text: string) => {
@@ -93,7 +122,7 @@ export function compareVersions(a: string, b: string): number {
   return 0
 }
 
-export type UpdateErrorCode = 'offline' | 'dns' | 'proxy' | 'proxyAuth' | 'tls' | 'blocked' | 'timeout' | 'server' | 'notFound' | 'invalidFeed' | 'integrity' | 'disk' | 'notWritable' | 'install' | 'unknown'
+export type UpdateErrorCode = 'offline' | 'dns' | 'proxy' | 'proxyAuth' | 'tls' | 'blocked' | 'timeout' | 'server' | 'notFound' | 'invalidFeed' | 'integrity' | 'disk' | 'notWritable' | 'install' | 'staged' | 'unknown'
 const allow = `Ask your IT team to allow ${updateHosts.slice(0, 2).join(' and ')}, or download the update from the releases page.`
 /**
  * What each failure means and what to do about it, in the words the toast and the status bar's tooltip show. The network
@@ -114,6 +143,7 @@ export const updateErrors: { readonly [C in UpdateErrorCode]: { readonly message
   disk: { message: 'There is not enough disk space to download the update.', hint: 'Free some space, then check for updates again.' },
   notWritable: { message: 'Varia cannot write the update next to the application.', hint: 'Move Varia to a folder you can write to, or download the update from the releases page.' },
   install: { message: 'The update could not be started.', hint: 'Download the update from the releases page and install it by hand.' },
+  staged: { message: 'The prepared update could not be put in place, so Varia is still the earlier version.', hint: 'Check for updates again: Varia downloads this release\'s installer and installs it with that instead.' },
   unknown: { message: 'The update failed.', hint: 'Check for updates again, or download the update from the releases page.' }
 }
 
@@ -125,7 +155,9 @@ export type UpdatePhase =
   /** A newer release that this build cannot install itself (or that waits for Download Update). */
   | { readonly status: 'available'; readonly version: string; readonly size?: number }
   | { readonly status: 'downloading'; readonly version: string; readonly received: number; readonly total: number }
-  /** Downloaded and verified: Restart to Update installs it. */
+  /** Downloaded and verified; being unpacked beside the installation so that Restart to Update only swaps folders. */
+  | { readonly status: 'preparing'; readonly version: string }
+  /** Downloaded and verified (and, where it can be, unpacked): Restart to Update installs it. */
   | { readonly status: 'ready'; readonly version: string }
   | { readonly status: 'error'; readonly code: UpdateErrorCode; readonly during: 'check' | 'download' | 'install'; readonly manual: boolean; readonly message: string; readonly hint: string; readonly detail?: string; readonly version?: string }
 export type UpdateState = UpdatePhase & {
@@ -139,7 +171,8 @@ export type UpdateState = UpdatePhase & {
 export function updateStatusText(state: UpdateState): string | undefined {
   switch (state.status) {
     case 'downloading': return `Downloading update ${state.total ? Math.floor(state.received / state.total * 100) : 0}%`
-    case 'ready': return state.kind === 'dmg' ? `Update ${state.version} downloaded` : `Restart to update to ${state.version}`
+    case 'preparing': return 'Preparing update…'
+    case 'ready': return `Restart to update to ${state.version}`
     case 'available': return `Update ${state.version} available`
     case 'error': return state.during === 'check' ? 'Update check failed' : 'Update failed'
     case 'checking': return state.manual ? 'Checking for updates…' : undefined
@@ -148,4 +181,4 @@ export function updateStatusText(state: UpdateState): string | undefined {
 }
 
 /** The checks that Help › Check for Updates offers once this build cannot install, said once in the tooltip and docs. */
-export const unsupportedUpdateHint = 'This copy of Varia cannot update itself (it was not installed with the Windows installer, nor run as the portable app, the AppImage or from the disk image). Download new releases from the releases page.'
+export const unsupportedUpdateHint = 'This copy of Varia cannot update itself (it is a macOS build, or was not installed with the Windows installer nor run as the portable app or the AppImage). Download new releases from the releases page.'

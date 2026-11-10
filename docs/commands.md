@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (290)
+## Commands (293)
 
 ### File
 
@@ -178,6 +178,9 @@ keys it uses are listed below.
 | Clear All Highlights (not in the palette) | `output.clearAllHighlights` | — | — | — | Always | Query Output context menu › Highlight › Clear All Highlights |
 | Compare with Previous Result | `output.compareWithPrevious` | — | — | — | Always | Query Output context menu › Compare with Previous Result |
 | Pivot Results… | `output.pivot` | — | — | — | Always | Query Output context menu › Pivot Results… |
+| Transpose Results | `output.transpose` | — | — | — | Always | Query Output context menu › Transpose › All Rows |
+| Transpose Selected Rows | `output.transposeSelectedRows` | — | — | — | Always | Query Output context menu › Transpose › Selected Rows |
+| Transpose Using Column as Headers | `output.transposeWithHeaders` | — | — | — | Always | Query Output context menu › Transpose › Using Column as Headers |
 | Compare with Previous Result (Exact Text) | `output.compareWithPreviousExact` | — | — | — | Always | — |
 | Show Column Profile | `output.toggleColumnProfile` | — | — | — | Always; checked when `resultsColumnProfile` | Query Output context menu › Column Profile |
 | Show Row Size in Results | `output.toggleRowSize` | — | — | — | Always; checked when `resultsRowSize` | Query Output context menu › Show Row Size |
@@ -824,9 +827,10 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | `2_sort` | Hi**g**hlight › | Submenu: Query Output context menu › Highlight | `outputView == 'grid'` |
 | `2_sort` | Co**m**pare with Previous Result | `output.compareWithPrevious` | `outputView == 'grid'` |
 | `2_sort` | Pivot Res**u**lts… | `output.pivot` | `outputView == 'grid'` |
+| `2_sort` | Trans**p**ose › | Submenu: Query Output context menu › Transpose | `outputGridTransposable` |
 | `2_width` | F**i**t Column | `output.fitColumn` | `outputView == 'grid'` |
 | `3_save` | Sa**v**e Results As… | `output.saveResultsAs` | `outputView == 'grid'` |
-| `4_view` | Show S**p**aces and Tabs | `output.showSpaces` | `outputView == 'grid'` |
+| `4_view` | Show Spaces and Ta**b**s | `output.showSpaces` | `outputView == 'grid'` |
 | `4_view` | Show All **W**hite Space | `output.showAllWhitespace` | `outputView == 'grid'` |
 | `4_view` | Column Pro**f**ile | `output.toggleColumnProfile` | `outputView == 'grid'` |
 | `4_view` | Show Row Si**z**e | `output.toggleRowSize` | `outputView == 'grid'` |
@@ -856,6 +860,14 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | `3_duplicates` | Filter for **D**uplicates in Selected Columns | `output.filterDuplicates` | `outputView == 'grid'` |
 | `3_duplicates` | Filter for Duplicate **R**ows | `output.filterDuplicateRows` | `outputView == 'grid'` |
 | `4_clear` | **C**lear Filters | `output.clearFilters` | `outputView == 'grid'` |
+
+#### Query Output context menu › Transpose
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_rows` | **A**ll Rows | `output.transpose` | `outputGridTransposable` |
+| `1_rows` | **S**elected Rows | `output.transposeSelectedRows` | `outputGridTransposable` |
+| `2_headers` | Using Column as **H**eaders | `output.transposeWithHeaders` | `outputGridTransposable` |
 
 #### Panel tab context menu (`dockTab.context`)
 
@@ -926,7 +938,7 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
 | `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
 
-## Context keys (147)
+## Context keys (148)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1020,7 +1032,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `editorOvertype` | boolean | state | The editor is in overtype mode (OVR): typing replaces the character after the caret. |
 | `hasRecentFiles` | boolean | state | File › Recent Files lists at least one file. |
 | `hasRecoveryFiles` | boolean | state | AutoRecover kept queries that an earlier run or an earlier workbench did not save, and they were neither recovered nor discarded. |
-| `updateBusy` | boolean | state | An update check or download is running. |
+| `updateBusy` | boolean | state | An update check or download is running, or a downloaded release is being unpacked. |
 | `updateAvailable` | boolean | state | A newer release that this copy can install waits for Help › Download Update (Automatically download updates is off). |
 | `updateReady` | boolean | state | A newer release was downloaded and verified: Help › Restart to Update installs it. |
 | `explorerHasSelection` | boolean | state | A node is selected in Object Explorer (a loading, error, or progress row is not a node). |
@@ -1077,6 +1089,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerServerEngine` | `''`, `'box'`, `'managedInstance'`, `'cloud'` | target | The kind of server the Object Explorer node the menu is for is on: 'box', 'managedInstance' or 'cloud', or '' for the empty area. |
 | `explorerServerLinux` | boolean | target | The menu is for a node on SQL Server on Linux. |
 | `outputView` | `'grid'`, `'messages'`, `''` | target | The Query Output view the menu is for: a results grid or the messages. |
+| `outputGridTransposable` | boolean | target | The menu is for a results grid Transpose can read: a query's rows, a pivot or a transpose, not a diff. |
 | `pane` | `'explorer'`, `'editor'`, `'results'`, `'messages'`, `'plan'`, `'statistics'`, `''` | target | The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, Results, Messages, Execution plan, or Client Statistics. |
 | `paneFloating` | boolean | target | The panel the menu is for is floating. |
 | `panePopout` | boolean | target | The panel the menu is for is in a window of its own (Move into New Window). |

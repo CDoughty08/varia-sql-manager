@@ -57,6 +57,8 @@ export interface OutputTarget {
   readonly column?: number
   /** Refuses commands after this grid was replaced by another execution at the same result index. */
   readonly result?: { readonly generation: number; readonly resultId: number }
+  /** The grid's result kind ('rows', 'diff', 'pivot', 'transpose'…), for the commands only some kinds offer. */
+  readonly resultKind?: string
   readonly selectedText: string
   readonly element: HTMLElement
 }
@@ -104,6 +106,7 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
     explorerServerEngine: target?.kind === 'explorer' ? target.node?.engine ?? '' : '',
     explorerServerLinux: target?.kind === 'explorer' && !!target.node?.linux,
     outputView: target?.kind === 'output' ? target.view : '',
+    outputGridTransposable: target?.kind === 'output' && target.view === 'grid' && transposableKinds.has(target.resultKind ?? ''),
     pane: target?.kind === 'dockTab' ? target.pane : '',
     paneFloating: target?.kind === 'dockTab' && target.floating,
     panePopout: target?.kind === 'dockTab' && target.popout,
@@ -186,6 +189,8 @@ const focusable = 'button, [tabindex], input, textarea, [contenteditable]'
 const editorChrome = '.scrollbar, .decorationsOverviewRuler, .contentWidgets, .overflowingContentWidgets, .overlayWidgets'
 const documentCommandEnabled: CommandEnabled = command => typeof document === 'undefined' || document.queryCommandEnabled(command)
 const outputViews: ReadonlySet<string> = new Set<OutputView>(['grid', 'messages'])
+/** The result kinds Transpose reads (TransposeService's `transposable`): never a diff's paired changes. */
+const transposableKinds: ReadonlySet<string> = new Set(['rows', 'pivot', 'transpose'])
 
 /** The text selected inside `element`, or '' when the selection is elsewhere or crosses its edge. */
 export function selectedTextIn(element: Element): string {
@@ -207,8 +212,9 @@ export function outputTarget(element: Element): OutputTarget | undefined {
   const column = kind === 'grid' ? outputColumn(element, view) : undefined
   const generation = Number(view.getAttribute('data-result-generation')), resultId = Number(view.getAttribute('data-result-id'))
   const result = kind === 'grid' && Number.isSafeInteger(generation) && generation > 0 && Number.isSafeInteger(resultId) && resultId > 0 ? { generation, resultId } : undefined
+  const resultKind = kind === 'grid' ? view.getAttribute('data-result-kind') ?? undefined : undefined
   return { kind: 'output', tabId, view: kind as OutputView, resultIndex, selectedText: kind === 'grid' ? '' : selectedTextIn(view), element: view,
-    ...(column !== undefined ? { column } : {}), ...(result ? { result } : {}) }
+    ...(column !== undefined ? { column } : {}), ...(result ? { result } : {}), ...(resultKind ? { resultKind } : {}) }
 }
 
 /**

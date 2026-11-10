@@ -11,10 +11,15 @@ extraResources:
     to: backend
 artifactName: Varia-SQL-Manager-${version}-${os}-${arch}.${ext}
 win:
-  target: [nsis, portable]
+  # zip: the application as an archive, which an installed copy unpacks beside itself to update (docs/updates.md).
+  target: [nsis, portable, zip]
   extraResources:
     - from: artifacts/sqltools-service/win-${arch}
       to: sqltools-service
+    # The update helper (backend/Varia.Updater, published by package.yml): it stages and swaps in a release.
+    - from: artifacts/updater
+      to: updater
+      filter: ['Varia.Updater.exe']
 nsis:
   oneClick: false
   perMachine: false

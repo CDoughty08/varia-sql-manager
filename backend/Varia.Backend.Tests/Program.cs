@@ -342,6 +342,7 @@ if (liveGroup is null)
         ("ResultSearch", Sync(() => ResultSearchChecks.Run(Check))),
         ("Profile", Sync(() => ProfileChecks.Run(Check))),
         ("Pivot", Sync(() => PivotChecks.Run(Check))),
+        ("Transpose", Sync(() => TransposeChecks.Run(Check))),
         ("Distinct", Sync(() => DistinctChecks.Run(Check))),
         ("CellLength", Sync(() => CellLengthChecks.Run(Check))),
         ("Text", () => TextChecks.RunAsync(Check)),
@@ -371,7 +372,8 @@ if (liveGroup is null)
         ("ActivityResource", Sync(() => ActivityResourceChecks.Run(Check))),
         ("ActivityQuery", Sync(() => ActivityQueryChecks.Run(Check))),
         ("ActivityAction", () => ActivityActionChecks.RunAsync(Check, json)),
-        ("SsisOperations", Sync(() => SsisOperationsChecks.Run(Check)))
+        ("SsisOperations", Sync(() => SsisOperationsChecks.Run(Check))),
+        ("Updater", Sync(() => UpdaterChecks.Run(Check)))
     ];
     var suiteNames = offlineSuites.Select(suite => suite.Name).ToArray();
     Check(suiteNames.Distinct().Count() == suiteNames.Length && OfflineSuites.Alone.All(suiteNames.Contains) && OfflineSuites.Weights.Keys.All(suiteNames.Contains)

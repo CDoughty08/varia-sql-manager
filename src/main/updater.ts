@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { chmod, mkdir, open, readdir, rename, rm, stat } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
 import { join } from 'node:path'
-import { assetFor, compareVersions, updateErrors, updateLimits, updateManifestSchema, type InstallKind, type UpdateAsset, type UpdateErrorCode, type UpdateManifest, type UpdatePhase, type UpdateState } from '../shared/updates'
+import { assetFor, compareVersions, stagedAssetFor, updateErrors, updateLimits, updateManifestSchema, type InstallKind, type UpdateAsset, type UpdateErrorCode, type UpdateManifest, type UpdatePhase, type UpdateState } from '../shared/updates'
 
 /** A failure the updater recognised, with its code and a short detail for Copy details (never a path or a URL's query). */
 export class UpdateFailure extends Error {
@@ -48,6 +48,32 @@ export function classifyUpdateError(error: unknown): { code: UpdateErrorCode; de
 }
 
 export interface UpdateSettings { readonly checkAutomatically: boolean; readonly downloadAutomatically: boolean }
+/**
+ * Unpacking a release beside the installation while Varia runs, so that Restart to Update only swaps two folders
+ * (`update-staging.ts`, for the installed Windows build). Anything it cannot do falls back to the installer.
+ */
+export interface UpdateStaging {
+  /** Whether a release can be staged here at all: the installation's folder is this user's to write. */
+  available(): Promise<boolean>
+  /** Whether `version`, unpacked from the archive with this checksum, is in place, in a staging folder that is this user's alone. */
+  staged(version: string, sha512: string): Promise<boolean>
+  /** Checks the archive against `sha512` again and unpacks it; rejects when it cannot (`StagingBusy`: not now). */
+  stage(archive: string, version: string, sha512: string, signal: AbortSignal): Promise<void>
+  /** Removes the staged release, keeping the record of a failure and the helper's log. */
+  clear(): Promise<void>
+  /** Removes everything staging left: the running version is the latest. */
+  remove(): Promise<void>
+  /** The release that could not be staged or swapped in, and whether the user has been told. It stays until `remove`. */
+  failure(): Promise<{ readonly version: string; readonly reported: boolean } | undefined>
+  /** Records that `version` installs with the installer from now on, in this run and later ones. */
+  markFailed(version: string, reported: boolean): Promise<void>
+}
+/** Another helper is still unpacking into the staging folder (Varia was ended while one ran): not a failure of this release. */
+export class StagingBusy extends Error {
+  constructor() { super('Another stage is running.') }
+}
+/** What Restart to Update installs: the installer or executable to run, or (staged) the release unpacked from `file`. */
+export interface ReadyUpdate { readonly file: string; readonly version: string; readonly staged: boolean; readonly sha512: string }
 type Timer = ReturnType<typeof setTimeout>
 export interface UpdaterOptions {
   readonly currentVersion: string
@@ -65,6 +91,7 @@ export interface UpdaterOptions {
   readonly downloadDir: string
   /** Whether `downloadDir` is the updater's alone; otherwise only its own hidden files there are touched. */
   readonly privateDir: boolean
+  readonly staging?: UpdateStaging
   readonly settings: () => UpdateSettings
   readonly publish: (state: UpdateState) => void
   readonly now?: () => number
@@ -79,17 +106,23 @@ const exists = (path: string) => stat(path).then(info => info.isFile() ? info.si
 
 /**
  * Help › Check for Updates and the automatic checks: reads the release manifest, downloads this build's file beside a
- * partial name while hashing it, and keeps it only when its size and SHA-512 match the manifest. Restart to Update arms
- * the verified file; main applies it once the app has closed (`update-install.ts`). One check or download at a time.
+ * partial name while hashing it, and keeps it only when its size and SHA-512 match the manifest. Where the release can be
+ * staged, its archive is then unpacked beside the installation. Restart to Update arms the verified file (hashed again)
+ * or the staged release; main applies it once the app has closed (`update-install.ts`). One check or download at a time.
  */
 export class Updater {
   private phase: UpdatePhase = { status: 'idle' }
   private running: Promise<UpdateState> | undefined
   private abort: AbortController | undefined
   private timer: Timer | undefined
-  private ready: { readonly file: string; readonly version: string } | undefined
-  private release: { readonly manifest: UpdateManifest; readonly asset: UpdateAsset } | undefined
+  private ready: ReadyUpdate | undefined
+  private release: { readonly manifest: UpdateManifest; readonly asset: UpdateAsset; readonly archive: UpdateAsset | undefined } | undefined
+  // The release whose staging or swap failed: it installs with the installer instead (staging keeps the record, so
+  // later runs do too, until a newer release or this one is running).
+  private unstageable: string | undefined
+  private recovered: Promise<void> | undefined
   private armed = false
+  private arming: Promise<boolean> | undefined
   private disposed = false
   private readonly now: () => number
   private readonly timers: NonNullable<UpdaterOptions['timers']>
@@ -104,10 +137,29 @@ export class Updater {
   }
 
   /** The verified file Restart to Update would install. */
-  get readyFile(): { readonly file: string; readonly version: string } | undefined { return this.ready }
+  get readyFile(): ReadyUpdate | undefined { return this.ready }
 
-  /** Schedules the first automatic check (when they are on). */
-  start(): void { this.schedule(updateLimits.firstCheckMs) }
+  /** Schedules the first automatic check (when they are on), and reports a swap that failed at the last restart. */
+  start(): void {
+    void this.recover()
+    this.schedule(updateLimits.firstCheckMs)
+  }
+
+  /** Once a run: a staged release that could not be swapped in is said, and installs with the installer from now on. */
+  private recover(): Promise<void> {
+    return this.recovered ??= (async () => {
+      if (!this.options.enabled || !this.options.staging) return
+      const staging = this.options.staging
+      const failure = await staging.failure().catch(() => undefined)
+      // A failure that a later, successful restart left behind is not this version's.
+      if (!failure || compareVersions(failure.version, this.options.currentVersion) <= 0) return
+      this.unstageable = failure.version
+      if (failure.reported) return
+      await staging.clear().catch(() => {})
+      await staging.markFailed(failure.version, true).catch(() => {})
+      if (this.phase.status === 'idle' && !this.disposed) this.fail(new UpdateFailure('staged'), 'install', false, failure.version)
+    })()
+  }
 
   /** Check for updates automatically may have changed: the next check follows it. */
   settingsChanged(): void {
@@ -120,7 +172,9 @@ export class Updater {
     if (!this.options.enabled || this.disposed) return Promise.resolve(this.state)
     if (this.running) return this.running
     if (manual) this.schedule(updateLimits.checkIntervalMs)
-    const run = this.running = this.run(manual).finally(() => { if (this.running === run) this.running = undefined })
+    // Whatever a check meets is a state, never a rejection: one left on "checking" would keep Check for Updates
+    // disabled for the rest of the run.
+    const run = this.running = this.run(manual).catch(error => this.fail(error, 'check', manual)).finally(() => { if (this.running === run) this.running = undefined })
     return run
   }
 
@@ -128,29 +182,49 @@ export class Updater {
   download(): Promise<UpdateState> {
     if (this.running || this.disposed || this.phase.status !== 'available' || !this.release) return this.running ?? Promise.resolve(this.state)
     const release = this.release
-    const run = this.running = this.fetchAsset(release.manifest, release.asset, true).finally(() => { if (this.running === run) this.running = undefined })
+    const run = this.running = this.obtain(release.manifest, release.asset, release.archive, true).finally(() => { if (this.running === run) this.running = undefined })
     return run
   }
 
-  /** Restart to Update: true when a verified file is ready, which `takeArmed` then hands over at exit. */
-  async arm(): Promise<boolean> {
-    if (this.phase.status !== 'ready' || !this.ready || this.running) return false
-    // The file was verified as it was written; one deleted or cut short since then is not installed.
-    const size = await exists(this.ready.file)
-    if (size < 0 || (this.release && size !== this.release.asset.size)) {
-      this.ready = undefined
-      this.fail(new UpdateFailure('integrity', 'The downloaded file changed'), 'install', true)
-      return false
+  /** Restart to Update: true when a verified update is ready, which `takeArmed` then hands over at exit. */
+  arm(): Promise<boolean> {
+    // Restart to Update chosen again while the first is still verifying shares its answer.
+    if (this.arming) return this.arming
+    if (this.phase.status !== 'ready' || !this.ready) return Promise.resolve(false)
+    // A quiet re-check of the feed is under way (the status bar still offers the restart): it is waited for. Should it
+    // find a newer release, the restart that was asked for is gone: Varia does not close minutes later, once that one
+    // has downloaded, into a release nobody chose.
+    if (this.running) {
+      const asked = this.ready
+      const again = () => this.ready === asked ? this.arm() : Promise.resolve(false)
+      return this.running.then(again, again)
     }
-    this.armed = true
-    return true
+    if (this.armed) return Promise.resolve(true)
+    const ready = this.ready
+    // It was verified as it was written, but it is run from a folder other programs can write to: it is hashed again
+    // now (a staged release: its marker and executable are looked for), and no check or download starts meanwhile.
+    const run = this.running = (async () => {
+      const whole = ready.staged
+        ? !!this.options.staging && await this.options.staging.staged(ready.version, ready.sha512).catch(() => false)
+        : await hashFile(ready.file).then(hash => hash === ready.sha512, () => false)
+      if (whole) { this.armed = true; return this.state }
+      this.ready = undefined
+      if (!ready.staged) return this.fail(new UpdateFailure('integrity', 'The downloaded file changed'), 'install', true, ready.version)
+      // The staged release is gone, or its folder is no longer this user's alone: the installer installs this one.
+      this.unstageable = ready.version
+      await this.options.staging?.clear().catch(() => {})
+      await this.options.staging?.markFailed(ready.version, true).catch(() => {})
+      return this.fail(new UpdateFailure('staged', 'The staged release is gone'), 'install', true, ready.version)
+    })().finally(() => { if (this.running === run) this.running = undefined })
+    const arming = this.arming = run.then(() => this.armed).finally(() => { if (this.arming === arming) this.arming = undefined })
+    return arming
   }
 
   /** The quit that Restart to Update started was cancelled (a query with unsaved changes was kept). */
   disarm(): void { this.armed = false }
 
   /** At exit: the file to install, once, if Restart to Update armed it. */
-  takeArmed(): { readonly file: string; readonly version: string } | undefined {
+  takeArmed(): ReadyUpdate | undefined {
     if (!this.armed || !this.ready) return undefined
     this.armed = false
     return this.ready
@@ -167,7 +241,8 @@ export class Updater {
     if (!this.options.enabled || this.disposed || !this.options.settings().checkAutomatically) return
     this.timer = this.timers.setTimeout(() => {
       this.timer = undefined
-      void this.check(false).then(state => { if (!this.timer) this.schedule(state.status === 'error' ? updateLimits.retryMs : updateLimits.checkIntervalMs) })
+      // A check never rejects (run() turns what it meets into a state); should one, the next is still scheduled.
+      void this.check(false).then(state => state.status === 'error', () => true).then(failed => { if (!this.timer) this.schedule(failed ? updateLimits.retryMs : updateLimits.checkIntervalMs) })
     }, ms)
   }
 
@@ -189,6 +264,7 @@ export class Updater {
   }
 
   private async run(manual: boolean): Promise<UpdateState> {
+    await this.recover()
     // A download in progress or a verified file stays what it is while the feed is read again.
     const previous = this.phase
     if (previous.status !== 'ready') this.set({ status: 'checking', manual })
@@ -200,27 +276,111 @@ export class Updater {
       this.release = undefined
       this.ready = undefined
       void this.sweep(undefined)
+      void this.options.staging?.remove().catch(() => {})
       return this.set({ status: 'upToDate', checkedAt: this.now() })
     }
     const asset = assetFor(manifest, this.options.kind, this.options.arch)
     if (!asset) {
       this.release = undefined
+      this.ready = undefined
+      this.armed = false
       return this.set({ status: 'available', version: manifest.version })
     }
-    this.release = { manifest, asset }
-    if (this.ready?.version === manifest.version) return this.set({ status: 'ready', version: manifest.version })
+    const version = manifest.version
+    const archive = await this.stageable(manifest)
+    this.release = { manifest, asset, archive }
+    // A newer release than the one that is ready replaces it; until it is ready too, Restart to Update has nothing (one
+    // chosen just before, still waiting on the unsaved-changes prompt, then closes Varia without installing).
+    if (this.ready?.version === version) return this.set({ status: 'ready', version })
     this.ready = undefined
-    const staged = this.stagedPath(asset)
-    // A file a previous run verified (the app was closed before Restart to Update) is used again once it hashes right.
+    this.armed = false
+    // What a previous run left (the app was closed before Restart to Update) is used again: a staged release whose
+    // marker names this archive, or a file that hashes right.
+    if (archive && await this.options.staging!.staged(version, archive.sha512).catch(() => false)) {
+      this.ready = { file: this.stagedPath(archive), version, staged: true, sha512: archive.sha512 }
+      void this.sweep(undefined)
+      return this.set({ status: 'ready', version })
+    }
+    if (!archive && await this.verified(asset)) {
+      // As after a download: a file that cannot be made runnable (an AppImage on a volume without modes) is a failure
+      // of this release's download, said as one.
+      try { return await this.readyToInstall(version, asset) } catch (error) { return this.fail(error, 'download', manual, version) }
+    }
+    if (!this.options.settings().downloadAutomatically) return this.set({ status: 'available', version, size: (archive ?? asset).size })
+    return this.obtain(manifest, asset, archive, manual)
+  }
+
+  /** The release's archive, when this installation can stage it and has not failed to before. */
+  private async stageable(manifest: UpdateManifest): Promise<UpdateAsset | undefined> {
+    const staging = this.options.staging
+    if (!staging || this.unstageable === manifest.version) return undefined
+    const archive = stagedAssetFor(manifest, this.options.kind, this.options.arch)
+    return archive && await staging.available().catch(() => false) ? archive : undefined
+  }
+
+  /** Downloads and stages the archive where that is possible; otherwise, or when staging fails, downloads the installer. */
+  private async obtain(manifest: UpdateManifest, asset: UpdateAsset, archive: UpdateAsset | undefined, manual: boolean): Promise<UpdateState> {
+    const version = manifest.version
+    if (archive) {
+      const staged = await this.stage(version, archive, manual)
+      if (staged) return staged
+    }
+    // Varia is closing: nothing more is downloaded.
+    if (this.disposed) return this.state
     try {
-      if (await exists(staged) === asset.size && await hashFile(staged) === asset.sha512) {
-        this.ready = { file: staged, version: manifest.version }
-        void this.sweep(asset)
-        return this.set({ status: 'ready', version: manifest.version })
-      }
-    } catch { /* Downloaded again below. */ }
-    if (!this.options.settings().downloadAutomatically) return this.set({ status: 'available', version: manifest.version, size: asset.size })
-    return this.fetchAsset(manifest, asset, manual)
+      // The installer an earlier run downloaded (when staging failed then, too) is not downloaded again.
+      if (!await this.verified(asset)) await this.downloadAsset(version, asset)
+      return await this.readyToInstall(version, asset)
+    } catch (error) { return this.fail(error, 'download', manual, version) }
+  }
+
+  /** Whether `asset` is already in the download folder, whole: a file an earlier run verified is used again once it hashes right. */
+  private async verified(asset: UpdateAsset): Promise<boolean> {
+    const file = this.stagedPath(asset)
+    try { return await exists(file) === asset.size && await hashFile(file) === asset.sha512 } catch { return false }
+  }
+
+  private async readyToInstall(version: string, asset: UpdateAsset): Promise<UpdateState> {
+    const file = this.stagedPath(asset)
+    // The AppImage runs as it is; the Windows files run by their extension.
+    if (this.options.kind === 'appimage') await chmod(file, 0o755)
+    this.ready = { file, version, staged: false, sha512: asset.sha512 }
+    void this.sweep(asset)
+    return this.set({ status: 'ready', version })
+  }
+
+  /**
+   * The state once the archive is downloaded and unpacked, or a download's failure (the installer would meet the same
+   * network). Undefined when only the unpacking failed: the installer can still install this release.
+   */
+  private async stage(version: string, archive: UpdateAsset, manual: boolean): Promise<UpdateState | undefined> {
+    const staging = this.options.staging!
+    const file = this.stagedPath(archive)
+    // An archive an earlier run downloaded (Varia was closed while it was being unpacked) is not downloaded again.
+    try { if (!await this.verified(archive)) await this.downloadAsset(version, archive) } catch (error) { return this.fail(error, 'download', manual, version) }
+    // Varia is closing: the archive stays for the next run, and no helper is started that nothing could stop.
+    if (this.disposed) return this.state
+    this.set({ status: 'preparing', version })
+    const controller = this.abort = new AbortController()
+    try {
+      await staging.stage(file, version, archive.sha512, controller.signal)
+    } catch (error) {
+      if (this.disposed) return this.state
+      this.unstageable = version
+      // The helper an earlier run left is still unpacking: this run installs with the installer, and nothing that
+      // helper is writing is removed. The next run finds its release staged.
+      if (error instanceof StagingBusy) return undefined
+      await rm(file, { force: true }).catch(() => {})
+      await staging.clear().catch(() => {})
+      // Remembered across runs: each would otherwise download the archive, fail to unpack it, and download the installer.
+      await staging.markFailed(version, true).catch(() => {})
+      return undefined
+    }
+    // The unpacked copy is what installs.
+    await rm(file, { force: true }).catch(() => {})
+    this.ready = { file, version, staged: true, sha512: archive.sha512 }
+    void this.sweep(undefined)
+    return this.set({ status: 'ready', version })
   }
 
   private async request(url: string, timeoutMs: number, accept: string): Promise<{ response: Response; controller: AbortController; refresh: () => void; clear: () => void }> {
@@ -272,8 +432,9 @@ export class Updater {
     return join(this.options.downloadDir, this.options.privateDir ? asset.name : `.${asset.name}.update`)
   }
 
-  private async fetchAsset(manifest: UpdateManifest, asset: UpdateAsset, manual: boolean): Promise<UpdateState> {
-    const version = manifest.version, staged = this.stagedPath(asset)
+  /** Downloads `asset` to its place in the download folder, verified; a failure leaves nothing behind. */
+  private async downloadAsset(version: string, asset: UpdateAsset): Promise<string> {
+    const staged = this.stagedPath(asset)
     const partial = join(this.options.downloadDir, `.${asset.name}.partial`)
     this.set({ status: 'downloading', version, received: 0, total: asset.size })
     let file: Awaited<ReturnType<typeof open>> | undefined
@@ -311,15 +472,11 @@ export class Updater {
       await file.close()
       file = undefined
       await rename(partial, staged)
-      // The AppImage runs as it is; the Windows files run by their extension.
-      if (this.options.kind === 'appimage') await chmod(staged, 0o755)
-      this.ready = { file: staged, version }
-      void this.sweep(asset)
-      return this.set({ status: 'ready', version })
+      return staged
     } catch (error) {
       await file?.close().catch(() => {})
       await rm(partial, { force: true }).catch(() => {})
-      return this.fail(error, 'download', manual, version)
+      throw error
     }
   }
 

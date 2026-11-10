@@ -2,7 +2,7 @@ import { Component, useLayoutEffect, useRef, useState, type ErrorInfo, type Poin
 import { createPortal } from 'react-dom'
 import { onUnexpectedError } from '../core/errors'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
-import { placeMenu, type Placement, type Rect } from './geometry'
+import { placeScrollingMenu, type Placement, type Rect } from './geometry'
 import type { MenuController, MenuLevel, MenuView } from './MenuController'
 import type { ResolvedMenuItem } from './resolve'
 import { codiconClass, type IconId } from '../../../shared/icons'
@@ -66,10 +66,18 @@ function MenuLevelView({ view, depth, controller }: { view: MenuView; depth: num
   const [placement, setPlacement] = useState<Placement | null>(null)
   const innermost = depth === view.levels.length - 1
   useLayoutEffect(() => {
-    const { width, height } = ref.current!.getBoundingClientRect()
+    const element = ref.current!
+    const { width, height } = element.getBoundingClientRect()
     // Inside the window the menu shows in; only the main window has the native controls over its title bar.
-    const root = ref.current!.ownerDocument.documentElement, main = ref.current!.ownerDocument === document
-    setPlacement(placeMenu(level.anchor, { width, height }, { width: root.clientWidth, height: root.clientHeight }, main ? controlsArea() : undefined))
+    const root = element.ownerDocument.documentElement, main = element.ownerDocument === document
+    // Measured with a height limit, its scroll bar included, for a menu that will scroll.
+    const widthAt = (maxHeight: number) => {
+      element.style.maxHeight = `${maxHeight}px`
+      const width = element.getBoundingClientRect().width
+      element.style.maxHeight = ''
+      return width
+    }
+    setPlacement(placeScrollingMenu(level.anchor, { width, height }, { width: root.clientWidth, height: root.clientHeight }, main ? controlsArea() : undefined, widthAt))
   }, [level.anchor])
   const report = () => { const element = ref.current; if (element) controller.setLevelRect(depth, rectOf(element), [...element.children].map(rectOf)) }
   useLayoutEffect(() => { if (placement) report() })
