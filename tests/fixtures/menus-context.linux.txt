@@ -346,6 +346,8 @@ output.context, for a results grid with selected cells
   Then &Sort Descending  ++++
   Clea&r Sort  ----
   Filt&er >
+    Filter Column &Values…  Alt+Down  ----
+    ---
     Filter for &Selected Values  ++++
     &Exclude Selected Values  ++++
     Filter &Between Lowest and Highest Selected  ----
@@ -391,6 +393,8 @@ output.context, for a results grid without
   Then &Sort Descending  ----
   Clea&r Sort  ----
   Filt&er >
+    Filter Column &Values…  Alt+Down  ----
+    ---
     Filter for &Selected Values  ----
     &Exclude Selected Values  ----
     Filter &Between Lowest and Highest Selected  ----

@@ -291,6 +291,10 @@ export const gridPart = {
   sortButton: '.rg-cs',
   sortedButton: '.rg-cs.on',
   sortOrder: '.rg-co',
+  /** A header's funnel (results grids), hidden from screen readers (Filter Column Values, Alt+Down, opens the same
+   *  popover); filled while its column has a filter. */
+  funnelButton: '.rg-cf',
+  funnelOn: '.rg-cf.on',
   /** Search in results' marks (GridView's marks), drawn only: a matched cell, the active match, a column header a
    *  column-name search matches, and cells and headers it leaves out. The active cell's label says "search match". */
   searchMatch: '.rg-c.is-hit',

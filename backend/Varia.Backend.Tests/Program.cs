@@ -342,6 +342,7 @@ if (liveGroup is null)
         ("ResultSearch", Sync(() => ResultSearchChecks.Run(Check))),
         ("Profile", Sync(() => ProfileChecks.Run(Check))),
         ("Pivot", Sync(() => PivotChecks.Run(Check))),
+        ("Distinct", Sync(() => DistinctChecks.Run(Check))),
         ("CellLength", Sync(() => CellLengthChecks.Run(Check))),
         ("Text", () => TextChecks.RunAsync(Check)),
         ("Explorer", () => ExplorerChecks.RunAsync(Check)),

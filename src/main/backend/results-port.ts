@@ -1,5 +1,5 @@
-import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ViewFilter, ResultsCloseResult, ResultsDiffParams, ResultsDiffResult, ResultsFindRowsParams, ResultsFindRowsResult, ResultsIdentifyParams, ResultsIdentifyResult, ResultsPivotParams, ResultsPivotResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsRowIdsParams, ResultsRowIdsResult, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult } from '../../shared/contracts'
-import { diffResultSchema, findRowsResultSchema, identifyResultSchema, type MemoryFeature, type MemoryReport, type PortEndResult, type PortMessage, type PortRequest, pivotResultSchema, portRequestSchema, profileResultSchema, rowBytesResultSchema, rowIdsResultSchema, searchResultSchema, testPortRequestSchema, viewCloseResultSchema, viewResultSchema } from '../../shared/ipc/port-messages'
+import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsDiffParams, ResultsDiffResult, ResultsDistinctParams, ResultsDistinctResult, ResultsFindRowsParams, ResultsFindRowsResult, ResultsIdentifyParams, ResultsIdentifyResult, ResultsPivotParams, ResultsPivotResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsRowIdsParams, ResultsRowIdsResult, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult, ViewFilter } from '../../shared/contracts'
+import { diffResultSchema, distinctResultSchema, findRowsResultSchema, identifyResultSchema, type MemoryFeature, type MemoryReport, pivotResultSchema, type PortEndResult, type PortMessage, type PortRequest, portRequestSchema, profileResultSchema, rowBytesResultSchema, rowIdsResultSchema, searchResultSchema, testPortRequestSchema, viewCloseResultSchema, viewResultSchema } from '../../shared/ipc/port-messages'
 import { liveDescriptors, liveRetired, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../../shared/live/schema'
 import { cancelReasons, limits as wire, type CancelReason, type ErrorCode } from '../../shared/ipc/wire/protocol'
 import type { StreamSink } from './connection'
@@ -42,6 +42,8 @@ export interface ResultsBackend {
   search(generation: number, params: ResultsSearchParams): { readonly done: Promise<ResultsSearchResult>; cancel(reason: CancelReason): void }
   /** A profile reads every row: the worker's cancel (a newer profile, or the panel closed) stops it. */
   profile(generation: number, params: ResultsProfileParams): { readonly done: Promise<ResultsProfileResult>; cancel(reason: CancelReason): void }
+  /** Distinct values read every row of a column: the worker's cancel (a newer request, or the popover closed) stops it. */
+  distinct(generation: number, params: ResultsDistinctParams): { readonly done: Promise<ResultsDistinctResult>; cancel(reason: CancelReason): void }
   live(generation: number, params: LiveSubscribeParams, onLive: (event: LiveEvent, bytes: number) => void, credit: number): LiveStreamHandle
   liveUpdate(generation: number, params: LiveUpdateParams): Promise<LiveUpdateResult>
 }
@@ -271,6 +273,7 @@ export class ResultsPortHost {
       case 'pivot': return this.pivot(request)
       case 'search': return this.search(request)
       case 'profile': return this.profile(request)
+      case 'distinct': return this.distinct(request)
       case 'live': return this.live(request)
       case 'liveUpdate': return this.liveUpdate(request)
     }
@@ -590,6 +593,39 @@ export class ResultsPortHost {
     })
   }
 
+  /** Distinct values of a column of a result this renderer owns (a view id is checked against its result by the backend),
+   *  cancelled and counted like a sort. The answer is bounded before the renderer sees it: the column is one the descriptor
+   *  named, the values at most those asked for (rows within a filter's bounds), and kept marks exactly when asked for. */
+  private distinct(request: Extract<PortRequest, { t: 'distinct' }>): void {
+    const { rid } = request
+    if (this.sorting.has(rid)) return this.end(rid, 'INVALID_REQUEST', 'The results request was invalid.')
+    if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
+    if (!this.current(request.generation, request.resultId)) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
+    const columns = this.owned.get(request.resultId)
+    if (columns !== undefined && request.column >= columns) return this.end(rid, 'INVALID_REQUEST', 'The results request was invalid.')
+    const port = this.port
+    const params: ResultsDistinctParams = { resultId: request.resultId, column: request.column, order: request.order, maxValues: request.maxValues }
+    if (request.search !== undefined) params.search = request.search
+    if (request.viewId !== undefined) params.viewId = request.viewId
+    if (request.keptViewId !== undefined) params.keptViewId = request.keptViewId
+    const distinct = this.backend.distinct(request.generation, params)
+    this.sorting.set(rid, distinct)
+    distinct.done.then(result => {
+      if (this.port !== port || this.sorting.get(rid) !== distinct) return
+      this.sorting.delete(rid)
+      const parsed = distinctResultSchema.safeParse(result)
+      // Kept marks come exactly when they were asked for: every value's and NULL's, or none.
+      const marked = request.keptViewId !== undefined
+      if (!parsed.success || parsed.data.values.length > request.maxValues || (parsed.data.nullsKept !== undefined) !== marked || (parsed.data.unlistedKept !== undefined) !== marked || parsed.data.values.some(value => (value.kept !== undefined) !== marked))
+        return this.end(rid, 'BACKEND_ERROR', 'The column\'s values could not be listed.')
+      this.post({ t: 'end', rid, ok: true, result: parsed.data })
+    }, error => {
+      if (this.port !== port || this.sorting.get(rid) !== distinct) return
+      this.sorting.delete(rid)
+      this.fail(rid, error)
+    })
+  }
+
   /** Row identities of a result this renderer owns (results.identify); cancelled like a sort, and counted with sorts. */
   private identify(request: Extract<PortRequest, { t: 'identify' }>): void {
     const { rid } = request
@@ -806,6 +842,11 @@ export function supervisorResults(supervisor: BackendSupervisor): ResultsBackend
     profile: (generation, params) => {
       let id = 0
       const done = supervisor.request('results.profile', params, { generation, onSent: sent => { id = sent } })
+      return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
+    },
+    distinct: (generation, params) => {
+      let id = 0
+      const done = supervisor.request('results.distinct', params, { generation, onSent: sent => { id = sent } })
       return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
     },
     live: (generation, params, onLive, credit) => {

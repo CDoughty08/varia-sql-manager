@@ -1,9 +1,10 @@
-import { Component, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ErrorInfo, type KeyboardEvent, type ReactNode } from 'react'
+import { Component, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ErrorInfo, type KeyboardEvent, type ReactNode } from 'react'
 import type { QueryResult } from '../../../shared/contracts'
 import { onUnexpectedError } from '../core/errors'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import type { ResultHandle } from '../results/ResultClient'
-import { setKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
+import { filteredColumns, setKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
+import { ColumnFilterPopover, type ColumnFilterTarget } from '../results/ColumnFilterPopover'
 import { compareText } from '../results/CompareService'
 import { highlightText } from '../results/HighlightsService'
 import { pivotStrip } from '../results/pivot'
@@ -67,6 +68,11 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
   const [swaps, setSwaps] = useState(0)
   marksRef.current = marks
   const [status, setStatus] = useState<GridStatus>({})
+  // The header funnel's popover, while open: its column and where it opens.
+  const [funnel, setFunnel] = useState<ColumnFilterTarget | undefined>()
+  const filtered = useMemo(() => filteredColumns(sort), [sort])
+  const filteredRef = useRef(filtered)
+  filteredRef.current = filtered
   const index = entry.index
   const countRef = useRef(count)
   countRef.current = count
@@ -97,11 +103,17 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
       onError: onUnexpectedError,
       onOpenValue: (row, column) => { void commands.execute('output.openValue', { tabId, cell: { resultIndex: index, row, column } }, 'keybinding') },
       sort: sortRef.current?.keys,
-      onSort: (column, add) => results.cycleSort(tabId, index, column, add)
+      onSort: (column, add) => results.cycleSort(tabId, index, column, add),
+      filtered: filteredRef.current,
+      // A press on the open column's funnel closes its popover, as pressing a menu's button again does.
+      onFilter: (column, anchor) => setFunnel(current => current?.column === column ? undefined : { column, anchor })
     })
     viewRef.current = view
     view.setMarks(marksRef.current)
-    const registration = results.registerGrid(tabId, index, { selectAll: () => view.selectAll(), repaint: () => view.repaint(), fitColumn: column => view.fitColumn(column) })
+    const registration = results.registerGrid(tabId, index, {
+      selectAll: () => view.selectAll(), repaint: () => view.repaint(), fitColumn: column => view.fitColumn(column),
+      filterColumn: column => setFunnel({ column, anchor: view.filterAnchor(column) })
+    })
     // Closing and opening the pane within one frame moves the grid without resizing it, and the move drops the scroller's
     // offsets: the frame this asks for writes them back (GridView's offsetsDropped), and a press before it keeps them.
     const unsubscribe = panes.subscribe(() => view.panesChanged())
@@ -112,7 +124,12 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
       if (viewRef.current === view) viewRef.current = undefined
     }
   }, [tabId, index, entry, results, resultClient, commands, platform, gridStats, panes])
-  useEffect(() => { viewRef.current?.update({ resultCount: count, showTypes, whitespace, sort: sort?.keys, rowSize }) }, [count, showTypes, whitespace, sort?.keys, rowSize])
+  useEffect(() => { viewRef.current?.update({ resultCount: count, showTypes, whitespace, sort: sort?.keys, rowSize, filtered }) }, [count, showTypes, whitespace, sort?.keys, rowSize, filtered])
+  // Closing the popover gives the focus back to the grid, as a menu does, unless a press elsewhere took it.
+  const closeFunnel = useCallback((refocus = true) => {
+    setFunnel(undefined)
+    if (refocus) rootRef.current?.focus({ preventScroll: true })
+  }, [])
   // The grid draws the highlighted rows of the handle it shows, and switches with its swaps.
   const highlightRows = marked?.rows
   useLayoutEffect(() => { viewRef.current?.setHighlights(highlightRows ?? []) }, [highlightRows, tabId, index, entry])
@@ -168,6 +185,8 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
         : !lost && snapshot.incomplete ? <div className="rg-strip" role="status" title={incompleteText}>{incompleteText}</div>
           : !lost && truncation ? <div className="rg-strip" role="status" title={truncation}>{truncation}</div>
             : highlightNote ? <div className="rg-strip" role="status" title={highlightNote}>{highlightNote}</div> : null}
+    {funnel && !lost && funnel.column < entry.descriptor.columns.length && <ColumnFilterPopover key={funnel.column} tabId={tabId} index={index} target={funnel}
+      columnName={entry.descriptor.columns[funnel.column].name || '(No column name)'} filtered={filtered.has(funnel.column)} grid={rootRef.current!} onClose={closeFunnel} />}
   </div>
 }
 

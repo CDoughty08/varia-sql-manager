@@ -101,6 +101,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'results.profile': { kind: 'unary', lane: 'results', deadlineMs: 120_000 },
   // Groups and aggregates stored rows in memory off the frame loop, then stores the pivot as a result; Stop cancels it.
   'results.pivot': { kind: 'unary', lane: 'results', deadlineMs: 120_000 },
+  // Groups a column's stored values in memory off the frame loop, as a filter compares them; a newer request cancels it.
+  'results.distinct': { kind: 'unary', lane: 'results', deadlineMs: 120_000 },
   // The backend answers its own 40 s budget as a TIMEOUT value; main cancels it from the renderer (varia:explorer-cancel).
   'explorer.children': { kind: 'unary', lane: 'explorer', deadlineMs: 45_000 },
   // A build reads every database (each within its own 120 s budget) and only Stop (varia:explorer-cancel), a newer build or a

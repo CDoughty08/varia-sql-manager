@@ -871,7 +871,37 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-ch.narrow .rg-cs { pointer-events: none; }
 .rg-ch.narrow:hover .rg-cs:not(.on) { visibility: hidden; }
 .rg-cs.on { color: var(--varia-resultsGrid-headerForeground); }
-.rg-ch.sel .rg-cs { color: inherit; }
+.rg-ch.sel .rg-cs, .rg-ch.sel .rg-cf { color: inherit; }
+/* A header's funnel (results grids): at the header's right end, the sort button left of it; it shows while hovered and
+   stays, filled, while its column has a filter. */
+.rg-cf { position: absolute; top: 0; right: 0; display: flex; align-items: center; justify-content: center; width: 18px; height: 21px; background: inherit; color: var(--varia-resultsGrid-headerDescriptionForeground); visibility: hidden; cursor: pointer; }
+.rg-ch.fb .rg-cs { right: 18px; }
+.rg-ch:hover .rg-cf, .rg-cf.on { visibility: visible; }
+.rg-cf.on { color: var(--varia-resultsGrid-headerForeground); }
+/* A sorted column's idle funnel still covers the header text beside the sort button, without its glyph. */
+.rg-cs.on + .rg-cf, .rg-ch.narrow:hover .rg-cs.on + .rg-cf { visibility: visible; }
+.rg-ch:not(:hover) .rg-cs.on + .rg-cf:not(.on) > span, .rg-ch.narrow .rg-cs.on + .rg-cf:not(.on) > span { visibility: hidden; }
+.rg-ch.narrow .rg-cf { pointer-events: none; }
+.rg-ch.narrow:hover .rg-cf:not(.on) { visibility: hidden; }
+.rg-cf:hover, .rg-cs:hover { color: var(--varia-resultsGrid-headerForeground); }
+/* The header funnel's popover (ColumnFilterPopover): a checklist of a column's distinct values, under the header. */
+.column-filter { position: fixed; z-index: 13000; display: flex; flex-direction: column; gap: var(--varia-space-2); box-sizing: border-box; min-height: 0; padding: var(--varia-space-2) var(--varia-space-3) var(--varia-space-3); overflow: hidden; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); font: var(--varia-size-sm)/var(--varia-line-sm) var(--varia-font-ui); animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease); }
+.column-filter-head { display: flex; align-items: center; gap: var(--varia-space-2); }
+.column-filter-head h2 { flex: 1 1 auto; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-md); font-weight: 600; }
+.column-filter select { max-width: 100%; font: inherit; color: var(--varia-input-foreground); background: var(--varia-input-background); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); }
+.column-filter-search { display: flex; align-items: center; gap: 4px; height: 24px; padding: 0 6px; border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); background: var(--varia-input-background); color: var(--varia-descriptionForeground); }
+.column-filter-search:focus-within { border-color: var(--varia-focusBorder); box-shadow: 0 0 0 1px var(--varia-focusBorder); }
+.column-filter-search input { flex: 1 1 0; width: 0; border: 0; outline: none; background: none; color: var(--varia-input-foreground); font: inherit; }
+.column-filter-bulk, .column-filter-actions, .column-filter-condition { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); }
+.column-filter-gap { flex: 1 1 auto; }
+.column-filter-list { flex: 1 1 auto; min-height: 60px; max-height: 260px; overflow: auto; border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-sm); padding: 2px 0; }
+.column-filter-item { display: flex; align-items: center; gap: var(--varia-space-2); padding: 1px var(--varia-space-2); cursor: default; }
+.column-filter-item:hover { background: var(--varia-list-hoverBackground); }
+.column-filter-item.null .column-filter-text, .column-filter-item.empty .column-filter-text { font-style: italic; color: var(--varia-descriptionForeground); }
+.column-filter-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; unicode-bidi: isolate; }
+.column-filter-count { flex-shrink: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; }
+.column-filter-note { margin: 0; padding: 2px var(--varia-space-2); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.column-filter-note.error { color: var(--varia-errorForeground); }
 .rg-co { font-size: var(--varia-size-xs); }
 .rg-co:empty { display: none; }
 .rg-ch.sel { background: var(--varia-resultsGrid-headerSelectionBackground); color: var(--varia-resultsGrid-headerSelectionForeground); }
