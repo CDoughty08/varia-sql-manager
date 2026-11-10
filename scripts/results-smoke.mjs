@@ -15,7 +15,7 @@ import {
   activeDocument, anyResultGrid, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice,
   jobProgress, kindIcon, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
   outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, resultsToolbar, resultToggle, statusBar,
-  profileCard, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, unsavedMark
+  pivotPanel, profileCard, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, unsavedMark
 } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -1407,7 +1407,7 @@ try {
   await page.keyboard.press('Shift+F10')
   const outputMenu = page.getByRole('menu', { name: 'Query output', exact: true })
   await expect(outputMenu).toBeVisible()
-  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Filter', 'Highlight', 'Compare with Previous Result', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Results'])
+  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Filter', 'Highlight', 'Compare with Previous Result', 'Pivot Results…', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Results'])
   await page.keyboard.press('Escape')
   // Shift+F10 right after a click opens at the cell just clicked, though the grid paints it as active only on its next
   // frame: below it (or above, when there is no room), from its left edge (or to its right edge, near the window's).
@@ -1482,6 +1482,52 @@ try {
   await show('Row size').click()
   await expect(rowNumber(0)).toHaveAttribute('title', /^Row 1: /)
   console.log('Results checks: the column profile panel shows the figures the backend computes for each column, and the row-size bar shows and hides with its bytes.')
+
+  // 13b2. Pivot: the results toolbar's Pivot opens the panel on the grid; a row group (active: 1 for every third id) with a
+  // Count of rows and a Max of id, built in the backend (results.pivot), adds the pivot as the run's next result.
+  await expect(show('Pivot')).toHaveAttribute('aria-pressed', 'false')
+  await show('Pivot').click()
+  const pivoting = pivotPanel(page)
+  await expect(pivoting).toBeVisible()
+  await expect(show('Pivot')).toHaveAttribute('aria-pressed', 'true')
+  await pivoting.getByRole('combobox', { name: 'Add row group', exact: true }).selectOption({ label: 'active' })
+  await expect(pivoting.getByRole('button', { name: 'Remove row group active', exact: true })).toBeVisible()
+  await pivoting.getByRole('button', { name: 'Add value', exact: true }).click()
+  await pivoting.getByRole('combobox', { name: 'Value 2 aggregate', exact: true }).selectOption({ label: 'Max' })
+  await expect(pivoting.getByRole('combobox', { name: 'Value 2 column', exact: true })).toHaveValue('0')
+  // Sum and Average take only numbers: the text name column is not offered for them.
+  await pivoting.getByRole('combobox', { name: 'Value 1 aggregate', exact: true }).selectOption({ label: 'Sum' })
+  await expect(pivoting.getByRole('combobox', { name: 'Value 1 column', exact: true }).getByRole('option', { name: 'name', exact: true })).toBeDisabled()
+  await pivoting.getByRole('combobox', { name: 'Value 1 aggregate', exact: true }).selectOption({ label: 'Count' })
+  await pivoting.getByRole('combobox', { name: 'Value 1 column', exact: true }).selectOption({ label: '(Rows)' })
+  await pivoting.getByRole('button', { name: 'Build Pivot', exact: true }).click()
+  const pivoted = grid(1)
+  await expect(cell(1, 2, pivoted)).toHaveText('99')
+  for (const name of ['active', 'Count of rows', 'Max of id']) await expect(pivoted.getByRole('columnheader', { name: new RegExp(`^${name}`) })).toHaveCount(1)
+  expect(await Promise.all([0, 1].map(row => Promise.all([0, 1, 2].map(column => cell(row, column, pivoted).textContent()))))).toEqual([['0', '66', '98'], ['1', '34', '99']])
+  await expect(strip(1)).toContainText('Pivot of Result 1: 100 rows in 2 row groups.')
+  await expect(page.getByRole('button', { name: 'Pivot of Result 1', exact: true })).toBeVisible()
+  await expect(pivoting.getByRole('combobox', { name: 'Pivot source', exact: true }).getByRole('option', { name: 'Pivot of Result 1', exact: true })).toHaveCount(1)
+  await page.screenshot({ path: resolve('artifacts', 'results-pivot.png') })
+  await pivoting.getByRole('button', { name: 'Close Pivot', exact: true }).click()
+  await expect(pivotPanel(page)).toHaveCount(0)
+  await expect(show('Pivot')).toHaveAttribute('aria-pressed', 'false')
+  // A pivot past its bounds is refused, not shown in part: 300 ids as column groups say so in the panel, which keeps the
+  // draft, and add no result. Running again releases the pivot with the run's other results.
+  await run('-- varia-fake: sets=W1*300')
+  await settled()
+  await expect(anyResultGrid(page)).toHaveCount(1)
+  await show('Pivot').click()
+  await expect(pivoting.getByRole('button', { name: 'Remove row group active', exact: true })).toBeVisible()
+  await pivoting.getByRole('combobox', { name: 'Column group', exact: true }).selectOption({ label: 'id' })
+  await pivoting.getByRole('button', { name: 'Build Pivot', exact: true }).click()
+  await expect(pivoting.getByRole('status')).toContainText('The column group has 300 distinct values, and a pivot can have at most 256 column groups.')
+  await expect(anyResultGrid(page)).toHaveCount(1)
+  await pivoting.getByRole('button', { name: 'Close Pivot', exact: true }).click()
+  await run('-- varia-fake: sets=W1*100')
+  await settled()
+  await expect(anyResultGrid(page)).toHaveCount(1)
+  console.log('Results checks: Pivot groups the rows of a grid by a column in the backend and adds the counts and maxima as a new result, offering Sum only for numeric columns and refusing a pivot past its bounds in the panel.')
 
   // 13c. Filters: the grid menu's Filter submenu filters by the selected cells' values, without NULL, between the lowest and
   // highest selected value and to duplicates; the caption counts the rows kept and lists each filter, named by its values,

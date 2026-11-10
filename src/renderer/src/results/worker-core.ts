@@ -2,7 +2,7 @@
 // from main through the results port, validates and caches them (decodePage), and answers the UI's windows and cells
 // with display text decoded only for the cells asked for. It also relays live subscriptions between the page and main
 // without decoding anything, and grants each live event's bytes back only once the page says it applied the event.
-import type { BackendStatus, ResultsCloseResult, ResultsDiffResult, ResultsDistinctResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsProfileResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult, WireKind } from '../../../shared/contracts'
+import type { BackendStatus, ResultsCloseResult, ResultsDiffResult, ResultsDistinctResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult, WireKind } from '../../../shared/contracts'
 import type { PortEndResult, PortMessage, PortRequest } from '../../../shared/ipc/port-messages'
 import { decodePage, pageMemoryBytes, PageFormatError, type PageView } from '../../../shared/ipc/wire/pages'
 import { CELL_ERROR, CELL_NULL, cellFlags, cellSlice, cellText, displayText, runSlice, textRun, type TextRun } from '../../../shared/ipc/wire/cells'
@@ -113,9 +113,9 @@ export class ResultsWorkerCore {
   private readonly viewCloses = new Map<number, number>()
   /** Row-identity requests in flight: the page's id by rid. */
   private readonly identities = new Map<number, number>()
-  /** The diffs among them, by rid: their generation, and whether the page gave them up. A diff answered after its cancel
-   *  is a stored result nobody holds, so it is closed. */
-  private readonly diffs = new Map<number, { readonly generation: number; cancelled: boolean }>()
+  /** The diffs and pivots among them, by rid: their generation, and whether the page gave them up. One answered after its
+   *  cancel is a stored result nobody holds, so it is closed. */
+  private readonly diffs = new Map<number, { readonly generation: number; cancelled: boolean; readonly cancelledText: string }>()
   /** The worker's own viewCloses (a view built after its sort was given up), whose rids stay taken until main answers. */
   private readonly orphanCloses = new Set<number>()
   private readonly lives = new Map<number, Live>()
@@ -452,8 +452,14 @@ export class ResultsWorkerCore {
     if (body.method === 'identify') this.send({ t: 'identify', rid, generation, resultId, by: body.by, ...(body.column === undefined ? {} : { column: body.column }) })
     else if (body.method === 'rowIds') this.send({ t: 'rowIds', rid, generation, resultId, firstRow: body.firstRow, count: body.count, ...viewId })
     else if (body.method === 'findRows') this.send({ t: 'findRows', rid, generation, resultId, ids: [...body.ids], ...viewId })
-    else {
-      this.diffs.set(rid, { generation, cancelled: false })
+    else if (body.method === 'pivot') {
+      this.diffs.set(rid, { generation, cancelled: false, cancelledText: 'The pivot was cancelled.' })
+      this.send({
+        t: 'pivot', rid, generation, resultId, rows: [...body.rows], ...(body.column === undefined ? {} : { column: body.column }),
+        values: body.values.map(value => value.column === undefined ? { aggregate: 'count' as const } : { aggregate: value.aggregate, column: value.column }), ...viewId
+      })
+    } else {
+      this.diffs.set(rid, { generation, cancelled: false, cancelledText: 'The comparison was cancelled.' })
       this.send({ t: 'diff', rid, generation, resultId, right: body.right, exact: body.exact, context: body.context })
     }
   }
@@ -671,10 +677,10 @@ export class ResultsWorkerCore {
       if (diff?.cancelled) {
         const close = this.allocate()
         this.orphanCloses.add(close)
-        this.send({ t: 'close', rid: close, generation: diff.generation, resultIds: [(result as ResultsDiffResult).descriptor.resultId] })
-        return this.error(identity, 'CANCELLED', 'The comparison was cancelled.')
+        this.send({ t: 'close', rid: close, generation: diff.generation, resultIds: [(result as ResultsDiffResult | ResultsPivotResult).descriptor.resultId] })
+        return this.error(identity, 'CANCELLED', diff.cancelledText)
       }
-      this.post({ type: 'identity', id: identity, result: result as ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsDiffResult })
+      this.post({ type: 'identity', id: identity, result: result as ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsDiffResult | ResultsPivotResult })
       return
     }
     const sizes = this.sizes.get(rid)

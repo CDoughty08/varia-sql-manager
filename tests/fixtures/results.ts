@@ -71,6 +71,14 @@ export function fakeResultClient() {
           }),
           key: 'Id', same: 1, changed: 1, added: 1, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: []
         })),
+        // A pivot is result 800 + this one's id: its row columns and a Count of rows, two row groups of three rows.
+        pivot: vi.fn<ResultHandle['pivot']>(async spec => ({
+          descriptor: descriptor(800 + value.resultId, {
+            generation: value.generation, index: value.index, kind: 'pivot', rowsRead: 2, rowsStored: 2, rowsAvailable: 2, state: 'complete',
+            columns: [...spec.rows.map(column => value.columns[column]), { name: 'Count of rows', dataType: 'bigint', wire: 'text', nullable: false }] as ResultColumn[]
+          }),
+          rows: 3, rowGroups: 2, columnGroups: 0, approximate: false
+        })),
         search: vi.fn<ResultHandle['search']>(async () => ({ rows: 0, total: 0, first: 0, matchRows: [], matchColumns: [], complete: true, approximate: false })),
         profile: vi.fn<ResultHandle['profile']>(async columns => ({ rows: handle.snapshot.rowsAvailable, complete: handle.snapshot.state === 'complete', columns: columns.map(column => ({ column, values: 0, nulls: 0, distinct: 0, distinctExact: true, approximate: false })) })),
         // Distinct values: none unless a test says otherwise.

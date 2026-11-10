@@ -309,7 +309,7 @@ internal static partial class ViewSorter
 
     /// <summary>A key over every row (indexed by base row), or over only <paramref name="kept"/>'s rows, in ascending base
     /// row order (indexed by their place in it). Its direction is the comparer's: keys compare ascending.</summary>
-    private static Key Build(ResultSetBuffer set, PageSource source, ViewKey sort, int[]? kept, int rows, CancellationToken token, ref bool approximate)
+    internal static Key Build(ResultSetBuffer set, PageSource source, ViewKey sort, int[]? kept, int rows, CancellationToken token, ref bool approximate)
     {
         var column = sort.Column;
         var meta = set.Columns[column];
@@ -487,7 +487,7 @@ internal static partial class ViewSorter
     }
 
     /// <summary>The sealed pages a sort reads, each parsed once, and a row's cell found again by binary search.</summary>
-    private sealed class PageSource
+    internal sealed class PageSource
     {
         private readonly StoredPage[] pages;
         private readonly long[] starts;
@@ -538,7 +538,7 @@ internal static partial class ViewSorter
 
     /// <summary>A column's values in ascending order, indexed by base row or, built over some rows (<c>map</c>), by their
     /// place in that list; <see cref="Comparer"/> applies a sort key's direction.</summary>
-    private abstract class Key(int rows, int[]? map = null)
+    internal abstract class Key(int rows, int[]? map = null)
     {
         private readonly byte[] nulls = new byte[(rows + 7) / 8];
         public void SetNull(int row) => nulls[row >> 3] |= (byte)(1 << (row & 7));
@@ -661,7 +661,7 @@ internal static partial class ViewSorter
 
     /// <summary>The keys in order, each descending where <paramref name="descending"/> says (null: all ascending), NULL
     /// lowest, then the index, so equal rows keep their order (a stable sort).</summary>
-    private sealed class Comparer(Key[] keys, bool[]? descending, CancellationToken token) : IComparer<int>
+    internal sealed class Comparer(Key[] keys, bool[]? descending, CancellationToken token) : IComparer<int>
     {
         private int calls;
 

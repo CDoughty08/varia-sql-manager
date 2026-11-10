@@ -325,6 +325,33 @@ describe('ResultClient', () => {
     await settle()
     expect(worker().fromWorker.findLast(item => item.t === 'close')).toMatchObject({ generation: 1, resultIds: [10] })
     expect((client as unknown as { pending: Map<number, unknown> }).pending.size).toBe(0)
+    // A pivot names distinct row columns of the result, a column group apart from them and 1 to 16 values; it reads through a view.
+    const pivotBefore = worker().fromWorker.length
+    for (const spec of [
+      { rows: [0, 0], values: [{ aggregate: 'count' as const }] },
+      { rows: [99], values: [{ aggregate: 'count' as const }] },
+      { rows: [0], column: 0, values: [{ aggregate: 'count' as const }] },
+      { rows: [0], values: [] },
+      { rows: [0], values: [{ aggregate: 'sum' as const }] },
+      { rows: [0], values: [{ aggregate: 'max' as const, column: -1 }] },
+      { rows: [0, 1, 2, 3, 4, 5, 6, 7, 8], values: [{ aggregate: 'count' as const }] },
+      { rows: [], values: Array.from({ length: 17 }, () => ({ aggregate: 'count' as const })) }
+    ]) await expect(handle.pivot(spec)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    expect(worker().fromWorker.length).toBe(pivotBefore)
+    const pivoting = view.pivot({ rows: [], column: 0, values: [{ aggregate: 'max', column: 0 }] })
+    const pivotAnswer = { descriptor: descriptor({ resultId: 11, kind: 'pivot' }), rows: 10, rowGroups: 2, columnGroups: 3, approximate: false }
+    expect(await answer('pivot', pivotAnswer)).toMatchObject({ t: 'pivot', generation: 1, resultId: 3, rows: [], column: 0, values: [{ aggregate: 'max', column: 0 }], viewId: 2 })
+    expect(await pivoting).toEqual(pivotAnswer)
+    // A pivot given up whose answer comes anyway is closed.
+    const giveUp = new AbortController()
+    const abandoned = handle.pivot({ rows: [0], values: [{ aggregate: 'count' }] }, { signal: giveUp.signal })
+    await settle()
+    const pivotAsked = worker().fromWorker.findLast(item => item.t === 'pivot')!
+    giveUp.abort()
+    await expect(abandoned).rejects.toMatchObject({ name: 'AbortError' })
+    worker().toWorker({ t: 'end', rid: pivotAsked.rid, ok: true, result: { ...pivotAnswer, descriptor: descriptor({ resultId: 12, kind: 'pivot' }) } } as never)
+    await settle()
+    expect(worker().fromWorker.findLast(item => item.t === 'close')).toMatchObject({ generation: 1, resultIds: [12] })
   })
 
   it('sorts a result into a view read by position, replaces and closes views, and drops them with their result', async () => {

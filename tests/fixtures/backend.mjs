@@ -672,6 +672,69 @@ function buildDiff(left, right, exact, context) {
     leftOnly: oneSided(left, 0), rightOnly: oneSided(right, 1)
   }
 }
+// results.pivot: a result's (or a view's) rows grouped by the row columns and the column group, values compared ordinally
+// (numbers by value), NULL first; each column group's values, then a Total per value. The real backend's collations,
+// types and limits have their own checks (PivotChecks).
+const pivotLabels = { count: 'Count', countDistinct: 'Distinct Count', sum: 'Sum', avg: 'Average', min: 'Min', max: 'Max' }
+function buildPivot(source, { rows: rowColumns, column: groupColumn, values }) {
+  const rows = source.sealed === undefined ? available(source) : source.read
+  const typeOf = at => source.columns[at].dataType.split('(')[0].trim().toLowerCase()
+  const approximate = at => typeOf(at) === 'float' || typeOf(at) === 'real'
+  const integer = at => ['tinyint', 'smallint', 'int', 'bigint'].includes(typeOf(at))
+  // An exact column's scale, as PivotOutput keeps it: money's 4, decimal(p,s)'s s, integers' 0.
+  const scaleOf = at => typeOf(at) === 'money' || typeOf(at) === 'smallmoney' ? 4 : typeOf(at) === 'decimal' || typeOf(at) === 'numeric' ? Number(/,\s*(\d+)\s*\)/.exec(source.columns[at].dataType)?.[1] ?? 0) : 0
+  const raw = (row, at) => { const value = cellValue(source.rowAt(row)[at]); return value === null || value === undefined ? null : value instanceof Uint8Array ? '0x' + Buffer.from(value).toString('hex').toUpperCase() : String(value) }
+  const compare = at => (a, b) => a === b ? 0 : a === null ? -1 : b === null ? 1 : numericTypes.has(typeOf(at)) ? Number(a) - Number(b) : a < b ? -1 : 1
+  const keyOf = (row, columns) => JSON.stringify(columns.map(at => raw(row, at)))
+  const groupsOf = columns => {
+    const first = new Map()
+    for (let row = 0; row < rows; row++) { const key = keyOf(row, columns); if (!first.has(key)) first.set(key, row) }
+    const keys = [...first.keys()].sort((a, b) => { const x = JSON.parse(a), y = JSON.parse(b); for (let i = 0; i < columns.length; i++) { const d = compare(columns[i])(x[i], y[i]); if (d) return d } return 0 })
+    return { keys, first, index: new Map(keys.map((key, at) => [key, at])) }
+  }
+  const rowGroups = groupsOf(rowColumns)
+  const columnLimit = Math.min(256, Math.floor((4096 - rowColumns.length) / values.length) - 1)
+  if (rowColumns.length === 0 && rowGroups.keys.length === 0) { rowGroups.keys.push('[]'); rowGroups.index.set('[]', 0) }
+  const columnGroups = groupColumn === undefined ? { keys: [], first: new Map(), index: new Map() } : groupsOf([groupColumn])
+  if (columnGroups.keys.length > columnLimit) return { error: `The column group has ${columnGroups.keys.length.toLocaleString('en-US')} distinct values, and a pivot can have at most ${columnLimit} column groups. Choose a column with fewer values, or move it to Rows.` }
+  const width = columnGroups.keys.length + 1
+  const cells = Array.from({ length: rowGroups.keys.length * width }, () => values.map(() => []))
+  for (let row = 0; row < rows; row++) {
+    const g = rowGroups.index.get(keyOf(row, rowColumns)), c = groupColumn === undefined ? -1 : columnGroups.index.get(keyOf(row, [groupColumn]))
+    for (const at of c < 0 ? [g * width + width - 1] : [g * width + c, g * width + width - 1]) values.forEach((_, v) => cells[at][v].push(row))
+  }
+  const figure = (value, members) => {
+    if (value.column === undefined) return String(members.length)
+    const present = members.filter(row => raw(row, value.column) !== null)
+    if (value.aggregate === 'count') return String(present.length)
+    if (value.aggregate === 'countDistinct') return String(new Set(present.map(row => raw(row, value.column).replace(/ +$/, '').toLowerCase())).size)
+    if (!present.length) return null
+    if (value.aggregate === 'min' || value.aggregate === 'max') {
+      const order = compare(value.column), best = present.reduce((a, b) => (value.aggregate === 'min' ? order(raw(b, value.column), raw(a, value.column)) < 0 : order(raw(b, value.column), raw(a, value.column)) > 0) ? b : a)
+      return source.rowAt(best)[value.column]
+    }
+    const sum = present.reduce((total, row) => total + Number(raw(row, value.column)), 0)
+    const figure = value.aggregate === 'sum' ? sum : sum / present.length
+    if (approximate(value.column)) return String(figure)
+    return figure.toFixed(value.aggregate === 'sum' ? scaleOf(value.column) : Math.max(scaleOf(value.column), 6))
+  }
+  const label = value => value.column === undefined ? 'Count of rows' : `${pivotLabels[value.aggregate]} of ${source.columns[value.column].name}`
+  const typeFor = value => value.column === undefined || value.aggregate === 'count' || value.aggregate === 'countDistinct' ? 'bigint'
+    : value.aggregate === 'min' || value.aggregate === 'max' ? source.columns[value.column].dataType : approximate(value.column) ? 'float'
+    : value.aggregate === 'sum' && integer(value.column) ? 'bigint' : `decimal(38,${value.aggregate === 'sum' ? scaleOf(value.column) : Math.max(scaleOf(value.column), 6)})`
+  const groupName = key => { const value = JSON.parse(key)[0]; return value === null ? 'NULL' : value.trim() === '' ? '(blank)' : value.slice(0, 128) }
+  const columns = [...rowColumns.map(at => source.columns[at])]
+  for (const key of columnGroups.keys) for (const value of values) columns.push(column(values.length > 1 ? `${groupName(key)} \u00b7 ${label(value)}` : groupName(key), typeFor(value)))
+  for (const value of values) columns.push(column(groupColumn === undefined ? label(value) : values.length > 1 ? `Total \u00b7 ${label(value)}` : 'Total', typeFor(value)))
+  const out = rowGroups.keys.map((key, g) => {
+    const first = rowGroups.first.get(key)
+    const cellsOf = Array.from({ length: width }, (_, c) => values.map((value, v) => figure(value, cells[g * width + c][v])))
+    return [...rowColumns.map(at => source.rowAt(first)[at]), ...cellsOf.flat()]
+  })
+  return {
+    set: { columns, rows: out, kind: 'pivot' }, rows, rowGroups: rowGroups.keys.length, columnGroups: columnGroups.keys.length, approximate: false
+  }
+}
 // results.search: the cells of a result (or a view's positions) whose display text contains the text, ignoring case;
 // binary values as 0x and uppercase hex, NULL and failed reads never. The real backend's collation rules have their own
 // checks. One pass counts every match and keeps a run of whole rows, forward from fromRow or the last before it.
@@ -1445,6 +1508,16 @@ async function workbench(id, method, params, credit) {
       const result = storeResult(diff.set, right.index)
       const { set: _set, ...counts } = diff
       return respond(id, { descriptor: describe(result), ...counts, approximate: false })
+    }
+    case 'results.pivot': {
+      const source = sourceOf(id, params.resultId, params.viewId)
+      if (!source) return
+      const result = stored.get(params.resultId)
+      if (!result.complete) return fail(id, 'RESULT_OPEN', 'Pivot this result after it finishes loading.')
+      const built = buildPivot(source, params)
+      if (built.error) return fail(id, 'INVALID_PARAMS', built.error)
+      const { set, ...counts } = built
+      return respond(id, { descriptor: describe(storeResult(set, result.index)), ...counts })
     }
     case 'results.search': {
       const source = sourceOf(id, params.resultId, params.viewId)
