@@ -19,7 +19,8 @@ interface PendingRequest { readonly token: Monaco.CancellationToken; readonly se
 interface RefreshWork { capture: Capture; readonly token: Monaco.CancellationToken; readonly cancel: () => void; work: Promise<boolean>; settled: Promise<void> }
 const noCancellation: Monaco.CancellationToken = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) }
 // Requests still in flight, cancelled or not. Each Peek navigation makes a new document, so Peek's requests have a cap of
-// their own: a burst of them on a slow server never takes the slots query tabs' completion, hover and analysis need.
+// their own here: a burst of them on a slow server never fills the renderer's slots for query tabs. On the backend they
+// still share the metadata slots with every other metadata request.
 export const pendingLimits = { documents: 8, peek: 2 } as const
 const cleanupLimits = { requests: 4, attempts: 16, deadlineMs: 30_000, retryMs: 250, maxRetryMs: 2000 }
 // LSP's CompletionItemKind numbering differs from Monaco's numbering.

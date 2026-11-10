@@ -36,8 +36,10 @@ being true.
   database and the model's own UUID as its document id), and nothing else. A Peek model gets hover only, never completion
   or diagnostics; it is served from its first request, and its `onWillDispose` ends it as closing a query does (epoch bump,
   context, epoch and listener dropped, `language.close` if it was used). Requests in flight are capped per kind
-  (`pendingLimits`): every Peek navigation makes a new document, so Peek's own small cap keeps its pending hovers from
-  taking the slots query tabs need. A server-level object has no database, so its names resolve in the login's default.
+  (`pendingLimits`): every Peek navigation makes a new document, so Peek has its own renderer cap of 2, apart from query
+  documents' 8. On the backend its requests still share the metadata slots (`ProtocolHost.MetadataSlots`) with query tabs,
+  Script As, `actions.describe` and `connections.connect`, so stalled Peek hovers can hold two of them until their deadline.
+  A server-level object has no database, so its names resolve in the login's default.
 - Backend stdout carries protocol v2 frames only (`Console.Out` goes to stderr). Never log SQL text, credentials, or
   connection strings. Passwords never reach disk in clear: not `connections.json`, process arguments, the environment,
   logs, traces or previews. A password the user chose to remember is stored only as Electron `safeStorage` ciphertext

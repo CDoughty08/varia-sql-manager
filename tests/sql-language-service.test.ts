@@ -1084,6 +1084,30 @@ describe('SQL language features in Peek', () => {
     for (const map of Object.values(bookkeeping(f.service))) expect(map.has(id)).toBe(false)
   })
 
+  it('closes a Peek document when its connection is reconnected, and opens it again on the new connection', async () => {
+    const f = await fixture()
+    f.addConnection(peekConnection)
+    const peek = peekFixture()
+    cleanups.push(() => peek.editor.dispose())
+    const model = peek.show('1', 'CREATE VIEW dbo.V AS SELECT 1 AS One')
+    const id = peekModelContext(model)!.documentId
+    await f.hover.provideHover(model, position, token())
+    // Reconnect: the old generation's connection is lost, and a new one takes its place under the same id.
+    f.connections.markLostBefore(2)
+    f.connections.replace(peekConnection, { id: peekConnection, providerId: 'sqlserver', generation: 2, server: peekConnection, database: 'master', serverVersion: 'test' },
+      { server: peekConnection, database: 'master', authentication: 'windows', trustServerCertificate: false })
+    expect(f.api.languageClose.mock.calls.map(([closed]) => closed)).toEqual([id])
+    // The same model is served again under the same id, on the new connection's binding.
+    expect(await f.hover.provideHover(model, position, token())).toMatchObject({ contents: [{ value: 'Customer table' }] })
+    expect(f.api.languageHover).toHaveBeenCalledTimes(2)
+    expect(f.api.languageHover.mock.calls[1]![0]).toMatchObject({ documentId: id, context: { connectionId: peekConnection, database: 'Sales' } })
+    expect(bookkeeping(f.service).contexts.has(id)).toBe(true)
+    // Disposing it afterwards closes the reopened document too.
+    peek.editor.keep(undefined)
+    await vi.waitFor(() => expect(f.api.languageClose.mock.calls.map(([closed]) => closed)).toEqual([id, id]))
+    for (const map of Object.values(bookkeeping(f.service))) expect(map.has(id)).toBe(false)
+  })
+
   it('stops serving a Peek model whose connection is lost, and closes what it opened', async () => {
     const f = await fixture()
     f.addConnection(peekConnection)
