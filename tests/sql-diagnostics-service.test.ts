@@ -25,11 +25,12 @@ function fixture() {
     return Object.assign(model, { getLanguageId: () => test.language, isDisposed: () => test.disposed })
   }
   let enabled = true, epoch = 0
+  const foreground = new Set<string>()
   let snapshot: ReturnType<SqlLanguageService['getSnapshot']> = { checking: false,
     status: { providers: [{ id: 'sqlserver', configured: true, completion: true, hover: true, refresh: true, diagnostics: true }] }, documentErrors: new Map(), activities: new Map() }
   const language = {
     diagnostics: vi.fn<SqlLanguageService['diagnostics']>(async model => ({ version: model.getVersionId(), items: [error, warning], isIncomplete: false })),
-    diagnosticsEpoch: () => epoch, getSnapshot: () => snapshot,
+    diagnosticsEpoch: () => epoch, isForegroundBusy: (id: string) => foreground.has(id), getSnapshot: () => snapshot,
     subscribe: (listener: () => void) => { languageListeners.add(listener); return () => languageListeners.delete(listener) },
     availability: () => ({ label: 'IntelliSense', detail: 'SQL language service unavailable.' })
   }
@@ -46,11 +47,55 @@ function fixture() {
   return { ...docs, connections, language, setModelMarkers, markers, backend, service, addConnection,
     setEnabled: (value: boolean) => { enabled = value; settingListeners.forEach(listener => listener()) },
     replaceLanguage: (value: typeof snapshot) => { snapshot = value; notifyLanguage() },
+    setForeground: (id: string, busy: boolean) => { if (busy) foreground.add(id); else foreground.delete(id); notifyLanguage() },
     refresh: (refreshing: boolean) => { if (refreshing) epoch++; snapshot = { ...snapshot, activities: refreshing ? new Map([[docs.documents.active!.id, 'refreshing']]) : new Map() }; notifyLanguage() },
     tick: () => vi.advanceTimersByTimeAsync(sqlDiagnosticDebounceMs) }
 }
 
 describe('versioned SQL diagnostics markers', () => {
+  it('yields held analysis to foreground requests and rechecks when they finish', async () => {
+    const f = fixture(), tab = f.documents.create('foreground.sql', 'SELECT Missing', 'master'), old = deferred<LanguageDiagnosticResult | undefined>()
+    f.language.diagnostics.mockReturnValueOnce(old.promise)
+    await f.tick()
+    const token = f.language.diagnostics.mock.calls[0][1]
+    f.setForeground(tab.id, true)
+    expect(token.isCancellationRequested).toBe(true)
+    expect(f.service.status(tab.id)?.label).toBe('SQL analysis paused')
+    old.resolve({ version: 1, items: [error], isIncomplete: false })
+    await f.tick()
+    expect(f.markers(tab.id)).toEqual([])
+    expect(f.language.diagnostics).toHaveBeenCalledOnce()
+    f.setForeground(tab.id, false)
+    expect(f.service.status(tab.id)?.label).toBe('Checking SQL')
+    await f.tick()
+    expect(f.language.diagnostics).toHaveBeenCalledTimes(2)
+    expect(f.markers(tab.id)).toHaveLength(2)
+  })
+  it('preserves valid markers through foreground scheduling but clears them on edits while busy', async () => {
+    const f = fixture(), tab = f.documents.create('foreground.sql', 'SELECT Missing', 'master')
+    await f.tick()
+    const markers = f.markers(tab.id), writes = f.setModelMarkers.mock.calls.length
+    f.setForeground(tab.id, true)
+    expect(f.markers(tab.id)).toBe(markers)
+    expect(f.setModelMarkers).toHaveBeenCalledTimes(writes)
+    expect(f.service.status(tab.id)?.label).toBe('SQL: 1 error, 1 warning')
+    expect(f.service.getSnapshot().documents.get(tab.id)).toMatchObject({ errors: 1, warnings: 1 })
+    f.setForeground(tab.id, false)
+    expect(f.markers(tab.id)).toBe(markers)
+    expect(f.setModelMarkers).toHaveBeenCalledTimes(writes)
+    await f.tick()
+    expect(f.language.diagnostics).toHaveBeenCalledOnce()
+    expect(f.service.status(tab.id)?.label).toBe('SQL: 1 error, 1 warning')
+    f.setForeground(tab.id, true)
+    f.model(tab.id).edit('SELECT Corrected')
+    expect(f.markers(tab.id)).toEqual([])
+    await f.tick()
+    expect(f.language.diagnostics).toHaveBeenCalledOnce()
+    f.language.diagnostics.mockResolvedValueOnce({ version: 2, items: [], isIncomplete: false })
+    f.setForeground(tab.id, false)
+    await f.tick()
+    expect(f.service.status(tab.id)?.label).toBe('SQL: no issues')
+  })
   it('debounces edits and maps severities, UTF-16 ranges and literal messages into its own marker owner', async () => {
     const f = fixture(), tab = f.documents.create('query.sql', 'SELECT Missing', 'master')
     f.model(tab.id).edit('SELECT Missing1'); f.model(tab.id).edit('SELECT Missing2')

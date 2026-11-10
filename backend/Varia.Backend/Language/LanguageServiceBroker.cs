@@ -31,6 +31,8 @@ internal sealed class LanguageServiceBroker(IEnumerable<ILanguageServiceProvider
     private sealed class Binding
     {
         public readonly SemaphoreSlim Serial = new(1, 1);
+        public readonly HashSet<BackgroundRequest> Background = [];
+        public int Foreground;
         public ILanguageServiceProvider? Provider;
         public CancellationTokenSource? Active;
         public string? ConnectionId;
@@ -41,6 +43,11 @@ internal sealed class LanguageServiceBroker(IEnumerable<ILanguageServiceProvider
         public Task<LanguageCloseResult>? CloseTask;
         public bool Closing;
     }
+    private sealed class BackgroundRequest(CancellationTokenSource cancellation)
+    {
+        public readonly CancellationTokenSource Cancellation = cancellation;
+        public bool Preempted;
+    }
 
     internal LanguageStatus Status() => new([.. providers.Values.Select(provider => provider.Status())]);
     internal Task<LanguageCompletionResult> CompleteAsync(LanguageRequest request, CancellationToken token) =>
@@ -49,7 +56,7 @@ internal sealed class LanguageServiceBroker(IEnumerable<ILanguageServiceProvider
         RequestAsync(request, token, (provider, requestToken) => provider.HoverAsync(request, requestToken));
     internal Task<LanguageDiagnosticResult> DiagnosticsAsync(LanguageRefreshRequest request, CancellationToken token) =>
         RequestAsync(new(request.DocumentId, request.Version, request.Text, request.Context, new(0, 0)), token,
-            (provider, requestToken) => provider.DiagnosticsAsync(request, requestToken));
+            (provider, requestToken) => provider.DiagnosticsAsync(request, requestToken), background: true);
     internal Task<LanguageRefreshResult> RefreshAsync(LanguageRefreshRequest request, CancellationToken token)
     {
         ValidateId(request.DocumentId);
@@ -74,7 +81,8 @@ internal sealed class LanguageServiceBroker(IEnumerable<ILanguageServiceProvider
         }
     }
 
-    private async Task<T> RequestAsync<T>(LanguageRequest request, CancellationToken token, Func<ILanguageServiceProvider, CancellationToken, Task<T>> run)
+    private async Task<T> RequestAsync<T>(LanguageRequest request, CancellationToken token, Func<ILanguageServiceProvider, CancellationToken, Task<T>> run,
+        bool background = false)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromSeconds(25));
@@ -83,31 +91,58 @@ internal sealed class LanguageServiceBroker(IEnumerable<ILanguageServiceProvider
             throw new RequestException("INVALID_PARAMS", "This database language provider is not installed.");
         var fingerprint = TextFingerprint(request.Text);
         Binding binding;
-        long epoch;
-        while (true)
-        {
-            Task? closing;
-            lock (gate)
-            {
-                ObjectDisposedException.ThrowIf(disposed, this);
-                if (suspensions != 0) throw new RequestException("BUSY", "SQL language services are paused while a database management action finishes.");
-                if (!documents.TryGetValue(request.DocumentId, out binding!))
-                {
-                    if (documents.Count >= MaxDocuments) throw new RequestException("BUSY", "Too many SQL language documents are open. Close unused query tabs.");
-                    binding = new();
-                    documents.Add(request.DocumentId, binding);
-                }
-                closing = binding.Closing ? binding.CloseTask : null;
-                epoch = binding.Epoch;
-            }
-            if (closing is null) break;
-            // An accepted close can still be retiring an idle language process. A newly registered request belongs
-            // to the next binding; requests registered before Closing retain the old binding and reject as stale.
-            await closing.WaitAsync(deadline.Token);
-        }
-        await binding.Serial.WaitAsync(deadline.Token);
+        Binding? admitted = null;
+        BackgroundRequest? analysis = null;
+        var entered = false;
+        long epoch = 0;
         try
         {
+            while (true)
+            {
+                Task? closing;
+                lock (gate)
+                {
+                    ObjectDisposedException.ThrowIf(disposed, this);
+                    deadline.Token.ThrowIfCancellationRequested();
+                    if (suspensions != 0) throw new RequestException("BUSY", "SQL language services are paused while a database management action finishes.");
+                    if (!documents.TryGetValue(request.DocumentId, out binding!))
+                    {
+                        if (documents.Count >= MaxDocuments) throw new RequestException("BUSY", "Too many SQL language documents are open. Close unused query tabs.");
+                        binding = new();
+                        documents.Add(request.DocumentId, binding);
+                    }
+                    closing = binding.Closing ? binding.CloseTask : null;
+                    epoch = binding.Epoch;
+                    if (closing is null)
+                    {
+                        if (background)
+                        {
+                            if (binding.Foreground != 0) throw new RequestException("STALE", "SQL analysis is paused while an interactive language request finishes.");
+                            analysis = new(deadline);
+                            binding.Background.Add(analysis);
+                            admitted = binding;
+                        }
+                        else
+                        {
+                            binding.Foreground++;
+                            admitted = binding;
+                            // Register before waiting for Serial: a queued foreground request must also prevent
+                            // background work from overtaking it or retaining the native document gate.
+                            foreach (var pending in binding.Background.ToArray())
+                            {
+                                pending.Preempted = true;
+                                pending.Cancellation.Cancel();
+                            }
+                        }
+                    }
+                }
+                if (closing is null) break;
+                // An accepted close can still be retiring an idle language process. A newly registered request belongs
+                // to the next binding; requests registered before Closing retain the old binding and reject as stale.
+                await closing.WaitAsync(deadline.Token);
+            }
+            await binding.Serial.WaitAsync(deadline.Token);
+            entered = true;
             lock (gate)
             {
                 if (binding.Closing) throw new RequestException("STALE", "The SQL language document has closed.");
@@ -120,14 +155,39 @@ internal sealed class LanguageServiceBroker(IEnumerable<ILanguageServiceProvider
             }
             if (binding.Provider is { } previous && !ReferenceEquals(previous, provider)) await previous.CloseAsync(request.DocumentId, deadline.Token);
             binding.Provider = provider;
-            return await run(provider, deadline.Token);
+            var result = await run(provider, deadline.Token);
+            if (background) deadline.Token.ThrowIfCancellationRequested();
+            return result;
+        }
+        catch (Exception) when (Preempted())
+        {
+            // A cancelled native client can report process loss instead of cancellation while it is retiring.
+            throw new RequestException("STALE", "SQL analysis was superseded by an interactive language request.");
         }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         {
-            var stale = binding.Closing || binding.Epoch != epoch;
+            bool stale;
+            lock (gate) stale = analysis?.Preempted == true || admitted?.Closing == true || admitted is not null && admitted.Epoch != epoch;
             throw new RequestException(stale ? "STALE" : "TIMEOUT", stale ? "The SQL language request was superseded or its document closed." : "The SQL language request exceeded its time limit.");
         }
-        finally { lock (gate) binding.Active = null; binding.Serial.Release(); }
+        finally
+        {
+            lock (gate)
+            {
+                if (admitted is not null)
+                {
+                    if (analysis is not null) admitted.Background.Remove(analysis);
+                    else admitted.Foreground--;
+                    if (entered) admitted.Active = null;
+                }
+            }
+            if (entered) admitted!.Serial.Release();
+        }
+
+        bool Preempted()
+        {
+            lock (gate) return !token.IsCancellationRequested && analysis?.Preempted == true;
+        }
     }
 
     internal async Task<LanguageCloseResult> CloseAsync(string id, CancellationToken token)

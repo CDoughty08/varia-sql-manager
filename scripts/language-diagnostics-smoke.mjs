@@ -139,6 +139,25 @@ async function fakeChecks() {
   console.log('SQL diagnostics UI: real red/yellow squiggle paint, marker hover, counts, Alt+F8 and Alt+Shift+F8 are visible in Monaco.')
 
   await mkdir(join(control, 'hold'), { recursive: true })
+  const hoverCount = (await calls()).filter(call => call.method === 'language.hover').length
+  const analysisCount = (await analyses()).length
+  await writeFile(join(control, 'hold', 'language.hover'), '')
+  try {
+    await editorTextbox(page).focus()
+    await page.keyboard.press(`${mod}+Home`)
+    for (let at = 0; at < 9; at++) await page.keyboard.press('ArrowRight')
+    await page.keyboard.press(`${mod}+K`)
+    await page.keyboard.press(`${mod}+I`)
+    await expect.poll(async () => (await calls()).filter(call => call.method === 'language.hover').length).toBeGreaterThan(hoverCount)
+    await expect(sqlQueryIssues(page)).toHaveText('SQL: 1 error, 1 warning')
+    await expect(editorDiagnosticMarks(page)).toHaveCount(1)
+    await expect(editorDiagnosticMarks(page, 'warning')).toHaveCount(1)
+    expect((await analyses()).length).toBe(analysisCount)
+  } finally { await rm(join(control, 'hold', 'language.hover'), { force: true }) }
+  await expect(sqlQueryIssues(page)).toHaveText('SQL: 1 error, 1 warning')
+  await page.keyboard.press('Escape')
+  console.log('SQL diagnostics UI: a held foreground hover preserves completed issues without restarting their analysis.')
+
   await writeFile(join(control, 'hold', 'language.diagnostics'), '')
   await setText(page, 'SELECT CorrectColumn;')
   await expect(editorDiagnosticMarks(page)).toHaveCount(0)
