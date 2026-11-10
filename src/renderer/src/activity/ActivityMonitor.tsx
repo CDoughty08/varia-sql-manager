@@ -1,5 +1,5 @@
 // The Activity Monitor document: a header (state, interval, chart window, cost, Pause, Refresh, Split View), eight tiles
-// with sparklines, up to two expanded charts, and the panes in one or two slots. Everything it shows comes from its live
+// with sparklines, any of them expanded as a chart, and the panes in one or two slots. Everything it shows comes from its live
 // handle and from ActivityMonitorService, which keeps the monitor's choices across tab switches; it draws, and runs
 // catalogue commands or service methods, nothing else.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
@@ -188,7 +188,7 @@ function Charts({ count, children }: { readonly count: number; readonly children
   return <section ref={box} className="activity-charts" aria-label="Charts" data-activity-region="charts" style={{ '--activity-chart-rows': rows } as CSSProperties}>{children}</section>
 }
 
-/** A tile's chart, expanded:its value and secondary series over the window, with axes, the linked crosshair and "View as
+/** A tile's chart, expanded: its value and secondary series over the window, with axes, the linked crosshair and "View as
  *  table" (its last 60 samples). */
 function ExpandedChart({ index, handle, state, link }: { readonly index: number; readonly handle: LiveHandle; readonly state: MonitorState; readonly link: ChartLink }) {
   const { activity } = useWorkbench()

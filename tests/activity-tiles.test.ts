@@ -187,7 +187,7 @@ describe('expanded chart rows', () => {
     expect(gridRows(2, '600px 600px')).toBe(1)
     expect(gridRows(8, '438.5px 438.5px')).toBe(4)
     expect(gridRows(8, '400px 400px 400px')).toBe(3)
-    // auto-fit reports collapsed tracks as 0px; they never add a row.
+    // auto-fit collapses tracks only when there are fewer charts than tracks, so they add no row.
     expect(gridRows(1, '900px 0px')).toBe(1)
     expect(gridRows(3, 'none')).toBe(3)
     expect(gridRows(0, '')).toBe(1)

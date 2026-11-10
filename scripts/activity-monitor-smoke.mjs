@@ -85,6 +85,14 @@ async function stays(id, ms = 800) {
 
 /** Where an element sits on screen, or undefined when it is not drawn. */
 const box = locator => locator.boundingBox()
+/** Eight open charts: the rows reserved match the columns the grid resolved, and each plot keeps a usable height. */
+async function expectAllCharts(where) {
+  await expect.poll(() => charts().evaluate(element => {
+    const columns = getComputedStyle(element).gridTemplateColumns.split(' ').filter(track => parseFloat(track) > 0).length
+    return Number(element.style.getPropertyValue('--activity-chart-rows')) === Math.ceil(8 / columns) && columns > 0
+  }), `chart rows ${where}`).toBe(true)
+  await expect.poll(async () => Math.min(...await Promise.all((await charts().locator('canvas').all()).map(async canvas => (await box(canvas)).height))), `smallest of eight charts ${where}`).toBeGreaterThanOrEqual(60)
+}
 /** The header's pieces at the window's size: the title cut or not, whether its state reaches into the controls on their row
  *  (a narrow document puts them on a row of their own), and whether the controls pass the document's right edge. */
 async function header() {
@@ -195,8 +203,7 @@ try {
   const captions = ['% Processor Time', 'Waiting Tasks', 'Database I/O', 'Batch Requests/sec', 'Blocked Sessions', 'Active Requests', 'CPU Pressure', 'Memory Grants Pending']
   for (const caption of captions.slice(2)) await monitor().getByRole('button', { name: `${caption} chart`, exact: true }).click()
   await expect(chartTitles()).toHaveText(captions)
-  for (const canvas of await charts().locator('canvas').all()) expect((await box(canvas)).height, 'one of eight charts').toBeGreaterThanOrEqual(60)
-  expect((await box(monitor().getByRole('region', { name: 'First pane', exact: true }))).height, 'pane under eight charts').toBeGreaterThanOrEqual(199)
+  await expectAllCharts('at 1500 x 960')
   for (const caption of [captions[0], ...captions.slice(3)]) await monitor().getByRole('button', { name: `${caption} chart`, exact: true }).click()
   await expect(chartTitles()).toHaveText(['Waiting Tasks', 'Database I/O'])
   await expect(monitor().getByRole('button', { name: '% Processor Time chart', exact: true })).toHaveAttribute('aria-pressed', 'false')
@@ -322,6 +329,13 @@ try {
     expect(Math.min(firstBox.height, secondBox.height)).toBeGreaterThanOrEqual(199)
     expect(secondBox.y).toBeGreaterThan(firstBox.y + firstBox.height)
   }
+  // In the smallest window, fewer chart columns: all eight still get a row each with a usable plot.
+  const chartCaptions = ['% Processor Time', 'Batch Requests/sec', 'Blocked Sessions', 'Active Requests', 'CPU Pressure', 'Memory Grants Pending']
+  for (const caption of chartCaptions) await monitor().getByRole('button', { name: `${caption} chart`, exact: true }).click()
+  await expect(chartTitles()).toHaveCount(8)
+  await expectAllCharts('at 1024 x 768')
+  for (const caption of chartCaptions) await monitor().getByRole('button', { name: `${caption} chart`, exact: true }).click()
+  await expect(chartTitles()).toHaveCount(2)
   await fit(1600, 1000)
   await page.screenshot({ path: join('artifacts', 'activity-monitor-1600.png') })
   await size(1500, 960)
