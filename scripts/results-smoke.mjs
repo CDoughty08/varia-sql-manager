@@ -297,6 +297,25 @@ try {
   expect(wheeled.client.uiUnits).toBeLessThanOrEqual(16 * 1024 * 1024)
   expect(wheeled.client.workerBytes).toBeLessThanOrEqual(64 * 1024 * 1024)
   expect(wheeled.nodes).toBeLessThanOrEqual(1500)
+  // The header funnel over the million names (one each): the checklist lists them all a window at a time, its scroll bar
+  // reaches the last (by value, as count order ties), it draws only the rows in view, a search runs in the backend, and
+  // Cancel closes it.
+  await page.keyboard.press('Control+Home')
+  await expect(cell(0, 0)).toHaveText('0')
+  await cell(0, 1).click()
+  await page.keyboard.press('Alt+ArrowDown')
+  const names = page.getByRole('dialog', { name: 'Filter name', exact: true })
+  await expect(names).toContainText('1,000,000 values in 1,000,000 rows. 1,000,000 ticked.', { timeout: 60000 })
+  const valueList = names.getByRole('group', { name: 'Values', exact: true })
+  await valueList.evaluate(list => { list.scrollTop = list.scrollHeight })
+  await expect(names.getByRole('checkbox', { name: 'Société 0000999995 SARL (1)', exact: true })).toBeChecked()
+  expect(await valueList.getByRole('checkbox').count()).toBeLessThan(100)
+  await names.getByRole('searchbox', { name: 'Search values', exact: true }).fill('0000999995')
+  await expect(names).toContainText('1 of 1,000,000 values match.')
+  await expect(names.getByRole('checkbox', { name: 'Société 0000999995 SARL (1)', exact: true })).toBeChecked()
+  await names.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(names).toHaveCount(0)
+  console.log('Results checks: the header funnel lists a million values a window at a time, reaches the last by its scroll bar and searches them in the backend.')
 
   // 3. Wide results: End and Ctrl+→ bring the last column into view, the DOM stays small, and the row numbers stay at
   // the grid's left edge however far it scrolls, with native and with virtual scrolling.

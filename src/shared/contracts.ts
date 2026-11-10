@@ -236,15 +236,21 @@ export interface ViewCells { ranges: [number, number][]; viewId?: number }
 /** A results.view filter. `in`, `notIn` and `between` compare a column's values, by its type and collation as the sort does,
  *  with those of base `rows` (one per distinct value; `between`'s lowest and highest) and, for `in` and `notIn`, NULL when
  *  `nulls` is set; or with the selected `cells`, which the view resolves to rows. `duplicates` keeps the rows whose values
- *  in `columns` repeat (NULL equal to NULL), each group together. */
+ *  in `columns` repeat (NULL equal to NULL), each group together. `groups` keeps the rows of the values a distinct
+ *  snapshot of `column` ticks (results.distinct), however many; the first view it builds freezes the snapshot. */
 export type ViewFilter =
   | { op: 'in' | 'notIn' | 'between'; column: number; rows: number[]; nulls?: boolean }
   | { op: 'in' | 'notIn' | 'between'; column: number; cells: ViewCells }
   | { op: 'duplicates'; columns: number[] }
+  | { op: 'groups'; column: number; snapshotId: number }
+/** A `groups` filter as a view applied it: whether it keeps (else drops) the `values` it names and NULL (`nulls`), and the
+ *  one value's representative `row` when it names exactly one besides NULL. */
+export interface ResolvedGroupsFilter { op: 'groups'; column: number; snapshotId: number; keep: boolean; values: number; nulls: boolean; row?: number }
 /** A filter as a view applied it: cells resolved to base rows, which build the same filter again. */
 export type ResolvedViewFilter =
   | { op: 'in' | 'notIn' | 'between'; column: number; rows: number[]; nulls: boolean }
   | { op: 'duplicates'; columns: number[] }
+  | ResolvedGroupsFilter
 /** results.view: up to `limits.views.maxKeys` keys on distinct columns and up to `limits.views.maxFilters` filters (at least
  *  one of either), the filters first; `replaces` names a view of the same result that this one supersedes. */
 export interface ResultsViewParams { resultId: number; sort: ViewSortKey[]; filters?: ViewFilter[]; replaces?: number }
@@ -333,21 +339,31 @@ export interface ColumnProfile {
 /** `rows` profiled (the view's, or the rows sealed when it ran) and whether that was all of them; the rows' byte sizes
  *  (absent without rows); the columns asked for, in order. */
 export interface ResultsProfileResult { rows: number; complete: boolean; rowBytes?: ProfileLengths; columns: ColumnProfile[] }
-/** results.distinct: a column's distinct values through `viewId`'s rows when given (else the rows sealed now), ordered by
- *  `count` (most frequent first, ties by value) or `value`, at most `maxValues` (1 to `limits.distinct.maxValues`) of them;
- *  `search` keeps the values whose display text contains it, compared as the results search compares a cell. With
- *  `keptViewId`, another view of the result, each value says whether a row of that view holds it, `nullsKept` whether it
- *  has a NULL and `unlistedKept` whether it holds a value past those listed; `unlistedHeld` and `unlistedDropped` name
- *  the representative rows of those past values it holds and does not hold, each when one filter holds them. Rows sealed
- *  after that view was built count as held. */
-export interface ResultsDistinctParams { resultId: number; column: number; order: 'count' | 'value'; maxValues: number; search?: string; viewId?: number; keptViewId?: number }
-/** A distinct value: its representative base row (the lowest holding it, so an `in` or `notIn` filter by it compares this
- *  value), its display text (binary as 0x hex, at most `limits.distinct.valueChars` characters and "…") and its count. */
-export interface DistinctValue { row: number; text: string; count: number; kept?: boolean }
-/** `rows` looked at and whether they were all the result's; `nulls` NULL and unreadable cells; `distinct` the values the
- *  search kept, of which `values` are the first (`truncated` when there were more); `approximate` when a truncated value
- *  compared by its stored prefix. */
-export interface ResultsDistinctResult { rows: number; complete: boolean; nulls: number; distinct: number; truncated: boolean; approximate: boolean; values: DistinctValue[]; nullsKept?: boolean; unlistedKept?: boolean; unlistedHeld?: number[]; unlistedDropped?: number[] }
+/** results.distinct: keeps a column's distinct values through `viewId`'s rows when given (else the rows sealed now) as a
+ *  snapshot the funnel's checklist reads by window (results.distinctRead) and ticks (results.distinctTick), closed with
+ *  results.distinctClose or its result. Every value and NULL start ticked, or with `keptViewId`, another view of the
+ *  result, ticked when a row of that view holds it (rows sealed after that view was built count as held). */
+export interface ResultsDistinctParams { resultId: number; column: number; viewId?: number; keptViewId?: number }
+/** The snapshot's id; `rows` grouped and whether they were all the result's; `nulls` NULL and unreadable cells; `distinct`
+ *  the values; `approximate` when a truncated value compared by its stored prefix; `checked` the values ticked and
+ *  `nullsChecked` NULL's tick. */
+export interface ResultsDistinctResult { snapshotId: number; rows: number; complete: boolean; nulls: number; distinct: number; approximate: boolean; checked: number; nullsChecked: boolean }
+/** results.distinctRead: 1 to `limits.distinct.maxWindow` values from `offset`, most frequent first (ties by value) or by
+ *  value, among those whose display text contains `search` (compared as the results search compares a cell) when given. */
+export interface ResultsDistinctReadParams { resultId: number; snapshotId: number; order: 'count' | 'value'; offset: number; count: number; search?: string }
+/** A distinct value: its `group` (its place in value order, which ticks and filters name), its representative base row (the
+ *  lowest holding it), its display text (binary as 0x hex, at most `limits.distinct.valueChars` characters and "…"), its
+ *  count and its tick. */
+export interface DistinctValue { group: number; row: number; text: string; count: number; checked: boolean }
+/** `total` values the search kept (every value without one); `values` the window from `offset`; the ticks as now. */
+export interface ResultsDistinctReadResult { total: number; offset: number; values: DistinctValue[]; checked: number; nullsChecked: boolean }
+/** results.distinctTick: ticks (`checked`) or clears 1 to `limits.distinct.maxWindow` `groups`, or every value (`all`), only
+ *  those whose text contains `search` with one; `nulls` sets NULL's tick, alone or with either. Refused once a groups
+ *  filter uses the snapshot. */
+export interface ResultsDistinctTickParams { resultId: number; snapshotId: number; checked: boolean; groups?: number[]; all?: true; search?: string; nulls?: boolean }
+export interface ResultsDistinctTickResult { checked: number; nullsChecked: boolean }
+export interface ResultsDistinctCloseParams { resultId: number; snapshotIds: number[] }
+export interface ResultsDistinctCloseResult { closed: number }
 /** `bytes[k]` is row `firstRow + k`'s sum of DATALENGTH over its cells (NULL counts 0; xml and json as their
  *  text, some sql_variant base types estimated: docs/ipc.md, Cell lengths and row sizes); it stops at the rows sealed so
  *  far (`rowsAvailable`), as results.read does. */
@@ -494,6 +510,11 @@ export interface PortMethods {
   'results.transpose': { params: ResultsTransposeParams; result: ResultsTransposeResult }
   /** A column's distinct values and their counts over a result's rows or a view's, for the header funnel's checklist. */
   'results.distinct': { params: ResultsDistinctParams; result: ResultsDistinctResult }
+  /** A window of a distinct snapshot's values, narrowed to a search's matches when one is given. */
+  'results.distinctRead': { params: ResultsDistinctReadParams; result: ResultsDistinctReadResult }
+  /** Ticks or clears some of a distinct snapshot's values, every value, those a search finds, or NULL. */
+  'results.distinctTick': { params: ResultsDistinctTickParams; result: ResultsDistinctTickResult }
+  'results.distinctClose': { params: ResultsDistinctCloseParams; result: ResultsDistinctCloseResult }
   /** A live subscription (docs/ipc.md): its EVENTs are credited, one unacknowledged at a time, and it ends only by CANCEL,
    *  a disconnect, a backend shutdown, a failure or its source ending. */
   'live.subscribe': { params: LiveSubscribeParams; result: LiveEnd }

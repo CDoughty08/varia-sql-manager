@@ -896,8 +896,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .column-filter-search input { flex: 1 1 0; width: 0; border: 0; outline: none; background: none; color: var(--varia-input-foreground); font: inherit; }
 .column-filter-bulk, .column-filter-actions, .column-filter-condition { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); }
 .column-filter-gap { flex: 1 1 auto; }
-.column-filter-list { flex: 1 1 auto; min-height: 60px; max-height: 260px; overflow: auto; border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-sm); padding: 2px 0; }
-.column-filter-item { display: flex; align-items: center; gap: var(--varia-space-2); padding: 1px var(--varia-space-2); cursor: default; }
+.column-filter-list { flex: 1 1 auto; min-height: 60px; max-height: 260px; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-sm); padding: 2px 0; }
+.column-filter-space { position: relative; overflow: hidden; }
+.column-filter-item { position: absolute; left: 0; right: 0; box-sizing: border-box; display: flex; align-items: center; gap: var(--varia-space-2); padding: 0 var(--varia-space-2); cursor: default; }
+.column-filter-item.pending::after { content: ''; flex: 1 1 auto; height: 6px; margin-right: 40%; border-radius: var(--varia-radius-pill); background: var(--varia-list-hoverBackground); }
 .column-filter-item:hover { background: var(--varia-list-hoverBackground); }
 .column-filter-item.null .column-filter-text, .column-filter-item.empty .column-filter-text { font-style: italic; color: var(--varia-descriptionForeground); }
 .column-filter-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; unicode-bidi: isolate; }
@@ -2286,7 +2288,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .activity-tile-toggle { position: absolute; top: var(--varia-space-1); right: var(--varia-space-1); display: inline-flex; align-items: center; justify-content: center; width: var(--varia-control); height: var(--varia-control); padding: 0; color: var(--varia-descriptionForeground); }
 .activity-tile-toggle[aria-pressed="true"], .activity-tile-toggle[aria-pressed="true"]:hover:not(:disabled) { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); border-color: var(--varia-panelTitle-activeBorder); transition: none; }
 .activity-sparkline { height: 28px; }
-.activity-charts { display: grid; flex: 0 1 auto; min-height: 150px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); grid-auto-rows: minmax(0, 1fr); gap: var(--varia-space-2); }
+/* Each row of charts keeps a chart's floor (150 px); ActivityMonitor's Charts counts the rows the auto-fit columns make. */
+.activity-charts { display: grid; flex: 0 1 auto; min-height: calc(var(--activity-chart-rows, 1) * 150px + (var(--activity-chart-rows, 1) - 1) * var(--varia-space-2)); grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); grid-auto-rows: minmax(0, 1fr); gap: var(--varia-space-2); }
 .activity-chart { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-tile-border); border-radius: var(--varia-radius-lg); background: var(--varia-tile-background); }
 .activity-chart-head { display: flex; align-items: center; gap: var(--varia-space-2); }
 .activity-chart-title { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); font-weight: 600; }
@@ -2321,8 +2324,6 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .document-frame[data-activity-monitor] .document-header { flex-wrap: wrap; }
   .document-frame[data-activity-monitor] .document-actions { flex: 1 1 100%; margin-left: 0; }
 }
-/* Stacked (under 760 px of document), two expanded charts keep a chart's floor each. */
-@container (width < 760px) { .activity-charts:has(> .activity-chart + .activity-chart) { min-height: calc(2 * 150px + var(--varia-space-2)); } }
 @media (forced-colors: active) {
   .activity-banner, .activity-pane, .activity-chart { border-color: CanvasText; }
   .activity-tile-toggle[aria-pressed="true"], .activity-tile-toggle[aria-pressed="true"]:hover:not(:disabled) { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }

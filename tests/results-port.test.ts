@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ResultsPortHost, toExactArrayBuffer, type FrameLike, type LiveStreamHandle, type PortMainLike, type ReadStream, type ResultsBackend } from '../src/main/backend/results-port'
 import { BackendError } from '../src/main/backend/errors'
 import type { StreamSink } from '../src/main/backend/connection'
-import type { QueryEvent, ResultDescriptor, ResultsDiffParams, ResultsDiffResult, ResultsDistinctParams, ResultsDistinctResult, ResultsFindRowsParams, ResultsIdentifyParams, ResultsIdentifyResult, ResultsPivotParams, ResultsPivotResult, ResultsTransposeParams, ResultsTransposeResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsRowBytesParams, ResultsRowIdsParams, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewParams, ResultsViewResult } from '../src/shared/contracts'
+import type { QueryEvent, ResultDescriptor, ResultsDiffParams, ResultsDiffResult, ResultsDistinctParams, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsFindRowsParams, ResultsIdentifyParams, ResultsIdentifyResult, ResultsPivotParams, ResultsPivotResult, ResultsTransposeParams, ResultsTransposeResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsRowBytesParams, ResultsRowIdsParams, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewParams, ResultsViewResult } from '../src/shared/contracts'
 import { cancelReasons, type CancelReason } from '../src/shared/ipc/wire/protocol'
 import { buildPortRequestSchema, type PortMessage, type portRequestSchema } from '../src/shared/ipc/port-messages'
 import { buildLiveSchemas } from '../src/shared/live/schema'
@@ -40,6 +40,7 @@ interface FakePivot { generation: number; params: ResultsPivotParams; cancels: C
 interface FakeSearch { generation: number; params: ResultsSearchParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeProfile { generation: number; params: ResultsProfileParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeDistinct { generation: number; params: ResultsDistinctParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
+interface FakeDistinctRead { generation: number; params: ResultsDistinctReadParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeUpdate { generation: number; params: LiveUpdateParams; resolve(value: LiveUpdateResult): void; reject(error: unknown): void }
 
 function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof portRequestSchema } = {}) {
@@ -54,6 +55,7 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
   const searches: FakeSearch[] = []
   const profiles: FakeProfile[] = []
   const distincts: FakeDistinct[] = []
+  const distinctReads: FakeDistinctRead[] = []
   let ready: number | undefined = 1
   const backend: ResultsBackend = {
     readyGeneration: () => ready,
@@ -125,6 +127,15 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
       distincts.push(distinct)
       return { done, cancel: reason => distinct.cancels.push(reason) }
     },
+    distinctRead: (generation, params) => {
+      let resolve!: (value: unknown) => void, reject!: (error: unknown) => void
+      const done = new Promise<ResultsDistinctReadResult>((onResolve, onReject) => { resolve = onResolve as (value: unknown) => void; reject = onReject })
+      const read: FakeDistinctRead = { generation, params, cancels: [], resolve, reject }
+      distinctReads.push(read)
+      return { done, cancel: reason => read.cancels.push(reason) }
+    },
+    distinctTick: vi.fn(async () => ({ checked: 0, nullsChecked: true })),
+    distinctClose: vi.fn(async () => ({ closed: 1 })),
     live: (generation, params, onLive, credit): LiveStreamHandle => {
       let resolve!: (value: LiveEnd) => void, reject!: (error: unknown) => void
       const done = new Promise<LiveEnd>((onResolve, onReject) => { resolve = onResolve; reject = onReject })
@@ -146,7 +157,7 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
     port().send({ t: 'live', rid, generation, params })
     return params
   }
-  return { host, backend, reads, lives, updates, views, identifies, diffs, pivots, transposes, searches, profiles, distincts, ports, port, frame, read, live, setReady: (generation: number | undefined) => { ready = generation } }
+  return { host, backend, reads, lives, updates, views, identifies, diffs, pivots, transposes, searches, profiles, distincts, distinctReads, ports, port, frame, read, live, setReady: (generation: number | undefined) => { ready = generation } }
 }
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
 const descriptor = (resultId: number, generation = 1): Pick<ResultDescriptor, 'generation' | 'resultId'> => ({ generation, resultId })
@@ -740,77 +751,92 @@ describe('ResultsPortHost', () => {
     port().hangUp()
     expect(profiles[1].cancels).toHaveLength(1)
   })
-  it('lists distinct values only for owned results and their columns, within the schema bounds, and relays a well-formed answer', async () => {
+  it('builds a distinct snapshot only for owned results and their columns, within the schema bounds, and relays a well-formed answer', async () => {
     const { host, port, distincts } = fixture()
     host.own([{ ...descriptor(7), columns: [{}, {}] }])
-    const ask = { t: 'distinct', generation: 1, resultId: 7, column: 1, order: 'count', maxValues: 2 }
-    port().send({ ...ask, rid: 1, viewId: 4, search: 'ab' })
+    const ask = { t: 'distinct', generation: 1, resultId: 7, column: 1 }
+    port().send({ ...ask, rid: 1, viewId: 4, keptViewId: 5 })
     port().send({ ...ask, rid: 2, resultId: 8 })
     port().send({ ...ask, rid: 3, column: 2 })
-    port().send({ ...ask, rid: 4, maxValues: 4097 })
-    port().send({ ...ask, rid: 5, maxValues: 0 })
-    port().send({ ...ask, rid: 6, order: 'random' })
-    port().send({ ...ask, rid: 7, search: '' })
-    port().send({ ...ask, rid: 8, search: 'x'.repeat(1025) })
-    port().send({ ...ask, rid: 9, extra: true })
-    port().send({ ...ask, rid: 10 })
-    port().send({ ...ask, rid: 11 })
-    port().send({ ...ask, rid: 12 })
-    expect(distincts.map(distinct => distinct.params)).toEqual([
-      { resultId: 7, column: 1, order: 'count', maxValues: 2, search: 'ab', viewId: 4 }, { resultId: 7, column: 1, order: 'count', maxValues: 2 },
-      { resultId: 7, column: 1, order: 'count', maxValues: 2 }, { resultId: 7, column: 1, order: 'count', maxValues: 2 }
-    ])
-    const good = { rows: 5, complete: true, nulls: 1, distinct: 3, truncated: true, approximate: false, values: [{ row: 0, text: 'a', count: 2 }, { row: 3, text: 'b', count: 1 }] }
+    port().send({ ...ask, rid: 4, keptViewId: 0 })
+    port().send({ ...ask, rid: 5, order: 'count' })
+    for (const rid of [6, 7, 8]) port().send({ ...ask, rid })
+    expect(distincts.map(distinct => distinct.params)).toEqual([{ resultId: 7, column: 1, viewId: 4, keptViewId: 5 }, { resultId: 7, column: 1 }, { resultId: 7, column: 1 }, { resultId: 7, column: 1 }])
+    const good = { snapshotId: 3, rows: 5, complete: true, nulls: 1, distinct: 3, approximate: false, checked: 2, nullsChecked: false }
     distincts[0].resolve(good)
-    // More values than asked, truncated that does not match, and a negative row: none reaches the renderer.
-    distincts[1].resolve({ ...good, values: [...good.values, { row: 4, text: 'c', count: 1 }] })
-    distincts[2].resolve({ ...good, truncated: false })
-    distincts[3].resolve({ ...good, values: [{ row: -1, text: 'a', count: 2 }] })
+    // More ticked than values, more values than rows, and no snapshot id: none reaches the renderer.
+    distincts[1].resolve({ ...good, checked: 4 })
+    distincts[2].resolve({ ...good, distinct: 5 })
+    distincts[3].resolve({ ...good, snapshotId: 0 })
     await settle()
-    expect(codes(port())).toEqual([[2, 'RESULT_UNAVAILABLE'], [3, 'INVALID_REQUEST'], [4, 'INVALID_REQUEST'], [5, 'INVALID_REQUEST'], [6, 'INVALID_REQUEST'], [7, 'INVALID_REQUEST'], [8, 'INVALID_REQUEST'], [9, 'INVALID_REQUEST'],
-      [1, 'ok'], [10, 'BACKEND_ERROR'], [11, 'BACKEND_ERROR'], [12, 'BACKEND_ERROR']])
+    expect(codes(port())).toEqual([[2, 'RESULT_UNAVAILABLE'], [3, 'INVALID_REQUEST'], [4, 'INVALID_REQUEST'], [5, 'INVALID_REQUEST'], [1, 'ok'], [6, 'BACKEND_ERROR'], [7, 'BACKEND_ERROR'], [8, 'BACKEND_ERROR']])
     expect(port().ends().find(end => end.rid === 1)).toEqual({ t: 'end', rid: 1, ok: true, result: good })
   })
 
-  it('passes a kept view on and relays kept marks only when they were asked for, on every value and NULL', async () => {
-    const { host, port, distincts } = fixture()
-    host.own([{ ...descriptor(7), columns: [{}, {}] }])
-    const ask = { t: 'distinct', generation: 1, resultId: 7, column: 1, order: 'count', maxValues: 2 }
-    port().send({ ...ask, rid: 1, keptViewId: 5 })
-    port().send({ ...ask, rid: 2, keptViewId: 0 })
-    port().send({ ...ask, rid: 3, keptViewId: 5 })
-    port().send({ ...ask, rid: 4, keptViewId: 5 })
-    port().send({ ...ask, rid: 5 })
-    port().send({ ...ask, rid: 6, keptViewId: 5 })
-    for (const rid of [7, 8, 9]) port().send({ ...ask, rid, keptViewId: 5 })
-    expect(distincts.map(distinct => distinct.params.keptViewId)).toEqual([5, 5, 5, undefined, 5, 5, 5, 5])
-    const marked = { rows: 5, complete: true, nulls: 1, distinct: 2, truncated: false, approximate: false, values: [{ row: 0, text: 'a', count: 2, kept: true }, { row: 3, text: 'b', count: 1, kept: false }], nullsKept: false, unlistedKept: false }
-    distincts[0].resolve(marked)
-    // A value without its mark, marks without NULL's, and marks nobody asked for: none reaches the renderer.
-    distincts[1].resolve({ ...marked, values: [marked.values[0], { row: 3, text: 'b', count: 1 }] })
-    distincts[2].resolve({ ...marked, nullsKept: undefined })
-    distincts[3].resolve(marked)
-    distincts[4].resolve({ ...marked, unlistedKept: undefined })
-    // Past values named only with kept marks, the held ones exactly when the kept view holds some.
-    distincts[5].resolve({ ...marked, unlistedHeld: [4] })
-    distincts[6].resolve({ ...marked, unlistedKept: true, unlistedHeld: [] })
-    distincts[7].resolve({ ...marked, unlistedKept: true, unlistedHeld: [4], unlistedDropped: [] })
-    await settle()
-    expect(codes(port())).toEqual([[2, 'INVALID_REQUEST'], [1, 'ok'], [3, 'BACKEND_ERROR'], [4, 'BACKEND_ERROR'], [5, 'BACKEND_ERROR'], [6, 'BACKEND_ERROR'], [7, 'BACKEND_ERROR'], [8, 'BACKEND_ERROR'], [9, 'ok']])
-    expect(port().ends().find(end => end.rid === 1)).toEqual({ t: 'end', rid: 1, ok: true, result: marked })
-  })
-  it('cancels a distinct-values request on the worker\'s cancel and when the port closes', async () => {
-    const { host, port, distincts } = fixture()
+  it('reads windows of a snapshot within the window asked for, and cancels a read or a build on the worker\'s cancel and when the port closes', async () => {
+    const { host, port, distincts, distinctReads, backend } = fixture()
     host.own([descriptor(7)])
-    port().send({ t: 'distinct', rid: 1, generation: 1, resultId: 7, column: 0, order: 'value', maxValues: 10 })
-    port().send({ t: 'cancel', rid: 1 })
-    expect(distincts[0].cancels).toEqual([cancelReasons.user])
-    distincts[0].reject(new BackendError('CANCELLED', 'The request was cancelled.'))
+    const ask = { t: 'distinctRead', generation: 1, resultId: 7, snapshotId: 3, order: 'value', offset: 4, count: 2 }
+    port().send({ ...ask, rid: 1, search: 'ab' })
+    port().send({ ...ask, rid: 2, count: 513 })
+    port().send({ ...ask, rid: 3, offset: -1 })
+    port().send({ ...ask, rid: 4, search: '' })
+    for (const rid of [5, 6, 7, 8]) port().send({ ...ask, rid })
+    expect(distinctReads.map(read => read.params)).toEqual([{ resultId: 7, snapshotId: 3, order: 'value', offset: 4, count: 2, search: 'ab' }, ...Array.from({ length: 4 }, () => ({ resultId: 7, snapshotId: 3, order: 'value', offset: 4, count: 2 }))])
+    const value = (group: number) => ({ group, row: group * 10, text: 'v' + group, count: 1, checked: true })
+    const good = { total: 6, offset: 4, checked: 6, nullsChecked: true, values: [value(4), value(5)] }
+    distinctReads[0].resolve(good)
+    // A window from elsewhere, one value short of the window, one past it, and a value without a row: none is relayed.
+    distinctReads[1].resolve({ ...good, offset: 0 })
+    distinctReads[2].resolve({ ...good, values: [value(4)] })
+    distinctReads[3].resolve({ ...good, total: 5, values: [value(4), value(5)] })
+    distinctReads[4].resolve({ ...good, values: [value(4), { ...value(5), row: -1 }] })
     await settle()
-    expect(codes(port())).toEqual([[1, 'CANCELLED']])
-    port().send({ t: 'distinct', rid: 2, generation: 1, resultId: 7, column: 0, order: 'value', maxValues: 10 })
+    expect(codes(port())).toEqual([[2, 'INVALID_REQUEST'], [3, 'INVALID_REQUEST'], [4, 'INVALID_REQUEST'], [1, 'ok'], [5, 'BACKEND_ERROR'], [6, 'BACKEND_ERROR'], [7, 'BACKEND_ERROR'], [8, 'BACKEND_ERROR']])
+    expect(port().ends().find(end => end.rid === 1)).toEqual({ t: 'end', rid: 1, ok: true, result: good })
+    port().send({ ...ask, rid: 9 })
+    port().send({ t: 'cancel', rid: 9 })
+    expect(distinctReads[5].cancels).toEqual([cancelReasons.user])
+    distinctReads[5].reject(new BackendError('CANCELLED', 'The request was cancelled.'))
+    port().send({ t: 'distinct', rid: 10, generation: 1, resultId: 7, column: 0 })
+    port().send({ t: 'cancel', rid: 10 })
+    expect(distincts[0].cancels).toEqual([cancelReasons.user])
+    await settle()
+    expect(codes(port()).slice(-1)).toEqual([[9, 'CANCELLED']])
+    port().send({ ...ask, rid: 11 })
+    port().send({ t: 'distinct', rid: 12, generation: 1, resultId: 7, column: 0 })
     port().hangUp()
+    expect(distinctReads[6].cancels).toHaveLength(1)
     expect(distincts[1].cancels).toHaveLength(1)
+    // A snapshot built after its port went is closed, since nobody else can.
+    distincts[1].resolve({ snapshotId: 8, rows: 1, complete: true, nulls: 0, distinct: 1, approximate: false, checked: 1, nullsChecked: true })
+    await settle()
+    expect(backend.distinctClose).toHaveBeenCalledWith(1, { resultId: 7, snapshotIds: [8] })
+  })
+
+  it('ticks and closes snapshots of owned results only, within the schema bounds', async () => {
+    const { host, port, backend } = fixture()
+    host.own([descriptor(7)])
+    const tick = { t: 'distinctTick', generation: 1, resultId: 7, snapshotId: 3, checked: false }
+    port().send({ ...tick, rid: 1, groups: [1, 2], nulls: true })
+    port().send({ ...tick, rid: 2, all: true, search: 'ab' })
+    port().send({ ...tick, rid: 3 })
+    port().send({ ...tick, rid: 4, all: true, groups: [1] })
+    port().send({ ...tick, rid: 5, groups: [1], search: 'ab' })
+    port().send({ ...tick, rid: 6, groups: Array.from({ length: 513 }, (_, at) => at) })
+    port().send({ t: 'distinctClose', rid: 7, generation: 1, resultId: 7, snapshotIds: [3] })
+    port().send({ t: 'distinctClose', rid: 8, generation: 1, resultId: 7, snapshotIds: [] })
+    await settle()
+    expect(vi.mocked(backend.distinctTick).mock.calls.map(call => call[1])).toEqual([{ resultId: 7, snapshotId: 3, checked: false, groups: [1, 2], nulls: true }, { resultId: 7, snapshotId: 3, checked: false, all: true, search: 'ab' }])
+    expect(vi.mocked(backend.distinctClose).mock.calls.map(call => call[1])).toEqual([{ resultId: 7, snapshotIds: [3] }])
+    expect(codes(port())).toEqual([[3, 'INVALID_REQUEST'], [4, 'INVALID_REQUEST'], [5, 'INVALID_REQUEST'], [6, 'INVALID_REQUEST'], [8, 'INVALID_REQUEST'], [1, 'ok'], [2, 'ok'], [7, 'ok']])
+    vi.mocked(backend.distinctTick).mockResolvedValueOnce({ checked: -1, nullsChecked: true })
+    vi.mocked(backend.distinctClose).mockResolvedValueOnce({ closed: 2 })
+    port().send({ ...tick, rid: 9, nulls: true })
+    port().send({ t: 'distinctClose', rid: 10, generation: 1, resultId: 7, snapshotIds: [3] })
+    port().send({ ...tick, rid: 11, resultId: 8, nulls: true })
+    await settle()
+    expect(codes(port()).slice(-3)).toEqual([[11, 'RESULT_UNAVAILABLE'], [9, 'BACKEND_ERROR'], [10, 'BACKEND_ERROR']])
   })
   it('forwards a row sizes answer only when it is well formed and answers the range asked', async () => {
     const { host, backend, port } = fixture()

@@ -1,6 +1,6 @@
 // Messages between the UI thread (ResultClient) and the results worker. The worker also owns the results port to main
 // (src/shared/ipc/port-messages.ts).
-import type { BackendStatus, IdentityBy, PivotValueSpec, QueryEvent, ResolvedViewFilter, ResultsDiffResult, ResultsDistinctParams, ResultsDistinctResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ResultsTransposeResult, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
+import type { BackendStatus, IdentityBy, PivotValueSpec, QueryEvent, ResolvedViewFilter, ResultsDiffResult, ResultsDistinctCloseResult, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ResultsTransposeResult, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport } from '../../../shared/ipc/port-messages'
 import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
@@ -59,6 +59,15 @@ export interface MeasureRequest {
   readonly colEnd: number
 }
 
+/** What a distinct snapshot request asks: a snapshot of a column (`keptViewId` starting its ticks from a view), a window of
+ *  one, ticks, or closing some. */
+export type DistinctRequest =
+  | { readonly kind: 'open'; readonly column: number; readonly keptViewId?: number }
+  | ({ readonly kind: 'read' } & Readonly<Omit<ResultsDistinctReadParams, 'resultId'>>)
+  | ({ readonly kind: 'tick' } & Readonly<Omit<ResultsDistinctTickParams, 'resultId'>>)
+  | { readonly kind: 'close'; readonly snapshotIds: readonly number[] }
+export type DistinctAnswer = ResultsDistinctResult | ResultsDistinctReadResult | ResultsDistinctTickResult | ResultsDistinctCloseResult
+
 /** UI → worker. `attach` transfers the port main sent to the page. */
 export type WorkerRequest =
   | { readonly type: 'attach'; readonly port: MessagePort }
@@ -84,9 +93,9 @@ export type WorkerRequest =
   | { readonly type: 'search'; readonly id: number; readonly key: ResultKey; readonly text: string; readonly fromRow: number; readonly maxMatches: number; readonly backward: boolean }
   /** A column profile (results.profile) of `key`'s rows, through its view when it names one; `cancel` with the same id stops it. */
   | { readonly type: 'profile'; readonly id: number; readonly key: ResultKey; readonly columns: readonly number[] }
-  /** A column's distinct values (results.distinct) over `key`'s rows, through its view when it names one; `cancel` with the
-   *  same id stops it. */
-  | { readonly type: 'distinct'; readonly id: number; readonly key: ResultKey; readonly params: Omit<ResultsDistinctParams, 'resultId' | 'viewId'> }
+  /** A distinct snapshot's request (results.distinct and its windows, ticks and close), relayed to main as it is: a
+   *  snapshot of `key`'s rows, through its view when it names one; `cancel` with the same id stops building it or a read. */
+  | { readonly type: 'distinct'; readonly id: number; readonly key: ResultKey; readonly request: DistinctRequest }
   /** A live subscription (docs/ipc.md, Live subscriptions); `cancel` with the same id ends it. */
   | { readonly type: 'live'; readonly id: number; readonly params: LiveSubscribeParams }
   /** A change to the running subscription whose request id is `live`. */
@@ -110,7 +119,7 @@ export type WorkerResponse =
   | { readonly type: 'identity'; readonly id: number; readonly result: ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsDiffResult | ResultsPivotResult | ResultsTransposeResult }
   | { readonly type: 'search'; readonly id: number; readonly result: ResultsSearchResult }
   | { readonly type: 'profile'; readonly id: number; readonly result: ResultsProfileResult }
-  | { readonly type: 'distinct'; readonly id: number; readonly result: ResultsDistinctResult }
+  | { readonly type: 'distinct'; readonly id: number; readonly result: DistinctAnswer }
   | { readonly type: 'error'; readonly id: number; readonly code: ErrorCode; readonly message: string }
   | { readonly type: 'query'; readonly queryId: string; readonly event: QueryEvent }
   | ({ readonly type: 'memory'; readonly feature: MemoryFeature } & MemoryReport)

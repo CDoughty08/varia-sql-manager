@@ -532,6 +532,17 @@ function buildView(result, sort, filters = []) {
       resolved.push(filter)
       continue
     }
+    if (filter.op === 'groups') {
+      // A checklist's snapshot: the rows of the values it ticks, frozen by the first view that uses it.
+      const snapshot = result.snapshots?.get(filter.snapshotId)
+      if (!snapshot) throw Object.assign(new Error('This column\'s value list was closed. Open the column\'s filter again.'), { code: 'VIEW_NOT_FOUND' })
+      if (snapshot.column !== filter.column) throw Object.assign(new Error('A groups filter\'s value list is of another column.'), { code: 'INVALID_PARAMS' })
+      const frozen = freezeSnapshot(snapshot)
+      const named = new Set(frozen.groups.map(group => snapshot.groups[group].key))
+      order = order.filter(row => { const value = valueOf(row, filter.column); return (value === null ? frozen.nulls : named.has(value)) === frozen.keep })
+      resolved.push({ op: 'groups', column: filter.column, snapshotId: filter.snapshotId, keep: frozen.keep, values: frozen.groups.length, nulls: frozen.nulls, ...frozen.groups.length === 1 ? { row: snapshot.groups[frozen.groups[0]].row } : {} })
+      continue
+    }
     let picked = filter.rows ?? []
     if (filter.cells) {
       const source = filter.cells.viewId === undefined ? undefined : result.views?.get(filter.cells.viewId)
@@ -855,44 +866,70 @@ function profileOf(source, columns) {
     })
   }
 }
-// results.distinct: values grouped as the fake filters compare them (case-insensitively without trailing spaces, numbers
-// as numbers), each shown by its lowest base row; the real backend's collation rules have their own checks. With a kept
-// view, each value (and NULL) says whether a row of that view holds it.
-function distinctOf(result, source, { column, order, maxValues, search }, keptView) {
+// results.distinct: a snapshot of a column's values grouped as the fake filters compare them (case-insensitively without
+// trailing spaces, numbers as numbers), each shown by its lowest base row, in value order and count order, with the
+// checklist's ticks; the real backend's collation rules have their own checks. With a kept view, each value (and NULL)
+// starts ticked when a row of that view holds it. Snapshots live on their result and go with it.
+let nextSnapshotId = 1
+function snapshotOf(result, source, column, keptView) {
   const rows = source === result ? available(result) : source.read
   const baseRow = position => source === result ? position : source.order[position]
   const textOf = value => value instanceof Uint8Array ? '0x' + Buffer.from(value).toString('hex').toUpperCase() : String(value)
   const keyOf = text => numericTypes.has(result.columns[column].dataType) ? Number(text) : text.replace(/ +$/, '').toLowerCase()
   const keptKeys = new Set()
-  let nullsKept = false
+  let nullTicked = !keptView
   if (keptView) for (let position = 0; position < keptView.read; position++) {
     const value = cellValue(result.rowAt(keptView.order[position])[column])
-    if (value === null || value === undefined) nullsKept = true
+    if (value === null || value === undefined) nullTicked = true
     else keptKeys.add(keyOf(textOf(value)))
   }
-  const groups = new Map()
+  const byKey = new Map()
   let nulls = 0
   for (let position = 0; position < rows; position++) {
     const row = baseRow(position), value = cellValue(result.rowAt(row)[column])
     if (value === null || value === undefined) { nulls++; continue }
     const text = textOf(value)
     const key = keyOf(text)
-    const group = groups.get(key)
-    if (group) { group.count++; if (row < group.row) Object.assign(group, { row, text }) } else groups.set(key, { key, row, text, count: 1 })
+    const group = byKey.get(key)
+    if (group) { group.count++; if (row < group.row) Object.assign(group, { row, text }) } else byKey.set(key, { key, row, text, count: 1 })
   }
-  let values = [...groups.values()].sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
-  if (search !== undefined) values = values.filter(value => value.text.toLowerCase().includes(search.toLowerCase()))
-  if (order === 'count') values = values.map((value, index) => ({ ...value, index })).sort((a, b) => b.count - a.count || a.index - b.index)
-  const kept = values.slice(0, maxValues).map(({ key, row, text, count }) => ({ row, text: text.length > 256 ? text.slice(0, 256) + '…' : text, count, ...keptView ? { kept: keptKeys.has(key) } : {} }))
-  return { rows, complete: source.sealed ?? source.complete, nulls, distinct: values.length, truncated: values.length > kept.length, approximate: false, values: kept, ...keptView ? { nullsKept, ...unlistedOf(values.slice(maxValues), keptKeys) } : {} }
+  const groups = [...byKey.values()].sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
+  const byCount = groups.map((_, group) => group).sort((a, b) => groups[b].count - groups[a].count || a - b)
+  const ticks = groups.map(group => !keptView || keptKeys.has(group.key))
+  return { snapshotId: nextSnapshotId++, column, rows, complete: !!(source.sealed ?? source.complete), nulls, groups, byCount, ticks, nullTicked }
+}
+const snapshotSummary = snapshot => ({ snapshotId: snapshot.snapshotId, rows: snapshot.rows, complete: snapshot.complete, nulls: snapshot.nulls, distinct: snapshot.groups.length, approximate: false, ...ticksOf(snapshot) })
+const ticksOf = snapshot => ({ checked: snapshot.ticks.filter(Boolean).length, nullsChecked: snapshot.nullTicked })
+/** The groups whose text contains the search, in value order. */
+function matchesOf(snapshot, search) {
+  if (snapshot.search?.text !== search) snapshot.search = { text: search, groups: snapshot.groups.flatMap((group, at) => group.text.toLowerCase().includes(search.toLowerCase()) ? [at] : []), byCount: undefined }
+  return snapshot.search.groups
+}
+/** A search's matches in count order, kept with the search as the real backend keeps them. */
+function countMatches(snapshot, search) {
+  const groups = matchesOf(snapshot, search)
+  if (!snapshot.search.byCount) { const matched = new Set(groups); snapshot.search.byCount = snapshot.byCount.filter(group => matched.has(group)) }
+  return snapshot.search.byCount
+}
+function readSnapshot(snapshot, { order, offset, count, search }) {
+  snapshot.valueOrder ??= snapshot.groups.map((_, group) => group)
+  const listed = search === undefined ? order === 'count' ? snapshot.byCount : snapshot.valueOrder : order === 'count' ? countMatches(snapshot, search) : matchesOf(snapshot, search)
+  const values = listed.slice(offset, offset + count).map(group => {
+    const { row, text, count: rows } = snapshot.groups[group]
+    return { group, row, text: text.length > 256 ? text.slice(0, 256) + '…' : text, count: rows, checked: snapshot.ticks[group] }
+  })
+  return { total: listed.length, offset, values, ...ticksOf(snapshot) }
+}
+/** The filter a snapshot's ticks make, fixed from the first view on: the fewer of the ticked (kept) and cleared (dropped)
+ *  values, dropping while rows still arrive. */
+function freezeSnapshot(snapshot) {
+  if (snapshot.frozen) return snapshot.frozen
+  const ticked = snapshot.ticks.filter(Boolean).length
+  const keep = snapshot.complete && ticked <= snapshot.groups.length - ticked
+  snapshot.frozen = { keep, groups: snapshot.ticks.flatMap((tick, group) => tick === keep ? [group] : []), nulls: (keep ? snapshot.nullTicked : !snapshot.nullTicked) && snapshot.nulls > 0 }
+  return snapshot.frozen
 }
 
-// The kept view's values past those listed: whether it holds any, and the held and dropped ones' rows, each when one filter
-// holds them.
-function unlistedOf(past, keptKeys) {
-  const held = past.filter(value => keptKeys.has(value.key)), dropped = past.filter(value => !keptKeys.has(value.key))
-  return { unlistedKept: held.length > 0, ...held.length > 4096 ? {} : { unlistedHeld: held.map(value => value.row) }, ...dropped.length > 4096 ? {} : { unlistedDropped: dropped.map(value => value.row) } }
-}
 /** The result, or the view of it a request names; undefined (after answering) when either is gone. */
 function sourceOf(id, resultId, viewId) {
   const result = stored.get(resultId)
@@ -1581,10 +1618,33 @@ async function workbench(id, method, params, credit) {
     case 'results.distinct': {
       const source = sourceOf(id, params.resultId, params.viewId)
       if (!source) return
-      if (params.column >= stored.get(params.resultId).columns.length) return fail(id, 'INVALID_PARAMS', "The column is not one of the result's.")
+      const result = stored.get(params.resultId)
+      if (params.column >= result.columns.length) return fail(id, 'INVALID_PARAMS', "The column is not one of the result's.")
       const keptView = params.keptViewId === undefined ? undefined : sourceOf(id, params.resultId, params.keptViewId)
       if (params.keptViewId !== undefined && !keptView) return
-      return respond(id, distinctOf(stored.get(params.resultId), source, params, keptView))
+      result.snapshots ??= new Map()
+      if (result.snapshots.size >= 24) return fail(id, 'TOO_LARGE', 'These results keep as many value lists as they can. Remove some column filters and try again.')
+      const snapshot = snapshotOf(result, source, params.column, keptView)
+      result.snapshots.set(snapshot.snapshotId, snapshot)
+      return respond(id, snapshotSummary(snapshot))
+    }
+    case 'results.distinctRead': case 'results.distinctTick': {
+      const result = stored.get(params.resultId)
+      if (!result) return missing(id, params.resultId)
+      const snapshot = result.snapshots?.get(params.snapshotId)
+      if (!snapshot) return fail(id, 'VIEW_NOT_FOUND', "This column's value list was closed. Open the column's filter again.")
+      if (method === 'results.distinctRead') return respond(id, readSnapshot(snapshot, params))
+      if (snapshot.frozen) return fail(id, 'INVALID_PARAMS', "These values already filter the grid. Open the column's filter again to change them.")
+      if (params.groups?.some(group => group >= snapshot.groups.length)) return fail(id, 'INVALID_PARAMS', "A value to tick is not one of the list's.")
+      for (const group of params.all ? params.search === undefined ? snapshot.groups.map((_, at) => at) : matchesOf(snapshot, params.search) : params.groups ?? []) snapshot.ticks[group] = params.checked
+      if (params.nulls !== undefined) snapshot.nullTicked = params.nulls
+      return respond(id, ticksOf(snapshot))
+    }
+    case 'results.distinctClose': {
+      const result = stored.get(params.resultId)
+      let closed = 0
+      for (const snapshotId of params.snapshotIds) if (result?.snapshots?.delete(snapshotId)) closed++
+      return respond(id, { closed })
     }
     case 'results.viewClose': {
       const result = stored.get(params.resultId)
