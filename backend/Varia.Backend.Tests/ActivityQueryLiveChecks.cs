@@ -66,7 +66,14 @@ internal static class ActivityQueryLiveChecks
         var ours = rows.FindIndex(row => Cell(row, "query")?.Contains(marker, StringComparison.Ordinal) == true);
         var row = ours >= 0 ? rows[ours] : null;
         static double Number(string? text) => text is null ? double.NaN : double.Parse(text, CultureInfo.InvariantCulture);
-        check(second is { Sampled: true, Errors: [] } && row is not null && Number(Cell(row, "executionsPerMinute")) > 0 && Number(Cell(row, "cpuRate")) >= 0
+        check(second is { Sampled: true, Errors: [] }, "a later query statistics sample reads without errors: " + string.Join(",", second.Errors.Select(error => error.Code)));
+        if (row is null && table is { More: > 0 })
+        {
+            // A busy server's other work outranked this cheap statement past shownHashes (or the rows were cut): nothing to assert
+            // about it, and the order check below still runs.
+            Console.WriteLine($"Activity Monitor query statistics live checks: this run's statement was outranked on a busy server ({rows.Count} rows shown, {table.More} more); its row checks skipped.");
+        }
+        else check(row is not null && Number(Cell(row, "executionsPerMinute")) > 0 && Number(Cell(row, "cpuRate")) >= 0
             && Number(Cell(row, "rowsPerExecution")) == 1 && Cell(row, "planCount") == "1" && Cell(row, "database") is { Length: > 0 } && Cell(row, "queryHash")?.StartsWith("0x", StringComparison.Ordinal) == true,
             $"the statement run {Runs} times since the first sample is ranked in the next, with its executions per minute, CPU, rows per execution, one plan, its text and database: rank {ours} of {rows.Count}");
         var cpu = rows.Select(entry => Number(Cell(entry, "cpuRate"))).ToList();

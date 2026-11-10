@@ -243,8 +243,10 @@ internal static partial class ActivitySql
 
     private static IReadOnlyList<ActivityStatement> Queries(bool spills)
     {
-        // Per-statement rows that ran since the last sample; deltas are per statement in C# and summed per query_hash, since
-        // grouping in SQL would make a sum depend on which rows a window happens to include.
+        // Per-statement rows whose last execution ended since the last sample; deltas are per statement in C# and summed per
+        // query_hash, since grouping in SQL would make a sum depend on which rows a window happens to include. last_execution_time
+        // is when the execution started, so the end adds last_elapsed_time (rounded up to the second): a statement that ran
+        // longer than a window is read when it ends, and the newest ends come first when the rows are cut.
         var columns = new List<string>
         {
             "query_hash", "query_plan_hash", "sql_handle", "plan_handle", "statement_start_offset", "statement_end_offset", "creation_time", "last_execution_time", "execution_count",
@@ -254,7 +256,9 @@ internal static partial class ActivitySql
         if (spills) columns.AddRange(["total_spills", "last_spills"]);
         var stats = new ActivityStatement("activity.queries", "stats",
             "SELECT TOP (@rowCap) " + string.Join(", ", columns.Select(column => "q." + column)) + "\n"
-            + "FROM sys.dm_exec_query_stats AS q\nWHERE q.last_execution_time >= @since\nORDER BY q.last_execution_time DESC\nOPTION (MAXDOP 1);",
+            + "FROM sys.dm_exec_query_stats AS q\n"
+            + "CROSS APPLY (SELECT DATEADD(second, CONVERT(int, q.last_elapsed_time / 1000000) + 1, q.last_execution_time) AS last_end) AS e\n"
+            + "WHERE e.last_end >= @since\nORDER BY e.last_end DESC\nOPTION (MAXDOP 1);",
             columns, [Int("@rowCap"), new("@since", SqlDbType.DateTime)], ["recentQueries"], NoLiterals);
         // Statement text and database only for shown hashes missing from the text cache; unused slots pass NULL handles.
         var slots = string.Join(",\n       ", Enumerable.Range(0, TextSlots).Select(slot => $"({slot}, @h{slot}, @p{slot}, @s{slot}, @e{slot})"));
