@@ -10,7 +10,7 @@
   "hideBenign": {"default":true,"tables":["waitCategories","waitTypes"]},
   "killOutcomes": ["killed","ended","changed","own","system","varia","denied","failed"],
   "limits": {"activeQueries":100,"blockingDepth":32,"blockingEdges":20000,"blockingRows":2000,"cancelIds":16,"cancelTombstoneMs":60000,"cancelTombstones":64,"columnFilterChars":256,"columnFilterValues":50,"columnFilters":8,"columnsPerProjection":64,"detailsBudgetMs":10000,"detailsChars":1000000,"detailsLocks":1000,"detailsPreviewChars":65536,"detailsRunning":32,"detailsTransactions":50,"detailsWaits":20,"facetChars":128,"facetColumns":7,"facetValues":100,"files":10000,"filterText":400,"inputBufferChars":4000,"killBudgetMs":25000,"killMessageChars":2000,"killSessions":64,"lastBatchChars":200,"leadBlockerBatches":20,"monitorsPerConnection":1,"probesPerMonitor":4,"queryDeltaKeys":20000,"queryStatsRows":20000,"resourceChars":512,"sessionId":32767,"sessions":10000,"shownHashes":200,"statementChars":4000,"textBatch":50,"textBatchesPerTick":4,"textCache":2000,"waitTypes":2000},
-  "liveProbes": ["activity.overview","activity.sessions","activity.resources"],
+  "liveProbes": ["activity.overview","activity.sessions","activity.resources","activity.queries"],
   "loadGuard": {"cheapSamples":10,"slowSamples":3},
   "pending": {"activity.resources":"Resource Waits and Data File I/O are not sampled yet; they arrive in a later version of Varia."},
   "poolSuffix": " - Activity Monitor",

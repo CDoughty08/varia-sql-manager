@@ -67,9 +67,9 @@ describe('live request schemas', () => {
     expect(ok(portRequestSchema, activity({ probes: [{ probe: 'debug.synthetic.table', intervalMs: 1000 }] }))).toBe(false)
     expect(ok(portRequestSchema, { t: 'liveUpdate', rid: 2, generation: 1, params: { subscriptionId: uuid(), source: 'activity', probes: [{ probe: 'activity.overview', intervalMs: 5000 }], refresh: true } })).toBe(true)
     expect(ok(portRequestSchema, { t: 'liveUpdate', rid: 2, generation: 1, params: { subscriptionId: uuid(), source: 'activity', args: { rows: 1 } } })).toBe(false)
-    // One subscription per monitor: the three probes, one filter per table and the Details flyout's session.
+    // One subscription per monitor: its four probes, one filter per table and the Details flyout's session.
     const probes = [{ probe: 'activity.overview', intervalMs: 2000 }, { probe: 'activity.sessions', intervalMs: 2000, sort: [{ column: 'login', descending: false }, { column: 'activeCpuMs', descending: true }] },
-      { probe: 'activity.resources', intervalMs: 5000, paused: true }]
+      { probe: 'activity.resources', intervalMs: 5000, paused: true }, { probe: 'activity.queries', intervalMs: 30_000, paused: true, sort: [{ column: 'logicalReadsRate', descending: true }] }]
     const args = { filters: [{ table: 'sessions', view: 'blocked', showVaria: true, columnFilters: [{ column: 'login', values: ['app'] }] }, { table: 'waitTypes', hideBenign: false }], focusSession: 32_767 }
     expect(ok(portRequestSchema, activity({ probes, args }))).toBe(true)
     expect(ok(portRequestSchema, { t: 'liveUpdate', rid: 2, generation: 1, params: { subscriptionId: uuid(), source: 'activity', args: { focusSession: 0 } } })).toBe(true)

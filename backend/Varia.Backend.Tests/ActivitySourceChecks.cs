@@ -264,7 +264,7 @@ internal static class ActivitySourceChecks
     }
 
     /// <summary>A live host the sample clock never calls.</summary>
-    private sealed class NoHost : ILiveHost
+    internal sealed class NoHost : ILiveHost
     {
         public bool TestHooks => false;
         public bool IsConnected(string connectionId) => false;
