@@ -101,7 +101,8 @@ export default function ResultsToolbar({ tabId }: { tabId: string }) {
   }
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
-    const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')], at = items.indexOf(event.target as HTMLButtonElement)
+    // Only shown buttons: a narrow window hides some (styles.css).
+    const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')].filter(item => item.getClientRects().length > 0), at = items.indexOf(event.target as HTMLButtonElement)
     if (at < 0) return
     const next = event.key === 'ArrowRight' ? (at + 1) % items.length : event.key === 'ArrowLeft' ? (at + items.length - 1) % items.length
       : event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : -1
@@ -131,7 +132,7 @@ export default function ResultsToolbar({ tabId }: { tabId: string }) {
       <button type="button" className="results-icon-toggle" aria-label="Pivot" aria-pressed={pivotOpen} tabIndex={-1} disabled={!pivotOpen && !canPivot}
         title="Pivot: group the focused grid's rows by columns and summarize them (count, sum, average, min, max) as a new result"
         onClick={() => { if (pivotOpen) pivot.close(tabId); else void commands.execute('output.pivot', { tabId }, 'toolbar') }}><Icon name="pivot" /></button>
-      <button type="button" className="results-icon-toggle" aria-label="Transpose" tabIndex={-1} disabled={!canTranspose} aria-busy={transposing}
+      <button type="button" className="results-icon-toggle results-transpose" aria-label="Transpose" tabIndex={-1} disabled={!canTranspose} aria-busy={transposing}
         title={transposing ? 'Transposing…' : "Transpose: the focused grid's columns as rows and its rows as columns, as a new result"}
         onClick={() => void commands.execute('output.transpose', { tabId }, 'toolbar')}><Icon name="transpose" /></button>
     </div>
