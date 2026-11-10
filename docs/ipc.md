@@ -245,7 +245,10 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `results.search` | port | unary | results | 120 s; the cells of a result (or a view) containing a text ([Search in results](#search-in-results)) |
 | `results.pivot` | port | unary | results | 120 s; a result's or a view's rows grouped and aggregated, stored as a new result ([Pivots](#pivots)) |
 | `results.profile` | port | unary | results | 120 s; aggregates over a result's or a view's rows ([Column profiles](#column-profiles)) |
-| `results.distinct` | port | unary | results | 120 s; a column's distinct values and their counts over a result's or a view's rows ([Distinct values](#distinct-values)) |
+| `results.distinct` | port | unary | results | 120 s; a snapshot of a column's distinct values and their counts over a result's or a view's rows ([Distinct values](#distinct-values)) |
+| `results.distinctRead` | port | unary | results | 30 s; a window of 1 – 512 of a snapshot's values, optionally searched |
+| `results.distinctTick` | port | unary | results | 30 s; ticks or clears a snapshot's values, all of them or a search's at once |
+| `results.distinctClose` | port | unary | control | 10 s; releases 1 – 64 snapshots |
 | `live.subscribe` | port | stream of credited EVENTs ([Live subscriptions](#live-subscriptions)) | live (no slot) | none, and no backstop: only CANCEL, a disconnect, a shutdown, a failure or its source ending ends it |
 | `live.update` | port | unary | control | 10 s |
 | `explorer.children` | invoke; cancelled with `explorerCancel` | unary | explorer | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value |
@@ -1341,7 +1344,8 @@ itself by view position.
   value, and keeps no NULL). The same filter can name selected cells instead,
   `cells: { ranges: 1 – 256 [first, count], viewId? }`, positions in a view (or the result) that the backend reads (each
   once, however the ranges overlap), reduces to one row per distinct value (at most 4,096, else `TOO_LARGE`; `between` keeps only the lowest and highest) and
-  answers resolved, `{ op, column, rows, nulls }`, in `filters`, so the renderer builds the same view again from rows. A
+  answers resolved, `{ op, column, rows, nulls }`, in `filters`, so the renderer builds the same view again from rows.
+  `{ op: 'groups', column, snapshotId }` filters by a distinct snapshot's ticks ([Distinct values](#distinct-values)). A
   view named that is gone answers `VIEW_NOT_FOUND`. `{ op: 'duplicates', columns }` keeps the rows whose values in those
   distinct columns equal another row's (NULL equal to NULL, as GROUP BY has it), each group together in the order of its
   first row. Values are equal and ordered as the sort compares them, so a column's collation decides which texts match
@@ -1574,60 +1578,69 @@ renderer (`Results/ColumnProfiles.cs`): `results.profile` answers aggregates, ne
 
 ## Distinct values
 
-The header funnel's popover lists a column's distinct values with their counts, computed in the backend over the rows
-it holds (`Results/DistinctValues.cs`); the renderer receives at most 4,096 values, never rows.
+The header funnel's popover lists a column's distinct values with their counts. The backend groups them once into a
+snapshot that it keeps with the result (`Results/DistinctValues.cs`), and the renderer reads it a window at a time,
+so a column of a million distinct values lists every one, bounded only by the result's query budget; the renderer
+receives at most 512 values a window, never rows.
 
-- **`results.distinct { resultId, column, order: 'count' | 'value', maxValues: 1 – 4,096, search?: 1 – 1,024 characters,
-  viewId?, keptViewId? }`** answers `{ rows, complete, nulls, distinct, truncated, approximate, values: [{ row, text, count,
-  kept? }], nullsKept?, unlistedKept?, unlistedHeld?, unlistedDropped? }`. The
-  column must be the result's (`INVALID_PARAMS`). Through a view it groups the view's rows (`VIEW_NOT_FOUND` when it is
-  gone), else the rows sealed when it ran; `complete` says those were every row of a finished set. `count` orders the
-  values most frequent first, ties in value order; `value` orders them as a sort does. `distinct` counts every value the
-  search kept, and `values` are the first `maxValues` of them (`truncated` when there were more). NULL and unreadable cells
-  are counted in `nulls`, never a value.
+- **`results.distinct { resultId, column, viewId?, keptViewId? }`** builds a snapshot and answers `{ snapshotId, rows,
+  complete, nulls, distinct, approximate, checked, nullsChecked }`. The column must be the result's (`INVALID_PARAMS`).
+  Through a view it groups the view's rows (`VIEW_NOT_FOUND` when it is gone), else the rows sealed when it ran;
+  `complete` says those were every row of a finished set. NULL and unreadable cells are counted in `nulls`, never a
+  value. A result keeps at most 24 snapshots (`TOO_LARGE`), released with the result, on re-execute and by
+  `results.distinctClose`.
 - **Equality** is the filters' ([Sorted views](#sorted-views)): the column's collation decides which texts are one value
   (case and trailing spaces under a CI collation), exact numerics are equal by value, and a truncated value compares by
-  its stored prefix (`approximate`). Each value's `row` is the lowest base row holding it, so an `in` or `notIn` filter by
-  those rows keeps or drops exactly the rows counted. `text` is the representative's display text (binary as `0x` hex),
-  cut to 256 characters with "…".
-- **`search`** keeps the values whose display text contains it, compared as [Search in results](#search-in-results)
-  compares a cell (the collation's locale and Ignore flags for character columns, hex for binary, case ignored otherwise).
-- **`keptViewId`**, another view of the same result (`VIEW_NOT_FOUND` when it is gone), marks each listed value `kept`
-  when any row of that view holds it (equal as above, whichever row), says in `nullsKept` whether that view has a NULL in
-  the column, and in `unlistedKept` whether it holds a value past those listed. `unlistedHeld` and `unlistedDropped` list
-  the representative rows of those past values it holds and of those it does not hold, each when it fits one filter
-  (4,096). A view built while the set was loading has not looked at the rows sealed after it, so their values count as
-  held. The marks cover every value listed, however many the view keeps, so a checklist over one view shows what
-  a filtered view keeps of each value. Main relays the marks only when they were asked for, on every value and NULL.
-- **Work.** One key per row for the column (as a filter builds it), the rows grouped by a stable sort, and up to one group
-  a row (its representative over the grouped rows' own array, a count and a kept mark), a kept view's row marks and the
-  count order's ranking, and the answer (1 KiB a value asked for): `DistinctWorkingBytes` (about 35 bytes a row) is charged to the result's query budget while it runs (`TOO_LARGE`
-  without room) and returned when it ends. The worker's `cancel` stops it (`CANCELLED`), within one group too. Main checks
-  the answer before forwarding it: rows below 2³¹, at most `maxValues` values, `truncated` exactly when `distinct` exceeds
-  them, kept marks exactly when asked for, past values named only with them (the held ones non-empty exactly when some
-  are kept), and the column
-  inside the result's when its descriptor named the columns.
-- **Renderer.** `ResultHandle.distinct(column, { order, maxValues, search, kept, signal })` validates the request before
-  the port (`kept` must be a view of the same result). `ResultsService.columnValues` asks over the rows the grid's other
-  filters keep (a view built for it without the column's own value list, shared by the popover's list and searches through
-  a `ColumnValuesScope` and closed with the popover), so values the column's filter
-  dropped can be ticked again; when the column has such a filter the grid's view marks which values it keeps now, and a
-  value first seen (in the list or a search) starts ticked only when it is kept. The popover (`ColumnFilterPopover`) lists them as a checklist with a search (local,
-  or in the backend once typing pauses when the list was truncated), Select all and Select none, NULL as an entry, and
-  custom conditions (equals, does not equal, between two listed values, is NULL, is not NULL). OK applies an `in` or
-  `notIn` filter by representative rows, whichever names fewer (keeping on a tie), replacing the column's value-list
-  filter and its Exclude NULLs (the checklist lists NULL as a value, so it also lists over the rows that filter hid);
-  every value ticked takes both off. A truncated list leaves the values it never showed as the grid shows them: `in` with
-  the ticked values and the past ones the grid holds, or `notIn` with the cleared values and the past ones it drops,
-  whichever fits one filter and names fewer (all shown when the column has no value filter). When neither side can be
-  named, `notIn` shows them all and the popover says so; every value ticked takes the filter off only when no past value
-  stays hidden. While rows still arrive only `notIn` applies, so their values stay shown. OK puts the new filter where the
-  one it replaces stood, since filters apply in order (a duplicates filter counts only the rows before it kept). The
-  base view's build stops when the popover closes. With a range on the column, Equals and Between choose only within
-  it, and the popover says so. Between replaces the column's range
-  filter; Clear filter takes all of the column's filters off. The popover opens in the grid's own window (a popped-out
-  Results panel's), and a second press on the open funnel closes it. There is no contains or starts-with condition: the
-  filters compare whole values by rows, and a text filter op would need its own backend filter.
+  its stored prefix (`approximate`). Each value's `row` is its representative, the lowest base row holding it, and its
+  `group` its place in value order. `text` is the representative's display text (binary as `0x` hex), cut to 256
+  characters with "…".
+- **Ticks.** The snapshot keeps the checklist's ticks, one a value and one for NULL. Without `keptViewId` every value
+  starts ticked; with it (another view of the same result, `VIEW_NOT_FOUND` when it is gone) a value or NULL starts
+  ticked when any row of that view holds it, so a checklist over one view shows what a filtered view keeps of each
+  value. A view built while the set was loading has not looked at the rows sealed after it, so their values start ticked.
+- **`results.distinctRead { resultId, snapshotId, order: 'count' | 'value', offset: 0 – 2³¹, count: 1 – 512, search?: 1 –
+  1,024 characters }`** answers `{ total, offset, values: [{ group, row, text, count, checked }], checked, nullsChecked }`:
+  the window at `offset` of the values in that order (`count` most frequent first, ties in value order; `value` as a sort
+  orders them), only those whose display text contains `search` when it is given, compared as [Search in
+  results](#search-in-results) compares a cell; `total` counts them. The last search's matches are kept, so scrolling a
+  searched list does not search again.
+- **`results.distinctTick { resultId, snapshotId, checked, groups?: 1 – 512, all?, search?, nulls? }`** sets the ticks of
+  the groups named, or with `all` of every value (or every value `search` matches), and NULL's with `nulls`, answering the
+  totals `{ checked, nullsChecked }`. Select all and Select none are one request whatever the count. A frozen snapshot
+  refuses it (`INVALID_PARAMS`).
+- **`results.distinctClose { resultId, snapshotIds: 1 – 64 }`** answers `{ closed }`; ids already gone are skipped. A
+  closed snapshot asked for again answers `VIEW_NOT_FOUND`.
+- **Filter.** `{ op: 'groups', column, snapshotId }` in `results.view` filters by the snapshot's ticks
+  ([Sorted views](#sorted-views)). The first view that uses it freezes the snapshot: its filter is fixed as `in` of the
+  ticked values' representative rows when the snapshot is complete and those are no more than the cleared ones, else
+  `notIn` of the cleared ones, so values in rows still arriving stay shown. The view answers it resolved as `{ op:
+  'groups', column, snapshotId, keep, values, nulls, row? }` (`row` when one value is named) for its label. A sort or
+  another filter builds the view again from the same frozen snapshot.
+- **Work and memory.** Building takes one key per row for the column (as a filter builds it), the rows grouped by a
+  stable sort, and the snapshot itself: `DistinctWorkingBytes` (about 57 bytes a row) is charged to the result's query
+  budget while it builds (`TOO_LARGE` without room) and returned when it ends. The snapshot keeps
+  `DistinctSnapshotBytes` (26 bytes a value and 4 KiB) charged until it is closed or its result goes. The worker's
+  `cancel` stops a build or a read (`CANCELLED`). Main checks each answer before forwarding it: rows below 2³¹,
+  `checked` at most `distinct`, `distinct` and `nulls` at most `rows`, a window at the offset asked with exactly
+  `min(count, total − offset)` values. A snapshot built after its port went is closed.
+- **Renderer.** `ResultHandle.distinct(column, { kept, signal })` validates the request before the port (`kept` must be a
+  view of the same result) and answers a `DistinctList` bound to the base result, whose `read`, `tick` and `close` go
+  through the worker. `ResultsService.columnValues` builds it over the rows the grid's other filters keep (a view built
+  for it without the column's own filters, closed once the snapshot is built), so values the column's filter dropped can
+  be ticked again, ticked by what the grid's view shows now. The popover (`ColumnFilterPopover`) lists them as a
+  virtualized checklist of fixed-height rows, reading 128-value blocks as they come into view, with a search the backend
+  runs once typing pauses, Select all and Select none, NULL as an entry, and custom conditions (equals, does not equal,
+  between two values among the first 512 in value order or of a search, is NULL, is not NULL). Ticks go to the backend in
+  order and patch the rows shown at once. OK hands the snapshot to the grid as a `groups` filter, replacing the column's
+  value-list filter and its Exclude NULLs (the checklist lists NULL as a value, so it also lists over the rows that
+  filter hid); every value and NULL ticked takes both off; none ticked asks for one. The grid keeps the snapshot while a
+  filter names it and closes it once the view it shows no longer does; a popover closed without OK closes its own. OK
+  puts the new filter where the one it replaces stood, since filters apply in order (a duplicates filter counts only the
+  rows before it kept). With a range on the column, Equals and Between choose only within it, and the popover says so.
+  Between replaces the column's range filter; Clear filter takes all of the column's filters off. The popover opens in
+  the grid's own window (a popped-out Results panel's), and a second press on the open funnel closes it. There is no
+  contains or starts-with condition: the filters compare whole values by rows, and a text filter op would need its own
+  backend filter.
 
 ## Copy and Save Results As
 
@@ -2467,7 +2480,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Pivots | 0 – 8 row columns, 1 – 16 values, 100,000 row groups, 256 column groups, 4,000,000 figures, refused past any of them (`INVALID_PARAMS`), column-group names cut to 128 characters (`limits.pivot`); a sort key per grouped column and 12 bytes a row while grouping, and the figures, under the query budget | zod and backend |
 | Search in results | 1 – 1,024 characters of text, 1 – 10,000 matches an answer plus its last row's columns (`limits.search`); no budget held | zod and backend |
 | Column profiles | 0 – 32 columns a request (`limits.profile`), 20 buckets, distinct exact to 16,384, values cut to 256 characters; working memory under the query budget | zod and backend |
-| Distinct values | 1 – 4,096 values an answer (`limits.distinct`, the In filter's own limit), values cut to 256 characters, search 1 – 1,024 characters; working memory under the query budget | zod and backend |
+| Distinct values | every distinct value of a column in a snapshot, 24 snapshots a result, windows of 1 – 512 values and ticks of 1 – 512 groups, 1 – 64 ids a close (`limits.distinct`), values cut to 256 characters, search 1 – 1,024 characters; working memory and each snapshot under the query budget | zod and backend |
 | Copy | 64 MiB of UTF-8 (estimated before any work; main cancels past 65 MiB received); DATA ≤ 1 MiB; 16 MiB initial credit; 120 s; one per window | backend and main |
 | Save Results As | one per window; 1 MiB writes; no deadline; suggested name ≤ 128 characters, path ≤ 32,767 | main and backend |
 | Job progress | EVENTs every ≥ 250 ms; pushed to the renderer ≤ 4 a second | backend and main |
@@ -2859,6 +2872,9 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | Grid: `frame()` during a 3 s wheel scroll over 1,000,000 rows, p95 | ≤ 3 ms | ≤ 8 ms | 0.7 – 0.9 ms | 0.8 ms |
 | Grid: animation-frame interval during that scroll, p95 / largest gap | ≤ 17.5 / 50 ms | gap ≤ 150 ms | 16.7 / 16.8 ms | 16.8 / 16.8 ms |
 | Grid: scroll bar jump to a random row of 1,000,000 → painted, p95 | ≤ 50 ms | ≤ 250 ms | 64 – 71 ms | 66 – 67 ms |
+| Grid: header funnel over 1,000,000 distinct values, Alt+Down → first values listed (the fake backend groups them) | ≤ 4,000 ms | reported only | 3,316 ms (Windows, 24 CPUs) | not measured |
+| Grid: funnel checklist scroll bar jump over 1,000,000 values → listed, p95 | ≤ 50 ms | ≤ 500 ms | 61 ms (Windows, 24 CPUs) | not measured |
+| Grid: funnel search over 1,000,000 values / OK with 1,111 ticked → grid filtered | ≤ 600 / 1,000 ms | reported only | 323 / 948 ms (Windows, 24 CPUs; the search includes its 200 ms debounce) | not measured |
 | Grid: `frame()` after a scroll bar jump, 300 columns, p95 | ≤ 8 ms | ≤ 16 ms | 2.3 – 3.1 ms | 2.5 – 3.3 ms |
 | Grid: main-thread task time per scroll bar jump, 300 columns / 300 bit columns, p95 | ≤ 50 / 50 ms | ≤ 170 / 260 ms | 73 – 85 / 102 – 128 ms | 75 – 76 / 99 – 129 ms |
 | Grid: UI long tasks over 50 ms in those two jump segments (one retry each) | 0 | ≤ 50 | 7 – 23 | 4 – 16 |

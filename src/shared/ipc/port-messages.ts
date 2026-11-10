@@ -2,7 +2,7 @@
 // requests are validated with portRequestSchema; backend payloads main forwards are validated with the schemas below.
 import { z } from 'zod'
 import { clientStatisticsSchema } from '../client-statistics'
-import type { BackendStatus, MemoryOrder, QueryEvent, ResultsCloseResult, ResultsDiffResult, ResultsDistinctResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsReadResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult } from '../contracts'
+import type { BackendStatus, MemoryOrder, QueryEvent, ResultsCloseResult, ResultsDiffResult, ResultsDistinctCloseResult, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsReadResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult } from '../contracts'
 import { maxQueryPlanDocuments } from '../plans'
 import { liveSubscribeParamsSchema, liveUpdateParamsSchema, testLiveSubscribeParamsSchema, testLiveUpdateParamsSchema, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../live/schema'
 import { backendDescriptorSchema } from './descriptors'
@@ -26,11 +26,16 @@ const distinctColumns = z.array(column).min(1).max(limits.page.maxColumns).refin
 export const viewFilterSchema = z.union([
   z.object({ op: filterOp, column, rows: filterRows, nulls: z.boolean().optional() }).strict(),
   z.object({ op: filterOp, column, cells: z.object({ ranges: z.array(z.tuple([count, z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)])).min(1).max(limits.views.maxFilterRanges), viewId: u32.optional() }).strict() }).strict(),
-  z.object({ op: z.literal('duplicates'), columns: distinctColumns }).strict()
+  z.object({ op: z.literal('duplicates'), columns: distinctColumns }).strict(),
+  z.object({ op: z.literal('groups'), column, snapshotId: u32 }).strict()
 ])
+/** A group: a value's place in a snapshot's value order (below 2^31, as rows are). */
+const group = filterRow
 const resolvedFilterSchema = z.union([
   z.object({ op: filterOp, column, rows: filterRows, nulls: z.boolean() }).strict(),
-  z.object({ op: z.literal('duplicates'), columns: distinctColumns }).strict()
+  z.object({ op: z.literal('duplicates'), columns: distinctColumns }).strict(),
+  z.object({ op: z.literal('groups'), column, snapshotId: u32, keep: z.boolean(), values: group, nulls: z.boolean(), row: filterRow.optional() }).strict()
+    .refine(filter => filter.row === undefined || filter.values === 1, 'A row names the one value.')
 ])
 
 /** One pivot value: an aggregate of a column; only count may leave the column out (it then counts rows). */
@@ -70,11 +75,19 @@ export const buildPortRequestSchema = (live: { subscribe: z.ZodType<LiveSubscrib
     t: z.literal('pivot'), rid: u31, generation, resultId: u32, rows: z.array(column).max(limits.pivot.maxRowFields).refine(columns => new Set(columns).size === columns.length, 'Columns must be distinct.'),
     column: column.optional(), values: z.array(pivotValueSchema).min(1).max(limits.pivot.maxValues), viewId: u32.optional()
   }).strict().refine(request => request.column === undefined || !request.rows.includes(request.column), 'The column group is not a row column.'),
-  // Distinct values (results.distinct): a column's values and counts over a result's rows or a view's; `cancel` stops one.
+  // Distinct snapshots (results.distinct and its windows, ticks and close): a column's values and counts over a result's rows
+  // or a view's, kept in the backend for the funnel's checklist; `cancel` stops building one, or a read.
+  z.object({ t: z.literal('distinct'), rid: u31, generation, resultId: u32, column, viewId: u32.optional(), keptViewId: u32.optional() }).strict(),
   z.object({
-    t: z.literal('distinct'), rid: u31, generation, resultId: u32, column, order: z.enum(['count', 'value']), maxValues: z.number().int().min(1).max(limits.distinct.maxValues),
-    search: z.string().min(1).max(limits.search.maxText).optional(), viewId: u32.optional(), keptViewId: u32.optional()
+    t: z.literal('distinctRead'), rid: u31, generation, resultId: u32, snapshotId: u32, order: z.enum(['count', 'value']), offset: group,
+    count: z.number().int().min(1).max(limits.distinct.maxWindow), search: z.string().min(1).max(limits.search.maxText).optional()
   }).strict(),
+  z.object({
+    t: z.literal('distinctTick'), rid: u31, generation, resultId: u32, snapshotId: u32, checked: z.boolean(), groups: z.array(group).min(1).max(limits.distinct.maxWindow).optional(),
+    all: z.literal(true).optional(), search: z.string().min(1).max(limits.search.maxText).optional(), nulls: z.boolean().optional()
+  }).strict().refine(request => !(request.all && request.groups) && (request.search === undefined || request.all === true) && (request.all || request.groups || request.nulls !== undefined),
+    'Tick some values, every value (a search\'s with one), or NULL.'),
+  z.object({ t: z.literal('distinctClose'), rid: u31, generation, resultId: u32, snapshotIds: z.array(u32).min(1).max(limits.distinct.maxClose) }).strict(),
   // Live subscriptions (docs/ipc.md): a stream acknowledged with `credit`, ended with `cancel`, changed with liveUpdate.
   z.object({ t: z.literal('live'), rid: u31, generation, params: live.subscribe }).strict(),
   z.object({ t: z.literal('liveUpdate'), rid: u31, generation, params: live.update }).strict()
@@ -137,17 +150,19 @@ export const pivotResultSchema = z.object({
   descriptor: backendDescriptorSchema.extend({ kind: z.literal('pivot') }), rows: count, rowGroups: z.number().int().min(0).max(limits.pivot.maxRowGroups),
   columnGroups: z.number().int().min(0).max(limits.pivot.maxColumnGroups), approximate: z.boolean()
 }).strict().refine(result => result.descriptor.rowsStored === result.rowGroups, 'A pivot stores a row per row group.')
-/** A results.distinct answer as the backend sends it, its rows within a filter's bounds (the backend checks a filter's rows
- *  against the result when one uses them); main also checks the values asked for and the kept marks. */
+/** A results.distinct answer as the backend sends it: its ticks within its values. */
 export const distinctResultSchema = z.object({
-  rows: count, complete: z.boolean(), nulls: count, distinct: count, truncated: z.boolean(), approximate: z.boolean(),
-  values: z.array(z.object({ row: filterRow, text: z.string().max(limits.distinct.valueChars + 1), count: count.min(1), kept: z.boolean().optional() }).strict()).max(limits.distinct.maxValues),
-  nullsKept: z.boolean().optional(), unlistedKept: z.boolean().optional(),
-  unlistedHeld: filterRows.optional(), unlistedDropped: filterRows.optional()
-}).strict().refine(result => result.values.length <= result.distinct && result.truncated === (result.distinct > result.values.length), 'Truncated says some values were left out.')
-  .refine(result => result.unlistedKept !== undefined ? result.unlistedHeld === undefined || (result.unlistedHeld.length > 0) === result.unlistedKept : result.unlistedHeld === undefined && result.unlistedDropped === undefined,
-    'Past values are named only with kept marks, the held ones exactly when the kept view holds some.')
-export type PortEndResult = ResultsPivotResult | ResultsDistinctResult | ResultsDiffResult | ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | ResultsViewResult | ResultsViewCloseResult | ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsSearchResult | ResultsProfileResult | LiveEnd | LiveUpdateResult
+  snapshotId: u32, rows: count, complete: z.boolean(), nulls: count, distinct: count, approximate: z.boolean(), checked: count, nullsChecked: z.boolean()
+}).strict().refine(result => result.checked <= result.distinct && result.distinct + result.nulls <= result.rows, 'The ticks and counts fit the rows.')
+/** A results.distinctRead answer: each value its group, a filter's row, text cut as the limits say and a count of at least
+ *  one row; main also checks the window against the request. */
+export const distinctReadResultSchema = z.object({
+  total: count, offset: count, checked: count, nullsChecked: z.boolean(),
+  values: z.array(z.object({ group, row: filterRow, text: z.string().max(limits.distinct.valueChars + 1), count: count.min(1), checked: z.boolean() }).strict()).max(limits.distinct.maxWindow)
+}).strict().refine(result => result.offset + result.values.length <= Math.max(result.total, result.offset), 'The window lies in the values.')
+export const distinctTickResultSchema = z.object({ checked: count, nullsChecked: z.boolean() }).strict()
+export const distinctCloseResultSchema = z.object({ closed: z.number().int().min(0).max(limits.distinct.maxClose) }).strict()
+export type PortEndResult = ResultsPivotResult | ResultsDistinctResult | ResultsDistinctReadResult | ResultsDistinctTickResult | ResultsDistinctCloseResult | ResultsDiffResult | ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | ResultsViewResult | ResultsViewCloseResult | ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsSearchResult | ResultsProfileResult | LiveEnd | LiveUpdateResult
 
 const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'server', 'print', 'error']), line: z.number().int().min(1).max(2_147_483_647).optional() }).strict()
 const session = { spid: z.number().int().min(0).max(32767), login: z.string().max(128).optional() }
