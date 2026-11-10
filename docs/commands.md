@@ -938,7 +938,7 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
 | `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
 
-## Context keys (147)
+## Context keys (148)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
