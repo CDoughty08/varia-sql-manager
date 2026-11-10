@@ -2,11 +2,40 @@
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-10
+
+A feature release focused on SQL IntelliSense, result transformations and everyday query workflows.
+
+### Added
+
+- **SQL IntelliSense:** bundled SQL Tools Service provides connection-aware completion, identifier hover, syntax and catalog diagnostics, and **Refresh Local Cache** (Ctrl+Shift+R). Suggestions distinguish columns from different sources, and SQL issues appear in the editor with keyboard navigation. See [language services](docs/language-services.md).
+- **Results filters:** filter by selected values, ranges, NULLs or duplicate rows without re-executing SQL. Each column's funnel offers a searchable distinct-value checklist with counts and custom conditions. Filters combine with sorting; search, profiles, highlights, copy and export follow the displayed rows.
+- **Pivot results:** group the displayed rows and calculate Count, Distinct Count, Sum, Average, Min or Max, with optional column groups and totals. The pivot opens as another result that can be sorted, filtered, copied and exported.
+- **Transpose results:** turn all displayed rows or selected rows into columns, optionally using a selected column's values as headers. NULLs and truncation marks are preserved; the new columns contain text.
+- **Activity Monitor Processes:** a live sessions grid with view chips, system-session and Varia-session toggles, column filters and text filtering. Every overview chart can now be expanded at once.
+- **Query workflows:** reopen closed queries with Ctrl+Shift+T as unsaved, disconnected copies, open queries in a specific editor group with its **+** button or a double-click, and see whether Execute will run a selection or the entire query. Status-bar controls offer Go to Line and insert/overtype switching.
+- **Results and error navigation:** Copy Column Name, keyboard-accessible Fit Column, a results-toolbar Close Results button, and Go to Line for SQL errors whose source location is still current. See [result grid tools](docs/results-tools.md).
+
 ### Changed
 
 - **Updates on Windows:** an installed copy in a folder you can write (the installer's default) now unpacks a new release beside itself while you work, so **Restart to Update** swaps it in instead of running the installer. Installations for all users keep the installer. See [updates](docs/updates.md).
 - **Updates on macOS:** macOS builds no longer download updates. They are not code signed, so they tell you a release exists and open the releases page.
 - **Restart to Update** verifies the downloaded file again before installing it.
+
+### Fixed and improved
+
+- Improve tab focus, rename and overflow behavior; single-row shelves scroll horizontally, stacked shelves expose hidden tabs, and each group's requested shelf heights restore with the workspace.
+- Show Object Explorer Peek definitions in a read-only editor with Find and SQL hover, page long definitions without silently cutting them, and keep Peek usable in narrow panels.
+- Improve saved-connection selection, Object Explorer recovery actions, database-scoped object search, compact controls and keyboard focus through menus.
+- Correct result highlight and comparison edge cases, filtered row counts and filter/sort key reuse; keep numeric pivot sums exact to 38 digits.
+- Harden shortcut import and persistence, cancellation responses, language-server cleanup, verified runtime downloads and packaged-app smoke checks.
+
+### Availability and limits
+
+- Connected IntelliSense supports SQL Login and Windows authentication. Entra IntelliSense is not yet available; query execution keeps its existing authentication support. Analysis uses a separate connection, so query-session temporary tables and uncommitted changes are unavailable to it.
+- Result transformations stay in memory. Transpose takes at most the first 4,095 displayed or selected rows and reports truncation. Pivots exceeding their group or figure limits are refused with an explanation.
+- Activity Monitor's Blocking, Resource Waits, Data File I/O and expensive-query panes are not yet shown; this release adds the Processes grid.
+- Builds remain unsigned, and macOS builds are not notarized. See the [current limitations](README.md#current-limitations).
 
 ## [0.7.0] - 2026-11-08
 
@@ -47,4 +76,6 @@ A feature release focused on execution plans, results analysis and workspace cus
 
 Release notes for [0.6.0 and earlier](https://github.com/CDoughty08/varia-sql-manager/releases/tag/v0.6.0) are available on GitHub.
 
+[Unreleased]: https://github.com/CDoughty08/varia-sql-manager/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/CDoughty08/varia-sql-manager/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/CDoughty08/varia-sql-manager/compare/v0.6.0...v0.7.0
