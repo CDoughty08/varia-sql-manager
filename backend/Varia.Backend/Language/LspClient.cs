@@ -37,6 +37,7 @@ internal sealed class LspClient : ILspClient, IAsyncDisposable
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private static readonly TimeSpan WriteTimeout = TimeSpan.FromSeconds(5);
     private readonly Process process;
+    private readonly Stream stdout;
     private readonly Stream input;
     private readonly Stream output;
     private readonly CancellationTokenSource lifetime = new();
@@ -57,8 +58,9 @@ internal sealed class LspClient : ILspClient, IAsyncDisposable
     private int disposed;
 
     /// <param name="kill">Replaces the tree kill, and <paramref name="exitGate"/> the backend's gate, in checks.</param>
+    /// <param name="readThrough">Wraps the child's stdout in checks, to hold a read in flight.</param>
     public LspClient(string executablePath, IReadOnlyList<string>? arguments = null, Func<string, JsonElement, Task>? notification = null,
-        Action<Process>? kill = null, ExitGate? exitGate = null)
+        Action<Process>? kill = null, ExitGate? exitGate = null, Func<Stream, Stream>? readThrough = null)
     {
         if (string.IsNullOrWhiteSpace(executablePath) || !Path.IsPathFullyQualified(executablePath) || !File.Exists(executablePath))
             throw new ArgumentException("The language server executable must be an existing absolute path.", nameof(executablePath));
@@ -74,9 +76,13 @@ internal sealed class LspClient : ILspClient, IAsyncDisposable
         if (arguments is not null) foreach (var argument in arguments) start.ArgumentList.Add(argument);
         process = Process.Start(start) ?? throw new IOException("The language server could not be started.");
         output = process.StandardInput.BaseStream;
-        input = new BufferedStream(process.StandardOutput.BaseStream, 16 * 1024);
+        stdout = readThrough?.Invoke(process.StandardOutput.BaseStream) ?? process.StandardOutput.BaseStream;
+        input = new BufferedStream(stdout, 16 * 1024);
         workers = [ReadAsync(), NotificationsAsync(), DrainErrorAsync(), WatchExitAsync()];
     }
+
+    /// <summary>How long a request's cancel notification waits for other writers. Checks shorten it.</summary>
+    internal TimeSpan CancelGateWait { get; init; } = TimeSpan.FromSeconds(1);
 
     /// <summary>Faulted when the server is lost or its protocol is invalid; completed normally on disposal.</summary>
     public Task Completion => completion.Task;
@@ -125,19 +131,23 @@ internal sealed class LspClient : ILspClient, IAsyncDisposable
 
     private async Task CancelAsync(long id)
     {
-        using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(1));
-        try { await NotifyAsync("$/cancelRequest", new { id }, budget.Token); }
-        catch (Exception error) when (error is IOException or OperationCanceledException or ObjectDisposedException) { }
+        // The caller's deadline has passed, so it waits only this long behind other writers. The budget covers that wait
+        // alone: as a token over the whole send it could lapse in a starved process before the gate was reached, and the
+        // cancel was then dropped with no writer ahead of it.
+        try { await SendAsync(new { jsonrpc = "2.0", method = "$/cancelRequest", @params = new { id } }, CancellationToken.None, CancelGateWait); }
+        catch (Exception error) when (error is IOException or ObjectDisposedException) { }
     }
 
-    private async Task SendAsync(object message, CancellationToken token)
+    /// <param name="gateWait">Bounds only the wait for other writers; a free gate is taken whatever the budget.</param>
+    private async Task SendAsync(object message, CancellationToken token, TimeSpan? gateWait = null)
     {
         ThrowIfStopped();
         var bytes = JsonSerializer.SerializeToUtf8Bytes(message, Json);
         try
         {
             if (bytes.Length > MaxMessageBytes) throw new IOException("The language server message exceeds its size limit.");
-            await writes.WaitAsync(token);
+            if (gateWait is not { } wait) await writes.WaitAsync(token);
+            else if (!await writes.WaitAsync(wait)) throw new IOException("The language server is busy writing.");
             try
             {
                 ThrowIfStopped();
@@ -314,7 +324,9 @@ internal sealed class LspClient : ILspClient, IAsyncDisposable
     {
         if (Interlocked.Exchange(ref disposed, 1) != 0) return;
         Stop(null);
-        input.Dispose();
+        // Not the reader's BufferedStream: a read in flight can still complete with data, and BufferedStream.Dispose drops
+        // the buffer that read then copies from. Closing the pipe under it ends the reader with an exception it expects.
+        stdout.Dispose();
         output.Dispose();
         process.Dispose();
         // A provider callback may be stuck in its own code; cleanup never waits for it synchronously.
