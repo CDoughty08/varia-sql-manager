@@ -163,7 +163,7 @@ try {
   await expect.poll(async () => (await handles()).length).toBe(1)
   const [{ id }] = await handles()
   const subscribed = await calls('live.subscribe')
-  expect(subscribed.at(-1).params).toMatchObject({ source: 'activity', probes: [{ probe: 'activity.overview', intervalMs: 2000 }, { probe: 'activity.sessions', intervalMs: 2000, paused: true }, { probe: 'activity.resources', intervalMs: 5000, paused: true }] })
+  expect(subscribed.at(-1).params).toMatchObject({ source: 'activity', probes: [{ probe: 'activity.overview', intervalMs: 2000 }, { probe: 'activity.sessions', intervalMs: 2000, paused: true }, { probe: 'activity.resources', intervalMs: 5000, paused: true }, { probe: 'activity.queries', intervalMs: 30000, paused: true }] })
   expect(subscribed.at(-1).params.probes[0].paused).toBeUndefined()
   // The View menu and the palette open the same monitor: one per connection.
   await queryTabs().filter({ hasText: 'SQLQuery1' }).click()
@@ -293,7 +293,8 @@ try {
   await expect(monitor().getByRole('separator', { name: 'Resize the panes', exact: true })).toBeVisible()
   // Showing pending panes starts no SQL: their probes stay paused.
   expect((await calls('live.update')).flatMap(call => call.params.probes ?? []).filter(probe => probe.probe !== 'activity.overview' && probe.paused === false)).toEqual([])
-  expect((await viewOf(id)).probes['activity.resources']).toMatchObject({ state: 'unavailable' })
+  // The resources probe samples now, but its panes are still pending: the view holds it paused, so it runs no SQL.
+  expect((await viewOf(id)).probes['activity.resources']).toMatchObject({ state: 'paused' })
   console.log('Panes passed: tabs with arrow keys, F6 and Shift+F6 between regions, Split View, and no probe started for a pending pane.')
 
   step = 'layout'

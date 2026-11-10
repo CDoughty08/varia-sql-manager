@@ -35,7 +35,7 @@ internal static class LiveSchedulerChecks
         check(catalog.Limits is { StatementsPerConnection: 2, Statements: 8, BudgetMs: { Min: 500, Max: 10_000 }, BackoffMs: 60_000, IdleMs: 30_000 },
             "the live limits carry the scheduler's gates (2 per connection, 8 in all), budget range, back-off cap and idle threshold");
         check(catalog.Sources.TryGetValue("activity", out var activity) && activity is { Scope: "server", TestOnly: false } && activity.Probes.SequenceEqual(ActivityCatalog.Current.LiveProbes)
-            && activity.Probes.SequenceEqual([ActivityReader.OverviewProbe, ActivityReader.SessionsProbe, "activity.resources"])
+            && activity.Probes.SequenceEqual([ActivityReader.OverviewProbe, ActivityReader.SessionsProbe, "activity.resources", ActivityReader.QueriesProbe])
             && catalog.Probes[ActivityReader.OverviewProbe] is { IntervalMs: { Default: 2000, Min: 1000, Max: 60_000 }, MaxDutyCycle: 0.2, Permission: "serverState", Gates: { MinMajor: 13 } } overview
             && overview.Gates.Editions.SequenceEqual([1, 2, 3, 4, 8]) && overview.Budget is { Min: 500, Max: 5000 }
             && overview.Series.Select(series => series.Id).SequenceEqual(ActivityCatalog.Current.Probes[ActivityReader.OverviewProbe].Series)
@@ -43,12 +43,14 @@ internal static class LiveSchedulerChecks
             && catalog.Probes[ActivityReader.SessionsProbe] is { Permission: "none", FilterMode: "memory" } sessions && sessions.Status.SequenceEqual(ActivityCatalog.Current.Statuses)
             && sessions.Series.All(series => series.Counter == "gauge"),
             "the embedded catalogue ships the Activity Monitor source with the activity catalogue's probes: the overview's 21 series (2 s by default, 1 to 60 s, a 0.2 load guard, server state, 2016 and later on box and Managed Instance) and the sessions probe, which runs without server state and works out its own series");
-        // The reader writes cells in the activity catalogue's column order; the live tables must have the same columns in it.
+        // The reader writes cells in the activity catalogue's column order, then a toned table's tone column (ActivityRowWriter);
+        // the live tables must have the same columns in it.
         var shapes = activity!.Probes.SelectMany(probe => catalog.Probes[probe].Tables.Select(table => (Live: table, Activity: ActivityCatalog.Current.Table(table.Id))))
-            .Where(pair => pair.Live.Columns.Count != pair.Activity.Columns.Count || pair.Live.Mode != "snapshot"
-                || pair.Live.Columns.Zip(pair.Activity.Columns).Any(column => !column.First.Id.EndsWith(column.Second.Id[1..], StringComparison.Ordinal) || column.First.DataType != LiveType(column.Second.Type)))
+            .Where(pair => pair.Live.Columns.Count != new ActivityRowWriter(pair.Activity).Count || pair.Live.Mode != "snapshot"
+                || pair.Live.Columns.Zip(pair.Activity.Columns).Any(column => !column.First.Id.EndsWith(column.Second.Id[1..], StringComparison.Ordinal) || column.First.DataType != LiveType(column.Second.Type))
+                || pair.Activity.Tones.Count > 0 && pair.Live.Columns[^1] is not { Role: "tone", DataType: "nvarchar" })
             .Select(pair => pair.Live.Id).ToList();
-        check(shapes.Count == 0, "every live Activity Monitor table has the activity catalogue's columns, in its order and with its types: " + string.Join(", ", shapes));
+        check(shapes.Count == 0, "every live Activity Monitor table has the activity catalogue's columns, in its order and with its types, and a toned table ends with the tone column: " + string.Join(", ", shapes));
         check(catalog.Sources.TryGetValue("ssis.catalog", out var ssis) && ssis is { Scope: "ssisdb", TestOnly: false } && ssis.Probes.SequenceEqual([LiveSql.CatalogProbe])
             && catalog.Probes[LiveSql.CatalogProbe] is { IntervalMs: { Default: 30_000, Min: 10_000, Max: 300_000 }, Permission: "none", Gates: null, Series.Count: 0, Tables.Count: 0 } probe
             && probe.Budget is { Min: 500, Max: 10_000 } && probe.Status.SequenceEqual(LiveSql.FingerprintIds.SelectMany(id => new[] { id + "Count", id + "Checksum" })),
@@ -758,11 +760,19 @@ internal static class LiveSchedulerChecks
             var opening = await sampler.OpenAsync([new LiveProbeState(overview, 2000) { Paused = true }], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15));
             check(host.Pooled == 0 && host.Opens == 0 && opening is { Spid: null, Probes: [{ State: "ok" }] },
                 "a view subscribed with every probe paused opens no connection and runs no SQL (the session is read when a probe first runs)");
-            var pending = LiveCatalog.Current.Probes["activity.resources"];
-            using var stub = new SqlSampler(host, new LiveGates(2, 8, host.IsConnected), Guid.NewGuid().ToString(), id, activity, LiveCatalog.Current.Limits, null, null, new ActivityReader(host, id));
-            var declared = await stub.OpenAsync([new LiveProbeState(overview, 2000) { Paused = true }, new LiveProbeState(pending, 5000) { Paused = true }], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15));
-            check(declared.Probes is [{ State: "ok" }, { State: "unavailable", Reason: "NOT_SUPPORTED" } resources] && resources.Note == ActivityCatalog.Current.Pending["activity.resources"] && host.Opens == 0,
-                "a probe the live catalogue declares before its sampling arrives (Resource Waits) opens unavailable with its note, and never runs");
+            // No probe is pending today; a catalogue that names one (as Resource Waits once was) opens it unavailable.
+            var resourcesSpec = LiveCatalog.Current.Probes["activity.resources"];
+            const string Note = "Resource Waits are not sampled yet.";
+            using var json = typeof(ActivityCatalog).Assembly.GetManifestResourceStream("Varia.Backend.Activity.activity-catalog.json")!;
+            var text = new StreamReader(json).ReadToEnd();
+            var withPending = ActivityCatalog.Parse(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(text.Replace("\"pending\": {}", "\"pending\": {\"activity.resources\": \"" + Note + "\"}", StringComparison.Ordinal))));
+            using var stub = new SqlSampler(host, new LiveGates(2, 8, host.IsConnected), Guid.NewGuid().ToString(), id, activity, LiveCatalog.Current.Limits, null, null, new ActivityReader(host, id, catalog: withPending));
+            var declared = await stub.OpenAsync([new LiveProbeState(overview, 2000) { Paused = true }, new LiveProbeState(resourcesSpec, 5000) { Paused = true }], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15));
+            using var sampled = new SqlSampler(host, new LiveGates(2, 8, host.IsConnected), Guid.NewGuid().ToString(), id, activity, LiveCatalog.Current.Limits, null, null, new ActivityReader(host, id));
+            var real = await sampled.OpenAsync([new LiveProbeState(resourcesSpec, 5000) { Paused = true }], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15));
+            check(ActivityCatalog.Current.Pending.Count == 0 && declared.Probes is [{ State: "ok" }, { State: "unavailable", Reason: "NOT_SUPPORTED" } resources] && resources.Note == Note
+                && real.Probes is [{ State: "ok" }] && host.Opens == 0,
+                "a probe a catalogue declares before its sampling arrives opens unavailable with its note and never runs; Resource Waits now opens ok");
         }
         {
             var host = new HangingHost(id);

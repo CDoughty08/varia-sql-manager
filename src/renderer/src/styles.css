@@ -572,11 +572,21 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .peek-follow:hover .peek-item-name { text-decoration: underline; }
 /* Top rows: the results grid fills the panel, which does not scroll itself. */
 .peek-grid { display: flex; flex-direction: column; overflow: hidden; }
+/* Peek's definition: the query editor (peek-editor.ts) fills the panel and scrolls itself. */
+.peek-editor { position: relative; flex: 1; min-height: 0; }
+.peek-editor-host { position: absolute; inset: 0; }
+.peek-grid > .peek-note { flex-shrink: 0; }
 .peek-rows { display: flex; flex: 1; flex-direction: column; min-height: 0; }
 /* A promoted tab: the card's body with the room of a document. */
 .peek-tab-body { display: flex; flex: 1; flex-direction: column; min-height: 0; border-top: 1px solid var(--varia-editorWidget-border); }
 .document-frame[data-peek-tab] .document-content { display: flex; flex-direction: column; overflow: hidden; }
 .peek-tab-body .peek-body { grid-template-columns: minmax(0, 1fr) minmax(260px, 360px); }
+/* A narrow card or tab (a slim popped-out Object Explorer) stacks Properties under the definition rather than squeezing it to nothing. */
+.peek-card, .peek-tab-body { container-type: inline-size; }
+@container (max-width: 560px) {
+  .peek-body, .peek-tab-body .peek-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 3fr) minmax(0, 2fr); }
+  .peek-side { border-left: 0; border-top: 1px solid var(--varia-editorWidget-border); }
+}
 .peek-fact dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; user-select: text; }
 .explorer-error { flex-shrink: 0; font-size: var(--varia-size-xs); color: var(--varia-errorForeground); line-height: 1.6; padding: 0 12px; margin: 5px 0 8px; overflow-wrap: anywhere; }
 @media (forced-colors: active) {

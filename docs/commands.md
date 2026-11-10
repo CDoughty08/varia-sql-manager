@@ -953,7 +953,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `editorFocus` | boolean | focus | Focus is in the query editor, including its find widget. |
 | `editorTextFocus` | boolean | focus | The query editor's text has focus. |
 | `inputFocus` | boolean | focus | Focus is on an input, text area, select, or editable element other than the editor text. The find widget's inputs count. |
-| `textInputFocus` | boolean | focus | `editorTextFocus \|\| inputFocus`. |
+| `textInputFocus` | boolean | focus | `editorTextFocus \|\| inputFocus \|\| peekEditorFocus`: focus is where keys type or move a caret. |
 | `activePanel` | `'explorer'`, `'editor'`, `'output'`, `''` | focus | The pane that holds focus: Object Explorer, the query editor, an output panel (Results, Messages or Execution plan), or '' for none. |
 | `outputGridFocus` | boolean | focus | Focus is in a results grid, which copies its selected cells rather than text. |
 | `messagesFocus` | boolean | focus | Focus is in a Messages view; activePanel is then 'output'. |
@@ -967,6 +967,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `documentTabFocus` | boolean | focus | Focus is on a document tab in the strip, or in its rename box; activePanel is then 'editor'. |
 | `peekFocus` | boolean | focus | Focus is in Object Explorer's Peek card, which floats outside every pane (activePanel is then ''). |
 | `peekTabFocus` | boolean | focus | Focus is in the active Peek tab; activePanel is then 'editor'. |
+| `peekEditorFocus` | boolean | focus | Focus is in Peek's read-only definition editor (a card's or a Peek tab's), its find widget included. It is not the query editor: editorFocus and editorTextFocus stay false, so query commands (Execute, Parse and the rest) leave it alone. |
 | `quickInputVisible` | boolean | state | The command palette or a picker is open. |
 | `backendStatus` | `'starting'`, `'ready'`, `'unresponsive'`, `'restarting'`, `'failed'`, `'stopped'`, `''` | state | The SQL backend's state; '' before the workbench has heard from main. |
 | `backendReady` | boolean | state | `backendStatus == 'ready'`. |

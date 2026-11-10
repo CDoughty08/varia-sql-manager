@@ -5,6 +5,7 @@ import type { CommandId } from '../../../shared/commands/catalog'
 import { bridgeRules, splitChord, type Platform, type ResolvedRule } from '../../../shared/commands/keybindings'
 import type { CommandService } from '../core/commands'
 import type { Disposable } from '../core/types'
+import { peekEditorContextKey } from '../explorer/peek-editor'
 
 /** Monaco's KeyMod bits. */
 const keyMod = { ctrlCmd: 2048, shift: 1024, alt: 512, winCtrl: 256 } as const
@@ -42,6 +43,8 @@ export interface BridgeMonaco {
   }
 }
 export const bridgeCommandId = (id: CommandId): string => 'varia.' + id
+/** A query's text: Peek's read-only editor is a Monaco editor too, but query commands never act on it. */
+export const bridgeWhen = `editorTextFocus && !${peekEditorContextKey}`
 
 /**
  * Registers each bridge rule with Monaco: a `varia.<id>` command that runs the catalogue command as its key would, and
@@ -54,7 +57,7 @@ export function registerEditorBridge(monaco: BridgeMonaco, commands: Pick<Comman
       const command = bridgeCommandId(rule.command)
       registrations.push(monaco.editor.registerCommand(command, () => { void commands.execute(rule.command, undefined, 'keybinding') }))
     }
-    registrations.push(monaco.editor.addKeybindingRules(rules.map(rule => ({ keybinding: toMonacoKeybinding(rule.chords, platform), command: bridgeCommandId(rule.command), when: 'editorTextFocus' }))))
+    registrations.push(monaco.editor.addKeybindingRules(rules.map(rule => ({ keybinding: toMonacoKeybinding(rule.chords, platform), command: bridgeCommandId(rule.command), when: bridgeWhen }))))
   } catch (error) {
     registrations.forEach(registration => registration.dispose())
     throw error

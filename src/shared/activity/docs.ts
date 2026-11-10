@@ -3,7 +3,7 @@ import {
   activityBands, activityEditions, activityIntervalDefaults, activityIntervalsSeconds, activityLimits, activityLiveProbes, activityLoadGuard, activityPanes, activityPoolSuffix, activityProbes, activitySource,
   activityStatuses, activityTables, benignCategories, benignWaits, blockerLabels, liveColumnId, liveColumnPrefixes, pendingProbes,
   chartWindowsMinutes, defaultChartWindowMinutes, defaultPanes, detailsSections, detailsTexts, killOutcomes, paneSpecs, pendingPaneNote, pendingPanes, probeSeries, probeSpecs, rankChips, rowTones, seriesSpecs, sessionToggles, tableSpecs, tileSpecs, unavailableMessage, variaSessionKinds,
-  viewChipNotes, viewChips, viewChipTitles, waitCategories, waitExceptions, waitsChartSeries, waitToggles, type ColumnSpec, type ThresholdSpec
+  viewChipNotes, viewChips, viewChipTitles, fileLatencyDefaults, fileViewNotes, fileViews, fileViewTitles, waitCategories, waitExceptions, waitsChartSeries, waitToggles, type ColumnSpec, type ThresholdSpec
 } from './catalog.ts'
 
 /** The results grid's copy keys the Differences section cites; tests/activity-catalog.test.ts checks them against the commands catalogue. */
@@ -81,13 +81,35 @@ const limitNotes: Readonly<Record<keyof typeof activityLimits, string>> = {
   cancelIds: 'Details reads one cancel may name',
   cancelTombstones: 'Cancelled Details ids main remembers, so a read cancelled before it was sent is refused',
   cancelTombstoneMs: 'Milliseconds main remembers them',
-  sessionId: 'The largest session id'
+  sessionId: 'The largest session id',
+  fileLatencyMs: 'The largest latency threshold a files filter may carry (`activityMonitor.fileLatency*`)',
+  waitAverageMs: 'Milliseconds of samples the 1-Minute Average of Resource Waits spans'
 }
 
 function columnsTable(columns: readonly ColumnSpec[]): string {
   return table(['Column', 'Id', 'Type', 'Unit', 'Shown', 'Parity', 'Notes'], columns.map(column =>
     [column.caption, code(column.id), column.type, columnUnit(column), column.visible ? 'Yes' : '', parityLabel[column.parity], column.note + (column.capability ? ` Needs ${code(column.capability)}.` : '')]))
 }
+
+/** How the query statistics probe builds Recent Expensive Queries (backend/Varia.Backend/Activity/ActivityQueries.cs). */
+const recentQueriesNotes = [
+  'The stats statement reads the plan cache\'s statements whose last execution ended since the previous sample (its start',
+  'plus its elapsed time, so a statement that ran longer than a window is read when it ends), newest end first, at most',
+  `\`queryStatsRows\`. Each statement (sql_handle, plan_handle and offsets) keeps its totals between samples, at most ${number(activityLimits.queryDeltaKeys)}`,
+  'statements, the one seen least recently dropped first; a row\'s values are the changes since those totals, summed per',
+  'query_hash, so a sum never depends on which rows a window happens to include. Rates span the window since the previous',
+  'sample on the probe\'s clock. A plan cached since the previous sample counts whole; any other statement new to the kept',
+  'totals counts its last execution (the `last_*` columns), which ended in the window, and so does one whose totals were',
+  'kept before a sample cut at `queryStatsRows`, which may have missed a run; its next runs count from the totals kept then.',
+  `The rows are the groups that ran in the window, most CPU first, at most ${number(activityLimits.shownHashes)}. Plan Count, Max Duration and Cached Since`,
+  'come from every kept statement of the group, not only those that ran in the window. A first sample (and the first after',
+  'Resume, a restart, a reconnect, a sample that timed out after its totals moved on, or the server\'s local time stepping',
+  'back, as when daylight saving ends) has no window: it shows the groups that ran in the last 10',
+  'minutes, by their plans\' total CPU, with the rates blank and the per-execution columns from the plans\' totals. Statement',
+  `text and database come from a cache of ${number(activityLimits.textCache)} texts, read for the shown rows that lack one, ${number(activityLimits.textBatch)} per statement and`,
+  `${number(activityLimits.textBatchesPerTick)} statements per sample, most expensive first; until its text arrives a row says "Loading text…", which the`,
+  'filter box does not match. A text SQL Server no longer has, or one the login may not read, stays blank.'
+]
 
 export function renderActivityMonitorDocs(): string {
   const overview = probeSpecs['activity.overview'], queries = activityIntervalDefaults.queriesIntervalSeconds
@@ -181,7 +203,7 @@ export function renderActivityMonitorDocs(): string {
     `The live catalogue ([docs/live.md](live.md)) declares ${activityLiveProbes.map(code).join(', ')}, built from this catalogue: the same tables, columns (in`,
     'the same order, with the captions as column names, so Copy with Headers and Save write them), keys, facets and series.',
     ...Object.entries(pendingProbes).map(([probe, note]) => `${code(probe)} opens unavailable: ${note}`),
-    `${activityProbes.filter(probe => !(activityLiveProbes as readonly string[]).includes(probe)).map(code).join(', ')} joins the live catalogue with Recent Expensive Queries.`,
+    ...activityProbes.filter(probe => !(activityLiveProbes as readonly string[]).includes(probe)).map(probe => `${code(probe)} is not in the live catalogue yet.`),
     '',
     'Each probe runs its statements one at a time on the live connection, within one budget. A statement the login may not run',
     '(PERMISSION_DENIED) or the server lacks (NOT_SUPPORTED) fails alone: the sample goes on, an error beside it names the tables',
@@ -269,7 +291,7 @@ export function renderActivityMonitorDocs(): string {
         spec.tones ? `Row tones: ${spec.tones.map(tone => `${tone} (${rowTones[tone]})`).join(', ')}.` : '',
         spec.departedLinger ? 'A selected row whose session ended stays one more sample, toned departed.' : ''
       ].filter(Boolean).join(' ')
-      return [`### ${spec.title} (${code(id)})`, '', facts, '', columnsTable(spec.columns), '']
+      return [`### ${spec.title} (${code(id)})`, '', facts, '', columnsTable(spec.columns), '', ...id === 'recentQueries' ? [...recentQueriesNotes, ''] : []]
     }),
     '## Filters',
     '',
@@ -282,6 +304,11 @@ export function renderActivityMonitorDocs(): string {
     `Column value filters (Alt+Down on a header) offer (All), (Blanks), (Non-blanks) and each value with its count for ${tableSpecs.sessions.facetColumns!.map(column => tableSpecs.sessions.columns.find(spec => spec.id === column)!.caption).join(', ')}.`,
     'Several values in one column match any of them; filters on several columns must all match.',
     `Resource Waits has ${waitToggles.hideBenign.title} (${waitToggles.hideBenign.default ? 'on' : 'off'} by default), which leaves out benign wait types and the ${benignLabels} category.`,
+    '',
+    table(['Data File I/O chip', 'Id', 'Shows'], fileViews.map(view => [fileViewTitles[view], code(view), fileViewNotes[view]])),
+    '',
+    `Data File I/O tones a row warning when its read or write latency reaches ${fileLatencyDefaults.warning} ms and error from ${fileLatencyDefaults.error} ms; the files filter carries the`,
+    `\`activityMonitor.fileLatency*\` settings in their place (1 to ${number(activityLimits.fileLatencyMs)} ms). An error threshold below the warning one acts as the warning one.`,
     '',
     `Recent Expensive Queries ranks by ${Object.values(rankChips).map(chip => chip.title).join(', ')}, re-sorted from the last sample without new SQL.`,
     '',

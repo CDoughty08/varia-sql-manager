@@ -1,4 +1,4 @@
-import { activityIntervalsSeconds, activityPanes, chartWindowsMinutes, defaultChartWindowMinutes, defaultPanes, paneSpecs, tileSpecs } from '../activity/catalog.ts'
+import { activityIntervalsSeconds, activityLimits, activityPanes, chartWindowsMinutes, defaultChartWindowMinutes, defaultPanes, paneSpecs, tileSpecs } from '../activity/catalog.ts'
 import { liveProbes } from '../live/catalog.ts'
 import type { SettingDef } from './types'
 
@@ -58,12 +58,12 @@ export const activityMonitorSettings = [
     description: 'The Blocked Sessions tile is outlined as an error once a session has waited on another this long.'
   },
   {
-    key: 'activityMonitor.fileLatencyWarningMs', page: 'activityMonitor', group: 'Thresholds', label: 'I/O latency warning', type: 'integer', min: 1, max: 10_000, unit: 'ms', varia: true,
+    key: 'activityMonitor.fileLatencyWarningMs', page: 'activityMonitor', group: 'Thresholds', label: 'I/O latency warning', type: 'integer', min: 1, max: activityLimits.fileLatencyMs, unit: 'ms', varia: true,
     default: threshold('activityMonitor.fileLatencyWarningMs', 'warning'), keywords: ['activity', 'monitor', 'latency', 'disk', 'io', 'threshold', 'warning'],
     description: 'The Database I/O tile is outlined as a warning when reads or writes take this long on average over the interval.'
   },
   {
-    key: 'activityMonitor.fileLatencyErrorMs', page: 'activityMonitor', group: 'Thresholds', label: 'I/O latency error', type: 'integer', min: 1, max: 10_000, unit: 'ms', varia: true,
+    key: 'activityMonitor.fileLatencyErrorMs', page: 'activityMonitor', group: 'Thresholds', label: 'I/O latency error', type: 'integer', min: 1, max: activityLimits.fileLatencyMs, unit: 'ms', varia: true,
     default: threshold('activityMonitor.fileLatencyErrorMs', 'error'), keywords: ['activity', 'monitor', 'latency', 'disk', 'io', 'threshold', 'error'],
     description: 'The Database I/O tile is outlined as an error when reads or writes take this long on average over the interval.'
   }
