@@ -35,7 +35,7 @@ describe('menu resolution', () => {
     const edit = resolveMenu('edit', options())
     expect(marked(edit)).toEqual(['&Undo', '&Redo', '-', 'Cu&t', '&Copy', '&Paste', '&Delete', 'Select &All', '-', '&Find and Replace', '&Go To Line…', '-', 'Ad&vanced', 'Boo&kmarks', '&IntelliSense'])
     // Separator keys count through the submenus, which are resolved first.
-    expect(edit.map(item => item.key)).toEqual(['edit.undo', 'edit.redo', 'sep:8', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll', 'sep:9', 'edit.findReplace', 'edit.goToLine', 'sep:10',
+    expect(edit.map(item => item.key)).toEqual(['edit.undo', 'edit.redo', 'sep:9', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll', 'sep:10', 'edit.findReplace', 'edit.goToLine', 'sep:11',
       'edit.advanced', 'edit.bookmarks', 'edit.intellisense'])
     const submenu = (key: string) => { const item = edit.find(entry => entry.key === key); return item?.kind === 'submenu' ? item.items : [] }
     expect(marked(submenu('edit.findReplace'))).toEqual(['&Quick Find', 'Quick &Replace', '-', 'Find &Next', 'Find &Previous'])
@@ -44,7 +44,7 @@ describe('menu resolution', () => {
     expect(marked(submenu('edit.bookmarks'))).toEqual(['&Toggle Bookmark', '-', '&Previous Bookmark', '&Next Bookmark', '-', '&Clear Bookmarks', '-', 'P&revious Bookmark In Document', 'Ne&xt Bookmark In Document'])
     // Varia's bridge chords are labelled like Monaco's.
     expect(submenu('edit.bookmarks')[0]).toMatchObject({ icon: 'bookmark', keybinding: { text: 'Ctrl+K Ctrl+K' } })
-    expect(marked(submenu('edit.intellisense'))).toEqual(['&Insert Snippet…', '&Surround With…', '-', '&Refresh Local Cache'])
+    expect(marked(submenu('edit.intellisense'))).toEqual(['&Insert Snippet…', '&Surround With…', '-', '&Refresh Local Cache', '-', '&Next SQL Issue', '&Previous SQL Issue'])
     expect(edit.find(item => item.key === 'edit.paste')).toMatchObject({ icon: 'clippy', keybinding: { text: 'Ctrl+V' }, enabled: true })
     const [undo] = edit
     expect(undo).toEqual({ kind: 'command', key: 'edit.undo', id: 'edit.undo', title: 'Undo', mnemonic: 0, icon: 'discard', keybinding: { parts: ['Ctrl+Z'], text: 'Ctrl+Z', aria: 'Control+Z' }, enabled: true })

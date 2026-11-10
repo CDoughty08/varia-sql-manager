@@ -62,6 +62,18 @@ if (args is ["--sql-language-live"])
     Console.WriteLine("Passed " + passed + " live SQL language checks.");
     return;
 }
+if (args is ["--sql-language-diagnostic-checks"])
+{
+    await SqlLanguageDiagnosticChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " SQL diagnostic checks.");
+    return;
+}
+if (args is ["--sql-completion-checks"])
+{
+    await SqlCompletionChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " SQL completion checks.");
+    return;
+}
 var liveGroup = LiveGroups.Parse(args);
 // Focused SQL Server lanes: their scratch and permission checks are required, never an offline-only or skipped success.
 if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--server-files-live" or "--seams-live" or "--new-database-live" or "--action-progress-live" or "--attach-live" or "--restore-live" or "--logins-live" or "--login-listing-live" or "--database-state-live" or "--delete-live" or "--detach-live" or "--rename-database-live" or "--login-actions-live" or "--login-delete-live" or "--login-properties-live" or "--securables-live" or "--login-kinds-live")])
@@ -307,6 +319,8 @@ if (liveGroup is null)
     (string Name, Func<Task> Run)[] offlineSuites = [
         ("LspTransport", () => LspTransportChecks.RunAsync(Check)),
         ("SqlLanguage", () => SqlLanguageChecks.RunAsync(Check)),
+        ("SqlLanguageDiagnostics", () => SqlLanguageDiagnosticChecks.RunAsync(Check)),
+        ("SqlCompletion", () => SqlCompletionChecks.RunAsync(Check)),
         ("Protocol", Sync(() => ProtocolChecks.Run(Check))),
         ("Page", Sync(() => PageChecks.Run(Check))),
         ("Host", Sync(() => HostChecks.Run(Check))),

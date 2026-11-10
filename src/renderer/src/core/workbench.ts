@@ -1,5 +1,6 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import { SqlLanguageService } from '../languages/SqlLanguageService'
+import { SqlDiagnosticsService } from '../languages/SqlDiagnosticsService'
 import { languagesContribution } from '../contributions/languages'
 import type { ReloadPins, VariaApi } from '../../../shared/contracts'
 import { actsOnTab } from '../../../shared/commands/catalog'
@@ -128,6 +129,7 @@ export interface Workbench extends Disposable {
   readonly quickInput: QuickInputService
   readonly documents: DocumentService
   readonly sqlLanguage: SqlLanguageService
+  readonly sqlDiagnostics: SqlDiagnosticsService
   readonly queries: QueryService
   readonly connections: ConnectionService
   readonly backend: BackendStateService
@@ -270,6 +272,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     { ...settingsDocumentOptions(() => settings.getSnapshot().values), newLineEnding: platformLineEnding(platform), server: id => connections.get(id)?.server })
   const editorStatus = new EditorStatusService(callback => { frame(callback) }), inputMode = new InputModeService()
   const sqlLanguage = new SqlLanguageService(monaco, api, documents, connections, backend)
+  const sqlDiagnostics = new SqlDiagnosticsService(monaco, sqlLanguage, documents, connections,
+    { enabled: () => settings.get('textEditor.sql.errorChecking'), subscribe: listener => settings.subscribe(listener) }, backend)
   const refreshDocuments = settings.subscribe(() => documents.refreshOptions())
   const bookmarks = new BookmarkService(documents, events), editorDialogs = new EditorDialogs(), tabRename = new TabRenameService(documents)
   const editorGroups = new EditorGroupService(documents)
@@ -469,6 +473,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     quickInput,
     documents,
     sqlLanguage,
+    sqlDiagnostics,
     queries,
     connections,
     backend,
@@ -579,6 +584,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       properties.dispose()
       newDatabase.dispose()
       restore.dispose()
+      sqlDiagnostics.dispose()
       sqlLanguage.dispose()
       documents.dispose()
       backend.dispose()

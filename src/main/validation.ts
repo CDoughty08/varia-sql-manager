@@ -10,7 +10,7 @@ import { scriptRequestSchema } from '../shared/scripting/schema.ts'
 import { actionDescribeSchema, actionExecuteRequestSchema, actionExecuteResultSchema, actionScriptRequestSchema } from '../shared/actions/schema.ts'
 import { ssisCatalogSetupSchema, ssisDescribeSchema, ssisExecuteSchema } from '../shared/ssis/schema.ts'
 import { activityDetailsRequestSchema, activityKillRequestSchema } from '../shared/activity/schema.ts'
-import { languageCloseSchema, languageRequestSchema, languageCompletionsSchema, languageHoverSchema, languageStatusSchema, languageRefreshRequestSchema, languageRefreshResultSchema } from '../shared/language-service'
+import { languageCloseSchema, languageRequestSchema, languageCompletionsSchema, languageHoverSchema, languageStatusSchema, languageRefreshRequestSchema, languageRefreshResultSchema, languageDiagnosticResultSchema } from '../shared/language-service'
 
 // Identifiers are used verbatim by the backend, so they are never trimmed here (a database may be named ' x').
 const name = z.string().min(1).max(128).refine(value => value.trim().length > 0)
@@ -22,6 +22,7 @@ export const requestSchemas = {
   'language.status': z.object({}).strict(),
   'language.complete': languageRequestSchema,
   'language.hover': languageRequestSchema,
+  'language.diagnostics': languageRefreshRequestSchema,
   'language.refresh': languageRefreshRequestSchema,
   'language.close': languageCloseSchema,
   'plans.parse': planParseSchema,
@@ -67,6 +68,7 @@ export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
   'language.status': languageStatusSchema,
   'language.complete': languageCompletionsSchema,
   'language.hover': languageHoverSchema,
+  'language.diagnostics': languageDiagnosticResultSchema,
   'language.refresh': languageRefreshResultSchema,
   'language.close': z.object({ closed: z.boolean() }).strict(),
   'plans.parse': planDocumentSchema,

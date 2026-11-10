@@ -46,7 +46,7 @@ try {
   stage = 'editor readiness'
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   // The fake connection can be ready before React has mounted and bound Monaco's model.
-  await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+  await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
   stage = 'initial query input'
   await replaceQuery()
   // Both heights fit the CI display; establish a different size so every held transition has a native event.
@@ -115,7 +115,7 @@ try {
     } : null, resizeHeld: window.variaResizeGate?.held, resizeObserved: window.variaResizeObserved
   })).catch(unavailable => ({ unavailable: unavailable.message }))
   const diagnostic = { stage, failures, native, renderer, editor: {
-    visible: await page?.locator('.monaco-editor').isVisible().catch(() => false),
+    visible: await page?.locator('.monaco-editor[role=code]').isVisible().catch(() => false),
     textboxFocused: page ? await editorTextbox(page).evaluate(element => element === document.activeElement).catch(() => false) : false,
     textLength: await text().then(value => value.length).catch(() => null)
   } }

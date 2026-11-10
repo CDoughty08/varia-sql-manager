@@ -80,6 +80,8 @@ internal static class SqlLanguageLiveChecks
             check(status.Providers.Single(provider => provider.Id == "sqlserver") is { Configured: true, Refresh: true }, "actual SQL Tools Service executable and cache refresh are configured for live tests");
             var firstConnection = await Call<ConnectionInfo>("connections.connect", Options(firstDatabase));
             var secondConnection = await Call<ConnectionInfo>("connections.connect", Options(secondDatabase));
+            await SqlLanguageDiagnosticLiveChecks.RunAsync(check, service, firstConnection, secondConnection, Sql);
+            await SqlCompletionLiveChecks.RunAsync(check, service, firstConnection);
             var firstId = Guid.NewGuid().ToString();
             var secondId = Guid.NewGuid().ToString();
             LanguageRequest Request(string id, int version, string text, ConnectionInfo connection, int? cursor = null) =>

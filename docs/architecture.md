@@ -27,6 +27,11 @@ being true.
   packaged SQL Tools Service is a pinned, checksum-verified build artifact, and the app never downloads one at runtime.
   Metadata uses independent connections, stale responses are discarded, and management actions release those connections.
   Service tracing is disabled so upstream exception logging cannot persist document text or connection details.
+  Diagnostics carry their model version and use a dedicated marker owner; edits, context changes and backend loss clear
+  obsolete markers immediately. SQL Tools' unversioned diagnostic notifications are correlated to immutable snapshot URIs
+  on a serialized analysis child, isolated from completion's global debounce. Its retained context and idle/churn lifetime
+  are bounded and released on close, disconnect, reset and relevant cache refresh. Foreground language requests preempt
+  background diagnostics for their document; analysis resumes after those requests settle. Analysis never executes the buffer.
 - Backend stdout carries protocol v2 frames only (`Console.Out` goes to stderr). Never log SQL text, credentials, or
   connection strings. Passwords never reach disk in clear: not `connections.json`, process arguments, the environment,
   logs, traces or previews. A password the user chose to remember is stored only as Electron `safeStorage` ciphertext
