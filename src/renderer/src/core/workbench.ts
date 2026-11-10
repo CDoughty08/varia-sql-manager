@@ -111,6 +111,7 @@ import { MenuStatePublisher } from './menu-state'
 import { focusHeld, focusWhenDrawn, modalOpen } from './modal'
 import { nextFrame as frame } from './frame'
 import { windows } from './windows'
+import { peekEditorHasTextFocus } from '../explorer/peek-editor'
 import type { Disposable } from './types'
 
 export interface Workbench extends Disposable {
@@ -435,7 +436,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     menubarRect: id => document.getElementById('menubar-' + id)?.getBoundingClientRect(), targets: menuTargets, editorCaret: () => editorCaret(documents, monaco),
     modalContains: element => [...document.querySelectorAll('[aria-modal="true"]')].at(-1)?.contains(element) ?? false, style: api.menuStyle, api })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen, menus,
-    keyArgs: command => { const tabId = actsOnTab(command) ? editorGroups.focusedDocument() : undefined; return tabId ? { tabId } : undefined }, editorHasTextFocus: () => documents.boundEditor?.hasTextFocus() ?? false,
+    keyArgs: command => { const tabId = actsOnTab(command) ? editorGroups.focusedDocument() : undefined; return tabId ? { tabId } : undefined }, // Peek's editor waits for a chord's second key after Ctrl+K as a query's does (folding works there; the bridge's chords do not).
+    editorHasTextFocus: () => (documents.boundEditor?.hasTextFocus() ?? false) || peekEditorHasTextFocus(windows.activeElement()),
     editorContains: target => target instanceof Node && !!documents.boundEditor?.getContainerDomNode().contains(target),
     keyUp: event => peek.keyUp(event.key) })
   const shortcutsBinding = userShortcuts.bind({ keybindings, gestures: gesturesFor(platform) })

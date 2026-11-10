@@ -33,6 +33,6 @@ export default function PeekTab({ documentId }: { readonly documentId: string })
   const back = open.back.length > 0 && <button type="button" className="icon-button" aria-label="Back" title="Back" onClick={() => view.goBack()}><Icon name="arrow-left" /></button>
   return <DocumentFrame id={`peek-${documentId}`} title={peekName(open)} subtitle={kindSpecs[open.kind].title} crumbs={crumbs} tools={back || undefined} verbs={verbs}
     attributes={{ 'data-peek-tab': documentId }}>
-    <div className="peek-view peek-tab-body"><PeekBody view={view} open={open} idPrefix={`peek-${documentId}`} /></div>
+    <div className="peek-view peek-tab-body"><PeekBody view={view} open={open} idPrefix={`peek-${documentId}`} inEditorPane /></div>
   </DocumentFrame>
 }

@@ -476,6 +476,14 @@ export const suggestionOption = (scope, label) => {
 }
 /** The text of the active editor group's editor, where several groups each show a query. */
 export const activeGroupEditorText = page => page.locator(part.activeEditorGroup).locator('.monaco-editor .view-lines').innerText()
+/** The lines Monaco draws in the editor inside `scope`: a Peek card's or Peek tab's read-only definition editor. */
+export const editorTextIn = scope => scope.locator('.monaco-editor .view-lines').innerText()
+/** The active group's query editor text, where a Peek tab in the same group has a Monaco editor of its own. */
+export const queryEditorText = page => page.locator(part.activeEditorGroup).locator('.editor-host .monaco-editor .view-lines').innerText()
+/** Peek's definition editor (Monaco, read-only) inside a Peek card or tab, by its text's accessible name. */
+export const peekDefinitionText = scope => scope.getByRole('textbox', { name: /^Definition text/ })
+/** The body-level hosts of Peek editors' hover and message widgets in a window (createQueryEditor's widget host). */
+export const peekEditorWidgetHosts = page => page.locator('.editor-overflow-widgets[data-peek-editor]')
 
 // Panes: the dock's panels, each with a tab in its group's header
 
