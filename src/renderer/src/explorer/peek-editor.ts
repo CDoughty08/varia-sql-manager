@@ -1,5 +1,6 @@
 import type { editor } from 'monaco-editor'
 import type { Disposable } from '../core/types'
+import type { ModelOptions } from '../services/documents'
 import type { QueryEditorInstance, QueryEditorUse } from '../editor/create-editor'
 
 /** The Monaco context key Peek's editor sets on itself: Varia's chord bridge leaves it out, as query-tab commands do. */
@@ -59,6 +60,8 @@ export interface PeekEditorOptions {
   readonly monaco: PeekEditorMonaco
   /** `createQueryEditor` with `peekEditorUse`: the same editor editor groups use. */
   readonly create: (container: HTMLElement) => QueryEditorInstance
+  /** Tools › Options › Text Editor › Transact-SQL › Tabs, applied to each model as `DocumentService` applies it to a query's. */
+  readonly modelOptions?: () => ModelOptions
   readonly newId?: () => string
 }
 
@@ -103,6 +106,7 @@ export class PeekEditor implements Disposable {
       return
     }
     const model = this.options.monaco.editor.createModel(text.text, 'sql', this.options.monaco.Uri.parse(`varia-sql://peek/${this.newId()}`))
+    if (this.options.modelOptions) model.updateOptions(this.options.modelOptions())
     modelContexts.set(model, { connectionId: text.connectionId, ...text.database === undefined ? {} : { database: text.database } })
     this.shown = { key: text.key, text: text.text, model }
     host.editor.instance.setModel(model)

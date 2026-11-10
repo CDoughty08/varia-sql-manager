@@ -15,6 +15,7 @@ import ExplorerIcon from './ExplorerIcon'
 import { selectionContextOf } from './ExplorerService'
 import { inPeekEditorWidgets, PeekEditor, peekEditorUse } from './peek-editor'
 import { formatPeekValue, peekObjectName, placePeek } from './peek-format'
+import { settingsDocumentOptions } from '../services/documents'
 import { peekMessages, type OpenPeek, type PeekDefinition, type PeekDependencies, type PeekMembers, type PeekPart, type PeekRows, type PeekView } from './PeekService'
 
 /** The view the parts below read and act on: the card's (the Peek service) or a promoted tab's. */
@@ -53,19 +54,31 @@ function Definition({ part, editor, open }: { part: PeekPart<PeekDefinition>; ed
  * Find widget slides out of view, aria-hidden, yet stays focusable), so the loop never hands focus to them or out of the card.
  */
 export function cardStops(card: Element): HTMLElement[] {
-  return [...card.querySelectorAll<HTMLElement>('button:not([disabled]):not([tabindex="-1"]), [tabindex="0"]')]
-    .filter(stop => !stop.closest('[aria-hidden="true"]') && stop.checkVisibility?.({ visibilityProperty: true }) !== false)
+  return [...card.querySelectorAll<HTMLElement>('button:not([disabled]):not([tabindex="-1"]), [tabindex="0"]')].filter(shown)
+}
+
+const shown = (element: HTMLElement): boolean => !element.closest('[aria-hidden="true"]') && element.checkVisibility?.({ visibilityProperty: true }) !== false
+
+/**
+ * Whether Tab (Shift+Tab when `back`) from `at` leaves Monaco's Find widget: `at` is its last shown control (its first, going
+ * back). Monaco moves Tab itself only from Close to Replace, which a read-only editor never shows, so past the edge the
+ * browser would take focus out of the card.
+ */
+export function leavesFind(widget: Element, at: Element, back: boolean): boolean {
+  const own = [...widget.querySelectorAll<HTMLElement>('textarea, [tabindex="0"]')].filter(shown)
+  return !own.length || (back ? own[0] : own[own.length - 1]) === at
 }
 
 /**
  * Where Tab (Shift+Tab when `back`) moves from `at` within the card's `stops`: the next stop in document order, wrapping at
  * either end, so focus stays in the card. Focus on the definition's text (not itself a stop) moves to the stop after or before
- * it. 'native' leaves the key to the browser inside Monaco's Find widget, whose inputs and buttons Tab walks by themselves.
+ * it. 'native' leaves the key to the browser inside Monaco's Find widget, whose inputs and buttons Tab walks by themselves, until
+ * `leaving` it from its edge (`leavesFind`).
  */
-export function nextStop(stops: readonly HTMLElement[], at: Element | null, back: boolean, onCard: boolean): HTMLElement | undefined | 'native' {
+export function nextStop(stops: readonly HTMLElement[], at: Element | null, back: boolean, onCard: boolean, leaving = false): HTMLElement | undefined | 'native' {
   if (!stops.length) return undefined
   if (onCard || !at) return back ? stops[stops.length - 1] : stops[0]
-  if (at.closest('.find-widget')) return 'native'
+  if (at.closest('.find-widget') && !leaving) return 'native'
   const index = stops.indexOf(at as HTMLElement)
   if (index >= 0) return stops[(index + (back ? -1 : 1) + stops.length) % stops.length]
   // DOCUMENT_POSITION_FOLLOWING (4): the stop comes after `at`.
@@ -240,7 +253,8 @@ export function PeekBody({ view, open, idPrefix, beforeScript, inEditorPane = fa
   const [editor, setEditor] = useState<PeekEditor | undefined>(undefined)
   useEffect(() => {
     // A promoted tab lives in the Query editor pane, so its widgets hide with that pane; the card floats outside every pane.
-    const made = new PeekEditor({ monaco: workbench.monaco, create: container => createQueryEditor(workbench, container, { ...peekEditorUse, inEditorPane }) })
+    const made = new PeekEditor({ monaco: workbench.monaco, create: container => createQueryEditor(workbench, container, { ...peekEditorUse, inEditorPane }),
+      modelOptions: settingsDocumentOptions(() => workbench.settings.getSnapshot().values).modelOptions })
     setEditor(made)
     return () => made.dispose()
   }, [workbench, inEditorPane])
@@ -359,7 +373,8 @@ function PeekCardView() {
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(true); return }
     if (event.key !== 'Tab' || !card.current) return
     const at = card.current.ownerDocument.activeElement
-    const next = nextStop(cardStops(card.current), at, event.shiftKey, at === card.current)
+    const find = at?.closest('.find-widget')
+    const next = nextStop(cardStops(card.current), at, event.shiftKey, at === card.current, !!find && !!at && leavesFind(find, at, event.shiftKey))
     if (next === 'native') return
     event.preventDefault()
     next?.focus()

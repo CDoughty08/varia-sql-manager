@@ -234,7 +234,7 @@ describe('context keys', () => {
   it('keep focus samples consistent with the key definitions', () => {
     for (const sample of focusSamples) {
       const record = contextRecord('linux', sample.keys)
-      expect(record.textInputFocus, sample.name).toBe(record.editorTextFocus || record.inputFocus)
+      expect(record.textInputFocus, sample.name).toBe(record.editorTextFocus || record.inputFocus || record.peekEditorFocus)
       if (record.editorTextFocus) expect(record.editorFocus, sample.name).toBe(true)
       expect(Object.keys(sample.keys).every(key => contextKeys[key as keyof typeof contextKeys].scope === 'focus'), sample.name).toBe(true)
     }

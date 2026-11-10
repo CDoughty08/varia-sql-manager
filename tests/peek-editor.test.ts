@@ -11,7 +11,7 @@ import { editorIdAttribute, inPeekEditorWidgets, PeekEditor, peekEditorAttribute
 import type { QueryEditorInstance } from '../src/renderer/src/editor/create-editor'
 import type { DocumentSnapshot } from '../src/renderer/src/services/documents'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
-import { nextStop, PeekBody } from '../src/renderer/src/explorer/PeekCard'
+import { leavesFind, nextStop, PeekBody } from '../src/renderer/src/explorer/PeekCard'
 import type { OpenPeek } from '../src/renderer/src/explorer/PeekService'
 
 /** Just enough DOM for the editor host: elements that know their document and parent. */
@@ -28,10 +28,10 @@ class FakeElement {
 class FakeDocument { createElement(): FakeElement { return new FakeElement(this) } }
 
 function fakeMonaco() {
-  const models: { value: string; uri: string; disposed: boolean; dispose(): void }[] = []
+  const models: { value: string; uri: string; disposed: boolean; options: unknown[]; dispose(): void }[] = []
   const editors: { container: FakeElement; model: unknown; disposed: boolean; models: unknown[] }[] = []
   const monaco = {
-    editor: { createModel: (value: string, _language: string, uri: unknown) => { const model = { value, uri: String(uri), disposed: false, dispose() { model.disposed = true } }; models.push(model); return model as never } },
+    editor: { createModel: (value: string, _language: string, uri: unknown) => { const model = { value, uri: String(uri), disposed: false, options: [] as unknown[], dispose() { model.disposed = true }, updateOptions(options: unknown) { model.options.push(options) } }; models.push(model); return model as never } },
     Uri: { parse: (value: string) => value }
   }
   const create = (container: HTMLElement): QueryEditorInstance => {
@@ -96,6 +96,16 @@ describe('Peek editor', () => {
     expect(models).toHaveLength(4)
   })
 
+  it('gives each model Tools > Options tabs, as a query has, so its tabs draw as wide as after Script to New Query', () => {
+    const { monaco, create, models } = fakeMonaco()
+    let tabSize = 4
+    const peek = new PeekEditor({ monaco, create, modelOptions: () => ({ tabSize, indentSize: tabSize, insertSpaces: false }) })
+    const slot = new FakeDocument().createElement()
+    peek.show(slot as never, text('1'))
+    tabSize = 8
+    peek.show(slot as never, text('2'))
+    expect(models.map(model => model.options)).toEqual([[{ tabSize: 4, indentSize: 4, insertSpaces: false }], [{ tabSize: 8, indentSize: 8, insertSpaces: false }]])
+  })
   it('makes the editor again in another window, since Monaco binds to the window it was made in, keeping the model', () => {
     const { monaco, create, models, editors } = fakeMonaco()
     const peek = new PeekEditor({ monaco, create })
@@ -247,9 +257,23 @@ describe('Peek card focus loop', () => {
     expect(nextStop(stops, element(9) as never, false, false)).toBe(stops[0])
     expect(nextStop(stops, null, false, true)).toBe(stops[0])
     expect(nextStop(stops, null, true, true)).toBe(stops[2])
-    // Find's own inputs keep the browser's Tab.
+    // Find's own inputs keep the browser's Tab, until it leaves Find from its edge: then on through the card, never out of it.
     expect(nextStop(stops, element(4, true) as never, false, false)).toBe('native')
+    expect(nextStop(stops, element(4, true) as never, false, false, true)).toBe(stops[2])
+    expect(nextStop(stops, element(4, true) as never, true, false, true)).toBe(stops[1])
     expect(nextStop([], text, false, false)).toBeUndefined()
+  })
+})
+
+describe('Leaving Peek\'s Find widget', () => {
+  const control = (hidden = false) => ({ closest: () => null, checkVisibility: () => !hidden })
+  it('is Tab from its last shown control, or Shift+Tab from its first, skipping the Replace controls a read-only editor hides', () => {
+    const input = control(), toggle = control(), close = control(), replace = control(true)
+    const widget = { querySelectorAll: () => [input, toggle, close, replace] } as never as Element
+    expect(leavesFind(widget, close as never, false)).toBe(true)
+    expect(leavesFind(widget, toggle as never, false)).toBe(false)
+    expect(leavesFind(widget, input as never, true)).toBe(true)
+    expect(leavesFind(widget, close as never, true)).toBe(false)
   })
 })
 
