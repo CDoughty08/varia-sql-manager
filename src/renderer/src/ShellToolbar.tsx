@@ -8,8 +8,8 @@ import { ActualPlanToggle, EstimatedPlanButton, QueryPickers, useExecutionScope,
 import { lostHint, withKey } from './query-context'
 
 /**
- * The header's search box (the command centre): it opens Search, which finds open queries, commands and the Object
- * Explorer objects already loaded, in a widget that opens below it. Its key is SSMS's Ctrl+Q on Windows; F1 still opens
+ * The header's search box (the command centre): it opens Search, which finds open queries, commands and the servers'
+ * objects (Search Objects' search), in a widget that opens below it. Its key is SSMS's Ctrl+Q on Windows; F1 still opens
  * the command palette.
  */
 export function CommandCentre() {

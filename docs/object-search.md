@@ -35,8 +35,10 @@ The same search runs in two places, with the same options and results, and the h
   loaded: the text is searched by name only, with Fuzzy Match, on every connected server, as it is typed, and each server
   answers at most 50 hits, shown with its server and database. Nothing is asked before there is text; typing builds the
   index of a server that has none. A hit reveals its object in Object Explorer, which takes focus. The last row, *See all
-  in Search Objects*, opens a Search Objects tab with the text (on All servers when several are connected) for every hit,
-  definitions and the filters. The search ends when the widget closes or changes mode.
+  in Search Objects*, opens a Search Objects tab with the text and Fuzzy Match on (on All servers when several are
+  connected) for every hit, definitions and the filters. New text takes the hits of the text before away at once, so Enter
+  never reveals an object the text no longer names; a row stays active on its object as other servers answer. The search
+  ends when the widget closes or changes mode.
 - **In both,** the hits are a listbox whose options announce the selected one, and each has a context menu (right-click,
   which selects the hit, or Shift+F10 and the context-menu key on the selected hit). See *A hit's menu* below.
 

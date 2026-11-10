@@ -1098,6 +1098,21 @@ describe('ExplorerService: seek', () => {
     expect(pages.slice(0, 4)).toEqual(['first', 'v1.tables.2', 'v1.tables.4', 'v1.tables.6'])
     expect(f.calls().some(isFolder('views'))).toBe(false)
   })
+  it('opens the collapsed folders above a row that is already loaded, sending nothing', async () => {
+    const f = fixture()
+    f.state.tables = names(3)
+    f.connect()
+    await settle()
+    await f.open('Databases', 'AppData', 'Tables')
+    const t1 = f.find('dbo.T1')
+    f.explorer.collapse(f.find('Databases'))
+    expect(f.labels().some(label => label.trim() === 'dbo.T1')).toBe(false)
+    const sent = f.calls().length
+    expect(await f.explorer.seek(cid('server-a'), [tablePath('T1')])).toEqual({ ok: true, nodeId: t1 })
+    expect(f.labels().some(label => label.trim() === 'dbo.T1')).toBe(true)
+    expect(f.explorer.getSnapshot().selected).toBe(t1)
+    expect(f.calls()).toHaveLength(sent)
+  })
 
   it('tries the next path when a fully listed node lacks the step: a database under System Databases', async () => {
     const f = fixture()

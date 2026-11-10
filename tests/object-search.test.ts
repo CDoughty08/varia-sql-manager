@@ -845,9 +845,12 @@ describe('ObjectSearchService', () => {
     expect(service.getSnapshot().documents[quickSearchId]).toBeUndefined()
     timers.run()
     expect(calls.search).toHaveLength(4)
-    // A tab's search names no limit: the backend's default stands.
+    // A tab's search names no limit: the backend's default stands. It opens exact, or with Fuzzy Match when asked.
     service.open('a', 'orders')
     expect(calls.search.at(-1)).not.toHaveProperty('limit')
+    expect(calls.search.at(-1)).not.toHaveProperty('match')
+    service.open('a', 'orders', false, undefined, true)
+    expect(calls.search.at(-1)).toMatchObject({ text: 'orders', in: 'all', match: 'fuzzy' })
   })
   it('hands focus to the box once per Search in Object Explorer, even when the box mounts later', () => {
     const { service } = harness()

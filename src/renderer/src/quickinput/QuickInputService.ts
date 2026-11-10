@@ -121,6 +121,8 @@ interface Session {
   /** The provider's own matches (`setAnswer`), shown after the filtered entries. */
   answered: readonly { readonly entry: Entry; readonly ranges: readonly MatchRange[] }[]
   answerBusy: boolean
+  /** The user moved the active row since the filter last changed. */
+  moved: boolean
   answerMessage?: QuickInputMessage
 }
 
@@ -176,7 +178,7 @@ export class QuickInputService extends SnapshotStore<QuickInputView> implements 
     const value = (options.value ?? '').slice(0, quickInputLimits.value)
     const session: Session = {
       id: ++this.sessions, options: options as unknown as QuickPickOptions<QuickPickItem>, abort: new AbortController(), timers: [],
-      entries: [], value, rows: [], rowEntries: [], activeIndex: -1, loading: false, busy: false, answered: [], answerBusy: false
+      entries: [], value, rows: [], rowEntries: [], activeIndex: -1, loading: false, busy: false, answered: [], answerBusy: false, moved: false
     }
     this.current = session
     // A mode switch by typing keeps the input as it is; anything else writes the new value.
@@ -206,6 +208,7 @@ export class QuickInputService extends SnapshotStore<QuickInputView> implements 
     if (value === session.value) return
     session.value = value
     session.hint = undefined
+    session.moved = false
     try { session.options.onDidChangeValue?.(value) } catch (error) { onUnexpectedError(error) }
     // The provider may have replaced the session (a quick access mode switch).
     if (this.current !== session) return
@@ -267,18 +270,21 @@ export class QuickInputService extends SnapshotStore<QuickInputView> implements 
   }
   /**
    * Replaces the open picker's answered rows (QuickPickAnswer). The active row stays active when it is still shown, so an
-   * answer that lands while the user walks the rows does not move them.
+   * answer that lands while the user walks the rows does not move them. An answered row that is active only because it was
+   * the first row (the user has not moved since typing) gives way to the new first row, so Enter takes the best match.
    */
   setAnswer(answer: QuickPickAnswer): void {
     const session = this.current
     if (!session) return
+    const active = session.rowEntries[session.activeIndex]
+    const keep = active && (session.moved || !session.answered.some(row => row.entry === active)) ? active.source.id : undefined
     session.answered = answer.items.slice(0, quickInputLimits.rows).flatMap(source => {
       const view = displayed(source)
       return view ? [{ entry: { source, view }, ranges: (source.ranges ?? []).filter(([start, end]) => start >= 0 && start < end && end <= view.label.length) }] : []
     })
     session.answerBusy = !!answer.busy
     session.answerMessage = answer.message
-    this.applyFilter(session, session.rowEntries[session.activeIndex]?.source.id)
+    this.applyFilter(session, keep)
     this.publishSession(session)
     this.notifyActive(session)
   }
@@ -425,6 +431,7 @@ export class QuickInputService extends SnapshotStore<QuickInputView> implements 
   private activate(session: Session, index: number): void {
     if (index === session.activeIndex) return
     session.activeIndex = index
+    session.moved = true
     session.hint = undefined
     this.publishSession(session)
     this.notifyActive(session)

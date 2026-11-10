@@ -7,7 +7,7 @@ import type { Workbench } from '../core/workbench'
 import { CommandHistory } from '../quickinput/history'
 import type { QuickInputAnchor, QuickInputMessage, QuickPickAnswerItem, QuickPickItem, QuickPickOptions } from '../quickinput/QuickInputService'
 import { hitIcon } from '../search/hit-actions'
-import { quickSearchId, serverGroups } from '../search/ObjectSearchService'
+import { quickSearchId, serverGroups, serverHitKey } from '../search/ObjectSearchService'
 
 /**
  * Quick access modes by prefix: commands, help, and no prefix, which is Go to Query, or Search when the header's search
@@ -92,7 +92,7 @@ export function paletteContribution(workbench: PaletteWorkbench, history = new C
   function searchObjects(text: string): { search(text: string): void; dispose(): void } | undefined {
     const { objectSearch } = workbench
     if (!objectSearch) return undefined
-    let shown: unknown, wasIndexing = false
+    let shown: unknown, wasIndexing = false, latest = text, said: QuickInputMessage | undefined
     const push = () => {
       const snapshot = objectSearch.getSnapshot(), document = snapshot.documents[quickSearchId]
       const indexing = connections.getSnapshot().some(connection => snapshot.indexes[connection.id]?.requestId)
@@ -100,30 +100,39 @@ export function paletteContribution(workbench: PaletteWorkbench, history = new C
       if (document === shown && indexing === wasIndexing) return
       shown = document
       wasIndexing = indexing
-      if (!document?.text.trim()) { found = { text: '', hits: new Map() }; quickInput.setAnswer({ items: [] }); return }
-      const hits = new Map<string, { connectionId: string; hit: ObjectSearchHit }>(), items: QuickPickAnswerItem[] = [], groups = serverGroups(document)
+      // With the last server gone the box is back to queries and commands, as it is before one connects.
+      if (!document?.text.trim() || !connections.live().length) { found = { text: '', hits: new Map() }; said = undefined; quickInput.setAnswer({ items: [] }); return }
+      // Only hits that answer the text as it is now: the answer to the text before is not offered while the new one is on
+      // its way, or Enter would reveal an object the text no longer names.
+      const current = document.asked?.text === document.text
+      const hits = new Map<string, { connectionId: string; hit: ObjectSearchHit }>(), items: QuickPickAnswerItem[] = [], groups = current ? serverGroups(document) : []
       for (const group of groups) for (const hit of group.hits) {
-        const id = `object:${hits.size}`
+        // The row is the object on its server, wherever it is in the list: a server that answers later moves the rows, and
+        // the active one stays on its object.
+        const id = 'object:' + serverHitKey(group.connectionId, hit)
+        if (hits.has(id)) continue
         hits.set(id, { connectionId: group.connectionId, hit })
         items.push({
           id, label: hit.label, description: [group.label, hit.object.database].filter(Boolean).join(' › '), icon: hitIcon(hit), group: searchGroups.objects,
           ...hit.range ? { ranges: [[hit.range[0], hit.range[0] + hit.range[1]]] } : {}
         })
       }
-      const total = document.result?.total ?? 0
+      const total = current ? document.result?.total ?? 0 : 0
       items.push({ id: seeAllId, label: seeAllObjects, icon: 'search', group: searchGroups.objects, description: total > hits.size ? `Showing ${count(hits.size)} of ${count(total)} objects` : 'Names and definitions, with filters' })
       found = { text: document.text, hits }
       const failed = groups.find(group => group.error)
       const message: QuickInputMessage | undefined = document.error ? { text: document.error, severity: 'error' }
         : failed ? { text: `${failed.label}: ${failed.error}`, severity: 'error' }
         : indexing ? { text: 'Indexing objects: more may be found when it finishes', severity: 'info' } : undefined
-      // Answered once the search that ran is for the text as it is now; until then the rows are the answer before.
-      const answered = !document.requestId && document.asked?.text === document.text
-      quickInput.setAnswer({ items, busy: !answered && !document.error, ...message ? { message } : {} })
+      // The same message is the same object, so the live region says it once, not with every key and every answer.
+      if (message && !(said && said.text === message.text && said.severity === message.severity)) said = message
+      quickInput.setAnswer({ items, busy: !(current && !document.requestId) && !document.error, ...message && said ? { message: said } : {} })
     }
     const unsubscribe = objectSearch.subscribe(push)
+    // A server that connects while the box has text is searched too, though nothing was asked while there was none.
+    const unfollow = connections.subscribe(() => { if (!objectSearch.getSnapshot().documents[quickSearchId]) objectSearch.quickSearch(latest) })
     objectSearch.quickSearch(text)
-    return { search: value => objectSearch.quickSearch(value), dispose: () => { unsubscribe(); objectSearch.endQuickSearch() } }
+    return { search: value => { latest = value; objectSearch.quickSearch(value) }, dispose: () => { unsubscribe(); unfollow(); objectSearch.endQuickSearch() } }
   }
   /** Reveal in Object Explorer, as a Search Objects hit's: the tree loads and expands its way to the object, and takes focus as F8 gives it. */
   const revealObject = (connectionId: string, hit: ObjectSearchHit) => {
@@ -134,7 +143,8 @@ export function paletteContribution(workbench: PaletteWorkbench, history = new C
   }
   const openSearchObjects = (text: string) => {
     const live = connections.live()
-    try { workbench.objectSearch?.open(live.length > 1 ? undefined : live[0]?.id, text, live.length > 1) }
+    // With Fuzzy Match, as the rows were found, so the tab has every hit they were the first of.
+    try { workbench.objectSearch?.open(live.length > 1 ? undefined : live[0]?.id, text, live.length > 1, undefined, true) }
     catch (error) { commands.reportError(error instanceof Error ? error.message : 'Search Objects could not open.') }
   }
   // Each row's id says which list it is from.

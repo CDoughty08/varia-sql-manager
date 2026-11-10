@@ -295,13 +295,13 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
 
   /**
    * Opens a Search Objects tab on the server (the first connected one when none is named), with `text` if given; `allServers`
-   * searches every connected server instead, and the tab belongs to none of them.
+   * searches every connected server instead, and the tab belongs to none of them. `fuzzy` opens it with Fuzzy Match on.
    */
-  open(connectionId?: string, text?: string, allServers = false, database?: string): string | undefined {
+  open(connectionId?: string, text?: string, allServers = false, database?: string, fuzzy = false): string | undefined {
     const connection = connectionId ? this.o.connections.get(connectionId) : this.o.connections.getSnapshot().find(live)
     if (!live(connection)) throw new Error('Connect to a server to search its objects.')
     const document = this.o.documents.openCustom('objectSearch', searchTitle, allServers ? undefined : connection.id, 'master')
-    this.putDocument({ id: document.id, connectionId: connection.id, ...emptyQuery, ...text ? { text } : {}, ...allServers ? { allServers: true } : database !== undefined ? { database } : {} })
+    this.putDocument({ id: document.id, connectionId: connection.id, ...emptyQuery, ...fuzzy ? { fuzzy } : {}, ...text ? { text } : {}, ...allServers ? { allServers: true } : database !== undefined ? { database } : {} })
     for (const id of allServers ? this.liveIds() : [connection.id]) this.ensureIndex(id)
     if (text) void this.search(document.id)
     this.o.focus?.(document.id)
