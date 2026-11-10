@@ -71,6 +71,10 @@ describe('Release builds', () => {
     // The installer smoke stages and swaps the archive, compares the result with the packaged files, then recovers.
     // It also has the helper refuse a folder that is not the installation's staging folder, and answer what main asks.
     expect(readFileSync('scripts/windows-installer-smoke.ps1', 'utf8')).toMatch(/\$code -ne 2 -or \(Test-Path -LiteralPath \$elsewhere\)[\s\S]*'check', '--sha512'[\s\S]*\$code -ne 3[\s\S]*'stage', '--archive'[\s\S]*AreAccessRulesProtected[\s\S]*'swap', '--pid'[\s\S]*Assert-Application 'swapped'[\s\S]*-ArgumentList 'recover'[\s\S]*Assert-Application 'recovered'/)
+    // Uninstalling takes the staging folder with it: the uninstaller asks the helper, before the application's files go,
+    // and the installer smoke uninstalls a copy with a release staged.
+    expect(readFileSync('build/installer.nsh', 'utf8')).toMatch(/!macro customUnInstall\n {2}IfFileExists "\$INSTDIR\\resources\\updater\\Varia\.Updater\.exe" 0 varia_staging_done\n {4}ExecWait '"\$INSTDIR\\resources\\updater\\Varia\.Updater\.exe" uninstall --install "\$INSTDIR"'\n/)
+    expect(readFileSync('scripts/windows-installer-smoke.ps1', 'utf8')).toMatch(/'\/S', '\/currentuser', "_\?=\$installDir"[\s\S]*Test-Path -LiteralPath \$exe[\s\S]*Test-Path -LiteralPath \$root\) \{ throw/)
     // electron-builder only warns about a missing extraResources folder: packaging refuses instead.
     const { updaterProblem } = createRequire(import.meta.url)('../build/updater-check.cjs')
     expect(readFileSync('build/sqltools-service-check.cjs', 'utf8')).toMatch(/updaterProblem\(context\.electronPlatformName, context\.packager\.projectDir\)\n {2}if \(problem\) throw new Error\(problem\)/)

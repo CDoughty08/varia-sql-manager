@@ -170,3 +170,16 @@ if ($process.ExitCode -ne 0) { & $log; throw "The recovery failed: $($process.Ex
 Assert-Application 'recovered'
 if ((Test-Path -LiteralPath (Join-Path $root 'old')) -or (Test-Path -LiteralPath (Join-Path $root 'swap.json'))) { throw 'The recovery left the old version or its journal behind.' }
 Write-Host 'Staged update: the installed helper unpacked this build beside the installation, swapped it in, and finished an interrupted swap.'
+
+# Uninstalling takes a staged release with it: Setup's uninstaller has the installation's helper remove the staging
+# folder before it removes the application (build/installer.nsh). Run in place (_?=, which must come last, unquoted), so
+# that it can be waited for.
+$code = Invoke-Helper $helper (@('stage', '--archive', "`"$archive`"", '--sha512', $sha512) + $common)
+if ($code -ne 0) { & $log; throw "Staging before the uninstall failed: $code" }
+if (-not (Test-Path -LiteralPath (Join-Path $staged $appName) -PathType Leaf)) { throw 'Nothing was staged before the uninstall.' }
+$process = Start-Process -FilePath (Join-Path $installDir "Uninstall $appName") -ArgumentList @('/S', '/currentuser', "_?=$installDir") -PassThru
+if (-not $process.WaitForExit(180000)) { $process.Kill($true); throw 'The uninstaller timed out.' }
+if ($process.ExitCode -ne 0) { throw "The uninstaller failed: $($process.ExitCode)" }
+if (Test-Path -LiteralPath $exe) { throw 'The uninstaller left the application.' }
+if (Test-Path -LiteralPath $root) { throw 'The uninstaller left the staging folder beside where the installation was.' }
+Write-Host 'Uninstall: the application and the release staged beside it are both gone.'

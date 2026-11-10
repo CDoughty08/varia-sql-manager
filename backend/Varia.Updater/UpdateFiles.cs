@@ -38,13 +38,26 @@ public static class UpdateFiles
     /// Whether <paramref name="root"/> is the one folder main stages in for this installation: beside it, on its
     /// volume, named after it (<c>.&lt;name&gt;.update</c>). An installation at a drive's root has none.
     /// </summary>
-    public static bool IsStagingRoot(string root, string installDir)
+    public static bool IsStagingRoot(string root, string installDir) =>
+        StagingRootFor(installDir) is { } own && string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), own, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
+    /// <summary>The staging folder of the installation in <paramref name="installDir"/> (src/main/update-install.ts names it the same way), or null at a drive's root.</summary>
+    public static string? StagingRootFor(string installDir)
     {
         var install = Path.TrimEndingDirectorySeparator(Path.GetFullPath(installDir));
         var parent = Path.GetDirectoryName(install);
         var name = Path.GetFileName(install);
-        if (string.IsNullOrEmpty(parent) || string.IsNullOrEmpty(name)) return false;
-        return string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), Path.Combine(parent, $".{name}.update"), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        return string.IsNullOrEmpty(parent) || string.IsNullOrEmpty(name) ? null : Path.Combine(parent, $".{name}.update");
+    }
+
+    /// <summary>
+    /// Removes an installation's staging folder with everything in it, for the uninstaller. One that is not this
+    /// user's alone is left where it is (false): what is in it is somebody else's, and may be a link to elsewhere.
+    /// </summary>
+    public static bool RemoveStaging(string installDir, int attempts = 5, Action<TimeSpan>? wait = null)
+    {
+        if (StagingRootFor(installDir) is not { } root || !Directory.Exists(root)) return true;
+        return IsOwnRoot(root) && DeleteTree(root, attempts, wait);
     }
 
     /// <summary>

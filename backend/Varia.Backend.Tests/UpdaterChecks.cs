@@ -86,6 +86,26 @@ internal static class UpdaterChecks
         using (new FileStream(Path.Combine(root, "stage.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
             check(Throws<UpdateFiles.StageBusyException>(() => UpdateFiles.Stage(archive, sha, root, install, Exe, "1.1.0")) && UpdateFiles.IsStaged(root, Exe, "1.1.0", sha512),
                 "a stage that finds another still running stops, and touches nothing of it");
+        // Uninstalling takes the staging folder with it; an installation that never staged has none to take.
+        var gone = Installation(Path.Combine(temp, "gone", "Varia SQL Manager"), "1.0.0");
+        var goneRoot = UpdateFiles.StagingRootFor(gone)!;
+        var goneArchive = Path.Combine(temp, "gone", "release.zip");
+        check(UpdateFiles.RemoveStaging(gone) && !Directory.Exists(goneRoot), "uninstalling an installation that never staged leaves nothing to remove, and makes nothing");
+        UpdateFiles.Stage(goneArchive, Archive(goneArchive, (Exe, "1.1.0"), ("resources/app.asar", "1.1.0")), goneRoot, gone, Exe, "1.1.0");
+        UpdateFiles.Log(goneRoot, "a line");
+        UpdateFiles.WriteMarker(UpdateFiles.FailedMarker(goneRoot), "1.1.0");
+        check(goneRoot == Path.Combine(temp, "gone", ".Varia SQL Manager.update") && UpdateFiles.IsStagingRoot(goneRoot, gone) && UpdateFiles.StagingRootFor(Path.GetPathRoot(gone)!) is null
+            && UpdateFiles.RemoveStaging(gone) && !Directory.Exists(goneRoot) && File.ReadAllText(Path.Combine(gone, Exe)) == "1.0.0",
+            "uninstalling removes the staged release, its markers and its log, and nothing of the installation itself");
+        if (OperatingSystem.IsWindows())
+        {
+            // A file in it still in use: said, not hidden, and the rest is gone or goes at the next attempt.
+            UpdateFiles.PrepareRoot(goneRoot);
+            var waited = 0;
+            using (new FileStream(Path.Combine(goneRoot, "held.txt"), FileMode.Create, FileAccess.Write, FileShare.None))
+                check(!UpdateFiles.RemoveStaging(gone, attempts: 3, _ => waited++) && waited == 2 && Directory.Exists(goneRoot), "a staging folder with a file still in use is tried a few times and reported as left");
+            check(UpdateFiles.RemoveStaging(gone) && !Directory.Exists(goneRoot), "and removed once it is free");
+        }
         if (OperatingSystem.IsWindows())
         {
             // The folder's name can be guessed: one that somebody else made first (here: made without the access rules
@@ -98,6 +118,7 @@ internal static class UpdaterChecks
             check(!UpdateFiles.IsOwnRoot(foreign) && UpdateFiles.IsStaged(foreign, Exe, "1.1.0", sha512), "a staging folder made without the helper's access rules is not this user's alone, whatever its marker says");
             check(Throws<UpdateFiles.ForeignRootException>(() => UpdateFiles.Stage(archive, sha, foreign, beside, Exe, "1.1.0")) && File.ReadAllText(Path.Combine(foreign, "app", Exe)) == "planted", "nothing is staged into a folder that is not this user's alone, and nothing in it is removed");
             check(Throws<UpdateFiles.ForeignRootException>(() => UpdateFiles.PrepareRoot(foreign)) && !UpdateFiles.IsOwnRoot(Path.Combine(temp, "foreign", "absent")), "such a folder is refused, and one that is not there is not anybody's");
+            check(!UpdateFiles.RemoveStaging(beside) && File.ReadAllText(Path.Combine(foreign, "app", Exe)) == "planted", "uninstalling leaves a staging folder that is not this user's alone exactly as it is");
         }
     }
 

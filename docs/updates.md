@@ -64,7 +64,10 @@ Varia is still open instead:
 The staging folder is `.<installation folder>.update` beside the installation: the same volume, so the renames are
 atomic, and a name that does not start with the installation's, so Setup's "is Varia running" check never takes the
 helper for the application. The helper works in no other folder (an installation at a drive's root has none and is not
-staged), and the folder is not made until a release is staged. Uninstalling does not remove it yet.
+staged), and the folder is not made until a release is staged. Uninstalling removes it: Setup's uninstaller runs the
+installation's helper (`uninstall`) before it removes the application's files, and the helper removes the staging
+folder, and a recovery registered for it, when the folder is this user's alone. (The record in the profile stays with
+the rest of the profile, as an uninstall keeps that.)
 
 That name can be guessed, and beside a custom installation (a shared `D:\Tools`) other people may be able to make
 folders. So the helper makes the staging folder for this user alone (its own access rules: the user, SYSTEM and
@@ -165,4 +168,5 @@ in unpackaged smoke runs, with `VARIA_TEST_UPDATE_KIND`), whose install writes `
 of running anything. Release builds run the helper for real, though not through main and without
 starting the swapped application: `scripts/windows-installer-smoke.ps1` installs with Setup, has the installed helper
 refuse another folder, stage that build's archive and swap it in, compares every packaged file's size with the result,
-then interrupts a second swap by hand and runs the recovery.
+interrupts a second swap by hand and runs the recovery, then uninstalls with a release staged and checks that both the
+application and the staging folder are gone.

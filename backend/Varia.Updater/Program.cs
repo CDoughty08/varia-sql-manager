@@ -9,8 +9,8 @@ namespace Varia.Updater;
 /// Varia SQL Manager's update helper for the installed Windows build (src/main/update-staging.ts starts it):
 /// <c>stage</c> runs from the installation while Varia is open; <c>swap</c> runs as a copy beside the staged release,
 /// after Restart to Update, and outlives the app; <c>recover</c> is that copy again at the next sign-in, when a swap was
-/// cut short; <c>check</c> answers main whether a release is staged, and <c>forget</c> ends a recovery that is no
-/// longer wanted. It takes paths only from main (or the journal its own swap wrote), works only in the one folder
+/// cut short; <c>check</c> answers main whether a release is staged, <c>forget</c> ends a recovery that is no
+/// longer wanted, and <c>uninstall</c> (from the uninstaller, build/installer.nsh) removes the staging folder. It takes paths only from main (or the journal its own swap wrote), works only in the one folder
 /// beside the installation that main stages in, and only when that folder is this user's alone
 /// (<see cref="UpdateFiles.IsOwnRoot"/>), and asks for no elevation.
 /// Exit codes: 0 done (check: staged), 1 failed, 2 not a request it serves, 3 the staging folder is not this user's
@@ -48,6 +48,12 @@ internal static partial class Program
         {
             var command = args.Length > 0 ? args[0] : "";
             var installDir = Path.GetFullPath(Need("--install"));
+            if (command == "uninstall")
+            {
+                // The application is going: so does what was staged for it, and a recovery registered for that folder.
+                if (UpdateFiles.StagingRootFor(installDir) is { } staging && UpdateFiles.IsOwnRoot(staging)) EndRecovery(staging);
+                return UpdateFiles.RemoveStaging(installDir) ? 0 : 3;
+            }
             var given = Path.GetFullPath(Need("--root"));
             // Before anything is read or written: only the staging folder main uses for this installation is worked in.
             if (!UpdateFiles.IsStagingRoot(given, installDir)) return 2;
