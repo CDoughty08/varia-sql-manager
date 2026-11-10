@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
+using Varia.Backend.Common;
 
 namespace Varia.Backend.Language;
 
@@ -47,16 +48,23 @@ internal sealed class LspClient : ILspClient, IAsyncDisposable
         new BoundedChannelOptions(256) { SingleReader = true, SingleWriter = true, FullMode = BoundedChannelFullMode.Wait });
     private readonly Func<string, JsonElement, Task>? notification;
     private readonly Task[] workers;
+    private readonly Action<Process> kill;
+    private readonly ExitGate exitGate;
     private long sequence;
     private int notificationCharacters;
     private int stopped;
+    private bool killed;
     private int disposed;
 
-    public LspClient(string executablePath, IReadOnlyList<string>? arguments = null, Func<string, JsonElement, Task>? notification = null)
+    /// <param name="kill">Replaces the tree kill, and <paramref name="exitGate"/> the backend's gate, in checks.</param>
+    public LspClient(string executablePath, IReadOnlyList<string>? arguments = null, Func<string, JsonElement, Task>? notification = null,
+        Action<Process>? kill = null, ExitGate? exitGate = null)
     {
         if (string.IsNullOrWhiteSpace(executablePath) || !Path.IsPathFullyQualified(executablePath) || !File.Exists(executablePath))
             throw new ArgumentException("The language server executable must be an existing absolute path.", nameof(executablePath));
         this.notification = notification;
+        this.kill = kill ?? (child => child.Kill(entireProcessTree: true));
+        this.exitGate = exitGate ?? ExitGate.Shared;
         var start = new ProcessStartInfo(executablePath)
         {
             UseShellExecute = false, CreateNoWindow = true,
@@ -284,15 +292,22 @@ internal sealed class LspClient : ILspClient, IAsyncDisposable
 
     private void Stop(Exception? error)
     {
-        if (Interlocked.Exchange(ref stopped, 1) != 0) return;
-        lifetime.Cancel();
-        notifications.Writer.TryComplete();
-        foreach (var (id, answer) in pending)
-            if (pending.TryRemove(id, out _)) answer.TrySetException(error ?? new ObjectDisposedException(nameof(LspClient)));
-        if (error is null) completion.TrySetResult();
-        else { completion.TrySetException(error); _ = completion.Task.Exception; }
-        try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
-        catch (Exception failure) when (failure is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException) { }
+        if (Interlocked.Exchange(ref stopped, 1) == 0)
+        {
+            lifetime.Cancel();
+            notifications.Writer.TryComplete();
+            foreach (var (id, answer) in pending)
+                if (pending.TryRemove(id, out _)) answer.TrySetException(error ?? new ObjectDisposedException(nameof(LspClient)));
+            if (error is null) completion.TrySetResult();
+            else { completion.TrySetException(error); _ = completion.Task.Exception; }
+        }
+        // Every caller leaves with the kill ended, also one that found the transport already stopping: Dispose releases
+        // the process handle next, and the backend's exit must not land inside a tree kill (ExitGate).
+        exitGate.Kill(ref killed, () =>
+        {
+            try { if (!process.HasExited) kill(process); }
+            catch (Exception failure) when (failure is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException) { }
+        });
     }
 
     public void Dispose()
