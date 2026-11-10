@@ -256,6 +256,7 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `explorer.search` | invoke; cancelled with `explorerCancel` | unary | explorer | 15 s; the backend stops at 5 s and answers `partial` |
 | `explorer.peek` | invoke; cancelled with `explorerCancel` | unary | explorer (Peek's own slot per connection) | 30 s; the backend answers its own 15 s budget, from when it has the slot, as an `error: TIMEOUT` value |
 | `explorer.peekDependencies` | invoke; cancelled with `explorerCancel` | unary | explorer (Peek's own slot per connection) | 30 s; as `explorer.peek` |
+| `explorer.peekDefinition` | invoke; cancelled with `explorerCancel` | unary: one page of a module's text, at most `peekLimits.definitionPageChars` UTF-16 code units, asked for one at a time after `explorer.peek`'s first | explorer (Peek's own slot per connection) | 30 s; as `explorer.peek` |
 | `results.copy` | main only (`varia:results-copy`) | stream, with EVENTs | results | 120 s |
 | `results.export` | main only (`varia:results-save`) | unary with EVENTs | results | none, and no backstop: only CANCEL (reason 1) ends it |
 | `scripting.script` | invoke; cancelled with `cancelScripting` | unary | metadata | 60 s; the backend answers its own 55 s budget as an `error: TIMEOUT` value |
@@ -1723,7 +1724,7 @@ A subscription names one **source** and 1 to 8 of its **probes**, each with its 
 `src/shared/live/catalog.ts` declares every source and probe and what they emit; it generates [docs/live.md](live.md) and the
 backend's embedded `Live/live-catalog.json` (`npx vitest run tests/live-catalog.test.ts -u`), and the schemas in
 `src/shared/live/schema.ts` are built from it. The production schemas accept only sources that are not test-only: the
-Activity Monitor's `activity` (server DMVs: `activity.overview`, `activity.sessions`, `activity.resources`, declared but not sampled yet, and `activity.queries`), Object Explorer's `explorer` (the
+Activity Monitor's `activity` (server DMVs: `activity.overview`, `activity.sessions`, `activity.resources` and `activity.queries`), Object Explorer's `explorer` (the
 status chips: database states, restore progress, running Agent jobs, availability group health) and the SSIS tree's
 `ssis.catalog` (scope `ssisdb`; its `ssis.catalogProbe` fingerprints the catalog for Object Explorer). The test source `debug.synthetic` is accepted only by main's test schemas (`ResultsPortHost` with
 `testSources`, set only in unpackaged smoke runs) and by a backend with `VARIA_BACKEND_TEST_HOOKS=1`, as

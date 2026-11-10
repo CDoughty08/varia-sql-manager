@@ -5,13 +5,17 @@ namespace Varia.Backend.Activity;
 internal sealed record ActivityColumnFilterDto(string? Column, List<string?>? Values = null, bool? Blanks = null, bool? NonBlanks = null);
 
 /// <summary>The monitor's filter for one table (the live layer's `args.activity`): Processes' view chip and toggles, the
-/// filter box, the column value filters, and Resource Waits' Hide benign waits.</summary>
+/// filter box, the column value filters, Resource Waits' Hide benign waits, and Data File I/O's chip and latency thresholds.</summary>
 internal sealed record ActivityFilterDto(string? Table, string? View = null, bool? ShowSystem = null, bool? ShowVaria = null, string? Text = null, List<ActivityColumnFilterDto?>? ColumnFilters = null,
-    bool? HideBenign = null);
+    bool? HideBenign = null, string? FileView = null, int? LatencyWarningMs = null, int? LatencyErrorMs = null);
 
 /// <summary>What Processes' view chips and toggles test about a session, which the sessions probe works out per row.</summary>
 internal readonly record struct SessionFacts(bool System = false, bool VariaPool = false, bool Active = false, bool Blocked = false, bool Blocking = false,
     bool IdleOpenTransaction = false, bool RollingBack = false);
+
+/// <summary>What Data File I/O's chips test about a file: its type ('rows', 'log', ...) and whether its read or write latency
+/// reached the warning threshold.</summary>
+internal readonly record struct FileFacts(string? Type = null, bool OverThreshold = false);
 
 /// <summary>The filter engine: one validated filter, applied to each row of a sample in memory, so the SQL never changes.
 /// Columns, bounds and view ids come from the catalogue; a filter that breaks one is refused as INVALID_PARAMS, as zod
@@ -24,12 +28,14 @@ internal sealed class ActivityFilter
     private readonly bool showVaria;
     private readonly string? text;
     private readonly bool hideBenign;
+    private readonly string? fileView;
     private readonly IReadOnlyList<string> textColumns;
     private readonly IReadOnlyList<(string Column, HashSet<string> Values, bool Blanks, bool NonBlanks)> columns;
 
     private ActivityFilter(string table, string? view, bool showSystem, bool showVaria, string? text, bool hideBenign, IReadOnlyList<string> textColumns,
-        IReadOnlyList<(string, HashSet<string>, bool, bool)> columns)
+        IReadOnlyList<(string, HashSet<string>, bool, bool)> columns, string? fileView)
     {
+        this.fileView = fileView;
         this.hideBenign = hideBenign;
         Table = table;
         this.view = view;
@@ -41,6 +47,9 @@ internal sealed class ActivityFilter
     }
 
     public string Table { get; }
+    /// <summary>Data File I/O's latency thresholds in ms: the filter's, else the catalogue's defaults.</summary>
+    public int LatencyWarningMs { get; private init; }
+    public int LatencyErrorMs { get; private init; }
 
     private static RequestException Invalid(string message) => new("INVALID_PARAMS", message);
 
@@ -52,6 +61,11 @@ internal sealed class ActivityFilter
         if (dto.View is not null && !catalog.Views.Contains(dto.View)) throw Invalid("Unknown Activity Monitor view.");
         var waits = catalog.HideBenignTables.Contains(dto.Table);
         if (!waits && dto.HideBenign is not null) throw Invalid("Only Resource Waits takes Hide benign waits.");
+        var files = dto.Table == "files";
+        if (!files && (dto.FileView is not null || dto.LatencyWarningMs is not null || dto.LatencyErrorMs is not null)) throw Invalid("Only Data File I/O takes a file view or latency thresholds.");
+        if (dto.FileView is not null && !catalog.FileViews.Contains(dto.FileView)) throw Invalid("Unknown Data File I/O view.");
+        var maxLatency = catalog.Limit("fileLatencyMs");
+        if (dto.LatencyWarningMs is < 1 || dto.LatencyWarningMs > maxLatency || dto.LatencyErrorMs is < 1 || dto.LatencyErrorMs > maxLatency) throw Invalid("A latency threshold is out of range.");
         if (dto.Text is { } search && search.Length > catalog.Limit("filterText")) throw Invalid("The filter text is too long.");
         var filters = dto.ColumnFilters ?? [];
         if (filters.Count > catalog.Limit("columnFilters")) throw Invalid("Too many column filters.");
@@ -69,15 +83,19 @@ internal sealed class ActivityFilter
         }
         var textColumns = table.Columns.Where(column => table.TextColumns.Contains(column.Id)).Select(column => column.Id).ToList();
         return new(dto.Table, sessions ? dto.View ?? "all" : null, dto.ShowSystem == true, dto.ShowVaria == true, string.IsNullOrEmpty(dto.Text) ? null : dto.Text,
-            waits && (dto.HideBenign ?? catalog.HideBenignDefault), textColumns, compiled);
+            waits && (dto.HideBenign ?? catalog.HideBenignDefault), textColumns, compiled, files ? dto.FileView ?? "all" : null)
+        {
+            LatencyWarningMs = dto.LatencyWarningMs ?? catalog.FileLatency.Warning,
+            LatencyErrorMs = dto.LatencyErrorMs ?? catalog.FileLatency.Error
+        };
     }
 
     /// <summary>Whether a row passes. <paramref name="cell"/> gives a column's text as the grid shows it (null for NULL);
-    /// <paramref name="facts"/> matter only for Processes, and <paramref name="benign"/> (a benign wait type, or a benign
-    /// category) only for Resource Waits.</summary>
-    public bool Matches(Func<string, string?> cell, SessionFacts facts = default, bool benign = false)
+    /// <paramref name="facts"/> matter only for Processes, <paramref name="benign"/> (a benign wait type, or a benign
+    /// category) only for Resource Waits, and <paramref name="file"/> only for Data File I/O.</summary>
+    public bool Matches(Func<string, string?> cell, SessionFacts facts = default, bool benign = false, FileFacts file = default)
     {
-        if (!Shows(facts, benign)) return false;
+        if (!Shows(facts, benign, file)) return false;
         if (text is not null && !textColumns.Any(column => cell(column)?.Contains(text, StringComparison.OrdinalIgnoreCase) == true)) return false;
         foreach (var (column, values, blanks, nonBlanks) in columns)
         {
@@ -91,9 +109,17 @@ internal sealed class ActivityFilter
     /// <summary>Whether a row passes the view chip and toggles (and Hide benign waits), before the filter box and the column
     /// value filters: the rows a table's facets count, so the values offered are ones the grid can show, and a column's own
     /// value filter never empties its list.</summary>
-    public bool Shows(SessionFacts facts = default, bool benign = false)
+    public bool Shows(SessionFacts facts = default, bool benign = false, FileFacts file = default)
     {
         if (benign && hideBenign) return false;
+        if (fileView is not null)
+            return fileView switch
+            {
+                "rows" => file.Type == "rows",
+                "log" => file.Type == "log",
+                "overThreshold" => file.OverThreshold,
+                _ => true
+            };
         if (view is null) return true;
         if (facts.System && !showSystem || facts.VariaPool && !showVaria) return false;
         return view switch

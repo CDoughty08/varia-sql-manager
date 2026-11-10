@@ -7,7 +7,7 @@ import {
   parentKinds, queryIds, schemaGroupList, scopeFields, textFilterOps, type FilterProperty, type KindSpec, type NodeKind, type RefField
 } from './catalog.ts'
 import type { ExplorerCancelParams, ExplorerChildrenParams, ExplorerFilter, ExplorerNodeRef, ObjectRef } from './refs.ts'
-import { isPeekKind, peekHas, type PeekParams } from './peek.ts'
+import { isPeekKind, peekHas, peekLimits, peekSpecs, type PeekDefinitionParams, type PeekParams } from './peek.ts'
 
 // zod's max() counts code points, while sysname holds 128 UTF-16 code units.
 const utf16 = (max: number) => z.string().min(1).refine(value => value.length <= max, `At most ${max} UTF-16 code units.`)
@@ -100,3 +100,7 @@ export const peekParamsSchema = z.object({ connectionId: z.uuid(), requestId: z.
 /** Peek's Dependencies tab, for the kinds whose card has it (peekSpecs' `tabs`). */
 export const peekDependenciesParamsSchema = z.object({ connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema }).strict()
   .refine(params => isPeekKind(params.target.kind) && peekHas(params.target.kind, 'dependencies'), { path: ['target', 'kind'], message: 'Peek lists no dependencies of this kind of object.' }) satisfies z.ZodType<PeekParams>
+/** A later page of a module's text: a kind whose definition is its module's, from past the first page to below the longest text Peek reads. */
+export const peekDefinitionParamsSchema = z.object({ connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema,
+  offset: z.number().int().min(1).max(peekLimits.definitionMaxChars - 1) }).strict()
+  .refine(params => isPeekKind(params.target.kind) && peekSpecs[params.target.kind].definition === 'module', { path: ['target', 'kind'], message: 'Peek reads no module text of this kind of object.' }) satisfies z.ZodType<PeekDefinitionParams>

@@ -15,8 +15,8 @@ import ExplorerIcon from './ExplorerIcon'
 import { selectionContextOf } from './ExplorerService'
 import { inPeekEditorWidgets, PeekEditor, peekEditorUse } from './peek-editor'
 import { formatPeekValue, peekObjectName, placePeek } from './peek-format'
+import { copyableDefinition, peekMessages, tooLongToCopy, type OpenPeek, type PeekDefinition, type PeekDependencies, type PeekMembers, type PeekPart, type PeekRows, type PeekView } from './PeekService'
 import { settingsDocumentOptions } from '../services/documents'
-import { peekMessages, type OpenPeek, type PeekDefinition, type PeekDependencies, type PeekMembers, type PeekPart, type PeekRows, type PeekView } from './PeekService'
 
 /** The view the parts below read and act on: the card's (the Peek service) or a promoted tab's. */
 const PeekViewContext = createContext<PeekView | undefined>(undefined)
@@ -40,14 +40,15 @@ function Definition({ part, editor, open }: { part: PeekPart<PeekDefinition>; ed
     try { editor.show(here, { key: String(open.id), text, connectionId: open.node.connectionId, ...object?.database === undefined ? {} : { database: object.database } }) } catch (error) { onUnexpectedError(error) }
     return () => editor.hide(here)
   }, [editor, text, open.id, open.node.connectionId, object?.database])
-  if (part.status === 'loading') return <p className="peek-note" role="status">Loading the definition…</p>
+  if (part.status === 'loading') return <p className="peek-note" role="status">{definitionLoading(part.progress)}</p>
   if (part.status === 'error') return <p className="peek-note error" role="alert">{part.message}</p>
   if (text === undefined) return <p className="peek-note">{peekMessages.noDefinition}</p>
-  return <>
-    <div ref={slot} className="peek-editor" />
-    {part.value.truncated && <p className="peek-note">The definition is longer than Peek shows. Script it to see all of it.</p>}
-  </>
+  return <div ref={slot} className="peek-editor" />
 }
+
+/** The Definition tab's loading line; a long text's pages say how much has come. */
+export const definitionLoading = (progress?: number): string =>
+  progress === undefined ? 'Loading the definition…' : `Loading the definition… ${Math.floor(progress * 100)}%`
 
 /**
  * The card's tab stops in order: its buttons and tabbable elements, without those Monaco keeps in the DOM but hides (a closed
@@ -244,7 +245,7 @@ export function PeekBody({ view, open, idPrefix, beforeScript, inEditorPane = fa
   const workbench = useWorkbench(), { commands } = workbench
   const node = open.node
   const definition = open.definition.status === 'ready' ? open.definition.value : undefined
-  const copyable = definition?.text !== undefined && !definition.truncated
+  const copyable = copyableDefinition(definition?.text)
   const script = scriptCommandId('create', 'newQuery')
   // The node's own selection keys, as a Peek tab's verbs pass them: the shown object may be a followed dependency, not the tree's selection.
   const target: CommandArgs = { target: { kind: 'explorer', node }, state: selectionContextOf(node, { insertable: insertTextFor(node.ref) !== undefined }) }
@@ -268,7 +269,7 @@ export function PeekBody({ view, open, idPrefix, beforeScript, inEditorPane = fa
           <Tabs peek={open} idPrefix={idPrefix} />
           <span className="peek-spacer" />
           {open.tab === 'definition' && <>
-            <button type="button" className="peek-action" disabled={!copyable} title={definition?.truncated ? 'The definition is cut; Script to New Query has all of it.' : undefined} onClick={() => { view.copyDefinition().catch(onUnexpectedError) }}>Copy</button>
+            <button type="button" className="peek-action" disabled={!copyable} title={definition?.text !== undefined && !copyable ? tooLongToCopy : undefined} onClick={() => { view.copyDefinition().catch(onUnexpectedError) }}>Copy</button>
             <button type="button" className="peek-action" disabled={!commands.isEnabled(script, target)}
               onClick={() => { beforeScript?.(); void commands.execute(script, target, 'toolbar') }}>Script to New Query</button>
             {modifiable && <button type="button" className="peek-action" disabled={!commands.isEnabled('explorer.modify', target)}

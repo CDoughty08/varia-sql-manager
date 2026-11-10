@@ -34,6 +34,14 @@ being true.
   background diagnostics for their document; analysis resumes after those requests settle. Analysis never executes the buffer.
   A language server child is killed only through `ExitGate`, which the backend's exit also takes: .NET's tree kill stops a
   process (SIGSTOP) before it kills it, and an exit in between would leave the child stopped for good.
+  The service serves query documents' models and Peek's read-only definition models (`peekModelContext`: connection,
+  database and the model's own UUID as its document id), and nothing else. A Peek model gets hover only, never completion
+  or diagnostics; it is served from its first request, and its `onWillDispose` ends it as closing a query does (epoch bump,
+  context, epoch and listener dropped, `language.close` if it was used). Requests in flight are capped per kind
+  (`pendingLimits`): every Peek navigation makes a new document, so Peek has its own renderer cap of 2, apart from query
+  documents' 8. On the backend its requests still share the metadata slots (`ProtocolHost.MetadataSlots`) with query tabs,
+  Script As, `actions.describe` and `connections.connect`, so stalled Peek hovers can hold two of them until their deadline.
+  A server-level object has no database, so its names resolve in the login's default.
 - Backend stdout carries protocol v2 frames only (`Console.Out` goes to stderr). Never log SQL text, credentials, or
   connection strings. Passwords never reach disk in clear: not `connections.json`, process arguments, the environment,
   logs, traces or previews. A password the user chose to remember is stored only as Electron `safeStorage` ciphertext
@@ -147,6 +155,16 @@ being true.
   text per query, band and filter shape, with values as parameters and database names only through `QUOTENAME`; no
   metadata built-ins; `READ UNCOMMITTED` and `LOCK_TIMEOUT 5000` on the explorer pool. The offline `CatalogSql` lint
   renders and checks every variant.
+- Peek never cuts a definition. A module's text comes in pages of `peekLimits.definitionPageChars` UTF-16 code units, so
+  each reply stays far under the 16 MiB response bound: `explorer.peek` carries the first page with the facts, and a longer
+  text (its `definitionLength` and `definitionStamp`, the module's `modify_date`) is read one page at a time with
+  `explorer.peekDefinition` (constant `PeekSql.DefinitionPage`, `SUBSTRING` from `@offset` under a binary collation that
+  counts code units), each page asked for once the last is in, and put together in the renderer (`PeekReads`). A page
+  never ends inside a surrogate pair. A page whose length or stamp differs from the first page's means the module changed
+  in between, and the part says so instead of showing pages that do not fit. Closing, replacing or refreshing the view
+  cancels the page being read. The one bound is `peekLimits.definitionMaxChars` (2^27 code units), a bound on the renderer's
+  memory (about twice that for a moment, while the pages are joined): a longer text is not read, and the part says so, never
+  showing part of it. Search Objects' details pane, which shows at most `shownChars`, reads a module's pages only that far.
 - Search Objects' index (`backend/Varia.Backend/Search/`, docs/object-search.md) lives only in backend memory, one per
   connection, never on disk, and is dropped on disconnect; its limits are `objectSearchLimits` in
   `src/shared/explorer/search.ts`, mirrored in C# (`tests/object-search.test.ts`), with everything it holds (records, names

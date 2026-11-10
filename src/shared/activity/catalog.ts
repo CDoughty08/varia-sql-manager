@@ -95,9 +95,7 @@ export const probeSpecs: { readonly [P in ActivityProbe]: ProbeSpec } = {
 /** The probes the live catalogue declares, in its order (src/shared/live/catalog.ts builds their entries from this catalogue). */
 export const activityLiveProbes = ['activity.overview', 'activity.sessions', 'activity.resources', 'activity.queries'] as const satisfies readonly ActivityProbe[]
 /** Probes the live catalogue declares whose sampling arrives later: each opens unavailable with this note and runs no SQL. */
-export const pendingProbes: { readonly [P in ActivityProbe]?: string } = {
-  'activity.resources': 'Resource Waits and Data File I/O are not sampled yet; they arrive in a later version of Varia.'
-}
+export const pendingProbes: { readonly [P in ActivityProbe]?: string } = {}
 /** Status values the sessions probe sends with its first sample on each new connection: what the capability probe found the
  *  login may do (1 or 0). */
 export const activityStatuses = {
@@ -132,7 +130,11 @@ export const activityLimits = {
   filterText: 400, columnFilters: 8, columnFilterValues: 50, columnFilterChars: 256, columnsPerProjection: 64,
   detailsChars: 1_000_000, detailsPreviewChars: 65_536, detailsWaits: 20, detailsTransactions: 50, detailsLocks: 1_000, detailsBudgetMs: 10_000, detailsRunning: 32,
   killSessions: 64, killBudgetMs: 25_000, killMessageChars: 2_000, cancelIds: 16, cancelTombstones: 64, cancelTombstoneMs: 60_000,
-  sessionId: 32_767
+  sessionId: 32_767,
+  /** The largest file latency threshold, in ms (activityMonitor.fileLatency*). */
+  fileLatencyMs: 10_000,
+  /** Milliseconds of samples Resource Waits' 1-Minute Average spans. */
+  waitAverageMs: 60_000
 } as const
 
 /** The session actions (activity.details and activity.kill): Details' sections, the texts it returns in full on request,
@@ -331,7 +333,7 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
       c('minuteAverage', '1-Minute Average (ms/sec)', 'decimal', 'ms/s', true, 'fix', 'The mean of the last 60 s. SSMS\'s Recent Wait Time is a weighted average over an unstated window.'),
       c('averageWaiters', 'Average Waiter Count', 'decimal', 'count', true, 'ssms', 'Wait time per second divided by 1,000.'),
       c('currentWaiters', 'Current Waiters', 'int', 'count', true, 'new', 'Tasks waiting in the category now.'),
-      c('cumulativeSeconds', 'Cumulative Wait Time (sec)', 'decimal', 's', true, 'ssms', 'Since SQL Server started or the statistics were cleared.'),
+      c('cumulativeSeconds', 'Cumulative Wait Time (sec)', 'decimal', 's', true, 'ssms', 'Wait time less signal wait since SQL Server started or the statistics were cleared.'),
       c('topWaitType', 'Top Wait Type', 'text', '', true, 'new', 'The category\'s largest wait type in the interval.')
     ]
   },
@@ -340,15 +342,15 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
     defaultSort: [{ column: 'waitRate', descending: true }],
     textColumns: ['waitType', 'category'],
     columns: [
-      c('waitType', 'Wait Type', 'text', '', true, 'new', 'Types with time in the interval or a task waiting now.'),
+      c('waitType', 'Wait Type', 'text', '', true, 'new', 'Types with time in the interval or a task waiting now; on a sample with no rate (the first, or after a restart or a clear), every type with time since SQL Server started.'),
       c('category', 'Category', 'text', '', true, 'new', 'Its wait category.'),
       c('waitRate', 'Wait Time (ms/sec)', 'decimal', 'ms/s', true, 'new', 'Wait time less signal wait, per second.'),
       c('signalRate', 'Signal (ms/sec)', 'decimal', 'ms/s', true, 'new', 'Signal wait per second.'),
       c('waitsRate', 'Waits/sec', 'decimal', '/s', true, 'new', 'Waits that ended per second.'),
-      c('averageWaitMs', 'Average Wait (ms)', 'decimal', 'ms', true, 'new', 'Wait time per wait in the interval.'),
+      c('averageWaitMs', 'Average Wait (ms)', 'decimal', 'ms', true, 'new', 'Wait time (signal wait included) per wait that ended in the interval.'),
       c('maxWaitMs', 'Max Wait (ms)', 'bigint', 'ms', true, 'new', 'The longest wait since SQL Server started.'),
       c('currentWaiters', 'Current Waiters', 'int', 'count', true, 'new', 'Tasks waiting on it now.'),
-      c('cumulativeSeconds', 'Cumulative (sec)', 'decimal', 's', true, 'new', 'Since SQL Server started or the statistics were cleared.'),
+      c('cumulativeSeconds', 'Cumulative (sec)', 'decimal', 's', true, 'new', 'Wait time less signal wait since SQL Server started or the statistics were cleared.'),
       c('benign', 'Benign', 'bool', '', true, 'new', 'A wait for work: on Varia\'s benign list or in Query Store\'s Idle category. It never counts in Waiting Tasks, and Hide benign waits hides it.')
     ]
   },
@@ -434,7 +436,6 @@ export const defaultPanes = { primary: 'processes', secondary: 'waits' } as cons
  *  (no SQL runs for a pane nobody can read). Processes, Blocking and Active Expensive Queries arrive with the sessions
  *  grids, Resource Waits and Data File I/O with the resources probe, Recent Expensive Queries with query statistics. */
 export const pendingPanes: readonly ActivityPane[] = [
-  'processes',
   'blocking',
   'waits',
   'fileIo',
@@ -531,13 +532,15 @@ export interface TileSpec {
   /** Its chart is expanded on the first open, so SSMS's view is recognisable at once. */
   readonly defaultExpanded?: boolean
 }
+/** The latency thresholds (ms) a files filter without its own uses: the Database I/O tile's, the settings' defaults. */
+export const fileLatencyDefaults = { warning: 20, error: 50 } as const
 // The first four are SSMS's four charts with SSMS's names.
 export const tileSpecs: readonly TileSpec[] = [
   { caption: '% Processor Time', series: 'cpuPercent', value: 'rate', secondary: ['schedulerDelay'], parity: 'fix', defaultExpanded: true,
     thresholds: [{ series: 'cpuPercent', warning: 80, error: 95, settings: { warning: 'activityMonitor.cpuWarningPercent' } }] },
   { caption: 'Waiting Tasks', series: 'waitingTasks', value: 'rate', secondary: [], parity: 'fix', defaultExpanded: true, thresholds: [] },
   { caption: 'Database I/O', series: 'ioMegabytes', value: 'rate', secondary: ['readLatency', 'writeLatency'], parity: 'ssms',
-    thresholds: ['readLatency', 'writeLatency'].map(series => ({ series, warning: 20, error: 50, settings: { warning: 'activityMonitor.fileLatencyWarningMs', error: 'activityMonitor.fileLatencyErrorMs' } })) },
+    thresholds: ['readLatency', 'writeLatency'].map(series => ({ series, warning: fileLatencyDefaults.warning, error: fileLatencyDefaults.error, settings: { warning: 'activityMonitor.fileLatencyWarningMs', error: 'activityMonitor.fileLatencyErrorMs' } })) },
   { caption: 'Batch Requests/sec', series: 'batchRequests', value: 'rate', secondary: ['compilations', 'recompilations'], parity: 'ssms', thresholds: [] },
   { caption: 'Blocked Sessions', series: 'blockedSessions', value: 'instant', secondary: ['longestBlock'], parity: 'new',
     thresholds: [{ series: 'longestBlock', warning: 5_000, error: 30_000, while: 'blockedSessions', settingScale: 1_000, settings: { warning: 'activityMonitor.blockedWarningSeconds', error: 'activityMonitor.blockedErrorSeconds' } }] },
@@ -572,6 +575,18 @@ export const sessionToggles = {
 export const waitToggles = {
   hideBenign: { title: 'Hide benign waits', tables: ['waitCategories', 'waitTypes'], default: true }
 } as const satisfies { readonly [toggle: string]: { readonly title: string; readonly tables: readonly ActivityTable[]; readonly default: boolean } }
+
+/** Data File I/O's chips (one at a time). Over threshold uses the latency thresholds the files filter carries (the
+ *  activityMonitor.fileLatency* settings), which also tone its rows. */
+export const fileViews = ['all', 'rows', 'log', 'overThreshold'] as const
+export type FileView = typeof fileViews[number]
+export const fileViewTitles: { readonly [V in FileView]: string } = { all: 'All', rows: 'Rows', log: 'Log', overThreshold: 'Over threshold' }
+export const fileViewNotes: { readonly [V in FileView]: string } = {
+  all: 'Every file.',
+  rows: 'Data files (Rows). Without VIEW ANY DEFINITION the server hides file types, so this shows none.',
+  log: 'Log files. Without VIEW ANY DEFINITION the server hides file types, so this shows none.',
+  overThreshold: 'Files whose read or write latency in the interval reached the warning threshold.'
+}
 
 /** Recent Expensive Queries' rank chips and the column each sorts by. */
 export const rankChips = {
@@ -782,6 +797,8 @@ export function activityCatalogJson(): string {
     `  "detailsTexts": ${line(detailsTexts)},`,
     `  "editions": ${line(Object.fromEntries(Object.entries(activityEditions).map(([id, spec]) => [id, { available: spec.available, editions: spec.editions }])))},`,
     `  "exceptions": ${line(waitExceptions.map(({ name, category }) => ({ name, category })))},`,
+    `  "fileLatency": ${line(fileLatencyDefaults)},`,
+    `  "fileViews": ${line(fileViews)},`,
     `  "hideBenign": ${line({ default: waitToggles.hideBenign.default, tables: waitToggles.hideBenign.tables })},`,
     `  "killOutcomes": ${line(Object.keys(killOutcomes))},`,
     `  "limits": ${line(activityLimits)},`,
@@ -802,7 +819,7 @@ export function activityCatalogJson(): string {
     `  "variaSessions": ${line(variaSessionKinds.map(({ suffix, kind, label }) => ({ suffix, kind, label })))},`,
     `  "version": 1,`,
     `  "views": ${line(viewChips)},`,
-    `  "waits": ${block(waitCategories.map(({ id, value, names, patterns }) => ({ id, value, names, patterns })))}`,
+    `  "waits": ${block(waitCategories.map(({ id, value, label, names, patterns }) => ({ id, value, label, names, patterns })))}`,
     '}',
     ''
   ].join('\n')

@@ -53,6 +53,9 @@ describe('Activity Monitor tiles', () => {
     expect([tone('Database I/O', { readLatency: 25 }), tone('Database I/O', { readLatency: 1, writeLatency: 50 }), tone('Database I/O', { readLatency: 60 }, { 'activityMonitor.fileLatencyErrorMs': 100 })]).toEqual(['warning', 'critical', 'warning'])
     expect([tone('CPU Pressure', { runnablePerScheduler: 1.2, workQueue: 0 }), tone('CPU Pressure', { runnablePerScheduler: 0.1, workQueue: 1 }), tone('Memory Grants Pending', { grantsPending: 1 })]).toEqual(['warning', 'critical', 'warning'])
     expect(tone('Waiting Tasks', { waitingTasks: 1e9 })).toBeUndefined()
+    // An error bound below the warning one acts as the warning one, as in Data File I/O: 20 ms is under a 50 ms warning.
+    const inverted = { 'activityMonitor.fileLatencyWarningMs': 50, 'activityMonitor.fileLatencyErrorMs': 10 }
+    expect([tone('Database I/O', { readLatency: 20 }, inverted), tone('Database I/O', { readLatency: 50 }, inverted)]).toEqual([undefined, 'critical'])
   })
   it('announce a threshold once, as it is crossed upward', () => {
     expect(toneAnnouncement('% Processor Time', undefined, 'warning')).toBe('% Processor Time is above its warning threshold.')

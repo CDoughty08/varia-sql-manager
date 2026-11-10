@@ -116,7 +116,7 @@ internal sealed class ExplorerService : IDisposable
         var spec = ExplorerRefs.ValidatePeek(args, catalog);
         var profile = PeekProfile(args.ConnectionId);
         var limits = catalog.Peek;
-        var batch = PeekSql.Render(spec, new SqlRender(profile.Band), limits.DefinitionChars, args.Target.Parent?.Kind, profile.Cloud);
+        var batch = PeekSql.Render(spec, new SqlRender(profile.Band), limits.DefinitionPageChars, args.Target.Parent?.Kind, profile.Cloud);
         // One more list row than the card keeps tells it there were more.
         return RunPeekAsync(args.ConnectionId, args.RequestId, args.Target, profile, batch.Text, limits.ListRows + 1,
             async (command, values, reader, ct) =>
@@ -187,6 +187,17 @@ internal sealed class ExplorerService : IDisposable
             error => new PeekDependenciesResult([], [], 0, Error: error), (result, elapsed) => result with { ElapsedMs = elapsed }, "the dependencies", token);
     }
 
+    /// <summary>explorer.peekDefinition: a page of a module's text after explorer.peek's first (<see cref="PeekSql.DefinitionPage"/>),
+    /// on the peek's slot and budget; the renderer asks for the next page only once it has this one.</summary>
+    public Task<PeekDefinitionResult> PeekDefinitionAsync(PeekDefinitionArgs args, CancellationToken token)
+    {
+        var spec = ExplorerRefs.ValidatePeekDefinition(args, catalog);
+        var profile = PeekProfile(args.ConnectionId);
+        return RunPeekAsync(args.ConnectionId, args.RequestId, args.Target, profile, PeekSql.DefinitionPage(spec, args.Target.Parent?.Kind), catalog.Peek.DefinitionPageChars,
+            async (_, _, reader, ct) => await PeekSql.ReadDefinitionPageAsync(reader, args.Offset, ct),
+            error => new PeekDefinitionResult(null, 0, 0, 0, error), (result, elapsed) => result with { ElapsedMs = elapsed }, "the definition", token, args.Offset);
+    }
+
     private ExplorerProfile PeekProfile(string connectionId)
     {
         var real = host.Profile(connectionId).Explorer(catalog);
@@ -200,7 +211,8 @@ internal sealed class ExplorerService : IDisposable
     /// and its own name in @k1, any other object's name in @object_name. <paramref name="read"/> reads what follows the lookup's
     /// row; a null from it, like a missing object, is NOT_FOUND.</summary>
     private async Task<T> RunPeekAsync<T>(string connectionId, string requestId, ObjectRefDto target, ExplorerProfile profile, string statement, int take,
-        Func<SqlCommand, Values, SqlDataReader, CancellationToken, Task<T?>> read, Func<ExplorerError, T> failed, Func<T, long, T> timed, string what, CancellationToken token)
+        Func<SqlCommand, Values, SqlDataReader, CancellationToken, Task<T?>> read, Func<ExplorerError, T> failed, Func<T, long, T> timed, string what, CancellationToken token,
+        int? offset = null)
         where T : class
     {
         var watch = Stopwatch.StartNew();
@@ -213,8 +225,8 @@ internal sealed class ExplorerService : IDisposable
             var lane = peekGates.GetOrAdd(connectionId, _ => new SemaphoreSlim(Options.PeekPerConnection));
             var scope = catalog.KindOf(target.Kind).Scope;
             var values = target.Parent is { } parent
-                ? new Values(parent.Schema, parent.Name, new CursorKey(target.Name, null, null), false, take, null, null, null, null, null, null, null)
-                : new Values(target.Schema, target.Name, null, false, take, null, null, null, null, null, null, null);
+                ? new Values(parent.Schema, parent.Name, new CursorKey(target.Name, null, null), false, take, null, null, null, null, null, null, null, Offset: offset)
+                : new Values(target.Schema, target.Name, null, false, take, null, null, null, null, null, null, null, Offset: offset);
             var server = scope is "database" or "serverObject";
             var subject = target.Parent is { } owner ? owner.Schema + "." + owner.Name + "." + target.Name : target.Schema is null ? target.Name ?? target.Kind : target.Schema + "." + target.Name;
             var result = await RunAsync(connectionId, server ? null : target.Database, subject, profile, server ? QueryScope.Server : QueryScope.Database, statement, values,
@@ -380,7 +392,7 @@ internal sealed class ExplorerService : IDisposable
     internal const int ConnectDeniedEstimate = 24;
 
     internal sealed record Values(string? ObjectSchema, string? ObjectName, CursorKey? Key, bool First, int Take, string? Name, string? Schema, string? Owner, DateTime? D1, DateTime? D2,
-        string? SsisFolder, string? SsisProject, string? SsisCatalog = null);
+        string? SsisFolder, string? SsisProject, string? SsisCatalog = null, int? Offset = null);
 
     internal static Values Parameters(ExplorerRequest request, CursorKey? key, bool first, string? objectName = null, string? objectSchema = null)
     {
@@ -494,7 +506,8 @@ internal sealed class ExplorerService : IDisposable
         Parameter("@ssis_folder", SqlDbType.NVarChar, 128, values.SsisFolder),
         Parameter("@ssis_project", SqlDbType.NVarChar, 128, values.SsisProject),
         Parameter("@kb", SqlDbType.BigInt, 0, values.Key?.Kb),
-        Parameter("@ssis_catalog", SqlDbType.NVarChar, 128, values.SsisCatalog)
+        Parameter("@ssis_catalog", SqlDbType.NVarChar, 128, values.SsisCatalog),
+        Parameter("@offset", SqlDbType.Int, 0, values.Offset)
     ];
 
     private static void Add(SqlCommand command, string name, SqlDbType type, int size, object? value) => command.Parameters.Add(Parameter(name, type, size, value));
