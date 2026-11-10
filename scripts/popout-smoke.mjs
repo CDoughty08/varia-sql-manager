@@ -250,8 +250,11 @@ try {
 
   // 6. A popout survives a restart: the layout keeps its window, and the next launch opens it again.
   await popsOut(() => movePane(page, 'explorer', 'window'))
-  // Moved without a resize (no DOM event says so), its place is saved all the same.
+  // Moved without a resize (no DOM event says so), its place is saved all the same, even when it moves as soon as its
+  // first place is saved: before the renderer's one-second check has seen the window, which then took the moved place
+  // as the one to compare with.
   const layoutFile = () => readFile(resolve(profile, 'workspace-layouts.json'), 'utf8').then(JSON.parse).catch(() => undefined)
+  await expect.poll(async () => (await layoutFile())?.current?.windows?.length ?? 0, { intervals: [20], timeout: 10000 }).toBe(1)
   const moved = await application.evaluate(({ BrowserWindow }) => {
     const popout = BrowserWindow.getAllWindows().find(window => window.webContents.getURL() === 'about:blank')
     const [x, y] = popout.getPosition()

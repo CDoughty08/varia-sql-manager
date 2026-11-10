@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Data.SqlClient;
+using Varia.Backend.Common;
 
 namespace Varia.Backend.Protocol;
 
@@ -35,6 +36,8 @@ internal sealed record HostOptions
     public int ResultSlots { get; init; } = 16;
     /// <summary>Ends the process; the checks record the code instead.</summary>
     public Action<int> Exit { get; init; } = Environment.Exit;
+    /// <summary>The exit waits here for a child's tree kill that is under way.</summary>
+    public ExitGate ExitGate { get; init; } = ExitGate.Shared;
     /// <summary>Fixed-format diagnostics only: never SQL, messages, server names or connection strings.</summary>
     public Action<string> Diagnostic { get; init; } = line => Console.Error.WriteLine(line);
 }
@@ -448,7 +451,7 @@ internal sealed class ProtocolHost
     {
         if (Interlocked.CompareExchange(ref exitCode, code, -1) != -1) return exitCode;
         outbound.Complete(TimeSpan.FromSeconds(1));
-        options.Exit(code);
+        options.ExitGate.Exit(options.Exit, code);
         return code;
     }
 

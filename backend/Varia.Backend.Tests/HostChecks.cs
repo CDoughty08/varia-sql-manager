@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO.Pipes;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Varia.Backend.Common;
 using Varia.Backend.Protocol;
 using Varia.Backend.Results;
 
@@ -293,6 +294,22 @@ internal static class HostChecks
         {
             host.Send(FrameKind.Hello, 0, 0, JsonBridge.Encode(new { versions = new[] { 2, 2 }, generation = 1 }, Json));
             check(host.Exited.Wait(15000) && host.Exits.TryPeek(out var code) && code == 0, "a stdout that fails to write ends the writer and exits 0");
+        }
+
+        // The exit used to land inside a tree kill a pool thread had under way (a retired language server's), which left
+        // that child stopped by the kill's SIGSTOP for good.
+        var exitGate = new ExitGate();
+        using (var host = new HostHarness(new HostOptions { ExitGate = exitGate }))
+        {
+            host.Hello();
+            bool killed = false, exitedDuringKill = true;
+            exitGate.Kill(ref killed, () =>
+            {
+                host.CloseInput();
+                SpinWait.SpinUntil(() => exitGate.Waiting > 0 || host.Exited.IsSet, 15000);
+                exitedDuringKill = host.Exited.IsSet;
+            });
+            check(!exitedDuringKill && host.Exited.Wait(15000) && host.Exits.TryPeek(out var code) && code == 0, "the exit waits for a child's tree kill that is under way");
         }
 
         OutboundChecks(check);
