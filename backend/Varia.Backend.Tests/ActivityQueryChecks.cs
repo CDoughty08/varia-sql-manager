@@ -22,6 +22,7 @@ internal static class ActivityQueryChecks
         Deltas(check);
         Texts(check);
         Grouping(check);
+        Clock(check);
         Cuts(check);
         Batching(check);
         Reader(check);
@@ -107,7 +108,7 @@ internal static class ActivityQueryChecks
         var stats = Statement("stats");
         var rows = new ActivityQueryRows(Catalog);
         // First sample: hash 7 has two statements (two plans), hash 8 one; no window, so no rates.
-        var since = rows.Since(Noon);
+        var since = rows.Since(Noon, 0);
         var first = rows.Apply(Result(stats, [Row(1, 7, 10, plan: 1), Row(2, 7, 10, plan: 2), Row(3, 8, 100)]), 0, Noon, spills: true);
         var firstRows = rows.Rows(first);
         check(since == Noon - ActivityQueryRows.FirstLookback && first.WindowMs is null && firstRows.Count == 2 && Cell(rows, firstRows[0], "queryHash") == "0x0800000000000000"
@@ -119,7 +120,7 @@ internal static class ActivityQueryChecks
         // it), hash 8 not at all; a plan of hash 9 was cached in the window, and a statement of hash 10 that the kept totals never
         // saw ran in it, from an old plan.
         var later = Noon.AddSeconds(30);
-        var second = rows.Since(later);
+        var second = rows.Since(later, 30_000);
         var window = rows.Apply(Result(stats,
         [
             Row(1, 7, 40, plan: 1, lastRun: later, maxElapsed: 30_000), Row(4, 9, 6, created: Noon.AddSeconds(10), lastRun: later, cpuEach: 1_000_000),
@@ -150,7 +151,7 @@ internal static class ActivityQueryChecks
         check(refused.All(row => Cell(rows, row, "query") is null), "when the login may not read statement texts a row's text is blank, never Loading text… for ever");
         var loading = rows.Rows(window);
         var filter = ActivityFilter.Compile(Catalog, new("recentQueries", Text: "load"));
-        check(loading.All(row => Cell(rows, row, "query") == ActivityQueryRows.Loading) && !loading.Any(row => filter.Matches(rows.FilterCells(row))),
+        check(loading.All(row => Cell(rows, row, "query") == ActivityQueryRows.Loading) && !loading.Any(row => filter.Matches(rows.FilterCells()(row))),
             "the filter box does not match Loading text…, so typing \"load\" keeps no row whose text has not arrived");
 
         // Without total_spills the column stays blank.
@@ -163,7 +164,41 @@ internal static class ActivityQueryChecks
         // A reset (baseline, resume, restart) starts again as a first sample.
         rows.Reset();
         var again = rows.Apply(Result(stats, [Row(1, 7, 50, lastRun: later)]), 60_000, later, spills: true);
-        check(again.WindowMs is null && rows.Since(later) == later - ActivityQueryRows.Overlap && rows.Baselines == 1, "after a reset the next sample is a first sample again, its baselines only what it read");
+        check(again.WindowMs is null && rows.Since(later.AddSeconds(30), 90_000) == later - ActivityQueryRows.Overlap && rows.Baselines == 1, "after a reset the next sample is a first sample again, its baselines only what it read");
+    }
+
+    private static void Clock(Action<bool, string> check)
+    {
+        // The server's local time steps back an hour (daylight saving ends) between two samples 30 s apart on the probe's clock:
+        // @since follows the window, not the previous sample's later local time, so the statements that ran are still read, and
+        // a plan cached in the window still counts whole.
+        var stats = Statement("stats");
+        var rows = new ActivityQueryRows(Catalog);
+        rows.Apply(Result(stats, [Row(1, 7, 10)]), 0, Noon, spills: true);
+        var back = Noon.AddHours(-1).AddSeconds(30);
+        var since = rows.Since(back, 30_000);
+        var sample = rows.Apply(Result(stats, [Row(1, 7, 40, lastRun: back), Row(2, 8, 6, created: back.AddSeconds(-10), lastRun: back)]), 30_000, back, spills: true);
+        var shown = rows.Rows(sample);
+        check(since == back.AddSeconds(-30) - ActivityQueryRows.Overlap && shown.Count == 2 && shown.All(row => Cell(rows, row, "executionsPerMinute") is not null),
+            "when the server's local time steps back between samples, @since and the cached-in-window test follow the probe's clock, so the window's statements are read and counted: " + since.ToString("O"));
+        check(rows.Since(Noon.AddSeconds(60), 60_000) == back - ActivityQueryRows.Overlap, "a clock that moved forward reads from the previous sample's own time");
+
+        // The filter predicate one sample built keeps that sample's loading rows, whatever later samples build.
+        var cells = rows.FilterCells();
+        var filter = ActivityFilter.Compile(Catalog, new("recentQueries", Text: "load"));
+        rows.Rows(sample);
+        check(!shown.Any(row => filter.Matches(cells(row))), "a sample's filter predicate keeps its own rows' loading state after the next sample's rows are built");
+
+        // The row's statement's text is gone (its plan left the cache): another statement of the group is asked for.
+        var text = Statement("text");
+        var batches = rows.TextBatches(sample);
+        var mine = batches.SelectMany(batch => batch).Single(request => QueryStatement.HashText(request.Statement.Hash) == "0x0700000000000000");
+        var group = new[] { mine };
+        rows.AddTexts(group, Result(text, []));
+        var twoPlans = rows.Apply(Result(stats, [Row(1, 7, 50, lastRun: back.AddSeconds(30)), Row(3, 7, 5, plan: 2, lastRun: back.AddSeconds(29))]), 60_000, back.AddSeconds(30), spills: true);
+        var asked = rows.TextBatches(twoPlans).SelectMany(batch => batch).Where(request => QueryStatement.HashText(request.Statement.Hash) == "0x0700000000000000").ToList();
+        check(asked is [{ Statement.Key: var other }] && !other.Equals(mine.Statement.Key),
+            "when SQL Server no longer has the row's statement's text, the text of another statement of the group is asked for");
     }
 
     private static void Cuts(Action<bool, string> check)
@@ -217,7 +252,7 @@ internal static class ActivityQueryChecks
             && Cell(rows, built[0], "query") == "SELECT " + Cell(rows, built[0], "queryHash") && Cell(rows, built[0], "database") == "Sales",
             "texts that arrived are cached and not asked for again; their rows show the statement on one line and its database, and the rest still say Loading text…");
         var sales = ActivityFilter.Compile(Catalog, new("recentQueries", Text: "select"));
-        check(built.Count(row => sales.Matches(rows.FilterCells(row))) == 100, "the filter box matches the texts that arrived");
+        check(built.Count(row => sales.Matches(rows.FilterCells()(row))) == 100, "the filter box matches the texts that arrived");
         // A slot the statement did not return (no handle) is kept empty, not asked for again.
         rows.AddTexts(rest[0], Result(text, []));
         check(rows.TextBatches(next).Count == 1 && rows.Rows(next).Count(row => Cell(rows, row, "query") is null) == 50,

@@ -204,7 +204,7 @@ internal sealed class ActivityReader : ILiveSqlReader
         if (clock is not null) results["clock"] = clock;
         var at = SampleTime(spec.Id, results, item);
         if (stop) return Nothing(spec, errors);
-        var since = queries.Since(ServerLocal(results));
+        var since = queries.Since(ServerLocal(results), at);
         var (stats, statsStop) = await Attempt(connection, prologue, spec, render, statements, statsAt,
             parameter => parameter.Name == "@since" ? since : Value(statements[statsAt], parameter), testText, errors, token).ConfigureAwait(false);
         if (stats is null) return Nothing(spec, errors);
@@ -222,8 +222,9 @@ internal sealed class ActivityReader : ILiveSqlReader
         ActivityFilter filter;
         lock (gate) filter = filters.GetValueOrDefault("recentQueries") ?? ActivityFilter.Compile(catalog, new("recentQueries"));
         var rows = queries.Rows(built, refused);
+        var cells = queries.FilterCells();
         // No series: the rates are per row, worked out here.
-        return new(null, [new(Index(spec, "recentQueries"), rows, built.More, row => filter.Matches(queries.FilterCells(row)))], errors);
+        return new(null, [new(Index(spec, "recentQueries"), rows, built.More, row => filter.Matches(cells(row)))], errors);
 
         int Position(string id)
         {

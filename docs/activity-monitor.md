@@ -395,7 +395,7 @@ Probe `activity.queries`; key `queryHash`; at most 200 rows. Default order: CPU 
 | Rows/Execution | `rowsPerExecution` | decimal | count | Yes | New | Rows per execution. |
 | Avg Grant (KB) | `avgGrantKb` | decimal | KB |  | New | Memory grant per execution. |
 | Spills | `spills` | bigint | count |  | New | Pages spilled in the window. Needs `totalSpills`. |
-| Plan Count | `planCount` | int | count | Yes | SSMS | Distinct plans (query_plan_hash) of the group the monitor has seen since it started reading, idle ones included. |
+| Plan Count | `planCount` | int | count | Yes | SSMS | Distinct plans (query_plan_hash) of the group seen since sampling started or resumed, idle ones included. |
 | Database | `database` | text | — | Yes | SSMS | The plan's database. |
 | Last Execution | `lastExecution` | datetime | — | Yes | New | The group's latest execution (server time). |
 | Cached Since | `cachedSince` | datetime | — |  | New | The creation time of the oldest plan of the group the monitor has seen. |

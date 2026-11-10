@@ -392,7 +392,7 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
       c('rowsPerExecution', 'Rows/Execution', 'decimal', 'count', true, 'new', 'Rows per execution.'),
       c('avgGrantKb', 'Avg Grant (KB)', 'decimal', 'KB', false, 'new', 'Memory grant per execution.'),
       c('spills', 'Spills', 'bigint', 'count', false, 'new', 'Pages spilled in the window.', 'totalSpills'),
-      c('planCount', 'Plan Count', 'int', 'count', true, 'ssms', 'Distinct plans (query_plan_hash) of the group the monitor has seen since it started reading, idle ones included.'),
+      c('planCount', 'Plan Count', 'int', 'count', true, 'ssms', 'Distinct plans (query_plan_hash) of the group seen since sampling started or resumed, idle ones included.'),
       c('database', 'Database', 'text', '', true, 'ssms', 'The plan\'s database.'),
       c('lastExecution', 'Last Execution', 'datetime', '', true, 'new', 'The group\'s latest execution (server time).'),
       c('cachedSince', 'Cached Since', 'datetime', '', false, 'new', 'The creation time of the oldest plan of the group the monitor has seen.'),

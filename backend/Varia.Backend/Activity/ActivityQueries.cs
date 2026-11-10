@@ -204,8 +204,8 @@ internal sealed class ActivityQueryRows(ActivityCatalog catalog)
     private readonly QueryDeltas deltas = new((int)catalog.Limit("queryDeltaKeys"));
     private readonly LruMap<StatementKey, QueryText> texts = new((int)catalog.Limit("textCache"));
     /// <summary>The rows the last <see cref="Rows"/> built whose text had not arrived: the filter box does not match the
-    /// placeholder.</summary>
-    private readonly HashSet<LiveRow> loading = new(ReferenceEqualityComparer.Instance);
+    /// placeholder. A new set each sample, so a predicate built from one never sees another's rows.</summary>
+    private HashSet<LiveRow> loading = new(ReferenceEqualityComparer.Instance);
     /// <summary>The previous sample's time on the probe's clock and the server's local time then (null before one).</summary>
     private (long At, DateTime? Local)? previous;
 
@@ -222,16 +222,26 @@ internal sealed class ActivityQueryRows(ActivityCatalog catalog)
         if (texts) this.texts.Clear();
     }
 
-    /// <summary>The stats statement's @since for a sample whose clock read <paramref name="now"/> (the server's local time):
-    /// the previous sample's clock less <see cref="Overlap"/>, which the stats statement compares with each statement's last
-    /// execution's end; a first sample reads <see cref="FirstLookback"/>.</summary>
-    public DateTime Since(DateTime? now)
+    /// <summary>The stats statement's @since for a sample at <paramref name="at"/> on the probe's clock whose clock statement
+    /// read <paramref name="now"/> (the server's local time): the previous sample's server time less <see cref="Overlap"/>,
+    /// which the stats statement compares with each statement's last execution's end; a first sample reads
+    /// <see cref="FirstLookback"/>.</summary>
+    public DateTime Since(DateTime? now, long at)
     {
         DateTime since;
-        if (previous is { Local: { } then }) since = then - Overlap;
+        if (Previous(now, at) is { } then) since = then - Overlap;
         else if (now is { } current) since = current - FirstLookback;
         else since = SqlMin;
         return since < SqlMin ? SqlMin : since;
+    }
+
+    /// <summary>The previous sample's time in the server's local time. GETDATE() can step back (a daylight saving change, a
+    /// clock set back) while the probe's clock (ms_ticks) does not, so it is never later than now less the window: else the
+    /// statements would seem to have ended before the previous sample, and none would be read until the clock caught up.</summary>
+    private DateTime? Previous(DateTime? now, long at)
+    {
+        if (previous is not { Local: { } then } before) return null;
+        return now is { } current && at >= before.At && current - TimeSpan.FromMilliseconds(at - before.At) is var stepped && stepped < then ? stepped : then;
     }
 
     /// <summary>Builds a sample from the stats statement's rows. <paramref name="at"/> is the sample's time on the probe's clock
@@ -239,7 +249,7 @@ internal sealed class ActivityQueryRows(ActivityCatalog catalog)
     public QuerySample Apply(ActivityResult stats, long at, DateTime? now, bool spills)
     {
         long? window = previous is { } before && at > before.At ? at - before.At : null;
-        var cachedAfter = window is not null ? previous!.Value.Local : null;
+        var cachedAfter = window is not null ? Previous(now, at) : null;
         var cap = (int)catalog.Limit("queryStatsRows");
         // Statistics rows past their cap are a cut: the window's sums miss what was not read, and so would the next one's.
         var truncated = stats.Rows.Count > cap;
@@ -293,8 +303,11 @@ internal sealed class ActivityQueryRows(ActivityCatalog catalog)
         var keys = new HashSet<StatementKey>();
         foreach (var group in sample.Shown)
         {
-            var shown = group.Shown;
-            if (!texts.Contains(shown.Key) && keys.Add(shown.Key)) wanted.Add(shown);
+            // The row's statement first; when SQL Server no longer has its text, another statement of the group whose text it
+            // may have, so the row is not left blank while one exists.
+            if (group.Statements.Any(statement => texts.Contains(statement.Key) && Text(statement.Key)?.Statement is not null)) continue;
+            var next = group.Statements.OrderByDescending(statement => ReferenceEquals(statement, group.Shown)).FirstOrDefault(statement => !texts.Contains(statement.Key));
+            if (next is not null && keys.Add(next.Key)) wanted.Add(next);
         }
         return [.. wanted.Take(size * (int)catalog.Limit("textBatchesPerTick")).Chunk(size).Select(chunk => chunk.Select((statement, slot) => new QueryTextRequest(slot, statement)).ToArray())];
     }
@@ -331,11 +344,16 @@ internal sealed class ActivityQueryRows(ActivityCatalog catalog)
 
     private QueryText? Text(StatementKey key) => texts.TryGet(key, out var text) ? text : null;
 
-    /// <summary>The cells the filter box tests for a row: a row still loading its text has no text to match.</summary>
-    public Func<string, string?> FilterCells(LiveRow row)
+    /// <summary>The cells the filter box tests for each row of the last <see cref="Rows"/>: a row still loading its text has
+    /// no text to match.</summary>
+    public Func<LiveRow, Func<string, string?>> FilterCells()
     {
-        var cells = writer.Reader(row);
-        return loading.Contains(row) ? column => column == "query" ? null : cells(column) : cells;
+        var waiting = loading;
+        return row =>
+        {
+            var cells = writer.Reader(row);
+            return waiting.Contains(row) ? column => column == "query" ? null : cells(column) : cells;
+        };
     }
 
     /// <summary>The sample's rows in rank order, in the catalogue's column order. <paramref name="textsRefused"/> says the login
@@ -343,7 +361,7 @@ internal sealed class ActivityQueryRows(ActivityCatalog catalog)
     public List<LiveRow> Rows(QuerySample sample, bool textsRefused = false)
     {
         var rows = new List<LiveRow>(sample.Shown.Count);
-        loading.Clear();
+        loading = new(ReferenceEqualityComparer.Instance);
         var facts = deltas.Facts(sample.Shown.Select(group => group.Hash).ToHashSet());
         foreach (var group in sample.Shown)
         {
