@@ -12,9 +12,11 @@ internal sealed record LanguageCloseArgs(string DocumentId);
 internal sealed record LanguageCloseResult(bool Closed);
 internal sealed record LanguageTextEdit(LanguageRange Range, string NewText);
 internal sealed record LanguageCompletionItem(string Label, int? Kind = null, string? Detail = null, string? Documentation = null,
-    string? InsertText = null, int? InsertTextFormat = null, LanguageTextEdit? TextEdit = null);
+    string? InsertText = null, int? InsertTextFormat = null, LanguageTextEdit? TextEdit = null, string? SortText = null, string? FilterText = null);
 internal sealed record LanguageCompletionResult(IReadOnlyList<LanguageCompletionItem> Items, bool IsIncomplete);
 internal sealed record LanguageHover(string Contents, LanguageRange? Range = null);
-internal sealed record LanguageProviderStatus(string Id, bool Configured, bool Completion, bool Hover, string? Reason = null, bool Refresh = false);
+internal sealed record LanguageDiagnostic(LanguageRange Range, string Message, int Severity = 1, string? Code = null, string? Source = null);
+internal sealed record LanguageDiagnosticResult(int Version, IReadOnlyList<LanguageDiagnostic> Items, bool IsIncomplete = false);
+internal sealed record LanguageProviderStatus(string Id, bool Configured, bool Completion, bool Hover, string? Reason = null, bool Refresh = false, bool Diagnostics = false);
 internal sealed record LanguageStatus(IReadOnlyList<LanguageProviderStatus> Providers);
 internal sealed record LanguageStatusArgs;

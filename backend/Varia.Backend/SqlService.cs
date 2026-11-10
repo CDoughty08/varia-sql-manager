@@ -27,7 +27,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     public static readonly string[] MethodNames =
     [
         "plans.parse", "plans.estimate",
-        "language.status", "language.complete", "language.hover", "language.refresh", "language.close",
+        "language.status", "language.complete", "language.hover", "language.diagnostics", "language.refresh", "language.close",
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
@@ -348,6 +348,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "language.status" => GetLanguageStatus(parameters, json),
         "language.complete" => await language.CompleteAsync(Read<LanguageRequest>(parameters, json), Token(context)),
         "language.hover" => (object?)await language.HoverAsync(Read<LanguageRequest>(parameters, json), Token(context)) ?? null!,
+        "language.diagnostics" => await language.DiagnosticsAsync(Read<LanguageRefreshRequest>(parameters, json), Token(context)),
         "language.refresh" => await language.RefreshAsync(Read<LanguageRefreshRequest>(parameters, json), Token(context)),
         "language.close" => await language.CloseAsync(Read<LanguageCloseArgs>(parameters, json).DocumentId, Token(context)),
         "connections.identity" => await IdentityAsync(Read<IdentityArgs>(parameters, json), Token(context)),

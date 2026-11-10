@@ -52,6 +52,12 @@
           "System.Security.Permissions": "8.0.0"
         }
       },
+      "Microsoft.SqlServer.TransactSql.ScriptDom": {
+        "type": "Direct",
+        "requested": "[180.140.0, )",
+        "resolved": "180.140.0",
+        "contentHash": "qdSHJPR3t2mqLcYQ31E9hBhQfuHo34jOtMEOrCKHBNuV+IShlLfDR8/tDzXR7MeI2ZhlZ+8wCVRMACifoAepAA=="
+      },
       "System.Security.Cryptography.Pkcs": {
         "type": "Direct",
         "requested": "[10.0.13, )",

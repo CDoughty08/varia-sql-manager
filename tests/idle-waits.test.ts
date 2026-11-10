@@ -236,7 +236,7 @@ describe('idle waits', () => {
   // top-level await) and skipped the suite's cleanup.
   it('check whether a process already exited before waiting for its exit', () => {
     for (const file of ['scripts/packaged-smoke.mjs', 'scripts/portable-smoke.mjs']) {
-      const lines = readFileSync(file, 'utf8').split('\n').filter(line => /once\('exit'/.test(line) && /ref: false/.test(line))
+      const lines = readFileSync(file, 'utf8').split('\n').filter(line => /once\('exit'/.test(line) && /ref: false|\bwithin\(/.test(line))
       expect(lines.length, file).toBeGreaterThan(0)
       for (const line of lines) expect(line, file).toMatch(/exitCode !== null \|\| child\.signalCode !== null \|\|/)
     }

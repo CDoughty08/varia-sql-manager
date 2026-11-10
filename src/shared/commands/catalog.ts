@@ -682,6 +682,14 @@ export const commandCatalog = {
     keybindings: [{ key: 'mod+shift+r', when: 'editorFocus && !inputFocus' }],
     menus: [{ menu: 'edit.intellisense', group: '2_cache', order: 1, mnemonic: 'r' }]
   },
+  'edit.nextSqlIssue': {
+    title: 'Next SQL Issue', category: 'Edit', keywords: ['error', 'warning', 'diagnostic', 'squiggle'], precondition: 'activeDocumentIsQuery', unavailableHint: openFirst,
+    keybindings: [{ key: 'alt+f8', native: true }], menus: [{ menu: 'edit.intellisense', group: '3_issues', order: 1, mnemonic: 'n' }]
+  },
+  'edit.previousSqlIssue': {
+    title: 'Previous SQL Issue', category: 'Edit', keywords: ['error', 'warning', 'diagnostic', 'squiggle'], precondition: 'activeDocumentIsQuery', unavailableHint: openFirst,
+    keybindings: [{ key: 'alt+shift+f8', native: true }], menus: [{ menu: 'edit.intellisense', group: '3_issues', order: 2, mnemonic: 'p' }]
+  },
   // SSMS's Activity Monitor (docs/activity-monitor.md): one per connection, opened from a server's menu, View or the
   // palette. SSMS's Ctrl+Alt+A is AltGr on Windows and Linux layouts (reservedReason), so only macOS has its key, ⌥⌘A.
   'activity.open': {

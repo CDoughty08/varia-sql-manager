@@ -1,6 +1,6 @@
 # SQL language services
 
-Varia's first language-service integration supplies completion suggestions and hover information in SQL query editors through Microsoft SQL Tools Service. SQL Server is the first provider. The editor-facing contract and transport are separate from that provider so another database engine can use a different language server without changing the Monaco integration.
+Varia supplies completion, hover information and query diagnostics through Microsoft SQL Tools Service. SQL Server is the first provider. The editor-facing contract and transport are separate from that provider so another database engine can use a different language server without changing the Monaco integration.
 
 Installed applications include the matching self-contained runtime for Windows x64, Linux x64, macOS arm64 or macOS x64. IntelliSense requires no separate installation, executable-path setting or first-launch download.
 
@@ -27,6 +27,12 @@ Developers can override discovery with `VARIA_SQLTOOLS_SERVICE_PATH`, an absolut
 
 Open a query tab and use **Ctrl+Space** to request suggestions, or type a provider trigger character such as `.`. Hover over an identifier for information supplied by the language server. Suggestions use the query tab's connection and selected database. Changing the active tab does not change the context of another editor's pending request.
 
+Column suggestions rank ahead of general suggestions with the same matching quality. In supported SELECT scopes, unqualified column suggestions carry their source qualifier: a self-join exposes `t.high` and `b.high` independently, and typing `hi` can match both. Typing `t.` uses SQL Tools' normal qualified completion and returns only that source's columns. Scope resolution uses a bounded SQL parser and SQL Tools' binder for each visible source; temporary probe edits are restored before any other request uses that document. Work is limited to 16 source qualifiers and a five-second probe budget. An incomplete expansion does not reintroduce ambiguous bare table columns.
+
+Hover and completion widgets can extend beyond a short query panel while remaining within the window. Each editor owns its widgets across split and floating groups; menus and dialogs stay above them.
+
+SQL error checking runs after a 500 ms editing pause without executing the query. Syntax and catalog-binding errors, including missing columns and unknown aliases, appear as red squiggles; provider warnings appear yellow. Hover for the message, or use **Alt+F8** / **Alt+Shift+F8** and **Edit › IntelliSense › Next/Previous SQL Issue** to navigate the current query. The status bar reports analysis progress, failures and error/warning counts. Turn it off in **Tools › Options › Text Editor › Transact-SQL › IntelliSense › Enable error checking**. Every edit clears obsolete markers immediately; only results matching the current model version, connection context and backend generation are displayed. Results are limited to 1,000 issues, with explicit incomplete status when capped. Unconnected queries receive syntax analysis; database name resolution requires a supported live connection.
+
 Use **Ctrl+Shift+R** (**Command+Shift+R** on macOS), **Edit › IntelliSense › Refresh Local Cache**, or the command palette to rebuild the current query's metadata cache after schema changes. Refresh uses the selected provider, connection and database. It preserves unsaved SQL, query execution sessions, transactions and temporary tables, and waits for the provider's readiness notification before reporting completion. The status bar shows refresh progress and failures. Changing the query's target or closing it discards an obsolete refresh result.
 
 Connected IntelliSense initially supports SQL Login and Windows authentication, using the connection's encryption and certificate settings. Microsoft Entra authentication is not enabled for IntelliSense in this slice: the SQL Tools Service process does not share Varia's token broker. Query execution keeps its existing authentication support.
@@ -49,9 +55,9 @@ The SQL Server adapter opens the buffer before connecting, waits for metadata re
 
 ## First-slice scope
 
-- Completion, hover and explicit metadata-cache refresh are implemented. Diagnostics, formatting, definition navigation, signature help and completion-item resolution are future work.
+- Completion, hover, syntax/catalog diagnostics and explicit metadata-cache refresh are implemented. Formatting, definition navigation, signature help and completion-item resolution are future work.
 - SQL Server is the only implemented provider. The reserved PostgreSQL and BigQuery identifiers do not enable those engines.
-- Server responses are bounded before reaching the editor. Documents above 250,000 UTF-16 code units retain normal editing and execution behavior without language requests. The provider holds at most 128 documents and 8,000,000 UTF-16 code units in total; a completion response returns at most 500 items. Matching identifiers are prioritized before truncation so names later in a large catalog remain reachable as the user types.
+- Server responses are bounded before reaching the editor. Documents above 250,000 UTF-16 code units retain normal editing and execution behavior without language requests. Completion retains at most 128 documents and 8,000,000 UTF-16 code units in total; a completion response returns at most 500 items. Matching identifiers are prioritized before truncation so names later in a large catalog remain reachable as the user types.
 - An absent service executable leaves language support unavailable; query editing and execution remain available.
 - The bundled service is pinned and verified at build time. Its executable and arguments come only from the trusted application, never SQL documents or renderer requests.
 
@@ -59,11 +65,13 @@ The child process starts lazily when a language request first needs it. Requests
 
 The pinned service retains some metadata and offline parse caches after document close. When a context's last document closes, or after 128 document closures, the adapter waits for admitted language requests to finish and retires the child. Remaining documents synchronize lazily with a fresh child; query execution sessions are unaffected. Renderer cleanup is bounded and also waits for requests queued behind metadata work, so a late request cannot reopen a closed tab's analysis state. Cleanup retries only explicit pre-dispatch capacity refusals. Persistent overload reports a warning rather than restarting the backend or silently discarding cleanup.
 
+SQL Tools publishes diagnostics asynchronously without document versions and shares its diagnostic debounce across documents. Analysis therefore uses one separate, serialized SQL Tools child with an immutable URI for each snapshot. This isolates native debounce across the two children and prevents an earlier snapshot's notification from painting the current query. Completion and hover preempt pending background analysis for their document, while error checking pauses and automatically resumes after foreground requests settle. At most one diagnostic context is retained, briefly two snapshot connections during rollover. The analysis child retires on close, disconnect, relevant cache refresh, context change, 128 snapshots, 8,000,000 cumulative snapshot UTF-16 code units, reset, or 60 seconds idle. The broker retains fingerprints for version checks rather than another copy of every query buffer. Using both analysis and completion can therefore hold two SQL Tools processes; diagnostics alone does not start the completion child. These are static language checks, not a guarantee that SQL will execute successfully; dynamic SQL and query-session-local objects remain outside the separate metadata connection.
+
 Database management actions temporarily pause language requests and release metadata connections so IntelliSense cannot keep a database in use during rename, detach, restore or similar operations. The next language request after the action rebuilds the analysis context. This initial suspension covers all providers; a later version can narrow it to the affected connection and database.
 
 ## Next stages
 
-Add diagnostics with versioned publication and marker ownership, Entra token handoff and provider settings. Implement a second provider before promoting any SQL Server-specific assumption into the common contract.
+Add Entra token handoff, formatting, signatures and definition navigation. Implement a second provider before promoting any SQL Server-specific assumption into the common contract.
 
 ## Live validation
 
