@@ -12,7 +12,15 @@ export const peekEditorUse: QueryEditorUse = {
   compact: true,
   ariaLabel: 'Definition text',
   contextKey: peekEditorContextKey,
-  inEditorPane: false
+  inEditorPane: false,
+  // Its hover and message widgets sit in a body-level host, outside the card: a press there is still a press on Peek.
+  widgetHostAttribute: peekEditorAttribute
+}
+
+/** Whether a pressed element belongs to a Peek editor, its body-level widget host included. */
+export function inPeekEditor(target: EventTarget | null): boolean {
+  const element = target && typeof (target as Element).closest === 'function' ? target as Element : (target as Node | null)?.parentElement
+  return !!element?.closest(`[${peekEditorAttribute}]`)
 }
 
 /**
@@ -23,7 +31,10 @@ export function peekEditorHasTextFocus(element: Element | null | undefined): boo
   return !!element?.closest(`[${peekEditorAttribute}]`) && !!element.closest('.native-edit-context, .inputarea') && !element.closest('.find-widget')
 }
 
-/** A model's connection and database, as a query document carries them, so SQL language features can read its schema. */
+/**
+ * A model's connection and database, as a query document carries them. SqlLanguageService serves query documents only today;
+ * this is what it reads to serve a Peek model's schema once it serves those too.
+ */
 export interface SqlModelContext { readonly connectionId: string; readonly database?: string }
 const modelContexts = new WeakMap<object, SqlModelContext>()
 /** The connection and database of a Peek model; undefined for any other model (a query document's are in DocumentService). */

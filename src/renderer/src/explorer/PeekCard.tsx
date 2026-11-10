@@ -13,7 +13,7 @@ import Icon from '../Icon'
 import { useKeybindingsRevision } from '../core/useCommand'
 import ExplorerIcon from './ExplorerIcon'
 import { selectionContextOf } from './ExplorerService'
-import { PeekEditor, peekEditorUse } from './peek-editor'
+import { inPeekEditor, PeekEditor, peekEditorUse } from './peek-editor'
 import { formatPeekValue, peekObjectName, placePeek } from './peek-format'
 import { peekMessages, type OpenPeek, type PeekDefinition, type PeekDependencies, type PeekMembers, type PeekPart, type PeekRows, type PeekView } from './PeekService'
 
@@ -315,10 +315,11 @@ function PeekCardView() {
     card.current?.focus({ preventScroll: true })
   }, [open?.id, open?.source, place])
 
-  // A press outside the card closes it; a press on a row then selects that row as usual.
+  // A press outside the card closes it; a press on a row then selects that row as usual. The definition editor's widgets
+  // (hover, read-only message) live outside the card, in a host of their own, and count as inside.
   useEffect(() => {
     if (!open || !doc) return
-    const press = (event: PointerEvent) => { if (!card.current?.contains(event.target as Node)) service.close() }
+    const press = (event: PointerEvent) => { if (!card.current?.contains(event.target as Node) && !inPeekEditor(event.target)) service.close() }
     doc.addEventListener('pointerdown', press, true)
     return () => doc.removeEventListener('pointerdown', press, true)
   }, [open?.id, doc, service])
