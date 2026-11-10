@@ -1,4 +1,5 @@
 <Solution>
   <Project Path="backend/Varia.Backend/Varia.Backend.csproj" />
   <Project Path="backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj" />
+  <Project Path="backend/Varia.Updater/Varia.Updater.csproj" />
 </Solution>

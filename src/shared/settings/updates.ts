@@ -13,6 +13,6 @@ export const updateSettings = [
   {
     key: 'environment.updates.downloadAutomatically', page: 'environment.productUpdates', label: 'Automatically download updates', type: 'boolean', default: true, enabledBy: 'environment.updates.checkAutomatically', varia: true,
     keywords: ['update', 'download', 'background', 'metered'],
-    description: 'Downloads a new release in the background as soon as a check finds it, and verifies it against the release\'s checksum; the status bar shows its progress. Nothing installs until you choose Restart to Update. While it is False, the status bar offers the update and Help › Download Update downloads it.'
+    description: 'Downloads a new release in the background as soon as a check finds it, and verifies it against the release\'s checksum; the status bar shows its progress. Nothing installs until you choose Restart to Update. While it is False, the status bar offers the update and Help › Download Update downloads it. macOS builds do not download updates (they are not code signed): there a check only says that a release exists, whatever this is set to.'
   }
 ] as const satisfies readonly SettingDef[]

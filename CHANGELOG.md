@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Updates on Windows:** an installed copy in a folder you can write (the installer's default) now unpacks a new release beside itself while you work, so **Restart to Update** swaps it in instead of running the installer. Installations for all users keep the installer. See [updates](docs/updates.md).
+- **Updates on macOS:** macOS builds no longer download updates. They are not code signed, so they tell you a release exists and open the releases page.
+- **Restart to Update** verifies the downloaded file again before installing it.
+
 ## [0.7.0] - 2026-11-08
 
 A feature release focused on execution plans, results analysis and workspace customization.
