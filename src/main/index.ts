@@ -64,7 +64,7 @@ import { sessionPrompt, sessionPromptRequestSchema } from '../shared/sessions'
 import { confirmOpenConnectionsSchema, openConnectionsAnswer, openConnectionsBox } from './open-connections'
 import { actionMessageBox, actionPromptAnswer, confirmActionBox, noLongRuns, parseLongRuns, reloadDetail, restartDetail } from './action-prompts'
 import type { LongRunState } from '../shared/long-runs.ts'
-import type { ApiResult, OpenedFiles, OpenSqlFile, QueryResult, RecoveredDocument, ReloadAnswer, RpcMethod, RpcMethods } from '../shared/contracts'
+import { maxClipboardText, type ApiResult, type OpenedFiles, type OpenSqlFile, type QueryResult, type RecoveredDocument, type ReloadAnswer, type RpcMethod, type RpcMethods } from '../shared/contracts'
 import { preparePlan } from './plan-request'
 import { memoryEventSchema } from '../shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../shared/explorer/schema.ts'
@@ -90,7 +90,6 @@ const developmentUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : und
 const isRendererUrl = rendererUrlVerifier(developmentUrl)
 // Built pages load from app://varia/ (app-protocol.ts), never file:, whose origin would reach every local file.
 protocol.registerSchemesAsPrivileged([{ scheme: appScheme, privileges: appSchemePrivileges }])
-const maxClipboardText = 8_388_608
 let mainWindow: BrowserWindow | null = null
 let backend: BackendSupervisor
 let resultsPort: ResultsPortHost | undefined
@@ -953,7 +952,7 @@ app.whenReady().then(async () => {
       // An Object Explorer load, a script, an object action, an SSIS Catalog read or write, a session's Details or a connect
       // with a requestId is registered before it is sent, so its cancel channel can always find it.
       const cancellable = cancellableRequests(method, { explorer: explorerRequests, scripting: scriptingRequests, actions: actionRequests, ssis: ssisRequests, activity: activityRequests, connections: connectionRequests }, prepared.context?.requestId)
-      const load = cancellable?.begin(prepared.context?.requestId ?? (validated as RpcMethods['explorer.children' | 'explorer.index' | 'explorer.search' | 'explorer.peek' | 'explorer.peekDependencies' | 'scripting.script' | 'actions.describe' | 'actions.script' | 'actions.execute' | 'ssis.describe' | 'ssis.execute' | 'ssis.catalogSetup' | 'activity.details']['params']).requestId)
+      const load = cancellable?.begin(prepared.context?.requestId ?? (validated as RpcMethods['explorer.children' | 'explorer.index' | 'explorer.search' | 'explorer.peek' | 'explorer.peekDependencies' | 'explorer.peekDefinition' | 'scripting.script' | 'actions.describe' | 'actions.script' | 'actions.execute' | 'ssis.describe' | 'ssis.execute' | 'ssis.catalogSetup' | 'activity.details']['params']).requestId)
       // A long action's STATS progress goes back only to the window that sent it (varia:actions-progress).
       const progress = method === 'actions.execute' ? actionProgressRelay((validated as RpcMethods['actions.execute']['params']).requestId, event.sender) : undefined
       // An object index build's progress goes back only to the window that started it (varia:explorer-index-progress).

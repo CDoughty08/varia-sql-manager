@@ -1,7 +1,7 @@
 // The Activity Monitor document in the real app on the fake backend's activity source (tests/fixtures/backend.mjs,
 // workbench mode): with no server connected it opens the Connect dialog and then the monitor; it opens from Object
 // Explorer's server menu, the View menu, the palette and the toolbar, one tab per connection;
-// its tiles fill after two samples and two charts are open (all eight may be), and a failed sample keeps them and says why; Pause stops sampling and Resume starts it again; the
+// its tiles fill after two samples and two charts are open (all eight may be); Processes shows the sessions probe's rows and its filters reach the backend; and a failed sample keeps them and says why; Pause stops sampling and Resume starts it again; the
 // interval and the chart window reach the live layer; a tab switch pauses it while hidden and keeps its choices; the
 // panes, Split View and F6 work; the header, tiles and panes fit common window sizes; a login without server state gets
 // the permission message and its GRANT statement; a lost backend reports it and
@@ -163,8 +163,8 @@ try {
   await expect.poll(async () => (await handles()).length).toBe(1)
   const [{ id }] = await handles()
   const subscribed = await calls('live.subscribe')
-  expect(subscribed.at(-1).params).toMatchObject({ source: 'activity', probes: [{ probe: 'activity.overview', intervalMs: 2000 }, { probe: 'activity.sessions', intervalMs: 2000, paused: true }, { probe: 'activity.resources', intervalMs: 5000, paused: true }, { probe: 'activity.queries', intervalMs: 30000, paused: true }] })
-  expect(subscribed.at(-1).params.probes[0].paused).toBeUndefined()
+  expect(subscribed.at(-1).params).toMatchObject({ source: 'activity', args: { filters: [{ table: 'sessions', view: 'all', showSystem: false, showVaria: false }] }, probes: [{ probe: 'activity.overview', intervalMs: 2000 }, { probe: 'activity.sessions', intervalMs: 2000 }, { probe: 'activity.resources', intervalMs: 5000, paused: true }, { probe: 'activity.queries', intervalMs: 30000, paused: true }] })
+  expect(subscribed.at(-1).params.probes.slice(0, 2).map(probe => probe.paused)).toEqual([undefined, undefined])
   // The View menu and the palette open the same monitor: one per connection.
   await queryTabs().filter({ hasText: 'SQLQuery1' }).click()
   await expect(queryTabs().filter({ hasText: 'SQLQuery1' })).toHaveAttribute('aria-selected', 'true')
@@ -268,11 +268,57 @@ try {
   await expect(monitor().getByLabel('Chart window', { exact: true })).toHaveValue('5')
   console.log('Tab switch passed: hidden, the monitor paused; shown again, it resumed with its charts, interval and window.')
 
+  step = 'processes'
+  // Processes draws the sessions probe's rows in a grid; system sessions and Varia's pools are hidden by default.
+  const processes = monitor().getByRole('grid', { name: /^Processes/ })
+  const filters = monitor().getByRole('toolbar', { name: 'Processes filters', exact: true })
+  await expect(processes).toBeVisible()
+  await expect(monitor().getByText(/^3 sessions · system sessions and Varia's own hidden$/)).toBeVisible()
+  await expect(processes.getByRole('gridcell', { name: 'svc_reporting', exact: true })).toBeVisible()
+  // The view chip goes to the backend as args: Blocked leaves the session waiting on 57.
+  await filters.getByRole('button', { name: 'Blocked', exact: true }).click()
+  await expect(filters.getByRole('button', { name: 'Blocked', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(monitor().getByText(/^1 session · 1 filter on/)).toBeVisible()
+  await filters.getByRole('button', { name: 'Blocked', exact: true }).click()
+  // Varia's own shows the Object Explorer pool session.
+  await filters.getByRole('checkbox', { name: "Varia's own", exact: true }).check()
+  await expect(monitor().getByText(/^4 sessions · system sessions hidden$/)).toBeVisible()
+  await filters.getByRole('checkbox', { name: "Varia's own", exact: true }).uncheck()
+  // The filter box matches the text columns once typing settles.
+  await filters.getByRole('searchbox', { name: 'Filter sessions', exact: true }).fill('billing')
+  await expect(monitor().getByText(/^1 session · 1 filter on/)).toBeVisible()
+  await expect(processes.getByRole('gridcell', { name: 'app_billing', exact: true })).toBeVisible()
+  await filters.getByRole('button', { name: 'Clear filters', exact: true }).click()
+  await expect(filters.getByRole('searchbox', { name: 'Filter sessions', exact: true })).toHaveValue('')
+  // Column filters list each value with its count, from the facets.
+  await filters.getByRole('button', { name: 'Column filters', exact: true }).click()
+  const columnFilters = monitor().getByRole('dialog', { name: 'Column filters', exact: true })
+  await columnFilters.getByRole('combobox', { name: 'Column', exact: true }).selectOption('database')
+  await expect(columnFilters.getByRole('checkbox', { name: /^SalesDb\s*2$/ })).toBeVisible()
+  await columnFilters.getByRole('checkbox', { name: /^BillingDb\s*1$/ }).check()
+  await expect(monitor().getByText(/^1 session · 1 filter on/)).toBeVisible()
+  await expect(filters.getByRole('button', { name: 'Column filters (1)', exact: true })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(columnFilters).toHaveCount(0)
+  await expect(filters.getByRole('button', { name: 'Column filters (1)', exact: true })).toBeFocused()
+  // A chosen value the facets no longer list (Blocked leaves no BillingDb row) stays listed, checked, so it can be turned
+  // off; a click outside closes the panel.
+  await filters.getByRole('button', { name: 'Blocked', exact: true }).click()
+  await expect(monitor().getByText(/^0 sessions · 2 filters on/)).toBeVisible()
+  await filters.getByRole('button', { name: 'Column filters (1)', exact: true }).click()
+  await columnFilters.getByRole('combobox', { name: 'Column', exact: true }).selectOption('database')
+  await expect(columnFilters.getByRole('checkbox', { name: /^BillingDb\s*—$/ })).toBeChecked()
+  await monitor().getByText(/^0 sessions · 2 filters on/).click()
+  await expect(columnFilters).toHaveCount(0)
+  await filters.getByRole('button', { name: 'Clear filters', exact: true }).click()
+  await expect(monitor().getByText(/^3 sessions/)).toBeVisible()
+  console.log('Processes passed: rows from the sessions probe, the view chip, toggles, filter box and column filters reach the backend, and Clear filters resets them.')
+
   step = 'panes'
   const first = monitor().getByRole('tablist', { name: 'First pane', exact: true })
   await expect(first.getByRole('tab', { name: 'Processes', exact: true })).toHaveAttribute('aria-selected', 'true')
   await expect(monitor().getByRole('tablist', { name: 'Second pane', exact: true }).getByRole('tab', { name: 'Resource Waits', exact: true })).toHaveAttribute('aria-selected', 'true')
-  await expect(monitor().getByText('Processes is not shown yet; it arrives in a later version of Varia.')).toBeVisible()
+  await expect(monitor().getByText('Resource Waits is not shown yet; it arrives in a later version of Varia.')).toBeVisible()
   await first.getByRole('tab', { name: 'Processes', exact: true }).focus()
   await page.keyboard.press('ArrowRight')
   await expect(first.getByRole('tab', { name: /^Blocking/ })).toHaveAttribute('aria-selected', 'true')
@@ -291,8 +337,8 @@ try {
   await expect(monitor().getByRole('tablist', { name: 'Second pane', exact: true })).toHaveCount(0)
   await split.click()
   await expect(monitor().getByRole('separator', { name: 'Resize the panes', exact: true })).toBeVisible()
-  // Showing pending panes starts no SQL: their probes stay paused.
-  expect((await calls('live.update')).flatMap(call => call.params.probes ?? []).filter(probe => probe.probe !== 'activity.overview' && probe.paused === false)).toEqual([])
+  // Showing pending panes starts no SQL: their probes stay paused (Processes' sessions probe ran from the start).
+  expect((await calls('live.update')).flatMap(call => call.params.probes ?? []).filter(probe => probe.probe !== 'activity.overview' && probe.probe !== 'activity.sessions' && probe.paused === false)).toEqual([])
   // The resources probe samples now, but its panes are still pending: the view holds it paused, so it runs no SQL.
   expect((await viewOf(id)).probes['activity.resources']).toMatchObject({ state: 'paused' })
   console.log('Panes passed: tabs with arrow keys, F6 and Shift+F6 between regions, Split View, and no probe started for a pending pane.')

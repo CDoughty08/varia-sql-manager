@@ -90,6 +90,15 @@ internal static class ExplorerRefs
         return spec.Dependencies ? spec : throw Invalid("Peek lists no dependencies of this kind of object.");
     }
 
+    /// <summary>explorer.peekDefinition's request, as peekDefinitionParamsSchema accepts it: a module kind's peek, and an offset past
+    /// the first page and below the longest text Peek reads.</summary>
+    public static PeekKindSpec ValidatePeekDefinition(PeekDefinitionArgs args, ExplorerCatalog catalog)
+    {
+        var spec = ValidatePeek(new(args.ConnectionId, args.RequestId, args.Target), catalog);
+        if (!spec.Module) throw Invalid("Peek reads no module text of this kind of object.");
+        return args.Offset >= 1 && args.Offset < catalog.Peek.DefinitionMaxChars ? spec : throw Invalid("offset.");
+    }
+
     /// <summary>The ref's shape: the fields its kind's scope requires and forbids, identifiers (the name within the kind's
     /// bound), and a child's parent kind.</summary>
     public static void Object(ObjectRefDto value, ExplorerCatalog catalog)

@@ -57,12 +57,20 @@ probe stays paused: no SQL runs for a pane nobody can read.
 
 | Pane | Now |
 | --- | --- |
-| Processes | Processes is not shown yet; it arrives in a later version of Varia. |
+| Processes | A live grid of sessions with view chips, toggles, column filters and a filter box (below). |
 | Blocking | Blocking is not shown yet; it arrives in a later version of Varia. |
 | Resource Waits | Resource Waits is not shown yet; it arrives in a later version of Varia. |
 | Data File I/O | Data File I/O is not shown yet; it arrives in a later version of Varia. |
 | Recent Expensive Queries | Recent Expensive Queries is not shown yet; it arrives in a later version of Varia. |
 | Active Expensive Queries | Active Expensive Queries is not shown yet; it arrives in a later version of Varia. |
+
+Processes shows the sessions probe's rows in a live grid (one row per session, toned blocked, blocking, rolling back,
+system or departed). Its toolbar holds the view chips, the System sessions and Varia's own toggles, Column filters (a
+column, then its values with their counts from the facets, (Blanks) and (Non-blanks)), the filter box (sent when typing
+pauses, on Enter or on leaving it; Escape puts back what was sent) and Clear filters, which keeps the toggles. All of them
+travel as the source's args and the backend filters the sample, so the SQL never changes. A status line counts the
+sessions shown and says what is hidden or cut; the pane keeps its last rows, dimmed, with the reason when a sample fails.
+A chosen value the facets no longer list stays in Column filters, checked, with a dash for its count; a column takes at most 50 values, and the panel closes on Escape or a click outside. With no rows yet the pane says whether it waits for a sample, is paused or has stopped.
 
 | Command | Id | Windows and Linux | macOS |
 | --- | --- | --- | --- |

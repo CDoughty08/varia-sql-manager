@@ -398,11 +398,20 @@ last in the batch, inside TRY…CATCH: a login without VIEW SERVER STATE gets th
 
 **Definition** shows the text in the query editor itself (`createQueryEditor`, read-only), so Tools › Options, the theme
 and Find reach it as they reach a query, and so will editor features added later. Each card or tab has one editor, and each
-definition a model of its own carrying the view's connection and database (`peekModelContext`, for SQL language features
-to read once they serve Peek; today they serve query documents only), disposed as soon as the view shows another object, goes Back or
-refreshes; closing the card or tab disposes the editor. Its focus key is `peekEditorFocus`, never `editorFocus`, so query
+definition a model of its own carrying the view's connection and database and its own UUID (`peekModelContext`), disposed
+as soon as the view shows another object, goes Back or refreshes; closing the card or tab disposes the editor. SQL language
+features serve that model as they serve a query's: hovering a name shows what IntelliSense knows of it in the view's
+database. Completion and analysis markers stay off, since the text is read-only, and disposing the model closes its
+language document. As for a query, a definition longer than 250,000 characters gets no hover.
+Its focus key is `peekEditorFocus`, never `editorFocus`, so query
 commands (Execute, Parse and the rest) leave it alone, and F5 refreshes the Peek; Find, Copy and Select All are Monaco's
 own. **Script to New Query** and, for a kind that offers it, **Modify** open the definition in a query tab through Script As.
+A definition is never cut. A module's text comes in pages of 1,000,000 characters: the first with the
+properties, the rest one page at a time (`explorer.peekDefinition`), and the tab shows the text once it has all of it. If the
+module changes between pages, the tab says so and Refresh reads it again. While the pages come, the tab says how much has
+come. Closing the card cancels the page still being read.
+Only a text longer than 134,217,728 characters, the most Peek holds in memory, is not read:
+the tab says so rather than showing part of it.
 
 Beside Definition, the card has tabs. **Columns** (tables and views) or **Parameters** (procedures and functions) lists the
 object's folder with `explorer.children`, as the tree does, up to 1,024 rows. **Dependencies**

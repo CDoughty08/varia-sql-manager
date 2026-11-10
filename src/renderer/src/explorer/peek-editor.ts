@@ -39,14 +39,16 @@ export function peekEditorHasTextFocus(element: Element | null | undefined): boo
   return !!element?.closest(`[${peekEditorAttribute}]`) && !!element.closest('.native-edit-context, .inputarea') && !element.closest('.find-widget')
 }
 
-/**
- * A model's connection and database, as a query document carries them. SqlLanguageService serves query documents only today;
- * this is what it reads to serve a Peek model's schema once it serves those too.
- */
+/** A model's connection and database, as a query document carries them. */
 export interface SqlModelContext { readonly connectionId: string; readonly database?: string }
-const modelContexts = new WeakMap<object, SqlModelContext>()
-/** The connection and database of a Peek model; undefined for any other model (a query document's are in DocumentService). */
-export const peekModelContext = (model: object): SqlModelContext | undefined => modelContexts.get(model)
+/**
+ * What SqlLanguageService reads to serve a Peek model: its connection and database, and `documentId`, the model's own UUID
+ * (its URI's), which names it to the language backend for as long as the model lives.
+ */
+export interface PeekModelContext extends SqlModelContext { readonly documentId: string }
+const modelContexts = new WeakMap<object, PeekModelContext>()
+/** The context of a Peek model; undefined for any other model (a query document's are in DocumentService). */
+export const peekModelContext = (model: object): PeekModelContext | undefined => modelContexts.get(model)
 
 /** The definition a Peek editor shows: `key` changes when the view shows another object or reads it again. */
 export interface PeekEditorText extends SqlModelContext { readonly key: string; readonly text: string }
@@ -105,9 +107,10 @@ export class PeekEditor implements Disposable {
       if (host.editor.instance.getModel() !== shown.model) host.editor.instance.setModel(shown.model)
       return
     }
-    const model = this.options.monaco.editor.createModel(text.text, 'sql', this.options.monaco.Uri.parse(`varia-sql://peek/${this.newId()}`))
+    const documentId = this.newId()
+    const model = this.options.monaco.editor.createModel(text.text, 'sql', this.options.monaco.Uri.parse(`varia-sql://peek/${documentId}`))
     if (this.options.modelOptions) model.updateOptions(this.options.modelOptions())
-    modelContexts.set(model, { connectionId: text.connectionId, ...text.database === undefined ? {} : { database: text.database } })
+    modelContexts.set(model, { documentId, connectionId: text.connectionId, ...text.database === undefined ? {} : { database: text.database } })
     this.shown = { key: text.key, text: text.text, model }
     host.editor.instance.setModel(model)
     shown?.model.dispose()

@@ -4,6 +4,7 @@ import { languageLimits, type DatabaseProviderId, type LanguageContext, type Lan
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import { isQueryDocument } from '../documents'
+import { peekModelContext } from '../explorer/peek-editor'
 import type { DocumentService } from '../services/documents'
 import type { ConnectionService } from '../services/connections'
 import type { BackendStateService } from '../services/backend'
@@ -12,15 +13,23 @@ type LanguageApi = Pick<VariaApi, 'languageStatus' | 'languageComplete' | 'langu
 type CloseResult = Awaited<ReturnType<LanguageApi['languageClose']>>
 type ActivityPhase = 'loading' | 'refreshing'
 interface Snapshot { readonly status?: LanguageStatus; readonly checking: boolean; readonly error?: string; readonly cleanupError?: string; readonly documentErrors: ReadonlyMap<string, string>; readonly activities: ReadonlyMap<string, ActivityPhase> }
-interface Capture { readonly request: LanguageRequest; readonly key: string; readonly epoch: number; readonly model: Monaco.editor.ITextModel }
-interface PendingRequest { readonly token: Monaco.CancellationToken; readonly settled: Promise<void> }
+/** `peek`: the model is a Peek definition's (read-only), which gets hover but neither completion nor diagnostics. */
+interface Capture { readonly request: LanguageRequest; readonly key: string; readonly epoch: number; readonly model: Monaco.editor.ITextModel; readonly peek: boolean }
+interface PendingRequest { readonly token: Monaco.CancellationToken; readonly settled: Promise<void>; readonly peek: boolean }
 interface RefreshWork { capture: Capture; readonly token: Monaco.CancellationToken; readonly cancel: () => void; work: Promise<boolean>; settled: Promise<void> }
 const noCancellation: Monaco.CancellationToken = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) }
+// Requests still in flight, cancelled or not. Each Peek navigation makes a new document, so Peek's requests have a cap of
+// their own here: a burst of them on a slow server never fills the renderer's slots for query tabs. On the backend they
+// still share the metadata slots with every other metadata request.
+export const pendingLimits = { documents: 8, peek: 2 } as const
 const cleanupLimits = { requests: 4, attempts: 16, deadlineMs: 30_000, retryMs: 250, maxRetryMs: 2000 }
 // LSP's CompletionItemKind numbering differs from Monaco's numbering.
 const kindNames = ['Text', 'Method', 'Function', 'Constructor', 'Field', 'Variable', 'Class', 'Interface', 'Module', 'Property', 'Unit', 'Value', 'Enum', 'Keyword', 'Snippet', 'Color', 'File', 'Reference', 'Folder', 'EnumMember', 'Constant', 'Struct', 'Event', 'Operator', 'TypeParameter'] as const
 
-/** One registration per workbench. Requests belong to models, never to the active editor or window. */
+/**
+ * One registration per workbench. Requests belong to models, never to the active editor or window: a query document's model,
+ * or a Peek definition's (`peekModelContext`), served under its own UUID from its first request until Monaco disposes it.
+ */
 export class SqlLanguageService extends SnapshotStore<Snapshot> implements Disposable {
   private readonly bindings: Disposable[] = []
   private readonly used = new Set<string>()
@@ -36,6 +45,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
   private closeRequests = 0
   private readonly refreshing = new Map<string, RefreshWork>()
   private readonly foreground = new Map<string, number>()
+  private readonly peekModels = new Map<string, { readonly model: Monaco.editor.ITextModel; readonly disposal: Disposable }>()
   private readonly activities = new Map<symbol, { capture: Capture; token: Monaco.CancellationToken; phase: ActivityPhase; visible: boolean }>()
   private disposed = false
   private statusSequence = 0
@@ -52,7 +62,8 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
       triggerCharacters: ['.'],
       provideCompletionItems: async (model, position, _context, token) => {
         const capture = this.capture(model, position)
-        if (!capture || token.isCancellationRequested) return { suggestions: [] }
+        // Peek's definition is read-only: nothing to complete.
+        if (!capture || capture.peek || token.isCancellationRequested) return { suggestions: [] }
         if (!this.getSnapshot().status && !await this.waitFor(this.readStatus(), token)) return { suggestions: [] }
         if (!this.current(capture, token) || !this.supports(capture, 'completion')) return { suggestions: [] }
         const pending = this.begin(`${capture.request.documentId}:completion`, token)
@@ -101,7 +112,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
         if (!capture || token.isCancellationRequested) return null
         if (!this.getSnapshot().status && !await this.waitFor(this.readStatus(), token)) return null
         if (!this.current(capture, token) || !this.supports(capture, 'hover')) return null
-        const pending = this.begin(`${capture.request.documentId}:hover`, token)
+        const pending = this.begin(`${capture.request.documentId}:hover`, token, capture.peek)
         if (!pending) return null
         const foreground = this.beginForeground(capture.request.documentId)
         const activity = this.activity(capture, token, 'loading')
@@ -259,7 +270,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
   /** Diagnostics use the same document/close barriers as completion, even when queued behind metadata work. */
   async diagnostics(model: Monaco.editor.ITextModel, token: Monaco.CancellationToken): Promise<LanguageDiagnosticResult | undefined> {
     const capture = this.capture(model, { lineNumber: 1, column: 1 } as Monaco.Position)
-    if (!capture || token.isCancellationRequested || !this.api.languageDiagnostics) return
+    if (!capture || capture.peek || token.isCancellationRequested || !this.api.languageDiagnostics) return
     if (!this.getSnapshot().status && !await this.waitFor(this.readStatus(), token)) return
     if (!this.current(capture, token) || !this.supports(capture, 'diagnostics')) return
     const oldContext = this.closing.get(capture.request.documentId)
@@ -320,24 +331,55 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
     if (connection?.lost) return { label: 'IntelliSense disconnected', detail: 'Reconnect this query to restore schema suggestions.' }
     return { label: 'IntelliSense', detail: document?.connectionId ? 'SQL completion and hover use this query’s connection and database. Ctrl+Space opens suggestions.' : 'SQL completion and hover are available. Connect this query for schema suggestions. Ctrl+Space opens suggestions.' }
   }
-  private context(documentId: string): { context: LanguageContext; key: string } | undefined {
+  /** The connection and database a served model's requests use: its query document's, or its Peek model's. */
+  private source(documentId: string): { connectionId?: string; database?: string } | undefined {
+    const peek = this.peekModels.get(documentId)
+    if (peek) return peekModelContext(peek.model)
     const document = this.documents.get(documentId)
-    if (!isQueryDocument(document) || !document) return
-    const connection = document.connectionId ? this.connections.get(document.connectionId) : undefined
-    if (document.connectionId && (!connection || connection.lost)) return
+    return isQueryDocument(document) && document ? document : undefined
+  }
+  private modelOf(documentId: string): Monaco.editor.ITextModel | undefined {
+    return this.peekModels.get(documentId)?.model ?? this.documents.getModel(documentId)
+  }
+  private served(documentId: string): boolean { return this.peekModels.has(documentId) || !!this.documents.get(documentId) }
+  private context(documentId: string): { context: LanguageContext; key: string } | undefined {
+    const source = this.source(documentId)
+    if (!source) return
+    const connection = source.connectionId ? this.connections.get(source.connectionId) : undefined
+    if (source.connectionId && (!connection || connection.lost)) return
     const context: LanguageContext = { providerId: connection?.providerId ?? 'sqlserver',
-      ...connection ? { connectionId: connection.id } : {}, ...document.database ? { database: document.database } : {} }
+      ...connection ? { connectionId: connection.id } : {}, ...source.database ? { database: source.database } : {} }
     return { context, key: JSON.stringify([context, connection?.generation ?? 0]) }
+  }
+  /**
+   * A Peek model is served from its first request. Its disposal (the view moved on, closed or was disposed) ends it as closing
+   * a query does, so its epoch, context and backend document go with it.
+   */
+  private peekId(model: Monaco.editor.ITextModel): string | undefined {
+    const peek = peekModelContext(model)
+    if (!peek) return
+    const known = this.peekModels.get(peek.documentId)
+    if (known) return known.model === model ? peek.documentId : undefined
+    if (model.isDisposed()) return
+    const disposal = model.onWillDispose(() => {
+      if (this.peekModels.get(peek.documentId)?.model !== model) return
+      this.peekModels.delete(peek.documentId)
+      disposal.dispose()
+      this.reconcile()
+    })
+    this.peekModels.set(peek.documentId, { model, disposal })
+    return peek.documentId
   }
   private capture(model: Monaco.editor.ITextModel, position: Monaco.Position): Capture | undefined {
     if (this.disposed || model.getLanguageId() !== 'sql' || model.getValueLength() > languageLimits.documentCharacters) return
     const document = this.documents.getSnapshot().documents.find(document => this.documents.getModel(document.id) === model)
-    if (!document) return
-    const context = this.context(document.id)
+    const id = document?.id ?? this.peekId(model)
+    if (!id) return
+    const context = this.context(id)
     if (!context) return
-    this.contexts.set(document.id, context.key)
-    return { model, key: context.key, epoch: this.backendEpoch + (this.epochs.get(document.id) ?? 0), request: {
-      documentId: document.id, version: model.getVersionId(), text: model.getValue(), context: context.context,
+    this.contexts.set(id, context.key)
+    return { model, key: context.key, epoch: this.backendEpoch + (this.epochs.get(id) ?? 0), peek: !document, request: {
+      documentId: id, version: model.getVersionId(), text: model.getValue(), context: context.context,
       position: { line: position.lineNumber - 1, character: position.column - 1 }
     } }
   }
@@ -366,21 +408,26 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
   }
   private current(capture: Capture, token: Monaco.CancellationToken): boolean {
     const id = capture.request.documentId
-    return !this.disposed && !token.isCancellationRequested && this.documents.getModel(id) === capture.model &&
+    return !this.disposed && !token.isCancellationRequested && this.modelOf(id) === capture.model &&
       capture.model.getVersionId() === capture.request.version && this.context(id)?.key === capture.key &&
       this.backendEpoch + (this.epochs.get(id) ?? 0) === capture.epoch
   }
   /** Keep canceled IPC work in the barrier until it really settles, so only its latest successor reaches the backend. */
-  private begin(key: string, token: Monaco.CancellationToken): { previous?: Promise<void>; finish: () => void } | undefined {
+  private begin(key: string, token: Monaco.CancellationToken, peek = false): { previous?: Promise<void>; finish: () => void } | undefined {
     const previous = this.pending.get(key)
-    if (previous ? !previous.token.isCancellationRequested : this.pending.size >= 8) return
+    if (previous ? !previous.token.isCancellationRequested : this.pendingCount(peek) >= (peek ? pendingLimits.peek : pendingLimits.documents)) return
     let finish!: () => void
     const done = new Promise<void>(resolve => { finish = resolve })
     const settled = previous ? Promise.all([previous.settled, done]).then(() => {}) : done
-    const request: PendingRequest = { token, settled }
+    const request: PendingRequest = { token, settled, peek }
     this.pending.set(key, request)
     void settled.then(() => { if (this.pending.get(key) === request) this.pending.delete(key) })
     return { previous: previous?.settled, finish }
+  }
+  private pendingCount(peek: boolean): number {
+    let count = 0
+    for (const request of this.pending.values()) if (request.peek === peek) count++
+    return count
   }
   /** Cancellation ends the editor's wait without removing the predecessor's actual in-flight work from its barrier. */
   private waitFor(work: Promise<void>, token: Monaco.CancellationToken): Promise<boolean> {
@@ -405,17 +452,16 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
   private reconcile(): void {
     for (const [id, key] of this.contexts) {
       const next = this.context(id)?.key ?? ''
-      if (next === key && this.documents.get(id)) continue
+      const served = this.served(id)
+      if (next === key && served) continue
       this.epochs.set(id, (this.epochs.get(id) ?? 0) + 1)
       this.refreshing.get(id)?.cancel()
       this.syncActivity(id)
-      if (this.documents.get(id)) this.contexts.set(id, next)
+      if (served) this.contexts.set(id, next)
       else this.contexts.delete(id)
       this.failure(id)
       if (this.used.delete(id)) this.close(id)
-      if (!this.documents.get(id)) {
-        this.epochs.delete(id)
-      }
+      if (!served) this.epochs.delete(id)
     }
   }
   private close(id: string): void {
@@ -500,6 +546,8 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
     this.refreshing.clear(); this.activities.clear(); this.foreground.clear()
     this.pending.clear()
     this.bindings.forEach(binding => binding.dispose())
+    for (const peek of this.peekModels.values()) peek.disposal.dispose()
+    this.peekModels.clear()
     for (const id of this.used) this.close(id)
     this.used.clear(); this.contexts.clear(); this.epochs.clear(); this.clearListeners()
     this.publish({ ...this.getSnapshot(), checking: false, activities: new Map() })

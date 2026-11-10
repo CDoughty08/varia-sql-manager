@@ -10,7 +10,7 @@ import type { AuthenticationMode } from './auth'
 import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts'
 import type { ObjectIndexParams, ObjectIndexProgress, ObjectIndexResult, ObjectSearchParams, ObjectSearchResult } from './explorer/search.ts'
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
-import type { PeekDependenciesParams, PeekDependenciesResult, PeekParams, PeekResult } from './explorer/peek.ts'
+import type { PeekDefinitionParams, PeekDefinitionResult, PeekDependenciesParams, PeekDependenciesResult, PeekParams, PeekResult } from './explorer/peek.ts'
 import type { DatabaseRuntime } from './explorer/status.ts'
 import type { ActionPromptAnswer, ActionPromptRequest } from './actions/prompts.ts'
 import type { LongRunState } from './long-runs.ts'
@@ -28,6 +28,9 @@ import type { ActivityDetailsRequest, ActivityDetailsResult, ActivityKillRequest
 import type { PlanDocument } from './plans'
 import type { ShortcutFile } from './commands/shortcut-schema'
 import type { DatabaseProviderId, LanguageRequest, LanguageCompletions, LanguageHover, LanguageStatus, LanguageRefreshRequest, LanguageRefreshResult, LanguageDiagnosticResult } from './language-service'
+
+/** The longest text `writeClipboardText` takes (main checks it): 8 Mi characters. */
+export const maxClipboardText = 8_388_608
 
 export interface AdvancedConnectionOptions {
   commandTimeout: number
@@ -458,6 +461,7 @@ export interface RpcMethods {
   'explorer.peek': { params: PeekParams; result: PeekResult }
   /** Peek's Dependencies: what the object uses and what uses it (sys.sql_expression_dependencies and foreign keys), read apart from the facts when the tab is chosen, on Peek's slot; Stop is varia:explorer-cancel. */
   'explorer.peekDependencies': { params: PeekDependenciesParams; result: PeekDependenciesResult }
+  'explorer.peekDefinition': { params: PeekDefinitionParams; result: PeekDefinitionResult }
   'scripting.script': { params: ScriptRequest; result: ScriptResult }
   /** What an object dialog shows (Delete Object's row and warnings), read in the action's own connection. */
   'actions.describe': { params: ActionDescribeRequest; result: ActionDescribeResult }
@@ -667,6 +671,7 @@ export interface VariaApi {
   /** Peek's read of one object; a card closed before it answers cancels it with explorerCancel. */
   explorerPeek(params: PeekParams): Promise<ApiResult<PeekResult>>
   explorerPeekDependencies(params: PeekDependenciesParams): Promise<ApiResult<PeekDependenciesResult>>
+  explorerPeekDefinition(params: PeekDefinitionParams): Promise<ApiResult<PeekDefinitionResult>>
   /** A build's progress, at most 4 a second per build and only for builds this window started; droppable. Returns the unsubscribe. */
   onExplorerIndexProgress(listener: (progress: ObjectIndexProgress) => void): () => void
   /** Scripts one Object Explorer object (Script As). Failures the user can act on come back as `result.error`. */
@@ -770,6 +775,7 @@ export interface VariaApi {
   takeSession(): Promise<ApiResult<RestoredSession>>
   finishSessionRestore(generation: number): Promise<ApiResult<void>>
   /** Writes text to the clipboard through main, which works while the window is unfocused; there is no read. */
+  /** At most `maxClipboardText` characters: main refuses a longer text. */
   writeClipboardText(text: string): Promise<ApiResult<void>>
   /** Brings one of the page's popout windows (by the `varia-popout-<uuid>` name it opened it with) to the top, restored, without
    *  activating it, so keyboard focus stays in the main window. */
