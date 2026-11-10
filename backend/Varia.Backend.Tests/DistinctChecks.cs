@@ -186,6 +186,11 @@ internal static class DistinctChecks
         partial.Tick(false, null, false, null, false, CancellationToken.None);
         check(!partial.Complete && partial.Nulls == 0 && partial.Freeze() is { Op: FilterOp.NotIn, Rows.Length: 9, Nulls: false },
             "a snapshot of a set still loading always drops its cleared values, and no NULL it never saw");
+        // Freezing takes only the ticks' lock: a search scanning the values (which holds the search lock) never delays it.
+        var scanned = Snapshot(set, 0);
+        Monitor.Enter(scanned.SearchLock);
+        try { check(Task.Run(scanned.Freeze).Wait(TimeSpan.FromSeconds(30)), "freezing never waits for a search"); }
+        finally { Monitor.Exit(scanned.SearchLock); }
         // A column without NULL names no NULL in its In, whatever NULL's tick, so the filter keeps exactly one value.
         var whole = Fill(store, [new("n", "int", "text")], Enumerable.Range(0, 4).Select(i => new object?[] { (i % 2).ToString(CultureInfo.InvariantCulture) }));
         var bit = Snapshot(whole, 0);

@@ -82,10 +82,13 @@ export function listWindow(o: { scrollTop: number; viewHeight: number; rowHeight
   const full = rows * rowHeight, space = Math.min(full, maxSpace), visible = Math.max(viewHeight, rowHeight) / rowHeight
   const top = full <= maxSpace ? scrollTop / rowHeight
     : Math.min(1, Math.max(0, scrollTop / Math.max(1, space - viewHeight))) * Math.max(0, rows - viewHeight / rowHeight)
+  // Mapped, the rows past the view's bottom stop at the space's end: each starts inside it, and the space clips the part of
+  // the last that would hang past it (overflow: hidden), so no row grows the scroll range.
+  const fits = full <= maxSpace ? rows : Math.ceil(top + (space - scrollTop) / rowHeight - 1e-6)
   return {
     space,
     first: Math.max(0, Math.floor(top) - overscan),
-    last: Math.min(rows, Math.ceil(top + visible) + overscan),
+    last: Math.max(0, Math.min(rows, fits, Math.ceil(top + visible) + overscan)),
     offset: row => full <= maxSpace ? row * rowHeight : scrollTop + (row - top) * rowHeight
   }
 }

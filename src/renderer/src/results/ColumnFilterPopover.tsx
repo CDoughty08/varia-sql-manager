@@ -80,6 +80,14 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
   /** A tick failed: the ticks shown are a guess until the snapshot's own are read again. */
   const ticksStale = useRef(false)
+  /** Focus is on a row of the list: a row scrolled out of the drawn window unmounts, and focus would fall to the page, out
+   *  of reach of Escape and the focus trap, so the list itself takes it. Only a move to another element ends it, since a
+   *  removed element's blur (where a browser fires one) names none. */
+  const listFocus = useRef(false)
+  useLayoutEffect(() => {
+    const element = viewport.current, doc = element?.ownerDocument
+    if (listFocus.current && element && doc && (doc.activeElement === doc.body || doc.activeElement === null)) element.focus({ preventScroll: true })
+  })
   const list = load.status === 'ready' ? load.list : undefined
   const summary = list?.summary
 
@@ -344,8 +352,9 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
       <button type="button" disabled={!listing || !summary} onClick={() => setAll(true)}>Select all</button>
       <button type="button" disabled={!listing || !summary} onClick={() => setAll(false)}>Select none</button>
     </div>
-    <div ref={viewport} className="column-filter-list" role="group" aria-label="Values" aria-busy={load.status === 'loading' || (!!summary && total === undefined)}
-      onScroll={event => setScrollTop(event.currentTarget.scrollTop)}>
+    <div ref={viewport} className="column-filter-list" role="group" aria-label="Values" aria-busy={load.status === 'loading' || (!!summary && total === undefined)} tabIndex={-1}
+      onScroll={event => setScrollTop(event.currentTarget.scrollTop)} onFocus={() => { listFocus.current = true }}
+      onBlur={event => { const next = event.relatedTarget as Node | null; if (next && !event.currentTarget.contains(next)) listFocus.current = false }}>
       {load.status === 'loading' && <p className="column-filter-note" role="status">Listing values…</p>}
       {load.status === 'error' && <p className="column-filter-note error" role="alert">{load.message}</p>}
       {readError && <p className="column-filter-note error" role="alert">{readError}</p>}

@@ -54,6 +54,14 @@ describe('column filter', () => {
     expect(middle.last).toBeGreaterThan(row + 10)
     expect(middle.offset(row)).toBeGreaterThanOrEqual((maxListSpace - 220) / 2 - 22)
     expect(listWindow({ ...base, rows: 0, scrollTop: 0 })).toMatchObject({ space: 0, first: 0, last: 0 })
+    // Every row drawn starts inside the space at any scroll position (near the end above all, where overscan rows would
+    // not), so at most part of one hangs past it, which the space clips; the rows still cover the view.
+    for (const scrollTop of [0, 1_000_000, maxListSpace - 2000, maxListSpace - 400, maxListSpace - 221, maxListSpace - 220]) {
+      const at = listWindow({ ...base, scrollTop })
+      for (let row = at.first; row < at.last; row++) expect(at.offset(row)).toBeLessThan(maxListSpace)
+      expect(at.offset(at.last - 1) + 22).toBeLessThan(maxListSpace + 22)
+      expect(at.offset(at.last - 1) + 22).toBeGreaterThanOrEqual(scrollTop + 220 - 1e-3)
+    }
   })
 
   it('drops the cached blocks farthest from view, never one in view', () => {

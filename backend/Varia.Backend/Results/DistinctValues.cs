@@ -13,20 +13,21 @@ internal enum DistinctOrder { Count, Value }
 /// orders. Windows of it are read (results.distinctRead) and ticked (results.distinctTick) by group, and a <c>groups</c>
 /// view filter keeps or drops the rows of the values it ticks; the first such filter freezes it, so a view built again
 /// keeps the same rows. Its memory (<see cref="ViewSorter.DistinctSnapshotBytes"/>) is charged to the result's query budget
-/// and returned when it is closed or its result released. Every member that reads or changes its ticks or search takes its
-/// lock; the groups never change once built.
+/// and returned when it is closed or its result released. The ticks have a lock of their own, held only briefly, so
+/// freezing (which a results.view does before it builds) never waits for a search; a search's scan holds the search lock,
+/// and its matches, once found, never change. The groups never change once built.
 /// </summary>
 internal sealed class DistinctSnapshot
 {
     private readonly object gate = new();
+    private readonly object searching = new();
     private readonly ViewSorter.PageSource source;
     private readonly int[] reps, counts, byCount;
     private readonly bool[] ticks;
     private int ticked;
     private bool nullTicked;
     private (FilterOp Op, int[] Rows, bool Nulls)? frozen;
-    private string? searchText;
-    private int[]? matchValue, matchCount;
+    private (string Text, int[] ByValue, int[] ByCount)? lastSearch;
 
     internal DistinctSnapshot(ResultSetBuffer set, int column, ViewSorter.PageSource source, int[] reps, int[] counts, int[] byCount, bool[] ticks, long rows, long nulls, bool nullTicked, bool complete, bool approximate)
     {
@@ -58,6 +59,8 @@ internal sealed class DistinctSnapshot
     /// <summary>A truncated value compared by its stored prefix.</summary>
     public bool Approximate { get; }
     internal long Charged { get; set; }
+    /// <summary>The search lock, for checks that hold it while freezing.</summary>
+    internal object SearchLock => searching;
 
     public (int Checked, bool NullChecked) Ticks { get { lock (gate) return (ticked, nullTicked); } }
 
@@ -66,19 +69,21 @@ internal sealed class DistinctSnapshot
     /// counts those values.</summary>
     public (int Total, DistinctValue[] Values, int Checked, bool NullChecked) Read(DistinctOrder order, int offset, int count, string? search, CancellationToken token)
     {
-        lock (gate)
-        {
-            var matched = search is null ? null : Matches(search, token);
-            var list = matched is null ? (order == DistinctOrder.Count ? byCount : null) : order == DistinctOrder.Count ? matchCount! : matchValue!;
-            var total = list?.Length ?? reps.Length;
-            var take = Math.Max(0, Math.Min(count, total - offset));
-            var values = new DistinctValue[take];
-            var wire = Set.Wires[Column];
+        var list = search is null ? (order == DistinctOrder.Count ? byCount : null) : order == DistinctOrder.Count ? Matches(search, token).ByCount : Matches(search, token).ByValue;
+        var total = list?.Length ?? reps.Length;
+        var take = Math.Max(0, Math.Min(count, total - offset));
+        var values = new DistinctValue[take];
+        var wire = Set.Wires[Column];
+        // The display texts read the pages, which only the search lock's holders also read.
+        lock (searching)
             for (var i = 0; i < take; i++)
             {
                 var group = list?[offset + i] ?? offset + i;
-                values[i] = new DistinctValue(group, reps[group], ViewSorter.Display(source, reps[group], Column, wire), counts[group], ticks[group]);
+                values[i] = new DistinctValue(group, reps[group], ViewSorter.Display(source, reps[group], Column, wire), counts[group], false);
             }
+        lock (gate)
+        {
+            for (var i = 0; i < take; i++) values[i] = values[i] with { Checked = ticks[values[i].Group] };
             return (total, values, ticked, nullTicked);
         }
     }
@@ -87,11 +92,13 @@ internal sealed class DistinctSnapshot
     /// NULL when <paramref name="nulls"/> says; INVALID_PARAMS for a group it does not have or once a filter froze it.</summary>
     public (int Checked, bool NullChecked) Tick(bool check, int[]? groups, bool all, string? search, bool? nulls, CancellationToken token)
     {
+        if (groups is not null && groups.Any(group => group < 0 || group >= reps.Length))
+            throw new RequestException("INVALID_PARAMS", "A value to tick is not one of the list's.");
+        // A search's matches are found before the ticks' lock is taken.
+        var matched = all && search is not null ? Matches(search, token).ByValue : null;
         lock (gate)
         {
             if (frozen is not null) throw new RequestException("INVALID_PARAMS", "These values already filter the grid. Open the column's filter again to change them.");
-            if (groups is not null && groups.Any(group => group < 0 || group >= reps.Length))
-                throw new RequestException("INVALID_PARAMS", "A value to tick is not one of the list's.");
             if (all && search is null)
             {
                 Array.Fill(ticks, check);
@@ -99,7 +106,7 @@ internal sealed class DistinctSnapshot
             }
             else
             {
-                foreach (var group in all ? Matches(search!, token) : groups ?? [])
+                foreach (var group in matched ?? groups ?? [])
                 {
                     if (ticks[group] == check) continue;
                     ticks[group] = check;
@@ -130,26 +137,29 @@ internal sealed class DistinctSnapshot
         }
     }
 
-    /// <summary>The groups whose display text contains the search, in value order, kept until another search; the count
-    /// order's alongside. Called under the lock.</summary>
-    private int[] Matches(string search, CancellationToken token)
+    /// <summary>The groups whose display text contains the search, in value order and in count order, kept until another
+    /// search; found under the search lock, never the ticks'.</summary>
+    private (int[] ByValue, int[] ByCount) Matches(string search, CancellationToken token)
     {
-        if (search == searchText) return matchValue!;
-        var matcher = ResultSearcher.MatcherFor(Set.Columns[Column], Set.Wires[Column], search);
-        var scratch = new ResultSearcher.Scratch();
-        var hit = new bool[reps.Length];
-        var found = 0;
-        for (var group = 0; group < reps.Length; group++)
+        lock (searching)
         {
-            if ((group & (ViewSorter.CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
-            if (matcher is not null && matcher.Matches(source.Cell(reps[group], Column), scratch)) { hit[group] = true; found++; }
+            if (lastSearch is { } last && last.Text == search) return (last.ByValue, last.ByCount);
+            var matcher = ResultSearcher.MatcherFor(Set.Columns[Column], Set.Wires[Column], search);
+            var scratch = new ResultSearcher.Scratch();
+            var hit = new bool[reps.Length];
+            var found = 0;
+            for (var group = 0; group < reps.Length; group++)
+            {
+                if ((group & (ViewSorter.CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+                if (matcher is not null && matcher.Matches(source.Cell(reps[group], Column), scratch)) { hit[group] = true; found++; }
+            }
+            var byValue = new int[found];
+            var ranked = new int[found];
+            for (int group = 0, at = 0; group < reps.Length; group++) if (hit[group]) byValue[at++] = group;
+            for (int i = 0, at = 0; i < byCount.Length; i++) if (hit[byCount[i]]) ranked[at++] = byCount[i];
+            lastSearch = (search, byValue, ranked);
+            return (byValue, ranked);
         }
-        var byValue = new int[found];
-        var ranked = new int[found];
-        for (int group = 0, at = 0; group < reps.Length; group++) if (hit[group]) byValue[at++] = group;
-        for (int i = 0, at = 0; i < byCount.Length; i++) if (hit[byCount[i]]) ranked[at++] = byCount[i];
-        (searchText, matchValue, matchCount) = (search, byValue, ranked);
-        return byValue;
     }
 }
 
