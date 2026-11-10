@@ -53,6 +53,7 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'language.status': control,
   'language.complete': { kind: 'unary', lane: 'metadata', deadlineMs: 30_000 },
   'language.hover': { kind: 'unary', lane: 'metadata', deadlineMs: 30_000 },
+  'language.diagnostics': { kind: 'unary', lane: 'metadata', deadlineMs: 30_000 },
   // Refresh cancels obsolete language work before rebuilding metadata, so it must reach an occupied metadata lane.
   'language.refresh': { kind: 'unary', lane: 'control', deadlineMs: 30_000 },
   'language.close': control,

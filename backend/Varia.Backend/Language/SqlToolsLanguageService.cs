@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Data.SqlClient;
 
@@ -7,7 +9,7 @@ namespace Varia.Backend.Language;
 
 /// <summary>SQL Server's provider. The public boundary is a small, engine-neutral LSP-shaped API; SQL Tools Service's
 /// proprietary connection protocol and executable configuration stay here, outside Monaco and the renderer.</summary>
-internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
+internal sealed partial class SqlToolsLanguageService : ILanguageServiceProvider
 {
     internal const int MaxDocuments = 128;
     internal const int MaxTextCharacters = 250_000;
@@ -40,6 +42,10 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
         public string? ContextKey;
         public string Text = "";
         public int Version;
+        public int RemoteVersion;
+        public int AcceptedVersion;
+        public string? AcceptedFingerprint;
+        public string? AcceptedContextKey;
         public int Generation;
         public int ParsedVersion;
         public bool CompletionReady;
@@ -49,9 +55,10 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
     }
 
     internal SqlToolsLanguageService(Func<LanguageContext, string?> connectionString, string? executablePath = null,
-        Func<Func<string, JsonElement, Task>, ILspClient>? createClient = null)
+        Func<Func<string, JsonElement, Task>, ILspClient>? createClient = null, TimeSpan? diagnosticIdleTimeout = null)
     {
         this.connectionString = connectionString;
+        this.diagnosticIdleTimeout = diagnosticIdleTimeout ?? DiagnosticIdleTimeout;
         var runtime = SqlToolsRuntime.Resolve(executablePath);
         configurationReason = createClient is not null ? null : runtime.UnavailableReason();
         this.createClient = createClient ?? (notification => new LspClient(runtime.ExecutablePath, runtime.Arguments, notification));
@@ -60,7 +67,7 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
     internal static string? ConfigurationReason(string? path) => SqlToolsRuntime.Resolve(path).UnavailableReason();
 
     public string Id => "sqlserver";
-    public LanguageProviderStatus Status() => new(Id, configurationReason is null, true, true, configurationReason, Refresh: true);
+    public LanguageProviderStatus Status() => new(Id, configurationReason is null, true, true, configurationReason, Refresh: true, Diagnostics: true);
 
     public async Task<LanguageRefreshResult> RefreshAsync(LanguageRefreshRequest request, CancellationToken token)
     {
@@ -69,14 +76,16 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
         if (request.Context.ConnectionId is null) return new(false);
         lock (gate)
         {
+            var refreshContext = JsonSerializer.Serialize(request.Context);
             if (documents.TryGetValue(request.DocumentId, out var current))
             {
-                if (request.Version < current.Version || request.Version == current.Version && request.Text != current.Text)
+                if (request.Version < current.AcceptedVersion || request.Version == current.AcceptedVersion && TextFingerprint(request.Text) != current.AcceptedFingerprint)
                     throw new RequestException("STALE", "The language refresh refers to an older document version.");
-                if (current.ContextKey is { } context && context != JsonSerializer.Serialize(request.Context))
+                if (current.AcceptedContextKey is { } context && context != JsonSerializer.Serialize(request.Context))
                     throw new RequestException("STALE", "The language refresh refers to an older connection context.");
                 current.Active?.Cancel();
             }
+            if ((diagnosticRunning ? diagnosticContextKey : diagnosticOwner?.ContextKey) == refreshContext) ResetDiagnostics();
         }
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromSeconds(25));
@@ -121,19 +130,24 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
         await document.Serial.WaitAsync(token);
         try
         {
-            if (request.Version < document.Version || request.Version == document.Version && request.Text != document.Text)
+            var fingerprint = TextFingerprint(request.Text);
+            if (request.Version < document.AcceptedVersion || request.Version == document.AcceptedVersion && document.AcceptedFingerprint is not null && fingerprint != document.AcceptedFingerprint)
                 throw new RequestException("STALE", "The SQL language request refers to an older document version.");
             // Check again under the document gate so Disconnect cannot leave a captured credential string usable.
             lock (gate)
             {
                 if (document.Closing) throw new RequestException("STALE", "The SQL language document has closed.");
-                if (method == "textDocument/rebuildIntelliSense" && document.ContextKey is { } context && context != JsonSerializer.Serialize(request.Context))
+                if (method == "textDocument/rebuildIntelliSense" && document.AcceptedContextKey is { } context && context != JsonSerializer.Serialize(request.Context))
                     throw new RequestException("STALE", "The language refresh refers to an older connection context.");
                 document.ConnectionId = request.Context.ConnectionId;
+                document.AcceptedVersion = request.Version;
+                document.AcceptedFingerprint = fingerprint;
+                document.AcceptedContextKey = JsonSerializer.Serialize(request.Context);
                 document.Active = operation;
             }
             using var usage = await EnterOperationAsync(token);
             settings = connectionString(request.Context);
+            if (method == "varia/diagnostics") return JsonSerializer.SerializeToElement(await DiagnosticsRemoteAsync(request, settings, token));
             var current = await GetClientAsync(token);
             await SynchronizeAsync(current, document, request, settings, token);
             var position = new { textDocument = new { uri = document.Uri }, position = request.Position };
@@ -155,7 +169,7 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
                 await CompletionAsync(current, document, request, position, token);
             }
             return method == "textDocument/completion"
-                ? await CompletionAsync(current, document, request, position, token)
+                ? await ScopedCompletionAsync(current, document, request, position, token)
                 : await current.RequestAsync(method, position, token);
         }
         catch (OperationCanceledException) { throw; }
@@ -310,7 +324,7 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
                     capabilities = new { textDocument = new { completion = new { completionItem = new { snippetSupport = true, documentationFormat = new[] { "plaintext", "markdown" } } }, hover = new { contentFormat = new[] { "plaintext" } } } }
                 }, token);
                 await created.NotifyAsync("initialized", new { }, token);
-                // Completion/hover only in this first slice. Diagnostics need their own versioned push boundary.
+                // Analysis has an isolated child: STS publishes unversioned diagnostics and debounces globally.
                 await created.NotifyAsync("workspace/didChangeConfiguration", new { settings = new { mssql = new { intelliSense = new { enableIntelliSense = true, enableErrorChecking = false, enableSuggestions = true, enableQuickInfo = true } } } }, token);
                 lock (gate)
                 {
@@ -364,13 +378,14 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
                 document.CompletionReady = false;
                 // STS's metadata prepopulation resolves the owner's current workspace buffer. Open it before
                 // connecting, so its IntelliSense-ready notification includes the actual unsaved document.
-                await current.NotifyAsync("textDocument/didOpen", new { textDocument = new { uri = document.Uri, languageId = "sql", version = request.Version, text = request.Text } }, token);
+                document.RemoteVersion = 1;
+                await current.NotifyAsync("textDocument/didOpen", new { textDocument = new { uri = document.Uri, languageId = "sql", version = document.RemoteVersion, text = request.Text } }, token);
                 if (settings is not null) await ConnectAsync(current, document.Uri, settings, token);
                 document.Generation = currentGeneration;
             }
             else if (document.Version != request.Version)
                 // STS's workspace handler requires Range.Value even for a whole-buffer replacement.
-                await current.NotifyAsync("textDocument/didChange", new { textDocument = new { uri = document.Uri, version = request.Version }, contentChanges = new[] { new { range = new LanguageRange(new(0, 0), EndPosition(document.Text)), rangeLength = document.Text.Length, text = request.Text } } }, token);
+                await current.NotifyAsync("textDocument/didChange", new { textDocument = new { uri = document.Uri, version = ++document.RemoteVersion }, contentChanges = new[] { new { range = new LanguageRange(new(0, 0), EndPosition(document.Text)), rangeLength = document.Text.Length, text = request.Text } } }, token);
             document.Text = request.Text;
             document.Version = request.Version;
             document.ConnectionId = request.Context.ConnectionId;
@@ -424,6 +439,7 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
 
     private Task NotificationAsync(ILspClient? source, string method, JsonElement parameters)
     {
+        if (method == "textDocument/publishDiagnostics") PublishDiagnostics(source, parameters);
         if (String(parameters, "ownerUri") is { } uri && connecting.TryGetValue(uri, out var pending) && ReferenceEquals(source, pending.Client))
         {
             if (method == "connection/complete") pending.Complete.TrySetResult(parameters.Clone());
@@ -458,6 +474,7 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
             if (!documents.TryGetValue(id, out document)) return new(false);
             document.Closing = true;
             document.Active?.Cancel();
+            if ((diagnosticRunning ? diagnosticDocumentId : diagnosticOwner?.DocumentId) == id) ResetDiagnostics();
             cleanup = document.CloseTask ??= Task.Run(CloseCoreAsync);
         }
         return await cleanup.WaitAsync(token);
@@ -530,6 +547,8 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
         if (!Guid.TryParseExact(id, "D", out _)) throw new RequestException("INVALID_PARAMS", "A document or connection ID is required.");
     }
 
+    private static string TextFingerprint(string text) => Convert.ToBase64String(SHA256.HashData(MemoryMarshal.AsBytes(text.AsSpan())));
+
     internal static bool PositionInText(string text, LanguagePosition position)
     {
         if (position.Line < 0 || position.Character < 0) return false;
@@ -571,7 +590,7 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
         // STS returns every declaration even after typing a complete identifier. Rank before applying our bounded
         // response limits, or a name beyond the first 500 declarations can never reach Monaco's own filtering.
         IEnumerable<JsonElement> candidates = array.EnumerateArray();
-        if (prefix.Length != 0) candidates = candidates.OrderBy(item => CompletionRank(item, prefix));
+        candidates = candidates.OrderBy(item => prefix.Length == 0 ? 0 : CompletionRank(item, prefix)).ThenBy(item => IsColumn(item) ? 0 : 1);
         foreach (var item in candidates)
         {
             if (items.Count == MaxCompletionItems) { incomplete = true; break; }
@@ -588,8 +607,9 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
             var completion = new LanguageCompletionItem(label, Number(item, "kind") is >= 1 and <= 25 ? Number(item, "kind") : null,
                 Bounded(String(item, "detail"), 4096), EmptyToNull(ReadContents(Property(item, "documentation"), 16_384)),
                 insertText, Number(item, "insertTextFormat") is 1 or 2 ? Number(item, "insertTextFormat") : null,
-                range is not null && newText is { Length: <= 16_384 } ? new(range, newText) : null);
-            characters += completion.Label.Length + (completion.Detail?.Length ?? 0) + (completion.Documentation?.Length ?? 0) + (completion.InsertText?.Length ?? 0) + (completion.TextEdit?.NewText.Length ?? 0);
+                range is not null && newText is { Length: <= 16_384 } ? new(range, newText) : null,
+                (IsColumn(item) ? "0:" : "1:") + (Bounded(String(item, "sortText"), 1024) ?? label), Bounded(String(item, "filterText"), 1024));
+            characters += completion.Label.Length + (completion.Detail?.Length ?? 0) + (completion.Documentation?.Length ?? 0) + (completion.InsertText?.Length ?? 0) + (completion.TextEdit?.NewText.Length ?? 0) + (completion.SortText?.Length ?? 0) + (completion.FilterText?.Length ?? 0);
             if (characters > 1_000_000) { incomplete = true; break; }
             items.Add(completion);
         }
@@ -689,6 +709,7 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
             client?.Dispose();
             startingClient = null;
             client = null;
+            ResetDiagnostics();
             retirement?.TrySetResult();
         }
         foreach (var waiter in connecting.Values) { waiter.Complete.TrySetCanceled(); waiter.Ready.TrySetCanceled(); }
@@ -707,6 +728,7 @@ internal sealed class SqlToolsLanguageService : ILanguageServiceProvider
             client?.Dispose();
             startingClient = null;
             client = null;
+            ResetDiagnostics();
             foreach (var document in documents.Values) document.Active?.Cancel();
         }
     }

@@ -547,6 +547,7 @@ internal static class SqlLanguageChecks
         public LanguageProviderStatus Status() => new(Id, true, true, true, Refresh: true);
         public Task<LanguageCompletionResult> CompleteAsync(LanguageRequest request, CancellationToken token) { Requests++; return Task.FromResult(new LanguageCompletionResult([], false)); }
         public Task<LanguageHover?> HoverAsync(LanguageRequest request, CancellationToken token) => Task.FromResult<LanguageHover?>(null);
+        public Task<LanguageDiagnosticResult> DiagnosticsAsync(LanguageRefreshRequest request, CancellationToken token) => Task.FromResult(new LanguageDiagnosticResult(request.Version, [], false));
         public Task<LanguageRefreshResult> RefreshAsync(LanguageRefreshRequest request, CancellationToken token) => Task.FromResult(new LanguageRefreshResult(true));
         public async Task<LanguageCloseResult> CloseAsync(string documentId, CancellationToken token)
         {

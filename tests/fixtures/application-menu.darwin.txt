@@ -61,6 +61,9 @@
     {"id":"edit.surroundWith","label":"Surround With…","registerAccelerator":false,"type":"normal","click":[["command","edit.surroundWith"]]}
     {"type":"separator"}
     {"accelerator":"Cmd+Shift+R","id":"edit.refreshIntelliSense","label":"Refresh Local Cache","registerAccelerator":false,"type":"normal","click":[["command","edit.refreshIntelliSense"]]}
+    {"type":"separator"}
+    {"id":"edit.nextSqlIssue","label":"Next SQL Issue","registerAccelerator":false,"type":"normal","click":[["command","edit.nextSqlIssue"]]}
+    {"id":"edit.previousSqlIssue","label":"Previous SQL Issue","registerAccelerator":false,"type":"normal","click":[["command","edit.previousSqlIssue"]]}
 {"id":"menu.view","label":"View"}
   {"accelerator":"Cmd+Shift+P","id":"workbench.showCommands","label":"Command Palette…","registerAccelerator":false,"type":"normal","click":[["command","workbench.showCommands"]]}
   {"accelerator":"Cmd+P","id":"workbench.quickOpen","label":"Go to Query…","registerAccelerator":false,"type":"normal","click":[["command","workbench.quickOpen"]]}

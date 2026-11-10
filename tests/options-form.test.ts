@@ -19,7 +19,7 @@ describe('Options page tree', () => {
     expect(treeRows(new Set()).map(row => row.page.title)).toEqual(['Environment', 'Text Editor', 'Query Execution', 'Query Results', 'SQL Server Object Explorer', 'Activity Monitor', 'SQL Server Integration Services'])
     const open = treeRows(new Set(['textEditor', 'textEditor.transactSql']))
     expect(open.map(row => `${row.level}:${row.page.title}:${row.expandable ? row.expanded : '-'}`)).toEqual([
-      '1:Environment:false', '1:Text Editor:true', '2:General:-', '2:Editor Tab and Status Bar:-', '2:Transact-SQL:true', '3:General:-', '3:Tabs:-', '1:Query Execution:false', '1:Query Results:false', '1:SQL Server Object Explorer:false', '1:Activity Monitor:-', '1:SQL Server Integration Services:-'
+      '1:Environment:false', '1:Text Editor:true', '2:General:-', '2:Editor Tab and Status Bar:-', '2:Transact-SQL:true', '3:General:-', '3:IntelliSense:-', '3:Tabs:-', '1:Query Execution:false', '1:Query Results:false', '1:SQL Server Object Explorer:false', '1:Activity Monitor:-', '1:SQL Server Integration Services:-'
     ])
   })
   it('shows a category\'s first page when it is selected, with the path to it expanded', () => {
@@ -42,7 +42,7 @@ describe('Options search', () => {
   it('matches descriptions, keywords, page paths, the theme note and the Shortcuts page\'s words', () => {
     expect(searchPages('waits indefinitely', 'win32')!.pages).toEqual(['queryExecution.sqlServer.general'])
     expect(searchPages('csv', 'win32')!.pages).toEqual(['queryResults.sqlServer.grid'])
-    expect(searchPages('transact-sql', 'win32')!.pages).toEqual(['textEditor.transactSql.general', 'textEditor.transactSql.tabs'])
+    expect(searchPages('transact-sql', 'win32')!.pages).toEqual(['textEditor.transactSql.general', 'textEditor.transactSql.intelliSense', 'textEditor.transactSql.tabs'])
     expect(searchPages('color theme', 'win32')!.pages).toContain('environment.general')
     // SSMS calls the page Keyboard; it also answers to Visual Studio Code's and other tools' words, and to mouse gestures.
     for (const word of ['shortcut', 'keybinding', 'hotkey', 'keymap', 'chord', 'mapping'])
