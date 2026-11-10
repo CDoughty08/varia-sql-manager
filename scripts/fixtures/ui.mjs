@@ -478,6 +478,8 @@ export const editorTextIn = scope => scope.locator('.monaco-editor .view-lines')
 export const queryEditorText = page => page.locator(part.activeEditorGroup).locator('.editor-host .monaco-editor .view-lines').innerText()
 /** Peek's definition editor (Monaco, read-only) inside a Peek card or tab, by its text's accessible name. */
 export const peekDefinitionText = scope => scope.getByRole('textbox', { name: /^Definition text/ })
+/** The body-level hosts of Peek editors' hover and message widgets in a window (createQueryEditor's widget host). */
+export const peekEditorWidgetHosts = page => page.locator('.editor-overflow-widgets[data-peek-editor]')
 
 // Panes: the dock's panels, each with a tab in its group's header
 

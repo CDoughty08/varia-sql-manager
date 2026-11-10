@@ -236,6 +236,8 @@ export function renderExplorerDocs(): string {
     `within ${peekLimits.budgetMs.toLocaleString('en-US')} ms; the definition of a kind without stored text comes from Script As (CREATE). A fact whose`,
     'catalog column is newer than the server is left out. Esc, a click elsewhere or another peek closes the card, and',
     'cancels a read still running. Each kind declares its tabs in the catalogue (`peekSpecs`), and the card shows exactly those.',
+    'Properties sit beside the definition; a card or tab narrower than 560px (a slim popped-out Object Explorer) stacks them',
+    'under it, so the editor of the definition always has room.',
     '',
     'Database-scoped kinds are read in their database, as the tree reads them; a database, a login and a server trigger on the',
     'server (sys.databases and sys.master_files, so an offline or restoring database still peeks). An index or a trigger is found',
