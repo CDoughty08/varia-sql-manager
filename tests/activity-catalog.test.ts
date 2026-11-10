@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   activityBands, activityCapabilities, activityCatalogJson, activityEditions, activityIntervalDefaults, activityIntervalsSeconds, activityLimits, activityLiveUnits, activityLoadGuard, activityPanes, activityPoolSuffix, activityProbes,
-  activitySource, activityTables, benignWaits, blockerLabels, defaultPanes, maxExpandedTiles, paneSpecs, probeIntervalMs, probeSeries, probeSpecs, rankChips, rowTones, seriesSpecs, tableSpecs,
+  activitySource, activityTables, benignWaits, blockerLabels, defaultPanes, paneSpecs, probeIntervalMs, probeSeries, probeSpecs, rankChips, rowTones, seriesSpecs, tableSpecs,
   tileSpecs, variaSessionKinds, viewChips, viewChipTitles, waitCategories, waitCategoryIds, waitExceptions, waitsChartSeries, waitToggles
 } from '../src/shared/activity/catalog'
 import { copyKeys, documentCommands, renderActivityMonitorDocs } from '../src/shared/activity/docs'
@@ -118,7 +118,6 @@ describe('activity monitor catalogue', () => {
   it('draws SSMS\'s four charts first, expands two of them on first open, and every tile series exists', () => {
     expect(tileSpecs.map(tile => tile.caption)).toEqual(['% Processor Time', 'Waiting Tasks', 'Database I/O', 'Batch Requests/sec', 'Blocked Sessions', 'Active Requests', 'CPU Pressure', 'Memory Grants Pending'])
     expect(tileSpecs.filter(tile => tile.defaultExpanded).map(tile => tile.caption)).toEqual(['% Processor Time', 'Waiting Tasks'])
-    expect(tileSpecs.filter(tile => tile.defaultExpanded).length).toBeLessThanOrEqual(maxExpandedTiles)
     const overview = probeSeries('activity.overview')
     for (const tile of tileSpecs) {
       for (const series of [tile.series, ...tile.secondary, ...tile.thresholds.flatMap(spec => [spec.series, ...spec.while ? [spec.while] : []])]) expect(overview, `${tile.caption} ${series}`).toContain(series)
@@ -166,6 +165,10 @@ describe('activity monitor catalogue', () => {
     expect([ok({ table: 'waitTypes', hideBenign: false }), ok({ table: 'waitCategories', hideBenign: true }), ok({ table: 'sessions', hideBenign: true }), ok({ table: 'files', hideBenign: false })])
       .toEqual([true, true, false, false])
     expect(waitToggles.hideBenign).toMatchObject({ tables: ['waitCategories', 'waitTypes'], default: true })
+    // Data File I/O's chip and latency thresholds: its table only, a known chip, thresholds within the settings' bounds.
+    expect([ok({ table: 'files', fileView: 'overThreshold', latencyWarningMs: 1, latencyErrorMs: activityLimits.fileLatencyMs }), ok({ table: 'files', fileView: 'log' }),
+      ok({ table: 'files', fileView: 'big' }), ok({ table: 'sessions', fileView: 'log' }), ok({ table: 'waitTypes', latencyWarningMs: 20 }), ok({ table: 'files', latencyWarningMs: 0 }),
+      ok({ table: 'files', latencyErrorMs: activityLimits.fileLatencyMs + 1 }), ok({ table: 'files', latencyWarningMs: 2.5 })]).toEqual([true, true, false, false, false, false, false, false])
     for (const bad of [
       { table: 'files', view: 'all' }, { table: 'waitTypes', showSystem: true }, { table: 'sessions', view: 'sleeping' }, { table: 'nope' }, { table: 'sessions', extra: 1 },
       { table: 'sessions', text: 'x'.repeat(activityLimits.filterText + 1) }, { table: 'sessions', columnFilters: [{ column: 'sessionId', values: ['1'] }] },

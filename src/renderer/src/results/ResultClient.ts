@@ -1,7 +1,7 @@
 // The renderer's access to stored query results (the PR7 grid contract). Rows stay in the backend; the results worker
 // reads and decodes pages, and the UI thread receives only windows of display text. Live subscriptions run through the
 // same worker and port: their tables are ordinary stored results, opened with the same handles.
-import type { ApiResult, BackendStatus, IdentityBy, QueryEvent, QueryResult, ResultColumn, ResultDescriptor, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ResolvedViewFilter, TruncationReason, VariaApi, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
+import type { ApiResult, BackendStatus, IdentityBy, PivotValueSpec, QueryEvent, QueryResult, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultsDiffResult, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, TruncationReason, VariaApi, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport } from '../../../shared/ipc/port-messages'
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
@@ -80,6 +80,11 @@ export interface ResultHandle extends Disposable {
   /** Aggregates for up to `limits.profile.maxColumns` distinct columns over the rows (a view's rows, through a view), computed
    *  in the backend (results.profile): never rows. No columns gives only the rows' byte sizes. */
   profile(columns: readonly number[], signal?: AbortSignal): Promise<ResultsProfileResult>
+  /** A column's distinct values with their counts over the rows (a view's rows, through a view), grouped in the backend as
+   *  a filter compares them and kept there as a snapshot (results.distinct) to read by window, tick and filter by (a
+   *  `groups` filter). Every value starts ticked, or with `kept`, a view of the same result, when a row of that view holds
+   *  it; NULL likewise. The snapshot belongs to the result: close it when it is no longer wanted. */
+  distinct(column: number, o?: { kept?: ResultHandle; signal?: AbortSignal }): Promise<DistinctList>
   /** Releases the result in the backend (results.close); queued while the results port is down. A view's close closes
    *  only the view (results.viewClose). */
   close(): Promise<void>
@@ -100,12 +105,32 @@ export interface ResultHandle extends Disposable {
    *  `ResultClient.open`. On a view, compares its result. `context`: unchanged rows around each change (default 1, -1 for
    *  all); `exact`: text compared character for character instead of by collation. */
   diff(right: ResultHandle, o?: { exact?: boolean; context?: number; signal?: AbortSignal }): Promise<ResultsDiffResult>
+  /** Pivots the rows (a view's rows, in its order and with its filters, through a view) in the backend (results.pivot): grouped
+   *  by up to `limits.pivot.maxRowFields` distinct `rows` columns and an optional `column` column by their collation, with
+   *  1 to `limits.pivot.maxValues` values each, stored as a new result whose descriptor the answer carries: open it with
+   *  `ResultClient.open`. The result must have finished loading. */
+  pivot(spec: PivotSpec, o?: { signal?: AbortSignal }): Promise<ResultsPivotResult>
   /** The cells whose grid text contains `text`, searched in the backend over the stored rows (results.search; a view's
    *  positions on a view): every match counted, and a run of up to `maxMatches` in whole rows from `fromRow`, or with
    *  `backward` the last before it. Aborting the signal stops the search. */
   search(text: string, fromRow: number, o?: SearchOptions): Promise<ResultsSearchResult>
 }
+/** A pivot's layout: row-group columns, an optional column-group column and its values. */
+export interface PivotSpec { readonly rows: readonly number[]; readonly column?: number; readonly values: readonly PivotValueSpec[] }
 export interface SearchOptions { readonly maxMatches?: number; readonly backward?: boolean; readonly signal?: AbortSignal }
+/** A column's distinct snapshot (results.distinct): what it found when built, windows of its values, ticks, and close (once;
+ *  later calls, and a close after its result went, do nothing). */
+export interface DistinctList {
+  /** The result it belongs to: a view's snapshot belongs to the view's result. */
+  readonly generation: number
+  readonly resultId: number
+  readonly snapshotId: number
+  readonly column: number
+  readonly summary: ResultsDistinctResult
+  read(o: Omit<ResultsDistinctReadParams, 'resultId' | 'snapshotId'> & { signal?: AbortSignal }): Promise<ResultsDistinctReadResult>
+  tick(o: Omit<ResultsDistinctTickParams, 'resultId' | 'snapshotId'>): Promise<ResultsDistinctTickResult>
+  close(): Promise<void>
+}
 /** A sorted view: the rows that were sealed when it was built (`complete` when that was all of them), in key order;
  *  `approximate` when a key compared a stored prefix or an estimated length. It never grows. */
 export interface ResultView extends ResultHandle {
@@ -358,6 +383,27 @@ export class ResultClient implements Disposable {
         if (response.type !== 'profile') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
         return response.result
       },
+      distinct: async (column, o = {}) => {
+        this.usable(state)
+        if (!Number.isInteger(column) || column < 0 || column >= state.columns.length) throw new ResultError('INVALID_PARAMS', 'The column is not one of the result\'s.')
+        const keptViewId = o.kept?.key.view
+        if (o.kept && (keptViewId === undefined || o.kept.key.generation !== state.key.generation || o.kept.key.resultId !== state.key.resultId))
+          throw new ResultError('INVALID_PARAMS', 'Kept values are read through a view of the same result.')
+        // A snapshot built just before the abort reached the worker is one nobody holds: it is closed, or it would keep its
+        // memory and one of the result's snapshots until the result goes.
+        const owned = { generation: state.key.generation, resultId: state.key.resultId }
+        const late = (message: WorkerResponse) => {
+          if (message.type !== 'distinct' || !('snapshotId' in message.result)) return
+          const { snapshotId } = message.result
+          void this.request(id => ({ type: 'distinct', id, key: owned, request: { kind: 'close', snapshotIds: [snapshotId] } })).catch(() => {})
+        }
+        const response = await this.request(id => ({ type: 'distinct', id, key: state.key, request: { kind: 'open', column, ...(keptViewId === undefined ? {} : { keptViewId }) } }), o.signal, late)
+        if (response.type !== 'distinct' || !('snapshotId' in response.result)) throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
+        // The snapshot outlives the view it was read through: its requests go through its result.
+        const owner = state.base === undefined ? state : this.results.get(state.base)
+        if (!owner) throw new ResultError('RESULT_RELEASED', released)
+        return this.distinctList(owner, column, response.result)
+      },
       close,
       sort: (keys, o) => this.sort(state.base === undefined ? state : this.results.get(state.base), keys, o),
       identify: async (by, o = {}) => {
@@ -401,6 +447,25 @@ export class ResultClient implements Disposable {
         if (response.type !== 'identity') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
         return response.result as ResultsDiffResult
       },
+      pivot: async (spec, o = {}) => {
+        this.usable(state)
+        const columns = state.columns.length, valid = (column: number | undefined) => column !== undefined && Number.isInteger(column) && column >= 0 && column < columns
+        // Main counts a request its schema refuses toward closing the port, so a bad pivot never leaves the page.
+        if (spec.rows.length > wire.pivot.maxRowFields || new Set(spec.rows).size !== spec.rows.length || !spec.rows.every(valid)
+          || (spec.column !== undefined && (!valid(spec.column) || spec.rows.includes(spec.column)))
+          || spec.values.length < 1 || spec.values.length > wire.pivot.maxValues || spec.values.some(value => value.column === undefined ? value.aggregate !== 'count' : !valid(value.column)))
+          throw new ResultError('INVALID_PARAMS', 'A pivot takes up to 8 distinct row columns, a column group that is not one of them, and 1 to 16 values of the result\'s columns.')
+        // A pivot answered just before the abort reached the worker is a stored result nobody holds: it is released.
+        const late = (message: WorkerResponse) => {
+          if (message.type !== 'identity') return
+          const { descriptor } = message.result as ResultsPivotResult
+          void this.release([{ generation: descriptor.generation, resultId: descriptor.resultId }]).catch(() => {})
+        }
+        const request = { method: 'pivot' as const, rows: [...spec.rows], ...(spec.column === undefined ? {} : { column: spec.column }), values: spec.values.map(value => ({ ...value })) }
+        const response = await this.request(id => ({ type: 'identity', id, key: state.key, request }), o.signal, late)
+        if (response.type !== 'identity') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
+        return response.result as ResultsPivotResult
+      },
       search: async (text, fromRow, o = {}) => {
         this.usable(state)
         // Main counts a request its schema refuses toward closing the port, so a bad search never leaves the page.
@@ -423,6 +488,50 @@ export class ResultClient implements Disposable {
     return full
   }
 
+  /** A snapshot's handle on its result's state (a snapshot read through a view belongs to the view's result); its requests
+   *  are checked before the port, since main counts a request its schema refuses toward closing it. */
+  private distinctList(state: ResultState, column: number, summary: ResultsDistinctResult): DistinctList {
+    const key: ResultKey = { generation: state.key.generation, resultId: state.key.resultId }
+    const { snapshotId } = summary
+    let closed = false
+    const search = (text: string | undefined) => {
+      if (text !== undefined && (text.length < 1 || text.length > wire.search.maxText)) throw new ResultError('INVALID_PARAMS', 'Search for 1 to 1,024 characters.')
+    }
+    return {
+      generation: key.generation, resultId: key.resultId, snapshotId, column, summary,
+      read: async o => {
+        this.usable(state)
+        search(o.search)
+        if ((o.order !== 'count' && o.order !== 'value') || !Number.isInteger(o.offset) || o.offset < 0 || o.offset > 2 ** 31 - 1 || !Number.isInteger(o.count) || o.count < 1 || o.count > wire.distinct.maxWindow)
+          throw new ResultError('INVALID_PARAMS', 'A window of values needs an order, an offset and 1 to 512 values.')
+        const response = await this.request(id => ({ type: 'distinct', id, key, request: { kind: 'read', snapshotId, order: o.order, offset: o.offset, count: o.count, ...(o.search === undefined ? {} : { search: o.search }) } }), o.signal)
+        if (response.type !== 'distinct' || !('values' in response.result)) throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
+        return response.result
+      },
+      tick: async o => {
+        this.usable(state)
+        search(o.search)
+        const groups = o.groups
+        if ((groups && (groups.length < 1 || groups.length > wire.distinct.maxWindow || groups.some(group => !Number.isInteger(group) || group < 0 || group > 2 ** 31 - 1)))
+          || (o.all && groups) || (o.search !== undefined && !o.all) || (!o.all && !groups && o.nulls === undefined))
+          throw new ResultError('INVALID_PARAMS', 'Tick 1 to 512 values, every value, or NULL.')
+        const response = await this.request(id => ({
+          type: 'distinct', id, key,
+          request: { kind: 'tick', snapshotId, checked: o.checked, ...(groups ? { groups: [...groups] } : {}), ...(o.all ? { all: true as const } : {}), ...(o.search === undefined ? {} : { search: o.search }), ...(o.nulls === undefined ? {} : { nulls: o.nulls }) }
+        }))
+        if (response.type !== 'distinct' || !('nullsChecked' in response.result) || 'values' in response.result || 'snapshotId' in response.result) throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
+        return response.result
+      },
+      close: async () => {
+        if (closed) return
+        closed = true
+        // A released or lost result took its snapshots with it.
+        if (!this.tracked(state)) return
+        try { await this.request(id => ({ type: 'distinct', id, key, request: { kind: 'close', snapshotIds: [snapshotId] } })) } catch { /* Gone with its result. */ }
+      }
+    }
+  }
+
   /** results.view through the worker. A view built after its sort was given up is closed by the worker. */
   private async sort(base: ResultState | undefined, keys: readonly ViewSortKey[], o: { filters?: readonly ViewFilter[]; replaces?: ResultView; signal?: AbortSignal } = {}): Promise<ResultView> {
     if (!base) throw new ResultError('RESULT_RELEASED', released)
@@ -430,7 +539,8 @@ export class ResultClient implements Disposable {
     const columnOf = (column: number) => Number.isInteger(column) && column >= 0 && column < base.columns.length
     if (keys.length > wire.views.maxKeys || new Set(keys.map(item => item.column)).size !== keys.length || keys.some(item => !columnOf(item.column)))
       throw new ResultError('INVALID_PARAMS', 'Each sort key needs a distinct column of the result.')
-    const filters = o.filters?.length ? o.filters.map(item => ({ ...item })) : undefined
+    // A groups filter goes as it was asked, without what the view said of it.
+    const filters = o.filters?.length ? o.filters.map((item): ViewFilter => item.op === 'groups' ? { op: 'groups', column: item.column, snapshotId: item.snapshotId } : { ...item }) : undefined
     if (keys.length + (filters?.length ?? 0) === 0 || (filters?.length ?? 0) > wire.views.maxFilters
       || filters?.some(item => item.op === 'duplicates' ? item.columns.length === 0 || new Set(item.columns).size !== item.columns.length || !item.columns.every(columnOf) : !columnOf(item.column)))
       throw new ResultError('INVALID_PARAMS', 'A view needs a sort key or a filter, on columns of the result.')
@@ -747,7 +857,7 @@ export class ResultClient implements Disposable {
 
   private received(message: WorkerResponse): void {
     switch (message.type) {
-      case 'window': case 'cell': case 'closed': case 'rowBytes': case 'measure': case 'stats': case 'liveUpdated': case 'view': case 'viewClosed': case 'identity': case 'search': case 'profile': {
+      case 'window': case 'cell': case 'closed': case 'rowBytes': case 'measure': case 'stats': case 'liveUpdated': case 'view': case 'viewClosed': case 'identity': case 'search': case 'profile': case 'distinct': {
         const pending = this.pending.get(message.id)
         this.pending.delete(message.id)
         pending?.resolve(message)

@@ -55,7 +55,10 @@ being true.
   to compare. `GridView` draws highlights from sorted positions by binary search per painted row, with theme colours only.
   Result diffs (`Results/ResultDiff.cs`, `results.diff`) align and compare rows in the backend too and store the unified
   diff as a new result of the same query; the grid reads it like any result and marks its rows and cells from its hidden
-  tone column.
+  tone column. Pivots (`Results/ResultPivot.cs`, `results.pivot`) group and aggregate a result's or a view's rows in the
+  backend too and store a derived set (`ResultStore.Open(derived: true)`): its working memory comes out of the query's
+  budget, a refusal fails only it and never stops the query, a pivot past its bounds is refused rather than shown in part,
+  and main owns it only once it has the answer (one not sent is released at once).
 - The grid renders cells only through `GridView` pools, and text only through `nodeValue` (`tests/grid-lint.test.ts`
   forbids HTML sinks under `grid/`, `results/`, `designer/` and `live/`); no React per row or cell, and frames stay
   O(visible cells).
@@ -105,6 +108,10 @@ being true.
   menus and the palette run it through `varia:run-role`. Two-part chords that Varia owns are `bridge` keybindings,
   registered with Monaco from the catalogue by `registerEditorBridge`; Monaco dispatches them. After catalogue changes,
   regenerate `docs/commands.md` with `npx vitest run tests/commands-docs.test.ts -u`.
+  Peek's definition is the query editor itself (`createQueryEditor` with `peekEditorUse`, `explorer/peek-editor.ts`), never
+  a copy of it: read-only, one per card or tab, a model per definition disposed as the view moves on. Its focus key is
+  `peekEditorFocus`, never `editorFocus`, and its Monaco context key `variaPeekEditor` keeps the bridge's chords off it, so no
+  query command acts on it.
   User shortcuts reach the renderer only through `ShortcutsService` (`src/renderer/src/core/ShortcutsService.ts`), which
   hands `effectiveRules` to `KeybindingService.setRules` (labels, menus, the palette and the editor bridge follow) and the
   file's gestures to `GestureService.setModifiers`; the Shortcuts page records keys only through `KeybindingService.capture`.

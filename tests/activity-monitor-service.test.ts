@@ -32,7 +32,7 @@ describe('Activity Monitor document', () => {
     expect(liveViews.last.spec).toEqual({
       connectionId: 'c1', source: 'activity',
       // Every pane's grid is still to come, so only the tiles' overview samples; the others wait, paused, for their panes.
-      probes: [{ probe: 'activity.overview', intervalMs: 2000, paused: false }, { probe: 'activity.sessions', intervalMs: 2000, paused: true }, { probe: 'activity.resources', intervalMs: 5000, paused: true }]
+      probes: [{ probe: 'activity.overview', intervalMs: 2000, paused: false }, { probe: 'activity.sessions', intervalMs: 2000, paused: true }, { probe: 'activity.resources', intervalMs: 5000, paused: true }, { probe: 'activity.queries', intervalMs: 30_000, paused: true }]
     })
     expect(liveViews.last.owner.key).toBe(`tab:${id}`)
     // Opening it again activates the same tab and subscribes nothing new; another server gets its own.
@@ -152,7 +152,7 @@ describe('Activity Monitor document', () => {
     expect(shownPanes({ ...state, split: false })).toEqual(['processes'])
     expect(probeSettings(state).map(entry => entry.probe)).toEqual([...activityLiveProbes])
   })
-  it('keeps the panes apart, splits and unsplits, and expands at most two charts, the oldest giving way', () => {
+  it('keeps the panes apart, splits and unsplits, and expands any number of charts, each toggling alone', () => {
     const { activity, connect, liveViews, context } = monitorFixture()
     connect(connectionInfo('c1'))
     const id = activity.open('c1')
@@ -165,8 +165,11 @@ describe('Activity Monitor document', () => {
     // Pane changes while every grid is pending start no SQL.
     expect(liveViews.last.calls).toEqual([])
     activity.toggleTile(id, 4)
-    expect(activity.get(id)?.expanded).toEqual([1, 4])
-    activity.toggleTile(id, 1)
+    expect(activity.get(id)?.expanded).toEqual([0, 1, 4])
+    // Every tile may be expanded: an eighth never closes the first.
+    for (const index of [2, 3, 5, 6, 7]) activity.toggleTile(id, index)
+    expect(activity.get(id)?.expanded).toEqual([0, 1, 4, 2, 3, 5, 6, 7])
+    for (const index of [0, 1, 2, 3, 5, 6, 7]) activity.toggleTile(id, index)
     expect(activity.get(id)?.expanded).toEqual([4])
     activity.toggleTile(id, 99)
     activity.setWindow(id, 60)

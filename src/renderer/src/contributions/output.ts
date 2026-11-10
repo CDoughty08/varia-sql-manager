@@ -109,6 +109,10 @@ export function outputContribution({ commands, results, menuTargets, documents, 
       when: args => { const target = targetOf(args); return !!grid(target) && !!results.sortOf(target!.tabId, target!.resultIndex)?.keys.length },
       run: args => { const target = targetOf(args); if (target && grid(target)) results.clearSort(target.tabId, target.resultIndex) }
     }),
+    commands.register('output.filterColumnValues', {
+      when: args => { const at = sortTarget(args); return !!at && results.canFilterColumn(at.tabId, at.index, at.column) },
+      run: args => { const at = sortTarget(args); if (at) results.filterColumn(at.tabId, at.index, at.column) }
+    }),
     commands.register('output.filterSelection', selectionFilter('in')),
     commands.register('output.excludeSelection', selectionFilter('notIn')),
     commands.register('output.filterBetween', selectionFilter('between')),

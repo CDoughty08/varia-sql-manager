@@ -31,7 +31,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
-        "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.identify", "results.rowIds", "results.findRows", "results.diff", "results.search", "results.profile", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.index", "explorer.search", "results.copy", "results.export",
+        "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.identify", "results.rowIds", "results.findRows", "results.diff", "results.search", "results.profile", "results.pivot", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.index", "explorer.search", "results.copy", "results.export",
+        "results.distinct", "results.distinctRead", "results.distinctTick", "results.distinctClose",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
         "ssis.describe", "ssis.execute", "ssis.catalogSetup"
@@ -301,14 +302,14 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     public RequestLane LaneOf(string method) => method switch
     {
         "query.execute" or "plans.estimate" => RequestLane.Query,
-        "results.read" or "results.copy" or "results.export" or "results.view" or "results.identify" or "results.findRows" or "results.diff" or "results.search" or "results.profile" => RequestLane.Results,
+        "results.read" or "results.copy" or "results.export" or "results.view" or "results.identify" or "results.findRows" or "results.diff" or "results.search" or "results.profile" or "results.pivot" or "results.distinct" or "results.distinctRead" or "results.distinctTick" => RequestLane.Results,
         "explorer.children" or "explorer.peek" or "explorer.peekDependencies" or "explorer.index" or "explorer.search" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
         "ssis.describe" or "ssis.execute" or "ssis.catalogSetup" => RequestLane.Ssis,
         "live.subscribe" or "activity.details" => RequestLane.Live,
         // Kill Process takes no metadata slot: it runs at once under its own gates, as object actions do under theirs.
         "activity.kill" => RequestLane.Actions,
-        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.rowIds" or "entra.cache.clear"
+        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.distinctClose" or "results.rowIds" or "entra.cache.clear"
             or "live.update" or "language.status" or "language.refresh" or "language.close" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
         _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
@@ -370,6 +371,11 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "results.diff" => await DiffAsync(Read<ResultsDiffArgs>(parameters, json), context),
         "results.search" => await SearchAsync(Read<ResultsSearchArgs>(parameters, json), Token(context)),
         "results.profile" => await ProfileAsync(Read<ResultsProfileArgs>(parameters, json), Token(context)),
+        "results.pivot" => await PivotAsync(Read<ResultsPivotArgs>(parameters, json), context),
+        "results.distinct" => await DistinctAsync(Read<ResultsDistinctArgs>(parameters, json), Token(context)),
+        "results.distinctRead" => await DistinctReadAsync(Read<ResultsDistinctReadArgs>(parameters, json), Token(context)),
+        "results.distinctTick" => await DistinctTickAsync(Read<ResultsDistinctTickArgs>(parameters, json), Token(context)),
+        "results.distinctClose" => CloseSnapshots(Read<ResultsDistinctCloseArgs>(parameters, json)),
         "results.copy" => await jobs.CopyAsync(Read<ResultsCopyArgs>(parameters, json), context),
         "results.export" => await jobs.ExportAsync(Read<ResultsExportArgs>(parameters, json), context),
         "explorer.children" => await explorer.ChildrenAsync(Read<ExplorerChildrenArgs>(parameters, json), Token(context)),
@@ -1573,7 +1579,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         // A filtered view keeps only its rows' order.
         var charged = 4L * built.Order.Length + ResultStore.ViewOverhead;
         store.Return(set.Budget, working + kept - charged);
-        var view = store.AddView(set, built.Order, keys, built.Approximate, complete, charged, args.Replaces);
+        var view = store.AddView(set, built.Order, keys, built.Approximate, complete, charged, args.Replaces, rows);
         return new ResultsViewResult(view.ViewId, view.Rows, rows, view.Complete, view.Approximate, args.Filters is null ? null : [.. built.Filters.Select(FilterResult)]);
     }
 
@@ -1595,12 +1601,24 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 filters[i] = new ViewFilter(FilterOp.Duplicates, -1, null, false, null, filter.Columns);
                 continue;
             }
+            if (filter.Op == "groups")
+            {
+                if (filter.Column is not { } listed || filter.SnapshotId is not { } snapshotId || snapshotId == 0 || filter.Rows is not null || filter.Nulls is not null
+                    || filter.Cells is not null || filter.Columns is not null)
+                    throw new RequestException("INVALID_PARAMS", "A groups filter needs a column and a value list of it.");
+                var snapshot = store.FindSnapshot(args.ResultId, snapshotId) ?? throw SnapshotClosed();
+                if (snapshot.Column != listed) throw new RequestException("INVALID_PARAMS", "A groups filter's value list is of another column.");
+                var (kept, rows, nulls) = snapshot.Freeze();
+                filters[i] = new ViewFilter(kept, listed, rows, nulls, null, [], snapshotId);
+                continue;
+            }
+            if (filter.SnapshotId is not null) throw new RequestException("INVALID_PARAMS", "Only a groups filter names a value list.");
             var op = filter.Op switch
             {
                 "in" => FilterOp.In,
                 "notIn" => FilterOp.NotIn,
                 "between" => FilterOp.Between,
-                _ => throw new RequestException("INVALID_PARAMS", "A filter's op is in, notIn, between or duplicates.")
+                _ => throw new RequestException("INVALID_PARAMS", "A filter's op is in, notIn, between, duplicates or groups.")
             };
             if (filter.Column is not { } column || column < 0 || column >= columns || filter.Columns is not null
                 || (filter.Rows is null) == (filter.Cells is null) || (filter.Cells is not null && filter.Nulls is not null)
@@ -1623,6 +1641,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private static ViewFilterResult FilterResult(ViewFilter filter) => filter.Op switch
     {
         FilterOp.Duplicates => new ViewFilterResult("duplicates", Columns: filter.Columns),
+        _ when filter.Snapshot is { } snapshot => new ViewFilterResult("groups", filter.Column, Nulls: filter.Nulls, SnapshotId: snapshot, Keep: filter.Op == FilterOp.In,
+            Values: filter.Rows!.Length, Row: filter.Rows.Length == 1 ? filter.Rows[0] : null),
         _ => new ViewFilterResult(filter.Op switch { FilterOp.In => "in", FilterOp.NotIn => "notIn", _ => "between" }, filter.Column, filter.Rows, filter.Nulls)
     };
 
@@ -1678,6 +1698,90 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             throw new RequestException("TOO_LARGE", "There is not enough result memory to profile these rows. Close other results and try again.");
         }
         finally { store.Return(set.Budget, working + charges.Extra); }
+    }
+
+    /// <summary>results.distinct: keeps a column's distinct values with their counts (ViewSorter.DistinctValues) over a
+    /// result's sealed rows or a view's as a snapshot, built off the frame loop; its working memory is charged to the
+    /// result's query budget while it runs and the snapshot's own while it is kept (TOO_LARGE when the budget has no room).</summary>
+    private async Task<ResultsDistinctResult> DistinctAsync(ResultsDistinctArgs args, CancellationToken token)
+    {
+        if (args.ResultId == 0 || args.ViewId == 0 || args.KeptViewId == 0)
+            throw new RequestException("INVALID_PARAMS", "Distinct values need a result, a column and views of that result.");
+        var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        if (args.Column < 0 || args.Column >= set.Columns.Count)
+            throw new RequestException("INVALID_PARAMS", "The column is not one of the result's.");
+        var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
+        var keptView = args.KeptViewId is { } keptId ? FindView(args.ResultId, keptId) : null;
+        var complete = view?.Complete ?? set.IsComplete;
+        var pages = set.SealedSnapshot();
+        long rows = 0;
+        foreach (var page in pages) rows += page.Rows;
+        var working = ViewSorter.DistinctWorkingBytes(rows);
+        if (!store.TryReserve(set.Budget, working, false, out _))
+            throw new RequestException("TOO_LARGE", "There is not enough result memory to list this column's values. Close other results and try again.");
+        DistinctSnapshot snapshot;
+        try
+        {
+            snapshot = await Task.Run(() => ViewSorter.DistinctValues(set, pages, view, args.Column, complete, token, keptView), token);
+            if (set.IsReleased) throw Unavailable(args.ResultId);
+            if ((view is not null && !store.HasView(view)) || (keptView is not null && !store.HasView(keptView))) throw ViewClosed();
+            // Cancelled once built: nobody waits for it, so it is not kept.
+            token.ThrowIfCancellationRequested();
+        }
+        catch
+        {
+            store.Return(set.Budget, working);
+            throw;
+        }
+        // The snapshot keeps its share of what was reserved (never more: it has at most one group a row).
+        snapshot.Charged = ViewSorter.DistinctSnapshotBytes(snapshot.Distinct);
+        store.Return(set.Budget, working - snapshot.Charged);
+        store.AddSnapshot(snapshot);
+        var (ticked, nullTicked) = snapshot.Ticks;
+        return new ResultsDistinctResult(snapshot.SnapshotId, snapshot.Rows, snapshot.Complete, snapshot.Nulls, snapshot.Distinct, snapshot.Approximate, ticked, nullTicked);
+    }
+
+    private DistinctSnapshot FindSnapshot(uint resultId, uint snapshotId)
+    {
+        if (store.Find(resultId) is null) throw Unavailable(resultId);
+        return store.FindSnapshot(resultId, snapshotId) ?? throw SnapshotClosed();
+    }
+
+    private static RequestException SnapshotClosed() => new("VIEW_NOT_FOUND", "This column's value list was closed. Open the column's filter again.");
+
+    /// <summary>results.distinctRead: a window of a snapshot's values in either order, narrowed to a search's matches (found
+    /// once and kept until the next search), off the frame loop.</summary>
+    private async Task<ResultsDistinctReadResult> DistinctReadAsync(ResultsDistinctReadArgs args, CancellationToken token)
+    {
+        var order = args.Order switch { "count" => DistinctOrder.Count, "value" => DistinctOrder.Value, _ => (DistinctOrder?)null };
+        if (args.ResultId == 0 || args.SnapshotId == 0 || order is null || args.Offset is < 0 or > int.MaxValue || args.Count is < 1 or > ViewSorter.MaxDistinctWindow
+            || args.Search is { Length: < 1 or > ResultSearcher.MaxText })
+            throw new RequestException("INVALID_PARAMS", "A window of values needs an order of count or value, an offset, 1 to 512 values and at most 1,024 characters of search text.");
+        var snapshot = FindSnapshot(args.ResultId, args.SnapshotId);
+        var (total, values, ticked, nullTicked) = await Task.Run(() => snapshot.Read(order.Value, (int)args.Offset, args.Count, args.Search, token), token);
+        if (snapshot.Set.IsReleased) throw Unavailable(args.ResultId);
+        return new ResultsDistinctReadResult(total, args.Offset, values, ticked, nullTicked);
+    }
+
+    /// <summary>results.distinctTick: ticks or clears some of a snapshot's values, every value, or those a search finds, and
+    /// NULL; refused once a filter uses the snapshot.</summary>
+    private async Task<ResultsDistinctTickResult> DistinctTickAsync(ResultsDistinctTickArgs args, CancellationToken token)
+    {
+        var all = args.All == true;
+        if (args.ResultId == 0 || args.SnapshotId == 0 || args.All == false || (all && args.Groups is not null) || (args.Search is not null && !all)
+            || args.Groups is { Length: < 1 or > ViewSorter.MaxDistinctWindow } || args.Search is { Length: < 1 or > ResultSearcher.MaxText }
+            || (!all && args.Groups is null && args.Nulls is null))
+            throw new RequestException("INVALID_PARAMS", "Tick 1 to 512 values, every value (or those a search of at most 1,024 characters finds), or NULL.");
+        var snapshot = FindSnapshot(args.ResultId, args.SnapshotId);
+        var (ticked, nullTicked) = await Task.Run(() => snapshot.Tick(args.Checked, args.Groups, all, args.Search, args.Nulls, token), token);
+        return new ResultsDistinctTickResult(ticked, nullTicked);
+    }
+
+    private ResultsDistinctCloseResult CloseSnapshots(ResultsDistinctCloseArgs args)
+    {
+        if (args.ResultId == 0 || args.SnapshotIds is not { Length: >= 1 and <= MaxViewIds } || args.SnapshotIds.Contains(0u))
+            throw new RequestException("INVALID_PARAMS", "Close 1 to 64 value lists by id.");
+        return new ResultsDistinctCloseResult(store.CloseSnapshots(args.ResultId, args.SnapshotIds));
     }
 
     private ResultsViewCloseResult CloseViews(ResultsViewCloseArgs args)
@@ -1818,6 +1922,114 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             }
         }
         finally { store.Return(left.Budget, working + cellBytes); }
+    }
+
+    /// <summary>results.pivot: groups and aggregates a complete result's rows (ResultPivoter), or its view's, off the frame
+    /// loop, charging its keys and figures to the result's query budget while it runs, and stores the pivot as a new result of
+    /// the query, released with its others, or at once when its answer is not sent (a CANCEL or the deadline came first).</summary>
+    private async Task<ResultsPivotResult> PivotAsync(ResultsPivotArgs args, RequestContext? context)
+    {
+        var token = Token(context);
+        if (args.ResultId == 0 || args.ViewId == 0 || args.Rows is not { Length: <= ResultPivoter.MaxRowFields } || args.Values is not { Length: >= 1 and <= ResultPivoter.MaxValues })
+            throw new RequestException("INVALID_PARAMS", "A pivot takes up to 8 row columns and 1 to 16 values.");
+        var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        // Only a query's rows or another pivot: a diff's or a live table's columns are not data to summarise.
+        if (set.Kind is not ("rows" or "pivot")) throw new RequestException("INVALID_PARAMS", "Only a query's results or another pivot can be pivoted.");
+        var spec = PivotSpecOf(args, set);
+        if (!set.IsComplete) throw new RequestException("RESULT_OPEN", "Pivot the results after they finish loading.");
+        // A query whose results were cut short stores nothing more, whatever memory is free: say why rather than blame memory.
+        switch (set.Budget.Stopped)
+        {
+            case TruncationReason.None: break;
+            case TruncationReason.RowLimit:
+                throw new RequestException("TOO_LARGE", "This query stored as many rows as its limit allows, so it cannot store a pivot. Raise the limit or return fewer rows, then run it again.");
+            default:
+                throw new RequestException("TOO_LARGE", "This query's results filled its result memory, so it cannot store a pivot. Close other results or return fewer rows, then run it again.");
+        }
+        var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
+        var pages = set.SealedSnapshot();
+        long rows = 0;
+        foreach (var page in pages) rows += page.Rows;
+        var working = ResultPivoter.WorkingBytes(rows, ResultPivoter.KeyColumns(spec));
+        const string tooLarge = "There is not enough result memory to pivot these rows. Close other results and try again.";
+        if (!store.TryReserve(set.Budget, working, false, out _)) throw new RequestException("TOO_LARGE", tooLarge);
+        long figures = 0;
+        bool Reserve(long bytes)
+        {
+            if (!store.TryReserve(set.Budget, bytes, false, out _)) return false;
+            figures += bytes;
+            return true;
+        }
+        try
+        {
+            PivotModel model;
+            try { model = await Task.Run(() => ResultPivoter.Build(set, pages, view?.Order, spec, token, Reserve), token); }
+            catch (PivotTooLargeException) { throw new RequestException("TOO_LARGE", tooLarge); }
+            if (set.IsReleased) throw Unavailable(args.ResultId);
+            if (view is not null && !store.HasView(view)) throw ViewClosed();
+            var (columns, wires, lengths) = PivotOutput.Shape(set, pages, spec, model);
+            var pivot = store.Open(set.Budget, set.Index, set.BatchNumber, set.Iteration, "pivot", columns, wires, lengths: lengths, derived: true)
+                ?? throw new RequestException("TOO_LARGE", tooLarge);
+            void Release()
+            {
+                if (store.Release([pivot.ResultId]) > 0) ReportMemory();
+            }
+            try
+            {
+                await Task.Run(() => PivotOutput.Write(pivot, set, pages, spec, model, token), token);
+                // A pivot is never kept in part: rows the budget refused would leave groups out of the summary.
+                if (pivot.Describe().RowsStored < model.RowGroups) throw new RequestException("TOO_LARGE", tooLarge);
+                var answer = new ResultsPivotResult(pivot.Describe(), model.Rows, model.RowGroups, model.ColumnGroups, model.Approximate);
+                // Main owns the pivot only once it has the answer: one not sent goes at once.
+                if (context is not null) context.Unsent = context.Dropped = Release;
+                return answer;
+            }
+            catch
+            {
+                Release();
+                throw;
+            }
+        }
+        finally { store.Return(set.Budget, working + figures); }
+    }
+
+    /// <summary>A pivot request checked against its result: distinct row columns, a column group that is not one of them, and
+    /// values whose aggregates suit their columns (SUM and AVG only of numbers).</summary>
+    private static PivotSpec PivotSpecOf(ResultsPivotArgs args, ResultSetBuffer set)
+    {
+        var count = set.Columns.Count;
+        bool Shown(int column) => column >= 0 && column < count && !ResultTextWriter.Hidden(set.Columns[column]);
+        for (var i = 0; i < args.Rows.Length; i++)
+            if (!Shown(args.Rows[i]) || Array.IndexOf(args.Rows, args.Rows[i], 0, i) >= 0)
+                throw new RequestException("INVALID_PARAMS", "Each row column must be a distinct column of the result.");
+        if (args.Column is { } grouped && (!Shown(grouped) || args.Rows.Contains(grouped)))
+            throw new RequestException("INVALID_PARAMS", "The column group must be a column of the result that is not a row column.");
+        var values = new PivotValue[args.Values.Length];
+        for (var i = 0; i < values.Length; i++)
+        {
+            var value = args.Values[i] ?? throw new RequestException("INVALID_PARAMS", "A pivot value needs an aggregate.");
+            var aggregate = value.Aggregate switch
+            {
+                "count" => PivotAggregate.Count,
+                "countDistinct" => PivotAggregate.CountDistinct,
+                "sum" => PivotAggregate.Sum,
+                "avg" => PivotAggregate.Avg,
+                "min" => PivotAggregate.Min,
+                "max" => PivotAggregate.Max,
+                _ => throw new RequestException("INVALID_PARAMS", "A pivot value's aggregate is count, countDistinct, sum, avg, min or max.")
+            };
+            if (value.Column is not { } column)
+            {
+                if (aggregate != PivotAggregate.Count) throw new RequestException("INVALID_PARAMS", "Only Count can count rows without a column.");
+                values[i] = new PivotValue(aggregate, -1);
+                continue;
+            }
+            if (!Shown(column)) throw new RequestException("INVALID_PARAMS", "A pivot value's column must be a column of the result.");
+            if (aggregate is PivotAggregate.Sum or PivotAggregate.Avg && !ResultPivoter.IsNumeric(set.Columns[column], set.Wires[column]))
+                throw new RequestException("INVALID_PARAMS", "Sum and Average need a numeric column.");
+            values[i] = new PivotValue(aggregate, column);
+        }
+        return new PivotSpec([.. args.Rows], args.Column ?? -1, values);
     }
 
     /// <summary>The most views one results.viewClose names (src/shared/ipc/wire/protocol.ts limits.views.maxClose).</summary>

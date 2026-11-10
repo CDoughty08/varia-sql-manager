@@ -36,7 +36,7 @@ describe('editor keybinding bridge', () => {
     const registration = registerEditorBridge(monaco, { execute }, platform)
     const expected = bridgeRules(platform)
     expect(expected.map(rule => rule.command)).toEqual(['editor.splitDown', 'editor.focusNextGroup', 'editor.focusPreviousGroup', 'edit.toggleBookmark', 'edit.previousBookmark', 'edit.nextBookmark', 'edit.clearBookmarks', 'edit.insertSnippet', 'edit.surroundWith'])
-    expect(rules).toEqual(expected.map(rule => ({ keybinding: toMonacoKeybinding(rule.chords, platform), command: bridgeCommandId(rule.command), when: 'editorTextFocus' })))
+    expect(rules).toEqual(expected.map(rule => ({ keybinding: toMonacoKeybinding(rule.chords, platform), command: bridgeCommandId(rule.command), when: 'editorTextFocus && !variaPeekEditor' })))
     expect([...commands.keys()]).toEqual(expected.map(rule => 'varia.' + rule.command))
     commands.get('varia.edit.nextBookmark')!({})
     expect(execute).toHaveBeenCalledWith('edit.nextBookmark', undefined, 'keybinding')

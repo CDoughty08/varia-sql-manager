@@ -42,13 +42,16 @@ export function thresholdBounds(spec: ThresholdSpec, settings: Partial<SettingsV
   return { warning: setting(spec.settings?.warning, spec.warning), error: setting(spec.settings?.error, spec.error) }
 }
 /** The worst threshold the tile's values cross now: a bound is reached at or above it, and a threshold with `while` counts
- *  only while that series is above zero (the longest block, while sessions are blocked). */
+ *  only while that series is above zero (the longest block, while sessions are blocked). An error bound below the warning one
+ *  acts as the warning one. */
 export function tileTone(tile: TileSpec, value: (id: string) => number, settings: Partial<SettingsValues>): TileTone | undefined {
   let tone: TileTone | undefined
   for (const spec of tile.thresholds) {
     if (spec.while !== undefined && !(value(spec.while) > 0)) continue
-    const current = value(spec.series), { warning, error } = thresholdBounds(spec, settings)
+    const current = value(spec.series), { warning, error: bound } = thresholdBounds(spec, settings)
     if (!Number.isFinite(current)) continue
+    // An error bound below the warning one acts as the warning one, as Data File I/O's row tones do.
+    const error = bound !== undefined && warning !== undefined ? Math.max(warning, bound) : bound
     if (error !== undefined && current >= error) return 'critical'
     if (warning !== undefined && current >= warning) tone = 'warning'
   }
@@ -158,4 +161,10 @@ export function monitorFacts(connection: { readonly server: string; readonly pro
     ...(activityEditions.managedInstance.editions as readonly number[]).includes(connection.engineEdition ?? -1) ? [{ label: 'Kind', value: activityEditions.managedInstance.label }] : [],
     ...connection.login ? [{ label: 'Login', value: connection.login }] : []
   ]
+}
+
+/** How many rows a grid lays its items in, from the columns its template resolved to (auto-fit, so the width decides). */
+export function gridRows(count: number, template: string): number {
+  const columns = template.trim() === '' || template === 'none' ? 1 : template.trim().split(/\s+/).length
+  return Math.max(1, Math.ceil(count / Math.max(1, columns)))
 }

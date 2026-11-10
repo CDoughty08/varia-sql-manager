@@ -3,7 +3,7 @@ import type { ApiResult, ResolvedViewFilter, ResultColumn, ResultsJobProgress, R
 import type { ResultHandle, ResultView } from '../src/renderer/src/results/ResultClient'
 import type { DocumentService } from '../src/renderer/src/services/documents'
 import { EventBus } from '../src/renderer/src/core/events'
-import { filterLabel, ResultsService, resultLimits, suggestedName } from '../src/renderer/src/results/ResultsService'
+import { filterLabel, filteredColumns, ResultsService, resultLimits, suggestedName } from '../src/renderer/src/results/ResultsService'
 import { selectAll } from '../src/renderer/src/grid/selection'
 import { openEnd } from '../src/renderer/src/grid/constants'
 import { deferred } from './fixtures/documents'
@@ -1025,7 +1025,7 @@ describe('results service filters', () => {
   })
   it('takes at most 16 filters, saying so, and filters only by selections whose runs of rows fit a request', async () => {
     const { service, handle, select, flush, tab } = filtered(1000, Array.from({ length: 17 }, (_, at): ResultColumn => ({ name: `c${at}`, dataType: 'int', wire: 'text', nullable: true })))
-    handle.sort.mockImplementation(async (_keys, o) => resolvedView(handle, 1, (o?.filters ?? []).map((filter): ResolvedViewFilter => filter.op === 'duplicates' ? filter : { op: filter.op, column: filter.column, rows: 'rows' in filter ? filter.rows : [0], nulls: 'nulls' in filter ? !!filter.nulls : false })))
+    handle.sort.mockImplementation(async (_keys, o) => resolvedView(handle, 1, (o?.filters ?? []).map((filter): ResolvedViewFilter => filter.op === 'duplicates' || filter.op === 'groups' ? filter as ResolvedViewFilter : { op: filter.op, column: filter.column, rows: 'rows' in filter ? filter.rows : [0], nulls: 'nulls' in filter ? !!filter.nulls : false })))
     for (let column = 0; column < 16; column++) {
       select([{ top: 0, bottom: 0, left: column, right: column }])
       expect(service.filterSelection('t1', 0, 'in')).toBe(true)
@@ -1129,7 +1129,133 @@ describe('results service filters', () => {
     expect(filterLabel({ op: 'between', column: 0, rows: [1, 2], nulls: false }, columns)).toBe('Id between 2 values')
     expect(filterLabel({ op: 'duplicates', columns: [0, 1] }, columns)).toBe('Duplicate rows')
     expect(filterLabel({ op: 'duplicates', columns: [1] }, columns)).toBe('Duplicates in Name')
+    // A checklist's filter names what it keeps or drops: the one value, a count, NULL, or nothing at all.
+    const groups = { op: 'groups' as const, column: 1, snapshotId: 4 }
+    expect(filterLabel({ ...groups, keep: true, values: 1, nulls: false, row: 3 }, columns, ["'x'"])).toBe("Name = 'x'")
+    expect(filterLabel({ ...groups, keep: false, values: 1, nulls: false, row: 3 }, columns, ["'x'"])).toBe("Name ≠ 'x'")
+    expect(filterLabel({ ...groups, keep: false, values: 999_999, nulls: true }, columns)).toBe('Name not in (1,000,000 values)')
+    expect(filterLabel({ ...groups, keep: true, values: 0, nulls: true }, columns)).toBe('Name is NULL')
+    expect(filterLabel({ ...groups, keep: false, values: 0, nulls: false }, columns)).toBe('Name: every value')
     // A diff's hidden tone column is not a value: every other column is every row's.
     expect(filterLabel({ op: 'duplicates', columns: [0, 1] }, [...columns, { name: 'tone', dataType: 'tinyint', wire: 'text', nullable: false, role: 'tone' }])).toBe('Duplicate rows')
+  })
+  it('applies the funnel conditions to a column, each replacing the filter of its kind on the column, and opens the funnel through the grid', async () => {
+    const { service, handle } = filtered()
+    handle.sort.mockResolvedValue(resolvedView(handle, 1, []))
+    const filters = () => handle.sort.mock.lastCall?.[1]?.filters
+    expect(service.canFilterColumn('t1', 0, 1)).toBe(false)
+    const filterColumn = vi.fn()
+    service.registerGrid('t1', 0, { selectAll: () => {}, repaint: () => {}, fitColumn: () => {}, filterColumn })
+    expect(service.canFilterColumn('t1', 0, 1)).toBe(true)
+    expect(service.canFilterColumn('t1', 0, 2)).toBe(false)
+    service.filterColumn('t1', 0, 1)
+    expect(filterColumn).toHaveBeenCalledWith(1)
+    const list = await handle.distinct(1)
+    expect(service.applyColumnFilter('t1', 0, 1, { kind: 'list', list })).toBe(true)
+    expect(filters()).toEqual([{ op: 'groups', column: 1, snapshotId: list.snapshotId }])
+    expect(service.sortOf('t1', 0)?.filters.map(item => item.label)).toEqual(['(No column name): filtering…'])
+    await settle()
+    // Another checklist replaces it, and the grid closes the snapshot it no longer filters by once the new view is shown;
+    // not NULL replaces a checklist too (the checklist lists NULL as a value); between is a kind of its own.
+    const next = await handle.distinct(1)
+    service.applyColumnFilter('t1', 0, 1, { kind: 'list', list: next })
+    expect(filters()).toEqual([{ op: 'groups', column: 1, snapshotId: next.snapshotId }])
+    expect(list.close).not.toHaveBeenCalled()
+    await settle()
+    expect(list.close).toHaveBeenCalledTimes(1)
+    service.applyColumnFilter('t1', 0, 1, { kind: 'notNull' })
+    await settle()
+    expect(next.close).toHaveBeenCalledTimes(1)
+    service.applyColumnFilter('t1', 0, 1, { kind: 'between', rows: [2, 6] })
+    service.applyColumnFilter('t1', 0, 0, { kind: 'equals', row: 1 })
+    expect(filters()).toEqual([{ op: 'notIn', column: 1, rows: [], nulls: true }, { op: 'between', column: 1, rows: [2, 6] }, { op: 'in', column: 0, rows: [1], nulls: false }])
+    expect(filteredColumns(service.sortOf('t1', 0))).toEqual(new Set([0, 1]))
+    service.applyColumnFilter('t1', 0, 1, { kind: 'notEquals', row: 5 })
+    service.applyColumnFilter('t1', 0, 1, { kind: 'null' })
+    // A replacement takes the place of the filter it replaces: filters apply in order.
+    expect(filters()).toEqual([{ op: 'in', column: 1, rows: [], nulls: true }, { op: 'between', column: 1, rows: [2, 6] }, { op: 'in', column: 0, rows: [1], nulls: false }])
+    expect(service.sortOf('t1', 0)?.filters[0]?.label).toBe('(No column name) is NULL')
+    service.filterDuplicates('t1', 0, true)
+    service.applyColumnFilter('t1', 0, 0, { kind: 'equals', row: 1 })
+    expect(filters()?.map(filter => filter.op)).toEqual(['in', 'between', 'in', 'duplicates'])
+    expect(filters()?.[2]).toEqual({ op: 'in', column: 0, rows: [1], nulls: false })
+    service.removeFilter('t1', 0, 3)
+    await settle()
+    // Every value ticked takes a checklist off, closing its snapshot.
+    const third = await handle.distinct(1)
+    service.applyColumnFilter('t1', 0, 1, { kind: 'list', list: third })
+    await settle()
+    service.applyColumnFilter('t1', 0, 1, { kind: 'all' })
+    expect(filters()).toEqual([{ op: 'between', column: 1, rows: [2, 6] }, { op: 'in', column: 0, rows: [1], nulls: false }])
+    await settle()
+    expect(third.close).toHaveBeenCalledTimes(1)
+    // A view that fails to build goes back to the filters it had, closing the snapshot it was given and keeping its own.
+    const kept = await handle.distinct(1), failed = await handle.distinct(1)
+    service.applyColumnFilter('t1', 0, 1, { kind: 'list', list: kept })
+    await settle()
+    handle.sort.mockRejectedValueOnce(new Error('Not enough memory.'))
+    service.applyColumnFilter('t1', 0, 1, { kind: 'list', list: failed })
+    await settle()
+    expect(failed.close).toHaveBeenCalledTimes(1)
+    expect(kept.close).not.toHaveBeenCalled()
+    expect(service.sortOf('t1', 0)?.filters.map(item => item.filter)).toContainEqual({ op: 'groups', column: 1, snapshotId: kept.snapshotId })
+    // A snapshot of another column, or of another result, is refused.
+    const calls = handle.sort.mock.calls.length
+    expect(service.applyColumnFilter('t1', 0, 0, { kind: 'list', list: await handle.distinct(1) })).toBe(false)
+    expect(service.applyColumnFilter('t1', 0, 1, { kind: 'list', list: { ...await handle.distinct(1), resultId: 999 } })).toBe(false)
+    expect(handle.sort.mock.calls.length).toBe(calls)
+    service.applyColumnFilter('t1', 0, 1, { kind: 'clear' })
+    service.applyColumnFilter('t1', 0, 0, { kind: 'clear' })
+    expect(service.sortOf('t1', 0)).toBeUndefined()
+    expect(kept.close).toHaveBeenCalledTimes(1)
+  })
+
+  it('names a checklist\'s filter by what the view says it keeps', async () => {
+    const { service, handle } = filtered()
+    const list = await handle.distinct(1)
+    handle.sort.mockResolvedValueOnce(resolvedView(handle, 1, [{ op: 'groups', column: 1, snapshotId: list.snapshotId, keep: false, values: 2, nulls: true }]))
+    service.applyColumnFilter('t1', 0, 1, { kind: 'list', list })
+    await settle()
+    await settle()
+    expect(service.sortOf('t1', 0)?.filters[0]).toMatchObject({ label: '(No column name) not in (3 values)', named: true, list })
+    // Built again (a sort), the filter goes as it was asked, and the grid keeps its snapshot.
+    handle.sort.mockResolvedValueOnce(resolvedView(handle, 2, [{ op: 'groups', column: 1, snapshotId: list.snapshotId, keep: false, values: 2, nulls: true }]))
+    service.sortBy('t1', 0, 0, 'ascending')
+    await settle()
+    expect(handle.sort.mock.lastCall?.[1]?.filters?.[0]).toMatchObject({ op: 'groups', column: 1, snapshotId: list.snapshotId })
+    expect(list.close).not.toHaveBeenCalled()
+  })
+
+  it('keeps the values of a column over the rows its other filters keep, ticked by what the grid shows now', async () => {
+    const { service, handle } = filtered()
+    const list = await service.columnValues('t1', 0, 1)
+    expect(list.column).toBe(1)
+    expect(handle.distinct).toHaveBeenLastCalledWith(1, {})
+    // A value list on the column and a not-NULL on another: the snapshot comes from a view of the other filter alone,
+    // closed once it is built, and the grid's own view starts its ticks.
+    const own = { op: 'in' as const, column: 1, rows: [0], nulls: false }, other = { op: 'notIn' as const, column: 0, rows: [], nulls: true }
+    const shown = resolvedView(handle, 1, [own, other])
+    handle.sort.mockResolvedValueOnce(shown)
+    service.applyColumnFilter('t1', 0, 1, { kind: 'equals', row: 0 })
+    handle.sort.mockResolvedValueOnce({ ...shown, viewId: 2 })
+    service.applyColumnFilter('t1', 0, 0, { kind: 'notNull' })
+    await settle()
+    await settle()
+    const others = { ...resolvedView(handle, 3, [other]), distinct: vi.fn<ResultHandle['distinct']>(async column => ({ ...await handle.distinct(column), snapshotId: 77 })) }
+    handle.sort.mockResolvedValueOnce(others)
+    const abort = new AbortController()
+    const values = await service.columnValues('t1', 0, 1, { signal: abort.signal })
+    expect(handle.sort).toHaveBeenLastCalledWith([], { filters: [{ op: 'notIn', column: 0, rows: [], nulls: true }], signal: abort.signal })
+    expect(others.distinct).toHaveBeenCalledWith(1, { signal: abort.signal, kept: expect.objectContaining({ viewId: 2 }) })
+    expect(values.snapshotId).toBe(77)
+    expect(others.close).toHaveBeenCalled()
+    // No other filter: the snapshot is the result's own, ticked by the grid's view of the column's filter.
+    handle.sort.mockResolvedValueOnce(resolvedView(handle, 4, [own]))
+    service.applyColumnFilter('t1', 0, 0, { kind: 'clear' })
+    await settle()
+    const sorts = handle.sort.mock.calls.length
+    await service.columnValues('t1', 0, 1)
+    expect(handle.sort.mock.calls.length).toBe(sorts)
+    expect(handle.distinct).toHaveBeenLastCalledWith(1, { kept: expect.objectContaining({ viewId: 4 }) })
   })
 })

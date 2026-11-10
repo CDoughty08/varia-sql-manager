@@ -572,11 +572,21 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .peek-follow:hover .peek-item-name { text-decoration: underline; }
 /* Top rows: the results grid fills the panel, which does not scroll itself. */
 .peek-grid { display: flex; flex-direction: column; overflow: hidden; }
+/* Peek's definition: the query editor (peek-editor.ts) fills the panel and scrolls itself. */
+.peek-editor { position: relative; flex: 1; min-height: 0; }
+.peek-editor-host { position: absolute; inset: 0; }
+.peek-grid > .peek-note { flex-shrink: 0; }
 .peek-rows { display: flex; flex: 1; flex-direction: column; min-height: 0; }
 /* A promoted tab: the card's body with the room of a document. */
 .peek-tab-body { display: flex; flex: 1; flex-direction: column; min-height: 0; border-top: 1px solid var(--varia-editorWidget-border); }
 .document-frame[data-peek-tab] .document-content { display: flex; flex-direction: column; overflow: hidden; }
 .peek-tab-body .peek-body { grid-template-columns: minmax(0, 1fr) minmax(260px, 360px); }
+/* A narrow card or tab (a slim popped-out Object Explorer) stacks Properties under the definition rather than squeezing it to nothing. */
+.peek-card, .peek-tab-body { container-type: inline-size; }
+@container (max-width: 560px) {
+  .peek-body, .peek-tab-body .peek-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 3fr) minmax(0, 2fr); }
+  .peek-side { border-left: 0; border-top: 1px solid var(--varia-editorWidget-border); }
+}
 .peek-fact dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; user-select: text; }
 .explorer-error { flex-shrink: 0; font-size: var(--varia-size-xs); color: var(--varia-errorForeground); line-height: 1.6; padding: 0 12px; margin: 5px 0 8px; overflow-wrap: anywhere; }
 @media (forced-colors: active) {
@@ -785,11 +795,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .output-toolbar { gap: 4px; }
   .output-views button { padding: 0 6px; }
   .results-toolbar-label, .results-toolbar .results-search > .results-search-icon, .results-search > button { display: none; }
-  .results-toolbar { gap: 2px; padding-left: 6px; }
+  /* A 1024-wide window (CI's displays) fits every group with Linux's wider fonts: the box gives up its width first. */
+  .results-toolbar { gap: 1px; padding-left: 6px; }
   .results-segments button { padding: 0 3px; }
   .results-segments button.results-icon-toggle { padding: 0 3px; }
   .results-search { padding-left: 4px; }
-  .results-search input { min-width: 24px; }
+  .results-search input { min-width: 12px; }
 }
 .job-strip { display: flex; min-width: 0; align-items: center; gap: 6px; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); white-space: nowrap; }
 /* Strips give way to a narrow window: a long file name is cut short, while Cancel and the status line keep their room. */
@@ -870,7 +881,39 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-ch.narrow .rg-cs { pointer-events: none; }
 .rg-ch.narrow:hover .rg-cs:not(.on) { visibility: hidden; }
 .rg-cs.on { color: var(--varia-resultsGrid-headerForeground); }
-.rg-ch.sel .rg-cs { color: inherit; }
+.rg-ch.sel .rg-cs, .rg-ch.sel .rg-cf { color: inherit; }
+/* A header's funnel (results grids): at the header's right end, the sort button left of it; it shows while hovered and
+   stays, filled, while its column has a filter. */
+.rg-cf { position: absolute; top: 0; right: 0; display: flex; align-items: center; justify-content: center; width: 18px; height: 21px; background: inherit; color: var(--varia-resultsGrid-headerDescriptionForeground); visibility: hidden; cursor: pointer; }
+.rg-ch.fb .rg-cs { right: 18px; }
+.rg-ch:hover .rg-cf, .rg-cf.on { visibility: visible; }
+.rg-cf.on { color: var(--varia-resultsGrid-headerForeground); }
+/* A sorted column's idle funnel still covers the header text beside the sort button, without its glyph. */
+.rg-cs.on + .rg-cf, .rg-ch.narrow:hover .rg-cs.on + .rg-cf { visibility: visible; }
+.rg-ch:not(:hover) .rg-cs.on + .rg-cf:not(.on) > span, .rg-ch.narrow .rg-cs.on + .rg-cf:not(.on) > span { visibility: hidden; }
+.rg-ch.narrow .rg-cf { pointer-events: none; }
+.rg-ch.narrow:hover .rg-cf:not(.on) { visibility: hidden; }
+.rg-cf:hover, .rg-cs:hover { color: var(--varia-resultsGrid-headerForeground); }
+/* The header funnel's popover (ColumnFilterPopover): a checklist of a column's distinct values, under the header. */
+.column-filter { position: fixed; z-index: 13000; display: flex; flex-direction: column; gap: var(--varia-space-2); box-sizing: border-box; min-height: 0; padding: var(--varia-space-2) var(--varia-space-3) var(--varia-space-3); overflow: hidden; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); font: var(--varia-size-sm)/var(--varia-line-sm) var(--varia-font-ui); animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease); }
+.column-filter-head { display: flex; align-items: center; gap: var(--varia-space-2); }
+.column-filter-head h2 { flex: 1 1 auto; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-md); font-weight: 600; }
+.column-filter select { max-width: 100%; font: inherit; color: var(--varia-input-foreground); background: var(--varia-input-background); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); }
+.column-filter-search { display: flex; align-items: center; gap: 4px; height: 24px; padding: 0 6px; border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); background: var(--varia-input-background); color: var(--varia-descriptionForeground); }
+.column-filter-search:focus-within { border-color: var(--varia-focusBorder); box-shadow: 0 0 0 1px var(--varia-focusBorder); }
+.column-filter-search input { flex: 1 1 0; width: 0; border: 0; outline: none; background: none; color: var(--varia-input-foreground); font: inherit; }
+.column-filter-bulk, .column-filter-actions, .column-filter-condition { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); }
+.column-filter-gap { flex: 1 1 auto; }
+.column-filter-list { flex: 1 1 auto; min-height: 60px; max-height: 260px; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-sm); padding: 2px 0; }
+.column-filter-space { position: relative; overflow: hidden; }
+.column-filter-item { position: absolute; left: 0; right: 0; box-sizing: border-box; display: flex; align-items: center; gap: var(--varia-space-2); padding: 0 var(--varia-space-2); cursor: default; }
+.column-filter-item.pending::after { content: ''; flex: 1 1 auto; height: 6px; margin-right: 40%; border-radius: var(--varia-radius-pill); background: var(--varia-list-hoverBackground); }
+.column-filter-item:hover { background: var(--varia-list-hoverBackground); }
+.column-filter-item.null .column-filter-text, .column-filter-item.empty .column-filter-text { font-style: italic; color: var(--varia-descriptionForeground); }
+.column-filter-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; unicode-bidi: isolate; }
+.column-filter-count { flex-shrink: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; }
+.column-filter-note { margin: 0; padding: 2px var(--varia-space-2); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.column-filter-note.error { color: var(--varia-errorForeground); }
 .rg-co { font-size: var(--varia-size-xs); }
 .rg-co:empty { display: none; }
 .rg-ch.sel { background: var(--varia-resultsGrid-headerSelectionBackground); color: var(--varia-resultsGrid-headerSelectionForeground); }
@@ -2253,7 +2296,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .activity-tile-toggle { position: absolute; top: var(--varia-space-1); right: var(--varia-space-1); display: inline-flex; align-items: center; justify-content: center; width: var(--varia-control); height: var(--varia-control); padding: 0; color: var(--varia-descriptionForeground); }
 .activity-tile-toggle[aria-pressed="true"], .activity-tile-toggle[aria-pressed="true"]:hover:not(:disabled) { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); border-color: var(--varia-panelTitle-activeBorder); transition: none; }
 .activity-sparkline { height: 28px; }
-.activity-charts { display: grid; flex: 0 1 auto; min-height: 150px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); grid-auto-rows: minmax(0, 1fr); gap: var(--varia-space-2); }
+/* Each row of charts keeps a chart's floor (150 px); ActivityMonitor's Charts counts the rows the auto-fit columns make. */
+.activity-charts { display: grid; flex: 0 1 auto; min-height: calc(var(--activity-chart-rows, 1) * 150px + (var(--activity-chart-rows, 1) - 1) * var(--varia-space-2)); grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); grid-auto-rows: minmax(0, 1fr); gap: var(--varia-space-2); }
 .activity-chart { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-tile-border); border-radius: var(--varia-radius-lg); background: var(--varia-tile-background); }
 .activity-chart-head { display: flex; align-items: center; gap: var(--varia-space-2); }
 .activity-chart-title { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); font-weight: 600; }
@@ -2288,8 +2332,6 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .document-frame[data-activity-monitor] .document-header { flex-wrap: wrap; }
   .document-frame[data-activity-monitor] .document-actions { flex: 1 1 100%; margin-left: 0; }
 }
-/* Stacked (under 760 px of document), two expanded charts keep a chart's floor each. */
-@container (width < 760px) { .activity-charts:has(> .activity-chart + .activity-chart) { min-height: calc(2 * 150px + var(--varia-space-2)); } }
 @media (forced-colors: active) {
   .activity-banner, .activity-pane, .activity-chart { border-color: CanvasText; }
   .activity-tile-toggle[aria-pressed="true"], .activity-tile-toggle[aria-pressed="true"]:hover:not(:disabled) { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
@@ -2445,3 +2487,22 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .index-status button { color: inherit; background: transparent; border: 1px solid currentColor; padding: 0 var(--varia-space-1); font-size: var(--varia-size-xs); line-height: 14px; }
 .index-status button.index-status-text { border-color: transparent; padding: 0; cursor: pointer; }
 .index-status button.index-status-text:hover { text-decoration: underline; }
+/* The pivot panel (PivotPanel): the column profile's frame, with its draft's fields stacked. */
+.results-main > .pivot-panel { flex: 0 0 280px; }
+.pivot-body { flex: 1; min-height: 0; overflow: auto; padding: 6px 8px; }
+.pivot-field { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; color: var(--varia-descriptionForeground); }
+.pivot-panel select { min-width: 0; height: 24px; padding: 0 6px; font-size: var(--varia-size-xs); }
+.pivot-field select { flex: 1; }
+.pivot-section { margin-bottom: 10px; }
+.pivot-section > select { width: 100%; }
+.pivot-section h3 { margin: 0 0 4px; font-size: var(--varia-size-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--varia-descriptionForeground); }
+.pivot-hint { margin: 2px 0 4px; color: var(--varia-descriptionForeground); }
+.pivot-list { margin: 0 0 4px; padding: 0; list-style: none; }
+.pivot-list li { display: flex; align-items: center; gap: 2px; min-width: 0; margin-bottom: 3px; }
+.pivot-list .icon-button { width: 22px; height: 22px; padding: 3px; }
+.pivot-name { flex: 1; min-width: 0; overflow: hidden; padding: 2px 6px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); text-overflow: ellipsis; white-space: nowrap; }
+.pivot-value select:first-child { flex: 0 0 96px; }
+.pivot-value select:nth-child(2) { flex: 1; }
+.pivot-section > button { display: inline-flex; align-items: center; gap: 4px; }
+.pivot-foot { display: flex; flex-shrink: 0; flex-direction: column; gap: 4px; padding: 6px 8px; border-top: 1px solid var(--varia-panel-border); }
+.pivot-foot > button { align-self: flex-end; }

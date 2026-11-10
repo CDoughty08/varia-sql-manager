@@ -56,14 +56,14 @@ describe('editing commands', () => {
     const { monaco } = setup()
     expect(monaco.editor.registerCommand.mock.calls.map(call => call[0])).toEqual(['varia.editor.splitDown', 'varia.editor.focusNextGroup', 'varia.editor.focusPreviousGroup', 'varia.edit.toggleBookmark', 'varia.edit.previousBookmark', 'varia.edit.nextBookmark', 'varia.edit.clearBookmarks',
       'varia.edit.insertSnippet', 'varia.edit.surroundWith', 'varia.edit.find', 'varia.edit.replace', 'varia.edit.findNext', 'varia.edit.findPrevious'])
-    expect(monaco.editor.addKeybindingRules.mock.calls.flatMap(call => call[0]).every(rule => rule.when === 'editorTextFocus')).toBe(true)
+    expect(monaco.editor.addKeybindingRules.mock.calls.flatMap(call => call[0]).every(rule => rule.when === 'editorTextFocus && !variaPeekEditor')).toBe(true)
   })
   it('take Ctrl+F, Ctrl+H, F3 and Shift+F3 from Monaco in editor text, so the keys seed as the menus do', async () => {
     const { monaco, commands, target } = setup({ platform: 'win32' })
     // Ctrl is CtrlCmd (2048) and Shift 1024; F, H and F3 are KeyCode 36, 38 and 61.
     expect(monaco.editor.addKeybindingRules.mock.calls[1][0]).toEqual([
-      { keybinding: 2048 | 36, command: 'varia.edit.find', when: 'editorTextFocus' }, { keybinding: 2048 | 38, command: 'varia.edit.replace', when: 'editorTextFocus' },
-      { keybinding: 61, command: 'varia.edit.findNext', when: 'editorTextFocus' }, { keybinding: 1024 | 61, command: 'varia.edit.findPrevious', when: 'editorTextFocus' }
+      { keybinding: 2048 | 36, command: 'varia.edit.find', when: 'editorTextFocus && !variaPeekEditor' }, { keybinding: 2048 | 38, command: 'varia.edit.replace', when: 'editorTextFocus && !variaPeekEditor' },
+      { keybinding: 61, command: 'varia.edit.findNext', when: 'editorTextFocus && !variaPeekEditor' }, { keybinding: 1024 | 61, command: 'varia.edit.findPrevious', when: 'editorTextFocus && !variaPeekEditor' }
     ])
     const handler = monaco.editor.registerCommand.mock.calls.find(call => call[0] === 'varia.edit.find')![1]
     target.select(2, 6)

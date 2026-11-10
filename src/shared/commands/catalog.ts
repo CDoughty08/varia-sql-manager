@@ -894,6 +894,13 @@ export const commandCatalog = {
   // range from their lowest to their highest, equal as the column's collation says), without NULL in the active cell's
   // column, or to the rows that repeat in the selected columns or in every column. Filters show in the result's caption,
   // where each comes off on its own; Clear Filters takes them all off.
+  // The header funnel's popover (results.distinct, results PR 4b): the column's distinct values with their counts as a
+  // checklist, and custom conditions; Alt+Down in a grid opens it for the active cell's column, as Excel's filter list does.
+  'output.filterColumnValues': {
+    title: 'Filter Column Values…', category: 'Query', icon: 'filter', keywords: ['filter', 'funnel', 'distinct', 'values', 'checklist', 'where', 'grid', 'column'], palette: false,
+    keybindings: [{ key: 'alt+down', when: 'outputGridFocus' }],
+    menus: [{ menu: 'output.filter', group: '0_column', order: 1, mnemonic: 'v', when: "outputView == 'grid'" }]
+  },
   'output.filterSelection': {
     title: 'Filter for Selected Values', category: 'Query', icon: 'filter', keywords: ['filter', 'in', 'equal', 'where', 'values', 'grid'], palette: false,
     menus: [{ menu: 'output.filter', group: '1_values', order: 1, mnemonic: 's', when: "outputView == 'grid'" }]
@@ -968,6 +975,11 @@ export const commandCatalog = {
   'output.compareWithPrevious': {
     title: 'Compare with Previous Result', category: 'Query', icon: 'git-compare', keywords: ['diff', 'compare', 'difference', 'changes', 'grid', 'result'],
     menus: [{ menu: 'output.context', group: '2_sort', order: 8, mnemonic: 'm', when: "outputView == 'grid'" }]
+  },
+  // Opens the pivot panel on the grid's result (PivotService); Build Pivot there adds the pivot (results.pivot) as a result.
+  'output.pivot': {
+    title: 'Pivot Results…', category: 'Query', icon: 'pivot', keywords: ['pivot', 'group', 'aggregate', 'summarize', 'crosstab', 'count', 'sum', 'average', 'grid', 'result'],
+    menus: [{ menu: 'output.context', group: '2_sort', order: 9, when: "outputView == 'grid'" }]
   },
   'output.compareWithPreviousExact': {
     title: 'Compare with Previous Result (Exact Text)', category: 'Query', icon: 'git-compare', keywords: ['diff', 'compare', 'difference', 'case', 'collation', 'exact', 'grid']

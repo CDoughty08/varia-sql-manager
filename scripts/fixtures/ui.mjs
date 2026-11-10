@@ -291,6 +291,10 @@ export const gridPart = {
   sortButton: '.rg-cs',
   sortedButton: '.rg-cs.on',
   sortOrder: '.rg-co',
+  /** A header's funnel (results grids), hidden from screen readers (Filter Column Values, Alt+Down, opens the same
+   *  popover); filled while its column has a filter. */
+  funnelButton: '.rg-cf',
+  funnelOn: '.rg-cf.on',
   /** Search in results' marks (GridView's marks), drawn only: a matched cell, the active match, a column header a
    *  column-name search matches, and cells and headers it leaves out. The active cell's label says "search match". */
   searchMatch: '.rg-c.is-hit',
@@ -472,6 +476,14 @@ export const suggestionOption = (scope, label) => {
 }
 /** The text of the active editor group's editor, where several groups each show a query. */
 export const activeGroupEditorText = page => page.locator(part.activeEditorGroup).locator('.monaco-editor .view-lines').innerText()
+/** The lines Monaco draws in the editor inside `scope`: a Peek card's or Peek tab's read-only definition editor. */
+export const editorTextIn = scope => scope.locator('.monaco-editor .view-lines').innerText()
+/** The active group's query editor text, where a Peek tab in the same group has a Monaco editor of its own. */
+export const queryEditorText = page => page.locator(part.activeEditorGroup).locator('.editor-host .monaco-editor .view-lines').innerText()
+/** Peek's definition editor (Monaco, read-only) inside a Peek card or tab, by its text's accessible name. */
+export const peekDefinitionText = scope => scope.getByRole('textbox', { name: /^Definition text/ })
+/** The body-level hosts of Peek editors' hover and message widgets in a window (createQueryEditor's widget host). */
+export const peekEditorWidgetHosts = page => page.locator('.editor-overflow-widgets[data-peek-editor]')
 
 // Panes: the dock's panels, each with a tab in its group's header
 
@@ -525,6 +537,8 @@ export const outputStatus = page => outputPane(page).locator(part.outputStatus)
 /** The column profile panel beside a run's grids, and one column's card in it. */
 export const columnProfile = page => page.getByRole('complementary', { name: 'Column profile', exact: true })
 export const profileCard = (page, column) => columnProfile(page).getByRole('region', { name: column, exact: true })
+/** The pivot panel beside the grids (PivotPanel): its source, row groups, column group and values, then Build Pivot. */
+export const pivotPanel = page => page.getByRole('complementary', { name: 'Pivot', exact: true })
 /** A profile card's figures, label to value ("NULLs" → "20 (20%)"). */
 export const profileFigures = card => card.locator('dl > div').evaluateAll(items => Object.fromEntries(items.map(item => [item.querySelector('dt').textContent, item.querySelector('dd').textContent])))
 export const jobProgress = page => outputPane(page).locator(part.jobProgress)

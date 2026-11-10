@@ -52,6 +52,9 @@ internal sealed class ResultStore
     /// <summary>Bookkeeping charged per view on top of its order array.</summary>
     public const long ViewOverhead = 256;
     private uint nextViewId = 1;
+    /// <summary>Distinct snapshots (results.distinct), by id: each belongs to its result and goes with it.</summary>
+    private readonly Dictionary<uint, DistinctSnapshot> snapshots = [];
+    private uint nextSnapshotId = 1;
     /// <summary>Each result's row identities (results.identify), at most one per result.</summary>
     private readonly Dictionary<uint, ResultIdentity> identities = [];
     private readonly Func<(long Load, long Threshold)>? memory;
@@ -120,8 +123,10 @@ internal sealed class ResultStore
     /// metadata, so it is charged without a check (an append table's restart, LiveAppendTable): no one else can take those
     /// bytes in between, and while a lease holds the released set the store is over by one set's metadata at most.</param>
     /// <param name="lengths">Each column's byte rule (ColumnPlan.Lengths); without them text counts as UTF-16.</param>
+    /// <param name="derived">A set made from stored results (<see cref="ResultSetBuffer.Derived"/>): a refusal returns null
+    /// without stopping the query.</param>
     public ResultSetBuffer? Open(QueryBudget query, int index, int batchNumber, int iteration, string kind, IReadOnlyList<ResultColumn> columns, IReadOnlyList<WireKind> wires, bool transfer = false,
-        IReadOnlyList<ColumnLength>? lengths = null)
+        IReadOnlyList<ColumnLength>? lengths = null, bool derived = false)
     {
         // A live set's pages stay off the large object heap; see LiveBudget.
         var sealBytes = query.Live is null ? PageBuilder.SealBytes : LiveSealBytes;
@@ -130,7 +135,7 @@ internal sealed class ResultStore
         if (transfer) Force(query, metadata);
         else if (!TryReserve(query, metadata, false, out var reason))
         {
-            query.Stop(reason);
+            if (!derived) query.Stop(reason);
             return null;
         }
         lock (gate)
@@ -140,7 +145,7 @@ internal sealed class ResultStore
                 Return(query, metadata);
                 throw new RequestException("BACKEND_ERROR", "Result identifiers are exhausted. Restart the SQL backend.");
             }
-            var set = new ResultSetBuffer(this, query, nextId++, index, batchNumber, iteration, kind, columns, wires, metadata, sealBytes, lengths);
+            var set = new ResultSetBuffer(this, query, nextId++, index, batchNumber, iteration, kind, columns, wires, metadata, sealBytes, lengths) { Derived = derived };
             sets[set.ResultId] = set;
             return set;
         }
@@ -238,7 +243,7 @@ internal sealed class ResultStore
     /// caller has reserved from the set's budget: they are returned when the view goes. <paramref name="replaces"/> names a
     /// view of the same set this one supersedes; past <see cref="MaxViewsPerResult"/> the set's oldest view goes. Throws
     /// RESULT_RELEASED, returning the charge, when the set was released while the view was built.</summary>
-    public ResultView AddView(ResultSetBuffer set, int[] order, IReadOnlyList<ViewKey> keys, bool approximate, bool complete, long charged, uint? replaces)
+    public ResultView AddView(ResultSetBuffer set, int[] order, IReadOnlyList<ViewKey> keys, bool approximate, bool complete, long charged, uint? replaces, long baseRows = long.MaxValue)
     {
         List<ResultView> dropped = [];
         ResultView view;
@@ -257,7 +262,7 @@ internal sealed class ResultStore
                 views.Remove(own[i].ViewId);
                 dropped.Add(own[i]);
             }
-            view = new ResultView(nextViewId++, set, order, keys, approximate, complete, charged);
+            view = new ResultView(nextViewId++, set, order, keys, approximate, complete, charged, baseRows);
             views[view.ViewId] = view;
         }
         foreach (var item in dropped) Return(item.Set.Budget, item.Charged);
@@ -289,6 +294,55 @@ internal sealed class ResultStore
                 if (views.TryGetValue(id, out var view) && view.Set.ResultId == resultId && views.Remove(id)) closed.Add(view);
         }
         foreach (var view in closed) Return(view.Set.Budget, view.Charged);
+        return closed.Count;
+    }
+
+    /// <summary>Keeps a distinct snapshot of its set, whose charge the caller has reserved from the set's budget: it is
+    /// returned when the snapshot goes. Throws RESULT_RELEASED, returning the charge, when the set was released while it was
+    /// built, and TOO_LARGE when the set already keeps <see cref="ViewSorter.MaxDistinctSnapshots"/>: a snapshot may hold a
+    /// grid's filter, so none is dropped to make room.</summary>
+    public DistinctSnapshot AddSnapshot(DistinctSnapshot snapshot)
+    {
+        var set = snapshot.Set;
+        lock (gate)
+        {
+            string? refusal = !sets.ContainsKey(set.ResultId) || set.IsReleased ? "RESULT_RELEASED" : nextSnapshotId == 0 ? "BACKEND_ERROR"
+                : snapshots.Values.Count(item => item.Set == set) >= ViewSorter.MaxDistinctSnapshots ? "TOO_LARGE" : null;
+            if (refusal is null)
+            {
+                snapshot.SnapshotId = nextSnapshotId++;
+                snapshots[snapshot.SnapshotId] = snapshot;
+                return snapshot;
+            }
+            Return(set.Budget, snapshot.Charged);
+            throw refusal switch
+            {
+                "RESULT_RELEASED" => new RequestException(refusal, "These results were closed. Execute the query again to see them."),
+                "TOO_LARGE" => new RequestException(refusal, "These results keep as many value lists as they can. Remove some column filters and try again."),
+                _ => new RequestException(refusal, "Value list identifiers are exhausted. Restart the SQL backend.")
+            };
+        }
+    }
+
+    /// <summary>A distinct snapshot of <paramref name="resultId"/>, or null when there is none by that id for that result.</summary>
+    public DistinctSnapshot? FindSnapshot(uint resultId, uint snapshotId)
+    {
+        lock (gate) return snapshots.TryGetValue(snapshotId, out var snapshot) && snapshot.Set.ResultId == resultId ? snapshot : null;
+    }
+
+    public int SnapshotCount { get { lock (gate) return snapshots.Count; } }
+
+    /// <summary>Closes distinct snapshots of <paramref name="resultId"/> (others' ids, unknown and repeated ones are skipped);
+    /// returns how many were closed.</summary>
+    public int CloseSnapshots(uint resultId, IEnumerable<uint> snapshotIds)
+    {
+        List<DistinctSnapshot> closed = [];
+        lock (gate)
+        {
+            foreach (var id in snapshotIds)
+                if (snapshots.TryGetValue(id, out var snapshot) && snapshot.Set.ResultId == resultId && snapshots.Remove(id)) closed.Add(snapshot);
+        }
+        foreach (var snapshot in closed) Return(snapshot.Set.Budget, snapshot.Charged);
         return closed.Count;
     }
 
@@ -352,8 +406,14 @@ internal sealed class ResultStore
     {
         // Identities go with their result too; Return takes no lock.
         foreach (var set in released) if (identities.Remove(set.ResultId, out var identity)) Return(set.Budget, identity.Charged);
-        if (released.Count == 0 || views.Count == 0) return [];
+        if (released.Count == 0 || views.Count + snapshots.Count == 0) return [];
         var gone = released.ToHashSet();
+        // Snapshots go with their result too.
+        foreach (var snapshot in snapshots.Values.Where(item => gone.Contains(item.Set)).ToList())
+        {
+            snapshots.Remove(snapshot.SnapshotId);
+            Return(snapshot.Set.Budget, snapshot.Charged);
+        }
         var dropped = views.Values.Where(view => gone.Contains(view.Set)).ToList();
         foreach (var view in dropped) views.Remove(view.ViewId);
         return dropped;

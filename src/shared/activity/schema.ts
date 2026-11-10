@@ -4,7 +4,7 @@
 // session actions' requests (main's requestSchemas) and answers; Activity/SessionActions.cs re-checks the same bounds.
 import { z } from 'zod'
 import type { LiveErrorCode } from '../live/schema.ts'
-import { activityLimits, activityTables, detailsTexts, tableSpecs, viewChips, waitToggles, type ActivityTable, type DetailsSection, type DetailsText, type KillOutcome, type ViewChip } from './catalog.ts'
+import { activityLimits, activityTables, detailsTexts, fileViews, tableSpecs, viewChips, waitToggles, type ActivityTable, type DetailsSection, type DetailsText, type FileView, type KillOutcome, type ViewChip } from './catalog.ts'
 
 export interface ActivityColumnFilter {
   readonly column: string
@@ -24,6 +24,11 @@ export interface ActivityFilter {
   readonly showVaria?: boolean
   /** Resource Waits' tables only: leave out benign rows (on when absent). */
   readonly hideBenign?: boolean
+  /** Data File I/O only: its chip, and the latency thresholds (ms) that tone its rows and pick Over threshold (the
+   *  activityMonitor.fileLatency* settings; the catalogue's defaults when absent). */
+  readonly fileView?: FileView
+  readonly latencyWarningMs?: number
+  readonly latencyErrorMs?: number
   /** Matched case-insensitively against the table's text columns. */
   readonly text?: string
   /** One per column; within one, any choice matches, and every column must match. */
@@ -31,6 +36,8 @@ export interface ActivityFilter {
 }
 
 const processesOnly = ['view', 'showSystem', 'showVaria'] as const
+const filesOnly = ['fileView', 'latencyWarningMs', 'latencyErrorMs'] as const
+const latencyMs = z.number().int().min(1).max(activityLimits.fileLatencyMs)
 
 export const activityColumnFilterSchema = z.object({
   column: z.string().min(1).max(64),
@@ -45,12 +52,18 @@ export const activityFilterSchema = z.object({
   showSystem: z.boolean().optional(),
   showVaria: z.boolean().optional(),
   hideBenign: z.boolean().optional(),
+  fileView: z.enum(fileViews).optional(),
+  latencyWarningMs: latencyMs.optional(),
+  latencyErrorMs: latencyMs.optional(),
   text: z.string().max(activityLimits.filterText).optional(),
   columnFilters: z.array(activityColumnFilterSchema).max(activityLimits.columnFilters).optional()
 }).strict().superRefine((filter, context) => {
   const spec = tableSpecs[filter.table]
   if (filter.table !== 'sessions') {
     for (const key of processesOnly) if (filter[key] !== undefined) context.addIssue({ code: 'custom', path: [key], message: `Only Processes takes ${key}.` })
+  }
+  if (filter.table !== 'files') {
+    for (const key of filesOnly) if (filter[key] !== undefined) context.addIssue({ code: 'custom', path: [key], message: `Only Data File I/O takes ${key}.` })
   }
   if (filter.hideBenign !== undefined && !(waitToggles.hideBenign.tables as readonly ActivityTable[]).includes(filter.table)) context.addIssue({ code: 'custom', path: ['hideBenign'], message: 'Only Resource Waits takes hideBenign.' })
   const seen = new Set<string>()

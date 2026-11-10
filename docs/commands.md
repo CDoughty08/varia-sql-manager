@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (288)
+## Commands (290)
 
 ### File
 
@@ -158,6 +158,7 @@ keys it uses are listed below.
 | Find in Results | `output.find` | Ctrl+F (`outputGridFocus`) | Ctrl+F (`outputGridFocus`) | ⌘F (`outputGridFocus`) | `hasResults` | — |
 | Find Next in Results | `output.findNext` | F3 (`outputGridFocus`) | F3 (`outputGridFocus`) | ⌘G (`outputGridFocus`), F3 (`outputGridFocus`) | `hasResults` | — |
 | Find Previous in Results | `output.findPrevious` | Shift+F3 (`outputGridFocus`) | Shift+F3 (`outputGridFocus`) | ⇧⌘G (`outputGridFocus`), ⇧F3 (`outputGridFocus`) | `hasResults` | — |
+| Filter Column Values… (not in the palette) | `output.filterColumnValues` | Alt+Down (`outputGridFocus`) | Alt+Down (`outputGridFocus`) | ⌥↓ (`outputGridFocus`) | Always | Query Output context menu › Filter › Filter Column Values… |
 | Filter for Selected Values (not in the palette) | `output.filterSelection` | — | — | — | Always | Query Output context menu › Filter › Filter for Selected Values |
 | Exclude Selected Values (not in the palette) | `output.excludeSelection` | — | — | — | Always | Query Output context menu › Filter › Exclude Selected Values |
 | Filter Between Lowest and Highest Selected (not in the palette) | `output.filterBetween` | — | — | — | Always | Query Output context menu › Filter › Filter Between Lowest and Highest Selected |
@@ -176,6 +177,7 @@ keys it uses are listed below.
 | Clear Highlight (not in the palette) | `output.clearHighlight` | — | — | — | Always | Query Output context menu › Highlight › Clear Highlight |
 | Clear All Highlights (not in the palette) | `output.clearAllHighlights` | — | — | — | Always | Query Output context menu › Highlight › Clear All Highlights |
 | Compare with Previous Result | `output.compareWithPrevious` | — | — | — | Always | Query Output context menu › Compare with Previous Result |
+| Pivot Results… | `output.pivot` | — | — | — | Always | Query Output context menu › Pivot Results… |
 | Compare with Previous Result (Exact Text) | `output.compareWithPreviousExact` | — | — | — | Always | — |
 | Show Column Profile | `output.toggleColumnProfile` | — | — | — | Always; checked when `resultsColumnProfile` | Query Output context menu › Column Profile |
 | Show Row Size in Results | `output.toggleRowSize` | — | — | — | Always; checked when `resultsRowSize` | Query Output context menu › Show Row Size |
@@ -821,6 +823,7 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | `2_sort` | Filt**e**r › | Submenu: Query Output context menu › Filter | `outputView == 'grid'` |
 | `2_sort` | Hi**g**hlight › | Submenu: Query Output context menu › Highlight | `outputView == 'grid'` |
 | `2_sort` | Co**m**pare with Previous Result | `output.compareWithPrevious` | `outputView == 'grid'` |
+| `2_sort` | Pivot Res**u**lts… | `output.pivot` | `outputView == 'grid'` |
 | `2_width` | F**i**t Column | `output.fitColumn` | `outputView == 'grid'` |
 | `3_save` | Sa**v**e Results As… | `output.saveResultsAs` | `outputView == 'grid'` |
 | `4_view` | Show S**p**aces and Tabs | `output.showSpaces` | `outputView == 'grid'` |
@@ -845,6 +848,7 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
+| `0_column` | Filter Column **V**alues… | `output.filterColumnValues` | `outputView == 'grid'` |
 | `1_values` | Filter for **S**elected Values | `output.filterSelection` | `outputView == 'grid'` |
 | `1_values` | **E**xclude Selected Values | `output.excludeSelection` | `outputView == 'grid'` |
 | `1_values` | Filter **B**etween Lowest and Highest Selected | `output.filterBetween` | `outputView == 'grid'` |
@@ -922,7 +926,7 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
 | `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
 
-## Context keys (146)
+## Context keys (147)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -937,7 +941,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `editorFocus` | boolean | focus | Focus is in the query editor, including its find widget. |
 | `editorTextFocus` | boolean | focus | The query editor's text has focus. |
 | `inputFocus` | boolean | focus | Focus is on an input, text area, select, or editable element other than the editor text. The find widget's inputs count. |
-| `textInputFocus` | boolean | focus | `editorTextFocus \|\| inputFocus`. |
+| `textInputFocus` | boolean | focus | `editorTextFocus \|\| inputFocus \|\| peekEditorFocus`: focus is where keys type or move a caret. |
 | `activePanel` | `'explorer'`, `'editor'`, `'output'`, `''` | focus | The pane that holds focus: Object Explorer, the query editor, an output panel (Results, Messages or Execution plan), or '' for none. |
 | `outputGridFocus` | boolean | focus | Focus is in a results grid, which copies its selected cells rather than text. |
 | `messagesFocus` | boolean | focus | Focus is in a Messages view; activePanel is then 'output'. |
@@ -951,6 +955,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `documentTabFocus` | boolean | focus | Focus is on a document tab in the strip, or in its rename box; activePanel is then 'editor'. |
 | `peekFocus` | boolean | focus | Focus is in Object Explorer's Peek card, which floats outside every pane (activePanel is then ''). |
 | `peekTabFocus` | boolean | focus | Focus is in the active Peek tab; activePanel is then 'editor'. |
+| `peekEditorFocus` | boolean | focus | Focus is in Peek's read-only definition editor (a card's or a Peek tab's), its find widget included. It is not the query editor: editorFocus and editorTextFocus stay false, so query commands (Execute, Parse and the rest) leave it alone. |
 | `quickInputVisible` | boolean | state | The command palette or a picker is open. |
 | `backendStatus` | `'starting'`, `'ready'`, `'unresponsive'`, `'restarting'`, `'failed'`, `'stopped'`, `''` | state | The SQL backend's state; '' before the workbench has heard from main. |
 | `backendReady` | boolean | state | `backendStatus == 'ready'`. |

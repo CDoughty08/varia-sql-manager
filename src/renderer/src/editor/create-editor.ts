@@ -7,8 +7,34 @@ import { bindExplorerDrop } from '../explorer/drop'
 /** A query editor: an editor group's Monaco instance, with Tools › Options applied and Object Explorer drops bound. */
 export interface QueryEditorInstance extends Disposable { readonly instance: editor.IStandaloneCodeEditor; contains(target: Node | null): boolean; setVisible(visible: boolean): void }
 
-/** Creates a query editor in `container`. Each editor group has one, which shows the group's active text document. */
-export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorOptions' | 'panes'>, container: HTMLElement): QueryEditorInstance {
+/**
+ * What sets a query editor that only shows text (Peek's definition) apart from an editor group's: everything else (Tools ›
+ * Options, the font, Find, the `varia` theme) is the same.
+ */
+export interface QueryEditorUse {
+  /**
+   * Read-only, with the words Monaco shows when the user tries to type: no Object Explorer drops, and Tab moves focus, as in
+   * any read-only field, so a dialog's focus loop still works.
+   */
+  readonly readOnly?: { readonly message: string }
+  /** A card's editor: less padding and no indicator margin (bookmarks live only in query documents). */
+  readonly compact?: boolean
+  /** The accessible name of the editor's text. */
+  readonly ariaLabel?: string
+  /** A Monaco context key set on this editor alone, so Monaco keybindings (Varia's chord bridge) can leave it out. */
+  readonly contextKey?: string
+  /** Whether its body-level widget host hides with the Query editor pane (default); Peek's card floats outside every pane. */
+  readonly inEditorPane?: boolean
+  /** An attribute set on that widget host, so its owner can tell a press on the editor's widgets from one outside it. */
+  readonly widgetHostAttribute?: string
+}
+
+/**
+ * Creates a query editor in `container`. Each editor group has one, which shows the group's active text document; Peek has
+ * one per card or tab, read-only (`use`).
+ */
+export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorOptions' | 'panes'>, container: HTMLElement, use: QueryEditorUse = {}): QueryEditorInstance {
+  const readOnly = use.readOnly
   // Dockview clips panel contents and floats create stacking contexts. Keep Monaco's widgets in the document that
   // owns this editor, outside those ancestors; fixed positioning lets Monaco constrain them to the window's edges.
   const overflow = container.ownerDocument.createElement('div')
@@ -27,9 +53,9 @@ export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorO
     minimap: { enabled: false },
     automaticLayout: true,
     scrollBeyondLastLine: false,
-    padding: { top: 16 },
+    padding: { top: use.compact ? 4 : 16 },
     // SSMS's indicator margin: bookmarks show there.
-    glyphMargin: true,
+    glyphMargin: !use.compact,
     // SSMS's Comment Selection writes --SELECT, with no space, and leaves empty lines alone.
     comments: { insertSpace: false, ignoreEmptyLines: true },
     // Quick Find starts from a single-line selection, and looks in a multi-line one, as SSMS's Look in: Selection does.
@@ -42,9 +68,12 @@ export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorO
     // clipboard): core/primary-selection.ts keeps Linux's PRIMARY selection out.
     selectionClipboard: false,
     // OVR (the Insert key) shows a block caret, as Visual Studio does.
-    overtypeCursorStyle: 'block'
+    overtypeCursorStyle: 'block',
+    ...readOnly ? { readOnly: true, readOnlyMessage: { value: readOnly.message }, tabFocusMode: true } : {},
+    ...use.ariaLabel ? { ariaLabel: use.ariaLabel } : {}
   })
   overflow.setAttribute('data-query-editor-id', instance.getId())
+  if (use.widgetHostAttribute) overflow.setAttribute(use.widgetHostAttribute, '')
   const options = workbench.editorOptions.bindEditor(instance)
   // The external host needs Monaco's current theme/high-contrast classes too, including after a new model replaces
   // its view. Observe just that view's class attribute, never the editor's changing text DOM.
@@ -61,11 +90,12 @@ export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorO
   // Closing or tabbing away from the outer Query Editor keeps its inner groups mounted. The body-level host must
   // follow that pane too, since it no longer inherits the editor container's visibility.
   let visible = true
-  const syncVisibility = () => { overflow.hidden = !visible || !workbench.panes.getSnapshot().editor }
+  const syncVisibility = () => { overflow.hidden = !visible || (use.inEditorPane !== false && !workbench.panes.getSnapshot().editor) }
   const visibility = workbench.panes.subscribe(syncVisibility)
   syncVisibility()
-  // Object Explorer rows dropped on the editor insert their names.
-  const drop = bindExplorerDrop(instance)
+  // Object Explorer rows dropped on the editor insert their names, where it takes text.
+  const drop = readOnly ? undefined : bindExplorerDrop(instance)
+  if (use.contextKey) instance.createContextKey(use.contextKey, true)
   return { instance, contains: target => container.contains(target) || overflow.contains(target), setVisible: value => { visible = value; syncVisibility() },
-    dispose: () => { visibility(); drop.dispose(); options.dispose(); model.dispose(); classes.disconnect(); instance.dispose(); overflow.remove() } }
+    dispose: () => { visibility(); drop?.dispose(); options.dispose(); model.dispose(); classes.disconnect(); instance.dispose(); overflow.remove() } }
 }

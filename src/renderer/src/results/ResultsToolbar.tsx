@@ -80,11 +80,13 @@ function ResultsSearchBox({ tabId }: { tabId: string }) {
  * ARIA toolbar pattern: one Tab stop, Left and Right (Home, End) move between them; the search box is a Tab stop of its own.
  */
 export default function ResultsToolbar({ tabId }: { tabId: string }) {
-  const { commands, settings, results } = useWorkbench()
+  const { commands, settings, results, pivot } = useWorkbench()
   const values = useServiceSnapshot(settings).values
   // The addressed query can update while another query is active; the command hook also follows global busy state.
   useServiceSnapshot(results)
   const canClose = useCommandEnabled('output.closeResults', { tabId })
+  const canPivot = useCommandEnabled('output.pivot', { tabId })
+  const pivotOpen = !!useServiceSnapshot(pivot).tabs[tabId]?.open
   const whitespace = values['queryResults.grid.whitespace'], sortText = values['queryResults.grid.sortText']
   const profile = values['queryResults.grid.columnProfile'], rowSize = values['queryResults.grid.rowSize']
   // Off (or Value) runs the command of the choice that is on, which turns it off.
@@ -122,6 +124,9 @@ export default function ResultsToolbar({ tabId }: { tabId: string }) {
         onClick={() => void commands.execute('output.toggleColumnProfile', undefined, 'toolbar')}><Icon name="graph" /></button>
       <button type="button" className="results-icon-toggle" aria-label="Row size" aria-pressed={rowSize} tabIndex={-1} title="Row size: a bar behind each row number; hover it for the exact bytes"
         onClick={() => void commands.execute('output.toggleRowSize', undefined, 'toolbar')}><Icon name="list-flat" /></button>
+      <button type="button" className="results-icon-toggle" aria-label="Pivot" aria-pressed={pivotOpen} tabIndex={-1} disabled={!pivotOpen && !canPivot}
+        title="Pivot: group the focused grid's rows by columns and summarize them (count, sum, average, min, max) as a new result"
+        onClick={() => { if (pivotOpen) pivot.close(tabId); else void commands.execute('output.pivot', { tabId }, 'toolbar') }}><Icon name="pivot" /></button>
     </div>
     <div className="results-segments" role="group" aria-label="Results">
       <button type="button" className="results-icon-toggle" aria-label="Close Results" tabIndex={-1} disabled={!canClose}

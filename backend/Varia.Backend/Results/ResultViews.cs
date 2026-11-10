@@ -20,15 +20,17 @@ internal sealed record ViewCells(int[]? Order, (long First, long Count)[] Ranges
 /// <summary>One results.view filter. In, NotIn and Between compare Column's values with those of base rows (Rows: one row per
 /// distinct value; Between's lowest and highest), or of the cells a selection named (Cells), which building the view
 /// resolves to rows; Nulls says NULL is among In's and NotIn's values. Duplicates compares Columns. Equality and order are
-/// the sort's (<see cref="ViewSorter"/>): a column's collation decides which texts are equal.</summary>
-internal sealed record ViewFilter(FilterOp Op, int Column, int[]? Rows, bool Nulls, ViewCells? Cells, int[] Columns);
+/// the sort's (<see cref="ViewSorter"/>): a column's collation decides which texts are equal.
+/// A distinct snapshot's checklist (<see cref="Snapshot"/>) arrives already resolved: In or NotIn with its values' rows in
+/// value order, one a value, however many.</summary>
+internal sealed record ViewFilter(FilterOp Op, int Column, int[]? Rows, bool Nulls, ViewCells? Cells, int[] Columns, uint? Snapshot = null);
 
 /// <summary>A view of one stored result: its rows in another order (and, later, only some of them), as base row numbers.
 /// Reads through it build pages in view order from the stored ones (<see cref="ViewPages"/>), so the renderer caches and
 /// draws them as it does a result's own. It covers the rows sealed when it was built; a view of a set still loading is
 /// built again by the renderer once more rows arrive. Its order array is charged to the result's query budget and
 /// returned when the view is closed, replaced, or its result is released.</summary>
-internal sealed class ResultView(uint viewId, ResultSetBuffer set, int[] order, IReadOnlyList<ViewKey> keys, bool approximate, bool complete, long charged)
+internal sealed class ResultView(uint viewId, ResultSetBuffer set, int[] order, IReadOnlyList<ViewKey> keys, bool approximate, bool complete, long charged, long baseRows = long.MaxValue)
 {
     public uint ViewId { get; } = viewId;
     public ResultSetBuffer Set { get; } = set;
@@ -39,6 +41,8 @@ internal sealed class ResultView(uint viewId, ResultSetBuffer set, int[] order, 
     public bool Approximate { get; } = approximate;
     /// <summary>The result had finished loading when the view was built: it covers every row.</summary>
     public bool Complete { get; } = complete;
+    /// <summary>The base rows it was built from (those sealed then): a row past them is one it has not looked at.</summary>
+    public long BaseRows { get; } = baseRows;
     internal long Charged { get; } = charged;
     public long Rows => Order.Length;
 }
@@ -51,7 +55,7 @@ internal sealed class ResultView(uint viewId, ResultSetBuffer set, int[] order, 
 /// _BIN and _BIN2), ignoring trailing spaces as SQL Server does; every other type by its display text's code points.
 /// Each row keeps 8 to 16 bytes per key while sorting (a number, or a prefix of its collation sort key), so most
 /// comparisons never touch the stored cell; ties read it again from its page.</summary>
-internal static class ViewSorter
+internal static partial class ViewSorter
 {
     public const int MaxKeys = 16;
     /// <summary>Filters one view takes, distinct values one In or NotIn filter holds, and cell ranges one selection names
@@ -60,7 +64,7 @@ internal static class ViewSorter
     /// <summary>Bytes a row one filter holds at most while it runs, besides its column's key: Duplicates' positions (4), group
     /// starts (up to 8, as their list grows) and the rows it keeps (4); Keep and Pick hold less.</summary>
     public const int FilterBytes = 16;
-    private const int CancelEvery = 1 << 14;
+    internal const int CancelEvery = 1 << 14;
 
     /// <summary>Bytes a sort holds per row and key while it runs: the key's 8- or 16-byte value and a NULL bit.</summary>
     public static long WorkingBytes(long rows, int keys) => rows * (16L * keys + 4) + rows / 8 * keys;
@@ -120,6 +124,13 @@ internal static class ViewSorter
                 continue;
             }
             var key = ValueKey(filter.Column);
+            if (filter.Snapshot is not null)
+            {
+                // A checklist's rows are its snapshot's: already one a value, in this key's order, and below the rows sealed.
+                order = Keep(order, key, filter.Op, filter.Rows!, filter.Nulls, token);
+                resolved[f] = filter;
+                continue;
+            }
             var (reps, nulls) = filter.Cells is { } cells ? Pick(key, cells, rows, token) : Distinct(key, filter.Rows!, rows, token);
             nulls |= filter.Nulls;
             if (filter.Op == FilterOp.Between)
@@ -307,7 +318,7 @@ internal static class ViewSorter
 
     /// <summary>A key over every row (indexed by base row), or over only <paramref name="kept"/>'s rows, in ascending base
     /// row order (indexed by their place in it). Its direction is the comparer's: keys compare ascending.</summary>
-    private static Key Build(ResultSetBuffer set, PageSource source, ViewKey sort, int[]? kept, int rows, CancellationToken token, ref bool approximate)
+    internal static Key Build(ResultSetBuffer set, PageSource source, ViewKey sort, int[]? kept, int rows, CancellationToken token, ref bool approximate)
     {
         var column = sort.Column;
         var meta = set.Columns[column];
@@ -485,7 +496,7 @@ internal static class ViewSorter
     }
 
     /// <summary>The sealed pages a sort reads, each parsed once, and a row's cell found again by binary search.</summary>
-    private sealed class PageSource
+    internal sealed class PageSource
     {
         private readonly StoredPage[] pages;
         private readonly long[] starts;
@@ -523,11 +534,20 @@ internal static class ViewSorter
             if (index < 0) index = ~index - 1;
             return View(index).Span(column, (int)(row - starts[index]));
         }
+
+        /// <summary>The page holding row <paramref name="row"/>, and the row's place in it (its flags as well as its cells).</summary>
+        public PageView ViewOf(int row, out int local)
+        {
+            var index = Array.BinarySearch(starts, (long)row);
+            if (index < 0) index = ~index - 1;
+            local = (int)(row - starts[index]);
+            return View(index);
+        }
     }
 
     /// <summary>A column's values in ascending order, indexed by base row or, built over some rows (<c>map</c>), by their
     /// place in that list; <see cref="Comparer"/> applies a sort key's direction.</summary>
-    private abstract class Key(int rows, int[]? map = null)
+    internal abstract class Key(int rows, int[]? map = null)
     {
         private readonly byte[] nulls = new byte[(rows + 7) / 8];
         public void SetNull(int row) => nulls[row >> 3] |= (byte)(1 << (row & 7));
@@ -650,7 +670,7 @@ internal static class ViewSorter
 
     /// <summary>The keys in order, each descending where <paramref name="descending"/> says (null: all ascending), NULL
     /// lowest, then the index, so equal rows keep their order (a stable sort).</summary>
-    private sealed class Comparer(Key[] keys, bool[]? descending, CancellationToken token) : IComparer<int>
+    internal sealed class Comparer(Key[] keys, bool[]? descending, CancellationToken token) : IComparer<int>
     {
         private int calls;
 
