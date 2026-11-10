@@ -1,11 +1,12 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import type { DistinctValue, ResultsDistinctResult } from '../../../shared/contracts'
 import { codiconClass } from '../../../shared/icons'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { useWorkbench } from '../core/WorkbenchContext'
 import { trapFocus } from '../trap-focus'
-import { checklistCondition, type ColumnCondition } from './column-filter'
+import { checklistCondition, unlistedValues, type ColumnCondition } from './column-filter'
+import { ColumnValuesScope } from './ResultsService'
 import { formatCount, plural } from './status'
 
 export interface ColumnFilterTarget { readonly column: number; readonly anchor: DOMRect }
@@ -21,6 +22,14 @@ const width = 300
 /** A search over a truncated list asks the backend once typing pauses (a short list filters what it has). */
 const searchPauseMs = 200
 const shown = (value: DistinctValue) => value.text === '' ? '(empty)' : value.text
+
+/** One checklist entry; a tick or a search re-renders only the entries it changes, not every one of up to 4,096. */
+const Item = memo(function Item({ value, checked, disabled, onToggle }: { value: DistinctValue; checked: boolean; disabled: boolean; onToggle(row: number): void }) {
+  return <label className={'column-filter-item' + (value.text === '' ? ' empty' : '')}>
+    <input type="checkbox" disabled={disabled} checked={checked} onChange={() => onToggle(value.row)} aria-label={`${shown(value)} (${formatCount(value.count)})`} />
+    <bdi className="column-filter-text" title={value.text}>{shown(value)}</bdi><span className="column-filter-count" aria-hidden="true">{formatCount(value.count)}</span>
+  </label>
+})
 
 /**
  * The header funnel's popover (results.distinct): the column's distinct values with their counts as a checklist with a
@@ -51,6 +60,9 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
   const [second, setSecond] = useState<number | undefined>()
   const [error, setError] = useState<string | undefined>()
   const nullsSeen = useRef(false)
+  // The view of the rows the other filters keep, shared by the list and its searches.
+  const scope = useMemo(() => new ColumnValuesScope(), [results, tabId, index, column])
+  useEffect(() => () => scope.release(), [scope])
 
   // A value seen for the first time starts ticked unless the column's filter drops it now (its kept mark); one seen
   // before keeps whatever the checklist says, so a new order or a search never undoes a tick.
@@ -70,7 +82,7 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
   useEffect(() => {
     const abort = new AbortController()
     setLoad({ status: 'loading' })
-    results.columnValues(tabId, index, column, { order, signal: abort.signal }).then(answer => {
+    results.columnValues(tabId, index, column, { order, scope, signal: abort.signal }).then(answer => {
       if (abort.signal.aborted) return
       remember(answer.result)
       setLoad({ status: 'ready', result: answer.result })
@@ -79,7 +91,7 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
       setLoad({ status: 'error', message: failure instanceof Error ? failure.message : 'The column\'s values could not be listed.' })
     })
     return () => abort.abort()
-  }, [results, tabId, index, column, order])
+  }, [results, tabId, index, column, order, scope])
 
   // A truncated list searches in the backend, which has every value.
   const full = load.status === 'ready' ? load.result : undefined
@@ -88,14 +100,14 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
     if (!full?.truncated || !needle) { setSearched(undefined); return }
     const abort = new AbortController()
     const timer = setTimeout(() => {
-      results.columnValues(tabId, index, column, { order, search: needle.slice(0, wire.search.maxText), signal: abort.signal }).then(answer => {
+      results.columnValues(tabId, index, column, { order, scope, search: needle.slice(0, wire.search.maxText), signal: abort.signal }).then(answer => {
         if (abort.signal.aborted) return
         remember(answer.result)
         setSearched({ text: needle, result: answer.result })
       }, () => { /* The full list stays shown, filtered by what it has. */ })
     }, searchPauseMs)
     return () => { clearTimeout(timer); abort.abort() }
-  }, [results, tabId, index, column, order, full, needle])
+  }, [results, tabId, index, column, order, scope, full, needle])
 
   const entries = useMemo(() => {
     if (!full) return []
@@ -127,11 +139,11 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
     })
     if (showNull) setNullChecked(checked)
   }
-  const toggle = (row: number) => setUnchecked(current => {
+  const toggle = useCallback((row: number) => setUnchecked(current => {
     const next = new Set(current)
     if (!next.delete(row)) next.add(row)
     return next
-  })
+  }), [])
 
   const apply = () => {
     let chosen: ColumnCondition | undefined
@@ -164,8 +176,8 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
   const left = Math.max(8, Math.min(anchor.right - width, innerWidth - width - 8))
   const below = innerHeight - anchor.bottom - 10, above = anchor.top - 10, down = below >= 420 || below >= above
   const place = down ? { left, width, top: anchor.bottom + 2, maxHeight: Math.max(160, below) } : { left, width, bottom: innerHeight - anchor.top + 2, maxHeight: above }
-  // A truncated list's values past it stay as the grid shows them: hidden when the column's filter hides all of them.
-  const unlisted = full?.truncated ? full.unlistedKept === false ? 'drop' as const : 'keep' as const : undefined
+  // A truncated list's values past it stay as the grid shows them, unless the grid's view names too many of them.
+  const unlisted = full ? unlistedValues(full, known) : undefined
   const titleId = `column-filter-${tabId}-${index}-${column}`
   const list = condition === 'list'
   const note = !full ? undefined
@@ -199,13 +211,10 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
         <input type="checkbox" disabled={!list} checked={nullChecked} onChange={() => setNullChecked(value => !value)} aria-label={`NULL (${formatCount(full!.nulls)})`} />
         <span className="column-filter-text">NULL</span><span className="column-filter-count" aria-hidden="true">{formatCount(full!.nulls)}</span>
       </label>}
-      {entries.map(value => <label key={value.row} className={'column-filter-item' + (value.text === '' ? ' empty' : '')}>
-        <input type="checkbox" disabled={!list} checked={!unchecked.has(value.row)} onChange={() => toggle(value.row)} aria-label={`${shown(value)} (${formatCount(value.count)})`} />
-        <bdi className="column-filter-text" title={value.text}>{shown(value)}</bdi><span className="column-filter-count" aria-hidden="true">{formatCount(value.count)}</span>
-      </label>)}
+      {entries.map(value => <Item key={value.row} value={value} checked={!unchecked.has(value.row)} disabled={!list} onToggle={toggle} />)}
       {full && !entries.length && !showNull && <p className="column-filter-note">No values match.</p>}
     </div>
-    {note && <p className="column-filter-note">{note}{unlisted === 'drop' ? ' Values not listed stay hidden.' : unlisted === 'keep' ? ' Values not listed will be shown.' : ''}{full?.approximate ? ' Long values were compared by their first characters.' : ''}</p>}
+    {note && <p className="column-filter-note">{note}{!unlisted ? '' : unlisted.exact ? ' Values not listed stay as the grid shows them.' : ' Values not listed will all be shown.'}{full?.approximate ? ' Long values were compared by their first characters.' : ''}</p>}
     <div className="column-filter-condition">
       <select aria-label="Condition" value={condition} onChange={event => { setError(undefined); setCondition(event.target.value as Condition) }}>
         {conditions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}

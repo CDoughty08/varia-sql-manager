@@ -7,9 +7,11 @@ namespace Varia.Backend.Results;
 internal enum DistinctOrder { Count, Value }
 
 /// <summary>What results.distinct found: the rows it looked at, the NULL count, every distinct value the search kept
-/// (Distinct) and the first of them (Values) in the order asked; with a kept view, whether it has a NULL and whether it
-/// holds a value past those listed.</summary>
-internal sealed record DistinctOutcome(long Rows, long Nulls, long Distinct, bool Approximate, DistinctValue[] Values, bool? NullsKept = null, bool? UnlistedKept = null);
+/// (Distinct) and the first of them (Values) in the order asked; with a kept view, whether it has a NULL, whether it holds a
+/// value past those listed, and when it holds some, the representative rows of the fewer of those past values it holds
+/// (UnlistedHeld) or does not (UnlistedDropped) when they fit one filter.</summary>
+internal sealed record DistinctOutcome(long Rows, long Nulls, long Distinct, bool Approximate, DistinctValue[] Values, bool? NullsKept = null, bool? UnlistedKept = null,
+    int[]? UnlistedHeld = null, int[]? UnlistedDropped = null);
 
 internal static partial class ViewSorter
 {
@@ -21,8 +23,9 @@ internal static partial class ViewSorter
 
     /// <summary>What results.distinct holds while it runs, charged to the result's budget: the column's key (as a filter's,
     /// 16 bytes a row and a NULL bit), the rows it groups (4 bytes a row), up to one group a row (a count and a kept mark, 5
-    /// bytes), a kept view's row marks (1 byte a row) and the count order's ranking (4 bytes a group).</summary>
-    public static long DistinctWorkingBytes(long rows) => WorkingBytes(rows, 1) + 14L * rows + 4096;
+    /// bytes), a kept view's row marks (1 byte a row) and the count order's ranking (4 bytes a group), and the answer (up
+    /// to 1 KiB a value listed: its text and its encoding).</summary>
+    public static long DistinctWorkingBytes(long rows, int maxValues) => WorkingBytes(rows, 1) + 14L * rows + 1024L * maxValues + 4096;
 
     /// <summary>A column's distinct values over a view's rows (or the sealed rows), each with its count and representative
     /// base row: the lowest base row holding it, so an In or NotIn filter by those rows compares exactly these values.
@@ -85,7 +88,12 @@ internal static partial class ViewSorter
             var first = values[start];
             var end = start + 1;
             var any = marks is not null && marks[first];
-            for (; end < count && key.Compare(first, values[end]) == 0; end++) any |= marks is not null && marks[values[end]];
+            for (; end < count && key.Compare(first, values[end]) == 0; end++)
+            {
+                // One value can hold most rows, and comparing long texts under a collation is slow.
+                if ((end & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+                any |= marks is not null && marks[values[end]];
+            }
             if (search is null || (matcher is not null && matcher.Matches(source.Cell(first, column), scratch)))
             {
                 values[groups] = first;
@@ -110,15 +118,35 @@ internal static partial class ViewSorter
             var g = ranked?[i] ?? i;
             answer[i] = new DistinctValue(values[g], Display(source, values[g], column, set.Wires[column]), counts[g], held is null ? null : held[g]);
         }
-        // Whether the kept view holds a value past those listed: a checklist that drops what it clears would show it, one
-        // that keeps what it ticks would not.
+        // Whether the kept view holds a value past those listed and, when it holds some, which: the fewer side's rows, so a
+        // checklist can leave every value it never listed as the kept view has it (keeping the held ones or dropping the
+        // others) within one filter's values.
         bool? unlistedKept = null;
+        int[]? unlistedHeld = null, unlistedDropped = null;
         if (held is not null)
         {
-            unlistedKept = false;
-            for (var i = listed; i < groups && unlistedKept == false; i++) unlistedKept = held[ranked?[i] ?? i];
+            var past = groups - listed;
+            var heldPast = 0;
+            for (var i = listed; i < groups; i++)
+            {
+                if ((i & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+                if (held[ranked?[i] ?? i]) heldPast++;
+            }
+            unlistedKept = heldPast > 0;
+            var keptSide = heldPast <= past - heldPast;
+            var side = keptSide ? heldPast : past - heldPast;
+            if (heldPast > 0 && side <= MaxFilterValues)
+            {
+                var sideRows = new int[side];
+                for (int i = listed, n = 0; n < side; i++)
+                {
+                    var g = ranked?[i] ?? i;
+                    if (held[g] == keptSide) sideRows[n++] = values[g];
+                }
+                if (keptSide) unlistedHeld = sideRows; else unlistedDropped = sideRows;
+            }
         }
-        return new DistinctOutcome(looked, nulls, groups, approximate, answer, nullsKept, unlistedKept);
+        return new DistinctOutcome(looked, nulls, groups, approximate, answer, nullsKept, unlistedKept, unlistedHeld, unlistedDropped);
     }
 
     /// <summary>A cell's grid text, cut to <see cref="DistinctValueChars"/> characters with "…": binary as 0x and hex, and

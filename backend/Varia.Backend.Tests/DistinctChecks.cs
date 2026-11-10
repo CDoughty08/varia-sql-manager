@@ -135,6 +135,16 @@ internal static class DistinctChecks
         check(listedOnly.UnlistedKept == false && listedOnly.Values.All(value => value.Kept == true) && beyond.UnlistedKept == true
             && beyond.Values.Count(value => value.Kept == true) == 1 && counted.UnlistedKept == true && Distinct(set, 0, max: 100).UnlistedKept is null,
             "a kept view says whether it holds a value past those listed, in either order");
+        // Past the list, the fewer side's rows: the one held value, or the one value it does not hold.
+        var allBut = store.AddView(set, Enumerable.Range(0, count).Where(i => i % 5000 != 4999).ToArray(), [], false, true, 0, null);
+        var dropping = ViewSorter.DistinctValues(set, set.SealedSnapshot(), null, 0, DistinctOrder.Count, null, 100, CancellationToken.None, allBut);
+        check(listedOnly is { UnlistedHeld: null, UnlistedDropped: null } && beyond is { UnlistedHeld: [4999], UnlistedDropped: null } && counted.UnlistedHeld is [4999]
+            && dropping is { UnlistedKept: true, UnlistedHeld: null, UnlistedDropped: [4999] } && Distinct(set, 0, max: 100) is { UnlistedHeld: null, UnlistedDropped: null },
+            "a kept view names the fewer of the past values it holds or drops: " + string.Join(",", beyond.UnlistedHeld ?? []) + "/" + string.Join(",", dropping.UnlistedDropped ?? []));
+        var many = Fill(store, [new("n", "int", "text")], Enumerable.Range(0, count).Select(i => new object?[] { i.ToString(CultureInfo.InvariantCulture) }));
+        var even = store.AddView(many, Enumerable.Range(0, count / 2).Select(i => 2 * i).ToArray(), [], false, true, 0, null);
+        var half = ViewSorter.DistinctValues(many, many.SealedSnapshot(), null, 0, DistinctOrder.Value, null, 100, CancellationToken.None, even);
+        check(half is { UnlistedKept: true, UnlistedHeld: null, UnlistedDropped: null }, "past values too many for one filter on both sides are not named");
         var longText = new string('x', 300) + "\U0001F600";
         var wide = Fill(store, [new("text", "nvarchar(max)", "text", Collation: Bin2), new("bin", "varbinary(max)", "binary")], [[longText, Enumerable.Repeat((byte)0xAB, 200).ToArray()]]);
         var text = Distinct(wide, 0).Values[0].Text;

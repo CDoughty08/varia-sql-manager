@@ -786,7 +786,15 @@ function distinctOf(result, source, { column, order, maxValues, search }, keptVi
   if (search !== undefined) values = values.filter(value => value.text.toLowerCase().includes(search.toLowerCase()))
   if (order === 'count') values = values.map((value, index) => ({ ...value, index })).sort((a, b) => b.count - a.count || a.index - b.index)
   const kept = values.slice(0, maxValues).map(({ key, row, text, count }) => ({ row, text: text.length > 256 ? text.slice(0, 256) + '…' : text, count, ...keptView ? { kept: keptKeys.has(key) } : {} }))
-  return { rows, complete: source.sealed ?? source.complete, nulls, distinct: values.length, truncated: values.length > kept.length, approximate: false, values: kept, ...keptView ? { nullsKept, unlistedKept: values.slice(maxValues).some(value => keptKeys.has(value.key)) } : {} }
+  return { rows, complete: source.sealed ?? source.complete, nulls, distinct: values.length, truncated: values.length > kept.length, approximate: false, values: kept, ...keptView ? { nullsKept, ...unlistedOf(values.slice(maxValues), keptKeys) } : {} }
+}
+
+// The kept view's values past those listed: whether it holds any, and the fewer side's rows when one filter holds them.
+function unlistedOf(past, keptKeys) {
+  const held = past.filter(value => keptKeys.has(value.key)), dropped = past.filter(value => !keptKeys.has(value.key))
+  if (!held.length) return { unlistedKept: false }
+  const side = held.length <= dropped.length ? held : dropped
+  return { unlistedKept: true, ...side.length > 4096 ? {} : side === held ? { unlistedHeld: held.map(value => value.row) } : { unlistedDropped: dropped.map(value => value.row) } }
 }
 /** The result, or the view of it a request names; undefined (after answering) when either is gone. */
 function sourceOf(id, resultId, viewId) {

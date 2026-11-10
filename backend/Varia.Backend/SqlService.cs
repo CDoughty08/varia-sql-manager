@@ -1699,7 +1699,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
-        var working = ViewSorter.DistinctWorkingBytes(rows);
+        var working = ViewSorter.DistinctWorkingBytes(rows, args.MaxValues);
         if (!store.TryReserve(set.Budget, working, false, out _))
             throw new RequestException("TOO_LARGE", "There is not enough result memory to list this column's values. Close other results and try again.");
         try
@@ -1707,7 +1707,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             var found = await Task.Run(() => ViewSorter.DistinctValues(set, pages, view, args.Column, order.Value, args.Search, args.MaxValues, token, keptView), token);
             if (set.IsReleased) throw Unavailable(args.ResultId);
             if ((view is not null && !store.HasView(view)) || (keptView is not null && !store.HasView(keptView))) throw ViewClosed();
-            return new ResultsDistinctResult(found.Rows, complete, found.Nulls, found.Distinct, found.Distinct > found.Values.Length, found.Approximate, found.Values, found.NullsKept, found.UnlistedKept);
+            return new ResultsDistinctResult(found.Rows, complete, found.Nulls, found.Distinct, found.Distinct > found.Values.Length, found.Approximate, found.Values, found.NullsKept, found.UnlistedKept, found.UnlistedHeld, found.UnlistedDropped);
         }
         finally { store.Return(set.Budget, working); }
     }

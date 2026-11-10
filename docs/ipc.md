@@ -1524,7 +1524,7 @@ it holds (`Results/DistinctValues.cs`); the renderer receives at most 4,096 valu
 
 - **`results.distinct { resultId, column, order: 'count' | 'value', maxValues: 1 – 4,096, search?: 1 – 1,024 characters,
   viewId?, keptViewId? }`** answers `{ rows, complete, nulls, distinct, truncated, approximate, values: [{ row, text, count,
-  kept? }], nullsKept?, unlistedKept? }`. The
+  kept? }], nullsKept?, unlistedKept?, unlistedHeld?, unlistedDropped? }`. The
   column must be the result's (`INVALID_PARAMS`). Through a view it groups the view's rows (`VIEW_NOT_FOUND` when it is
   gone), else the rows sealed when it ran; `complete` says those were every row of a finished set. `count` orders the
   values most frequent first, ties in value order; `value` orders them as a sort does. `distinct` counts every value the
@@ -1539,25 +1539,32 @@ it holds (`Results/DistinctValues.cs`); the renderer receives at most 4,096 valu
   compares a cell (the collation's locale and Ignore flags for character columns, hex for binary, case ignored otherwise).
 - **`keptViewId`**, another view of the same result (`VIEW_NOT_FOUND` when it is gone), marks each listed value `kept`
   when any row of that view holds it (equal as above, whichever row), says in `nullsKept` whether that view has a NULL in
-  the column, and in `unlistedKept` whether it holds a value past those listed. The marks cover every value listed, however many the view keeps, so a checklist over one view shows what
+  the column, and in `unlistedKept` whether it holds a value past those listed. When it holds some, `unlistedHeld` or
+  `unlistedDropped` lists the representative rows of the fewer of those past values it holds or does not hold (an empty
+  `unlistedDropped` when it holds them all), when they fit one filter (4,096); neither when both sides are larger. The marks cover every value listed, however many the view keeps, so a checklist over one view shows what
   a filtered view keeps of each value. Main relays the marks only when they were asked for, on every value and NULL.
 - **Work.** One key per row for the column (as a filter builds it), the rows grouped by a stable sort, and up to one group
   a row (its representative over the grouped rows' own array, a count and a kept mark), a kept view's row marks and the
-  count order's ranking: `DistinctWorkingBytes` (about 35 bytes a row) is charged to the result's query budget while it runs (`TOO_LARGE`
-  without room) and returned when it ends. The worker's `cancel` stops it (`CANCELLED`). Main checks the answer before
-  forwarding it: rows below 2³¹, at most `maxValues` values, `truncated` exactly when `distinct` exceeds them, and the
-  column inside the result's when its descriptor named the columns.
+  count order's ranking, and the answer (1 KiB a value asked for): `DistinctWorkingBytes` (about 35 bytes a row) is charged to the result's query budget while it runs (`TOO_LARGE`
+  without room) and returned when it ends. The worker's `cancel` stops it (`CANCELLED`), within one group too. Main checks
+  the answer before forwarding it: rows below 2³¹, at most `maxValues` values, `truncated` exactly when `distinct` exceeds
+  them, kept marks exactly when asked for, past values named only on one side and only when some are kept, and the column
+  inside the result's when its descriptor named the columns.
 - **Renderer.** `ResultHandle.distinct(column, { order, maxValues, search, kept, signal })` validates the request before
   the port (`kept` must be a view of the same result). `ResultsService.columnValues` asks over the rows the grid's other
-  filters keep (a view built for it without the column's own value list, closed once read), so values the column's filter
+  filters keep (a view built for it without the column's own value list, shared by the popover's list and searches through
+  a `ColumnValuesScope` and closed with the popover), so values the column's filter
   dropped can be ticked again; when the column has such a filter the grid's view marks which values it keeps now, and a
   value first seen (in the list or a search) starts ticked only when it is kept. The popover (`ColumnFilterPopover`) lists them as a checklist with a search (local,
   or in the backend once typing pauses when the list was truncated), Select all and Select none, NULL as an entry, and
   custom conditions (equals, does not equal, between two listed values, is NULL, is not NULL). OK applies an `in` or
   `notIn` filter by representative rows, whichever names fewer (keeping on a tie), replacing the column's value-list
   filter and its Exclude NULLs (the checklist lists NULL as a value, so it also lists over the rows that filter hid);
-  every value ticked takes both off. A truncated list leaves the values it never showed as the grid shows them: `notIn`
-  when the grid shows any of them (or the column has no value filter), else `in`. Between replaces the column's range
+  every value ticked takes both off. A truncated list leaves the values it never showed as the grid shows them: `in` with
+  the ticked values and the past ones the grid holds, or `notIn` with the cleared values and the past ones it drops, from
+  the kept marks (all shown when the column has no value filter, all hidden when the grid holds none of them). When the
+  grid holds and drops too many of them for one filter either way, `notIn` shows them all and the popover says so; every
+  value ticked takes the filter off only when no past value stays hidden. Between replaces the column's range
   filter; Clear filter takes all of the column's filters off. The popover opens in the grid's own window (a popped-out
   Results panel's), and a second press on the open funnel closes it. There is no contains or starts-with condition: the
   filters compare whole values by rows, and a text filter op would need its own backend filter.

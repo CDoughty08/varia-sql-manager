@@ -3,7 +3,7 @@ import type { ApiResult, ResolvedViewFilter, ResultColumn, ResultsJobProgress, R
 import type { ResultHandle, ResultView } from '../src/renderer/src/results/ResultClient'
 import type { DocumentService } from '../src/renderer/src/services/documents'
 import { EventBus } from '../src/renderer/src/core/events'
-import { filterLabel, filteredColumns, ResultsService, resultLimits, suggestedName } from '../src/renderer/src/results/ResultsService'
+import { ColumnValuesScope, filterLabel, filteredColumns, ResultsService, resultLimits, suggestedName } from '../src/renderer/src/results/ResultsService'
 import { selectAll } from '../src/renderer/src/grid/selection'
 import { openEnd } from '../src/renderer/src/grid/constants'
 import { deferred } from './fixtures/documents'
@@ -1201,8 +1201,21 @@ describe('results service filters', () => {
     service.applyColumnFilter('t1', 0, 1, { kind: 'values', op: 'notIn', rows: [], nulls: true })
     await settle()
     await settle()
-    handle.sort.mockResolvedValueOnce({ ...others, viewId: 5 })
+    const scoped = { ...others, viewId: 5, close: vi.fn(async () => undefined) }
+    handle.sort.mockResolvedValueOnce(scoped)
     await service.columnValues('t1', 0, 1, { order: 'count' })
     expect(handle.sort).toHaveBeenLastCalledWith([], { filters: [{ op: 'notIn', column: 0, rows: [], nulls: true }] })
+    // A popover's scope builds that view once for its list and searches, and closes it when released.
+    expect(scoped.close).toHaveBeenCalledTimes(1)
+    const shared = { ...others, viewId: 6, close: vi.fn(async () => undefined) }
+    const scope = new ColumnValuesScope(), sorts = handle.sort.mock.calls.length
+    handle.sort.mockResolvedValueOnce(shared)
+    await service.columnValues('t1', 0, 1, { order: 'count', scope })
+    await service.columnValues('t1', 0, 1, { order: 'count', search: 'b', scope })
+    expect(handle.sort.mock.calls.length).toBe(sorts + 1)
+    expect(shared.close).not.toHaveBeenCalled()
+    scope.release()
+    await settle()
+    expect(shared.close).toHaveBeenCalledTimes(1)
   })
 })

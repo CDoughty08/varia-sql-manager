@@ -103,10 +103,35 @@ export interface GridController {
   /** Opens the header funnel's popover for a column (results grids). */
   filterColumn?(column: number): void
 }
-/** A column's distinct values for the funnel's checklist, and, when the column has a value-list filter, the values that
- *  filter keeps now (their representative rows, and whether NULL is among them). */
 /** A column's values for the funnel; with the column filtered, each value (and `nullsKept`) says whether the grid shows it. */
 export interface ColumnValues { readonly result: ResultsDistinctResult }
+
+/**
+ * The view of the rows the grid's other filters keep that one popover's lists share (columnValues' `scope`): built once,
+ * not once a search pause, again only when those filters or the result change, and released with the popover.
+ */
+export class ColumnValuesScope {
+  private base?: { readonly handle: ResultHandle; readonly filters: readonly GridFilter[]; readonly view: Promise<ResultHandle> }
+
+  view(handle: ResultHandle, filters: readonly GridFilter[], build: () => Promise<ResultHandle>): Promise<ResultHandle> {
+    const base = this.base
+    if (base && base.handle === handle && base.filters.length === filters.length && base.filters.every((item, at) => item === filters[at])) return base.view
+    this.release()
+    const view = build()
+    const next = { handle, filters: [...filters], view }
+    this.base = next
+    // A view that failed to build is not kept, so the next list tries again.
+    view.catch(() => { if (this.base === next) this.base = undefined })
+    return view
+  }
+
+  /** Closes the view it holds (once built); a later list builds another. */
+  release(): void {
+    const base = this.base
+    this.base = undefined
+    void base?.view.then(view => view.close(), () => undefined)
+  }
+}
 /** How a run ended: the summary, or main's failure (`code` BACKEND_LOST when the backend stopped), plus a notice to show first. */
 export interface RunEnd { summary?: QueryResult; error?: string; code?: ErrorCode; notice?: string; planContext?: PlanExecutionContext }
 /** Open Value in New Tab's outcome: whether a document opened, and what the banner says (a failure, or that it opened unformatted). */
@@ -662,9 +687,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /**
    * A column's distinct values for the funnel (results.distinct): over the rows the grid's other filters keep, so values
    * the column's own value list drops can be ticked again. With `kept`, a column that has a value-list filter also says
-   * which values it keeps now: the same values have the same lowest row in both, so they match by row.
+   * which values it keeps now: the same values have the same lowest row in both, so they match by row. A `scope` keeps the
+   * view it builds for the lists that follow (a popover's searches), else it is closed once read.
    */
-  async columnValues(tabId: string, index: number, column: number, o: { order: 'count' | 'value'; search?: string; signal?: AbortSignal }): Promise<ColumnValues> {
+  async columnValues(tabId: string, index: number, column: number, o: { order: 'count' | 'value'; search?: string; signal?: AbortSignal; scope?: ColumnValuesScope }): Promise<ColumnValues> {
     const run = this.runs.get(tabId), set = run?.sets[index], sort = run?.sorts.get(index)
     if (!run || !set || !this.filterable(set)) throw new Error('These results are no longer available.')
     if (sort?.sorting) throw new Error('The results are still being sorted or filtered. Try again when they are shown.')
@@ -673,10 +699,12 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (others.length === filters.length) return { result: await (sort?.view ?? set.handle).distinct(column, ask) }
     // A view without the column's value list, closed once its values are read; the grid's view marks what it keeps of
     // every value listed, so values past what one answer lists never count as dropped.
-    const base = others.length > 0 ? await set.handle.sort([], { filters: others.map(item => item.filter), ...o.signal ? { signal: o.signal } : {} }) : undefined
+    const build = (signal?: AbortSignal) => set.handle.sort([], { filters: others.map(item => item.filter), ...signal ? { signal } : {} })
+    const owned = others.length > 0 && !o.scope ? await build(o.signal) : undefined
+    const base = owned ?? (others.length > 0 ? await o.scope!.view(set.handle, others, () => build()) : undefined)
     try {
       return { result: await (base ?? set.handle).distinct(column, { ...ask, ...sort?.view ? { kept: sort.view } : {} }) }
-    } finally { void base?.close() }
+    } finally { void owned?.close() }
   }
 
   /**
