@@ -423,8 +423,8 @@ Resource Waits has Hide benign waits (on by default), which leaves out benign wa
 | Data File I/O chip | Id | Shows |
 | --- | --- | --- |
 | All | `all` | Every file. |
-| Rows | `rows` | Data files (Rows). |
-| Log | `log` | Log files. |
+| Rows | `rows` | Data files (Rows). Without VIEW ANY DEFINITION the server hides file types, so this shows none. |
+| Log | `log` | Log files. Without VIEW ANY DEFINITION the server hides file types, so this shows none. |
 | Over threshold | `overThreshold` | Files whose read or write latency in the interval reached the warning threshold. |
 
 Data File I/O tones a row warning when its read or write latency reaches 20 ms and error from 50 ms; the files filter carries the

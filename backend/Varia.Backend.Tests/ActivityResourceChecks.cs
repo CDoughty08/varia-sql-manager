@@ -227,6 +227,7 @@ internal static class ActivityResourceChecks
         var ran = new List<string>();
         long ticks = 10_000;
         long lockWait = 1_000;
+        long start = 1;
         var reader = new ActivityReader(new NoHost(), "c", new ActivityLiveArgs([new ActivityFilterDto("files", LatencyWarningMs: 200, LatencyErrorMs: 300)]))
         {
             TestRun = (statement, values) =>
@@ -236,7 +237,7 @@ internal static class ActivityResourceChecks
                 IEnumerable<Dictionary<string, object?>> rows = statement.Id switch
                 {
                     "capabilities" => [new() { ["spid"] = 99, ["server_state"] = 1, ["alter_any_connection"] = 0, ["view_any_definition"] = 1, ["spills"] = 1 }],
-                    "clock" => [new() { ["ms_ticks"] = ticks, ["sqlserver_start_time_ms_ticks"] = 1L }],
+                    "clock" => [new() { ["ms_ticks"] = ticks, ["sqlserver_start_time_ms_ticks"] = start }],
                     "waitStats" => [Wait("LCK_M_X", 10, lockWait), Wait("SOS_WORK_DISPATCHER", 10, lockWait * 10)],
                     "waiters" => [],
                     "files" => [File(1, 1, ticks / 100, ticks)],
@@ -265,5 +266,18 @@ internal static class ActivityResourceChecks
             "the reader sends the wait series (null on its baseline) with the server's clock, and the three tables");
         check(categories.View is { } view && categories.Rows.Count(view) == 1 && categories.FacetScope is not null && fileRow.Cells[^1].Text is null,
             "the reader applies Hide benign waits by default (Idle hidden), and tones rows by the files filter's thresholds, not the defaults (100 ms is under a 200 ms warning)");
+        // A restart (new start ticks) and a resume restart the resources rows through the reader, even with counters still rising:
+        // the 1-Minute Average then holds only the newest interval (2,000 ms/s), not the 1,000 ms/s ones from before.
+        (ticks, lockWait, start) = (20_000, 11_000, 2);
+        var restarted = Read(null);
+        (ticks, lockWait) = (25_000, 16_000);
+        var resumed = Read("resumed");
+        (ticks, lockWait) = (30_000, 26_000);
+        var after = Read(null);
+        var writer = new ActivityResourceRows(Catalog).CategoriesWriter;
+        var lockRow = after.Tables.Single(table => Spec.Tables[table.Table].Id == "waitCategories").Rows.FirstOrDefault(row => Cell(writer, row, "categoryId") == "lock");
+        check(restarted.Raw!.Values.All(value => value is null) && resumed.Raw!.Values.All(value => value is null) && after.Raw!.Values[lockSeries] == 2_000
+            && lockRow is not null && Cell(writer, lockRow, "minuteAverage") == "2000.0",
+            "a restart or a resume gives the resources probe a fresh baseline and an empty 1-Minute Average though no counter fell, and the next sample rates again");
     }
 }

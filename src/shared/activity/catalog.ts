@@ -587,8 +587,8 @@ export type FileView = typeof fileViews[number]
 export const fileViewTitles: { readonly [V in FileView]: string } = { all: 'All', rows: 'Rows', log: 'Log', overThreshold: 'Over threshold' }
 export const fileViewNotes: { readonly [V in FileView]: string } = {
   all: 'Every file.',
-  rows: 'Data files (Rows).',
-  log: 'Log files.',
+  rows: 'Data files (Rows). Without VIEW ANY DEFINITION the server hides file types, so this shows none.',
+  log: 'Log files. Without VIEW ANY DEFINITION the server hides file types, so this shows none.',
   overThreshold: 'Files whose read or write latency in the interval reached the warning threshold.'
 }
 
