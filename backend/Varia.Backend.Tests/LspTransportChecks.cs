@@ -43,6 +43,8 @@ internal static class LspTransportChecks
         var reentered = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         LspClient client = null!;
+        // No time for other writers: the cancel below finds the write gate free, and must then be sent however little of
+        // its budget is left. The budget once covered the whole send, and a starved runner spent it before the gate.
         client = new LspClient(path, arguments, async (method, parameters) =>
         {
             if (method == "fixture/reenter")
@@ -52,7 +54,7 @@ internal static class LspTransportChecks
                 throw new InvalidOperationException("A provider callback can fail without taking down the reader.");
             }
             if (method == "fixture/cancelled") cancelled.TrySetResult();
-        });
+        }) { CancelGateWait = TimeSpan.Zero };
         await using (client)
         {
             // Cold CLR/apphost startup is unrelated to framing correctness and can take much longer when the stress
@@ -74,7 +76,7 @@ internal static class LspTransportChecks
             try { await client.RequestAsync("hang", null, timeout: TimeSpan.FromMilliseconds(100)); }
             catch (TimeoutException) { timedOut = true; }
             await cancelled.Task.WaitAsync(CheckWait);
-            check(timedOut, "LSP request deadlines send a cancel notification and release pending requests");
+            check(timedOut, "LSP request deadlines send a cancel notification, whatever is left of its budget, and release pending requests");
             using var cancel = new CancellationTokenSource();
             var hanging = client.RequestAsync("hang", null, cancel.Token, CheckWait);
             cancel.Cancel();
@@ -121,6 +123,26 @@ internal static class LspTransportChecks
                 catch (Exception error) when (error is IOException or ObjectDisposedException) { }
             check(refused, "LSP pending requests have a strict capacity and disposal releases all slots");
         }
+        // A read of the child's stdout that is in flight when the client is disposed can still complete with data. Dispose
+        // used to dispose the reader's BufferedStream under it, which drops the buffer the read then copies from, and the
+        // reader died of an ArgumentOutOfRangeException that left DisposeAsync.
+        HeldReadStream? holding = null;
+        var racing = new LspClient(path, arguments, readThrough: stream => holding = new HeldReadStream(stream));
+        try
+        {
+            await racing.RequestAsync("echo", new { }, timeout: StartupWait);
+            holding!.Hold();
+            // The fixture answers a cancel with a notification: bytes for the reader without a request waiting on them.
+            await racing.NotifyAsync("$/cancelRequest", new { id = 0 });
+            await holding.Held.WaitAsync(CheckWait);
+            racing.Dispose();
+            holding.Release();
+            var readerSurvived = true;
+            try { await racing.DisposeAsync(); }
+            catch (Exception) { readerSurvived = false; }
+            check(readerSurvived && racing.Completion.IsCompletedSuccessfully, "LSP disposal leaves a read that completes after it to the reader");
+        }
+        finally { racing.Dispose(); holding?.Release(); }
         // .NET's tree kill stops the child (SIGSTOP), lists its children and then kills it. A Dispose that found another
         // thread's stop under way used to return at once and release the process handle, and the backend's exit could land
         // inside the kill; either left the child stopped for good. Both now wait at the gate until the kill has ended.
@@ -213,6 +235,41 @@ internal static class LspTransportChecks
     }
 
     private static byte[] Frame(byte[] body) => [.. Encoding.ASCII.GetBytes("Content-Length: " + body.Length + "\r\n\r\n"), .. body];
+
+    /// <summary>Holds back one read that has already taken bytes from the child, as a starved thread pool does.</summary>
+    private sealed class HeldReadStream(Stream inner) : Stream
+    {
+        private readonly TaskCompletionSource held = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int holdNext;
+
+        public Task Held => held.Task;
+        public void Hold() => Volatile.Write(ref holdNext, 1);
+        public void Release() => released.TrySetResult();
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken token = default)
+        {
+            var count = await inner.ReadAsync(buffer, token);
+            if (count > 0 && Interlocked.Exchange(ref holdNext, 0) == 1)
+            {
+                held.TrySetResult();
+                await released.Task;
+            }
+            return count;
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, count);
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        protected override void Dispose(bool disposing) { if (disposing) inner.Dispose(); base.Dispose(disposing); }
+    }
 
     private sealed class FragmentedStream(byte[] bytes) : MemoryStream(bytes)
     {
