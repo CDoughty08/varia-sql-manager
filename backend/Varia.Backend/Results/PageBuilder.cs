@@ -73,6 +73,8 @@ internal sealed class PageBuilder
     public long FirstRow { get; private set; }
     public int RowCount => rows;
     public bool HasRows => rows > 0;
+    /// <summary>Whether the last cell appended was stored truncated: marked so by its caller, or cut by the 8 MiB row limit.</summary>
+    public bool LastTruncated => lastTruncated;
     /// <summary>Approximate encoded size of the committed rows: cell bytes plus offsets.</summary>
     public long ByteCount => dataBytes + 4L * columns.Length * (rows + 1);
     public bool IsFull => rows >= MaxRows || ByteCount >= sealBytes;

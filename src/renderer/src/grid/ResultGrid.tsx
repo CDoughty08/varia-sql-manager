@@ -177,7 +177,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
   // The grid holds only rows; its strip and the lost overlay are its siblings, outside the table structure.
   return <div className="rg-frame">
     <div ref={rootRef} className="results-grid rg" role="grid" tabIndex={0} data-result-grid="" data-output-view="grid" data-tab-id={tabId} data-result-index={index}
-      data-result-generation={entry.descriptor.generation} data-result-id={entry.descriptor.resultId}
+      data-result-generation={entry.descriptor.generation} data-result-id={entry.descriptor.resultId} data-result-kind={entry.descriptor.kind}
       data-pane-focus={focused ? 'selected' : 'grid'} aria-multiselectable="true" aria-readonly="true" onKeyDown={keyDown} onFocus={() => onFocus(index)}>
       <div ref={scrollRef} className="rg-scroll" tabIndex={-1} />
     </div>

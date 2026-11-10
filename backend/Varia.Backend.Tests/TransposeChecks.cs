@@ -173,8 +173,25 @@ internal static class TransposeChecks
         check(plan is { Available: ResultTransposer.MaxRows + 5, Truncated: true } && plan.Positions.Length == ResultTransposer.MaxRows && output.Columns.Count == PageBuilder.MaxColumns
             && output.Columns[^1].Name == "Row 4095" && Text(output)[0].EndsWith("|4094", StringComparison.Ordinal),
             "a transpose takes the first 4,095 rows, so its columns fit a page, and counts the others");
-        check(ResultTransposer.MaxCells / 2000 < ResultTransposer.MaxRows && ResultTransposer.Plan(set, set.SealedSnapshot(), null, [(0, 10)], -1) is { Available: 10, Truncated: false },
-            "a wide result takes fewer rows (the cell bound), and a selection within the limit is whole");
+        check(ResultTransposer.Plan(set, set.SealedSnapshot(), null, [(0, 10)], -1) is { Available: 10, Truncated: false }, "a selection within the limit is whole");
+        // A wide result takes fewer rows: 2,000 columns hold MaxCells in 2,000 rows, short of the column limit.
+        const int wide = 2000;
+        var cells = store.Open(store.BeginQuery("wide"), 0, 1, 1, "rows", [.. Enumerable.Range(0, wide).Select(i => new ResultColumn("c" + i.ToString(CultureInfo.InvariantCulture), "int", "text"))], [.. Enumerable.Repeat(WireKind.Text, wide)])!;
+        for (var row = 0; row < ResultTransposer.MaxCells / wide + 5; row++)
+        {
+            var builder = cells.BeginRow()!;
+            for (var c = 0; c < wide; c++) builder.AppendNull();
+            cells.TryCommitRow();
+        }
+        cells.Complete();
+        var widePlan = ResultTransposer.Plan(cells, cells.SealedSnapshot(), null, null, -1);
+        check(widePlan is { Available: ResultTransposer.MaxCells / wide + 5, Truncated: true } && widePlan.Positions.Length == ResultTransposer.MaxCells / wide && widePlan.Positions.Length < ResultTransposer.MaxRows,
+            "a wide result takes only the rows whose cells fit the cell bound, and counts the others: " + widePlan.Positions.Length);
+        // Two 5 MiB values become one row of 10 MiB: the 8 MiB row limit cuts the second, and the cut is counted.
+        var big = new string('a', 5 * 1024 * 1024);
+        var large = Source(store, [[big], [big]], [new("x", "nvarchar(max)", "text")]);
+        var (_, cut) = Transpose(store, large);
+        check(cut.Describe().TruncatedCells == 1, "a cell the output row's 8 MiB limit cuts counts as truncated: " + cut.Describe().TruncatedCells);
     }
 
     /// <summary>A transpose the budget has no room for is refused whole and takes nothing.</summary>

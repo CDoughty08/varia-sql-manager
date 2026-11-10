@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Globalization;
 using System.Text;
 
@@ -74,7 +75,7 @@ internal static class ResultTransposer
             columns.Add(new ResultColumn(name, "nvarchar(max)", "text"));
         }
         // "Column" keeps its name; the rows' columns are numbered " (2)", " (3)" in order when they repeat.
-        PivotOutput.Unique(columns, rows: 1, values: 0);
+        ColumnNames.Unique(columns);
         return (columns, [.. columns.Select(_ => WireKind.Text)], [.. columns.Select(_ => ColumnLength.Utf16)]);
     }
 
@@ -83,6 +84,11 @@ internal static class ResultTransposer
     public static void Write(ResultSetBuffer set, ResultSetBuffer source, StoredPage[] pages, TransposePlan plan, CancellationToken token)
     {
         var access = new RowAccess(pages, source.Wires.Count);
+        // Every source column reads every row taken: find each row's page once, not once a cell.
+        var pageOf = new int[plan.Positions.Length];
+        var indexOf = new int[plan.Positions.Length];
+        for (var i = 0; i < pageOf.Length; i++) pageOf[i] = access.PageOf(plan.Positions[i], out indexOf[i]);
+        var hex = Array.Empty<char>();
         var counter = 0;
         try
         {
@@ -95,22 +101,27 @@ internal static class ResultTransposer
                 builder.AppendText(source.Columns[column].Name);
                 builder.Measure(source.Columns[column].Name.Length, 2L * source.Columns[column].Name.Length);
                 var truncated = 0;
-                foreach (var row in plan.Positions)
+                for (var i = 0; i < pageOf.Length; i++)
                 {
                     if ((++counter & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
-                    truncated += Cell(builder, access, source, column, row);
+                    var view = access.Page(pageOf[i], out var lengths);
+                    truncated += Cell(builder, view, lengths, column, indexOf[i], ref hex);
                 }
                 if (!set.TryCommitRow(truncated)) break;
             }
         }
-        finally { set.Complete(); }
+        finally
+        {
+            set.Complete();
+            if (hex.Length > 0) ArrayPool<char>.Shared.Return(hex);
+        }
     }
 
     /// <summary>Copies a source cell as text (binary as 0x hex, as the grid shows it), its NULL, error and truncation flags
-    /// kept, with its full length when it was stored truncated; returns 1 for a truncated one.</summary>
-    private static int Cell(PageBuilder builder, RowAccess access, ResultSetBuffer source, int column, int row)
+    /// kept, with its full length when it was stored truncated; returns 1 for a cell stored truncated: cut in the source, or
+    /// cut here by the output row's 8 MiB limit.</summary>
+    private static int Cell(PageBuilder builder, PageView view, PageLengths lengths, int column, int at, ref char[] hex)
     {
-        var view = access.At(row, out var at, out var lengths);
         if (view.IsNull(column, at)) { builder.AppendNull(view.IsError(column, at)); return 0; }
         var cut = view.IsTruncated(column, at);
         var span = view.Span(column, at);
@@ -119,7 +130,18 @@ internal static class ResultTransposer
         var exact = true;
         if (view.Wire(column) == WireKind.Binary)
         {
-            builder.AppendText("0x" + Convert.ToHexString(span), cut);
+            // Only as many bytes as a row can hold as hex: the rest could never be stored, and is said by the truncation.
+            var bytes = Math.Min(span.Length, PageBuilder.MaxRowBytes / 2);
+            var need = 2 + 2 * bytes;
+            if (hex.Length < need)
+            {
+                if (hex.Length > 0) ArrayPool<char>.Shared.Return(hex);
+                hex = ArrayPool<char>.Shared.Rent(need);
+            }
+            hex[0] = '0';
+            hex[1] = 'x';
+            Convert.TryToHexString(span[..bytes], hex.AsSpan(2), out var written);
+            builder.AppendText(hex.AsSpan(0, 2 + written), cut || bytes < span.Length);
             // A binary value shows as 0x and two hex digits a byte: its full bytes, when kept, give its full text's length.
             chars = 2 + 2L * (kept?.Bytes ?? span.Length);
             if (cut && kept is null) exact = false;
@@ -131,8 +153,10 @@ internal static class ResultTransposer
             if (cut && kept is null) exact = false;
             else if (kept is { Exact: false }) exact = false;
         }
+        // The builder's flag, not the source's: a cell the output row's limit cut is truncated too, and counts.
+        var stored = builder.LastTruncated;
         // The output is nvarchar: two bytes a character, as DATALENGTH counts it.
         builder.Measure(chars, 2 * chars, exact: exact);
-        return cut ? 1 : 0;
+        return stored ? 1 : 0;
     }
 }

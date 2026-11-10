@@ -1,6 +1,7 @@
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import { resolveBlocks } from '../grid/selection'
+import { mergeRows } from './HighlightsService'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import type { ResultSetEntry, ResultsService } from './ResultsService'
 import { resultLimits, setKey } from './ResultsService'
@@ -60,6 +61,11 @@ export class TransposeService extends SnapshotStore<TransposeSnapshot> implement
       && !(sort && (sort.sorting || sort.stale || !sort.view))
   }
 
+  /** Whether a transpose runs in a tab, for the toolbar's busy button. A start or an end publishes the snapshot again. */
+  isRunning(tabId: string): boolean {
+    return this.running.has(tabId)
+  }
+
   /** The grid's selected rows as [first, count] position ranges (merged, at most 256), or undefined without any. */
   selectedRows(tabId: string, index: number): [number, number][] | undefined {
     const entry = this.results.getSnapshot()[tabId]?.sets[index]
@@ -67,13 +73,7 @@ export class TransposeService extends SnapshotStore<TransposeSnapshot> implement
     if (!entry || !selection) return undefined
     const sort = this.results.sortOf(tabId, index)
     const rows = (sort?.view ?? entry.handle).getSnapshot().rowsAvailable
-    const spans = resolveBlocks(selection, rows, entry.descriptor.columns.length).map(block => [block.top, block.bottom] as [number, number]).sort((a, b) => a[0] - b[0])
-    const merged: [number, number][] = []
-    for (const [top, bottom] of spans) {
-      const last = merged.at(-1)
-      if (last && top <= last[1] + 1) last[1] = Math.max(last[1], bottom)
-      else merged.push([top, bottom])
-    }
+    const merged = mergeRows(resolveBlocks(selection, rows, entry.descriptor.columns.length).map(block => [block.top, block.bottom] as const))
     return merged.length > 0 && merged.length <= wire.transpose.maxRanges ? merged.map(([top, bottom]) => [top, bottom - top + 1]) : undefined
   }
 
@@ -97,6 +97,7 @@ export class TransposeService extends SnapshotStore<TransposeSnapshot> implement
     const abort = new AbortController()
     const item = { abort, queryId: tab.queryId }
     this.running.set(tabId, item)
+    this.publish(new Map(this.getSnapshot()))
     try {
       const result = await handle.transpose({ ...(rows ? { rows } : {}), ...(o.header === undefined ? {} : { headerColumn: o.header }) }, { signal: abort.signal })
       const sourceLabel = entry.label ?? `Result ${entry.index + 1}`
@@ -115,7 +116,11 @@ export class TransposeService extends SnapshotStore<TransposeSnapshot> implement
     } catch (error) {
       if (!abort.signal.aborted) this.results.notify(tabId, error instanceof Error ? error.message : 'The results could not be transposed.')
     } finally {
-      if (this.running.get(tabId) === item) this.running.delete(tabId)
+      if (this.running.get(tabId) === item) {
+        this.running.delete(tabId)
+        // Not filtered by `shown`: the results publish their new set on the next frame, and sync drops stale strips then.
+        this.publish(new Map(this.getSnapshot()))
+      }
     }
   }
 

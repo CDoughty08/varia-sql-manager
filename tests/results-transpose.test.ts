@@ -15,14 +15,14 @@ const cells = (resultIndex: number, ...blocks: [number, number][]): GridSelectio
   resultIndex, blocks: blocks.map(([top, bottom]) => ({ kind: 'cells' as const, anchor: { row: top, column: 1 }, focus: { row: bottom, column: 1 } })), active: { row: blocks[0][0], column: 1 }
 })
 
-function fixture() {
+function fixture(o: { frames?: (() => void)[] } = {}) {
   const client = fakeResultClient(), events = new EventBus(), timers = manualTimers()
   const progress = new Set<(value: ResultsJobProgress) => void>()
   const api = {
     copyResults: vi.fn<VariaApi['copyResults']>(), saveResults: vi.fn<VariaApi['saveResults']>(), cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(),
     onResultsJob: vi.fn<VariaApi['onResultsJob']>(listener => { progress.add(listener); return () => { progress.delete(listener) } })
   }
-  const results = new ResultsService({ client, api, events, frame: callback => callback(), timers: timers.timers, newId: () => crypto.randomUUID() })
+  const results = new ResultsService({ client, api, events, frame: callback => { if (o.frames) o.frames.push(callback); else callback() }, timers: timers.timers, newId: () => crypto.randomUUID() })
   const transpose = new TransposeService(results)
   let next = 1
   /** Runs a query of `count` complete sets of 10 rows; `finish: false` leaves it running. */
@@ -34,7 +34,7 @@ function fixture() {
     if (o.finish !== false) void results.finish('t1', queryId, { summary: summaryOf(values) })
     return results.getSnapshot().t1.sets.map(set => set.handle as FakeHandle)
   }
-  return { client, results, transpose, run }
+  return { client, events, results, transpose, run }
 }
 
 describe('transpose schemas', () => {
@@ -125,6 +125,51 @@ describe('TransposeService', () => {
     await transpose.transpose('t1', 0)
     expect(notify).toHaveBeenCalledWith('t1', 'There is not enough result memory to transpose these rows. Close other results, or select fewer rows, and try again.')
     expect(results.getSnapshot().t1.sets).toHaveLength(1)
+  })
+
+  it("releases a transpose with its run's others when the tab closes, and offers none of a backend that was lost", async () => {
+    const { client, events, results, transpose, run } = fixture()
+    run(1)
+    await transpose.transpose('t1', 0)
+    const id = results.getSnapshot().t1.sets[1].descriptor.resultId
+    events.emit({ type: 'documents.closed', tabId: 't1' })
+    expect(client.released()).toEqual(expect.arrayContaining([1, id]))
+    expect(results.getSnapshot().t1).toBeUndefined()
+    expect(transpose.getSnapshot().size).toBe(0)
+    // A new backend lost every result: the transpose (and its source) can be transposed no more.
+    run(1, { queryId: 'q2' })
+    await transpose.transpose('t1', 0)
+    expect(results.getSnapshot().t1.sets).toHaveLength(2)
+    client.lose()
+    expect(results.getSnapshot().t1.sets.map(set => set.handle.getSnapshot().state)).toEqual(['lost', 'lost'])
+    expect([transpose.canTranspose('t1', 0), transpose.canTranspose('t1', 1)]).toEqual([false, false])
+  })
+
+  it("keeps a new transpose's strip when the results show its set only on the next frame", async () => {
+    const frames: (() => void)[] = []
+    const { results, transpose, run } = fixture({ frames })
+    run(1)
+    while (frames.length > 0) frames.shift()!()
+    await transpose.transpose('t1', 0)
+    while (frames.length > 0) frames.shift()!()
+    const sets = results.getSnapshot().t1.sets
+    expect(sets).toHaveLength(2)
+    expect(transpose.getSnapshot().get(setKey(sets[1].descriptor))).toMatchObject({ sourceLabel: 'Result 1', transposed: 10 })
+  })
+
+  it('says a transpose runs: its tab is busy from the request to the answer, and subscribers hear both', async () => {
+    const { transpose, run } = fixture()
+    const [first] = run(1)
+    let answer!: (value: Awaited<ReturnType<FakeHandle['transpose']>>) => void
+    vi.mocked(first.transpose).mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    const heard = vi.fn()
+    transpose.subscribe(heard)
+    const transposing = transpose.transpose('t1', 0)
+    expect([transpose.isRunning('t1'), heard.mock.calls.length]).toEqual([true, 1])
+    answer({ descriptor: descriptor(980, { index: 1, kind: 'transpose' }), rows: 10, transposed: 10, columns: 2 })
+    await transposing
+    expect(transpose.isRunning('t1')).toBe(false)
+    expect(heard.mock.calls.length).toBeGreaterThanOrEqual(2)
   })
 
   it('gives up a transpose a new run replaces, releases its late answer, and drops strips of closed transposes', async () => {

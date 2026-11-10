@@ -1951,8 +1951,14 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var pages = set.SealedSnapshot();
         const string tooLarge = "There is not enough result memory to transpose these rows. Close other results, or select fewer rows, and try again.";
-        var plan = ResultTransposer.Plan(set, pages, view?.Order, args.Rows?.Select(range => (range[0], range[1])).ToArray(), args.HeaderColumn ?? -1);
-        var (columns, wires, lengths) = ResultTransposer.Shape(set, pages, plan);
+        var ranges = args.Rows?.Select(range => (range[0], range[1])).ToArray();
+        // Off the frame loop: the plan walks the view's order and the shape reads a header value a row taken.
+        var (plan, (columns, wires, lengths)) = await Task.Run(() =>
+        {
+            var plan = ResultTransposer.Plan(set, pages, view?.Order, ranges, args.HeaderColumn ?? -1);
+            token.ThrowIfCancellationRequested();
+            return (plan, ResultTransposer.Shape(set, pages, plan));
+        }, token);
         if (set.IsReleased) throw Unavailable(args.ResultId);
         if (view is not null && !store.HasView(view)) throw ViewClosed();
         var transpose = store.Open(set.Budget, set.Index, set.BatchNumber, set.Iteration, "transpose", columns, wires, lengths: lengths, derived: true)

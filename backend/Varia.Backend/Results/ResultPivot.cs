@@ -443,21 +443,8 @@ internal static class PivotOutput
     /// <summary>Makes every column's name distinct (ignoring case), so no two headers match and a JSON save has no repeated
     /// key: the row-group columns keep the source's names, then the totals (or, without a column group, the values) keep
     /// theirs, then the column groups' columns in order; a later name already taken is numbered " (2)", " (3)".</summary>
-    internal static void Unique(List<ResultColumn> columns, int rows, int values)
-    {
-        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        // A number is never one that another column already has as its own name.
-        var names = new HashSet<string>(columns.Select(column => column.Name), StringComparer.OrdinalIgnoreCase);
-        var order = Enumerable.Range(0, rows).Concat(Enumerable.Range(columns.Count - values, values)).Concat(Enumerable.Range(rows, columns.Count - rows - values));
-        foreach (var i in order)
-        {
-            var name = columns[i].Name;
-            if (used.Add(name)) continue;
-            var n = 2;
-            while (names.Contains(name + " (" + n.ToString(CultureInfo.InvariantCulture) + ")") || !used.Add(name + " (" + n.ToString(CultureInfo.InvariantCulture) + ")")) n++;
-            columns[i] = columns[i] with { Name = name + " (" + n.ToString(CultureInfo.InvariantCulture) + ")" };
-        }
-    }
+    internal static void Unique(List<ResultColumn> columns, int rows, int values) =>
+        ColumnNames.Unique(columns, Enumerable.Range(0, rows).Concat(Enumerable.Range(columns.Count - values, values)).Concat(Enumerable.Range(rows, columns.Count - rows - values)));
 
     /// <summary>Makes the column groups' names distinct, so no two columns share a header (and a JSON save no key): the NULL
     /// group keeps "NULL" and Total keeps "Total"; a text value of the same name, or values that share their first 128

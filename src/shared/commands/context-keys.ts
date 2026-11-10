@@ -182,6 +182,7 @@ export const contextKeys = {
   },
   explorerServerLinux: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for a node on SQL Server on Linux.' },
   outputView: { type: 'enum', scope: 'target', menu: 'output.context', values: ['grid', 'messages', ''], description: 'The Query Output view the menu is for: a results grid or the messages.' },
+  outputGridTransposable: { type: 'boolean', scope: 'target', menu: 'output.context', description: "The menu is for a results grid Transpose can read: a query's rows, a pivot or a transpose, not a diff." },
   pane: { type: 'enum', scope: 'target', menu: 'dockTab.context', values: ['explorer', 'editor', 'results', 'messages', 'plan', 'statistics', ''], description: "The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, Results, Messages, Execution plan, or Client Statistics." },
   paneFloating: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel the menu is for is floating.' },
   panePopout: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel the menu is for is in a window of its own (Move into New Window).' },

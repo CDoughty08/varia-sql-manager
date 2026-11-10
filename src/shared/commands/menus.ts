@@ -133,7 +133,7 @@ export const submenus: Readonly<Record<SubmenuId, SubmenuDescriptor>> = {
   // The results grid's Filter submenu (results PR 4): filters by the selected cells' values, NULL and duplicates (results.view).
   'output.filter': { title: 'Filter', nativeId: 'output.filter', placements: [{ menu: 'output.context', group: '2_sort', order: 6, mnemonic: 'e', when: "outputView == 'grid'" }] },
   // The results grid's Transpose submenu: its columns as rows, of all its rows, the selected ones, or named by a column (results.transpose).
-  'output.transposeMenu': { title: 'Transpose', nativeId: 'output.transposeMenu', placements: [{ menu: 'output.context', group: '2_sort', order: 10, mnemonic: 'p', when: "outputView == 'grid'" }] },
+  'output.transposeMenu': { title: 'Transpose', nativeId: 'output.transposeMenu', placements: [{ menu: 'output.context', group: '2_sort', order: 10, mnemonic: 'p', when: 'outputGridTransposable' }] },
   // A Search Objects hit's names, from src/shared/explorer/search.ts' `searchHitNames`.
   'search.copy': { title: 'Copy', nativeId: 'search.copy', placements: [{ menu: 'search.hit.context', group: '5_copy', order: 1, mnemonic: 'c' }] }
 }

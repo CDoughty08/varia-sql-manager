@@ -827,7 +827,7 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | `2_sort` | Hi**g**hlight › | Submenu: Query Output context menu › Highlight | `outputView == 'grid'` |
 | `2_sort` | Co**m**pare with Previous Result | `output.compareWithPrevious` | `outputView == 'grid'` |
 | `2_sort` | Pivot Res**u**lts… | `output.pivot` | `outputView == 'grid'` |
-| `2_sort` | Trans**p**ose › | Submenu: Query Output context menu › Transpose | `outputView == 'grid'` |
+| `2_sort` | Trans**p**ose › | Submenu: Query Output context menu › Transpose | `outputGridTransposable` |
 | `2_width` | F**i**t Column | `output.fitColumn` | `outputView == 'grid'` |
 | `3_save` | Sa**v**e Results As… | `output.saveResultsAs` | `outputView == 'grid'` |
 | `4_view` | Show Spaces and Ta**b**s | `output.showSpaces` | `outputView == 'grid'` |
@@ -865,9 +865,9 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
-| `1_rows` | **A**ll Rows | `output.transpose` | `outputView == 'grid'` |
-| `1_rows` | **S**elected Rows | `output.transposeSelectedRows` | `outputView == 'grid'` |
-| `2_headers` | Using Column as **H**eaders | `output.transposeWithHeaders` | `outputView == 'grid'` |
+| `1_rows` | **A**ll Rows | `output.transpose` | `outputGridTransposable` |
+| `1_rows` | **S**elected Rows | `output.transposeSelectedRows` | `outputGridTransposable` |
+| `2_headers` | Using Column as **H**eaders | `output.transposeWithHeaders` | `outputGridTransposable` |
 
 #### Panel tab context menu (`dockTab.context`)
 
@@ -938,7 +938,7 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
 | `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
 
-## Context keys (146)
+## Context keys (147)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1088,6 +1088,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerServerEngine` | `''`, `'box'`, `'managedInstance'`, `'cloud'` | target | The kind of server the Object Explorer node the menu is for is on: 'box', 'managedInstance' or 'cloud', or '' for the empty area. |
 | `explorerServerLinux` | boolean | target | The menu is for a node on SQL Server on Linux. |
 | `outputView` | `'grid'`, `'messages'`, `''` | target | The Query Output view the menu is for: a results grid or the messages. |
+| `outputGridTransposable` | boolean | target | The menu is for a results grid Transpose can read: a query's rows, a pivot or a transpose, not a diff. |
 | `pane` | `'explorer'`, `'editor'`, `'results'`, `'messages'`, `'plan'`, `'statistics'`, `''` | target | The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, Results, Messages, Execution plan, or Client Statistics. |
 | `paneFloating` | boolean | target | The panel the menu is for is floating. |
 | `panePopout` | boolean | target | The panel the menu is for is in a window of its own (Move into New Window). |
