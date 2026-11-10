@@ -669,6 +669,11 @@ try {
   // Find is Monaco's own in Peek: Ctrl+F (Cmd+F) opens it on the definition; Esc closes it and leaves the card open.
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+F' : 'Control+F')
   await expect(peekCard.locator('.find-widget.visible')).toBeVisible()
+  // Tab past Find's last control (Close: a read-only editor shows no Replace) goes on through the card, never out of it.
+  await peekCard.locator('.find-widget').getByRole('button', { name: /^Close/ }).focus()
+  await page.keyboard.press('Tab')
+  await expect.poll(() => peekCard.evaluate(card => card.contains(document.activeElement) && !document.activeElement.closest('.find-widget'))).toBe(true)
+  await peekCard.locator('.find-widget .find-part textarea').focus()
   await page.keyboard.press('Escape')
   await expect(peekCard.locator('.find-widget.visible')).toHaveCount(0)
   await expect(peekCard).toBeVisible()
