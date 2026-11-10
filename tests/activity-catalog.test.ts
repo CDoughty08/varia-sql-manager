@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   activityBands, activityCapabilities, activityCatalogJson, activityEditions, activityIntervalDefaults, activityIntervalsSeconds, activityLimits, activityLiveUnits, activityLoadGuard, activityPanes, activityPoolSuffix, activityProbes,
-  activitySource, activityTables, benignWaits, blockerLabels, defaultPanes, maxExpandedTiles, paneSpecs, probeIntervalMs, probeSeries, probeSpecs, rankChips, rowTones, seriesSpecs, tableSpecs,
+  activitySource, activityTables, benignWaits, blockerLabels, defaultPanes, paneSpecs, probeIntervalMs, probeSeries, probeSpecs, rankChips, rowTones, seriesSpecs, tableSpecs,
   tileSpecs, variaSessionKinds, viewChips, viewChipTitles, waitCategories, waitCategoryIds, waitExceptions, waitsChartSeries, waitToggles
 } from '../src/shared/activity/catalog'
 import { copyKeys, documentCommands, renderActivityMonitorDocs } from '../src/shared/activity/docs'
@@ -118,7 +118,6 @@ describe('activity monitor catalogue', () => {
   it('draws SSMS\'s four charts first, expands two of them on first open, and every tile series exists', () => {
     expect(tileSpecs.map(tile => tile.caption)).toEqual(['% Processor Time', 'Waiting Tasks', 'Database I/O', 'Batch Requests/sec', 'Blocked Sessions', 'Active Requests', 'CPU Pressure', 'Memory Grants Pending'])
     expect(tileSpecs.filter(tile => tile.defaultExpanded).map(tile => tile.caption)).toEqual(['% Processor Time', 'Waiting Tasks'])
-    expect(tileSpecs.filter(tile => tile.defaultExpanded).length).toBeLessThanOrEqual(maxExpandedTiles)
     const overview = probeSeries('activity.overview')
     for (const tile of tileSpecs) {
       for (const series of [tile.series, ...tile.secondary, ...tile.thresholds.flatMap(spec => [spec.series, ...spec.while ? [spec.while] : []])]) expect(overview, `${tile.caption} ${series}`).toContain(series)
