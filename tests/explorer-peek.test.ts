@@ -271,16 +271,17 @@ describe('PeekService', () => {
     const reader = service.read(target, false, change => { changes.push(change) }, 15)
     resolvePeek(ok({ facts: {}, definition: 'CREATE PROC', definitionLength: 26, definitionStamp: 7, elapsedMs: 1 }))
     await flush()
-    expect(changes.at(-1)).toEqual({ definition: { status: 'loading', progress: 11 / 15 } })
+    expect(changes.at(-1)).toEqual({ definition: { status: 'loading', progress: 11 / 14 } })
     pages[0]!(ok({ text: 'EDURE dbo.', length: 26, stamp: 7, elapsedMs: 1 }))
     await flush()
     expect(changes.at(-1)).toEqual({ definition: { status: 'ready', value: { text: 'CREATE PROCEDURE dbo.', length: 26 } } })
     expect(api.explorerPeekDefinition).toHaveBeenCalledTimes(1)
     reader.release(false)
-    // A first page as long as the reader wants asks for no more; nor does a text longer than Peek reads, whose start shows.
-    for (const length of [26, peekLimits.definitionMaxChars + 1]) {
+    // A first page as long as the reader wants asks for no more, nor one a code unit short of it (it ended before a pair it
+    // would split); nor does a text longer than Peek reads, whose start shows.
+    for (const [length, wants] of [[26, 5], [26, 12], [peekLimits.definitionMaxChars + 1, 5]] as const) {
       const told: PeekChange[] = []
-      const short = service.read(target, false, change => { told.push(change) }, 5)
+      const short = service.read(target, false, change => { told.push(change) }, wants)
       resolvePeek(ok({ facts: {}, definition: 'CREATE PROC', definitionLength: length, definitionStamp: 7, elapsedMs: 1 }))
       await flush()
       expect(told.at(-1)).toEqual({ definition: { status: 'ready', value: { text: 'CREATE PROC', length } } })

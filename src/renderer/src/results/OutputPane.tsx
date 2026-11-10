@@ -14,6 +14,7 @@ import type { EstimatedPlanState } from '../services/queries'
 import ClientStatisticsPane from '../statistics/ClientStatisticsPane'
 import EmptyState from '../kit/EmptyState'
 import ColumnProfilePanel from './ColumnProfilePanel'
+import PivotPanel from './PivotPanel'
 import MessagesView from './MessagesView'
 import ResultsToolbar from './ResultsToolbar'
 import type { OutputViewName, ResultJob, ResultSetEntry, TabResults } from './ResultsService'
@@ -139,8 +140,9 @@ const viewNames: Record<OutputPaneId, string> = { results: 'Results', messages: 
  * also holds the run summary and the copy and save strips, so they show once, wherever the panels are.
  */
 function OutputPane({ pane, tabId, query, connected, hint }: Props) {
-  const { results, panes, queries, queryPlans, retainedPlans, settings } = useWorkbench()
+  const { results, panes, queries, queryPlans, retainedPlans, settings, pivot } = useWorkbench()
   const profileOpen = useServiceSnapshot(settings).values['queryResults.grid.columnProfile']
+  const pivotOpen = !!useServiceSnapshot(pivot).tabs[tabId]?.open
   // The set the profile describes: the grid that last had focus in this tab.
   const [profiled, setProfiled] = useState<{ tabId: string; index: number } | undefined>(undefined)
   const history = useServiceSnapshot(retainedPlans)
@@ -245,6 +247,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
               : <EmptyState className="output-empty" icon="table" detail={tab.status === 'running' ? 'Result sets appear here as the query returns them.' : 'The query returned no result sets.'} />}
             {profileOpen && hasSets && tab.status !== 'closed' && <ColumnProfilePanel key={'profile:' + tab.queryId} tabId={tabId} tab={tab}
               index={profiled?.tabId === tabId ? profiled.index : results.viewState(tabId).focusedIndex} />}
+            {pivotOpen && hasSets && tab.status !== 'closed' && <PivotPanel key={'pivot:' + tab.queryId} tabId={tabId} tab={tab} />}
           </div>
           {showStrip && <MessagesStrip tabId={tabId} tab={tab} fits={stripFits} maxHeight={stripMax} />}
         </> : pane === 'plan' ? plans.length > 0 || livePlan ? visible.plan && <ResultPlans tabId={tabId} queryId={tab.queryId} plans={plans} visible={visible.plan} order={tab.summary?.planOrder} live={livePlan} />
