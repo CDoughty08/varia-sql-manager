@@ -56,7 +56,7 @@ describe('Peek editor', () => {
     expect(host.parentElement).toBe(slot)
     expect(host.attributes.has(peekEditorAttribute)).toBe(true)
     expect(models.map(model => model.uri)).toEqual(['varia-sql://peek/m1'])
-    expect(peekModelContext(models[0]!)).toEqual({ connectionId: 'c1', database: 'Sales' })
+    expect(peekModelContext(models[0]!)).toEqual({ documentId: 'm1', connectionId: 'c1', database: 'Sales' })
     expect(editors[0]!.model).toBe(models[0])
     // The same definition again (a render) makes nothing new.
     peek.show(slot as never, text('1'))

@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import type { ApiResult, BackendState, ConnectionInfo, VariaApi } from '../src/shared/contracts'
-import { languageLimits, type LanguageCompletions, type LanguageHover, type LanguageStatus } from '../src/shared/language-service'
+import { languageLimits, languageRequestSchema, type LanguageCompletions, type LanguageHover, type LanguageStatus } from '../src/shared/language-service'
 import { limits as ipcLimits } from '../src/shared/ipc/wire/protocol'
 import { SqlLanguageService } from '../src/renderer/src/languages/SqlLanguageService'
 import { SqlDiagnosticsService, sqlDiagnosticDebounceMs } from '../src/renderer/src/languages/SqlDiagnosticsService'
 import { ConnectionService } from '../src/renderer/src/services/connections'
 import { BackendStateService } from '../src/renderer/src/services/backend'
 import { documentFixture, deferred, TestModel } from './fixtures/documents'
+import { PeekEditor, peekModelContext } from '../src/renderer/src/explorer/peek-editor'
+import type { QueryEditorInstance } from '../src/renderer/src/editor/create-editor'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).reverse().forEach(cleanup => cleanup()); vi.useRealTimers(); vi.restoreAllMocks() })
@@ -935,5 +937,107 @@ describe('SQL language editor integration', () => {
     await f.service.refresh()
     await expect(f.service.refreshCache(tab.id)).rejects.toThrow('does not support refreshing')
     expect(f.api.languageRefresh).not.toHaveBeenCalled()
+  })
+})
+
+const peekConnection = '7b0c4a5e-1d2f-4c3b-9a8e-6f5d4c3b2a10'
+/** A Peek view's editor as PeekCard makes it, with test models that report their disposal as Monaco's do. */
+function peekFixture() {
+  const models: TestModel[] = []
+  const monaco = { Uri: { parse: (value: string) => value }, editor: { createModel: (value: string, language: string, uri: unknown) => {
+    const model = new TestModel(value, String(uri), language), dispose = model.dispose.bind(model), willDispose = new Set<() => void>()
+    Object.assign(model, {
+      getLanguageId: () => model.language,
+      isDisposed: () => model.disposed,
+      onWillDispose: (listener: () => void) => { willDispose.add(listener); return { dispose: () => { willDispose.delete(listener) } } },
+      dispose: () => { for (const listener of [...willDispose]) listener(); dispose() },
+      willDisposeCount: () => willDispose.size
+    })
+    models.push(model)
+    return model.asModel()
+  } } }
+  let shown: unknown = null
+  const create = (): QueryEditorInstance => ({ instance: { getModel: () => shown, setModel: (model: unknown) => { shown = model } } as never,
+    contains: () => false, setVisible: () => {}, dispose: () => {} })
+  const element = () => ({ parentElement: null as unknown, className: '', setAttribute() {}, remove() {} })
+  const slot = { ownerDocument: { createElement: element }, append(child: { parentElement: unknown }) { child.parentElement = slot } }
+  const editor = new PeekEditor({ monaco, create })
+  const show = (key: string, text: string) => { editor.show(slot as never, { key, text, connectionId: peekConnection, database: 'Sales' }); return models.at(-1)!.asModel() }
+  return { editor, models, show, willDisposeListeners: (model: TestModel) => (model as unknown as { willDisposeCount(): number }).willDisposeCount() }
+}
+/** The service's per-document bookkeeping, which must hold nothing for a model that is gone. */
+const bookkeeping = (service: SqlLanguageService) => {
+  const inner = service as unknown as Record<'peekModels' | 'contexts' | 'epochs' | 'used', { size: number; has(id: string): boolean }>
+  return { peekModels: inner.peekModels, contexts: inner.contexts, epochs: inner.epochs, used: inner.used }
+}
+describe('SQL language features in Peek', () => {
+  it('serves hover on a Peek model with its connection, database and own UUID, and keeps completion and diagnostics off', async () => {
+    const f = await fixture()
+    f.addConnection(peekConnection)
+    const peek = peekFixture()
+    cleanups.push(() => peek.editor.dispose())
+    const model = peek.show('1', 'CREATE PROCEDURE dbo.P AS SELECT * FROM dbo.Customer')
+    const id = peekModelContext(model)!.documentId
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+    expect(await f.hover.provideHover(model, position, token())).toEqual({ contents: [{ value: 'Customer table', isTrusted: false, supportHtml: false }], range: undefined })
+    // The request is one the backend's schema accepts: Peek's UUID, its text and version, and its connection and database.
+    const request = f.api.languageHover.mock.calls[0]![0]
+    expect(languageRequestSchema.safeParse(request).success).toBe(true)
+    expect(request).toMatchObject({ documentId: id, version: model.getVersionId(), text: model.getValue(), context: { providerId: 'sqlserver', connectionId: peekConnection, database: 'Sales' } })
+    expect(f.documents.getSnapshot().documents.map(document => document.id)).not.toContain(id)
+    // Read-only: nothing to complete, and no markers on a definition.
+    expect(await f.completion.provideCompletionItems(model, position, { triggerKind: 0 }, token())).toEqual({ suggestions: [] })
+    expect(f.api.languageComplete).not.toHaveBeenCalled()
+    expect(await f.service.diagnostics(model, token())).toBeUndefined()
+    expect(f.api.languageDiagnostics).not.toHaveBeenCalled()
+    // A model that is not Peek's or a query's is still not served.
+    const stray = new TestModel('SELECT 1', 'varia-sql://other/1')
+    expect(await f.hover.provideHover(Object.assign(stray, { getLanguageId: () => 'sql' }).asModel(), position, token())).toBeNull()
+    expect(f.api.languageHover).toHaveBeenCalledOnce()
+  })
+
+  it('closes a Peek model’s backend document with the model, leaving no context, epoch or listener behind', async () => {
+    const f = await fixture()
+    f.addConnection(peekConnection)
+    const peek = peekFixture()
+    const first = peek.show('1', 'CREATE VIEW dbo.V AS SELECT 1 AS One')
+    const firstId = peekModelContext(first)!.documentId
+    await f.hover.provideHover(first, position, token())
+    await f.hover.provideHover(first, position, token())
+    expect(peek.willDisposeListeners(peek.models[0]!)).toBe(1)
+    expect(bookkeeping(f.service).peekModels.has(firstId)).toBe(true)
+    // Another object: Peek disposes the first model, and the service closes its document at once.
+    const second = peek.show('2', 'CREATE VIEW dbo.W AS SELECT 2 AS Two')
+    const secondId = peekModelContext(second)!.documentId
+    expect(secondId).not.toBe(firstId)
+    expect(f.api.languageClose).toHaveBeenCalledWith(firstId)
+    expect(peek.willDisposeListeners(peek.models[0]!)).toBe(0)
+    for (const map of Object.values(bookkeeping(f.service))) expect(map.has(firstId)).toBe(false)
+    // A disposed model's late request is not served.
+    expect(await f.hover.provideHover(first, position, token())).toBeNull()
+    // A model never asked about is never opened, so closing it sends nothing.
+    peek.editor.keep(undefined)
+    expect(f.api.languageClose.mock.calls.map(([id]) => id)).toEqual([firstId])
+    // The view closes after a hover: its last model closes too, and nothing is left.
+    const third = peek.show('3', 'CREATE VIEW dbo.X AS SELECT 3 AS Three')
+    const thirdId = peekModelContext(third)!.documentId
+    await f.hover.provideHover(third, position, token())
+    peek.editor.dispose()
+    expect(f.api.languageClose.mock.calls.map(([id]) => id)).toEqual([firstId, thirdId])
+    for (const map of Object.values(bookkeeping(f.service))) expect(map.size).toBe(0)
+  })
+
+  it('stops serving a Peek model whose connection is lost, and closes what it opened', async () => {
+    const f = await fixture()
+    f.addConnection(peekConnection)
+    const peek = peekFixture()
+    cleanups.push(() => peek.editor.dispose())
+    const model = peek.show('1', 'CREATE VIEW dbo.V AS SELECT 1 AS One')
+    const id = peekModelContext(model)!.documentId
+    await f.hover.provideHover(model, position, token())
+    f.connections.markLostBefore(2)
+    expect(f.api.languageClose).toHaveBeenCalledWith(id)
+    expect(await f.hover.provideHover(model, position, token())).toBeNull()
+    expect(f.api.languageHover).toHaveBeenCalledOnce()
   })
 })

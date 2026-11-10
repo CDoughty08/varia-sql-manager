@@ -32,6 +32,10 @@ being true.
   on a serialized analysis child, isolated from completion's global debounce. Its retained context and idle/churn lifetime
   are bounded and released on close, disconnect, reset and relevant cache refresh. Foreground language requests preempt
   background diagnostics for their document; analysis resumes after those requests settle. Analysis never executes the buffer.
+  The service serves query documents' models and Peek's read-only definition models (`peekModelContext`: connection,
+  database and the model's own UUID as its document id), and nothing else. A Peek model gets hover only, never completion
+  or diagnostics; it is served from its first request, and its `onWillDispose` ends it as closing a query does (epoch bump,
+  context, epoch and listener dropped, `language.close` if it was used).
 - Backend stdout carries protocol v2 frames only (`Console.Out` goes to stderr). Never log SQL text, credentials, or
   connection strings. Passwords never reach disk in clear: not `connections.json`, process arguments, the environment,
   logs, traces or previews. A password the user chose to remember is stored only as Electron `safeStorage` ciphertext
