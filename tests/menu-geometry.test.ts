@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { inSafeTriangle, menuMargin as m, placeMenu, type Rect } from '../src/renderer/src/menus/geometry'
+import { inSafeTriangle, menuMargin as m, placeMenu, placeScrollingMenu, type Rect } from '../src/renderer/src/menus/geometry'
 
 const small = { width: 220, height: 300 }
 const viewports = [{ width: 1024, height: 700 }, { width: 1600, height: 1000 }]
@@ -8,6 +8,19 @@ const inside = (placement: { x: number; y: number; maxHeight: number }, size: { 
   placement.x >= m && placement.y >= m && placement.x + size.width <= viewport.width - m && placement.y + Math.min(size.height, placement.maxHeight) <= viewport.height - m
 
 describe('menu placement', () => {
+  it('places a menu that scrolls by its width with the scroll bar, so one aligned right of a cell still ends at its edge', () => {
+    // A tall menu below a cell near the right edge of a short window: it fits neither below nor above, so it scrolls.
+    const viewport = { width: 1024, height: 700 }, size = { width: 260, height: 640 }, cell = rect(880, 300, 120, 24), bar = 15
+    const widthAt = (maxHeight: number) => maxHeight < size.height ? size.width + bar : size.width
+    const placed = placeScrollingMenu({ kind: 'below', rect: cell }, size, viewport, undefined, widthAt)
+    expect(placed.maxHeight).toBeLessThan(size.height)
+    expect(placed.x + size.width + bar).toBe(cell.right)
+    // Placed by its width without the bar, it would end the bar's width past the cell.
+    expect(placeMenu({ kind: 'below', rect: cell }, size, viewport).x + size.width + bar).toBe(cell.right + bar)
+    // A menu that fits is not measured again.
+    const fits = { width: 260, height: 200 }
+    expect(placeScrollingMenu({ kind: 'below', rect: cell }, fits, viewport, undefined, () => { throw new Error('measured') })).toEqual(placeMenu({ kind: 'below', rect: cell }, fits, viewport))
+  })
   it.each(viewports)('opens at the pointer, flipping and clamping into a $width×$height viewport', viewport => {
     const { width: vw, height: vh } = viewport
     expect(placeMenu({ kind: 'point', x: 100, y: 120 }, small, viewport)).toEqual({ x: 100, y: 120, maxHeight: vh - m - 120 })
