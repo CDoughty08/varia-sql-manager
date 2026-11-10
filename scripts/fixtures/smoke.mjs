@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { readdirSync, readFileSync } from 'node:fs'
 import { _electron, expect as baseExpect } from '@playwright/test'
 import { ignoreCrashedTargetReplies } from './playwright-races.mjs'
 
@@ -70,6 +71,25 @@ const killTree = pid => { try { execFileSync('taskkill', ['/PID', String(pid), '
 if (process.platform === 'win32') process.on('exit', () => { for (const pid of running) killTree(pid) })
 
 /**
+ * Linux: the processes in a process group as `name pid state` (state T is stopped), at most 20. Playwright's close waits for
+ * the app's pipes, which the backend and its language server inherit, so a close that hangs after main exited names its holder.
+ */
+export function groupMembers(group) {
+  const members = []
+  try {
+    for (const pid of readdirSync('/proc')) {
+      if (!/^\d+$/.test(pid) || members.length >= 20) continue
+      try {
+        const stat = readFileSync(`/proc/${pid}/stat`, 'utf8'), end = stat.lastIndexOf(')')
+        const [state, , pgid] = stat.slice(end + 2).split(' ')
+        if (Number(pgid) === group) members.push(`${stat.slice(stat.indexOf('(') + 1, end)} ${pid} ${state}`)
+      } catch { /* It exited meanwhile. */ }
+    }
+  } catch { /* No /proc on this platform. */ }
+  return members
+}
+
+/**
  * Closes the app within `ms`. A close that never finished (a prompt nobody answers, a wedged main) used to hang its suite to
  * the job's 25 minute timeout, hiding the error that sent the suite to its finally block. Past `ms` this kills the app,
  * fails the suite through the exit code, and returns without throwing, so that error still propagates and prints.
@@ -85,6 +105,8 @@ export async function boundedClose(application, close, ms = closeMs) {
   const child = application.process()
   // Playwright detaches POSIX apps into their own group; descendants can keep its stdio open after the leader dies.
   if (process.platform !== 'win32' && child?.pid) {
+    const members = groupMembers(child.pid)
+    if (members.length) console.error(`Still running in the app's process group (main ${(child.exitCode ?? child.signalCode ?? null) === null ? 'has not exited' : 'exited'}): ${members.join(', ')}`)
     try {
       process.kill(-child.pid, 'SIGKILL')
       return
