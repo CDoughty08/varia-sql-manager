@@ -15,19 +15,41 @@ import Icon from '../Icon'
 import Segmented from '../kit/Segmented'
 import { argsFor } from '../menus/targets'
 import { searchHitTarget } from './hit-actions'
-import { columnsOf, type DefinitionPart, type SearchDetails as Details } from './SearchDetailsService'
+import { columnsOf, shownChars, type DefinitionPart, type SearchDetails as Details } from './SearchDetailsService'
 
 /** Lines of a definition that are coloured; longer text shows the rest plain, so a huge module never stalls the pane. */
 const colouredLines = 3000
+/** Characters coloured at most, so a module of millions of characters (Peek's definitions are never cut) is not split or tokenized whole. */
+const colouredChars = 1_000_000
+export { shownChars }
+
+/** The part of `text` the pane shows, never ending inside a surrogate pair. */
+export function shownText(text: string): string {
+  if (text.length <= shownChars) return text
+  const code = text.charCodeAt(shownChars - 1)
+  return text.slice(0, code >= 0xd800 && code <= 0xdbff ? shownChars - 1 : shownChars)
+}
 
 /** A run of definition text in one SQL scope's colour. */
 interface Run { readonly text: string; readonly style?: SyntaxStyle }
 
 /**
- * Monaco's SQL tokens for the first `colouredLines` lines, merged into runs; the rest of the text is one plain run. SQL's
+ * Monaco's SQL tokens for the first `colouredLines` lines (at most `colouredChars`), merged into runs; the rest of the text is one plain run. SQL's
  * tokenizer loads lazily (start.tsx registers it), and tokenize answers plain text until it has: colorize waits for it,
  * and the runs are made again once it is there.
  */
+/** Where the coloured head ends: after `colouredLines` lines, or at `colouredChars` (never inside a surrogate pair). */
+export function colouredEnd(text: string): number {
+  let end = 0
+  for (let line = 0; line < colouredLines && end < text.length; line++) {
+    const next = text.indexOf('\n', end)
+    end = next < 0 ? text.length : next + 1
+  }
+  if (end <= colouredChars) return end
+  const code = text.charCodeAt(colouredChars - 1)
+  return code >= 0xd800 && code <= 0xdbff ? colouredChars - 1 : colouredChars
+}
+
 function useRuns(text: string | undefined): readonly Run[] {
   const { monaco, theme } = useWorkbench()
   const { active } = useServiceSnapshot(theme)
@@ -40,8 +62,8 @@ function useRuns(text: string | undefined): readonly Run[] {
   return useMemo(() => {
     if (text === undefined) return []
     try {
-      const lines = text.split('\n')
-      const head = lines.slice(0, colouredLines), tokens = monaco.editor.tokenize(head.join('\n'), 'sql')
+      const cut = colouredEnd(text)
+      const head = text.slice(0, cut).split('\n'), tokens = monaco.editor.tokenize(head.join('\n'), 'sql')
       const runs: Run[] = []
       const push = (piece: string, style?: SyntaxStyle) => {
         const last = runs[runs.length - 1]
@@ -56,9 +78,9 @@ function useRuns(text: string | undefined): readonly Run[] {
           push(line.slice(token.offset, end), isSqlScope(scope) ? active.syntax[scope] : undefined)
         })
         if (!lineTokens.length) push(line)
-        if (index < lines.length - 1) push('\n')
+        if (index < head.length - 1) push('\n')
       })
-      if (lines.length > colouredLines) push(lines.slice(colouredLines).join('\n'))
+      if (cut < text.length) push(text.slice(cut))
       return runs
     } catch (error) {
       onUnexpectedError(error)
@@ -112,10 +134,15 @@ export function hitProperties(hit: ObjectSearchHit): readonly { readonly label: 
 }
 
 function Definition({ details, part }: { readonly details: Details; readonly part: DefinitionPart }) {
-  const text = part.status === 'ready' ? part.value.text : undefined
+  const whole = part.status === 'ready' ? part.value.text : undefined
+  // A long module comes only as far as the pane shows, with its whole length.
+  const length = part.status === 'ready' ? part.value.length ?? whole?.length : undefined
+  const text = useMemo(() => whole === undefined ? undefined : shownText(whole), [whole])
   const runs = useRuns(text)
   const pre = useRef<HTMLPreElement>(null)
-  const line = text === undefined ? undefined : matchedLine(text, details.hit, !!details.kind && peekSpecs[details.kind].definition === 'module')
+  // Found once per text and hit, not on every render (a sash drag renders the pane on each move).
+  const module = !!details.kind && peekSpecs[details.kind].definition === 'module'
+  const line = useMemo(() => text === undefined ? undefined : matchedLine(text, details.hit, module), [text, details.hit, module])
   // The matched line comes into view once per hit and match (a third of the way down), not again as the user scrolls.
   const scrolled = useRef<string | undefined>(undefined)
   useLayoutEffect(() => {
@@ -138,7 +165,7 @@ function Definition({ details, part }: { readonly details: Details; readonly par
       {runs.map((run, index) => run.style
         ? <span key={index} style={{ color: run.style.foreground, fontStyle: run.style.fontStyle.includes('italic') ? 'italic' : undefined, fontWeight: run.style.fontStyle.includes('bold') ? 'bold' : undefined }}>{run.text}</span>
         : run.text)}</pre>
-    {part.value.truncated && <p className="peek-note">The definition is longer than the pane shows. Script it to see all of it.</p>}
+    {length !== undefined && length > text.length && <p className="peek-note">The definition is longer than this pane shows ({length.toLocaleString('en-US')} characters). Peek or Script to New Query shows all of it.</p>}
   </>
 }
 

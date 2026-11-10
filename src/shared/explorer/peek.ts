@@ -214,8 +214,19 @@ export const peekTabTitle = (kind: PeekKind, tab: PeekTab): string =>
 export const peekFacts = (kind: PeekKind): readonly PeekFact[] => peekSpecs[kind].groups.flatMap(group => group.facts)
 
 export const peekLimits = {
-  /** Module text kept, in UTF-16 code units; longer text is cut and marked `definitionTruncated`. */
-  definitionChars: 1_000_000,
+  /**
+   * Module text per reply, in UTF-16 code units: explorer.peek answers the first page with the facts, and a longer text comes in
+   * further pages (explorer.peekDefinition), put together by the renderer. Text is never cut; pages only keep each reply far
+   * under the protocol's 16 MiB (a page is at most 3 MB of UTF-8).
+   */
+  definitionPageChars: 1_000_000,
+  /**
+   * The longest module text Peek reads, in UTF-16 code units: 2^27 (256 MB as a JavaScript string, held by the view and its
+   * editor's model; while the last page is joined to the others, the pages and the whole text are briefly both alive, about
+   * twice that). A bound on the renderer's memory, not SQL Server's: a module that long only comes from dynamic SQL or a very
+   * large batch. A longer one says so instead of showing part of it.
+   */
+  definitionMaxChars: 134_217_728,
   /** The backend's own budget for a peek; past it the reply is a TIMEOUT value. */
   budgetMs: 15_000,
   /** How long the pointer rests on a row with Ctrl (Cmd on macOS) held before the card opens. */
@@ -282,9 +293,14 @@ export interface PeekList {
 export interface PeekResult {
   /** Fact id to value, for the kind's facts the server's band has; null where the catalog has no value (a heap's index space is 0, not null). */
   readonly facts: Readonly<Record<string, PeekValue>>
-  /** `module` kinds: the module's text; absent when it is encrypted or the login may not see it. */
+  /**
+   * `module` kinds: the module's text, or its first page (`peekLimits.definitionPageChars`, never ending inside a surrogate
+   * pair) when `definitionLength` is set; absent when it is encrypted or the login may not see it.
+   */
   readonly definition?: string
-  readonly definitionTruncated?: true
+  /** Only when `definition` is a first page: the whole text's length in UTF-16 code units, and its module's modify_date (ms). */
+  readonly definitionLength?: number
+  readonly definitionStamp?: number
   /** The kind's lists (`peekListsOf`), by id. */
   readonly lists?: Readonly<Partial<Record<PeekListId, PeekList>>>
   /** Groups with `refused` words whose statement the login was refused: their facts are absent. */
@@ -312,6 +328,26 @@ export interface PeekDependenciesResult {
   readonly error?: ExplorerError
 }
 
+/**
+ * explorer.peekDefinition: a page of a module's text from `offset` (UTF-16 code units), after explorer.peek's first page, on
+ * Peek's slot within its budget. Constant SQL, the object found as its peek finds it; `module` kinds only.
+ */
+export interface PeekDefinitionParams extends PeekParams {
+  readonly offset: number
+}
+export interface PeekDefinitionResult {
+  /**
+   * At most `peekLimits.definitionPageChars` code units from `offset`, never ending inside a surrogate pair before the end;
+   * absent when the module has no visible text now.
+   */
+  readonly text?: string
+  /** The whole text's length and its module's modify_date (ms) now: the renderer checks both against the first page's. */
+  readonly length: number
+  readonly stamp: number
+  readonly elapsedMs: number
+  readonly error?: ExplorerError
+}
+
 /** The block explorerCatalogJson embeds for the backend. */
 export const peekCatalogBlock = () => ({
   kinds: peekKinds.map(kind => ({
@@ -320,7 +356,8 @@ export const peekCatalogBlock = () => ({
     facts: peekSpecs[kind].groups.flatMap(group => group.facts.map(({ id, format, since }) => ({ id, format, since: since ?? null, optional: group.refused !== undefined }))),
     lists: peekListsOf(kind).map(id => ({ id, columns: peekLists[id].columns.map(item => ({ id: item.id, format: item.format })) }))
   })),
-  definitionChars: peekLimits.definitionChars,
+  definitionPageChars: peekLimits.definitionPageChars,
+  definitionMaxChars: peekLimits.definitionMaxChars,
   budgetMs: peekLimits.budgetMs,
   dependencies: peekLimits.dependencies,
   listRows: peekLimits.listRows,

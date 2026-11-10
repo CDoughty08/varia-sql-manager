@@ -258,6 +258,7 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `explorer.search` | invoke; cancelled with `explorerCancel` | unary | explorer | 15 s; the backend stops at 5 s and answers `partial` |
 | `explorer.peek` | invoke; cancelled with `explorerCancel` | unary | explorer (Peek's own slot per connection) | 30 s; the backend answers its own 15 s budget, from when it has the slot, as an `error: TIMEOUT` value |
 | `explorer.peekDependencies` | invoke; cancelled with `explorerCancel` | unary | explorer (Peek's own slot per connection) | 30 s; as `explorer.peek` |
+| `explorer.peekDefinition` | invoke; cancelled with `explorerCancel` | unary: one page of a module's text, at most `peekLimits.definitionPageChars` UTF-16 code units, asked for one at a time after `explorer.peek`'s first | explorer (Peek's own slot per connection) | 30 s; as `explorer.peek` |
 | `results.copy` | main only (`varia:results-copy`) | stream, with EVENTs | results | 120 s |
 | `results.export` | main only (`varia:results-save`) | unary with EVENTs | results | none, and no backstop: only CANCEL (reason 1) ends it |
 | `scripting.script` | invoke; cancelled with `cancelScripting` | unary | metadata | 60 s; the backend answers its own 55 s budget as an `error: TIMEOUT` value |

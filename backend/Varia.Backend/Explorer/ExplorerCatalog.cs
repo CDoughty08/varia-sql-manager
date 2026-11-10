@@ -37,10 +37,10 @@ internal sealed record PeekKindSpec(string Kind, string Definition, IReadOnlyLis
     /// <summary>The facts a server of this band has, in reply order.</summary>
     public IReadOnlyList<PeekFactSpec> FactsFor(int band) => [.. Facts.Where(fact => (fact.Since ?? ExplorerCatalog.MinBand) <= band)];
 }
-/// <summary>Peek's kinds and limits: module text kept (UTF-16 code units), the backend's budget for one peek, the dependencies
+/// <summary>Peek's kinds and limits: module text per reply and the longest Peek reads (UTF-16 code units), the backend's budget for one peek, the dependencies
 /// listed each way, the rows each list keeps, and the databases a login's User mapping reads. (Its Top rows tab runs Select
 /// Top Rows' script through query.execute, not the explorer.)</summary>
-internal sealed record CatalogPeek(IReadOnlyDictionary<string, PeekKindSpec> Kinds, int DefinitionChars, int BudgetMs, int Dependencies, int ListRows = 1024, int MappingDatabases = 256);
+internal sealed record CatalogPeek(IReadOnlyDictionary<string, PeekKindSpec> Kinds, int DefinitionPageChars, int DefinitionMaxChars, int BudgetMs, int Dependencies, int ListRows = 1024, int MappingDatabases = 256);
 
 /// <summary>What a server can browse: its version band (12 below SQL Server 2016, else the major version up to 17, or the
 /// band of the catalog columns it has when that is higher), whether it is a cloud edition, whether it runs on Linux, and whether
@@ -73,7 +73,7 @@ internal sealed class ExplorerCatalog
     private sealed record PeekFactJson(string Id, string Format, int? Since, bool Optional = false);
     private sealed record PeekListJson(string Id, List<PeekFactJson> Columns);
     private sealed record PeekKindJson(string Kind, string Definition, bool Dependencies, string? OptionalGroup, List<PeekFactJson> Facts, List<PeekListJson> Lists);
-    private sealed record PeekJson(int BudgetMs, int DefinitionChars, int Dependencies, int ListRows, int MappingDatabases, List<PeekKindJson> Kinds);
+    private sealed record PeekJson(int BudgetMs, int DefinitionPageChars, int DefinitionMaxChars, int Dependencies, int ListRows, int MappingDatabases, List<PeekKindJson> Kinds);
     private sealed record CatalogJson(int Version, List<int> CloudEngineEditions, List<FolderJson> Folders, List<KindJson> Kinds, List<int> ManagedInstanceEngineEditions, List<string> Queries,
         CatalogSchemaGroups SchemaGroups, Dictionary<string, CatalogScope> Scopes, PeekJson? Peek);
     private static readonly string[] PeekFormats = ["text", "code", "date", "bool", "count", "kb"];
@@ -119,7 +119,8 @@ internal sealed class ExplorerCatalog
     private static CatalogPeek ParsePeek(PeekJson? peek, Dictionary<string, CatalogKind> kinds)
     {
         if (peek is null) throw new InvalidOperationException("The Object Explorer catalogue has no peek block.");
-        if (peek.DefinitionChars is < 1 or > 4_000_000 || peek.BudgetMs is < 1000 or > 60_000 || peek.Dependencies is < 1 or > 10_000
+        // A page is at most 3 bytes a code unit in UTF-8, far under the protocol's 16 MiB reply; no module is longer than 2^30.
+        if (peek.DefinitionPageChars is < 1 or > 4_000_000 || peek.DefinitionMaxChars < peek.DefinitionPageChars || peek.DefinitionMaxChars > 1 << 30 || peek.BudgetMs is < 1000 or > 60_000 || peek.Dependencies is < 1 or > 10_000
             || peek.ListRows is < 1 or > 10_000 || peek.MappingDatabases is < 1 or > 32_767) throw new InvalidOperationException("Peek's limits are out of range.");
         var specs = new Dictionary<string, PeekKindSpec>(StringComparer.Ordinal);
         foreach (var kind in peek.Kinds ?? throw new InvalidOperationException("Peek has no kinds."))
@@ -145,7 +146,7 @@ internal sealed class ExplorerCatalog
             if (!specs.TryAdd(kind.Kind, new(kind.Kind, kind.Definition, [.. facts.Select(fact => new PeekFactSpec(fact.Id, fact.Format, fact.Since, fact.Optional))], kind.Dependencies, lists, kind.OptionalGroup)))
                 throw new InvalidOperationException("Peek names " + kind.Kind + " twice.");
         }
-        return new(specs, peek.DefinitionChars, peek.BudgetMs, peek.Dependencies, peek.ListRows, peek.MappingDatabases);
+        return new(specs, peek.DefinitionPageChars, peek.DefinitionMaxChars, peek.BudgetMs, peek.Dependencies, peek.ListRows, peek.MappingDatabases);
     }
 
     /// <summary>Fact and list column ids become column aliases in PeekSql's batches, so they are plain words, distinct, never

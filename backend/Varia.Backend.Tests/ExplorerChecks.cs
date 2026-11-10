@@ -639,9 +639,9 @@ internal static class ExplorerChecks
         check(kindProblems.Any(problem => problem.StartsWith("database band ", StringComparison.Ordinal)) && goodProblems.Count == 0 && kindRenders > baseRenders,
             "the SQL lint renders and checks the queries kinds list: " + kindProblems.Count + " problems in a kind's bad query");
         var declared = CatalogSql.Declarations.Split(", ").Select(item => item.Split(' ')[0]).ToList();
-        check(declared.Count == 16 && declared.Contains("@ssis_catalog") && declared.Contains("@ssis_folder") && declared.Contains("@ssis_project") && declared.Contains("@kb")
+        check(declared.Count == 17 && declared.Contains("@offset") && declared.Contains("@ssis_catalog") && declared.Contains("@ssis_folder") && declared.Contains("@ssis_project") && declared.Contains("@kb")
             && declared.All(name => CatalogSql.ModuleCall.Contains(name + " = " + name, StringComparison.Ordinal)) && CatalogSql.ModuleCall.Split(" = @").Length - 1 == declared.Count,
-            "the scope wrapper passes exactly the declared parameters, the SSIS folder, project and bigint key among them");
+            "the scope wrapper passes exactly the declared parameters, the SSIS folder, project, bigint key and Peek's text offset among them");
     }
 
     private static void Filters(Action<bool, string> check)

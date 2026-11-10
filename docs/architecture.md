@@ -147,6 +147,16 @@ being true.
   text per query, band and filter shape, with values as parameters and database names only through `QUOTENAME`; no
   metadata built-ins; `READ UNCOMMITTED` and `LOCK_TIMEOUT 5000` on the explorer pool. The offline `CatalogSql` lint
   renders and checks every variant.
+- Peek never cuts a definition. A module's text comes in pages of `peekLimits.definitionPageChars` UTF-16 code units, so
+  each reply stays far under the 16 MiB response bound: `explorer.peek` carries the first page with the facts, and a longer
+  text (its `definitionLength` and `definitionStamp`, the module's `modify_date`) is read one page at a time with
+  `explorer.peekDefinition` (constant `PeekSql.DefinitionPage`, `SUBSTRING` from `@offset` under a binary collation that
+  counts code units), each page asked for once the last is in, and put together in the renderer (`PeekReads`). A page
+  never ends inside a surrogate pair. A page whose length or stamp differs from the first page's means the module changed
+  in between, and the part says so instead of showing pages that do not fit. Closing, replacing or refreshing the view
+  cancels the page being read. The one bound is `peekLimits.definitionMaxChars` (2^27 code units), a bound on the renderer's
+  memory (about twice that for a moment, while the pages are joined): a longer text is not read, and the part says so, never
+  showing part of it. Search Objects' details pane, which shows at most `shownChars`, reads a module's pages only that far.
 - Search Objects' index (`backend/Varia.Backend/Search/`, docs/object-search.md) lives only in backend memory, one per
   connection, never on disk, and is dropped on disconnect; its limits are `objectSearchLimits` in
   `src/shared/explorer/search.ts`, mirrored in C# (`tests/object-search.test.ts`), with everything it holds (records, names

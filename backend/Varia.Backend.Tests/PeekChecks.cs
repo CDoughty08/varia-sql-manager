@@ -65,7 +65,7 @@ internal static partial class PeekChecks
     {
         var peek = ExplorerCatalog.Current.Peek;
         check(peek.Kinds.Keys.Order(StringComparer.Ordinal).SequenceEqual(["database", "databaseTrigger", "function", "index", "login", "procedure", "sequence", "serverTrigger", "synonym",
-                "table", "tableType", "trigger", "type", "view"]) && peek.DefinitionChars == 1_000_000 && peek.BudgetMs == 15_000
+                "table", "tableType", "trigger", "type", "view"]) && peek.DefinitionPageChars == 1_000_000 && peek.DefinitionMaxChars == 134_217_728 && peek.BudgetMs == 15_000
             && peek.Kinds.Values.Where(kind => kind.Module).Select(kind => kind.Kind).Order(StringComparer.Ordinal).SequenceEqual(["databaseTrigger", "function", "procedure", "serverTrigger", "trigger", "view"]),
             "the catalogue's peek block lists its kinds, the modules and triggers with their text and the rest scripted, with its limits");
         check(peek.Kinds.Values.Where(kind => !kind.Dependencies).Select(kind => kind.Kind).Order(StringComparer.Ordinal).SequenceEqual(["database", "databaseTrigger", "index", "login", "serverTrigger"])
@@ -78,9 +78,9 @@ internal static partial class PeekChecks
         // Top rows runs Select Top Rows' script through query.execute: the catalogue gives the backend no rows of its own to read.
         JsonObject embedded;
         using (var stream = typeof(ExplorerCatalog).Assembly.GetManifestResourceStream("Varia.Backend.Explorer.explorer-catalog.json")!) embedded = JsonNode.Parse(stream)!["peek"]!.AsObject();
-        check(embedded.Select(item => item.Key).Order(StringComparer.Ordinal).SequenceEqual(["budgetMs", "definitionChars", "dependencies", "kinds", "listRows", "mappingDatabases"])
+        check(embedded.Select(item => item.Key).Order(StringComparer.Ordinal).SequenceEqual(["budgetMs", "definitionMaxChars", "definitionPageChars", "dependencies", "kinds", "listRows", "mappingDatabases"])
             && embedded["kinds"]!.AsArray().All(kind => kind!.AsObject().Select(item => item.Key).Order(StringComparer.Ordinal).SequenceEqual(["definition", "dependencies", "facts", "kind", "lists", "optionalGroup"])),
-            "the catalogue's peek block holds kinds, the definition length, the budget, the dependencies and the lists' limits, and nothing for rows: " + embedded.ToJsonString());
+            "the catalogue's peek block holds kinds, the definition's page and longest length, the budget, the dependencies and the lists' limits, and nothing for rows: " + embedded.ToJsonString());
         var table = peek.Kinds["table"];
         check(table.Facts.Select(fact => fact.Id).Take(4).SequenceEqual(["schema", "created", "modified", "systemObject"]) && table.Facts.Single(fact => fact.Id == "temporal").Since == 13
             && table.Facts.Single(fact => fact.Id == "ledger").Since == 16 && table.FactsFor(12).All(fact => fact.Since is null) && table.FactsFor(16).Count == table.Facts.Count
@@ -105,7 +105,9 @@ internal static partial class PeekChecks
             ("User mapping before another list", json => { var lists = Kind(json, "login")["lists"]!.AsArray(); var mapping = lists[1]!; lists.RemoveAt(1); lists.Insert(0, mapping); }),
             ("no list rows", json => json["peek"]!["listRows"] = 0),
             ("a kind twice", json => Kind(json, "view")["kind"] = "table"),
-            ("a definition budget of zero", json => json["peek"]!["definitionChars"] = 0),
+            ("a definition page of zero", json => json["peek"]!["definitionPageChars"] = 0),
+            ("a definition page past 4M code units", json => json["peek"]!["definitionPageChars"] = 4_000_001),
+            ("a longest definition below its page", json => json["peek"]!["definitionMaxChars"] = 999_999),
             ("no dependencies", json => json["peek"]!["dependencies"] = 0)
         };
         var accepted = new List<string>();
@@ -130,7 +132,7 @@ internal static partial class PeekChecks
             for (var band = ExplorerCatalog.MinBand; band <= ExplorerCatalog.MaxBand; band++)
             {
                 var render = new SqlRender(band);
-                var batch = PeekSql.Render(spec, render, peek.DefinitionChars, parent, cloud);
+                var batch = PeekSql.Render(spec, render, peek.DefinitionPageChars, parent, cloud);
                 var name = spec.Kind + (parent is null ? "" : " of a " + parent) + " " + band + (cloud ? " (cloud)" : "");
                 // A cloud server has no sys.master_files; its database reads no files.
                 if (cloud && batch.Text.Contains("master_files", StringComparison.Ordinal)) problems.Add(name + ": it reads sys.master_files");
@@ -145,7 +147,18 @@ internal static partial class PeekChecks
                 List<string> all = [.. expected, .. batch.Lists.SelectMany(list => list.Columns), .. optional, .. optional.Count > 0 ? new[] { PeekSql.Refused } : []];
                 if (!batch.Columns.SequenceEqual(expected) || !batch.Optional.SequenceEqual(optional) || !aliases.SequenceEqual(all)) problems.Add(name + ": its columns are " + string.Join(",", aliases));
                 if (!batch.Text.StartsWith(PeekSql.Lookup(spec.Kind, parent), StringComparison.Ordinal)) problems.Add(name + ": it does not find the object first");
-                if (spec.Module != batch.Text.Contains("LEFT(m.definition, 1000001) AS [definition]", StringComparison.Ordinal)) problems.Add(name + ": its module text");
+                if (spec.Module != batch.Text.Contains("LEFT(m.definition COLLATE Latin1_General_100_BIN2, 1000000) AS [definition], CONVERT(bigint, DATALENGTH(m.definition)) / 2 AS [definitionLength], o.modify_date AS [definitionStamp]", StringComparison.Ordinal))
+                    problems.Add(name + ": its module text");
+                if (spec.Module)
+                {
+                    // A later page finds the object as the peek does, then reads from the kind's own FROM by code units.
+                    var page = PeekSql.DefinitionPage(spec, parent);
+                    problems.AddRange(CatalogSql.Lint(page, render, list: false, mayCheckAccess: false).Select(problem => name + " (page): " + problem));
+                    if (!page.StartsWith(PeekSql.Lookup(spec.Kind, parent), StringComparison.Ordinal)
+                        || !page.Contains("SELECT SUBSTRING(m.definition COLLATE Latin1_General_100_BIN2, @offset + 1, @take) AS [text], CONVERT(bigint, DATALENGTH(m.definition)) / 2 AS [length], o.modify_date AS [stamp] FROM ", StringComparison.Ordinal)
+                        || !page.EndsWith("WHERE o.object_id = @object_id;\n", StringComparison.Ordinal))
+                        problems.Add(name + ": its page");
+                }
                 // Each list reads the catalogue's columns first, in order, then its helpers; User mapping reads databases instead.
                 var lists = spec.ListSpecs.Where(list => list.Id != "userMapping").ToList();
                 if (!batch.Lists.Select(list => list.Id).SequenceEqual(lists.Select(list => list.Id)) || batch.Mapping != spec.ListSpecs.Any(list => list.Id == "userMapping")
@@ -160,11 +173,11 @@ internal static partial class PeekChecks
         var mappingProblems = CatalogSql.Lint(PeekSql.MappingUsers, new SqlRender(ExplorerCatalog.MinBand), list: false, mayCheckAccess: false);
         check(mappingProblems.Count == 0 && PeekSql.MappingUsers.Contains("sp.name = @object_name", StringComparison.Ordinal) && !PeekSql.MappingUsers.Contains("sql_logins", StringComparison.Ordinal),
             "User mapping's statement in each database passes the lint and finds the login's user by its SID, through the login's name: " + string.Join(", ", mappingProblems));
-        var index = PeekSql.Render(peek.Kinds["index"], new SqlRender(17), peek.DefinitionChars, "table");
+        var index = PeekSql.Render(peek.Kinds["index"], new SqlRender(17), peek.DefinitionPageChars, "table");
         var usage = index.Text[index.Text.IndexOf("BEGIN TRY", StringComparison.Ordinal)..];
         check(usage.Contains("sys.dm_db_index_usage_stats", StringComparison.Ordinal) && usage.Contains("IF ERROR_NUMBER() NOT IN (229, 262, 297, 300) THROW;", StringComparison.Ordinal)
             && index.Text.IndexOf("sys.dm_db_index_usage_stats", StringComparison.Ordinal) > index.Text.IndexOf("FROM sys.index_columns", StringComparison.Ordinal)
-            && !PeekSql.Render(peek.Kinds["index"], new SqlRender(14), peek.DefinitionChars, "view").Text.Contains("optimize_for_sequential_key", StringComparison.Ordinal),
+            && !PeekSql.Render(peek.Kinds["index"], new SqlRender(14), peek.DefinitionPageChars, "view").Text.Contains("optimize_for_sequential_key", StringComparison.Ordinal),
             "an index's usage is read last, inside TRY…CATCH that answers a refusal and raises any other error, and its band 15 option is left out below it");
         // A selective XML index also has no using index; only xml_index_type says which is primary. User mapping counts every
         // database the login may enter, past the batch's TOP, and a table type that uses a type is listed by its own names.
@@ -174,7 +187,7 @@ internal static partial class PeekChecks
             && type.Contains("tt.name, tt.type_table_object_id", StringComparison.Ordinal) && PeekSql.KindOf("TT") == "tableType",
             "a primary XML index is told by its type, User mapping counts every database, and a table type is a type's user by its own names");
         var refusedLookup = false;
-        try { PeekSql.Render(peek.Kinds["trigger"], new SqlRender(17), peek.DefinitionChars, "tableType"); } catch (InvalidOperationException) { refusedLookup = true; }
+        try { PeekSql.Render(peek.Kinds["trigger"], new SqlRender(17), peek.DefinitionPageChars, "tableType"); } catch (InvalidOperationException) { refusedLookup = true; }
         check(refusedLookup, "Peek finds no trigger below a table type");
         // Dependencies are their own request: sys.sql_expression_dependencies needs more than VIEW DEFINITION, and a login refused
         // it must still get the facts.
@@ -193,7 +206,7 @@ internal static partial class PeekChecks
                         dependencyProblems.Add(spec.Kind + ": it does not read the code's dependencies");
                 }
             for (var band = ExplorerCatalog.MinBand; band <= ExplorerCatalog.MaxBand; band++)
-                if (PeekSql.Render(spec, new SqlRender(band), peek.DefinitionChars, parent).Text.Contains("sql_expression_dependencies", StringComparison.OrdinalIgnoreCase)) dependencyProblems.Add(spec.Kind + " " + band + ": the facts read dependencies");
+                if (PeekSql.Render(spec, new SqlRender(band), peek.DefinitionPageChars, parent).Text.Contains("sql_expression_dependencies", StringComparison.OrdinalIgnoreCase)) dependencyProblems.Add(spec.Kind + " " + band + ": the facts read dependencies");
         }
         var synonymUses = PeekSql.Dependencies("synonym", new SqlRender(17));
         var typeUses = PeekSql.Dependencies("type", new SqlRender(17));
@@ -202,13 +215,26 @@ internal static partial class PeekChecks
             "each kind with a Dependencies tab has a batch, for bands 12-17, that finds the object, then lists both ways (a synonym's base object, what uses a type), passes the lint, and the facts batch reads no dependencies"
             + (dependencyProblems.Count > 0 ? ": " + dependencyProblems[0] : ""));
         var table = peek.Kinds["table"];
-        var old = PeekSql.Render(table, new SqlRender(12), peek.DefinitionChars);
-        var newest = PeekSql.Render(table, new SqlRender(17), peek.DefinitionChars);
+        var old = PeekSql.Render(table, new SqlRender(12), peek.DefinitionPageChars);
+        var newest = PeekSql.Render(table, new SqlRender(17), peek.DefinitionPageChars);
         check(!old.Text.Contains("temporal_type") && !old.Text.Contains("ledger_type") && !old.Columns.Contains("temporal") && newest.Text.Contains("t.temporal_type_desc AS [temporal]")
             && newest.Text.Contains("t.ledger_type_desc AS [ledger]") && newest.Text.Contains("ep.name = N'microsoft_database_tools_support'"),
             "a table's temporal and ledger facts appear only from their bands, and System object counts tools-support objects as the tree does");
         // The lint still refuses what the batches avoid.
         check(CatalogSql.Lint(newest.Text, new SqlRender(13), false, false).Any(problem => problem.Contains("ledger_type")), "a table's band 17 batch fails the lint on a band 13 server");
+    }
+
+    /// <summary>A text read as the renderer reads it: SUBSTRING's page of <paramref name="size"/> from each offset, trimmed as the backend trims it.</summary>
+    private static List<string> Pages(string text, int size)
+    {
+        var pages = new List<string>();
+        for (var offset = 0; offset < text.Length;)
+        {
+            var page = PeekSql.Trim(text.Substring(offset, Math.Min(size, text.Length - offset)), offset, text.Length);
+            pages.Add(page);
+            offset += page.Length;
+        }
+        return pages;
     }
 
     /// <summary>Each peek kind with the parent kinds it is found below (none for a kind that is not a child).</summary>
@@ -245,9 +271,18 @@ internal static partial class PeekChecks
         check(PeekSql.FunctionType("SQL_SCALAR_FUNCTION") == "Scalar-valued" && PeekSql.FunctionType("SQL_INLINE_TABLE_VALUED_FUNCTION") == "Inline table-valued"
             && PeekSql.FunctionType("SQL_TABLE_VALUED_FUNCTION") == "Multi-statement table-valued" && PeekSql.FunctionType("AGGREGATE_FUNCTION") == "CLR aggregate"
             && PeekSql.FunctionType("SOMETHING_NEW") == "SOMETHING_NEW", "a function's type is in SSMS's words, and an unknown type as the server names it");
-        var pair = new string('x', 9) + "\U0001F600";
-        check(PeekSql.Cut("abc", 3) == ("abc", false) && PeekSql.Cut("abcd", 3) == ("abc", true) && PeekSql.Cut(pair, 10) == (new string('x', 9), true) && PeekSql.Cut(pair, 11) == (pair, false),
-            "module text is cut at the limit, never inside a surrogate pair, and marked cut only when it was");
+        // A page of 10 code units whose last is a pair's first half: kept at the text's end, otherwise the half moves to the next page.
+        var pair = new string('x', 9) + "\U0001F600"[..1];
+        check(PeekSql.Trim("abc", 0, 3) == "abc" && PeekSql.Trim("abc", 0, 9) == "abc" && PeekSql.Trim(pair, 0, 11) == new string('x', 9) && PeekSql.Trim(pair, 5, 15) == pair
+            && PeekSql.Trim(pair, 5, 16) == new string('x', 9) && PeekSql.Trim("", 3, 9) == "",
+            "a page never ends inside a surrogate pair before the text's end, so the pages put together are the text");
+        var whole = new string('a', 999_999) + "\U0001F600" + new string('b', 999_999) + "\U0001F600";
+        var pages = Pages(whole, 1_000_000);
+        check(pages.Count == 3 && pages[0].Length == 999_999 && pages[1].Length == 1_000_000 && pages[2] == "b\U0001F600" && string.Concat(pages) == whole,
+            "a long module's pages, each from the offset the last ended at, start with a whole pair and put together the text: " + string.Join(",", pages.Select(page => page.Length)));
+        check(PeekSql.Stamp(new DateTime(2026, 11, 9, 12, 30, 15, 123)) == 1_794_227_415_123L
+            && PeekSql.Stamp(new DateTime(2026, 11, 9, 12, 30, 15, 124)) - PeekSql.Stamp(new DateTime(2026, 11, 9, 12, 30, 15, 123)) == 1,
+            "a module's stamp is its modify_date in milliseconds since 1970, which tells two edits a millisecond apart");
     }
 
     private static async Task RequestsAsync(Action<bool, string> check)
@@ -297,6 +332,25 @@ internal static partial class PeekChecks
             };
             check(dependencies.SequenceEqual(["INVALID_PARAMS", "INVALID_PARAMS", "INVALID_PARAMS", "NOT_CONNECTED", "NOT_CONNECTED"]),
                 "explorer.peekDependencies refuses the kinds without the tab (a login, a database, an index) and takes a synonym and a sequence: " + string.Join(", ", dependencies));
+            async Task<string> Page(string target, string offset)
+            {
+                var body = "{\"connectionId\":\"" + Guid.NewGuid() + "\",\"requestId\":\"" + Guid.NewGuid() + "\",\"target\":" + target + offset + "}";
+                try { await sql.DispatchAsync("explorer.peekDefinition", JsonDocument.Parse(body).RootElement, Json); return "ok"; }
+                catch (RequestException error) { return error.Code; }
+                catch (JsonException) { return "JSON"; }
+            }
+            var pages = new[]
+            {
+                await Page(Ref("procedure"), ",\"offset\":1000000"), await Page(Ref("view"), ",\"offset\":134217727"),
+                await Page("{\"kind\":\"trigger\",\"database\":\"Sales\",\"parent\":{\"kind\":\"table\",\"schema\":\"dbo\",\"name\":\"T\"},\"name\":\"tr\"}", ",\"offset\":5"),
+                await Page("{\"kind\":\"serverTrigger\",\"name\":\"t\"}", ",\"offset\":5"),
+                await Page(Ref("table"), ",\"offset\":5"), await Page(Ref("synonym"), ",\"offset\":5"), await Page(Ref("procedure"), ",\"offset\":0"),
+                await Page(Ref("procedure"), ",\"offset\":134217728"), await Page(Ref("procedure"), ""), await Page(Ref("procedure"), ",\"offset\":5,\"take\":5")
+            };
+            check(sql.Methods.Contains("explorer.peekDefinition") && sql.LaneOf("explorer.peekDefinition") == RequestLane.Explorer
+                && pages.SequenceEqual(["NOT_CONNECTED", "NOT_CONNECTED", "NOT_CONNECTED", "NOT_CONNECTED", "INVALID_PARAMS", "INVALID_PARAMS", "INVALID_PARAMS", "INVALID_PARAMS", "INVALID_PARAMS", "JSON"]),
+                "HELLO lists explorer.peekDefinition on the explorer lane; it takes a module kind's offset past the first code unit and below the longest text, and refuses "
+                + "a table, a synonym, offset 0 or the longest text, a missing offset (read as 0) and any other field before the connection: " + string.Join(", ", pages));
             string removed;
             try { await sql.DispatchAsync("explorer.peekRows", JsonDocument.Parse(Body(Ref("table"))).RootElement, Json); removed = "ok"; }
             catch (RequestException error) { removed = error.Code; }
@@ -316,8 +370,8 @@ internal static partial class PeekChecks
         var json = JsonSerializer.Serialize(failed, Json);
         check(json.StartsWith("{\"facts\":{},\"elapsedMs\":", StringComparison.Ordinal) && json.Contains("\"error\":{\"code\":") && !json.Contains("definition"),
             "a failed peek serializes as facts, elapsedMs and error, without a definition");
-        var shaped = JsonSerializer.Serialize(new PeekResult(new() { ["schema"] = "dbo", ["rowCount"] = 3L, ["temporal"] = null, ["systemObject"] = false }, 4, "CREATE VIEW v AS SELECT 1", true), Json);
-        check(shaped == "{\"facts\":{\"schema\":\"dbo\",\"rowCount\":3,\"temporal\":null,\"systemObject\":false},\"elapsedMs\":4,\"definition\":\"CREATE VIEW v AS SELECT 1\",\"definitionTruncated\":true}",
+        var shaped = JsonSerializer.Serialize(new PeekResult(new() { ["schema"] = "dbo", ["rowCount"] = 3L, ["temporal"] = null, ["systemObject"] = false }, 4, "CREATE VIEW v AS SELECT 1", 2_000_001, 1_794_486_615_123), Json);
+        check(shaped == "{\"facts\":{\"schema\":\"dbo\",\"rowCount\":3,\"temporal\":null,\"systemObject\":false},\"elapsedMs\":4,\"definition\":\"CREATE VIEW v AS SELECT 1\",\"definitionLength\":2000001,\"definitionStamp\":1794486615123}",
             "a peek reply keeps null facts and drops the members it does not have: " + shaped);
         var listed = JsonSerializer.Serialize(new PeekResult(new() { ["disabled"] = false }, 1, Lists: new() { ["serverRoles"] = new([["sysadmin", true]]), ["userMapping"] = new([], Unread: 2) },
             Refused: ["usage"]), Json);

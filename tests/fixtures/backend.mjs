@@ -1195,6 +1195,50 @@ function explorerSample(live, probe) {
   live.kept.set(probe.probe, kept)
   return { tables: [{ table: 0, descriptor: describe(result), revision: probe.samples, ...(retired ? { retired } : {}) }] }
 }
+// Processes on the fake server: a user session blocked by an idle one holding a transaction, a running one, a system
+// session and a Varia pool session (hidden unless the toggles show them). The filter in the args is applied as the real
+// backend's ActivityFilter does, in memory, and the facets count the rows the view chip and toggles leave.
+const fakeSessions = [
+  { sessionId: 12, status: 'background', login: 'sa', database: 'master', command: 'LAZY WRITER', application: null, hostName: null, system: true },
+  { sessionId: 57, status: 'sleeping · 1 open tran', login: 'app_orders', database: 'SalesDb', command: null, application: 'Orders.Api', hostName: 'APP-01', headBlocker: '1', blocking: '1', openTransactions: '1', loginTime: '2026-11-09 08:00:00.000', hostProcessId: '4100' },
+  { sessionId: 61, status: 'suspended', login: 'svc_reporting', database: 'SalesDb', command: 'SELECT', application: 'Power BI', hostName: 'BI-01', waitType: 'LCK_M_S', waitTimeMs: '41200', blockedBy: '57', openTransactions: '0', loginTime: '2026-11-09 08:01:00.000', hostProcessId: '5200' },
+  { sessionId: 66, status: 'running', login: 'app_billing', database: 'BillingDb', command: 'SELECT', application: 'Billing.Worker', hostName: 'APP-07', cpuRate: '812.5', openTransactions: '0', loginTime: '2026-11-09 08:02:00.000', hostProcessId: '6300' },
+  { sessionId: 95, status: 'sleeping', login: 'tester', database: 'master', command: null, application: 'Varia SQL Manager - Object Explorer', hostName: 'WS-01', varia: 'Varia Object Explorer', pool: true, openTransactions: '0', loginTime: '2026-11-09 08:03:00.000', hostProcessId: '7400' }
+]
+const sessionTextColumns = ['login', 'database', 'application', 'hostName', 'command', 'waitType', 'status']
+function sessionsShown(filter) {
+  const view = filter.view ?? 'all'
+  return fakeSessions.filter(row => (filter.showSystem || !row.system) && (filter.showVaria || !row.pool) && (view === 'all'
+    || (view === 'active' && row.command !== null) || (view === 'blocked' && row.blockedBy) || (view === 'blocking' && row.blocking)
+    || (view === 'idleOpenTransaction' && row.command === null && row.openTransactions > 0) || (view === 'rollingBack' && false)))
+}
+function activitySessionsSample(live, probe) {
+  const filter = (live.args.filters ?? []).find(item => item.table === 'sessions') ?? {}
+  const spec = liveProbes['activity.sessions'].tables[0]
+  const shown = sessionsShown(filter)
+  const facets = spec.facets.map(column => {
+    const counts = new Map()
+    for (const row of shown) if (row[column]) counts.set(row[column], (counts.get(row[column]) ?? 0) + 1)
+    return { column, values: [...counts].sort((a, b) => b[1] - a[1]).map(([text, count]) => ({ text, count })) }
+  })
+  const text = filter.text?.toLowerCase()
+  const rows = shown.filter(row => (!text || sessionTextColumns.some(column => row[column]?.toLowerCase().includes(text)))
+    && (filter.columnFilters ?? []).every(column => (column.values ?? []).includes(row[column.column]) || (column.blanks && !row[column.column]) || (column.nonBlanks && !!row[column.column])))
+  const columns = spec.columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true }))
+  const result = storeResult({ columns, rows: rows.map(row => spec.columns.map(column => column.id === 'sessionId' ? String(row.sessionId) : row[column.id] ?? null)) }, 0)
+  const kept = live.kept.get(probe.probe) ?? []
+  kept.push(result.resultId)
+  const retired = kept.length > 2 ? [kept.shift()] : undefined
+  if (retired) stored.delete(retired[0])
+  live.kept.set(probe.probe, kept)
+  // Facets go when a column's values changed since the last ones sent, as the backend sends them.
+  const sentFacets = live.sentFacets ?? new Map()
+  live.sentFacets = sentFacets
+  const changed = facets.filter(facet => JSON.stringify(facet) !== sentFacets.get(facet.column))
+  for (const facet of changed) sentFacets.set(facet.column, JSON.stringify(facet))
+  const status = probe.samples === 1 ? [{ id: 'serverState', value: 1 }, { id: 'canKill', value: 1 }] : undefined
+  return { tables: [{ table: 0, descriptor: describe(result), revision: probe.samples, ...(retired ? { retired } : {}), ...(changed.length ? { facets: changed } : {}) }], ...(status ? { status } : {}) }
+}
 /** An overview sample: every series of the catalogue, a rate's first sample (and the first after a pause) without a value. */
 function overviewMetrics(n, first) {
   const blocked = !!controlDirectory && existsSync(join(controlDirectory, 'activity-blocked'))
@@ -1235,6 +1279,7 @@ function wakeLive(live) {
     if (live.source === 'explorer') samples.push({ ...sample, ...explorerSample(live, probe) })
     else if (probe.probe === 'activity.overview' && controlDirectory && existsSync(join(controlDirectory, 'activity-failing'))) errors.push({ probe: probe.probe, code: 'BLOCKED', message: 'The overview waited too long for a lock and will try again.', retryInMs: probe.intervalMs, terminal: false })
     else if (probe.probe === 'activity.overview') samples.push({ ...sample, metrics: overviewMetrics(n, sample.gap === 'baseline' || sample.gap === 'resumed') })
+    else if (probe.probe === 'activity.sessions') samples.push({ ...sample, ...activitySessionsSample(live, probe) })
     else if (live.source === 'activity') samples.push(sample)
     else if (probe.probe === 'debug.synthetic.metrics') samples.push({ ...sample, metrics: [n, 50 + 50 * Math.sin(n / 4), sample.elapsedMs === undefined || sample.gap === 'resumed' ? null : (50 + 50 * Math.sin(n / 4)) * 1000 / Math.max(1, sample.elapsedMs)] })
     else if (probe.probe === ssisOperationsProbe && live.missing) errors.push({ probe: probe.probe, ...live.missing, retryInMs: 0, terminal: true })
