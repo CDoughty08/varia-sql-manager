@@ -19,7 +19,7 @@ const menuNames: Readonly<Record<MenuId, string>> = {
   theme: 'View › Theme', 'query.connection': 'Query › Connection', 'editor.context': 'Editor context menu', 'explorer.context': 'Object Explorer context menu', 'explorer.new': 'Object Explorer context menu › New',
   'explorer.tasks': 'Object Explorer context menu › Tasks', 'explorer.tasks.restore': 'Object Explorer context menu › Tasks › Restore',
   ...Object.fromEntries(scriptSubmenuIds.map(id => [id, 'Object Explorer context menu › Script … as' + (id === scriptAsSubmenuId ? '' : ` › ${submenus[id].title}`)])) as Record<typeof scriptSubmenuIds[number], string>,
-  'tableDesigner.context': 'Table designer context menu', 'documentTab.context': 'Query tab context menu', 'output.context': 'Query Output context menu', 'output.highlight': 'Query Output context menu › Highlight', 'output.filter': 'Query Output context menu › Filter', 'dockTab.context': 'Panel tab context menu', 'input.context': 'Text field context menu',
+  'tableDesigner.context': 'Table designer context menu', 'documentTab.context': 'Query tab context menu', 'output.context': 'Query Output context menu', 'output.highlight': 'Query Output context menu › Highlight', 'output.filter': 'Query Output context menu › Filter', 'output.transposeMenu': 'Query Output context menu › Transpose', 'dockTab.context': 'Panel tab context menu', 'input.context': 'Text field context menu',
   'ssis.operation.context': 'Integration Services Operations context menu', 'search.hit.context': 'Search Objects result context menu', 'search.copy': 'Search Objects result context menu › Copy'
 }
 /** How each context menu opens, and what its items act on. */

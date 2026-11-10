@@ -31,7 +31,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
-        "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.identify", "results.rowIds", "results.findRows", "results.diff", "results.search", "results.profile", "results.pivot", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.index", "explorer.search", "results.copy", "results.export",
+        "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.identify", "results.rowIds", "results.findRows", "results.diff", "results.search", "results.profile", "results.pivot", "results.transpose", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.index", "explorer.search", "results.copy", "results.export",
         "results.distinct",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
@@ -302,7 +302,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     public RequestLane LaneOf(string method) => method switch
     {
         "query.execute" or "plans.estimate" => RequestLane.Query,
-        "results.read" or "results.copy" or "results.export" or "results.view" or "results.identify" or "results.findRows" or "results.diff" or "results.search" or "results.profile" or "results.pivot" or "results.distinct" => RequestLane.Results,
+        "results.read" or "results.copy" or "results.export" or "results.view" or "results.identify" or "results.findRows" or "results.diff" or "results.search" or "results.profile" or "results.pivot" or "results.distinct" or "results.transpose" => RequestLane.Results,
         "explorer.children" or "explorer.peek" or "explorer.peekDependencies" or "explorer.index" or "explorer.search" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
         "ssis.describe" or "ssis.execute" or "ssis.catalogSetup" => RequestLane.Ssis,
@@ -372,6 +372,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "results.search" => await SearchAsync(Read<ResultsSearchArgs>(parameters, json), Token(context)),
         "results.profile" => await ProfileAsync(Read<ResultsProfileArgs>(parameters, json), Token(context)),
         "results.pivot" => await PivotAsync(Read<ResultsPivotArgs>(parameters, json), context),
+        "results.transpose" => await TransposeAsync(Read<ResultsTransposeArgs>(parameters, json), context),
         "results.distinct" => await DistinctAsync(Read<ResultsDistinctArgs>(parameters, json), Token(context)),
         "results.copy" => await jobs.CopyAsync(Read<ResultsCopyArgs>(parameters, json), context),
         "results.export" => await jobs.ExportAsync(Read<ResultsExportArgs>(parameters, json), context),
@@ -1921,6 +1922,60 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             }
         }
         finally { store.Return(set.Budget, working + figures); }
+    }
+
+    /// <summary>results.transpose: turns a complete result's columns into rows and its rows (a view's, or only the selected
+    /// ranges) into columns (ResultTransposer) off the frame loop, and stores it as a new result of the query, charged to its
+    /// budget all or nothing, released with its others, or at once when its answer is not sent (a CANCEL or the deadline).</summary>
+    private async Task<ResultsTransposeResult> TransposeAsync(ResultsTransposeArgs args, RequestContext? context)
+    {
+        var token = Token(context);
+        if (args.ResultId == 0 || args.ViewId == 0 || args.HeaderColumn is < 0 or >= PageBuilder.MaxColumns
+            || args.Rows is { } named && (named is not { Length: >= 1 and <= ResultTransposer.MaxRanges } || named.Any(range => range is not [>= 0 and <= MaxSafeInteger, >= 1 and <= MaxSafeInteger])))
+            throw new RequestException("INVALID_PARAMS", "A transpose takes up to 256 row ranges and a header column of the result.");
+        var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        // A query's rows, a pivot or another transpose: a diff's rows are paired changes, and a plan is one document.
+        if (set.Kind is not ("rows" or "pivot" or "transpose")) throw new RequestException("INVALID_PARAMS", "Only a query's results, a pivot or a transpose can be transposed.");
+        if (args.HeaderColumn is { } header && (header >= set.Columns.Count || ResultTextWriter.Hidden(set.Columns[header])))
+            throw new RequestException("INVALID_PARAMS", "The header column must be a column of the result.");
+        if (!set.IsComplete) throw new RequestException("RESULT_OPEN", "Transpose the results after they finish loading.");
+        // A query whose results were cut short stores nothing more, whatever memory is free: say why rather than blame memory.
+        switch (set.Budget.Stopped)
+        {
+            case TruncationReason.None: break;
+            case TruncationReason.RowLimit:
+                throw new RequestException("TOO_LARGE", "This query stored as many rows as its limit allows, so it cannot store a transpose. Raise the limit or return fewer rows, then run it again.");
+            default:
+                throw new RequestException("TOO_LARGE", "This query's results filled its result memory, so it cannot store a transpose. Close other results or return fewer rows, then run it again.");
+        }
+        var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
+        var pages = set.SealedSnapshot();
+        const string tooLarge = "There is not enough result memory to transpose these rows. Close other results, or select fewer rows, and try again.";
+        var plan = ResultTransposer.Plan(set, pages, view?.Order, args.Rows?.Select(range => (range[0], range[1])).ToArray(), args.HeaderColumn ?? -1);
+        var (columns, wires, lengths) = ResultTransposer.Shape(set, pages, plan);
+        if (set.IsReleased) throw Unavailable(args.ResultId);
+        if (view is not null && !store.HasView(view)) throw ViewClosed();
+        var transpose = store.Open(set.Budget, set.Index, set.BatchNumber, set.Iteration, "transpose", columns, wires, lengths: lengths, derived: true)
+            ?? throw new RequestException("TOO_LARGE", tooLarge);
+        void Release()
+        {
+            if (store.Release([transpose.ResultId]) > 0) ReportMemory();
+        }
+        try
+        {
+            await Task.Run(() => ResultTransposer.Write(transpose, set, pages, plan, token), token);
+            // A transpose is never kept in part: rows the budget refused would drop source columns without a word.
+            if (transpose.Describe().RowsStored < plan.Columns.Length) throw new RequestException("TOO_LARGE", tooLarge);
+            var answer = new ResultsTransposeResult(transpose.Describe(), plan.Available, plan.Positions.Length, plan.Columns.Length);
+            // Main owns the transpose only once it has the answer: one not sent goes at once.
+            if (context is not null) context.Unsent = context.Dropped = Release;
+            return answer;
+        }
+        catch
+        {
+            Release();
+            throw;
+        }
     }
 
     /// <summary>A pivot request checked against its result: distinct row columns, a column group that is not one of them, and

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ResultsPortHost, toExactArrayBuffer, type FrameLike, type LiveStreamHandle, type PortMainLike, type ReadStream, type ResultsBackend } from '../src/main/backend/results-port'
 import { BackendError } from '../src/main/backend/errors'
 import type { StreamSink } from '../src/main/backend/connection'
-import type { QueryEvent, ResultDescriptor, ResultsDiffParams, ResultsDiffResult, ResultsDistinctParams, ResultsDistinctResult, ResultsFindRowsParams, ResultsIdentifyParams, ResultsIdentifyResult, ResultsPivotParams, ResultsPivotResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsRowBytesParams, ResultsRowIdsParams, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewParams, ResultsViewResult } from '../src/shared/contracts'
+import type { QueryEvent, ResultDescriptor, ResultsDiffParams, ResultsDiffResult, ResultsDistinctParams, ResultsDistinctResult, ResultsFindRowsParams, ResultsIdentifyParams, ResultsIdentifyResult, ResultsPivotParams, ResultsPivotResult, ResultsTransposeParams, ResultsTransposeResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsRowBytesParams, ResultsRowIdsParams, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewParams, ResultsViewResult } from '../src/shared/contracts'
 import { cancelReasons, type CancelReason } from '../src/shared/ipc/wire/protocol'
 import { buildPortRequestSchema, type PortMessage, type portRequestSchema } from '../src/shared/ipc/port-messages'
 import { buildLiveSchemas } from '../src/shared/live/schema'
@@ -35,6 +35,7 @@ interface FakeLive { generation: number; params: LiveSubscribeParams; onLive: (e
 interface FakeView { generation: number; params: ResultsViewParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeIdentify { generation: number; params: ResultsIdentifyParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeDiff { generation: number; params: ResultsDiffParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
+interface FakeTranspose { generation: number; params: ResultsTransposeParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakePivot { generation: number; params: ResultsPivotParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeSearch { generation: number; params: ResultsSearchParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeProfile { generation: number; params: ResultsProfileParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
@@ -49,6 +50,7 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
   const identifies: FakeIdentify[] = []
   const diffs: FakeDiff[] = []
   const pivots: FakePivot[] = []
+  const transposes: FakeTranspose[] = []
   const searches: FakeSearch[] = []
   const profiles: FakeProfile[] = []
   const distincts: FakeDistinct[] = []
@@ -95,6 +97,13 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
       return { done, cancel: reason => view.cancels.push(reason) }
     },
     viewClose: vi.fn(async (_generation: number, params: ResultsViewCloseParams) => ({ closed: params.viewIds.length })),
+    transpose: (generation, params) => {
+      let resolve!: (value: unknown) => void, reject!: (error: unknown) => void
+      const done = new Promise<ResultsTransposeResult>((onResolve, onReject) => { resolve = onResolve as (value: unknown) => void; reject = onReject })
+      const transpose: FakeTranspose = { generation, params, cancels: [], resolve, reject }
+      transposes.push(transpose)
+      return { done, cancel: reason => transpose.cancels.push(reason) }
+    },
     search: (generation, params) => {
       let resolve!: (value: unknown) => void, reject!: (error: unknown) => void
       const done = new Promise<ResultsSearchResult>((onResolve, onReject) => { resolve = onResolve as (value: unknown) => void; reject = onReject })
@@ -137,7 +146,7 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
     port().send({ t: 'live', rid, generation, params })
     return params
   }
-  return { host, backend, reads, lives, updates, views, identifies, diffs, pivots, searches, profiles, distincts, ports, port, frame, read, live, setReady: (generation: number | undefined) => { ready = generation } }
+  return { host, backend, reads, lives, updates, views, identifies, diffs, pivots, transposes, searches, profiles, distincts, ports, port, frame, read, live, setReady: (generation: number | undefined) => { ready = generation } }
 }
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
 const descriptor = (resultId: number, generation = 1): Pick<ResultDescriptor, 'generation' | 'resultId'> => ({ generation, resultId })
@@ -561,6 +570,57 @@ describe('ResultsPortHost', () => {
     pivots[5].resolve(answer(34))
     await settle()
     expect(backend.close).toHaveBeenLastCalledWith(1, [34])
+  })
+  it('transposes only owned results of the current generation within the schema bounds, checks the shape of the answer, owns the transpose, and closes one refused or answered after its port went', async () => {
+    const { host, backend, port, transposes } = fixture()
+    host.own([descriptor(7)])
+    const transposeDescriptor = (resultId: number, columns = 3, rows = 2) => ({
+      resultId, index: 1, batchNumber: 1, iteration: 1, kind: 'transpose', columns: Array.from({ length: columns }, (_, at) => ({ name: at === 0 ? 'Column' : `Row ${at}`, dataType: 'nvarchar(max)', wire: 'text', nullable: true })),
+      rowsRead: rows, rowsStored: rows, rowsAvailable: rows, bytesStored: 10, truncatedCells: 0, state: 'complete', incomplete: false
+    })
+    const answer = (resultId: number) => ({ descriptor: transposeDescriptor(resultId), rows: 2, transposed: 2, columns: 2 })
+    const ask = { generation: 1, resultId: 7 }
+    port().send({ t: 'transpose', rid: 1, ...ask, viewId: 3, rows: [[0, 1], [4, 1]], headerColumn: 1 })
+    port().send({ t: 'transpose', rid: 2, ...ask, resultId: 8 })
+    port().send({ t: 'transpose', rid: 3, ...ask, generation: 2 })
+    port().send({ t: 'transpose', rid: 4, ...ask, rows: [] })
+    port().send({ t: 'transpose', rid: 5, ...ask, rows: [[0, 0]] })
+    port().send({ t: 'transpose', rid: 6, ...ask, rows: [[-1, 1]] })
+    port().send({ t: 'transpose', rid: 7, ...ask, rows: Array.from({ length: 257 }, () => [0, 1]) })
+    port().send({ t: 'transpose', rid: 8, ...ask, headerColumn: 4096 })
+    port().send({ t: 'transpose', rid: 9, ...ask, extra: true })
+    expect(transposes.map(item => item.params)).toEqual([{ resultId: 7, viewId: 3, rows: [[0, 1], [4, 1]], headerColumn: 1 }])
+    transposes[0].resolve(answer(40))
+    await settle()
+    expect(codes(port())).toEqual([[2, 'RESULT_UNAVAILABLE'], [3, 'RESULT_UNAVAILABLE'], [4, 'INVALID_REQUEST'], [5, 'INVALID_REQUEST'], [6, 'INVALID_REQUEST'], [7, 'INVALID_REQUEST'], [8, 'INVALID_REQUEST'], [9, 'INVALID_REQUEST'], [1, 'ok']])
+    expect(port().ends().find(end => end.rid === 1)).toEqual({ t: 'end', rid: 1, ok: true, result: { ...answer(40), descriptor: { ...transposeDescriptor(40), generation: 1 } } })
+    expect(host.owns(1, 40)).toBe(true)
+    // Main checks the shape: a column per row taken past Column, a row per source column, the kind, and no more rows than the ranges asked.
+    port().send({ t: 'transpose', rid: 11, ...ask })
+    transposes[1].resolve({ ...answer(41), descriptor: transposeDescriptor(41, 4) })
+    port().send({ t: 'transpose', rid: 12, ...ask })
+    transposes[2].resolve({ ...answer(42), descriptor: transposeDescriptor(42, 3, 5) })
+    port().send({ t: 'transpose', rid: 13, ...ask })
+    transposes[3].resolve({ ...answer(43), descriptor: { ...transposeDescriptor(43), kind: 'pivot' } })
+    port().send({ t: 'transpose', rid: 14, ...ask, rows: [[0, 1]] })
+    transposes[4].resolve(answer(44))
+    port().send({ t: 'transpose', rid: 15, ...ask })
+    transposes[5].resolve({ ...answer(45), transposed: 3, rows: 2, descriptor: transposeDescriptor(45, 4) })
+    await settle()
+    expect(codes(port()).slice(-5)).toEqual([[11, 'BACKEND_ERROR'], [12, 'BACKEND_ERROR'], [13, 'BACKEND_ERROR'], [14, 'BACKEND_ERROR'], [15, 'BACKEND_ERROR']])
+    for (const resultId of [41, 42, 43, 44, 45]) {
+      expect(host.owns(1, resultId)).toBe(false)
+      expect(backend.close).toHaveBeenCalledWith(1, [resultId])
+    }
+    // The worker's cancel stops one; answered after the page reloaded, no port owns the transpose, so main closes it.
+    port().send({ t: 'transpose', rid: 16, ...ask })
+    port().send({ t: 'cancel', rid: 16 })
+    expect(transposes[6].cancels).toEqual([cancelReasons.user])
+    port().send({ t: 'transpose', rid: 17, ...ask })
+    host.open({ postMessage() {} })
+    transposes[7].resolve(answer(46))
+    await settle()
+    expect(backend.close).toHaveBeenLastCalledWith(1, [46])
   })
   it("searches only owned results of the current generation, within the schema bounds, and cancels on the worker's cancel", async () => {
     const { host, port, searches } = fixture()

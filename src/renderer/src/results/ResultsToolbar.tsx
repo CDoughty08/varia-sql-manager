@@ -86,6 +86,7 @@ export default function ResultsToolbar({ tabId }: { tabId: string }) {
   useServiceSnapshot(results)
   const canClose = useCommandEnabled('output.closeResults', { tabId })
   const canPivot = useCommandEnabled('output.pivot', { tabId })
+  const canTranspose = useCommandEnabled('output.transpose', { tabId })
   const pivotOpen = !!useServiceSnapshot(pivot).tabs[tabId]?.open
   const whitespace = values['queryResults.grid.whitespace'], sortText = values['queryResults.grid.sortText']
   const profile = values['queryResults.grid.columnProfile'], rowSize = values['queryResults.grid.rowSize']
@@ -127,6 +128,9 @@ export default function ResultsToolbar({ tabId }: { tabId: string }) {
       <button type="button" className="results-icon-toggle" aria-label="Pivot" aria-pressed={pivotOpen} tabIndex={-1} disabled={!pivotOpen && !canPivot}
         title="Pivot: group the focused grid's rows by columns and summarize them (count, sum, average, min, max) as a new result"
         onClick={() => { if (pivotOpen) pivot.close(tabId); else void commands.execute('output.pivot', { tabId }, 'toolbar') }}><Icon name="pivot" /></button>
+      <button type="button" className="results-icon-toggle" aria-label="Transpose" tabIndex={-1} disabled={!canTranspose}
+        title="Transpose: the focused grid's columns as rows and its rows as columns, as a new result"
+        onClick={() => void commands.execute('output.transpose', { tabId }, 'toolbar')}><Icon name="transpose" /></button>
     </div>
     <div className="results-segments" role="group" aria-label="Results">
       <button type="button" className="results-icon-toggle" aria-label="Close Results" tabIndex={-1} disabled={!canClose}

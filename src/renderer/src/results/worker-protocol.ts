@@ -1,6 +1,6 @@
 // Messages between the UI thread (ResultClient) and the results worker. The worker also owns the results port to main
 // (src/shared/ipc/port-messages.ts).
-import type { BackendStatus, IdentityBy, PivotValueSpec, QueryEvent, ResolvedViewFilter, ResultsDiffResult, ResultsDistinctParams, ResultsDistinctResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
+import type { BackendStatus, IdentityBy, PivotValueSpec, QueryEvent, ResolvedViewFilter, ResultsDiffResult, ResultsDistinctParams, ResultsDistinctResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ResultsTransposeResult, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport } from '../../../shared/ipc/port-messages'
 import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
@@ -18,6 +18,9 @@ export type IdentityRequest =
   | { readonly method: 'diff'; readonly right: number; readonly exact: boolean; readonly context: number }
   /** results.pivot: this result's rows (its view's, when the key names one) grouped and aggregated, stored as a new result. */
   | { readonly method: 'pivot'; readonly rows: readonly number[]; readonly column?: number; readonly values: readonly PivotValueSpec[] }
+  /** results.transpose: this result's columns as rows and its rows (its view's, when the key names one; only `rows`'
+   *  [first, count] position ranges when given) as columns, named by `headerColumn`'s values, stored as a new result. */
+  | { readonly method: 'transpose'; readonly rows?: readonly (readonly [number, number])[]; readonly headerColumn?: number }
 
 /** Cell flags in a window: NULL, truncated where the backend stored it (a prefix), read error, over the window's text
  *  budget, and cut at the window's maxCellChars. */
@@ -104,7 +107,7 @@ export type WorkerResponse =
   | { readonly type: 'stats'; readonly id: number; readonly bytes: number; readonly pages: number; readonly wireBytes: number; readonly columns: number }
   | { readonly type: 'view'; readonly id: number; readonly viewId: number; readonly rows: number; readonly baseRows: number; readonly complete: boolean; readonly approximate: boolean; readonly filters?: readonly ResolvedViewFilter[] }
   | { readonly type: 'viewClosed'; readonly id: number; readonly closed: number }
-  | { readonly type: 'identity'; readonly id: number; readonly result: ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsDiffResult | ResultsPivotResult }
+  | { readonly type: 'identity'; readonly id: number; readonly result: ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsDiffResult | ResultsPivotResult | ResultsTransposeResult }
   | { readonly type: 'search'; readonly id: number; readonly result: ResultsSearchResult }
   | { readonly type: 'profile'; readonly id: number; readonly result: ResultsProfileResult }
   | { readonly type: 'distinct'; readonly id: number; readonly result: ResultsDistinctResult }

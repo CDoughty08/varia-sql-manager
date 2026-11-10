@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (290)
+## Commands (293)
 
 ### File
 
@@ -178,6 +178,9 @@ keys it uses are listed below.
 | Clear All Highlights (not in the palette) | `output.clearAllHighlights` | — | — | — | Always | Query Output context menu › Highlight › Clear All Highlights |
 | Compare with Previous Result | `output.compareWithPrevious` | — | — | — | Always | Query Output context menu › Compare with Previous Result |
 | Pivot Results… | `output.pivot` | — | — | — | Always | Query Output context menu › Pivot Results… |
+| Transpose Results | `output.transpose` | — | — | — | Always | Query Output context menu › Transpose › All Rows |
+| Transpose Selected Rows | `output.transposeSelectedRows` | — | — | — | Always | Query Output context menu › Transpose › Selected Rows |
+| Transpose Using Column as Headers | `output.transposeWithHeaders` | — | — | — | Always | Query Output context menu › Transpose › Using Column as Headers |
 | Compare with Previous Result (Exact Text) | `output.compareWithPreviousExact` | — | — | — | Always | — |
 | Show Column Profile | `output.toggleColumnProfile` | — | — | — | Always; checked when `resultsColumnProfile` | Query Output context menu › Column Profile |
 | Show Row Size in Results | `output.toggleRowSize` | — | — | — | Always; checked when `resultsRowSize` | Query Output context menu › Show Row Size |
@@ -824,9 +827,10 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | `2_sort` | Hi**g**hlight › | Submenu: Query Output context menu › Highlight | `outputView == 'grid'` |
 | `2_sort` | Co**m**pare with Previous Result | `output.compareWithPrevious` | `outputView == 'grid'` |
 | `2_sort` | Pivot Res**u**lts… | `output.pivot` | `outputView == 'grid'` |
+| `2_sort` | Trans**p**ose › | Submenu: Query Output context menu › Transpose | `outputView == 'grid'` |
 | `2_width` | F**i**t Column | `output.fitColumn` | `outputView == 'grid'` |
 | `3_save` | Sa**v**e Results As… | `output.saveResultsAs` | `outputView == 'grid'` |
-| `4_view` | Show S**p**aces and Tabs | `output.showSpaces` | `outputView == 'grid'` |
+| `4_view` | Show Spaces and Ta**b**s | `output.showSpaces` | `outputView == 'grid'` |
 | `4_view` | Show All **W**hite Space | `output.showAllWhitespace` | `outputView == 'grid'` |
 | `4_view` | Column Pro**f**ile | `output.toggleColumnProfile` | `outputView == 'grid'` |
 | `4_view` | Show Row Si**z**e | `output.toggleRowSize` | `outputView == 'grid'` |
@@ -856,6 +860,14 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | `3_duplicates` | Filter for **D**uplicates in Selected Columns | `output.filterDuplicates` | `outputView == 'grid'` |
 | `3_duplicates` | Filter for Duplicate **R**ows | `output.filterDuplicateRows` | `outputView == 'grid'` |
 | `4_clear` | **C**lear Filters | `output.clearFilters` | `outputView == 'grid'` |
+
+#### Query Output context menu › Transpose
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_rows` | **A**ll Rows | `output.transpose` | `outputView == 'grid'` |
+| `1_rows` | **S**elected Rows | `output.transposeSelectedRows` | `outputView == 'grid'` |
+| `2_headers` | Using Column as **H**eaders | `output.transposeWithHeaders` | `outputView == 'grid'` |
 
 #### Panel tab context menu (`dockTab.context`)
 

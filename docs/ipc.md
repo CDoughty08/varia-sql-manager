@@ -39,6 +39,7 @@ The code is the reference implementation; this document describes it.
 - [Row identities and highlights](#row-identities-and-highlights)
 - [Result diffs](#result-diffs)
 - [Pivots](#pivots)
+- [Transpose](#transpose)
 - [Search in results](#search-in-results)
 - [Column profiles](#column-profiles)
 - [Distinct values](#distinct-values)
@@ -244,6 +245,7 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `results.diff` | port | unary | results | 120 s; the unified diff of two results of one query, stored as a new result ([Result diffs](#result-diffs)) |
 | `results.search` | port | unary | results | 120 s; the cells of a result (or a view) containing a text ([Search in results](#search-in-results)) |
 | `results.pivot` | port | unary | results | 120 s; a result's or a view's rows grouped and aggregated, stored as a new result ([Pivots](#pivots)) |
+| `results.transpose` | port | unary | results | 120 s; a result's columns as rows and its rows (a view's, or selected ones) as columns, stored as a new result ([Transpose](#transpose)) |
 | `results.profile` | port | unary | results | 120 s; aggregates over a result's or a view's rows ([Column profiles](#column-profiles)) |
 | `results.distinct` | port | unary | results | 120 s; a column's distinct values and their counts over a result's or a view's rows ([Distinct values](#distinct-values)) |
 | `live.subscribe` | port | stream of credited EVENTs ([Live subscriptions](#live-subscriptions)) | live (no slot) | none, and no backstop: only CANCEL, a disconnect, a shutdown, a failure or its source ending ends it |
@@ -1501,6 +1503,47 @@ receives a new result to read like any other, never the rows it grouped.
   `addSet` releases one the run cannot take (the panel says why when its run is unchanged). A re-run keeps the draft,
   which follows its columns by name if the query now returns them in another order (`remapDraft`).
 
+## Transpose
+
+Transpose turns a result's columns into rows and its rows into columns in the backend (`Results/ResultTranspose.cs`); like
+a pivot, the renderer receives a new result to read like any other, never the rows it transposed.
+
+- **`results.transpose { resultId, viewId?, rows?, headerColumn? }`** answers `{ descriptor, rows, transposed, columns }`.
+  Through a view it reads the view's rows, so its sort and filters apply. `rows` takes only 1 to 256 `[first, count]`
+  position ranges (the view's positions through a view), merged where they overlap or touch as a filter's selection is
+  (`ViewSorter.Merge`), for Transpose Selected Rows; positions past the rows are ignored. `headerColumn` names the columns
+  by that column's values. The result must be complete (`RESULT_OPEN`) and be a query's rows, a pivot or another transpose
+  (`INVALID_PARAMS` for a diff, an execution plan or any other kind); `headerColumn` must be a shown column of the result.
+  In the answer `rows` counts the rows it could take (the view's or the ranges'), `transposed` the first of them it took,
+  and `columns` the source columns it holds as rows.
+- **The transpose result** (`kind: 'transpose'`, stamped with the generation and owned by main as a pivot is) has a
+  `Column` column holding the source columns' names, then one column per row taken, named "Row 1", "Row 2"… by the row's
+  position (as the grid numbers it), or by `headerColumn`'s values as a pivot names its column groups ("NULL", "(blank)"
+  for empty text, binary as `0x` hex, cut to 128 characters with "…"). No two columns share a name, ignoring case
+  (`PivotOutput.Unique`): `Column` keeps its name and a repeated one is numbered " (2)", " (3)". A diff's hidden tone
+  column (`role: 'tone'`) is never a row. Each cell is the source cell's display text as stored, with its NULL, error and
+  truncation flags kept, so a truncated value stays marked and its full length is kept when the source kept it; binary
+  values become their `0x` hex text. Every column past `Column` is typed `nvarchar(max)` with a text wire, since one
+  column now holds every source column's type: its sort, filters, profile and lengths treat the values as text.
+- **Limits.** Rows become columns, so at most 4,095 rows (a page's 4,096 columns less `Column`), and fewer when the cells
+  (rows times columns) would pass 4,000,000. Past either it takes the first rows and says so: `transposed` is less than
+  `rows`, and the grid strip says "Transposed the first 4,095 of 10,000 rows; filter or select rows to transpose others."
+  A cell past a row's 8 MiB is cut and marked truncated, as any stored cell. Main checks the answer's shape: a `Column`
+  column plus one per row taken, all text, a row per source column, `transposed` at most `rows` (no more than the ranges
+  asked for) and within the cell bound.
+- **Memory.** It is a derived set (`ResultStore.Open(derived: true)`) of the source's query, charged to its budget,
+  released with the query's other results and at once when its answer is not delivered. It is stored whole or not at
+  all: rows the budget refuses part-way release it with `TOO_LARGE` ("There is not enough result memory to transpose these
+  rows. Close other results, or select fewer rows, and try again."), and a query whose results were already cut short (its
+  row limit or its budget) stores no transpose, with a `TOO_LARGE` message that names which. A refusal never stops its
+  query. The worker's `cancel` stops it (`CANCELLED`).
+- **Renderer.** `ResultHandle.transpose(spec?, { signal })` validates the ranges and header column before sending.
+  `TransposeService` runs Transpose (the results toolbar and the grid menu's Transpose › All Rows), Selected Rows (the
+  selection's rows as merged ranges; offered when rows are selected) and Using Column as Headers (the active cell's
+  column), through the grid's view when it shows one and only once that view is built. It appends the transpose as the
+  run's last set, named "Transpose of Result N", whose grid strip says what it holds; a failure is said in the results
+  toolbar. A new run gives up a transpose in flight, and `addSet` releases one the run cannot take.
+
 ## Search in results
 
 The results toolbar's search box searches every grid of a run in the backend, over the rows it holds
@@ -2464,6 +2507,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Row identities | `results.rowIds` 1 – 16,384 rows; `results.findRows` 1 – 10,000 ids, 100,000 matches (`limits.identity`); 24 bytes a row while identifying, 8 kept, under the query budget | zod and backend |
 | Result diffs | context -1 – 100 rows, 64 one-sided column names each side (`limits.diff`); about 80 bytes a row of both results and 12 a differing cell while aligning, the diff's rows under the query budget | zod and backend |
 | Sorted views | 0 – 16 keys and 0 – 16 filters a view (one at least), 4,096 distinct values a filter, 256 cell ranges a selection, 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key or filtered column while building, 4 bytes a row kept, under the query budget | zod and backend |
+| Transpose | 1 – 256 row ranges, at most 4,095 rows taken and 4,000,000 cells, the first rows taken past either with explicit truncation (`limits.transpose`); the stored set under the query budget, whole or refused | zod and backend |
 | Pivots | 0 – 8 row columns, 1 – 16 values, 100,000 row groups, 256 column groups, 4,000,000 figures, refused past any of them (`INVALID_PARAMS`), column-group names cut to 128 characters (`limits.pivot`); a sort key per grouped column and 12 bytes a row while grouping, and the figures, under the query budget | zod and backend |
 | Search in results | 1 – 1,024 characters of text, 1 – 10,000 matches an answer plus its last row's columns (`limits.search`); no budget held | zod and backend |
 | Column profiles | 0 – 32 columns a request (`limits.profile`), 20 buckets, distinct exact to 16,384, values cut to 256 characters; working memory under the query budget | zod and backend |

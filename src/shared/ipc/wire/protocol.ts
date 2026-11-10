@@ -39,6 +39,10 @@ export const limits = {
   /** results.pivot: row-group columns and values one pivot takes, and the row groups, column groups and figures (cells
    *  times values) it can have: a pivot past any of them is refused, never shown in part (ResultPivoter in C#). */
   pivot: { maxRowFields: 8, maxValues: 16, maxRowGroups: 100_000, maxColumnGroups: 256, maxCells: 4_000_000 },
+  /** results.transpose: source rows one takes (they become columns, so a page's columns less "Column"), cells it holds
+   *  (fewer rows for a wide result), and row ranges one request names. Past the rows or cells it takes the first ones and
+   *  says so (ResultTransposer in C#). */
+  transpose: { maxRows: 4095, maxCells: 4_000_000, maxRanges: 256 },
   /** results.distinct: values one answer lists (the In filter's own limit, ViewSorter.MaxDistinctValues in C#) and
    *  characters of a value's text (ViewSorter.DistinctValueChars). */
   distinct: { maxValues: 4096, valueChars: 256 },

@@ -58,7 +58,9 @@ being true.
   tone column. Pivots (`Results/ResultPivot.cs`, `results.pivot`) group and aggregate a result's or a view's rows in the
   backend too and store a derived set (`ResultStore.Open(derived: true)`): its working memory comes out of the query's
   budget, a refusal fails only it and never stops the query, a pivot past its bounds is refused rather than shown in part,
-  and main owns it only once it has the answer (one not sent is released at once).
+  and main owns it only once it has the answer (one not sent is released at once). Transposes (`Results/ResultTranspose.cs`,
+  `results.transpose`) copy a result's or a view's cells, columns as rows, into a derived set the same way; past 4,095
+  rows they take the first ones with explicit truncation, never more columns than a page holds.
 - The grid renders cells only through `GridView` pools, and text only through `nodeValue` (`tests/grid-lint.test.ts`
   forbids HTML sinks under `grid/`, `results/`, `designer/` and `live/`); no React per row or cell, and frames stay
   O(visible cells).

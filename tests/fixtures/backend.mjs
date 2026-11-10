@@ -735,6 +735,40 @@ function buildPivot(source, { rows: rowColumns, column: groupColumn, values }) {
     set: { columns, rows: out, kind: 'pivot' }, rows, rowGroups: rowGroups.keys.length, columnGroups: columnGroups.keys.length, approximate: false
   }
 }
+// results.transpose: a result's (or a view's) shown columns as rows and its rows (or only the ranges' positions, merged)
+// as columns after a Column column, named "Row N" by position or by the header column's values (pivot-style, made distinct
+// ignoring case); cells keep their flags, binary shown as 0x hex text. The real backend's limits have their own checks
+// (TransposeChecks).
+function buildTranspose(source, { rows: ranges, headerColumn }) {
+  const length = source.sealed === undefined ? available(source) : source.read
+  const spans = (ranges ?? [[0, length]]).map(([first, count]) => [first, Math.min(length, first + count)]).filter(([first, end]) => first < end).sort((a, b) => a[0] - b[0])
+  const merged = []
+  for (const span of spans) { const last = merged.at(-1); if (last && span[0] <= last[1]) last[1] = Math.max(last[1], span[1]); else merged.push([...span]) }
+  const shown = source.columns.map((_, at) => at).filter(at => source.columns[at].role !== 'tone')
+  const limit = Math.min(4095, Math.floor(4_000_000 / Math.max(1, shown.length)))
+  const positions = merged.flatMap(([first, end]) => Array.from({ length: end - first }, (_, k) => first + k))
+  const taken = positions.slice(0, limit)
+  const text = cell => cell instanceof Uint8Array ? '0x' + Buffer.from(cell).toString('hex').toUpperCase() : cell
+  const copy = cell => cell !== null && typeof cell === 'object' && !(cell instanceof Uint8Array) ? (cell.error ? cell : { ...cell, value: text(cell.value) }) : text(cell)
+  const nameOf = position => {
+    if (headerColumn === undefined) return `Row ${position + 1}`
+    const value = cellValue(source.rowAt(position)[headerColumn])
+    if (value === null || value === undefined) return 'NULL'
+    const shownText = text(value)
+    return shownText.trim() === '' ? '(blank)' : shownText.length > 128 ? shownText.slice(0, 128) + '…' : shownText
+  }
+  const names = ['Column', ...taken.map(nameOf)], all = new Set(names.map(name => name.toLowerCase())), used = new Set()
+  const unique = names.map(name => {
+    if (!used.has(name.toLowerCase())) { used.add(name.toLowerCase()); return name }
+    let n = 2
+    while (all.has(`${name} (${n})`.toLowerCase()) || used.has(`${name} (${n})`.toLowerCase())) n++
+    used.add(`${name} (${n})`.toLowerCase())
+    return `${name} (${n})`
+  })
+  const columns = unique.map((name, at) => at === 0 ? { ...column(name, 'nvarchar(128)'), nullable: false } : column(name, 'nvarchar(max)'))
+  const out = shown.map(at => [source.columns[at].name, ...taken.map(position => copy(source.rowAt(position)[at]))])
+  return { set: { columns, rows: out, kind: 'transpose' }, rows: positions.length, transposed: taken.length, columns: shown.length }
+}
 // results.search: the cells of a result (or a view's positions) whose display text contains the text, ignoring case;
 // binary values as 0x and uppercase hex, NULL and failed reads never. The real backend's collation rules have their own
 // checks. One pass counts every match and keeps a run of whole rows, forward from fromRow or the last before it.
@@ -1517,6 +1551,16 @@ async function workbench(id, method, params, credit) {
       const built = buildPivot(source, params)
       if (built.error) return fail(id, 'INVALID_PARAMS', built.error)
       const { set, ...counts } = built
+      return respond(id, { descriptor: describe(storeResult(set, result.index)), ...counts })
+    }
+    case 'results.transpose': {
+      const source = sourceOf(id, params.resultId, params.viewId)
+      if (!source) return
+      const result = stored.get(params.resultId)
+      if (result.kind === 'diff' || result.kind === 'executionPlan') return fail(id, 'INVALID_PARAMS', "Only a query's results, a pivot or a transpose can be transposed.")
+      if (params.headerColumn !== undefined && params.headerColumn >= result.columns.length) return fail(id, 'INVALID_PARAMS', 'The header column must be a column of the result.')
+      if (!result.complete) return fail(id, 'RESULT_OPEN', 'Transpose the results after they finish loading.')
+      const { set, ...counts } = buildTranspose(source, params)
       return respond(id, { descriptor: describe(storeResult(set, result.index)), ...counts })
     }
     case 'results.search': {

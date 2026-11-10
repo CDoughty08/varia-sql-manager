@@ -79,6 +79,17 @@ export function fakeResultClient() {
           }),
           rows: 3, rowGroups: 2, columnGroups: 0, approximate: false
         })),
+        // A transpose is result 700 + this one's id: Column, then a column per row taken (all rows, or the ranges'), a row a column.
+        transpose: vi.fn<ResultHandle['transpose']>(async (spec = {}) => {
+          const rows = spec.rows ? spec.rows.reduce((sum, [, count]) => sum + count, 0) : handle.snapshot.rowsAvailable
+          return {
+            descriptor: descriptor(700 + value.resultId, {
+              generation: value.generation, index: value.index, kind: 'transpose', rowsRead: value.columns.length, rowsStored: value.columns.length, rowsAvailable: value.columns.length, state: 'complete',
+              columns: [{ name: 'Column', dataType: 'nvarchar(128)', wire: 'text', nullable: false }, ...Array.from({ length: rows }, (_, at) => ({ name: `Row ${at + 1}`, dataType: 'nvarchar(max)', wire: 'text', nullable: true }))] as ResultColumn[]
+            }),
+            rows, transposed: rows, columns: value.columns.length
+          }
+        }),
         search: vi.fn<ResultHandle['search']>(async () => ({ rows: 0, total: 0, first: 0, matchRows: [], matchColumns: [], complete: true, approximate: false })),
         profile: vi.fn<ResultHandle['profile']>(async columns => ({ rows: handle.snapshot.rowsAvailable, complete: handle.snapshot.state === 'complete', columns: columns.map(column => ({ column, values: 0, nulls: 0, distinct: 0, distinctExact: true, approximate: false })) })),
         // Distinct values: none unless a test says otherwise.

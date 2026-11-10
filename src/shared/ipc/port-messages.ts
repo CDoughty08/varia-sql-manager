@@ -2,7 +2,7 @@
 // requests are validated with portRequestSchema; backend payloads main forwards are validated with the schemas below.
 import { z } from 'zod'
 import { clientStatisticsSchema } from '../client-statistics'
-import type { BackendStatus, MemoryOrder, QueryEvent, ResultsCloseResult, ResultsDiffResult, ResultsDistinctResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsReadResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult } from '../contracts'
+import type { BackendStatus, MemoryOrder, QueryEvent, ResultsCloseResult, ResultsDiffResult, ResultsDistinctResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsTransposeResult, ResultsReadResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult } from '../contracts'
 import { maxQueryPlanDocuments } from '../plans'
 import { liveSubscribeParamsSchema, liveUpdateParamsSchema, testLiveSubscribeParamsSchema, testLiveUpdateParamsSchema, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../live/schema'
 import { backendDescriptorSchema } from './descriptors'
@@ -70,6 +70,11 @@ export const buildPortRequestSchema = (live: { subscribe: z.ZodType<LiveSubscrib
     t: z.literal('pivot'), rid: u31, generation, resultId: u32, rows: z.array(column).max(limits.pivot.maxRowFields).refine(columns => new Set(columns).size === columns.length, 'Columns must be distinct.'),
     column: column.optional(), values: z.array(pivotValueSchema).min(1).max(limits.pivot.maxValues), viewId: u32.optional()
   }).strict().refine(request => request.column === undefined || !request.rows.includes(request.column), 'The column group is not a row column.'),
+  // A transpose (results.transpose) of a result's rows, a view's or only some of them, stored as a new result the port then owns.
+  z.object({
+    t: z.literal('transpose'), rid: u31, generation, resultId: u32, viewId: u32.optional(),
+    rows: z.array(z.tuple([count, z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)])).min(1).max(limits.transpose.maxRanges).optional(), headerColumn: column.optional()
+  }).strict(),
   // Distinct values (results.distinct): a column's values and counts over a result's rows or a view's; `cancel` stops one.
   z.object({
     t: z.literal('distinct'), rid: u31, generation, resultId: u32, column, order: z.enum(['count', 'value']), maxValues: z.number().int().min(1).max(limits.distinct.maxValues),
@@ -137,6 +142,13 @@ export const pivotResultSchema = z.object({
   descriptor: backendDescriptorSchema.extend({ kind: z.literal('pivot') }), rows: count, rowGroups: z.number().int().min(0).max(limits.pivot.maxRowGroups),
   columnGroups: z.number().int().min(0).max(limits.pivot.maxColumnGroups), approximate: z.boolean()
 }).strict().refine(result => result.descriptor.rowsStored === result.rowGroups, 'A pivot stores a row per row group.')
+/** A results.transpose answer as the backend sends it; main also checks its shape against the request. */
+export const transposeResultSchema = z.object({
+  descriptor: backendDescriptorSchema.extend({ kind: z.literal('transpose') }), rows: count, transposed: z.number().int().min(0).max(limits.transpose.maxRows),
+  columns: z.number().int().min(0).max(limits.page.maxColumns)
+}).strict().refine(result => result.transposed <= result.rows && result.transposed * result.columns <= limits.transpose.maxCells, 'A transpose takes at most the rows it could, within its cells.')
+  .refine(result => result.descriptor.columns.length === result.transposed + 1 && result.descriptor.rowsStored === result.columns && result.descriptor.columns.every(item => item.wire === 'text'),
+    'A transpose has a Column column and one per row taken, all text, and a row per source column.')
 /** A results.distinct answer as the backend sends it, its rows within a filter's bounds (the backend checks a filter's rows
  *  against the result when one uses them); main also checks the values asked for and the kept marks. */
 export const distinctResultSchema = z.object({
@@ -147,7 +159,7 @@ export const distinctResultSchema = z.object({
 }).strict().refine(result => result.values.length <= result.distinct && result.truncated === (result.distinct > result.values.length), 'Truncated says some values were left out.')
   .refine(result => result.unlistedKept !== undefined ? result.unlistedHeld === undefined || (result.unlistedHeld.length > 0) === result.unlistedKept : result.unlistedHeld === undefined && result.unlistedDropped === undefined,
     'Past values are named only with kept marks, the held ones exactly when the kept view holds some.')
-export type PortEndResult = ResultsPivotResult | ResultsDistinctResult | ResultsDiffResult | ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | ResultsViewResult | ResultsViewCloseResult | ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsSearchResult | ResultsProfileResult | LiveEnd | LiveUpdateResult
+export type PortEndResult = ResultsPivotResult | ResultsTransposeResult | ResultsDistinctResult | ResultsDiffResult | ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | ResultsViewResult | ResultsViewCloseResult | ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsSearchResult | ResultsProfileResult | LiveEnd | LiveUpdateResult
 
 const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'server', 'print', 'error']), line: z.number().int().min(1).max(2_147_483_647).optional() }).strict()
 const session = { spid: z.number().int().min(0).max(32767), login: z.string().max(128).optional() }
