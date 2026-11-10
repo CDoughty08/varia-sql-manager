@@ -65,6 +65,13 @@ jobs:
       # ReadyToRun (the project sets it for a RID-specific publish), restored from packages.lock.json's entry for the RID.
       - name: Publish self-contained backend
         run: dotnet publish backend/Varia.Backend/Varia.Backend.csproj -c Release -r ${{ inputs.rid }} --self-contained true -p:RestoreLockedMode=true -o artifacts/release-backend
+      # One native file (the project sets PublishAot for a RID-specific publish), which electron-builder copies into the
+      # Windows packages' resources (build/updater-check.cjs refuses to package without it). Its compiler comes from
+      # nuget.org at the version of the SDK global.json resolves to, and NuGet's audit is an error there: an SDK whose
+      # compiler has a known advisory, or nuget.org being unreachable, fails this step.
+      - name: Publish update helper
+        if: runner.os == 'Windows'
+        run: dotnet publish backend/Varia.Updater/Varia.Updater.csproj -c Release -r ${{ inputs.rid }} -o artifacts/updater
       - name: Package application
         id: package
         run: npm run package -- ${{ inputs.target }}
@@ -73,7 +80,7 @@ jobs:
         run: |
           $version = (Get-Content package.json | ConvertFrom-Json).version
           $expected = switch ('${{ inputs.rid }}') {
-            'win-x64' { @("dist/Varia-SQL-Manager-$version-Windows-x64-Setup.exe", "dist/Varia-SQL-Manager-$version-Windows-x64-Portable.exe") }
+            'win-x64' { @("dist/Varia-SQL-Manager-$version-Windows-x64-Setup.exe", "dist/Varia-SQL-Manager-$version-Windows-x64-Portable.exe", "dist/Varia-SQL-Manager-$version-win-x64.zip", "dist/win-unpacked/resources/updater/Varia.Updater.exe") }
             'linux-x64' { @("dist/Varia-SQL-Manager-$version-linux-x86_64.AppImage") }
             'osx-arm64' { @("dist/Varia-SQL-Manager-$version-mac-arm64.dmg", "dist/Varia-SQL-Manager-$version-mac-arm64.zip") }
             'osx-x64' { @("dist/Varia-SQL-Manager-$version-mac-x64.dmg", "dist/Varia-SQL-Manager-$version-mac-x64.zip") }

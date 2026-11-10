@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- No console window: main starts it hidden and detached, and it outlives the app. -->
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <IsAotCompatible>true</IsAotCompatible>
+    <!-- The release publish (package.yml, win-x64) is one native file with no runtime to carry: it is copied out of the
+         installation to swap it. Builds and checks stay IL, on every platform. -->
+    <PublishAot Condition="'$(RuntimeIdentifier)' != ''">true</PublishAot>
+    <OptimizationPreference>Size</OptimizationPreference>
+    <DebugType Condition="'$(RuntimeIdentifier)' != ''">none</DebugType>
+  </PropertyGroup>
+</Project>

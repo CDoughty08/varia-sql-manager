@@ -17,12 +17,12 @@ await writeFile(join(profile, 'settings.json'), JSON.stringify({ version: 1, val
 
 const version = '99.0.0', name = `Varia-SQL-Manager-${version}-Windows-x64-Setup.exe`
 const payload = randomBytes(3 * 1024 * 1024)
-const manifest = { schema: 1, version, assets: ['x64', 'arm64'].map(arch => ({ name, kind: 'win-setup', arch, size: payload.length, sha512: createHash('sha512').update(payload).digest('base64') })) }
+const manifest = { schema: 2, version, assets: ['x64', 'arm64'].map(arch => ({ name, kind: 'win-setup', arch, size: payload.length, sha512: createHash('sha512').update(payload).digest('base64') })) }
 let mode = 'portal'
 const served = []
 const server = createServer(async (request, response) => {
   served.push(request.url)
-  if (request.url === '/varia-update.json') {
+  if (request.url === '/varia-update-v2.json') {
     if (mode === 'portal') { response.writeHead(200, { 'content-type': 'text/html' }); response.end('<html><body>This site is blocked by your organization.</body></html>'); return }
     response.writeHead(200, { 'content-type': 'application/octet-stream' })
     response.end(JSON.stringify(manifest))

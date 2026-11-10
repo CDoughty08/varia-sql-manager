@@ -22,3 +22,14 @@
     varia_done_silent:
   !endif
 !macroend
+
+; A release staged beside the installation (docs/updates.md) goes with it. The installation's own update helper removes
+; it, before the application's files (the helper among them) are removed: it knows which folder that is, takes only one
+; that is this user's alone, follows no link planted there, and ends a recovery registered for it. A recursive delete
+; from here would do none of that. An installation without the helper never staged anything.
+!macro customUnInstall
+  IfFileExists "$INSTDIR\resources\updater\Varia.Updater.exe" 0 varia_staging_done
+    ExecWait '"$INSTDIR\resources\updater\Varia.Updater.exe" uninstall --install "$INSTDIR"'
+    ClearErrors
+  varia_staging_done:
+!macroend

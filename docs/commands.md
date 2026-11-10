@@ -1032,7 +1032,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `editorOvertype` | boolean | state | The editor is in overtype mode (OVR): typing replaces the character after the caret. |
 | `hasRecentFiles` | boolean | state | File › Recent Files lists at least one file. |
 | `hasRecoveryFiles` | boolean | state | AutoRecover kept queries that an earlier run or an earlier workbench did not save, and they were neither recovered nor discarded. |
-| `updateBusy` | boolean | state | An update check or download is running. |
+| `updateBusy` | boolean | state | An update check or download is running, or a downloaded release is being unpacked. |
 | `updateAvailable` | boolean | state | A newer release that this copy can install waits for Help › Download Update (Automatically download updates is off). |
 | `updateReady` | boolean | state | A newer release was downloaded and verified: Help › Restart to Update installs it. |
 | `explorerHasSelection` | boolean | state | A node is selected in Object Explorer (a loading, error, or progress row is not a node). |

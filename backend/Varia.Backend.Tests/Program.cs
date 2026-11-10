@@ -372,7 +372,8 @@ if (liveGroup is null)
         ("ActivityResource", Sync(() => ActivityResourceChecks.Run(Check))),
         ("ActivityQuery", Sync(() => ActivityQueryChecks.Run(Check))),
         ("ActivityAction", () => ActivityActionChecks.RunAsync(Check, json)),
-        ("SsisOperations", Sync(() => SsisOperationsChecks.Run(Check)))
+        ("SsisOperations", Sync(() => SsisOperationsChecks.Run(Check))),
+        ("Updater", Sync(() => UpdaterChecks.Run(Check)))
     ];
     var suiteNames = offlineSuites.Select(suite => suite.Name).ToArray();
     Check(suiteNames.Distinct().Count() == suiteNames.Length && OfflineSuites.Alone.All(suiteNames.Contains) && OfflineSuites.Weights.Keys.All(suiteNames.Contains)

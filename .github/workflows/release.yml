@@ -19,10 +19,12 @@ on:
       - package-lock.json
       - global.json
       - backend/Varia.Backend/Varia.Backend.csproj
+      - backend/Varia.Updater/**
       - src/main/app-protocol.ts
       - src/main/backend/spawn-spec.ts
       - src/main/backend/sqltools-runtime.ts
       - src/main/update-install.ts
+      - src/main/update-staging.ts
       - scripts/packaged-smoke.mjs
       - scripts/packaged-contents.mjs
       - scripts/prepare-sqltools-service.mjs
@@ -57,9 +59,11 @@ jobs:
         include:
           - runner: windows-latest
             rid: win-x64
-            target: --win nsis portable --x64
+            target: --win nsis portable zip --x64
             executable: dist/win-unpacked/Varia SQL Manager.exe
-            asset: dist/*.exe
+            asset: |
+              dist/*.exe
+              dist/*.zip
           - runner: ubuntu-24.04
             rid: linux-x64
             target: --linux AppImage --x64
@@ -111,7 +115,8 @@ jobs:
           pattern: release-*
           path: release-assets
           merge-multiple: true
-      # The update manifest: each file's size and SHA-512, which Varia's updater checks before installing.
+      # The update manifests (the one builds up to 0.7.0 read, and the current one): each file's size and SHA-512, which
+      # Varia's updater checks before installing.
       - name: Write update manifest
         env:
           RELEASE_TAG: ${{ github.ref_name }}
