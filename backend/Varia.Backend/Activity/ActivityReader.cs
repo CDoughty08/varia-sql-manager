@@ -19,6 +19,7 @@ internal sealed class ActivityReader : ILiveSqlReader
 {
     public const string OverviewProbe = "activity.overview";
     public const string SessionsProbe = "activity.sessions";
+    public const string ResourcesProbe = "activity.resources";
     public const string QueriesProbe = "activity.queries";
     private readonly ActivityCatalog catalog;
     private readonly ILiveHost host;
@@ -26,6 +27,7 @@ internal sealed class ActivityReader : ILiveSqlReader
     private readonly Lock gate = new();
     private readonly Dictionary<string, ActivityFilter> filters = new(StringComparer.Ordinal);
     private readonly ActivitySessionRows sessions;
+    private readonly ActivityResourceRows resources;
     private readonly ActivityQueryRows queries;
     /// <summary>Statements that failed for good on this connection, by probe, render and statement: reported each sample, not
     /// run again until a new connection's capability probe.</summary>
@@ -45,6 +47,7 @@ internal sealed class ActivityReader : ILiveSqlReader
         this.connectionId = connectionId;
         this.catalog = catalog ?? ActivityCatalog.Current;
         sessions = new(this.catalog);
+        resources = new(this.catalog);
         queries = new(this.catalog);
         if (args is not null) Apply(args);
     }
@@ -96,6 +99,7 @@ internal sealed class ActivityReader : ILiveSqlReader
     public void Reset()
     {
         sessions.Reset();
+        resources.Reset();
         queries.Reset(texts: true);
         clocks.Clear();
         io.Reset();
@@ -147,11 +151,12 @@ internal sealed class ActivityReader : ILiveSqlReader
             if (result is not null) results[statement.Id] = result;
             if (stop) break;
         }
-        // The sessions probe's clock moves with every read, even one that read nothing, so each row's rate spans its own time.
-        var sampleTime = spec.Id == SessionsProbe ? SampleTime(spec.Id, results, item) : 0;
+        // Per-row probes' clocks move with every read, even one that read nothing, so each row's rate spans its own time.
+        var sampleTime = spec.Id is SessionsProbe or ResourcesProbe ? SampleTime(spec.Id, results, item) : 0;
         if (results.Count == 0) return Nothing(spec, errors);
 
         if (spec.Id == OverviewProbe) return new(ActivityOverview.Raw([.. spec.Series.Select(series => series.Id)], results, catalog, io), [], errors);
+        if (spec.Id == ResourcesProbe) return Resources(spec, sampleTime, results, errors);
         if (spec.Id != SessionsProbe) throw Bug("No reader for this Activity Monitor probe.");
         return Sessions(spec, sampleTime, results, errors, capabilities);
     }
@@ -286,6 +291,33 @@ internal sealed class ActivityReader : ILiveSqlReader
         return new(new LiveRawSample(msTicks, startTicks, [built.FocusCpuRate, built.FocusReadsRate], [null, null]), tables, errors, Status: status, SeriesReset: moved);
     }
 
+    private LiveReaderSample Resources(LiveProbeJson spec, long at, Dictionary<string, ActivityResult> results, List<LiveProbeError> errors)
+    {
+        Dictionary<string, ActivityFilter> current;
+        lock (gate) current = new(filters, StringComparer.Ordinal);
+        ActivityFilter Filter(string table) => current.GetValueOrDefault(table) ?? ActivityFilter.Compile(catalog, new(table));
+        var io = Filter("files");
+        var built = resources.Build(results, at, [.. spec.Series.Select(series => series.Id)], io.LatencyWarningMs, io.LatencyErrorMs);
+        var tables = new List<LiveReaderTable>();
+        if (built.Categories is { } categories)
+        {
+            var filter = Filter("waitCategories");
+            tables.Add(new(Index(spec, "waitCategories"), categories, 0, row => filter.Matches(resources.CategoriesWriter.Reader(row), benign: built.Benign.Contains(row)),
+                row => filter.Shows(benign: built.Benign.Contains(row))));
+        }
+        if (built.Types is { } types)
+        {
+            var filter = Filter("waitTypes");
+            tables.Add(new(Index(spec, "waitTypes"), types, built.TypesMore, row => filter.Matches(resources.TypesWriter.Reader(row), benign: built.Benign.Contains(row)),
+                row => filter.Shows(benign: built.Benign.Contains(row))));
+        }
+        if (built.Files is { } fileRows)
+            tables.Add(new(Index(spec, "files"), fileRows, built.FilesMore, row => io.Matches(resources.FilesWriter.Reader(row), file: built.FileFacts.GetValueOrDefault(row)),
+                row => io.Shows(file: built.FileFacts.GetValueOrDefault(row))));
+        var (msTicks, startTicks) = ActivityOverview.Clock(results);
+        return new(new LiveRawSample(msTicks, startTicks, built.Series, new double?[built.Series.Length]), tables, errors);
+    }
+
     /// <summary>The server's local time the probe's clock statement read (GETDATE(), the time query statistics are in).</summary>
     private static DateTime? ServerLocal(IReadOnlyDictionary<string, ActivityResult> results) =>
         results.TryGetValue("clock", out var clock) && clock.Rows is [var row, ..] ? clock.Time(row, "server_local_time") : null;
@@ -302,7 +334,8 @@ internal sealed class ActivityReader : ILiveSqlReader
         long? step = previous is not { } before ? null : msTicks is { } now && before.Ticks is { } then ? now - then : item.TakenAt - before.TakenAt;
         if (item.Gap is "baseline" or "resumed" || restarted || step is not >= 0)
         {
-            if (probe == QueriesProbe) queries.Reset();
+            if (probe == ResourcesProbe) resources.Reset();
+            else if (probe == QueriesProbe) queries.Reset();
             else sessions.Reset();
             step = 0;
         }
@@ -331,6 +364,7 @@ internal sealed class ActivityReader : ILiveSqlReader
         ("sessions", "@rowCap") => (int)catalog.Limit("sessions") + 1,
         ("edges", "@edgeCap") => (int)catalog.Limit("blockingEdges") + 1,
         ("activeQueries", "@take") => (int)catalog.Limit("activeQueries") + 1,
+        ("files", "@rowCap") => (int)catalog.Limit("files") + 1,
         _ => throw new RequestException("BACKEND_ERROR", "An Activity Monitor statement has a parameter the source does not fill.")
     };
 
