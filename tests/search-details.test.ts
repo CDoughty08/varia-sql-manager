@@ -95,9 +95,9 @@ describe('Search Objects details pane', () => {
     settle()
     const start = 'x'.repeat(shownChars)
     // No further page is asked for: the fake api has no explorerPeekDefinition, so asking would fail the read.
-    pending.peek[0]!(ok({ facts: {}, definition: start, definitionLength: 50_000_000, definitionStamp: 7, elapsedMs: 2 }))
+    pending.peek[0]!(ok({ facts: {}, definition: start, definitionLength: shownChars * 50, definitionStamp: 7, elapsedMs: 2 }))
     await flush()
-    expect(service.getSnapshot().documents.tab?.definition).toEqual({ status: 'ready', value: { text: start, length: 50_000_000 } })
+    expect(service.getSnapshot().documents.tab?.definition).toEqual({ status: 'ready', value: { text: start, length: shownChars * 50 } })
   })
   it('scripts any other kind Script As can write, and says when a kind has no definition', async () => {
     const { service, api, pending, settle } = setup()
