@@ -1725,6 +1725,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             snapshot = await Task.Run(() => ViewSorter.DistinctValues(set, pages, view, args.Column, complete, token, keptView), token);
             if (set.IsReleased) throw Unavailable(args.ResultId);
             if ((view is not null && !store.HasView(view)) || (keptView is not null && !store.HasView(keptView))) throw ViewClosed();
+            // Cancelled once built: nobody waits for it, so it is not kept.
+            token.ThrowIfCancellationRequested();
         }
         catch
         {
@@ -1758,7 +1760,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var snapshot = FindSnapshot(args.ResultId, args.SnapshotId);
         var (total, values, ticked, nullTicked) = await Task.Run(() => snapshot.Read(order.Value, (int)args.Offset, args.Count, args.Search, token), token);
         if (snapshot.Set.IsReleased) throw Unavailable(args.ResultId);
-        return new ResultsDistinctReadResult(total, args.Offset, [.. values.Select(value => new DistinctValue(value.Group, value.Row, value.Text, value.Count, value.Checked))], ticked, nullTicked);
+        return new ResultsDistinctReadResult(total, args.Offset, values, ticked, nullTicked);
     }
 
     /// <summary>results.distinctTick: ticks or clears some of a snapshot's values, every value, or those a search finds, and

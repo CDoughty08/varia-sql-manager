@@ -6,10 +6,6 @@ namespace Varia.Backend.Results;
 /// orders them.</summary>
 internal enum DistinctOrder { Count, Value }
 
-/// <summary>One value of a snapshot's window: its group (its place in value order), its representative base row, its
-/// display text, how many rows hold it and whether the checklist ticks it.</summary>
-internal sealed record DistinctEntry(int Group, int Row, string Text, int Count, bool Checked);
-
 /// <summary>
 /// A column's distinct values over a view's rows (or the sealed rows), kept for the header funnel's checklist
 /// (results.distinct): the groups in value order (each its representative base row, the lowest holding it, and its count),
@@ -66,8 +62,9 @@ internal sealed class DistinctSnapshot
     public (int Checked, bool NullChecked) Ticks { get { lock (gate) return (ticked, nullTicked); } }
 
     /// <summary>Up to <paramref name="count"/> values from <paramref name="offset"/> in the order asked, among those whose
-    /// display text contains <paramref name="search"/> when given; <c>Total</c> counts those values.</summary>
-    public (int Total, DistinctEntry[] Values, int Checked, bool NullChecked) Read(DistinctOrder order, int offset, int count, string? search, CancellationToken token)
+    /// display text contains <paramref name="search"/> when given, each as results.distinctRead answers it; <c>Total</c>
+    /// counts those values.</summary>
+    public (int Total, DistinctValue[] Values, int Checked, bool NullChecked) Read(DistinctOrder order, int offset, int count, string? search, CancellationToken token)
     {
         lock (gate)
         {
@@ -75,12 +72,12 @@ internal sealed class DistinctSnapshot
             var list = matched is null ? (order == DistinctOrder.Count ? byCount : null) : order == DistinctOrder.Count ? matchCount! : matchValue!;
             var total = list?.Length ?? reps.Length;
             var take = Math.Max(0, Math.Min(count, total - offset));
-            var values = new DistinctEntry[take];
+            var values = new DistinctValue[take];
             var wire = Set.Wires[Column];
             for (var i = 0; i < take; i++)
             {
                 var group = list?[offset + i] ?? offset + i;
-                values[i] = new DistinctEntry(group, reps[group], ViewSorter.Display(source, reps[group], Column, wire), counts[group], ticks[group]);
+                values[i] = new DistinctValue(group, reps[group], ViewSorter.Display(source, reps[group], Column, wire), counts[group], ticks[group]);
             }
             return (total, values, ticked, nullTicked);
         }
@@ -116,7 +113,8 @@ internal sealed class DistinctSnapshot
 
     /// <summary>The filter its ticks make, fixed from the first call on: <c>In</c> with the ticked values' rows when the
     /// snapshot saw every row and they are no more than the cleared ones, else <c>NotIn</c> with the cleared ones (so values
-    /// in rows that arrive later stay shown); the rows are in value order, one a value, as a filter's own resolve to.</summary>
+    /// in rows that arrive later stay shown); the rows are in value order, one a value, as a filter's own resolve to. NULL is
+    /// among them only when the snapshot saw a NULL.</summary>
     public (FilterOp Op, int[] Rows, bool Nulls) Freeze()
     {
         lock (gate)
@@ -126,7 +124,8 @@ internal sealed class DistinctSnapshot
             var rows = new int[keep ? ticked : reps.Length - ticked];
             for (int group = 0, at = 0; group < reps.Length; group++)
                 if (ticks[group] == keep) rows[at++] = reps[group];
-            frozen = (keep ? FilterOp.In : FilterOp.NotIn, rows, keep ? nullTicked && Nulls > 0 : !nullTicked);
+            // NULL is named only when the snapshot saw one: an entry never shown was never cleared, so NULLs that arrive later stay.
+            frozen = (keep ? FilterOp.In : FilterOp.NotIn, rows, (keep ? nullTicked : !nullTicked) && Nulls > 0);
             return frozen.Value;
         }
     }

@@ -389,7 +389,15 @@ export class ResultClient implements Disposable {
         const keptViewId = o.kept?.key.view
         if (o.kept && (keptViewId === undefined || o.kept.key.generation !== state.key.generation || o.kept.key.resultId !== state.key.resultId))
           throw new ResultError('INVALID_PARAMS', 'Kept values are read through a view of the same result.')
-        const response = await this.request(id => ({ type: 'distinct', id, key: state.key, request: { kind: 'open', column, ...(keptViewId === undefined ? {} : { keptViewId }) } }), o.signal)
+        // A snapshot built just before the abort reached the worker is one nobody holds: it is closed, or it would keep its
+        // memory and one of the result's snapshots until the result goes.
+        const owned = { generation: state.key.generation, resultId: state.key.resultId }
+        const late = (message: WorkerResponse) => {
+          if (message.type !== 'distinct' || !('snapshotId' in message.result)) return
+          const { snapshotId } = message.result
+          void this.request(id => ({ type: 'distinct', id, key: owned, request: { kind: 'close', snapshotIds: [snapshotId] } })).catch(() => {})
+        }
+        const response = await this.request(id => ({ type: 'distinct', id, key: state.key, request: { kind: 'open', column, ...(keptViewId === undefined ? {} : { keptViewId }) } }), o.signal, late)
         if (response.type !== 'distinct' || !('snapshotId' in response.result)) throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
         // The snapshot outlives the view it was read through: its requests go through its result.
         const owner = state.base === undefined ? state : this.results.get(state.base)

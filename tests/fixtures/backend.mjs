@@ -892,7 +892,7 @@ function freezeSnapshot(snapshot) {
   if (snapshot.frozen) return snapshot.frozen
   const ticked = snapshot.ticks.filter(Boolean).length
   const keep = snapshot.complete && ticked <= snapshot.groups.length - ticked
-  snapshot.frozen = { keep, groups: snapshot.ticks.flatMap((tick, group) => tick === keep ? [group] : []), nulls: keep ? snapshot.nullTicked && snapshot.nulls > 0 : !snapshot.nullTicked }
+  snapshot.frozen = { keep, groups: snapshot.ticks.flatMap((tick, group) => tick === keep ? [group] : []), nulls: (keep ? snapshot.nullTicked : !snapshot.nullTicked) && snapshot.nulls > 0 }
   return snapshot.frozen
 }
 

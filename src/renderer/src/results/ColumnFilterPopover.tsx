@@ -5,7 +5,7 @@ import { codiconClass } from '../../../shared/icons'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { useWorkbench } from '../core/WorkbenchContext'
 import { trapFocus } from '../trap-focus'
-import { checklistCondition, columnFilterKind, type ColumnCondition } from './column-filter'
+import { blocksToDrop, checklistCondition, columnFilterKind, listWindow, type ColumnCondition } from './column-filter'
 import type { DistinctList } from './ResultClient'
 import { formatCount, plural } from './status'
 
@@ -25,6 +25,8 @@ const searchPauseMs = 200
 /** Values one window read asks for, and rows drawn past each edge of the list's viewport. */
 const blockSize = 128
 const overscan = 8
+/** Blocks kept while scrolling (4,096 values): the farthest from view go first, so a long scroll holds no more. */
+const maxBlocks = 32
 /** The list's row height before the theme's `--varia-row` is read. */
 const fallbackRow = 22
 const shown = (value: DistinctValue) => value.text === '' ? '(empty)' : value.text
@@ -73,6 +75,11 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
   const [ticking, setTicking] = useState(0)
   /** The snapshot passed to the grid's filter (OK): the grid closes it from then on. */
   const handed = useRef(false)
+  /** False once the popover is gone: an OK still waiting on its ticks then applies nothing (its snapshot was closed). */
+  const alive = useRef(true)
+  useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
+  /** A tick failed: the ticks shown are a guess until the snapshot's own are read again. */
+  const ticksStale = useRef(false)
   const list = load.status === 'ready' ? load.list : undefined
   const summary = list?.summary
 
@@ -105,7 +112,7 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
   }, [search])
 
   // Windows of the list in this order and search, by block; a new order or search starts again from the top.
-  const blocks = useRef(new Map<number, readonly DistinctValue[]>()), reading = useRef(new Set<number>())
+  const blocks = useRef(new Map<number, readonly DistinctValue[]>()), reading = useRef(new Map<number, AbortController>())
   const [version, setVersion] = useState(0)
   const [total, setTotal] = useState<number | undefined>()
   const [readError, setReadError] = useState<string | undefined>()
@@ -117,14 +124,15 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
     keyAbort.current?.abort()
     keyAbort.current = new AbortController()
     blocks.current = new Map()
-    reading.current = new Set()
+    for (const read of reading.current.values()) read.abort()
+    reading.current = new Map()
     setTotal(needle ? undefined : summary?.distinct)
     setReadError(undefined)
     setScrollTop(0)
     if (viewport.current) viewport.current.scrollTop = 0
     setVersion(value => value + 1)
   }, [list, summary, order, needle])
-  useEffect(() => () => keyAbort.current?.abort(), [])
+  useEffect(() => () => { keyAbort.current?.abort(); for (const read of reading.current.values()) read.abort() }, [])
 
   // The viewport's height and the theme's row height, measured in the grid's own window.
   useLayoutEffect(() => {
@@ -143,30 +151,40 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
   const showNull = !!summary && summary.nulls > 0 && (!needle || 'null'.includes(needle.toLowerCase()))
   const nullRows = showNull ? 1 : 0
   const valueRows = total ?? 0
-  const firstRow = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan)
-  const lastRow = Math.min(nullRows + valueRows, Math.ceil((scrollTop + Math.max(viewHeight, rowHeight)) / rowHeight) + overscan)
+  const win = listWindow({ scrollTop, viewHeight, rowHeight, rows: nullRows + valueRows, overscan })
+  const firstRow = win.first, lastRow = win.last
   const firstBlock = Math.floor(Math.max(0, firstRow - nullRows) / blockSize)
   const lastBlock = Math.floor(Math.max(0, lastRow - nullRows - 1) / blockSize)
+  const inView = useRef({ firstBlock, lastBlock })
+  inView.current = { firstBlock, lastBlock }
 
-  // Reads the blocks in view that it lacks; an answer read while a tick was on its way is read again after it.
+  // Reads the blocks in view that it lacks, and gives up those scrolled away from, so a fast scroll never queues reads of
+  // rows no longer shown ahead of those in view; an answer read while a tick was on its way is read again after it.
   useEffect(() => {
     const signal = keyAbort.current?.signal
-    if (!list || ticking > 0 || !signal) return
+    if (!list || !signal) return
+    const own = reading.current
+    for (const [block, read] of own) if (block < firstBlock - 1 || block > lastBlock + 1) { read.abort(); own.delete(block) }
+    if (ticking > 0) return
     for (let block = firstBlock; block <= lastBlock; block++) {
-      if (blocks.current.has(block) || reading.current.has(block) || (total !== undefined && block * blockSize >= total) || (total === undefined && block > 0)) continue
-      reading.current.add(block)
-      const sent = epoch.current, own = reading.current
-      list.read({ order, offset: block * blockSize, count: blockSize, ...needle ? { search: needle } : {}, signal }).then(answer => {
-        if (signal.aborted || reading.current !== own) return
+      if (blocks.current.has(block) || own.has(block) || (total !== undefined && block * blockSize >= total) || (total === undefined && block > 0)) continue
+      const read = new AbortController()
+      own.set(block, read)
+      const sent = epoch.current
+      list.read({ order, offset: block * blockSize, count: blockSize, ...needle ? { search: needle } : {}, signal: read.signal }).then(answer => {
+        if (signal.aborted || read.signal.aborted || reading.current !== own) return
         own.delete(block)
+        setReadError(undefined)
         if (epoch.current === sent) {
           blocks.current.set(block, answer.values)
+          for (const drop of blocksToDrop(blocks.current.keys(), inView.current.firstBlock, inView.current.lastBlock, maxBlocks)) blocks.current.delete(drop)
           setTotal(answer.total)
+          ticksStale.current = false
           setTicks({ checked: answer.checked, nullChecked: answer.nullsChecked })
         }
         setVersion(value => value + 1)
       }, (failure: unknown) => {
-        if (signal.aborted || reading.current !== own) return
+        if (signal.aborted || read.signal.aborted || reading.current !== own) return
         own.delete(block)
         setReadError(message(failure, 'The column\'s values could not be listed.'))
       })
@@ -180,6 +198,7 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
     setTicking(value => value + 1)
     chain.current = chain.current.then(() => list.tick(tick)).then(answer => setTicks({ checked: answer.checked, nullChecked: answer.nullsChecked }), (failure: unknown) => {
       setError(message(failure, 'The value could not be ticked.'))
+      ticksStale.current = true
       blocks.current = new Map()
       setVersion(value => value + 1)
     }).finally(() => setTicking(value => value - 1))
@@ -241,8 +260,20 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
     let chosen: ColumnCondition | undefined
     if (condition === 'list') {
       if (!list || !summary) return
-      // The last tick decides what OK filters by.
+      // The last tick decides what OK filters by; after a failed one, the snapshot's own ticks do.
       await chain.current
+      if (!alive.current) return
+      if (ticksStale.current) {
+        try {
+          const answer = await list.read({ order: 'value', offset: 0, count: 1 })
+          ticksStale.current = false
+          setTicks({ checked: answer.checked, nullChecked: answer.nullsChecked })
+        } catch (failure) {
+          if (alive.current) setError(message(failure, 'The column\'s values could not be listed.'))
+          return
+        }
+        if (!alive.current) return
+      }
       const outcome = checklistCondition({ list, checked: ticksNow.current.checked, distinct: summary.distinct, hasNull: summary.nulls > 0, nullChecked: ticksNow.current.nullChecked })
       if ('error' in outcome) return setError(outcome.error)
       chosen = outcome.condition
@@ -319,14 +350,14 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
       {load.status === 'error' && <p className="column-filter-note error" role="alert">{load.message}</p>}
       {readError && <p className="column-filter-note error" role="alert">{readError}</p>}
       {empty && <p className="column-filter-note">No values match.</p>}
-      {summary && <div className="column-filter-space" style={{ height: (nullRows + valueRows) * rowHeight }}>
+      {summary && <div className="column-filter-space" style={{ height: win.space }}>
         {rows.map(({ index: row, value }) => row < nullRows
-          ? <label key="null" className="column-filter-item null" style={{ top: 0, height: rowHeight }}>
+          ? <label key="null" className="column-filter-item null" style={{ top: win.offset(0), height: rowHeight }}>
             <input type="checkbox" disabled={!listing} checked={ticks.nullChecked} onChange={toggleNull} aria-label={`NULL (${formatCount(summary.nulls)})`} />
             <span className="column-filter-text">NULL</span><span className="column-filter-count" aria-hidden="true">{formatCount(summary.nulls)}</span>
           </label>
-          : value ? <Item key={value.group} value={value} top={row * rowHeight} height={rowHeight} checked={value.checked} disabled={!listing} onToggle={toggle} />
-            : <div key={'row' + row} className="column-filter-item pending" style={{ top: row * rowHeight, height: rowHeight }} aria-hidden="true" />)}
+          : value ? <Item key={value.group} value={value} top={win.offset(row)} height={rowHeight} checked={value.checked} disabled={!listing} onToggle={toggle} />
+            : <div key={'row' + row} className="column-filter-item pending" style={{ top: win.offset(row), height: rowHeight }} aria-hidden="true" />)}
       </div>}
     </div>
     {note && <p className="column-filter-note">{note}{!summary?.complete ? ' Values in rows still arriving will be shown.' : ''}{summary?.approximate ? ' Long values were compared by their first characters.' : ''}</p>}

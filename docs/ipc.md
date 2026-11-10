@@ -1617,7 +1617,7 @@ receives at most 512 values a window, never rows.
   'groups', column, snapshotId, keep, values, nulls, row? }` (`row` when one value is named) for its label. A sort or
   another filter builds the view again from the same frozen snapshot.
 - **Work and memory.** Building takes one key per row for the column (as a filter builds it), the rows grouped by a
-  stable sort, and the snapshot itself: `DistinctWorkingBytes` (about 37 bytes a row) is charged to the result's query
+  stable sort, and the snapshot itself: `DistinctWorkingBytes` (about 57 bytes a row) is charged to the result's query
   budget while it builds (`TOO_LARGE` without room) and returned when it ends. The snapshot keeps
   `DistinctSnapshotBytes` (26 bytes a value and 4 KiB) charged until it is closed or its result goes. The worker's
   `cancel` stops a build or a read (`CANCELLED`). Main checks each answer before forwarding it: rows below 2³¹,

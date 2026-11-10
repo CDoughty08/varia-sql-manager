@@ -65,10 +65,10 @@ internal static class DistinctChecks
     private static DistinctSnapshot Snapshot(ResultSetBuffer set, int column, ResultView? view = null, ResultView? kept = null) =>
         ViewSorter.DistinctValues(set, set.SealedSnapshot(), view, column, set.IsComplete, CancellationToken.None, kept);
 
-    private static DistinctEntry[] List(DistinctSnapshot snapshot, DistinctOrder order = DistinctOrder.Count, string? search = null, int offset = 0, int count = ViewSorter.MaxDistinctWindow) =>
+    private static DistinctValue[] List(DistinctSnapshot snapshot, DistinctOrder order = DistinctOrder.Count, string? search = null, int offset = 0, int count = ViewSorter.MaxDistinctWindow) =>
         snapshot.Read(order, offset, count, search, CancellationToken.None).Values;
 
-    private static string Describe(DistinctSnapshot snapshot, DistinctEntry[] values) =>
+    private static string Describe(DistinctSnapshot snapshot, DistinctValue[] values) =>
         $"rows {snapshot.Rows}, nulls {snapshot.Nulls}, distinct {snapshot.Distinct}: " + string.Join(", ", values.Select(value => $"{value.Text}@{value.Row}×{value.Count}{(value.Checked ? "" : "-")}"));
 
     private static int[] Kept(ResultSetBuffer set, DistinctSnapshot snapshot)
@@ -182,7 +182,10 @@ internal static class DistinctChecks
         var partial = Snapshot(loading, 0);
         partial.Tick(false, null, true, null, null, CancellationToken.None);
         partial.Tick(true, [3], false, null, null, CancellationToken.None);
-        check(!partial.Complete && partial.Freeze() is { Op: FilterOp.NotIn, Rows.Length: 9, Nulls: false }, "a snapshot of a set still loading always drops its cleared values");
+        // NULL cleared on a list that never showed one: NULLs that arrive later are not dropped with the cleared values.
+        partial.Tick(false, null, false, null, false, CancellationToken.None);
+        check(!partial.Complete && partial.Nulls == 0 && partial.Freeze() is { Op: FilterOp.NotIn, Rows.Length: 9, Nulls: false },
+            "a snapshot of a set still loading always drops its cleared values, and no NULL it never saw");
         // A column without NULL names no NULL in its In, whatever NULL's tick, so the filter keeps exactly one value.
         var whole = Fill(store, [new("n", "int", "text")], Enumerable.Range(0, 4).Select(i => new object?[] { (i % 2).ToString(CultureInfo.InvariantCulture) }));
         var bit = Snapshot(whole, 0);

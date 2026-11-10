@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { checklistCondition, columnFilterKind, conditionFilter, sameFilterFamily } from '../src/renderer/src/results/column-filter'
+import { blocksToDrop, checklistCondition, columnFilterKind, conditionFilter, listWindow, maxListSpace, sameFilterFamily } from '../src/renderer/src/results/column-filter'
 import type { DistinctList } from '../src/renderer/src/results/ResultClient'
 
 describe('column filter', () => {
@@ -34,5 +34,31 @@ describe('column filter', () => {
     expect(columnFilterKind({ op: 'between', column: 2, rows: [1, 2] }, 2)).toBe('between')
     expect(columnFilterKind({ op: 'between', column: 2, rows: [1, 2] }, 1)).toBeUndefined()
     expect(columnFilterKind({ op: 'duplicates', columns: [2] }, 2)).toBeUndefined()
+  })
+  it('gives each row its own pixels within the space a browser lays out, and maps the scroll bar past it so every row stays reachable', () => {
+    const near = listWindow({ scrollTop: 2200, viewHeight: 220, rowHeight: 22, rows: 1_000_000, overscan: 8 })
+    expect(near.space).toBe(22_000_000)
+    expect([near.first, near.last, near.offset(100), near.offset(5)]).toEqual([92, 118, 2200, 110])
+    // Two million rows of 22 px would need 44 million px: the space stops at the cap, and its ends show the first and last rows.
+    const rows = 2_000_000, base = { viewHeight: 220, rowHeight: 22, rows, overscan: 8 }
+    const top = listWindow({ ...base, scrollTop: 0 }), bottom = listWindow({ ...base, scrollTop: maxListSpace - 220 })
+    expect(top.space).toBe(maxListSpace)
+    expect([top.first, top.offset(0)]).toEqual([0, 0])
+    expect(bottom.last).toBe(rows)
+    expect(bottom.offset(rows - 1)).toBeCloseTo(maxListSpace - 22, 3)
+    expect(bottom.offset(rows - 10)).toBeCloseTo(maxListSpace - 220, 3)
+    // Halfway down the bar is halfway through the rows, drawn in view.
+    const middle = listWindow({ ...base, scrollTop: (maxListSpace - 220) / 2 })
+    const row = Math.floor((rows - 10) / 2)
+    expect(middle.first).toBeLessThanOrEqual(row)
+    expect(middle.last).toBeGreaterThan(row + 10)
+    expect(middle.offset(row)).toBeGreaterThanOrEqual((maxListSpace - 220) / 2 - 22)
+    expect(listWindow({ ...base, rows: 0, scrollTop: 0 })).toMatchObject({ space: 0, first: 0, last: 0 })
+  })
+
+  it('drops the cached blocks farthest from view, never one in view', () => {
+    expect(blocksToDrop([0, 1, 2], 1, 1, 4)).toEqual([])
+    expect(blocksToDrop([0, 1, 2, 3, 10, 50], 2, 3, 3)).toEqual([50, 10, 0])
+    expect(blocksToDrop([4, 5, 6], 4, 6, 1)).toEqual([])
   })
 })

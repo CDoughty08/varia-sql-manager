@@ -534,6 +534,18 @@ describe('ResultClient', () => {
     const closes = worker().fromWorker.filter(item => item.t === 'distinctClose').length
     await list.close()
     expect(worker().fromWorker.filter(item => item.t === 'distinctClose').length).toBe(closes)
+    // A snapshot answered after its open was given up (the cancel crossed the answer) is closed, not left in the backend.
+    const abort = new AbortController()
+    const given = handle.distinct(0, { signal: abort.signal })
+    await settle()
+    const asked = worker().fromWorker.findLast(item => item.t === 'distinct')!
+    abort.abort()
+    await expect(given).rejects.toMatchObject({ name: 'AbortError' })
+    await settle()
+    expect(worker().fromWorker.at(-1)).toEqual({ t: 'cancel', rid: asked.rid })
+    worker().toWorker({ t: 'end', rid: asked.rid, ok: true, result: { ...summary, snapshotId: 11 } })
+    await settle()
+    expect(worker().fromWorker.at(-1)).toEqual({ t: 'distinctClose', rid: expect.any(Number), generation: 1, resultId: 3, snapshotIds: [11] })
     // Refused before the port: a column the result lacks, a kept handle that is no view, and windows or ticks out of bounds.
     await expect(handle.distinct(0, { kept: handle })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     await expect(handle.distinct(1)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })

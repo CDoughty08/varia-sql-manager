@@ -69,3 +69,31 @@ export function checklistCondition(o: { list: DistinctList; checked: number; dis
   if (o.checked === o.distinct && (!o.hasNull || nullIn)) return { condition: { kind: 'all' } }
   return { condition: { kind: 'list', list: o.list } }
 }
+
+/** The checklist's tallest scroll space in px: Chromium clamps layout sizes near 33.5 million px, so a longer list maps its
+ *  scroll bar onto its rows instead of giving each row its own pixels. */
+export const maxListSpace = 30_000_000
+
+/** The rows of a virtual list of fixed-height rows drawn for a scroll position (with `overscan` rows past each edge), its
+ *  scroll space, and each row's place in it. Within `maxListSpace` a row sits at `row × rowHeight`; past it the scroll bar's
+ *  range spans the rows, and the rows in view are placed around the scroll position, so every row stays reachable. */
+export function listWindow(o: { scrollTop: number; viewHeight: number; rowHeight: number; rows: number; overscan: number; maxSpace?: number }): { space: number; first: number; last: number; offset(row: number): number } {
+  const { scrollTop, viewHeight, rowHeight, rows, overscan } = o, maxSpace = o.maxSpace ?? maxListSpace
+  const full = rows * rowHeight, space = Math.min(full, maxSpace), visible = Math.max(viewHeight, rowHeight) / rowHeight
+  const top = full <= maxSpace ? scrollTop / rowHeight
+    : Math.min(1, Math.max(0, scrollTop / Math.max(1, space - viewHeight))) * Math.max(0, rows - viewHeight / rowHeight)
+  return {
+    space,
+    first: Math.max(0, Math.floor(top) - overscan),
+    last: Math.min(rows, Math.ceil(top + visible) + overscan),
+    offset: row => full <= maxSpace ? row * rowHeight : scrollTop + (row - top) * rowHeight
+  }
+}
+
+/** The cached blocks to drop so at most `max` stay: the farthest from those in view (`first` to `last`), never one in view. */
+export function blocksToDrop(blocks: Iterable<number>, first: number, last: number, max: number): number[] {
+  const held = [...blocks]
+  if (held.length <= max) return []
+  const distance = (block: number) => block < first ? first - block : block > last ? block - last : 0
+  return held.filter(block => distance(block) > 0).sort((a, b) => distance(b) - distance(a)).slice(0, held.length - max)
+}
