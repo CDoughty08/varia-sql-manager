@@ -81,7 +81,8 @@ the rules that keep it lean.
   and `VARIA_RESULT_BUDGET_BYTES`. Suites import `electron` and `expect` from `scripts/fixtures/smoke.mjs`: assertions
   wait 15 s on Windows, whose runners can take seconds to write a file, and closing the app logs main's file operations
   that took 500 ms or more. A close that has not finished in 45 s kills the app and fails the suite without hiding its own
-  error (`boundedClose`), and `smoke-shards.mjs` kills a suite past four times its weight (at least 5 min), so one hang
+  error (`boundedClose`; on Linux it first names the processes still in the app's process group, since Playwright's close waits
+  for pipes the backend and its language server inherit), and `smoke-shards.mjs` kills a suite past four times its weight (at least 5 min), so one hang
   cannot run its shard to the job's timeout.
 
 

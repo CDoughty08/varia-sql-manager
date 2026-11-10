@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { boundedClose } from '../scripts/fixtures/smoke.mjs'
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
+import { boundedClose, groupMembers } from '../scripts/fixtures/smoke.mjs'
 
 const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
 let exitCode: typeof process.exitCode
@@ -83,6 +85,20 @@ describe('smoke close backstop', () => {
     expect(console.error).not.toHaveBeenCalled()
     expect(process.exitCode).toBe(7)
     expect(vi.getTimerCount()).toBe(0)
+  })
+
+  // A hung close on CI showed only that main had exited; the process that still held its pipes went unnamed.
+  it.runIf(process.platform === 'linux')('names the processes still in a process group', async () => {
+    vi.useRealTimers()
+    const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], { detached: true, stdio: ['pipe', 'ignore', 'ignore'] })
+    try {
+      await once(child, 'spawn')
+      expect(groupMembers(child.pid!)).toEqual([expect.stringMatching(new RegExp(`^.+ ${child.pid} [RSD]$`))])
+    } finally {
+      child.stdin.end()
+      await once(child, 'exit')
+    }
+    expect(groupMembers(child.pid!)).toEqual([])
   })
 
   it('propagates a close error without replacing it with timeout cleanup', async () => {
