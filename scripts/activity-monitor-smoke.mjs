@@ -288,6 +288,15 @@ try {
   await page.keyboard.press('Escape')
   await expect(columnFilters).toHaveCount(0)
   await expect(filters.getByRole('button', { name: 'Column filters (1)', exact: true })).toBeFocused()
+  // A chosen value the facets no longer list (Blocked leaves no BillingDb row) stays listed, checked, so it can be turned
+  // off; a click outside closes the panel.
+  await filters.getByRole('button', { name: 'Blocked', exact: true }).click()
+  await expect(monitor().getByText(/^0 sessions · 2 filters on/)).toBeVisible()
+  await filters.getByRole('button', { name: 'Column filters (1)', exact: true }).click()
+  await columnFilters.getByRole('combobox', { name: 'Column', exact: true }).selectOption('database')
+  await expect(columnFilters.getByRole('checkbox', { name: /^BillingDb\s*—$/ })).toBeChecked()
+  await monitor().getByText(/^0 sessions · 2 filters on/).click()
+  await expect(columnFilters).toHaveCount(0)
   await filters.getByRole('button', { name: 'Clear filters', exact: true }).click()
   await expect(monitor().getByText(/^3 sessions/)).toBeVisible()
   console.log('Processes passed: rows from the sessions probe, the view chip, toggles, filter box and column filters reach the backend, and Clear filters resets them.')

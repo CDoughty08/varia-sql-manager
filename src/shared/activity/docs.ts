@@ -161,6 +161,7 @@ export function renderActivityMonitorDocs(): string {
     'pauses, on Enter or on leaving it; Escape puts back what was sent) and Clear filters, which keeps the toggles. All of them',
     `travel as the source's args and the backend filters the sample, so the SQL never changes. A status line counts the`,
     'sessions shown and says what is hidden or cut; the pane keeps its last rows, dimmed, with the reason when a sample fails.',
+    `A chosen value the facets no longer list stays in Column filters, checked, with a dash for its count; a column takes at most ${number(activityLimits.columnFilterValues)} values, and the panel closes on Escape or a click outside. With no rows yet the pane says whether it waits for a sample, is paused or has stopped.`,
     '',
     table(['Command', 'Id', 'Windows and Linux', 'macOS'], Object.entries(documentCommands).map(([id, command]) => [command.title, code(id), command.other, command.darwin])),
     '',

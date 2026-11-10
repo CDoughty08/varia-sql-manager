@@ -4,7 +4,7 @@
 import type { ReactNode } from 'react'
 import InlineError from '../../kit/InlineError'
 import Skeleton from '../../kit/Skeleton'
-import type { LiveProbeSnapshot } from '../../live/LiveService'
+import type { LiveProbeSnapshot, LiveSnapshot } from '../../live/LiveService'
 
 export interface PaneProblem {
   /** failing: the last sample failed and the probe retries by itself; refused: this table cannot be read here. */
@@ -23,7 +23,22 @@ export function paneProblem(probe: LiveProbeSnapshot | undefined, table: number)
   return probe.state === 'failing' || probe.state === 'stale' ? { kind: 'failing', code: error.code, message: error.message } : undefined
 }
 
-export default function PaneState({ problem, hasRows, children }: { readonly problem: PaneProblem | undefined; readonly hasRows: boolean; readonly children: ReactNode }) {
+/**
+ * Why a pane has no rows yet when nothing failed: loading while samples can still come, paused while its probe is paused
+ * (the monitor's Pause, or Retry while paused), stopped once the view ended or was lost (the document's banner says why).
+ */
+export type PaneWaiting = 'loading' | 'paused' | 'stopped'
+export function paneWaiting(snapshot: LiveSnapshot, probe: string): PaneWaiting {
+  if (snapshot.status === 'ended' || snapshot.status === 'lost') return 'stopped'
+  return snapshot.status === 'paused' || snapshot.probes[probe]?.state === 'paused' ? 'paused' : 'loading'
+}
+export const paneWaitingText: Readonly<Record<PaneWaiting, string>> = {
+  loading: 'Waiting for the first sample…',
+  paused: 'Paused: rows arrive when sampling resumes.',
+  stopped: 'No rows: the monitor stopped sampling.'
+}
+
+export default function PaneState({ problem, hasRows, waiting, children }: { readonly problem: PaneProblem | undefined; readonly hasRows: boolean; readonly waiting: PaneWaiting; readonly children: ReactNode }) {
   if (problem?.kind === 'refused' && !hasRows) return <div className="activity-pane-grid"><InlineError className="activity-pane-notice" role="status" code={problem.code} message={problem.message} copy={false} /></div>
   return <div className="activity-pane-grid" data-stale={problem && hasRows ? '' : undefined}>
     {problem && <InlineError className="activity-pane-notice" role="status" code={problem.code} message={hasRows ? `${problem.message} The rows below are from the last sample that succeeded.` : problem.message} copy={false} />}
@@ -31,7 +46,9 @@ export default function PaneState({ problem, hasRows, children }: { readonly pro
         then the placeholder rows cover it. */}
     <div className="activity-pane-rows">
       {children}
-      {!hasRows && !problem && <div className="activity-pane-loading"><Skeleton rows={6} label="Waiting for the first sample" /></div>}
+      {!hasRows && !problem && (waiting === 'loading'
+        ? <div className="activity-pane-loading"><Skeleton rows={6} label="Waiting for the first sample" /></div>
+        : <p className="activity-pane-loading activity-note">{paneWaitingText[waiting]}</p>)}
     </div>
   </div>
 }

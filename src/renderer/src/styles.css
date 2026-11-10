@@ -2278,7 +2278,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .activity-filter-box { display: inline-flex; align-items: center; gap: var(--varia-space-1); color: var(--varia-descriptionForeground); }
 .activity-filter-box input { width: 22ch; height: var(--varia-control); padding: 0 var(--varia-space-2); }
 .activity-column-filters { position: relative; }
-.activity-popover { position: absolute; top: calc(100% + 4px); right: 0; z-index: 20; display: flex; flex-direction: column; gap: var(--varia-space-2); width: 300px; max-height: 360px; padding: var(--varia-space-2); border: 1px solid var(--varia-widget-border); border-radius: var(--varia-radius-lg); background: var(--varia-editorWidget-background); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); }
+.activity-popover { position: fixed; inset: auto; margin: 0; flex-direction: column; gap: var(--varia-space-2); overscroll-behavior: contain; padding: var(--varia-space-2); border: 1px solid var(--varia-widget-border); border-radius: var(--varia-radius-lg); background: var(--varia-editorWidget-background); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); }
+.activity-popover:popover-open { display: flex; }
 .activity-popover-row { display: flex; align-items: center; gap: var(--varia-space-2); }
 .activity-popover-row select { flex: 1; }
 .activity-popover-values { display: flex; flex-direction: column; gap: 2px; min-height: 0; overflow: auto; }
