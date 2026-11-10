@@ -28,7 +28,7 @@ internal sealed record ViewFilter(FilterOp Op, int Column, int[]? Rows, bool Nul
 /// draws them as it does a result's own. It covers the rows sealed when it was built; a view of a set still loading is
 /// built again by the renderer once more rows arrive. Its order array is charged to the result's query budget and
 /// returned when the view is closed, replaced, or its result is released.</summary>
-internal sealed class ResultView(uint viewId, ResultSetBuffer set, int[] order, IReadOnlyList<ViewKey> keys, bool approximate, bool complete, long charged)
+internal sealed class ResultView(uint viewId, ResultSetBuffer set, int[] order, IReadOnlyList<ViewKey> keys, bool approximate, bool complete, long charged, long baseRows = long.MaxValue)
 {
     public uint ViewId { get; } = viewId;
     public ResultSetBuffer Set { get; } = set;
@@ -39,6 +39,8 @@ internal sealed class ResultView(uint viewId, ResultSetBuffer set, int[] order, 
     public bool Approximate { get; } = approximate;
     /// <summary>The result had finished loading when the view was built: it covers every row.</summary>
     public bool Complete { get; } = complete;
+    /// <summary>The base rows it was built from (those sealed then): a row past them is one it has not looked at.</summary>
+    public long BaseRows { get; } = baseRows;
     internal long Charged { get; } = charged;
     public long Rows => Order.Length;
 }
@@ -51,7 +53,7 @@ internal sealed class ResultView(uint viewId, ResultSetBuffer set, int[] order, 
 /// _BIN and _BIN2), ignoring trailing spaces as SQL Server does; every other type by its display text's code points.
 /// Each row keeps 8 to 16 bytes per key while sorting (a number, or a prefix of its collation sort key), so most
 /// comparisons never touch the stored cell; ties read it again from its page.</summary>
-internal static class ViewSorter
+internal static partial class ViewSorter
 {
     public const int MaxKeys = 16;
     /// <summary>Filters one view takes, distinct values one In or NotIn filter holds, and cell ranges one selection names
@@ -522,6 +524,15 @@ internal static class ViewSorter
             var index = Array.BinarySearch(starts, (long)row);
             if (index < 0) index = ~index - 1;
             return View(index).Span(column, (int)(row - starts[index]));
+        }
+
+        /// <summary>The page holding row <paramref name="row"/>, and the row's place in it (its flags as well as its cells).</summary>
+        public PageView ViewOf(int row, out int local)
+        {
+            var index = Array.BinarySearch(starts, (long)row);
+            if (index < 0) index = ~index - 1;
+            local = (int)(row - starts[index]);
+            return View(index);
         }
     }
 

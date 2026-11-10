@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (288)
+## Commands (289)
 
 ### File
 
@@ -158,6 +158,7 @@ keys it uses are listed below.
 | Find in Results | `output.find` | Ctrl+F (`outputGridFocus`) | Ctrl+F (`outputGridFocus`) | ⌘F (`outputGridFocus`) | `hasResults` | — |
 | Find Next in Results | `output.findNext` | F3 (`outputGridFocus`) | F3 (`outputGridFocus`) | ⌘G (`outputGridFocus`), F3 (`outputGridFocus`) | `hasResults` | — |
 | Find Previous in Results | `output.findPrevious` | Shift+F3 (`outputGridFocus`) | Shift+F3 (`outputGridFocus`) | ⇧⌘G (`outputGridFocus`), ⇧F3 (`outputGridFocus`) | `hasResults` | — |
+| Filter Column Values… (not in the palette) | `output.filterColumnValues` | Alt+Down (`outputGridFocus`) | Alt+Down (`outputGridFocus`) | ⌥↓ (`outputGridFocus`) | Always | Query Output context menu › Filter › Filter Column Values… |
 | Filter for Selected Values (not in the palette) | `output.filterSelection` | — | — | — | Always | Query Output context menu › Filter › Filter for Selected Values |
 | Exclude Selected Values (not in the palette) | `output.excludeSelection` | — | — | — | Always | Query Output context menu › Filter › Exclude Selected Values |
 | Filter Between Lowest and Highest Selected (not in the palette) | `output.filterBetween` | — | — | — | Always | Query Output context menu › Filter › Filter Between Lowest and Highest Selected |
@@ -845,6 +846,7 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
+| `0_column` | Filter Column **V**alues… | `output.filterColumnValues` | `outputView == 'grid'` |
 | `1_values` | Filter for **S**elected Values | `output.filterSelection` | `outputView == 'grid'` |
 | `1_values` | **E**xclude Selected Values | `output.excludeSelection` | `outputView == 'grid'` |
 | `1_values` | Filter **B**etween Lowest and Highest Selected | `output.filterBetween` | `outputView == 'grid'` |

@@ -154,6 +154,23 @@ internal sealed record ColumnProfile(int Column, long Values, long Nulls, long D
 /// <summary>Rows profiled (the view's, or the rows sealed when it ran), whether they were all the result's, the rows' byte
 /// sizes (null without rows), and the columns asked for, in order.</summary>
 internal sealed record ResultsProfileResult(long Rows, bool Complete, ProfileLengths? RowBytes, ColumnProfile[] Columns);
+/// <summary>results.distinct: one column's distinct values over a result's rows, or its view's (ViewId), ordered by "count"
+/// (most frequent first) or "value", at most MaxValues (1 to 4,096) of them; Search (1 to 1,024 characters) keeps the
+/// values whose display text contains it. KeptViewId, another view of the result, has each value say whether one of that
+/// view's rows holds it.</summary>
+internal sealed record ResultsDistinctArgs(uint ResultId, int Column, string Order, int MaxValues, string? Search = null, uint? ViewId = null, uint? KeptViewId = null);
+/// <summary>A distinct value: its representative base row (the lowest holding it), its display text (binary as 0x hex, at
+/// most 256 characters and "…"), how many rows hold it, and with a KeptViewId whether a row of that view holds it.</summary>
+internal sealed record DistinctValue(int Row, string Text, long Count, bool? Kept = null);
+/// <summary>Rows looked at (the view's, or the rows sealed when it ran) and whether they were all the result's; Nulls counts
+/// NULL and unreadable cells; Distinct the values the search kept, of which Values are the first in the order asked
+/// (Truncated when there were more); Approximate when a truncated value compared by its stored prefix; with a KeptViewId,
+/// NullsKept says whether that view has a NULL (or unreadable) cell in the column, UnlistedKept whether it holds a value
+/// past those listed, and UnlistedHeld and UnlistedDropped the representative rows of those past values it holds and does
+/// not hold, each absent when they are more than one filter holds. A view built while the set loaded holds the rows sealed
+/// after it.</summary>
+internal sealed record ResultsDistinctResult(long Rows, bool Complete, long Nulls, long Distinct, bool Truncated, bool Approximate, DistinctValue[] Values, bool? NullsKept = null, bool? UnlistedKept = null,
+    int[]? UnlistedHeld = null, int[]? UnlistedDropped = null);
 /// <summary>results.rowBytes: Bytes[k] is row FirstRow + k's sum of DATALENGTH over its cells (NULL counts 0; xml and json
 /// as their text, some sql_variant base types estimated: docs/ipc.md, Cell lengths and row sizes); it stops at the rows sealed
 /// so far. Estimated lists, in order, the rows of the range whose sum includes an estimate.</summary>

@@ -1,7 +1,7 @@
 // The renderer's access to stored query results (the PR7 grid contract). Rows stay in the backend; the results worker
 // reads and decodes pages, and the UI thread receives only windows of display text. Live subscriptions run through the
 // same worker and port: their tables are ordinary stored results, opened with the same handles.
-import type { ApiResult, BackendStatus, IdentityBy, QueryEvent, QueryResult, ResultColumn, ResultDescriptor, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ResolvedViewFilter, TruncationReason, VariaApi, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
+import type { ApiResult, BackendStatus, IdentityBy, QueryEvent, QueryResult, ResultColumn, ResultDescriptor, ResultsDiffResult, ResultsDistinctParams, ResultsDistinctResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ResolvedViewFilter, TruncationReason, VariaApi, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport } from '../../../shared/ipc/port-messages'
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
@@ -80,6 +80,10 @@ export interface ResultHandle extends Disposable {
   /** Aggregates for up to `limits.profile.maxColumns` distinct columns over the rows (a view's rows, through a view), computed
    *  in the backend (results.profile): never rows. No columns gives only the rows' byte sizes. */
   profile(columns: readonly number[], signal?: AbortSignal): Promise<ResultsProfileResult>
+  /** A column's distinct values with their counts over the rows (a view's rows, through a view), grouped in the backend as
+   *  a filter compares them (results.distinct); each value names a representative base row to filter by. `kept`, a view of
+   *  the same result, has each value (and NULL) say whether a row of that view holds it. */
+  distinct(column: number, o: { order: ResultsDistinctParams['order']; maxValues?: number; search?: string; kept?: ResultHandle; signal?: AbortSignal }): Promise<ResultsDistinctResult>
   /** Releases the result in the backend (results.close); queued while the results port is down. A view's close closes
    *  only the view (results.viewClose). */
   close(): Promise<void>
@@ -356,6 +360,21 @@ export class ResultClient implements Disposable {
           throw new ResultError('INVALID_PARAMS', 'Each profiled column must be a distinct column of the result.')
         const response = await this.request(id => ({ type: 'profile', id, key: state.key, columns: [...columns] }), signal)
         if (response.type !== 'profile') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
+        return response.result
+      },
+      distinct: async (column, o) => {
+        this.usable(state)
+        const maxValues = o.maxValues ?? wire.distinct.maxValues
+        if (!Number.isInteger(column) || column < 0 || column >= state.columns.length) throw new ResultError('INVALID_PARAMS', 'The column is not one of the result\'s.')
+        if (!Number.isInteger(maxValues) || maxValues < 1 || maxValues > wire.distinct.maxValues || (o.order !== 'count' && o.order !== 'value'))
+          throw new ResultError('INVALID_PARAMS', 'Distinct values need an order of count or value and 1 to 4,096 values.')
+        if (o.search !== undefined && (o.search.length < 1 || o.search.length > wire.search.maxText)) throw new ResultError('INVALID_PARAMS', 'Search for 1 to 1,024 characters.')
+        const keptViewId = o.kept?.key.view
+        if (o.kept && (keptViewId === undefined || o.kept.key.generation !== state.key.generation || o.kept.key.resultId !== state.key.resultId))
+          throw new ResultError('INVALID_PARAMS', 'Kept values are read through a view of the same result.')
+        const params = { column, order: o.order, maxValues, ...(o.search === undefined ? {} : { search: o.search }), ...(keptViewId === undefined ? {} : { keptViewId }) }
+        const response = await this.request(id => ({ type: 'distinct', id, key: state.key, params }), o.signal)
+        if (response.type !== 'distinct') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
         return response.result
       },
       close,
@@ -747,7 +766,7 @@ export class ResultClient implements Disposable {
 
   private received(message: WorkerResponse): void {
     switch (message.type) {
-      case 'window': case 'cell': case 'closed': case 'rowBytes': case 'measure': case 'stats': case 'liveUpdated': case 'view': case 'viewClosed': case 'identity': case 'search': case 'profile': {
+      case 'window': case 'cell': case 'closed': case 'rowBytes': case 'measure': case 'stats': case 'liveUpdated': case 'view': case 'viewClosed': case 'identity': case 'search': case 'profile': case 'distinct': {
         const pending = this.pending.get(message.id)
         this.pending.delete(message.id)
         pending?.resolve(message)

@@ -22,6 +22,7 @@ export interface FakeHandle extends ResultHandle {
   readonly sort: ReturnType<typeof vi.fn<ResultHandle['sort']>>
   readonly search: ReturnType<typeof vi.fn<ResultHandle['search']>>
   readonly profile: ReturnType<typeof vi.fn<ResultHandle['profile']>>
+  readonly distinct: ReturnType<typeof vi.fn<ResultHandle['distinct']>>
 }
 
 /**
@@ -72,6 +73,8 @@ export function fakeResultClient() {
         })),
         search: vi.fn<ResultHandle['search']>(async () => ({ rows: 0, total: 0, first: 0, matchRows: [], matchColumns: [], complete: true, approximate: false })),
         profile: vi.fn<ResultHandle['profile']>(async columns => ({ rows: handle.snapshot.rowsAvailable, complete: handle.snapshot.state === 'complete', columns: columns.map(column => ({ column, values: 0, nulls: 0, distinct: 0, distinctExact: true, approximate: false })) })),
+        // Distinct values: none unless a test says otherwise.
+        distinct: vi.fn<ResultHandle['distinct']>(async () => ({ rows: handle.snapshot.rowsAvailable, complete: handle.snapshot.state === 'complete', nulls: 0, distinct: 0, truncated: false, approximate: false, values: [] })),
         dispose: vi.fn()
       }
       settle(handle, value, false)

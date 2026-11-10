@@ -1,6 +1,6 @@
 // Messages between the UI thread (ResultClient) and the results worker. The worker also owns the results port to main
 // (src/shared/ipc/port-messages.ts).
-import type { BackendStatus, IdentityBy, QueryEvent, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ResolvedViewFilter, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
+import type { BackendStatus, IdentityBy, QueryEvent, ResultsDiffResult, ResultsDistinctParams, ResultsDistinctResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ResolvedViewFilter, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport } from '../../../shared/ipc/port-messages'
 import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
@@ -79,6 +79,9 @@ export type WorkerRequest =
   | { readonly type: 'search'; readonly id: number; readonly key: ResultKey; readonly text: string; readonly fromRow: number; readonly maxMatches: number; readonly backward: boolean }
   /** A column profile (results.profile) of `key`'s rows, through its view when it names one; `cancel` with the same id stops it. */
   | { readonly type: 'profile'; readonly id: number; readonly key: ResultKey; readonly columns: readonly number[] }
+  /** A column's distinct values (results.distinct) over `key`'s rows, through its view when it names one; `cancel` with the
+   *  same id stops it. */
+  | { readonly type: 'distinct'; readonly id: number; readonly key: ResultKey; readonly params: Omit<ResultsDistinctParams, 'resultId' | 'viewId'> }
   /** A live subscription (docs/ipc.md, Live subscriptions); `cancel` with the same id ends it. */
   | { readonly type: 'live'; readonly id: number; readonly params: LiveSubscribeParams }
   /** A change to the running subscription whose request id is `live`. */
@@ -102,6 +105,7 @@ export type WorkerResponse =
   | { readonly type: 'identity'; readonly id: number; readonly result: ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsDiffResult }
   | { readonly type: 'search'; readonly id: number; readonly result: ResultsSearchResult }
   | { readonly type: 'profile'; readonly id: number; readonly result: ResultsProfileResult }
+  | { readonly type: 'distinct'; readonly id: number; readonly result: ResultsDistinctResult }
   | { readonly type: 'error'; readonly id: number; readonly code: ErrorCode; readonly message: string }
   | { readonly type: 'query'; readonly queryId: string; readonly event: QueryEvent }
   | ({ readonly type: 'memory'; readonly feature: MemoryFeature } & MemoryReport)

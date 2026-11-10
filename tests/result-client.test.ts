@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ResultClient, WindowCache, type PortMessageEvent, type RowWindow, type WindowLike, type WorkerLike } from '../src/renderer/src/results/ResultClient'
 import { ResultsWorkerCore } from '../src/renderer/src/results/worker-core'
 import type { WorkerRequest, WorkerResponse } from '../src/renderer/src/results/worker-protocol'
-import type { ApiResult, QueryResult, ResultDescriptor, ResultsProfileResult } from '../src/shared/contracts'
+import type { ApiResult, QueryResult, ResultDescriptor, ResultsDistinctResult, ResultsProfileResult } from '../src/shared/contracts'
 import type { PortMessage, PortRequest } from '../src/shared/ipc/port-messages'
 import type { LiveEvent, LiveSubscribeParams } from '../src/shared/live/schema'
 import { columnViewBytes, encodePage } from '../src/shared/ipc/wire/pages'
@@ -460,6 +460,41 @@ describe('ResultClient', () => {
     expect((await viewed).columns).toEqual([])
     await expect(handle.profile([1])).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     await expect(handle.profile([0, 0])).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+  })
+
+  it('lists the distinct values of a column through a result or its view and refuses bad requests before the port', async () => {
+    const { client, worker, handOver } = fixture()
+    handOver()
+    await client.ready()
+    worker().toWorker({ t: 'backend', generation: 1, status: 'ready' })
+    const handle = client.open(descriptor())
+    const answer = async (result: unknown) => {
+      await settle()
+      const request = worker().fromWorker.findLast(item => item.t === 'distinct')!
+      worker().toWorker({ t: 'end', rid: request.rid, ok: true, result: result as ResultsDistinctResult })
+      return request
+    }
+    const result = { rows: 10, complete: true, nulls: 2, distinct: 2, truncated: false, approximate: false, values: [{ row: 0, text: 'a', count: 5 }, { row: 4, text: 'b', count: 3 }] }
+    const listing = handle.distinct(0, { order: 'count' })
+    expect(await answer(result)).toEqual(expect.objectContaining({ t: 'distinct', generation: 1, resultId: 3, column: 0, order: 'count', maxValues: 4096 }))
+    expect(await listing).toEqual(result)
+    const sorting = handle.sort([{ column: 0, descending: true, mode: 'value' }])
+    await settle()
+    const sort = worker().fromWorker.findLast(item => item.t === 'view')!
+    worker().toWorker({ t: 'end', rid: sort.rid, ok: true, result: { viewId: 2, rows: 10, baseRows: 10, complete: true, approximate: false } })
+    const view = await sorting
+    const viewed = view.distinct(0, { order: 'value', maxValues: 5, search: 'b' })
+    expect(await answer({ ...result, distinct: 1, values: [result.values[1]] })).toMatchObject({ t: 'distinct', resultId: 3, column: 0, order: 'value', maxValues: 5, search: 'b', viewId: 2 })
+    expect((await viewed).values).toEqual([result.values[1]])
+    // A kept view of the same result goes with the request; the result itself, with no view, is refused.
+    const marked = handle.distinct(0, { order: 'count', kept: view })
+    expect(await answer({ ...result, values: result.values.map(value => ({ ...value, kept: true })), nullsKept: true, unlistedKept: false })).toMatchObject({ t: 'distinct', keptViewId: 2 })
+    expect((await marked).nullsKept).toBe(true)
+    await expect(view.distinct(0, { order: 'count', kept: handle })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.distinct(1, { order: 'count' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.distinct(0, { order: 'count', maxValues: 4097 })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.distinct(0, { order: 'count', search: '' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.distinct(0, { order: 'random' as 'count' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
   })
 
   it('bounds the text of the windows a result remembers', async () => {

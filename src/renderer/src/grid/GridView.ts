@@ -83,6 +83,8 @@ interface HeaderSlot {
   readonly el: HTMLDivElement; readonly text: Text; readonly type: Text; column: number; sel: boolean; mark: number; shown: boolean; left: number; width: number
   /** The sort button (grids with `onSort`): its glyph, its place among several keys, and what it shows now ('' unsorted). */
   readonly sort?: { readonly el: HTMLSpanElement; readonly glyph: HTMLSpanElement; readonly order: Text; state: string }
+  /** The funnel button (grids with `onFilter`), filled while its column has a filter. */
+  readonly funnel?: { readonly el: HTMLSpanElement; readonly glyph: HTMLSpanElement; on: boolean }
 }
 /** A sorted column as its header shows it: its place among the sort's keys and its direction. */
 export interface HeaderSortKey { readonly column: number; readonly descending: boolean }
@@ -140,6 +142,10 @@ export interface GridViewOptions {
   readonly sort?: readonly HeaderSortKey[]
   /** A header's sort button was clicked (`add`: grid.addSortKey's modifier was held); without it headers have none. */
   onSort?(column: number, add: boolean): void
+  /** The columns with a filter of their own; their funnels show it. */
+  readonly filtered?: ReadonlySet<number>
+  /** A header's funnel was clicked: the popover opens under `anchor`. Without it headers have none. */
+  onFilter?(column: number, anchor: DOMRect): void
 }
 
 /**
@@ -208,6 +214,7 @@ export class GridView {
   private whitespace: WhitespaceMode
   /** Each sorted column's place among the keys and direction. */
   private sortKeys: ReadonlyMap<number, { readonly at: number; readonly descending: boolean }>
+  private filtered: ReadonlySet<number>
   /** The row-size bar's sizes for the handle shown, while the bar is on. */
   private sizes: RowSizes | undefined
   private rowHeader = 0
@@ -276,6 +283,7 @@ export class GridView {
     this.showTypes = o.showTypes ?? true
     this.whitespace = o.whitespace ?? 'none'
     this.sortKeys = sortMap(o.sort)
+    this.filtered = o.filtered ?? new Set()
     if (o.rowSize) this.sizes = this.sizesFor(o.handle)
     this.capOverride = o.stats?.scrollCap
     this.cap = this.capOverride ?? scrollCap(windowOf(o.root).devicePixelRatio)
@@ -365,7 +373,8 @@ export class GridView {
     this.setStatus({})
     this.schedule()
   }
-  update(o: { resultCount: number; showTypes?: boolean; whitespace?: WhitespaceMode; sort?: readonly HeaderSortKey[]; rowSize?: boolean }): void {
+  update(o: { resultCount: number; showTypes?: boolean; whitespace?: WhitespaceMode; sort?: readonly HeaderSortKey[]; rowSize?: boolean; filtered?: ReadonlySet<number> }): void {
+    if (o.filtered && !sameSet(o.filtered, this.filtered)) { this.filtered = o.filtered; this.schedule() }
     const showTypes = o.showTypes ?? this.showTypes, whitespace = o.whitespace ?? this.whitespace
     if (o.rowSize !== undefined && o.rowSize !== !!this.sizes) {
       this.sizes?.dispose()
@@ -729,18 +738,27 @@ export class GridView {
   private pointerDown(event: PointerEvent): void {
     const press = pressButton(event, this.o.platform)
     if (!press) return
+    this.syncPointerFrame()
+    const point = this.point(event)
+    let hit = point.inside ? this.hitAt(point.x, point.y) : undefined
+    // A column's border stays a resize grip over the header buttons drawn at its right end.
+    const onButton = press === 'primary' && hit?.kind !== 'resize'
+    // A press on a header's funnel opens its popover; it selects nothing and starts no drag.
+    const funnel = onButton && this.o.onFilter ? (event.target as Element | null)?.closest?.('.rg-cf') : null
+    const filterColumn = funnel ? this.slots.get(funnel.parentElement!)?.header?.column ?? -1 : -1
+    if (filterColumn >= 0) {
+      event.preventDefault()
+      this.o.onFilter!(filterColumn, funnel!.getBoundingClientRect())
+      return
+    }
     // A press on a header's sort button sorts; it selects nothing and starts no drag.
-    const button = press === 'primary' && this.o.onSort ? (event.target as Element | null)?.closest?.('.rg-cs') : null
+    const button = onButton && this.o.onSort ? (event.target as Element | null)?.closest?.('.rg-cs') : null
     const column = button ? this.slots.get(button.parentElement!)?.header?.column ?? -1 : -1
     if (column >= 0) {
       event.preventDefault()
       this.o.onSort!(column, this.gestures.matches('grid.addSortKey', event))
       return
     }
-    this.syncPointerFrame()
-    const point = this.point(event)
-    if (!point.inside) return
-    let hit = this.hitAt(point.x, point.y)
     if (!hit) return
     if (hit.kind === 'resize') {
       if (press === 'primary') { this.startResize(event.pointerId, point.x, hit.column); return }
@@ -1006,8 +1024,21 @@ export class GridView {
           sort = { el: button, glyph, order, state: '' }
           button.title = 'Sort ascending'
         }
+        let funnel: HeaderSlot['funnel']
+        if (this.o.onFilter) {
+          // Hidden from screen readers like the sort button: Filter Column Values (Alt+Down) opens the same popover.
+          const button = doc.createElement('span'), glyph = doc.createElement('span')
+          button.className = 'rg-cf'
+          button.setAttribute('aria-hidden', 'true')
+          button.title = 'Filter column values'
+          glyph.className = codiconClass('filter')
+          button.append(glyph)
+          el.append(button)
+          el.classList.add('fb')
+          funnel = { el: button, glyph, on: false }
+        }
         this.head.append(el)
-        const header: HeaderSlot = { el, text, type, column: -1, sel: false, mark: 0, shown: false, left: Number.NaN, width: -1, ...sort ? { sort } : {} }
+        const header: HeaderSlot = { el, text, type, column: -1, sel: false, mark: 0, shown: false, left: Number.NaN, width: -1, ...sort ? { sort } : {}, ...funnel ? { funnel } : {} }
         this.slots.set(el, { header })
         this.headerSlots.push(header)
       }
@@ -1455,7 +1486,7 @@ export class GridView {
         if (width !== header.width) {
           header.width = width
           header.el.style.width = width + 'px'
-          if (header.sort) header.el.classList.toggle('narrow', width < g.sortButtonMinWidth)
+          if (header.sort || header.funnel) header.el.classList.toggle('narrow', width < g.sortButtonMinWidth)
         }
       }
       if (!header.shown) { header.shown = true; header.el.style.display = '' }
@@ -1469,8 +1500,21 @@ export class GridView {
         header.mark = mark
       }
       if (header.sort) this.paintSort(header, header.sort, column)
+      if (header.funnel && header.funnel.on !== this.filtered.has(column)) {
+        const on = header.funnel.on = this.filtered.has(column)
+        header.funnel.el.classList.toggle('on', on)
+        header.funnel.glyph.className = codiconClass(on ? 'filter-filled' : 'filter')
+        header.funnel.el.title = on ? 'Filter column values (filtered)' : 'Filter column values'
+      }
     }
     for (const header of this.headerSlots) if (!used.has(header) && header.shown) { header.shown = false; header.column = -1; header.el.style.display = 'none'; header.el.removeAttribute('aria-colindex') }
+  }
+
+  /** Where a column's funnel popover opens: under its header's right end, clamped to the grid (Alt+Down in a grid). */
+  filterAnchor(column: number): DOMRect {
+    const box = this.scroller.getBoundingClientRect()
+    const right = Math.min(box.right, Math.max(box.left + this.rowHeader, box.left + this.rowHeader + this.layout.xOf(column) + this.layout.width(column) - this.o.state.scrollLeft))
+    return new DOMRect(right - 18, box.top, 18, g.headerHeight)
   }
 
   /** A header's sort button: the direction's arrow, its place when the grid sorts by several columns, and aria-sort on the
@@ -1573,3 +1617,4 @@ export function focusInRun(root: Pick<HTMLElement, 'dataset'>, active: Pick<Elem
   const tabId = root.dataset.tabId
   return tabId !== undefined && active?.closest<HTMLElement>('[data-result-grid]')?.dataset.tabId === tabId
 }
+const sameSet = (a: ReadonlySet<number>, b: ReadonlySet<number>) => a.size === b.size && [...a].every(item => b.has(item))

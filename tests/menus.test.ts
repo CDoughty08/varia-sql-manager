@@ -367,7 +367,7 @@ describe('menu state', () => {
       // Sorting a grid: its menu and its headers' sort buttons; Sort text by is the results toolbar's and the palette's.
       'output.sortAscending', 'output.sortDescending', 'output.thenSortAscending', 'output.thenSortDescending', 'output.clearSort', 'output.sortTextByChars', 'output.sortTextByBytes',
       // The grid menu's Filter submenu.
-      'output.filterSelection', 'output.excludeSelection', 'output.filterBetween', 'output.excludeNulls', 'output.filterDuplicates', 'output.filterDuplicateRows', 'output.clearFilters',
+      'output.filterColumnValues', 'output.filterSelection', 'output.excludeSelection', 'output.filterBetween', 'output.excludeNulls', 'output.filterDuplicates', 'output.filterDuplicateRows', 'output.clearFilters',
       // The grid menu's Highlight submenu and its key.
       'output.highlightRows', 'output.highlightYellow', 'output.highlightGreen', 'output.highlightBlue', 'output.highlightPurple', 'output.highlightRed', 'output.clearHighlight', 'output.clearAllHighlights',
       // Search in results: the results toolbar's search box, its keys in a grid, and the palette.

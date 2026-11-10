@@ -311,6 +311,21 @@ export interface ColumnProfile {
 /** `rows` profiled (the view's, or the rows sealed when it ran) and whether that was all of them; the rows' byte sizes
  *  (absent without rows); the columns asked for, in order. */
 export interface ResultsProfileResult { rows: number; complete: boolean; rowBytes?: ProfileLengths; columns: ColumnProfile[] }
+/** results.distinct: a column's distinct values through `viewId`'s rows when given (else the rows sealed now), ordered by
+ *  `count` (most frequent first, ties by value) or `value`, at most `maxValues` (1 to `limits.distinct.maxValues`) of them;
+ *  `search` keeps the values whose display text contains it, compared as the results search compares a cell. With
+ *  `keptViewId`, another view of the result, each value says whether a row of that view holds it, `nullsKept` whether it
+ *  has a NULL and `unlistedKept` whether it holds a value past those listed; `unlistedHeld` and `unlistedDropped` name
+ *  the representative rows of those past values it holds and does not hold, each when one filter holds them. Rows sealed
+ *  after that view was built count as held. */
+export interface ResultsDistinctParams { resultId: number; column: number; order: 'count' | 'value'; maxValues: number; search?: string; viewId?: number; keptViewId?: number }
+/** A distinct value: its representative base row (the lowest holding it, so an `in` or `notIn` filter by it compares this
+ *  value), its display text (binary as 0x hex, at most `limits.distinct.valueChars` characters and "…") and its count. */
+export interface DistinctValue { row: number; text: string; count: number; kept?: boolean }
+/** `rows` looked at and whether they were all the result's; `nulls` NULL and unreadable cells; `distinct` the values the
+ *  search kept, of which `values` are the first (`truncated` when there were more); `approximate` when a truncated value
+ *  compared by its stored prefix. */
+export interface ResultsDistinctResult { rows: number; complete: boolean; nulls: number; distinct: number; truncated: boolean; approximate: boolean; values: DistinctValue[]; nullsKept?: boolean; unlistedKept?: boolean; unlistedHeld?: number[]; unlistedDropped?: number[] }
 /** `bytes[k]` is row `firstRow + k`'s sum of DATALENGTH over its cells (NULL counts 0; xml and json as their
  *  text, some sql_variant base types estimated: docs/ipc.md, Cell lengths and row sizes); it stops at the rows sealed so
  *  far (`rowsAvailable`), as results.read does. */
@@ -451,6 +466,8 @@ export interface PortMethods {
   'results.search': { params: ResultsSearchParams; result: ResultsSearchResult }
   /** Aggregates over a result's rows or a view's, for the column profile panel: never rows. */
   'results.profile': { params: ResultsProfileParams; result: ResultsProfileResult }
+  /** A column's distinct values and their counts over a result's rows or a view's, for the header funnel's checklist. */
+  'results.distinct': { params: ResultsDistinctParams; result: ResultsDistinctResult }
   /** A live subscription (docs/ipc.md): its EVENTs are credited, one unacknowledged at a time, and it ends only by CANCEL,
    *  a disconnect, a backend shutdown, a failure or its source ending. */
   'live.subscribe': { params: LiveSubscribeParams; result: LiveEnd }
