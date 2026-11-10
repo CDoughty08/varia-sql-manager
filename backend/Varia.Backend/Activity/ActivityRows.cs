@@ -191,7 +191,8 @@ internal sealed class ActivityIoTotals
     }
 }
 
-/// <summary>Writes a table's cells by catalogue column id, in the catalogue's column order (the live table's).</summary>
+/// <summary>Writes a table's cells by catalogue column id, in the catalogue's column order (the live table's), then, for a
+/// table that tones its rows, the live table's tone column (NULL until <see cref="Tone"/> sets one).</summary>
 internal sealed class ActivityRowWriter
 {
     private readonly Dictionary<string, int> index;
@@ -200,12 +201,21 @@ internal sealed class ActivityRowWriter
     {
         Spec = spec;
         index = spec.Columns.Select((column, at) => (column.Id, at)).ToDictionary(item => item.Id, item => item.at, StringComparer.Ordinal);
+        Count = index.Count + (spec.Tones.Count > 0 ? 1 : 0);
     }
 
     public ActivityTableSpec Spec { get; }
-    public int Count => index.Count;
+    /// <summary>Cells in a row: the catalogue's columns, and the tone column when the table has tones.</summary>
+    public int Count { get; }
 
-    public LiveCell[] New() => Enumerable.Repeat(LiveCell.Null, index.Count).ToArray();
+    public LiveCell[] New() => Enumerable.Repeat(LiveCell.Null, Count).ToArray();
+
+    /// <summary>Sets the row's tone: one of the table's catalogue tones, sent as the live tone it maps to.</summary>
+    public void Tone(LiveCell[] cells, string tone, ActivityCatalog catalog)
+    {
+        if (Count == index.Count || !Spec.Tones.Contains(tone) || !catalog.Tones.TryGetValue(tone, out var live)) throw new RequestException("BACKEND_ERROR", "An Activity Monitor row names a tone its table lacks.");
+        cells[^1] = LiveCell.Of(live);
+    }
 
     /// <summary>A column the catalogue lacks is a bug, which ends the view failed (BACKEND_ERROR), never a lost connection.</summary>
     public void Set(LiveCell[] cells, string column, LiveCell cell) =>

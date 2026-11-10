@@ -152,7 +152,10 @@ describe('live catalogue', () => {
       expect((live.tables ?? []).map(table => table.id), id).toEqual(spec.tables)
       for (const table of live.tables ?? []) {
         const source = tableSpecs[table.id as ActivityTable]
-        expect(table.columns.map(column => [column.id, column.name, column.dataType]), table.id).toEqual(source.columns.map(column => [liveColumnId(table.id as ActivityTable, column.id), column.caption, liveColumnTypes[column.type]]))
+        // A table that tones its rows ends with the tone column (prefixed like the others, so ids stay unique in the probe).
+        const tone = source.tones?.length ? [[liveColumnId(table.id as ActivityTable, 'tone'), 'tone', 'nvarchar', 'tone']] : []
+        expect(table.columns.map(column => [column.id, column.name, column.dataType, ...column.role ? [column.role] : []]), table.id)
+          .toEqual([...source.columns.map(column => [liveColumnId(table.id as ActivityTable, column.id), column.caption, liveColumnTypes[column.type]]), ...tone])
         expect(table.key, table.id).toEqual(source.key.map(column => liveColumnId(table.id as ActivityTable, column)))
         expect(table.facets ?? [], table.id).toEqual((source.facetColumns ?? []).map(column => liveColumnId(table.id as ActivityTable, column)))
         expect(table.departed ?? false, table.id).toBe(source.departedLinger ?? false)
@@ -170,7 +173,8 @@ describe('live catalogue', () => {
     expect(liveProbes['activity.queries']).toMatchObject({ intervalMs: { default: 30_000, min: 15_000, max: 60_000 }, minGapMs: 15_000, budgetMs: { max: 10_000 }, filterMode: 'memory' })
     expect([liveProbes['activity.queries'].series, liveProbes['activity.queries'].tables?.map(table => [table.id, table.key, table.rowCap])]).toEqual([undefined, [['recentQueries', ['queryHash'], 200]]])
     expect(liveProbes['activity.sessions'].status).toEqual(Object.keys(activityStatuses))
-    expect(liveProbes['activity.resources'].description).toContain(pendingProbes['activity.resources'])
+    // Every declared Activity Monitor probe samples: none opens unavailable.
+    expect(pendingProbes).toEqual({})
     // The opened frame carries a pending probe's note.
     for (const note of Object.values(pendingProbes)) expect(note.length).toBeLessThanOrEqual(L.noteCharacters)
     expect(liveProbes['activity.overview'].series?.find(series => series.id === 'pageLifeExpectancy')).toMatchObject({ unit: 'seconds', counter: 'gauge' })

@@ -42,13 +42,16 @@ export function thresholdBounds(spec: ThresholdSpec, settings: Partial<SettingsV
   return { warning: setting(spec.settings?.warning, spec.warning), error: setting(spec.settings?.error, spec.error) }
 }
 /** The worst threshold the tile's values cross now: a bound is reached at or above it, and a threshold with `while` counts
- *  only while that series is above zero (the longest block, while sessions are blocked). */
+ *  only while that series is above zero (the longest block, while sessions are blocked). An error bound below the warning one
+ *  acts as the warning one. */
 export function tileTone(tile: TileSpec, value: (id: string) => number, settings: Partial<SettingsValues>): TileTone | undefined {
   let tone: TileTone | undefined
   for (const spec of tile.thresholds) {
     if (spec.while !== undefined && !(value(spec.while) > 0)) continue
-    const current = value(spec.series), { warning, error } = thresholdBounds(spec, settings)
+    const current = value(spec.series), { warning, error: bound } = thresholdBounds(spec, settings)
     if (!Number.isFinite(current)) continue
+    // An error bound below the warning one acts as the warning one, as Data File I/O's row tones do.
+    const error = bound !== undefined && warning !== undefined ? Math.max(warning, bound) : bound
     if (error !== undefined && current >= error) return 'critical'
     if (warning !== undefined && current >= warning) tone = 'warning'
   }

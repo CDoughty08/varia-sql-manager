@@ -52,9 +52,10 @@ internal sealed class ActivityCatalog
     private sealed record TableJson(string Table, string Probe, List<string> Key, int RowCap, List<string> Columns, List<string>? Identity = null, List<string>? TextColumns = null,
         List<string>? FacetColumns = null, List<string>? Tones = null, bool? DepartedLinger = null);
     private sealed record VariaJson(string Suffix, string Kind, string Label);
-    private sealed record WaitJson(string Id, int Value, List<string> Names, List<string> Patterns);
+    private sealed record WaitJson(string Id, int Value, string Label, List<string> Names, List<string> Patterns);
+    private sealed record LatencyJson(int Warning, int Error);
     private sealed record CatalogJson(int Version, BandsJson Bands, List<string> Benign, List<string> BenignCategories, Dictionary<string, string> BlockerLabels, List<string> DetailsSections,
-        List<string> DetailsTexts, Dictionary<string, EditionJson> Editions, List<ExceptionJson> Exceptions, HideBenignJson HideBenign, List<string> KillOutcomes, Dictionary<string, long> Limits,
+        List<string> DetailsTexts, Dictionary<string, EditionJson> Editions, List<ExceptionJson> Exceptions, LatencyJson FileLatency, List<string> FileViews, HideBenignJson HideBenign, List<string> KillOutcomes, Dictionary<string, long> Limits,
         List<string> LiveProbes, LoadGuardJson LoadGuard, Dictionary<string, string> Pending, string PoolSuffix, List<ProbeJson> Probes, string Source, List<string> Statuses, List<TableJson> Tables,
         Dictionary<string, string> Tones, string UnavailableMessage,
         List<VariaJson> VariaSessions, List<string> Views, List<WaitJson> Waits);
@@ -92,6 +93,9 @@ internal sealed class ActivityCatalog
         KillOutcomes = json.KillOutcomes;
         UnavailableMessage = json.UnavailableMessage;
         WaitCategories = [.. json.Waits.Select(wait => wait.Id)];
+        WaitLabels = json.Waits.ToFrozenDictionary(wait => wait.Id, wait => wait.Label, StringComparer.Ordinal);
+        FileViews = json.FileViews;
+        FileLatency = (json.FileLatency.Warning, json.FileLatency.Error);
         var names = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var wait in json.Waits) foreach (var name in wait.Names) names[name] = wait.Id;
         foreach (var exception in json.Exceptions) names[exception.Name] = exception.Category;
@@ -139,6 +143,11 @@ internal sealed class ActivityCatalog
     /// <summary>The status ids the sessions probe sends with its first sample on each connection.</summary>
     public IReadOnlyList<string> Statuses { get; }
     public IReadOnlyList<string> WaitCategories { get; }
+    /// <summary>Each wait category's caption, by id.</summary>
+    public IReadOnlyDictionary<string, string> WaitLabels { get; }
+    /// <summary>Data File I/O's chips, and the latency thresholds (ms) a files filter without its own uses.</summary>
+    public IReadOnlyList<string> FileViews { get; }
+    public (int Warning, int Error) FileLatency { get; }
     /// <summary>The Details flyout's sections, the texts it returns whole on request, and Kill's outcomes (activity.details and activity.kill).</summary>
     public IReadOnlyList<string> DetailsSections { get; }
     public IReadOnlySet<string> DetailsTexts { get; }
