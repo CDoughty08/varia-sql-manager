@@ -199,7 +199,10 @@ internal static class PivotChecks
         static string Scaled(Int128 value, int scale) { var buffer = new byte[64]; return Encoding.ASCII.GetString(buffer, 0, PivotOutput.WriteScaled(buffer, value, scale)); }
         check(ResultPivoter.TryScaled("-12.5"u8, 2, out var parsed) && parsed == -1250 && ResultPivoter.TryScaled("7"u8, 4, out var seven) && seven == 70000
             && !ResultPivoter.TryScaled("1.234"u8, 2, out _) && !ResultPivoter.TryScaled("1e5"u8, 2, out _) && !ResultPivoter.TryScaled("-"u8, 0, out _) && !ResultPivoter.TryScaled(""u8, 0, out _)
-            && !ResultPivoter.TryScaled(System.Text.Encoding.ASCII.GetBytes("1" + new string('0', 38)), 0, out _),
+            && !ResultPivoter.TryScaled(System.Text.Encoding.ASCII.GetBytes("1" + new string('0', 38)), 0, out _)
+            // 38 digits with fewer decimals than the scale: padding them would pass Int128's range, so they are refused, not wrapped.
+            && !ResultPivoter.TryScaled(System.Text.Encoding.ASCII.GetBytes("17" + new string('0', 36)), 1, out _) && !ResultPivoter.TryScaled(System.Text.Encoding.ASCII.GetBytes("1" + new string('0', 37)), 1, out _)
+            && ResultPivoter.TryScaled(System.Text.Encoding.ASCII.GetBytes(new string('9', 37)), 1, out var padded) && padded == Int128.Parse(new string('9', 37) + "0", CultureInfo.InvariantCulture),
             "exact text parses to whole units of its scale, and anything else, more decimals or 10^38 is refused");
         check(Scaled(250, 2) == "2.50" && Scaled(-5, 2) == "-0.05" && Scaled(42, 0) == "42" && PivotOutput.Average(5, 2, 0, 6) == 2_500_000 && PivotOutput.Average(-25555, 10, 4, 6) == -255_550
             && PivotOutput.Average(2, 3, 0, 6) == 666_667 && PivotOutput.Average(-2, 3, 0, 6) == -666_667,

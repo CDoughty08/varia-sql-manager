@@ -4,10 +4,10 @@ import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { sqlTypeLabel } from '../grid/measure'
 import Icon from '../Icon'
-import { aggregateFits, emptyDraft, fitDraft, isNumericColumn, pivotAggregates, pivotColumns, valueLabel, type PivotDraft } from './pivot'
+import { aggregateFits, columnGroupLimit, emptyDraft, fitDraft, isNumericColumn, pivotAggregates, pivotColumns, pivotFacts, valueLabel, type PivotDraft } from './pivot'
 import { pivotable } from './PivotService'
 import type { TabResults } from './ResultsService'
-import { formatCount, plural } from './status'
+import { formatCount } from './status'
 
 const nameOf = (column: ResultColumn | undefined) => column?.name || '(No column name)'
 
@@ -28,7 +28,10 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
   const columns = entry?.descriptor.columns ?? []
   const draft = entry ? fitDraft(state.draft, columns) : emptyDraft
   const usable = pivotColumns(columns)
-  const viewed = !!entry && !!results.sortOf(tabId, entry.index)?.view
+  const sort = entry ? results.sortOf(tabId, entry.index) : undefined
+  const viewed = !!sort?.view
+  // A sort or filter still being built: the pivot waits for the rows the grid is about to show.
+  const sorting = !!sort && (sort.sorting || sort.stale || !sort.view)
   const set = (next: Partial<PivotDraft>) => pivot.setDraft(tabId, { ...draft, ...next })
   const setValue = (at: number, value: PivotValueSpec) => set({ values: draft.values.map((item, index) => index === at ? value : item) })
   const chooseAggregate = (at: number, aggregate: PivotAggregate) => {
@@ -51,7 +54,7 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
   }
   const anyNumeric = usable.some(index => isNumericColumn(columns[index]))
   const can = !!entry && pivot.canPivot(tabId, entry.index)
-  const facts = entry ? `${formatCount(entry.descriptor.rowsStored)} ${plural(entry.descriptor.rowsStored, 'row')}${viewed ? ' as sorted and filtered' : ''}` : ''
+  const facts = entry ? pivotFacts(entry.descriptor.rowsStored, sort?.view?.rows) : ''
   return <aside className="profile-panel pivot-panel" aria-label="Pivot" aria-busy={state.running || undefined}>
     <div className="profile-head">
       <span className="profile-title">Pivot</span>
@@ -89,7 +92,7 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
           <option value="">(None)</option>
           {usable.filter(column => !draft.rows.includes(column)).map(column => <option key={column} value={column}>{nameOf(columns[column])}</option>)}
         </select>
-        {draft.column !== undefined && <div className="pivot-hint">A column per distinct value, then a Total. A column with more than {formatCount(wire.pivot.maxColumnGroups)} values is refused.</div>}
+        {draft.column !== undefined && <div className="pivot-hint">A column per distinct value, then a Total. A column with more than {formatCount(columnGroupLimit(draft.rows.length, draft.values.length))} values is refused.</div>}
       </section>
       <section className="pivot-section" aria-labelledby={ids + 'values'}>
         <h3 id={ids + 'values'}>Values</h3>
@@ -113,6 +116,7 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
       {state.error && <div className="profile-note error" role="status">{state.error}</div>}
       {!entry ? <div className="profile-note">Choose a result to pivot.</div>
         : !pivotable(entry) && !state.running ? <div className="profile-note">{entry.handle.getSnapshot().state === 'complete' ? 'This result cannot be pivoted.' : 'Pivot this result after it finishes loading.'}</div> : null}
+      {entry && pivotable(entry) && sorting && !state.running && <div className="profile-note">Pivot after the grid finishes sorting and filtering.</div>}
       {viewed && <div className="profile-note">The pivot reads the rows as the grid shows them, sorted and filtered.</div>}
       {state.running
         ? <button type="button" onClick={() => pivot.cancel(tabId)}>Cancel</button>

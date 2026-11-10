@@ -62,16 +62,32 @@ export function fitDraft(draft: PivotDraft, columns: readonly ResultColumn[]): P
 /** The draft's columns moved to where `to` has them by name, for a draft made against `from` (a re-run whose query now
  *  returns its columns in another order, or another set): a column `to` lacks drops out when the draft is fitted. */
 export function remapDraft(draft: PivotDraft, from: readonly ResultColumn[], to: readonly ResultColumn[]): PivotDraft {
+  // A name several columns share (SELECT a.Id, b.Id) maps by its place among them: the second Id to the second Id.
   const move = (index: number): number => {
     const name = from[index]?.name
     if (name === undefined || to[index]?.name === name) return index
-    return to.findIndex(column => column.name === name)
+    let nth = 0
+    for (let i = 0; i < index; i++) if (from[i].name === name) nth++
+    for (let i = 0; i < to.length; i++) if (to[i].name === name && nth-- === 0) return i
+    return -1
   }
   return {
     rows: draft.rows.map(move),
     ...(draft.column === undefined ? {} : { column: move(draft.column) }),
     values: draft.values.map(value => value.column === undefined ? value : { ...value, column: move(value.column) })
   }
+}
+
+/** The most column groups a pivot with `rows` row columns and `values` values can have: 256, fewer when they would pass a
+ *  page's 4,096 columns (ResultPivoter.ColumnGroupLimit in C#). */
+export function columnGroupLimit(rows: number, values: number): number {
+  return Math.min(wire.pivot.maxColumnGroups, Math.floor((wire.page.maxColumns - rows) / Math.max(values, 1)) - 1)
+}
+
+/** The panel's count of the rows a pivot reads: the grid's view's when it shows one (its filters apply), else all stored. */
+export function pivotFacts(rowsStored: number, viewRows: number | undefined): string {
+  const rows = viewRows ?? rowsStored
+  return `${formatCount(rows)} ${plural(rows, 'row')}${viewRows === undefined ? '' : ' as sorted and filtered'}`
 }
 
 /** The request a draft makes. */

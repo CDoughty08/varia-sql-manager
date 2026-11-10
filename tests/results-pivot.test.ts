@@ -3,7 +3,7 @@ import type { ResultColumn, ResultsJobProgress, VariaApi } from '../src/shared/c
 import { EventBus } from '../src/renderer/src/core/events'
 import { ResultError } from '../src/renderer/src/results/ResultClient'
 import { PivotService } from '../src/renderer/src/results/PivotService'
-import { aggregateFits, draftSpec, emptyDraft, fitDraft, isNumericColumn, pivotStrip, pivotText, remapDraft, valueLabel } from '../src/renderer/src/results/pivot'
+import { aggregateFits, columnGroupLimit, draftSpec, emptyDraft, fitDraft, isNumericColumn, pivotFacts, pivotStrip, pivotText, remapDraft, valueLabel } from '../src/renderer/src/results/pivot'
 import { ResultsService, setKey } from '../src/renderer/src/results/ResultsService'
 import { descriptor, fakeResultClient, summaryOf, type FakeHandle } from './fixtures/results'
 import { manualTimers } from './fixtures/workbench'
@@ -57,6 +57,15 @@ describe('pivot helpers', () => {
     const remapped = remapDraft({ rows: [0], column: 1, values: [{ aggregate: 'sum', column: 2 }, { aggregate: 'count' }] }, columns, moved)
     expect(remapped).toEqual({ rows: [1], column: -1, values: [{ aggregate: 'sum', column: 0 }, { aggregate: 'count' }] })
     expect(fitDraft(remapped, moved)).toEqual({ rows: [1], values: [{ aggregate: 'sum', column: 0 }, { aggregate: 'count' }] })
+    // Columns sharing a name map by their place among them: the second Id stays the second Id.
+    const ids = [column('Id', 'int'), column('Name', 'nvarchar(20)'), column('Id', 'int')]
+    expect(remapDraft({ rows: [2], values: [{ aggregate: 'max', column: 0 }] }, ids, [ids[1], ids[0], ids[2]])).toEqual({ rows: [2], values: [{ aggregate: 'max', column: 1 }] })
+    expect(remapDraft({ rows: [2], values: [] }, ids, [ids[0], ids[1]])).toEqual({ rows: [-1], values: [] })
+    // The column-group bound the panel names is the backend's (ResultPivoter.ColumnGroupLimit): lower with many values.
+    expect([columnGroupLimit(0, 1), columnGroupLimit(1, 2), columnGroupLimit(0, 16), columnGroupLimit(8, 16)]).toEqual([256, 256, 255, 254])
+    // The panel counts the rows the pivot reads: the view's when the grid shows one.
+    expect(pivotFacts(10_000, undefined)).toBe('10,000 rows')
+    expect(pivotFacts(10_000, 300)).toBe('300 rows as sorted and filtered')
   })
 
   it('says what a pivot read, how many groups it has, and when long values were grouped by a prefix', () => {
@@ -135,6 +144,28 @@ describe('PivotService', () => {
     await pivot.run('t1')
     expect(moved.pivot).toHaveBeenCalledWith({ rows: [1], column: 2, values: [{ aggregate: 'sum', column: 0 }] }, { signal: expect.any(AbortSignal) })
     expect(pivot.getSnapshot().tabs.t1).toMatchObject({ running: false, error: 'These results were closed, so the pivot was not added.' })
+  })
+
+  it("waits for the grid's sort or filter to be built, and drops a closed pivot's strip", async () => {
+    const { results, pivot, run } = fixture()
+    const [first] = run(1)
+    pivot.open('t1', 0)
+    const sortOf = vi.spyOn(results, 'sortOf')
+    const view = { rows: 3 } as unknown as NonNullable<ReturnType<ResultsService['sortOf']>>['view']
+    const sort = { keys: [], filters: [], applied: [], view, sorting: false, approximate: false, stale: false }
+    // A filter still being built (or one built while rows streamed, or none yet) would pivot the rows the grid is leaving.
+    for (const pending of [{ sorting: true }, { stale: true }, { view: undefined }]) {
+      sortOf.mockReturnValue({ ...sort, ...pending })
+      expect(pivot.canPivot('t1', 0)).toBe(false)
+      await pivot.run('t1')
+      expect(first.pivot).not.toHaveBeenCalled()
+    }
+    sortOf.mockRestore()
+    await pivot.run('t1')
+    expect(pivot.getSnapshot().info.size).toBe(1)
+    // Close Results changes no panel, but the closed pivot's strip goes.
+    results.closeResults('t1')
+    expect(pivot.getSnapshot().info.size).toBe(0)
   })
 
   it('gives up a pivot a new run replaces, releases its late answer, and keeps strips only for pivots a run still shows', async () => {

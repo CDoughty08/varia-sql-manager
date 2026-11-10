@@ -74,10 +74,13 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     if (current) this.update(tabId, { ...current, draft: this.fit(tabId, current.source, draft), error: undefined })
   }
 
-  /** Whether a grid's set can be pivoted now: its run has ended, its rows have all loaded, and no pivot runs in its tab. */
+  /** Whether a grid's set can be pivoted now: its run has ended, its rows have all loaded, its grid's sort or filter is built
+   *  (as Save Results As waits for it: the pivot reads the rows the grid shows), and no pivot runs in its tab. */
   canPivot(tabId: string, index: number): boolean {
     const tab = this.results.getSnapshot()[tabId]
+    const sort = this.results.sortOf(tabId, index)
     return !!tab && tab.status !== 'running' && tab.status !== 'closed' && !this.running.has(tabId) && pivotable(tab.sets[index])
+      && !(sort && (sort.sorting || sort.stale || !sort.view))
   }
 
   /** Pivots the panel's set by its draft and appends the pivot to the run; a failure shows in the panel. */
@@ -182,6 +185,8 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       if (columns && this.fitted.get(tabId) !== columns) next = { ...next, draft: this.fit(tabId, next.source, next.draft) }
       if (next !== tab) { tabs ??= { ...current.tabs }; tabs[tabId] = next }
     }
-    if (tabs) this.publish({ tabs, info: this.shown(current.info) })
+    // Strips of pivots no run shows any more go, whether or not a panel changed (Close Results changes none).
+    const info = current.info.size ? this.shown(current.info) : current.info
+    if (tabs || info.size !== current.info.size) this.publish({ tabs: tabs ?? current.tabs, info })
   }
 }

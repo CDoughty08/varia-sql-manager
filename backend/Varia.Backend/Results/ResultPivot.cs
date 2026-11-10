@@ -294,10 +294,11 @@ internal static class ResultPivoter
             value = value * 10 + (c - '0');
         }
         if (digits == 0) return false;
+        // Tested before multiplying: a 38-digit value times 10 would pass Int128's range and wrap.
         for (; decimals < scale; decimals++)
         {
+            if (value >= Decimal38 / 10) return false;
             value *= 10;
-            if (value >= Decimal38) return false;
         }
         if (value >= Decimal38) return false;
         if (negative) value = -value;

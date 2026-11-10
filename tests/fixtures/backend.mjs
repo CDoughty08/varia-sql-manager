@@ -678,7 +678,10 @@ const pivotLabels = { count: 'Count', countDistinct: 'Distinct Count', sum: 'Sum
 function buildPivot(source, { rows: rowColumns, column: groupColumn, values }) {
   const rows = source.sealed === undefined ? available(source) : source.read
   const typeOf = at => source.columns[at].dataType.split('(')[0].trim().toLowerCase()
-  const numeric = at => numericTypes.has(typeOf(at)) && typeOf(at) !== 'bit'
+  const approximate = at => typeOf(at) === 'float' || typeOf(at) === 'real'
+  const integer = at => ['tinyint', 'smallint', 'int', 'bigint'].includes(typeOf(at))
+  // An exact column's scale, as PivotOutput keeps it: money's 4, decimal(p,s)'s s, integers' 0.
+  const scaleOf = at => typeOf(at) === 'money' || typeOf(at) === 'smallmoney' ? 4 : typeOf(at) === 'decimal' || typeOf(at) === 'numeric' ? Number(/,\s*(\d+)\s*\)/.exec(source.columns[at].dataType)?.[1] ?? 0) : 0
   const raw = (row, at) => { const value = cellValue(source.rowAt(row)[at]); return value === null || value === undefined ? null : value instanceof Uint8Array ? '0x' + Buffer.from(value).toString('hex').toUpperCase() : String(value) }
   const compare = at => (a, b) => a === b ? 0 : a === null ? -1 : b === null ? 1 : numericTypes.has(typeOf(at)) ? Number(a) - Number(b) : a < b ? -1 : 1
   const keyOf = (row, columns) => JSON.stringify(columns.map(at => raw(row, at)))
@@ -710,11 +713,14 @@ function buildPivot(source, { rows: rowColumns, column: groupColumn, values }) {
       return source.rowAt(best)[value.column]
     }
     const sum = present.reduce((total, row) => total + Number(raw(row, value.column)), 0)
-    return String(value.aggregate === 'sum' ? sum : sum / present.length)
+    const figure = value.aggregate === 'sum' ? sum : sum / present.length
+    if (approximate(value.column)) return String(figure)
+    return figure.toFixed(value.aggregate === 'sum' ? scaleOf(value.column) : Math.max(scaleOf(value.column), 6))
   }
   const label = value => value.column === undefined ? 'Count of rows' : `${pivotLabels[value.aggregate]} of ${source.columns[value.column].name}`
   const typeFor = value => value.column === undefined || value.aggregate === 'count' || value.aggregate === 'countDistinct' ? 'bigint'
-    : value.aggregate === 'min' || value.aggregate === 'max' ? source.columns[value.column].dataType : numeric(value.column) && typeOf(value.column) !== 'float' && typeOf(value.column) !== 'real' ? 'decimal(38,6)' : 'float'
+    : value.aggregate === 'min' || value.aggregate === 'max' ? source.columns[value.column].dataType : approximate(value.column) ? 'float'
+    : value.aggregate === 'sum' && integer(value.column) ? 'bigint' : `decimal(38,${value.aggregate === 'sum' ? scaleOf(value.column) : Math.max(scaleOf(value.column), 6)})`
   const groupName = key => { const value = JSON.parse(key)[0]; return value === null ? 'NULL' : value.trim() === '' ? '(blank)' : value.slice(0, 128) }
   const columns = [...rowColumns.map(at => source.columns[at])]
   for (const key of columnGroups.keys) for (const value of values) columns.push(column(values.length > 1 ? `${groupName(key)} \u00b7 ${label(value)}` : groupName(key), typeFor(value)))
