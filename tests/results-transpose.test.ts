@@ -103,6 +103,19 @@ describe('TransposeService', () => {
     expect(transpose.getSnapshot().get(setKey(sets[1].descriptor))).toMatchObject({ selected: true, rows: 6, transposed: 6, header: 'Id' })
   })
 
+  it('says why it transposes no selection of more than 256 separate runs of rows', async () => {
+    const { results, transpose, run } = fixture()
+    const [first] = run(1)
+    first.snapshot = { ...first.snapshot, rowsAvailable: 1000, rowsStored: 1000 }
+    const runs = Array.from({ length: limits.transpose.maxRanges + 1 }, (_, at) => [2 * at, 2 * at] as [number, number])
+    results.setSelection('t1', 0, cells(0, ...runs))
+    expect(transpose.selectedRows('t1', 0)).toHaveLength(limits.transpose.maxRanges + 1)
+    const notify = vi.spyOn(results, 'notify')
+    await transpose.transpose('t1', 0, { selected: true })
+    expect(first.transpose).not.toHaveBeenCalled()
+    expect(notify).toHaveBeenCalledWith('t1', 'Transpose takes up to 256 separate runs of selected rows; these are 257. Select fewer runs, or filter the rows and transpose them all.')
+  })
+
   it("transposes nothing while the query runs or of a diff, waits for the grid's sort, and says why one failed", async () => {
     const { results, transpose, run } = fixture()
     run(1, { finish: false })
@@ -155,6 +168,24 @@ describe('TransposeService', () => {
     const sets = results.getSnapshot().t1.sets
     expect(sets).toHaveLength(2)
     expect(transpose.getSnapshot().get(setKey(sets[1].descriptor))).toMatchObject({ sourceLabel: 'Result 1', transposed: 10 })
+  })
+
+  it("keeps a new transpose's strip when another tab publishes before the frame that shows its set, and drops it once its tab runs again", async () => {
+    const frames: (() => void)[] = []
+    const { results, transpose, run } = fixture({ frames })
+    run(1)
+    while (frames.length > 0) frames.shift()!()
+    await transpose.transpose('t1', 0)
+    // Another tab starts a query at once: the results publish it now, still without the transpose's set.
+    results.begin('t2', 'other')
+    expect(transpose.getSnapshot().size).toBe(1)
+    while (frames.length > 0) frames.shift()!()
+    const sets = results.getSnapshot().t1.sets
+    expect(transpose.getSnapshot().get(setKey(sets[1].descriptor))).toMatchObject({ sourceLabel: 'Result 1' })
+    // Shown once, the strip goes with its set as any other: a new run in its tab drops it.
+    run(1, { queryId: 'q2' })
+    while (frames.length > 0) frames.shift()!()
+    expect(transpose.getSnapshot().size).toBe(0)
   })
 
   it('says a transpose runs: its tab is busy from the request to the answer, and subscribers hear both', async () => {

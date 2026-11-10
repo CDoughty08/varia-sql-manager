@@ -45,6 +45,9 @@ export class TransposeService extends SnapshotStore<TransposeSnapshot> implement
   /** Transposes in flight by tab, with the run they read: a newer run (or none) gives them up. */
   private readonly running = new Map<string, { readonly abort: AbortController; readonly queryId: string }>()
   private readonly unsubscribe: () => void
+  /** Strips of transposes added whose sets the results have not shown yet (they publish them on the next frame), with the
+   *  tab and run they were added to: a publish for another tab in between must not drop them. */
+  private readonly fresh = new Map<string, { readonly tabId: string; readonly queryId: string }>()
 
   constructor(results: Results) {
     super(new Map())
@@ -66,7 +69,8 @@ export class TransposeService extends SnapshotStore<TransposeSnapshot> implement
     return this.running.has(tabId)
   }
 
-  /** The grid's selected rows as [first, count] position ranges (merged, at most 256), or undefined without any. */
+  /** The grid's selected rows as [first, count] position ranges (merged), or undefined without any. A transpose takes at
+   *  most 256 of them, and says so for more. */
   selectedRows(tabId: string, index: number): [number, number][] | undefined {
     const entry = this.results.getSnapshot()[tabId]?.sets[index]
     const selection = entry && this.results.selection(tabId, index)
@@ -74,7 +78,7 @@ export class TransposeService extends SnapshotStore<TransposeSnapshot> implement
     const sort = this.results.sortOf(tabId, index)
     const rows = (sort?.view ?? entry.handle).getSnapshot().rowsAvailable
     const merged = mergeRows(resolveBlocks(selection, rows, entry.descriptor.columns.length).map(block => [block.top, block.bottom] as const))
-    return merged.length > 0 && merged.length <= wire.transpose.maxRanges ? merged.map(([top, bottom]) => [top, bottom - top + 1]) : undefined
+    return merged.length > 0 ? merged.map(([top, bottom]) => [top, bottom - top + 1]) : undefined
   }
 
   /** The column of the grid's active cell, which Transpose Using Column as Headers names the columns by. */
@@ -91,6 +95,8 @@ export class TransposeService extends SnapshotStore<TransposeSnapshot> implement
     const entry = tab.sets[index]
     const rows = o.selected ? this.selectedRows(tabId, index) : undefined
     if (o.selected && !rows) return
+    if (rows && rows.length > wire.transpose.maxRanges)
+      return this.results.notify(tabId, `Transpose takes up to ${wire.transpose.maxRanges} separate runs of selected rows; these are ${formatCount(rows.length)}. Select fewer runs, or filter the rows and transpose them all.`)
     const sort = this.results.sortOf(tabId, index)
     // The grid's view when it shows one: the transpose reads its rows as the grid shows them.
     const handle = sort?.view ?? entry.handle
@@ -112,7 +118,9 @@ export class TransposeService extends SnapshotStore<TransposeSnapshot> implement
         source: entry.index, sourceLabel, viewed: !!sort?.view, selected: !!rows, rows: result.rows, transposed: result.transposed, columns: result.columns,
         ...(o.header === undefined ? {} : { header: entry.descriptor.columns[o.header]?.name })
       }
-      this.publish(new Map([...this.shown(this.getSnapshot()), [setKey(result.descriptor), info]]))
+      const key = setKey(result.descriptor)
+      this.fresh.set(key, { tabId, queryId: tab.queryId })
+      this.publish(new Map([...this.shown(this.getSnapshot()), [key, info]]))
     } catch (error) {
       if (!abort.signal.aborted) this.results.notify(tabId, error instanceof Error ? error.message : 'The results could not be transposed.')
     } finally {
@@ -128,13 +136,17 @@ export class TransposeService extends SnapshotStore<TransposeSnapshot> implement
     this.unsubscribe()
     for (const item of this.running.values()) item.abort.abort()
     this.running.clear()
+    this.fresh.clear()
     this.clearListeners()
   }
 
-  /** Only transposes some run still shows keep their strips. */
+  /** Only transposes some run still shows keep their strips, and fresh ones its run has yet to show (until it shows them,
+   *  or the tab closes or runs again). */
   private shown(info: TransposeSnapshot): Map<string, TransposeInfo> {
-    const shown = new Set(Object.values(this.results.getSnapshot()).flatMap(run => run.sets.map(entry => setKey(entry.descriptor))))
-    return new Map([...info].filter(([key]) => shown.has(key)))
+    const snapshot = this.results.getSnapshot()
+    const shown = new Set(Object.values(snapshot).flatMap(run => run.sets.map(entry => setKey(entry.descriptor))))
+    for (const [key, at] of this.fresh) if (shown.has(key) || snapshot[at.tabId]?.queryId !== at.queryId) this.fresh.delete(key)
+    return new Map([...info].filter(([key]) => shown.has(key) || this.fresh.has(key)))
   }
 
   /** A new run (or a closed tab) gives up its tab's running transpose; strips of sets no run shows go. */

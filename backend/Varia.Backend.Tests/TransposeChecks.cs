@@ -134,6 +134,11 @@ internal static class TransposeChecks
         var clash = Source(store, [["Column"], ["column"], ["NULL"], [null]], [new("Name", "nvarchar(20)", "text", Collation: CaseInsensitive)]);
         var (_, clashing) = Transpose(store, clash, header: 0);
         check(Names(clashing) == "Column,Column (2),column (3),NULL,NULL (2)", "a header value named Column or repeated is numbered: " + Names(clashing));
+        // Names keep the first 128 characters of long values, multi-byte ones included, and spaces before text are not blank.
+        var longValues = Source(store, [[new string('a', 1 << 20)], [new string('é', 1000)], [new string(' ', 2000) + "x"], [new string(' ', 2000)]], [new("Name", "nvarchar(max)", "text")]);
+        var (_, cut) = Transpose(store, longValues, header: 0);
+        check(cut.Columns.Select(column => column.Name).SequenceEqual(["Column", new string('a', 128) + "…", new string('é', 128) + "…", new string(' ', 128) + "…", "(blank)"]),
+            "long header values name their columns by their first 128 characters, and only an all-space value is (blank): " + string.Join("|", cut.Columns.Select(column => column.Name.Length)));
     }
 
     /// <summary>A view's order and filters decide the rows and their order; ranges take only those positions, merged.</summary>
