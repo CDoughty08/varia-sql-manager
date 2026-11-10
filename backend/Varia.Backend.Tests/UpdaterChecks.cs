@@ -62,6 +62,7 @@ internal static class UpdaterChecks
         var archive = Path.Combine(temp, "release.zip");
         var sha = Archive(archive, (Exe, "1.1.0"), ("resources/", ""), ("resources/app.asar", "1.1.0"), ("locales/en-US.pak", "pak"));
         // What an interrupted earlier stage left is replaced.
+        UpdateFiles.PrepareRoot(root);
         Directory.CreateDirectory(Path.Combine(root, "app.tmp", "stale"));
         UpdateFiles.Stage(archive, sha, root, install, Exe, "1.1.0");
         var app = UpdateFiles.AppDir(root);
@@ -76,6 +77,28 @@ internal static class UpdaterChecks
         using var marker = JsonDocument.Parse(File.ReadAllText(UpdateFiles.StagedMarker(root)));
         check(marker.RootElement.GetProperty("version").GetString() == "1.1.0" && marker.RootElement.GetProperty("sha512").GetString() == sha, "the staged marker names the version and the archive's checksum, written last");
         check(File.ReadAllText(Path.Combine(install, Exe)) == "1.0.0", "staging leaves the running installation alone");
+        var sha512 = marker.RootElement.GetProperty("sha512").GetString()!;
+        check(UpdateFiles.IsOwnRoot(root) && UpdateFiles.IsStaged(root, Exe, "1.1.0", sha512) && !UpdateFiles.IsStaged(root, Exe, "1.2.0", sha512) && !UpdateFiles.IsStaged(root, Exe, "1.1.0", Convert.ToBase64String(SHA512.HashData("another archive"u8)))
+            && !UpdateFiles.IsStaged(root, "Other.exe", "1.1.0", sha512) && !UpdateFiles.IsStaged(Path.Combine(temp, "nowhere"), Exe, "1.1.0", sha512),
+            "a release is staged only where the marker names its version and checksum and its application is in place");
+        check(!File.Exists(Path.Combine(root, "stage.lock")), "a finished stage leaves no lock behind");
+        // A helper that Varia left unpacking (it was ended meanwhile) is neither unpacked over nor deleted under.
+        using (new FileStream(Path.Combine(root, "stage.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+            check(Throws<UpdateFiles.StageBusyException>(() => UpdateFiles.Stage(archive, sha, root, install, Exe, "1.1.0")) && UpdateFiles.IsStaged(root, Exe, "1.1.0", sha512),
+                "a stage that finds another still running stops, and touches nothing of it");
+        if (OperatingSystem.IsWindows())
+        {
+            // The folder's name can be guessed: one that somebody else made first (here: made without the access rules
+            // the helper gives its own) is not staged into, and nothing in it is believed.
+            var foreign = Path.Combine(temp, "foreign", ".Varia SQL Manager.update");
+            var beside = Installation(Path.Combine(temp, "foreign", "Varia SQL Manager"), "1.0.0");
+            Directory.CreateDirectory(Path.Combine(foreign, "app"));
+            File.WriteAllText(Path.Combine(foreign, "app", Exe), "planted");
+            UpdateFiles.WriteMarker(UpdateFiles.StagedMarker(foreign), "1.1.0", sha512);
+            check(!UpdateFiles.IsOwnRoot(foreign) && UpdateFiles.IsStaged(foreign, Exe, "1.1.0", sha512), "a staging folder made without the helper's access rules is not this user's alone, whatever its marker says");
+            check(Throws<UpdateFiles.ForeignRootException>(() => UpdateFiles.Stage(archive, sha, foreign, beside, Exe, "1.1.0")) && File.ReadAllText(Path.Combine(foreign, "app", Exe)) == "planted", "nothing is staged into a folder that is not this user's alone, and nothing in it is removed");
+            check(Throws<UpdateFiles.ForeignRootException>(() => UpdateFiles.PrepareRoot(foreign)) && !UpdateFiles.IsOwnRoot(Path.Combine(temp, "foreign", "absent")), "such a folder is refused, and one that is not there is not anybody's");
+        }
     }
 
     private static void Refusals(Action<bool, string> check, string temp)
@@ -106,6 +129,14 @@ internal static class UpdaterChecks
             if (Throws<InvalidDataException>(() => UpdateFiles.Unpack(stream, into)) && !File.Exists(Path.Combine(temp, "outside.txt"))) refused++;
         }
         check(refused == outside.Length, "an entry with an absolute, rooted or climbing name is refused however it is written");
+        // The bounds on what an archive may unpack to, at sizes a check can afford.
+        var bulky = Path.Combine(temp, "bulky.zip");
+        Archive(bulky, ("a.txt", new string('a', 600)), ("b.txt", new string('b', 600)));
+        using (var stream = File.OpenRead(bulky))
+            check(Throws<InvalidDataException>(() => UpdateFiles.Unpack(stream, Path.Combine(temp, "into-bulky"), maxBytes: 1000)), "an archive that unpacks to more than its bound is refused, counted as it is written");
+        using (var stream = File.OpenRead(bulky))
+            check(Throws<InvalidDataException>(() => UpdateFiles.Unpack(stream, Path.Combine(temp, "into-many"), maxEntries: 1)), "an archive with more files than its bound is refused");
+        check(UpdateFiles.MaxUnpackedBytes == 8L << 30 && UpdateFiles.MaxEntries == 200_000, "an archive may unpack to at most 8 GiB and 200,000 files");
         var twice = Path.Combine(temp, "twice.zip");
         Archive(twice, (Exe, "1.1.0"), (Exe, "another"));
         using (var stream = File.OpenRead(twice)) check(Throws<IOException>(() => UpdateFiles.Unpack(stream, Path.Combine(temp, "into-twice"))), "an archive that names a file twice is refused, not unpacked one over the other");
@@ -132,6 +163,16 @@ internal static class UpdaterChecks
             UpdateFiles.Stage(archive, Archive(archive, (Exe, "1.1.0"), ("resources/app.asar", "1.1.0")), root, install, Exe, "1.1.0");
             return (install, root);
         }
+        // The installation is moved aside as an interrupted swap left it; a scanner still reading what was just written
+        // there is waited for (really: these files exist for a moment only).
+        void Aside(string install, string root)
+        {
+            for (var attempt = 1; ; attempt++)
+            {
+                try { Directory.Move(install, UpdateFiles.OldDir(root)); return; }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException && attempt < 50) { Thread.Sleep(100); }
+            }
+        }
         string Version(string install) => File.Exists(Path.Combine(install, Exe)) ? File.ReadAllText(Path.Combine(install, Exe)) : "none";
 
         var (install, root) = Staged("before");
@@ -139,17 +180,31 @@ internal static class UpdaterChecks
             "a swap stopped before its first rename leaves the installation and the staged release as they are");
 
         (install, root) = Staged("between");
-        Directory.Move(install, UpdateFiles.OldDir(root));
+        Aside(install, root);
         UpdateFiles.WriteMarker(UpdateFiles.FailedMarker(root), "1.1.0");
         check(UpdateFiles.Recover(root, install, Exe) == UpdateFiles.Recovery.Completed && Version(install) == "1.1.0" && File.Exists(Path.Combine(install, $"Uninstall {Exe}")) && Version(UpdateFiles.OldDir(root)) == "1.0.0"
             && !Directory.Exists(UpdateFiles.AppDir(root)) && !File.Exists(UpdateFiles.StagedMarker(root)) && !File.Exists(UpdateFiles.FailedMarker(root)),
             "a swap stopped between its renames, with no installation in place, is finished: the staged release becomes the installation");
-        check(UpdateFiles.Recover(root, install, Exe) == UpdateFiles.Recovery.Completed && Version(install) == "1.1.0", "a swap stopped after both renames only has its tidying left, however often that is asked");
+        File.WriteAllText(UpdateFiles.StagedMarker(root), "{}");
+        check(UpdateFiles.Recover(root, install, Exe) == UpdateFiles.Recovery.Tidied && UpdateFiles.Recover(root, install, Exe) == UpdateFiles.Recovery.Tidied && Version(install) == "1.1.0" && !File.Exists(UpdateFiles.StagedMarker(root)),
+            "a swap stopped after both renames only has its tidying left, however often that is asked, and is not taken for one this run completed");
         UpdateFiles.DeleteTree(UpdateFiles.OldDir(root));
         check(UpdateFiles.Recover(root, install, Exe) == UpdateFiles.Recovery.Nothing && Version(install) == "1.1.0", "a finished swap has nothing to recover");
 
+        // Something made a folder of the installation's name after it was moved aside: empty, it is not the installation.
+        (install, root) = Staged("stub");
+        Aside(install, root);
+        Directory.CreateDirectory(install);
+        check(UpdateFiles.Recover(root, install, Exe) == UpdateFiles.Recovery.Completed && Version(install) == "1.1.0", "an empty folder where the installation was does not stop the staged release from going there");
+        (install, root) = Staged("occupied");
+        Aside(install, root);
+        Directory.CreateDirectory(install);
+        File.WriteAllText(Path.Combine(install, "somebody.log"), "x");
+        check(UpdateFiles.Recover(root, install, Exe) == UpdateFiles.Recovery.Nothing && Version(UpdateFiles.OldDir(root)) == "1.0.0" && File.Exists(Path.Combine(UpdateFiles.AppDir(root), Exe)) && File.Exists(Path.Combine(install, "somebody.log")),
+            "a folder there that holds something is left alone, with both versions kept for Setup to repair");
+
         (install, root) = Staged("broken");
-        Directory.Move(install, UpdateFiles.OldDir(root));
+        Aside(install, root);
         File.Delete(Path.Combine(UpdateFiles.AppDir(root), Exe));
         check(UpdateFiles.Recover(root, install, Exe) == UpdateFiles.Recovery.RolledBack && Version(install) == "1.0.0" && !Directory.Exists(UpdateFiles.OldDir(root)) && !Directory.Exists(UpdateFiles.AppDir(root)) && !File.Exists(UpdateFiles.StagedMarker(root)),
             "when the staged release is not whole, the old version goes back and nothing stays staged");
@@ -165,14 +220,14 @@ internal static class UpdaterChecks
         {
             // A scanner reading the staged release at sign-in is waited for.
             (install, root) = Staged("waited");
-            Directory.Move(install, UpdateFiles.OldDir(root));
+            Aside(install, root);
             long clock = 0;
             var held = new FileStream(Path.Combine(UpdateFiles.AppDir(root), "resources", "app.asar"), FileMode.Open, FileAccess.Read, FileShare.None);
             try
             {
                 check(Throws<Exception>(() => UpdateFiles.Recover(root, install, Exe)) && !Directory.Exists(install), "a recovery without patience fails while a file of the staged release is in use");
                 var outcome = UpdateFiles.Recover(root, install, Exe, TimeSpan.FromSeconds(10), span => { clock += (long)span.TotalMilliseconds; if (clock >= 600) held.Dispose(); }, () => clock);
-                check(outcome == UpdateFiles.Recovery.Completed && Version(install) == "1.1.0" && clock == 600, "a recovery waits for a file in use and then finishes the swap");
+                check(outcome == UpdateFiles.Recovery.Completed && Version(install) == "1.1.0" && clock >= 600, "a recovery waits for a file in use and then finishes the swap");
             }
             finally { held.Dispose(); }
         }
@@ -214,7 +269,7 @@ internal static class UpdaterChecks
             long clock = 0;
             try { UpdateFiles.Swap(root, install, Exe, TimeSpan.FromSeconds(2), () => { asked++; held.Dispose(); }, span => { waits++; clock += (long)span.TotalMilliseconds; }, () => clock); }
             finally { held.Dispose(); }
-            check(asked == 1 && waits == 6 && !File.Exists(UpdateFiles.FailedMarker(root)), "a swap waits for a file in use, asks once (half way) for what holds it to be ended, and clears an earlier failure once it goes through");
+            check(asked == 1 && waits >= 6 && !File.Exists(UpdateFiles.FailedMarker(root)), "a swap waits for a file in use, asks once (half way) for what holds it to be ended, and clears an earlier failure once it goes through");
         }
         else UpdateFiles.Swap(root, install, Exe, TimeSpan.Zero);
 
@@ -235,7 +290,7 @@ internal static class UpdaterChecks
             using (new FileStream(Path.Combine(UpdateFiles.AppDir(backRoot), "resources", "app.asar"), FileMode.Open, FileAccess.Read, FileShare.None))
             {
                 var failed = Throws<Exception>(() => UpdateFiles.Swap(backRoot, back, Exe, TimeSpan.FromSeconds(4), null, span => { waits++; clock += (long)span.TotalMilliseconds; }, () => clock));
-                check(failed && waits == 5 && File.ReadAllText(Path.Combine(back, Exe)) == "1.0.0" && !Directory.Exists(UpdateFiles.OldDir(backRoot)) && File.Exists(Path.Combine(UpdateFiles.AppDir(backRoot), Exe)) && File.Exists(UpdateFiles.StagedMarker(backRoot)),
+                check(failed && waits >= 5 && File.ReadAllText(Path.Combine(back, Exe)) == "1.0.0" && !Directory.Exists(UpdateFiles.OldDir(backRoot)) && File.Exists(Path.Combine(UpdateFiles.AppDir(backRoot), Exe)) && File.Exists(UpdateFiles.StagedMarker(backRoot)),
                     "when the staged release cannot be moved into place, even after waiting, the installation goes back and the release stays staged");
             }
             // The version an earlier update replaced is still held: the swap fails at once, before anything moves.

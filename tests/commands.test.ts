@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { commandDescriptor, type CommandId } from '../src/shared/commands/catalog'
-import { contextRecord } from '../src/shared/commands/context-keys'
+import { contextKeys, contextRecord } from '../src/shared/commands/context-keys'
 import { compileWhen, evaluateWhen } from '../src/shared/commands/when'
 import { menuCommandIds } from '../src/shared/commands/menus'
 import { CommandService, type CommandSource } from '../src/renderer/src/core/commands'
@@ -334,6 +334,7 @@ describe('context keys', () => {
     expect(computeContextKeys({ ...base, documents: { ...documents, activeId: 'b' }, queries: running, connections: [connectionInfo('server-a')] })).toMatchObject({ activeDocumentConnected: false, queryRunning: false })
     expect(computeContextKeys({ ...base, documents: snapshot({ documents: [doc('a')], activeId: 'missing' }) })).toMatchObject({ hasActiveDocument: false })
     // Check for Updates waits on whatever main is doing, unpacking a release included (minutes, on a slow disk).
+    expect(contextKeys.updateBusy.description).toContain('unpacked')
     const update = { currentVersion: '1.0.0', kind: 'nsis', enabled: true } as const
     for (const busy of [{ status: 'checking', manual: false }, { status: 'downloading', version: '1.1.0', received: 1, total: 2 }, { status: 'preparing', version: '1.1.0' }] as const) expect(computeContextKeys({ ...base, documents: snapshot(), update: { ...update, ...busy } }), busy.status).toMatchObject({ updateBusy: true, updateReady: false })
     expect(computeContextKeys({ ...base, documents: snapshot(), update: { ...update, status: 'ready', version: '1.1.0' } })).toMatchObject({ updateBusy: false, updateReady: true })

@@ -69,7 +69,8 @@ describe('Release builds', () => {
     expect(windows).toMatch(/target: --win nsis portable zip --x64\n/)
     expect(windows).toMatch(/asset: \|\n {14}dist\/\*\.exe\n {14}dist\/\*\.zip\n/)
     // The installer smoke stages and swaps the archive, compares the result with the packaged files, then recovers.
-    expect(readFileSync('scripts/windows-installer-smoke.ps1', 'utf8')).toMatch(/'stage', '--archive'[\s\S]*'swap', '--pid'[\s\S]*Assert-Application 'swapped'[\s\S]*-ArgumentList 'recover'[\s\S]*Assert-Application 'recovered'/)
+    // It also has the helper refuse a folder that is not the installation's staging folder, and answer what main asks.
+    expect(readFileSync('scripts/windows-installer-smoke.ps1', 'utf8')).toMatch(/\$code -ne 2 -or \(Test-Path -LiteralPath \$elsewhere\)[\s\S]*'check', '--sha512'[\s\S]*\$code -ne 3[\s\S]*'stage', '--archive'[\s\S]*AreAccessRulesProtected[\s\S]*'swap', '--pid'[\s\S]*Assert-Application 'swapped'[\s\S]*-ArgumentList 'recover'[\s\S]*Assert-Application 'recovered'/)
     // electron-builder only warns about a missing extraResources folder: packaging refuses instead.
     const { updaterProblem } = createRequire(import.meta.url)('../build/updater-check.cjs')
     expect(readFileSync('build/sqltools-service-check.cjs', 'utf8')).toMatch(/updaterProblem\(context\.electronPlatformName, context\.packager\.projectDir\)\n {2}if \(problem\) throw new Error\(problem\)/)

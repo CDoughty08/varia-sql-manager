@@ -250,9 +250,10 @@ being true.
   instead of refusing the release. An installed
   Windows copy whose folder the user can write stages a release beside itself while it runs and swaps it in at restart,
   through the update helper (`backend/Varia.Updater`, `src/main/update-staging.ts`): the helper takes paths only from
-  main, works only in the one folder beside the installation that main stages in, checks the archive's SHA-512 again
-  before unpacking it, and asks for no elevation; anything it cannot do falls back to the installer, for that release in
-  every later run too (`failed.json`). macOS builds do not update themselves until they are code signed.
+  main, works only in the one folder beside the installation that main stages in and only when that folder is this
+  user's alone (main believes no marker there by itself: it asks the helper), checks the archive's SHA-512 again before
+  unpacking it, and asks for no elevation; anything it cannot do falls back to the installer, for that release in
+  every later run too (`update-failed.json` in the profile, written before every swap is started). macOS builds do not update themselves until they are code signed.
 - Settings live only in `src/shared/settings/` (pages in `pages.ts`, definitions per area, aggregated by `catalog.ts`;
   the Scripting page's entries come from `src/shared/scripting/options.ts`), with defaults, bounds, platforms and zod
   schemas built from the definitions. Only main reads and writes `settings.json` (`SettingsStore`: overrides only, read

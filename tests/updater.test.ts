@@ -3,7 +3,7 @@ import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { classifyUpdateError, httpFailure, UpdateFailure, Updater, type UpdaterOptions, type UpdateSettings, type UpdateStaging } from '../src/main/updater'
+import { classifyUpdateError, httpFailure, StagingBusy, UpdateFailure, Updater, type UpdaterOptions, type UpdateSettings, type UpdateStaging } from '../src/main/updater'
 import { assetFor, compareVersions, legacyAssetKinds, stagedAssetFor, updateFeedUrl, updateLimits, updateManifestSchema, updateStatusText, type UpdateManifest, type UpdateState } from '../src/shared/updates'
 
 const payload = Buffer.from('Varia SQL Manager 1.1.0 installer bytes '.repeat(400))
@@ -358,6 +358,35 @@ describe('Updater', () => {
     expect(await armed).toBe(true)
     expect(instance.takeArmed()).toMatchObject({ version: '1.1.0' })
   })
+  // Otherwise Varia would close minutes after the click, once the newer release had downloaded, into one nobody chose.
+  it('drops a restart that was waiting on a re-check once that finds a newer release', async () => {
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    let checks = 0
+    const { instance } = updater({}, { fetch: async url => {
+      if (!url.endsWith('.json')) return file(payload)
+      if (++checks === 2) { await gate; return json(manifest('1.2.0')) }
+      return json(manifest())
+    } })
+    await instance.check(false)
+    const recheck = instance.check(false)
+    const armed = instance.arm()
+    release()
+    expect(await recheck).toMatchObject({ status: 'ready', version: '1.2.0' })
+    expect(await armed).toBe(false)
+    expect(instance.takeArmed()).toBeUndefined()
+    // Asked for again, with the newer release ready, it is that one.
+    expect(await instance.arm()).toBe(true)
+    expect(instance.takeArmed()).toMatchObject({ version: '1.2.0' })
+  })
+  // A check left on "checking" would keep Check for Updates disabled for the rest of the run, and end the schedule.
+  it('turns anything a check meets into a state, and keeps checking', async () => {
+    let broken = true
+    const { instance, timers } = updater({ manifest: [json(manifest()), json(manifest('1.0.0'))] }, { settings: () => { if (broken) { broken = false; return { checkAutomatically: true, get downloadAutomatically(): boolean { throw new RangeError('settings') } } } return { checkAutomatically: true, downloadAutomatically: true } } })
+    expect(await instance.check(false)).toMatchObject({ status: 'error', code: 'unknown', during: 'check', manual: false })
+    expect(await instance.check(true)).toMatchObject({ status: 'upToDate' })
+    void timers
+  })
   it('has nothing to restart into once a newer release has no file for this build', async () => {
     const newer = { ...manifest('1.2.0'), assets: manifest('1.2.0').assets.filter(asset => asset.kind !== 'win-setup') }
     const { instance } = updater({ manifest: [json(manifest()), json(newer)], asset: [file(payload)] })
@@ -554,9 +583,24 @@ describe('Updater, staging the release beside the installation', () => {
     calls.length = 0
     expect(await instance.arm()).toBe(false)
     expect(instance.takeArmed()).toBeUndefined()
-    expect(instance.state).toMatchObject({ status: 'error', code: 'integrity', during: 'install' })
-    // What is left of it is removed, as the message says.
-    expect(calls).toEqual(['clear'])
+    // Not a changed download: the staged release is gone (or its folder is no longer this user's alone). What is left
+    // of it is removed, and this release installs with the installer, as the message says.
+    expect(instance.state).toMatchObject({ status: 'error', code: 'staged', during: 'install', manual: true, version: '1.1.0' })
+    expect(instance.state.status === 'error' && instance.state.hint).toContain('installer')
+    expect(calls).toEqual(['clear', 'failed 1.1.0'])
+    expect(held.failure).toEqual({ version: '1.1.0', reported: true })
+  })
+  // Varia was ended while a helper was unpacking, and that helper is still at it.
+  it('installs with the installer for now while another stage is still running, and records no failure', async () => {
+    const { staging, calls, held } = fakeStaging({ stage: async () => { throw new StagingBusy() } })
+    const { instance, requests } = updater({ manifest: [json(withArchive())], asset: [file(archive), file(payload)] }, { staging })
+    expect(await instance.check(false)).toMatchObject({ status: 'ready', version: '1.1.0' })
+    expect(instance.readyFile?.staged).toBe(false)
+    expect(requests).toHaveLength(3)
+    // Nothing that helper is writing is removed, and the next run may find its release staged.
+    expect(calls).toEqual([])
+    expect(held.failure).toBeUndefined()
+    await expect.poll(() => readdir(join(dir, 'updates')), { timeout: 5000 }).toEqual(['Varia-SQL-Manager-1.1.0-Windows-x64-Setup.exe'])
   })
   // The helper put the old version back (a file was in use) and started it: this run says so, and installs with the installer.
   it('says that the last restart could not swap the release in, and installs it with the installer instead', async () => {

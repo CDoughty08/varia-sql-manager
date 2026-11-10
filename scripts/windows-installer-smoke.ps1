@@ -110,8 +110,20 @@ $common = @('--root', "`"$root`"", '--install', "`"$installDir`"", '--exe', "`"$
 $log = { if (Test-Path -LiteralPath (Join-Path $root 'update.log')) { Get-Content -LiteralPath (Join-Path $root 'update.log') | Write-Host } }
 $marker = Join-Path $installDir 'from-the-installer.txt'
 Set-Content -LiteralPath $marker -Value 'replaced by the swap'
+# The helper works in no folder but the one beside the installation that is named after it, and says so before it
+# writes anything; and nothing is staged before it has staged.
+$elsewhere = Join-Path (Split-Path -Parent $installDir) 'varia-staged-elsewhere'
+$code = Invoke-Helper $helper @('stage', '--archive', "`"$archive`"", '--sha512', $sha512, '--root', "`"$elsewhere`"", '--install', "`"$installDir`"", '--exe', "`"$appName`"", '--version', $version)
+if ($code -ne 2 -or (Test-Path -LiteralPath $elsewhere)) { throw "The helper did not refuse another folder: $code" }
+$code = Invoke-Helper $helper (@('check', '--sha512', $sha512) + $common)
+if ($code -ne 3) { throw "The helper took a release for staged before staging: $code" }
 $code = Invoke-Helper $helper (@('stage', '--archive', "`"$archive`"", '--sha512', $sha512) + $common)
 if ($code -ne 0) { & $log; throw "Staging failed: $code" }
+# What main asks before it offers Restart to Update, and again when that is chosen.
+$code = Invoke-Helper $helper (@('check', '--sha512', $sha512) + $common)
+if ($code -ne 0) { & $log; throw "The helper does not take the release it staged for staged: $code" }
+# Made for this user alone: its access rules are its own, not the parent folder's.
+if (-not (Get-Acl -LiteralPath $root).AreAccessRulesProtected) { throw 'The staging folder inherits its access rules.' }
 $staged = Join-Path $root 'app'
 foreach ($name in @($appName, "Uninstall $appName", 'resources\app.asar', 'resources\updater\Varia.Updater.exe', 'resources\backend\Varia.Backend.exe')) {
   if (-not (Test-Path -LiteralPath (Join-Path $staged $name) -PathType Leaf)) { throw "The staged release lacks $name." }

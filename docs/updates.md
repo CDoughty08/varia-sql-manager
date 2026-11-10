@@ -46,23 +46,33 @@ Running the installer at restart means waiting, with nothing on screen, while it
 new one. An installed copy whose folder the user can write (the installer's default, "only for me") does that work while
 Varia is still open instead:
 
-1. The release's archive (`Varia-SQL-Manager-<version>-win-x64.zip`: the packaged application, without the two files
+1. The release's archive (`Varia-SQL-Manager-<version>-win-x64.zip`: the packaged application, without the files
    Setup adds) downloads and is verified like any other file. The status bar then shows **Preparing update…**, and
    Check for Updates waits.
 2. The update helper (`resources/updater/Varia.Updater.exe`, built from `backend/Varia.Updater`) runs from the installation
    at below-normal priority. It checks the archive's SHA-512 again with the file held open, unpacks it to
    `<staging>/app`, refusing an entry that would land outside it or over another, copies in what Setup wrote and the
-   archive lacks (the uninstaller and `resources/elevate.exe`), and writes `staged.json` last. Only then is the update
-   ready; the archive is deleted. Closing Varia meanwhile stops the helper and keeps the archive for the next run.
+   archive lacks (the uninstaller, its icon where there is one, and `resources/elevate.exe`), and writes `staged.json`
+   last. Only then is the update ready; the archive is deleted. Closing Varia meanwhile stops the helper and keeps the
+   archive for the next run. One stage runs at a time: a helper left unpacking by a Varia that was ended is not
+   unpacked over, and that run installs with Setup.
 3. Restart to Update copies the helper into the staging folder and starts it there, detached. Once Varia has exited it
    renames the installation to `<staging>/old` and `<staging>/app` to the installation, starts Varia, updates the version
-   that Apps & features shows, and deletes the old folder. The restart costs two renames. The helper that swaps is the
-   running version's, not the new release's; the uninstaller stays the one Setup last wrote.
+   that Apps & features shows, and deletes the old folder. After Varia's own exit, the restart costs two renames. The
+   helper that swaps is the running version's, not the new release's; the uninstaller stays the one Setup last wrote.
 
 The staging folder is `.<installation folder>.update` beside the installation: the same volume, so the renames are
 atomic, and a name that does not start with the installation's, so Setup's "is Varia running" check never takes the
 helper for the application. The helper works in no other folder (an installation at a drive's root has none and is not
 staged), and the folder is not made until a release is staged. Uninstalling does not remove it yet.
+
+That name can be guessed, and beside a custom installation (a shared `D:\Tools`) other people may be able to make
+folders. So the helper makes the staging folder for this user alone (its own access rules: the user, SYSTEM and
+Administrators, nothing inherited) and works only in a folder that is a real folder, owned by this user, with rules of
+its own; one that somebody else made first is refused, and the release installs with Setup. Main believes nothing in
+the folder by itself: whether a release is staged is the helper's answer (`check`), asked before Restart to Update is
+offered and again when it is chosen. One consequence: after a staged update the installation's files carry the staging
+folder's access rules, not the parent folder's, so only the user who installed it (and administrators) can read them.
 
 A folder cannot be renamed while one of its files is open. The helper waits up to 30 seconds for Varia to exit and tries
 the rename for up to 20 more. Half way through, if no Varia is running from the installation, it ends whatever else
@@ -71,19 +81,26 @@ meanwhile, and its backend, are left alone. The second rename, and the move back
 5 seconds. If the release cannot be put in place, the helper puts the installation back, starts the old version unless
 it is already running, and writes `failed.json`.
 
-`failed.json` names the release that could not be staged or swapped in, and it stays until that release (or a newer
-one) is running: every later start installs that release with Setup instead of staging it again. Main writes the same
-record when an archive cannot be unpacked (the same run then falls back to Setup without an error, and reuses that
-Setup in later runs) and when the swap cannot be started at Restart to Update (Varia then starts again as it is). The
-first start after a failed swap says so in the status bar (**Update failed**), once. `<staging>/update.log` has a line
-for each step and is kept with the record.
+A release that could not be staged or swapped in is remembered until it (or a newer one) is running: every later start
+installs that release with Setup instead of staging it again. The helper's record is `<staging>/failed.json`; main's is
+`update-failed.json` in the profile, written when an archive cannot be unpacked (the same run then falls back to Setup
+without an error, and reuses that Setup in later runs), when a staged release is gone at Restart to Update, and, before
+the helper is started, for every swap. That last one is never taken back (the new version ignores a record that is not
+newer than itself), so a helper that cannot be started (Varia then starts again as it is) and one that is ended before
+it can say anything, by security software for instance, both leave the release to Setup instead of leaving it "ready"
+for a restart that fails the same way each time. The first start after a failed swap says so in the status bar
+(**Update failed**), once. `<staging>/update.log` has a line for each step and is kept with the record.
 
 Between the two renames there is no installation. Before the first, the helper writes `<staging>/swap.json` (the
 installation's folder, the executable's name and the versions) and registers its copy in the staging folder under the
-user's `RunOnce` key as `Varia.Updater.exe recover`; both are removed when the swap ends, either way. If the helper is
-cut short in between (the power goes), the next sign-in runs it: it reads the journal beside itself and, from where the
-folders are, moves the staged release into place, or the old version back when the staged one is not whole, without
-starting Varia. The journal is flushed to disk, and the registry key too, before the first rename. A recovery that
+user's `RunOnce` key as `Varia.Updater.exe recover`; both are removed when the swap ends with an installation in
+place, whichever version that is. If the helper is cut short in between (the power goes), the next sign-in runs it: it
+reads the journal beside itself and, from where the folders are, moves the staged release into place, or the old
+version back when the staged one is not whole, without starting Varia. An empty folder that something made where the
+installation was is removed first; one that holds anything is left, with both versions, for Setup to repair. A journal
+left after both renames only has the old version removed: the installation may be another version by then. When the
+running version is the latest, main has the helper end any recovery still registered (`forget`) before it removes the
+staging folder. The journal is flushed to disk, and the registry key too, before the first rename. A recovery that
 fails (a scanner holding the folder for more than 20 seconds) registers itself again, for five sign-ins at most. Should
 the swap's own move back fail as well, the journal and the registration are left for that sign-in. `RunOnce` runs at
 most 260 characters, so an installation whose path makes the command longer is not registered and has no such recovery.
@@ -138,12 +155,14 @@ a download or of an install is a toast with **Try again** and **Open releases pa
 
 `tests/updater.test.ts` drives the updater with streamed answers (progress, checksums, filter pages, proxy errors, stalls,
 the schedule) and a stand-in for staging (the archive route, its fallbacks to Setup and how long they last, a failed
-swap reported at the next start); `tests/update-install.test.ts` swaps real files in a temporary folder and checks how the helper is started;
+swap reported at the next start); `tests/update-install.test.ts` swaps real files in a temporary folder and checks how the helper is started and
+what main keeps of a failure;
 `tests/update-manifest.test.ts` checks the manifest script against the release job's file names, and the first manifest
-against the schema 0.7.0 shipped. The helper's file work (staging, the swap, its refusals) is the offline .NET suite
-`UpdaterChecks`. `scripts/updates-smoke.mjs` runs the app against a loopback feed (`VARIA_TEST_UPDATE_FEED`, honoured only
+against the schema 0.7.0 shipped. The helper's file work (staging, the swap, recovery, its refusals, and on Windows whose
+staging folder it accepts) is the offline .NET suite `UpdaterChecks`; its process work (waiting for Varia, ending what
+it left running, the sign-in entry, the uninstall entry, starting Varia) has no automated check. `scripts/updates-smoke.mjs` runs the app against a loopback feed (`VARIA_TEST_UPDATE_FEED`, honoured only
 in unpackaged smoke runs, with `VARIA_TEST_UPDATE_KIND`), whose install writes `update-applied.json` in the profile instead
 of running anything. Release builds run the helper for real, though not through main and without
 starting the swapped application: `scripts/windows-installer-smoke.ps1` installs with Setup, has the installed helper
-stage that build's archive and swap it in, compares every packaged file's size with the result, then interrupts a second
-swap by hand and runs the recovery.
+refuse another folder, stage that build's archive and swap it in, compares every packaged file's size with the result,
+then interrupts a second swap by hand and runs the recovery.

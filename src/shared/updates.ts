@@ -143,7 +143,7 @@ export const updateErrors: { readonly [C in UpdateErrorCode]: { readonly message
   disk: { message: 'There is not enough disk space to download the update.', hint: 'Free some space, then check for updates again.' },
   notWritable: { message: 'Varia cannot write the update next to the application.', hint: 'Move Varia to a folder you can write to, or download the update from the releases page.' },
   install: { message: 'The update could not be started.', hint: 'Download the update from the releases page and install it by hand.' },
-  staged: { message: 'The prepared update could not be put in place, so Varia is still the earlier version.', hint: 'Check for updates again: Varia installs this release with its installer instead.' },
+  staged: { message: 'The prepared update could not be put in place, so Varia is still the earlier version.', hint: 'Check for updates again: Varia downloads this release\'s installer and installs it with that instead.' },
   unknown: { message: 'The update failed.', hint: 'Check for updates again, or download the update from the releases page.' }
 }
 

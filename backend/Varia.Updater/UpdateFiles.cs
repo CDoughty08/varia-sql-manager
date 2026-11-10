@@ -1,5 +1,8 @@
 using System.IO.Compression;
+using System.Runtime.Versioning;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 
@@ -24,7 +27,12 @@ public static class UpdateFiles
 
     /// <summary>What a swap is doing, written before its first rename so that one cut short can be finished.</summary>
     public sealed record SwapJournal(string InstallDir, string Exe, string Version, string? From, int Attempts = 0);
-    public enum Recovery { Nothing, Completed, RolledBack }
+    /// <summary>Tidied: both renames had been done, and only the old version was left to remove.</summary>
+    public enum Recovery { Nothing, Completed, Tidied, RolledBack }
+    /// <summary>Another stage is still unpacking into this staging folder.</summary>
+    public sealed class StageBusyException() : IOException("Another stage is running.");
+    /// <summary>The staging folder exists and is not this user's alone.</summary>
+    public sealed class ForeignRootException() : UnauthorizedAccessException("The staging folder is not this user's alone.");
 
     /// <summary>
     /// Whether <paramref name="root"/> is the one folder main stages in for this installation: beside it, on its
@@ -40,13 +48,83 @@ public static class UpdateFiles
     }
 
     /// <summary>
+    /// Makes the staging folder for this user alone, or accepts one that already is (<see cref="IsOwnRoot"/>). Its
+    /// name can be guessed, and beside a custom installation other people may be able to make folders: one that
+    /// somebody else made first, or made a link, is refused, and the release installs with Setup instead.
+    /// </summary>
+    public static void PrepareRoot(string root)
+    {
+        if (OperatingSystem.IsWindows()) PrepareOwnRoot(root);
+        else Directory.CreateDirectory(root);
+    }
+
+    /// <summary>
+    /// Whether the staging folder is one <see cref="PrepareRoot"/> made: a real folder, owned by this user, whose
+    /// access rules are its own (not inherited from a parent others may write to). Only such a folder's markers and
+    /// staged release are believed, and only there does the helper write, rename or delete.
+    /// </summary>
+    public static bool IsOwnRoot(string root) => OperatingSystem.IsWindows() ? IsOwnRootOnWindows(root) : Directory.Exists(root);
+
+    [SupportedOSPlatform("windows")]
+    private static void PrepareOwnRoot(string root)
+    {
+        var folder = new DirectoryInfo(root);
+        if (!folder.Exists)
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            var security = new DirectorySecurity();
+            // Protected: nothing is inherited from the parent. What is made inside inherits these three.
+            security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            foreach (var who in new[] { identity.User!, new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null) })
+                security.AddAccessRule(new FileSystemAccessRule(who, FileSystemRights.FullControl, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+            folder.Create(security);
+        }
+        // Also when it was just made: somebody may have made it in between.
+        if (!IsOwnRootOnWindows(root)) throw new ForeignRootException();
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static bool IsOwnRootOnWindows(string root)
+    {
+        try
+        {
+            var folder = new DirectoryInfo(root);
+            if (!folder.Exists || folder.Attributes.HasFlag(FileAttributes.ReparsePoint)) return false;
+            var security = folder.GetAccessControl(AccessControlSections.Owner | AccessControlSections.Access);
+            using var identity = WindowsIdentity.GetCurrent();
+            // What this user makes is owned by the user, or (elevated) by the token's owner, the Administrators group.
+            return security.GetOwner(typeof(SecurityIdentifier)) is SecurityIdentifier owner && (owner == identity.User || owner == identity.Owner) && security.AreAccessRulesProtected;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException or System.Security.SecurityException) { return false; }
+    }
+
+    /// <summary>Whether <c>staged.json</c> names this release and its application is in place.</summary>
+    public static bool IsStaged(string root, string exe, string version, string sha512)
+    {
+        try
+        {
+            var marker = StagedMarker(root);
+            if (!File.Exists(marker) || new FileInfo(marker).Length > 8192) return false;
+            using var document = JsonDocument.Parse(File.ReadAllBytes(marker));
+            bool Is(string name, string expected) => document.RootElement.ValueKind == JsonValueKind.Object && document.RootElement.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String && value.GetString() == expected;
+            return Is("version", version) && Is("sha512", sha512) && File.Exists(Path.Combine(AppDir(root), exe));
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException) { return false; }
+    }
+
+    /// <summary>
     /// Checks the archive against its SHA-512 once more, with the file held so that it cannot change in between, and
     /// unpacks it. What Setup adds to an installation and the archive does not carry (its uninstaller, the elevation
     /// helper) comes from the installation. Nothing is unpacked over what an earlier stage left and could not remove.
     /// </summary>
     public static void Stage(string archive, string sha512, string root, string installDir, string exe, string version)
     {
-        Directory.CreateDirectory(root);
+        PrepareRoot(root);
+        // One stage at a time: a helper Varia left unpacking when it was ended is not unpacked over, nor deleted under.
+        FileStream busy;
+        try { busy = new FileStream(Path.Combine(root, "stage.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose); }
+        catch (IOException) { throw new StageBusyException(); }
+        using var held = busy;
         var app = AppDir(root);
         var temp = Path.Combine(root, "app.tmp");
         File.Delete(StagedMarker(root));
@@ -79,14 +157,14 @@ public static class UpdateFiles
         }
     }
 
-    /// <summary>Unpacks every entry under <paramref name="destination"/>, refusing one that would land outside it.</summary>
-    public static void Unpack(Stream archive, string destination)
+    /// <summary>Unpacks every entry under <paramref name="destination"/>, refusing one that would land outside it or over another, and an archive past the bounds.</summary>
+    public static void Unpack(Stream archive, string destination, long maxBytes = MaxUnpackedBytes, int maxEntries = MaxEntries)
     {
         var rootPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(destination));
         var prefix = rootPath + Path.DirectorySeparatorChar;
         Directory.CreateDirectory(rootPath);
         using var zip = new ZipArchive(archive, ZipArchiveMode.Read, leaveOpen: true);
-        if (zip.Entries.Count > MaxEntries) throw new InvalidDataException("The archive holds too many files.");
+        if (zip.Entries.Count > maxEntries) throw new InvalidDataException("The archive holds too many files.");
         long total = 0;
         var buffer = new byte[1 << 16];
         foreach (var entry in zip.Entries)
@@ -105,7 +183,7 @@ public static class UpdateFiles
             for (int read; (read = input.Read(buffer)) > 0;)
             {
                 total += read;
-                if (total > MaxUnpackedBytes) throw new InvalidDataException("The archive unpacks to too much.");
+                if (total > maxBytes) throw new InvalidDataException("The archive unpacks to too much.");
                 output.Write(buffer, 0, read);
             }
         }
@@ -182,9 +260,19 @@ public static class UpdateFiles
     {
         var app = AppDir(root);
         var old = OldDir(root);
+        // A folder of the installation's name without its executable is not the installation: something made it after
+        // the installation was moved aside. Empty, it is removed; holding anything, it is left for Setup to repair.
+        if (Directory.Exists(installDir) && !File.Exists(Path.Combine(installDir, exe)) && (Directory.Exists(old) || Directory.Exists(app)))
+        {
+            try { Directory.Delete(installDir, recursive: false); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return Recovery.Nothing; }
+        }
         if (Directory.Exists(installDir))
         {
             if (!Directory.Exists(old) || Directory.Exists(app)) return Recovery.Nothing;
+            // Whether the installation is the staged release or one installed since is not known: only the markers go.
+            Remove(StagedMarker(root));
+            return Recovery.Tidied;
         }
         else if (File.Exists(Path.Combine(app, exe))) Move(app, installDir, patience, wait, milliseconds);
         else if (Directory.Exists(old))

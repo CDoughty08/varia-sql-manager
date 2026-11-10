@@ -453,8 +453,9 @@ function confirmUnresponsiveClose(window: BrowserWindow, quit: boolean): void {
   unresponsivePrompt ??= oneDialog(async () => window.isDestroyed() ? { response: 1 } : !rendererUnresponsive ? { response: -1 }
     : dialog.showMessageBox(window, { type: 'warning', title: 'Workbench not responding', message: 'Close Varia SQL Manager?', detail: lossDetailsFor(pageGeneration).unresponsive, buttons: ['Close', 'Wait'], defaultId: 1, cancelId: 1, noLink: true }),
   { response: 1 }).then(({ response }) => {
-    // Wait: a Restart to Update that started this quit installs nothing at a later exit.
-    if (response === 1) updater?.disarm()
+    // Wait (answered in a window that is still there): a Restart to Update that started this quit installs nothing at a
+    // later exit.
+    if (response === 1 && !window.isDestroyed() && rendererUnresponsive) updater?.disarm()
     if (window.isDestroyed() || response === 1) return
     if (response === 0) closeApproved = true
     if (quit) app.quit()
@@ -1173,6 +1174,9 @@ app.on('will-quit', event => {
   void backend.stop().finally(async () => { backendStopped = true; await installArmedUpdate(); app.exit(0) })
 })
 
+/** Main's record of a release that could not be staged or swapped in (update-staging.ts), in the profile. */
+const stagingRecord = () => join(app.getPath('userData'), 'update-failed.json')
+
 function requireUpdater(): Updater {
   if (!updater) throw new Error('Updates are not available yet.')
   return updater
@@ -1193,7 +1197,7 @@ function startUpdater(settingsLoaded: Promise<unknown>): void {
     assetUrl: feed ? (version, name) => new URL(`download/v${encodeURIComponent(version)}/${encodeURIComponent(name)}`, feed).href : assetUrl,
     fetch: (url, init) => network.fetch(url, { ...init, cache: 'no-store', redirect: 'follow' }), secureOnly: !feed,
     downloadDir: target.downloadDir, privateDir: target.privateDir,
-    ...(target.staging ? { staging: helperStaging(target.staging, { env: process.env }) } : {}),
+    ...(target.staging ? { staging: helperStaging(target.staging, { env: process.env, record: stagingRecord() }) } : {}),
     settings: () => ({ checkAutomatically: settings.current()['environment.updates.checkAutomatically'], downloadAutomatically: settings.current()['environment.updates.downloadAutomatically'] }),
     publish: state => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:updates-changed', state) }
   })
@@ -1211,7 +1215,7 @@ async function installArmedUpdate(): Promise<void> {
     else if (armed.staged && updateTarget?.staging) {
       // The swap could not be started: Restart to Update still restarts, into this version, which reports the failure
       // and installs the release with the installer instead (applyStaged left the record).
-      try { await applyStaged(updateTarget.staging, { version: armed.version, currentVersion: app.getVersion(), pid: process.pid }, { env: relaunchEnv(process.env) }) }
+      try { await applyStaged(updateTarget.staging, { version: armed.version, currentVersion: app.getVersion(), pid: process.pid }, { env: relaunchEnv(process.env), record: stagingRecord() }) }
       catch { app.relaunch() }
     }
     else await applyUpdate(kind, armed.file, armed.version, { env: process.env, currentVersion: app.getVersion() })
