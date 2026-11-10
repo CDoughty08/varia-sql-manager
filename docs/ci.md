@@ -158,7 +158,12 @@ run's lane times; re-measure on the next CI run):
   ran Smoke (Linux 3/3) to its 25 minute timeout seven times, printing nothing. The fixture now kills an app that has not
   closed in 45 s and fails the suite with its own error shown (`boundedClose`), and `smoke-shards.mjs` kills a suite past
   four times its weight (at least 5 min), so the shard's later suites still run. A `npm run check` stopped by the step
-  timeout prints what its running lanes held, where it used to lose the hung lane's output.
+  timeout prints what its running lanes held, where it used to lose the hung lane's output. Playwright's close waits for
+  the app's stdio pipes as well as its exit, and the backend and its language server inherit two of them. A SQL Tools
+  Service the backend's exit had left stopped in the middle of its tree kill kept language-services-live-smoke waiting out
+  those 45 s after main had exited with code 0; the backend's exit now waits for the kill (`ExitGate`), and on Linux a
+  hung close names the processes still in the app's process group. It still fails the suite: a process left behind after
+  quit is a product bug.
 - **Coverage restored or pinned.** The Host shutdown check proves again that Dispose comes before the exit (by sequence, or
   by the exit waiting out DrainTimeout for a starved Dispose); three timing bounds widened for starved runners were tightened
   back to what their regressions need (Host's deadline < 1 s, Entra's connect bound < 8 s, DrainLong < 5 s). Tests now pin

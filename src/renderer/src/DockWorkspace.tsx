@@ -15,6 +15,7 @@ import type { DockSide } from './contributions/shell'
 import { preparePopoutDocument, type PopoutDocument } from './popouts/popout-document'
 import PopoutFrame, { type PopoutCommands } from './popouts/PopoutFrame'
 import { placeHost } from './popouts/place'
+import { PopoutMoves } from './popouts/moves'
 import { paneDrag } from './popouts/drag'
 import { watchModals, windows } from './core/windows'
 import { focusToReturn, returnFocusTo } from './core/focus'
@@ -537,19 +538,20 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     }
   }, [])
   // While popouts are open, one timer notices a window torn down without its pagehide (by the OS, or a crash) and a window
-  // moved, which no DOM event reports; a moved window's place is saved as a resize's is.
+  // moved, which no DOM event reports (`PopoutMoves`); a moved window's place is saved as a resize's is.
   const anyPopout = popouts.length > 0
   useEffect(() => {
     if (!anyPopout) return
-    const places = new Map<PopoutRecord, string>()
+    const places = new PopoutMoves()
     const poll = setInterval(() => {
       let moved = false
+      const saved = stateRef.current.current?.windows
       for (const record of popoutsRef.current) {
         if (record.window.closed) { windowClosed(record.id); continue }
-        const place = record.window.screenX + ',' + record.window.screenY
-        if (places.has(record) && places.get(record) !== place) moved = true
-        places.set(record, place)
+        const now = { x: clampCoordinate(record.window.screenX), y: clampCoordinate(record.window.screenY) }
+        if (places.moved(record.id, now, saved?.find(item => item.id === record.id)?.bounds)) moved = true
       }
+      places.keep(new Set(popoutsRef.current.map(record => record.id)))
       if (moved) changed()
     }, 1000)
     // Dialogs open in the main window: one opened from a popout brings the main window to the front, or the popout would

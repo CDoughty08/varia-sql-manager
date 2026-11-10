@@ -516,12 +516,16 @@ class EditorAreaController implements Area, EditorGroupHost {
       element.className = 'editor-host'
       slot.append(element)
       const created = createQueryEditor(this.workbench, element)
-      // Clicking or tabbing into a group's editor makes its document the active one.
-      const focus = created.instance.onDidFocusEditorWidget(() => {
+      // Clicking or tabbing into a group's editor makes its document the active one. Monaco reports widget focus only as
+      // a change, and it reports a blur a task late: focus that left the editor (for a plan's canvas in another group)
+      // and came back before then raised no new focus, leaving the plan active under the caret. Every focusin counts too.
+      const activate = () => {
         const shows = this.editors.get(group)?.shows
         if (shows && this.workbench.documents.getSnapshot().activeId !== shows) this.api?.getPanel(shows)?.api.setActive()
-      })
-      editor = { element, editor: created, shows: '', dispose: () => { focus.dispose(); this.workbench.documents.releaseEditor(created.instance); created.dispose(); element.remove() } }
+      }
+      const focus = created.instance.onDidFocusEditorWidget(activate)
+      element.addEventListener('focusin', activate)
+      editor = { element, editor: created, shows: '', dispose: () => { focus.dispose(); element.removeEventListener('focusin', activate); this.workbench.documents.releaseEditor(created.instance); created.dispose(); element.remove() } }
       this.editors.set(group, editor)
     }
     // Another group's editor left in this slot (a restore rebuilds the groups around the same panels) goes.
