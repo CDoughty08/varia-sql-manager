@@ -83,6 +83,9 @@ describe('guide loading and focus ownership', () => {
       view.flushFocus()
       expect(view.host.querySelector('h1')?.textContent).toBe('Getting Started')
       expect(document.activeElement).toBe(view.host.querySelector('input[type="search"]'))
+      await view.open('run-query')
+      expect(view.host.querySelector('[role="alert"]')?.textContent).toContain('Restart Varia to try loading this guide again.')
+      expect(document.activeElement).toBe(view.host.querySelector('[data-help-focus]'))
     } finally { view.dispose() }
   })
   it('ignores a guide completing after its document was closed', async () => {
@@ -149,7 +152,8 @@ it('keeps a restored section current as the tab finishes laying out, until the u
     const column = view.host.querySelector<HTMLElement>('[aria-label="Guide sections"]')!
     Object.defineProperties(column, { clientHeight: { get: () => height }, scrollHeight: { get: () => 1187 } })
     column.querySelectorAll('section').forEach((section, index) => Object.defineProperty(section, 'offsetTop', { get: () => [0, 538, 847, 1006][index] }))
-    const scroll = async (top: number) => {
+    const scroll = async (top: number, user = false) => {
+      if (user) await act(async () => column.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: top - column.scrollTop })))
       column.scrollTop = top
       await act(async () => column.dispatchEvent(new Event('scroll')))
       act(() => pending?.())
@@ -158,10 +162,39 @@ it('keeps a restored section current as the tab finishes laying out, until the u
     height = 356
     await scroll(831)
     expect(onFrame).toHaveBeenLastCalledWith(expect.objectContaining({ section: 'limits' }))
-    await scroll(538)
+    await scroll(538, true)
     expect(onFrame).toHaveBeenLastCalledWith(expect.objectContaining({ section: 'select' }))
-    await scroll(831)
+    await scroll(831, true)
     expect(onFrame).toHaveBeenLastCalledWith(expect.objectContaining({ section: 'related' }))
+  } finally { view.dispose(); clock.mockRestore() }
+})
+
+it.each([['clicked', 'wheel'], ['restored', 'wheel'], ['restored', 'keyboard'], ['restored', 'nested-keyboard'], ['restored', 'tab'], ['restored', 'scrollbar'], ['restored', 'touch']] as const)('marks the last section after %s navigation and %s scrolling directly to the end', async (mode, input) => {
+  let pending: (() => void) | undefined
+  const clock = vi.spyOn(frames, 'nextFrame').mockImplementation(callback => { pending = callback; return () => { pending = undefined } })
+  const sections = ['A', 'B', 'C', 'D'].map(id => ({ id, title: id, content: createElement('button', { type: 'button' }, id) })), onFrame = vi.fn()
+  const view = await mount(createElement(DocumentSections, { id: 'user-scroll', title: 'Guide', sections, frame: { ...initialFrameState(sections), section: mode === 'restored' ? 'B' : 'A' }, onFrame }))
+  try {
+    const column = view.host.querySelector<HTMLElement>('[aria-label="Guide sections"]')!
+    Object.defineProperties(column, { clientHeight: { get: () => 400 }, scrollHeight: { get: () => 1100 } })
+    column.querySelectorAll('section').forEach((section, index) => Object.defineProperty(section, 'offsetTop', { get: () => [0, 500, 900, 1000][index] }))
+    if (mode === 'clicked') await act(async () => view.host.querySelector<HTMLButtonElement>('[data-section="B"]')!.click())
+    column.scrollTop = 500
+    await act(async () => column.dispatchEvent(new Event('scroll')))
+    act(() => pending?.())
+    expect(onFrame).toHaveBeenLastCalledWith(expect.objectContaining({ section: 'B' }))
+    const event = {
+      wheel: new WheelEvent('wheel', { bubbles: true, deltaY: 200 }), keyboard: new KeyboardEvent('keydown', { bubbles: true, key: 'End' }),
+      'nested-keyboard': new KeyboardEvent('keydown', { bubbles: true, key: 'PageDown' }),
+      tab: new KeyboardEvent('keydown', { bubbles: true, key: 'Tab' }),
+      scrollbar: new Event('pointerdown', { bubbles: true }), touch: new Event('touchmove', { bubbles: true })
+    }[input]
+    const target = input === 'nested-keyboard' ? column.querySelector('button')! : column
+    await act(async () => target.dispatchEvent(event))
+    column.scrollTop = 700
+    await act(async () => column.dispatchEvent(new Event('scroll')))
+    act(() => pending?.())
+    expect(onFrame).toHaveBeenLastCalledWith(expect.objectContaining({ section: 'D' }))
   } finally { view.dispose(); clock.mockRestore() }
 })
 

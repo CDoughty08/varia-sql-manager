@@ -17,7 +17,7 @@ class GuideBoundary extends Component<{ readonly children: ReactNode }, { readon
   state = { failed: false }
   static getDerivedStateFromError() { return { failed: true } }
   render() {
-    return this.state.failed ? <div className="document-content" role="alert"><EmptyState icon="info" title="This guide could not be opened" detail="Choose All guides to return to the list. If the problem continues, restart Varia." /></div> : this.props.children
+    return this.state.failed ? <div className="document-content" role="alert"><EmptyState icon="info" title="This guide could not be opened" detail="Choose All guides to read another guide. Restart Varia to try loading this guide again." /></div> : this.props.children
   }
 }
 

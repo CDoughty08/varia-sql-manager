@@ -54,8 +54,9 @@ with `node scripts/ci-timings.mjs` (add `--steps` for per-step times) before and
 
   Getting Started also shares `updates-smoke.mjs`, including search, lazy routing/focus, interactive fictional samples,
   live shortcut/gesture/settings changes, Options navigation and a narrow layout under reduced motion. The expanded
-  suite took 9.1 seconds locally on Windows. Its initial shard estimates are 12 seconds on Linux and Windows, pending
-  CI measurements; this adds no launch or job. Registration/reference checks load every bundled page without SQL.
+  suite took 9.1 seconds locally on Windows. [PR #424's successful run](https://github.com/CDoughty08/varia-sql-manager/actions/runs/42976652703)
+  measured 11 seconds on both Linux and Windows; the shard weights record those measurements. This adds no launch or
+  job. Registration/reference checks load every bundled page without SQL.
   DOM checks hold and reject real guide-module imports to cover focus ownership, failure recovery and closing during
   a load; scroll checks cover hidden tabs and reflow on remount. The shared smoke also checks numeric sample ordering
   under each text-sort mode and focus/section restoration after a tab switch.

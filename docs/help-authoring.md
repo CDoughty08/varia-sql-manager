@@ -16,6 +16,8 @@ to CLAUDE.md so Codex and Claude receive the same instructions.
    frame and navigation controls, including focus when its tab remounts; `GuidePage` supplies its section body.
    Guide modules must not focus themselves when they finish loading: the navigation request already owns focus,
    and the user may have moved elsewhere.
+   A rejected lazy import stays failed for the window's lifetime; recovery directs the reader to other guides or a
+   restart, rather than promising that reopening the same page retries it.
 3. Use `CommandRef`, `SettingRef` and `GestureRef` for current names, paths, keys and values. Declare those references
    in the catalog. Do not transcribe default key strings or use the reader's current Help focus to resolve them.
    A new lesson context belongs in the shared references helper, with checks for focus flags and scope precedence.
@@ -30,7 +32,7 @@ to CLAUDE.md so Codex and Claude receive the same instructions.
    guide and verifies module parity, related links, section uniqueness, real source paths and declared references.
    It intentionally does not snapshot prose: reviewers still check correctness, prerequisites, failure remedies,
    persistence limits and whether the explanation helps the user finish their task. `tests/getting-started-loading.test.ts`
-   exercises delayed/rejected modules, recovery focus, closing during a load, tab reflow and settings-sensitive samples.
+   exercises delayed/rejected modules, recovery focus, closing during a load, tab reflow, scroll input and settings-sensitive samples.
 
 ## Verify behavior
 

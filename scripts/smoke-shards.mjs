@@ -28,7 +28,7 @@ export const suiteSeconds = {
     'scripts/results-smoke.mjs': 85, 'scripts/estimated-plans-smoke.mjs': 12, 'scripts/options-resize-smoke.mjs': 3, 'scripts/options-smoke.mjs': 18,
     'scripts/files-smoke.mjs': 15, 'scripts/hot-exit-smoke.mjs': 18, 'scripts/editor-smoke.mjs': 21, 'scripts/language-services-smoke.mjs': 12, 'scripts/language-diagnostics-smoke.mjs': 20,
     'scripts/table-designer-smoke.mjs': 5, 'scripts/document-frame-smoke.mjs': 16, 'scripts/ssis-smoke.mjs': 5,
-    'scripts/ssis-operations-smoke.mjs': 18, 'scripts/updates-smoke.mjs': 12
+    'scripts/ssis-operations-smoke.mjs': 18, 'scripts/updates-smoke.mjs': 11
   },
   windows: {
     'scripts/retained-plans-smoke.mjs': 20,
@@ -41,7 +41,7 @@ export const suiteSeconds = {
     'scripts/results-smoke.mjs': 66, 'scripts/estimated-plans-smoke.mjs': 12, 'scripts/options-resize-smoke.mjs': 2, 'scripts/options-smoke.mjs': 16,
     'scripts/files-smoke.mjs': 13, 'scripts/hot-exit-smoke.mjs': 13, 'scripts/editor-smoke.mjs': 25, 'scripts/language-services-smoke.mjs': 15, 'scripts/language-diagnostics-smoke.mjs': 25,
     'scripts/table-designer-smoke.mjs': 7, 'scripts/document-frame-smoke.mjs': 22, 'scripts/ssis-smoke.mjs': 4,
-    'scripts/ssis-operations-smoke.mjs': 18, 'scripts/updates-smoke.mjs': 12
+    'scripts/ssis-operations-smoke.mjs': 18, 'scripts/updates-smoke.mjs': 11
   }
 }
 

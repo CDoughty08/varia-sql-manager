@@ -16,6 +16,7 @@ real application. Options links open the relevant page; changes apply through th
 The results illustration sorts numeric ranks, so text-sort modes do not change its order. Its copy explanation uses
 your applied column-header option. Loading and unavailable guides keep their heading and All guides navigation;
 a guide finishing its load leaves focus where you moved it.
+If a guide fails to load, you can read other guides from All guides. Restart Varia to retry the failed guide.
 
 The guide tab has no SQL model and cannot be saved or recovered as a query. Reopening the same guide keeps its
 section; choosing another guide starts at its beginning. Returning to All guides clears the search. Closing the tab

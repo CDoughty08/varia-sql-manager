@@ -238,6 +238,7 @@ export function DocumentSections({ id, title, sections, frame, onFrame, hint }: 
   // A tab switched back to remounts its frame: the column starts at the top, so it scrolls to the section its list marks
   // (the effect below), which counts as chosen so the end of the scroll keeps it marked.
   const restored = useRef(restoredSection(frame, sections)).current
+  const restoring = useRef(restored !== undefined)
   const chosen = useRef<string | undefined>(restored)
   const reveal = useRef<string | undefined>(restored)
   const pending = useRef<(() => void) | undefined>(undefined)
@@ -251,12 +252,27 @@ export function DocumentSections({ id, title, sections, frame, onFrame, hint }: 
     if (element) column.scrollTop = element.offsetTop
   })
   const choose = (section: string) => {
+    restoring.current = false
     chosen.current = section
     const element = content.current?.querySelector<HTMLElement>(`#${CSS.escape(sectionDomId(id, section))}`)
     // An open section scrolls now; a collapsed one once it has opened (the render that opens it runs the effect above).
     if (element && content.current && !frame.collapsed.includes(section)) content.current.scrollTop = element.offsetTop
     else reveal.current = section
     onFrame(selectSection(frame, sections, section))
+  }
+  const scrollInput = () => {
+    if (!restoring.current) return
+    restoring.current = false
+    chosen.current = undefined
+  }
+  const scrollKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement
+    if (event.defaultPrevented) return
+    // Tabbing to another control can scroll the column too, including when leaving an editable field.
+    if (event.key === 'Tab') { scrollInput(); return }
+    if (target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return
+    if (event.key === ' ' && target.closest('button, summary, [role="button"]')) return
+    if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) scrollInput()
   }
   const scrolled = () => {
     pending.current?.()
@@ -269,9 +285,8 @@ export function DocumentSections({ id, title, sections, frame, onFrame, hint }: 
       const tops = sections.map(section => column.querySelector<HTMLElement>(`#${CSS.escape(sectionDomId(id, section.id))}`)?.offsetTop ?? 0)
       const chosenIndex = chosen.current === undefined ? undefined : sections.findIndex(section => section.id === chosen.current)
       const index = spySection(tops, column, chosenIndex)
-      // Keep a restored choice while its section is current: the column can grow as its tab finishes laying out.
-      // Scrolling to a different section releases that choice, so ordinary scrolling still decides what is marked.
-      if (sections[index]?.id !== chosen.current) chosen.current = undefined
+      // Only remount restoration survives layout changes until scroll input; ordinary choices keep the original rule.
+      if (!restoring.current && column.scrollTop + column.clientHeight < column.scrollHeight - 1) chosen.current = undefined
       if (index >= 0) onFrame(scrolledTo(frame, sections[index].id))
     })
   }
@@ -279,7 +294,10 @@ export function DocumentSections({ id, title, sections, frame, onFrame, hint }: 
     {sections.length > 1 && <SectionNav id={id} sections={sections} current={frame.section} onChoose={choose} />}
     {/* A tab stop of its own, so PageDown, PageUp and Space page through a section taller than the view; the list's keys
         only go from heading to heading. */}
-    <div className="document-content document-sections" ref={content} onScroll={scrolled} role="region" aria-label={`${title} sections`} tabIndex={0}>
+    <div className="document-content document-sections" ref={content} onScroll={scrolled} onWheel={scrollInput} onTouchMove={scrollInput}
+      onPointerDown={event => { if (event.target === event.currentTarget) scrollInput() }}
+      onKeyDown={scrollKey}
+      role="region" aria-label={`${title} sections`} tabIndex={0}>
       {sections.map(section => <FrameSectionView key={section.id} id={id} section={section} collapsed={frame.collapsed.includes(section.id)} onToggle={() => onFrame(toggleSection(frame, section.id))} />)}
       {hint}
     </div>
