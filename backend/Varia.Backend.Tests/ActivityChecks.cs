@@ -228,6 +228,14 @@ internal static class ActivityChecks
         check(order.Rows.Where(row => row.Depth == 0).Select(row => row.Node.SessionId).SequenceEqual([4, 8, 1]),
             "lead blockers come by sessions downstream, then by their chain's longest wait");
         check(BlockingGraph.Build([], 32, 2_000) is { Rows.Count: 0, Nodes.Count: 0, Truncated: false, BlockedSessions: 0 }, "no blocking is an empty graph");
+        // Row tones: every table that declares tones gets them, most urgent first, and only tones its catalogue lists.
+        check(ActivitySessionRows.SessionTone(true, true, true, true) == "blocked" && ActivitySessionRows.SessionTone(false, true, true, true) == "blocking"
+            && ActivitySessionRows.SessionTone(false, false, true, true) == "rollback" && ActivitySessionRows.SessionTone(false, false, false, true) == "system"
+            && ActivitySessionRows.SessionTone(false, false, false, false) is null, "a session is toned blocked, then blocking, rolling back or system, else not at all");
+        check(ActivitySessionRows.ChainTone(0) == "blocking" && ActivitySessionRows.ChainTone(1) == "blocked" && ActivitySessionRows.ChainTone(31) == "blocked", "a chain's lead blocker is toned blocking and every session under it blocked");
+        check(ActivitySessionRows.ActiveTone(true, true) == "blocked" && ActivitySessionRows.ActiveTone(false, true) == "rollback" && ActivitySessionRows.ActiveTone(false, false) is null, "a running request is toned blocked, else rolling back");
+        check(new[] { "blocked", "blocking", "rollback", "system" }.All(Catalog.Table("sessions").Tones.Contains) && new[] { "blocked", "blocking" }.All(Catalog.Table("blocking").Tones.Contains)
+            && new[] { "blocked", "rollback" }.All(Catalog.Table("activeQueries").Tones.Contains), "every tone the session rows set is one its table declares");
     }
 
     private static void Filters(Action<bool, string> check)

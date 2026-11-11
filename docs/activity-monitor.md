@@ -58,11 +58,17 @@ probe stays paused: no SQL runs for a pane nobody can read.
 | Pane | Now |
 | --- | --- |
 | Sessions | A live grid of sessions with view chips, Show chips, header funnels and a filter box (below); SSMS calls it Processes. |
-| Blocking | Blocking is not shown yet; it arrives in a later version of Varia. |
+| Blocking | A live grid of the blocking chains, lead blockers first (below). |
 | Resource Waits | Resource Waits is not shown yet; it arrives in a later version of Varia. |
 | Data File I/O | Data File I/O is not shown yet; it arrives in a later version of Varia. |
 | Recent Expensive Queries | Recent Expensive Queries is not shown yet; it arrives in a later version of Varia. |
-| Active Expensive Queries | Active Expensive Queries is not shown yet; it arrives in a later version of Varia. |
+| Active Expensive Queries | A live grid of the running requests, the most CPU first (below). |
+
+Blocking and Active Expensive Queries show the sessions probe's other two tables, so showing them runs no extra SQL.
+Blocking lists each session in a chain once, indented under the session it waits on, lead blockers (toned blocking) first
+and every session under them toned blocked; Active Expensive Queries lists running requests, the 100 using the most CPU, toned
+blocked or rolling back. Each has a status line (the rows, and what cut them), says when its table is empty while the
+monitor samples, and only speaks for the last sample when it is paused or stopped. A table the login cannot read says so.
 
 Sessions shows the sessions probe's rows in a live grid (one row per session, toned blocked, blocking, rolling back,
 system or departed). It is the results grid with live rows: the same header, whose sort buttons (Shift+click adds a key)

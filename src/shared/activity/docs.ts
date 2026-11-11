@@ -15,7 +15,9 @@ export const copyKeys = {
  *  checks them against the commands catalogue, which this file cannot import in plain Node. */
 /** What a pane whose grid has arrived shows, for the Panes table. */
 const shownPaneNotes: { readonly [P in (typeof activityPanes)[number]]?: string } = {
-  processes: 'A live grid of sessions with view chips, Show chips, header funnels and a filter box (below); SSMS calls it Processes.'
+  processes: 'A live grid of sessions with view chips, Show chips, header funnels and a filter box (below); SSMS calls it Processes.',
+  blocking: 'A live grid of the blocking chains, lead blockers first (below).',
+  activeQueries: 'A live grid of the running requests, the most CPU first (below).'
 }
 export const documentCommands = {
   'activity.open': { title: 'Activity Monitor', other: '—', darwin: '⌥⌘A' },
@@ -177,6 +179,12 @@ export function renderActivityMonitorDocs(): string {
     'probe stays paused: no SQL runs for a pane nobody can read.',
     '',
     table(['Pane', 'Now'], activityPanes.map(pane => [paneSpecs[pane].title, pendingPanes.includes(pane) ? pendingPaneNote(pane) : shownPaneNotes[pane] ?? 'Shown.'])),
+    '',
+    `Blocking and Active Expensive Queries show the sessions probe's other two tables, so showing them runs no extra SQL.`,
+    `Blocking lists each session in a chain once, indented under the session it waits on, lead blockers (toned blocking) first`,
+    `and every session under them toned blocked; Active Expensive Queries lists running requests, the ${number(tableSpecs.activeQueries.rowCap)} using the most CPU, toned`,
+    'blocked or rolling back. Each has a status line (the rows, and what cut them), says when its table is empty while the',
+    'monitor samples, and only speaks for the last sample when it is paused or stopped. A table the login cannot read says so.',
     '',
     `Sessions shows the sessions probe's rows in a live grid (one row per session, toned blocked, blocking, rolling back,`,
     `system or departed). It is the results grid with live rows: the same header, whose sort buttons (Shift+click adds a key)`,

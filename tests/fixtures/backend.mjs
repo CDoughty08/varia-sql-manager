@@ -1161,6 +1161,7 @@ function liveSubscribe(id, credit, params) {
     const kept = ended === 'sourceEnded' ? live.revisions.slice(-1) : []
     for (const resultId of live.revisions) if (!kept.includes(resultId)) stored.delete(resultId)
     for (const ids of live.kept.values()) for (const resultId of ids) stored.delete(resultId)
+    for (const ids of live.keptOthers?.values() ?? []) for (const resultId of ids) stored.delete(resultId)
     respond(id, { ended, ...error, ...(ended === 'sourceEnded' ? { kept } : {}), ticks: live.ticks, elapsedMs: Date.now() - live.started })
   }
   lives.set(id, live)
@@ -1212,6 +1213,22 @@ function sessionsShown(filter) {
     || (view === 'active' && row.command !== null) || (view === 'blocked' && row.blockedBy) || (view === 'blocking' && row.blocking)
     || (view === 'idleOpenTransaction' && row.command === null && row.openTransactions > 0) || (view === 'rollingBack' && false)))
 }
+// Blocking and Active Expensive Queries on the fake server: the chain 57 → 61 exists only while the control file
+// activity-blocked does (as the overview's Blocked Sessions tile reads it), so a test sees both the empty pane and the
+// chain; 61 and 66 are running. Cells are keyed by the catalogue's column id without the table's prefix.
+const fakeChain = [
+  { session: '57', sessionId: '57', depth: '0', status: 'sleeping', blockedSessions: '1', login: 'app_orders', hostName: 'APP-01', application: 'Orders.Api', database: 'SalesDb', openTransactions: '1', cycle: '0', lastBatch: 'BEGIN TRAN; UPDATE dbo.Orders SET Status = 2 WHERE OrderId = 1', tone: 'warning' },
+  { session: '└─ 61', sessionId: '61', depth: '1', status: 'suspended', blockedSessions: '0', waitType: 'LCK_M_S', waitTimeMs: '41200', waitResource: 'KEY: 7:72057594043695104 (8194443284a0)', login: 'svc_reporting', hostName: 'BI-01', application: 'Power BI', database: 'SalesDb', openTransactions: '0', cycle: '0', tone: 'error' }
+]
+const fakeActive = [
+  { query: 'SELECT o.OrderId, o.Total FROM dbo.Orders AS o WHERE o.Status = 2', sessionId: '61', requestId: '0', startTime: '2026-11-09 08:01:10.000', status: 'suspended', database: 'SalesDb', cpuMs: '120', elapsedMs: '41300', logicalReads: '512', waitType: 'LCK_M_S', blockedBy: '57', dop: '1', tone: 'error' },
+  { query: 'SELECT b.InvoiceId FROM dbo.Invoices AS b ORDER BY b.Due', sessionId: '66', requestId: '0', startTime: '2026-11-09 08:02:30.000', status: 'running', database: 'BillingDb', cpuMs: '8125', cpuRate: '812.5', elapsedMs: '9800', logicalReads: '981204', dop: '4', grantedMemoryKb: '10240', usedMemoryKb: '8192' }
+]
+function sessionTableResult(spec, prefix, rows) {
+  const id = column => column.id.slice(prefix.length, prefix.length + 1).toLowerCase() + column.id.slice(prefix.length + 1)
+  const columns = spec.columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true, ...(column.role ? { role: column.role } : {}) }))
+  return storeResult({ columns, rows: rows.map(row => spec.columns.map(column => row[id(column)] ?? null)) }, 0)
+}
 function activitySessionsSample(live, probe) {
   const filter = (live.args.filters ?? []).find(item => item.table === 'sessions') ?? {}
   const spec = liveProbes['activity.sessions'].tables[0]
@@ -1242,7 +1259,27 @@ function activitySessionsSample(live, probe) {
   const changed = facets.filter(facet => JSON.stringify(facet) !== sentFacets.get(facet.column))
   for (const facet of changed) sentFacets.set(facet.column, JSON.stringify(facet))
   const status = probe.samples === 1 ? [{ id: 'serverState', value: 1 }, { id: 'canKill', value: 1 }] : undefined
-  return { tables: [{ table: 0, descriptor: describe(result), revision: probe.samples, ...(retired ? { retired } : {}), ...(changed.length ? { facets: changed } : {}) }], ...(status ? { status } : {}) }
+  const blocked = !!controlDirectory && existsSync(join(controlDirectory, 'activity-blocked'))
+  const [, chainSpec, activeSpec] = liveProbes['activity.sessions'].tables
+  const chain = sessionTableResult(chainSpec, 'chain', blocked ? fakeChain : [])
+  const active = sessionTableResult(activeSpec, 'active', fakeActive)
+  // The other tables' results go the way Processes' do: two kept per table, the older retired.
+  const others = live.keptOthers ?? (live.keptOthers = new Map())
+  const keep = (table, resultId) => {
+    const ids = others.get(table) ?? []
+    ids.push(resultId)
+    others.set(table, ids)
+    if (ids.length <= 2) return undefined
+    const gone = ids.shift()
+    stored.delete(gone)
+    return [gone]
+  }
+  const chainRetired = keep(1, chain.resultId), activeRetired = keep(2, active.resultId)
+  return { tables: [
+    { table: 0, descriptor: describe(result), revision: probe.samples, ...(retired ? { retired } : {}), ...(changed.length ? { facets: changed } : {}) },
+    { table: 1, descriptor: describe(chain), revision: probe.samples, ...(chainRetired ? { retired: chainRetired } : {}) },
+    { table: 2, descriptor: describe(active), revision: probe.samples, ...(activeRetired ? { retired: activeRetired } : {}) }
+  ], ...(status ? { status } : {}) }
 }
 /** An overview sample: every series of the catalogue, a rate's first sample (and the first after a pause) without a value. */
 function overviewMetrics(n, first) {
