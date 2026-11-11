@@ -28,6 +28,28 @@ export function smokeDebuggingProfile(options: { packaged: boolean, env: NodeJS.
 }
 
 /**
+ * Whether main opens no file another program hands it: the command line's, a second instance's, macOS's open-file and
+ * drops. A smoke run that keeps its debugging port lets any program of the same user read the page, and macOS grants
+ * file access (TCC's Files and Folders) to the app, not to the profile: a program without that grant could start Varia
+ * on a throwaway profile with ~/Documents/secret.sql as its argument and read the editor's text through the port. The
+ * smoke scripts hand over no files.
+ */
+export function launchFilesRefused(smokeProfile: string | null): boolean { return smokeProfile !== null }
+
+/**
+ * Whether main reads no file whose path comes from its profile. The program that starts a smoke run chooses the profile,
+ * and can write it while the run lasts, so every path stored there is that program's: a planted Session/session.json,
+ * AutoRecover record or recent-files.json naming ~/Documents/secret.sql would have main read it (hot exit's restore,
+ * Recover, File › Recent Files) and hand its text to the page, which the debugging port shows, for the reason
+ * `launchFilesRefused` gives. So in a smoke run the session and AutoRecover stores hand out their records without the
+ * file's path (the query reopens with its kept text and no file; a clean tab that kept only its path does not reopen),
+ * and Recent Files neither reads nor writes its file: it lists only what this run's own dialogs opened. Main's Open and
+ * Save dialogs stay, since only the person at the screen answers them. The smoke scripts start on a fresh profile and use
+ * none of the three.
+ */
+export function profilePathsRefused(smokeProfile: string | null): boolean { return smokeProfile !== null }
+
+/**
  * Takes the remote debugging switches off a packaged build's command line, and says whether there were any. Main runs it
  * as its module loads, before Chromium starts the DevTools handler (which reads its command line once the app is getting
  * ready), so a shortcut, file association or other program that adds one never gets a debugging port, even for the

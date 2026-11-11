@@ -91,7 +91,8 @@ the rules that keep it lean.
 - vitest: `tests/*.test.ts`, fixtures in `tests/fixtures/`.
 - .NET: `backend/Varia.Backend.Tests/Program.cs`, a console program of `Check(condition, name)` calls. Offline checks come
   first, their suites in concurrent lanes (`OfflineSuites.cs`: six by default, `VARIA_TEST_OFFLINE_LANES=<n>`; one when
-  `VARIA_TEST_SLOW_MS` is set): a new offline suite goes in Program.cs's `offlineSuites` list, with its measured seconds in
+  `VARIA_TEST_SLOW_MS` is set; a suite still running after 3 minutes is named and the run exits,
+  `VARIA_TEST_OFFLINE_SUITE_MS=<ms>` to change that): a new offline suite goes in Program.cs's `offlineSuites` list, with its measured seconds in
   `OfflineSuites.Weights` if over 0.3 s, and runs in `OfflineSuites.Alone` if it changes process-wide state (the console,
   environment variables, a static override, GC measurements); live checks follow and create only session-local temporary objects. They create databases (and logins) only
   when `VARIA_TEST_SQL_SCRATCH=1`; scratch objects are uniquely named, marked, and dropped in `finally`

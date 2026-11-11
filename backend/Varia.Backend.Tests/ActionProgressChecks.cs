@@ -21,6 +21,7 @@ internal static class ActionProgressChecks
         Messages(check);
         Catalogue(check);
         await RunnerAsync(check);
+        await LateHoldersAsync(check);
         await GatesAsync(check);
         await DrainAsync(check);
     }
@@ -188,6 +189,22 @@ internal static class ActionProgressChecks
 
     private static RunStep[] Nothing(SqlConnection _) => [];
 
+    /// <summary>How long the holders get to open their connections. It returns as soon as they have, so it is generous: a Windows
+    /// runner once stalled every suite for 20 s here.</summary>
+    private const int HoldersWaitMs = 60_000;
+
+    /// <summary>Waits for the holders to take their gates. The probes that follow must find those gates taken: one that ran first
+    /// would take the gate itself and wait in HeldHost for the release that comes only after it is awaited, which hung the whole
+    /// check to the step's timeout. So when the holders are late this ends them, fails the check, and the caller skips its probes.</summary>
+    internal static async Task<bool> HoldersOpenedAsync(Func<int> opened, int count, int waitMs, Action release, Task[] holders, Action<bool, string> check, string what)
+    {
+        if (SpinWait.SpinUntil(() => opened() == count, waitMs)) return true;
+        release();
+        await Task.WhenAll(holders);
+        check(false, what + ": the " + count + " holding actions did not open their connections within " + waitMs + " ms (" + opened() + " did), so the gates were not probed");
+        return false;
+    }
+
     private static async Task GatesAsync(Action<bool, string> check)
     {
         var host = new HeldHost();
@@ -195,7 +212,7 @@ internal static class ActionProgressChecks
         using var stop = new CancellationTokenSource();
         var first = Outcome(service.ExecuteStepsAsync("A", Guid.NewGuid().ToString(), "delete", Nothing, null, stop.Token));
         var second = Outcome(service.ExecuteStepsAsync("B", Guid.NewGuid().ToString(), "delete", Nothing, null, stop.Token));
-        SpinWait.SpinUntil(() => host.Opened.Count == 2, 15_000);
+        if (!await HoldersOpenedAsync(() => host.Opened.Count, 2, HoldersWaitMs, () => { stop.Cancel(); host.Release.TrySetResult(); }, [first, second], check, "the long gate")) return;
         // A's long gate is taken: another long action on A waits gateWaitMs, then BUSY; one on C finds both long slots taken.
         var sameConnection = await Outcome(service.ExecuteStepsAsync("A", Guid.NewGuid().ToString(), "delete", Nothing, null, stop.Token));
         var third = await Outcome(service.ExecuteStepsAsync("C", Guid.NewGuid().ToString(), "delete", Nothing, null, stop.Token));
@@ -217,7 +234,7 @@ internal static class ActionProgressChecks
         using var shortStop = new CancellationTokenSource();
         var holding = Outcome(shortService.ExecuteStepsAsync("A", Guid.NewGuid().ToString(), "delete", Nothing, null, shortStop.Token));
         var holdingB = Outcome(shortService.ExecuteStepsAsync("B", Guid.NewGuid().ToString(), "delete", Nothing, null, shortStop.Token));
-        SpinWait.SpinUntil(() => shortHost.Opened.Count == 2, 15_000);
+        if (!await HoldersOpenedAsync(() => shortHost.Opened.Count, 2, HoldersWaitMs, () => { shortStop.Cancel(); shortHost.Release.TrySetResult(); }, [holding, holdingB], check, "the execute gate")) return;
         var busy = await Outcome(shortService.ExecuteStepsAsync("A", Guid.NewGuid().ToString(), "rename", Nothing, null, shortStop.Token));
         var elsewhere = await Outcome(shortService.ExecuteStepsAsync("C", Guid.NewGuid().ToString(), "rename", Nothing, null, shortStop.Token));
         shortStop.Cancel();
@@ -227,6 +244,21 @@ internal static class ActionProgressChecks
             && elsewhere == "BUSY: Object actions are already running on other connections. Retry after they finish.",
             "a second action on a Varia connection whose execute gate is taken is BUSY, worded for this connection (critic A26), and one refused "
             + "because actions on other connections hold every slot says so: " + busy + " / " + elsewhere);
+    }
+
+    /// <summary>Holders that never open (a stalled runner): the wait gives up, ends them and reports it, where it used to go on to
+    /// a probe that then held the gate for good.</summary>
+    private static async Task LateHoldersAsync(Action<bool, string> check)
+    {
+        var host = new HeldHost();
+        using var service = new ActionService(host, new ActionServiceOptions { GateWait = TimeSpan.FromMilliseconds(200) }, WithLong("delete"));
+        using var stop = new CancellationTokenSource();
+        var only = Outcome(service.ExecuteStepsAsync("A", Guid.NewGuid().ToString(), "delete", Nothing, null, stop.Token));
+        var reports = new List<(bool Passed, string Name)>();
+        // Two are awaited and one exists, so the count is never reached.
+        var opened = await HoldersOpenedAsync(() => host.Opened.Count, 2, 300, () => { stop.Cancel(); host.Release.TrySetResult(); }, [only], (passed, name) => reports.Add((passed, name)), "late holders");
+        check(!opened && only.IsCompleted && reports is [(false, var name)] && name.StartsWith("late holders: the 2 holding actions did not open", StringComparison.Ordinal),
+            "a gate check whose holders are late ends them and fails by name, and never probes a gate nobody holds");
     }
 
     private static async Task DrainAsync(Action<bool, string> check)
@@ -242,6 +274,9 @@ internal static class ActionProgressChecks
         var watch = Stopwatch.StartNew();
         var gaveUp = !stuckService.DrainLong();
         var waited = watch.ElapsedMilliseconds;
+        // Neither job can end before stuck.Release below (their requests answer sooner), so a drain that returned gave up on
+        // a job still running.
+        var stillRunning = stuckService.ActiveJobs == 2;
         // The same job finishing inside its wait: the drain returns once it ended.
         var held = new HeldHost { IgnoreStop = true };
         // A 30 s Stop wait, so a release a starved CI runner fires late still lands well inside it, and drainedMs's bound can be wide.
@@ -249,14 +284,20 @@ internal static class ActionProgressChecks
         var run = Outcome(service.ExecuteStepsAsync("A", Guid.NewGuid().ToString(), "delete", Nothing, null, CancellationToken.None));
         SpinWait.SpinUntil(() => held.Opened.Count == 1, 15_000);
         service.CancelAll();
-        _ = Task.Delay(300).ContinueWith(_ => held.Release.TrySetResult(), TaskScheduler.Default);
+        // The watch starts before the release is scheduled, so a stall between the two cannot make the drain look too quick.
         watch.Restart();
+        _ = Task.Delay(300).ContinueWith(_ => held.Release.TrySetResult(), TaskScheduler.Default);
         var drained = service.DrainLong();
         var drainedMs = watch.ElapsedMilliseconds;
         var jobEnded = run.IsCompleted || await Task.WhenAny(run, Task.Delay(15_000)) == run;
         stuck.Release.TrySetResult();
         await Task.WhenAll(stuckRun, shortRun, run);
-        check(gaveUp && waited is >= 250 and < 5_000 && drained && drainedMs is >= 250 and < 15_000 && jobEnded,
-            $"after CancelAll a shutdown waits for each long job (not the others) up to its Stop wait plus cleanup budget, and returns once they ended: gave up after {waited} ms, drained in {drainedMs} ms");
+        // The stuck drain's wait is 300 ms. Its upper bound only has to tell that from the waits it must not use (the default
+        // Stop grace or cleanup budget, 10 s each), and five copies on three CPUs returned from it 5.3 s late; a wait with no
+        // bound never returns at all. The released job's drain returns true only once the job ended, which the release allows;
+        // its bound sits under the 30 s Stop wait, which a drain that did not return when the job ended would take.
+        check(gaveUp && stillRunning && waited is >= 250 and < 9_000 && drained && drainedMs is >= 250 and < 25_000 && jobEnded,
+            $"after CancelAll a shutdown waits for each long job (not the others) up to its Stop wait plus cleanup budget, and returns once they ended: gave up after {waited} ms"
+            + $" (jobs still running then: {stillRunning}), drained in {drainedMs} ms (drained: {drained}, request answered: {jobEnded})");
     }
 }

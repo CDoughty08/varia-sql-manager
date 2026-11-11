@@ -10,6 +10,7 @@
 ### Fixed
 
 - **Results:** when a running query fills its result memory budget (or reaches a row limit, or the computer runs low on memory), the grid now says so at once, with the rows read still counting, instead of only after the query ends.
+- **No leftover language service on Linux and macOS:** a SQL backend that crashed or was restarted while a query's language service was closing could leave that process suspended in the background. It now always ends.
 
 ## [0.8.0] - 2026-11-10
 
