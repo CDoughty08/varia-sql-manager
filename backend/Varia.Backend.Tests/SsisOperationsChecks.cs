@@ -237,9 +237,15 @@ internal static class SsisOperationsChecks
         LateSample(rebaseMs + 1);
         LateSample(2 * rebaseMs - 1);
         LateSample(2 * rebaseMs);
-        check(passed == 100 && missed.Length == 0 && found is [90] && Ids(late) is [90] && lateReads[^5] == "above 100" && lateReads[^4..] is ["baseline", "above 90", not "baseline", "baseline"],
+        // New filters or a lost connection may be another scope or server: that baseline settles only what it read.
+        late.Reset();
+        LateSample(2 * rebaseMs + 1);
+        var afterReset = late.SettledId;
+        check(passed == 100 && missed.Length == 0 && found is [90] && Ids(late) is [90] && lateReads[^6] == "above 100" && lateReads[^5..] is ["baseline", "above 100", "above 100", "baseline", "baseline"]
+            && afterReset == 90,
             "an in-scope operation whose insert commits after the catalog's high-water mark settled above it is missed by the reads above the settled id, and shown once the window "
-            + "is read from scratch again, every " + rebaseMs + " ms: settled " + passed + ", then [" + string.Join(",", missed) + "], then [" + string.Join(",", found) + "]; " + string.Join(", ", lateReads));
+            + "is read from scratch again, every " + rebaseMs + " ms, which keeps the settled id (the reads after it stay above the high-water mark) unless the connection was lost: settled "
+            + passed + ", then [" + string.Join(",", missed) + "], then [" + string.Join(",", found) + "]; " + string.Join(", ", lateReads) + "; " + afterReset);
 
         // The tiles' watermarks: the open count reads from the lowest open id, the 24-hour count from the lowest id created within
         // them, neither past the settled id (an id above it may still commit), and a baseline or a clock gone back reads from 0.

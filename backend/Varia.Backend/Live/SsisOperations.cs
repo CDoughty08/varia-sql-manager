@@ -95,6 +95,8 @@ internal sealed class SsisOperationsWindow(SsisCatalog catalog, LiveSettleJson s
     private long settled, ticks;
     /// <summary>When the last baseline read the window (the reader's monotonic ms clock).</summary>
     private long baselinedAt;
+    /// <summary>The baseline asked for is a rebase of the same window on the same server: its settled id still holds.</summary>
+    private bool rebase;
     private DateTimeOffset since = DateTimeOffset.MinValue;
     /// <summary>Where the next sample's turn of open ids starts (more than one sample's worth take turns).</summary>
     private long refreshFrom = long.MaxValue;
@@ -122,16 +124,23 @@ internal sealed class SsisOperationsWindow(SsisCatalog catalog, LiveSettleJson s
     {
         Filter = filter;
         NeedsBaseline = true;
+        rebase = false;
     }
 
     /// <summary>A lost connection may reach another server (a failover): the next sample reads everything again.</summary>
-    public void Reset() => NeedsBaseline = true;
+    public void Reset()
+    {
+        NeedsBaseline = true;
+        rebase = false;
+    }
 
     /// <summary>Before a sample at <paramref name="nowMs"/>: a window last read from scratch a rebase interval ago is read from
     /// scratch again, since its read above the settled id never finds a row that turned up below it.</summary>
     public void Begin(long nowMs)
     {
-        if (!NeedsBaseline && nowMs - baselinedAt >= rebaseMs) NeedsBaseline = true;
+        if (NeedsBaseline || nowMs - baselinedAt < rebaseMs) return;
+        NeedsBaseline = true;
+        rebase = true;
     }
 
     /// <summary>The open ids the next sample reads again: all of them up to <paramref name="max"/>, else the next <paramref name="max"/>
@@ -150,7 +159,9 @@ internal sealed class SsisOperationsWindow(SsisCatalog catalog, LiveSettleJson s
 
     /// <summary>The window read from scratch: these rows, nothing else. Rows created within the settle window of the server's time
     /// are read again until they settle; every older id is settled at once. The catalog's high-water mark (<paramref name="highWater"/>,
-    /// null when the login sees no operation) settles like an id first seen now.</summary>
+    /// null when the login sees no operation) settles like an id first seen now. A rebase keeps the settled id it had when that
+    /// is higher (the catalog's high-water mark, in a filtered view), so the reads and the tiles' watermarks after it stay a
+    /// range above the newest operations.</summary>
     public void Baseline(IReadOnlyList<SsisOperation> read, DateTimeOffset serverNow, long nowMs, long? highWater = null)
     {
         rows.Clear();
@@ -160,7 +171,8 @@ internal sealed class SsisOperationsWindow(SsisCatalog catalog, LiveSettleJson s
         refreshFrom = long.MaxValue;
         foreach (var row in read) rows[row.Id] = row;
         var recent = serverNow.AddMilliseconds(-settle.Ms);
-        settled = read.Where(row => row.Created is { } created && created <= recent).Select(row => row.Id).DefaultIfEmpty().Max();
+        settled = Math.Max(rebase ? settled : 0, read.Where(row => row.Created is { } created && created <= recent).Select(row => row.Id).DefaultIfEmpty().Max());
+        rebase = false;
         foreach (var row in read) if (row.Id > settled) seen[row.Id] = (ticks, nowMs);
         Mark(highWater, nowMs);
         Trim(serverNow);

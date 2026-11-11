@@ -376,6 +376,19 @@ internal static class SsisOperationsLiveChecks
                 && reader.Window.Ids.Contains(long.Parse(gap, CultureInfo.InvariantCulture)),
                 "an operation that appears running below the open watermark and the settled id is left out of Running until the rebase every " + rebaseMs + " ms reads from 0, counts it and shows it: "
                 + hidden[0] + " then " + rebased[0] + " against " + withGap[0] + ", open watermark " + reader.Watermarks.OpenFrom + " (the operation " + gap + ")");
+
+            // The same operation left Created: once settled, the open watermark passes it and each sample reads it by key, so it
+            // is counted the sample after it starts though it sits below the range.
+            var orphan = long.Parse(gap, CultureInfo.InvariantCulture);
+            await exec("UPDATE [catalog].[operations] SET status = 1, start_time = NULL WHERE operation_id = " + gap + ";", null);
+            for (var i = 0; i < 6 && !reader.Watermarks.Created.Contains(orphan); i++) await Sample(countMs / 2);
+            var passedOrphan = (Listed: reader.Watermarks.Created.Contains(orphan), reader.Watermarks.OpenFrom);
+            await exec("UPDATE [catalog].[operations] SET status = 2, start_time = SYSDATETIMEOFFSET() WHERE operation_id = " + gap + ";", null);
+            var startedTiles = await Sample(countMs / 2);
+            var (direct, _) = await Direct();
+            check(passedOrphan.Listed && passedOrphan.OpenFrom > orphan && reader.Watermarks.OpenFrom > orphan && startedTiles[0] == direct[0] && startedTiles[1] == direct[1],
+                "an operation left Created does not hold the open watermark, and is counted by key once it starts: watermark " + passedOrphan.OpenFrom + " then " + reader.Watermarks.OpenFrom
+                + " above " + gap + ", Running " + startedTiles[0] + " against " + direct[0]);
         }
         finally
         {
