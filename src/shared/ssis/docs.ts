@@ -58,7 +58,7 @@ const limitNotes: Readonly<Record<keyof typeof ssisLimits, string>> = {
   operationsWindowHours: 'The longest window, in hours (`windowHours`)',
   operationsDefaultWindowHours: 'The window unless told otherwise, in hours',
   operationsCountMs: 'How often the 24-hour counts are read, in ms',
-  operationsRebaseMs: 'How often the counts read every operation again instead of from their watermarks, in ms'
+  operationsRebaseMs: 'How often the counts read every operation again instead of from their watermarks, and the window from scratch instead of above its settled id, in ms'
 }
 
 const viewNotes: Readonly<Record<typeof describeViews[number], string>> = {
@@ -269,8 +269,12 @@ export function renderSsisDocs(): string {
     'id settles like a row\'s, so the read stays above the newest operations even when the filters match none of them, and each',
     'count reads only from its watermark up: the lowest open id (an ended operation never opens again) and the lowest id created',
     'in the 24 hours, neither past the settled id, both 0 on a new window and the 24-hour one again if the server\'s clock goes back.',
-    `Every ${ssisLimits.operationsRebaseMs / 60_000} minutes both counts read from 0 again, which picks up an operation below a watermark that the login`,
-    'was only just allowed to read, or whose commit outlasted the settle window. A row a refresh no longer',
+    'An operation left Created (`create_execution` with no `start_execution`) would hold the open watermark for as long as the',
+    'catalog keeps it, so once it is settled and the lowest open id the watermark passes it, one a sample and at most 16, and each',
+    'sample reads those by key instead, counting any that started since.',
+    `Every ${ssisLimits.operationsRebaseMs / 60_000} minutes both counts read from 0 again and the window is read from scratch, which picks up an operation`,
+    'below a watermark or the settled id that the login was only just allowed to read, or whose commit outlasted the settle window',
+    '(with READ_COMMITTED_SNAPSHOT on, an insert held open while a higher id, in the filters\' scope or not, settles). A row a refresh no longer',
     'finds (removed by the retention cleanup, or a dirty read rolled back) leaves the window. Folder and Project match an',
     'execution\'s or a validation\'s names (`catalog.executions`, `catalog.validations`) and Project a deployment\'s project (its',
     '`object_name`); Package matches an execution\'s.',
