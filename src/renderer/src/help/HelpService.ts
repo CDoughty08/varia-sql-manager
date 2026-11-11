@@ -29,9 +29,9 @@ export class HelpService extends SnapshotStore<HelpState> implements Disposable 
     this.documents.activate(documentId)
     this.focus(documentId)
   }
+  /** The stable document chrome remounted after a tab switch; lazy page bodies never call this. */
+  mounted(id: string): void { if (this.getSnapshot().documentId === id) this.focus(id) }
   search(search: string): void { this.publish({ ...this.getSnapshot(), search: search.slice(0, 200) }) }
-  /** Lazy pages notify after mounting; the workbench callback checks current ownership and held focus. */
-  ready(documentId: string): void { if (this.getSnapshot().documentId === documentId) this.focus(documentId) }
   setFrame(route: HelpRoute, frame: FrameState): void {
     if (helpRouteKey(route) === helpRouteKey(this.getSnapshot().route)) this.publish({ ...this.getSnapshot(), frame })
   }

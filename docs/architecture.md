@@ -274,7 +274,8 @@ being true.
 - Getting Started uses `src/shared/help/catalog.ts` and lazy JSX guide modules with matching stable IDs. References
   resolve through the existing command, setting, effective shortcut and gesture catalogs/services. Lesson focus is
   explicit, so Help focus does not erase editor or results bindings. The singleton custom document has no text model,
-  SQL session, recovery record or persisted progress. Samples are bounded fictional illustrations with local state;
+  SQL session, recovery record or persisted progress. Its frame/navigation stay mounted while only the section body
+  loads or fails; guide modules never refocus on load. Samples are bounded fictional illustrations with local state;
   they do not connect, execute SQL or duplicate production result processing. docs/help-authoring.md owns the workflow.
 - Release notes are reviewed, versioned plain-text records (`release-notes/*.json`), validated by
   `src/shared/releases/schema.ts` and explicitly bundled by its catalog. Their read-only document uses the normal custom

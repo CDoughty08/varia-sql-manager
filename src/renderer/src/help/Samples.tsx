@@ -29,13 +29,14 @@ export function QuerySample() {
 export function ResultsSample() {
   const { settings } = useWorkbench(), { values } = useServiceSnapshot(settings)
   const [filter, setFilter] = useState(false), [ascending, setAscending] = useState(false)
-  const rows = [{ name: 'Orion', status: 'Open' }, { name: 'Atlas', status: 'Closed' }, { name: 'Lyra', status: 'Open' }]
-  const visible = rows.filter(row => !filter || row.status === 'Open').sort((a, b) => ascending ? a.name.localeCompare(b.name) : 0)
+  const rows = [{ rank: 30, name: 'Orion', status: 'Open' }, { rank: 10, name: 'Atlas', status: 'Closed' }, { rank: 20, name: 'Lyra', status: 'Open' }]
+  const visible = rows.filter(row => !filter || row.status === 'Open').sort((a, b) => ascending ? a.rank - b.rank : 0)
   const headers = values['queryResults.grid.includeColumnHeaders']
   return <figure className="help-sample"><figcaption>Sample · explore returned rows</figcaption>
-    <div className="help-sample-controls"><button type="button" aria-pressed={filter} onClick={() => setFilter(!filter)}>Show Open rows only</button><button type="button" aria-pressed={ascending} onClick={() => setAscending(!ascending)}>Sort Name ascending</button></div>
-    <table aria-label="Fictional returned rows"><thead><tr><th>Name</th><th>Status</th></tr></thead><tbody>{visible.map(row => <tr key={row.name}><td>{row.name}</td><td>{row.status}</td></tr>)}</tbody></table>
+    <div className="help-sample-controls"><button type="button" aria-pressed={filter} onClick={() => setFilter(!filter)}>Show Open rows only</button><button type="button" aria-pressed={ascending} onClick={() => setAscending(!ascending)}>Sort Rank ascending</button></div>
+    <table aria-label="Fictional returned rows"><thead><tr><th>Rank</th><th>Name</th><th>Status</th></tr></thead><tbody>{visible.map(row => <tr key={row.name}><td>{row.rank}</td><td>{row.name}</td><td>{row.status}</td></tr>)}</tbody></table>
     <p role="status">{visible.length} of 3 sample rows shown. Sorting and filtering change the view; they do not rerun the query.</p>
+    <p className="help-muted">Rank is numeric, so it sorts by value regardless of your text-sort option.</p>
     <p><strong>Ordinary Copy currently {headers ? 'includes' : 'omits'} column headers.</strong> Copy with Headers includes them regardless of that option.</p>
     <p className="help-muted">Fictional rows only. Use the real grid to select, copy or save returned data.</p>
   </figure>

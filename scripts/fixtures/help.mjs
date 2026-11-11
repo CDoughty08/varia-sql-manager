@@ -44,14 +44,20 @@ export async function gettingStartedSmoke(page, menu, application) {
     await home.getByRole('button', { name: /Work with query results/ }).click()
     const results = helpPage(page, 'Work with query results')
     await results.getByRole('button', { name: 'Show Open rows only', exact: true }).click()
-    await results.getByRole('button', { name: 'Sort Name ascending', exact: true }).click()
+    await results.getByRole('button', { name: 'Sort Rank ascending', exact: true }).click()
     await expect(results.getByRole('table', { name: 'Fictional returned rows' }).getByRole('row')).toHaveCount(3)
     await expect(results).toContainText('2 of 3 sample rows shown.')
+    await expect(results.getByRole('table', { name: 'Fictional returned rows' }).getByRole('cell')).toHaveText(['20', 'Lyra', 'Open', '30', 'Orion', 'Open'])
     await expect(results.getByText('Off', { exact: true })).toBeVisible()
     const saved = await page.evaluate(() => window.varia.updateSettings({ 'queryResults.grid.includeColumnHeaders': true }))
     if (!saved.ok) throw new Error(saved.error)
     await expect(results).toContainText('Ordinary Copy currently includes column headers.')
     await expect(results).toContainText('Include column headers when copying or saving the results: On')
+    for (const mode of ['chars', 'bytes', 'value']) {
+      const changed = await page.evaluate(mode => window.varia.updateSettings({ 'queryResults.grid.sortText': mode }), mode)
+      if (!changed.ok) throw new Error(changed.error)
+      await expect(results.getByRole('table', { name: 'Fictional returned rows' }).getByRole('cell')).toHaveText(['20', 'Lyra', 'Open', '30', 'Orion', 'Open'])
+    }
     await results.getByRole('button', { name: 'Open this Options page', exact: true }).click()
     const options = page.getByRole('dialog', { name: 'Options', exact: true })
     await expect(options).toBeVisible()
@@ -74,13 +80,18 @@ export async function gettingStartedSmoke(page, menu, application) {
       await page.emulateMedia({ reducedMotion: 'no-preference' })
     }
     await expect(documentTab(page, 'Getting Started')).toHaveCount(1)
+    await results.getByRole('navigation', { name: 'Sections', exact: true }).getByRole('button', { name: 'Know the limits', exact: true }).click()
+    await menu('file.new')
+    await documentTab(page, 'Getting Started').click()
+    await expect(results.getByRole('button', { name: 'All guides', exact: true })).toBeFocused()
+    await expect(results.getByRole('navigation', { name: 'Sections', exact: true }).getByRole('button', { name: 'Know the limits', exact: true })).toHaveAttribute('aria-current', 'location')
   } finally {
     await page.evaluate(async file => {
       const current = await window.varia.shortcuts.get()
       if (!current.ok) throw new Error(current.error)
       const saved = await window.varia.shortcuts.save(file, current.value.revision)
       if (!saved.ok) throw new Error(saved.error)
-      const settings = await window.varia.updateSettings({ 'queryResults.grid.includeColumnHeaders': false })
+      const settings = await window.varia.updateSettings({ 'queryResults.grid.includeColumnHeaders': false, 'queryResults.grid.sortText': 'value' })
       if (!settings.ok) throw new Error(settings.error)
     }, changed)
   }

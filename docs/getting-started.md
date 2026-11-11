@@ -13,6 +13,10 @@ The examples contain fictional data. Changing sample authentication, query selec
 no connection or SQL request. **Open Connect dialog** and **Open a blank query** are explicit entry points to the
 real application. Options links open the relevant page; changes apply through the normal Options workflow.
 
+The results illustration sorts numeric ranks, so text-sort modes do not change its order. Its copy explanation uses
+your applied column-header option. Loading and unavailable guides keep their heading and All guides navigation;
+a guide finishing its load leaves focus where you moved it.
+
 The guide tab has no SQL model and cannot be saved or recovered as a query. Reopening the same guide keeps its
 section; choosing another guide starts at its beginning. Returning to All guides clears the search. Closing the tab
 or restarting clears its reading state. Guides do not preserve query results or store completion progress.
