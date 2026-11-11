@@ -3,7 +3,7 @@ import { comparePlans } from './comparison'
 
 export interface ComparisonIndex {
   left?: string; right?: string; status: string; reason: string
-  operators: { left?: string; right?: string; status: string; reason: string; structural: boolean; structureUnknown?: boolean; propertiesChanged: boolean }[]
+  operators: { left?: string; right?: string; status: string; reason: string; structural: boolean; structureUnknown?: boolean; propertiesChanged: boolean; propertiesUnverified?: boolean }[]
 }
 self.onmessage = (event: MessageEvent<{ left: PlanStatement[]; right: PlanStatement[] }>) => {
   try {
