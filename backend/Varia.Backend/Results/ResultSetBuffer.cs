@@ -365,10 +365,15 @@ internal sealed class ResultSetBuffer
         }
     }
 
-    /// <summary>Counters for a progress event.</summary>
-    public (uint ResultId, long RowsRead, long RowsStored, long RowsAvailable, long BytesStored) Progress()
+    /// <summary>Counters for a progress event, and why the set stopped storing rows once it has: a long statement keeps
+    /// reading for minutes after that, and the grid says why its rows stopped only if it hears before the set closes.</summary>
+    public (uint ResultId, long RowsRead, long RowsStored, long RowsAvailable, long BytesStored, string? Truncated) Progress()
     {
-        lock (gate) return (ResultId, RowsRead, rowsStored, rowsAvailable, bytesStored);
+        lock (gate)
+        {
+            var reason = Truncated;
+            return (ResultId, RowsRead, rowsStored, rowsAvailable, bytesStored, reason == TruncationReason.None ? null : Name(reason));
+        }
     }
 
     public static string Name(TruncationReason reason) => reason switch
