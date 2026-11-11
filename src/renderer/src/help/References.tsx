@@ -1,10 +1,10 @@
-import type { CommandId } from '../../../shared/commands/catalog'
+import { commandDescriptor, type CommandId } from '../../../shared/commands/catalog'
 import { gestureAvailable, gestureDescriptor, type GestureId } from '../../../shared/commands/gestures'
 import type { LessonContext } from '../../../shared/help/catalog'
 import { lessonCommand, lessonContexts, lessonShortcut, settingValueLabel } from '../../../shared/help/references'
 import { pagePath, settingDef, type SettingKey } from '../../../shared/settings/catalog'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
-import { useKeybindingsRevision } from '../core/useCommand'
+import { useCommandEnabled, useKeybindingsRevision } from '../core/useCommand'
 
 export function CommandRef({ id, context }: { readonly id: CommandId; readonly context: LessonContext }) {
   const { platform, keybindings, settings } = useWorkbench()
@@ -36,6 +36,7 @@ export function GestureRef({ id }: { readonly id: GestureId }) {
 
 /** Only explicit, non-executing entry points. Sample controls never dispatch application commands. */
 export function GuideAction({ command, label }: { readonly command: 'connection.connect' | 'file.new'; readonly label: string }) {
-  const { commands } = useWorkbench()
-  return <button type="button" className="document-verb outline" data-help-action={command} onClick={() => { void commands.execute(command, undefined, 'toolbar') }}>{label}</button>
+  const { commands } = useWorkbench(), enabled = useCommandEnabled(command)
+  const reason = enabled ? undefined : commands.unavailableReason(command) ?? commandDescriptor(command).unavailableHint
+  return <button type="button" className="document-verb outline" data-help-action={command} disabled={!enabled} title={reason} onClick={() => { void commands.execute(command, undefined, 'toolbar') }}>{label}</button>
 }

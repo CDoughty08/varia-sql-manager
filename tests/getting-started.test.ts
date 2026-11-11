@@ -10,6 +10,7 @@ import { lessonCommand, lessonShortcut, settingValueLabel } from '../src/shared/
 import { defaultSettings, settingKeys } from '../src/shared/settings/catalog'
 import { HelpService } from '../src/renderer/src/help/HelpService'
 import HelpDocument, { guideLoaders } from '../src/renderer/src/help/HelpDocument'
+import { GuideAction } from '../src/renderer/src/help/References'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import { documentFixture } from './fixtures/documents'
@@ -85,6 +86,19 @@ describe('contextual references', () => {
 })
 
 describe('read-only guide document', () => {
+  it('keeps guides available while the backend starts and follows real command availability for actions', async () => {
+    const fixture = workbenchFixture()
+    try {
+      fixture.backend.receive({ status: 'starting', generation: 1 })
+      expect(await fixture.commands.execute('help.gettingStarted', undefined, 'menu')).toBe(true)
+      const render = () => renderToStaticMarkup(createElement(WorkbenchProvider, { workbench: fixture as unknown as Workbench, children: createElement(GuideAction, { command: 'connection.connect', label: 'Open Connect dialog' }) }))
+      expect(render()).toContain('disabled=""')
+      expect(render()).toContain('The backend is still starting.')
+      fixture.backend.receive({ status: 'ready', generation: 1, pid: 123, runtime: 'test', platform: 'linux' })
+      expect(render()).not.toContain('disabled=')
+      expect(fixture.api.execute).not.toHaveBeenCalled()
+    } finally { fixture.dispose() }
+  })
   it('reuses a tab, preserves same-route position, bounds search and clears on close without saving or SQL', async () => {
     const fixture = documentFixture(), focus = vi.fn(), help = new HelpService(fixture.documents, focus)
     try {
