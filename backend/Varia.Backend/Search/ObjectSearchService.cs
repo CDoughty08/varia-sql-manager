@@ -243,7 +243,8 @@ internal sealed class ObjectSearchService : IDisposable
     /// <summary>Opens a batch's rows and reads them. A read that stops early (past the budget, answering null) cancels the batch
     /// before its reader closes: closing a reader short of its end reads, and throws away, every row and definition left. A
     /// read that completes is handed to <paramref name="keep"/> before the reader closes, so an error on close (a broken
-    /// transport, a statement after the last result set) still finds it held by the index, never charged and lost.</summary>
+    /// transport, a statement after the last result set) still finds it held by the index, never charged and lost. A read that
+    /// throws cancels the batch too, so its error comes out at once rather than after the rest of the batch drained.</summary>
     internal static async Task<T?> ReadThenStopAsync<T>(Func<Task<DbDataReader>> open, Func<DbDataReader, Task<T?>> read, Action cancel, Action<T> keep) where T : class
     {
         var rows = await open();
@@ -251,7 +252,9 @@ internal sealed class ObjectSearchService : IDisposable
         try { value = await read(rows); }
         catch
         {
-            await rows.DisposeAsync();
+            cancel();
+            // The read's own error is the one to report: the cancelled batch's error on close changes nothing.
+            try { await rows.DisposeAsync(); } catch (Exception error) when (error is DbException or InvalidOperationException) { }
             throw;
         }
         if (value is not null)

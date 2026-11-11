@@ -1,0 +1,41 @@
+name: Audit
+
+# npm audit was a step of CI's Check (ubuntu) job, where an outage of npm's advisory endpoint, or a new advisory against any
+# installed package, failed every open pull request and main push whatever it changed. It runs here instead: on the pushes
+# that change the dependencies (the ones that can bring an advisory in, or fix one), and daily on main, which is what reports
+# an advisory published since. scripts/audit.mjs retries an endpoint that gives no report, then warns without failing, so
+# only an advisory fails the job. The paths filter means it cannot be a required check (docs/ci.md).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [package.json, package-lock.json, scripts/audit.mjs, .github/workflows/audit.yml]
+  push:
+    branches: [main]
+    paths: [package.json, package-lock.json, scripts/audit.mjs, .github/workflows/audit.yml]
+  schedule:
+    - cron: '43 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' || github.event_name == 'push') && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Audit dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      # The lockfile alone is audited, so nothing is installed. Moderate and low advisories only report (docs/ci.md).
+      - name: Audit the lockfile (high and critical advisories)
+        timeout-minutes: 5
+        run: node scripts/audit.mjs
