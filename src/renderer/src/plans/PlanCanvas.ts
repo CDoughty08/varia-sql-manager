@@ -45,6 +45,9 @@ export class PlanCanvas {
   private readonly edgeIndex: SpatialIndex<PlacedEdge>
   private readonly placed: Map<string, PlacedNode>
   private camera: Camera
+  // An explicit camera, even one equal to the default, replaces the initial Fit.
+  private cameraRequested: boolean
+  private backingLimit = Infinity
   private selected = ''
   private frame = 0
   private ready = false
@@ -75,6 +78,7 @@ export class PlanCanvas {
     }
     this.overviewCells = [...cells.values()]
     this.camera = options.camera ?? { x: 0, y: 0, scale: 1 }
+    this.cameraRequested = !!options.camera
     this.owner = windowOf(options.root)
     this.ownerDocument = options.root.ownerDocument
     this.watchPixelRatio()
@@ -118,8 +122,13 @@ export class PlanCanvas {
       this.world.addChild(this.edges, this.cards, this.labels)
       this.app.stage.addChild(this.world)
       this.app.stage.addChild(this.overview, this.overviewCamera)
+      const gl = this.gl
+      if (gl) {
+        const limits = [gl.getParameter(gl.MAX_RENDERBUFFER_SIZE), gl.getParameter(gl.MAX_TEXTURE_SIZE), ...Array.from(gl.getParameter(gl.MAX_VIEWPORT_DIMS) as ArrayLike<number> | null ?? [])]
+        this.backingLimit = Math.min(...limits.filter((value): value is number => typeof value === 'number' && value > 0))
+      }
       this.resize()
-      if (!this.options.camera) this.fit()
+      if (!this.cameraRequested) this.fit()
     } catch {
       try { this.app.destroy(true, { children: true }) } catch { /* Initialization may have failed before a renderer exists. */ }
       this.ready = false
@@ -146,49 +155,59 @@ export class PlanCanvas {
     this.dismissHover()
     this.width = Math.max(1, this.options.root.clientWidth)
     this.height = Math.max(1, this.options.root.clientHeight)
-    this.app.renderer.resize(this.width, this.height, this.owner.devicePixelRatio || 1)
+    // Full DPI when the backing store fits; otherwise the highest resolution the device can allocate.
+    // Labels follow renderer.resolution, so they rasterize at the effective value too.
+    this.app.renderer.resize(this.width, this.height, Math.min(this.owner.devicePixelRatio || 1, this.backingLimit / this.width, this.backingLimit / this.height))
+    const gl = this.gl
+    if (gl && !gl.isContextLost() && !this.backed(gl)) {
+      // Browsers may allocate less than the advertised limits and clamp silently. Follow what was allocated.
+      const resolution = Math.min(gl.drawingBufferWidth / this.width, gl.drawingBufferHeight / this.height)
+      if (resolution > 0) this.app.renderer.resize(this.width, this.height, resolution)
+      if (!(resolution > 0) || !this.backed(gl)) { this.cancelFrame(); this.options.failed(); return }
+    }
     this.invalidate()
   }
+  private get gl(): WebGLRenderingContext | undefined { return (this.app.renderer as { gl?: WebGLRenderingContext }).gl }
+  private backed(gl: WebGLRenderingContext): boolean { return gl.drawingBufferWidth === this.app.canvas.width && gl.drawingBufferHeight === this.app.canvas.height }
   private cancelFrame(): void { if (this.frame) this.owner.cancelAnimationFrame(this.frame); this.frame = 0 }
   private invalidate(): void {
     if (!this.frame && this.ready && !this.disposed && this.visible && !this.ownerDocument.hidden) this.frame = this.owner.requestAnimationFrame(() => { this.frame = 0; this.draw() })
   }
   /** Public camera hook for linked viewers. Values are copied and invalid cameras are ignored. */
-  setCamera(camera: Camera, notify = true): void {
-    if (![camera.x, camera.y, camera.scale].every(Number.isFinite) || camera.scale <= 0) return
-    if (this.camera.x === camera.x && this.camera.y === camera.y && this.camera.scale === camera.scale) return
+  setCamera(camera: Camera, notify = true): void { if (this.moveCamera(camera, notify)) this.cameraRequested = true }
+  /** Fit, zoom and reveal derive the camera from the measured viewport, so before initialization they do not count as requests. */
+  private moveCamera(camera: Camera, notify = true): boolean {
+    if (![camera.x, camera.y, camera.scale].every(Number.isFinite) || camera.scale <= 0) return false
+    if (this.camera.x === camera.x && this.camera.y === camera.y && this.camera.scale === camera.scale) return true
     this.dismissHover()
     this.camera = { ...camera, scale: Math.max(0.00001, Math.min(3, camera.scale)) }
     if (notify) this.options.cameraChanged({ ...this.camera })
     this.invalidate()
+    return true
   }
   getCamera(): Camera { return { ...this.camera } }
   /** Apply a linked viewer's camera without echoing it back to the host or fitting over it during initialization. */
-  restoreCamera(camera: Camera): void {
-    if (![camera.x, camera.y, camera.scale].every(Number.isFinite) || camera.scale <= 0) return
-    this.options.camera = { ...camera, scale: Math.max(0.00001, Math.min(3, camera.scale)) }
-    this.setCamera(this.options.camera, false)
-  }
+  restoreCamera(camera: Camera): void { this.setCamera(camera, false) }
   pan(x: number, y: number): void { this.setCamera({ ...this.camera, x: this.camera.x + x, y: this.camera.y + y }) }
   navigateMinimap(x: number, y: number): void {
     const bounds = this.options.layout.bounds
     const worldX = bounds.x + Math.max(0, Math.min(1, x / minimapSize.width)) * bounds.width
     const worldY = bounds.y + Math.max(0, Math.min(1, y / minimapSize.height)) * bounds.height
-    this.setCamera({ ...this.camera, x: this.width / 2 - worldX * this.camera.scale, y: this.height / 2 - worldY * this.camera.scale })
+    this.moveCamera({ ...this.camera, x: this.width / 2 - worldX * this.camera.scale, y: this.height / 2 - worldY * this.camera.scale })
   }
   preferences(minimap: boolean, flow: boolean, collapsed: ReadonlySet<string>): void { this.options.minimap = minimap; this.options.rowFlow = flow; this.options.collapsed = collapsed; this.invalidate() }
   fit(statement?: number): void {
     const bounds = statement === undefined ? this.options.layout.bounds : this.options.layout.statements[statement] ?? this.options.layout.bounds
-    this.setCamera(fit(bounds, this.width, this.height))
+    this.moveCamera(fit(bounds, this.width, this.height))
   }
-  zoom(factor: number): void { this.setCamera(zoomAt(this.camera, this.width / 2, this.height / 2, factor)) }
+  zoom(factor: number): void { this.moveCamera(zoomAt(this.camera, this.width / 2, this.height / 2, factor)) }
   actualSize(): void { this.zoom(1 / this.camera.scale) }
   select(id: string, reveal = false): void {
     this.selected = id
     const node = this.placed.get(id)
     const area = viewport(this.camera, this.width, this.height)
     if (reveal && node && (node.x < area.x || node.y < area.y || node.x + node.width > area.x + area.width || node.y + node.height > area.y + area.height))
-      this.setCamera({ scale: this.camera.scale, x: this.width / 2 - (node.x + node.width / 2) * this.camera.scale, y: this.height / 2 - (node.y + node.height / 2) * this.camera.scale })
+      this.moveCamera({ scale: this.camera.scale, x: this.width / 2 - (node.x + node.width / 2) * this.camera.scale, y: this.height / 2 - (node.y + node.height / 2) * this.camera.scale })
     this.invalidate()
   }
   colors(colors: CanvasColors): void { this.options.colors = colors; this.overviewDirty = true; this.invalidate() }
@@ -393,6 +412,13 @@ export class PlanCanvas {
       this.overviewCamera.clear().rect(left, top, Math.max(1, right - left), Math.max(1, bottom - top)).stroke({ color: colors.accent, width: 2 })
     }
     this.app.render()
+    this.pruneTextCache()
+  }
+  /** Pixi 8 keeps a null entry for every released text/style/resolution key, so each zoom step or live counter
+   * value would otherwise leave one behind until disposal. Its lookups treat a missing key like a null one. */
+  private pruneTextCache(): void {
+    const cache = (this.app.renderer as unknown as { canvasText?: { _activeTextures?: Record<string, unknown> | null } }).canvasText?._activeTextures
+    if (cache) for (const key in cache) if (cache[key] === null) delete cache[key]
   }
   dispose(): void {
     this.disposed = true; this.dismissHover(); this.cancelFrame(); this.adoption.dispose(); this.size.dispose(); this.visibility.dispose()
