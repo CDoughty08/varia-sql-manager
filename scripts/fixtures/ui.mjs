@@ -60,6 +60,8 @@ export const part = {
   editorGroup: '.editor-groups .dv-groupview',
   activeEditorGroup: '.editor-groups .dv-groupview.dv-active-group',
   floatingEditorGroup: '.editor-groups .dv-resize-container .dv-groupview',
+  /** A floating editor group's right-edge resize handle, beside the group rather than inside it. */
+  floatingEditorResizeRight: '.editor-groups .dv-resize-container .dv-resize-handle-right',
   tabSid: '.tab-sid',
   /** The kind icon before a tab's name (kindIcon finds it by name; page code needs its box and stroke). */
   tabIcon: '.tab-icon',

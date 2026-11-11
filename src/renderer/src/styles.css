@@ -630,8 +630,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 }
 /* Decoration yields in narrow splits; the environment and SID still have their own row. */
 @container (width < 200px) {
-  .query-tab .tab-select { gap: 0; }
+  .query-tab .tab-select { gap: 0; padding-inline: 0; }
   .query-tab .tab-select > .tab-icon { display: none; }
+}
+/* Tiny floating groups reserve the second line for the complete SID; the environment remains in the tab's description. */
+@container (width < 140px) {
+  .query-tab .environment-tag[data-place="tab"] { display: none; }
+  .query-tab .tab-sid { padding-inline: var(--varia-space-0); }
 }
 /* A document tab's keyboard ring is a 1px inset outline, as the single strip drew it: the strip would clip the default ring,
    and forced colours drop box shadows. */
@@ -654,6 +659,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 }
 .tab-select { display: flex; flex: 1; min-width: 0; overflow: hidden; align-items: flex-start; gap: var(--varia-space-1); height: 100%; border: 0; border-radius: 0; padding: var(--varia-space-0) var(--varia-space-2) 0; color: inherit; }
 .tab-select:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.tab-select:has(.tab-title:only-child) { align-items: center; }
 .tab-content { display: flex; flex-direction: column; flex: 1; min-width: 0; height: 100%; }
 .tab-title { display: flex; align-items: center; flex: none; gap: var(--varia-space-1); min-width: 0; min-height: var(--varia-line-sm); line-height: var(--varia-line-sm); }
 .tab-title:only-child { margin-block: auto; }
