@@ -1102,7 +1102,7 @@ when no port is open).
 | --- | --- |
 | `session.opened` | Before the first batch, once a live query session is acquired. Carries its `spid` and optional `login`. The final summary still describes whether the session survived execution |
 | `resultSet.opened` | When a kept result set's columns are known, before its first row; carries the descriptor |
-| `progress` | At most 10 times a second per query, latest value wins; up to 64 result sets with `rowsRead`, `rowsStored`, `rowsAvailable`, `bytesStored`. A sealed page is reported at once when no progress went out in the last 100 ms, and every set's first sealed page at once whatever the spacing, so the first rows of each set (one-row sets included) are readable without waiting for a tick |
+| `progress` | At most 10 times a second per query, latest value wins; up to 64 result sets with `rowsRead`, `rowsStored`, `rowsAvailable`, `bytesStored`, and `truncated` (the descriptor's reason) once a set has stopped storing rows, so the grid says why its rows stopped while the statement still reads. A sealed page is reported at once when no progress went out in the last 100 ms, and every set's first sealed page at once whatever the spacing, so the first rows of each set (one-row sets included) are readable without waiting for a tick |
 | `messages` | Every 100 ms or 64 KiB, only entries stored under the message caps: `{ text, kind: 'info' \| 'print' \| 'server' \| 'error' }` ([Messages](#messages)) |
 | `resultSet.closed` | Once per kept result set, with its final descriptor |
 
@@ -2738,7 +2738,16 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
   instance's handover, macOS's open-file and its Recent Files store, and the page refers to files by opaque ids. A drop
   is read in the preload's isolated world, from trusted events only, and sent on `varia:files-dropped`, which
   `window.varia` does not expose; main still accepts only absolute paths to regular files, at most 32, and reads them
-  as Open does (5 MB).
+  as Open does (5 MB). Main also reopens the paths it stored itself in its profile: hot exit's session, an AutoRecover
+  record's file and Recent Files. A packaged smoke run that keeps its debugging port (`VARIA_PACKAGED_SMOKE=1`) reads a
+  document only at a path one of its own dialogs returned in that run: macOS grants file access to the app, so anything
+  else would be readable through the port by the program that started the run. It opens none of the files another
+  program can hand it (the command line, a second instance, open-file, a drop; `launchFilesRefused`), and none its
+  profile names, since that program chose the profile and can write it (`profilePathsRefused`): the session and
+  AutoRecover stores hand out their records without the file's path, so a kept query reopens with its text and no file
+  and a clean tab that kept only its path does not reopen, and Recent Files neither reads nor writes
+  `recent-files.json`, listing only what that run's dialogs opened. The stores' other content (query text, names,
+  settings, layouts, themes) is still read from the profile, as files in Varia's own formats.
 - **AutoRecover** (`varia:recovery-write`, `-list`, `-take`, `-discard`, main's channels with strict zod schemas)
   writes query text, never results, connections or credentials, to `<userData>/AutoRecover/<uuid>.json` (a lower-case uuid;
   a file named in upper case still counts against the caps, is quarantined rather than offered, and is purged): the folder is

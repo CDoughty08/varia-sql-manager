@@ -223,8 +223,7 @@ internal static class ActivityActionChecks
         var id = Guid.NewGuid().ToString();
         var host = new ActivityFixtureHost(id, new ServerProfile(17, null, 3, null, false, true, true, 16));
         var live = new LiveService(host);
-        // Kill's budget must outlast the second kill's start by far: a starved CI runner can take a second to get there.
-        var actions = new SessionActions(host, live) { DetailsBudgetMs = 300, KillBudgetMs = 3_000, GateWaitMs = 100 };
+        var actions = new SessionActions(host, live) { DetailsBudgetMs = 300, KillBudgetMs = 300, GateWaitMs = 100 };
         var started = Environment.TickCount64;
         var details = await actions.DetailsAsync(new ActivityDetailsArgs(id, Guid.NewGuid().ToString(), 69, "2026-10-22T06:50:12"), CancellationToken.None);
         var detailsMs = Environment.TickCount64 - started;
@@ -232,18 +231,30 @@ internal static class ActivityActionChecks
             && detailsMs < 15_000 && live.Gates.Busy == 0,
             $"a Details read past its budget (a server that never answers) is a TIMEOUT value, and its live gate is back ({detailsMs} ms)");
         // A kill holds its connection's gate; a second kill on the same connection is BUSY rather than queueing behind it.
+        // The first kill has the gate once it asks for its connection, and its open ends only on Stop, long before its budget:
+        // nothing but the second kill's own gate wait is timed. (With the first ending on a 3 s budget and the second sent
+        // 50 ms after it, five copies sharing three CPUs saw the second start after the first had gone.)
+        var overlap = new SessionActions(host, live) { KillBudgetMs = 120_000, GateWaitMs = 100 };
         using var stop = new CancellationTokenSource();
-        var holding = actions.KillAsync(new ActivityKillArgs(id, [new(69, "2026-10-22T06:50:12", null)]), stop.Token);
-        await Task.Delay(50);
-        string? busyMessage = null;
-        try { await actions.KillAsync(new ActivityKillArgs(id, [new(70, "2026-10-22T06:50:12", null)]), CancellationToken.None); }
-        catch (RequestException error) when (error.Code == "BUSY") { busyMessage = error.Message; }
-        var held = await holding;
+        var before = Volatile.Read(ref host.Connections);
+        var holding = overlap.KillAsync(new ActivityKillArgs(id, [new(69, "2026-10-22T06:50:12", null)]), stop.Token);
+        var holds = SpinWait.SpinUntil(() => Volatile.Read(ref host.Connections) == before + 1, 15_000);
+        string? busyMessage = null, second = null;
+        try { second = (await overlap.KillAsync(new ActivityKillArgs(id, [new(70, "2026-10-22T06:50:12", null)]), CancellationToken.None)).Error?.Code ?? "none"; }
+        catch (RequestException error) when (error.Code == "BUSY") { (busyMessage, second) = (error.Message, "BUSY"); }
+        var heldThroughout = !holding.IsCompleted && Volatile.Read(ref host.Connections) == before + 1;
+        stop.Cancel();
+        string stopped;
+        try { stopped = (await holding).Error?.Code ?? "none"; }
+        catch (OperationCanceledException) { stopped = "cancelled"; }
+        overlap.Forget(id);
+        // A kill past its budget, with no other kill about.
+        var held = await actions.KillAsync(new ActivityKillArgs(id, [new(69, "2026-10-22T06:50:12", null)]), CancellationToken.None);
         // The kill gates are one per connection and two in the backend: the message names the window, not the server.
-        check(busyMessage == SessionActions.KillBusy && busyMessage == "Other Kill Process requests are running in this window. Retry when they finish."
+        check(holds && heldThroughout && stopped == "cancelled" && busyMessage == SessionActions.KillBusy && busyMessage == "Other Kill Process requests are running in this window. Retry when they finish."
             && held is { Results.Count: 0, Error: { Code: "TIMEOUT", Retryable: true } },
             "a second Kill on a connection whose Kill is still running is BUSY (worded for the window's kill gates), and a Kill past its budget is a TIMEOUT value that tried no session: "
-            + busyMessage + ", " + held.Error?.Code);
+            + $"first kill at its connection {holds}, still there when the second answered {heldThroughout}, second {second}: {busyMessage}; first on Stop {stopped}; past its budget {held.Error?.Code}");
 
         // Details waits for a live gate as long as its budget allows (C-critic G12), not Kill's fixed gate wait.
         var gates = new List<IDisposable>();

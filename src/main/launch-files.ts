@@ -54,10 +54,14 @@ export function fileArguments(argv: readonly string[], options: ArgumentOptions)
 /**
  * Paths waiting for a page that can take them: main adds those from the command line, a second instance, macOS's
  * open-file and drops, and takes them all once the workbench is ready. At most 32 wait; later ones are dropped.
+ * A queue made `closed` takes none: every file another program can hand main comes through here, so closing it is how a
+ * packaged smoke run on its debugging port opens no launch file (sandbox-guard.ts's `launchFilesRefused`).
  */
 export class LaunchQueue {
   private paths: string[] = []
+  constructor(private readonly closed = false) {}
   add(paths: readonly string[]): void {
+    if (this.closed) return
     for (const path of paths) if (this.paths.length < maxLaunchFiles && isAbsolute(path) && !this.paths.includes(path)) this.paths.push(path)
   }
   /** Everything waiting, in arrival order; the queue is empty afterwards. */

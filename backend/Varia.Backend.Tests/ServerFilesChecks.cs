@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Data.SqlClient;
@@ -125,14 +126,20 @@ internal static class ServerFilesChecks
         }
         var sameServer = await Describe(servers[0]);
         var otherServer = await Describe(Guid.NewGuid().ToString());
+        // Counted while the stuck listings still hold their gates. A listing answers TIMEOUT before its job hears of it (the
+        // job's token is cancelled from the pool), so once the gate is released the second listing's job can win it and open
+        // a seventh connection before that cancel lands: seen on a starved CI runner, and no fault of the gate.
         var heldWhile = host.Held;
+        var openedWhile = host.OpenedBy();
         host.Release();
         watch.Restart();
         while (service.ActiveJobs > 0 && watch.Elapsed < TimeSpan.FromSeconds(15)) await Task.Delay(10);
-        check(timedOut.All(result => result.Error?.Code == "TIMEOUT") && heldWhile == servers.Count && second.Error?.Code == "TIMEOUT" && host.Opened == servers.Count + 2
-            && sameServer == "CONNECTION_LOST" && otherServer == "CONNECTION_LOST" && service.ActiveJobs == 0 && service.RunningCount == 0,
+        var opens = servers.Select(server => openedWhile.GetValueOrDefault(server)).ToList();
+        check(timedOut.All(result => result.Error?.Code == "TIMEOUT") && heldWhile == servers.Count && second.Error?.Code == "TIMEOUT" && opens[0] == 2 && opens.Skip(1).All(count => count == 1)
+            && openedWhile.Values.Sum() == servers.Count + 2 && sameServer == "CONNECTION_LOST" && otherServer == "CONNECTION_LOST" && service.ActiveJobs == 0 && service.RunningCount == 0,
             "listings stuck past their budget hold only the picker's own gate: a second listing on that server waits for it, and describes on that server and others still open (their unreachable fake answers CONNECTION_LOST, not BUSY): "
-            + string.Join(", ", timedOut.Select(result => result.Error?.Code)) + " | " + second.Error?.Code + " | " + sameServer + " | " + otherServer + " | " + host.Opened + " opened");
+            + string.Join(", ", timedOut.Select(result => result.Error?.Code)) + " | " + second.Error?.Code + " | " + sameServer + " | " + otherServer + " | " + heldWhile + " held, opened while held: "
+            + string.Join("+", opens) + " on the stuck servers (the first has the describe's too), " + openedWhile.Values.Sum() + " in all; " + host.Opened + " once released, " + service.ActiveJobs + " jobs left");
     }
 
     // These checks exercise gates and error mapping. Real failed opens can time out in SqlClient's non-pooled-open
@@ -150,9 +157,13 @@ internal static class ServerFilesChecks
         public int Opened => Volatile.Read(ref opened);
         public void Release() => released.TrySetResult();
         public ServerProfile Profile(string connectionId) => Box2022;
-        public SqlConnection Connection(string connectionId) => new("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false");
+        private readonly ConcurrentDictionary<string, int> openedBy = new();
+        /// <summary>The opens so far, by Varia connection.</summary>
+        public Dictionary<string, int> OpenedBy() => new(openedBy);
+        public SqlConnection Connection(string connectionId) => new("Application Name=" + connectionId + ";Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false");
         public async Task OpenAsync(SqlConnection connection, CancellationToken token)
         {
+            openedBy.AddOrUpdate(new SqlConnectionStringBuilder(connection.ConnectionString).ApplicationName, 1, (_, count) => count + 1);
             Interlocked.Increment(ref opened);
             if (Blocking)
             {
