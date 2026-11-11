@@ -168,7 +168,8 @@ export class PlanCanvas {
     this.invalidate()
   }
   private get gl(): WebGLRenderingContext | undefined { return (this.app.renderer as { gl?: WebGLRenderingContext }).gl }
-  private backed(gl: WebGLRenderingContext): boolean { return gl.drawingBufferWidth === this.app.canvas.width && gl.drawingBufferHeight === this.app.canvas.height }
+  // A collapsed root at a low zoom factor rounds to a 0-pixel canvas, which still has a 1-pixel drawing buffer.
+  private backed(gl: WebGLRenderingContext): boolean { return gl.drawingBufferWidth === Math.max(1, this.app.canvas.width) && gl.drawingBufferHeight === Math.max(1, this.app.canvas.height) }
   private cancelFrame(): void { if (this.frame) this.owner.cancelAnimationFrame(this.frame); this.frame = 0 }
   private invalidate(): void {
     if (!this.frame && this.ready && !this.disposed && this.visible && !this.ownerDocument.hidden) this.frame = this.owner.requestAnimationFrame(() => { this.frame = 0; this.draw() })

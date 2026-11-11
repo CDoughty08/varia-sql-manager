@@ -45,7 +45,7 @@ vi.mock('pixi.js', async original => {
   class Application {
     stage = new Container(); canvas = document.createElement('canvas')
     renderer = (canvas => {
-      const size = (pixels: number) => Math.min(pixels, gpu.allocatable || gpu.limit)
+      const size = (pixels: number) => Math.max(1, Math.min(pixels, gpu.allocatable || gpu.limit))
       const renderer = { resolution: 1, canvasText: system = new TextSystem({ resolution: 1 } as never, false),
         gl: gpu.limit ? { MAX_RENDERBUFFER_SIZE: 1, MAX_TEXTURE_SIZE: 2, MAX_VIEWPORT_DIMS: 3, isContextLost: () => false,
           getParameter: (name: number) => name === 3 ? [gpu.limit, gpu.limit] : gpu.limit,
@@ -317,10 +317,20 @@ it('lowers the effective resolution to the device drawing-buffer limit and falls
     gpu.allocatable = 8192
     rendering.resize()
     expect(backing()).toEqual({ resolution: 8192 / 5500, requested: 8192, actual: 8192 })
+    // A collapsed root below 50% zoom rounds to a 0-pixel canvas; its 1-pixel drawing buffer is not a failure.
+    pixelRatio.mockReturnValue(0.4)
+    size.width = size.height = 0
+    rendering.resize()
+    expect(backing()).toEqual({ resolution: 0.4, requested: 0, actual: 1 })
     expect(failed).not.toHaveBeenCalled()
-    // No resolution can represent a surface the device will not allocate at all.
-    Object.defineProperty(rendering.app.renderer.gl, 'drawingBufferWidth', { value: 0 })
+    pixelRatio.mockReturnValue(3)
+    size.width = 5500; size.height = 20
+    // A buffer that never matches the request, and one that cannot be allocated at all, both use the fallback.
+    Object.defineProperty(rendering.app.renderer.gl, 'drawingBufferWidth', { configurable: true, get: () => rendering.app.canvas.width - 1 })
     rendering.resize()
     expect(failed).toHaveBeenCalledOnce()
+    Object.defineProperty(rendering.app.renderer.gl, 'drawingBufferWidth', { value: 0 })
+    rendering.resize()
+    expect(failed).toHaveBeenCalledTimes(2)
   } finally { gpu.limit = gpu.allocatable = 0; canvas.dispose(); frames.mockRestore(); media.mockRestore(); pixelRatio.mockRestore() }
 })
