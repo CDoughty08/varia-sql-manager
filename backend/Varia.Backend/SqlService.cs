@@ -1880,10 +1880,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         _ => new RequestException("BUDGET_STOPPED", BudgetStoppedFull)
     };
 
-    /// <summary>Why a pivot, diff or transpose was not stored whole. Its sources are complete, but their query may still be
-    /// reading later sets and its tab may run again, so a source released or a query stopped while it was built is the
-    /// reason, not the memory left: only otherwise is it <paramref name="tooLarge"/>.</summary>
-    private RequestException NotStored(QueryBudget budget, string tooLarge, params ReadOnlySpan<(ResultSetBuffer Set, uint Id)> sources)
+    /// <summary>Why a pivot, diff or transpose was refused memory or not stored whole. Its sources are complete, but their
+    /// query may still be reading later sets and its tab may run again, so a source released or a query stopped while it
+    /// was built is the reason, not the memory left: only otherwise is it <paramref name="tooLarge"/>.</summary>
+    private RequestException NotStored(QueryBudget budget, string tooLarge, params (ResultSetBuffer Set, uint Id)[] sources)
     {
         foreach (var (set, id) in sources) if (set.IsReleased) return Unavailable(id);
         return BudgetStopped(budget) ?? new RequestException("TOO_LARGE", tooLarge);
@@ -1923,7 +1923,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         }
         try
         {
-            var model = await Task.Run(() => ResultDiffer.Compare(left, leftPages, right, rightPages, args.Exact, token, ReserveCells), token);
+            DiffModel model;
+            try { model = await Task.Run(() => ResultDiffer.Compare(left, leftPages, right, rightPages, args.Exact, token, ReserveCells), token); }
+            catch (RequestException error) when (error.Code == "TOO_LARGE") { throw NotStored(left.Budget, error.Message, (left, args.Left), (right, args.Right)); }
             if (left.IsReleased) throw Unavailable(args.Left);
             if (right.IsReleased) throw Unavailable(args.Right);
             const string tooLarge = "There is not enough result memory to show the differences. Close other results and try again.";
@@ -1993,7 +1995,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         {
             PivotModel model;
             try { model = await Task.Run(() => ResultPivoter.Build(set, pages, view?.Order, spec, token, Reserve), token); }
-            catch (PivotTooLargeException) { throw new RequestException("TOO_LARGE", tooLarge); }
+            catch (PivotTooLargeException) { throw NotStored(set.Budget, tooLarge, (set, args.ResultId)); }
             if (set.IsReleased) throw Unavailable(args.ResultId);
             if (view is not null && !store.HasView(view)) throw ViewClosed();
             var (columns, wires, lengths) = PivotOutput.Shape(set, pages, spec, model);

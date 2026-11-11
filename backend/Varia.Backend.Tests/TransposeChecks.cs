@@ -349,5 +349,20 @@ internal static class TransposeChecks
         var during = Message(wide);
         check(sealing is null && during == "BUDGET_STOPPED: " + SqlService.BudgetStoppedFull && store.UsedBytes == used,
             $"a transpose whose query stops storing while it is written answers BUDGET_STOPPED and keeps nothing: {during} {store.UsedBytes - used}");
+        // The same while it is planned: the transpose is not opened.
+        var wired = new Tripwire(People) { Within = nameof(ResultTransposer) };
+        var planned = store.Open(store.BeginQuery("transpose" + Guid.NewGuid()), 0, 1, 1, "rows", wired, [WireKind.Text, WireKind.Text, WireKind.Binary])!;
+        planned.CountRow();
+        var row = planned.BeginRow()!;
+        row.AppendText("Ann");
+        row.AppendText("31");
+        row.AppendNull();
+        planned.TryCommitRow();
+        planned.Complete();
+        used = store.UsedBytes;
+        wired.OnRead = () => planned.Budget.Stop(TruncationReason.SystemMemory);
+        var unopened = Message(planned);
+        check(wired.OnRead is null && unopened == "BUDGET_STOPPED: " + SqlService.BudgetStoppedLowMemory && store.UsedBytes == used,
+            $"a transpose whose query stops storing while it is planned answers BUDGET_STOPPED and keeps nothing: {unopened} {store.UsedBytes - used}");
     }
 }

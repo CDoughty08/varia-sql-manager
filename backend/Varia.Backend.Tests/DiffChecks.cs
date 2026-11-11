@@ -353,23 +353,6 @@ internal static class DiffChecks
         check(refused == "TOO_LARGE" && budget.Stopped == TruncationReason.None && tight.UsedBytes == used, "a diff the budget has no room for answers TOO_LARGE and takes nothing: " + refused + " " + budget.Stopped);
     }
 
-    /// <summary>Columns that run an action the first time they are read once armed: what happens to a result while it is compared.</summary>
-    private sealed class Tripwire(ResultColumn[] columns) : IReadOnlyList<ResultColumn>
-    {
-        public Action? OnRead { get; set; }
-        private ResultColumn[] Read()
-        {
-            var action = OnRead;
-            OnRead = null;
-            action?.Invoke();
-            return columns;
-        }
-        public ResultColumn this[int index] => Read()[index];
-        public int Count => Read().Length;
-        public IEnumerator<ResultColumn> GetEnumerator() => ((IEnumerable<ResultColumn>)Read()).GetEnumerator();
-        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
-    }
-
     /// <summary>A diff is a derived set, stored whole or not at all: one the budget or low system memory cuts short is refused
     /// and leaves its query able to store another; a query that stopped storing answers BUDGET_STOPPED; a source released
     /// while it was compared ends the diff.</summary>
@@ -408,9 +391,24 @@ internal static class DiffChecks
 
         // Low system memory: the diff's first page seals after 64 rows.
         var low = false;
-        var probed = new ResultStore(1L << 30, 1L << 29, () => (low ? 100 : 0, 50));
+        // The probe runs at every page seal: what happens to the query while a diff's first page is sealed.
+        Action? sealing = null;
+        var probed = new ResultStore(1L << 30, 1L << 29, () =>
+        {
+            var action = sealing;
+            sealing = null;
+            action?.Invoke();
+            return (low ? 100 : 0, 50);
+        });
         using (var service = new SqlService(probed))
         {
+            var written = Pair(probed, Rows(100, "1.00"), Rows(100, "2.00"));
+            var before = probed.UsedBytes;
+            sealing = () => written.Left.Budget.Stop(TruncationReason.QueryBudget);
+            var cut = Message(service, written.Left, written.Right);
+            check(sealing is null && cut == "BUDGET_STOPPED: " + SqlService.BudgetStoppedFull && probed.UsedBytes == before,
+                $"a diff whose query stops storing while it is written answers BUDGET_STOPPED and keeps nothing: {cut} {probed.UsedBytes - before}");
+
             var (left, right) = Pair(probed, Rows(100, "1.00"), Rows(100, "2.00"));
             var few = Pair(probed, Rows(2, "1.00"), Rows(2, "2.00"));
             var used = probed.UsedBytes;
@@ -439,7 +437,7 @@ internal static class DiffChecks
             (Tripwire Columns, ResultSetBuffer Left, ResultSetBuffer Right) Wired(string session)
             {
                 var budget = open.BeginQuery(session);
-                var columns = new Tripwire(Columns);
+                var columns = new Tripwire(Columns) { Within = nameof(ResultDiffer) };
                 var left = open.Open(budget, 0, 1, 1, "rows", columns, Wires)!;
                 left.CountRow();
                 var builder = left.BeginRow()!;
@@ -462,6 +460,20 @@ internal static class DiffChecks
             var during = Message(service, stopping.Left, stopping.Right);
             check(stopping.Columns.OnRead is null && during == "BUDGET_STOPPED: " + SqlService.BudgetStoppedLowMemory && open.UsedBytes == used,
                 $"a diff whose query stops storing while it is compared answers BUDGET_STOPPED and keeps nothing: {during} {open.UsedBytes - used}");
+            // The same while it compares, with the budget full: the differing cells are refused their memory.
+            var filling = Wired("filling");
+            used = open.UsedBytes;
+            long taken = 0;
+            filling.Columns.OnRead = () =>
+            {
+                taken = open.QueryBytes - filling.Left.Budget.UsedBytes;
+                open.TryReserve(filling.Left.Budget, taken, false, out _);
+                filling.Left.Budget.Stop(TruncationReason.QueryBudget);
+            };
+            var cells = Message(service, filling.Left, filling.Right);
+            open.Return(filling.Left.Budget, taken);
+            check(filling.Columns.OnRead is null && taken > 0 && cells == "BUDGET_STOPPED: " + SqlService.BudgetStoppedFull && open.UsedBytes == used,
+                $"a diff refused memory for its differing cells because its query filled the budget answers BUDGET_STOPPED: {cells} {open.UsedBytes - used}");
         }
     }
 }

@@ -416,6 +416,39 @@ internal static class PivotChecks
         var gone = Message(Grouped(closing));
         check(sealing is null && gone == "RESULT_RELEASED: These results were closed. Execute the query again to see them.",
             "a pivot whose source is released while it is written answers RESULT_RELEASED: " + gone);
+        // The same while it groups: stopped, the pivot is not opened; stopped with the budget full, its figures are refused.
+        (Tripwire Columns, ResultSetBuffer Set) Wired()
+        {
+            var columns = new Tripwire([new("g", "int", "text")]) { Within = nameof(ResultPivoter) };
+            var wired = store.Open(store.BeginQuery("pivot" + Guid.NewGuid()), 0, 1, 1, "rows", columns, [WireKind.Text])!;
+            for (var i = 0; i < 10; i++)
+            {
+                wired.CountRow();
+                wired.BeginRow()!.AppendText(i.ToString(CultureInfo.InvariantCulture));
+                wired.TryCommitRow();
+            }
+            wired.Complete();
+            return (columns, wired);
+        }
+        var grouping = Wired();
+        used = store.UsedBytes;
+        grouping.Columns.OnRead = () => grouping.Set.Budget.Stop(TruncationReason.SystemMemory);
+        var unopened = Message(Grouped(grouping.Set));
+        check(grouping.Columns.OnRead is null && unopened == "BUDGET_STOPPED: " + SqlService.BudgetStoppedLowMemory && store.UsedBytes == used,
+            $"a pivot whose query stops storing while it groups answers BUDGET_STOPPED and keeps nothing: {unopened} {store.UsedBytes - used}");
+        var filling = Wired();
+        used = store.UsedBytes;
+        long taken = 0;
+        filling.Columns.OnRead = () =>
+        {
+            taken = store.QueryBytes - filling.Set.Budget.UsedBytes;
+            store.TryReserve(filling.Set.Budget, taken, false, out _);
+            filling.Set.Budget.Stop(TruncationReason.QueryBudget);
+        };
+        var figures = Message(Grouped(filling.Set));
+        store.Return(filling.Set.Budget, taken);
+        check(filling.Columns.OnRead is null && taken > 0 && figures == "BUDGET_STOPPED: " + SqlService.BudgetStoppedFull && store.UsedBytes == used,
+            $"a pivot refused memory for its figures because its query filled the budget answers BUDGET_STOPPED: {figures} {store.UsedBytes - used}");
     }
 
     /// <summary>A pivot whose rows run out of the query's budget part-way is refused and released, never kept in part.</summary>

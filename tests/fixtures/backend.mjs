@@ -282,7 +282,10 @@ async function controlled(name, consume = false) {
   if (consume) await rm(path, { force: true })
   return true
 }
-/** Answers BUDGET_STOPPED as SqlService.ThrowIfStopped does, while a budget-stopped control file exists. */
+/**
+ * Answers BUDGET_STOPPED as SqlService.ThrowIfStopped does, while a budget-stopped control file exists: after the request
+ * and the result's state are checked. Unlike SqlService, a pivot's or transpose's view is looked up first (sourceOf).
+ */
 async function budgetStopped(id) {
   if (await controlled('budget-stopped-low')) return fail(id, 'BUDGET_STOPPED', 'The computer was low on memory while this query ran, so it can store nothing more. Run the query again.'), true
   if (await controlled('budget-stopped')) return fail(id, 'BUDGET_STOPPED', "This query's results filled its result memory, so it can store nothing more. Run the query again returning fewer rows."), true
@@ -1639,6 +1642,7 @@ async function workbench(id, method, params, credit) {
       if (!source) return
       const result = stored.get(params.resultId)
       if (!result.complete) return fail(id, 'RESULT_OPEN', 'Pivot this result after it finishes loading.')
+      // Before the pivot is built, as in SqlService: its one refusal here (too many column groups) comes from the build.
       if (await budgetStopped(id)) return
       const built = buildPivot(source, params)
       if (built.error) return fail(id, 'INVALID_PARAMS', built.error)
