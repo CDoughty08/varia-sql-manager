@@ -146,7 +146,14 @@ internal sealed class PlanDiagnostics(Func<string?, int, string> bound, Action o
 
     internal static void ApplyTextBudget(IEnumerable<PlanStatement> statements, Func<string?, int, string> retain, CancellationToken token)
     {
-        string Text(string? value) => retain(value, 16_384);
+        // A retained value is shorter than its original exactly when it was cut, so the owner can be marked here.
+        var shortened = false;
+        string Text(string? value)
+        {
+            var retained = retain(value, 16_384);
+            if (retained.Length != (value?.Length ?? 0)) shortened = true;
+            return retained;
+        }
         string? Optional(string? value)
         {
             if (value is null) return null;
@@ -166,6 +173,7 @@ internal sealed class PlanDiagnostics(Func<string?, int, string> bound, Action o
         {
             token.ThrowIfCancellationRequested();
             var data = statement.Diagnostics;
+            shortened = false;
             Properties(data.MemoryGrant);
             Details(data.Warnings);
             for (var i = 0; i < data.Parameters.Count; i++)
@@ -179,10 +187,12 @@ internal sealed class PlanDiagnostics(Func<string?, int, string> bound, Action o
                 data.MissingIndexes[i] = index with { Database = Text(index.Database), Schema = Text(index.Schema), Table = Text(index.Table) };
                 for (var c = 0; c < index.Columns.Count; c++) index.Columns[c] = new(Text(index.Columns[c].Usage), Text(index.Columns[c].Name));
             }
+            if (shortened) statement.DetailsShortened = true;
             foreach (var node in statement.Nodes)
             {
                 token.ThrowIfCancellationRequested();
                 var diagnostic = node.Diagnostics;
+                shortened = false;
                 diagnostic.EstimatedExecutionMode = Text(diagnostic.EstimatedExecutionMode);
                 Strings(diagnostic.OutputColumns);
                 for (var i = 0; i < diagnostic.Predicates.Count; i++)
@@ -197,6 +207,7 @@ internal sealed class PlanDiagnostics(Func<string?, int, string> bound, Action o
                     diagnostic.Threads[i] = diagnostic.Threads[i] with { ExecutionMode = Text(diagnostic.Threads[i].ExecutionMode) };
                     Properties(diagnostic.Threads[i].Properties);
                 }
+                if (shortened) node.DetailsShortened = true;
             }
         }
     }

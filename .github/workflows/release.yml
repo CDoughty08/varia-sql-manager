@@ -121,13 +121,19 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: node scripts/update-manifest.mjs release-assets "$RELEASE_TAG"
-      - name: Create release with generated notes
+      - name: Prepare curated release notes
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node scripts/release-notes.mjs "$RELEASE_TAG" release-notes.md
+      - name: Create release with curated notes
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
         shell: bash
         run: |
-          args=(--verify-tag --generate-notes)
+          args=(--verify-tag --notes-file release-notes.md)
           if [[ "$RELEASE_TAG" == *-* ]]; then args+=(--prerelease); fi
           gh release create "$RELEASE_TAG" release-assets/* "${args[@]}"
