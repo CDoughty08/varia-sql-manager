@@ -1,18 +1,18 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import type { DistinctValue, ResultsDistinctTickParams } from '../../../shared/contracts'
 import { codiconClass } from '../../../shared/icons'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
-import { useWorkbench } from '../core/WorkbenchContext'
 import { trapFocus } from '../trap-focus'
 import { blocksToDrop, checklistCondition, columnFilterKind, listWindow, type ColumnCondition } from './column-filter'
 import type { DistinctList } from './ResultClient'
+import type { ResultsService } from './ResultsService'
 import { formatCount, plural } from './status'
 
 export interface ColumnFilterTarget { readonly column: number; readonly anchor: DOMRect }
 
 /** The custom conditions beside the checklist (`list`): one value, not it, between two, NULL, not NULL. */
-type Condition = 'list' | 'equals' | 'notEquals' | 'between' | 'null' | 'notNull'
+export type Condition = 'list' | 'equals' | 'notEquals' | 'between' | 'null' | 'notNull'
 const conditions: readonly (readonly [Condition, string])[] = [
   ['list', 'Values ticked in the list'], ['equals', 'Equals'], ['notEquals', 'Does not equal'], ['between', 'Between'], ['null', 'Is NULL'], ['notNull', 'Is not NULL']
 ]
@@ -41,7 +41,37 @@ const Item = memo(function Item({ value, top, height, checked, disabled, onToggl
 })
 
 /**
- * The header funnel's popover (results.distinct): the column's distinct values with their counts as a checklist with a
+ * What a funnel's popover filters: a column's distinct values as a snapshot (`DistinctList`), and the grid's filter it
+ * applies. A results grid's source is the backend's snapshot of the result (results.distinct) and ResultsService's view
+ * filters (`resultsFilterSource`); a live grid's is the live source's facets, filtered by the source's args (LiveGridPane).
+ */
+export interface ColumnFilterSource {
+  columnValues(column: number, o: { signal?: AbortSignal }): Promise<DistinctList>
+  /** OK's condition, or `clear`; false when it does not fit, or why (the popover stays open and says so). */
+  apply(column: number, condition: ColumnCondition): boolean | string
+  /** The column's own range limits the values Equals and Between can choose. */
+  ranged?(column: number): boolean
+  /** The conditions it can filter by; all of them by default. */
+  readonly conditions?: readonly Condition[]
+  /** What the list calls NULL's entry ("NULL"; a live source's blanks are "(Blanks)"). */
+  readonly nullText?: string
+  /** Its own words for some conditions (a live source's "Is blank" for "Is NULL"). */
+  readonly conditionLabels?: Partial<Record<Condition, string>>
+  /** A note under the list (a live source lists only its most frequent values). */
+  note?(column: number): string | undefined
+}
+
+/** A results grid's funnel source: the backend's distinct snapshot of the result and ResultsService's view filters. */
+export function resultsFilterSource(results: Pick<ResultsService, 'columnValues' | 'applyColumnFilter' | 'sortOf'>, tabId: string, index: number): ColumnFilterSource {
+  return {
+    columnValues: (column, o) => results.columnValues(tabId, index, column, o),
+    apply: (column, condition) => results.applyColumnFilter(tabId, index, column, condition),
+    ranged: column => !!results.sortOf(tabId, index)?.filters.some(item => columnFilterKind(item.filter, column) === 'between')
+  }
+}
+
+/**
+ * The header funnel's popover (results.distinct, or a live source's facets): the column's distinct values with their counts as a checklist with a
  * search, Select all and Select none, NULL as an entry of its own, and custom conditions. The values stay in the backend
  * as a snapshot, however many: the list draws only the rows in view (a fixed row height) and reads windows of them as it
  * scrolls, a search narrows the snapshot in the backend, and the ticks live there too, so Select all over a million values
@@ -50,13 +80,14 @@ const Item = memo(function Item({ value, top, height, checked, disabled, onToggl
  * outside closes it unchanged and closes the snapshot. It lists the values of the rows the grid's other filters keep, so
  * values the column's own filter dropped can be ticked again.
  */
-export function ColumnFilterPopover({ tabId, index, columnName, target, filtered, grid, onClose }: {
-  tabId: string; index: number; columnName: string; target: ColumnFilterTarget; filtered: boolean
+export function ColumnFilterPopover({ source, columnName, target, filtered, grid, onClose }: {
+  source: ColumnFilterSource; columnName: string; target: ColumnFilterTarget; filtered: boolean
   /** The grid it filters: the popover opens in that grid's window (the main one, or a popout's). */
   grid: HTMLElement
   onClose(refocus?: boolean): void
 }) {
-  const { results } = useWorkbench()
+  const nullText = source.nullText ?? 'NULL', titleId = useId()
+  const offered = (source.conditions ? conditions.filter(([value]) => source.conditions!.includes(value)) : conditions).map(([value, label]) => [value, source.conditionLabels?.[value] ?? label] as const)
   const { column, anchor } = target
   const card = useRef<HTMLFormElement>(null), searchBox = useRef<HTMLInputElement>(null), viewport = useRef<HTMLDivElement>(null)
   const [order, setOrder] = useState<'count' | 'value'>('count')
@@ -97,7 +128,7 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
     let opened: DistinctList | undefined
     handed.current = false
     setLoad({ status: 'loading' })
-    results.columnValues(tabId, index, column, { signal: abort.signal }).then(answer => {
+    source.columnValues(column, { signal: abort.signal }).then(answer => {
       if (abort.signal.aborted) { void answer.close(); return }
       opened = answer
       setTicks({ checked: answer.summary.checked, nullChecked: answer.summary.nullsChecked })
@@ -109,7 +140,7 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
       abort.abort()
       if (opened && !handed.current) void opened.close()
     }
-  }, [results, tabId, index, column, setTicks])
+  }, [source, column, setTicks])
 
   // A search narrows the list in the backend once typing pauses.
   useEffect(() => {
@@ -156,7 +187,7 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
     return () => observer.disconnect()
   }, [])
 
-  const showNull = !!summary && summary.nulls > 0 && (!needle || 'null'.includes(needle.toLowerCase()))
+  const showNull = !!summary && summary.nulls > 0 && (!needle || nullText.toLowerCase().includes(needle.toLowerCase()))
   const nullRows = showNull ? 1 : 0
   const valueRows = total ?? 0
   const win = listWindow({ scrollTop, viewHeight, rowHeight, rows: nullRows + valueRows, overscan })
@@ -288,11 +319,12 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
     } else if (condition === 'null' || condition === 'notNull') chosen = { kind: condition }
     else if (!first || (condition === 'between' && !second)) return setError(condition === 'between' ? 'Choose the lowest and the highest value.' : 'Choose a value.')
     else chosen = condition === 'between' ? { kind: 'between', rows: [first.row, second!.row] } : { kind: condition, row: first.row }
-    if (!results.applyColumnFilter(tabId, index, column, chosen)) return
+    const applied = source.apply(column, chosen)
+    if (applied !== true) { if (typeof applied === 'string') setError(applied); return }
     if (chosen.kind === 'list') handed.current = true
     onClose()
   }
-  const clear = () => { if (results.applyColumnFilter(tabId, index, column, { kind: 'clear' })) onClose() }
+  const clear = () => { if (source.apply(column, { kind: 'clear' }) === true) onClose() }
 
   const keyDown = (event: KeyboardEvent<HTMLFormElement>) => {
     trapFocus(event)
@@ -326,8 +358,8 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
   const below = innerHeight - anchor.bottom - 10, above = anchor.top - 10, down = below >= 420 || below >= above
   const place = down ? { left, width, top: anchor.bottom + 2, maxHeight: Math.max(160, below) } : { left, width, bottom: innerHeight - anchor.top + 2, maxHeight: above }
   // The column's own range limits the values listed, so Equals and Between can choose only within it.
-  const ranged = !!results.sortOf(tabId, index)?.filters.some(item => columnFilterKind(item.filter, column) === 'between')
-  const titleId = `column-filter-${tabId}-${index}-${column}`
+  const ranged = !!source.ranged?.(column)
+  const sourceNote = source.note?.(column)
   const note = !summary ? undefined
     : needle && total !== undefined ? `${formatCount(total)} of ${formatCount(summary.distinct)} ${plural(summary.distinct, 'value')} match. ${formatCount(ticks.checked)} ticked.`
       : `${formatCount(summary.distinct)} ${plural(summary.distinct, 'value')} in ${formatCount(summary.rows)} ${plural(summary.rows, 'row')}. ${formatCount(ticks.checked)} ticked.`
@@ -362,17 +394,17 @@ export function ColumnFilterPopover({ tabId, index, columnName, target, filtered
       {summary && <div className="column-filter-space" style={{ height: win.space }}>
         {rows.map(({ index: row, value }) => row < nullRows
           ? <label key="null" className="column-filter-item null" style={{ top: win.offset(0), height: rowHeight }}>
-            <input type="checkbox" disabled={!listing} checked={ticks.nullChecked} onChange={toggleNull} aria-label={`NULL (${formatCount(summary.nulls)})`} />
-            <span className="column-filter-text">NULL</span><span className="column-filter-count" aria-hidden="true">{formatCount(summary.nulls)}</span>
+            <input type="checkbox" disabled={!listing} checked={ticks.nullChecked} onChange={toggleNull} aria-label={`${nullText} (${formatCount(summary.nulls)})`} />
+            <span className="column-filter-text">{nullText}</span><span className="column-filter-count" aria-hidden="true">{formatCount(summary.nulls)}</span>
           </label>
           : value ? <Item key={value.group} value={value} top={win.offset(row)} height={rowHeight} checked={value.checked} disabled={!listing} onToggle={toggle} />
             : <div key={'row' + row} className="column-filter-item pending" style={{ top: win.offset(row), height: rowHeight }} aria-hidden="true" />)}
       </div>}
     </div>
-    {note && <p className="column-filter-note">{note}{!summary?.complete ? ' Values in rows still arriving will be shown.' : ''}{summary?.approximate ? ' Long values were compared by their first characters.' : ''}</p>}
+    {note && <p className="column-filter-note">{note}{!summary?.complete ? ' Values in rows still arriving will be shown.' : ''}{summary?.approximate ? ' Long values were compared by their first characters.' : ''}{sourceNote ? ' ' + sourceNote : ''}</p>}
     <div className="column-filter-condition">
       <select aria-label="Condition" value={condition} onChange={event => { setError(undefined); setCondition(event.target.value as Condition) }}>
-        {conditions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        {offered.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
       </select>
       {(condition === 'equals' || condition === 'notEquals') && valueSelect('Value', first, setFirst)}
       {condition === 'between' && <>{valueSelect('Lowest value', first, setFirst)}{valueSelect('Highest value', second, setSecond)}</>}

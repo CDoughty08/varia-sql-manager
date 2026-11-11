@@ -293,11 +293,76 @@ internal static class TransposeChecks
         check(store.Find(whole.Descriptor.ResultId) is null && store.Find(again.Descriptor.ResultId) is null && store.UsedBytes <= before,
             "a transpose is released with its query's other results, and with it all it charged");
         var limited = Source(store);
-        limited.Budget.Stop(TruncationReason.RowLimit);
-        string? message;
-        try { Call<object>("results.transpose", new { resultId = limited.ResultId }); message = null; }
-        catch (RequestException error) { message = error.Code + ": " + error.Message; }
-        check(message == "TOO_LARGE: This query stored as many rows as its limit allows, so it cannot store a transpose. Raise the limit or return fewer rows, then run it again.",
-            "a transpose of a query stopped at its row limit says so");
+        string? Message()
+        {
+            try { Call<object>("results.transpose", new { resultId = limited.ResultId }); return null; }
+            catch (RequestException error) { return error.Code + ": " + error.Message; }
+        }
+        // A row limit marks its set and never stops the query, so its results still transpose.
+        limited.Skip(TruncationReason.RowLimit);
+        var marked = Message();
+        check(marked is null, "a transpose of a result cut at its row limit is stored: " + marked);
+        limited.Budget.Stop(TruncationReason.SystemMemory);
+        var stopped = Message();
+        check(stopped == "BUDGET_STOPPED: " + SqlService.BudgetStoppedLowMemory, "a transpose of a query that stopped storing answers BUDGET_STOPPED with why: " + stopped);
+        Pressure(check);
+    }
+
+    /// <summary>Low system memory while a transpose is written fails only that transpose, and one whose last page is sealed
+    /// under it is whole; a query that stops storing while one is written is why it was not kept.</summary>
+    private static void Pressure(Action<bool, string> check)
+    {
+        var low = false;
+        // The probe runs at every page seal: what happens to the query while a transpose's first page is sealed.
+        Action? sealing = null;
+        var store = new ResultStore(1L << 30, 1L << 29, () =>
+        {
+            var action = sealing;
+            sealing = null;
+            action?.Invoke();
+            return (low ? 100 : 0, 50);
+        });
+        using var service = new SqlService(store);
+        ResultsTransposeResult? stored = null;
+        string? Message(ResultSetBuffer of)
+        {
+            try { stored = (ResultsTransposeResult)service.DispatchAsync("results.transpose", JsonSerializer.SerializeToElement(new { resultId = of.ResultId }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult()!; return null; }
+            catch (RequestException error) { stored = null; return error.Code + ": " + error.Message; }
+        }
+        // 70 columns transpose to 70 rows: the first page seals after 64, with 6 still to store.
+        ResultColumn[] columns = [.. Enumerable.Range(0, 70).Select(i => new ResultColumn("c" + i.ToString(CultureInfo.InvariantCulture), "int", "text"))];
+        var wide = Source(store, [[.. Enumerable.Range(0, 70).Select(i => i.ToString(CultureInfo.InvariantCulture))]], columns);
+        var narrow = Source(store);
+        var used = store.UsedBytes;
+        low = true;
+        var pressed = Message(wide);
+        check(pressed?.StartsWith("TOO_LARGE: There is not enough result memory to transpose", StringComparison.Ordinal) == true && wide.Budget.Stopped == TruncationReason.None && store.UsedBytes == used,
+            $"a transpose cut short by low system memory is refused whole and leaves its query's budget open: {pressed} {wide.Budget.Stopped} {store.UsedBytes - used}");
+        var whole = Message(narrow);
+        check(whole is null && stored!.Descriptor is { RowsStored: 3, Truncated: null, State: "complete" } && narrow.Budget.Stopped == TruncationReason.None,
+            $"a transpose whose last page is sealed under low system memory is kept whole and not marked truncated: {whole} {stored?.Descriptor.RowsStored} {stored?.Descriptor.Truncated}");
+        low = false;
+        var again = Message(wide);
+        check(again is null && stored!.Descriptor is { RowsStored: 70, Truncated: null }, "the same transpose is stored once memory is free again: " + again);
+        used = store.UsedBytes;
+        sealing = () => wide.Budget.Stop(TruncationReason.QueryBudget);
+        var during = Message(wide);
+        check(sealing is null && during == "BUDGET_STOPPED: This query's results filled its result memory, so it can store nothing more. Run the query again returning fewer rows." && store.UsedBytes == used,
+            $"a transpose whose query stops storing while it is written answers BUDGET_STOPPED and keeps nothing: {during} {store.UsedBytes - used}");
+        // The same while it is planned: the transpose is not opened.
+        var wired = new Tripwire(People) { Within = nameof(ResultTransposer) };
+        var planned = store.Open(store.BeginQuery("transpose" + Guid.NewGuid()), 0, 1, 1, "rows", wired, [WireKind.Text, WireKind.Text, WireKind.Binary])!;
+        planned.CountRow();
+        var row = planned.BeginRow()!;
+        row.AppendText("Ann");
+        row.AppendText("31");
+        row.AppendNull();
+        planned.TryCommitRow();
+        planned.Complete();
+        used = store.UsedBytes;
+        wired.OnRead = () => planned.Budget.Stop(TruncationReason.SystemMemory);
+        var unopened = Message(planned);
+        check(wired.OnRead is null && unopened == "BUDGET_STOPPED: " + SqlService.BudgetStoppedLowMemory && store.UsedBytes == used,
+            $"a transpose whose query stops storing while it is planned answers BUDGET_STOPPED and keeps nothing: {unopened} {store.UsedBytes - used}");
     }
 }

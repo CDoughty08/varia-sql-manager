@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import type { ReactNode, WheelEvent } from 'react'
 import type { IconId } from '../../../shared/icons'
 import Icon from '../Icon'
 import { formatCount } from '../results/status'
@@ -25,7 +25,13 @@ export function Chip({ label, pressed, onToggle, count, icon, disabled, title }:
   </button>
 }
 
-/** A labelled row of chips; each chip is its own button and tab stop, as a row of toggle buttons is. */
-export function ChipGroup({ label, children }: { readonly label: string; readonly children: ReactNode }) {
-  return <div className="chip-group" role="group" aria-label={label}>{children}</div>
+/** A labelled row of chips; each chip is its own button and tab stop, as a row of toggle buttons is. `dense` chips fit a
+ *  pane's toolbar: shorter than its other controls, on one line. A `scroll` row gives way in a narrow toolbar rather than
+ *  wrapping it: it scrolls sideways (the wheel too), its last chip cut at the edge, and a focused chip scrolls into view. */
+export function ChipGroup({ label, dense, scroll, children }: { readonly label: string; readonly dense?: boolean; readonly scroll?: boolean; readonly children: ReactNode }) {
+  const wheel = (event: WheelEvent<HTMLDivElement>) => {
+    const row = event.currentTarget
+    if (row.scrollWidth > row.clientWidth && Math.abs(event.deltaY) > Math.abs(event.deltaX)) row.scrollLeft += event.deltaY
+  }
+  return <div className={'chip-group' + (dense ? ' dense' : '') + (scroll ? ' scroll' : '')} role="group" aria-label={label} onWheel={scroll ? wheel : undefined}>{children}</div>
 }

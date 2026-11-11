@@ -64,14 +64,22 @@ being true.
   `results.findRows`) hash collation-normalized values there, and the renderer only receives positions and ids, never rows
   to compare. `GridView` draws highlights from sorted positions by binary search per painted row, with theme colours only.
   Result diffs (`Results/ResultDiff.cs`, `results.diff`) align and compare rows in the backend too and store the unified
-  diff as a new result of the same query; the grid reads it like any result and marks its rows and cells from its hidden
-  tone column. Pivots (`Results/ResultPivot.cs`, `results.pivot`) group and aggregate a result's or a view's rows in the
-  backend too and store a derived set (`ResultStore.Open(derived: true)`): its working memory comes out of the query's
-  budget, a refusal fails only it and never stops the query, a pivot past its bounds is refused rather than shown in part,
+  diff as a new derived result of the same query; the grid reads it like any result and marks its rows and cells from its
+  hidden tone column. Pivots (`Results/ResultPivot.cs`, `results.pivot`) group and aggregate a result's or a view's rows in
+  the backend too and store a derived set (`ResultStore.Open(derived: true)`): its working memory comes out of the query's
+  budget, a pivot past its bounds is refused rather than shown in part,
   and main owns it only once it has the answer (one not sent is released at once). Transposes (`Results/ResultTranspose.cs`,
   `results.transpose`) copy a result's or a view's cells, columns as rows, into a derived set the same way; they take at
   most 4,095 rows (never more columns than a page holds) and at most 4,000,000 cells (fewer rows for a wide result), the
-  first ones with explicit truncation.
+  first ones with explicit truncation. A derived set (a diff, a pivot, a transpose) is stored whole or not at all, and
+  its own refusals never stop its query's budget: a row the budget refuses, or a page sealed under low system memory with
+  rows still to store, fails only that set (`TOO_LARGE`), so a smaller one can still fit. Only a query's own sets stop its
+  budget (the query or global budget full, or low system memory at a page seal; a row limit never does); while a query is
+  still reading, what a derived build holds counts against that budget like anything else. A derived set asked of a
+  stopped query is refused before any work with `BUDGET_STOPPED` and a sentence for why it stopped, and one refused
+  memory or cut short because its query stopped, or its source was released, while it was built answers that
+  (`BUDGET_STOPPED`, `RESULT_RELEASED`), not `TOO_LARGE`. Nothing looks again once the set is written whole: a source
+  closed during the write still leaves its derived set.
 - The grid renders cells only through `GridView` pools, and text only through `nodeValue` (`tests/grid-lint.test.ts`
   forbids HTML sinks under `grid/`, `results/`, `designer/` and `live/`); no React per row or cell, and frames stay
   O(visible cells).
