@@ -163,7 +163,7 @@ export default function SsisOperations({ documentId }: { readonly documentId: st
         <div className="ssis-operations-grid" ref={menuTarget}>
           {unavailable ? <EmptyState icon="pulse" title="Operations are not available" detail={unavailable} />
             : <>
-              <LiveGridPane live={handle} probe={operationsProbe} label="Operations" contextMenu={false} state={service.gridState(documentId)} onGrid={grid => service.attachGrid(documentId, grid)} />
+              <LiveGridPane live={handle} probe={operationsProbe} label="Operations" contextMenu={false} sortable={false} state={service.gridState(documentId)} onGrid={grid => service.attachGrid(documentId, grid)} />
               {rows === 0 && <EmptyState className="ssis-operations-empty" icon="pulse"
                 title={isFiltered ? 'No operations match the filters' : `No operations in the ${windowLabel(state.filters.windowHours).toLowerCase()}`}
                 detail="The catalog shows each login only the operations it has permission to read."

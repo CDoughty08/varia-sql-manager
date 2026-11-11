@@ -519,6 +519,13 @@ describe('LiveGrid', () => {
     expect(second.live.setProbe).toHaveBeenLastCalledWith('debug.synthetic.grid', { sort: [{ column: 'name', descending: true, table: 1 }, { column: 'id', descending: true, table: 0 }] })
     second.grid.sortBy(undefined)
     expect(second.live.setProbe).toHaveBeenLastCalledWith('debug.synthetic.grid', { sort: [{ column: 'id', descending: true, table: 0 }] })
+    // Its own keys never evict a sibling table's: table 1's four keys stay while table 0 sorts by two (six in all).
+    const siblings = ['groupName', 'items', 'a', 'b'].map(column => ({ column, descending: false, table: 1 }))
+    const crowded = harness(keySpec, { options: { sort: siblings } })
+    crowded.emit(table({ ids: ['1'] }))
+    crowded.grid.cycleSort('id')
+    crowded.grid.cycleSort('name', true)
+    expect(crowded.live.setProbe).toHaveBeenLastCalledWith('debug.synthetic.grid', { sort: [{ column: 'id', descending: false, table: 0 }, { column: 'name', descending: false, table: 0 }, ...siblings] })
     // A grid built again over a sorted probe shows its sort from the start, as does a probe-wide key on a column it has.
     const remounted = harness(keySpec, { options: { sort: [{ column: 'id', descending: true, table: 0 }, { column: 'name', descending: false, table: 1 }] } })
     expect(remounted.grid.getSnapshot().sort).toEqual([{ column: 'id', descending: true }])

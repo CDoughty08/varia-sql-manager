@@ -1223,7 +1223,9 @@ function activitySessionsSample(live, probe) {
   })
   const text = filter.text?.toLowerCase()
   const rows = shown.filter(row => (!text || sessionTextColumns.some(column => row[column]?.toLowerCase().includes(text)))
-    && (filter.columnFilters ?? []).every(column => (column.values ?? []).includes(row[column.column]) || (column.blanks && !row[column.column]) || (column.nonBlanks && !!row[column.column])))
+    // As ActivityFilter.cs: a blank cell passes with blanks; another passes when listed, or, excluding, when not listed.
+    && (filter.columnFilters ?? []).every(column => !row[column.column] ? !!column.blanks
+      : column.exclude ? !(column.values ?? []).includes(row[column.column]) : (column.values ?? []).includes(row[column.column]) || !!column.nonBlanks))
   // The probe's sort for this table (a header's sort button), by text with the session id breaking ties.
   const sort = (probe.sort ?? []).filter(key => key.table === undefined || key.table === 0)
   if (sort.length) rows.sort((a, b) => { for (const key of sort) { const left = String(a[key.column] ?? ''), right = String(b[key.column] ?? ''); if (left !== right) return (left < right ? -1 : 1) * (key.descending ? -1 : 1) } return a.sessionId - b.sessionId })

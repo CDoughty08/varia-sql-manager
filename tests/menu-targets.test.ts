@@ -18,7 +18,7 @@ describe('menu targets', () => {
       { kind: 'searchHit', searchId: 's', index: 0, hit: { object: hitObject, folder: 'tables', label: 'dbo.Orders' }, pane: false, node: { lost: false, kind: 'table', connectionId: 'c', label: 'dbo.Orders', ref: { type: 'object', object: hitObject } }, state: { explorerScriptTitle: 'table' } }
     ]
     expect(targets.map(target => menuForTarget[target.kind])).toEqual(contextMenuIds)
-    const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, explorerFolder: '', explorerFolderInsertable: false, explorerNodePeekable: false, explorerNodeStatus: '', explorerServerEngine: '', explorerServerLinux: false, outputView: '', outputGridTransposable: false, outputLiveSortable: false, pane: '', paneFloating: false, panePopout: false, documentTabFloating: false, searchHitSchema: false }
+    const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, explorerFolder: '', explorerFolderInsertable: false, explorerNodePeekable: false, explorerNodeStatus: '', explorerServerEngine: '', explorerServerLinux: false, outputView: '', outputGridTransposable: false, outputLiveFilterable: false, outputLiveSortable: false, pane: '', paneFloating: false, panePopout: false, documentTabFloating: false, searchHitSchema: false }
     expect(targets.map(targetKeys)).toEqual([none, { ...none, explorerNode: 'table', explorerNodePeekable: true }, none, none, { ...none, outputView: 'messages' }, { ...none, pane: 'results', paneFloating: true }, none, none, { ...none, searchHitSchema: true }])
     expect(targetKeys(undefined)).toEqual(none)
     // The empty area below the servers, and a server lost with its backend generation.
@@ -236,7 +236,7 @@ describe('menu target service', () => {
     const service = new MenuTargetService()
     // Until its grid registers its commands it has no menu (a stopped view's grid unmounted them).
     expect(service.targetFor(dom(header))).toBeUndefined()
-    const live = { sortable: true } as LiveOutput
+    const live = { sortable: true, filterable: false } as LiveOutput
     const unregister = registerLiveOutput(dom(grid), live)
     const hit = service.targetFor(dom(header))!
     expect(hit).toMatchObject({ target: { kind: 'output', view: 'live', tabId: '', resultIndex: 0, column: 1, live }, element: grid, anchor: active })
@@ -244,7 +244,9 @@ describe('menu target service', () => {
     expect(service.targetFor(dom(grid))!.target).toMatchObject({ column: 2 })
     // It names no query, so File commands and Close Results have no tab to act on.
     expect(argsFor(hit.target).tabId).toBeUndefined()
-    expect(targetKeys(hit.target)).toMatchObject({ outputView: 'live', outputLiveSortable: true, outputGridTransposable: false })
+    expect(targetKeys(hit.target)).toMatchObject({ outputView: 'live', outputLiveSortable: true, outputLiveFilterable: false, outputGridTransposable: false })
+    // Only a grid whose source filters columns shows the Filter items.
+    expect(targetKeys({ ...hit.target, live: { sortable: true, filterable: true } as LiveOutput } as MenuTarget).outputLiveFilterable).toBe(true)
     expect(targetKeys({ ...hit.target, live: { sortable: false } as LiveOutput } as MenuTarget).outputLiveSortable).toBe(false)
     unregister()
     expect(service.targetFor(dom(header))).toBeUndefined()

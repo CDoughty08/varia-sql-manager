@@ -74,7 +74,7 @@ the Show chips (System, Varia's own), the filter box (sent when typing pauses, o
 back what was sent) and Clear filters, which keeps the Show chips. All of them travel as the source's args and the
 backend filters the sample, so the SQL never changes. A status line counts the sessions shown and says what is hidden or
 cut; the pane keeps its last rows, dimmed, with the reason when a sample fails.
-A chosen value the facets no longer list stays in its funnel, ticked, with a count of 0; a column takes at most 50 values. With no rows yet the pane says whether it waits for a sample, is paused or has stopped.
+A chosen value the facets no longer list stays in its funnel, ticked, with a count of 0. A filter names at most 50 values: the ticked ones, or, when fewer are unticked, the unticked ones it leaves out (so values the funnel never listed still show). With no rows yet the pane says whether it waits for a sample, is paused or has stopped.
 
 | Command | Id | Windows and Linux | macOS |
 | --- | --- | --- | --- |
@@ -445,7 +445,7 @@ Filters run in the backend over the sample; the SQL never changes.
 
 Toggles: System sessions (`activityMonitor.showSystemSessions`, off by default), Varia's own (`activityMonitor.showVariaSessions`, off by default). The filter box matches
 case-insensitively against Login, Database, Application, Host Name, Command, Wait Type, Status.
-Column value filters (Alt+Down on a header) offer (All), (Blanks), (Non-blanks) and each value with its count for Login, Database, Application, Host Name, Wait Type, Command, Status.
+Header funnels (or Alt+Down in a cell) list each value with its count, and (Blanks), with Select all and Select none, for Login, Database, Application, Host Name, Wait Type, Command, Status.
 Several values in one column match any of them; filters on several columns must all match.
 Resource Waits has Hide benign waits (on by default), which leaves out benign wait types and the Idle category.
 

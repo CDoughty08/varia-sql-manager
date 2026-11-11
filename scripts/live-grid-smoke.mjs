@@ -132,14 +132,14 @@ try {
   await gridMenu.getByRole('menuitem', { name: /^Sort Ascending/ }).click()
   await expect.poll(async () => (await live('grid')).sort).toEqual([{ column: 'amount', descending: false }])
   await expect(amount).toHaveAttribute('aria-sort', 'ascending')
-  await amountCell.click({ button: 'right' })
-  await gridMenu.getByRole('menuitem', { name: /^Sort Descending/ }).click()
+  // Sorting by a catalogue column id (the owner's commands, LiveGrid.sortBy) shows in the same header.
+  await live('sortGrid', 'amount', true)
   await expect(amount).toHaveAttribute('aria-sort', 'descending')
   await expect.poll(async () => { const amounts = (await rows()).map(row => Number(row.cells[3])); return amounts.length === 12 && amounts.every((value, index) => index === 0 || amounts[index - 1] >= value) }, { timeout: 20000 }).toBe(true)
   expect((await live('grid')).sort).toEqual([{ column: 'amount', descending: true }])
   await live('unmountGrid')
   await live('dispose', items)
-  console.log('Sort passed: the context menu sorted by the catalogue column, the header shows it, and the next revision came sorted.')
+  console.log('Sort passed: the context menu and a sort by catalogue id sorted the grid, the header shows it, and the next revision came sorted.')
 
   step = 'follow tail'
   const log = await live('subscribeSynthetic', { probes: ['debug.synthetic.log'], tickMs: 300, logRows: 25 })

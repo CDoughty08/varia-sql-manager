@@ -55,6 +55,8 @@ export interface ColumnFilterSource {
   readonly conditions?: readonly Condition[]
   /** What the list calls NULL's entry ("NULL"; a live source's blanks are "(Blanks)"). */
   readonly nullText?: string
+  /** Its own words for some conditions (a live source's "Is blank" for "Is NULL"). */
+  readonly conditionLabels?: Partial<Record<Condition, string>>
   /** A note under the list (a live source lists only its most frequent values). */
   note?(column: number): string | undefined
 }
@@ -85,7 +87,7 @@ export function ColumnFilterPopover({ source, columnName, target, filtered, grid
   onClose(refocus?: boolean): void
 }) {
   const nullText = source.nullText ?? 'NULL', titleId = useId()
-  const offered = source.conditions ? conditions.filter(([value]) => source.conditions!.includes(value)) : conditions
+  const offered = (source.conditions ? conditions.filter(([value]) => source.conditions!.includes(value)) : conditions).map(([value, label]) => [value, source.conditionLabels?.[value] ?? label] as const)
   const { column, anchor } = target
   const card = useRef<HTMLFormElement>(null), searchBox = useRef<HTMLInputElement>(null), viewport = useRef<HTMLDivElement>(null)
   const [order, setOrder] = useState<'count' | 'value'>('count')

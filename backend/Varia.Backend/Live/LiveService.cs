@@ -743,7 +743,9 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
             var sortable = spec.Tables.Where(table => table.Mode == "snapshot").SelectMany(table => table.Columns).Where(LiveColumnJson.IsData).Select(column => column.Id).ToHashSet(StringComparer.Ordinal);
             bool Sorts(LiveSortArgs key) => key.Table is not { } table ? sortable.Contains(key.Column)
                 : table >= 0 && table < spec.Tables.Count && spec.Tables[table].Mode == "snapshot" && spec.Tables[table].Columns.Exists(column => column.Id == key.Column && LiveColumnJson.IsData(column));
-            if (sort.Length is 0 || sort.Length > Limits.SortColumns || sort.Any(key => key?.Column is null || !Sorts(key))
+            // Each table (and the probe-wide keys) holds its own Limits.SortColumns keys, so one grid's sort never evicts another's.
+            if (sort.Length is 0 || sort.Length > Limits.SortColumns * (spec.Tables.Count + 1) || sort.Any(key => key?.Column is null || !Sorts(key))
+                || sort.GroupBy(key => key.Table).Any(group => group.Count() > Limits.SortColumns)
                 || sort.Select(key => key.Table + "/" + key.Column).Distinct(StringComparer.Ordinal).Count() != sort.Length)
                 throw Invalid("Sort names a column the probe does not sort by.");
         }

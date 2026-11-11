@@ -9,7 +9,7 @@ import { highlightText } from '../results/HighlightsService'
 import { pivotStrip } from '../results/pivot'
 import { transposeStrip } from '../results/TransposeService'
 import { formatBytes, formatCount } from '../results/status'
-import GridShell, { instanceKey, type GridFunnels, type GridShellApi, type GridSpec } from './GridShell'
+import GridShell, { GridErrorBoundary, instanceKey, type GridFunnels, type GridShellApi, type GridSpec } from './GridShell'
 import type { GridView } from './GridView'
 import { describeSelection } from './selection'
 
@@ -52,7 +52,7 @@ const keysOf = (sort: GridSort | undefined) => (sort?.keys.map(key => `${key.col
  * filters for the header, and the strips (truncation, highlights, compare, pivot, transpose). A live view mounts the same
  * shell with its own source (LiveGridPane).
  */
-export default function ResultGrid({ tabId, entry, count, focused, budget, sort, onFocus, onWide }: ResultGridProps) {
+function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, onWide }: ResultGridProps) {
   const { results, commands, gridStats, panes, settings, resultsSearch, highlights, compare, pivot, transpose } = useWorkbench()
   const marked = useSyncExternalStore(highlights.subscribe, () => highlights.getSnapshot()[tabId]?.get(entry.index))
   const compared = useSyncExternalStore(compare.subscribe, () => compare.getSnapshot().get(setKey(entry.descriptor)))
@@ -154,7 +154,11 @@ export default function ResultGrid({ tabId, entry, count, focused, budget, sort,
       'data-result-grid': '', 'data-output-view': 'grid', 'data-tab-id': tabId, 'data-result-index': index, 'data-result-generation': entry.descriptor.generation,
       'data-result-id': entry.descriptor.resultId, 'data-result-kind': entry.descriptor.kind, 'data-pane-focus': focused ? 'selected' : 'grid', onFocus: () => onFocus(index)
     }}
-    failedFrameProps={{ 'data-result-index': index }}
     sort={sort?.keys} onSort={(column, add) => results.cycleSort(tabId, index, column, add)} funnels={funnels}
     update={{ resultCount: count, showTypes, rowSize }} gone={lost ? lostText : undefined} strip={note ? { text: note } : undefined} />
+}
+
+/** A result set's grid: a throw while rendering it stays in its frame (GridErrorBoundary), whose Retry renders it again. */
+export default function ResultGrid(props: ResultGridProps) {
+  return <GridErrorBoundary frameProps={{ 'data-result-index': props.entry.index }}><ResultGridBody {...props} /></GridErrorBoundary>
 }

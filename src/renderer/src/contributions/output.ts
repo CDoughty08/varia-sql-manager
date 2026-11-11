@@ -57,6 +57,11 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     const selection = shown && results.selection(target!.tabId, target!.resultIndex)
     return shown && selection && resolveBlocks(selection, shown.rows, shown.columns).length > 0 ? target : undefined
   }
+  /** The hasResults context key for a query (results not closed, nor lost with a stopped backend), which Find and Save
+   *  check in their handlers: a live view's grid has rows without a query's results. */
+  const hasResults = (tabId: string | undefined) => !!tabId && !!results.context.getSnapshot()[tabId]
+  // What Find and Save say without results: a query's, since a live view's grid always has its own source.
+  const noResults = 'Execute a query that returns results first.'
   /** A live grid's commands, and the column captured by its menu, else its active cell's. */
   const liveOf = (args?: CommandArgs): LiveOutput | undefined => { const target = targetOf(args); return target?.view === 'live' ? target.live : undefined }
   const liveColumn = (args?: CommandArgs): { live: LiveOutput; column: number } | undefined => {
@@ -104,7 +109,12 @@ export function outputContribution({ commands, results, menuTargets, documents, 
   const fromGrid = (args?: CommandArgs) => targetOf(args)?.view === 'grid'
   const registrations = [
     commands.register('output.find', {
+      unavailable: args => liveOf(args) ? undefined : noResults,
+      // A query's results (no hasResults precondition: a live view's grid finds through its owner's filter box).
+      when: args => { const live = liveOf(args); return live ? live.canFind() : hasResults(searchTab(args)) },
       run: args => {
+        const live = liveOf(args)
+        if (live) { live.find(); return }
         const tabId = searchTab(args)
         if (!tabId || !results.getSnapshot()[tabId]?.sets.length) return
         // The box is in the Results view's toolbar.
@@ -171,6 +181,9 @@ export function outputContribution({ commands, results, menuTargets, documents, 
       run: args => { const at = sortTarget(args), live = liveColumn(args); if (live) live.live.fitColumn(live.column); else if (at) results.fitColumn(at.tabId, at.index, at.column) }
     }),
     commands.register('output.saveResultsAs', {
+      unavailable: args => liveOf(args) ? undefined : noResults,
+      // A query's results, or a live view's grid with rows (which has no query, so no hasResults precondition).
+      when: args => { const live = liveOf(args); return live ? live.hasRows() : hasResults(targetOf(args)?.tabId ?? documents.getSnapshot().activeId) },
       run: async args => {
         const live = liveOf(args)
         if (live) { if (live.hasRows()) live.save(); return }

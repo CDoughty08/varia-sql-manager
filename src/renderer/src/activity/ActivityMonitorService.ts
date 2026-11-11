@@ -74,7 +74,9 @@ export function processesActivityFilter(filter: ProcessesFilter): ActivityFilter
     .map(column => ({
       column: column.column,
       ...column.values?.length ? { values: column.values.slice(0, activityLimits.columnFilterValues).map(value => value.slice(0, activityLimits.columnFilterChars)) } : {},
-      ...column.blanks ? { blanks: true } : {}, ...column.nonBlanks ? { nonBlanks: true } : {}
+      ...column.blanks ? { blanks: true } : {}, ...column.nonBlanks ? { nonBlanks: true } : {},
+      // An excluding filter names the values it leaves out; without them it would exclude nothing, so it is never sent bare.
+      ...column.exclude && column.values?.length && !column.nonBlanks ? { exclude: true } : {}
     }))
   return { table: 'sessions', view: filter.view, showSystem: filter.showSystem, showVaria: filter.showVaria, ...text ? { text } : {}, ...columnFilters.length ? { columnFilters } : {} }
 }

@@ -9,16 +9,18 @@ import type { ColumnFilterSource, Condition } from '../results/ColumnFilterPopov
 import type { DistinctList } from '../results/ResultClient'
 import { formatCount } from '../results/status'
 
-/** Rows whose cell equals one of `values`, or is blank (`blanks`), or is not blank (`nonBlanks`); ActivityColumnFilter's shape. */
+/** Rows whose cell equals one of `values` (or, with `exclude`, any value but those), or is blank (`blanks`), or is not
+ *  blank (`nonBlanks`); ActivityColumnFilter's shape. */
 export interface LiveValueFilter {
   readonly values?: readonly string[]
   readonly blanks?: boolean
   readonly nonBlanks?: boolean
+  readonly exclude?: boolean
 }
 /** A facet list's values by text, for OK: the ticked ones, and whether every listed value is ticked. */
 export interface FacetList extends DistinctList {
   readonly texts: readonly string[]
-  ticked(): { readonly values: readonly string[]; readonly all: boolean; readonly blanks: boolean }
+  ticked(): { readonly values: readonly string[]; readonly unticked: readonly string[]; readonly all: boolean; readonly blanks: boolean }
 }
 
 const empty = (filter: LiveValueFilter | undefined) => !filter || (!filter.values?.length && !filter.blanks && !filter.nonBlanks)
@@ -35,7 +37,9 @@ export function facetList(column: number, facet: LiveFacet | undefined, filter: 
   for (const value of facet?.values ?? []) { if (value.text === '') nulls = value.count; else counts.set(value.text, value.count) }
   for (const text of filter?.values ?? []) if (text !== '' && !counts.has(text)) counts.set(text, 0)
   const texts = [...counts.keys()].sort((a, b) => a.localeCompare(b))
-  const checked = new Set<number>(empty(filter) || filter!.nonBlanks ? texts.map((_, group) => group) : texts.flatMap((text, group) => filter!.values?.includes(text) ? [group] : []))
+  // An excluding filter ticks every value but the ones it leaves out.
+  const on = (text: string) => empty(filter) || !!filter!.nonBlanks || (filter!.exclude ? !filter!.values?.includes(text) : !!filter!.values?.includes(text))
+  const checked = new Set<number>(texts.flatMap((text, group) => on(text) ? [group] : []))
   let nullsChecked = empty(filter) || !!filter!.blanks
   const values = (): DistinctValue[] => texts.map((text, group) => ({ group, row: group, text, count: counts.get(text) ?? 0, checked: checked.has(group) }))
   const matching = (search: string | undefined) => { const needle = search?.toLocaleLowerCase(); return needle ? values().filter(value => value.text.toLocaleLowerCase().includes(needle)) : values() }
@@ -57,7 +61,7 @@ export function facetList(column: number, facet: LiveFacet | undefined, filter: 
       return { checked: checked.size, nullsChecked }
     },
     close: async () => {},
-    ticked: () => ({ values: texts.filter((_, group) => checked.has(group)), all: checked.size === texts.length, blanks: nullsChecked })
+    ticked: () => ({ values: texts.filter((_, group) => checked.has(group)), unticked: texts.filter((_, group) => !checked.has(group)), all: checked.size === texts.length, blanks: nullsChecked })
   }
 }
 
@@ -68,9 +72,12 @@ export function liveCondition(condition: ColumnCondition, texts: readonly string
       const ticks = (condition.list as Partial<FacetList>).ticked?.()
       if (!ticks) return { error: 'The values could not be read.' }
       if (ticks.all) return { filter: ticks.blanks ? undefined : { nonBlanks: true } }
-      if (ticks.values.length > maxValues) return { error: `A column filter holds at most ${formatCount(maxValues)} values.` }
       if (ticks.values.length === 0) return ticks.blanks ? { filter: { blanks: true } } : { error: 'Select at least one value.' }
-      return { filter: { values: ticks.values, ...ticks.blanks ? { blanks: true } : {} } }
+      // Fewer unticked than ticked: leave those out (every other value passes, those the list never showed too), so
+      // unticking one of many values never runs into the limit; otherwise only the ticked values pass.
+      const exclude = ticks.unticked.length < ticks.values.length, named = exclude ? ticks.unticked : ticks.values
+      if (named.length > maxValues) return { error: `A column filter names at most ${formatCount(maxValues)} values: tick or untick fewer.` }
+      return { filter: { values: named, ...exclude ? { exclude: true } : {}, ...ticks.blanks ? { blanks: true } : {} } }
     }
     case 'equals': return texts[condition.row] === undefined ? { error: 'Choose a value.' } : { filter: { values: [texts[condition.row]] } }
     case 'null': return { filter: { blanks: true } }
@@ -98,6 +105,7 @@ export function liveFilterSource(o: {
   return {
     conditions: liveConditions,
     nullText: '(Blanks)',
+    conditionLabels: { null: 'Is blank', notNull: 'Is not blank' },
     columnValues: async column => {
       const id = o.columnId(column)
       if (id === undefined) throw new Error('This column cannot be filtered.')

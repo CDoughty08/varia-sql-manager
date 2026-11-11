@@ -69,7 +69,7 @@ colours the row and hides the column, and Copy and Save leave it out.
 | Interval | 1 s to 3,600 s requested, then clamped to the probe's own minimum and maximum |
 | Frames | one unacknowledged per subscription; initial credit 64 KiB; at most 256 KiB each, and the catalogue's worst case at most 192 KiB |
 | Series, status values, errors | 64 series per probe; 16 status values of 128 characters; 8 probe errors of 2,000 characters per tick |
-| Sort, filter, tracking | 4 sort columns; filter text 400 characters on 8 columns; 64 tracked keys of 512 characters per table |
+| Sort, filter, tracking | 4 sort columns per table; filter text 400 characters on 8 columns; 64 tracked keys of 512 characters per table |
 | Resume token, kept results | 256 base64url characters; 64 results kept when a source ends |
 | Tables | a snapshot revision at most 10,000 rows (a table's own cap may be lower); an append segment 200,000 rows or 32 MiB, 2 segments' worth kept in at most 8 results a table; at most 10,000 new append rows a tick |
 | Table memory | 64 MiB per subscription, all live tables at most 25 % of the result budget; past either, a sample stores what fits and reports BUDGET |

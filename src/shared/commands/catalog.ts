@@ -816,8 +816,9 @@ export const commandCatalog = {
   // The Query Output menu and the results grid's keys: the grid copies its selected cells, and Messages their selected
   // text (Ctrl+C there is Chromium's copy). Select All selects the grid's cells, or only the text of Messages.
   // A live view's grid (an Activity Monitor pane) is the results grid with a live source, so its menu is this one: Copy,
-  // Select All, Save, Sort (a snapshot table), Fit Column, Filter Column Values and Clear Filters (the columns its source
-  // filters) and White space act on it (outputView 'live'); the result-set items hide. It serves its own keys.
+  // Select All, Save, Sort (a snapshot table that sorts: outputLiveSortable), Fit Column, Filter Column Values and Clear
+  // Filters (a source that filters columns: outputLiveFilterable) and White space act on it (outputView 'live'), with these
+  // keys (outputGridFocus); the result-set items hide.
   'output.copy': {
     title: 'Copy', category: 'Query', icon: 'copy', palette: false,
     keybindings: [{ key: 'mod+c', when: 'outputGridFocus' }], menus: [{ menu: 'output.context', group: '1_copy', order: 1, mnemonic: 'c' }]
@@ -836,8 +837,7 @@ export const commandCatalog = {
   },
   // The grid the menu was opened for, else the focused grid, else the grid that last had focus (the only one, often).
   'output.saveResultsAs': {
-    title: 'Save Results As…', category: 'Query', icon: 'save-as', keywords: ['export', 'csv', 'json', 'tab', 'grid'], precondition: 'hasResults',
-    unavailableHint: 'Execute a query that returns results first.',
+    title: 'Save Results As…', category: 'Query', icon: 'save-as', keywords: ['export', 'csv', 'json', 'tab', 'grid'],
     keybindings: [{ key: 'mod+s', when: 'outputGridFocus' }], menus: [{ menu: 'output.context', group: '3_save', order: 1, mnemonic: 'v', when: "outputView == 'grid' || outputView == 'live'" }]
   },
   // Frees the active query's results in the backend; Messages stay.
@@ -888,8 +888,8 @@ export const commandCatalog = {
   // Search in results (the results toolbar's search box, results.search): Find in Results puts the focus in the box, as
   // Ctrl+F does in a grid; Find Next and Previous step through the matches of every grid, as F3 and Shift+F3 do there.
   'output.find': {
-    title: 'Find in Results', category: 'Query', icon: 'search', keywords: ['search', 'find', 'grid', 'values', 'columns', 'filter'], precondition: 'hasResults',
-    unavailableHint: 'Execute a query that returns results first.', keybindings: [{ key: 'mod+f', when: 'outputGridFocus' }]
+    title: 'Find in Results', category: 'Query', icon: 'search', keywords: ['search', 'find', 'grid', 'values', 'columns', 'filter'],
+    keybindings: [{ key: 'mod+f', when: 'outputGridFocus' }]
   },
   'output.findNext': {
     title: 'Find Next in Results', category: 'Query', keywords: ['search', 'next', 'match', 'grid'], precondition: 'hasResults', unavailableHint: 'Execute a query that returns results first.',
@@ -908,7 +908,7 @@ export const commandCatalog = {
   'output.filterColumnValues': {
     title: 'Filter Column Values…', category: 'Query', icon: 'filter', keywords: ['filter', 'funnel', 'distinct', 'values', 'checklist', 'where', 'grid', 'column'], palette: false,
     keybindings: [{ key: 'alt+down', when: 'outputGridFocus' }],
-    menus: [{ menu: 'output.filter', group: '0_column', order: 1, mnemonic: 'v', when: "outputView == 'grid' || outputView == 'live'" }]
+    menus: [{ menu: 'output.filter', group: '0_column', order: 1, mnemonic: 'v', when: "outputView == 'grid' || outputLiveFilterable" }]
   },
   'output.filterSelection': {
     title: 'Filter for Selected Values', category: 'Query', icon: 'filter', keywords: ['filter', 'in', 'equal', 'where', 'values', 'grid'], palette: false,
@@ -936,7 +936,7 @@ export const commandCatalog = {
   },
   'output.clearFilters': {
     title: 'Clear Filters', category: 'Query', icon: 'clear-all', keywords: ['filter', 'unfilter', 'all', 'reset', 'grid'], palette: false,
-    menus: [{ menu: 'output.filter', group: '4_clear', order: 1, mnemonic: 'c', when: "outputView == 'grid' || outputView == 'live'" }]
+    menus: [{ menu: 'output.filter', group: '4_clear', order: 1, mnemonic: 'c', when: "outputView == 'grid' || outputLiveFilterable" }]
   },
   // The results toolbar's Sort text by choices (queryResults.grid.sortText); each goes back to Value when it is already on.
   'output.sortTextByChars': {

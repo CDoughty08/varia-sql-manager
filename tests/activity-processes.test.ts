@@ -47,15 +47,17 @@ describe('Sessions pane', () => {
     expect(await read(none, 'count')).toEqual([['sa', 2, true], ['app', 1, true]])
     const chosen = facetList(0, facet, { values: ['app', 'gone'], blanks: true })
     expect(await read(chosen)).toEqual([['app', 1, true], ['gone', 0, true], ['sa', 2, false]])
-    expect(chosen.ticked()).toEqual({ values: ['app', 'gone'], all: false, blanks: true })
+    expect(chosen.ticked()).toEqual({ values: ['app', 'gone'], unticked: ['sa'], all: false, blanks: true })
     const nonBlanks = facetList(0, facet, { nonBlanks: true })
-    expect(nonBlanks.ticked()).toEqual({ values: ['app', 'sa'], all: true, blanks: false })
+    expect(nonBlanks.ticked()).toEqual({ values: ['app', 'sa'], unticked: [], all: true, blanks: false })
+    // An excluding filter opens with every value ticked but the ones it leaves out.
+    expect(facetList(0, facet, { values: ['sa'], exclude: true, blanks: true }).ticked()).toEqual({ values: ['app'], unticked: ['sa'], all: false, blanks: true })
     // Ticks go through the popover's protocol: by group, by search, and NULL's entry.
     await none.tick({ checked: false, all: true, search: 'P' })
     await none.tick({ checked: false, nulls: false })
-    expect(none.ticked()).toEqual({ values: ['sa'], all: false, blanks: false })
+    expect(none.ticked()).toEqual({ values: ['sa'], unticked: ['app'], all: false, blanks: false })
     expect((await none.read({ order: 'value', offset: 0, count: 50, search: 'ap' })).total).toBe(1)
-    expect(facetList(0, undefined, undefined).ticked()).toEqual({ values: [], all: true, blanks: true })
+    expect(facetList(0, undefined, undefined).ticked()).toEqual({ values: [], unticked: [], all: true, blanks: true })
   })
   it('turns the popover\'s condition into the filter the backend applies, or none, within the values a column filter holds', async () => {
     const max = activityLimits.columnFilterValues
@@ -79,10 +81,15 @@ describe('Sessions pane', () => {
     expect(liveCondition({ kind: 'notNull' }, texts, max)).toEqual({ filter: { nonBlanks: true } })
     expect(liveCondition({ kind: 'clear' }, texts, max)).toEqual({ filter: undefined })
     expect(liveCondition({ kind: 'notEquals', row: 0 } as never, texts, max)).toMatchObject({ error: expect.any(String) })
-    const many = { column: 'login', values: Array.from({ length: max + 2 }, (_, index) => ({ text: `v${index}`, count: 1 })) }
+    // Unticking one of more values than a filter names leaves just that one out (every unlisted value passes too).
+    const many = { column: 'login', values: Array.from({ length: max + 2 }, (_, index) => ({ text: `v${String(index).padStart(3, '0')}`, count: 1 })), more: true as const }
     const big = facetList(0, many, undefined)
     await big.tick({ checked: false, groups: [0] })
-    expect(liveCondition({ kind: 'list', list: big }, big.texts, max)).toMatchObject({ error: expect.stringMatching(/at most/) })
+    expect(liveCondition({ kind: 'list', list: big }, big.texts, max)).toEqual({ filter: { values: ['v000'], exclude: true, blanks: true } })
+    // Only when both the ticked and the unticked values are too many does it refuse.
+    const huge = facetList(0, { column: 'login', values: Array.from({ length: 2 * max + 4 }, (_, index) => ({ text: `v${String(index).padStart(3, '0')}`, count: 1 })) }, undefined)
+    await huge.tick({ checked: false, groups: Array.from({ length: max + 2 }, (_, index) => index) })
+    expect(liveCondition({ kind: 'list', list: huge }, huge.texts, max)).toMatchObject({ error: expect.stringMatching(/at most/) })
   })
   it('gives the results grid\'s popover a live source: the facet columns only, the live conditions, and OK as the column\'s args', async () => {
     const applied: [string, unknown][] = []
@@ -92,6 +99,7 @@ describe('Sessions pane', () => {
     })
     expect(source.conditions).toEqual(['list', 'equals', 'null', 'notNull'])
     expect(source.nullText).toBe('(Blanks)')
+    expect(source.conditionLabels).toEqual({ null: 'Is blank', notNull: 'Is not blank' })
     expect(source.note?.(0)).toMatch(/most frequent/)
     await expect(source.columnValues(5, {})).rejects.toThrow()
     const list = await source.columnValues(0, {})
@@ -100,6 +108,11 @@ describe('Sessions pane', () => {
     expect(source.apply(0, { kind: 'notEquals', row: 0 } as never)).toEqual(expect.any(String))
     expect(source.apply(0, { kind: 'clear' })).toBe(true)
     expect(applied).toEqual([['login', { values: ['app'], blanks: true }], ['login', undefined]])
+    expect(activityLiveArgsSchema.safeParse({ filters: [processesActivityFilter(filter({ columnFilters: [{ column: 'login', values: ['sa'], exclude: true, blanks: true }] }))] }).success).toBe(true)
+    // The pane's args carry the exclusion (and never a bare one, which would exclude nothing).
+    expect(processesActivityFilter(filter({ columnFilters: [{ column: 'login', values: ['sa'], exclude: true }] })).columnFilters).toEqual([{ column: 'login', values: ['sa'], exclude: true }])
+    expect(processesActivityFilter(filter({ columnFilters: [{ column: 'login', exclude: true, blanks: true }] })).columnFilters).toEqual([{ column: 'login', blanks: true }])
+    expect(activityLiveArgsSchema.safeParse({ filters: [{ table: 'sessions', columnFilters: [{ column: 'login', exclude: true, blanks: true }] }] }).success).toBe(false)
     // Every filter it hands the pane is one the live schema accepts as a column filter.
     const args = { filters: [processesActivityFilter(filter({ columnFilters: [{ column: 'login', ...applied[0][1] as object }] }))] }
     expect(activityLiveArgsSchema.safeParse(args).success).toBe(true)

@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { liveProbes, type LiveProbeId, type LiveTone } from '../../../shared/live/catalog'
 import type { LiveFacet } from '../../../shared/live/schema'
 import { onUnexpectedError } from '../core/errors'
-import GridShell, { instanceKey, type GridFunnels, type GridShellApi, type GridSpec } from '../grid/GridShell'
+import { useWorkbench } from '../core/WorkbenchContext'
+import GridShell, { GridErrorBoundary, instanceKey, type GridFunnels, type GridShellApi, type GridSpec } from '../grid/GridShell'
 import type { GridView } from '../grid/GridView'
 import { registerLiveOutput, type LiveOutput } from '../menus/targets'
 import { formatCount, plural } from '../results/status'
@@ -48,8 +49,16 @@ export interface LiveGridPaneProps {
   onGrid?(grid: LiveGrid | undefined): void
   /** Header funnels for the columns the source filters; none without it. Its presence is read when the grid is built. */
   readonly filters?: LiveFilters
-  /** Query Output's context menu (view `live`); false for an owner with a menu of its own (SSIS Operations). */
+  /**
+   * Query Output's context menu and keys (view `live`: Ctrl+C, Ctrl+Shift+C, Ctrl+A, Ctrl+S, Alt+Down and Ctrl+F run the
+   * catalogue's output.* commands, remappable in Shortcut Mapping); false for an owner with a menu of its own (SSIS
+   * Operations), whose grid serves its own Ctrl+C, Ctrl+Shift+C and Ctrl+A.
+   */
   readonly contextMenu?: boolean
+  /** False for a table whose order is its meaning (Blocking's chains in tree order): no header sort, no Sort items. */
+  readonly sortable?: boolean
+  /** Find in Results (Ctrl+F) in this grid: the owner's own filter box, since a live view has no Find. */
+  onFind?(): void
 }
 
 const defaultNewRows = (count: number) => `${formatCount(count)} new ${plural(count, 'row')} · Jump to latest`
@@ -63,13 +72,14 @@ const indexesOf = (ids: readonly string[], columns: readonly { readonly id: stri
  * the source's args, and the grid says so when its rows are gone. This adds the "n new rows" button. Until the view's
  * first sample the grid area is empty.
  */
-export function LiveGridPane({ live, probe, table = 0, label, toneLabel, state, newRowsLabel = defaultNewRows, onGrid, filters, contextMenu = true }: LiveGridPaneProps) {
+function LiveGridBody({ live, probe, table = 0, label, toneLabel, state, newRowsLabel = defaultNewRows, onGrid, filters, contextMenu = true, sortable = true, onFind }: LiveGridPaneProps) {
+  const { commands } = useWorkbench()
   const columns = liveProbes[probe]?.tables?.[table]?.columns ?? []
   const [grid, setGrid] = useState<LiveGrid>()
   const [notice, setNotice] = useState<string>()
   const apiRef = useRef<GridShellApi | undefined>(undefined)
-  const latest = useRef({ toneLabel, onGrid, filters, label })
-  latest.current = { toneLabel, onGrid, filters, label }
+  const latest = useRef({ toneLabel, onGrid, filters, label, onFind })
+  latest.current = { toneLabel, onGrid, filters, label, onFind }
   const report = useCallback((what: string) => (result: { ok: boolean; error?: string; code?: string } | undefined) =>
     setNotice(result && !result.ok && result.code !== 'CANCELLED' ? `Could not ${what}: ${result.error}` : undefined), [])
   const mount = (create: (spec: GridSpec) => GridView) => {
@@ -80,11 +90,17 @@ export function LiveGridPane({ live, probe, table = 0, label, toneLabel, state, 
         handle: first.handle, descriptor: first.descriptor, state: own,
         // No SQL type hints: a live catalogue's columns name a type without its length, so a header would invent one
         // ("nvarchar(max)"), and live views follow SSMS's monitors, whose headers are names alone.
-        resultIndex: 0, resultCount: 1, label, followTail: first.mode === 'append', showTypes: false, clipboardKeys: true,
+        resultIndex: 0, resultCount: 1, label, followTail: first.mode === 'append', showTypes: false,
+        // With Query Output's menu its keys are the catalogue's (outputGridFocus); without, the grid serves its own.
+        clipboardKeys: !contextMenu,
         // The header sorts a snapshot table as a results grid's does; the backend sorts each sample (the probe's sort).
-        sortable: first.mode === 'snapshot',
+        sortable: sortable && first.mode === 'snapshot',
         onSelection: hooks.onSelection, onViewport: hooks.onViewport,
-        onCopy: headers => { void created.copy(!!headers).then(report('copy the rows'), onUnexpectedError) },
+        // Edit › Copy's copy event: output.copy, as in a results grid, or the grid's own copy without the menu.
+        onCopy: headers => {
+          if (contextMenu) void commands.execute(headers ? 'output.copyWithHeaders' : 'output.copy', undefined, 'keybinding')
+          else void created.copy(!!headers).then(report('copy the rows'), onUnexpectedError)
+        },
         onEscape: () => false,
         toneLabel: tone => latest.current.toneLabel?.(tone)
       })
@@ -120,12 +136,15 @@ export function LiveGridPane({ live, probe, table = 0, label, toneLabel, state, 
     const view = () => apiRef.current?.view()
     const rows = () => !!grid.shown && grid.shown.descriptor.rowsAvailable > 0 && columns.length > 0
     return {
-      sortable: grid.sortable,
+      sortable: sortable && grid.sortable,
+      filterable: !!latest.current.filters?.columns.length,
       hasRows: rows,
       hasSelection: () => rows() && !!view()?.currentSelection(),
       activeColumn: () => view()?.currentSelection()?.active.column,
       columnName: column => columns[column]?.name,
-      canSort: column => grid.canSort(column),
+      canSort: column => sortable && grid.canSort(column),
+      find: () => latest.current.onFind?.(),
+      canFind: () => !!latest.current.onFind,
       canFilter: column => !!view()?.canFilter(column),
       sorted: () => (grid.getSnapshot().sort?.length ?? 0) > 0,
       filtered: () => (latest.current.filters?.filters.length ?? 0) > 0,
@@ -138,19 +157,24 @@ export function LiveGridPane({ live, probe, table = 0, label, toneLabel, state, 
       clearFilters: () => latest.current.filters?.clear(),
       save: () => { void grid.save(latest.current.label).then(report('save the rows'), onUnexpectedError) }
     }
-  }, [grid, columns, report])
+  }, [grid, columns, report, sortable])
   const [root, setRoot] = useState<HTMLDivElement | null>(null)
   useEffect(() => output && root && contextMenu ? registerLiveOutput(root, output) : undefined, [output, root, contextMenu])
   const onApi = useCallback((api: GridShellApi | undefined) => { apiRef.current = api }, [])
   // The grid can no longer read its rows: say why, rather than leave cells that read as loading.
   const gone = snapshot.lost ? liveGridText.lost : snapshot.released ? liveGridText[snapshot.released] : undefined
-  return <GridShell mountKey={`${probe}|${table}|${instanceKey(live)}|${state ? instanceKey(state) : 0}`} mount={mount} onApi={onApi} ownKeys contents="rows"
+  return <GridShell mountKey={`${probe}|${table}|${instanceKey(live)}|${state ? instanceKey(state) : 0}`} mount={mount} onApi={onApi} contents="rows"
     frameProps={{ className: 'live-grid', 'data-live-probe': probe, 'data-live-table': table }}
     rootProps={{ 'aria-label': label, ...contextMenu ? { 'data-output-view': 'live' } : {} }} rootRef={setRoot}
     sort={headerSort} onSort={(column, add) => grid?.cycleSort(column, add)} {...funnels ? { funnels } : {}}
     gone={gone} strip={notice ? { text: notice, error: true } : undefined}>
     {snapshot.newRows > 0 && <button className="live-grid-new-rows" onClick={() => grid?.jumpToEnd()}>{newRowsLabel(snapshot.newRows)}</button>}
   </GridShell>
+}
+
+/** A live table's grid: a throw while rendering it stays in its frame (GridErrorBoundary), whose Retry renders it again. */
+export function LiveGridPane(props: LiveGridPaneProps) {
+  return <GridErrorBoundary contents="rows" frameProps={{ className: 'live-grid', 'data-live-probe': props.probe, 'data-live-table': props.table ?? 0 }}><LiveGridBody {...props} /></GridErrorBoundary>
 }
 
 const noSubscribe = () => () => {}

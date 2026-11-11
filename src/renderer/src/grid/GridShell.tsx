@@ -39,8 +39,6 @@ export interface GridShellProps {
   readonly rootProps: HTMLAttributes<HTMLDivElement> & Record<`data-${string}`, string | number | undefined>
   /** The frame's attributes (a live grid's probe and table). */
   readonly frameProps?: HTMLAttributes<HTMLDivElement> & Record<`data-${string}`, string | number | undefined>
-  /** The frame's attributes once the shell failed to render (a result's index); the frame's own otherwise. */
-  readonly failedFrameProps?: HTMLAttributes<HTMLDivElement> & Record<`data-${string}`, string | number | undefined>
   /** Registers the grid element for its context menu, besides the shell's own ref. */
   readonly rootRef?: RefCallback<HTMLDivElement>
   /**
@@ -63,8 +61,6 @@ export interface GridShellProps {
   readonly strip?: { readonly text: string; readonly error?: boolean }
   /** What the render error strip calls the grid's contents. */
   readonly contents?: 'result' | 'rows'
-  /** Alt+Down opens the active column's funnel: a grid outside Query Output, whose keys are its own. */
-  readonly ownKeys?: boolean
   onApi?(api: GridShellApi | undefined): void
   /** More inside the frame (a live log's "n new rows" button). */
   readonly children?: ReactNode
@@ -76,7 +72,7 @@ export interface GridShellProps {
  * what it shows: a query's result set (ResultGrid) or a live view's table (LiveGridPane), which differ only in how the view
  * is built and swapped, and in what the funnels and sort ask.
  */
-function GridShellBody({ rootProps, frameProps, rootRef: outerRef, mount, mountKey, sort, onSort, funnels, update, gone, strip, contents = 'result', ownKeys, onApi, children }: GridShellProps) {
+export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mount, mountKey, sort, onSort, funnels, update, gone, strip, contents = 'result', onApi, children }: GridShellProps) {
   const { resultClient, platform, settings } = useWorkbench()
   const whitespace = useServiceSnapshot(settings).values['queryResults.grid.whitespace']
   const rootRef = useRef<HTMLDivElement | null>(null), scrollRef = useRef<HTMLDivElement>(null), viewRef = useRef<GridView | undefined>(undefined)
@@ -130,14 +126,8 @@ function GridShellBody({ rootProps, frameProps, rootRef: outerRef, mount, mountK
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     rootProps.onKeyDown?.(event)
     if (event.defaultPrevented || (event.target as Element).closest('button')) return
-    const view = viewRef.current
-    // Alt+Down opens the active column's funnel, as output.filterColumnValues does in Query Output.
-    if (ownKeys && funnels && event.key === 'ArrowDown' && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
-      const column = view?.currentSelection()?.active.column
-      if (column !== undefined && view?.canFilter(column)) { event.preventDefault(); event.stopPropagation(); setFunnel({ column, anchor: view.filterAnchor(column) }) }
-      return
-    }
-    if (view?.key(event.nativeEvent)) { event.preventDefault(); event.stopPropagation() }
+    // Alt+Down, Ctrl+C and the other Query Output keys are the catalogue's (output.*, outputGridFocus), never the shell's.
+    if (viewRef.current?.key(event.nativeEvent)) { event.preventDefault(); event.stopPropagation() }
   }
   const setRoot = useCallback((element: HTMLDivElement | null) => { rootRef.current = element; outerRef?.(element) }, [outerRef])
   const retry = () => viewRef.current?.retry()
@@ -159,15 +149,18 @@ function GridShellBody({ rootProps, frameProps, rootRef: outerRef, mount, mountK
   </div>
 }
 
-/** A grid whose shell failed to render shows the render-error strip; Retry renders it again. */
-class GridErrorBoundary extends Component<{ children: ReactNode; frameProps?: GridShellProps['frameProps']; failed: string }, { failed: boolean; attempt: number }> {
+/**
+ * A grid that failed to render shows the render-error strip in its frame; Retry renders it again. It wraps the whole grid,
+ * its source and the shell (ResultGrid, LiveGridPane), so a throw in either stays in the grid and Retry runs every effect.
+ */
+export class GridErrorBoundary extends Component<{ children: ReactNode; frameProps?: HTMLAttributes<HTMLDivElement> & Record<`data-${string}`, string | number | undefined>; contents?: GridShellProps['contents'] }, { failed: boolean; attempt: number }> {
   state = { failed: false, attempt: 0 }
   static getDerivedStateFromError(): Partial<{ failed: boolean }> { return { failed: true } }
   componentDidCatch(error: Error, info: ErrorInfo): void { onUnexpectedError(Object.assign(error, { componentStack: info.componentStack })) }
   render(): ReactNode {
     if (this.state.failed) {
-      return <div {...this.props.frameProps} className="rg-frame failed">
-        <div className="rg-strip error" role="status">{this.props.failed} <button onClick={() => this.setState(state => ({ failed: false, attempt: state.attempt + 1 }))}>Retry</button></div>
+      return <div {...this.props.frameProps} className={'rg-frame failed' + (this.props.frameProps?.className ? ' ' + this.props.frameProps.className : '')}>
+        <div className="rg-strip error" role="status">{failedText(this.props.contents)} <button onClick={() => this.setState(state => ({ failed: false, attempt: state.attempt + 1 }))}>Retry</button></div>
       </div>
     }
     return <ErrorBoundaryKey key={this.state.attempt}>{this.props.children}</ErrorBoundaryKey>
@@ -175,8 +168,3 @@ class GridErrorBoundary extends Component<{ children: ReactNode; frameProps?: Gr
 }
 const failedText = (contents: GridShellProps['contents']) => contents === 'rows' ? 'These rows could not be displayed.' : 'This result could not be displayed.'
 function ErrorBoundaryKey({ children }: { children: ReactNode }) { return <>{children}</> }
-
-/** The results grid: every grid of rows, a query's or a live view's, mounts this. */
-export default function GridShell(props: GridShellProps) {
-  return <GridErrorBoundary frameProps={props.failedFrameProps ?? props.frameProps} failed={failedText(props.contents)}><GridShellBody {...props} /></GridErrorBoundary>
-}

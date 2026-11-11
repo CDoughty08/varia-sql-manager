@@ -608,28 +608,32 @@ describe('Query Output commands', () => {
     expect(all.api.copyResults.mock.calls[0][0]).toMatchObject({ headers: true, parts: [{ rows: [[0, Number.MAX_SAFE_INTEGER]], columns: [[0, 1]] }] })
   })
   it('act on a live view\'s grid through its own commands: the items it takes, at the menu\'s column', async () => {
-    const { commands, doc } = await ran()
+    // No query has run: the Activity Monitor's grids have rows without any query's results (no hasResults).
+    const fixture = workbenchFixture()
+    cleanups.push(fixture.dispose)
+    const { commands } = fixture, doc = fakeDocument()
     const calls: unknown[][] = []
     let selection = false, sorted = false, filtered = false
     const live: LiveOutput = {
-      sortable: true, hasRows: () => true, hasSelection: () => selection, activeColumn: () => 0, columnName: column => ['session_id', 'login'][column],
+      sortable: true, filterable: true, hasRows: () => true, hasSelection: () => selection, activeColumn: () => 0, columnName: column => ['session_id', 'login'][column],
       canSort: column => column === 1, canFilter: column => column === 1, sorted: () => sorted, filtered: () => filtered,
       copy: headers => calls.push(['copy', headers]), selectAll: () => calls.push(['selectAll']), sort: (...args) => calls.push(['sort', ...args]), clearSort: () => calls.push(['clearSort']),
-      fitColumn: column => calls.push(['fit', column]), filterColumn: column => calls.push(['filter', column]), clearFilters: () => calls.push(['clearFilters']), save: () => calls.push(['save'])
+      fitColumn: column => calls.push(['fit', column]), filterColumn: column => calls.push(['filter', column]), clearFilters: () => calls.push(['clearFilters']), save: () => calls.push(['save']),
+      canFind: () => true, find: () => calls.push(['find'])
     }
     const on = (column?: number): CommandArgs => ({ target: { kind: 'output', tabId: '', view: 'live', resultIndex: 0, selectedText: '', element: new FakeElement(doc, 'div').dom, live, ...column === undefined ? {} : { column } } })
-    const ids = ['output.copy', 'output.copyWithHeaders', 'output.copyColumnName', 'output.selectAll', 'output.saveResultsAs', 'output.sortAscending', 'output.thenSortDescending', 'output.clearSort',
+    const ids = ['output.find', 'output.copy', 'output.copyWithHeaders', 'output.copyColumnName', 'output.selectAll', 'output.saveResultsAs', 'output.sortAscending', 'output.thenSortDescending', 'output.clearSort',
       'output.fitColumn', 'output.filterColumnValues', 'output.clearFilters', 'output.filterSelection', 'output.highlightYellow', 'output.closeResults', 'output.openValue', 'output.transpose'] as const
     const enabled = (args: CommandArgs) => ids.filter(id => commands.isEnabled(id, args))
     // The active cell's column (0) neither sorts nor filters; the result-set items never act on a live grid.
-    expect(enabled(on())).toEqual(['output.copyColumnName', 'output.selectAll', 'output.saveResultsAs', 'output.fitColumn'])
+    expect(enabled(on())).toEqual(['output.find', 'output.copyColumnName', 'output.selectAll', 'output.saveResultsAs', 'output.fitColumn'])
     selection = sorted = filtered = true
-    expect(enabled(on(1))).toEqual(['output.copy', 'output.copyWithHeaders', 'output.copyColumnName', 'output.selectAll', 'output.saveResultsAs', 'output.sortAscending', 'output.thenSortDescending',
+    expect(enabled(on(1))).toEqual(['output.find', 'output.copy', 'output.copyWithHeaders', 'output.copyColumnName', 'output.selectAll', 'output.saveResultsAs', 'output.sortAscending', 'output.thenSortDescending',
       'output.clearSort', 'output.fitColumn', 'output.filterColumnValues', 'output.clearFilters'])
-    for (const id of ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.sortAscending', 'output.thenSortDescending', 'output.clearSort', 'output.fitColumn', 'output.filterColumnValues', 'output.clearFilters'] as const) {
+    for (const id of ['output.find', 'output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs', 'output.sortAscending', 'output.thenSortDescending', 'output.clearSort', 'output.fitColumn', 'output.filterColumnValues', 'output.clearFilters'] as const) {
       expect(await commands.execute(id, on(1), 'menu'), id).toBe(true)
     }
-    expect(calls).toEqual([['copy', false], ['copy', true], ['selectAll'], ['save'], ['sort', 1, false, false], ['sort', 1, true, true], ['clearSort'], ['fit', 1], ['filter', 1], ['clearFilters']])
+    expect(calls).toEqual([['find'], ['copy', false], ['copy', true], ['selectAll'], ['save'], ['sort', 1, false, false], ['sort', 1, true, true], ['clearSort'], ['fit', 1], ['filter', 1], ['clearFilters']])
     // A snapshot table sorts; a log keeps its arrival order.
     expect(commands.isEnabled('output.sortAscending', { target: { ...on(1).target!, live: { ...live, sortable: false } } as CommandArgs['target'] })).toBe(false)
   })

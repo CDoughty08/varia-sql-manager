@@ -313,13 +313,18 @@ try {
   await expect(monitor().getByText(/^1 session · 1 filter on/)).toBeVisible()
   await expect(columnHeader('Database').locator(gridPart.funnelOn)).toHaveCount(1)
   await expect.poll(async () => (await calls('live.update')).some(call => JSON.stringify(call.params.args ?? {}).includes('"column":"database","values":["BillingDb"]'))).toBe(true)
-  // Alt+Down opens the active column's funnel, as in a results grid; Escape closes it and gives the grid the focus back.
+  // Alt+Down (output.filterColumnValues) opens the active column's funnel, as in a results grid; Escape closes it and gives
+  // the grid the focus back.
   await sessionsGrid.getByRole('gridcell', { name: 'BillingDb', exact: true }).click()
   await page.keyboard.press('Alt+ArrowDown')
   await expect(funnel.getByRole('checkbox', { name: 'BillingDb (1)', exact: true })).toBeChecked()
   await page.keyboard.press('Escape')
   await expect(funnel).toHaveCount(0)
   await expect(sessionsGrid).toBeFocused()
+  // The grid's keys are Query Output's catalogue commands (outputGridFocus): Find in Results (Ctrl+F) moves to the pane's
+  // filter box, since a live view has no Find of its own.
+  await page.keyboard.press(`${mod}+F`)
+  await expect(filters.getByRole('searchbox', { name: 'Filter sessions', exact: true })).toBeFocused()
   // A chosen value the facets no longer list (Blocked leaves no BillingDb row) stays listed, ticked, so it can be taken
   // off; a press outside closes the popover unchanged.
   await filters.getByRole('button', { name: 'Blocked', exact: true }).click()
@@ -332,6 +337,16 @@ try {
   await filters.getByRole('button', { name: 'Clear filters', exact: true }).click()
   await expect(monitor().getByText(/^3 sessions/)).toBeVisible()
   await expect(columnHeader('Database').locator(gridPart.funnelOn)).toHaveCount(0)
+  // Unticking one value of several leaves just that one out (an excluding filter), so values the facets never listed pass.
+  await columnHeader('Login').hover()
+  await columnHeader('Login').locator(gridPart.funnelButton).click()
+  const loginFunnel = page.getByRole('dialog', { name: 'Filter Login', exact: true })
+  await loginFunnel.getByRole('checkbox', { name: 'app_billing (1)', exact: true }).uncheck()
+  await loginFunnel.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(monitor().getByText(/^2 sessions · 1 filter on/)).toBeVisible()
+  await expect.poll(async () => (await calls('live.update')).some(call => (text => text.includes('"column":"login","values":["app_billing"]') && text.includes('"exclude":true'))(JSON.stringify(call.params.args ?? {})))).toBe(true)
+  await filters.getByRole('button', { name: 'Clear filters', exact: true }).click()
+  await expect(monitor().getByText(/^3 sessions/)).toBeVisible()
   // The toolbar keeps to one row in a pane 800 px wide (two panes side by side): its chips are dense, the Show chips are
   // chips (no raw checkboxes), and the filter box gives way first.
   const rows = await filters.evaluate(element => {

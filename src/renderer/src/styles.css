@@ -937,7 +937,6 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .column-filter-gap { flex: 1 1 auto; }
 .column-filter-list { flex: 1 1 auto; min-height: 60px; max-height: 260px; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-sm); padding: 2px 0; }
 .column-filter-space { position: relative; overflow: hidden; }
-/* A live grid's short facet list is drawn whole, in flow (LiveColumnFilterPopover). */
 .column-filter-item { position: absolute; left: 0; right: 0; box-sizing: border-box; display: flex; align-items: center; gap: var(--varia-space-2); padding: 0 var(--varia-space-2); cursor: default; }
 .column-filter-item.pending::after { content: ''; flex: 1 1 auto; height: 6px; margin-right: 40%; border-radius: var(--varia-radius-pill); background: var(--varia-list-hoverBackground); }
 .column-filter-item:hover { background: var(--varia-list-hoverBackground); }
@@ -1907,8 +1906,11 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .chip[aria-pressed="true"]:hover:not(:disabled) { background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); transition: none; }
 .chip-count { font-weight: 600; font-variant-numeric: tabular-nums; }
 /* A pane toolbar's chips (ChipGroup dense): shorter than its controls, tighter, never wrapping their label. */
-.chip-group.dense { gap: 2px; }
-.chip-group.dense .chip { height: 22px; padding: 0 var(--varia-space-2); white-space: nowrap; }
+.chip-group.dense { gap: var(--varia-space-0); }
+.chip-group.dense .chip { flex: none; height: calc(var(--varia-control) - var(--varia-space-1)); padding: 0 var(--varia-space-2); white-space: nowrap; }
+/* A scroll row (ChipGroup scroll) shrinks instead of wrapping its toolbar; its last chip shows cut at the edge, and a focused
+   chip scrolls into view. */
+.chip-group.scroll { flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .live-pill, .stale-badge { display: inline-flex; align-items: center; gap: 6px; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .live-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--varia-live-indicator); }
 /* A ring grows from the dot and fades; the dot keeps its color, so it reads at rest and mid-beat alike. */
@@ -2355,14 +2357,16 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .activity-pane-content { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 .activity-pane-tools { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1) var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-2); border-bottom: 1px solid var(--varia-panel-border); }
 /* Each group keeps to one line. A wrapping row breaks by its items' basis before anything shrinks, so the filter box starts
-   small and grows to the right (its auto margin), and the toolbar wraps only in a pane narrower than about 760 px. */
+   small and grows to the right (its auto margin). A one-row toolbar (Sessions) never wraps: its scroll chip row gives way. */
 .activity-pane-tools > .chip-group { flex-wrap: nowrap; }
-.activity-tools-separator { flex: none; width: 1px; height: 16px; background: var(--varia-panel-border); }
+.activity-pane-tools.one-row { flex-wrap: nowrap; }
+.activity-pane-tools.one-row > :not(.scroll) { flex-shrink: 0; }
+.activity-tools-separator { flex: none; width: 1px; height: var(--varia-space-4); background: var(--varia-panel-border); }
 .activity-tools-spacer { flex: 1 1 0; }
 .activity-tool { display: inline-flex; flex: none; align-items: center; gap: var(--varia-space-1); height: var(--varia-control); padding: 0 var(--varia-space-2); }
 .activity-tool.icon-only { justify-content: center; width: var(--varia-control); padding: 0; }
 .activity-tool[data-filtered] { color: var(--varia-list-activeSelectionForeground); }
-.activity-filter-box { display: inline-flex; flex: 1 1 120px; min-width: 120px; max-width: 240px; margin-left: auto; align-items: center; gap: var(--varia-space-1); color: var(--varia-descriptionForeground); }
+.activity-filter-box { display: inline-flex; flex: 1 1 10em; min-width: 10em; max-width: 20em; margin-left: auto; align-items: center; gap: var(--varia-space-1); color: var(--varia-descriptionForeground); }
 .activity-filter-box input { flex: 1 1 0; width: 0; min-width: 0; height: var(--varia-control); padding: 0 var(--varia-space-2); }
 .activity-pane-grid { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .activity-pane-notice { flex: none; margin: var(--varia-space-1) var(--varia-space-2); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-lg); }

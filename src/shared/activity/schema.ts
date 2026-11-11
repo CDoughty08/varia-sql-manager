@@ -14,6 +14,9 @@ export interface ActivityColumnFilter {
   readonly blanks?: boolean
   /** Rows whose cell is not empty. */
   readonly nonBlanks?: boolean
+  /** `values` are the ones to leave out: every other non-blank value passes (blanks as `blanks` says), so a funnel whose
+   *  most frequent values are listed can untick a few without dropping the values it never listed. */
+  readonly exclude?: boolean
 }
 export interface ActivityFilter {
   readonly table: ActivityTable
@@ -43,7 +46,8 @@ export const activityColumnFilterSchema = z.object({
   column: z.string().min(1).max(64),
   values: z.array(z.string().max(activityLimits.columnFilterChars)).max(activityLimits.columnFilterValues).optional(),
   blanks: z.boolean().optional(),
-  nonBlanks: z.boolean().optional()
+  nonBlanks: z.boolean().optional(),
+  exclude: z.boolean().optional()
 }).strict()
 
 export const activityFilterSchema = z.object({
@@ -72,6 +76,7 @@ export const activityFilterSchema = z.object({
     if (seen.has(columnFilter.column)) context.addIssue({ code: 'custom', path: ['columnFilters', index, 'column'], message: 'One filter per column.' })
     seen.add(columnFilter.column)
     if (!columnFilter.values?.length && !columnFilter.blanks && !columnFilter.nonBlanks) context.addIssue({ code: 'custom', path: ['columnFilters', index], message: 'A column filter needs a value, (Blanks) or (Non-blanks).' })
+    if (columnFilter.exclude && (!columnFilter.values?.length || columnFilter.nonBlanks)) context.addIssue({ code: 'custom', path: ['columnFilters', index], message: 'An excluding filter names values, without (Non-blanks).' })
   })
 }) satisfies z.ZodType<ActivityFilter>
 

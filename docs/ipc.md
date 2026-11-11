@@ -2263,18 +2263,25 @@ selection, Copy). `ResultGrid` mounts it for a query's result set and `LiveGridP
 its source. A live source adds `GridView.swap(handle, descriptor, mapRow)`, which shows another result with the same
 columns in place (widths and scroll stay; the first row shown, the active cell and each block move through `mapRow`,
 `grid/swap.ts`), a hidden tone column, follow tail, and the "n new rows" button.
-- **What a live source gives the shared components.** Header sort: a snapshot table's sort buttons call `LiveGrid.cycleSort`
-  (the same cycle as `ResultsService.cycleSort`; Shift+click adds a key), which sets the probe's sort for this table, and
-  the backend sorts each revision; the header shows the probe's sort. Funnels: an owner that filters some columns at its
-  source (`filters`: the Activity Monitor's facet columns) gets funnels on just those headers (`GridViewOptions.filterable`),
-  and `ColumnFilterPopover` runs over a `ColumnFilterSource` (`live/live-filter.ts`): the column's facet as an in-memory
-  `DistinctList`, the conditions a value filter can express (values, Equals, Is NULL, Is not NULL), and OK as the filter
-  the owner sends as the source's args, never filtering on the client. Menu: the grid is Query Output's view `live`
-  (`data-output-view="live"`, its `LiveOutput` registered with `registerLiveOutput`), so `output.context` and the `output.*`
-  commands act on it (Copy, Copy with Headers, Copy Column Name, Select All, Save, Sort and Then Sort, Clear Sort, Fit
-  Column, Filter Column Values…, Clear Filters, White space); the result-set items hide (`outputView != 'live'`). The grid
-  serves its own Ctrl+C, Ctrl+Shift+C, Ctrl+A and Alt+Down (it is outside Query Output); an owner with a menu of its own
-  (SSIS Operations) turns the menu off.
+- **What a live source gives the shared components.** Header sort: a snapshot table's sort buttons call `LiveGrid.cycleSort`,
+  which uses the same `cycleSortKeys` (`grid/sort-keys.ts`) as `ResultsService.cycleSort` (Shift+click adds a key; Then
+  Sort uses `sortKeysBy`). It sets the probe's sort for this table, and the backend sorts each revision; the header shows the
+  probe's sort. Each table holds its own `sortColumns` keys, so one grid's sort never evicts a sibling table's. An owner
+  whose order is its meaning (a tree in chain order; SSIS Operations) passes `sortable={false}`: no sort buttons and no Sort
+  items. Funnels: an owner that filters some columns at its source (`filters`: the Activity Monitor's facet columns) gets
+  funnels on just those headers (`GridViewOptions.filterable`), and `ColumnFilterPopover` runs over a `ColumnFilterSource`
+  (`live/live-filter.ts`): the column's facet as an in-memory `DistinctList`, the conditions a value filter can express
+  (values, Equals, Is blank, Is not blank) and OK as the filter the owner sends as the source's args, never filtering on
+  the client. The facets, not the backend's distinct snapshot of the revision, are the list because they ignore the
+  column's own filter (a filtered column still lists the values it hid). OK names the ticked values, or, when fewer are
+  unticked, the unticked ones with `exclude`, so unticking one of many values stays within the limit and keeps the values
+  the facets did not list. Menu and keys: the grid is Query Output's view `live` (`data-output-view="live"`, its
+  `LiveOutput` registered with `registerLiveOutput`), so `output.context` and the `output.*` commands act on it, and
+  `outputGridFocus` holds in it, so its keys are the catalogue's (Ctrl+C honouring Include column headers, Ctrl+Shift+C,
+  Ctrl+A, Ctrl+S, Alt+Down, Ctrl+F to the owner's filter box) and Shortcut Mapping remaps them. Items for a query's result
+  sets hide (`outputView != 'live'`); Sort shows with `outputLiveSortable`, Filter with `outputLiveFilterable`. An owner
+  with a menu of its own (SSIS Operations) turns the menu off, and its grid serves its own Ctrl+C, Ctrl+Shift+C and Ctrl+A.
+  The error boundary (`GridErrorBoundary`) wraps the whole grid, source and shell, so a throw in either stays in its frame.
 - **Snapshot revisions.** After each applied tick (before it is acknowledged) the grid first reads the rows the new revision
   will show into the window cache (`GridView.prepare`, at most 250 ms), then swaps it in, so a swap never paints a frame of
   empty cells; a newer revision arriving meanwhile has retired the one shown and swaps in at once. The grid tracks the

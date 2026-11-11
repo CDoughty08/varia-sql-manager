@@ -69,6 +69,8 @@ export interface OutputTarget {
 export interface LiveOutput {
   /** Its table sorts (a snapshot table, not a log that keeps arrival order). */
   readonly sortable: boolean
+  /** Its source filters some columns by value (header funnels), so the Filter items show. */
+  readonly filterable: boolean
   /** The grid has rows and columns to select, copy and save. */
   hasRows(): boolean
   /** Cells are selected. */
@@ -89,6 +91,9 @@ export interface LiveOutput {
   filterColumn(column: number): void
   clearFilters(): void
   save(): void
+  /** Find in Results: the owner's filter box, when it has one. */
+  canFind(): boolean
+  find(): void
 }
 const liveOutputs = new WeakMap<Element, LiveOutput>()
 /** A live grid's element (marked `data-output-view="live"`) and its commands, until the returned function runs. */
@@ -142,6 +147,7 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
     outputView: target?.kind === 'output' ? target.view : '',
     outputGridTransposable: target?.kind === 'output' && target.view === 'grid' && transposableKinds.has(target.resultKind ?? ''),
     outputLiveSortable: target?.kind === 'output' && !!target.live?.sortable,
+    outputLiveFilterable: target?.kind === 'output' && !!target.live?.filterable,
     pane: target?.kind === 'dockTab' ? target.pane : '',
     paneFloating: target?.kind === 'dockTab' && target.floating,
     panePopout: target?.kind === 'dockTab' && target.popout,
