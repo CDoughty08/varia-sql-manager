@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { createElement } from 'react'
 import { planDocumentSchema, planNodeSchema, operatorDiagnosticsSchema } from '../src/shared/plans'
-import { discrepancyLabel, estimatedTotalRows, rankOperators, rowComparison } from '../src/renderer/src/plans/diagnostics'
+import { discrepancyLabel, estimatedTotalRows, formatPlanMetric, rankOperators, rowComparison } from '../src/renderer/src/plans/diagnostics'
 import { PlanProperties } from '../src/renderer/src/plans/PlanProperties'
 
 const diagnostic = operatorDiagnosticsSchema.parse({ estimatedExecutions: 5, parallel: true, estimatedExecutionMode: 'Row', predicates: [], outputColumns: [], warnings: [], spills: [], threads: [], runtimeDetailsAvailable: true })
@@ -20,6 +20,13 @@ describe('plan diagnostics', () => {
     expect(discrepancyLabel({ ...node('a'), estimatedRows: 0 })).toBe('∞× underestimate')
     expect(discrepancyLabel({ ...node('a'), actualRows: 0 })).toBe('∞× overestimate')
     expect(discrepancyLabel({ ...node('a'), actualRows: 0, estimatedRows: 0 })).toBe('1× match')
+  })
+  it('formats tiny magnitudes symmetrically and keeps a true zero unsigned', () => {
+    expect(formatPlanMetric(0.00001)).toBe('1.00e-5')
+    expect(formatPlanMetric(-0.00001)).toBe('-1.00e-5')
+    expect(formatPlanMetric(0)).toBe('0'); expect(formatPlanMetric(-0)).toBe('0')
+    expect(formatPlanMetric(-0.5)).toBe(new Intl.NumberFormat(undefined, { maximumFractionDigits: 4 }).format(-0.5))
+    expect(formatPlanMetric(null)).toBe('Unavailable')
   })
   it('ranks available measurements including zeros with stable ties and excludes unavailable metrics', () => {
     const matches = [node('missing'), node('zero', 0), node('high', 20), node('tie', 20)].map(node => ({ node }))

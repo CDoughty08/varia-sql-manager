@@ -3,7 +3,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { planDocumentSchema, planNodeSchema, type PlanNode, type PlanStatement } from '../src/shared/plans'
 import { comparePlans, metricDelta, pairOperators, propertyDifferences } from '../src/renderer/src/plans/comparison'
-import { documentInput, snapshotInput } from '../src/renderer/src/plans/comparison-inputs'
+import { comparisonChoices, documentInput, snapshotInput } from '../src/renderer/src/plans/comparison-inputs'
 import ComparisonDetails from '../src/renderer/src/plans/ComparisonDetails'
 import { RetainedPlansService } from '../src/renderer/src/plans/RetainedPlansService'
 
@@ -73,6 +73,52 @@ describe('conservative deterministic matching', () => {
   })
 })
 
+describe('shortened fields are never complete evidence', () => {
+  const long = 'SELECT N\'' + 'x'.repeat(16_373) + '…'
+  it('does not pair statements on text the parser shortened, and still pairs them on a complete unique hash', () => {
+    const cut = (id: string, hash?: string): PlanStatement => ({ ...statement(id, long, [node(id + 'n')], hash), textShortened: true })
+    const different = comparePlans([cut('a', '0x1111111111111111')], [cut('b', '0x2222222222222222')])
+    expect(different.map(pair => pair.status)).toEqual(['left-only', 'right-only'])
+    expect(different[0].reason).toContain('shortened')
+    expect(comparePlans([cut('a')], [cut('b')]).every(pair => pair.status !== 'paired')).toBe(true)
+    // One complete side is not enough: its text only equals the other side's retained prefix.
+    expect(comparePlans([cut('a')], [statement('b', long)]).every(pair => pair.status !== 'paired')).toBe(true)
+    expect(comparePlans([cut('a', '0x1111111111111111')], [cut('b', '0x1111111111111111')])[0]).toMatchObject({ status: 'paired', reason: 'Unique query hash and type (optimizer identity)' })
+    expect(comparePlans([statement('a', long)], [statement('b', long)])[0]).toMatchObject({ status: 'paired', reason: 'Unique exact statement text and type' })
+  })
+  it('does not pair operators on shortened identity or predicates, and reports agreeing shortened properties as unverified', () => {
+    const cutObject = (id: string) => ({ ...node(id, 'Seek', 'dbo.' + 't'.repeat(507) + '…'), identityShortened: true })
+    expect(pairOperators([cutObject('a')], [cutObject('b')]).map(pair => pair.status)).toEqual(['left-only', 'right-only'])
+    const cutDetails = (id: string) => ({ ...node(id), detailsShortened: true, properties: [{ name: 'Predicate', value: 'x'.repeat(1023) + '…' }] })
+    expect(pairOperators([cutDetails('a')], [cutDetails('b')])[0]).toMatchObject({ status: 'paired', reason: 'Unique physical/logical operator and object', propertiesChanged: false, propertiesUnverified: true })
+    expect(pairOperators([cutDetails('a')], [{ ...cutDetails('b'), properties: [] }])[0]).toMatchObject({ propertiesChanged: true })
+    expect(pairOperators([node('a')], [node('b')])[0]).not.toHaveProperty('propertiesUnverified')
+    expect(planNodeSchema.parse(cutDetails('a')).detailsShortened).toBe(true)
+  })
+  it('never calls shortened parameter values or statement text the same, while complete values still compare exactly', () => {
+    const diagnostics = (compiledValue: string, runtimeValue: string) => ({ degreeOfParallelism: null, memoryGrant: [{ name: 'Future', value: compiledValue }], warnings: [], missingIndexes: [],
+      parameters: [{ name: '@p', dataType: 'nvarchar(max)', compiledValue, runtimeValue }] })
+    const cut = 'N\'' + 'x'.repeat(4093) + '…', whole = 'y'.repeat(5000)
+    const render = (left: PlanStatement, right: PlanStatement) => renderToStaticMarkup(createElement(ComparisonDetails, { leftStatement: left, rightStatement: right }))
+    const row = (html: string, name: string) => html.slice(html.indexOf(name), html.indexOf('</tr>', html.indexOf(name)))
+    const shortenedSide = (id: string): PlanStatement => ({ ...statement(id, long), textShortened: true, detailsShortened: true, diagnostics: diagnostics(cut, whole) })
+    const html = render(shortenedSide('l'), shortenedSide('r'))
+    for (const name of ['Statement text', 'Parameter @p · compiled', 'Memory grant · Future']) {
+      expect(row(html, name)).toContain('equality unverified'); expect(row(html, name)).not.toContain('>Same<')
+    }
+    // Complete retained values in the same statement are exact, even where only the comparison view shortens their display.
+    expect(row(html, 'Parameter @p · runtime')).toContain('shortened in comparison; inspect frozen XML')
+    expect(row(html, 'Parameter @p · runtime')).toContain('>Same<')
+    expect(row(html, 'Parameter @p · type')).toContain('>Same<')
+    // A list in a shortened owner may have lost entries.
+    expect(row(html, 'Warning attributes')).toContain('equality unverified')
+    const complete = render({ ...statement('l', whole), diagnostics: diagnostics(whole, whole) }, { ...statement('r', whole), diagnostics: diagnostics(whole, whole) })
+    for (const name of ['Statement text', 'Parameter @p · compiled', 'Warning attributes']) expect(row(complete, name)).toContain('>Same<')
+    expect(complete).not.toContain('equality unverified')
+    expect(row(render(shortenedSide('l'), { ...shortenedSide('r'), diagnostics: diagnostics(cut + 'B', whole) }), 'Parameter @p · compiled')).toContain('Changed / availability differs')
+  })
+})
+
 describe('delta and diagnostic availability', () => {
   it('defines measured zeros, a zero baseline, subtraction direction, invalid values and overflow', () => {
     expect(metricDelta(0, 0)).toMatchObject({ absolute: 0, percent: 0, zeroBaseline: false })
@@ -117,6 +163,32 @@ describe('delta and diagnostic availability', () => {
 })
 
 describe('immutable comparison inputs', () => {
+  it('gives colliding selector choices distinct bounded labels and leaves unique ones unchanged', () => {
+    const doc = (id: string, name: string, path?: string, dirty = false) => ({ id, name, dirty, kind: 'sqlplan', file: path ? { path } : undefined })
+    const deep = '/srv/' + 'nested/'.repeat(40)
+    const labels = comparisonChoices([], [doc('d1', 'query.sqlplan', '/work/before/query.sqlplan'), doc('d2', 'query.sqlplan', '/work/after/query.sqlplan'),
+      doc('d3', 'other.sqlplan', '/work/after/other.sqlplan'), doc('u-000001', 'Plan.sqlplan'), doc('u-000002', 'Plan.sqlplan'),
+      doc('l1', 'long.sqlplan', deep + 'a/long.sqlplan'), doc('l2', 'long.sqlplan', deep + 'b/long.sqlplan'), { ...doc('q', 'query.sql'), kind: 'sql' }]).map(choice => choice.label)
+    expect(labels.slice(0, 5)).toEqual(['Document · query.sqlplan · /work/before', 'Document · query.sqlplan · /work/after', 'Document · other.sqlplan',
+      'Document · Plan.sqlplan · not saved · #000001', 'Document · Plan.sqlplan · not saved · #000002'])
+    expect(new Set(labels).size).toBe(7)
+    expect(labels.every(label => label.length < 160)).toBe(true)
+    expect(labels[5].endsWith('/a')).toBe(true)
+    // Same folder and the same identifier tail still end up distinct.
+    expect(new Set(comparisonChoices([], [doc('x-same', 'p.sqlplan', '/w/p.sqlplan'), doc('y-same', 'p.sqlplan', '/w/p.sqlplan')]).map(choice => choice.label)).size).toBe(2)
+  })
+  it('separates retained snapshots that share a name, batch and second by their millisecond', async () => {
+    const history = new RetainedPlansService()
+    for (const startedAt of [1_700_000_000_123, 1_700_000_000_456]) await history.capture({ executionId: 'run' + startedAt, tabId: 'doc', name: 'query', connectionId: 'connection', database: 'master', sql: 'SELECT 1', startLine: 1,
+      sqlScope: 'document', startedAt, includeActualPlan: false, includeLivePlan: false, estimateMode: 'session' }, { status: 'completed', endedAt: startedAt + 1 },
+    [{ key: 'source' + startedAt, label: 'Plan', captureType: 'estimated', batchNumber: 1, iteration: 1, incomplete: false, read: async () => ({ text: '<plan/>', truncated: false }) }])
+    const choices = comparisonChoices(history.getSnapshot().entries, [])
+    history.dispose()
+    expect(choices).toHaveLength(2)
+    expect(new Set(choices.map(choice => choice.label)).size).toBe(2)
+    expect(choices.map(choice => /\+(\d{3}) ms/.exec(choice.label)?.[1]).sort()).toEqual(['123', '456'])
+    expect(choices[0].detail).toContain('master')
+  })
   it('freezes edited document XML and revision across save, further edits and source close', async () => {
     let xml = '<original/>', revision = 3
     const source = { id: 'doc', name: 'plan.sqlplan', dirty: true, file: { path: 'plan.sqlplan' } }

@@ -3,7 +3,9 @@ import type { PlanNode } from '../../../shared/plans'
 const metricFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 4 })
 export function formatPlanMetric(value: number | null | undefined): string {
   if (value == null) return 'Unavailable'
-  return value > 0 && value < 0.0001 ? value.toExponential(2) : metricFormat.format(value)
+  // Deltas are signed: a tiny negative must not round to "-0", and a true zero stays a plain 0.
+  const magnitude = Math.abs(value)
+  return magnitude > 0 && magnitude < 0.0001 ? value.toExponential(2) : metricFormat.format(magnitude === 0 ? 0 : value)
 }
 
 /** Compare like scopes: total observed rows vs optimizer rows × optimizer executions.
