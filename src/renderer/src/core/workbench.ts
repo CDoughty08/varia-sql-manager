@@ -57,6 +57,7 @@ import { helpContribution } from '../contributions/help'
 import { updatesContribution } from '../contributions/updates'
 import { UpdateService } from '../updates/UpdateService'
 import { ReleaseNotesService } from '../release-notes/ReleaseNotesService'
+import { HelpService } from '../help/HelpService'
 import { editContribution } from '../contributions/edit'
 import { windowContribution } from '../contributions/window'
 import { menusContribution } from '../contributions/menus'
@@ -236,6 +237,7 @@ export interface Workbench extends Disposable {
   /** Help › Check for Updates, as main reports it. */
   readonly updates: UpdateService
   readonly releaseNotes: ReleaseNotesService
+  readonly help: HelpService
   /**
    * Makes a popout window a full part of the workbench while it is open: its keys reach `KeybindingService`, its right-clicks
    * and presses `MenuService`, and its focus counts as the user's window (`windows`).
@@ -408,6 +410,13 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       if (windows.active() !== window) window.focus()
       target.focus()
     }))
+  const help = new HelpService(documents, id => focusLater(() => {
+    const root = document.querySelector<HTMLElement>(`[data-help-document="${CSS.escape(id)}"]`)
+    const target = root?.querySelector<HTMLElement>('[data-help-focus]') ?? root?.querySelector<HTMLElement>('button')
+    if (!target || documents.getSnapshot().activeId !== id) return
+    if (windows.active() !== window) window.focus()
+    target.focus()
+  }))
   const searchDetails = new SearchDetailsService({ api, peek, connections, searches: objectSearch, scriptingOptions })
   const context = new ContextKeyService({
     platform,
@@ -548,6 +557,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     notifications,
     updates,
     releaseNotes,
+    help,
     attachWindow: target => {
       const attached = [windows.add(target), keybindings.attach(target), menus.attach(target), blockPrimaryPaste(target, platform), trackWindowFocus(target, target.document.documentElement)]
       return { dispose: () => attached.forEach(item => item.dispose()) }
@@ -630,6 +640,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       userShortcuts.dispose()
       notifications.dispose()
       releaseNotes.dispose()
+      help.dispose()
       updates.dispose()
       theme.dispose()
       events.dispose()

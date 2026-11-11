@@ -52,6 +52,11 @@ with `node scripts/ci-timings.mjs` (add `--steps` for per-step times) before and
   compilation uses the existing tag-publication job, with a script-free
   dependency install for the shared schema. It creates no new job and does not run that install on ordinary PR checks.
 
+  Getting Started also shares `updates-smoke.mjs`, including search, lazy routing/focus, interactive fictional samples,
+  live shortcut/gesture/settings changes, Options navigation and a narrow layout under reduced motion. The expanded
+  suite took 9.1 seconds locally on Windows. Its initial shard estimates are 12 seconds on Linux and Windows, pending
+  CI measurements; this adds no launch or job. Registration/reference checks load every bundled page without SQL.
+
   Smoke builds and packaging prepare Electron from its npm-pinned checksums, retrying transient official-download failures
   within a three-attempt, three-minute budget and seeding the shared archive cache so packaging verifies checksums offline.
   Publishing a verified SQL Tools archive or runtime retries brief Windows sharing violations up to seven times. Persistent

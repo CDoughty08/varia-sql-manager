@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (297)
+## Commands (299)
 
 ### File
 
@@ -374,6 +374,8 @@ keys it uses are listed below.
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
+| Getting Started | `help.gettingStarted` | — | — | — | Always | Help › Getting Started |
+| Open Getting Started Guide (not in the palette) | `help.openGuide` | — | — | — | Always | — |
 | About Varia | `help.about` | — | — | — | Always | Help › About Varia |
 | Varia on GitHub | `help.openProject` | — | — | — | Always | — |
 | Report an Issue | `help.reportIssue` | — | — | — | Always | — |
@@ -583,6 +585,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
+| `0_guides` | **G**etting Started | `help.gettingStarted` | Always |
 | `1_entra` | Clear **E**ntra ID Token Cache | `help.clearEntraTokenCache` | Always |
 | `2_updates` | Check for **U**pdates | `help.checkForUpdates` | Always |
 | `2_updates` | **R**estart to Update | `help.restartToUpdate` | Always |

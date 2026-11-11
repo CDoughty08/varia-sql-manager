@@ -9,6 +9,7 @@ import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { loadReleaseArchive } from './release-notes.mjs'
+import { gettingStartedSmoke } from './fixtures/help.mjs'
 import { aboutDialog, backendReady, memoryBreakdown, memoryIndicator, movePane, popoutDockButton, popoutTab, popoutTabs, quickInputBox, releaseNotesPage, statusBar, toastMessage, toasts } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -61,6 +62,7 @@ try {
     item.click()
   }, id)
   const bar = statusBar(page)
+  await gettingStartedSmoke(page, menu, application)
 
   // About works through Help and the palette, follows update pushes, and exposes no arbitrary external-link API.
   await application.evaluate(async ({ shell, clipboard }) => {
@@ -148,6 +150,10 @@ try {
   await expect(notes).toBeVisible()
   await expect.poll(() => page.evaluate(() => globalThis.releaseSmokeFocus.count)).toBeGreaterThan(0)
   await page.evaluate(() => { window.focus = globalThis.releaseSmokeFocus.original })
+  await popout.keyboard.press('F1')
+  await quickInputBox(popout).fill('> Getting Started')
+  await popout.keyboard.press('Enter')
+  await expect(page.getByRole('searchbox', { name: 'Find a guide', exact: true })).toBeFocused()
   await popoutDockButton(popout).click()
   await page.keyboard.press('F1')
   await quickInputBox(page).fill('> About Varia')
@@ -212,7 +218,7 @@ try {
   if (applied.kind !== 'nsis' || applied.version !== version || applied.file !== name) throw new Error(`Unexpected install: ${JSON.stringify(applied)}`)
   if ((await readdir(join(profile, 'updates'))).some(file => file.endsWith('.partial'))) throw new Error('A partial download was left behind.')
   if (failures.length) throw new Error(`Page errors: ${failures.join('; ')}`)
-  console.log('About: focus, safe support details and fixed links. Release notes: offline installed/history content, preserved same-release section/scroll, themes, exact advertised-version unavailability and independent downloads. Updates: blocked-feed remedy, verified download and restart through About.')
+  console.log('Getting Started: searchable guides, scoped live references, fictional samples, Options navigation, popout focus, themes and narrow reduced-motion layout. About: focus, safe support details and fixed links. Release notes: offline installed/history content, preserved same-release section/scroll, themes, exact advertised-version unavailability and independent downloads. Updates: blocked-feed remedy, verified download and restart through About.')
 } finally {
   clearTimeout(watchdog)
   server.close()

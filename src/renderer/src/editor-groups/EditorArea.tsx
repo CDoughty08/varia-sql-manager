@@ -18,6 +18,7 @@ import EnvironmentTag from '../EnvironmentTag'
 import Icon from '../Icon'
 import EmptyState from '../kit/EmptyState'
 import ReleaseNotes from '../release-notes/ReleaseNotes'
+import HelpDocument from '../help/HelpDocument'
 import { useMenuTarget } from '../menus/useMenuTarget'
 import PaneMenuButton from '../PaneMenuButton'
 import TabRenameBox from '../TabRenameBox'
@@ -136,6 +137,7 @@ function DocumentPanel({ api }: IDockviewPanelProps) {
     {kind === 'objectSearch' && <ObjectSearch documentId={id} />}
     {kind === 'peek' && <PeekTab documentId={id} />}
     {kind === 'releaseNotes' && <ReleaseNotes documentId={id} />}
+    {kind === 'help' && <HelpDocument documentId={id} />}
     {kind === 'ssisOperations' && <SsisOperations documentId={id} />}
     {kind === 'restoreDatabase' && <RestoreDatabase documentId={id} />}
   </div>

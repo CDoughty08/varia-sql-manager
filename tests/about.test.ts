@@ -61,7 +61,7 @@ describe('About support details and links', () => {
     const commands = new CommandService(), events = new EventBus(), requested = vi.fn()
     const api = { clearEntraTokenCache: vi.fn(), openProductLink: vi.fn(async () => ({ ok: true as const, value: undefined })) }
     events.subscribe(requested)
-    const contribution = helpContribution({ commands, events }, api)
+    const contribution = helpContribution({ commands, events, help: { open: vi.fn() } }, api)
     expect(await commands.execute('help.about', undefined, 'palette')).toBe(true)
     expect(requested).toHaveBeenCalledWith({ type: 'help.aboutRequested' })
     await commands.execute('help.openProject', undefined, 'menu')
