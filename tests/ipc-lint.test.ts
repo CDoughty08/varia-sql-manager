@@ -48,6 +48,15 @@ await import(${JSON.stringify(core)})`
     expect(result.stderr).toBe('')
     expect(result.status).toBe(0)
   })
+  it('knows every error code the SQL service answers with, and documents every code', async () => {
+    const { errorCodes } = await import('../src/shared/ipc/wire/protocol')
+    // Main turns a code it does not know into BACKEND_ERROR, so a new backend code must be added to errorCodes.
+    const thrown = new Set([...readFileSync(join('backend', 'Varia.Backend', 'SqlService.cs'), 'utf8').matchAll(/RequestException\("([A-Z_]+)"/g)].map(match => match[1]))
+    expect(thrown).toContain('BUDGET_STOPPED')
+    expect([...thrown].filter(code => !(errorCodes as readonly string[]).includes(code))).toEqual([])
+    const docs = readFileSync(join('docs', 'ipc.md'), 'utf8')
+    expect(errorCodes.filter(code => !docs.includes('`' + code + '`'))).toEqual([])
+  })
   it('honours the backend test seams only in unpackaged smoke runs', () => {
     const main = readFileSync(join('src', 'main', 'index.ts'), 'utf8')
     expect(main).toContain("const testSeams = process.env.VARIA_SMOKE_TEST === '1' && !app.isPackaged")

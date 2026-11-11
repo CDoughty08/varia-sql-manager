@@ -293,11 +293,15 @@ internal static class TransposeChecks
         check(store.Find(whole.Descriptor.ResultId) is null && store.Find(again.Descriptor.ResultId) is null && store.UsedBytes <= before,
             "a transpose is released with its query's other results, and with it all it charged");
         var limited = Source(store);
-        limited.Budget.Stop(TruncationReason.RowLimit);
-        string? message;
-        try { Call<object>("results.transpose", new { resultId = limited.ResultId }); message = null; }
-        catch (RequestException error) { message = error.Code + ": " + error.Message; }
-        check(message == "TOO_LARGE: This query stored as many rows as its limit allows, so it cannot store a transpose. Raise the limit or return fewer rows, then run it again.",
-            "a transpose of a query stopped at its row limit says so");
+        string? Message()
+        {
+            try { Call<object>("results.transpose", new { resultId = limited.ResultId }); return null; }
+            catch (RequestException error) { return error.Code + ": " + error.Message; }
+        }
+        // A row limit marks its set and never stops the query, so its results still transpose.
+        limited.Skip(TruncationReason.RowLimit);
+        check(Message() is null, "a transpose of a result cut at its row limit is stored: " + Message());
+        limited.Budget.Stop(TruncationReason.SystemMemory);
+        check(Message() == "BUDGET_STOPPED: " + SqlService.BudgetStoppedLowMemory, "a transpose of a query that stopped storing answers BUDGET_STOPPED with why: " + Message());
     }
 }

@@ -268,7 +268,8 @@ internal static class PivotChecks
         using var service = new SqlService(tight);
         var budget = tight.BeginQuery("tight");
         var set = tight.Open(budget, 0, 1, 1, "rows", [new("id", "int", "text")], [WireKind.Text])!;
-        for (var row = 0; row < 100_000; row++)
+        // Nearly full, not stopped: a stopped query answers BUDGET_STOPPED instead (Pressure).
+        for (var row = 0; row < 100_000 && tight.UsedBytes < 56 * 1024; row++)
         {
             if (set.BeginRow() is not { } builder) break;
             builder.AppendText(row.ToString(CultureInfo.InvariantCulture));
@@ -279,7 +280,7 @@ internal static class PivotChecks
         string? refused;
         try { service.DispatchAsync("results.pivot", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, rows = new[] { 0 }, values = new[] { new { aggregate = "count" } } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); refused = null; }
         catch (RequestException error) { refused = error.Code; }
-        check(refused == "TOO_LARGE" && tight.UsedBytes == used, "a pivot the budget has no room for answers TOO_LARGE and takes nothing: " + refused);
+        check(refused == "TOO_LARGE" && budget.Stopped == TruncationReason.None && tight.UsedBytes == used, "a pivot the budget has no room for answers TOO_LARGE and takes nothing: " + refused + " " + budget.Stopped);
     }
 
     /// <summary>A cancelled pivot stops while it groups and while it writes.</summary>
@@ -349,18 +350,51 @@ internal static class PivotChecks
         var diff = store.Open(set.Budget, 1, 1, 1, "diff", Sales, [.. Sales.Select(_ => WireKind.Text)])!;
         diff.Complete();
         check(Code(new { resultId = diff.ResultId, rows = new[] { 0 }, values = new object[] { new { aggregate = "count" } } }) == "INVALID_PARAMS", "a diff cannot be pivoted");
-        // A query whose results were cut short stores nothing more: the refusal says why, not that memory ran out.
+        Partial(check);
+        Pressure(check);
+    }
+
+    /// <summary>Low system memory while a pivot is written fails only that pivot, and one whose last page is sealed under it
+    /// is whole. A query that stopped storing answers BUDGET_STOPPED with the sentence for why it stopped.</summary>
+    private static void Pressure(Action<bool, string> check)
+    {
+        var low = false;
+        var store = new ResultStore(1L << 30, 1L << 29, () => (low ? 100 : 0, 50));
+        using var service = new SqlService(store);
+        T Call<T>(object args) => (T)service.DispatchAsync("results.pivot", JsonSerializer.SerializeToElement(args, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult()!;
         string? Message(object args)
         {
-            try { Call<object>("results.pivot", args); return null; }
+            try { Call<object>(args); return null; }
             catch (RequestException error) { return error.Code + ": " + error.Message; }
         }
-        var limited = Source(store);
-        limited.Budget.Stop(TruncationReason.RowLimit);
-        check(Message(new { resultId = limited.ResultId, rows = new[] { 0 }, values = new object[] { new { aggregate = "count" } } })
-            == "TOO_LARGE: This query stored as many rows as its limit allows, so it cannot store a pivot. Raise the limit or return fewer rows, then run it again.",
-            "a pivot of a query stopped at its row limit says so");
-        Partial(check);
+        static object Grouped(ResultSetBuffer of) => new { resultId = of.ResultId, rows = new[] { 0 }, values = new object[] { new { aggregate = "count" } } };
+        static object Total(ResultSetBuffer of) => new { resultId = of.ResultId, rows = Array.Empty<int>(), values = new object[] { new { aggregate = "count" } } };
+        // 200 groups: the pivot's first page seals after 64 rows, with 136 still to store.
+        var set = Source(store, [.. Enumerable.Range(0, 200).Select(i => new string?[] { i.ToString(CultureInfo.InvariantCulture) })], [new("g", "int", "text")]);
+        var used = store.UsedBytes;
+        low = true;
+        var pressed = Message(Grouped(set));
+        check(pressed == "TOO_LARGE: There is not enough result memory to pivot these rows. Close other results and try again." && set.Budget.Stopped == TruncationReason.None && store.UsedBytes == used,
+            $"a pivot cut short by low system memory is refused whole and leaves its query's budget open: {pressed} {set.Budget.Stopped} {store.UsedBytes - used}");
+        var whole = Call<ResultsPivotResult>(Total(set));
+        check(whole.Descriptor is { RowsStored: 1, Truncated: null, State: "complete" } && set.Budget.Stopped == TruncationReason.None,
+            $"a pivot whose last page is sealed under low system memory is kept whole and not marked truncated: {whole.Descriptor.RowsStored} {whole.Descriptor.Truncated} {set.Budget.Stopped}");
+        low = false;
+        var again = Call<ResultsPivotResult>(Grouped(set));
+        check(again is { RowGroups: 200 } && again.Descriptor is { RowsStored: 200, Truncated: null }, "the same pivot is stored once memory is free again: " + again.Descriptor.RowsStored);
+        // A query's own set stops its query at any seal under low memory, its last one too, though every row was stored.
+        low = true;
+        var stopped = Source(store);
+        low = false;
+        var lowMemory = Message(Grouped(stopped));
+        check(stopped.Budget.Stopped == TruncationReason.SystemMemory && stopped.Truncated == TruncationReason.None
+            && lowMemory == "BUDGET_STOPPED: The computer was low on memory while this query ran, so it can store nothing more. Run the query again.",
+            $"a pivot of a query stopped by low system memory at its final seal answers BUDGET_STOPPED and says to run it again: {lowMemory} {stopped.Budget.Stopped}");
+        var full = Source(store);
+        full.Budget.Stop(TruncationReason.QueryBudget);
+        var filled = Message(Grouped(full));
+        check(filled == "BUDGET_STOPPED: This query's results filled its result memory, so it can store nothing more. Run the query again returning fewer rows." && filled == "BUDGET_STOPPED: " + SqlService.BudgetStoppedFull,
+            "a pivot of a query that filled its result memory answers BUDGET_STOPPED and says to return fewer rows: " + filled);
     }
 
     /// <summary>A pivot whose rows run out of the query's budget part-way is refused and released, never kept in part.</summary>
