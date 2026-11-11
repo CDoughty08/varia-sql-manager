@@ -25,7 +25,8 @@ export function Chip({ label, pressed, onToggle, count, icon, disabled, title }:
   </button>
 }
 
-/** A labelled row of chips; each chip is its own button and tab stop, as a row of toggle buttons is. */
-export function ChipGroup({ label, children }: { readonly label: string; readonly children: ReactNode }) {
-  return <div className="chip-group" role="group" aria-label={label}>{children}</div>
+/** A labelled row of chips; each chip is its own button and tab stop, as a row of toggle buttons is. `dense` chips fit a
+ *  pane's toolbar: shorter than its other controls, on one line. */
+export function ChipGroup({ label, dense, children }: { readonly label: string; readonly dense?: boolean; readonly children: ReactNode }) {
+  return <div className={dense ? 'chip-group dense' : 'chip-group'} role="group" aria-label={label}>{children}</div>
 }

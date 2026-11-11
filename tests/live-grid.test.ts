@@ -465,6 +465,40 @@ describe('LiveGrid', () => {
     expect(log.live.setProbe).not.toHaveBeenCalled()
   })
 
+  it('cycles a header sort as a results grid does, with a modifier adding keys, and shows it by shown column', () => {
+    const { grid, live, emit } = harness()
+    emit(table({ ids: ['1'] }))
+    expect(grid.sortable).toBe(true)
+    const last = () => live.setProbe.mock.lastCall?.[1].sort
+    grid.cycleSort(1)
+    expect(last()).toEqual([{ column: 'name', descending: false, table: 0 }])
+    grid.cycleSort(1)
+    expect(last()).toEqual([{ column: 'name', descending: true, table: 0 }])
+    expect(grid.headerSort()).toEqual([{ column: 1, descending: true }])
+    grid.cycleSort(1)
+    expect(last()).toBeUndefined()
+    // Another column without the modifier starts again; with it, the column is a further key that cycles off.
+    grid.cycleSort(1)
+    grid.cycleSort(0, true)
+    expect(last()).toEqual([{ column: 'name', descending: false, table: 0 }, { column: 'id', descending: false, table: 0 }])
+    expect(grid.headerSort()).toEqual([{ column: 1, descending: false }, { column: 0, descending: false }])
+    grid.cycleSort(0, true)
+    expect(last()).toEqual([{ column: 'name', descending: false, table: 0 }, { column: 'id', descending: true, table: 0 }])
+    grid.cycleSort(0, true)
+    expect(last()).toEqual([{ column: 'name', descending: false, table: 0 }])
+    // With two keys a plain click sorts by the column alone; the tone column never sorts.
+    grid.cycleSort(0, true)
+    grid.cycleSort(0)
+    expect(last()).toEqual([{ column: 'id', descending: false, table: 0 }])
+    const calls = live.setProbe.mock.calls.length
+    grid.cycleSort(2)
+    expect(live.setProbe).toHaveBeenCalledTimes(calls)
+    const log = harness(logSpec)
+    expect(log.grid.sortable).toBe(false)
+    log.grid.cycleSort(0)
+    expect(log.live.setProbe).not.toHaveBeenCalled()
+  })
+
   it('copies the selection of the revision it shows, over the shown columns only, and saves that revision', async () => {
     const { grid, view, emit, copies, api } = harness()
     const shown = table({ ids: ['1', '2', '3'] })

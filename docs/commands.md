@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (296)
+## Commands (305)
 
 ### File
 
@@ -101,6 +101,15 @@ keys it uses are listed below.
 | Toggle Word Wrap | `editor.toggleWordWrap` | Alt+Z | Alt+Z | — | Always; checked when `editorWordWrap` | Edit › Advanced › Word Wrap |
 | View White Space | `editor.toggleWhitespace` | — | — | — | Always; checked when `editorWhitespace` | Edit › Advanced › View White Space |
 | Toggle Line Numbers | `editor.toggleLineNumbers` | — | — | — | Always; checked when `editorLineNumbers` | — |
+| Copy (not in the palette) | `liveGrid.copy` | — | — | — | Always | Live grid context menu › Copy |
+| Copy with Headers (not in the palette) | `liveGrid.copyWithHeaders` | — | — | — | Always | Live grid context menu › Copy with Headers |
+| Select All (not in the palette) | `liveGrid.selectAll` | — | — | — | Always | Live grid context menu › Select All |
+| Sort Ascending (not in the palette) | `liveGrid.sortAscending` | — | — | — | Always | Live grid context menu › Sort Ascending |
+| Sort Descending (not in the palette) | `liveGrid.sortDescending` | — | — | — | Always | Live grid context menu › Sort Descending |
+| Clear Sort (not in the palette) | `liveGrid.clearSort` | — | — | — | Always | Live grid context menu › Clear Sort |
+| Filter Column Values… (not in the palette) | `liveGrid.filterColumnValues` | — | — | — | Always | Live grid context menu › Filter Column Values… |
+| Fit Column (not in the palette) | `liveGrid.fitColumn` | — | — | — | Always | Live grid context menu › Fit Column |
+| Save Rows As… (not in the palette) | `liveGrid.saveAs` | — | — | — | Always | Live grid context menu › Save Rows As… |
 | Zoom In | `view.zoomIn` | Ctrl+= *, Ctrl+Shift+= * | Ctrl+= *, Ctrl+Shift+= * | ⌘= *, ⇧⌘= * | Always | View › Zoom In |
 | Zoom Out | `view.zoomOut` | Ctrl+- * | Ctrl+- * | ⌘- * | Always | View › Zoom Out |
 | Reset Zoom | `view.resetZoom` | Ctrl+0 * | Ctrl+0 * | ⌘0 * | Always | View › Reset Zoom |
@@ -921,6 +930,22 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 | `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
 | `8_view` | **P**ause | `ssis.pauseOperations` | Always |
 
+#### Live grid context menu (`liveGrid.context`)
+
+Right-click a live grid (an Activity Monitor pane such as Sessions; a right-click outside the selection selects that cell first), or press Shift+F10 or the context-menu key in it. Items act on the grid's selection and the active cell's column; Sort and Filter Column Values ask the backend, which sorts and filters each sample.
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_copy` | **C**opy | `liveGrid.copy` | Always |
+| `1_copy` | Copy with **H**eaders | `liveGrid.copyWithHeaders` | Always |
+| `2_select` | Select **A**ll | `liveGrid.selectAll` | Always |
+| `3_sort` | S**o**rt Ascending | `liveGrid.sortAscending` | `liveGridSortable` |
+| `3_sort` | Sort **D**escending | `liveGrid.sortDescending` | `liveGridSortable` |
+| `3_sort` | Clea**r** Sort | `liveGrid.clearSort` | `liveGridSortable` |
+| `4_filter` | Filter Column **V**alues… | `liveGrid.filterColumnValues` | `liveGridFilterable` |
+| `5_width` | F**i**t Column | `liveGrid.fitColumn` | Always |
+| `6_save` | **S**ave Rows As… | `liveGrid.saveAs` | Always |
+
 #### Search Objects result context menu (`search.hit.context`)
 
 Right-click a Search Objects result (in the Search Objects tab or Object Explorer's search), which selects it, or press Shift+F10 or the context-menu key on the selected result. Items act on that object: Select Top N Rows, Modify and Script … as are Object Explorer's, for the object's kind; Rename, Delete and Properties are left to the tree (Reveal in Object Explorer first).
@@ -942,7 +967,7 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
 | `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
 
-## Context keys (148)
+## Context keys (150)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1099,6 +1124,8 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `panePopout` | boolean | target | The panel the menu is for is in a window of its own (Move into New Window). |
 | `documentTabFloating` | boolean | target | The document tab the menu is for is in a floating editor group. |
 | `searchHitSchema` | boolean | target | The Search Objects result the menu is for is in a schema (itself, or its parent for a column, key or trigger), so it has schema-qualified and fully qualified names. |
+| `liveGridSortable` | boolean | target | The live grid the menu is for sorts (its table is a snapshot, not a log that keeps arrival order). |
+| `liveGridFilterable` | boolean | target | The live grid the menu is for filters its active cell's column (the header has a funnel). |
 
 ## Reserved keys
 

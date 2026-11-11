@@ -106,7 +106,7 @@ export interface GridViewOptions {
   readonly state: GridViewState
   readonly resultIndex: number
   readonly resultCount: number
-  /** The grid's name, which its accessible label starts with (a live grid's "Processes"); "Result i of n" otherwise. */
+  /** The grid's name, which its accessible label starts with (a live grid's "Sessions"); "Result i of n" otherwise. */
   readonly label?: string
   readonly platform: Platform
   readonly stats?: GridStats
@@ -117,10 +117,10 @@ export interface GridViewOptions {
   /** A bar behind each row number shows the row's bytes (queryResults.grid.rowSize); off by default. */
   readonly rowSize?: boolean
   onSelection(selection: GridSelection): void
-  /** Edit › Copy (the copy event), and a live grid's Ctrl+C: runs Copy. */
-  onCopy(): void
+  /** Edit › Copy (the copy event), and a live grid's Ctrl+C (with `headers`, its Ctrl+Shift+C): runs Copy. */
+  onCopy(headers?: boolean): void
   /**
-   * The grid serves Ctrl+A and Ctrl+C (⌘ on macOS) itself: a live grid's. A results grid leaves them to the catalogue's
+   * The grid serves Ctrl+A, Ctrl+C and Ctrl+Shift+C (⌘ on macOS) itself: a live grid's. A results grid leaves them to the catalogue's
    * output.selectAll and output.copy, which KeybindingService dispatches, so they can be remapped.
    */
   readonly clipboardKeys?: boolean
@@ -146,6 +146,8 @@ export interface GridViewOptions {
   readonly filtered?: ReadonlySet<number>
   /** A header's funnel was clicked: the popover opens under `anchor`. Without it headers have none. */
   onFilter?(column: number, anchor: DOMRect): void
+  /** The columns whose headers have a funnel, when not every column's: a live source filters only some (its facets). */
+  readonly filterable?: ReadonlySet<number>
 }
 
 /**
@@ -215,6 +217,7 @@ export class GridView {
   /** Each sorted column's place among the keys and direction. */
   private sortKeys: ReadonlyMap<number, { readonly at: number; readonly descending: boolean }>
   private filtered: ReadonlySet<number>
+  private filterable: ReadonlySet<number> | undefined
   /** The row-size bar's sizes for the handle shown, while the bar is on. */
   private sizes: RowSizes | undefined
   private rowHeader = 0
@@ -284,6 +287,7 @@ export class GridView {
     this.whitespace = o.whitespace ?? 'none'
     this.sortKeys = sortMap(o.sort)
     this.filtered = o.filtered ?? new Set()
+    this.filterable = o.filterable
     if (o.rowSize) this.sizes = this.sizesFor(o.handle)
     this.capOverride = o.stats?.scrollCap
     this.cap = this.capOverride ?? scrollCap(windowOf(o.root).devicePixelRatio)
@@ -334,6 +338,7 @@ export class GridView {
     try {
       switch (action.type) {
         case 'copy': this.o.onCopy(); return true
+        case 'copyHeaders': this.o.onCopy(true); return true
         case 'escape':
           if (this.resizing) { this.endResize(true); return true }
           if (this.drag) { this.endDrag(); return true }
@@ -373,8 +378,14 @@ export class GridView {
     this.setStatus({})
     this.schedule()
   }
-  update(o: { resultCount: number; showTypes?: boolean; whitespace?: WhitespaceMode; sort?: readonly HeaderSortKey[]; rowSize?: boolean; filtered?: ReadonlySet<number> }): void {
+  update(o: { resultCount: number; showTypes?: boolean; whitespace?: WhitespaceMode; sort?: readonly HeaderSortKey[]; rowSize?: boolean; filtered?: ReadonlySet<number>; filterable?: ReadonlySet<number> }): void {
     if (o.filtered && !sameSet(o.filtered, this.filtered)) { this.filtered = o.filtered; this.schedule() }
+    if (o.filterable && (!this.filterable || !sameSet(o.filterable, this.filterable))) {
+      this.filterable = o.filterable
+      // Each header shows or hides its funnel again.
+      for (const header of this.headerSlots) header.column = -1
+      this.schedule()
+    }
     const showTypes = o.showTypes ?? this.showTypes, whitespace = o.whitespace ?? this.whitespace
     if (o.rowSize !== undefined && o.rowSize !== !!this.sizes) {
       this.sizes?.dispose()
@@ -746,6 +757,7 @@ export class GridView {
     // A press on a header's funnel opens its popover; it selects nothing and starts no drag.
     const funnel = onButton && this.o.onFilter ? (event.target as Element | null)?.closest?.('.rg-cf') : null
     const filterColumn = funnel ? this.slots.get(funnel.parentElement!)?.header?.column ?? -1 : -1
+    if (funnel && !this.canFilter(filterColumn)) { event.preventDefault(); return }
     if (filterColumn >= 0) {
       event.preventDefault()
       this.o.onFilter!(filterColumn, funnel!.getBoundingClientRect())
@@ -1479,6 +1491,7 @@ export class GridView {
           header.type.nodeValue = this.showTypes ? this.types[column] : ''
           header.el.setAttribute('aria-colindex', String(column + 2))
           header.el.classList.toggle('unnamed', !name)
+          if (header.funnel) header.el.classList.toggle('fb', this.canFilter(column))
           if (this.hovered === header.el) { this.hovered.removeAttribute('title'); this.hovered = undefined }
         }
         const left = this.rowHeader + this.layout.xOf(column), width = this.layout.width(column)
@@ -1509,6 +1522,9 @@ export class GridView {
     }
     for (const header of this.headerSlots) if (!used.has(header) && header.shown) { header.shown = false; header.column = -1; header.el.style.display = 'none'; header.el.removeAttribute('aria-colindex') }
   }
+
+  /** Whether a column's header has a funnel. */
+  canFilter(column: number): boolean { return !!this.o.onFilter && column >= 0 && column < this.columns && (!this.filterable || this.filterable.has(column)) }
 
   /** Where a column's funnel popover opens: under its header's right end, clamped to the grid (Alt+Down in a grid). */
   filterAnchor(column: number): DOMRect {

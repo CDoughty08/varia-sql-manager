@@ -20,7 +20,7 @@ const menuNames: Readonly<Record<MenuId, string>> = {
   'explorer.tasks': 'Object Explorer context menu › Tasks', 'explorer.tasks.restore': 'Object Explorer context menu › Tasks › Restore',
   ...Object.fromEntries(scriptSubmenuIds.map(id => [id, 'Object Explorer context menu › Script … as' + (id === scriptAsSubmenuId ? '' : ` › ${submenus[id].title}`)])) as Record<typeof scriptSubmenuIds[number], string>,
   'tableDesigner.context': 'Table designer context menu', 'documentTab.context': 'Query tab context menu', 'output.context': 'Query Output context menu', 'output.highlight': 'Query Output context menu › Highlight', 'output.filter': 'Query Output context menu › Filter', 'output.transposeMenu': 'Query Output context menu › Transpose', 'dockTab.context': 'Panel tab context menu', 'input.context': 'Text field context menu',
-  'ssis.operation.context': 'Integration Services Operations context menu', 'search.hit.context': 'Search Objects result context menu', 'search.copy': 'Search Objects result context menu › Copy'
+  'ssis.operation.context': 'Integration Services Operations context menu', 'liveGrid.context': 'Live grid context menu', 'search.hit.context': 'Search Objects result context menu', 'search.copy': 'Search Objects result context menu › Copy'
 }
 /** How each context menu opens, and what its items act on. */
 const contextMenuUses: Readonly<Record<ContextMenuId, string>> = {
@@ -31,6 +31,7 @@ const contextMenuUses: Readonly<Record<ContextMenuId, string>> = {
   'output.context': 'Right-click the results grid or Messages, or press Shift+F10 or the context-menu key where it has focus. A right-click outside the grid\'s selection selects that cell first.',
   'dockTab.context': 'Right-click a panel\'s tab (Object Explorer, Query editor, or Query output), or press Shift+F10 or the context-menu key on a focused tab.',
   'ssis.operation.context': 'Right-click the Integration Services Operations grid (a right-click outside the selection selects that row first), or press Shift+F10 or the context-menu key in it. Items act on the selected operation and the document\'s rows.',
+  'liveGrid.context': 'Right-click a live grid (an Activity Monitor pane such as Sessions; a right-click outside the selection selects that cell first), or press Shift+F10 or the context-menu key in it. Items act on the grid\'s selection and the active cell\'s column; Sort and Filter Column Values ask the backend, which sorts and filters each sample.',
   'search.hit.context': 'Right-click a Search Objects result (in the Search Objects tab or Object Explorer\'s search), which selects it, or press Shift+F10 or the context-menu key on the selected result. Items act on that object: Select Top N Rows, Modify and Script … as are Object Explorer\'s, for the object\'s kind; Rename, Delete and Properties are left to the tree (Reveal in Object Explorer first).',
   'input.context': 'Right-click a text field, including those in dialogs and the editor\'s find widget, or press Shift+F10 or the context-menu key in it. It is the only menu that opens while a dialog is open; the command palette\'s field has none.'
 }

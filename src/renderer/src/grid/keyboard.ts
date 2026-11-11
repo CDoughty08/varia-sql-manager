@@ -4,7 +4,7 @@ import { gridLimits as g } from './constants'
 // The grid's own keys, handled in the grid's React onKeyDown. They are not catalogue keybindings: the catalogue's
 // commands (Copy, Select All, Copy with Headers, Save Results As, F6, Ctrl+R, Shift+F10) reach a results grid through
 // KeybindingService, and Tab, Alt combinations and Previous/Next Query are left to the browser and the workbench. A live
-// grid (LiveGridPane) is outside Query Output, so it keeps mod+C and mod+A as its own keys (`clipboard`).
+// grid (LiveGridPane) is outside Query Output, so it keeps mod+C, mod+shift+C and mod+A as its own keys (`clipboard`).
 
 /** Where a move goes: one cell, a page, or an edge of the result (the last row is the last available one). */
 export type GridMove = 'up' | 'down' | 'left' | 'right' | 'pageUp' | 'pageDown' | 'firstRow' | 'lastRow' | 'firstColumn' | 'lastColumn' | 'firstCell' | 'lastCell'
@@ -13,8 +13,8 @@ export type GridAction =
   | { readonly type: 'move'; readonly move: GridMove; readonly extend: boolean }
   /** Shift+Space and Ctrl+Space: whole rows or whole columns over the last block. */
   | { readonly type: 'selectRows' | 'selectColumns' | 'selectAll' }
-  /** Enter opens a link cell; Escape cancels a drag, a resize, or the tab's copy or save; copy is a live grid's mod+C. */
-  | { readonly type: 'open' | 'escape' | 'copy' }
+  /** Enter opens a link cell; Escape cancels a drag, a resize, or the tab's copy or save; copy and copyHeaders are a live grid's mod+C and mod+Shift+C. */
+  | { readonly type: 'open' | 'escape' | 'copy' | 'copyHeaders' }
 
 const moves: readonly (readonly [key: string, plain: GridMove, mod: GridMove])[] = [
   ['up', 'up', 'firstRow'], ['down', 'down', 'lastRow'], ['left', 'left', 'firstColumn'], ['right', 'right', 'lastColumn'],
@@ -39,6 +39,7 @@ function build(platform: Platform, clipboard: boolean): ReadonlyMap<string, Grid
   if (clipboard) {
     add('mod+a', { type: 'selectAll' })
     add('mod+c', { type: 'copy' })
+    add('mod+shift+c', { type: 'copyHeaders' })
   }
   return map
 }
@@ -46,7 +47,7 @@ const tables = new Map<string, ReadonlyMap<string, GridAction>>()
 
 /**
  * What a key press does in the grid, or undefined when the grid leaves it alone (and does not prevent its default).
- * `clipboard` adds mod+A and mod+C, for grids whose Select All and Copy are not the catalogue's `output.*` commands.
+ * `clipboard` adds mod+A, mod+C and mod+Shift+C, for grids whose Select All and Copy are not the catalogue's `output.*` commands.
  */
 export function gridKeyAction(event: KeyEventLike, platform: Platform, clipboard = false): GridAction | undefined {
   const chord = chordFromEvent(event, platform)

@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { activityLimits, tableSpecs } from '../src/shared/activity/catalog'
 import { activityLiveArgsSchema } from '../src/shared/activity/schema'
 import { defaultProcessesFilter, monitorArgs, processesActivityFilter, type ProcessesFilter } from '../src/renderer/src/activity/ActivityMonitorService'
-import { activeFilters, processesStatus, processesToneLabel, valueChoices } from '../src/renderer/src/activity/panes/ProcessesPane'
+import { activeFilters, processesStatus, processesToneLabel } from '../src/renderer/src/activity/panes/ProcessesPane'
+import { liveFilterOutcome, liveFilterTicks } from '../src/renderer/src/live/live-filter'
 import { paneProblem, paneWaiting } from '../src/renderer/src/activity/panes/PaneState'
 import type { LiveProbeSnapshot, LiveSnapshot } from '../src/renderer/src/live/LiveService'
 
@@ -10,7 +11,7 @@ const probe = (patch: Partial<LiveProbeSnapshot>): LiveProbeSnapshot => ({ state
 const view = (patch: Partial<LiveSnapshot>, sessions?: Partial<LiveProbeSnapshot>): LiveSnapshot => ({ status: 'live', connectionId: 'c1', probes: sessions ? { 'activity.sessions': probe(sessions) } : {}, ...patch })
 const filter = (patch: Partial<ProcessesFilter>): ProcessesFilter => ({ ...defaultProcessesFilter, ...patch })
 
-describe('Processes filter args', () => {
+describe('Sessions filter args', () => {
   it('builds args the live schema accepts, with every facet column and the bounds at their limits', () => {
     const columns = tableSpecs.sessions.facetColumns ?? []
     expect(columns.length).toBeGreaterThan(0)
@@ -23,8 +24,8 @@ describe('Processes filter args', () => {
   })
 })
 
-describe('Processes pane', () => {
-  it('names the tones Processes gives its rows', () => {
+describe('Sessions pane', () => {
+  it('names the tones Sessions gives its rows', () => {
     expect(['error', 'warning', 'running', 'muted', 'info'].map(tone => processesToneLabel(tone as never))).toEqual(['blocked', 'blocking others', 'rolling back', 'system or ended session', undefined])
   })
   it('counts the rows shown and says what is hidden, cut or why there are none', () => {
@@ -36,18 +37,37 @@ describe('Processes pane', () => {
     expect(processesStatus(undefined, false, defaultProcessesFilter, 'paused')).toMatch(/^Paused/)
     expect(processesStatus(undefined, false, defaultProcessesFilter, 'stopped')).toMatch(/stopped/)
   })
-  it('lists chosen values the facets no longer have, and disables the rest at the limit instead of dropping a value', () => {
-    const facet = { column: 'login', values: [{ text: 'sa', count: 2 }, { text: 'app', count: 1 }] }
-    expect(valueChoices(facet, ['app', 'gone'])).toEqual([
-      { text: 'sa', count: 2, checked: false, disabled: false },
-      { text: 'app', count: 1, checked: true, disabled: false },
-      { text: 'gone', checked: true, disabled: false }
-    ])
-    expect(valueChoices(undefined)).toEqual([])
-    const chosen = Array.from({ length: activityLimits.columnFilterValues }, (_, index) => `v${index}`)
-    const choices = valueChoices({ column: 'login', values: [{ text: 'v0', count: 1 }, { text: 'other', count: 1 }] }, chosen)
-    expect(choices.slice(0, 2)).toEqual([{ text: 'v0', count: 1, checked: true, disabled: false }, { text: 'other', count: 1, checked: false, disabled: true }])
-    expect(choices).toHaveLength(activityLimits.columnFilterValues + 1)
+  it('opens a funnel with every value ticked, or the filter on, listing chosen values the facets no longer have', () => {
+    const facet = { column: 'login', values: [{ text: 'sa', count: 2 }, { text: '', count: 4 }, { text: 'app', count: 1 }] }
+    const none = liveFilterTicks(facet, undefined)
+    expect(none.entries).toEqual([{ text: 'sa', count: 2 }, { text: 'app', count: 1 }])
+    expect([...none.ticked]).toEqual(['sa', 'app'])
+    expect(none.blanks).toBe(true)
+    const chosen = liveFilterTicks(facet, { values: ['app', 'gone'], blanks: true })
+    expect(chosen.entries).toEqual([{ text: 'sa', count: 2 }, { text: 'app', count: 1 }, { text: 'gone' }])
+    expect([...chosen.ticked]).toEqual(['app', 'gone'])
+    expect(chosen.blanks).toBe(true)
+    const nonBlanks = liveFilterTicks(facet, { nonBlanks: true })
+    expect([...nonBlanks.ticked]).toEqual(['sa', 'app'])
+    expect(nonBlanks.blanks).toBe(false)
+    expect(liveFilterTicks(undefined, undefined)).toEqual({ entries: [], ticked: new Set(), blanks: true })
+  })
+  it('turns the ticks into the filter the backend applies, or none, within the values a column filter holds', () => {
+    const entries = [{ text: 'sa', count: 2 }, { text: 'app', count: 1 }]
+    const max = activityLimits.columnFilterValues
+    expect(liveFilterOutcome({ entries, ticked: new Set(['sa', 'app']), blanks: true }, max)).toEqual({ clear: true })
+    expect(liveFilterOutcome({ entries, ticked: new Set(['sa', 'app']), blanks: false }, max)).toEqual({ filter: { nonBlanks: true } })
+    expect(liveFilterOutcome({ entries, ticked: new Set(['app']), blanks: false }, max)).toEqual({ filter: { values: ['app'] } })
+    expect(liveFilterOutcome({ entries, ticked: new Set(['app']), blanks: true }, max)).toEqual({ filter: { values: ['app'], blanks: true } })
+    expect(liveFilterOutcome({ entries, ticked: new Set(), blanks: true }, max)).toEqual({ filter: { blanks: true } })
+    expect(liveFilterOutcome({ entries, ticked: new Set(), blanks: false }, max)).toEqual({ error: 'Select at least one value.' })
+    expect(liveFilterOutcome({ entries: [], ticked: new Set(), blanks: false }, max)).toEqual({ filter: { nonBlanks: true } })
+    const many = Array.from({ length: max + 2 }, (_, index) => ({ text: `v${index}`, count: 1 }))
+    expect(liveFilterOutcome({ entries: many, ticked: new Set(many.slice(1).map(entry => entry.text)), blanks: false }, max)).toMatchObject({ error: expect.stringMatching(/at most/) })
+    // Every outcome's filter is one the live schema accepts as a column filter.
+    const outcome = liveFilterOutcome({ entries, ticked: new Set(['app']), blanks: true }, max)
+    const args = { filters: [processesActivityFilter(filter({ columnFilters: ['filter' in outcome ? { column: 'login', ...outcome.filter } : { column: 'login' }] }))] }
+    expect(activityLiveArgsSchema.safeParse(args).success).toBe(true)
   })
   it('says why a pane has no rows: its own table\'s failure or refusal, a pause, or a stopped view', () => {
     expect(paneProblem(undefined, 0)).toBeUndefined()

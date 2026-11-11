@@ -734,6 +734,36 @@ export const commandCatalog = {
     title: 'Close Activity Monitor', category: 'Activity Monitor', icon: 'close', precondition: 'activeDocumentIsActivityMonitor && !documentBusy', unavailableHint: openMonitor,
     keybindings: [{ key: 'shift+escape', when: 'activityMonitorFocus' }]
   },
+  // A live grid's menu (LiveGridPane: the Activity Monitor's panes), the results grid's items for a grid whose rows the
+  // backend samples. The grid serves its own Ctrl+C, Ctrl+Shift+C, Ctrl+A and Alt+Down, so these have no keys; Sort and
+  // Filter Column Values change the source's args, and the backend sorts and filters each sample.
+  'liveGrid.copy': {
+    title: 'Copy', category: 'View', icon: 'copy', palette: false, menus: [{ menu: 'liveGrid.context', group: '1_copy', order: 1, mnemonic: 'c' }]
+  },
+  'liveGrid.copyWithHeaders': {
+    title: 'Copy with Headers', category: 'View', palette: false, menus: [{ menu: 'liveGrid.context', group: '1_copy', order: 2, mnemonic: 'h' }]
+  },
+  'liveGrid.selectAll': {
+    title: 'Select All', category: 'View', palette: false, menus: [{ menu: 'liveGrid.context', group: '2_select', order: 1, mnemonic: 'a' }]
+  },
+  'liveGrid.sortAscending': {
+    title: 'Sort Ascending', category: 'View', icon: 'arrow-up', palette: false, menus: [{ menu: 'liveGrid.context', group: '3_sort', order: 1, mnemonic: 'o', when: 'liveGridSortable' }]
+  },
+  'liveGrid.sortDescending': {
+    title: 'Sort Descending', category: 'View', icon: 'arrow-down', palette: false, menus: [{ menu: 'liveGrid.context', group: '3_sort', order: 2, mnemonic: 'd', when: 'liveGridSortable' }]
+  },
+  'liveGrid.clearSort': {
+    title: 'Clear Sort', category: 'View', palette: false, menus: [{ menu: 'liveGrid.context', group: '3_sort', order: 3, mnemonic: 'r', when: 'liveGridSortable' }]
+  },
+  'liveGrid.filterColumnValues': {
+    title: 'Filter Column Values…', category: 'View', icon: 'filter', palette: false, menus: [{ menu: 'liveGrid.context', group: '4_filter', order: 1, mnemonic: 'v', when: 'liveGridFilterable' }]
+  },
+  'liveGrid.fitColumn': {
+    title: 'Fit Column', category: 'View', palette: false, menus: [{ menu: 'liveGrid.context', group: '5_width', order: 1, mnemonic: 'i' }]
+  },
+  'liveGrid.saveAs': {
+    title: 'Save Rows As…', category: 'View', icon: 'save-as', palette: false, menus: [{ menu: 'liveGrid.context', group: '6_save', order: 1, mnemonic: 's' }]
+  },
   // Not theme.*: PR1's theme menu items (theme.mode.*, theme.create, …) come from themeMenuModel and keep those ids.
   'preferences.colorTheme': {
     title: 'Color Theme…', category: 'Preferences', icon: 'symbol-color', keywords: ['dark', 'light', 'appearance'],

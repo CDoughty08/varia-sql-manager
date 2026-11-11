@@ -1224,6 +1224,9 @@ function activitySessionsSample(live, probe) {
   const text = filter.text?.toLowerCase()
   const rows = shown.filter(row => (!text || sessionTextColumns.some(column => row[column]?.toLowerCase().includes(text)))
     && (filter.columnFilters ?? []).every(column => (column.values ?? []).includes(row[column.column]) || (column.blanks && !row[column.column]) || (column.nonBlanks && !!row[column.column])))
+  // The probe's sort for this table (a header's sort button), by text with the session id breaking ties.
+  const sort = (probe.sort ?? []).filter(key => key.table === undefined || key.table === 0)
+  if (sort.length) rows.sort((a, b) => { for (const key of sort) { const left = String(a[key.column] ?? ''), right = String(b[key.column] ?? ''); if (left !== right) return (left < right ? -1 : 1) * (key.descending ? -1 : 1) } return a.sessionId - b.sessionId })
   const columns = spec.columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true }))
   const result = storeResult({ columns, rows: rows.map(row => spec.columns.map(column => column.id === 'sessionId' ? String(row.sessionId) : row[column.id] ?? null)) }, 0)
   const kept = live.kept.get(probe.probe) ?? []

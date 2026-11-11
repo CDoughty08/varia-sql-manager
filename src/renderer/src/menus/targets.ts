@@ -62,6 +62,24 @@ export interface OutputTarget {
   readonly selectedText: string
   readonly element: HTMLElement
 }
+/** What a live grid's menu commands act on (LiveGridPane): its grid, selection, sort and columns. */
+export interface LiveGridControls {
+  /** The grid's accessible name ("Sessions"), which Save As suggests as the file's name. */
+  readonly label: string
+  /** Its table sorts (a snapshot table), so the Sort items show. */
+  readonly sortable: boolean
+  /** The active cell's column, which the column items act on. */
+  activeColumn(): number | undefined
+  /** Whether a column has a funnel (its source filters it). */
+  canFilter(column: number): boolean
+  copy(headers: boolean): void
+  selectAll(): void
+  /** Sorts by the column alone, or with `undefined` goes back to the source's order. */
+  sort(column: number | undefined, descending?: boolean): void
+  fitColumn(column: number): void
+  filterColumn(column: number): void
+  save(): void
+}
 /** What a context menu was opened for. Renderer objects only: commands receive it as `CommandArgs.target`, and it never crosses IPC. */
 export type MenuTarget =
   | { readonly kind: 'editor'; readonly tabId: string }
@@ -73,6 +91,8 @@ export type MenuTarget =
   | { readonly kind: 'tableDesigner'; readonly tabId: string }
   /** An Integration Services Operations grid; its commands act on the selected operation. */
   | { readonly kind: 'ssisOperations'; readonly tabId: string }
+  /** A live grid (an Activity Monitor pane); its commands act on that grid, at the active cell's column. */
+  | { readonly kind: 'liveGrid'; readonly grid: LiveGridControls }
   | OutputTarget
   /** A panel's tab or ⋯ button; `popout` when the panel is in a window of its own. */
   | { readonly kind: 'dockTab'; readonly pane: PaneId; readonly floating: boolean; readonly popout: boolean }
@@ -81,13 +101,13 @@ export type MenuTarget =
 
 export const menuForTarget: Readonly<Record<MenuTarget['kind'], ContextMenuId>> = {
   editor: 'editor.context', explorer: 'explorer.context', tableDesigner: 'tableDesigner.context', documentTab: 'documentTab.context', output: 'output.context', dockTab: 'dockTab.context', input: 'input.context',
-  ssisOperations: 'ssis.operation.context', searchHit: 'search.hit.context'
+  ssisOperations: 'ssis.operation.context', liveGrid: 'liveGrid.context', searchHit: 'search.hit.context'
 }
 /** Each context menu's accessible name. */
 export const contextMenuLabels: Readonly<Record<ContextMenuId, string>> = {
   'editor.context': 'Query editor', 'explorer.context': 'Object Explorer', 'tableDesigner.context': 'Table Designer', 'documentTab.context': 'Query tab', 'output.context': 'Query output',
   'dockTab.context': 'Panel tab', 'input.context': 'Text field', 'ssis.operation.context': 'Integration Services Operations',
-  'search.hit.context': 'Search result'
+  'liveGrid.context': 'Live grid', 'search.hit.context': 'Search result'
 }
 
 /** A folder whose objects Filter Settings can narrow (Tables, Views, Databases, Logins…). */
@@ -111,7 +131,9 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
     paneFloating: target?.kind === 'dockTab' && target.floating,
     panePopout: target?.kind === 'dockTab' && target.popout,
     documentTabFloating: target?.kind === 'documentTab' && !!target.floating,
-    searchHitSchema: target?.kind === 'searchHit' && searchHitNames(target.hit.object).schema !== undefined
+    searchHitSchema: target?.kind === 'searchHit' && searchHitNames(target.hit.object).schema !== undefined,
+    liveGridSortable: target?.kind === 'liveGrid' && target.grid.sortable,
+    liveGridFilterable: target?.kind === 'liveGrid' && (column => column !== undefined && target.grid.canFilter(column))(target.grid.activeColumn())
   }
 }
 /**
@@ -126,6 +148,7 @@ export const inputOf = (args: CommandArgs | undefined): InputTarget | undefined 
 /** The Object Explorer node a context menu was opened for; undefined for its empty area and for other targets. */
 export const explorerNodeOf = (args: CommandArgs | undefined): ExplorerMenuNode | undefined => args?.target?.kind === 'explorer' ? args.target.node : undefined
 export const outputOf = (args: CommandArgs | undefined): OutputTarget | undefined => args?.target?.kind === 'output' ? args.target : undefined
+export const liveGridOf = (args: CommandArgs | undefined): LiveGridControls | undefined => args?.target?.kind === 'liveGrid' ? args.target.grid : undefined
 export const searchHitOf = (args: CommandArgs | undefined): SearchHitTarget | undefined => args?.target?.kind === 'searchHit' ? args.target : undefined
 /** The object a menu was opened for: an Object Explorer node, or a Search Objects result's object. */
 export const objectNodeOf = (args: CommandArgs | undefined): ObjectMenuNode | undefined => explorerNodeOf(args) ?? searchHitOf(args)?.node

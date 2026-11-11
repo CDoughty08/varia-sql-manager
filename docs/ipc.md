@@ -1793,7 +1793,7 @@ errorEvery?: 1..1,000, logRows?: 0..10,000, logLevel?: 0..3, lateEvery?: 1..1,00
 minimum so tests run fast (samples still report the requested interval), a sample count after which the source ends, an
 error value every n-th table sample, and its log's messages per sample, lowest level, late messages and start. `activity`
 takes `{ filters?: activity filter[1..7], focusSession?: 0..32,767 }` (`activityLiveArgsSchema`), at least one member: one filter
-per table (`activityFilterSchema`: Processes' view chip and System and Varia toggles, the filter box ≤ 400 characters, ≤ 8
+per table (`activityFilterSchema`: Sessions' view chip and System and Varia's own chips, the filter box ≤ 400 characters, ≤ 8
 column value filters of ≤ 50 values ≤ 256 characters on the table's facet columns, Hide benign waits on Resource Waits), and
 the session the sessions probe's two series follow (the Details flyout; 0 for none). The first sessions sample after
 `focusSession` names another session is marked `gap: 'reset'`, so a chart starts the series again rather than join one
@@ -1860,7 +1860,7 @@ from its own state; the writers do the rest.
   revision, at the row it had, and lists it in `departed`; the next revision drops it. Only the track list's first `linger`
   keys stay (LiveGrid's selected rows); the others are answered −1 at once. Facet columns carry their distinct
   values over every row the source gave that its facet scope keeps (before the view and filter; NULL left out; the
-  Activity Monitor's Processes counts only the rows its view chip and toggles show, before its filter box and column value
+  Activity Monitor's Sessions counts only the rows its view chip and toggles show, before its filter box and column value
   filters, so it never offers a value only hidden sessions have, and a column's own filter never empties its list), most frequent first, at most 100 of at
   most 128 characters (values that differ only past them count together), and only when they changed since the table's last
   facets; a tick's facet text is shared by its tables up to 32 KiB, counting only the facets a sample sends, and what does
@@ -2261,6 +2261,15 @@ and results worker](#results-port-and-results-worker)). Views never call it them
 `GridView.swap(handle, descriptor, mapRow)` shows another result with the same columns in place (widths and scroll stay;
 the first row shown, the active cell and each block move through `mapRow`, `grid/swap.ts`), a hidden tone column, and
 follow tail.
+- **The results grid's header and menu.** A snapshot table's headers have the results grid's sort buttons
+  (`LiveGrid.cycleSort`, the same cycle as `ResultsService.cycleSort`; Shift+click adds a key): they set the probe's sort for
+  this table, and the backend sorts each revision. An owner that filters some columns at its source (`columnFilter`: the
+  Activity Monitor's facet columns) gets the results grid's funnels on just those headers (`GridViewOptions.filterable`);
+  a funnel, Alt+Down or Filter Column Values… opens its popover (`LiveColumnFilterPopover`, the results popover's card over
+  the source's facets), and OK hands the filter to the owner, which sends it as the source's args, never filtering on the
+  client. The grid serves its own Ctrl+C, Ctrl+Shift+C and Ctrl+A, and its context menu (`liveGrid.context`: Copy, Copy
+  with Headers, Select All, Sort, Filter Column Values…, Fit Column, Save Rows As…) acts on it; an owner with a menu of its
+  own (SSIS Operations) turns it off.
 - **Snapshot revisions.** After each applied tick (before it is acknowledged) the grid first reads the rows the new revision
   will show into the window cache (`GridView.prepare`, at most 250 ms), then swaps it in, so a swap never paints a frame of
   empty cells; a newer revision arriving meanwhile has retired the one shown and swaps in at once. The grid tracks the

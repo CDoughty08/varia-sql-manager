@@ -1,7 +1,7 @@
 // The Activity Monitor document in the real app on the fake backend's activity source (tests/fixtures/backend.mjs,
 // workbench mode): with no server connected it opens the Connect dialog and then the monitor; it opens from Object
 // Explorer's server menu, the View menu, the palette and the toolbar, one tab per connection;
-// its tiles fill after two samples and two charts are open (all eight may be); Processes shows the sessions probe's rows and its filters reach the backend; and a failed sample keeps them and says why; Pause stops sampling and Resume starts it again; the
+// its tiles fill after two samples and two charts are open (all eight may be); Sessions shows the sessions probe's rows in the results grid and its filters, funnels and sort reach the backend; and a failed sample keeps them and says why; Pause stops sampling and Resume starts it again; the
 // interval and the chart window reach the live layer; a tab switch pauses it while hidden and keeps its choices; the
 // panes, Split View and F6 work; the header, tiles and panes fit common window sizes; a login without server state gets
 // the permission message and its GRANT statement; a lost backend reports it and
@@ -10,7 +10,7 @@
 // probe fills the tiles, and Pause stops it.
 import { electron, expect, within } from './fixtures/smoke.mjs'
 import {
-  activityBanner, backendReady, bannerGlyph, documentActions, documentContent, documentFrame, documentTabs, documentTitle, explorerTree, livePill, staleBadge, tileCaptions, toolbarButton
+  activityBanner, backendReady, bannerGlyph, documentActions, documentContent, documentFrame, documentTabs, documentTitle, explorerTree, gridCellSelector, gridPart, livePill, staleBadge, tileCaptions, toolbarButton
 } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -268,58 +268,111 @@ try {
   await expect(monitor().getByLabel('Chart window', { exact: true })).toHaveValue('5')
   console.log('Tab switch passed: hidden, the monitor paused; shown again, it resumed with its charts, interval and window.')
 
-  step = 'processes'
-  // Processes draws the sessions probe's rows in a grid; system sessions and Varia's pools are hidden by default.
-  const processes = monitor().getByRole('grid', { name: /^Processes/ })
-  const filters = monitor().getByRole('toolbar', { name: 'Processes filters', exact: true })
-  await expect(processes).toBeVisible()
+  step = 'sessions'
+  // Sessions (SSMS's Processes) draws the sessions probe's rows in the results grid; system sessions and Varia's pools are
+  // hidden by default.
+  const sessionsGrid = monitor().getByRole('grid', { name: /^Sessions/ })
+  const filters = monitor().getByRole('toolbar', { name: 'Sessions filters', exact: true })
+  const columnHeader = name => sessionsGrid.locator(gridPart.columnHeader).filter({ hasText: new RegExp(`^${name}$`) })
+  const loginAt = row => sessionsGrid.locator(gridCellSelector(row, 2))
+  await expect(sessionsGrid).toBeVisible()
   await expect(monitor().getByText(/^3 sessions · system sessions and Varia's own hidden$/)).toBeVisible()
-  await expect(processes.getByRole('gridcell', { name: 'svc_reporting', exact: true })).toBeVisible()
+  await expect(sessionsGrid.getByRole('gridcell', { name: 'svc_reporting', exact: true })).toBeVisible()
   // The view chip goes to the backend as args: Blocked leaves the session waiting on 57.
   await filters.getByRole('button', { name: 'Blocked', exact: true }).click()
   await expect(filters.getByRole('button', { name: 'Blocked', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect(monitor().getByText(/^1 session · 1 filter on/)).toBeVisible()
   await filters.getByRole('button', { name: 'Blocked', exact: true }).click()
-  // Varia's own shows the Object Explorer pool session.
-  await filters.getByRole('checkbox', { name: "Varia's own", exact: true }).check()
+  // The Show chips are chips too: Varia's own shows the Object Explorer pool session.
+  const showVaria = filters.getByRole('group', { name: 'Show', exact: true }).getByRole('button', { name: "Varia's own", exact: true })
+  await showVaria.click()
+  await expect(showVaria).toHaveAttribute('aria-pressed', 'true')
   await expect(monitor().getByText(/^4 sessions · system sessions hidden$/)).toBeVisible()
-  await filters.getByRole('checkbox', { name: "Varia's own", exact: true }).uncheck()
+  await showVaria.click()
   // The filter box matches the text columns once typing settles.
   await filters.getByRole('searchbox', { name: 'Filter sessions', exact: true }).fill('billing')
   await expect(monitor().getByText(/^1 session · 1 filter on/)).toBeVisible()
-  await expect(processes.getByRole('gridcell', { name: 'app_billing', exact: true })).toBeVisible()
+  await expect(sessionsGrid.getByRole('gridcell', { name: 'app_billing', exact: true })).toBeVisible()
   await filters.getByRole('button', { name: 'Clear filters', exact: true }).click()
   await expect(filters.getByRole('searchbox', { name: 'Filter sessions', exact: true })).toHaveValue('')
-  // Column filters list each value with its count, from the facets.
-  await filters.getByRole('button', { name: 'Column filters', exact: true }).click()
-  const columnFilters = monitor().getByRole('dialog', { name: 'Column filters', exact: true })
-  await columnFilters.getByRole('combobox', { name: 'Column', exact: true }).selectOption('database')
-  await expect(columnFilters.getByRole('checkbox', { name: /^SalesDb\s*2$/ })).toBeVisible()
-  await columnFilters.getByRole('checkbox', { name: /^BillingDb\s*1$/ }).check()
+  // A facet column's header has the results grid's funnel: its popover lists the values with their counts from the
+  // facets, and OK sends the ticked values to the backend as the source's args. A column the source cannot filter has none.
+  await expect(monitor().getByText(/^3 sessions/)).toBeVisible()
+  await columnHeader('Session ID').hover()
+  await expect(columnHeader('Session ID').locator(gridPart.funnelButton)).toBeHidden()
+  await columnHeader('Database').hover()
+  await columnHeader('Database').locator(gridPart.funnelButton).click()
+  const funnel = page.getByRole('dialog', { name: 'Filter Database', exact: true })
+  await expect(funnel.getByRole('checkbox', { name: 'SalesDb (2)', exact: true })).toBeChecked()
+  await expect(funnel.getByRole('searchbox', { name: 'Search values', exact: true })).toBeFocused()
+  await page.screenshot({ path: join('artifacts', 'activity-monitor-sessions.png') })
+  await funnel.getByRole('button', { name: 'Select none', exact: true }).click()
+  await funnel.getByRole('checkbox', { name: 'BillingDb (1)', exact: true }).check()
+  await funnel.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(funnel).toHaveCount(0)
   await expect(monitor().getByText(/^1 session · 1 filter on/)).toBeVisible()
-  await expect(filters.getByRole('button', { name: 'Column filters (1)', exact: true })).toBeVisible()
+  await expect(columnHeader('Database').locator(gridPart.funnelOn)).toHaveCount(1)
+  await expect.poll(async () => (await calls('live.update')).some(call => JSON.stringify(call.params.args ?? {}).includes('"column":"database","values":["BillingDb"]'))).toBe(true)
+  // Alt+Down opens the active column's funnel, as in a results grid; Escape closes it and gives the grid the focus back.
+  await sessionsGrid.getByRole('gridcell', { name: 'BillingDb', exact: true }).click()
+  await page.keyboard.press('Alt+ArrowDown')
+  await expect(funnel.getByRole('checkbox', { name: 'BillingDb (1)', exact: true })).toBeChecked()
   await page.keyboard.press('Escape')
-  await expect(columnFilters).toHaveCount(0)
-  await expect(filters.getByRole('button', { name: 'Column filters (1)', exact: true })).toBeFocused()
-  // A chosen value the facets no longer list (Blocked leaves no BillingDb row) stays listed, checked, so it can be turned
-  // off; a click outside closes the panel.
+  await expect(funnel).toHaveCount(0)
+  await expect(sessionsGrid).toBeFocused()
+  // A chosen value the facets no longer list (Blocked leaves no BillingDb row) stays listed, ticked, so it can be taken
+  // off; a press outside closes the popover unchanged.
   await filters.getByRole('button', { name: 'Blocked', exact: true }).click()
   await expect(monitor().getByText(/^0 sessions · 2 filters on/)).toBeVisible()
-  await filters.getByRole('button', { name: 'Column filters (1)', exact: true }).click()
-  await columnFilters.getByRole('combobox', { name: 'Column', exact: true }).selectOption('database')
-  await expect(columnFilters.getByRole('checkbox', { name: /^BillingDb\s*—$/ })).toBeChecked()
+  await columnHeader('Database').hover()
+  await columnHeader('Database').locator(gridPart.funnelButton).click()
+  await expect(funnel.getByRole('checkbox', { name: 'BillingDb (none now)', exact: true })).toBeChecked()
   await monitor().getByText(/^0 sessions · 2 filters on/).click()
-  await expect(columnFilters).toHaveCount(0)
+  await expect(funnel).toHaveCount(0)
   await filters.getByRole('button', { name: 'Clear filters', exact: true }).click()
   await expect(monitor().getByText(/^3 sessions/)).toBeVisible()
-  console.log('Processes passed: rows from the sessions probe, the view chip, toggles, filter box and column filters reach the backend, and Clear filters resets them.')
+  await expect(columnHeader('Database').locator(gridPart.funnelOn)).toHaveCount(0)
+  // The toolbar keeps to one row in a pane 800 px wide (two panes side by side): its chips are dense, the Show chips are
+  // chips (no raw checkboxes), and the filter box gives way first.
+  const rows = await filters.evaluate(element => {
+    const width = element.style.width
+    element.style.width = '800px'
+    const shown = [...element.children].map(child => child.getBoundingClientRect()).filter(rect => rect.width > 0)
+    const tops = new Set(shown.map(rect => Math.round(rect.top + rect.height / 2)))
+    element.style.width = width
+    return { rows: tops.size, widths: shown.map(rect => Math.round(rect.width)) }
+  })
+  expect(rows.rows, `Sessions toolbar rows at 800 px: ${JSON.stringify(rows.widths)}`).toBe(1)
+  await expect(filters.getByRole('checkbox')).toHaveCount(0)
+  // The header's sort button sorts in the backend (the probe's sort), as a results grid's header does: Login ascending,
+  // then descending; the context menu's Clear Sort and Sort Ascending do the same.
+  await columnHeader('Login').hover()
+  await columnHeader('Login').locator(gridPart.sortButton).click()
+  await expect(loginAt(0)).toHaveText('app_billing')
+  await expect(columnHeader('Login')).toHaveAttribute('aria-sort', 'ascending')
+  await expect.poll(async () => (await calls('live.update')).some(call => call.params.probes?.some(probe => probe.probe === 'activity.sessions' && probe.sort?.[0]?.column === 'login'))).toBe(true)
+  await columnHeader('Login').locator(gridPart.sortButton).click()
+  await expect(loginAt(0)).toHaveText('svc_reporting')
+  await sessionsGrid.getByRole('gridcell', { name: 'app_orders', exact: true }).click({ button: 'right' })
+  const gridMenu = page.getByRole('menu', { name: 'Live grid', exact: true })
+  await expect(gridMenu.getByRole('menuitem', { name: /^Copy with Headers/ })).toBeVisible()
+  await gridMenu.getByRole('menuitem', { name: /^Clear Sort/ }).click()
+  await expect(columnHeader('Login')).not.toHaveAttribute('aria-sort', /./)
+  await expect(loginAt(0)).toHaveText('app_orders')
+  await sessionsGrid.getByRole('gridcell', { name: 'app_orders', exact: true }).click({ button: 'right' })
+  await gridMenu.getByRole('menuitem', { name: /^Sort Ascending/ }).click()
+  await expect(loginAt(0)).toHaveText('app_billing')
+  await sessionsGrid.getByRole('gridcell', { name: 'app_billing', exact: true }).click({ button: 'right' })
+  await gridMenu.getByRole('menuitem', { name: /^Clear Sort/ }).click()
+  await expect(loginAt(0)).toHaveText('app_orders')
+  console.log('Sessions passed: rows from the sessions probe; the view and Show chips, filter box, header funnels and header sort reach the backend; the context menu sorts; Clear filters resets them.')
 
   step = 'panes'
   const first = monitor().getByRole('tablist', { name: 'First pane', exact: true })
-  await expect(first.getByRole('tab', { name: 'Processes', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await expect(first.getByRole('tab', { name: 'Sessions', exact: true })).toHaveAttribute('aria-selected', 'true')
   await expect(monitor().getByRole('tablist', { name: 'Second pane', exact: true }).getByRole('tab', { name: 'Resource Waits', exact: true })).toHaveAttribute('aria-selected', 'true')
   await expect(monitor().getByText('Resource Waits is not shown yet; it arrives in a later version of Varia.')).toBeVisible()
-  await first.getByRole('tab', { name: 'Processes', exact: true }).focus()
+  await first.getByRole('tab', { name: 'Sessions', exact: true }).focus()
   await page.keyboard.press('ArrowRight')
   await expect(first.getByRole('tab', { name: /^Blocking/ })).toHaveAttribute('aria-selected', 'true')
   await expect(first.getByRole('tab', { name: /^Blocking/ })).toBeFocused()
@@ -337,7 +390,7 @@ try {
   await expect(monitor().getByRole('tablist', { name: 'Second pane', exact: true })).toHaveCount(0)
   await split.click()
   await expect(monitor().getByRole('separator', { name: 'Resize the panes', exact: true })).toBeVisible()
-  // Showing pending panes starts no SQL: their probes stay paused (Processes' sessions probe ran from the start).
+  // Showing pending panes starts no SQL: their probes stay paused (Sessions' probe ran from the start).
   expect((await calls('live.update')).flatMap(call => call.params.probes ?? []).filter(probe => probe.probe !== 'activity.overview' && probe.probe !== 'activity.sessions' && probe.paused === false)).toEqual([])
   // The resources probe samples now, but its panes are still pending: the view holds it paused, so it runs no SQL.
   expect((await viewOf(id)).probes['activity.resources']).toMatchObject({ state: 'paused' })

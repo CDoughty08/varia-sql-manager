@@ -4,12 +4,12 @@ namespace Varia.Backend.Activity;
 // Members are nullable for the wire: JSON can send null for any of them, and Compile refuses it as zod does.
 internal sealed record ActivityColumnFilterDto(string? Column, List<string?>? Values = null, bool? Blanks = null, bool? NonBlanks = null);
 
-/// <summary>The monitor's filter for one table (the live layer's `args.activity`): Processes' view chip and toggles, the
+/// <summary>The monitor's filter for one table (the live layer's `args.activity`): Sessions' view chip and toggles, the
 /// filter box, the column value filters, Resource Waits' Hide benign waits, and Data File I/O's chip and latency thresholds.</summary>
 internal sealed record ActivityFilterDto(string? Table, string? View = null, bool? ShowSystem = null, bool? ShowVaria = null, string? Text = null, List<ActivityColumnFilterDto?>? ColumnFilters = null,
     bool? HideBenign = null, string? FileView = null, int? LatencyWarningMs = null, int? LatencyErrorMs = null);
 
-/// <summary>What Processes' view chips and toggles test about a session, which the sessions probe works out per row.</summary>
+/// <summary>What Sessions' view chips and toggles test about a session, which the sessions probe works out per row.</summary>
 internal readonly record struct SessionFacts(bool System = false, bool VariaPool = false, bool Active = false, bool Blocked = false, bool Blocking = false,
     bool IdleOpenTransaction = false, bool RollingBack = false);
 
@@ -57,7 +57,7 @@ internal sealed class ActivityFilter
     {
         if (dto.Table is null || !catalog.Tables.TryGetValue(dto.Table, out var table)) throw Invalid("Unknown Activity Monitor table.");
         var sessions = dto.Table == "sessions";
-        if (!sessions && (dto.View is not null || dto.ShowSystem is not null || dto.ShowVaria is not null)) throw Invalid("Only Processes takes a view or session toggles.");
+        if (!sessions && (dto.View is not null || dto.ShowSystem is not null || dto.ShowVaria is not null)) throw Invalid("Only Sessions takes a view or session toggles.");
         if (dto.View is not null && !catalog.Views.Contains(dto.View)) throw Invalid("Unknown Activity Monitor view.");
         var waits = catalog.HideBenignTables.Contains(dto.Table);
         if (!waits && dto.HideBenign is not null) throw Invalid("Only Resource Waits takes Hide benign waits.");

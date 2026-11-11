@@ -291,7 +291,7 @@ export const gridPart = {
   sortButton: '.rg-cs',
   sortedButton: '.rg-cs.on',
   sortOrder: '.rg-co',
-  /** A header's funnel (results grids), hidden from screen readers (Filter Column Values, Alt+Down, opens the same
+  /** A header's funnel (results grids, and a live grid's filterable columns), hidden from screen readers (Filter Column Values, Alt+Down, opens the same
    *  popover); filled while its column has a filter. */
   funnelButton: '.rg-cf',
   funnelOn: '.rg-cf.on',
@@ -576,7 +576,7 @@ export const resultSplitters = page => page.getByRole('separator', { name: /^Res
 
 // Live grids (LiveGridPane): a grid its owner names, in a frame with the overlay, the error strip and the new-rows button.
 
-/** A live grid's own grid by the name its owner gives it, which its label starts with ("Processes, 12 rows, 9 columns"),
+/** A live grid's own grid by the name its owner gives it, which its label starts with ("Sessions, 12 rows, 9 columns"),
  *  for page code. */
 export const liveGridSelector = name => `[role="grid"]:is([aria-label="${name}"], [aria-label^="${name}, "])`
 const escaped = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')

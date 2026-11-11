@@ -14,7 +14,7 @@ import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable } from '../core/types'
-import type { GridViewport } from '../grid/GridView'
+import type { GridViewport, HeaderSortKey } from '../grid/GridView'
 import { copyPlan, type GridSelection } from '../grid/selection'
 import type { RowMap } from '../grid/swap'
 import type { ResultHandle, RowWindow } from '../results/ResultClient'
@@ -238,13 +238,43 @@ export class LiveGrid extends SnapshotStore<LiveGridSnapshot> implements Disposa
    */
   sortBy(column: number | string | undefined, descending = false): void {
     if (this.spec.mode !== 'snapshot') return
-    const others = this.siblingKeys()
-    if (column === undefined) this.o.live.setProbe(this.o.probe, { sort: others.length > 0 ? others.slice(0, limits.live.sortColumns) : undefined })
-    else {
-      const id = typeof column === 'number' ? this.spec.columns[column]?.id : this.spec.columns.find(item => item.id === column)?.id
-      if (!id || this.spec.columns.find(item => item.id === id)?.role === 'tone') return
-      this.o.live.setProbe(this.o.probe, { sort: [{ column: id, descending, table: this.index }, ...others].slice(0, limits.live.sortColumns) })
+    if (column === undefined) return this.setSort([])
+    const id = this.sortColumn(column)
+    if (id) this.setSort([{ column: id, descending }])
+  }
+  /**
+   * A header's sort button, as in a results grid (ResultsService.cycleSort): without `add` only the sole key cycles
+   * (ascending, descending, unsorted) and any other click sorts by the column alone, ascending; with `add` the column
+   * becomes a further key, or its key cycles (ascending, descending, removed). At most limits.live.sortColumns keys.
+   */
+  cycleSort(column: number | string, add = false): void {
+    if (this.spec.mode !== 'snapshot') return
+    const id = this.sortColumn(column)
+    if (!id) return
+    const keys = this.sortOf() ?? [], current = keys.find(key => key.column === id)
+    if (!add || !current) {
+      const cycles = add || keys.length === 1
+      if (current && cycles && current.descending) return this.setSort(add ? keys.filter(key => key.column !== id) : [])
+      const descending = !!current && cycles
+      return this.setSort(add ? [...keys, { column: id, descending }] : [{ column: id, descending }])
     }
+    this.setSort(current.descending ? keys.filter(key => key.column !== id) : keys.map(key => key.column === id ? { ...key, descending: true } : key))
+  }
+  /** Whether the header sorts this table: snapshot tables only, since an append table keeps its arrival order. */
+  get sortable(): boolean { return this.spec.mode === 'snapshot' }
+  /** This table's sort as its header shows it: shown column indexes, in order. */
+  headerSort(sort: readonly LiveSort[] | undefined = this.getSnapshot().sort): HeaderSortKey[] {
+    return (sort ?? []).flatMap(key => { const column = this.spec.columns.findIndex(item => item.id === key.column); return column < 0 ? [] : [{ column, descending: key.descending }] })
+  }
+  /** A shown column index or catalogue id as a sortable column's id (never the tone column). */
+  private sortColumn(column: number | string): string | undefined {
+    const spec = typeof column === 'number' ? this.spec.columns[column] : this.spec.columns.find(item => item.id === column)
+    return spec && spec.role !== 'tone' ? spec.id : undefined
+  }
+  /** Replaces this table's keys in the probe's sort setting; the probe's other tables keep theirs. */
+  private setSort(own: readonly { readonly column: string; readonly descending: boolean }[]): void {
+    const sort = [...own.map(key => ({ column: key.column, descending: key.descending, table: this.index })), ...this.siblingKeys()].slice(0, limits.live.sortColumns)
+    this.o.live.setProbe(this.o.probe, { sort: sort.length > 0 ? sort : undefined })
     this.changed()
   }
 

@@ -1,4 +1,4 @@
-// The strict zod schema of the Activity Monitor's filter: Processes' view chip and toggles, the filter box and the column
+// The strict zod schema of the Activity Monitor's filter: Sessions' view chip and toggles, the filter box and the column
 // value filters. The live layer carries it as `args.activity` (L2b); the backend re-checks every bound and column id against
 // the catalogue (Activity/ActivityFilter.cs) and filters the snapshot in memory, so the SQL never changes. Below it, the
 // session actions' requests (main's requestSchemas) and answers; Activity/SessionActions.cs re-checks the same bounds.
@@ -17,9 +17,9 @@ export interface ActivityColumnFilter {
 }
 export interface ActivityFilter {
   readonly table: ActivityTable
-  /** Processes only. */
+  /** Sessions only. */
   readonly view?: ViewChip
-  /** Processes only: SQL Server's own sessions, and Varia's pool sessions (query tabs always show). */
+  /** Sessions only: SQL Server's own sessions, and Varia's pool sessions (query tabs always show). */
   readonly showSystem?: boolean
   readonly showVaria?: boolean
   /** Resource Waits' tables only: leave out benign rows (on when absent). */
@@ -60,7 +60,7 @@ export const activityFilterSchema = z.object({
 }).strict().superRefine((filter, context) => {
   const spec = tableSpecs[filter.table]
   if (filter.table !== 'sessions') {
-    for (const key of processesOnly) if (filter[key] !== undefined) context.addIssue({ code: 'custom', path: [key], message: `Only Processes takes ${key}.` })
+    for (const key of processesOnly) if (filter[key] !== undefined) context.addIssue({ code: 'custom', path: [key], message: `Only Sessions takes ${key}.` })
   }
   if (filter.table !== 'files') {
     for (const key of filesOnly) if (filter[key] !== undefined) context.addIssue({ code: 'custom', path: [key], message: `Only Data File I/O takes ${key}.` })
