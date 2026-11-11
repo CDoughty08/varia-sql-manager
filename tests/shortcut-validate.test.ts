@@ -44,7 +44,8 @@ describe('validateShortcut', () => {
     expect(check({ command: 'file.new', key: 'mod+home' }).warnings).toEqual([
       'In the Results Grid, Ctrl+Home also does its own “Move to the edge of the results”.', 'In the Table Designer, Ctrl+Home also does its own “Move to the first or last row”.'
     ])
-    expect(check({ command: 'file.new', key: 'mod+home', scope: 'activityMonitor' }).verdict).toBe('ok')
+    // The Activity Monitor's live grids are results grids (outputGridFocus), so Ctrl+Home there is the grid's own too.
+    expect(check({ command: 'file.new', key: 'mod+home', scope: 'activityMonitor' }).warnings).toEqual(['In the Results Grid, Ctrl+Home also does its own “Move to the edge of the results”.'])
     // The workbench sees keys first, so a narrower shortcut may take an editor key where it applies, as Close does with Delete.
     expect(check({ command: 'file.new', key: 'delete', scope: 'objectExplorer' }, 'win32', removing('win32', { command: 'explorer.delete', key: 'delete', remove: true }))).toMatchObject({
       verdict: 'warning', warnings: ['Where this shortcut applies, it takes Delete from Delete.'], rule: { whenSource: "(activePanel == 'explorer' && !inputFocus) && !textInputFocus" }

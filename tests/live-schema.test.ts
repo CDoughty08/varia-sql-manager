@@ -112,6 +112,10 @@ describe('live request schemas', () => {
     expect(ok(fixture.subscribe, settings({ sort: [{ column: 'v0', descending: true }, { column: 'k1', descending: false }], view: 'blocked', filter: { text: 'x', columns: ['m0', 'k0'] } }))).toBe(true)
     // A key for one table names a column of that snapshot table; the same column may go once per table and once for all.
     expect(ok(fixture.subscribe, settings({ sort: [{ column: 'k0', descending: true, table: 0 }, { column: 'k1', descending: false, table: 1 }, { column: 'k0', descending: false }] }))).toBe(true)
+    // Each table (and the probe-wide keys) holds its own L.sortColumns keys: five across tables are fine, five on one are not.
+    const key = (column: string, table?: number) => ({ column, descending: false, ...table === undefined ? {} : { table } })
+    expect(ok(fixture.subscribe, settings({ sort: [key('k0', 0), key('v0', 0), key('k1', 1), key('k2', 2), key('k3', 3)] }))).toBe(true)
+    expect(ok(fixture.subscribe, settings({ sort: ['k0', 'v0', 'k1', 'k2', 'k3'].map(column => key(column)) }))).toBe(false)
     for (const [name, probe] of Object.entries({
       appendSort: { sort: [{ column: 'm0', descending: true }] },
       unknownSort: { sort: [{ column: 'nope', descending: true }] },
