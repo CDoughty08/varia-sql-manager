@@ -58,6 +58,9 @@ export interface SearchDocumentState extends SearchQueryState {
   readonly requestId?: string
   /** All servers: the search runs on every connected server, each with its own index, and its hits are grouped by server. */
   readonly allServers?: boolean
+  /** All servers: the search on its way whose landings `servers` shows. Until `requestId`'s first landing they differ, and
+   *  `servers` and `result` are still the search before's, kept in view. */
+  readonly landed?: string
   /** All servers: each server's answer, in Object Explorer's order; `result` merges them, so a hit's index runs across groups. */
   readonly servers?: readonly ServerAnswer[]
   /** All servers: the servers the last search had that have since disconnected, by name. */
@@ -549,7 +552,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
       // No server is left to answer: a cancelled search's pending marks go (keeping any answer they showed), so no group or
       // picker entry still says it is searching.
       const settled = document.servers?.flatMap(({ pending: _pending, ...answer }): ServerAnswer[] => answer.result || answer.error ? [answer] : [])
-      const { servers: _servers, ...rest } = document
+      const { servers: _servers, landed: _landed, ...rest } = document
       this.putDocument({ ...rest, ...settled?.length ? { servers: settled } : {}, requestId: undefined, error: 'No server is connected.' })
       return Promise.resolve()
     }
@@ -602,8 +605,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const searched = new Set(servers.map(answer => answer.connectionId))
     const left = fanout.previous.filter(answer => !searched.has(answer.connectionId) && !live(this.o.connections.get(answer.connectionId))).map(answer => answer.label)
     const finished = !fanout.requests.size
-    const { requestId: _request, left: _left, result: _result, ...base } = current
-    const next: SearchDocumentState = { ...base, ...finished ? {} : { requestId: fanout.requestId }, servers, asked: fanout.asked, error: undefined, ...left.length ? { left } : {} }
+    const { requestId: _request, landed: _landed, left: _left, result: _result, ...base } = current
+    const next: SearchDocumentState = { ...base, ...finished ? {} : { requestId: fanout.requestId, landed: fanout.requestId }, servers, asked: fanout.asked, error: undefined, ...left.length ? { left } : {} }
     const merged = mergeAnswers(servers)
     const answered = merged ? { ...next, result: merged } : next
     this.putDocument({ ...answered, current: keptHit(current, fanout.asked, answered) })

@@ -44,7 +44,13 @@ const posix = process.platform !== 'win32'
 const leftover = /^((session|previous)\.json\.invalid-[0-9a-f-]{36}\.json|\.varia-[0-9a-f-]{36}\.tmp)$/i
 const dayMs = 86_400_000
 
-export interface SessionStoreOptions { readonly now?: () => Date; readonly totalBytes?: number }
+export interface SessionStoreOptions {
+  readonly now?: () => Date
+  readonly totalBytes?: number
+  /** Hands out each kept tab without its file's path and baseline (sandbox-guard.ts's `profilePathsRefused`): whoever
+   *  reopens it has no file to read, so a tab that kept its text reopens without a file and one that kept only its path does not reopen. */
+  readonly pathsRefused?: boolean
+}
 
 /** Prepares the same bounded record for disk on quit or a one-use in-memory reload checkpoint. */
 export function encodeSession(session: SessionInput, options: SessionStoreOptions = {}) {
@@ -172,8 +178,10 @@ export class SessionStore {
     const read = await readJsonFile(path, sessionLimits.totalBytes)
     if (read.kind === 'missing') return undefined
     const parsed = read.kind === 'ok' ? recordSchema.safeParse(read.value) : undefined
-    if (parsed?.success) return parsed.data
+    if (parsed?.success) return this.options.pathsRefused ? { ...parsed.data, documents: parsed.data.documents.map(withoutFile) } : parsed.data
     await quarantine(path).catch(() => {})
     return undefined
   }
 }
+
+const withoutFile = ({ path: _path, fileSha256: _baseline, ...document }: SessionRecordDocument): SessionRecordDocument => document

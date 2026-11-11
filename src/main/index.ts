@@ -35,7 +35,7 @@ import { prepare as prepareConnection, settle as settleConnection, type Settled 
 import { connectionLibrary } from './connection-library'
 import { clearEntraPrompt, clearEntraTokenCache } from './entra'
 import { SettingsStore } from './settings-store'
-import { packagedSmokeVariable, sandboxRefusal, smokeDebuggingProfile, stripRemoteDebugging } from './sandbox-guard'
+import { launchFilesRefused, packagedSmokeVariable, profilePathsRefused, sandboxRefusal, smokeDebuggingProfile, stripRemoteDebugging } from './sandbox-guard'
 import { refuseDownloads } from './download-guard'
 import { ShortcutStore, shortcutHandlers } from './shortcut-store'
 import { effectiveRules } from '../shared/commands/effective'
@@ -169,13 +169,16 @@ if (smokeProfile) {
 }
 // Tools › Options. Constructing it reads nothing; code that acts on a value awaits load(), and current() is for menu titles.
 const settings = new SettingsStore(join(app.getPath('userData'), 'settings.json'), join(app.getPath('userData'), 'scripting-options.json'))
+// A packaged smoke run on its debugging port reads no file its profile names (sandbox-guard.ts): the three stores below
+// that keep file paths hand none out.
+const pathsRefused = profilePathsRefused(smokeProfile)
 // File › Recent Files. macOS's Dock menu follows it, except in smoke runs, which must not add to the user's.
 const systemRecent = process.env.VARIA_SMOKE_TEST === '1' ? undefined : systemRecentDocuments(process.platform, app)
-const recent = new RecentFilesStore(join(app.getPath('userData'), 'recent-files.json'), systemRecent ? { system: systemRecent } : {})
+const recent = new RecentFilesStore(join(app.getPath('userData'), 'recent-files.json'), { ...systemRecent ? { system: systemRecent } : {}, pathsRefused })
 // AutoRecover's copies of unsaved queries, user-only, in the profile; see recovery-store.ts.
-const recovery = new RecoveryStore(join(app.getPath('userData'), 'AutoRecover'))
+const recovery = new RecoveryStore(join(app.getPath('userData'), 'AutoRecover'), { pathsRefused })
 // Hot exit's copy of the open tabs, user-only, in the profile; see session-store.ts.
-const openSession = new SessionStore(join(app.getPath('userData'), 'Session'))
+const openSession = new SessionStore(join(app.getPath('userData'), 'Session'), { pathsRefused })
 // Whether a page of this process has taken the session: only the first also reopens what a crashed run restored.
 let sessionTaken = false
 // Smoke suites keep the quit prompts they check unless they ask for hot exit (VARIA_TEST_HOT_EXIT=1).
@@ -210,9 +213,10 @@ const contextMenus = new ContextMenuPopups<BrowserWindow>({
   title: (id, title) => menuTitle(id, title), rules: shortcutRules
 })
 // Files named on the command line, from a second instance, by macOS (open-file) or by a drop, until the page takes them.
-const launchFiles = new LaunchQueue()
+// A packaged smoke run on its debugging port takes none of them, and hands none to another instance.
+const launchFiles = new LaunchQueue(launchFilesRefused(smokeProfile))
 const commandLineFiles = (argv: readonly string[], cwd: string) => fileArguments(argv, { cwd, defaultApp: !!process.defaultApp })
-const ownFiles = commandLineFiles(process.argv, process.cwd())
+const ownFiles = launchFilesRefused(smokeProfile) ? [] : commandLineFiles(process.argv, process.cwd())
 launchFiles.add(ownFiles)
 // A second instance would overwrite this instance's layouts and connection library, so it hands its files to this one
 // as additional data (which Chromium passes on as it was, while it may reorder the command line) and quits.

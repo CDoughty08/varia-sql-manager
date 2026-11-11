@@ -11,6 +11,9 @@ export interface RecentFilesStoreOptions {
   readonly now?: () => Date
   /** The OS's recent documents (`systemRecentDocuments`), which follow the list. */
   readonly system?: { add(path: string): void; clear(): void }
+  /** The file is neither read nor written (sandbox-guard.ts's `profilePathsRefused`): the list starts empty and holds
+   *  only what this process adds, so no path in it comes from the profile. */
+  readonly pathsRefused?: boolean
 }
 
 /**
@@ -38,6 +41,8 @@ export class RecentFilesStore {
   /** Reads the file once; later calls share that read. */
   load(): Promise<void> {
     this.loading ??= this.serial(async () => {
+      // Never read, so never written either: the list lives in memory for this run.
+      if (this.options.pathsRefused) { this.unreadable = true; return }
       let read
       try { read = await readJsonFile(this.path, recentFilesLimits.fileBytes) }
       catch { this.unreadable = true; return }
