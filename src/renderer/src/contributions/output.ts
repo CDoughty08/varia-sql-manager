@@ -2,7 +2,7 @@ import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { resolveBlocks } from '../grid/selection'
-import { outputOf, type MenuTargetService, type OutputTarget } from '../menus/targets'
+import { outputOf, type LiveOutput, type MenuTargetService, type OutputTarget } from '../menus/targets'
 import type { SelectionFilter } from '../results/ResultsService'
 import { requestFrame, windows } from '../core/windows'
 import { focusHeld } from '../core/modal'
@@ -26,7 +26,8 @@ const baseName = (name: string) => name.replace(/\.[^.]*$/, '') || 'Results'
  * selected cells through the backend (ResultsService.copy: SSMS's tab-separated text, with Windows line breaks on
  * Windows); Messages copy the text selected in them. The commands act on the menu's target, else on the view that has
  * focus (Ctrl+C, Ctrl+Shift+C, Ctrl+S, Edit › Copy); Save Results As from the palette acts on the grid that last had
- * focus. Open Value opens the XML, JSON or plan cell a click or Enter names, else the focused grid's active cell.
+ * focus. Open Value opens the XML, JSON or plan cell a click or Enter names, else the focused grid's active cell. A live
+ * view's grid (view `live`) is the same grid with a live source: the commands it takes act through its `LiveOutput`.
  */
 export function outputContribution({ commands, results, menuTargets, documents, settings, resultsSearch, panes }: Pick<Workbench, 'commands' | 'results' | 'menuTargets' | 'documents' | 'settings' | 'resultsSearch' | 'panes'>, api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
   const showWhitespace = (mode: 'spaces' | 'all') =>
@@ -56,6 +57,13 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     const selection = shown && results.selection(target!.tabId, target!.resultIndex)
     return shown && selection && resolveBlocks(selection, shown.rows, shown.columns).length > 0 ? target : undefined
   }
+  /** A live grid's commands, and the column captured by its menu, else its active cell's. */
+  const liveOf = (args?: CommandArgs): LiveOutput | undefined => { const target = targetOf(args); return target?.view === 'live' ? target.live : undefined }
+  const liveColumn = (args?: CommandArgs): { live: LiveOutput; column: number } | undefined => {
+    const target = targetOf(args), live = target?.view === 'live' ? target.live : undefined
+    const column = live && (target!.column ?? live.activeColumn())
+    return live && column !== undefined ? { live, column } : undefined
+  }
   const showSortText = (mode: 'chars' | 'bytes') =>
     settings.choose('queryResults.grid.sortText', settings.getSnapshot().values['queryResults.grid.sortText'] === mode ? 'value' : mode)
   /** The column captured by the menu, else the focused grid's active cell. */
@@ -66,9 +74,14 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     return shown && column !== undefined && Number.isInteger(column) && column >= 0 && column < shown.columns && shown.set.descriptor.columns[column].role !== 'tone'
       ? { tabId: target!.tabId, index: target!.resultIndex, column } : undefined
   }
+  const liveSort = (args?: CommandArgs) => { const at = liveColumn(args); return at && at.live.sortable && at.live.canSort(at.column) ? at : undefined }
   const sortCommand = (direction: 'ascending' | 'descending', add: boolean) => ({
-    when: (args?: CommandArgs) => !!sortTarget(args),
-    run: (args?: CommandArgs) => { const at = sortTarget(args); if (at) results.sortBy(at.tabId, at.index, at.column, direction, add) }
+    when: (args?: CommandArgs) => !!sortTarget(args) || !!liveSort(args),
+    run: (args?: CommandArgs) => {
+      const at = sortTarget(args), live = liveSort(args)
+      if (at) results.sortBy(at.tabId, at.index, at.column, direction, add)
+      else if (live) live.live.sort(live.column, direction === 'descending', add)
+    }
   })
   /** A filter by the grid's selection: the menu's grid, else the focused one. */
   const selectionFilter = (kind: SelectionFilter) => ({
@@ -106,12 +119,12 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     commands.register('output.thenSortAscending', sortCommand('ascending', true)),
     commands.register('output.thenSortDescending', sortCommand('descending', true)),
     commands.register('output.clearSort', {
-      when: args => { const target = targetOf(args); return !!grid(target) && !!results.sortOf(target!.tabId, target!.resultIndex)?.keys.length },
-      run: args => { const target = targetOf(args); if (target && grid(target)) results.clearSort(target.tabId, target.resultIndex) }
+      when: args => { const target = targetOf(args), live = liveOf(args); return live ? live.sortable && live.sorted() : !!grid(target) && !!results.sortOf(target!.tabId, target!.resultIndex)?.keys.length },
+      run: args => { const target = targetOf(args), live = liveOf(args); if (live) { if (live.sortable) live.clearSort() } else if (target && grid(target)) results.clearSort(target.tabId, target.resultIndex) }
     }),
     commands.register('output.filterColumnValues', {
-      when: args => { const at = sortTarget(args); return !!at && results.canFilterColumn(at.tabId, at.index, at.column) },
-      run: args => { const at = sortTarget(args); if (at) results.filterColumn(at.tabId, at.index, at.column) }
+      when: args => { const at = sortTarget(args), live = liveColumn(args); return live ? live.live.canFilter(live.column) : !!at && results.canFilterColumn(at.tabId, at.index, at.column) },
+      run: args => { const at = sortTarget(args), live = liveColumn(args); if (live) { if (live.live.canFilter(live.column)) live.live.filterColumn(live.column) } else if (at) results.filterColumn(at.tabId, at.index, at.column) }
     }),
     commands.register('output.filterSelection', selectionFilter('in')),
     commands.register('output.excludeSelection', selectionFilter('notIn')),
@@ -120,41 +133,47 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     commands.register('output.filterDuplicates', duplicatesFilter(false)),
     commands.register('output.filterDuplicateRows', duplicatesFilter(true)),
     commands.register('output.clearFilters', {
-      when: args => { const target = targetOf(args); return !!grid(target) && !!results.sortOf(target!.tabId, target!.resultIndex)?.filters.length },
-      run: args => { const target = targetOf(args); if (target && grid(target)) results.clearFilters(target.tabId, target.resultIndex) }
+      when: args => { const target = targetOf(args), live = liveOf(args); return live ? live.filtered() : !!grid(target) && !!results.sortOf(target!.tabId, target!.resultIndex)?.filters.length },
+      run: args => { const target = targetOf(args), live = liveOf(args); if (live) live.clearFilters(); else if (target && grid(target)) results.clearFilters(target.tabId, target.resultIndex) }
     }),
     commands.register('output.sortTextByChars', { run: () => showSortText('chars') }),
     commands.register('output.sortTextByBytes', { run: () => showSortText('bytes') }),
     commands.register('output.copy', {
-      when: args => { const target = targetOf(args); return !!selected(target) || (target?.view !== 'grid' && !!target?.selectedText) },
+      when: args => { const target = targetOf(args), live = liveOf(args); return live ? live.hasSelection() : !!selected(target) || (target?.view !== 'grid' && !!target?.selectedText) },
       run: async args => {
-        const target = targetOf(args), cells = selected(target)
+        const target = targetOf(args), cells = selected(target), live = liveOf(args)
+        if (live) { if (live.hasSelection()) live.copy(settings.get('queryResults.grid.includeColumnHeaders')); return }
         // Tools › Options › Query Results › Results to Grid decides the header row; Copy with Headers always has one.
         if (cells) { const failure = await results.copy(cells.tabId, cells.resultIndex, settings.get('queryResults.grid.includeColumnHeaders')); if (failure) commands.reportError(failure) }
         else if (target && target.view !== 'grid' && target.selectedText) unwrap(await api.writeClipboardText(target.selectedText))
       }
     }),
     commands.register('output.copyWithHeaders', {
-      when: args => !!selected(targetOf(args)),
+      when: args => { const live = liveOf(args); return live ? live.hasSelection() : !!selected(targetOf(args)) },
       run: async args => {
+        const live = liveOf(args)
+        if (live) { if (live.hasSelection()) live.copy(true); return }
         const cells = selected(targetOf(args))
         const failure = cells && await results.copy(cells.tabId, cells.resultIndex, true)
         if (failure) commands.reportError(failure)
       }
     }),
     commands.register('output.copyColumnName', {
-      when: args => !!sortTarget(args),
+      when: args => { const live = liveColumn(args); return live ? live.live.columnName(live.column) !== undefined : !!sortTarget(args) },
       run: async args => {
-        const at = sortTarget(args)
-        if (at) unwrap(await api.writeClipboardText(results.getSnapshot()[at.tabId].sets[at.index].descriptor.columns[at.column].name))
+        const at = sortTarget(args), live = liveColumn(args), name = live?.live.columnName(live.column)
+        if (name !== undefined) unwrap(await api.writeClipboardText(name))
+        else if (at) unwrap(await api.writeClipboardText(results.getSnapshot()[at.tabId].sets[at.index].descriptor.columns[at.column].name))
       }
     }),
     commands.register('output.fitColumn', {
-      when: args => { const at = sortTarget(args); return !!at && results.canFitColumn(at.tabId, at.index, at.column) },
-      run: args => { const at = sortTarget(args); if (at) results.fitColumn(at.tabId, at.index, at.column) }
+      when: args => { const at = sortTarget(args), live = liveColumn(args); return live ? live.live.hasRows() : !!at && results.canFitColumn(at.tabId, at.index, at.column) },
+      run: args => { const at = sortTarget(args), live = liveColumn(args); if (live) live.live.fitColumn(live.column); else if (at) results.fitColumn(at.tabId, at.index, at.column) }
     }),
     commands.register('output.saveResultsAs', {
       run: async args => {
+        const live = liveOf(args)
+        if (live) { if (live.hasRows()) live.save(); return }
         const target = targetOf(args), tabId = target?.tabId ?? documents.getSnapshot().activeId
         const tab = results.getSnapshot()[tabId]
         if (!tab?.sets.length) return
@@ -209,12 +228,14 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     commands.register('output.selectAll', {
       when: args => {
         const target = targetOf(args)
+        if (target?.view === 'live') return !!target.live?.hasRows()
         if (target?.view === 'grid') { const shown = grid(target); return !!shown && shown.rows > 0 && shown.columns > 0 }
         return !!target?.element.textContent
       },
       run: args => {
         const target = targetOf(args)
-        if (target?.view === 'grid') { if (grid(target)) results.selectAll(target.tabId, target.resultIndex) }
+        if (target?.view === 'live') { if (target.live?.hasRows()) target.live.selectAll() }
+        else if (target?.view === 'grid') { if (grid(target)) results.selectAll(target.tabId, target.resultIndex) }
         // Messages keep text selection; Chromium's Select All would select the whole window.
         else if (target) target.element.ownerDocument.getSelection()?.selectAllChildren(target.element)
       }

@@ -124,9 +124,9 @@ try {
   console.log('Save passed: a dialog open across samples saved the newest revision.')
 
   step = 'sort'
-  // The grid's context menu sorts by the active cell's column, as a results grid's does; the backend sorts the next revision.
+  // Query Output's context menu (the results grid's own) sorts by the active cell's column; the backend sorts the next revision.
   const amount = grid.locator(gridPart.columnHeader).filter({ hasText: /^amount$/ })
-  const gridMenu = page.getByRole('menu', { name: 'Live grid', exact: true })
+  const gridMenu = page.getByRole('menu', { name: 'Query output', exact: true })
   const amountCell = grid.locator(`${gridPart.cell}[aria-colindex="5"]`).first()
   await amountCell.click({ button: 'right' })
   await gridMenu.getByRole('menuitem', { name: /^Sort Ascending/ }).click()

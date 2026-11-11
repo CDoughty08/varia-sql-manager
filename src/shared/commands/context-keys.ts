@@ -14,7 +14,7 @@ import { ssisVerbContextKey, ssisVerbs, ssisVerbSpecs, type SsisVerbContextKey }
 export type ContextKeyScope = 'static' | 'state' | 'focus' | 'target'
 interface Declared { readonly scope: Exclude<ContextKeyScope, 'target'>; readonly description: string; readonly menu?: undefined }
 /** A target key describes one kind of context-menu target, so it may appear only in that context menu's placements. */
-interface DeclaredTarget { readonly scope: 'target'; readonly description: string; readonly menu: 'explorer.context' | 'output.context' | 'dockTab.context' | 'documentTab.context' | 'search.hit.context' | 'liveGrid.context' }
+interface DeclaredTarget { readonly scope: 'target'; readonly description: string; readonly menu: 'explorer.context' | 'output.context' | 'dockTab.context' | 'documentTab.context' | 'search.hit.context' }
 export type ContextKeyDeclaration =
   | ({ readonly type: 'boolean' } & (Declared | DeclaredTarget))
   | ({ readonly type: 'enum'; readonly values: readonly string[] } & (Declared | DeclaredTarget))
@@ -182,15 +182,14 @@ export const contextKeys = {
     description: "The kind of server the Object Explorer node the menu is for is on: 'box', 'managedInstance' or 'cloud', or '' for the empty area."
   },
   explorerServerLinux: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for a node on SQL Server on Linux.' },
-  outputView: { type: 'enum', scope: 'target', menu: 'output.context', values: ['grid', 'messages', ''], description: 'The Query Output view the menu is for: a results grid or the messages.' },
+  outputView: { type: 'enum', scope: 'target', menu: 'output.context', values: ['grid', 'messages', 'live', ''], description: "The Query Output view the menu is for: a results grid, the messages, or a live view's grid (an Activity Monitor pane)." },
   outputGridTransposable: { type: 'boolean', scope: 'target', menu: 'output.context', description: "The menu is for a results grid Transpose can read: a query's rows, a pivot or a transpose, not a diff." },
+  outputLiveSortable: { type: 'boolean', scope: 'target', menu: 'output.context', description: "The live view's grid the menu is for sorts (its table is a snapshot, not a log that keeps arrival order)." },
   pane: { type: 'enum', scope: 'target', menu: 'dockTab.context', values: ['explorer', 'editor', 'results', 'messages', 'plan', 'statistics', ''], description: "The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, Results, Messages, Execution plan, or Client Statistics." },
   paneFloating: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel the menu is for is floating.' },
   panePopout: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel the menu is for is in a window of its own (Move into New Window).' },
   documentTabFloating: { type: 'boolean', scope: 'target', menu: 'documentTab.context', description: "The document tab the menu is for is in a floating editor group." },
-  searchHitSchema: { type: 'boolean', scope: 'target', menu: 'search.hit.context', description: 'The Search Objects result the menu is for is in a schema (itself, or its parent for a column, key or trigger), so it has schema-qualified and fully qualified names.' },
-  liveGridSortable: { type: 'boolean', scope: 'target', menu: 'liveGrid.context', description: 'The live grid the menu is for sorts (its table is a snapshot, not a log that keeps arrival order).' },
-  liveGridFilterable: { type: 'boolean', scope: 'target', menu: 'liveGrid.context', description: "The live grid the menu is for filters its active cell's column (the header has a funnel)." }
+  searchHitSchema: { type: 'boolean', scope: 'target', menu: 'search.hit.context', description: 'The Search Objects result the menu is for is in a schema (itself, or its parent for a column, key or trigger), so it has schema-qualified and fully qualified names.' }
 } as const satisfies Record<string, ContextKeyDeclaration>
 
 type Declarations = typeof contextKeys

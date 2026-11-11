@@ -234,14 +234,17 @@ export class LiveGrid extends SnapshotStore<LiveGridSnapshot> implements Disposa
    * Sorts this grid's snapshot table by a shown column (its index) or a catalogue column id; `undefined` goes back to the
    * source's order. The backend sorts, and its next revision arrives sorted: the probe's sort setting holds a key for
    * this table (`table`), so the probe's other tables keep theirs. A probe-wide key (no table) gives way to it here, and
-   * stays on the other tables as their own keys.
+   * stays on the other tables as their own keys. With `add` the column becomes a further key (Then Sort).
    */
-  sortBy(column: number | string | undefined, descending = false): void {
+  sortBy(column: number | string | undefined, descending = false, add = false): void {
     if (this.spec.mode !== 'snapshot') return
     if (column === undefined) return this.setSort([])
     const id = this.sortColumn(column)
-    if (id) this.setSort([{ column: id, descending }])
+    // Then Sort: the column becomes the last key, as in a results grid (ResultsService.sortBy).
+    if (id) this.setSort(add ? [...(this.sortOf() ?? []).filter(key => key.column !== id), { column: id, descending }] : [{ column: id, descending }])
   }
+  /** Whether a shown column sorts (never the tone column). */
+  canSort(column: number): boolean { return this.sortable && this.sortColumn(column) !== undefined }
   /**
    * A header's sort button, as in a results grid (ResultsService.cycleSort): without `add` only the sole key cycles
    * (ascending, descending, unsorted) and any other click sorts by the column alone, ascending; with `add` the column

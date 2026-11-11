@@ -404,9 +404,7 @@ describe('menu state', () => {
       // The results toolbar's Profile and Row size toggles, also in the grid's menu.
       'output.toggleColumnProfile', 'output.toggleRowSize', 'output.compareWithPrevious', 'output.compareWithPreviousExact', 'output.pivot',
       // The grid menu's Transpose submenu, also the results toolbar's Transpose.
-      'output.transpose', 'output.transposeSelectedRows', 'output.transposeWithHeaders',
-      // A live grid's context menu (the grid serves its own keys).
-      'liveGrid.copy', 'liveGrid.copyWithHeaders', 'liveGrid.selectAll', 'liveGrid.sortAscending', 'liveGrid.sortDescending', 'liveGrid.clearSort', 'liveGrid.filterColumnValues', 'liveGrid.fitColumn', 'liveGrid.saveAs']
+      'output.transpose', 'output.transposeSelectedRows', 'output.transposeWithHeaders']
     expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))
     // Query › Connection is a native submenu too.
     for (const id of ['preferences.colorTheme', 'connection.connect', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'file.closeAll', 'view.toggleResultsPane'] as const) expect(menuCommandIds).toContain(id)

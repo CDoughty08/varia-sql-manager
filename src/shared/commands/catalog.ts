@@ -734,36 +734,6 @@ export const commandCatalog = {
     title: 'Close Activity Monitor', category: 'Activity Monitor', icon: 'close', precondition: 'activeDocumentIsActivityMonitor && !documentBusy', unavailableHint: openMonitor,
     keybindings: [{ key: 'shift+escape', when: 'activityMonitorFocus' }]
   },
-  // A live grid's menu (LiveGridPane: the Activity Monitor's panes), the results grid's items for a grid whose rows the
-  // backend samples. The grid serves its own Ctrl+C, Ctrl+Shift+C, Ctrl+A and Alt+Down, so these have no keys; Sort and
-  // Filter Column Values change the source's args, and the backend sorts and filters each sample.
-  'liveGrid.copy': {
-    title: 'Copy', category: 'View', icon: 'copy', palette: false, menus: [{ menu: 'liveGrid.context', group: '1_copy', order: 1, mnemonic: 'c' }]
-  },
-  'liveGrid.copyWithHeaders': {
-    title: 'Copy with Headers', category: 'View', palette: false, menus: [{ menu: 'liveGrid.context', group: '1_copy', order: 2, mnemonic: 'h' }]
-  },
-  'liveGrid.selectAll': {
-    title: 'Select All', category: 'View', palette: false, menus: [{ menu: 'liveGrid.context', group: '2_select', order: 1, mnemonic: 'a' }]
-  },
-  'liveGrid.sortAscending': {
-    title: 'Sort Ascending', category: 'View', icon: 'arrow-up', palette: false, menus: [{ menu: 'liveGrid.context', group: '3_sort', order: 1, mnemonic: 'o', when: 'liveGridSortable' }]
-  },
-  'liveGrid.sortDescending': {
-    title: 'Sort Descending', category: 'View', icon: 'arrow-down', palette: false, menus: [{ menu: 'liveGrid.context', group: '3_sort', order: 2, mnemonic: 'd', when: 'liveGridSortable' }]
-  },
-  'liveGrid.clearSort': {
-    title: 'Clear Sort', category: 'View', palette: false, menus: [{ menu: 'liveGrid.context', group: '3_sort', order: 3, mnemonic: 'r', when: 'liveGridSortable' }]
-  },
-  'liveGrid.filterColumnValues': {
-    title: 'Filter Column Values…', category: 'View', icon: 'filter', palette: false, menus: [{ menu: 'liveGrid.context', group: '4_filter', order: 1, mnemonic: 'v', when: 'liveGridFilterable' }]
-  },
-  'liveGrid.fitColumn': {
-    title: 'Fit Column', category: 'View', palette: false, menus: [{ menu: 'liveGrid.context', group: '5_width', order: 1, mnemonic: 'i' }]
-  },
-  'liveGrid.saveAs': {
-    title: 'Save Rows As…', category: 'View', icon: 'save-as', palette: false, menus: [{ menu: 'liveGrid.context', group: '6_save', order: 1, mnemonic: 's' }]
-  },
   // Not theme.*: PR1's theme menu items (theme.mode.*, theme.create, …) come from themeMenuModel and keep those ids.
   'preferences.colorTheme': {
     title: 'Color Theme…', category: 'Preferences', icon: 'symbol-color', keywords: ['dark', 'light', 'appearance'],
@@ -845,17 +815,20 @@ export const commandCatalog = {
   },
   // The Query Output menu and the results grid's keys: the grid copies its selected cells, and Messages their selected
   // text (Ctrl+C there is Chromium's copy). Select All selects the grid's cells, or only the text of Messages.
+  // A live view's grid (an Activity Monitor pane) is the results grid with a live source, so its menu is this one: Copy,
+  // Select All, Save, Sort (a snapshot table), Fit Column, Filter Column Values and Clear Filters (the columns its source
+  // filters) and White space act on it (outputView 'live'); the result-set items hide. It serves its own keys.
   'output.copy': {
     title: 'Copy', category: 'Query', icon: 'copy', palette: false,
     keybindings: [{ key: 'mod+c', when: 'outputGridFocus' }], menus: [{ menu: 'output.context', group: '1_copy', order: 1, mnemonic: 'c' }]
   },
   'output.copyWithHeaders': {
     title: 'Copy with Headers', category: 'Query', palette: false,
-    keybindings: [{ key: 'mod+shift+c', when: 'outputGridFocus' }], menus: [{ menu: 'output.context', group: '1_copy', order: 2, mnemonic: 'h', when: "outputView == 'grid'" }]
+    keybindings: [{ key: 'mod+shift+c', when: 'outputGridFocus' }], menus: [{ menu: 'output.context', group: '1_copy', order: 2, mnemonic: 'h', when: "outputView == 'grid' || outputView == 'live'" }]
   },
   'output.copyColumnName': {
     title: 'Copy Column Name', category: 'Query', icon: 'copy', palette: false,
-    menus: [{ menu: 'output.context', group: '1_copy', order: 3, mnemonic: 'n', when: "outputView == 'grid'" }]
+    menus: [{ menu: 'output.context', group: '1_copy', order: 3, mnemonic: 'n', when: "outputView == 'grid' || outputView == 'live'" }]
   },
   'output.selectAll': {
     title: 'Select All', category: 'Query', palette: false,
@@ -865,48 +838,48 @@ export const commandCatalog = {
   'output.saveResultsAs': {
     title: 'Save Results As…', category: 'Query', icon: 'save-as', keywords: ['export', 'csv', 'json', 'tab', 'grid'], precondition: 'hasResults',
     unavailableHint: 'Execute a query that returns results first.',
-    keybindings: [{ key: 'mod+s', when: 'outputGridFocus' }], menus: [{ menu: 'output.context', group: '3_save', order: 1, mnemonic: 'v', when: "outputView == 'grid'" }]
+    keybindings: [{ key: 'mod+s', when: 'outputGridFocus' }], menus: [{ menu: 'output.context', group: '3_save', order: 1, mnemonic: 'v', when: "outputView == 'grid' || outputView == 'live'" }]
   },
   // Frees the active query's results in the backend; Messages stay.
   'output.closeResults': {
     title: 'Close Results', category: 'Query', icon: 'close', keywords: ['free', 'memory', 'release', 'clear'], precondition: '!documentBusy',
     unavailableHint: 'There are no results to close, or the query is still running.',
-    menus: [{ menu: 'output.context', group: 'z_close', order: 1, mnemonic: 'l' }]
+    menus: [{ menu: 'output.context', group: 'z_close', order: 1, mnemonic: 'l', when: "outputView != 'live'" }]
   },
   // The results toolbar's White space choices; each turns the grid's marks off when it is already on (queryResults.grid.whitespace).
   'output.showSpaces': {
     title: 'Show Spaces and Tabs in Results', category: 'Query', icon: 'whitespace', keywords: ['whitespace', 'spaces', 'tabs', 'grid'], toggled: 'resultsWhitespaceSpaces',
-    menus: [{ menu: 'output.context', group: '4_view', order: 1, title: 'Show Spaces and Tabs', mnemonic: 'b', when: "outputView == 'grid'" }]
+    menus: [{ menu: 'output.context', group: '4_view', order: 1, title: 'Show Spaces and Tabs', mnemonic: 'b', when: "outputView == 'grid' || outputView == 'live'" }]
   },
   'output.showAllWhitespace': {
     title: 'Show All White Space in Results', category: 'Query', icon: 'whitespace', keywords: ['whitespace', 'crlf', 'nbsp', 'invisible', 'grid'],
-    toggled: 'resultsWhitespaceAll', menus: [{ menu: 'output.context', group: '4_view', order: 2, title: 'Show All White Space', mnemonic: 'w', when: "outputView == 'grid'" }]
+    toggled: 'resultsWhitespaceAll', menus: [{ menu: 'output.context', group: '4_view', order: 2, title: 'Show All White Space', mnemonic: 'w', when: "outputView == 'grid' || outputView == 'live'" }]
   },
   // Sorting a grid (results.view): the menu's column, else the active cell's. Sort replaces the grid's sort; Then Sort adds
   // the column as a further key. A header's sort button does the same with a click, and Shift+click (grid.addSortKey).
   'output.sortAscending': {
     title: 'Sort Ascending', category: 'Query', icon: 'arrow-up', keywords: ['order', 'sort', 'asc', 'grid', 'column'], palette: false,
-    menus: [{ menu: 'output.context', group: '2_sort', order: 1, mnemonic: 'o', when: "outputView == 'grid'" }]
+    menus: [{ menu: 'output.context', group: '2_sort', order: 1, mnemonic: 'o', when: "outputView == 'grid' || outputLiveSortable" }]
   },
   'output.sortDescending': {
     title: 'Sort Descending', category: 'Query', icon: 'arrow-down', keywords: ['order', 'sort', 'desc', 'grid', 'column'], palette: false,
-    menus: [{ menu: 'output.context', group: '2_sort', order: 2, mnemonic: 'd', when: "outputView == 'grid'" }]
+    menus: [{ menu: 'output.context', group: '2_sort', order: 2, mnemonic: 'd', when: "outputView == 'grid' || outputLiveSortable" }]
   },
   'output.thenSortAscending': {
     title: 'Then Sort Ascending', category: 'Query', keywords: ['order', 'sort', 'secondary', 'grid', 'column'], palette: false,
-    menus: [{ menu: 'output.context', group: '2_sort', order: 3, when: "outputView == 'grid'" }]
+    menus: [{ menu: 'output.context', group: '2_sort', order: 3, when: "outputView == 'grid' || outputLiveSortable" }]
   },
   'output.thenSortDescending': {
     title: 'Then Sort Descending', category: 'Query', keywords: ['order', 'sort', 'secondary', 'grid', 'column'], palette: false,
-    menus: [{ menu: 'output.context', group: '2_sort', order: 4, when: "outputView == 'grid'" }]
+    menus: [{ menu: 'output.context', group: '2_sort', order: 4, when: "outputView == 'grid' || outputLiveSortable" }]
   },
   'output.clearSort': {
     title: 'Clear Sort', category: 'Query', keywords: ['order', 'unsort', 'original', 'grid'], palette: false,
-    menus: [{ menu: 'output.context', group: '2_sort', order: 5, mnemonic: 'r', when: "outputView == 'grid'" }]
+    menus: [{ menu: 'output.context', group: '2_sort', order: 5, mnemonic: 'r', when: "outputView == 'grid' || outputLiveSortable" }]
   },
   'output.fitColumn': {
     title: 'Fit Column', category: 'Query', keywords: ['resize', 'width', 'autosize'], palette: false,
-    menus: [{ menu: 'output.context', group: '2_width', order: 1, mnemonic: 'i', when: "outputView == 'grid'" }]
+    menus: [{ menu: 'output.context', group: '2_width', order: 1, mnemonic: 'i', when: "outputView == 'grid' || outputView == 'live'" }]
   },
   'output.revealError': {
     title: 'Go to Error Line', category: 'Query', icon: 'go-to-file', palette: false, precondition: '!documentBusy',
@@ -935,7 +908,7 @@ export const commandCatalog = {
   'output.filterColumnValues': {
     title: 'Filter Column Values…', category: 'Query', icon: 'filter', keywords: ['filter', 'funnel', 'distinct', 'values', 'checklist', 'where', 'grid', 'column'], palette: false,
     keybindings: [{ key: 'alt+down', when: 'outputGridFocus' }],
-    menus: [{ menu: 'output.filter', group: '0_column', order: 1, mnemonic: 'v', when: "outputView == 'grid'" }]
+    menus: [{ menu: 'output.filter', group: '0_column', order: 1, mnemonic: 'v', when: "outputView == 'grid' || outputView == 'live'" }]
   },
   'output.filterSelection': {
     title: 'Filter for Selected Values', category: 'Query', icon: 'filter', keywords: ['filter', 'in', 'equal', 'where', 'values', 'grid'], palette: false,
@@ -963,7 +936,7 @@ export const commandCatalog = {
   },
   'output.clearFilters': {
     title: 'Clear Filters', category: 'Query', icon: 'clear-all', keywords: ['filter', 'unfilter', 'all', 'reset', 'grid'], palette: false,
-    menus: [{ menu: 'output.filter', group: '4_clear', order: 1, mnemonic: 'c', when: "outputView == 'grid'" }]
+    menus: [{ menu: 'output.filter', group: '4_clear', order: 1, mnemonic: 'c', when: "outputView == 'grid' || outputView == 'live'" }]
   },
   // The results toolbar's Sort text by choices (queryResults.grid.sortText); each goes back to Value when it is already on.
   'output.sortTextByChars': {

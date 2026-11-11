@@ -326,7 +326,7 @@ try {
   await expect(monitor().getByText(/^0 sessions · 2 filters on/)).toBeVisible()
   await columnHeader('Database').hover()
   await columnHeader('Database').locator(gridPart.funnelButton).click()
-  await expect(funnel.getByRole('checkbox', { name: 'BillingDb (none now)', exact: true })).toBeChecked()
+  await expect(funnel.getByRole('checkbox', { name: 'BillingDb (0)', exact: true })).toBeChecked()
   await monitor().getByText(/^0 sessions · 2 filters on/).click()
   await expect(funnel).toHaveCount(0)
   await filters.getByRole('button', { name: 'Clear filters', exact: true }).click()
@@ -345,7 +345,7 @@ try {
   expect(rows.rows, `Sessions toolbar rows at 800 px: ${JSON.stringify(rows.widths)}`).toBe(1)
   await expect(filters.getByRole('checkbox')).toHaveCount(0)
   // The header's sort button sorts in the backend (the probe's sort), as a results grid's header does: Login ascending,
-  // then descending; the context menu's Clear Sort and Sort Ascending do the same.
+  // then descending; Query Output's context menu (the results grid's own) Clear Sort and Sort Ascending do the same.
   await columnHeader('Login').hover()
   await columnHeader('Login').locator(gridPart.sortButton).click()
   await expect(loginAt(0)).toHaveText('app_billing')
@@ -354,7 +354,7 @@ try {
   await columnHeader('Login').locator(gridPart.sortButton).click()
   await expect(loginAt(0)).toHaveText('svc_reporting')
   await sessionsGrid.getByRole('gridcell', { name: 'app_orders', exact: true }).click({ button: 'right' })
-  const gridMenu = page.getByRole('menu', { name: 'Live grid', exact: true })
+  const gridMenu = page.getByRole('menu', { name: 'Query output', exact: true })
   await expect(gridMenu.getByRole('menuitem', { name: /^Copy with Headers/ })).toBeVisible()
   await gridMenu.getByRole('menuitem', { name: /^Clear Sort/ }).click()
   await expect(columnHeader('Login')).not.toHaveAttribute('aria-sort', /./)

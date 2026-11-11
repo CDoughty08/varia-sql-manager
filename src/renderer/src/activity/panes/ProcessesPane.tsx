@@ -1,6 +1,6 @@
 // The Sessions pane (docs/activity-monitor.md, Sessions; SSMS's Processes): one row per session from the sessions probe,
-// through LiveGridPane (no React per row), the results grid's header with its sort buttons and funnels. Its toolbar and the
-// funnels set the monitor's sessions filter (view chip, Show chips, filter box, column value filters), which
+// in the results grid (LiveGridPane mounts ResultGrid's shell: no React per row), with its header's sort buttons and funnels
+// (ColumnFilterPopover over the sessions facets) and Query Output's menu. Its toolbar and the funnels set the monitor's sessions filter (view chip, Show chips, filter box, column value filters), which
 // ActivityMonitorService sends as the source's args; the backend filters (and sorts) the sample in memory.
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { activityLimits, sessionToggles, tableSpecs, viewChipNotes, viewChipTitles, viewChips } from '../../../../shared/activity/catalog'
@@ -9,8 +9,7 @@ import type { LiveTone } from '../../../../shared/live/catalog'
 import { useWorkbench } from '../../core/WorkbenchContext'
 import Icon from '../../Icon'
 import { Chip, ChipGroup } from '../../kit/Chip'
-import { LiveColumnFilterPopover } from '../../live/LiveColumnFilterPopover'
-import { LiveGridPane, type LiveColumnFilter } from '../../live/LiveGridPane'
+import { LiveGridPane, type LiveFilters } from '../../live/LiveGridPane'
 import type { LiveHandle, LiveSnapshot } from '../../live/LiveService'
 import { formatCount, plural } from '../../results/status'
 import type { MonitorFacts, MonitorState, ProcessesFilter } from '../ActivityMonitorService'
@@ -52,15 +51,16 @@ export default function ProcessesPane({ state, handle, snapshot, facts, labelled
   const [drafting, setDrafting] = useState(false)
   const set = (change: Partial<ProcessesFilter>) => activity.setProcessesFilter(state.id, change)
   // The header's funnels: one per facet column, each a value filter the backend applies (ActivityFilter.cs).
-  const columnFilter: LiveColumnFilter = {
+  const filters: LiveFilters = {
     columns: sessions.facetColumns ?? [],
-    filtered: filter.columnFilters.map(item => item.column),
-    popover: target => {
-      const others = filter.columnFilters.filter(item => item.column !== target.column)
-      return <LiveColumnFilterPopover caption={target.caption} anchor={target.anchor} grid={target.grid} facet={facts.facets.sessions?.[target.column]}
-        filter={filter.columnFilters.find(item => item.column === target.column)} maxValues={activityLimits.columnFilterValues} onClose={target.onClose}
-        onApply={next => set({ columnFilters: next ? [...others, { column: target.column, ...next } satisfies ActivityColumnFilter] : others })} />
-    }
+    filters: filter.columnFilters,
+    facet: column => facts.facets.sessions?.[column],
+    apply: (column, next) => {
+      const others = filter.columnFilters.filter(item => item.column !== column)
+      set({ columnFilters: next ? [...others, { column, ...next } satisfies ActivityColumnFilter] : others })
+    },
+    clear: () => set({ columnFilters: [] }),
+    maxValues: activityLimits.columnFilterValues
   }
   return <div className="activity-pane-content" data-activity-grid="processes">
     <div className="activity-pane-tools" role="toolbar" aria-label="Sessions filters">
@@ -79,7 +79,7 @@ export default function ProcessesPane({ state, handle, snapshot, facts, labelled
       </button>
     </div>
     <PaneState problem={problem} hasRows={!!table} waiting={waiting}>
-      <LiveGridPane live={handle} probe={probe} table={0} label="Sessions" toneLabel={processesToneLabel} state={activity.gridState(state.id, 'processes')} columnFilter={columnFilter} />
+      <LiveGridPane live={handle} probe={probe} table={0} label="Sessions" toneLabel={processesToneLabel} state={activity.gridState(state.id, 'processes')} filters={filters} />
     </PaneState>
     {/* Not a live region: the count changes with every sample on a busy server, and re-announcing it would be noise. */}
     <p className="activity-pane-status" aria-labelledby={labelledBy}>{processesStatus(table?.descriptor.rowsAvailable, !!table?.descriptor.truncated, filter, waiting)}</p>

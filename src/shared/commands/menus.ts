@@ -11,8 +11,8 @@ export const applicationMenus = [
   { id: 'help', label: 'Help', mnemonic: 'h' }
 ] as const
 export type MenubarId = typeof applicationMenus[number]['id']
-/** Context menus, one per kind of target: the editor, an Object Explorer node, a table designer, a query tab, Query Output, a panel tab, a text field, the Integration Services Operations grid, a live grid, a Search Objects hit. */
-export const contextMenuIds = ['editor.context', 'explorer.context', 'tableDesigner.context', 'documentTab.context', 'output.context', 'dockTab.context', 'input.context', 'ssis.operation.context', 'liveGrid.context', 'search.hit.context'] as const
+/** Context menus, one per kind of target: the editor, an Object Explorer node, a table designer, a query tab, Query Output, a panel tab, a text field, the Integration Services Operations grid, a Search Objects hit. */
+export const contextMenuIds = ['editor.context', 'explorer.context', 'tableDesigner.context', 'documentTab.context', 'output.context', 'dockTab.context', 'input.context', 'ssis.operation.context', 'search.hit.context'] as const
 export type ContextMenuId = typeof contextMenuIds[number]
 export const submenuIds = [
   'file.recent',
@@ -71,7 +71,6 @@ export const menuIds: readonly MenuId[] = [
   'dockTab.context',
   'input.context',
   'ssis.operation.context',
-  'liveGrid.context',
   'search.hit.context',
   'search.copy'
 ]
@@ -132,7 +131,7 @@ export const submenus: Readonly<Record<SubmenuId, SubmenuDescriptor>> = {
   // The results grid's Highlight submenu (results PR 8): a colour for the selected rows, or none.
   'output.highlight': { title: 'Highlight', nativeId: 'output.highlight', placements: [{ menu: 'output.context', group: '2_sort', order: 7, mnemonic: 'g', when: "outputView == 'grid'" }] },
   // The results grid's Filter submenu (results PR 4): filters by the selected cells' values, NULL and duplicates (results.view).
-  'output.filter': { title: 'Filter', nativeId: 'output.filter', placements: [{ menu: 'output.context', group: '2_sort', order: 6, mnemonic: 'e', when: "outputView == 'grid'" }] },
+  'output.filter': { title: 'Filter', nativeId: 'output.filter', placements: [{ menu: 'output.context', group: '2_sort', order: 6, mnemonic: 'e', when: "outputView == 'grid' || outputView == 'live'" }] },
   // The results grid's Transpose submenu: its columns as rows, of all its rows, the selected ones, or named by a column (results.transpose).
   'output.transposeMenu': { title: 'Transpose', nativeId: 'output.transposeMenu', placements: [{ menu: 'output.context', group: '2_sort', order: 10, mnemonic: 'p', when: 'outputGridTransposable' }] },
   // A Search Objects hit's names, from src/shared/explorer/search.ts' `searchHitNames`.

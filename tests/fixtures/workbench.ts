@@ -30,7 +30,6 @@ import { TransposeService } from '../../src/renderer/src/results/TransposeServic
 import { highlightsContribution } from '../../src/renderer/src/contributions/highlights'
 import { pivotContribution } from '../../src/renderer/src/contributions/pivot'
 import { transposeContribution } from '../../src/renderer/src/contributions/transpose'
-import { liveGridContribution } from '../../src/renderer/src/contributions/live'
 import { compareContribution } from '../../src/renderer/src/contributions/compare'
 import { ResultsSearchService } from '../../src/renderer/src/results/search'
 import { browserTimers } from '../../src/renderer/src/core/timers'
@@ -514,7 +513,6 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     compareContribution(workbench),
     pivotContribution(workbench),
     transposeContribution(workbench),
-    liveGridContribution(workbench),
     shellContribution(workbench, host),
     paletteContribution(workbench, history),
     themeContribution(workbench, api, options.timers),

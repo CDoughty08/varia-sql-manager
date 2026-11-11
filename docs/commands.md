@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (305)
+## Commands (296)
 
 ### File
 
@@ -101,15 +101,6 @@ keys it uses are listed below.
 | Toggle Word Wrap | `editor.toggleWordWrap` | Alt+Z | Alt+Z | — | Always; checked when `editorWordWrap` | Edit › Advanced › Word Wrap |
 | View White Space | `editor.toggleWhitespace` | — | — | — | Always; checked when `editorWhitespace` | Edit › Advanced › View White Space |
 | Toggle Line Numbers | `editor.toggleLineNumbers` | — | — | — | Always; checked when `editorLineNumbers` | — |
-| Copy (not in the palette) | `liveGrid.copy` | — | — | — | Always | Live grid context menu › Copy |
-| Copy with Headers (not in the palette) | `liveGrid.copyWithHeaders` | — | — | — | Always | Live grid context menu › Copy with Headers |
-| Select All (not in the palette) | `liveGrid.selectAll` | — | — | — | Always | Live grid context menu › Select All |
-| Sort Ascending (not in the palette) | `liveGrid.sortAscending` | — | — | — | Always | Live grid context menu › Sort Ascending |
-| Sort Descending (not in the palette) | `liveGrid.sortDescending` | — | — | — | Always | Live grid context menu › Sort Descending |
-| Clear Sort (not in the palette) | `liveGrid.clearSort` | — | — | — | Always | Live grid context menu › Clear Sort |
-| Filter Column Values… (not in the palette) | `liveGrid.filterColumnValues` | — | — | — | Always | Live grid context menu › Filter Column Values… |
-| Fit Column (not in the palette) | `liveGrid.fitColumn` | — | — | — | Always | Live grid context menu › Fit Column |
-| Save Rows As… (not in the palette) | `liveGrid.saveAs` | — | — | — | Always | Live grid context menu › Save Rows As… |
 | Zoom In | `view.zoomIn` | Ctrl+= *, Ctrl+Shift+= * | Ctrl+= *, Ctrl+Shift+= * | ⌘= *, ⇧⌘= * | Always | View › Zoom In |
 | Zoom Out | `view.zoomOut` | Ctrl+- * | Ctrl+- * | ⌘- * | Always | View › Zoom Out |
 | Reset Zoom | `view.resetZoom` | Ctrl+0 * | Ctrl+0 * | ⌘0 * | Always | View › Reset Zoom |
@@ -828,26 +819,26 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
 | `1_copy` | **C**opy | `output.copy` | Always |
-| `1_copy` | Copy with **H**eaders | `output.copyWithHeaders` | `outputView == 'grid'` |
-| `1_copy` | Copy Column **N**ame | `output.copyColumnName` | `outputView == 'grid'` |
+| `1_copy` | Copy with **H**eaders | `output.copyWithHeaders` | `outputView == 'grid' \|\| outputView == 'live'` |
+| `1_copy` | Copy Column **N**ame | `output.copyColumnName` | `outputView == 'grid' \|\| outputView == 'live'` |
 | `2_select` | Select **A**ll | `output.selectAll` | Always |
-| `2_sort` | S**o**rt Ascending | `output.sortAscending` | `outputView == 'grid'` |
-| `2_sort` | Sort **D**escending | `output.sortDescending` | `outputView == 'grid'` |
-| `2_sort` | **T**hen Sort Ascending | `output.thenSortAscending` | `outputView == 'grid'` |
-| `2_sort` | Then **S**ort Descending | `output.thenSortDescending` | `outputView == 'grid'` |
-| `2_sort` | Clea**r** Sort | `output.clearSort` | `outputView == 'grid'` |
-| `2_sort` | Filt**e**r › | Submenu: Query Output context menu › Filter | `outputView == 'grid'` |
+| `2_sort` | S**o**rt Ascending | `output.sortAscending` | `outputView == 'grid' \|\| outputLiveSortable` |
+| `2_sort` | Sort **D**escending | `output.sortDescending` | `outputView == 'grid' \|\| outputLiveSortable` |
+| `2_sort` | **T**hen Sort Ascending | `output.thenSortAscending` | `outputView == 'grid' \|\| outputLiveSortable` |
+| `2_sort` | Then **S**ort Descending | `output.thenSortDescending` | `outputView == 'grid' \|\| outputLiveSortable` |
+| `2_sort` | Clea**r** Sort | `output.clearSort` | `outputView == 'grid' \|\| outputLiveSortable` |
+| `2_sort` | Filt**e**r › | Submenu: Query Output context menu › Filter | `outputView == 'grid' \|\| outputView == 'live'` |
 | `2_sort` | Hi**g**hlight › | Submenu: Query Output context menu › Highlight | `outputView == 'grid'` |
 | `2_sort` | Co**m**pare with Previous Result | `output.compareWithPrevious` | `outputView == 'grid'` |
 | `2_sort` | Pivot Res**u**lts… | `output.pivot` | `outputView == 'grid'` |
 | `2_sort` | Trans**p**ose › | Submenu: Query Output context menu › Transpose | `outputGridTransposable` |
-| `2_width` | F**i**t Column | `output.fitColumn` | `outputView == 'grid'` |
-| `3_save` | Sa**v**e Results As… | `output.saveResultsAs` | `outputView == 'grid'` |
-| `4_view` | Show Spaces and Ta**b**s | `output.showSpaces` | `outputView == 'grid'` |
-| `4_view` | Show All **W**hite Space | `output.showAllWhitespace` | `outputView == 'grid'` |
+| `2_width` | F**i**t Column | `output.fitColumn` | `outputView == 'grid' \|\| outputView == 'live'` |
+| `3_save` | Sa**v**e Results As… | `output.saveResultsAs` | `outputView == 'grid' \|\| outputView == 'live'` |
+| `4_view` | Show Spaces and Ta**b**s | `output.showSpaces` | `outputView == 'grid' \|\| outputView == 'live'` |
+| `4_view` | Show All **W**hite Space | `output.showAllWhitespace` | `outputView == 'grid' \|\| outputView == 'live'` |
 | `4_view` | Column Pro**f**ile | `output.toggleColumnProfile` | `outputView == 'grid'` |
 | `4_view` | Show Row Si**z**e | `output.toggleRowSize` | `outputView == 'grid'` |
-| `z_close` | C**l**ose Results | `output.closeResults` | Always |
+| `z_close` | C**l**ose Results | `output.closeResults` | `outputView != 'live'` |
 
 #### Query Output context menu › Highlight
 
@@ -865,14 +856,14 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
-| `0_column` | Filter Column **V**alues… | `output.filterColumnValues` | `outputView == 'grid'` |
+| `0_column` | Filter Column **V**alues… | `output.filterColumnValues` | `outputView == 'grid' \|\| outputView == 'live'` |
 | `1_values` | Filter for **S**elected Values | `output.filterSelection` | `outputView == 'grid'` |
 | `1_values` | **E**xclude Selected Values | `output.excludeSelection` | `outputView == 'grid'` |
 | `1_values` | Filter **B**etween Lowest and Highest Selected | `output.filterBetween` | `outputView == 'grid'` |
 | `2_nulls` | Exclude **N**ULLs | `output.excludeNulls` | `outputView == 'grid'` |
 | `3_duplicates` | Filter for **D**uplicates in Selected Columns | `output.filterDuplicates` | `outputView == 'grid'` |
 | `3_duplicates` | Filter for Duplicate **R**ows | `output.filterDuplicateRows` | `outputView == 'grid'` |
-| `4_clear` | **C**lear Filters | `output.clearFilters` | `outputView == 'grid'` |
+| `4_clear` | **C**lear Filters | `output.clearFilters` | `outputView == 'grid' \|\| outputView == 'live'` |
 
 #### Query Output context menu › Transpose
 
@@ -930,22 +921,6 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 | `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
 | `8_view` | **P**ause | `ssis.pauseOperations` | Always |
 
-#### Live grid context menu (`liveGrid.context`)
-
-Right-click a live grid (an Activity Monitor pane such as Sessions; a right-click outside the selection selects that cell first), or press Shift+F10 or the context-menu key in it. Items act on the grid's selection and the active cell's column; Sort and Filter Column Values ask the backend, which sorts and filters each sample.
-
-| Group | Item | Command | Shown |
-| --- | --- | --- | --- |
-| `1_copy` | **C**opy | `liveGrid.copy` | Always |
-| `1_copy` | Copy with **H**eaders | `liveGrid.copyWithHeaders` | Always |
-| `2_select` | Select **A**ll | `liveGrid.selectAll` | Always |
-| `3_sort` | S**o**rt Ascending | `liveGrid.sortAscending` | `liveGridSortable` |
-| `3_sort` | Sort **D**escending | `liveGrid.sortDescending` | `liveGridSortable` |
-| `3_sort` | Clea**r** Sort | `liveGrid.clearSort` | `liveGridSortable` |
-| `4_filter` | Filter Column **V**alues… | `liveGrid.filterColumnValues` | `liveGridFilterable` |
-| `5_width` | F**i**t Column | `liveGrid.fitColumn` | Always |
-| `6_save` | **S**ave Rows As… | `liveGrid.saveAs` | Always |
-
 #### Search Objects result context menu (`search.hit.context`)
 
 Right-click a Search Objects result (in the Search Objects tab or Object Explorer's search), which selects it, or press Shift+F10 or the context-menu key on the selected result. Items act on that object: Select Top N Rows, Modify and Script … as are Object Explorer's, for the object's kind; Rename, Delete and Properties are left to the tree (Reveal in Object Explorer first).
@@ -967,7 +942,7 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
 | `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
 
-## Context keys (150)
+## Context keys (149)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1117,15 +1092,14 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerNodeStatus` | `''`, `'disabled'`, `'unavailable'`, `'readOnly'`, `'noAccess'` | target | The status badge of the Object Explorer node the menu is for ('disabled', 'unavailable', 'readOnly' or 'noAccess'), or '' for none. |
 | `explorerServerEngine` | `''`, `'box'`, `'managedInstance'`, `'cloud'` | target | The kind of server the Object Explorer node the menu is for is on: 'box', 'managedInstance' or 'cloud', or '' for the empty area. |
 | `explorerServerLinux` | boolean | target | The menu is for a node on SQL Server on Linux. |
-| `outputView` | `'grid'`, `'messages'`, `''` | target | The Query Output view the menu is for: a results grid or the messages. |
+| `outputView` | `'grid'`, `'messages'`, `'live'`, `''` | target | The Query Output view the menu is for: a results grid, the messages, or a live view's grid (an Activity Monitor pane). |
 | `outputGridTransposable` | boolean | target | The menu is for a results grid Transpose can read: a query's rows, a pivot or a transpose, not a diff. |
+| `outputLiveSortable` | boolean | target | The live view's grid the menu is for sorts (its table is a snapshot, not a log that keeps arrival order). |
 | `pane` | `'explorer'`, `'editor'`, `'results'`, `'messages'`, `'plan'`, `'statistics'`, `''` | target | The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, Results, Messages, Execution plan, or Client Statistics. |
 | `paneFloating` | boolean | target | The panel the menu is for is floating. |
 | `panePopout` | boolean | target | The panel the menu is for is in a window of its own (Move into New Window). |
 | `documentTabFloating` | boolean | target | The document tab the menu is for is in a floating editor group. |
 | `searchHitSchema` | boolean | target | The Search Objects result the menu is for is in a schema (itself, or its parent for a column, key or trigger), so it has schema-qualified and fully qualified names. |
-| `liveGridSortable` | boolean | target | The live grid the menu is for sorts (its table is a snapshot, not a log that keeps arrival order). |
-| `liveGridFilterable` | boolean | target | The live grid the menu is for filters its active cell's column (the header has a funnel). |
 
 ## Reserved keys
 

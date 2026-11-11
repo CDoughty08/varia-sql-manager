@@ -43,10 +43,11 @@ export interface InputTarget {
   readonly canUndo: boolean
   readonly canRedo: boolean
 }
-export type OutputView = 'grid' | 'messages'
+export type OutputView = 'grid' | 'messages' | 'live'
 /**
  * A Query Output view: the query's results grid for one result set (its cell selection lives in the grid's view state,
- * `ResultsService`), or Messages with the text selected in them when the menu opened.
+ * `ResultsService`), or Messages with the text selected in them when the menu opened. A live view's grid (an Activity
+ * Monitor pane) is the same results grid with a live source: view `live`, whose commands act through `live`.
  */
 export interface OutputTarget {
   readonly kind: 'output'
@@ -61,24 +62,39 @@ export interface OutputTarget {
   readonly resultKind?: string
   readonly selectedText: string
   readonly element: HTMLElement
+  /** A live grid's own commands (view `live`): its table is not a result set in ResultsService. */
+  readonly live?: LiveOutput
 }
-/** What a live grid's menu commands act on (LiveGridPane): its grid, selection, sort and columns. */
-export interface LiveGridControls {
-  /** The grid's accessible name ("Sessions"), which Save As suggests as the file's name. */
-  readonly label: string
-  /** Its table sorts (a snapshot table), so the Sort items show. */
+/** What Query Output's commands do in a live grid (LiveGridPane): its selection, sort, funnels, widths and copy. */
+export interface LiveOutput {
+  /** Its table sorts (a snapshot table, not a log that keeps arrival order). */
   readonly sortable: boolean
-  /** The active cell's column, which the column items act on. */
+  /** The grid has rows and columns to select, copy and save. */
+  hasRows(): boolean
+  /** Cells are selected. */
+  hasSelection(): boolean
   activeColumn(): number | undefined
-  /** Whether a column has a funnel (its source filters it). */
+  columnName(column: number): string | undefined
+  /** Whether a column sorts (never the tone column) or has a funnel (its source filters it). */
+  canSort(column: number): boolean
   canFilter(column: number): boolean
+  sorted(): boolean
+  filtered(): boolean
   copy(headers: boolean): void
   selectAll(): void
-  /** Sorts by the column alone, or with `undefined` goes back to the source's order. */
-  sort(column: number | undefined, descending?: boolean): void
+  /** Sorts by the column, alone or (`add`) as a further key. */
+  sort(column: number, descending: boolean, add: boolean): void
+  clearSort(): void
   fitColumn(column: number): void
   filterColumn(column: number): void
+  clearFilters(): void
   save(): void
+}
+const liveOutputs = new WeakMap<Element, LiveOutput>()
+/** A live grid's element (marked `data-output-view="live"`) and its commands, until the returned function runs. */
+export function registerLiveOutput(element: Element, live: LiveOutput): () => void {
+  liveOutputs.set(element, live)
+  return () => { if (liveOutputs.get(element) === live) liveOutputs.delete(element) }
 }
 /** What a context menu was opened for. Renderer objects only: commands receive it as `CommandArgs.target`, and it never crosses IPC. */
 export type MenuTarget =
@@ -91,8 +107,6 @@ export type MenuTarget =
   | { readonly kind: 'tableDesigner'; readonly tabId: string }
   /** An Integration Services Operations grid; its commands act on the selected operation. */
   | { readonly kind: 'ssisOperations'; readonly tabId: string }
-  /** A live grid (an Activity Monitor pane); its commands act on that grid, at the active cell's column. */
-  | { readonly kind: 'liveGrid'; readonly grid: LiveGridControls }
   | OutputTarget
   /** A panel's tab or ⋯ button; `popout` when the panel is in a window of its own. */
   | { readonly kind: 'dockTab'; readonly pane: PaneId; readonly floating: boolean; readonly popout: boolean }
@@ -101,13 +115,13 @@ export type MenuTarget =
 
 export const menuForTarget: Readonly<Record<MenuTarget['kind'], ContextMenuId>> = {
   editor: 'editor.context', explorer: 'explorer.context', tableDesigner: 'tableDesigner.context', documentTab: 'documentTab.context', output: 'output.context', dockTab: 'dockTab.context', input: 'input.context',
-  ssisOperations: 'ssis.operation.context', liveGrid: 'liveGrid.context', searchHit: 'search.hit.context'
+  ssisOperations: 'ssis.operation.context', searchHit: 'search.hit.context'
 }
 /** Each context menu's accessible name. */
 export const contextMenuLabels: Readonly<Record<ContextMenuId, string>> = {
   'editor.context': 'Query editor', 'explorer.context': 'Object Explorer', 'tableDesigner.context': 'Table Designer', 'documentTab.context': 'Query tab', 'output.context': 'Query output',
   'dockTab.context': 'Panel tab', 'input.context': 'Text field', 'ssis.operation.context': 'Integration Services Operations',
-  'liveGrid.context': 'Live grid', 'search.hit.context': 'Search result'
+  'search.hit.context': 'Search result'
 }
 
 /** A folder whose objects Filter Settings can narrow (Tables, Views, Databases, Logins…). */
@@ -127,13 +141,12 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
     explorerServerLinux: target?.kind === 'explorer' && !!target.node?.linux,
     outputView: target?.kind === 'output' ? target.view : '',
     outputGridTransposable: target?.kind === 'output' && target.view === 'grid' && transposableKinds.has(target.resultKind ?? ''),
+    outputLiveSortable: target?.kind === 'output' && !!target.live?.sortable,
     pane: target?.kind === 'dockTab' ? target.pane : '',
     paneFloating: target?.kind === 'dockTab' && target.floating,
     panePopout: target?.kind === 'dockTab' && target.popout,
     documentTabFloating: target?.kind === 'documentTab' && !!target.floating,
-    searchHitSchema: target?.kind === 'searchHit' && searchHitNames(target.hit.object).schema !== undefined,
-    liveGridSortable: target?.kind === 'liveGrid' && target.grid.sortable,
-    liveGridFilterable: target?.kind === 'liveGrid' && (column => column !== undefined && target.grid.canFilter(column))(target.grid.activeColumn())
+    searchHitSchema: target?.kind === 'searchHit' && searchHitNames(target.hit.object).schema !== undefined
   }
 }
 /**
@@ -148,7 +161,6 @@ export const inputOf = (args: CommandArgs | undefined): InputTarget | undefined 
 /** The Object Explorer node a context menu was opened for; undefined for its empty area and for other targets. */
 export const explorerNodeOf = (args: CommandArgs | undefined): ExplorerMenuNode | undefined => args?.target?.kind === 'explorer' ? args.target.node : undefined
 export const outputOf = (args: CommandArgs | undefined): OutputTarget | undefined => args?.target?.kind === 'output' ? args.target : undefined
-export const liveGridOf = (args: CommandArgs | undefined): LiveGridControls | undefined => args?.target?.kind === 'liveGrid' ? args.target.grid : undefined
 export const searchHitOf = (args: CommandArgs | undefined): SearchHitTarget | undefined => args?.target?.kind === 'searchHit' ? args.target : undefined
 /** The object a menu was opened for: an Object Explorer node, or a Search Objects result's object. */
 export const objectNodeOf = (args: CommandArgs | undefined): ObjectMenuNode | undefined => explorerNodeOf(args) ?? searchHitOf(args)?.node
@@ -211,7 +223,7 @@ const focusable = 'button, [tabindex], input, textarea, [contenteditable]'
 /** Parts of the query editor whose right-click shows no menu: scroll bars, the overview ruler, hovers, suggestions, and the find widget around its inputs. */
 const editorChrome = '.scrollbar, .decorationsOverviewRuler, .contentWidgets, .overflowingContentWidgets, .overlayWidgets'
 const documentCommandEnabled: CommandEnabled = command => typeof document === 'undefined' || document.queryCommandEnabled(command)
-const outputViews: ReadonlySet<string> = new Set<OutputView>(['grid', 'messages'])
+const outputViews: ReadonlySet<string> = new Set<OutputView>(['grid', 'messages', 'live'])
 /** The result kinds Transpose reads (TransposeService's `transposable`): never a diff's paired changes. */
 const transposableKinds: ReadonlySet<string> = new Set(['rows', 'pivot', 'transpose'])
 
@@ -231,6 +243,11 @@ function outputColumn(element: Element, view: HTMLElement): number | undefined {
 export function outputTarget(element: Element): OutputTarget | undefined {
   const view = element.closest<HTMLElement>('[data-output-view]')
   const kind = view?.getAttribute('data-output-view') ?? '', tabId = view?.getAttribute('data-tab-id') ?? '', resultIndex = Number(view?.getAttribute('data-result-index') ?? 0)
+  if (view && kind === 'live') {
+    // A live grid belongs to no query: its commands come with it.
+    const live = liveOutputs.get(view), column = outputColumn(element, view)
+    return live ? { kind: 'output', tabId: '', view: 'live', resultIndex: 0, selectedText: '', element: view, live, ...(column !== undefined ? { column } : {}) } : undefined
+  }
   if (!view || !outputViews.has(kind) || !tabId || !Number.isInteger(resultIndex) || resultIndex < 0) return undefined
   const column = kind === 'grid' ? outputColumn(element, view) : undefined
   const generation = Number(view.getAttribute('data-result-generation')), resultId = Number(view.getAttribute('data-result-id'))
@@ -288,7 +305,7 @@ export class MenuTargetService {
       const output = outputTarget(element)
       if (!output) return undefined
       // Keyboard menus open below the grid's active cell, else its first cell.
-      const anchor = output.view === 'grid' ? gridAnchor(output.element) ?? output.element.querySelector('.rg-c.is-act') ?? output.element.querySelector('.rg-c') ?? undefined : undefined
+      const anchor = output.view !== 'messages' ? gridAnchor(output.element) ?? output.element.querySelector('.rg-c.is-act') ?? output.element.querySelector('.rg-c') ?? undefined : undefined
       const column = output.column ?? (anchor ? outputColumn(anchor, output.element) : undefined)
       const target = column === undefined ? output : { ...output, column }
       return { target, element: output.element, focus: output.element, ...(anchor ? { anchor } : {}) }

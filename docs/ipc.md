@@ -2256,20 +2256,25 @@ and results worker](#results-port-and-results-worker)). Views never call it them
   its `refresh`, Retry a new handle. The view reads the overview's ring for its tiles and charts and runs no timer but the
   states kit's one-second age ticker.
 
-**LiveGrid** (`live/LiveGrid.ts`, its React shell `live/LiveGridPane.tsx`): a live table in a results grid. It wraps
-`GridView`, which renders it as any result (pools, tiles, `nodeValue` text, keys, selection, Copy) with three additions:
-`GridView.swap(handle, descriptor, mapRow)` shows another result with the same columns in place (widths and scroll stay;
-the first row shown, the active cell and each block move through `mapRow`, `grid/swap.ts`), a hidden tone column, and
-follow tail.
-- **The results grid's header and menu.** A snapshot table's headers have the results grid's sort buttons
-  (`LiveGrid.cycleSort`, the same cycle as `ResultsService.cycleSort`; Shift+click adds a key): they set the probe's sort for
-  this table, and the backend sorts each revision. An owner that filters some columns at its source (`columnFilter`: the
-  Activity Monitor's facet columns) gets the results grid's funnels on just those headers (`GridViewOptions.filterable`);
-  a funnel, Alt+Down or Filter Column Values… opens its popover (`LiveColumnFilterPopover`, the results popover's card over
-  the source's facets), and OK hands the filter to the owner, which sends it as the source's args, never filtering on the
-  client. The grid serves its own Ctrl+C, Ctrl+Shift+C and Ctrl+A, and its context menu (`liveGrid.context`: Copy, Copy
-  with Headers, Select All, Sort, Filter Column Values…, Fit Column, Save Rows As…) acts on it; an owner with a menu of its
-  own (SSIS Operations) turns it off.
+**LiveGrid** (`live/LiveGrid.ts`, mounted by `live/LiveGridPane.tsx`): a live table in the results grid. There is one grid
+component tree: `grid/GridShell.tsx` (the root and scroller, the header's sort buttons and funnels with `ColumnFilterPopover`,
+the strips and the gone overlay) over `GridView`, which renders it as any result (pools, tiles, `nodeValue` text, keys,
+selection, Copy). `ResultGrid` mounts it for a query's result set and `LiveGridPane` for a live table; each supplies only
+its source. A live source adds `GridView.swap(handle, descriptor, mapRow)`, which shows another result with the same
+columns in place (widths and scroll stay; the first row shown, the active cell and each block move through `mapRow`,
+`grid/swap.ts`), a hidden tone column, follow tail, and the "n new rows" button.
+- **What a live source gives the shared components.** Header sort: a snapshot table's sort buttons call `LiveGrid.cycleSort`
+  (the same cycle as `ResultsService.cycleSort`; Shift+click adds a key), which sets the probe's sort for this table, and
+  the backend sorts each revision; the header shows the probe's sort. Funnels: an owner that filters some columns at its
+  source (`filters`: the Activity Monitor's facet columns) gets funnels on just those headers (`GridViewOptions.filterable`),
+  and `ColumnFilterPopover` runs over a `ColumnFilterSource` (`live/live-filter.ts`): the column's facet as an in-memory
+  `DistinctList`, the conditions a value filter can express (values, Equals, Is NULL, Is not NULL), and OK as the filter
+  the owner sends as the source's args, never filtering on the client. Menu: the grid is Query Output's view `live`
+  (`data-output-view="live"`, its `LiveOutput` registered with `registerLiveOutput`), so `output.context` and the `output.*`
+  commands act on it (Copy, Copy with Headers, Copy Column Name, Select All, Save, Sort and Then Sort, Clear Sort, Fit
+  Column, Filter Column Values…, Clear Filters, White space); the result-set items hide (`outputView != 'live'`). The grid
+  serves its own Ctrl+C, Ctrl+Shift+C, Ctrl+A and Alt+Down (it is outside Query Output); an owner with a menu of its own
+  (SSIS Operations) turns the menu off.
 - **Snapshot revisions.** After each applied tick (before it is acknowledged) the grid first reads the rows the new revision
   will show into the window cache (`GridView.prepare`, at most 250 ms), then swaps it in, so a swap never paints a frame of
   empty cells; a newer revision arriving meanwhile has retired the one shown and swaps in at once. The grid tracks the

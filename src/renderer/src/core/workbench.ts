@@ -65,7 +65,6 @@ import { messagesContribution } from '../contributions/messages'
 import { highlightsContribution } from '../contributions/highlights'
 import { pivotContribution } from '../contributions/pivot'
 import { transposeContribution } from '../contributions/transpose'
-import { liveGridContribution } from '../contributions/live'
 import { compareContribution } from '../contributions/compare'
 import { scriptingContribution } from '../contributions/scripting'
 import { settingsContribution } from '../contributions/settings'
@@ -641,7 +640,6 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     compareContribution(workbench),
     pivotContribution(workbench),
     transposeContribution(workbench),
-    liveGridContribution(workbench),
     paletteContribution(workbench),
     themeContribution(workbench, api),
     backendContribution(workbench),
