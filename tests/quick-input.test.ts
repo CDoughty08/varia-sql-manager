@@ -860,12 +860,12 @@ describe('Search', () => {
     api.explorerSearch.mockImplementation(async () => ({ ok: true, value: { hits: [], total: 0, partial: false, elapsedMs: 0, index: { state: 'none', databases: 0, indexed: 0, objects: 0, modules: 0, cut: 0, skipped: [], definitions: true } } }))
     await key('workbench.search')
     quickInput.filter('zzqq')
-    await landed(() => expect(view().message).toEqual({ text: `server-a.example has no search index: ${seeAllObjects} builds it`, severity: 'info' }))
+    await landed(() => expect(view().message).toEqual({ text: `server-a.example has no search index: Rebuild Search Index builds it`, severity: 'info' }))
     expect(api.explorerIndex).not.toHaveBeenCalled()
-    // The row to the tab is where the index is built, as any Search Objects tab builds one.
+    // The row to the tab builds none either: the tab offers Build index.
     expect(labels()).toEqual([seeAllObjects])
     quickInput.accept()
-    expect(api.explorerIndex).toHaveBeenCalledTimes(1)
+    expect(api.explorerIndex).not.toHaveBeenCalled()
   })
   it('keeps the active row on its object when a server that lists first answers later', async () => {
     const { key, quickInput, view, api, connect } = palette()

@@ -237,7 +237,8 @@ const live = (connection: LiveConnection | undefined): connection is LiveConnect
  * unless Options says not to), shows its progress in the status bar, and runs each Search Objects tab's searches
  * (explorer.search) as the user types. The index itself lives only in the backend's memory; the page keeps the hits of the
  * last search per tab. A build starts when a server connects (Options › Index objects when a server connects), or when a
- * tab first searches a server that has none.
+ * search is opened on a server that has none while that option is on. With it off nothing builds an index but the user:
+ * Build index in the search, or Rebuild Search Index.
  */
 export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> implements CustomDocumentProvider, Disposable {
   readonly kind = 'objectSearch' as const
@@ -310,7 +311,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
 
   /**
    * Points Object Explorer's box at a server: the one its selection is on, or the first connected one. Its text and options
-   * stay; a server with no index yet gets one. With no server connected the box keeps its text for the next one.
+   * stay; a server with no index yet gets one (ensureIndex). With no server connected the box keeps its text for the next one.
    */
   followExplorer(connectionId: string | undefined): void {
     if (this.disposed) return
@@ -319,16 +320,14 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const current = this.getSnapshot().documents[explorerSearchId]
     if (!current) {
       this.putDocument({ id: explorerSearchId, connectionId: target, ...emptyQuery })
-      const entry = this.getSnapshot().indexes[target]
-      if (!entry?.status && !entry?.requestId) this.build(target)
+      this.ensureIndex(target)
     } else this.setConnection(explorerSearchId, target)
   }
 
   /**
    * The header's Search asks for `text`: names only, approximately too (Fuzzy Match), on every connected server, after the
    * same pause in typing as a tab's. Nothing is asked before there is text, and it never builds an index: a server without
-   * one (Options › Index objects when a server connects is off) answers no hits until Search Objects or Rebuild Search Index
-   * builds it, as its owner chose.
+   * one answers no hits until the user builds it (Build index in Search Objects, or Rebuild Search Index).
    */
   quickSearch(text: string): void {
     if (this.disposed) return
@@ -649,8 +648,13 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
 
   private liveIds(): string[] { return this.o.connections.getSnapshot().filter(live).map(connection => connection.id) }
 
-  /** Builds a server's index when it has none and none is building. */
+  /**
+   * Builds a server's index when it has none and none is building, while Options › Index objects when a server connects is
+   * on (a server that connected while it was off, say). With it off the user chose not to have builds start on their own,
+   * so opening or pointing a search at a server builds nothing: the search says the server has no index and offers to build it.
+   */
   private ensureIndex(connectionId: string): void {
+    if (!this.o.settings.get('objectExplorer.search.indexOnConnect')) return
     const entry = this.getSnapshot().indexes[connectionId]
     if (!entry?.status && !entry?.requestId) this.build(connectionId)
   }

@@ -121,11 +121,11 @@ export function paletteContribution(workbench: PaletteWorkbench, history = new C
       items.push({ id: seeAllId, label: seeAllObjects, icon: 'search', group: searchGroups.objects, description: total > hits.size ? `Showing ${count(hits.size)} of ${count(total)} objects` : 'Names and definitions, with filters' })
       found = { text: document.text, hits }
       const failed = groups.find(group => group.error)
-      // Search never builds an index: a server without one says so, with where to build it.
+      // Search never builds an index: a server without one says so, with the command that builds it.
       const bare = groups.filter(group => group.result?.index.state === 'none' && !snapshot.indexes[group.connectionId]?.requestId)
       const message: QuickInputMessage | undefined = document.error ? { text: document.error, severity: 'error' }
         : failed ? { text: `${failed.label}: ${failed.error}`, severity: 'error' }
-        : bare.length ? { text: `${bare.length === 1 ? `${bare[0]!.label} has` : `${count(bare.length)} servers have`} no search index: ${seeAllObjects} builds it`, severity: 'info' }
+        : bare.length ? { text: `${bare.length === 1 ? `${bare[0]!.label} has` : `${count(bare.length)} servers have`} no search index: Rebuild Search Index builds it`, severity: 'info' }
         : indexing ? { text: 'Indexing objects: more may be found when it finishes', severity: 'info' } : undefined
       // The same message is the same object, so the live region says it once, not with every key and every answer.
       if (message && !(said && said.text === message.text && said.severity === message.severity)) said = message

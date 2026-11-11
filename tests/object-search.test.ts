@@ -17,7 +17,7 @@ import type { LiveConnection } from '../src/renderer/src/services/connections'
 import { explorerSearchId, hitServer, mergeAnswers, ObjectSearchService, quickSearchHits, quickSearchId, revealPaths, serverGroups, shownHits, unknownKindReveal, type ObjectSearchOptions, type RevealHost } from '../src/renderer/src/search/ObjectSearchService'
 import { searchHitTarget } from '../src/renderer/src/search/hit-actions'
 import { insertTextFor } from '../src/shared/explorer/refs'
-import { indexSummary, searchHitPath } from '../src/renderer/src/search/ObjectSearch'
+import { indexSummary, searchHitPath, unindexedServers } from '../src/renderer/src/search/ObjectSearch'
 import { allIndexesSummary, allServersSummary, DatabaseScope, groupNote, indexGap, indexIncomplete, KindBadge, listTabStop, moreMatches } from '../src/renderer/src/search/SearchPanel'
 import { kindSpecs, nodeKinds } from '../src/shared/explorer/catalog'
 import { colorKeys } from '../src/shared/theme/registry'
@@ -183,7 +183,8 @@ function harness(settings: { indexOnConnect?: boolean; definitions?: boolean } =
     get: vi.fn(), activate: vi.fn(), getSnapshot: vi.fn()
   } as unknown as ObjectSearchOptions['documents']
   const connections = new Connections([])
-  const values: Record<string, boolean> = { 'objectExplorer.search.indexOnConnect': settings.indexOnConnect ?? true, 'objectExplorer.search.definitions': settings.definitions ?? true }
+  // Read from `settings` each time, so a test can change one as Options would.
+  const values: Record<string, boolean> = { get 'objectExplorer.search.indexOnConnect'() { return settings.indexOnConnect ?? true }, get 'objectExplorer.search.definitions'() { return settings.definitions ?? true } }
   const timers: Timers & { run(): void } = (() => {
     const queue = new Map<number, () => void>()
     let next = 0
@@ -249,12 +250,35 @@ describe('ObjectSearchService', () => {
     expect(Object.keys(service.getSnapshot().indexes)).toEqual(['b'])
   })
 
-  it('waits for the first search when Options turns indexing on connect off', () => {
-    const { service, calls, connections } = harness({ indexOnConnect: false })
-    connections.set([connection('a')])
+  it('builds nothing until the user asks when Options turns indexing on connect off', () => {
+    const { service, calls, connections, timers } = harness({ indexOnConnect: false })
+    connections.set([connection('a'), connection('b')])
+    // Opening a search, pointing it at another server or at all of them, Object Explorer's box, and searching: none builds.
+    const id = service.open('a', 'orders')!
+    service.setConnection(id, 'b')
+    service.setAllServers(id)
+    service.open(undefined, 'orders', true)
+    service.followExplorer('a')
+    service.followExplorer('b')
+    connections.set([connection('a'), connection('b'), connection('c')])
+    timers.run()
+    expect(calls.search.length).toBeGreaterThan(0)
     expect(calls.index).toHaveLength(0)
+    // Build index, and Rebuild Search Index.
+    service.build('b')
+    expect(calls.index.map(call => call.connectionId)).toEqual(['b'])
+  })
+  it('gives a server that has no index one when a search opens on it, while indexing on connect is on', () => {
+    const values = { indexOnConnect: false }
+    const { service, calls, connections } = harness(values)
+    connections.set([connection('a'), connection('b')])
+    expect(calls.index).toHaveLength(0)
+    // Turned on after the servers connected.
+    values.indexOnConnect = true
     service.open('a')
-    expect(calls.index).toHaveLength(1)
+    expect(calls.index.map(call => call.connectionId)).toEqual(['a'])
+    service.followExplorer('b')
+    expect(calls.index.map(call => call.connectionId)).toEqual(['a', 'b'])
   })
 
   it('keeps the previous status through a rebuild, ignores a superseded build, and a stopped one keeps what it had', async () => {
@@ -398,10 +422,10 @@ describe('ObjectSearchService', () => {
   })
 
   it('searches all servers at once, each on its own index, and merges their answers in Object Explorer\'s order', async () => {
-    const { service, calls, pendingSearch, connections, timers, api } = harness({ indexOnConnect: false })
+    const { service, calls, pendingSearch, connections, timers, api } = harness()
     connections.set([connection('a'), connection('b')])
     const id = service.open(undefined, undefined, true)!
-    // The tab belongs to no server, and every server gets an index.
+    // The tab belongs to no server; each server has the index it got when it connected, and no second one.
     expect(vi.mocked(api.explorerIndex).mock.calls.map(([params]) => params.connectionId)).toEqual(['a', 'b'])
     expect(service.getSnapshot().documents[id]).toMatchObject({ allServers: true, connectionId: 'a' })
     const hits = ['A', 'B'].map(name => ({ ...hit, label: `dbo.${name}`, object: { ...hit.object, name } }))
@@ -466,9 +490,9 @@ describe('ObjectSearchService', () => {
     pendingSearch[0](answer([hit]))
     pendingSearch[1](answer([hit]))
     await settle()
-    // A server connects: it gets an index, and only it is searched; a's and b's answers stand.
+    // A server connects: only it is searched; a's and b's answers stand. Indexing on connect is off, so none is indexed.
     connections.set([connection('a'), connection('b'), connection('c')])
-    expect(calls.index.map(call => call.connectionId)).toEqual(['a', 'b', 'c'])
+    expect(calls.index).toHaveLength(0)
     expect(calls.search.slice(2).map(call => call.connectionId)).toEqual(['c'])
     expect(serverGroups(service.getSnapshot().documents[id]).map(group => [group.connectionId, !!group.pending])).toEqual([['a', false], ['b', false], ['c', true]])
     pendingSearch[2]({ ok: false, error: 'The search timed out.', code: 'TIMEOUT' })
@@ -785,7 +809,6 @@ describe('ObjectSearchService', () => {
     connections.set([connection('a'), connection('b')])
     service.followExplorer(undefined)
     expect(service.getSnapshot().documents[explorerSearchId]).toMatchObject({ connectionId: 'a', text: '', caseSensitive: false, wholeWord: false, regex: false, fuzzy: false, scope: 'all', types: [] })
-    expect(calls.index.map(call => call.connectionId)).toEqual(['a'])
     service.setQuery(explorerSearchId, { text: 'ord', wholeWord: true })
     service.search(explorerSearchId)
     expect(calls.search.at(-1)).toMatchObject({ connectionId: 'a', text: 'ord', wholeWord: true })
@@ -803,7 +826,7 @@ describe('ObjectSearchService', () => {
     // Selecting a node on another server moves the box there, keeping its text and options, and indexes that server.
     service.followExplorer('b')
     expect(service.getSnapshot().documents[explorerSearchId]).toMatchObject({ connectionId: 'b', text: 'ord', wholeWord: true })
-    expect(calls.index.map(call => call.connectionId)).toEqual(['a', 'b'])
+    expect(calls.index).toHaveLength(0)
     expect(calls.search.at(-1)).toMatchObject({ connectionId: 'b', text: 'ord', wholeWord: true })
     // A lost server falls back to the first connected one.
     connections.set([connection('a'), connection('b', true)])
@@ -862,9 +885,17 @@ describe('ObjectSearchService', () => {
     connections.set([connection('a'), connection('b')])
     expect(calls.search.at(-1)).toMatchObject({ connectionId: 'b', text: 'orders' })
     expect(calls.index).toHaveLength(0)
-    // An All servers tab is where the indexes are built.
+  })
+  it('does not build for the header\'s Search with indexing on connect on either, where an All servers tab would', () => {
+    const values = { indexOnConnect: false }
+    const { service, calls, connections, timers } = harness(values)
+    connections.set([connection('a')])
+    values.indexOnConnect = true
+    service.quickSearch('orders')
+    timers.run()
+    expect(calls.index).toHaveLength(0)
     service.open(undefined, undefined, true)
-    expect(calls.index.map(call => call.connectionId)).toEqual(['a', 'b'])
+    expect(calls.index.map(call => call.connectionId)).toEqual(['a'])
   })
   it('hands focus to the box once per Search in Object Explorer, even when the box mounts later', () => {
     const { service } = harness()
@@ -975,6 +1006,12 @@ describe('Search Objects\' summary', () => {
     expect(indexSummary(undefined, status({ skipped: [{ database: '', code: 'CATALOG_ERROR', message: 'm' }] }))).toBe('Index: 40 objects, 5 definitions in 2 databases · server objects skipped')
     expect(indexSummary(undefined, status({ skipped: [{ database: 'Big', code: childrenLeftOut, message: 'm' }] }))).toBe('Index: 40 objects, 5 definitions in 2 databases · columns and other children left out of 1 large database')
     expect(indexSummary(undefined, undefined)).toBe('This server has no index yet.')
+    // Build index is offered for the servers with no index and none building.
+    const building = { connectionId: 'b', requestId: 'r', done: 0, total: 0, objects: 0 }, built = { connectionId: 'c', done: 1, total: 1, objects: 3, status: status() }
+    expect(unindexedServers(['a', 'b', 'c', 'd'], { b: building, c: built, d: { connectionId: 'd', done: 0, total: 0, objects: 0, error: 'failed' } })).toEqual(['a', 'd'])
+    expect(unindexedServers(['a'], {}, status())).toEqual([])
+    expect(unindexedServers(['a'], {}, { ...status(), state: 'none' })).toEqual(['a'])
+    expect(unindexedServers([], {})).toEqual([])
     expect(indexSummary({ connectionId: 'a', done: 0, total: 0, objects: 0, error: 'Denied.' }, undefined)).toBe('The index could not be built: Denied.')
   })
 })
