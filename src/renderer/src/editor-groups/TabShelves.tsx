@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { OVERFLOW_WRAP_TABS_CLASS, type DockviewGroupPanel } from 'dockview-react'
 import type { EditorTabRows } from '../../../shared/editor-groups'
+import { defaultDensity, densities } from '../../../shared/theme/metrics'
 import { useWorkbench } from '../core/WorkbenchContext'
 import type { Workbench } from '../core/workbench'
 import type { QueryTab } from '../documents'
@@ -124,7 +125,7 @@ export class TabShelfLayout {
   readonly refresh = (): void => {
     if (this.disposed || !this.list.clientWidth) return
     const width = this.list.clientWidth
-    const rowHeight = parseFloat(getComputedStyle(this.list).getPropertyValue('--varia-bar')) || 36
+    const rowHeight = parseFloat(getComputedStyle(this.list).getPropertyValue('--varia-documentTab')) || densities[defaultDensity].documentTab
     const tabs = this.group.panels.map(panel => this.workbench.documents.get(panel.id)).filter(tab => tab !== undefined)
     const pinned = tabs.filter(tab => tab.pinned), unpinned = tabs.filter(tab => !tab.pinned)
     const membership = JSON.stringify([pinned.map(tab => tab.id), unpinned.map(tab => tab.id)])
