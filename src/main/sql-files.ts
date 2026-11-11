@@ -85,7 +85,13 @@ interface FileReadOptions {
  * compares its file with every registered one, so without it n files cost n² resolutions, seconds at the tab cap on a
  * network or OneDrive folder. Kept only for the burst, so a link retargeted later is seen.
  */
-export type TargetCache = Map<string, Promise<string>>
+export type TargetCache = Map<string, Promise<FileIdentity>>
+/** How a path is compared with another (`identity`): the file a save of it writes, and for a dangling link also the
+ *  missing file it leads to, which a save of it would write once that file exists. */
+interface FileIdentity { readonly writes: string; readonly leadsTo?: string }
+/** Where a save of a path writes (`writeTarget`). `dangling` is set when the target is a link whose target is missing:
+ *  the path the link leads to, which nothing may reach by following the link. */
+interface WriteTarget { readonly target: string; readonly dangling?: string }
 type Comparison = { readonly change?: FileChange['change']; readonly stamp: Stamp } | undefined
 const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
 /**
@@ -175,10 +181,8 @@ export class SqlFileStore {
     const { eol, mixed } = detectEol(decoded.text, this.platform)
     const [readOnly, info] = await Promise.all([isReadOnly(absolutePath), stat(absolutePath)])
     // One file keeps one registration, path and name, whatever case or link it is reached through, so the page finds
-    // its tab instead of opening a second one that would save over the first. Concurrent opens (one Open dialog's files)
-    // look for the owner and register one at a time, or a file and a link to it would both find none and both register.
-    return this.serially(async () => {
-      const existing = await this.owner(absolutePath, undefined, targets ?? new Map())
+    // its tab instead of opening a second one that would save over the first.
+    const finish = (existing: SqlFile | undefined): OpenSqlFile => {
       // The tab of a file opened again keeps the text it has, so its Save must keep writing what that text was read as.
       const file: SqlFile = existing && !reload ? existing : {
         id: existing?.id ?? randomUUID(), name: existing?.name ?? basename(absolutePath), path: existing?.path ?? absolutePath, encoding: decoded.encoding,
@@ -193,9 +197,16 @@ export class SqlFileStore {
       }
       if (reload) this.conflicts.delete(file.id)
       return { ...file, content: decoded.text, eol, mixedEol: mixed, ...kind === 'sqlplan' ? { kind } : {} }
-    })
+    }
+    // A file registered under this very path (every Reload, and an Open of a tab's own path) needs no resolution and
+    // registers nothing new, so it does not wait in the queue behind another file's realpath, which a share that has
+    // gone offline holds for its whole timeout. Found and finished in one step, so no registration comes between.
+    const open = this.literalOwner(absolutePath)
+    if (open) return finish(open)
+    return this.serially(async () => finish(await this.owner(absolutePath, undefined, targets ?? new Map())))
   }
-  /** Runs `task` once every registration started before it has settled. */
+  /** Runs `task` once every registration started before it has settled: concurrent opens (one Open dialog's files) look
+   *  for the owner and register one at a time, or a file and a link to it would both find none and both register. */
   private serially<T>(task: () => Promise<T>): Promise<T> {
     const next = this.registering.then(task)
     this.registering = next.catch(() => {})
@@ -230,7 +241,9 @@ export class SqlFileStore {
 
   /** Whether the registered file cannot be written now: its attribute may have changed since it was read. */
   async readOnly(fileId: string): Promise<boolean> {
-    return isReadOnly(await this.writeTarget(this.get(fileId).path))
+    const { target, dangling } = await this.writeTarget(this.get(fileId).path)
+    // A dangling link is replaced as a new file is (`save`): access would follow it to whatever it names by now.
+    return dangling === undefined && isReadOnly(target)
   }
 
   /**
@@ -249,9 +262,11 @@ export class SqlFileStore {
     if (encoding === 'legacy') throw new Error(`${existing?.name ?? basename(path)} was read as ${existing?.codePage ?? 'ANSI'}, which Varia SQL Manager does not write. Save it as Unicode.`)
     const bytes = encodeText(content, encoding)
     if (bytes.length > fileKinds[kind].maxBytes) throw new Error(fileKinds[kind].tooLarge)
-    const target = await this.writeTarget(path)
+    const { target, dangling } = await this.writeTarget(path)
     let current: { mode: number; uid: number; gid: number } | undefined
-    try {
+    // A dangling link is a new file: stat, access and chmod would each follow it again, to a file that may have appeared
+    // since the walk and that the walk never checked. With no `current`, nothing below looks through the link.
+    if (dangling === undefined) try {
       const info = await stat(target)
       if (!info.isFile()) throw new Error(`${basename(path)} is not a file.`)
       current = { mode: info.mode & 0o7777, uid: info.uid, gid: info.gid }
@@ -288,7 +303,7 @@ export class SqlFileStore {
     const file: SqlFile = { id: existing?.id ?? randomUUID(), name: basename(path), path, encoding, readOnly: false }
     const hash = sha256(bytes)
     this.files.set(file.id, { file, kind, baseSha256: hash })
-    const info = await stat(target)
+    const info = await (dangling === undefined ? stat : lstat)(target)
     this.stamps.set(file.id, { size: info.size, mtimeMs: info.mtimeMs, sha256: hash })
     this.conflicts.delete(file.id)
     return file
@@ -376,14 +391,14 @@ export class SqlFileStore {
    * path is resolved here (`resolveCheckingLinks`) rather than by realpath, which follows links through readlink and so
    * escapes the kernel's fs.protected_symlinks rule.
    */
-  private async writeTarget(path: string): Promise<string> {
+  private async writeTarget(path: string): Promise<WriteTarget> {
     const uid = this.walkingUid
     if (uid !== undefined) return this.resolveCheckingLinks(path, uid)
-    try { return await (this.options.realpath ?? realpath)(path) }
+    try { return { target: await (this.options.realpath ?? realpath)(path) } }
     catch (error) {
-      if (missing(error)) return path
+      if (missing(error)) return { target: path }
       // Windows' realpath fails on some volumes (RAM disks, some virtual drives); only a link needs resolving.
-      if (!(await lstat(path)).isSymbolicLink()) return path
+      if (!(await lstat(path)).isSymbolicLink()) return { target: path }
       throw error
     }
   }
@@ -398,9 +413,10 @@ export class SqlFileStore {
    * path are a new file. Its result is the write target, so no unchecked resolution runs after the check.
    * A dangling link at the end of the path (its target, or a folder on the way to it, is missing) is itself the target,
    * as it was when realpath failed on it: Save replaces the link with the file rather than create its target's file, or
-   * fail on its target's missing folder.
+   * fail on its target's missing folder. That target is the one result that still is a link, so it comes with `dangling`
+   * (the missing path it leads to) and its callers must not follow it: they treat it as a new file.
    */
-  private async resolveCheckingLinks(path: string, uid: number): Promise<string> {
+  private async resolveCheckingLinks(path: string, uid: number): Promise<WriteTarget> {
     const lookAt = this.options.lstat ?? lstat
     const linkText = this.options.readlink ?? ((link: string) => readlink(link))
     const parts = (text: string) => text.split(sep).filter(part => part !== '' && part !== '.')
@@ -417,8 +433,9 @@ export class SqlFileStore {
       let facts: LinkFacts
       try { facts = await lookAt(candidate) }
       catch (error) {
-        if (missing(error)) return finalLink ?? join(candidate, ...rest)
-        throw error
+        if (!missing(error)) throw error
+        const reached = join(candidate, ...rest)
+        return finalLink === undefined ? { target: reached } : { target: finalLink, dangling: reached }
       }
       if (!facts.isSymbolicLink()) { resolved = candidate; continue }
       if (rest.length === 0) finalLink ??= candidate
@@ -431,39 +448,70 @@ export class SqlFileStore {
       if (root !== '') resolved = root
       rest = [...parts(target.slice(root.length)), ...rest]
     }
-    return resolved
+    return { target: resolved }
   }
   /**
-   * The name that identifies the file at `path`, so two spellings of one file compare equal: its write target, and on
+   * The names that identify the file at `path`, so two spellings of one file compare equal: its write target, and on
    * POSIX that target's realpath. The walk keeps the caller's case, but macOS's realpath gives each name its case on
    * disk, so on a case-insensitive volume /Users/u/Q/Report.sql and /Users/u/q/report.sql are one file, as they were
    * before the walk replaced realpath. realpath runs only after the walk, which has refused any link the kernel would,
-   * and only names the file for this comparison: the save still writes the walk's target. A path realpath cannot
-   * resolve (a new file, a dangling link) is named by its write target.
+   * and only names the file for this comparison: the save still writes the walk's target. A dangling link is named
+   * without being followed, and also by the missing file it leads to (`leadsTo`): once another tab creates that file,
+   * the link's own Save would write it too.
    */
-  private async identity(path: string): Promise<string> {
-    const target = await this.writeTarget(path)
-    if (this.walkingUid === undefined) return target
-    try { return await (this.options.realpath ?? realpath)(target) }
-    catch { return target }
+  private async identity(path: string): Promise<FileIdentity> {
+    const { target, dangling } = await this.writeTarget(path)
+    if (this.walkingUid === undefined) return { writes: target }
+    if (dangling === undefined) return { writes: await this.named(target) }
+    return { writes: await this.named(target, true), leadsTo: await this.named(dangling) }
   }
   /**
-   * The registration, other than `except`, of the file at `path`: the same path (in any case on Windows), or the same
-   * file reached through a symbolic link or, on a case-insensitive macOS volume, in another case (`identity`), which a
-   * save would write too.
+   * `path` as realpath spells it. A path realpath cannot resolve (a missing file, or with `asMissing` a dangling link,
+   * which must not be followed) is its deepest folder realpath can resolve plus the rest of its components, so two
+   * spellings of one missing file still compare equal: through a link at a folder, or in another case where the volume
+   * folds case. A volume folds case when realpath gives the folder's other case the same spelling (as macOS's does on
+   * its default volumes, and Linux's never does), and then the missing components compare in lower case.
+   */
+  private async named(path: string, asMissing = false): Promise<string> {
+    const real = this.options.realpath ?? realpath
+    if (!asMissing) try { return await real(path) } catch { /* named by its folder below */ }
+    const rest: string[] = []
+    for (let folder = path, parent = dirname(folder); parent !== folder; folder = parent, parent = dirname(folder)) {
+      rest.unshift(basename(folder))
+      let base: string
+      try { base = await real(parent) } catch { continue }
+      const otherCase = base.toLowerCase() !== base ? base.toLowerCase() : base.toUpperCase()
+      // A folder without a letter in its path cannot be asked: macOS's volumes fold case unless formatted not to.
+      const folds = otherCase === base ? this.platform === 'darwin' : await real(otherCase).then(found => found === base, () => false)
+      return join(base, ...folds ? rest.map(part => part.toLowerCase()) : rest)
+    }
+    return path
+  }
+  /** The registration, other than `except`, at exactly `path` (in any case on Windows): found without resolving anything. */
+  private literalOwner(path: string, except?: string): SqlFile | undefined {
+    for (const { file } of this.files.values()) if (file.id !== except && samePath(file.path, path, this.platform)) return file
+    return undefined
+  }
+  /**
+   * The registration, other than `except`, of the file at `path`: the same path (in any case on Windows), or the file a
+   * save of `path` would write, reached through a symbolic link or, on a case-insensitive macOS volume, in another case
+   * (`identity`). A registered dangling link also owns the missing file it leads to.
    */
   private async owner(path: string, except: string | undefined, targets: TargetCache): Promise<SqlFile | undefined> {
     const others = [...this.files.values()].map(entry => entry.file).filter(file => file.id !== except)
-    const literal = others.find(entry => samePath(entry.path, path, this.platform))
+    const literal = this.literalOwner(path, except)
     if (literal || !others.length) return literal
     // A file this burst registers is cached under its own path, so the next open does not resolve it again.
     const resolved = (candidate: string) => {
       let target = targets.get(candidate)
-      if (!target) targets.set(candidate, target = this.identity(candidate).catch(() => candidate))
+      if (!target) targets.set(candidate, target = this.identity(candidate).catch(() => ({ writes: candidate })))
       return target
     }
-    const target = await resolved(path)
-    for (const entry of others) if (samePath(await resolved(entry.path), target, this.platform)) return entry
+    const { writes } = await resolved(path)
+    for (const entry of others) {
+      const other = await resolved(entry.path)
+      if (samePath(other.writes, writes, this.platform) || (other.leadsTo !== undefined && samePath(other.leadsTo, writes, this.platform))) return entry
+    }
     return undefined
   }
 }
