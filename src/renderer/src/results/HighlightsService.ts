@@ -363,6 +363,16 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
           continue
         }
         if (placeOf(tab.sets, index) !== marks.at) changed = true
+        // Its result went (it was closed, or a new run began): what was asked of that result lands nowhere and says
+        // nothing. The highlights stay for the next result of that number, which binds them again.
+        if (!entry && marks.bound) {
+          marks.bound.abort.abort()
+          this.stopRetry(marks)
+          marks.bound = undefined
+          marks.finding.clear()
+          marks.failed.clear()
+          changed = true
+        }
         if (!complete(entry)) {
           if (marks.found.size > 0) { marks.found.clear(); changed = true }
           continue

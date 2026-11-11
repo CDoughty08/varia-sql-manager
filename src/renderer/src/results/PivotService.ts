@@ -200,6 +200,8 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       // run does not have (a derived one after a re-run, an original the run has yet to return) leaves `source` where it was.
       const placed = this.place(tabId, run, tab.source)
       if (placed >= 0 && placed !== tab.source) next = { ...next, source: placed }
+      // The entry went while its run stayed: the panel does not take up whatever moved into its place.
+      const gone = placed < 0 && this.sources.has(tabId) && this.runs.get(tabId) === run.queryId && run.status !== 'running'
       // A new run keeps the draft (a re-run of the same query pivots the same way) and the set it pivots; the draft is fitted
       // to the set when it runs.
       if (this.runs.get(tabId) !== run.queryId) {
@@ -208,7 +210,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       }
       // Once the run has ended without that set (or it is a diff), the panel moves to the first set it can pivot.
       const entry = run.sets[next.source]
-      if (run.status !== 'running' && (!entry || entry.descriptor.kind === 'diff')) {
+      if (run.status !== 'running' && (gone || !entry || entry.descriptor.kind === 'diff')) {
         const first = run.sets.findIndex(item => item.descriptor.kind === 'rows' || item.descriptor.kind === 'pivot')
         if (first >= 0 && first !== next.source) next = { ...next, source: first }
       }

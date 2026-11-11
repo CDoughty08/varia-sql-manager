@@ -128,6 +128,13 @@ describe('PivotService', () => {
     results.removeEntry('t1', sets()[0].key)
     expect(pivot.getSnapshot().tabs.t1.source).toBe(1)
     expect(sets()[1].label).toBe('Pivot of Result 3')
+    // When the entry it pivots goes, the panel moves to the first set it can pivot, not to whatever took its place.
+    run(3, { queryId: 'q0' })
+    pivot.setSource('t1', 1)
+    results.removeEntry('t1', sets()[1].key)
+    expect(pivot.getSnapshot().tabs.t1.source).toBe(0)
+    expect(sets()[0]).toMatchObject({ ordinal: 1 })
+    results.removeEntry('t1', sets()[0].key)
     // An original result is followed by its number into the next run: Result 3, though it stood first when the run began.
     pivot.setSource('t1', 0)
     expect(sets()[0]).toMatchObject({ ordinal: 3 })

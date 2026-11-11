@@ -271,6 +271,32 @@ describe('highlights', () => {
     expect(highlights.getSnapshot().t1).toBeUndefined()
   })
 
+  it('says nothing of a search that was running for a result that then went, and keeps its highlights for the next run', async () => {
+    const { client, results, highlights } = fixture()
+    const two = (queryId: string, first: number) => {
+      results.begin('t1', queryId)
+      const values = [0, 1].map(index => descriptor(first + index, { index, rowsRead: 10, rowsStored: 10, rowsAvailable: 10 }))
+      void results.finish('t1', queryId, { summary: summaryOf(values) })
+      return values.map(value => client.handle(value.resultId)!)
+    }
+    const [, second] = two('q1', 1)
+    let fail!: (error: Error) => void
+    vi.mocked(second.findRows).mockReturnValueOnce(new Promise((_, reject) => { fail = reject }))
+    results.setSelection('t1', 1, rows(1, 2, 3))
+    const marking = highlights.highlight('t1', 1, 1)
+    await settle()
+    results.removeEntry('t1', results.getSnapshot().t1.sets[1].key)
+    fail(Object.assign(new Error('The result was released.'), { code: 'RESULT_RELEASED' }))
+    await marking
+    await settle()
+    expect(results.getSnapshot().t1.jobNotice).toBe('')
+    // The next run's second result takes them up.
+    const [, again] = two('q2', 11)
+    await settle()
+    expect(highlights.getSnapshot().t1?.get(1)).toMatchObject({ count: 2, found: 2 })
+    expect(highlights.getSnapshot().t1!.get(1)!.rows.map(item => item.handle)).toEqual([again])
+  })
+
   it('keeps the whole-row fallback, refuses too many rows at once, and forgets a closed tab', async () => {
     const { results, highlights, run, shown } = fixture()
     const handle = run(1, 20_000)
