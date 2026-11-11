@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { contextMenuIds } from '../src/shared/commands/menus'
-import { argsFor, contextMenuLabels, editableText, inputTarget, isEditableText, menuForTarget, MenuTargetService, targetKeys, type MenuTarget } from '../src/renderer/src/menus/targets'
+import { argsFor, contextMenuLabels, editableText, inputTarget, isEditableText, menuForTarget, MenuTargetService, registerLiveOutput, targetKeys, type LiveOutput, type MenuTarget } from '../src/renderer/src/menus/targets'
 import { registerGridAnchor } from '../src/renderer/src/grid/anchor'
 import { fakeDocument, FakeElement } from './fixtures/elements'
 
@@ -18,7 +18,7 @@ describe('menu targets', () => {
       { kind: 'searchHit', searchId: 's', index: 0, hit: { object: hitObject, folder: 'tables', label: 'dbo.Orders' }, pane: false, node: { lost: false, kind: 'table', connectionId: 'c', label: 'dbo.Orders', ref: { type: 'object', object: hitObject } }, state: { explorerScriptTitle: 'table' } }
     ]
     expect(targets.map(target => menuForTarget[target.kind])).toEqual(contextMenuIds)
-    const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, explorerFolder: '', explorerFolderInsertable: false, explorerNodePeekable: false, explorerNodeStatus: '', explorerServerEngine: '', explorerServerLinux: false, outputView: '', outputGridTransposable: false, pane: '', paneFloating: false, panePopout: false, documentTabFloating: false, searchHitSchema: false }
+    const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, explorerFolder: '', explorerFolderInsertable: false, explorerNodePeekable: false, explorerNodeStatus: '', explorerServerEngine: '', explorerServerLinux: false, outputView: '', outputGridTransposable: false, outputLiveFilterable: false, outputLiveSortable: false, pane: '', paneFloating: false, panePopout: false, documentTabFloating: false, searchHitSchema: false }
     expect(targets.map(targetKeys)).toEqual([none, { ...none, explorerNode: 'table', explorerNodePeekable: true }, none, none, { ...none, outputView: 'messages' }, { ...none, pane: 'results', paneFloating: true }, none, none, { ...none, searchHitSchema: true }])
     expect(targetKeys(undefined)).toEqual(none)
     // The empty area below the servers, and a server lost with its backend generation.
@@ -226,6 +226,30 @@ describe('menu target service', () => {
     expect(targetKeys(service.targetFor(dom(grid))!.target).outputGridTransposable).toBe(false)
     const transposable = (kind: string) => { grid.setAttribute('data-result-kind', kind); return targetKeys(service.targetFor(dom(grid))!.target).outputGridTransposable }
     expect(['rows', 'pivot', 'transpose', 'diff'].map(transposable)).toEqual([true, true, true, false])
+  })
+  it('resolves a live view\'s grid as Query Output\'s view `live`, with its commands and the clicked or active column', () => {
+    const doc = fakeDocument(), make = (tag: string, init?: ConstructorParameters<typeof FakeElement>[2]) => new FakeElement(doc, tag, init)
+    const header = make('div', { attributes: { 'aria-colindex': '3' } })
+    const active = make('div', { className: 'rg-c is-act', attributes: { 'aria-colindex': '4' } })
+    const grid = make('div', { attributes: { 'data-output-view': 'live', 'aria-label': 'Sessions' } }).append(header, active)
+    make('body').append(grid)
+    const service = new MenuTargetService()
+    // Until its grid registers its commands it has no menu (a stopped view's grid unmounted them).
+    expect(service.targetFor(dom(header))).toBeUndefined()
+    const live = { sortable: true, filterable: false } as LiveOutput
+    const unregister = registerLiveOutput(dom(grid), live)
+    const hit = service.targetFor(dom(header))!
+    expect(hit).toMatchObject({ target: { kind: 'output', view: 'live', tabId: '', resultIndex: 0, column: 1, live }, element: grid, anchor: active })
+    expect(menuForTarget[hit.target.kind]).toBe('output.context')
+    expect(service.targetFor(dom(grid))!.target).toMatchObject({ column: 2 })
+    // It names no query, so File commands and Close Results have no tab to act on.
+    expect(argsFor(hit.target).tabId).toBeUndefined()
+    expect(targetKeys(hit.target)).toMatchObject({ outputView: 'live', outputLiveSortable: true, outputLiveFilterable: false, outputGridTransposable: false })
+    // Only a grid whose source filters columns shows the Filter items.
+    expect(targetKeys({ ...hit.target, live: { sortable: true, filterable: true } as LiveOutput } as MenuTarget).outputLiveFilterable).toBe(true)
+    expect(targetKeys({ ...hit.target, live: { sortable: false } as LiveOutput } as MenuTarget).outputLiveSortable).toBe(false)
+    unregister()
+    expect(service.targetFor(dom(header))).toBeUndefined()
   })
   it('reads a text field\'s facts again once it has focus', () => {
     let undo = false
