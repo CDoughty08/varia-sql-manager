@@ -8,6 +8,8 @@ export type { CommandId } from '../../../shared/commands/catalog'
 export interface Disposable { dispose(): void }
 /** Renderer-only command arguments; they never cross IPC. */
 export interface CommandContext {
+  /** The exact advertised release; omitted when Help opens notes for the running application. */
+  readonly releaseVersion?: string
   /** The tab a tab-strip button acts on. */
   readonly tabId?: string
   /** New Query's explicit editor group, from that group's header or empty strip. */

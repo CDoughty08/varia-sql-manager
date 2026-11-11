@@ -3,7 +3,7 @@ import type { UpdateState } from '../../../shared/updates'
 import { productName } from '../../../shared/product'
 import { formatBytes } from '../results/status'
 
-export type AboutUpdateCommand = 'help.checkForUpdates' | 'help.downloadUpdate' | 'help.restartToUpdate' | 'help.releaseNotes'
+export type AboutUpdateCommand = 'help.checkForUpdates' | 'help.downloadUpdate' | 'help.restartToUpdate' | 'help.releaseNotes' | 'help.openDownloads'
 export interface AboutUpdatePresentation {
   readonly title: string
   readonly detail: string
@@ -14,7 +14,7 @@ export interface AboutUpdatePresentation {
 
 export const platformName = (platform: Platform): string => ({ win32: 'Windows', darwin: 'macOS', linux: 'Linux' })[platform]
 const check = { command: 'help.checkForUpdates', label: 'Check for Updates' } as const
-const downloads = { command: 'help.releaseNotes', label: 'Open Release Downloads' } as const
+const downloads = { command: 'help.openDownloads', label: 'Open Release Downloads' } as const
 
 /** The dialog projects the same updater state as the status bar; it never starts a check merely by opening. */
 export function aboutUpdate(state: UpdateState, platform: Platform): AboutUpdatePresentation {
