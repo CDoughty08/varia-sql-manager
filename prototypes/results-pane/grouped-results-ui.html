@@ -1,0 +1,559 @@
+<div id="varia-grouped-ui" class="viz-dotted-background">
+  <section class="vg-app" aria-label="Varia grouped Results pane"></section>
+</div>
+<style>
+  #varia-grouped-ui { padding: 12px 0; }
+  #varia-grouped-ui .vg-app {
+    --vg-bg: light-dark(#fff, #16181d); --vg-chrome: light-dark(#f7f8fa, #111317);
+    --vg-input: light-dark(#fff, #101216); --vg-text: light-dark(#1c1f26, #d9dce3);
+    --vg-secondary: light-dark(#3a404b, #bcc1cb); --vg-muted: light-dark(#5c6370, #9298a4);
+    --vg-border: light-dark(#e3e6eb, #262a31); --vg-gridline: light-dark(#eceef2, #1f2228);
+    --vg-control: light-dark(#878e9b, #6a7184); --vg-hover: light-dark(#dfe2e7, #262a32);
+    --vg-active: light-dark(#e7ebfc, #21273b); --vg-badge: light-dark(#d6dae0, #30343e);
+    --vg-accent: light-dark(#4453d0, #8f9cff); --vg-on-accent: light-dark(#fff, #0e1230);
+    --vg-accent-text: light-dark(#3240b0, #bcc5ff); --vg-success: light-dark(#146f3b, #74d19c);
+    --vg-warning: light-dark(#875800, #e4bb6a); --vg-error: light-dark(#b42229, #f39a9a);
+    --vg-blue: light-dark(#2a78d6, #3987e5); --vg-overlay: light-dark(#fff, #1d2026);
+    --vg-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
+    --vg-mono: 'Cascadia Mono', Consolas, 'SF Mono', Menlo, monospace;
+    --vg-row: 20px;
+    color: var(--vg-text); background: var(--vg-bg); font: 12px/16px var(--vg-ui);
+    height: 500px; min-height: 360px; border: 1px solid var(--vg-border);
+    display: flex; flex-direction: column; min-width: 0; container-type: inline-size;
+    position: relative; text-align: left;
+  }
+  #varia-grouped-ui .vg-app * { box-sizing: border-box; }
+  #varia-grouped-ui .vg-app [hidden] { display: none !important; }
+  #varia-grouped-ui .vg-app button { font: inherit; color: inherit; background: transparent; border: 1px solid transparent; border-radius: 4px; padding: 0 6px; height: 24px; display: inline-flex; align-items: center; justify-content: center; gap: 4px; white-space: nowrap; }
+  #varia-grouped-ui .vg-app button:hover:not(:disabled) { background: var(--vg-hover); }
+  #varia-grouped-ui .vg-app button:disabled { opacity: .42; cursor: not-allowed; }
+  #varia-grouped-ui .vg-app input, #varia-grouped-ui .vg-app select { font: inherit; color: var(--vg-text); background: var(--vg-input); border: 1px solid var(--vg-control); border-radius: 4px; min-width: 0; height: 24px; padding: 0 6px; }
+  #varia-grouped-ui .vg-app .vg-primary { background: var(--vg-accent); color: var(--vg-on-accent); border-color: var(--vg-accent); }
+  #varia-grouped-ui .vg-app .vg-outline { border-color: var(--vg-border); }
+  #varia-grouped-ui .vg-app .vg-icon { width: 24px; flex: 0 0 24px; padding: 0; }
+  #varia-grouped-ui .vg-app i[data-lucide] { display: inline-flex; width: 14px; height: 16px; align-items: center; justify-content: center; font-style: normal; }
+  #varia-grouped-ui .vg-app svg.lucide { width: 14px; height: 14px; flex-shrink: 0; }
+  #varia-grouped-ui .vg-top { min-height: 36px; padding: 5px 6px 5px 8px; border-bottom: 1px solid var(--vg-border); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  #varia-grouped-ui .vg-output-tabs { display: inline-flex; padding: 1px; gap: 1px; border: 1px solid var(--vg-border); border-radius: 4px; flex-shrink: 0; }
+  #varia-grouped-ui .vg-app .vg-output-tabs button { height: 22px; padding: 0 8px; color: var(--vg-muted); }
+  #varia-grouped-ui .vg-output-tabs [aria-selected="true"] { background: var(--vg-active); color: var(--vg-text) !important; font-weight: 600; }
+  #varia-grouped-ui .vg-count { border-radius: 999px; background: var(--vg-badge); padding: 0 5px; min-width: 16px; font: 600 11px/16px var(--vg-ui); color: var(--vg-secondary); }
+  #varia-grouped-ui .vg-display { display: flex; align-items: center; gap: 4px; min-width: 0; border-left: 1px solid var(--vg-border); padding-left: 6px; flex: 1 1 360px; }
+  #varia-grouped-ui .vg-search { display: flex; align-items: center; gap: 2px; min-width: 90px; flex: 1 1 180px; height: 24px; padding: 0 3px 0 5px; border: 1px solid var(--vg-control); border-radius: 4px; background: var(--vg-input); color: var(--vg-muted); }
+  #varia-grouped-ui .vg-search input { border: 0; padding: 0; width: 0; flex: 1; min-width: 18px; font-size: 11px; height: 20px; }
+  #varia-grouped-ui .vg-search-count { font-size: 11px; white-space: nowrap; }
+  #varia-grouped-ui .vg-app .vg-search button { height: 18px; width: 18px; padding: 0; }
+  #varia-grouped-ui .vg-segments { display: inline-flex; gap: 1px; padding: 1px; border: 1px solid var(--vg-border); border-radius: 4px; flex-shrink: 0; }
+  #varia-grouped-ui .vg-app .vg-segments button { height: 20px; padding: 0 5px; color: var(--vg-muted); font-size: 11px; }
+  #varia-grouped-ui .vg-app .vg-segments [aria-pressed="true"] { background: var(--vg-active); color: var(--vg-text); font-weight: 600; }
+  #varia-grouped-ui .vg-summary { margin-left: auto; color: var(--vg-muted); font-size: 11px; white-space: nowrap; display: flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
+  #varia-grouped-ui .vg-summary strong { color: var(--vg-text); font-weight: 600; }
+  #varia-grouped-ui .vg-summary i { color: var(--vg-success); }
+  #varia-grouped-ui .vg-output { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  #varia-grouped-ui .vg-groups { min-height: 30px; display: flex; align-items: stretch; gap: 2px; padding: 3px 6px 0; background: var(--vg-chrome); border-bottom: 1px solid var(--vg-border); flex-shrink: 0; flex-wrap: nowrap; }
+  #varia-grouped-ui .vg-group { display: flex; align-items: center; border: 1px solid transparent; border-bottom: 0; border-radius: 4px 4px 0 0; color: var(--vg-muted); max-width: 190px; }
+  #varia-grouped-ui .vg-group[data-active="true"] { background: var(--vg-bg); border-color: var(--vg-border); color: var(--vg-text); box-shadow: inset 0 2px var(--vg-accent); }
+  #varia-grouped-ui .vg-app .vg-group > button { height: 26px; padding: 0 8px; min-width: 0; }
+  #varia-grouped-ui .vg-app .vg-group > .vg-close { width: 22px; padding: 0; }
+  #varia-grouped-ui .vg-group select { max-width: 140px; }
+  #varia-grouped-ui .vg-all-results { margin: 0 0 3px auto; max-width: 200px; font-size: 11px !important; height: 23px !important; }
+  #varia-grouped-ui .vg-viewbar { display: flex; align-items: center; min-height: 32px; gap: 10px; padding: 3px 8px; border-bottom: 1px solid var(--vg-border); flex-shrink: 0; flex-wrap: wrap; }
+  #varia-grouped-ui .vg-views { display: flex; align-items: center; gap: 4px; }
+  #varia-grouped-ui .vg-view { display: flex; align-items: center; border-radius: 4px; color: var(--vg-muted); }
+  #varia-grouped-ui .vg-view[data-active="true"] { background: var(--vg-active); color: var(--vg-accent-text); }
+  #varia-grouped-ui .vg-app .vg-view button { height: 24px; padding: 0 8px; }
+  #varia-grouped-ui .vg-app .vg-view .vg-close { width: 20px; padding: 0; }
+  #varia-grouped-ui .vg-actions { display: flex; align-items: center; gap: 3px; margin-left: auto; }
+  #varia-grouped-ui .vg-app .vg-actions button { font-size: 11px; }
+  #varia-grouped-ui .vg-actions-compact { display: none !important; }
+  #varia-grouped-ui .vg-facts { display: flex; align-items: center; gap: 8px; min-height: 26px; padding: 0 8px; color: var(--vg-muted); border-bottom: 1px solid var(--vg-gridline); font-size: 11px; flex-shrink: 0; flex-wrap: wrap; }
+  #varia-grouped-ui .vg-facts strong { color: var(--vg-text); font-size: 12px; font-weight: 600; }
+  #varia-grouped-ui .vg-filter-chip { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding-left: 8px; border: 1px solid var(--vg-accent); border-radius: 999px; color: var(--vg-accent-text); background: var(--vg-active); }
+  #varia-grouped-ui .vg-app .vg-filter-chip button { height: 18px; width: 20px; padding: 0; }
+  #varia-grouped-ui .vg-main { display: flex; flex: 1; min-height: 0; min-width: 0; }
+  #varia-grouped-ui .vg-grid-column { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; position: relative; }
+  #varia-grouped-ui .vg-scroller { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-color: var(--vg-control) var(--vg-chrome); }
+  #varia-grouped-ui .vg-scroller table { border-collapse: separate; border-spacing: 0; table-layout: fixed; font: 12px/19px var(--vg-mono); color: var(--vg-text); }
+  #varia-grouped-ui .vg-scroller th { background: var(--vg-bg); color: var(--vg-muted); position: sticky; top: 0; z-index: 2; height: 22px; font: 12px/21px var(--vg-ui); text-align: left; font-weight: 400; }
+  #varia-grouped-ui .vg-scroller td { height: var(--vg-row); line-height: calc(var(--vg-row) - 1px); }
+  #varia-grouped-ui .vg-scroller td, #varia-grouped-ui .vg-scroller th { padding: 0 6px; border-right: 1px solid var(--vg-gridline); border-bottom: 1px solid var(--vg-gridline); white-space: pre; overflow: hidden; text-overflow: clip; }
+  #varia-grouped-ui .vg-scroller .vg-type { font-size: 11px; margin-left: 6px; color: var(--vg-muted); }
+  #varia-grouped-ui .vg-scroller .vg-rn { width: 46px; position: sticky; left: 0; z-index: 1; text-align: right; background: var(--vg-bg); color: var(--vg-muted); font: 11px/19px var(--vg-ui); }
+  #varia-grouped-ui .vg-scroller th.vg-rn { z-index: 3; }
+  #varia-grouped-ui .vg-scroller tr[data-selected="true"] td { background: var(--vg-active); }
+  #varia-grouped-ui .vg-scroller td[data-active="true"] { box-shadow: inset 0 0 0 1px var(--vg-accent); }
+  #varia-grouped-ui .vg-scroller .vg-null { color: var(--vg-muted); font-style: italic; }
+  #varia-grouped-ui .vg-scroller .vg-spacer td { border: 0; padding: 0; line-height: 0; }
+  #varia-grouped-ui .vg-scroller .vg-number { text-align: right; }
+  #varia-grouped-ui .vg-app .vg-column-button { height: 20px; width: 19px; padding: 0; float: right; color: var(--vg-muted); }
+  #varia-grouped-ui .vg-scroller tr[data-tone="removed"] td { background: color-mix(in srgb, var(--vg-error) 12%, var(--vg-bg)); }
+  #varia-grouped-ui .vg-scroller tr[data-tone="added"] td { background: color-mix(in srgb, var(--vg-success) 12%, var(--vg-bg)); }
+  #varia-grouped-ui .vg-scroller mark { background: var(--vg-warning); color: var(--vg-input); padding: 0; }
+  #varia-grouped-ui .vg-source-strip, #varia-grouped-ui .vg-limit { padding: 4px 8px; min-height: 25px; border-top: 1px solid var(--vg-gridline); color: var(--vg-muted); font-size: 11px; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; flex-shrink: 0; }
+  #varia-grouped-ui .vg-limit { color: var(--vg-warning); }
+  #varia-grouped-ui .vg-app .vg-source-link { height: auto; padding: 0; color: var(--vg-accent-text); font-size: 11px; text-decoration: underline; }
+  #varia-grouped-ui .vg-sidecars { display: flex; min-height: 0; max-width: 62%; }
+  #varia-grouped-ui .vg-side { width: 280px; display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--vg-border); background: var(--vg-chrome); font-size: 11px; }
+  #varia-grouped-ui .vg-profile { width: 300px; }
+  #varia-grouped-ui .vg-side-head { display: flex; align-items: center; gap: 6px; height: 26px; min-height: 26px; padding: 0 4px 0 8px; border-bottom: 1px solid var(--vg-border); }
+  #varia-grouped-ui .vg-side-head strong { color: var(--vg-muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  #varia-grouped-ui .vg-side-head span { color: var(--vg-muted); flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  #varia-grouped-ui .vg-side-body { padding: 6px 8px; min-height: 0; flex: 1; overflow-y: auto; }
+  #varia-grouped-ui .vg-side-source { color: var(--vg-muted); padding: 3px 0 9px; }
+  #varia-grouped-ui .vg-side-source b { color: var(--vg-text); font-weight: 400; }
+  #varia-grouped-ui .vg-side h3 { margin: 0 0 4px; font: 600 11px/16px var(--vg-ui); text-transform: uppercase; letter-spacing: .04em; color: var(--vg-muted); }
+  #varia-grouped-ui .vg-side-section { margin-bottom: 12px; }
+  #varia-grouped-ui .vg-side select { width: 100%; font-size: 11px; }
+  #varia-grouped-ui .vg-row-field { display: flex; gap: 3px; align-items: center; }
+  #varia-grouped-ui .vg-row-field select { flex: 1; }
+  #varia-grouped-ui .vg-value-fields { display: flex; gap: 3px; }
+  #varia-grouped-ui .vg-value-fields select:first-child { flex: 0 0 88px; }
+  #varia-grouped-ui .vg-value-fields select:nth-child(2) { flex: 1; }
+  #varia-grouped-ui .vg-side-foot { border-top: 1px solid var(--vg-border); padding: 6px 8px; display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+  #varia-grouped-ui .vg-side-note { width: 100%; color: var(--vg-muted); margin-bottom: 4px; }
+  #varia-grouped-ui .vg-profile-card { padding: 6px 8px; border: 1px solid var(--vg-border); border-radius: 4px; background: var(--vg-bg); margin: 0 0 6px; }
+  #varia-grouped-ui .vg-profile-card header { display: flex; justify-content: space-between; gap: 6px; }
+  #varia-grouped-ui .vg-profile-card header span { color: var(--vg-muted); }
+  #varia-grouped-ui .vg-profile-card dl { display: grid; grid-template-columns: auto 1fr; gap: 0 10px; margin: 3px 0 0; }
+  #varia-grouped-ui .vg-profile-card dt { color: var(--vg-muted); }
+  #varia-grouped-ui .vg-profile-card dd { text-align: right; margin: 0; font-variant-numeric: tabular-nums; }
+  #varia-grouped-ui .vg-histogram { height: 26px; display: flex; align-items: flex-end; gap: 1px; margin-top: 5px; border-bottom: 1px solid var(--vg-border); }
+  #varia-grouped-ui .vg-histogram i { flex: 1; background: var(--vg-blue); }
+  #varia-grouped-ui .vg-side-switch { display: none; }
+  #varia-grouped-ui .vg-messages-strip { border-top: 1px solid var(--vg-border); flex-shrink: 0; }
+  #varia-grouped-ui .vg-app .vg-messages-strip > button { width: 100%; justify-content: flex-start; height: 26px; font-size: 11px; color: var(--vg-muted); border-radius: 0; }
+  #varia-grouped-ui .vg-messages { font: 12px/1.7 var(--vg-mono); padding: 10px 20px; color: var(--vg-secondary); }
+  #varia-grouped-ui .vg-notice { padding: 4px 8px; color: var(--vg-accent-text); background: var(--vg-active); font-size: 11px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  #varia-grouped-ui .vg-empty { padding: 24px; color: var(--vg-muted); display: grid; gap: 6px; flex: 1; align-content: center; justify-content: center; text-align: center; }
+  #varia-grouped-ui .vg-menu { position: absolute; right: 8px; top: 96px; z-index: 12; background: var(--vg-overlay); border: 1px solid var(--vg-control); border-radius: 4px; padding: 4px; min-width: 210px; max-width: calc(100% - 16px); box-shadow: 0 6px 16px color-mix(in srgb, var(--vg-text) 15%, transparent); }
+  #varia-grouped-ui .vg-app .vg-menu button { display: flex; justify-content: flex-start; width: 100%; height: 27px; padding: 0 8px; font-size: 12px; }
+  #varia-grouped-ui .vg-menu hr { border: 0; border-top: 1px solid var(--vg-border); margin: 4px 0; }
+  #varia-grouped-ui .vg-filter-menu { left: 48px; right: auto; width: 220px; top: 124px; }
+  #varia-grouped-ui .vg-filter-menu strong { display: block; padding: 3px 8px 6px; }
+  #varia-grouped-ui .vg-filter-menu label { display: flex; align-items: center; gap: 6px; padding: 2px 8px; }
+  #varia-grouped-ui .vg-filter-menu input { width: 14px; height: 14px; padding: 0; accent-color: var(--vg-accent); }
+  #varia-grouped-ui .vg-filter-buttons { display: flex; justify-content: flex-end; gap: 4px; padding: 4px; }
+  #varia-grouped-ui .vg-app .vg-filter-buttons button { width: auto; }
+  @container (max-width: 1160px) {
+    #varia-grouped-ui .vg-display { flex-basis: 370px; }
+    #varia-grouped-ui .vg-summary { width: auto; justify-content: flex-end; }
+    #varia-grouped-ui .vg-search .vg-search-step { display: none; }
+    #varia-grouped-ui .vg-sidecars[data-both="true"] { flex-direction: column; width: 280px; }
+    #varia-grouped-ui .vg-sidecars[data-both="true"] .vg-side { width: 100%; flex: 1; min-height: 0; }
+    #varia-grouped-ui .vg-sidecars[data-both="true"] .vg-side:not([data-front="true"]) { display: none; }
+    #varia-grouped-ui .vg-sidecars[data-both="true"] .vg-side-switch { display: flex; padding: 2px 4px; border-left: 1px solid var(--vg-border); border-bottom: 1px solid var(--vg-border); background: var(--vg-chrome); gap: 3px; }
+    #varia-grouped-ui .vg-side-switch [aria-pressed="true"] { background: var(--vg-active); }
+  }
+  @container (max-width: 700px) {
+    #varia-grouped-ui .vg-display { border-left: 0; padding-left: 0; flex-basis: 100%; flex-wrap: wrap; order: 3; }
+    #varia-grouped-ui .vg-search { flex-basis: 130px; }
+    #varia-grouped-ui .vg-summary { width: auto; font-size: 11px; order: 1; }
+    #varia-grouped-ui .vg-top > button { order: 2; margin-left: auto; }
+    #varia-grouped-ui .vg-summary-detail { display: none; }
+    #varia-grouped-ui .vg-actions-labeled { display: none !important; }
+    #varia-grouped-ui .vg-actions-compact { display: inline-flex !important; }
+    #varia-grouped-ui .vg-sidecars { max-width: 48%; }
+    #varia-grouped-ui .vg-side, #varia-grouped-ui .vg-profile { width: 240px; }
+    #varia-grouped-ui .vg-value-fields { flex-wrap: wrap; }
+    #varia-grouped-ui .vg-value-fields select:first-child { flex-basis: 100%; }
+  }
+  @container (max-width: 460px) {
+    #varia-grouped-ui .vg-groups > .vg-group { display: none; }
+    #varia-grouped-ui .vg-all-results { width: 100%; max-width: none; margin-left: 0; }
+    #varia-grouped-ui .vg-summary { display: none; }
+    #varia-grouped-ui .vg-views { gap: 1px; }
+    #varia-grouped-ui .vg-app .vg-view button { padding: 0 5px; }
+    #varia-grouped-ui .vg-viewbar { gap: 4px; }
+    #varia-grouped-ui .vg-actions { width: 100%; justify-content: flex-end; }
+    #varia-grouped-ui .vg-main:has(.vg-sidecars) .vg-grid-column { display: none; }
+    #varia-grouped-ui .vg-sidecars { max-width: 100%; width: 100% !important; flex: 1; }
+    #varia-grouped-ui .vg-side { width: 100% !important; flex: 1; }
+  }
+  @media (pointer: coarse) {
+    #varia-grouped-ui .vg-app button, #varia-grouped-ui .vg-app select { min-height: 44px; min-width: 44px; }
+    #varia-grouped-ui .vg-app input { min-height: 44px; font-size: 16px; }
+    #varia-grouped-ui .vg-app .vg-segments, #varia-grouped-ui .vg-output-tabs, #varia-grouped-ui .vg-search, #varia-grouped-ui .vg-side-head { height: auto; min-height: 44px; }
+    #varia-grouped-ui .vg-facts, #varia-grouped-ui .vg-viewbar, #varia-grouped-ui .vg-top { height: auto; }
+  }
+</style>
+<script>
+(() => {
+  const root = document.getElementById('varia-grouped-ui')
+  const app = root.querySelector('.vg-app')
+  const esc = value => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char])
+  const number = value => value.toLocaleString('en-US')
+  const icon = (name, fallback = '') => `<i data-lucide="${name}" aria-hidden="true">${fallback}</i>`
+  const button = (action, label, attrs = '', image = '') => {
+    const classes = [...attrs.matchAll(/\bclass="([^"]*)"/g)].flatMap(match => match[1].split(' '))
+    return `<button type="button" class="${[...new Set(['cursor-interaction', ...classes])].join(' ')}" data-action="${action}" ${attrs.replace(/\bclass="[^"]*"/g, '')}>${image}${label}</button>`
+  }
+  const iconButton = (action, label, name, fallback, attrs = '') => button(action, '', `class="vg-icon cursor-interaction" aria-label="${esc(label)}" data-tooltip="${esc(label)}" ${attrs}`, icon(name, fallback)).replace('class="cursor-interaction" ', '')
+  const closeButton = (action, label, attrs = '') => iconButton(action, label, 'x', '×', attrs)
+  const viewNames = { table: 'Table', pivot: 'Pivot', transpose: 'Transpose' }
+  const config = { appearance: 'System', paneHeight: 540, rowHeight: 20, resultCount: '2', data: 'Screenshot example', runState: 'Completed', actions: 'Labeled buttons', showCounts: false }
+  const initialGroup = id => ({ id, label: `Result ${id}`, active: 'table', filter: null, sortColumn: -1, sortDirection: 1, views: id === 1 ? { pivot: { filter: null, group: 'high', aggregate: 'Count', column: '(Rows)', columnGroup: '(None)' } } : { pivot: { filter: null, group: 'high', aggregate: 'Count', column: '(Rows)', columnGroup: '(None)' }, transpose: { filter: null } } })
+  const fresh = () => ({ groups: Array.from({ length: Number(config.resultCount) }, (_, at) => initialGroup(at + 1)), comparisons: [], activeGroup: 1, comparison: null, output: 'results', whitespace: 'Off', sortText: 'Value', profile: true, rowSize: false, panel: null, sideFront: 'profile', search: '', searchMode: 'Data', match: 0, selection: { row: 0, col: 0 }, menu: null, messages: false, notice: '' })
+  let state = fresh()
+  let lastPrivate = ''
+  let dataCache = new Map()
+  let currentData = null
+  let scrollPosition = { top: 0, left: 0 }
+  let lastSettings = JSON.stringify({ data: config.data, count: config.resultCount, runState: config.runState })
+  const restore = saved => {
+    const privateState = saved?.privateContent
+    if (privateState?.version !== 2 || !privateState.state || !Array.isArray(privateState.state.groups)) return
+    Object.assign(config, privateState.config)
+    state = { ...fresh(), ...privateState.state, panel: null, menu: null, notice: '' }
+    lastSettings = JSON.stringify({ data: config.data, count: config.resultCount, runState: config.runState })
+  }
+  restore(window.openai?.widgetState)
+  const save = () => {
+    const privateContent = { version: 2, config, state: { ...state, panel: null, menu: null, notice: '' } }
+    lastPrivate = JSON.stringify(privateContent)
+    window.openai?.setWidgetState?.({ modelContent: { concept: 'Grouped views with actual Varia chrome', active: activeName(), data: config.data, rowHeight: config.rowHeight, actions: config.actions, originalResults: state.groups.length, views: state.groups.map(group => ({ result: group.label, views: ['table', ...Object.keys(group.views)] })), comparisons: state.comparisons.map(item => item.label) }, privateContent })?.catch(() => {})
+  }
+  const activeGroup = () => state.groups.find(group => group.id === state.activeGroup)
+  const activeComparison = () => state.comparisons.find(item => item.id === state.comparison)
+  const activeView = () => activeComparison()?.kind ?? activeGroup()?.active ?? 'table'
+  const activeName = () => activeComparison()?.label ?? (activeGroup() ? `${activeGroup().label} · ${viewNames[activeView()]}` : 'No result')
+  const runReady = () => config.runState === 'Completed'
+  const canCloseResults = () => config.runState !== 'Running'
+  const columns = () => config.data === 'Screenshot example' ? [{ name: 'high', type: 'int', width: 70 }] : [{ name: 'OrderId', type: 'int', width: 130 }, { name: 'Region', type: 'varchar(20)', width: 170 }, { name: 'Status', type: 'varchar(20)', width: 190 }, { name: 'Total', type: 'decimal(12,2)', width: 180 }]
+  function baseData(id) {
+    const key = `${config.data}:${id}`
+    if (dataCache.has(key)) return dataCache.get(key)
+    let rows
+    if (config.data === 'Screenshot example') {
+      const buckets = [[1, 12468], [2, 2036], [0, 612], [4, 400], [8, 600], [16, 450], [32, 650], [64, 600], [128, 700], [null, 1947]]
+      rows = buckets.flatMap(([value, count]) => Array.from({ length: count }, () => [value]))
+      if (id % 2 === 0) { rows[15] = [2]; rows[22] = [128] }
+    } else rows = Array.from({ length: 20463 }, (_, at) => [10241 + at, ['North', 'South', 'East', 'West'][at % 4], id % 2 === 0 && at === 0 ? 'Pending' : ['Shipped', 'Pending', 'Shipped', 'Cancelled'][at % 4], (id % 2 === 0 && at === 2 ? 185 : 143.5 + at * 13.25).toFixed(2)])
+    const data = { columns: columns(), rows }
+    dataCache.set(key, data)
+    return data
+  }
+  function filtered(id, filter) {
+    const data = baseData(id)
+    return { ...data, rows: filter === null ? data.rows : data.rows.filter(row => row[0] === null ? filter.includes('NULL') : filter.includes(String(row[0]))) }
+  }
+  function viewData(id, kind, recipe = null) {
+    const group = state.groups.find(item => item.id === id)
+    if (kind === 'table') return filtered(id, recipe?.filter ?? group?.filter ?? null)
+    recipe = recipe ?? group?.views[kind]
+    const source = filtered(id, recipe?.filter ?? null)
+    if (kind === 'transpose') {
+      const taken = Math.min(source.rows.length, 4095)
+      return { columns: [{ name: 'Column', type: 'nvarchar(128)', width: 170 }, ...Array.from({ length: taken }, (_, at) => ({ name: `Row ${at + 1}`, type: 'nvarchar(max)', width: 155 }))], rows: source.columns.map((column, at) => [column.name, ...source.rows.slice(0, taken).map(row => row[at])]), sourceRows: source.rows.length, taken, partial: taken < source.rows.length, sourceFilter: recipe?.filter }
+    }
+    const keyIndex = Math.max(0, source.columns.findIndex(column => column.name === recipe?.group))
+    const valueIndex = source.columns.findIndex(column => column.name === recipe?.column)
+    const groups = new Map()
+    for (const row of source.rows) {
+      const key = row[keyIndex]
+      const entry = groups.get(key) ?? { count: 0, sum: 0 }
+      entry.count++
+      entry.sum += Number(row[valueIndex] ?? 0)
+      groups.set(key, entry)
+    }
+    const aggregate = recipe?.aggregate ?? 'Count'
+    const rows = [...groups].sort(([a], [b]) => a === null ? -1 : b === null ? 1 : String(a).localeCompare(String(b), undefined, { numeric: true })).map(([key, value]) => [key, aggregate === 'Count' ? value.count : aggregate === 'Average' ? (value.sum / value.count).toFixed(2) : value.sum.toFixed(2)])
+    return { columns: [source.columns[keyIndex], { name: `${aggregate} (${recipe?.column ?? '(Rows)'})`.replace('((Rows))', '(Rows)'), type: aggregate === 'Count' ? 'bigint' : 'decimal(38,2)', width: 200 }], rows, sourceRows: source.rows.length, sourceFilter: recipe?.filter }
+  }
+  function comparisonData(comparison) {
+    const left = viewData(comparison.left, comparison.kind, comparison.leftRecipe)
+    const right = viewData(comparison.right, comparison.kind, comparison.rightRecipe)
+    const rows = [], tones = []
+    let changed = 0
+    if (comparison.kind !== 'table' || config.data === 'Order data') {
+      const paired = new Map(right.rows.map(row => [String(row[0]), row]))
+      for (const row of left.rows) {
+        const after = paired.get(String(row[0]))
+        if (after && JSON.stringify(row) !== JSON.stringify(after)) { rows.push(['−', ...row], ['+', ...after]); tones.push('removed', 'added'); changed++ }
+      }
+      if (!rows.length && left.rows.length) { rows.push(['=', ...left.rows[0]]); tones.push('') }
+    } else {
+      const counts = data => data.rows.reduce((map, row) => map.set(JSON.stringify(row), (map.get(JSON.stringify(row)) ?? 0) + 1), new Map())
+      const a = counts(left), b = counts(right)
+      for (const key of new Set([...a.keys(), ...b.keys()])) {
+        const delta = (b.get(key) ?? 0) - (a.get(key) ?? 0)
+        if (delta) { rows.push([delta > 0 ? '+' : '−', ...JSON.parse(key), Math.abs(delta)]); tones.push(delta > 0 ? 'added' : 'removed'); changed += Math.abs(delta) }
+      }
+    }
+    const cols = [{ name: 'Change', type: '', width: 70 }, ...left.columns]
+    if (comparison.kind === 'table' && config.data === 'Screenshot example') cols.push({ name: 'Rows', type: 'bigint', width: 100 })
+    return { columns: cols, rows, tones, changed, partial: left.partial || right.partial, leftRows: left.sourceRows ?? left.rows.length, rightRows: right.sourceRows ?? right.rows.length }
+  }
+  function shownData() {
+    const comparison = activeComparison()
+    if (comparison) return comparisonData(comparison)
+    const group = activeGroup()
+    if (!group) return null
+    const data = viewData(group.id, group.active)
+    if (group.active === 'table' && group.sortColumn >= 0) {
+      const at = group.sortColumn
+      data.rows = [...data.rows].sort((a, b) => {
+        const left = a[at], right = b[at]
+        const value = state.sortText === 'Chars' ? String(left ?? '').length - String(right ?? '').length : state.sortText === 'Bytes' ? new TextEncoder().encode(String(left ?? '')).length - new TextEncoder().encode(String(right ?? '')).length : typeof left === 'number' && typeof right === 'number' ? left - right : String(left ?? '').localeCompare(String(right ?? ''), undefined, { numeric: true })
+        return value * group.sortDirection
+      })
+    }
+    return data
+  }
+  const fingerprint = data => data.columns.map(column => `${column.name}:${column.type}`).join('|')
+  function candidates() {
+    const group = activeGroup(), kind = group?.active
+    if (!group || !kind) return []
+    const from = fingerprint(viewData(group.id, kind))
+    return state.groups.filter(other => other.id !== group.id && (kind === 'table' || other.views[kind]) && fingerprint(viewData(other.id, kind)) === from)
+  }
+  function searchMatches() {
+    if (!state.search) return []
+    const needle = state.search.toLowerCase(), matches = []
+    for (const group of state.groups) {
+      for (const kind of ['table', ...Object.keys(group.views)]) {
+        const data = viewData(group.id, kind)
+        if (state.searchMode === 'Columns') data.columns.forEach((column, col) => { if (column.name.toLowerCase().includes(needle)) matches.push({ group: group.id, kind, row: 0, col }) })
+        else for (let row = 0; row < data.rows.length && matches.length < 500; row++) for (let col = 0; col < data.columns.length && matches.length < 500; col++) if (String(data.rows[row][col] ?? 'NULL').toLowerCase().includes(needle)) matches.push({ group: group.id, kind, row, col })
+        if (matches.length >= 500) return matches
+      }
+    }
+    return matches
+  }
+  let matches = []
+  const decorate = cell => {
+    let text = cell === null ? 'NULL' : String(cell)
+    if (state.whitespace !== 'Off') text = text.replace(/ /g, '·').replace(/\t/g, '→')
+    const safe = esc(text)
+    return state.search && text.toLowerCase().includes(state.search.toLowerCase()) ? `<mark>${safe}</mark>` : safe
+  }
+  function paintGrid() {
+    const scroller = app.querySelector('.vg-scroller')
+    if (!scroller || !currentData) return
+    const data = currentData, rh = config.rowHeight
+    const first = Math.max(0, Math.floor((scroller.scrollTop - 22) / rh) - 3)
+    const last = Math.min(data.rows.length, first + Math.ceil((scroller.clientHeight || 300) / rh) + 8)
+    const widths = data.columns.map(column => column.width)
+    const totalWidth = widths.reduce((a, b) => a + b, 46)
+    let left = 46, firstColumn = 0
+    while (firstColumn < widths.length - 1 && left + widths[firstColumn] < scroller.scrollLeft) left += widths[firstColumn++]
+    let lastColumn = firstColumn, right = left
+    while (lastColumn < widths.length && right < scroller.scrollLeft + (scroller.clientWidth || 600) + 200) right += widths[lastColumn++]
+    const indices = Array.from({ length: lastColumn - firstColumn }, (_, at) => firstColumn + at)
+    const colCount = indices.length + 1 + (firstColumn ? 1 : 0) + (lastColumn < widths.length ? 1 : 0)
+    const lead = firstColumn ? `<col style="width:${left - 46}px">` : ''
+    const trail = lastColumn < widths.length ? `<col style="width:${totalWidth - right}px">` : ''
+    const filler = firstColumn ? '<td aria-hidden="true"></td>' : ''
+    const tail = lastColumn < widths.length ? '<td aria-hidden="true"></td>' : ''
+    const group = activeGroup(), table = !activeComparison() && group?.active === 'table'
+    const body = []
+    if (first) body.push(`<tr class="vg-spacer" aria-hidden="true"><td colspan="${colCount}" style="height:${first * rh}px"></td></tr>`)
+    for (let row = first; row < last; row++) body.push(`<tr data-selected="${state.selection.row === row}" data-tone="${data.tones?.[row] ?? ''}" aria-rowindex="${row + 2}"><td class="vg-rn" ${state.rowSize ? `style="background:linear-gradient(90deg,color-mix(in srgb,var(--vg-warning) 28%,var(--vg-bg)) ${config.data === 'Screenshot example' ? 90 : 40}%,var(--vg-bg) 0)"` : ''}>${row + 1}</td>${filler}${indices.map(col => `<td data-cell="${row}:${col}" data-active="${state.selection.row === row && state.selection.col === col}" class="${data.rows[row][col] === null ? 'vg-null' : ''}">${decorate(data.rows[row][col])}</td>`).join('')}${tail}</tr>`)
+    if (last < data.rows.length) body.push(`<tr class="vg-spacer" aria-hidden="true"><td colspan="${colCount}" style="height:${(data.rows.length - last) * rh}px"></td></tr>`)
+    if (!data.rows.length) body.push(`<tr><td colspan="${colCount}">No rows match the current filter.</td></tr>`)
+    scroller.innerHTML = `<table aria-label="${esc(activeName())}" aria-rowcount="${data.rows.length + 1}" aria-colcount="${data.columns.length + 1}" style="width:${totalWidth}px"><colgroup><col style="width:46px">${lead}${indices.map(col => `<col style="width:${widths[col]}px">`).join('')}${trail}</colgroup><thead><tr><th class="vg-rn" scope="col"></th>${firstColumn ? '<th aria-hidden="true"></th>' : ''}${indices.map(col => `<th scope="col" aria-colindex="${col + 2}">${table ? iconButton('sort-column', `Sort ${data.columns[col].name}`, group.sortColumn === col ? group.sortDirection === 1 ? 'arrow-up' : 'arrow-down' : 'arrow-down-up', group.sortColumn === col ? group.sortDirection === 1 ? '↑' : '↓' : '↕', `data-col="${col}" class="vg-column-button cursor-interaction"`) : ''}${esc(data.columns[col].name)}<span class="vg-type">${esc(data.columns[col].type)}</span></th>`).join('')}${lastColumn < widths.length ? '<th aria-hidden="true"></th>' : ''}</tr></thead><tbody>${body.join('')}</tbody></table>`
+    globalThis.lucide?.createIcons({ attrs: { width: 14, height: 14 } })
+  }
+  function sourceStrip(data) {
+    const group = activeGroup(), comparison = activeComparison()
+    if (comparison) return `<div class="vg-source-strip">${[comparison.left, comparison.right].map((id, at) => state.groups.some(item => item.id === id && (comparison.kind === 'table' || item.views[comparison.kind])) ? button('source', `Result ${id} · ${viewNames[comparison.kind]}`, `data-id="${id}" data-kind="${comparison.kind}" class="vg-source-link cursor-interaction"`).replace('class="cursor-interaction" ', '') : `<span>Result ${id} · ${viewNames[comparison.kind]} (closed)</span>`).join(' ↔ ')}<span>· snapshot · ${data.changed} ${comparison.kind === 'table' && config.data === 'Screenshot example' ? 'row differences' : 'changed rows'}</span></div>${data.partial ? '<div class="vg-limit">Partial comparison: at least one transpose contains only the first 4,095 source rows.</div>' : ''}`
+    if (group?.active === 'table') return ''
+    const kind = group.active
+    return `<div class="vg-source-strip">From ${button('source', `${group.label} · Table`, `data-id="${group.id}" data-kind="table" class="vg-source-link cursor-interaction"`).replace('class="cursor-interaction" ', '')}<span>· ${number(data.sourceRows)} ${data.sourceFilter === null ? 'source' : 'filtered'} rows${kind === 'pivot' ? ` · ${esc(group.views.pivot.aggregate)} (${esc(group.views.pivot.column)})` : ''}</span></div>${data.partial ? `<div class="vg-limit">Transposed the first 4,095 of ${number(data.sourceRows)} rows. Filter the original table to transpose fewer rows. ${button('source', 'Go to table', `data-id="${group.id}" data-kind="table" class="vg-source-link cursor-interaction"`).replace('class="cursor-interaction" ', '')}</div>` : ''}`
+  }
+  function profileMarkup(data) {
+    const profiles = data.columns.slice(0, 4).map((column, at) => {
+      const values = data.rows.map(row => row[at]), notNull = values.filter(value => value !== null), distinct = new Set(notNull.map(String)).size
+      const numeric = notNull.length > 0 && notNull.every(value => Number.isFinite(Number(value)))
+      const min = notNull.length ? numeric ? Math.min(...notNull.map(Number)) : [...notNull].sort()[0] : '—'
+      const max = notNull.length ? numeric ? Math.max(...notNull.map(Number)) : [...notNull].sort().at(-1) : '—'
+      const nulls = values.length - notNull.length
+      const bins = Array(20).fill(0)
+      if (numeric) for (const value of notNull) bins[Math.min(19, Math.floor((Number(value) - Number(min)) / Math.max(1, Number(max) - Number(min)) * 19))]++
+      const largest = Math.max(1, ...bins)
+      return `<section class="vg-profile-card" aria-label="${esc(column.name)} profile"><header><b>${esc(column.name)}</b><span>${esc(column.type)}</span></header><dl><dt>NULLs</dt><dd>${number(nulls)} (${values.length ? (nulls / values.length * 100).toFixed(1) : '0.0'}%)</dd><dt>Distinct</dt><dd>${number(distinct)}</dd><dt>Min</dt><dd>${esc(min)}</dd><dt>Max</dt><dd>${esc(max)}</dd></dl>${numeric ? `<div class="vg-histogram" aria-hidden="true">${bins.map(count => `<i style="height:${count / largest * 100}%"></i>`).join('')}</div><span style="color:var(--vg-muted)">by value</span>` : ''}</section>`
+    }).join('')
+    return `<aside class="vg-side vg-profile" aria-label="Column profile" data-front="${state.sideFront === 'profile'}"><div class="vg-side-head"><strong>Column profile</strong><span>${esc(activeName())}</span>${closeButton('profile', 'Close Column Profile')}</div><div class="vg-side-body"><div class="vg-side-source">${number(data.rows.length)} rows${config.data === 'Screenshot example' && activeView() === 'table' ? ' · largest 4 B · average 4 B' : ''}</div>${profiles}${data.columns.length > 4 ? '<div class="vg-side-note">Showing the first 4 columns in this preview.</div>' : ''}</div></aside>`
+  }
+  function panelMarkup() {
+    const panel = state.panel, group = activeGroup()
+    if (!panel || !group) return ''
+    const source = baseData(group.id)
+    if (panel.kind === 'compare') {
+      const targets = candidates()
+      return `<aside class="vg-side" data-front="${state.sideFront === 'builder'}" aria-label="Compare results"><div class="vg-side-head"><strong>Compare</strong><span>${viewNames[group.active]}</span>${closeButton('close-panel', 'Close comparison picker')}</div><div class="vg-side-body"><div class="vg-side-source">From <b>${esc(group.label)} · ${viewNames[group.active]}</b></div><div class="vg-side-section"><h3>Compare with</h3>${targets.length ? `<select data-field="compare-target" aria-label="Comparison target">${targets.map(target => `<option value="${target.id}" ${panel.target === target.id ? 'selected' : ''}>${esc(target.label)} · ${viewNames[group.active]}</option>`).join('')}</select>` : '<div class="vg-side-note">No compatible view. Create the same view on another result with matching columns.</div>'}</div><div class="vg-side-note">${targets.length ? `Columns and types match. ${group.active === 'table' ? config.data === 'Screenshot example' ? 'Whole rows are matched; high is not a unique key.' : 'Rows are matched by OrderId.' : `Rows are matched by ${group.active === 'transpose' ? 'Column' : esc(group.views.pivot.group)}.`}` : ''}</div>${group.active === 'transpose' && targets.length ? '<div class="vg-side-note" style="color:var(--vg-warning);margin-top:12px">Partial inputs stay marked in the comparison.</div>' : ''}</div><div class="vg-side-foot">${button('build-comparison', 'Compare', `class="vg-primary cursor-interaction" ${!targets.length ? 'disabled' : ''}`).replace('class="cursor-interaction" ', '')}</div></aside>`
+    }
+    const fields = source.columns.map(column => column.name)
+    return `<aside class="vg-side" data-front="${state.sideFront === 'builder'}" aria-label="Pivot builder"><div class="vg-side-head"><strong>Pivot</strong><span>${number(filtered(group.id, group.filter).rows.length)} rows</span>${closeButton('close-panel', 'Close Pivot')}</div><div class="vg-side-body"><div class="vg-side-source">Source <b>${esc(group.label)} · Table</b></div><div class="vg-side-section"><h3>Rows</h3><div class="vg-row-field">${fields.length > 1 ? `<select aria-label="Pivot row group" data-field="pivot-group">${fields.map(field => `<option ${panel.group === field ? 'selected' : ''}>${field}</option>`).join('')}</select>` : `<span style="flex:1;border:1px solid var(--vg-border);border-radius:4px;padding:3px 6px;background:var(--vg-bg)">${fields[0]}</span>`}</div></div><div class="vg-side-section"><h3>Columns</h3><span style="color:var(--vg-muted)">(None)</span></div><div class="vg-side-section"><h3>Values</h3><div class="vg-value-fields"><select aria-label="Pivot aggregate" data-field="pivot-aggregate">${['Count', 'Sum', 'Average'].map(item => `<option ${panel.aggregate === item ? 'selected' : ''}>${item}</option>`).join('')}</select><select aria-label="Pivot value column" data-field="pivot-column">${[...(panel.aggregate === 'Count' ? ['(Rows)'] : []), ...fields.filter(field => panel.aggregate === 'Count' || ['high', 'Total', 'OrderId'].includes(field))].map(field => `<option ${panel.column === field ? 'selected' : ''}>${field}</option>`).join('')}</select></div></div></div><div class="vg-side-foot"><div class="vg-side-note">${group.filter === null ? 'Uses the original table.' : 'Uses the original table’s filtered rows.'}${group.views.pivot ? ' Updates this result’s existing Pivot view.' : ''}</div>${button('build-pivot', group.views.pivot ? 'Update Pivot' : 'Build Pivot', 'class="vg-primary cursor-interaction"').replace('class="cursor-interaction" ', '')}</div></aside>`
+  }
+  function menuMarkup() {
+    if (!state.menu) return ''
+    const group = activeGroup(), comparison = activeComparison()
+    if (state.menu === 'filter' && group) {
+      const values = [...new Set(baseData(group.id).rows.map(row => row[0] === null ? 'NULL' : String(row[0])))].slice(0, 10)
+      const selected = state.filterDraft ?? values
+      return `<div class="vg-menu vg-filter-menu" role="dialog" aria-label="Filter ${esc(columns()[0].name)}"><strong>${esc(columns()[0].name)}</strong>${values.map(value => `<label><input type="checkbox" data-filter-value="${esc(value)}" ${selected.includes(value) ? 'checked' : ''}>${value}</label>`).join('')}<div class="vg-filter-buttons">${button('filter-only-eight', config.data === 'Screenshot example' ? 'Only 8' : 'First value')}${button('apply-filter', 'Apply', 'class="vg-primary cursor-interaction"').replace('class="cursor-interaction" ', '')}${button('close-menu', 'Cancel')}</div></div>`
+    }
+    return `<div class="vg-menu" role="menu" aria-label="Result actions">${!comparison && group?.active === 'table' ? `${button('pivot', group.views.pivot ? 'Edit Pivot…' : 'Pivot…', `role="menuitem" ${!runReady() ? 'disabled' : ''}`)}${button('transpose', group.views.transpose ? 'Rebuild Transpose' : 'Transpose', `role="menuitem" ${!runReady() ? 'disabled' : ''}`)}${button('filter', `Filter ${columns()[0].name}…`, 'role="menuitem"')}` : !comparison && group?.active === 'pivot' ? button('pivot', 'Edit Pivot…', `role="menuitem" ${!runReady() ? 'disabled' : ''}`) : ''}${!comparison ? button('compare', 'Compare…', `role="menuitem" ${!runReady() ? 'disabled' : ''}`) : ''}${button('save', 'Save Results As…', 'role="menuitem"')}<hr>${comparison ? button('close-comparison', 'Close comparison', `role="menuitem" data-id="${comparison.id}"`) : group ? `${group.active !== 'table' ? button('close-view', `Close ${viewNames[group.active]}`, `role="menuitem" data-id="${group.id}" data-kind="${group.active}"`) : ''}${button('close-group', `Close ${group.label} and its views`, `role="menuitem" data-id="${group.id}" ${!canCloseResults() ? 'disabled' : ''}`)}` : ''}${button('close-all', 'Close all results', `role="menuitem" ${!canCloseResults() ? 'disabled' : ''}`)}</div>`
+  }
+  function render(resetScroll = true) {
+    if (resetScroll) scrollPosition = { top: 0, left: 0 }
+    const group = activeGroup(), comparison = activeComparison(), view = activeView()
+    currentData = group || comparison ? shownData() : null
+    const allCount = state.groups.reduce((count, item) => count + 1 + Object.keys(item.views).length, state.comparisons.length)
+    const ready = runReady(), canClose = canCloseResults(), lost = config.runState === 'Backend lost'
+    const keys = [...state.groups.map(item => `r${item.id}`), ...state.comparisons.map(item => `c${item.id}`)]
+    const visibleKeys = keys.slice(0, Math.max(1, Math.floor((app.clientWidth - 200) / (config.showCounts ? 180 : 115))))
+    const activeKey = comparison ? `c${comparison.id}` : `r${group?.id}`
+    if (keys.includes(activeKey) && !visibleKeys.includes(activeKey)) visibleKeys[visibleKeys.length - 1] = activeKey
+    const tabVisible = (kind, id) => visibleKeys.includes(`${kind}${id}`)
+    app.style.height = `${config.paneHeight}px`
+    app.style.setProperty('--vg-row', `${config.rowHeight}px`)
+    app.style.colorScheme = config.appearance === 'System' ? 'inherit' : config.appearance.toLowerCase()
+    const segments = (action, label, items, current) => `<div class="vg-segments" role="group" aria-label="${label}">${items.map(item => button(action, item, `data-value="${item}" aria-pressed="${item === current}" data-tooltip="${label}: ${item}"`)).join('')}</div>`
+    const nav = state.groups.filter(item => tabVisible('r', item.id)).map(item => `<div class="vg-group" data-active="${!comparison && group?.id === item.id}">${button('group', esc(item.label) + (config.showCounts ? `<span class="vg-count">${number(baseData(item.id).rows.length)}</span>` : ''), `role="tab" id="vg-group-${item.id}" aria-controls="vg-result-content" aria-selected="${!comparison && group?.id === item.id}" data-id="${item.id}"`)}${closeButton('close-group', `Close ${item.label} and its views`, `data-id="${item.id}" class="vg-close cursor-interaction" ${!canClose ? 'disabled' : ''}`)}</div>`).join('')
+    const comparisonTabs = state.comparisons.filter(item => tabVisible('c', item.id)).map(item => `<div class="vg-group" data-active="${comparison?.id === item.id}">${button('comparison', item.label, `role="tab" id="vg-comparison-${item.id}" aria-controls="vg-result-content" aria-selected="${comparison?.id === item.id}" data-id="${item.id}"`)}${closeButton('close-comparison', `Close ${item.label}`, `data-id="${item.id}" class="vg-close cursor-interaction"`)}</div>`).join('')
+    const actions = group && !comparison ? `<span class="vg-actions-labeled" ${config.actions === 'Actions menu' ? 'style="display:none!important"' : ''}>${view === 'table' || view === 'pivot' ? button('pivot', group.views.pivot ? 'Edit Pivot…' : 'Pivot…', !ready ? 'disabled' : '') : ''}${view === 'table' ? button('transpose', group.views.transpose ? 'Rebuild Transpose' : 'Transpose', !ready ? 'disabled' : '') : ''}${button('compare', 'Compare…', !ready ? 'disabled' : '')}</span>${button('actions', 'Actions', `class="vg-actions-compact cursor-interaction" ${config.actions === 'Actions menu' ? 'style="display:inline-flex!important"' : ''} aria-expanded="${state.menu === 'actions'}"`).replace('class="cursor-interaction" ', '')}` : ''
+    const views = group && !comparison ? `<div class="vg-views" role="tablist" aria-label="Views of ${group.label}">${['table', ...['pivot', 'transpose'].filter(kind => group.views[kind])].map(kind => `<div class="vg-view" data-active="${kind === view}">${button('view', viewNames[kind], `role="tab" id="vg-view-${kind}" aria-controls="vg-result-content" aria-selected="${kind === view}" data-kind="${kind}"`)}${kind !== 'table' ? closeButton('close-view', `Close ${viewNames[kind]} of ${group.label}`, `data-id="${group.id}" data-kind="${kind}" class="vg-close cursor-interaction"`) : ''}</div>`).join('')}</div>` : comparison ? `<strong>${viewNames[view]} · Result ${comparison.left} ↔ Result ${comparison.right}</strong>` : ''
+    const annotatedFilter = group && !comparison && view === 'table' && group.filter !== null
+    const outputData = currentData && !lost && config.runState !== 'Empty'
+    const summary = config.runState === 'Empty' ? 'Ready' : config.runState === 'Running' ? 'Executing' : lost ? 'Connection lost' : 'Completed'
+    app.innerHTML = `<div class="vg-top"><div class="vg-output-tabs" role="tablist" aria-label="Query output">${button('results', `Results <span class="vg-count">${state.groups.length}</span>`, `role="tab" aria-selected="${state.output === 'results'}" aria-controls="vg-results-output" id="vg-results-tab" data-tooltip="${state.groups.length} original results · ${allCount} total views"`)}${button('messages', 'Messages <span class="vg-count">2</span>', `role="tab" aria-selected="${state.output === 'messages'}" aria-controls="vg-messages-output" id="vg-messages-tab"`)}</div><div class="vg-display" role="toolbar" aria-label="Results tools"><label class="vg-search">${icon('search', '⌕')}<input type="text" data-field="search" aria-label="${state.searchMode === 'Columns' ? 'Search column names' : 'Search all results'}" placeholder="${state.searchMode === 'Columns' ? 'Search column names' : 'Search all results'}" value="${esc(state.search)}"><span class="vg-search-count">${state.search ? `${matches.length ? state.match + 1 : 0}/${matches.length}${matches.length >= 500 ? '+' : ''}` : ''}</span>${iconButton('previous-match', 'Previous match', 'arrow-up', '↑', `class="vg-search-step cursor-interaction" ${!matches.length ? 'disabled' : ''}`)}${iconButton('next-match', 'Next match', 'arrow-down', '↓', `class="vg-search-step cursor-interaction" ${!matches.length ? 'disabled' : ''}`)}${button('search-mode', state.searchMode, `aria-label="Search in ${state.searchMode === 'Data' ? 'columns' : 'data'}" data-tooltip="Search ${state.searchMode === 'Data' ? 'column names' : 'cell values'}"`)}</label>${segments('whitespace', 'White space', ['Off', 'Spaces', 'All'], state.whitespace)}${segments('sort-text', 'Sort text by', ['Value', 'Chars', 'Bytes'], state.sortText)}<div class="vg-segments" role="group" aria-label="Show">${button('profile', 'Profile', `aria-pressed="${state.profile}" data-tooltip="Column profile of the active view"`)}${button('row-size', 'Rows', `aria-label="Row size" aria-pressed="${state.rowSize}" data-tooltip="Row size bars"`)}</div></div><span class="vg-summary">${icon(config.runState === 'Running' ? 'loader' : lost ? 'circle-alert' : 'circle-check', config.runState === 'Running' ? '◌' : lost ? '!' : '✓')}<strong>${summary}</strong><span class="vg-summary-detail">${config.runState === 'Running' ? '· 20,463 rows so far · 0.8 s' : lost ? '· results unavailable' : config.runState === 'Empty' ? '' : '· 40,926 rows · 0.038 s'}</span></span>${iconButton('close-all', 'Close all results', 'x', '×', !canClose || !allCount ? 'disabled' : '')}</div><div class="vg-output" id="vg-results-output" role="tabpanel" aria-labelledby="vg-results-tab" ${state.output !== 'results' ? 'hidden' : ''}><div class="vg-groups" role="tablist" aria-label="Original results and comparisons">${nav}${comparisonTabs}${allCount ? `<select class="vg-all-results" aria-label="All results and views" data-field="navigate">${state.groups.map(item => `<optgroup label="${item.label}">${['table', ...Object.keys(item.views)].map(kind => `<option value="${item.id}:${kind}" ${!comparison && group?.id === item.id && view === kind ? 'selected' : ''}>${item.label} · ${viewNames[kind]}</option>`).join('')}</optgroup>`).join('')}${state.comparisons.map(item => `<option value="c:${item.id}" ${comparison?.id === item.id ? 'selected' : ''}>${item.label}</option>`).join('')}</select>` : ''}</div>${currentData ? `<div class="vg-viewbar">${views}<div class="vg-actions">${actions}${iconButton('save', 'Save active view as…', 'save', '↓')}${iconButton('actions', 'More result actions', 'ellipsis', '…', `aria-expanded="${state.menu === 'actions'}"`)}</div></div>` : ''}${outputData ? `<div class="vg-facts"><strong>${esc(activeName())}</strong><span>${number(currentData.rows.length)} rows · ${number(currentData.columns.length)} ${currentData.columns.length === 1 ? 'column' : 'columns'}${config.runState === 'Running' ? ' · loading' : ''}</span>${annotatedFilter ? `<span class="vg-filter-chip">${columns()[0].name} in (${group.filter.map(esc).join(', ')})${closeButton('clear-filter', 'Remove filter')}</span>` : ''}${group && view === 'table' && !comparison ? button('filter', 'Filter…', 'data-tooltip="Filter the first column"') : ''}</div><div class="vg-main"><div class="vg-grid-column" id="vg-result-content" role="tabpanel" aria-labelledby="${comparison ? `vg-comparison-${comparison.id}` : `vg-view-${view}`}"><div class="vg-scroller"></div>${sourceStrip(currentData)}</div>${state.profile || state.panel ? `<div class="vg-sidecars" data-both="${!!state.profile && !!state.panel}">${state.profile && state.panel ? `<div class="vg-side-switch">${button('side-profile', 'Profile', `aria-pressed="${state.sideFront === 'profile'}"`)}${button('side-builder', state.panel.kind === 'pivot' ? 'Pivot' : 'Compare', `aria-pressed="${state.sideFront === 'builder'}"`)}</div>` : ''}${state.profile ? profileMarkup(currentData) : ''}${panelMarkup()}</div>` : ''}</div>` : `<div class="vg-empty"><strong>${lost ? 'Results are no longer available' : config.runState === 'Empty' ? 'Query results' : 'Results closed'}</strong><span>${lost ? 'Reconnect and execute the query again.' : config.runState === 'Empty' ? 'Execute a query to view results.' : 'Execute the query again to load results. Messages are kept.'}</span></div>`}${state.notice ? `<div class="vg-notice" aria-live="polite"><span>${esc(state.notice)}</span>${closeButton('dismiss', 'Dismiss notice')}</div>` : ''}<div class="vg-messages-strip">${button('messages-strip', `${icon(state.messages ? 'chevron-down' : 'chevron-right', state.messages ? '⌄' : '›')} Messages <span>· 2 · no errors</span>`, `aria-expanded="${state.messages}" aria-controls="vg-inline-messages"`)}${state.messages ? '<div class="vg-messages" id="vg-inline-messages">(20,463 rows affected)<br>(20,463 rows affected)</div>' : ''}</div></div><div id="vg-messages-output" class="vg-messages" role="tabpanel" aria-labelledby="vg-messages-tab" ${state.output !== 'messages' ? 'hidden' : ''}>(20,463 rows affected)<br>(20,463 rows affected)</div>${menuMarkup()}`
+    const scroller = app.querySelector('.vg-scroller')
+    if (scroller) { scroller.scrollTop = scrollPosition.top; scroller.scrollLeft = scrollPosition.left; paintGrid(); scroller.addEventListener('scroll', () => { scrollPosition = { top: scroller.scrollTop, left: scroller.scrollLeft }; paintGrid() }, { passive: true }) }
+    globalThis.lucide?.createIcons({ attrs: { width: 14, height: 14 } })
+  }
+  function normalize() {
+    if (state.comparison && !activeComparison()) state.comparison = null
+    if (!activeGroup()) state.activeGroup = state.groups[0]?.id ?? 0
+    const group = activeGroup()
+    if (group && group.active !== 'table' && !group.views[group.active]) group.active = 'table'
+  }
+  function moveMatch(by) {
+    if (!matches.length) return
+    state.match = (state.match + by + matches.length) % matches.length
+    const match = matches[state.match]
+    state.activeGroup = match.group; state.comparison = null; activeGroup().active = match.kind; state.selection = { row: match.row, col: match.col }; state.panel = null
+    render()
+    const scroller = app.querySelector('.vg-scroller')
+    if (scroller) { scroller.scrollTop = match.row * config.rowHeight; scroller.scrollLeft = currentData.columns.slice(0, match.col).reduce((sum, column) => sum + column.width, 0); paintGrid() }
+  }
+  app.addEventListener('click', event => {
+    const cell = event.target.closest('[data-cell]')
+    if (cell) { const [row, col] = cell.dataset.cell.split(':').map(Number); state.selection = { row, col }; paintGrid(); save(); return }
+    const control = event.target.closest('button[data-action]')
+    if (!control || control.disabled) return
+    const action = control.dataset.action, group = activeGroup(), comparison = activeComparison()
+    let keepScroll = false
+    if (!['actions', 'filter', 'filter-only-eight'].includes(action)) state.menu = null
+    if (action === 'group' || action === 'source') { state.activeGroup = Number(control.dataset.id); state.comparison = null; if (action === 'source') activeGroup().active = control.dataset.kind === 'table' || activeGroup().views[control.dataset.kind] ? control.dataset.kind : 'table'; state.panel = null }
+    if (action === 'view' && group) { group.active = control.dataset.kind; state.comparison = null; state.panel = null }
+    if (action === 'comparison') { state.comparison = Number(control.dataset.id); state.panel = null }
+    if (action === 'results' || action === 'messages') state.output = action
+    if (action === 'profile') { state.profile = !state.profile; state.sideFront = 'profile'; keepScroll = true }
+    if (action === 'row-size') { state.rowSize = !state.rowSize; keepScroll = true }
+    if (action === 'side-profile') { state.sideFront = 'profile'; keepScroll = true }
+    if (action === 'side-builder') { state.sideFront = 'builder'; keepScroll = true }
+    if (action === 'actions') state.menu = state.menu === 'actions' ? null : 'actions'
+    if (action === 'close-menu') state.menu = null
+    if (action === 'pivot' && group && !comparison && ['table', 'pivot'].includes(group.active) && runReady()) {
+      const existing = group.views.pivot
+      state.panel = { kind: 'pivot', group: existing?.group ?? columns()[0].name, aggregate: existing?.aggregate ?? 'Count', column: existing?.column ?? '(Rows)' }; state.sideFront = 'builder'; keepScroll = true
+    }
+    if (action === 'build-pivot' && group && state.panel?.kind === 'pivot' && runReady()) {
+      group.views.pivot = { ...state.panel, filter: group.filter === null ? null : [...group.filter], columnGroup: '(None)' }; group.active = 'pivot'; state.panel = null; state.selection = { row: 0, col: 0 }; state.notice = 'Pivot updated from the original table. Comparison snapshots are kept.'
+    }
+    if (action === 'transpose' && group && group.active === 'table' && !comparison && runReady()) {
+      group.views.transpose = { filter: group.filter === null ? null : [...group.filter] }; group.active = 'transpose'; state.panel = null; state.selection = { row: 0, col: 0 }
+    }
+    if (action === 'compare' && group && !comparison && runReady()) { state.panel = { kind: 'compare', target: candidates()[0]?.id }; state.sideFront = 'builder'; keepScroll = true }
+    if (action === 'build-comparison' && group && state.panel?.kind === 'compare' && runReady()) {
+      const target = candidates().find(item => item.id === state.panel.target) ?? candidates()[0]
+      if (target && state.comparisons.length < 8) {
+        const id = Math.max(0, ...state.comparisons.map(item => item.id)) + 1
+        state.comparisons.push({ id, label: `Comparison ${id}`, kind: group.active, left: group.id, right: target.id, leftRecipe: { ...(group.active === 'table' ? { filter: group.filter } : group.views[group.active]) }, rightRecipe: { ...(group.active === 'table' ? { filter: target.filter } : target.views[group.active]) } }); state.comparison = id; state.panel = null; state.notice = 'Comparison snapshot created from both inputs.'
+      }
+    }
+    if (action === 'close-panel') { state.panel = null; keepScroll = true }
+    if (action === 'close-group' && canCloseResults()) { const id = Number(control.dataset.id); state.groups = state.groups.filter(item => item.id !== id); state.panel = null; state.notice = `Result ${id} and its views closed. Comparison snapshots are kept.` }
+    if (action === 'close-view') { const target = state.groups.find(item => item.id === Number(control.dataset.id)); if (target) { delete target.views[control.dataset.kind]; if (target.active === control.dataset.kind) target.active = 'table' }; state.panel = null; state.notice = `${viewNames[control.dataset.kind]} closed. The original table is kept.` }
+    if (action === 'close-comparison') { state.comparisons = state.comparisons.filter(item => item.id !== Number(control.dataset.id)); state.notice = 'Comparison closed. Both inputs are kept.' }
+    if (action === 'close-all' && canCloseResults()) { state.groups = []; state.comparisons = []; state.profile = false; state.panel = null; state.notice = '' }
+    if (action === 'filter' && group && group.active === 'table') { state.menu = state.menu === 'filter' ? null : 'filter'; state.filterDraft = group.filter ?? [...new Set(baseData(group.id).rows.map(row => row[0] === null ? 'NULL' : String(row[0])))].slice(0, 10) }
+    if (action === 'filter-only-eight') state.filterDraft = [config.data === 'Screenshot example' ? '8' : String(baseData(group.id).rows[0][0])]
+    if (action === 'apply-filter' && group) { group.filter = [...(state.filterDraft ?? [])]; state.filterDraft = null; state.menu = null; state.selection = { row: 0, col: 0 }; state.notice = 'Filter applied to Table. Existing Pivot and Transpose views keep the rows they were built from.' }
+    if (action === 'clear-filter' && group) group.filter = null
+    if (action === 'sort-column' && group && group.active === 'table') { const col = Number(control.dataset.col); group.sortDirection = group.sortColumn === col ? -group.sortDirection : 1; group.sortColumn = col }
+    if (action === 'whitespace') { state.whitespace = control.dataset.value; keepScroll = true }
+    if (action === 'sort-text') { state.sortText = control.dataset.value; keepScroll = true }
+    if (action === 'search-mode') { state.searchMode = state.searchMode === 'Data' ? 'Columns' : 'Data'; state.match = 0; matches = searchMatches(); keepScroll = true }
+    if (action === 'next-match' || action === 'previous-match') { moveMatch(action === 'next-match' ? 1 : -1); save(); return }
+    if (action === 'save') state.notice = `Save Results As… targets ${activeName()}. File saving is not connected in this mock.`
+    if (action === 'messages-strip') { state.messages = !state.messages; keepScroll = true }
+    if (action === 'dismiss') { state.notice = ''; keepScroll = true }
+    normalize(); matches = searchMatches(); render(!keepScroll)
+    if (action === 'pivot' || action === 'compare') app.querySelector('.vg-side[data-front="true"] select')?.focus({ preventScroll: true })
+    else if (['close-view', 'close-group', 'close-comparison'].includes(action)) app.querySelector('.vg-view button[aria-selected="true"], .vg-group button[aria-selected="true"]')?.focus({ preventScroll: true })
+    else app.querySelector(`button[data-action="${action}"]`)?.focus({ preventScroll: true })
+    save()
+  })
+  app.addEventListener('change', event => {
+    const field = event.target.dataset.field, value = event.target.value
+    if (event.target.dataset.filterValue !== undefined) {
+      const selected = new Set(state.filterDraft ?? []), item = event.target.dataset.filterValue
+      if (event.target.checked) selected.add(item); else selected.delete(item)
+      state.filterDraft = [...selected]; return
+    }
+    if (field === 'navigate') { const [id, kind] = value.split(':'); if (id === 'c') state.comparison = Number(kind); else { state.activeGroup = Number(id); activeGroup().active = kind; state.comparison = null }; state.panel = null }
+    if (field === 'pivot-group' && state.panel?.kind === 'pivot') state.panel.group = value
+    if (field === 'pivot-aggregate' && state.panel?.kind === 'pivot') { state.panel.aggregate = value; if (value !== 'Count' && state.panel.column === '(Rows)') state.panel.column = columns().find(column => ['high', 'Total', 'OrderId'].includes(column.name))?.name ?? columns()[0].name }
+    if (field === 'pivot-column' && state.panel?.kind === 'pivot') state.panel.column = value
+    if (field === 'compare-target' && state.panel?.kind === 'compare') state.panel.target = Number(value)
+    render(field === 'navigate'); app.querySelector(`[data-field="${field}"]`)?.focus({ preventScroll: true }); save()
+  })
+  app.addEventListener('input', event => {
+    if (event.target.dataset.field !== 'search') return
+    state.search = event.target.value; state.match = 0; matches = searchMatches(); paintGrid()
+    const count = app.querySelector('.vg-search-count'); if (count) count.textContent = state.search ? `${matches.length ? 1 : 0}/${matches.length}${matches.length >= 500 ? '+' : ''}` : ''
+    save()
+  })
+  app.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { if (state.menu || state.panel) { state.menu = null; state.panel = null; render(false) }; return }
+    if (event.target.dataset.field === 'search' && event.key === 'Enter') { event.preventDefault(); moveMatch(event.shiftKey ? -1 : 1); save() }
+  })
+  app.addEventListener('contextmenu', event => {
+    if (!event.target.closest('.vg-scroller')) return
+    event.preventDefault(); state.menu = 'actions'; render(false)
+  })
+  window.addEventListener('openai:set_globals', event => {
+    const next = event.detail?.globals?.widgetState
+    if (next?.privateContent?.version !== 2 || JSON.stringify(next.privateContent) === lastPrivate) return
+    restore(next); dataCache.clear(); normalize(); matches = searchMatches(); render()
+  })
+  render()
+  let lastWidth = app.clientWidth
+  const resize = new ResizeObserver(() => {
+    if (app.clientWidth !== lastWidth) { lastWidth = app.clientWidth; render(false) }
+  })
+  resize.observe(app)
+  if (globalThis.Tweak) {
+    const tweak = new Tweak({ container: app, onChange: () => {
+      const settings = JSON.stringify({ data: config.data, count: config.resultCount, runState: config.runState })
+      if (settings !== lastSettings) {
+        dataCache.clear(); state = fresh()
+        if (config.data === 'Order data') state.groups.forEach(group => { group.views.pivot = { filter: null, group: 'Region', aggregate: 'Sum', column: 'Total', columnGroup: '(None)' } })
+        if (config.runState === 'Empty') { state.groups = []; state.profile = false }
+        lastSettings = settings
+      }
+      normalize(); matches = searchMatches(); render(false); save()
+    } })
+    tweak.addSelect(config, 'appearance', { label: 'Appearance', options: ['System', 'Dark', 'Light'] })
+    tweak.addSlider(config, 'paneHeight', { label: 'Results pane height', min: 360, max: 680, step: 20, unit: 'px' })
+    tweak.addSlider(config, 'rowHeight', { label: 'Grid row height', min: 20, max: 28, step: 2, unit: 'px' })
+    tweak.addSelect(config, 'actions', { label: 'Result actions', options: ['Labeled buttons', 'Actions menu'] })
+    tweak.addSelect(config, 'data', { label: 'Example data', options: ['Screenshot example', 'Order data'] })
+    tweak.addSelect(config, 'resultCount', { label: 'Original result count', options: ['2', '6', '12'] })
+    tweak.addSelect(config, 'runState', { label: 'Query state', options: ['Completed', 'Running', 'Empty', 'Backend lost'] })
+    tweak.addToggle(config, 'showCounts', { label: 'Row counts on result tabs' })
+  }
+})()
+</script>
