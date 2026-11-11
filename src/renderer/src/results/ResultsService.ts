@@ -18,8 +18,37 @@ import { retainedPlanLimits, type PlanExecutionContext, type RetainedPlansServic
 import { orderPlanEntries } from '../plans/sources'
 
 export type RunStatus = 'running' | QueryStatus | 'lost' | 'closed'
-/** One result set of the run; `index` is its position in the stack (the grid's `data-result-index`). */
-export interface ResultSetEntry { readonly index: number; readonly descriptor: ResultDescriptor; readonly handle: ResultHandle; readonly capturedPlan?: true; readonly label?: string }
+/**
+ * An entry's key: an opaque id ResultsService mints when the entry joins its run, unique in the window and never reused.
+ * It is not `setKey`: an entry maps to the stored result it currently shows, and state that belongs to the entry (its sort,
+ * views, grid state, jobs) is kept by this key, so it stays with the entry when the entries around it come and go.
+ */
+export type EntryKey = string
+/** An entry named by its key, or by its place in the stack: the adapter for callers that still read the grid's
+ *  `data-result-index` (the DOM, menu targets, src/renderer/src/grid). A place is resolved to a key at once. */
+export type EntryRef = EntryKey | number
+/**
+ * One result set of the run. `index` is its position in the stack (the grid's `data-result-index`), derived from the list
+ * and rewritten when it changes. `ordinal` is an original result's number in its run (`descriptor.index + 1`); a result
+ * Varia made (a pivot, a transpose, a diff) has none. `number` is what the entry is numbered by where it has no name of its
+ * own ("Result 4" on a job's strip, in a save's suggested name): the ordinal, or for a derived entry the next number after
+ * the run's highest when it was appended, fixed for its life. That is the place it was appended at, and stays unique when
+ * an entry before it has gone.
+ */
+export interface ResultSetEntry {
+  readonly key: EntryKey; readonly index: number; readonly ordinal?: number; readonly number: number
+  readonly descriptor: ResultDescriptor; readonly handle: ResultHandle; readonly capturedPlan?: true; readonly label?: string
+}
+/** An entry's name: its label when Varia made it ("Pivot of Result 3"), else "Result N" by its number. */
+export const entryName = (entry: Pick<ResultSetEntry, 'label' | 'number'>): string => entry.label ?? `Result ${entry.number}`
+/** Where the entry `key` stands in `sets`, or -1. `hint` is the place it was last seen at, which is right unless an entry
+ *  before it came or went, so the list is searched only then. */
+export function entryIndex(sets: readonly ResultSetEntry[], key: EntryKey, hint = -1): number {
+  return sets[hint]?.key === key ? hint : sets.findIndex(entry => entry.key === key)
+}
+/** The entry of `sets` a reference names. */
+export const entryOf = (sets: readonly ResultSetEntry[] | undefined, ref: EntryRef): ResultSetEntry | undefined =>
+  sets === undefined ? undefined : typeof ref === 'number' ? sets[ref] : sets[entryIndex(sets, ref)]
 /**
  * A grid's sort and filters (results.view): its keys in order, with the text mode each was sorted by, its filters, and the
  * view the grid shows. While a view is built (`sorting`) the grid keeps showing what it showed; a failed one keeps the last
@@ -60,7 +89,9 @@ export const setKey = (descriptor: Pick<ResultDescriptor, 'generation' | 'result
  * main reports its file (`fileName`), after the save dialog closed.
  */
 export interface ResultJob {
-  readonly jobId: string; readonly kind: 'copy' | 'save'; readonly index: number; readonly label: string
+  readonly jobId: string; readonly kind: 'copy' | 'save'; readonly label: string
+  /** The entry it copies or saves, and that entry's place in the stack (derived, as `ResultSetEntry.index`). */
+  readonly entry: EntryKey; readonly index: number
   readonly rowsDone: number; readonly rowsTotal: number; readonly startedAt: number; readonly visible: boolean; readonly fileName?: string
 }
 /** What the output pane shows for one query tab. */
@@ -87,7 +118,7 @@ export interface TabResults {
   readonly announced: number
   /** How the last save ended ("Saved 400 rows to results.csv."), shown in the toolbar for a few seconds; '' otherwise. */
   readonly jobNotice: string
-  /** Each sorted grid's sort, by set index. */
+  /** Each sorted grid's sort, by set index: derived from the sorts the service keeps by entry key, for the grids. */
   readonly sorts: ReadonlyMap<number, GridSort>
 }
 /** One grid's view, outside React and never in a snapshot: it survives tab switches, Ctrl+R and unmounting. */
@@ -98,8 +129,9 @@ export interface GridViewState {
    *  opens where it was rather than at the tail. */
   following?: boolean
 }
-/** `collapsed` holds the sets shown as their caption alone, by index (a set's caption toggles it). */
-export interface TabViewState { stackScrollTop: number; weights?: number[]; focusedIndex: number; grids: Map<number, GridViewState>; collapsed: ReadonlySet<number> }
+/** `collapsed` holds the sets shown as their caption alone, by index (a set's caption toggles it). `grids` is by entry key;
+ *  the stack's own state (`weights`, `focusedIndex`, `collapsed`) is still by position. */
+export interface TabViewState { stackScrollTop: number; weights?: number[]; focusedIndex: number; grids: Map<EntryKey, GridViewState>; collapsed: ReadonlySet<number> }
 /** A mounted grid, for the commands that act on it. */
 export interface GridController {
   selectAll(): void; repaint(): void; fitColumn(column: number): void
@@ -119,6 +151,10 @@ interface Run {
   planSets: ResultSetEntry[]
   /** The sets' keys, so a thousand sets open in linear time. */
   readonly setKeys: Set<string>
+  /** `sets` by entry key. */
+  readonly entries: Map<EntryKey, ResultSetEntry>
+  /** The highest number an entry of the run was given: a derived entry takes the next. */
+  numbered: number
   /** `sets` is held by a published snapshot, so the next change copies it first. */
   setsPublished: boolean
   readonly rowsRead: Map<number, number>
@@ -144,13 +180,15 @@ interface Run {
   endedAt?: number
   closedFrom?: Exclude<RunStatus, 'running' | 'closed'>
   retaining?: Promise<void>
-  /** Replaced, never changed in place, so a published snapshot keeps the one it had. */
-  sorts: ReadonlyMap<number, GridSort>
-  /** The sort each grid is waiting for, by set index. */
-  readonly sorting: Map<number, AbortController>
-  /** Each grid's views still open (its current one, the one it shows, and those superseded since), by set index: a view
+  /** By entry key. Replaced, never changed in place, so the snapshot's copy by index is made again only when it or `sets` changed. */
+  sorts: ReadonlyMap<EntryKey, GridSort>
+  /** `sorts` by set index as last published, with the `sorts` and `sets` it was made from. */
+  sortsShown?: { readonly sorts: ReadonlyMap<EntryKey, GridSort>; readonly sets: readonly ResultSetEntry[]; readonly byIndex: ReadonlyMap<number, GridSort> }
+  /** The sort each grid is waiting for, by entry key. */
+  readonly sorting: Map<EntryKey, AbortController>
+  /** Each grid's views still open (its current one, the one it shows, and those superseded since), by entry key: a view
    *  closes only once the grid shows another or none, so a re-sort keeps painting the old order until the new one is read. */
-  readonly held: Map<number, { shown?: ResultHandle; readonly views: Set<ResultView> }>
+  readonly held: Map<EntryKey, { shown?: ResultHandle; readonly views: Set<ResultView> }>
 }
 interface RunningJob { job: ResultJob; readonly tabId: string; timer?: unknown }
 
@@ -183,7 +221,8 @@ function valueBase(column: ResultColumn, kind: TextDocument['kind']): string {
   const name = column.name.replace(/[\\/:*?"<>|\x00-\x1f\x7f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/g, '_').trim().slice(0, 100)
   return name || kindInfo[kind].blankName
 }
-/** Save Results As's suggested name, '{tab}-Result{n}', cut to the length main accepts (never inside a surrogate pair). */
+/** Save Results As's suggested name, '{tab}-Result{n}' for the entry numbered `index + 1`, cut to the length main accepts
+ *  (never inside a surrogate pair). */
 export function suggestedName(baseName: string, index: number): string {
   const suffix = `-Result${index + 1}`
   let end = Math.min(baseName.length, wire.jobs.suggestedName - suffix.length)
@@ -215,12 +254,13 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private readonly views = new Map<string, TabViewState>()
   /** Each tab's last choice to open or close the Messages strip: a strip the user opened starts open in the next run. */
   private readonly stripChoices = new Map<string, boolean>()
-  private readonly controllers = new Map<string, GridController>()
+  /** Mounted grids, by entry key. */
+  private readonly controllers = new Map<EntryKey, GridController>()
   private readonly dirty = new Set<string>()
   private readonly announcements = new Map<string, unknown>()
   /** The last selection each tab's live region read out: an arrow key that leaves its size unchanged says nothing. */
   private readonly selectionAnnounced = new Map<string, string>()
-  /** Values being opened, by tab, set, row and column: another click or Enter while one opens opens nothing more. */
+  /** Values being opened, by entry key, row and column: another click or Enter while one opens opens nothing more. */
   private readonly opening = new Set<string>()
   private readonly subscriptions: (() => void)[] = []
   private readonly noticeTimers = new Map<string, unknown>()
@@ -233,6 +273,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private scheduled = false
   private disposed = false
   private announcedCount = 0
+  private minted = 0
 
   constructor(o: {
     client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary' | 'release' | 'onGeneration'>; api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'>; events: EventBus
@@ -270,7 +311,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.selectionAnnounced.delete(tabId)
     this.views.set(tabId, emptyView())
     const run: Run = {
-      queryId, startedAt: this.now(), status: 'running', sets: [], planSets: [], setKeys: new Set(), setsPublished: false, rowsRead: new Map(), messages: [], notices: [], messagesTruncated: false,
+      queryId, startedAt: this.now(), status: 'running', sets: [], planSets: [], setKeys: new Set(), entries: new Map(), numbered: 0, setsPublished: false, rowsRead: new Map(), messages: [], notices: [], messagesTruncated: false,
       completedBatches: 0, totalBatches: 0, view: 'messages', manualView: false, strip: this.stripChoices.get(tabId) === true, stripManual: false,
       settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: '', sorts: new Map(), sorting: new Map(), held: new Map()
     }
@@ -299,12 +340,12 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (summary) {
       this.client.applySummary(summary)
       for (const descriptor of summary.resultSets) {
-        this.opened(run, descriptor)
+        this.opened(tabId, run, descriptor)
         this.settle(run, descriptor)
         run.rowsRead.set(descriptor.resultId, descriptor.rowsRead)
       }
       run.planSets = (summary.planSets ?? []).map((descriptor, index) => ({
-        index, descriptor, handle: this.client.open(descriptor), capturedPlan: true
+        key: this.mint(), index, number: index + 1, descriptor, handle: this.client.open(descriptor), capturedPlan: true
       }))
       this.refreshSorts(tabId, run)
       if (!sameMessages(run.messages, summary.messages)) run.messages = summary.messages.slice(0, resultLimits.messages)
@@ -335,7 +376,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
         if (snapshot.state !== 'complete') continue
         available += snapshot.rowsAvailable
         for (let row = 0; row < snapshot.rowsAvailable && sources.length < retainedPlanLimits.documentsPerRun; row++) {
-          sources.push({ key: `${descriptor.generation}:${descriptor.resultId}:${row}`, label: `${entry.capturedPlan ? 'Actual plan' : 'SQL-returned plan'} ${entry.index + 1}, row ${row + 1}`,
+          sources.push({ key: `${descriptor.generation}:${descriptor.resultId}:${row}`, label: `${entry.capturedPlan ? 'Actual plan' : 'SQL-returned plan'} ${entry.number}, row ${row + 1}`,
             captureType: entry.capturedPlan ? 'actual' : 'query-returned', batchNumber: descriptor.batchNumber, iteration: descriptor.iteration,
             generation: descriptor.generation, resultId: descriptor.resultId, row, incomplete: snapshot.incomplete,
             read: async signal => {
@@ -388,6 +429,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     run.sets = []
     run.planSets = []
     run.setKeys.clear()
+    run.entries.clear()
     run.closedFrom = run.status
     run.status = 'closed'
     run.view = 'results'
@@ -397,17 +439,57 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.publishNow(tabId)
   }
 
+  /**
+   * Takes one entry out of a run that has ended and releases its result; the entries after it move up a place and keep
+   * their keys, numbers, names and state. Nothing in the interface calls this yet: it is the operation closing one result
+   * is built on, and what the checks use to show that state follows an entry and not its place. The stack's own state by
+   * position (weights, collapsed, focused) and the run's totals are not touched. False when there is no such entry.
+   */
+  removeEntry(tabId: string, key: EntryKey): boolean {
+    const run = this.runs.get(tabId), entry = run?.entries.get(key)
+    if (!run || !entry || run.status === 'running' || run.status === 'closed') return false
+    run.sorting.get(key)?.abort()
+    run.sorting.delete(key)
+    // Releasing the result closes its views; the sort goes with its filters' snapshots.
+    run.held.delete(key)
+    this.setSort(tabId, run, key, undefined)
+    if (this.copying?.job.entry === key && this.runs.get(this.copying.tabId) === run) this.cancelRunning(this.copying)
+    this.controllers.delete(key)
+    this.views.get(tabId)?.grids.delete(key)
+    run.sets = run.sets.filter(other => other !== entry)
+    run.setsPublished = false
+    run.entries.delete(key)
+    run.setKeys.delete(setKey(entry.descriptor))
+    if (run.settled.has(setKey(entry.descriptor))) {
+      run.settled = new Map(run.settled)
+      run.settledPublished = false
+      run.settled.delete(setKey(entry.descriptor))
+    }
+    this.reindex(tabId, run, entry.index)
+    const release = () => {
+      void this.client.release([entry.handle.key]).catch(() => {})
+      entry.handle.dispose()
+    }
+    // As Close Results: a retained-plan copy in progress reads the result first.
+    if (run.retaining) void run.retaining.then(release, release)
+    else release()
+    this.publishNow(tabId)
+    return true
+  }
+
   /** The tab's view state, created on first use. */
   viewState(tabId: string): TabViewState {
     let view = this.views.get(tabId)
     if (!view) this.views.set(tabId, view = emptyView())
     return view
   }
-  /** One grid's state: scroll, widths and selection. */
-  gridState(tabId: string, index: number): GridViewState {
+  /** One grid's state: scroll, widths and selection. It is the entry's, wherever the entry stands. */
+  gridState(tabId: string, ref: EntryRef): GridViewState {
     const grids = this.viewState(tabId).grids
-    let state = grids.get(index)
-    if (!state) grids.set(index, state = { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: false })
+    // A place no entry stands at yet has a state of its own, which no entry takes over.
+    const key = this.entry(this.runs.get(tabId), ref)?.key ?? '#' + ref
+    let state = grids.get(key)
+    if (!state) grids.set(key, state = { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: false })
     return state
   }
 
@@ -434,39 +516,45 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   }
 
   /** The grid a command acts on registers while it is mounted. */
-  registerGrid(tabId: string, index: number, controller: GridController): Disposable {
-    const key = tabId + ':' + index
+  registerGrid(tabId: string, ref: EntryRef, controller: GridController): Disposable {
+    const key = this.entry(this.runs.get(tabId), ref)?.key
+    if (key === undefined) return { dispose: () => {} }
     this.controllers.set(key, controller)
     return { dispose: () => { if (this.controllers.get(key) === controller) this.controllers.delete(key) } }
   }
   /** Fitting uses the mounted grid's bounded measurement and current (possibly sorted) view. */
-  canFitColumn(tabId: string, index: number, column: number): boolean {
-    const set = this.runs.get(tabId)?.sets[index], state = set?.handle.getSnapshot().state
+  canFitColumn(tabId: string, ref: EntryRef, column: number): boolean {
+    const set = this.entry(this.runs.get(tabId), ref), state = set?.handle.getSnapshot().state
     return !!set && Number.isInteger(column) && column >= 0 && column < set.descriptor.columns.length && set.descriptor.columns[column].role !== 'tone'
-      && state !== 'released' && state !== 'lost' && this.controllers.has(tabId + ':' + index)
+      && state !== 'released' && state !== 'lost' && this.controllers.has(set.key)
   }
-  fitColumn(tabId: string, index: number, column: number): void {
-    if (this.canFitColumn(tabId, index, column)) this.controllers.get(tabId + ':' + index)?.fitColumn(column)
+  fitColumn(tabId: string, ref: EntryRef, column: number): void {
+    const set = this.entry(this.runs.get(tabId), ref)
+    if (set && this.canFitColumn(tabId, set.key, column)) this.controllers.get(set.key)?.fitColumn(column)
   }
-  selection(tabId: string, index: number): GridSelection | undefined {
-    const selection = this.views.get(tabId)?.grids.get(index)?.selection
-    return selection?.resultIndex === index ? selection : undefined
+  selection(tabId: string, ref: EntryRef): GridSelection | undefined {
+    const set = this.entry(this.runs.get(tabId), ref)
+    const selection = set && this.views.get(tabId)?.grids.get(set.key)?.selection
+    return selection && selection.resultIndex === set.index ? selection : undefined
   }
-  setSelection(tabId: string, index: number, selection: GridSelection | undefined): void {
-    if (!this.runs.get(tabId)?.sets[index]) return
-    this.gridState(tabId, index).selection = selection
-    this.controllers.get(tabId + ':' + index)?.repaint()
+  setSelection(tabId: string, ref: EntryRef, selection: GridSelection | undefined): void {
+    const set = this.entry(this.runs.get(tabId), ref)
+    if (!set) return
+    this.gridState(tabId, set.key).selection = selection
+    this.controllers.get(set.key)?.repaint()
   }
   /** Select All: an open-ended block that grows as rows stream in. */
-  selectAll(tabId: string, index: number): void {
-    const controller = this.controllers.get(tabId + ':' + index)
+  selectAll(tabId: string, ref: EntryRef): void {
+    const set = this.entry(this.runs.get(tabId), ref)
+    if (!set) return
+    const controller = this.controllers.get(set.key)
     if (controller) controller.selectAll()
-    else this.setSelection(tabId, index, selectAll(index, this.selection(tabId, index)?.active))
+    else this.setSelection(tabId, set.key, selectAll(set.index, this.selection(tabId, set.key)?.active))
   }
   clearSelections(tabId: string): void {
-    for (const [index, state] of this.views.get(tabId)?.grids ?? []) {
+    for (const [key, state] of this.views.get(tabId)?.grids ?? []) {
       state.selection = undefined
-      this.controllers.get(tabId + ':' + index)?.repaint()
+      this.controllers.get(key)?.repaint()
     }
   }
 
@@ -475,8 +563,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    * clipboard. One copy runs per window, so a new one cancels the last. Resolves to the sentence the error banner shows
    * when it fails; a cancelled copy is silent.
    */
-  async copy(tabId: string, index: number, headers: boolean): Promise<string | undefined> {
-    const run = this.runs.get(tabId), set = run?.sets[index], selection = this.selection(tabId, index)
+  async copy(tabId: string, ref: EntryRef, headers: boolean): Promise<string | undefined> {
+    const run = this.runs.get(tabId), set = this.entry(run, ref), selection = set && this.selection(tabId, set.key)
     if (!run || !set || !selection) return undefined
     const state = set.handle.getSnapshot().state
     if (state === 'lost' || state === 'released') return state === 'lost' ? unavailable : closedResults
@@ -484,13 +572,13 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (parts.length === 0) return undefined
     this.cancelRunning(this.copying)
     const jobId = this.newId()
-    const running: RunningJob = { tabId, job: { jobId, kind: 'copy', index, label: `Result ${index + 1}`, rowsDone: 0, rowsTotal: 0, startedAt: this.now(), visible: false } }
+    const running: RunningJob = { tabId, job: { jobId, kind: 'copy', entry: set.key, index: set.index, label: `Result ${set.number}`, rowsDone: 0, rowsTotal: 0, startedAt: this.now(), visible: false } }
     this.copying = running
     run.jobs = [...run.jobs, running.job]
     this.schedule(tabId)
     running.timer = this.timers.setTimeout(() => { running.timer = undefined; this.updateJob(running, { visible: true }) }, g.copyStripDelayMs)
     let result
-    const view = run.sorts.get(index)?.view
+    const view = run.sorts.get(set.key)?.view
     try { result = await this.api.copyResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, headers, parts, ...view ? { viewId: view.viewId } : {} }) }
     finally { this.endJob(running) }
     if (result.ok) {
@@ -511,23 +599,23 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    * leases the result); Cancel, Escape and reloading the window stop it. Resolves to the sentence the error banner shows
    * when it fails; a cancelled dialog is silent, and the end of a save is announced and shown in the toolbar.
    */
-  async saveAs(tabId: string, index: number, baseName: string): Promise<string | undefined> {
-    const run = this.runs.get(tabId), set = run?.sets[index]
+  async saveAs(tabId: string, ref: EntryRef, baseName: string): Promise<string | undefined> {
+    const run = this.runs.get(tabId), set = this.entry(run, ref)
     if (!run || !set) return undefined
     const snapshot = set.handle.getSnapshot()
     if (snapshot.state === 'lost' || snapshot.state === 'released') return snapshot.state === 'lost' ? unavailable : closedResults
     if (snapshot.state !== 'complete') return stillLoading
-    const sort = run.sorts.get(index)
+    const sort = run.sorts.get(set.key)
     // The file follows the grid's order, which a running or pending sort is about to change.
     if (sort && (sort.sorting || sort.stale || !sort.view)) return stillSorting
     const jobId = this.newId()
-    const running: RunningJob = { tabId, job: { jobId, kind: 'save', index, label: `Result ${index + 1}`, rowsDone: 0, rowsTotal: snapshot.rowsAvailable, startedAt: this.now(), visible: false } }
+    const running: RunningJob = { tabId, job: { jobId, kind: 'save', entry: set.key, index: set.index, label: `Result ${set.number}`, rowsDone: 0, rowsTotal: snapshot.rowsAvailable, startedAt: this.now(), visible: false } }
     this.saves.set(jobId, running)
     this.clearJobNotice(tabId)
     run.jobs = [...run.jobs, running.job]
     this.schedule(tabId)
     let result
-    try { result = await this.api.saveResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, suggestedName: suggestedName(baseName, index), ...sort?.view ? { viewId: sort.view.viewId } : {} }) }
+    try { result = await this.api.saveResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, suggestedName: suggestedName(baseName, set.number - 1), ...sort?.view ? { viewId: sort.view.viewId } : {} }) }
     finally { this.endJob(running) }
     if (this.disposed) return undefined
     if (result.ok) {
@@ -548,18 +636,19 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    * opens as a text document. A value the backend stored as a prefix opens unformatted, with a sentence saying so; a
    * NULL or unreadable value opens nothing.
    */
-  async openValue(tabId: string, index: number, row: number, column: number, capturedPlan = false): Promise<OpenedValue> {
-    const run = this.runs.get(tabId), set = (capturedPlan ? run?.planSets : run?.sets)?.[index]
+  async openValue(tabId: string, ref: EntryRef, row: number, column: number, capturedPlan = false): Promise<OpenedValue> {
+    // A captured plan is named by its place among the plan sets, which never changes.
+    const run = this.runs.get(tabId), set = capturedPlan ? (typeof ref === 'number' ? run?.planSets[ref] : undefined) : this.entry(run, ref)
     const info = set?.descriptor.columns[column], spec = info?.role ? valueKinds[info.role] : undefined
     if (!set || !info || !spec || !this.documents) return { opened: false }
     const state = set.handle.getSnapshot().state
     if (state === 'lost' || state === 'released') return { opened: false, message: state === 'lost' ? unavailable : closedResults }
-    const key = `${tabId}:${capturedPlan}:${index}:${row}:${column}`
+    const key = `${set.key}:${row}:${column}`
     if (this.opening.has(key)) return { opened: false }
     this.opening.add(key)
     try {
       // Rows are the grid's: a sorted grid's are its view's positions.
-      const handle = (capturedPlan ? undefined : run?.sorts.get(index)?.view) ?? set.handle
+      const handle = (capturedPlan ? undefined : run?.sorts.get(set.key)?.view) ?? set.handle
       const value = await handle.getCell(row, column, { format: spec.kind === 'json' ? 'json' : 'xml' })
       if (this.disposed || value.isNull || value.error) return { opened: false }
       const base = spec.base ?? valueBase(info, spec.kind), number = (this.valueNumbers.get(base + spec.extension) ?? 0) + 1
@@ -571,29 +660,32 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   }
 
   /** A grid's sort, while it has one. */
-  sortOf(tabId: string, index: number): GridSort | undefined { return this.runs.get(tabId)?.sorts.get(index) }
+  sortOf(tabId: string, ref: EntryRef): GridSort | undefined {
+    const run = this.runs.get(tabId), set = this.entry(run, ref)
+    return set && run!.sorts.get(set.key)
+  }
 
   /**
    * Sorts a grid by a column: alone, or with `add` as a further key after those it has (moved to the end when it is one).
    * `none` takes the column out of the sort; a grid left with no key shows its rows in the order SQL Server sent them.
    */
-  sortBy(tabId: string, index: number, column: number, direction: SortDirection, add = false): void {
-    const run = this.runs.get(tabId), set = run?.sets[index]
+  sortBy(tabId: string, ref: EntryRef, column: number, direction: SortDirection, add = false): void {
+    const run = this.runs.get(tabId), set = this.entry(run, ref)
     if (!run || !set || column < 0 || column >= set.descriptor.columns.length) return
-    this.applySort(tabId, run, index, sortKeysBy(run.sorts.get(index)?.keys ?? [], column, direction, add, wire.views.maxKeys, (descending): ViewSortKey => ({ column, descending, mode: 'value' })))
+    this.applySort(tabId, run, set.key, sortKeysBy(run.sorts.get(set.key)?.keys ?? [], column, direction, add, wire.views.maxKeys, (descending): ViewSortKey => ({ column, descending, mode: 'value' })))
   }
 
   /** A header's sort button (`cycleSortKeys`, which a live grid's header shares): ascending, then descending, then out of
    *  the sort. With `add`, the column changes in place among the keys (a new one goes last); without, it becomes the only key. */
-  cycleSort(tabId: string, index: number, column: number, add = false): void {
-    const run = this.runs.get(tabId), set = run?.sets[index]
+  cycleSort(tabId: string, ref: EntryRef, column: number, add = false): void {
+    const run = this.runs.get(tabId), set = this.entry(run, ref)
     if (!run || !set || column < 0 || column >= set.descriptor.columns.length) return
-    this.applySort(tabId, run, index, cycleSortKeys(run.sorts.get(index)?.keys ?? [], column, add, wire.views.maxKeys, (descending): ViewSortKey => ({ column, descending, mode: 'value' })))
+    this.applySort(tabId, run, set.key, cycleSortKeys(run.sorts.get(set.key)?.keys ?? [], column, add, wire.views.maxKeys, (descending): ViewSortKey => ({ column, descending, mode: 'value' })))
   }
 
-  clearSort(tabId: string, index: number): void {
-    const run = this.runs.get(tabId)
-    if (run?.sorts.get(index)?.keys.length) this.applySort(tabId, run, index, [])
+  clearSort(tabId: string, ref: EntryRef): void {
+    const run = this.runs.get(tabId), set = this.entry(run, ref)
+    if (run && set && run.sorts.get(set.key)?.keys.length) this.applySort(tabId, run, set.key, [])
   }
 
   /**
@@ -602,9 +694,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    * (`notNull`). Values are equal as the column's collation and type say. A filter of the same kind on the column replaces
    * the one it has. False when the selection does not fit the filter.
    */
-  filterSelection(tabId: string, index: number, kind: SelectionFilter): boolean {
-    const run = this.runs.get(tabId), set = run?.sets[index], target = this.filterTarget(tabId, index, kind)
+  filterSelection(tabId: string, ref: EntryRef, kind: SelectionFilter): boolean {
+    const run = this.runs.get(tabId), set = this.entry(run, ref), target = this.filterTarget(tabId, ref, kind)
     if (!run || !set || !target) return false
+    const index = set.key
     const { column } = target
     const filter: ViewFilter = kind === 'notNull' ? { op: 'notIn', column, rows: [], nulls: true }
       : { op: kind, column, cells: { ranges: target.ranges, ...target.viewId === undefined ? {} : { viewId: target.viewId } } }
@@ -616,12 +709,13 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   }
 
   /** Whether `filterSelection` can filter the grid's selection that way. */
-  canFilterSelection(tabId: string, index: number, kind: SelectionFilter): boolean { return !!this.filterTarget(tabId, index, kind) }
+  canFilterSelection(tabId: string, ref: EntryRef, kind: SelectionFilter): boolean { return !!this.filterTarget(tabId, ref, kind) }
 
   /** Keeps a grid's rows whose values in the selected columns (every column with `allColumns`) repeat, each group together. */
-  filterDuplicates(tabId: string, index: number, allColumns = false): boolean {
-    const run = this.runs.get(tabId), set = run?.sets[index], columns = this.duplicateColumns(tabId, index, allColumns)
+  filterDuplicates(tabId: string, ref: EntryRef, allColumns = false): boolean {
+    const run = this.runs.get(tabId), set = this.entry(run, ref), columns = this.duplicateColumns(tabId, ref, allColumns)
     if (!run || !set || !columns) return false
+    const index = set.key
     const names = set.descriptor.columns
     const label = filterLabel({ op: 'duplicates', columns }, names)
     const filters = (run.sorts.get(index)?.filters ?? []).filter(item => !(item.filter.op === 'duplicates' && sameColumns(item.filter.columns, columns)))
@@ -631,7 +725,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** Adds a filter after the grid's others, or at `at` among them (where the one it replaces stood, since filters apply in
    *  order and a duplicates filter after it counts only the rows it keeps); a grid that has as many as a view takes says
    *  so and keeps them. */
-  private addFilter(tabId: string, run: Run, index: number, others: readonly GridFilter[], item: GridFilter, at = others.length): boolean {
+  private addFilter(tabId: string, run: Run, index: EntryKey, others: readonly GridFilter[], item: GridFilter, at = others.length): boolean {
     if (others.length >= wire.views.maxFilters) {
       this.notify(tabId, `Could not filter the results: a grid takes at most ${wire.views.maxFilters} filters. Remove one first.`)
       return false
@@ -641,15 +735,16 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   }
 
   /** Whether a grid's column can open the funnel's popover: a result's own column (not a diff's tone) on a mounted grid. */
-  canFilterColumn(tabId: string, index: number, column: number): boolean {
-    const set = this.runs.get(tabId)?.sets[index]
+  canFilterColumn(tabId: string, ref: EntryRef, column: number): boolean {
+    const set = this.entry(this.runs.get(tabId), ref)
     return !!set && this.filterable(set) && Number.isInteger(column) && column >= 0 && column < set.descriptor.columns.length && set.descriptor.columns[column].role !== 'tone'
-      && !!this.controllers.get(tabId + ':' + index)?.filterColumn
+      && !!this.controllers.get(set.key)?.filterColumn
   }
 
   /** Opens the funnel's popover for a column (the grid menu's Filter Column Values, Alt+Down in a grid). */
-  filterColumn(tabId: string, index: number, column: number): void {
-    if (this.canFilterColumn(tabId, index, column)) this.controllers.get(tabId + ':' + index)?.filterColumn?.(column)
+  filterColumn(tabId: string, ref: EntryRef, column: number): void {
+    const set = this.entry(this.runs.get(tabId), ref)
+    if (set && this.canFilterColumn(tabId, set.key, column)) this.controllers.get(set.key)?.filterColumn?.(column)
   }
 
   /**
@@ -658,8 +753,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    * filter the grid's view starts each value ticked only when it keeps it, as it does NULL. The view built for it is closed
    * once the snapshot is; the snapshot is the caller's to close, or to hand to `applyColumnFilter`.
    */
-  async columnValues(tabId: string, index: number, column: number, o: { signal?: AbortSignal } = {}): Promise<DistinctList> {
-    const run = this.runs.get(tabId), set = run?.sets[index], sort = run?.sorts.get(index)
+  async columnValues(tabId: string, ref: EntryRef, column: number, o: { signal?: AbortSignal } = {}): Promise<DistinctList> {
+    const run = this.runs.get(tabId), set = this.entry(run, ref), sort = set && run?.sorts.get(set.key)
     if (!run || !set || !this.filterable(set)) throw new Error('These results are no longer available.')
     if (sort?.sorting) throw new Error('The results are still being sorted or filtered. Try again when they are shown.')
     const filters = sort?.filters ?? [], others = filters.filter(item => { const own = columnFilterKind(item.filter, column); return own === undefined || own === 'between' })
@@ -675,9 +770,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    * Applies the funnel's condition to a column: it replaces the column's filter of the same kind (its value list, its
    * range or its not-NULL), and `clear` takes all of the column's filters off. False when the grid cannot be filtered.
    */
-  applyColumnFilter(tabId: string, index: number, column: number, condition: ColumnCondition): boolean {
-    const run = this.runs.get(tabId), set = run?.sets[index]
+  applyColumnFilter(tabId: string, ref: EntryRef, column: number, condition: ColumnCondition): boolean {
+    const run = this.runs.get(tabId), set = this.entry(run, ref)
     if (!run || !set || !this.filterable(set) || !Number.isInteger(column) || column < 0 || column >= set.descriptor.columns.length) return false
+    const index = set.key
     const filters = run.sorts.get(index)?.filters ?? [], kind = conditionKind(condition)
     const others = filters.filter(item => { const own = columnFilterKind(item.filter, column); return own === undefined || (kind !== undefined && !sameFilterFamily(own, kind)) })
     const filter = conditionFilter(condition, column)
@@ -698,34 +794,34 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     return this.addFilter(tabId, run, index, others, item, replaced < 0 ? others.length : replaced)
   }
 
-  canFilterDuplicates(tabId: string, index: number, allColumns = false): boolean { return !!this.duplicateColumns(tabId, index, allColumns) }
+  canFilterDuplicates(tabId: string, ref: EntryRef, allColumns = false): boolean { return !!this.duplicateColumns(tabId, ref, allColumns) }
 
   /** Takes one filter off a grid; the others apply again in their order. */
-  removeFilter(tabId: string, index: number, at: number): void {
-    const run = this.runs.get(tabId), sort = run?.sorts.get(index)
-    if (!run || !sort || at < 0 || at >= sort.filters.length) return
-    this.applyView(tabId, run, index, sort.keys, sort.filters.filter((_, position) => position !== at), 'filter')
+  removeFilter(tabId: string, ref: EntryRef, at: number): void {
+    const run = this.runs.get(tabId), set = this.entry(run, ref), sort = set && run?.sorts.get(set.key)
+    if (!run || !set || !sort || at < 0 || at >= sort.filters.length) return
+    this.applyView(tabId, run, set.key, sort.keys, sort.filters.filter((_, position) => position !== at), 'filter')
   }
 
-  clearFilters(tabId: string, index: number): void {
-    const run = this.runs.get(tabId), sort = run?.sorts.get(index)
-    if (run && sort?.filters.length) this.applyView(tabId, run, index, sort.keys, [], 'filter')
+  clearFilters(tabId: string, ref: EntryRef): void {
+    const run = this.runs.get(tabId), set = this.entry(run, ref), sort = set && run?.sorts.get(set.key)
+    if (run && set && sort?.filters.length) this.applyView(tabId, run, set.key, sort.keys, [], 'filter')
   }
 
   /** The text sort mode changed: every grid sorted by a column the mode orders (text, xml, json, binary) sorts again. */
   resort(): void {
     for (const [tabId, run] of this.runs) for (const [index, sort] of run.sorts) {
-      const columns = run.sets[index]?.descriptor.columns
+      const columns = run.entries.get(index)?.descriptor.columns
       if (columns && sort.keys.some(key => columns[key.column] && lengthSortable(columns[key.column]))) this.applySort(tabId, run, index, sort.keys)
     }
   }
 
   /** The grid now shows `view` (undefined: its result's own order): the views it held before close. */
-  viewShown(tabId: string, index: number, view: ResultHandle | undefined): void {
-    const run = this.runs.get(tabId), held = run?.held.get(index)
-    if (!held) return
+  viewShown(tabId: string, ref: EntryRef, view: ResultHandle | undefined): void {
+    const run = this.runs.get(tabId), set = this.entry(run, ref), held = set && run?.held.get(set.key)
+    if (!set || !held) return
     held.shown = view
-    this.closeHeld(run!, index)
+    this.closeHeld(run!, set.key)
   }
 
   /** Cancels a copy or save by its job id (Cancel on its strip). */
@@ -785,7 +881,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (this.runs.get(tabId) !== run || run.status !== 'running') return
     switch (event.type) {
       case 'resultSet.opened': case 'resultSet.closed':
-        this.opened(run, event.descriptor)
+        this.opened(tabId, run, event.descriptor)
         this.settle(run, event.descriptor)
         run.rowsRead.set(event.descriptor.resultId, event.descriptor.rowsRead)
         if (!run.manualView && run.sets.length > 0) run.view = 'results'
@@ -806,7 +902,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   }
 
   /** Opens a set's handle once, keeping the sets in the backend's order; sets past the limit are not kept. */
-  private opened(run: Run, descriptor: ResultDescriptor): void {
+  private opened(tabId: string, run: Run, descriptor: ResultDescriptor): void {
     const key = setKey(descriptor)
     if (run.setKeys.has(key) || run.sets.length >= resultLimits.sets) return
     run.setKeys.add(key)
@@ -815,8 +911,11 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     // Sets arrive in order, so the place is almost always the end.
     let at = run.sets.length
     while (at > 0 && (run.sets[at - 1].descriptor.index - descriptor.index || run.sets[at - 1].descriptor.resultId - descriptor.resultId) > 0) at--
-    run.sets.splice(at, 0, { index: at, descriptor, handle })
-    for (let index = at + 1; index < run.sets.length; index++) run.sets[index] = { ...run.sets[index], index }
+    const entry: ResultSetEntry = { key: this.mint(), index: at, ordinal: descriptor.index + 1, number: descriptor.index + 1, descriptor, handle }
+    run.numbered = Math.max(run.numbered, entry.number)
+    run.sets.splice(at, 0, entry)
+    run.entries.set(entry.key, entry)
+    if (at + 1 < run.sets.length) this.reindex(tabId, run, at + 1)
   }
 
   /** Records a set that has all its rows (once): the stack sizes it to them from then on. */
@@ -873,7 +972,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     run.setKeys.add(key)
     if (run.setsPublished) { run.sets = run.sets.slice(); run.setsPublished = false }
     const index = run.sets.length
-    run.sets.push({ index, descriptor, handle: this.client.open(descriptor), label })
+    // Numbered once, for its life: an entry that goes before it does not renumber it, nor give its number to the next.
+    const entry: ResultSetEntry = { key: this.mint(), index, number: ++run.numbered, descriptor, handle: this.client.open(descriptor), label }
+    run.sets.push(entry)
+    run.entries.set(entry.key, entry)
     if (run.settledPublished) { run.settled = new Map(run.settled); run.settledPublished = false }
     // Its grid always shows a strip: what was compared.
     run.settled.set(key, { rows: descriptor.rowsStored, strip: true })
@@ -927,14 +1029,14 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    * is built; a newer sort of the same grid cancels this one. No keys closes the view. A failure keeps the last view and
    * says why in the toolbar.
    */
-  private applySort(tabId: string, run: Run, index: number, keys: readonly ViewSortKey[]): void {
+  private applySort(tabId: string, run: Run, index: EntryKey, keys: readonly ViewSortKey[]): void {
     this.applyView(tabId, run, index, keys, run.sorts.get(index)?.filters ?? [], 'sort')
   }
 
   /** Builds a grid's view from its keys and filters (see applySort); a filter's selected cells come back as base rows,
    *  whose values then name the filter. */
-  private applyView(tabId: string, run: Run, index: number, keys: readonly ViewSortKey[], filters: readonly GridFilter[], action: 'sort' | 'filter'): void {
-    const set = run.sets[index]
+  private applyView(tabId: string, run: Run, index: EntryKey, keys: readonly ViewSortKey[], filters: readonly GridFilter[], action: 'sort' | 'filter'): void {
+    const set = run.entries.get(index)
     if (!set || this.disposed) return
     run.sorting.get(index)?.abort()
     run.sorting.delete(index)
@@ -977,10 +1079,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   }
 
   /** The column and cells a selection filter takes, or undefined when the selection does not fit it. */
-  private filterTarget(tabId: string, index: number, kind: SelectionFilter): { column: number; ranges: [number, number][]; viewId?: number } | undefined {
-    const run = this.runs.get(tabId), set = run?.sets[index], selection = this.selection(tabId, index)
+  private filterTarget(tabId: string, ref: EntryRef, kind: SelectionFilter): { column: number; ranges: [number, number][]; viewId?: number } | undefined {
+    const run = this.runs.get(tabId), set = this.entry(run, ref), selection = set && this.selection(tabId, set.key)
     if (!run || !set || !selection || !this.filterable(set)) return undefined
-    const shown = run.held.get(index)?.shown as ResultView | undefined
+    const shown = run.held.get(set.key)?.shown as ResultView | undefined
     const rows = (shown ?? set.handle).getSnapshot().rowsAvailable, columns = set.descriptor.columns.length
     if (kind === 'notNull') return selection.active.column < columns ? { column: selection.active.column, ranges: [] } : undefined
     const blocks = resolveBlocks(selection, rows, columns)
@@ -992,16 +1094,16 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     return { column, ranges, ...shown ? { viewId: shown.viewId } : {} }
   }
 
-  private duplicateColumns(tabId: string, index: number, allColumns: boolean): number[] | undefined {
-    const run = this.runs.get(tabId), set = run?.sets[index]
+  private duplicateColumns(tabId: string, ref: EntryRef, allColumns: boolean): number[] | undefined {
+    const run = this.runs.get(tabId), set = this.entry(run, ref)
     if (!run || !set || !this.filterable(set)) return undefined
     const columns = set.descriptor.columns.length
     // A diff's hidden tone column (its last) is not one of the rows' values.
     const shownColumns = set.descriptor.columns.flatMap((item, column) => item.role === 'tone' ? [] : [column])
     if (allColumns) return shownColumns.length > 0 ? shownColumns : undefined
-    const selection = this.selection(tabId, index)
+    const selection = this.selection(tabId, set.key)
     if (!selection) return undefined
-    const shown = run.held.get(index)?.shown ?? set.handle
+    const shown = run.held.get(set.key)?.shown ?? set.handle
     const picked = new Set<number>()
     for (const block of resolveBlocks(selection, shown.getSnapshot().rowsAvailable, columns)) for (let column = block.left; column <= block.right; column++) if (set.descriptor.columns[column]?.role !== 'tone') picked.add(column)
     return picked.size > 0 ? [...picked].sort((a, b) => a - b) : undefined
@@ -1014,7 +1116,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   }
 
   /** Names each filter of the grid's view by the values its rows hold: "name = 'x'", "name between 'a' and 'b'". */
-  private nameFilters(tabId: string, run: Run, index: number, set: ResultSetEntry): void {
+  private nameFilters(tabId: string, run: Run, index: EntryKey, set: ResultSetEntry): void {
     const sort = run.sorts.get(index)
     if (!sort?.view || sort.sorting || sort.filters.every(item => item.named)) return
     const columns = set.descriptor.columns
@@ -1042,7 +1144,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   }
 
   /** Closes the grid's views but its current one and the one it shows. */
-  private closeHeld(run: Run, index: number): void {
+  private closeHeld(run: Run, index: EntryKey): void {
     const held = run.held.get(index)
     if (!held) return
     const keep = run.sorts.get(index)?.view
@@ -1054,7 +1156,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (held.views.size === 0) run.held.delete(index)
   }
 
-  private setSort(tabId: string, run: Run, index: number, sort: GridSort | undefined): void {
+  private setSort(tabId: string, run: Run, index: EntryKey, sort: GridSort | undefined): void {
     // A snapshot no filter of the grid's sort names any more (asked for, or applied) is closed: it went with its filter.
     const lists = (value: GridSort | undefined) => new Set([...value?.filters ?? [], ...value?.applied ?? []].flatMap(item => item.list ? [item.list] : []))
     const kept = lists(sort)
@@ -1069,7 +1171,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** Views built while rows were still arriving are built again once their set has every row. */
   private refreshSorts(tabId: string, run: Run): void {
     for (const [index, sort] of run.sorts) {
-      if (sort.stale && !sort.sorting && run.sets[index]?.handle.getSnapshot().state === 'complete') this.applyView(tabId, run, index, sort.keys, sort.filters, sort.keys.length ? 'sort' : 'filter')
+      if (sort.stale && !sort.sorting && run.entries.get(index)?.handle.getSnapshot().state === 'complete') this.applyView(tabId, run, index, sort.keys, sort.filters, sort.keys.length ? 'sort' : 'filter')
     }
   }
 
@@ -1098,7 +1200,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     run.held.clear()
     this.closeHandles(run)
     this.runs.delete(tabId)
-    for (const key of [...this.controllers.keys()]) if (key.startsWith(tabId + ':')) this.controllers.delete(key)
+    for (const key of run.entries.keys()) this.controllers.delete(key)
   }
 
   private schedule(tabId: string): void {
@@ -1150,7 +1252,42 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       messagesTruncated: run.messagesTruncated, rowsRead: this.totalRows(run), completedBatches: run.completedBatches, totalBatches: run.totalBatches,
       ...run.summary ? { summary: run.summary } : {}, ...run.error ? { error: run.error } : {}, view: run.view, manualView: run.manualView, strip: run.strip, stripChosen: run.stripManual, settled: run.settled,
       ...run.endedAt !== undefined ? { endedAt: run.endedAt } : {}, ...run.closedFrom ? { closedFrom: run.closedFrom } : {}, jobs: run.jobs, announcement: run.announcement, announced: run.announced,
-      jobNotice: run.jobNotice, sorts: run.sorts
+      jobNotice: run.jobNotice, sorts: this.sortsByIndex(run)
+    }
+  }
+
+  /** The run's sorts by set index, for the snapshot: the same map until a sort or the list of sets changes. */
+  private sortsByIndex(run: Run): ReadonlyMap<number, GridSort> {
+    const shown = run.sortsShown
+    if (shown && shown.sorts === run.sorts && shown.sets === run.sets) return shown.byIndex
+    const byIndex = new Map<number, GridSort>()
+    for (const [key, sort] of run.sorts) { const entry = run.entries.get(key); if (entry) byIndex.set(entry.index, sort) }
+    run.sortsShown = { sorts: run.sorts, sets: run.sets, byIndex }
+    return byIndex
+  }
+
+  private mint(): EntryKey { return 'e' + ++this.minted }
+
+  /** The entry a reference names: by key, or (the adapter for `data-result-index`) by its place in the stack. */
+  private entry(run: Run | undefined, ref: EntryRef): ResultSetEntry | undefined {
+    return run === undefined ? undefined : typeof ref === 'number' ? run.sets[ref] : run.entries.get(ref)
+  }
+
+  /**
+   * Rewrites what is derived from an entry's place, for the entries from `from` on, after one came or went before them:
+   * `index`, the place its selection names, and the place its jobs name. `run.sets` must be the run's own copy.
+   */
+  private reindex(tabId: string, run: Run, from: number): void {
+    const grids = this.views.get(tabId)?.grids
+    for (let index = from; index < run.sets.length; index++) {
+      const entry = run.sets[index]
+      if (entry.index === index) continue
+      const moved = { ...entry, index }
+      run.sets[index] = moved
+      run.entries.set(moved.key, moved)
+      const state = grids?.get(moved.key)
+      if (state?.selection) state.selection = { ...state.selection, resultIndex: index }
+      for (const running of [this.copying, ...this.saves.values()]) if (running && running.job.entry === moved.key && this.runs.get(running.tabId) === run) this.updateJob(running, { index })
     }
   }
 }
