@@ -12,6 +12,7 @@ import type { ExplorerMenuNode, InputTarget, LiveOutput, OutputTarget, OutputVie
 import type { ExplorerNodeRef, ObjectRef } from '../src/shared/explorer/refs'
 import { fakeDocument, FakeElement } from './fixtures/elements'
 import * as windowTools from '../src/renderer/src/core/windows'
+import { keyAt } from './fixtures/entries'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
@@ -565,7 +566,6 @@ describe('Object Explorer commands', () => {
 
 describe('Query Output commands', () => {
   const results: QueryResult = { ...queryOutput, messages: [{ text: 'hello', kind: 'info' }], resultSets: [descriptor(1), descriptor(2, { index: 1 })] }
-  const block = (resultIndex = 0): GridSelection => ({ resultIndex, blocks: [{ kind: 'cells', anchor: { row: 0, column: 0 }, focus: { row: 1, column: 1 } }], active: { row: 1, column: 1 } })
   /** A query that has run and shows `value`, and targets for its views, each over an element of the fake document. */
   async function ran(platform: Platform = 'win32', value: QueryResult = results, settings: NonNullable<Parameters<typeof workbenchFixture>[0]>['settings'] = {}) {
     const fixture = workbenchFixture({ platform, settings })
@@ -575,14 +575,17 @@ describe('Query Output commands', () => {
     fixture.api.execute.mockResolvedValueOnce({ ok: true, value })
     await fixture.queries.execute()
     const doc = fakeDocument()
-    const element = (view: OutputView, resultIndex = 0, text = '') => new FakeElement(doc, 'div', { textContent: text, attributes: { 'data-output-view': view, 'data-tab-id': tab.id, 'data-result-index': String(resultIndex) } })
-    const on = (view: OutputView, options: { resultIndex?: number; selectedText?: string; text?: string } = {}): CommandArgs => ({ tabId: tab.id, target: {
-      kind: 'output', tabId: tab.id, view, resultIndex: options.resultIndex ?? 0, selectedText: options.selectedText ?? '', element: element(view, options.resultIndex, options.text).dom
+    /** The key of the run's result at `place`, which its grid carries and its targets name it by. */
+    const key = (place = 0) => keyAt(fixture.results, tab.id, place)
+    const block = (place = 0): GridSelection => ({ entry: key(place), blocks: [{ kind: 'cells', anchor: { row: 0, column: 0 }, focus: { row: 1, column: 1 } }], active: { row: 1, column: 1 } })
+    const element = (view: OutputView, place = 0, text = '') => new FakeElement(doc, 'div', { textContent: text, attributes: { 'data-output-view': view, 'data-tab-id': tab.id, ...(view === 'grid' ? { 'data-result-entry': key(place) } : {}) } })
+    const on = (view: OutputView, options: { place?: number; selectedText?: string; text?: string } = {}): CommandArgs => ({ tabId: tab.id, target: {
+      kind: 'output', tabId: tab.id, view, ...(view === 'grid' ? { entry: key(options.place) } : {}), selectedText: options.selectedText ?? '', element: element(view, options.place, options.text).dom
     } })
-    return { ...fixture, tab, doc, element, on }
+    return { ...fixture, tab, doc, element, on, key, block }
   }
   it('copy the grid\'s selected cells through the backend, with or without headers', async () => {
-    const { commands, api, resultSelection, tab, on, element } = await ran()
+    const { commands, api, resultSelection, tab, on, element, block, key } = await ran()
     const enabled = (args: CommandArgs) => (['output.copy', 'output.copyWithHeaders', 'output.selectAll'] as const).filter(id => commands.isEnabled(id, args))
     expect(enabled(on('grid'))).toEqual(['output.selectAll'])
     resultSelection.set(tab.id, block())
@@ -600,10 +603,10 @@ describe('Query Output commands', () => {
     resultSelection.clear(tab.id)
     resultSelection.set(tab.id, block(1))
     expect(enabled(on('grid'))).toEqual(['output.selectAll'])
-    expect(enabled(on('grid', { resultIndex: 1 }))).toEqual(['output.copy', 'output.copyWithHeaders', 'output.selectAll'])
-    expect(enabled({ target: { kind: 'output', tabId: 'gone', view: 'grid', resultIndex: 0, selectedText: '', element: element('grid').dom } })).toEqual([])
+    expect(enabled(on('grid', { place: 1 }))).toEqual(['output.copy', 'output.copyWithHeaders', 'output.selectAll'])
+    expect(enabled({ target: { kind: 'output', tabId: 'gone', view: 'grid', entry: key(), selectedText: '', element: element('grid').dom } })).toEqual([])
     const all = await ran('linux')
-    all.resultSelection.set(all.tab.id, selectAll(0))
+    all.resultSelection.set(all.tab.id, selectAll(all.key()))
     expect(await all.commands.execute('output.copyWithHeaders', all.on('grid'), 'menu')).toBe(true)
     expect(all.api.copyResults.mock.calls[0][0]).toMatchObject({ headers: true, parts: [{ rows: [[0, Number.MAX_SAFE_INTEGER]], columns: [[0, 1]] }] })
   })
@@ -621,7 +624,7 @@ describe('Query Output commands', () => {
       fitColumn: column => calls.push(['fit', column]), filterColumn: column => calls.push(['filter', column]), clearFilters: () => calls.push(['clearFilters']), save: () => calls.push(['save']),
       canFind: () => true, find: () => calls.push(['find'])
     }
-    const on = (column?: number): CommandArgs => ({ target: { kind: 'output', tabId: '', view: 'live', resultIndex: 0, selectedText: '', element: new FakeElement(doc, 'div').dom, live, ...column === undefined ? {} : { column } } })
+    const on = (column?: number): CommandArgs => ({ target: { kind: 'output', tabId: '', view: 'live', selectedText: '', element: new FakeElement(doc, 'div').dom, live, ...column === undefined ? {} : { column } } })
     const ids = ['output.find', 'output.copy', 'output.copyWithHeaders', 'output.copyColumnName', 'output.selectAll', 'output.saveResultsAs', 'output.sortAscending', 'output.thenSortDescending', 'output.clearSort',
       'output.fitColumn', 'output.filterColumnValues', 'output.clearFilters', 'output.filterSelection', 'output.highlightYellow', 'output.closeResults', 'output.openValue', 'output.transpose'] as const
     const enabled = (args: CommandArgs) => ids.filter(id => commands.isEnabled(id, args))
@@ -638,13 +641,13 @@ describe('Query Output commands', () => {
     expect(commands.isEnabled('output.sortAscending', { target: { ...on(1).target!, live: { ...live, sortable: false } } as CommandArgs['target'] })).toBe(false)
   })
   it('copy with headers when Tools › Options › Results to Grid says so', async () => {
-    const { commands, api, resultSelection, tab, on } = await ran('win32', results, { 'queryResults.grid.includeColumnHeaders': true })
+    const { commands, api, resultSelection, tab, on, block } = await ran('win32', results, { 'queryResults.grid.includeColumnHeaders': true })
     resultSelection.set(tab.id, block())
     expect(await commands.execute('output.copy', on('grid'), 'menu')).toBe(true)
     expect(api.copyResults.mock.calls[0][0]).toMatchObject({ headers: true })
   })
   it('copy nothing from results the backend lost, and report a copy the backend refused in the banner', async () => {
-    const { commands, api, resultSelection, resultClient, tab, on } = await ran()
+    const { commands, api, resultSelection, resultClient, tab, on, block } = await ran()
     resultSelection.set(tab.id, block())
     api.copyResults.mockResolvedValueOnce({ ok: false, code: 'TOO_LARGE', error: 'The selection is too large to copy (70 MB; the limit is 64 MB). Use Save Results As instead.' })
     expect(await commands.execute('output.copy', on('grid'), 'menu')).toBe(true)
@@ -661,14 +664,14 @@ describe('Query Output commands', () => {
     expect(commands.isEnabled('output.selectAll', on('grid'))).toBe(false)
   })
   it('save the menu\'s grid, else the one that last had focus, and close the results when no query runs', async () => {
-    const { commands, api, results, resultClient, queries, tab, on, startQuery } = await ran()
+    const { commands, api, results, resultClient, queries, tab, on, startQuery, key } = await ran()
     expect(commands.isEnabled('output.saveResultsAs')).toBe(true)
     expect(commands.isEnabled('output.closeResults')).toBe(true)
-    expect(await commands.execute('output.saveResultsAs', on('grid', { resultIndex: 1 }), 'menu')).toBe(true)
+    expect(await commands.execute('output.saveResultsAs', on('grid', { place: 1 }), 'menu')).toBe(true)
     // From the palette (or Messages), the grid that last had focus.
-    results.viewState(tab.id).focusedIndex = 1
+    results.viewState(tab.id).focused = key(1)
     expect(await commands.execute('output.saveResultsAs', undefined, 'palette')).toBe(true)
-    results.viewState(tab.id).focusedIndex = 0
+    results.viewState(tab.id).focused = key(0)
     expect(await commands.execute('output.saveResultsAs', on('messages'), 'menu')).toBe(true)
     expect(api.saveResults.mock.calls.map(([request]) => [request.resultId, request.suggestedName, request.format])).toEqual([[2, 'SQLQuery1-Result2', undefined], [2, 'SQLQuery1-Result2', undefined], [1, 'SQLQuery1-Result1', undefined]])
     api.saveResults.mockResolvedValueOnce({ ok: false, code: 'EXPORT_FAILED', error: 'Could not save the results: access to out.csv is denied.' })
@@ -687,11 +690,11 @@ describe('Query Output commands', () => {
   })
   it('copies only the raw column name and fits the captured column of the addressed grid', async () => {
     const columns: ResultColumn[] = [{ name: ' Total ] net\t', dataType: 'int', wire: 'text', nullable: false }, { name: '', dataType: 'nvarchar', wire: 'text', nullable: true }]
-    const { commands, documents, api, results, resultSelection, tab, on } = await ran('win32', { ...queryOutput, resultSets: [descriptor(1), descriptor(2, { index: 1, columns })] })
+    const { commands, documents, api, results, resultSelection, tab, on, key, block } = await ran('win32', { ...queryOutput, resultSets: [descriptor(1), descriptor(2, { index: 1, columns })] })
     const controller = { selectAll: vi.fn(), repaint: vi.fn(), fitColumn: vi.fn() }
-    const registration = results.registerGrid(tab.id, 1, controller)
+    const registration = results.registerGrid(tab.id, key(1), controller)
     resultSelection.set(tab.id, block(1))
-    const captured = on('grid', { resultIndex: 1 })
+    const captured = on('grid', { place: 1 })
     if (captured.target?.kind !== 'output') throw new Error('Output target missing')
     const args: CommandArgs = { ...captured, target: { ...captured.target, column: 0, result: { generation: 1, resultId: 2 } } }
     // A different active document and cell do not replace the menu's captured tab, result or column.
@@ -717,7 +720,7 @@ describe('Query Output commands', () => {
     const other = documents.create('Other.sql', 'SELECT 2', 'master', 'server-a')
     results.begin(other.id, 'other-run')
     results.finish(other.id, 'other-run', { summary: { ...queryOutput, resultSets: [descriptor(9, { index: 0 })] } })
-    expect(await commands.execute('output.closeResults', on('grid', { resultIndex: 1 }), 'menu')).toBe(true)
+    expect(await commands.execute('output.closeResults', on('grid', { place: 1 }), 'menu')).toBe(true)
     expect(results.getSnapshot()[tab.id]).toMatchObject({ status: 'closed', messages: [{ text: 'hello', kind: 'info' }] })
     expect(results.getSnapshot()[other.id].status).toBe('completed')
     expect(await commands.execute('output.closeResults', { tabId: other.id }, 'toolbar')).toBe(true)
@@ -768,11 +771,11 @@ describe('Query Output commands', () => {
   })
   it('open an XML, JSON or plan value from a click or Enter in a new tab, and focus the editor there', async () => {
     const columns: ResultColumn[] = [{ name: 'Id', dataType: 'int', wire: 'text', nullable: false }, { name: 'XML_F52E2B61-18A1-11d1-B105-00805F49916B', dataType: 'ntext', wire: 'text', role: 'xml', nullable: true }]
-    const { commands, documents, resultClient, resultSelection, tab, on } = await ran('win32', { ...results, resultSets: [descriptor(1, { columns })] })
+    const { commands, documents, resultClient, resultSelection, tab, on, key } = await ran('win32', { ...results, resultSets: [descriptor(1, { columns })] })
     const editor = new TestEditor(), focus = vi.fn()
     documents.bindEditor(Object.assign(editor, { focus }).asEditor())
     resultClient.handle(1)!.getCell.mockResolvedValue({ text: '<a>\n  <b />\n</a>', isNull: false, truncated: false, error: false, formatted: true })
-    const cell = (column: number): CommandArgs => ({ tabId: tab.id, cell: { resultIndex: 0, row: 1, column } })
+    const cell = (column: number): CommandArgs => ({ tabId: tab.id, cell: { entry: key(), row: 1, column } })
     // Only a value column opens; the grid makes only those cells links.
     expect(commands.isEnabled('output.openValue', cell(0))).toBe(false)
     expect(await commands.execute('output.openValue', cell(1), 'keybinding')).toBe(true)
@@ -782,7 +785,7 @@ describe('Query Output commands', () => {
     expect(opened.connectionId).toBeUndefined()
     expect(focus).toHaveBeenCalledOnce()
     // Without a cell, the grid's active cell; a value that opened unformatted says why in the banner.
-    resultSelection.set(tab.id, { resultIndex: 0, blocks: [{ kind: 'cells', anchor: { row: 0, column: 1 }, focus: { row: 0, column: 1 } }], active: { row: 0, column: 1 } })
+    resultSelection.set(tab.id, { entry: key(), blocks: [{ kind: 'cells', anchor: { row: 0, column: 1 }, focus: { row: 0, column: 1 } }], active: { row: 0, column: 1 } })
     resultClient.handle(1)!.getCell.mockResolvedValueOnce({ text: '<a><b>', isNull: false, truncated: true, error: false, formatted: false })
     expect(await commands.execute('output.openValue', on('grid'), 'menu')).toBe(true)
     expect(documents.active!.name).toBe('XML_F52E2B61-18A1-11d1-B105-00805F49916B2.xml')
@@ -803,14 +806,14 @@ describe('Query Output commands', () => {
     expect(commands.isEnabled('output.selectAll', on('messages'))).toBe(false)
   })
   it('select every cell from the menu, and from Edit › Select All while the grid has focus', async () => {
-    const { commands, api, resultSelection, tab, on, element } = await ran()
+    const { commands, api, resultSelection, tab, on, element, key } = await ran()
     expect(await commands.execute('output.selectAll', on('grid'), 'menu')).toBe(true)
-    expect(resultSelection.get(tab.id, 0)).toEqual(selectAll(0))
+    expect(resultSelection.get(tab.id, key())).toEqual(selectAll(key()))
     resultSelection.clear(tab.id)
     vi.stubGlobal('document', { activeElement: element('grid') })
     cleanups.push(() => vi.unstubAllGlobals())
     expect(await commands.execute('edit.selectAll', undefined, 'menu')).toBe(true)
-    expect(resultSelection.get(tab.id, 0)).toEqual(selectAll(0))
+    expect(resultSelection.get(tab.id, key())).toEqual(selectAll(key()))
     expect(api.runRole).not.toHaveBeenCalled()
     // A text field's own menu still selects the field's text.
     const input = new FakeElement(fakeDocument(), 'input', { value: 'x' })
@@ -818,7 +821,7 @@ describe('Query Output commands', () => {
     expect(api.runRole.mock.calls).toEqual([['selectAll']])
   })
   it('copy with headers from Ctrl+Shift+C in a focused grid, and leave the key alone elsewhere', async () => {
-    const { commands, api, resultSelection, tab, element } = await ran()
+    const { commands, api, resultSelection, tab, element, block } = await ran()
     resultSelection.set(tab.id, block())
     vi.stubGlobal('document', { activeElement: element('grid') })
     cleanups.push(() => vi.unstubAllGlobals())

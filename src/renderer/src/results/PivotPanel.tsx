@@ -6,7 +6,7 @@ import { sqlTypeLabel } from '../grid/measure'
 import Icon from '../Icon'
 import { aggregateFits, columnGroupLimit, emptyDraft, fitDraft, isNumericColumn, pivotAggregates, pivotColumns, pivotFacts, valueLabel, type PivotDraft } from './pivot'
 import { pivotable } from './PivotService'
-import type { TabResults } from './ResultsService'
+import { entryName, entryOf, type TabResults } from './ResultsService'
 import { formatCount } from './status'
 
 const nameOf = (column: ResultColumn | undefined) => column?.name || '(No column name)'
@@ -24,11 +24,11 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
   const ids = useId()
   if (!state) return null
   const sources = tab.sets.filter(pivotable)
-  const entry = tab.sets[state.source]
+  const entry = entryOf(tab.sets, state.source)
   const columns = entry?.descriptor.columns ?? []
   const draft = entry ? fitDraft(state.draft, columns) : emptyDraft
   const usable = pivotColumns(columns)
-  const sort = entry ? results.sortOf(tabId, entry.index) : undefined
+  const sort = entry ? results.sortOf(tabId, entry.key) : undefined
   const viewed = !!sort?.view
   // A sort or filter still being built: the pivot waits for the rows the grid is about to show.
   const sorting = !!sort && (sort.sorting || sort.stale || !sort.view)
@@ -53,7 +53,7 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
     set({ rows })
   }
   const anyNumeric = usable.some(index => isNumericColumn(columns[index]))
-  const can = !!entry && pivot.canPivot(tabId, entry.index)
+  const can = !!entry && pivot.canPivot(tabId, entry.key)
   const facts = entry ? pivotFacts(entry.descriptor.rowsStored, sort?.view?.rows) : ''
   return <aside className="profile-panel pivot-panel" aria-label="Pivot" aria-busy={state.running || undefined}>
     <div className="profile-head">
@@ -64,9 +64,10 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
     <div className="pivot-body">
       <label className="pivot-field">
         <span>Source</span>
-        <select aria-label="Pivot source" value={state.source} onChange={event => pivot.setSource(tabId, Number(event.target.value))}>
-          {!sources.includes(entry!) && <option value={state.source}>{entry?.label ?? `Result ${state.source + 1}`}</option>}
-          {sources.map(item => <option key={item.index} value={item.index}>{item.label ?? `Result ${item.index + 1}`}</option>)}
+        <select aria-label="Pivot source" value={state.source ?? ''} onChange={event => pivot.setSource(tabId, event.target.value)}>
+          {/* A set that cannot be pivoted now, or one a new run has yet to return, is still named. */}
+          {!sources.includes(entry!) && <option value={state.source ?? ''}>{entry ? entryName(entry) : state.sourceNumber === undefined ? '' : `Result ${state.sourceNumber}`}</option>}
+          {sources.map(item => <option key={item.key} value={item.key}>{entryName(item)}</option>)}
         </select>
       </label>
       <section className="pivot-section" aria-labelledby={ids + 'rows'}>

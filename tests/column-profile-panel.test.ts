@@ -24,12 +24,13 @@ function fixture(columns = 40) {
     profile: vi.fn((cols: number[], signal?: AbortSignal) => new Promise<ResultsProfileResult>((resolve, reject) => { asked.push({ columns: cols, signal, resolve, reject }) }))
   }
   const descriptor = { columns: Array.from({ length: columns }, (_, index) => ({ name: 'c' + index, dataType: 'int' })) }
-  const tab = { sets: [{ index: 0, descriptor, handle }] } as unknown as TabResults
-  const results = { subscribe: () => () => {}, getSnapshot: () => 0, sortOf: () => undefined }
+  const tab = { sets: [{ key: 'e1', number: 1, descriptor, handle }, { key: 'e2', number: 2, descriptor: { columns: [] }, handle }] } as unknown as TabResults
+  // The panel is told which grid took the focus; the one the stack names (the second) is not asked for.
+  const results = { subscribe: () => () => {}, getSnapshot: () => 0, sortOf: () => undefined, focusedEntry: () => tab.sets[1] }
   const workbench = { results, commands: { execute: vi.fn(async () => true) } } as unknown as Workbench
   const container = document.createElement('div')
   const root = createRoot(container)
-  act(() => { root.render(createElement(WorkbenchProvider, { workbench, children: createElement(ColumnProfilePanel, { tabId: 't', tab, index: 0 }) })) })
+  act(() => { root.render(createElement(WorkbenchProvider, { workbench, children: createElement(ColumnProfilePanel, { tabId: 't', tab, shown: 'e1' }) })) })
   const answer = async (at: number, rows: number, nulls: number) => {
     const request = asked[at]
     await act(async () => { request.resolve({ rows, complete: snapshot.state === 'complete', columns: request.columns.map(column => profileOf(column, rows, nulls)) }) })

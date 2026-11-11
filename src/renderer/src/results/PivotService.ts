@@ -2,14 +2,16 @@ import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import type { ResultColumn } from '../../../shared/contracts'
 import { draftSpec, emptyDraft, fitDraft as fitColumns, remapDraft, type PivotDraft, type PivotInfo } from './pivot'
-import type { EntryKey, EntryRef, ResultSetEntry, ResultsService, TabResults } from './ResultsService'
-import { entryIndex, entryName, entryOf, resultLimits, setKey } from './ResultsService'
+import type { EntryKey, ResultSetEntry, ResultsService, TabResults } from './ResultsService'
+import { entryName, entryOf, resultLimits, setKey } from './ResultsService'
 
-/** One tab's pivot panel: whether it shows, the set it pivots (`source`, its place in the stack, derived from the entry the
- *  service follows), the draft, and the pivot running or the last failure. */
+/** One tab's pivot panel: whether it shows, the set it pivots (`source`: the key of the run's entry the service follows,
+ *  undefined while the run does not have it), the draft, and the pivot running or the last failure. */
 export interface PivotTab {
   readonly open: boolean
-  readonly source: number
+  readonly source: EntryKey | undefined
+  /** The number of the original result the panel follows, which names it while a new run has yet to return it. */
+  readonly sourceNumber?: number
   readonly draft: PivotDraft
   readonly running: boolean
   readonly error?: string
@@ -25,6 +27,9 @@ type Results = Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'so
  *  over, or a derived entry (another pivot) by its key. */
 type Source = { readonly ordinal: number } | { readonly key: EntryKey }
 const sourceOf = (entry: ResultSetEntry): Source => entry.ordinal === undefined ? { key: entry.key } : { ordinal: entry.ordinal }
+/** The entry of a run a panel follows, if the run has it. */
+const followed = (sets: readonly ResultSetEntry[], source: Source | undefined): ResultSetEntry | undefined =>
+  source === undefined ? undefined : 'key' in source ? entryOf(sets, source.key) : sets.find(entry => entry.ordinal === source.ordinal)
 
 /** A set a pivot can read: rows (a query's, or another pivot's) that have all loaded. */
 export const pivotable = (entry: ResultSetEntry | undefined): boolean =>
@@ -43,7 +48,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
   private readonly runs = new Map<string, string>()
   /** The columns each tab's draft was last fitted to: a draft follows its columns by name when they move. */
   private readonly fitted = new Map<string, readonly ResultColumn[]>()
-  /** The entry each tab's panel pivots; the snapshot's `source` is where it stands. */
+  /** The entry each tab's panel pivots; the snapshot's `source` is its key in the run shown. */
   private readonly sources = new Map<string, Source>()
   private readonly unsubscribe: () => void
 
@@ -54,16 +59,16 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
   }
 
   /** Opens the panel on a grid's set (the one the command named or that has the focus). */
-  open(tabId: string, ref: EntryRef): void {
+  open(tabId: string, key: EntryKey): void {
     const tab = this.results.getSnapshot()[tabId]
     if (!tab) return
     const current = this.getSnapshot().tabs[tabId]
-    const entry = entryOf(tab.sets, ref), index = entry?.index ?? (typeof ref === 'number' ? ref : -1)
-    const source = entry && pivotable(entry) ? index : current?.source ?? index
+    const entry = entryOf(tab.sets, key)
+    // A grid that cannot be pivoted (a diff, one still loading) leaves the panel on the set it had.
+    const source = entry && pivotable(entry) ? entry.key : current?.source ?? entry?.key
     const draft = current && current.source === source ? current.draft : emptyDraft
     this.runs.set(tabId, tab.queryId)
-    this.follow(tabId, tab, source)
-    this.update(tabId, { open: true, source, draft: this.fit(tabId, source, draft), running: this.running.has(tabId), error: undefined })
+    this.update(tabId, { open: true, ...this.follow(tabId, tab, source), draft: this.fit(tabId, source, draft), running: this.running.has(tabId), error: undefined })
   }
 
   close(tabId: string): void {
@@ -72,12 +77,10 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
   }
 
   /** Points the panel at another set of the run; the draft is kept as far as the set's columns allow. */
-  setSource(tabId: string, ref: EntryRef): void {
+  setSource(tabId: string, key: EntryKey): void {
     const current = this.getSnapshot().tabs[tabId], tab = this.results.getSnapshot()[tabId]
-    const index = typeof ref === 'number' ? ref : tab ? entryIndex(tab.sets, ref) : -1
-    if (!current || current.source === index || index < 0) return
-    if (tab) this.follow(tabId, tab, index)
-    this.update(tabId, { ...current, source: index, draft: this.fit(tabId, index, current.draft), error: undefined })
+    if (!current || !tab || current.source === key || !entryOf(tab.sets, key)) return
+    this.update(tabId, { open: current.open, ...this.follow(tabId, tab, key), draft: this.fit(tabId, key, current.draft), running: current.running })
   }
 
   setDraft(tabId: string, draft: PivotDraft): void {
@@ -87,8 +90,8 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
 
   /** Whether a grid's set can be pivoted now: its run has ended, its rows have all loaded, its grid's sort or filter is built
    *  (as Save Results As waits for it: the pivot reads the rows the grid shows), and no pivot runs in its tab. */
-  canPivot(tabId: string, ref: EntryRef): boolean {
-    const tab = this.results.getSnapshot()[tabId], entry = entryOf(tab?.sets, ref)
+  canPivot(tabId: string, key: EntryKey | undefined): boolean {
+    const tab = this.results.getSnapshot()[tabId], entry = entryOf(tab?.sets, key)
     const sort = entry && this.results.sortOf(tabId, entry.key)
     return !!tab && tab.status !== 'running' && tab.status !== 'closed' && !this.running.has(tabId) && pivotable(entry)
       && !(sort && (sort.sorting || sort.stale || !sort.view))
@@ -98,8 +101,8 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
   async run(tabId: string): Promise<void> {
     const state = this.getSnapshot().tabs[tabId]
     const tab = this.results.getSnapshot()[tabId]
-    if (!state || !tab || !this.canPivot(tabId, state.source)) return
-    const entry = tab.sets[state.source]
+    const entry = entryOf(tab?.sets, state?.source)
+    if (!state || !tab || !entry || !this.canPivot(tabId, entry.key)) return
     const sort = this.results.sortOf(tabId, entry.key)
     // The grid's view when it shows one: the pivot reads its rows as the grid shows them.
     const handle = sort?.view ?? entry.handle
@@ -123,10 +126,8 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
         }
         return
       }
-      // Where the source stands now: an entry before it may have gone while the pivot was built.
-      const at = entryIndex(this.results.getSnapshot()[tabId]?.sets ?? [], entry.key, entry.index)
       const info: PivotInfo = {
-        source: at < 0 ? entry.index : at, sourceLabel, viewed: !!sort?.view, rows: result.rows, rowGroups: result.rowGroups,
+        source: entry.key, sourceLabel, viewed: !!sort?.view, rows: result.rows, rowGroups: result.rowGroups,
         columnGroups: result.columnGroups, approximate: result.approximate
       }
       const snapshot = this.getSnapshot()
@@ -152,23 +153,16 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     this.clearListeners()
   }
 
-  /** The panel follows the entry that stands at `index` now. */
-  private follow(tabId: string, tab: TabResults, index: number): void {
-    const entry = tab.sets[index]
-    if (entry) this.sources.set(tabId, sourceOf(entry))
-    else this.sources.delete(tabId)
+  /** The panel follows the entry `key` from now on; what the snapshot says of it. */
+  private follow(tabId: string, tab: TabResults, key: EntryKey | undefined): Pick<PivotTab, 'source' | 'sourceNumber'> {
+    const entry = entryOf(tab.sets, key)
+    if (!entry) { this.sources.delete(tabId); return { source: undefined } }
+    this.sources.set(tabId, sourceOf(entry))
+    return { source: entry.key, ...entry.ordinal === undefined ? {} : { sourceNumber: entry.ordinal } }
   }
 
-  /** Where the entry a panel follows stands in a run, or -1 when the run does not have it. */
-  private place(tabId: string, tab: TabResults, hint: number): number {
-    const source = this.sources.get(tabId)
-    if (!source) return -1
-    if ('key' in source) return entryIndex(tab.sets, source.key, hint)
-    return tab.sets[hint]?.ordinal === source.ordinal ? hint : tab.sets.findIndex(entry => entry.ordinal === source.ordinal)
-  }
-
-  private fit(tabId: string, source: number, draft: PivotDraft): PivotDraft {
-    const columns = this.results.getSnapshot()[tabId]?.sets[source]?.descriptor.columns
+  private fit(tabId: string, source: EntryKey | undefined, draft: PivotDraft): PivotDraft {
+    const columns = entryOf(this.results.getSnapshot()[tabId]?.sets, source)?.descriptor.columns
     if (!columns) return draft
     const previous = this.fitted.get(tabId)
     this.fitted.set(tabId, columns)
@@ -196,29 +190,24 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       const run = snapshot[tabId]
       if (!run) { tabs ??= { ...current.tabs }; delete tabs[tabId]; this.runs.delete(tabId); this.fitted.delete(tabId); this.sources.delete(tabId); continue }
       let next = tab
-      // The set it pivots is an entry, not a place: when entries before it came or went, `source` follows it. An entry the
-      // run does not have (a derived one after a re-run, an original the run has yet to return) leaves `source` where it was.
-      const placed = this.place(tabId, run, tab.source)
-      if (placed >= 0 && placed !== tab.source) next = { ...next, source: placed }
-      // The entry went while its run stayed: the panel does not take up whatever moved into its place.
-      const gone = placed < 0 && this.sources.has(tabId) && this.runs.get(tabId) === run.queryId && run.status !== 'running'
       // A new run keeps the draft (a re-run of the same query pivots the same way) and the set it pivots; the draft is fitted
       // to the set when it runs.
       if (this.runs.get(tabId) !== run.queryId) {
         this.runs.set(tabId, run.queryId)
-        next = { open: tab.open, source: tab.source, draft: tab.draft, running: false }
+        next = { open: tab.open, source: tab.source, ...tab.sourceNumber === undefined ? {} : { sourceNumber: tab.sourceNumber }, draft: tab.draft, running: false }
       }
-      // Once the run has ended without that set (or it is a diff), the panel moves to the first set it can pivot.
-      const entry = run.sets[next.source]
-      if (run.status !== 'running' && (gone || !entry || entry.descriptor.kind === 'diff')) {
-        const first = run.sets.findIndex(item => item.descriptor.kind === 'rows' || item.descriptor.kind === 'pivot')
-        if (first >= 0 && first !== next.source) next = { ...next, source: first }
+      // The set it pivots is an entry, not a place: an original result is found again by its number in a new run, a derived
+      // one only by its key, in the run that made it.
+      let entry = followed(run.sets, this.sources.get(tabId))
+      // Once the run has ended without that set (or it is a diff), the panel moves to the first set it can pivot. While the
+      // run goes on, a result it has yet to return keeps the panel.
+      if (run.status !== 'running' && (!entry || entry.descriptor.kind === 'diff')) {
+        const first = run.sets.find(item => item.descriptor.kind === 'rows' || item.descriptor.kind === 'pivot')
+        if (first) { entry = first; next = { open: next.open, ...this.follow(tabId, run, first.key), draft: next.draft, running: next.running, ...next.error ? { error: next.error } : {} } }
       }
-      // Once the run has ended the panel follows whatever stands at its place: the set it moved to, or the one a re-run
-      // put where a derived entry stood.
-      if (placed !== next.source && (placed >= 0 || run.status !== 'running')) this.follow(tabId, run, next.source)
+      if (next.source !== entry?.key) next = { ...next, source: entry?.key }
       // Once the set's columns are known the draft follows them by name, so a re-run that moves them keeps what it grouped.
-      const columns = run.sets[next.source]?.descriptor.columns
+      const columns = entry?.descriptor.columns
       if (columns && this.fitted.get(tabId) !== columns) next = { ...next, draft: this.fit(tabId, next.source, next.draft) }
       if (next !== tab) { tabs ??= { ...current.tabs }; tabs[tabId] = next }
     }

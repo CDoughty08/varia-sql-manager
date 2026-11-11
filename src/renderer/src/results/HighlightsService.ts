@@ -6,7 +6,7 @@ import type { Disposable } from '../core/types'
 import type { RowHighlights } from '../grid/highlights'
 import { resolveBlocks } from '../grid/selection'
 import type { ResultHandle } from './ResultClient'
-import { entryOf, type EntryKey, type EntryRef, type ResultSetEntry, type ResultsService, type TabResults } from './ResultsService'
+import { entryOf, type EntryKey, type ResultSetEntry, type ResultsService, type TabResults } from './ResultsService'
 import { formatCount } from './status'
 
 /** One result set's highlights as the grid and its strip show them. */
@@ -28,23 +28,15 @@ export interface SetHighlights {
   /** The rows to draw, one set per handle the grid may show (the result's, and its sorted view's). */
   readonly rows: readonly RowHighlights[]
 }
-/** Each tab's highlights by set index, for the grids: derived from the entries they belong to each time it is built. */
-export type HighlightsSnapshot = Readonly<Record<string, ReadonlyMap<number, SetHighlights>>>
+/** Each tab's highlights by entry key, for the grids: those of the entries its run has now. */
+export type HighlightsSnapshot = Readonly<Record<string, ReadonlyMap<EntryKey, SetHighlights>>>
 /** What a set of highlights belongs to: an original result's number in its run (a number), which the next run's result of
  *  that number takes over, or a derived entry's key (a string), which goes with that entry. */
 type Owner = number | EntryKey
 const ownerOf = (entry: ResultSetEntry): Owner => entry.ordinal ?? entry.key
-/** The entry that has an owner's highlights now. An original result stands at its number less one unless an entry before
- *  it went, so the list is searched only then. */
+/** The entry that has an owner's highlights now: the run's original result of that number, or the derived entry itself. */
 function owned(sets: readonly ResultSetEntry[], owner: Owner): ResultSetEntry | undefined {
-  if (typeof owner === 'string') return entryOf(sets, owner)
-  return sets[owner - 1]?.ordinal === owner ? sets[owner - 1] : sets.find(entry => entry.ordinal === owner)
-}
-/** The set index an owner's highlights are published at, or -1: where its entry stands; an original result this run has
- *  not returned (yet) keeps the place its number names while no other entry stands there. */
-function placeOf(sets: readonly ResultSetEntry[], owner: Owner): number {
-  const entry = owned(sets, owner)
-  return entry ? entry.index : typeof owner === 'number' && !sets[owner - 1] ? owner - 1 : -1
+  return typeof owner === 'string' ? entryOf(sets, owner) : sets.find(entry => entry.ordinal === owner)
 }
 
 /** How a set's highlights tell rows apart, chosen when its first row is highlighted and kept through re-runs. A column is
@@ -89,8 +81,8 @@ interface Marks {
   bound?: Binding
   /** Bumped by every change of `colors`; a handle's rows are found again for a newer one. */
   version: number
-  /** The set index the highlights were last published at (-1: none), so they are published again when their entry moves. */
-  at: number
+  /** The entry the highlights were last published for (undefined: none), so they are published again when another has them. */
+  at: EntryKey | undefined
   /** Rows found per handle, and the version they were found for. */
   readonly found: Map<ResultHandle, { readonly version: number; readonly rows: RowHighlights; readonly marks: number; readonly truncated: boolean }>
   /** Searches in flight, by handle. */
@@ -134,26 +126,26 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
   }
 
   /** Whether a grid's rows can be highlighted: its set has every row and is still held. */
-  canHighlight(tabId: string, ref: EntryRef): boolean { return complete(this.entry(tabId, ref)) }
+  canHighlight(tabId: string, key: EntryKey): boolean { return complete(this.entry(tabId, key)) }
 
   /** Whether a grid has highlights (Clear All Highlights). */
-  hasHighlights(tabId: string, ref: EntryRef): boolean {
-    const entry = this.entry(tabId, ref)
+  hasHighlights(tabId: string, key: EntryKey): boolean {
+    const entry = this.entry(tabId, key)
     return !!entry && (this.tabs.get(tabId)?.get(ownerOf(entry))?.colors.size ?? 0) > 0
   }
 
   /** The rows a grid draws (GridView.setHighlights). */
-  rowsFor(tabId: string, ref: EntryRef): readonly RowHighlights[] {
-    const entry = this.entry(tabId, ref)
-    return (entry && this.getSnapshot()[tabId]?.get(entry.index)?.rows) ?? []
+  rowsFor(tabId: string, key: EntryKey): readonly RowHighlights[] {
+    const entry = this.entry(tabId, key)
+    return (entry && this.getSnapshot()[tabId]?.get(entry.key)?.rows) ?? []
   }
 
   /**
    * Highlights the grid's selected rows with `color` (1-based), or takes their highlight away with 0. A colour every selected
    * row already has is taken away instead, so the same command turns it off. Resolves once the grid can draw the change.
    */
-  async highlight(tabId: string, ref: EntryRef, color: number): Promise<void> {
-    const entry = this.entry(tabId, ref)
+  async highlight(tabId: string, key: EntryKey, color: number): Promise<void> {
+    const entry = this.entry(tabId, key)
     if (!entry) return
     const index = ownerOf(entry)
     // The user acting is a reason to search again for rows a failed search did not find: at once, unless the command
@@ -210,8 +202,8 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
   }
 
   /** Takes every highlight off a grid. */
-  clear(tabId: string, ref: EntryRef): void {
-    const entry = this.entry(tabId, ref), index = entry && ownerOf(entry)
+  clear(tabId: string, key: EntryKey): void {
+    const entry = this.entry(tabId, key), index = entry && ownerOf(entry)
     const marks = index === undefined ? undefined : this.tabs.get(tabId)?.get(index)
     if (!marks || index === undefined) return
     marks.bound?.abort.abort()
@@ -229,7 +221,7 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
   }
 
   /** The entry a grid's reference names, in the results as last published. */
-  private entry(tabId: string, ref: EntryRef): ResultSetEntry | undefined { return entryOf(this.results.getSnapshot()[tabId]?.sets, ref) }
+  private entry(tabId: string, key: EntryKey): ResultSetEntry | undefined { return entryOf(this.results.getSnapshot()[tabId]?.sets, key) }
   /** The entry that has an owner's highlights now. */
   private owned(tabId: string, owner: Owner): ResultSetEntry | undefined {
     const sets = this.results.getSnapshot()[tabId]?.sets
@@ -242,7 +234,7 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
     let sets = this.tabs.get(tabId)
     if (!sets && create) this.tabs.set(tabId, sets = new Map())
     let marks = sets?.get(index)
-    if (!marks && create) sets!.set(index, marks = { colors: new Map(), version: 0, at: -1, found: new Map(), finding: new Map(), failed: new Map(), retries: 0 })
+    if (!marks && create) sets!.set(index, marks = { colors: new Map(), version: 0, at: undefined, found: new Map(), finding: new Map(), failed: new Map(), retries: 0 })
     return marks
   }
 
@@ -362,7 +354,7 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
           changed = true
           continue
         }
-        if (placeOf(tab.sets, index) !== marks.at) changed = true
+        if (entry?.key !== marks.at) changed = true
         // Its result went (it was closed, or a new run began): what was asked of that result lands nowhere and says
         // nothing. The highlights stay for the next result of that number, which binds them again.
         if (!entry && marks.bound) {
@@ -397,14 +389,15 @@ export class HighlightsService extends SnapshotStore<HighlightsSnapshot> impleme
   }
 
   private build(): HighlightsSnapshot {
-    const next: Record<string, ReadonlyMap<number, SetHighlights>> = {}
+    const next: Record<string, ReadonlyMap<EntryKey, SetHighlights>> = {}
     const results = this.results.getSnapshot()
     for (const [tabId, sets] of this.tabs) {
-      const shown = new Map<number, SetHighlights>()
+      const shown = new Map<EntryKey, SetHighlights>()
       const entries = results[tabId]?.sets ?? []
       for (const [owner, marks] of sets) {
-        const index = marks.at = placeOf(entries, owner)
-        if (index < 0 || (marks.colors.size === 0 && !marks.by)) continue
+        // Highlights kept for a result this run has not returned (yet) are drawn nowhere until it does.
+        const index = marks.at = owned(entries, owner)?.key
+        if (index === undefined || (marks.colors.size === 0 && !marks.by)) continue
         const found = [...marks.found.values()]
         const base = marks.bound && marks.found.get(marks.bound.handle)
         const by = marks.by ? ('column' in marks.by ? marks.by.column || '(No column name)' : '') : undefined

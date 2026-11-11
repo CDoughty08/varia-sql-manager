@@ -6,7 +6,7 @@ import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { trapFocus } from '../trap-focus'
 import { blocksToDrop, checklistCondition, columnFilterKind, listWindow, type ColumnCondition } from './column-filter'
 import type { DistinctList } from './ResultClient'
-import type { ResultsService } from './ResultsService'
+import type { EntryKey, ResultsService } from './ResultsService'
 import { formatCount, plural } from './status'
 
 export interface ColumnFilterTarget { readonly column: number; readonly anchor: DOMRect }
@@ -62,11 +62,11 @@ export interface ColumnFilterSource {
 }
 
 /** A results grid's funnel source: the backend's distinct snapshot of the result and ResultsService's view filters. */
-export function resultsFilterSource(results: Pick<ResultsService, 'columnValues' | 'applyColumnFilter' | 'sortOf'>, tabId: string, index: number): ColumnFilterSource {
+export function resultsFilterSource(results: Pick<ResultsService, 'columnValues' | 'applyColumnFilter' | 'sortOf'>, tabId: string, entry: EntryKey): ColumnFilterSource {
   return {
-    columnValues: (column, o) => results.columnValues(tabId, index, column, o),
-    apply: (column, condition) => results.applyColumnFilter(tabId, index, column, condition),
-    ranged: column => !!results.sortOf(tabId, index)?.filters.some(item => columnFilterKind(item.filter, column) === 'between')
+    columnValues: (column, o) => results.columnValues(tabId, entry, column, o),
+    apply: (column, condition) => results.applyColumnFilter(tabId, entry, column, condition),
+    ranged: column => !!results.sortOf(tabId, entry)?.filters.some(item => columnFilterKind(item.filter, column) === 'between')
   }
 }
 

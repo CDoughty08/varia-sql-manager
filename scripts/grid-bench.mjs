@@ -6,7 +6,7 @@ import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { within } from './fixtures/smoke.mjs'
-import { backendReady, documentTabs, gridCell, gridCellSelector, gridPart, jobNotice, outputPane, outputStatus, part, statusBar, toolbarButton } from './fixtures/ui.mjs'
+import { backendReady, documentTabs, gridCell, gridCellSelector, gridPart, jobNotice, outputPane, outputStatus, part, resultGrid, resultGridSelector, statusBar, toolbarButton } from './fixtures/ui.mjs'
 
 // End-to-end results grid benchmarks (npm run bench:grid): the built app in test mode at 1600 × 1000 (or the screen, if
 // smaller), its grids fed by the fake backend's synthetic sets (tests/fixtures/backend.mjs, `-- varia-fake:` scripts).
@@ -48,7 +48,7 @@ const random = (seed => () => {
 
 const textbox = () => page.locator('.monaco-editor [role="textbox"]')
 const status = () => outputStatus(page)
-const grid = (index = 0) => page.locator(`[data-result-grid][data-result-index="${index}"]`)
+const grid = (name = 'Result 1') => resultGrid(page, name)
 const cell = (row, column) => gridCell(grid(), row, column)
 const stats = () => page.evaluate(() => window.__variaGrid.stats())
 const resetStats = () => page.evaluate(() => window.__variaGrid.reset())
@@ -82,10 +82,10 @@ async function launch(env) {
   await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
   // The fake backend (VARIA_TEST_BACKEND) says its runtime is 'fake'; the Release backend names its .NET.
   await backendReady(page, env.VARIA_TEST_BACKEND ? 'fake' : undefined).waitFor({ timeout: 60000 })
-  await page.evaluate(gridPart => {
-    /** What grid 0 shows: its first row and column in view, how many cells in view still load, and how many rows show. */
+  await page.evaluate(({ gridPart, first }) => {
+    /** What the first result's grid shows: its first row and column in view, how many cells in view still load, and how many rows show. */
     window.__benchView = () => {
-      const root = document.querySelector('[data-result-grid][data-result-index="0"]')
+      const root = document.querySelector(first)
       if (!root) return { signature: '', loading: 0, rows: 0 }
       const body = root.querySelector(gridPart.scroller).getBoundingClientRect(), head = root.querySelector(gridPart.head).getBoundingClientRect()
       const corner = root.querySelector(gridPart.corner).getBoundingClientRect()
@@ -103,7 +103,7 @@ async function launch(env) {
       }
       return { signature: `${firstRow}:${firstColumn}`, loading, rows }
     }
-  }, gridPart)
+  }, { gridPart, first: resultGridSelector() })
 }
 
 async function close() {
@@ -115,7 +115,7 @@ async function close() {
 
 /** Moves grid 0's scroll bars to fractions of their range and resolves, in ms, once the rows there are painted. */
 const jump = (top, left) => page.evaluate(async ({ top, left, part }) => {
-  const scroller = document.querySelector('[data-result-grid][data-result-index="0"] ' + part)
+  const scroller = document.querySelector(part)
   const before = window.__benchView().signature, started = performance.now()
   scroller.scrollTop = top * (scroller.scrollHeight - scroller.clientHeight)
   if (left !== null) scroller.scrollLeft = left * (scroller.scrollWidth - scroller.clientWidth)
@@ -125,7 +125,7 @@ const jump = (top, left) => page.evaluate(async ({ top, left, part }) => {
     if (now.signature !== before && now.rows > 0 && now.loading === 0) return performance.now() - started
     if (performance.now() - started > 15000) throw new Error(`Grid 0 did not paint after a jump to ${top}, ${left}: ${JSON.stringify(now)}.`)
   }
-}, { top, left: left ?? null, part: gridPart.scroller })
+}, { top, left: left ?? null, part: `${resultGridSelector()} ${gridPart.scroller}` })
 /** Fractions at least `gap` from the previous one, so every jump moves the rows in view. */
 function fractions(count, gap) {
   const list = []
@@ -326,7 +326,7 @@ try {
     await page.evaluate(value => window.__variaGrid.setScrollCap(value), cap)
     const result = await page.evaluate(async ({ label, scrollerPart }) => {
       const frame = () => new Promise(done => requestAnimationFrame(done))
-      const scroller = document.querySelector('[data-result-grid][data-result-index="0"] ' + scrollerPart)
+      const scroller = document.querySelector(scrollerPart)
       scroller.scrollTop = 0
       scroller.scrollLeft = 0
       for (let index = 0; index < 5; index++) await frame()
@@ -344,7 +344,7 @@ try {
       }
       const start = window.__benchSegments.findLast(item => item.name === label).at
       return { intervals, rows: Number(window.__benchView().signature.split(':')[0]), long: window.__benchLongTasks.filter(task => task.at >= start && task.ms > 50).map(task => task.ms) }
-    }, { label: name, scrollerPart: gridPart.scroller })
+    }, { label: name, scrollerPart: `${resultGridSelector()} ${gridPart.scroller}` })
     await page.evaluate(() => window.__variaGrid.setScrollCap())
     if (!(result.rows > 1000)) throw new Error(`${name}: the grid scrolled to row ${result.rows} only.`)
     wheelLongTasks.push(...result.long)
@@ -367,7 +367,7 @@ try {
   await segment('300 columns: across')
   await resetStats()
   const steps = await page.evaluate(async scrollerPart => {
-    const scroller = document.querySelector('[data-result-grid][data-result-index="0"] ' + scrollerPart)
+    const scroller = document.querySelector(scrollerPart)
     let count = 0
     while (scroller.scrollLeft < scroller.scrollWidth - scroller.clientWidth - 1) {
       scroller.scrollLeft += 120
