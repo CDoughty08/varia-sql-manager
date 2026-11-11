@@ -36,6 +36,8 @@ export interface SearchQueryState {
   readonly types: readonly SearchType[]
   /** A database-menu search is scoped until its chip is cleared or its server changes. */
   readonly database?: string
+  /** The most hits each server answers, when fewer than the backend's default will do. */
+  readonly limit?: number
 }
 /** One server's part of an All servers search: its answer, or why it has none. */
 export interface ServerAnswer {
@@ -98,6 +100,10 @@ export interface ObjectSearchOptions {
 export const searchTitle = 'Search Objects'
 /** The search Object Explorer's box runs: the same search as a tab's, on the server of the explorer's selection. */
 export const explorerSearchId = 'explorer'
+/** The header's Search (Ctrl+Q): the same search again, by name on every connected server, while its widget is open with text. */
+export const quickSearchId = 'quick'
+/** The hits each server answers the header's Search: the rest are a Search Objects tab away. */
+export const quickSearchHits = 50
 /** A list's selected hit: its search, the search's server, and the hit's index in the result. */
 export interface FocusedHit { readonly searchId: string; readonly connectionId: string; readonly index: number; readonly hit: ObjectSearchHit }
 
@@ -231,7 +237,8 @@ const live = (connection: LiveConnection | undefined): connection is LiveConnect
  * unless Options says not to), shows its progress in the status bar, and runs each Search Objects tab's searches
  * (explorer.search) as the user types. The index itself lives only in the backend's memory; the page keeps the hits of the
  * last search per tab. A build starts when a server connects (Options › Index objects when a server connects), or when a
- * tab first searches a server that has none.
+ * search is opened on a server that has none while that option is on. With it off nothing builds an index but the user:
+ * Build index in the search, or Rebuild Search Index.
  */
 export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> implements CustomDocumentProvider, Disposable {
   readonly kind = 'objectSearch' as const
@@ -289,13 +296,13 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
 
   /**
    * Opens a Search Objects tab on the server (the first connected one when none is named), with `text` if given; `allServers`
-   * searches every connected server instead, and the tab belongs to none of them.
+   * searches every connected server instead, and the tab belongs to none of them. `fuzzy` opens it with Fuzzy Match on.
    */
-  open(connectionId?: string, text?: string, allServers = false, database?: string): string | undefined {
+  open(connectionId?: string, text?: string, allServers = false, database?: string, fuzzy = false): string | undefined {
     const connection = connectionId ? this.o.connections.get(connectionId) : this.o.connections.getSnapshot().find(live)
     if (!live(connection)) throw new Error('Connect to a server to search its objects.')
     const document = this.o.documents.openCustom('objectSearch', searchTitle, allServers ? undefined : connection.id, 'master')
-    this.putDocument({ id: document.id, connectionId: connection.id, ...emptyQuery, ...text ? { text } : {}, ...allServers ? { allServers: true } : database !== undefined ? { database } : {} })
+    this.putDocument({ id: document.id, connectionId: connection.id, ...emptyQuery, ...fuzzy ? { fuzzy } : {}, ...text ? { text } : {}, ...allServers ? { allServers: true } : database !== undefined ? { database } : {} })
     for (const id of allServers ? this.liveIds() : [connection.id]) this.ensureIndex(id)
     if (text) void this.search(document.id)
     this.o.focus?.(document.id)
@@ -304,7 +311,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
 
   /**
    * Points Object Explorer's box at a server: the one its selection is on, or the first connected one. Its text and options
-   * stay; a server with no index yet gets one. With no server connected the box keeps its text for the next one.
+   * stay; a server with no index yet gets one (ensureIndex). With no server connected the box keeps its text for the next one.
    */
   followExplorer(connectionId: string | undefined): void {
     if (this.disposed) return
@@ -313,10 +320,27 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const current = this.getSnapshot().documents[explorerSearchId]
     if (!current) {
       this.putDocument({ id: explorerSearchId, connectionId: target, ...emptyQuery })
-      const entry = this.getSnapshot().indexes[target]
-      if (!entry?.status && !entry?.requestId) this.build(target)
+      this.ensureIndex(target)
     } else this.setConnection(explorerSearchId, target)
   }
+
+  /**
+   * The header's Search asks for `text`: names only, approximately too (Fuzzy Match), on every connected server, after the
+   * same pause in typing as a tab's. Nothing is asked before there is text, and it never builds an index: a server without
+   * one answers no hits until the user builds it (Build index in Search Objects, or Rebuild Search Index).
+   */
+  quickSearch(text: string): void {
+    if (this.disposed) return
+    const current = this.getSnapshot().documents[quickSearchId]
+    if (!current) {
+      const connectionId = this.liveIds()[0]
+      if (!text.trim() || !connectionId) return
+      this.putDocument({ id: quickSearchId, connectionId, ...emptyQuery, scope: 'names', fuzzy: true, limit: quickSearchHits, allServers: true })
+    } else if (current.text === text) return
+    this.setQuery(quickSearchId, { text })
+  }
+  /** The header's Search closed: its search is cancelled and forgotten. */
+  endQuickSearch(): void { this.closed(quickSearchId) }
 
   /** Search in Object Explorer: the box takes focus once it is shown. */
   focusPane(): void {
@@ -500,14 +524,15 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
 
   private query(document: SearchDocumentState): SearchQueryState {
     return { text: document.text, caseSensitive: document.caseSensitive, wholeWord: document.wholeWord, regex: document.regex, fuzzy: document.fuzzy, scope: document.scope, types: document.types,
-      ...document.database !== undefined ? { database: document.database } : {} }
+      ...document.database !== undefined ? { database: document.database } : {}, ...document.limit !== undefined ? { limit: document.limit } : {} }
   }
 
   private ask(connectionId: string, requestId: string, asked: SearchQueryState) {
     const kinds = searchTypeKinds(asked.types)
     return this.o.api.explorerSearch({
       connectionId, requestId, text: asked.text, caseSensitive: asked.caseSensitive, wholeWord: asked.wholeWord, regex: asked.regex, in: asked.scope, ...kinds ? { kinds } : {},
-      ...asked.fuzzy && !asked.regex ? { match: 'fuzzy' as const } : {}, ...asked.database !== undefined ? { database: asked.database } : {}
+      ...asked.fuzzy && !asked.regex ? { match: 'fuzzy' as const } : {}, ...asked.database !== undefined ? { database: asked.database } : {},
+      ...asked.limit !== undefined ? { limit: asked.limit } : {}
     })
   }
 
@@ -623,8 +648,13 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
 
   private liveIds(): string[] { return this.o.connections.getSnapshot().filter(live).map(connection => connection.id) }
 
-  /** Builds a server's index when it has none and none is building. */
+  /**
+   * Builds a server's index when it has none and none is building, while Options › Index objects when a server connects is
+   * on (a server that connected while it was off, say). With it off the user chose not to have builds start on their own,
+   * so opening or pointing a search at a server builds nothing: the search says the server has no index and offers to build it.
+   */
   private ensureIndex(connectionId: string): void {
+    if (!this.o.settings.get('objectExplorer.search.indexOnConnect')) return
     const entry = this.getSnapshot().indexes[connectionId]
     if (!entry?.status && !entry?.requestId) this.build(connectionId)
   }
@@ -658,7 +688,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     // A server that connects joins every All servers search (with an index if it has none), asked on its own; one that leaves
     // drops out of it, and the search runs again to name it.
     const spanning = Object.values(this.getSnapshot().documents).filter(document => document.allServers)
-    if (spanning.length) for (const id of ids) this.ensureIndex(id)
+    // The header's Search spans the servers too, but builds nothing.
+    if (spanning.some(document => document.id !== quickSearchId)) for (const id of ids) this.ensureIndex(id)
     for (const document of spanning) {
       if (!document.text.trim()) continue
       if (departed) void this.search(document.id)

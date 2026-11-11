@@ -179,7 +179,8 @@ being true.
   plan guide and server trigger text). It indexes Microsoft-shipped objects too; the resource
   database's (negative ids, from `sys.all_objects` and `sys.all_sql_modules`) are read once per build and shared across
   connections by fingerprint in `ResourceCatalog`, which interns their definitions. Object Explorer's search box and the
-  Search Objects tab are one search (`SearchPanel`, `ObjectSearchService`); the tree has no filter of loaded rows. Regex runs only `NonBacktracking` with a match timeout, and
+  Search Objects tab are one search (`SearchPanel`, `ObjectSearchService`), and the header's Search (Ctrl+Q) lists objects only
+  from it (`quickSearch`, shown through the quick input's `setAnswer`); the tree has no filter or listing of loaded rows. Regex runs only `NonBacktracking` with a match timeout, and
   a database the build cannot read is a skipped value. Never log names, definitions or search text.
 - Script As verbs, titles, URN types and preflight ids live only in `src/shared/scripting/catalog.ts`, and scripting
   options only in `options.ts`; after changing them, regenerate `docs/scripting.md` and the backend's embedded

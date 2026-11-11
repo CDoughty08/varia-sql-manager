@@ -24,6 +24,14 @@ export interface QuickPickItem {
   readonly disabledHint?: string
   readonly ariaLabel?: string
 }
+/** A row its provider matched itself: `ranges` is what its search matched in the label. */
+export interface QuickPickAnswerItem extends QuickPickItem { readonly ranges?: readonly MatchRange[] }
+/**
+ * Rows a provider matched itself, for the filter as typed (a server's search): they follow the filtered items in the order
+ * given, each run under its group, and are never filtered or ranked here. `busy` shows the progress bar while more are on
+ * their way, and `message` shows when the picker has nothing else to say.
+ */
+export interface QuickPickAnswer { readonly items: readonly QuickPickAnswerItem[]; readonly busy?: boolean; readonly message?: QuickInputMessage }
 export type HideReason = 'accept' | 'cancel' | 'blur' | 'replace'
 export type QuickInputMove = 'next' | 'previous' | 'pageNext' | 'pagePrevious' | 'first' | 'last'
 export type ValueSelection = 'end' | 'afterPrefix' | 'all'
@@ -110,6 +118,12 @@ interface Session {
   /** Set while the filter matches more rows than are shown. */
   truncation?: QuickInputMessage
   hint?: QuickInputMessage
+  /** The provider's own matches (`setAnswer`), shown after the filtered entries. */
+  answered: readonly { readonly entry: Entry; readonly ranges: readonly MatchRange[] }[]
+  answerBusy: boolean
+  /** The user moved the active row since the filter last changed. */
+  moved: boolean
+  answerMessage?: QuickInputMessage
 }
 
 class VisibilityStore extends SnapshotStore<{ readonly visible: boolean }> {
@@ -164,7 +178,7 @@ export class QuickInputService extends SnapshotStore<QuickInputView> implements 
     const value = (options.value ?? '').slice(0, quickInputLimits.value)
     const session: Session = {
       id: ++this.sessions, options: options as unknown as QuickPickOptions<QuickPickItem>, abort: new AbortController(), timers: [],
-      entries: [], value, rows: [], rowEntries: [], activeIndex: -1, loading: false, busy: false
+      entries: [], value, rows: [], rowEntries: [], activeIndex: -1, loading: false, busy: false, answered: [], answerBusy: false, moved: false
     }
     this.current = session
     // A mode switch by typing keeps the input as it is; anything else writes the new value.
@@ -194,6 +208,7 @@ export class QuickInputService extends SnapshotStore<QuickInputView> implements 
     if (value === session.value) return
     session.value = value
     session.hint = undefined
+    session.moved = false
     try { session.options.onDidChangeValue?.(value) } catch (error) { onUnexpectedError(error) }
     // The provider may have replaced the session (a quick access mode switch).
     if (this.current !== session) return
@@ -252,6 +267,26 @@ export class QuickInputService extends SnapshotStore<QuickInputView> implements 
     if (!session) return
     session.hint = message
     this.publishSession(session)
+  }
+  /**
+   * Replaces the open picker's answered rows (QuickPickAnswer). The active row stays active when it is still shown, so an
+   * answer that lands while the user walks the rows does not move them. An answered row that is active only because it was
+   * the first row (the user has not moved since typing) gives way to the new first row, so Enter takes the best match.
+   */
+  setAnswer(answer: QuickPickAnswer): void {
+    const session = this.current
+    if (!session) return
+    const active = session.rowEntries[session.activeIndex]
+    const keep = active && (session.moved || !session.answered.some(row => row.entry === active)) ? active.source.id : undefined
+    session.answered = answer.items.slice(0, quickInputLimits.rows).flatMap(source => {
+      const view = displayed(source)
+      return view ? [{ entry: { source, view }, ranges: (source.ranges ?? []).filter(([start, end]) => start >= 0 && start < end && end <= view.label.length) }] : []
+    })
+    session.answerBusy = !!answer.busy
+    session.answerMessage = answer.message
+    this.applyFilter(session, keep)
+    this.publishSession(session)
+    this.notifyActive(session)
   }
   dispose(): void {
     if (this.disposed) return
@@ -381,6 +416,7 @@ export class QuickInputService extends SnapshotStore<QuickInputView> implements 
       } else if (sort === 'grouped') scored.sort((a, b) => byGroup(a, b) || ranked(a, b))
       ordered = scored
     }
+    for (const { entry, ranges } of session.answered) ordered.push({ entry, ranges, descriptionRanges: [], group: entry.view.group })
     const shown = ordered.length > quickInputLimits.rows ? ordered.slice(0, quickInputLimits.rows) : ordered
     session.truncation = shown.length < ordered.length
       ? { text: `Showing ${formatCount(shown.length)} of ${formatCount(ordered.length)} ${noun}; type to narrow the list`, severity: 'info' } : undefined
@@ -395,6 +431,7 @@ export class QuickInputService extends SnapshotStore<QuickInputView> implements 
   private activate(session: Session, index: number): void {
     if (index === session.activeIndex) return
     session.activeIndex = index
+    session.moved = true
     session.hint = undefined
     this.publishSession(session)
     this.notifyActive(session)
@@ -411,7 +448,7 @@ export class QuickInputService extends SnapshotStore<QuickInputView> implements 
     const { options } = session
     this.publish({
       visible: true, session: session.id, ariaLabel: options.ariaLabel, placeholder: options.placeholder, title: options.title, noun: options.noun, prefix: options.prefix ?? '',
-      rows: session.rows, activeIndex: session.activeIndex, busy: session.busy, loading: session.loading, message: session.hint ?? session.loadMessage ?? session.truncation, input: this.input,
+      rows: session.rows, activeIndex: session.activeIndex, busy: session.busy || session.answerBusy, loading: session.loading, message: session.hint ?? session.loadMessage ?? session.truncation ?? session.answerMessage, input: this.input,
       ...options.anchor ? { anchor: options.anchor } : {}
     })
   }

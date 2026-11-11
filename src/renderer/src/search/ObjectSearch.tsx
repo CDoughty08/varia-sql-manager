@@ -4,7 +4,7 @@ import DocumentFrame from '../kit/DocumentFrame'
 import SearchPanel from './SearchPanel'
 import ServerPicker, { allServersValue, serverPickerOptions } from './ServerPicker'
 
-export { indexSummary, searchHitPath } from './SearchPanel'
+export { indexSummary, searchHitPath, unindexedServers } from './SearchPanel'
 
 /** Search Objects: a server's object index searched by name and inside module definitions, with Match Case, Whole Word and Regex,
  *  as Object Explorer's box searches it, in a tab of its own with a server picker, which can also search all connected servers. */

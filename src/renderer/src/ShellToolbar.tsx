@@ -8,14 +8,14 @@ import { ActualPlanToggle, EstimatedPlanButton, QueryPickers, useExecutionScope,
 import { lostHint, withKey } from './query-context'
 
 /**
- * The header's search box (the command centre): it opens Search, which finds open queries, commands and the Object
- * Explorer objects already loaded, in a widget that opens below it. Its key is SSMS's Ctrl+Q on Windows; F1 still opens
+ * The header's search box (the command centre): it opens Search, which finds open queries, commands and the servers'
+ * objects (Search Objects' search), in a widget that opens below it. Its key is SSMS's Ctrl+Q on Windows; F1 still opens
  * the command palette.
  */
 export function CommandCentre() {
   const { commands } = useWorkbench()
   const key = useKeybindingLabel('workbench.search')
-  return <button type="button" className="command-centre" aria-label="Search" aria-keyshortcuts={key?.aria} title={withKey('Search open queries, commands and loaded objects', key)}
+  return <button type="button" className="command-centre" aria-label="Search" aria-keyshortcuts={key?.aria} title={withKey('Search open queries, commands and objects', key)}
     onClick={event => void commands.execute('workbench.search', { anchor: event.currentTarget }, 'toolbar')}>
     <Icon name="search" /><span className="command-centre-text">Search commands, queries and objects</span><span className="command-centre-short">Search</span>{key && <kbd>{key.text}</kbd>}
   </button>

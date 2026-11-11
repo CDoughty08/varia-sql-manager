@@ -1,5 +1,4 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { kindSpecs, type KindSpec } from '../../../shared/explorer/catalog.ts'
 import { peekSpecs } from '../../../shared/explorer/peek.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import type { ObjectSearchHit } from '../../../shared/explorer/search.ts'
@@ -14,7 +13,9 @@ import { peekMessages } from '../explorer/PeekService'
 import Icon from '../Icon'
 import Segmented from '../kit/Segmented'
 import { argsFor } from '../menus/targets'
-import { searchHitTarget } from './hit-actions'
+import { hitIcon, hitKindSpec, searchHitTarget } from './hit-actions'
+
+export { hitKindSpec }
 import { columnsOf, shownChars, type DefinitionPart, type SearchDetails as Details } from './SearchDetailsService'
 
 /** Lines of a definition that are coloured; longer text shows the rest plain, so a huge module never stalls the pane. */
@@ -116,12 +117,6 @@ export function matchedLine(text: string, hit: ObjectSearchHit, exact: boolean):
  */
 export const scrollKey = (id: number, line: number | undefined): string => `${id}:${line ?? ''}`
 
-/** A hit's kind as this build's catalogue has it; a kind it does not know (a newer backend's) shows as a plain object. */
-export function hitKindSpec(kind: string): Pick<KindSpec, 'title' | 'icon' | 'subtypeIcons'> {
-  return Object.hasOwn(kindSpecs, kind) ? kindSpecs[kind as keyof typeof kindSpecs] : unknownKindSpec
-}
-const unknownKindSpec: Pick<KindSpec, 'title' | 'icon'> = { title: 'Object', icon: 'file' }
-
 /** The hit's own properties, known before anything is read: its type, and where it is. */
 export function hitProperties(hit: ObjectSearchHit): readonly { readonly label: string; readonly value: string }[] {
   const { object } = hit
@@ -216,7 +211,7 @@ export default function SearchDetails({ searchId }: { readonly searchId: string 
   const args = argsFor(searchHitTarget(explorer, details.connectionId, searchId, -1, hit, false))
   return <section className="search-details" aria-label={`Details: ${name}`}>
     <div className="peek-head search-details-head">
-      <ExplorerIcon name={(hit.subtype && spec.subtypeIcons?.[hit.subtype]) || spec.icon} />
+      <ExplorerIcon name={hitIcon(hit)} />
       <bdi className="peek-name" title={name}>{name}</bdi>
       <span className="peek-kind">{spec.title}</span>
       <span className="peek-spacer" />

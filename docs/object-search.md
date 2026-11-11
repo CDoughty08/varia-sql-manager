@@ -4,7 +4,7 @@ Search Objects searches every object a server's login can see, not just the node
 Object Explorer lists, from logins and databases down to columns and parameters. It matches names, and it can also match text
 inside definitions (procedures, functions, views and triggers, and constraint, computed column and plan guide expressions).
 
-The same search runs in two places, with the same options and results:
+The same search runs in two places, with the same options and results, and the header's Search asks it too:
 
 - **Object Explorer's search box**, at the top of the pane. Search in Object Explorer (Ctrl+Shift+F, Cmd+Shift+F on macOS,
   or the palette) focuses it and selects its text, so typing replaces it and End keeps it. It searches the server of the
@@ -30,6 +30,16 @@ The same search runs in two places, with the same options and results:
   shows without taking focus, so the keys go on walking the hits. ↑ on the first hit, and Escape, return to the box.
   Beside the hits, behind a sash, is the *details pane* (below them when the tab is narrower than 760 px): see
   *The details pane* below.
+- **The header's Search** (the search box in the header, View › Search…, Ctrl+Q on Windows) lists objects below the open
+  queries and commands it matches itself. The objects are this search's answer, not a filter of what Object Explorer has
+  loaded: the text is searched by name only, with Fuzzy Match, on every connected server, as it is typed, and each server
+  answers at most 50 hits, shown with its server and database. Nothing is asked before there is text, and Search never builds
+  an index: a server that has none (`objectExplorer.search.indexOnConnect` is off) answers no hits and is named in a message,
+  until you build it (Build index in Search Objects, or Rebuild Search Index). A hit reveals its object in Object Explorer, which takes focus. The last row, *See all
+  in Search Objects*, opens a Search Objects tab with the text and Fuzzy Match on (on All servers when several are
+  connected) for every hit, definitions and the filters. New text takes the hits of the text before away at once, so Enter
+  never reveals an object the text no longer names; a row stays active on its object as other servers answer. The search
+  ends when the widget closes or changes mode.
 - **In both,** the hits are a listbox whose options announce the selected one, and each has a context menu (right-click,
   which selects the hit, or Shift+F10 and the context-menu key on the selected hit). See *A hit's menu* below.
 
@@ -37,6 +47,9 @@ The same search runs in two places, with the same options and results:
 
 - **Where it lives.** The index is held in the backend's memory, one per connection, and is never written to disk. It is
   built when a server connects (setting `objectExplorer.search.indexOnConnect`), or on demand with Rebuild Search Index.
+  While that setting is off nothing else builds one: opening a search, pointing it at another server or All servers, and
+  typing in the header's Search all leave a server without an index as it is. The search says "This server has no index
+  yet." with a **Build index** button (**Build indexes** on All servers, for every server that has none).
   It is dropped on disconnect and when the backend ends.
 - **Progress.** The status bar shows "Indexing objects N / M" and a Stop button while a build runs. A newer build of the
   same connection stops the older one.
@@ -243,7 +256,7 @@ The same search runs in two places, with the same options and results:
 - **How.** The renderer sends one `explorer.search` per connected server at once, each on that server's own index, and
   shows each server's group as its answer lands (`ObjectSearchService`, `searchAll`), in Object Explorer's order, so a
   slow server holds back only its own group, marked "searching…", and the selection stays on its server's hit. Each
-  server's limit is its own, so a large server cannot crowd the others out. Every server gets an index if it has none.
+  server's limit is its own, so a large server cannot crowd the others out. Every server gets an index if it has none, while indexing on connect is on.
   When a server's build ends, or a server connects, only that server is asked again and its answer merged in (until it
   lands its group keeps its answer to the same query), within the search still on its way if there is one, so N builds
   ending or N servers connecting cost N requests, not N per server; a server that disconnects drops out, named in the

@@ -91,6 +91,18 @@ export function indexSummary(entry: IndexEntry | undefined, status: ObjectIndexS
   return `Index: ${count(status.objects, 'object')}${modules} in ${count(status.indexed, 'database')}${skipped}`
 }
 
+/**
+ * The servers of a search (`servers`: the live ones it asks) that have no index and none building, which Build index builds:
+ * while indexing on connect is off, only the user starts a build. `answered` is a one-server search's index as its last
+ * answer reported it, which knows of an index this window did not build.
+ */
+export function unindexedServers(servers: readonly string[], indexes: Readonly<Record<string, IndexEntry>>, answered?: ObjectIndexStatus): string[] {
+  return servers.filter(id => {
+    const entry = indexes[id], status = entry?.status ?? answered
+    return !entry?.requestId && (!status || status.state === 'none')
+  })
+}
+
 /** Whether the index line should stay in view: a build running or failed, or an index that leaves objects out (not ready, with
  *  databases skipped, or names only). A healthy index's detail is a click away. */
 export function indexIncomplete(entry: IndexEntry | undefined, status: ObjectIndexStatus | undefined): boolean {
@@ -384,6 +396,9 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   // In Object Explorer's band, progress and an incomplete index stay visible and a healthy index's detail is a click away; the
   // tab (All servers included, which is tab only) always shows the line, naming each server whose index leaves objects out.
   const indexNotice = indexIncomplete(entry, index)
+  const unbuilt = unindexedServers(spanning ? workbench.connections.live().map(connection => connection.id) : workbench.connections.isLive(state.connectionId) ? [state.connectionId] : [],
+    snapshot.indexes, spanning ? undefined : result?.index)
+  const buildIndex = unbuilt.length ? <> <button type="button" className="object-search-build" onClick={() => { for (const id of unbuilt) objectSearch.build(id) }}>{unbuilt.length > 1 ? 'Build indexes' : 'Build index'}</button></> : null
   const paneSummary = result && asked && !state.requestId && !state.error && !result.problem && !result.partial
     ? `${count(result.total, 'result')} · ${count(result.index.indexed, 'database')}` : summary
   const showHits = !pane || !!state.text.trim()
@@ -533,7 +548,7 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
       {showHits && <>
         {pane ? <PaneSearchFilters id={searchId} scope={state.scope} types={state.types} onScope={scope => set({ scope })} onTypes={types => set({ types })} />
           : <SearchFilters id={searchId} scope={state.scope} types={state.types} onScope={scope => set({ scope })} onTypes={types => set({ types })} options={options} />}
-        {(!pane || indexNotice) && <p className="object-search-index">{indexText}</p>}
+        {(!pane || indexNotice) && <p className="object-search-index">{indexText}{buildIndex}</p>}
       </>}
       {pane ? <div className="object-search-pane-status">
         <p className={`object-search-summary${state.error || result?.problem ? ' error' : ''}`} role="status">{showHits ? paneSummary : ''}</p>
