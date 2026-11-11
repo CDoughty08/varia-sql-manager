@@ -2738,7 +2738,9 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
   instance's handover, macOS's open-file and its Recent Files store, and the page refers to files by opaque ids. A drop
   is read in the preload's isolated world, from trusted events only, and sent on `varia:files-dropped`, which
   `window.varia` does not expose; main still accepts only absolute paths to regular files, at most 32, and reads them
-  as Open does (5 MB).
+  as Open does (5 MB). A packaged smoke run that keeps its debugging port (`VARIA_PACKAGED_SMOKE=1`) opens none of the
+  files another program can hand it (the command line, a second instance, open-file, a drop): macOS grants file access
+  to the app, so they would be readable through the port.
 - **AutoRecover** (`varia:recovery-write`, `-list`, `-take`, `-discard`, main's channels with strict zod schemas)
   writes query text, never results, connections or credentials, to `<userData>/AutoRecover/<uuid>.json` (a lower-case uuid;
   a file named in upper case still counts against the caps, is quarantined rather than offered, and is purged): the folder is

@@ -35,7 +35,7 @@ import { prepare as prepareConnection, settle as settleConnection, type Settled 
 import { connectionLibrary } from './connection-library'
 import { clearEntraPrompt, clearEntraTokenCache } from './entra'
 import { SettingsStore } from './settings-store'
-import { packagedSmokeVariable, sandboxRefusal, smokeDebuggingProfile, stripRemoteDebugging } from './sandbox-guard'
+import { launchFilesRefused, packagedSmokeVariable, sandboxRefusal, smokeDebuggingProfile, stripRemoteDebugging } from './sandbox-guard'
 import { refuseDownloads } from './download-guard'
 import { ShortcutStore, shortcutHandlers } from './shortcut-store'
 import { effectiveRules } from '../shared/commands/effective'
@@ -210,9 +210,10 @@ const contextMenus = new ContextMenuPopups<BrowserWindow>({
   title: (id, title) => menuTitle(id, title), rules: shortcutRules
 })
 // Files named on the command line, from a second instance, by macOS (open-file) or by a drop, until the page takes them.
-const launchFiles = new LaunchQueue()
+// A packaged smoke run on its debugging port takes none of them, and hands none to another instance.
+const launchFiles = new LaunchQueue(launchFilesRefused(smokeProfile))
 const commandLineFiles = (argv: readonly string[], cwd: string) => fileArguments(argv, { cwd, defaultApp: !!process.defaultApp })
-const ownFiles = commandLineFiles(process.argv, process.cwd())
+const ownFiles = launchFilesRefused(smokeProfile) ? [] : commandLineFiles(process.argv, process.cwd())
 launchFiles.add(ownFiles)
 // A second instance would overwrite this instance's layouts and connection library, so it hands its files to this one
 // as additional data (which Chromium passes on as it was, while it may reorder the command line) and quits.
