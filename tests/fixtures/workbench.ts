@@ -243,7 +243,8 @@ export function updatesApi(initial: UpdateState = { status: 'idle', currentVersi
     checkForUpdates: vi.fn<VariaApi['checkForUpdates']>(async () => ({ ok: true, value: current })),
     downloadUpdate: vi.fn<VariaApi['downloadUpdate']>(async () => ({ ok: true, value: current })),
     restartToUpdate: vi.fn<VariaApi['restartToUpdate']>(async () => ({ ok: true, value: current.status === 'ready' })),
-    openReleasesPage: vi.fn<VariaApi['openReleasesPage']>(async () => ({ ok: true, value: undefined }))
+    openReleasesPage: vi.fn<VariaApi['openReleasesPage']>(async () => ({ ok: true, value: undefined })),
+    openProductLink: vi.fn<VariaApi['openProductLink']>(async () => ({ ok: true, value: undefined }))
   }
 }
 

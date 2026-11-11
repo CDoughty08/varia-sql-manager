@@ -4,6 +4,7 @@ import { BackendError } from '../src/main/backend/errors'
 import { CommandService } from '../src/renderer/src/core/commands'
 import { helpContribution } from '../src/renderer/src/contributions/help'
 import type { VariaApi } from '../src/shared/contracts'
+import { EventBus } from '../src/renderer/src/core/events'
 
 describe('Help › Clear Entra ID Token Cache in main', () => {
   it('asks first, with Clear as the default and Cancel as Escape', () => {
@@ -22,8 +23,8 @@ describe('Help › Clear Entra ID Token Cache in main', () => {
 describe('Help › Clear Entra ID Token Cache in the workbench', () => {
   function harness(answer: Awaited<ReturnType<VariaApi['clearEntraTokenCache']>>) {
     const commands = new CommandService()
-    const api = { clearEntraTokenCache: vi.fn(async () => answer) }
-    const contribution = helpContribution({ commands }, api)
+    const api = { clearEntraTokenCache: vi.fn(async () => answer), openProductLink: vi.fn<VariaApi['openProductLink']>() }
+    const contribution = helpContribution({ commands, events: new EventBus() }, api)
     return { commands, api, contribution }
   }
   it('says the cache was cleared, says nothing when the user cancelled, and shows a failure in the command banner', async () => {

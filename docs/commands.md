@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (293)
+## Commands (296)
 
 ### File
 
@@ -374,6 +374,9 @@ keys it uses are listed below.
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
+| About Varia | `help.about` | — | — | — | Always | Help › About Varia |
+| Varia on GitHub | `help.openProject` | — | — | — | Always | — |
+| Report an Issue | `help.reportIssue` | — | — | — | Always | — |
 | Clear Entra ID Token Cache | `help.clearEntraTokenCache` | — | — | — | Always | Help › Clear Entra ID Token Cache |
 | Check for Updates | `help.checkForUpdates` | — | — | — | `!updateBusy` | Help › Check for Updates |
 | Download Update | `help.downloadUpdate` | — | — | — | `updateAvailable` | — |
@@ -583,6 +586,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `2_updates` | Check for **U**pdates | `help.checkForUpdates` | Always |
 | `2_updates` | **R**estart to Update | `help.restartToUpdate` | Always |
 | `2_updates` | Release **N**otes | `help.releaseNotes` | Always |
+| `z_about` | **A**bout Varia | `help.about` | Always |
 
 ### Context menus
 

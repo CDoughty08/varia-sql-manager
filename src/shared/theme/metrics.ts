@@ -74,7 +74,7 @@ export const glyphSizes = {
   badge: { px: 9, use: 'The status mark at a tree icon\'s corner.' },
   sm: { px: 12, use: 'Glyphs in status bars and tab strips, beside xs and sm text.' },
   md: { px: 16, use: 'Every other icon: tree rows, toolbars, menus, the palette, tabs, dialogs.' },
-  lg: { px: 24, use: 'Large glyphs; none today (an empty state draws its glyph at md, as the states kit specifies).' }
+  lg: { px: 24, use: 'The brand mark in About Varia.' }
 } as const
 export type GlyphSizeName = keyof typeof glyphSizes
 /** The styles.css rules sized with each glyph size; tests/theme-metrics.test.ts checks the list both ways. */
@@ -86,7 +86,7 @@ export const glyphUse: Readonly<Record<GlyphSizeName, readonly string[]>> = {
     '.tile-caption > .codicon'
   ],
   md: ['.icon'],
-  lg: []
+  lg: ['.about-brand > .icon']
 }
 /** Glyph overrides that apply only inside a narrow size container; outside it the normal toolbar grid applies. */
 export const glyphConditions: Readonly<Record<string, { readonly container: string; readonly maxWidth: number; readonly outside: GlyphSizeName }>> = {

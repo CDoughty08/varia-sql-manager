@@ -784,6 +784,12 @@ export const commandCatalog = {
     title: 'Toggle Developer Tools', category: 'Developer', icon: 'tools', role: 'toggleDevTools', keybindings: [{ win: 'ctrl+shift+i', linux: 'ctrl+shift+i', mac: 'alt+meta+i', native: true }],
     menus: [{ menu: 'view', group: 'z_developer', order: 2, mnemonic: 'd' }]
   },
+  'help.about': {
+    title: 'About Varia', category: 'Help', icon: 'info', keywords: ['version', 'build', 'support', 'product'],
+    menus: [{ menu: 'help', group: 'z_about', order: 1, mnemonic: 'a' }]
+  },
+  'help.openProject': { title: 'Varia on GitHub', category: 'Help', icon: 'link-external', keywords: ['project', 'repository', 'source', 'support'] },
+  'help.reportIssue': { title: 'Report an Issue', category: 'Help', icon: 'link-external', keywords: ['bug', 'support', 'problem', 'feedback'] },
   // SSMS 22's Help › Clear Entra ID Token Cache: main asks first, then the backend forgets every Microsoft Entra token.
   'help.clearEntraTokenCache': {
     title: 'Clear Entra ID Token Cache', category: 'Help', icon: 'discard', keywords: ['entra', 'azure', 'token', 'signin', 'login', 'mfa'],

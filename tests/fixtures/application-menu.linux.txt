@@ -157,3 +157,5 @@
   {"id":"help.checkForUpdates","label":"Check for Updates","registerAccelerator":false,"type":"normal","click":[["command","help.checkForUpdates"]]}
   {"id":"help.restartToUpdate","label":"Restart to Update","registerAccelerator":false,"type":"normal","click":[["command","help.restartToUpdate"]]}
   {"id":"help.releaseNotes","label":"Release Notes","registerAccelerator":false,"type":"normal","click":[["command","help.releaseNotes"]]}
+  {"type":"separator"}
+  {"id":"help.about","label":"About Varia","registerAccelerator":false,"type":"normal","click":[["command","help.about"]]}
