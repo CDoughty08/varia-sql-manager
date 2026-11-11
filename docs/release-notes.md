@@ -15,8 +15,9 @@ done since that release; Unreleased content is not presented as a published rele
 self-updates, including macOS, and update-error remedies still use that browser destination. Checking, downloading,
 verification and installation remain owned by the updater and its existing manifests.
 
-The tab has no SQL model, connection or save operation. It reuses one tab for subsequent requests, releases its
-selection on close and keeps section selection only in memory while open. It is not restored by hot exit.
+The tab has no SQL model, connection or save operation. It reuses one tab for subsequent requests. Reopening the same
+release preserves its section and scroll position; choosing a different release starts at its first section. Closing
+the tab releases that selection. State stays only in memory while open and is not restored by hot exit.
 
 ## Content and release preparation
 
@@ -38,8 +39,11 @@ Feature PRs maintain CHANGELOG.md's **Unreleased** section and affected user doc
 3. Run `node scripts/release-notes.mjs --changelog`. It preserves Unreleased and the older-history link while regenerating
    published prose and release links from the records. Do not edit generated published sections by hand.
 4. Preview the public body with `node scripts/release-notes.mjs v<version> artifacts/release-notes.md`, review the in-app
-   reader, and run `npm run check`. Tests require every versioned record to be bundled, the package version to have notes
-   and the generated changelog to match. The publishing command refuses missing, oversized, invalid or mismatched records.
+   reader, and run `npm run check`. Normal checks load the actual archive through the publishing validator, including
+   each file's version/name match and byte limit, require it to equal the bundled records, check the package version's
+   notes and compare the generated changelog. Publication tests use synthetic records and exercise a subsequent release;
+   Electron checks derive installed/history expectations from the archive. A new release does not require editing test
+   prose. The publishing command refuses missing, oversized, invalid or mismatched records.
 
 Tag publication uses this compiled body with `gh release create --notes-file`, replacing automatic commit-list notes.
 Published records are immutable. Future feature PRs edit Unreleased, and a correction belongs in the next release.

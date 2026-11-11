@@ -19,11 +19,14 @@ export class ReleaseNotesService extends SnapshotStore<ReleaseNotesState> implem
     })
   }
   open(requestedVersion?: string): void {
-    const requested = requestedVersion ?? this.runningVersion()
+    const runningVersion = this.runningVersion(), before = this.getSnapshot()
+    const requested = requestedVersion ?? runningVersion
     const version = requested ? releaseVersionSchema.parse(requested) : undefined
-    let documentId = this.getSnapshot().documentId
+    let documentId = before.documentId
     if (!documentId || !this.documents.get(documentId)) documentId = this.documents.openCustom('releaseNotes', 'Release Notes', undefined, '').id
-    this.publish({ documentId, version, frame: initialFrameState(releaseSections(version)) })
+    // A repeated request reuses the mounted frame and its scroll position, including one opened before version info arrived.
+    const sameRelease = documentId === before.documentId && version === (before.version ?? (runningVersion || undefined))
+    this.publish({ documentId, version, frame: sameRelease ? before.frame : initialFrameState(releaseSections(version)) })
     this.documents.activate(documentId)
     this.focus(documentId)
   }

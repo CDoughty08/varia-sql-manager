@@ -8,6 +8,7 @@ import { createServer } from 'node:http'
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
+import { loadReleaseArchive } from './release-notes.mjs'
 import { aboutDialog, backendReady, memoryBreakdown, memoryIndicator, movePane, popoutDockButton, popoutTab, popoutTabs, quickInputBox, releaseNotesPage, statusBar, toastMessage, toasts } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -15,7 +16,10 @@ const profile = await mkdtemp(resolve('artifacts', 'updates-profile-'))
 // No automatic check: the suite runs each one itself.
 await writeFile(join(profile, 'settings.json'), JSON.stringify({ version: 1, values: { 'environment.updates.checkAutomatically': false } }))
 
-const version = '99.0.0', name = `Varia-SQL-Manager-${version}-Windows-x64-Setup.exe`
+const archive = await loadReleaseArchive()
+const packageVersion = JSON.parse(await readFile('package.json', 'utf8')).version
+const nextMajor = Math.max(...[packageVersion, ...archive.map(record => record.version)].map(version => Number(version.split('.')[0]))) + 1
+const version = `${nextMajor}.0.0`, name = `Varia-SQL-Manager-${version}-Windows-x64-Setup.exe`
 const payload = randomBytes(3 * 1024 * 1024)
 const manifest = { schema: 2, version, assets: ['x64', 'arm64'].map(arch => ({ name, kind: 'win-setup', arch, size: payload.length, sha512: createHash('sha512').update(payload).digest('base64') })) }
 let mode = 'portal'
@@ -67,6 +71,8 @@ try {
   const about = aboutDialog(page)
   await expect(about).toBeVisible()
   const currentVersion = await application.evaluate(({ app }) => app.getVersion())
+  const installedNotes = archive.find(record => record.version === currentVersion)
+  if (!installedNotes) throw new Error('The running version has no bundled release record.')
   await expect(about).toContainText(`Version ${currentVersion}`)
   await expect(about.getByRole('button', { name: 'Done', exact: true })).toBeFocused()
   await page.keyboard.press('Tab')
@@ -96,12 +102,27 @@ try {
   const notes = releaseNotesPage(page)
   await expect(notes).toBeVisible()
   await expect(notes.getByRole('combobox', { name: 'Release version', exact: true })).toHaveValue(currentVersion)
-  await expect(notes).toContainText('SQL IntelliSense')
+  await expect(notes).toContainText(installedNotes.summary)
+  await expect(notes.getByRole('heading', { name: installedNotes.changes[0].title, exact: true }).first()).toBeVisible()
   await notes.screenshot({ path: 'artifacts/release-notes.png' })
-  await notes.getByRole('combobox', { name: 'Release version', exact: true }).selectOption('0.7.0')
-  await expect(notes).toContainText('Graphical execution plans')
-  await expect(notes).not.toContainText('Filter results in place')
-  await notes.getByRole('combobox', { name: 'Release version', exact: true }).selectOption(currentVersion)
+  const sectionButtons = notes.getByRole('navigation', { name: 'Sections', exact: true }).getByRole('button')
+  if (await sectionButtons.count() > 1) {
+    await sectionButtons.last().click()
+    await expect(sectionButtons.last()).toHaveAttribute('aria-current', 'location')
+    const content = notes.getByRole('region', { name: 'Release Notes sections', exact: true })
+    const scrollTop = await content.evaluate(element => element.scrollTop)
+    await menu('help.releaseNotes')
+    await expect(sectionButtons.last()).toHaveAttribute('aria-current', 'location')
+    await expect.poll(() => content.evaluate(element => element.scrollTop)).toBe(scrollTop)
+    await sectionButtons.first().click()
+  }
+  const history = archive.find(record => record.version !== currentVersion)
+  if (history) {
+    await notes.getByRole('combobox', { name: 'Release version', exact: true }).selectOption(history.version)
+    await expect(notes).toContainText(history.summary)
+    await expect(notes.getByRole('heading', { name: history.changes[0].title, exact: true }).first()).toBeVisible()
+    await notes.getByRole('combobox', { name: 'Release version', exact: true }).selectOption(currentVersion)
+  }
   await menu('theme.mode.light')
   await notes.screenshot({ path: 'artifacts/release-notes-light.png' })
   await menu('theme.mode.dark')
@@ -167,10 +188,10 @@ try {
   await expect(toasts(page).filter({ hasText: `Varia SQL Manager ${version} is ready to install.` })).toBeVisible()
   await toasts(page).filter({ hasText: `Varia SQL Manager ${version} is ready to install.` }).getByRole('button', { name: 'Release notes', exact: true }).click()
   await expect(notes).toContainText(`Notes for ${version} are not bundled with this copy`)
-  await expect(notes).not.toContainText('SQL IntelliSense')
+  await expect(notes.getByRole('region', { name: 'Release Notes sections', exact: true })).toHaveCount(0)
   await notes.screenshot({ path: 'artifacts/release-notes-unavailable.png' })
   await notes.getByRole('button', { name: `Read installed version ${currentVersion}`, exact: true }).click()
-  await expect(notes).toContainText('SQL IntelliSense')
+  await expect(notes).toContainText(installedNotes.summary)
   await menu('help.about')
   await expect(about).toContainText(`Version ${version} is ready`)
   await expect(about.getByRole('button', { name: 'Restart to Update', exact: true })).toBeEnabled()
@@ -191,7 +212,7 @@ try {
   if (applied.kind !== 'nsis' || applied.version !== version || applied.file !== name) throw new Error(`Unexpected install: ${JSON.stringify(applied)}`)
   if ((await readdir(join(profile, 'updates'))).some(file => file.endsWith('.partial'))) throw new Error('A partial download was left behind.')
   if (failures.length) throw new Error(`Page errors: ${failures.join('; ')}`)
-  console.log('About: focus, safe support details and fixed links. Release notes: offline installed/history content, themes, exact advertised-version unavailability and independent downloads. Updates: blocked-feed remedy, verified download and restart through About.')
+  console.log('About: focus, safe support details and fixed links. Release notes: offline installed/history content, preserved same-release section/scroll, themes, exact advertised-version unavailability and independent downloads. Updates: blocked-feed remedy, verified download and restart through About.')
 } finally {
   clearTimeout(watchdog)
   server.close()

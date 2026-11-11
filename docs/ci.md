@@ -45,9 +45,11 @@ with `node scripts/ci-timings.mjs` (add `--steps` for per-step times) before and
   5.1 seconds locally on Windows. PR #406's CI measured 6 seconds on Linux and 7 seconds on Windows; the shard weights
   record those measurements.
 
-  The release reader's installed/history, exact-version/unavailable, About navigation and light/dark checks also share
-  that launch. A warm local Windows run takes about 6 seconds; retain the measured shard weights until its PR CI reports
-  replacement figures. Curated release-body compilation uses the existing tag-publication job, with a script-free
+  The release reader's installed/history, same-release section/scroll preservation, exact-version/unavailable, About
+  navigation and light/dark checks also share that launch. PR #408's initial CI measured 6 seconds on Linux and 7 on
+  Windows. Content checks validate the checked-in archive with the same loader as publication; generic publication
+  fixtures and archive-derived smoke expectations allow new releases without changing test prose. Curated release-body
+  compilation uses the existing tag-publication job, with a script-free
   dependency install for the shared schema. It creates no new job and does not run that install on ordinary PR checks.
 
   Smoke builds and packaging prepare Electron from its npm-pinned checksums, retrying transient official-download failures

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { readFileSync, readdirSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { bundledReleaseNotes, releaseNotesFor } from '../src/shared/releases/catalog'
@@ -10,38 +10,71 @@ import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import { documentFixture } from './fixtures/documents'
 import { workbenchFixture } from './fixtures/workbench'
+import { releaseRecord } from './fixtures/releases'
+// @ts-expect-error The publishing script is plain JavaScript without declarations.
+import { loadReleaseArchive, loadReleaseNotes } from '../scripts/release-notes.mjs'
 
 describe('published release content', () => {
-  it('bundles every versioned record, matches filenames and dates, and excludes Unreleased', () => {
-    const files = readdirSync('release-notes').filter(file => file.endsWith('.json'))
-    expect(files.sort()).toEqual(bundledReleaseNotes.map(record => `${record.version}.json`).sort())
-    expect(new Set(bundledReleaseNotes.map(record => record.version)).size).toBe(files.length)
+  it('validates the checked-in archive through the publishing loader and bundles the same records', async () => {
+    const archive = await loadReleaseArchive()
+    expect(archive).toEqual(bundledReleaseNotes)
+    expect(new Set(bundledReleaseNotes.map(record => record.version)).size).toBe(archive.length)
     const changelog = readFileSync('CHANGELOG.md', 'utf8')
     for (const record of bundledReleaseNotes) expect(changelog).toContain(releaseNotesMarkdown(record, 'changelog').trimEnd())
     const { version } = JSON.parse(readFileSync('package.json', 'utf8'))
-    expect(releaseNotesFor(version)).toBeDefined()
+    expect(await loadReleaseNotes(`v${version}`)).toEqual(releaseNotesFor(version))
     expect(releaseNotesFor('Unreleased')).toBeUndefined()
     expect(releaseNotesFor('99.0.0')).toBeUndefined()
     expect(releaseNotesFor(undefined)).toBeUndefined()
   })
   it('refuses HTML, control characters, unknown fields, invalid dates and duplicate titles', () => {
-    const record = bundledReleaseNotes[0], change = record.changes[0]
+    const record = releaseRecord(), change = record.changes[0]
     for (const text of ['<script>alert(1)</script>', '<img src=x onerror=alert(1)>', 'bad\u0000text', 'x'.repeat(1601)])
       expect(releaseNotesSchema.safeParse({ ...record, changes: [{ ...change, text }] }).success).toBe(false)
     for (const value of [{ ...record, url: 'https://example.com' }, { ...record, releasedOn: '2026-02-30' }, { ...record, version: '../../private' }, { ...record, changes: [change, change] }])
       expect(releaseNotesSchema.safeParse(value).success).toBe(false)
   })
   it('exports the same reviewed content and escapes Markdown links and formatting', () => {
-    const record = bundledReleaseNotes[0]
+    const record = releaseRecord()
     const markdown = releaseNotesMarkdown(record)
     expect(markdown).toContain(`# Varia SQL Manager ${record.version}`)
-    expect(markdown).toContain('Write SQL with connection\\-aware suggestions')
+    expect(markdown).toContain('An update for everyday work\\.')
     const injected = releaseNotesSchema.parse({ ...record, changes: [{ ...record.changes[0], text: '[Open](javascript:alert(1)) **bold**' }] })
     expect(releaseNotesMarkdown(injected)).toContain('\\[Open\\]\\(javascript:alert\\(1\\)\\) \\*\\*bold\\*\\*')
   })
 })
 
 describe('read-only release document', () => {
+  it('preserves the selected section on same-version requests and resets it when switching versions or reopening a closed tab', async () => {
+    const fixture = documentFixture(), service = new ReleaseNotesService(fixture.documents, () => '0.8.0', vi.fn())
+    service.open()
+    const id = service.getSnapshot().documentId!, frame = { ...service.getSnapshot().frame, section: 'limits' }
+    service.setFrame(frame)
+    service.open()
+    expect(service.getSnapshot().frame).toBe(frame)
+    service.open('0.8.0')
+    expect(service.getSnapshot().frame).toBe(frame)
+    service.select('0.7.0')
+    expect(service.getSnapshot().frame.section).toBe('added')
+    service.setFrame({ ...service.getSnapshot().frame, section: 'limits' })
+    await fixture.documents.close(id)
+    service.open('0.7.0')
+    expect(service.getSnapshot().frame.section).toBe('added')
+    service.dispose(); fixture.documents.dispose()
+  })
+  it('preserves a section chosen after delayed running-version information arrives', () => {
+    const fixture = documentFixture()
+    let runningVersion = ''
+    const service = new ReleaseNotesService(fixture.documents, () => runningVersion, vi.fn())
+    service.open()
+    runningVersion = '0.8.0'
+    const frame = { ...service.getSnapshot().frame, section: 'limits' }
+    service.setFrame(frame)
+    service.open()
+    expect(service.getSnapshot()).toMatchObject({ version: '0.8.0', frame })
+    expect(service.getSnapshot().frame).toBe(frame)
+    service.dispose(); fixture.documents.dispose()
+  })
   it('reuses one tab with no SQL model, saving, connection or session and releases its selection on close', async () => {
     const fixture = documentFixture(), focus = vi.fn()
     const service = new ReleaseNotesService(fixture.documents, () => '0.8.0', focus)
