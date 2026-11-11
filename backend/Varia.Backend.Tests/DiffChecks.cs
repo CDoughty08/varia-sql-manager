@@ -436,20 +436,32 @@ internal static class DiffChecks
         var open = new ResultStore(1L << 30, 1L << 29);
         using (var service = new SqlService(open))
         {
-            var budget = open.BeginQuery("released");
-            var columns = new Tripwire(Columns);
-            var left = open.Open(budget, 0, 1, 1, "rows", columns, Wires)!;
-            left.CountRow();
-            var builder = left.BeginRow()!;
-            foreach (var cell in new[] { "1", "a", "1.00" }) builder.AppendText(cell);
-            left.TryCommitRow();
-            left.Complete();
-            var right = Fill(open, budget, 1, [["1", "a", "2.00"]]);
+            (Tripwire Columns, ResultSetBuffer Left, ResultSetBuffer Right) Wired(string session)
+            {
+                var budget = open.BeginQuery(session);
+                var columns = new Tripwire(Columns);
+                var left = open.Open(budget, 0, 1, 1, "rows", columns, Wires)!;
+                left.CountRow();
+                var builder = left.BeginRow()!;
+                foreach (var cell in new[] { "1", "a", "1.00" }) builder.AppendText(cell);
+                left.TryCommitRow();
+                left.Complete();
+                return (columns, left, Fill(open, budget, 1, [["1", "a", "2.00"]]));
+            }
+            var gone = Wired("released");
             var count = open.Count;
-            columns.OnRead = () => open.Release(left.ResultId);
-            var released = Message(service, left, right);
-            check(columns.OnRead is null && released == "RESULT_RELEASED: These results were closed. Execute the query again to see them." && open.Count == count - 1,
+            gone.Columns.OnRead = () => open.Release(gone.Left.ResultId);
+            var released = Message(service, gone.Left, gone.Right);
+            check(gone.Columns.OnRead is null && released == "RESULT_RELEASED: These results were closed. Execute the query again to see them." && open.Count == count - 1,
                 $"a diff whose source is released while it is compared answers RESULT_RELEASED and stores nothing: {released} {open.Count - count}");
+            // The sources are complete, but their query may still be reading later sets: one that stops storing while they
+            // are compared is why the diff was not kept, not the memory left.
+            var stopping = Wired("stopping");
+            var used = open.UsedBytes;
+            stopping.Columns.OnRead = () => stopping.Left.Budget.Stop(TruncationReason.SystemMemory);
+            var during = Message(service, stopping.Left, stopping.Right);
+            check(stopping.Columns.OnRead is null && during == "BUDGET_STOPPED: " + SqlService.BudgetStoppedLowMemory && open.UsedBytes == used,
+                $"a diff whose query stops storing while it is compared answers BUDGET_STOPPED and keeps nothing: {during} {open.UsedBytes - used}");
         }
     }
 }

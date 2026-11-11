@@ -72,10 +72,12 @@ being true.
   `results.transpose`) copy a result's or a view's cells, columns as rows, into a derived set the same way; they take at
   most 4,095 rows (never more columns than a page holds) and at most 4,000,000 cells (fewer rows for a wide result), the
   first ones with explicit truncation. A derived set (a diff, a pivot, a transpose) is stored whole or not at all, and
-  never stops its query's budget: a row the budget refuses, or a page sealed under low system memory with rows still to
-  store, fails only that set (`TOO_LARGE`), so a smaller one can still fit. Only a query's own sets stop its budget (the
-  query or global budget full, or low system memory at a page seal; a row limit never does), and a derived set asked of
-  a stopped query is refused before any work with `BUDGET_STOPPED` and a sentence for why it stopped.
+  its own refusals never stop its query's budget: a row the budget refuses, or a page sealed under low system memory with
+  rows still to store, fails only that set (`TOO_LARGE`), so a smaller one can still fit. Only a query's own sets stop its
+  budget (the query or global budget full, or low system memory at a page seal; a row limit never does); while a query is
+  still reading, what a derived build holds counts against that budget like anything else. A derived set asked of a
+  stopped query is refused before any work with `BUDGET_STOPPED` and a sentence for why it stopped, and one whose query
+  stops, or whose source is released, while it is built answers that (`BUDGET_STOPPED`, `RESULT_RELEASED`), not `TOO_LARGE`.
 - The grid renders cells only through `GridView` pools, and text only through `nodeValue` (`tests/grid-lint.test.ts`
   forbids HTML sinks under `grid/`, `results/`, `designer/` and `live/`); no React per row or cell, and frames stay
   O(visible cells).

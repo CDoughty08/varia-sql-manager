@@ -1506,7 +1506,9 @@ receives a new result to read like any other, never the rows it grouped.
   never stops the query. The pivot is a derived set (`ResultStore.Open(derived: true)`): a refusal fails only it and
   never stops its query, so a smaller pivot of the same results can still fit. Low system memory is checked when a
   page is sealed; a derived set sealing one under it stores no further row (so it is refused, `TOO_LARGE`) and leaves
-  the query's budget open, and one whose last page is sealed under it is whole.
+  the query's budget open, and one whose last page is sealed under it is whole. A source is complete while its query may
+  still be reading later sets: a pivot, diff or transpose cut short because that query stopped storing, or because a
+  source was released, while it was built answers `BUDGET_STOPPED` or `RESULT_RELEASED`, not `TOO_LARGE`.
 - **Work.** One pass sorts the rows by each grouped column's key (`ResultPivoter.WorkingBytes`: the sort keys and 12 bytes
   a row); each grouping keeps its groups' first rows only up to its bound and is refused before the next runs. Then the
   figures (4 to 25 bytes a cell and value) are charged to the query budget before they are computed

@@ -355,6 +355,23 @@ describe('ResultsJobHost over the fake backend', () => {
     expect([lines.length, lines[0], lines[1].split(',').slice(0, 2)]).toEqual([3002, '\ufeffid,name,created,amount,key,note,active,score', ['0', 'Customer 0000000000 GmbH']])
     expect((await readdir(control)).filter(name => name.endsWith('.tmp'))).toEqual([])
   })
+  it('passes BUDGET_STOPPED from a pivot, diff or transpose of a stopped query through main with its sentence', async () => {
+    const { control, supervisor, execute } = await workbench()
+    const [first, second] = (await execute('-- varia-fake: sets=N1*10,N1*10\nSELECT 1')).resultSets
+    const asks = () => [
+      supervisor.request('results.pivot', { resultId: first.resultId, rows: [0], values: [{ aggregate: 'count' }] }),
+      supervisor.request('results.diff', { left: first.resultId, right: second.resultId }),
+      supervisor.request('results.transpose', { resultId: first.resultId })
+    ]
+    await writeFile(join(control, 'budget-stopped'), '')
+    // A code main does not know would arrive as BACKEND_ERROR.
+    for (const ask of asks()) expect(await failure(ask)).toMatchObject({ code: 'BUDGET_STOPPED', message: "This query's results filled its result memory, so it can store nothing more. Run the query again returning fewer rows." })
+    await writeFile(join(control, 'budget-stopped-low'), '')
+    for (const ask of asks()) expect(await failure(ask)).toMatchObject({ code: 'BUDGET_STOPPED', message: 'The computer was low on memory while this query ran, so it can store nothing more. Run the query again.' })
+    await rm(join(control, 'budget-stopped'))
+    await rm(join(control, 'budget-stopped-low'))
+    for (const ask of asks()) expect(await ask).toMatchObject({ descriptor: { state: 'complete' } })
+  })
   it('cancels a held save, leaving no file and no temporary file', async () => {
     const { control, jobs, execute, choose } = await workbench()
     const [set] = (await execute('-- varia-fake: sets=W1*5000\nSELECT 1')).resultSets

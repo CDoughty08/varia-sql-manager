@@ -359,7 +359,15 @@ internal static class PivotChecks
     private static void Pressure(Action<bool, string> check)
     {
         var low = false;
-        var store = new ResultStore(1L << 30, 1L << 29, () => (low ? 100 : 0, 50));
+        // The probe runs at every page seal: what happens to the query while a pivot's first page is sealed.
+        Action? sealing = null;
+        var store = new ResultStore(1L << 30, 1L << 29, () =>
+        {
+            var action = sealing;
+            sealing = null;
+            action?.Invoke();
+            return (low ? 100 : 0, 50);
+        });
         using var service = new SqlService(store);
         T Call<T>(object args) => (T)service.DispatchAsync("results.pivot", JsonSerializer.SerializeToElement(args, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult()!;
         string? Message(object args)
@@ -395,6 +403,19 @@ internal static class PivotChecks
         var filled = Message(Grouped(full));
         check(filled == "BUDGET_STOPPED: This query's results filled its result memory, so it can store nothing more. Run the query again returning fewer rows." && filled == "BUDGET_STOPPED: " + SqlService.BudgetStoppedFull,
             "a pivot of a query that filled its result memory answers BUDGET_STOPPED and says to return fewer rows: " + filled);
+        // The source is complete, but its query may still be reading later sets, and its tab may run again: one that
+        // stops or goes while the pivot is written is the reason the pivot was not kept, not the memory left.
+        used = store.UsedBytes;
+        sealing = () => set.Budget.Stop(TruncationReason.GlobalBudget);
+        var during = Message(Grouped(set));
+        check(sealing is null && during == "BUDGET_STOPPED: " + SqlService.BudgetStoppedFull && store.UsedBytes == used,
+            $"a pivot whose query stops storing while it is written answers BUDGET_STOPPED and keeps nothing: {during} {store.UsedBytes - used}");
+        var closing = Source(store, [.. Enumerable.Range(0, 200).Select(i => new string?[] { i.ToString(CultureInfo.InvariantCulture) })], [new("g", "int", "text")]);
+        // As the tab running again does: the source and the pivot being written both go.
+        sealing = () => store.ReleaseSession(closing.Budget.SessionId);
+        var gone = Message(Grouped(closing));
+        check(sealing is null && gone == "RESULT_RELEASED: These results were closed. Execute the query again to see them.",
+            "a pivot whose source is released while it is written answers RESULT_RELEASED: " + gone);
     }
 
     /// <summary>A pivot whose rows run out of the query's budget part-way is refused and released, never kept in part.</summary>

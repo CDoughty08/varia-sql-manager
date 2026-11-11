@@ -1870,12 +1870,23 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// a row limit marks its set and leaves the budget open.</summary>
     private static void ThrowIfStopped(QueryBudget budget)
     {
-        switch (budget.Stopped)
-        {
-            case TruncationReason.None: return;
-            case TruncationReason.SystemMemory: throw new RequestException("BUDGET_STOPPED", BudgetStoppedLowMemory);
-            default: throw new RequestException("BUDGET_STOPPED", BudgetStoppedFull);
-        }
+        if (BudgetStopped(budget) is { } stopped) throw stopped;
+    }
+
+    private static RequestException? BudgetStopped(QueryBudget budget) => budget.Stopped switch
+    {
+        TruncationReason.None => null,
+        TruncationReason.SystemMemory => new RequestException("BUDGET_STOPPED", BudgetStoppedLowMemory),
+        _ => new RequestException("BUDGET_STOPPED", BudgetStoppedFull)
+    };
+
+    /// <summary>Why a pivot, diff or transpose was not stored whole. Its sources are complete, but their query may still be
+    /// reading later sets and its tab may run again, so a source released or a query stopped while it was built is the
+    /// reason, not the memory left: only otherwise is it <paramref name="tooLarge"/>.</summary>
+    private RequestException NotStored(QueryBudget budget, string tooLarge, params ReadOnlySpan<(ResultSetBuffer Set, uint Id)> sources)
+    {
+        foreach (var (set, id) in sources) if (set.IsReleased) return Unavailable(id);
+        return BudgetStopped(budget) ?? new RequestException("TOO_LARGE", tooLarge);
     }
 
     internal const string BudgetStoppedFull = "This query's results filled its result memory, so it can store nothing more. Run the query again returning fewer rows.";
@@ -1918,7 +1929,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             const string tooLarge = "There is not enough result memory to show the differences. Close other results and try again.";
             var set = store.Open(left.Budget, right.Index, right.BatchNumber, right.Iteration, "diff", UnifiedDiff.Columns(right, model), UnifiedDiff.Wires(right, model),
                 lengths: UnifiedDiff.Lengths(right, model), derived: true)
-                ?? throw new RequestException("TOO_LARGE", tooLarge);
+                ?? throw NotStored(left.Budget, tooLarge, (left, args.Left), (right, args.Right));
             void Release()
             {
                 if (store.Release([set.ResultId]) > 0) ReportMemory();
@@ -1929,7 +1940,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 // A diff is never kept in part: its counts would describe rows it does not show. The writer counts each row
                 // before trying to store it and stops at the first one refused.
                 var written = set.Describe();
-                if (written.RowsStored < written.RowsRead) throw new RequestException("TOO_LARGE", tooLarge);
+                if (written.RowsStored < written.RowsRead) throw NotStored(left.Budget, tooLarge, (left, args.Left), (right, args.Right));
                 var (same, changed, added, removed, soft) = model.Counts();
                 var paired = model.Pairs;
                 string[] OneSided(IReadOnlyList<ResultColumn> columns, Func<(int Left, int Right), int> side) =>
@@ -1987,7 +1998,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             if (view is not null && !store.HasView(view)) throw ViewClosed();
             var (columns, wires, lengths) = PivotOutput.Shape(set, pages, spec, model);
             var pivot = store.Open(set.Budget, set.Index, set.BatchNumber, set.Iteration, "pivot", columns, wires, lengths: lengths, derived: true)
-                ?? throw new RequestException("TOO_LARGE", tooLarge);
+                ?? throw NotStored(set.Budget, tooLarge, (set, args.ResultId));
             void Release()
             {
                 if (store.Release([pivot.ResultId]) > 0) ReportMemory();
@@ -1996,7 +2007,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             {
                 await Task.Run(() => PivotOutput.Write(pivot, set, pages, spec, model, token), token);
                 // A pivot is never kept in part: rows the budget refused would leave groups out of the summary.
-                if (pivot.Describe().RowsStored < model.RowGroups) throw new RequestException("TOO_LARGE", tooLarge);
+                if (pivot.Describe().RowsStored < model.RowGroups) throw NotStored(set.Budget, tooLarge, (set, args.ResultId));
                 var answer = new ResultsPivotResult(pivot.Describe(), model.Rows, model.RowGroups, model.ColumnGroups, model.Approximate);
                 // Main owns the pivot only once it has the answer: one not sent goes at once.
                 if (context is not null) context.Unsent = context.Dropped = Release;
@@ -2041,7 +2052,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (set.IsReleased) throw Unavailable(args.ResultId);
         if (view is not null && !store.HasView(view)) throw ViewClosed();
         var transpose = store.Open(set.Budget, set.Index, set.BatchNumber, set.Iteration, "transpose", columns, wires, lengths: lengths, derived: true)
-            ?? throw new RequestException("TOO_LARGE", tooLarge);
+            ?? throw NotStored(set.Budget, tooLarge, (set, args.ResultId));
         void Release()
         {
             if (store.Release([transpose.ResultId]) > 0) ReportMemory();
@@ -2050,7 +2061,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         {
             await Task.Run(() => ResultTransposer.Write(transpose, set, pages, plan, token), token);
             // A transpose is never kept in part: rows the budget refused would drop source columns without a word.
-            if (transpose.Describe().RowsStored < plan.Columns.Length) throw new RequestException("TOO_LARGE", tooLarge);
+            if (transpose.Describe().RowsStored < plan.Columns.Length) throw NotStored(set.Budget, tooLarge, (set, args.ResultId));
             var answer = new ResultsTransposeResult(transpose.Describe(), plan.Available, plan.Positions.Length, plan.Columns.Length);
             // Main owns the transpose only once it has the answer: one not sent goes at once.
             if (context is not null) context.Unsent = context.Dropped = Release;

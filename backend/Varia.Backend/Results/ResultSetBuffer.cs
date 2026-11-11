@@ -168,8 +168,7 @@ internal sealed class ResultSetBuffer
         lock (gate) SealLocked();
     }
 
-    /// <param name="last">The seal inside <see cref="Complete"/>: no row follows it, so a derived set has nothing to stop.</param>
-    private void SealLocked(bool last = false)
+    private void SealLocked()
     {
         if (builder is null || !builder.HasRows) return;
         var first = builder.FirstRow;
@@ -192,11 +191,12 @@ internal sealed class ResultSetBuffer
         bytesStored += page.Length;
         // Checked at every seal, the only low-memory check there is: the page just sealed is kept, and nothing more is
         // stored. A query's own set stops its query, at its last seal too, so later sets store nothing. A derived set stops
-        // only itself, at its next row (its caller then refuses it whole), so one whose last seal sees pressure is whole
-        // and not truncated, and the query can still store another.
+        // only itself, at its next row (its caller then refuses it whole), and the query can still store another. One whose
+        // last seal sees pressure (the seal inside Complete, or its last row filling a page) asks for no row after it, so
+        // it is whole and not truncated.
         if (!store.IsSystemMemoryLow()) return;
-        if (!Derived) Budget.Stop(TruncationReason.SystemMemory);
-        else if (!last) pressed = true;
+        if (Derived) pressed = true;
+        else Budget.Stop(TruncationReason.SystemMemory);
     }
 
     private bool Reserve(long bytes)
@@ -220,7 +220,7 @@ internal sealed class ResultSetBuffer
         {
             if (state != 0) return;
             builder?.AbortRow();
-            SealLocked(last: true);
+            SealLocked();
             ReturnLocked(slack + working + pending);
             slack = working = pending = 0;
             builder = null;
