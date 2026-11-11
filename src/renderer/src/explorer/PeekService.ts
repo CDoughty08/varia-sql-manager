@@ -443,7 +443,7 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
     if (!open || open.node.ref.type !== 'object' || !this.canFollow(dependency) || !dependency.kind || !isPeekKind(dependency.kind)) return
     const object = { kind: dependency.kind, ...(open.node.ref.object.database === undefined ? {} : { database: open.node.ref.object.database }), schema: dependency.schema!, name: dependency.name }
     const { subtype: _subtype, status: _status, database: _database, listedAt: _listedAt, filtered: _filtered, insertable: _insertable, ...rest } = open.node
-    // The dependency's own subtype, as the tree lists it, so Script As offers its verbs and Columns reads its folder.
+    // The dependency's own subtype, as the tree lists it, so Script As offers its verbs.
     const node: ExplorerMenuNode = { ...rest, kind: dependency.kind, ...(dependency.subtype === undefined ? {} : { subtype: dependency.subtype }), ref: { type: 'object', object }, label: `${dependency.schema}.${dependency.name}` }
     const back = [...open.back, { node: open.node, kind: open.kind, tab: open.tab }].slice(-peekLimits.backSteps)
     this.load(node, dependency.kind, open.source === 'hover' ? 'keyboard' : open.source, false, { back })
@@ -537,12 +537,13 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
   private loadTab(): void {
     const open = this.getSnapshot().open
     if (!open || open.node.ref.type !== 'object' || this.disposed || open.tab === 'definition') return
-    const connectionId = open.node.connectionId, target = open.node.ref.object, subtype = open.node.subtype
+    const connectionId = open.node.connectionId, target = open.node.ref.object
     switch (open.tab) {
       case 'members': {
         const folder = peekSpecs[open.kind].members
         return folder && this.loadPart(open, 'members', requestId => this.reads.api.explorerChildren({ connectionId, requestId,
-          node: { type: 'folder', owner: target, folder }, ...(subtype === undefined ? {} : { subtype }), pageSize: peekLimits.members }),
+          // No subtype: a children request carries one only for an object node (the schema rejects it beside a folder).
+          node: { type: 'folder', owner: target, folder }, pageSize: peekLimits.members }),
           value => ({ nodes: value.nodes, more: value.cursor !== undefined }))
       }
       case 'dependencies': return peekHas(open.kind, 'dependencies') ? this.loadPart(open, 'dependencies', requestId => this.reads.api.explorerPeekDependencies({ connectionId, requestId, target }),
