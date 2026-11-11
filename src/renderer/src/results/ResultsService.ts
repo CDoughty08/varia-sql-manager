@@ -1,4 +1,5 @@
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
+import { cycleSortKeys, sortKeysBy, type SortDirection } from '../grid/sort-keys'
 import type { MessageEntry, QueryEvent, QueryResult, QueryStatus, ResolvedGroupsFilter, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultsJobProgress, VariaApi, ViewFilter, ViewSortKey, ViewSortMode } from '../../../shared/contracts'
 import type { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
@@ -76,7 +77,7 @@ export interface GridFilter {
 /** What a selection filters by: its values, other values, the range from its lowest to its highest, or no NULL in its column. */
 export type SelectionFilter = 'in' | 'notIn' | 'between' | 'notNull'
 /** How a header click or a command changes a column's place in the sort. */
-export type SortDirection = 'ascending' | 'descending' | 'none'
+export type { SortDirection } from '../grid/sort-keys'
 /** A set that has all its rows, for sizing the stack to them: its rows, and whether its grid shows a strip (truncated or incomplete). */
 export interface SettledSet { readonly rows: number; readonly strip: boolean }
 /** The output pane's views: the stacked grids, Messages, and the run's execution plans (shown only when it returned some). */
@@ -671,24 +672,15 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   sortBy(tabId: string, ref: EntryRef, column: number, direction: SortDirection, add = false): void {
     const run = this.runs.get(tabId), set = this.entry(run, ref)
     if (!run || !set || column < 0 || column >= set.descriptor.columns.length) return
-    const keys = add ? (run.sorts.get(set.key)?.keys ?? []).filter(key => key.column !== column) : []
-    if (direction !== 'none') keys.push({ column, descending: direction === 'descending', mode: 'value' })
-    this.applySort(tabId, run, set.key, keys.slice(-wire.views.maxKeys))
+    this.applySort(tabId, run, set.key, sortKeysBy(run.sorts.get(set.key)?.keys ?? [], column, direction, add, wire.views.maxKeys, (descending): ViewSortKey => ({ column, descending, mode: 'value' })))
   }
 
-  /** A header's sort button: ascending, then descending, then out of the sort. With `add`, the column changes in place among
-   *  the keys (a new one goes last); without, it becomes the only key. */
+  /** A header's sort button (`cycleSortKeys`, which a live grid's header shares): ascending, then descending, then out of
+   *  the sort. With `add`, the column changes in place among the keys (a new one goes last); without, it becomes the only key. */
   cycleSort(tabId: string, ref: EntryRef, column: number, add = false): void {
-    const run = this.runs.get(tabId), index = this.entry(run, ref)?.key
-    if (!run || index === undefined) return
-    const keys = run.sorts.get(index)?.keys ?? []
-    const at = keys.findIndex(key => key.column === column), current = keys[at]
-    // Without the modifier only the sole key cycles; any other click starts a new sort by the column, ascending.
-    const cycles = add || keys.length === 1
-    const next: SortDirection = !current || !cycles ? 'ascending' : current.descending ? 'none' : 'descending'
-    if (!add || !current) return this.sortBy(tabId, index, column, next, add)
-    const changed = next === 'none' ? keys.filter(key => key.column !== column) : keys.map(key => key.column === column ? { ...key, descending: true } : key)
-    this.applySort(tabId, run, index, changed)
+    const run = this.runs.get(tabId), set = this.entry(run, ref)
+    if (!run || !set || column < 0 || column >= set.descriptor.columns.length) return
+    this.applySort(tabId, run, set.key, cycleSortKeys(run.sorts.get(set.key)?.keys ?? [], column, add, wire.views.maxKeys, (descending): ViewSortKey => ({ column, descending, mode: 'value' })))
   }
 
   clearSort(tabId: string, ref: EntryRef): void {

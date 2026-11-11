@@ -69,7 +69,7 @@ export function focusFacts<E extends FocusElement>(element: E | null, editor: Fo
   const pane = element.closest('[data-pane]')?.getAttribute('data-pane') ?? ''
   const tree = element.closest('[data-explorer-tree]')
   return {
-    editorFocus, editorTextFocus, inputFocus, activePanel: isOutputPane(pane) ? 'output' : panels.has(pane) ? pane as FocusFacts['activePanel'] : editorFocus ? 'editor' : '', outputGridFocus: !!element.closest('[data-result-grid]'),
+    editorFocus, editorTextFocus, inputFocus, activePanel: isOutputPane(pane) ? 'output' : panels.has(pane) ? pane as FocusFacts['activePanel'] : editorFocus ? 'editor' : '', outputGridFocus: !!element.closest('[data-result-grid]') || !!element.closest('[data-output-view="live"]'),
     searchHitsFocus: !!element.closest('[data-search-hits]'),
     designerFocus: !!element.closest('[data-designer]'), queryBarFocus: !!element.closest('[data-query-bar]'), activityMonitorFocus: !!element.closest('[data-activity-monitor]'),
     documentTabFocus: !!element.closest('[data-document-tab]'), peekFocus: !!element.closest('[data-peek-card]'), peekTabFocus: !!element.closest('[data-peek-tab]'), peekEditorFocus: !!element.closest(`[${peekEditorAttribute}]`), messagesFocus: !!element.closest('[data-output-view="messages"]'),
