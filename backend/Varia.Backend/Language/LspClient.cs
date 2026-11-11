@@ -57,7 +57,16 @@ internal sealed class LspClient : ILspClient, IAsyncDisposable
     private bool killed;
     private int disposed;
 
-    /// <param name="kill">Replaces the tree kill, and <paramref name="exitGate"/> the backend's gate, in checks.</param>
+    /// <summary>Whether the child is killed with its descendants. Only on Windows: on Linux and macOS .NET's tree kill stops the
+    /// process (SIGSTOP), lists its children and only then kills it, and a backend that main killed in between (a crash, or a
+    /// close past its grace) left the language server stopped for good, holding every descriptor it inherited. ExitGate covers
+    /// only the backend's own exit, never a SIGKILL. A plain kill there is one signal with no stopped state, and the SQL Tools
+    /// Service starts no processes of its own.</summary>
+    internal static bool KillsTree => OperatingSystem.IsWindows();
+
+    internal static void Kill(Process child) => child.Kill(entireProcessTree: KillsTree);
+
+    /// <param name="kill">Replaces the kill, and <paramref name="exitGate"/> the backend's gate, in checks.</param>
     /// <param name="readThrough">Wraps the child's stdout in checks, to hold a read in flight.</param>
     public LspClient(string executablePath, IReadOnlyList<string>? arguments = null, Func<string, JsonElement, Task>? notification = null,
         Action<Process>? kill = null, ExitGate? exitGate = null, Func<Stream, Stream>? readThrough = null)
@@ -65,7 +74,7 @@ internal sealed class LspClient : ILspClient, IAsyncDisposable
         if (string.IsNullOrWhiteSpace(executablePath) || !Path.IsPathFullyQualified(executablePath) || !File.Exists(executablePath))
             throw new ArgumentException("The language server executable must be an existing absolute path.", nameof(executablePath));
         this.notification = notification;
-        this.kill = kill ?? (child => child.Kill(entireProcessTree: true));
+        this.kill = kill ?? Kill;
         this.exitGate = exitGate ?? ExitGate.Shared;
         var start = new ProcessStartInfo(executablePath)
         {
