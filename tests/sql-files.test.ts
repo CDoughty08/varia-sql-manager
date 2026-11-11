@@ -539,7 +539,8 @@ describe('SQL file encodings and save hardening', () => {
     expect(saved).toMatchObject({ path: alias, readOnly: false })
     expect(await readFile(alias, 'utf8')).toBe('SELECT 1')
     await chmod(alias, 0o444)
-    expect(await isReadOnly(alias)).toBe(true)
+    // Root may write a read-only file, so there the question is no test.
+    if (process.getuid?.() !== 0) expect(await isReadOnly(alias)).toBe(true)
     expect(await store.readOnly(saved.id)).toBe(false)
     // Overwrite of a read-only file changes no mode through the link either.
     await store.save('SELECT 2', saved.id, undefined, 'sql', { overwriteReadOnly: true })
@@ -601,6 +602,14 @@ describe('SQL file encodings and save hardening', () => {
     present = false
     await expect(store.save('SELECT 3', elsewhere.id, other)).rejects.toThrow('Report.sql is open in another query tab')
     expect(await readdir(dirname(other))).toEqual([])
+    // Linux's realpath never gives a name another case, so a spelling that resolves to the folder is a link, not folding.
+    const linux = new SqlFileStore({ platform: 'linux', uid: 1000, realpath: async path => same(path, folder) ? folder : dirname(path) === folder ? Promise.reject(absent(path)) : path })
+    await writeFile(real, 'SELECT 1')
+    await linux.read(real)
+    await rm(real)
+    const upper = join(folder, 'REPORT.sql')
+    expect(await linux.save('SELECT 4', undefined, upper)).toMatchObject({ path: upper })
+    await rm(upper)
     // On a case-sensitive volume the other case is another file, and is saved.
     folds = false
     expect(await store.save('SELECT 3', elsewhere.id, other)).toMatchObject({ id: elsewhere.id, path: other })
@@ -612,7 +621,7 @@ describe('SQL file encodings and save hardening', () => {
     for (const path of [offline, changed, unrelated]) await writeFile(path, 'SELECT 1')
     // A stand-in for a share that has gone offline: resolving the file on it does not come back.
     let stuck = false
-    const store = new SqlFileStore({ realpath: path => stuck && path === offline ? new Promise<string>(() => {}) : Promise.resolve(path) })
+    const store = new SqlFileStore({ realpath: path => stuck && basename(path) === basename(offline) ? new Promise<string>(() => {}) : Promise.resolve(path) })
     const onShare = await store.read(offline), tab = await store.read(changed)
     stuck = true
     let settled = false

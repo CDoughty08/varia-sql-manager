@@ -469,8 +469,9 @@ export class SqlFileStore {
    * `path` as realpath spells it. A path realpath cannot resolve (a missing file, or with `asMissing` a dangling link,
    * which must not be followed) is its deepest folder realpath can resolve plus the rest of its components, so two
    * spellings of one missing file still compare equal: through a link at a folder, or in another case where the volume
-   * folds case. A volume folds case when realpath gives the folder's other case the same spelling (as macOS's does on
-   * its default volumes, and Linux's never does), and then the missing components compare in lower case.
+   * folds case. Only macOS's realpath gives a name its case on disk, so only there can a volume be seen to fold case:
+   * it does when realpath gives the folder's other case the same spelling, and then the missing components compare in
+   * lower case. Elsewhere a link named as the folder's other case would pass for folding.
    */
   private async named(path: string, asMissing = false): Promise<string> {
     const real = this.options.realpath ?? realpath
@@ -482,7 +483,7 @@ export class SqlFileStore {
       try { base = await real(parent) } catch { continue }
       const otherCase = base.toLowerCase() !== base ? base.toLowerCase() : base.toUpperCase()
       // A folder without a letter in its path cannot be asked: macOS's volumes fold case unless formatted not to.
-      const folds = otherCase === base ? this.platform === 'darwin' : await real(otherCase).then(found => found === base, () => false)
+      const folds = this.platform === 'darwin' && (otherCase === base || await real(otherCase).then(found => found === base, () => false))
       return join(base, ...folds ? rest.map(part => part.toLowerCase()) : rest)
     }
     return path
