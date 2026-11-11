@@ -18,27 +18,45 @@ import { detailsDrag, detailsKey, searchDetailsLimits } from './SearchDetailsSer
 import { paneBandDrag, paneBandKey, paneBandLimits } from './pane-band'
 
 const numbers = new Intl.NumberFormat('en-US')
-/** The hit Page Down (`direction` 1) or Page Up (-1) selects from `at`, as lists do: the last (first) hit fully in view, or when
- *  `at` is already there, the furthest whose rows from `at` fit in the list's height, at least one away. Rows differ in height
- *  (a definition hit has a second line), so it adds up the rows it passes. */
-function pageFrom(rows: readonly HTMLElement[], at: number, direction: 1 | -1): number {
-  const list = rows[at]?.closest('ul')
-  if (!list) return at
+/** A stop's row in the list: a hit's list item, or a group header itself. */
+const stopRow = (stop: HTMLElement) => stop.dataset.hit !== undefined ? stop.parentElement ?? stop : stop
+/** The stop Page Down (`direction` 1) or Page Up (-1) reaches from `at` in `list`, the scrolling box, as lists do: the last
+ *  (first) stop fully in view, or when `at` is already there, the furthest whose rows from `at` fit in the list's height, at
+ *  least one away. Rows differ in height (a definition hit has a second line), so it adds up the rows it passes. `rows` are the
+ *  hits, or with All servers the group headers and hits, which page as one list across the groups. */
+function pageFrom(list: HTMLElement | null, rows: readonly HTMLElement[], at: number, direction: 1 | -1): number {
+  if (!list || !rows[at]) return at
   const top = list.getBoundingClientRect().top + list.clientTop, height = list.clientHeight, bottom = top + height
   let edge = at
   for (let index = at + direction; index >= 0 && index < rows.length; index += direction) {
-    const box = rows[index]!.parentElement!.getBoundingClientRect()
+    const box = stopRow(rows[index]!).getBoundingClientRect()
     if (direction > 0 ? box.bottom > bottom + 0.5 : box.top < top - 0.5) break
     edge = index
   }
   if (edge !== at) return edge
-  let to = at, used = rows[at]?.parentElement?.offsetHeight ?? 0
+  let to = at, used = stopRow(rows[at]!).offsetHeight
   while (to + direction >= 0 && to + direction < rows.length) {
-    used += rows[to + direction]!.parentElement?.offsetHeight ?? 0
+    used += stopRow(rows[to + direction]!).offsetHeight
     if (used > height && to !== at) break
     to += direction
   }
   return to
+}
+/**
+ * The stop a walking key reaches from stop `at` of an All servers list's `count` (its group headers and shown hits, in order),
+ * the same whether `at` is a header or a hit: ↑ and ↓ the stop before and after (-1, the box, above the first), Home and End
+ * the first and last stop, the Page keys the stop `page` answers. Any other key is not a walk.
+ */
+export function stopForKey(count: number, at: number, key: string, page: (direction: 1 | -1) => number): number | undefined {
+  switch (key) {
+    case 'ArrowDown': return Math.min(at + 1, count - 1)
+    case 'ArrowUp': return at - 1
+    case 'Home': return 0
+    case 'End': return count - 1
+    case 'PageDown': return page(1)
+    case 'PageUp': return page(-1)
+    default: return undefined
+  }
 }
 const count = (value: number, noun: string) => `${numbers.format(value)} ${noun}${value === 1 ? '' : 's'}`
 const dragEnds = ['pointerup', 'pointercancel', 'lostpointercapture'] as const
@@ -317,18 +335,24 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
     if (stop.dataset.hit !== undefined) objectSearch.pick(searchId, Number(stop.dataset.index))
     stop.focus()
   }
+  /** All servers: a walking key (stopForKey) on stop `at` of `all` moves there, or to the box above the first stop. */
+  const walk = (all: readonly HTMLElement[], at: number, key: string): boolean => {
+    const to = stopForKey(all.length, at, key, direction => pageFrom(list.current, all, at, direction))
+    if (to === undefined) return false
+    if (to < 0) focusInput()
+    else moveTo(all[to])
+    return true
+  }
   /** A group header, as a tree grid's group row: ↑ and ↓ walk the stops, ← collapses, → expands (or, expanded, goes to the
-   *  first hit), Home and End go to the first and last stop, Escape returns to the box; Enter and Space are the button's own. */
+   *  first hit), Home and End go to the first and last stop and the Page keys a page of stops, as they do on a hit, Escape
+   *  returns to the box; Enter and Space are the button's own. */
   const onHeadKey = (event: KeyboardEvent<HTMLElement>, head: HTMLElement) => {
     if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
     const all = stops(), at = all.indexOf(head), expanded = head.getAttribute('aria-expanded') === 'true', connectionId = head.dataset.groupHead!
     const below = all[at + 1], hitBelow = below?.dataset.hit !== undefined ? below : undefined
-    if (event.key === 'ArrowDown') moveTo(below)
-    else if (event.key === 'ArrowUp') { if (at > 0) moveTo(all[at - 1]); else focusInput() }
+    if (walk(all, at, event.key)) { /* Moved. */ }
     else if (event.key === 'ArrowLeft') { if (expanded) objectSearch.toggleGroup(searchId, connectionId) }
     else if (event.key === 'ArrowRight') { if (!expanded) objectSearch.toggleGroup(searchId, connectionId); else moveTo(hitBelow) }
-    else if (event.key === 'Home') moveTo(all[0])
-    else if (event.key === 'End') moveTo(all.at(-1))
     else if (event.key === 'Escape') focusInput()
     else return
     event.preventDefault()
@@ -342,18 +366,16 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
     if (isCopyKey(event, platform)) { copyName(event); return }
     // Shift+Enter reveals too, as in the box (where it goes back a hit).
     if (event.ctrlKey || event.metaKey || event.altKey || (event.shiftKey && event.key !== 'Enter')) return
-    // All servers: ↑ and ↓ walk the headers too (↑ on a group's first hit reaches its header), and ← goes to the hit's header.
-    if (spanning && (event.key === 'ArrowUp' || event.key === 'ArrowDown' || event.key === 'ArrowLeft')) {
-      event.preventDefault()
+    // All servers: the walking keys count the headers too, as they do on a header (↑ on a group's first hit reaches its header,
+    // Home the first group's), and ← goes to the hit's header.
+    if (spanning) {
       const items = stops(), position = items.indexOf(all[at]!)
-      if (event.key === 'ArrowLeft') moveTo(items.slice(0, position).reverse().find(item => item.dataset.groupHead !== undefined))
-      else if (event.key === 'ArrowDown') moveTo(items[position + 1])
-      else if (position > 0) moveTo(items[position - 1])
-      else focusInput()
-      return
+      const left = event.key === 'ArrowLeft'
+      if (left) moveTo(items.slice(0, position).reverse().find(item => item.dataset.groupHead !== undefined))
+      if (left || walk(items, position, event.key)) { event.preventDefault(); return }
     }
-    const next = event.key === 'ArrowDown' ? at + 1 : event.key === 'ArrowUp' ? at - 1 : event.key === 'PageDown' ? pageFrom(all, at, 1)
-      : event.key === 'PageUp' ? pageFrom(all, at, -1) : event.key === 'Home' ? 0 : event.key === 'End' ? all.length - 1 : undefined
+    const next = event.key === 'ArrowDown' ? at + 1 : event.key === 'ArrowUp' ? at - 1 : event.key === 'PageDown' ? pageFrom(list.current, all, at, 1)
+      : event.key === 'PageUp' ? pageFrom(list.current, all, at, -1) : event.key === 'Home' ? 0 : event.key === 'End' ? all.length - 1 : undefined
     if (event.key === 'Enter' || event.key === 'Escape') {
       event.preventDefault()
       event.stopPropagation()

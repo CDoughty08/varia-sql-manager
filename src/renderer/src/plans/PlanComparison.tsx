@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
-import { snapshotInput, documentInput, type ComparisonInput } from './comparison-inputs'
+import { comparisonChoices, snapshotInput, documentInput, type ComparisonInput } from './comparison-inputs'
 import type { ComparisonIndex } from './comparison.worker'
 import ComparisonDetails from './ComparisonDetails'
 import PlanViewer from './PlanViewer'
@@ -13,17 +13,18 @@ interface Comparison { prepared: [Prepared, Prepared]; pairs: ComparisonIndex[] 
 const pageSize = 50
 const sideNames = ['Left', 'Right'] as const
 const inputLabels = ['Left comparison input', 'Right comparison input'] as const
-const mark = (operator: ComparisonIndex['operators'][number]) => operator.status !== 'paired' ? operator.status : [operator.structural ? 'Structure changed' : operator.structureUnknown ? 'Parent relationship unavailable' : '', operator.propertiesChanged ? 'Properties changed' : ''].filter(Boolean).join(' · ') || 'Paired'
+const mark = (operator: ComparisonIndex['operators'][number]) => operator.status !== 'paired' ? operator.status : [operator.structural ? 'Structure changed' : operator.structureUnknown ? 'Parent relationship unavailable' : '', operator.propertiesChanged ? 'Properties changed' : operator.propertiesUnverified ? 'Property equality unverified (shortened fields)' : ''].filter(Boolean).join(' · ') || 'Paired'
 
-/** Owns exactly two immutable inputs. Input changes/unmount terminate matching and layout workers and drop cache scopes. */
+/** Owns exactly two immutable inputs. Each frozen input keeps one preparation scope for as long as it is held, so a swap
+ * (a new matching generation, `run.id`) reuses its parse, pending or finished, and its layouts. Replacing the inputs,
+ * hiding or unmounting drops the scopes; every generation change terminates matching and rejects late results. */
 export default function PlanComparison({ initialSnapshot, initialDocument, active = true, close }: { initialSnapshot?: string; initialDocument?: string; active?: boolean; close(): void }) {
   const { retainedPlans, documents, planPreparation, files } = useWorkbench()
   const history = useServiceSnapshot(retainedPlans), docs = useServiceSnapshot(documents)
-  const choices = useMemo(() => [...history.entries.map(entry => ({ id: 'snapshot:' + entry.id, label: `${entry.captureType} · ${entry.context.name} · batch ${entry.batchNumber}, repetition ${entry.iteration} · ${new Date(entry.context.startedAt).toLocaleString()}` })),
-    ...docs.documents.filter(document => document.kind === 'sqlplan').map(document => ({ id: 'document:' + document.id, label: `Document · ${document.name}${document.dirty ? ' · edited' : ''}` }))], [history.entries, docs.documents])
+  const choices = useMemo(() => comparisonChoices(history.entries, docs.documents), [history.entries, docs.documents])
   const initial = initialSnapshot ? 'snapshot:' + initialSnapshot : initialDocument ? 'document:' + initialDocument : choices[0]?.id ?? ''
   const [picks, setPicks] = useState<[string, string]>([initial, choices.find(choice => choice.id !== initial)?.id ?? initial])
-  const [run, setRun] = useState<{ id: string; inputs: [ComparisonInput, ComparisonInput] }>()
+  const [run, setRun] = useState<{ id: string; owner: string; inputs: [ComparisonInput, ComparisonInput]; scopes: [string, string] }>()
   const [comparison, setComparison] = useState<Comparison>()
   const [error, setError] = useState('')
   const [linked, setLinked] = useState(true)
@@ -46,16 +47,26 @@ export default function PlanComparison({ initialSnapshot, initialDocument, activ
   }
   const start = () => {
     setComparison(undefined); setError('')
-    try { setRun({ id: 'comparison:' + crypto.randomUUID(), inputs: [capture(picks[0]), capture(picks[1])] }) }
+    try {
+      const id = 'comparison:' + crypto.randomUUID()
+      setRun({ id, owner: id, inputs: [capture(picks[0]), capture(picks[1])], scopes: [id + ':input:0', id + ':input:1'] })
+    }
     catch (error) { setRun(undefined); setError(error instanceof Error ? error.message : 'The inputs could not be acquired.') }
   }
+  const owner = run?.owner
+  useEffect(() => {
+    if (!owner || !active) return
+    return () => { for (const side of [0, 1]) planPreparation.close(`${owner}:input:${side}`) }
+  }, [owner, active, planPreparation])
   useEffect(() => {
     setComparison(undefined); setSelected(['', '']); setCameras([undefined, undefined]); setPairIndex(0); setOperatorIndex(-1); setPage(0)
     if (!run || !active) return
     setError('')
-    const stop = new AbortController(), scopes = sideNames.map(side => run.id + ':' + side)
+    const stop = new AbortController(), scopes = run.scopes
     let worker: Worker | undefined
-    const release = () => { stop.abort(); worker?.terminate(); for (const scope of scopes) planPreparation.close(scope) }
+    // Leaving a generation only detaches from the shared preparations; a failure also drops them so a retry starts clean.
+    const detach = () => { stop.abort(); worker?.terminate() }
+    const release = () => { detach(); for (const scope of scopes) planPreparation.close(scope) }
     const timer = setTimeout(() => { release(); setError('Comparison preparation exceeded 35 seconds. Choose inputs and compare again.') }, 35_000)
     const parse = (xml: string) => window.varia.parsePlan(xml)
     void Promise.all(run.inputs.map((input, side) => loadPlanSources([input.source], parse, stop.signal,
@@ -73,7 +84,7 @@ export default function PlanComparison({ initialSnapshot, initialDocument, activ
       }
       worker.postMessage({ left: prepared[0].statements, right: prepared[1].statements })
     }).catch(error => { if (!stop.signal.aborted) { clearTimeout(timer); release(); setError(error instanceof Error ? error.message : 'Comparison preparation failed.') } })
-    return () => { clearTimeout(timer); release() }
+    return () => { clearTimeout(timer); detach() }
   }, [run, active, planPreparation])
   const indexes = useMemo(() => comparison?.prepared.map(prepared => ({ statements: new Map(prepared.statements.map(s => [s.id, s])),
     nodes: new Map(prepared.statements.flatMap(s => s.nodes.map(node => [node.id, node] as const))) })), [comparison])
@@ -109,16 +120,17 @@ export default function PlanComparison({ initialSnapshot, initialDocument, activ
   }, [comparison])
   return <section className="plan-comparison" aria-label="Plan comparison">
     <div className="comparison-controls">
-      {sideNames.map((side, index) => <label key={side}>{side} plan <select aria-label={inputLabels[index]} value={picks[index]} onChange={event => {
+      {sideNames.map((side, index) => <label key={side}>{side} plan <select aria-label={inputLabels[index]} value={picks[index]} title={choices.find(choice => choice.id === picks[index])?.detail}
+        aria-description={choices.find(choice => choice.id === picks[index])?.detail} onChange={event => {
         setRun(undefined); setComparison(undefined); setError(''); setPicks(previous => index === 0 ? [event.target.value, previous[1]] : [previous[0], event.target.value])
       }}>
         {!choices.some(choice => choice.id === picks[index]) && <option value={picks[index]}>Input unavailable</option>}
-        {choices.map(choice => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
+        {choices.map(choice => <option key={choice.id} value={choice.id} title={choice.detail}>{choice.label}</option>)}
       </select></label>)}
       <button type="button" onClick={start} disabled={!picks.every(pick => choices.some(choice => choice.id === pick))}>Compare selected plans</button>
       <button type="button" onClick={() => {
         setPicks([picks[1], picks[0]]); setError(''); setComparison(undefined)
-        if (run) setRun({ id: 'comparison:' + crypto.randomUUID(), inputs: [run.inputs[1], run.inputs[0]] })
+        if (run) setRun({ id: 'comparison:' + crypto.randomUUID(), owner: run.owner, inputs: [run.inputs[1], run.inputs[0]], scopes: [run.scopes[1], run.scopes[0]] })
       }}>Swap plans</button>
       <button type="button" onClick={() => { void files.open() }} disabled={docs.busy}>Open saved plan…</button>
       <button type="button" onClick={close}>Close comparison</button>
@@ -166,7 +178,7 @@ export default function PlanComparison({ initialSnapshot, initialDocument, activ
       </div>}
       <div className="comparison-viewers">{sideNames.map((side, index) => <section key={side} aria-label={side + ' plan view'}>
         <div className="comparison-side-note">{side} · {(index === 0 ? pair?.left : pair?.right) ? 'Statement in selected pair' : 'No statement counterpart; the input remains available to inspect'}</div>
-        <PlanViewer key={run.id + side} sources={[run.inputs[index].source]} identity={run.id + ':' + side} scope={run.id + ':' + side} visible={active} compact transient
+        <PlanViewer key={run.id + side} sources={[run.inputs[index].source]} identity={run.id + ':' + side} scope={run.scopes[index]} visible={active} compact transient
           prepared={comparison.prepared[index]} marks={marks[index]} navigation={{ selected: selected[index], statement: linked ? (index === 0 ? pair?.left : pair?.right) ?? '' : undefined,
             camera: cameras[index], select: id => select(index, id), selectStatement: id => {
               lastSide.current = index

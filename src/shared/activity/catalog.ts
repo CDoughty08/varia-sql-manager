@@ -99,7 +99,7 @@ export const pendingProbes: { readonly [P in ActivityProbe]?: string } = {}
 /** Status values the sessions probe sends with its first sample on each new connection: what the capability probe found the
  *  login may do (1 or 0). */
 export const activityStatuses = {
-  serverState: 'The login reads server state (VIEW SERVER PERFORMANCE STATE from SQL Server 2022, VIEW SERVER STATE before): without it, Processes shows only the monitor\'s own session and Blocking and Active Expensive Queries report PERMISSION_DENIED.',
+  serverState: 'The login reads server state (VIEW SERVER PERFORMANCE STATE from SQL Server 2022, VIEW SERVER STATE before): without it, Sessions shows only the monitor\'s own session and Blocking and Active Expensive Queries report PERMISSION_DENIED.',
   canKill: 'The login holds ALTER ANY CONNECTION, which Kill Process needs.'
 } as const
 export type ActivityStatus = keyof typeof activityStatuses
@@ -154,7 +154,7 @@ export type DetailsSection = typeof detailsSections[number]['id']
 export const detailsTexts = ['statement', 'batch', 'inputBuffer'] as const satisfies readonly DetailsSection[]
 export type DetailsText = typeof detailsTexts[number]
 export const killOutcomes = {
-  killed: 'SQL Server accepted KILL. An open transaction rolls back, which can take as long as the work it undoes; Processes shows its progress.',
+  killed: 'SQL Server accepted KILL. An open transaction rolls back, which can take as long as the work it undoes; Sessions shows its progress.',
   ended: 'No session has that id any more. Nothing was killed.',
   changed: 'The id now belongs to another session (its login time or host process id differs). Nothing was killed.',
   own: 'The session Kill itself runs on. Nothing was killed.',
@@ -225,7 +225,7 @@ export const activityPermissions = ['viewServerState', 'viewServerPerformanceSta
 
 export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
   sessions: {
-    probe: 'activity.sessions', title: 'Processes', key: ['sessionId'], identity: ['loginTime'], rowCap: 10_000, departedLinger: true,
+    probe: 'activity.sessions', title: 'Sessions', key: ['sessionId'], identity: ['loginTime'], rowCap: 10_000, departedLinger: true,
     tones: ['blocked', 'blocking', 'rollback', 'departed', 'system'],
     defaultSort: [{ column: 'sessionId', descending: false }],
     textColumns: ['login', 'database', 'application', 'hostName', 'command', 'waitType', 'status'],
@@ -275,7 +275,7 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
       c('session', 'Session', 'text', '', true, 'new', 'The session id indented by its depth in the chain; lead blockers at depth 0.'),
       c('sessionId', 'Session ID', 'int', 'id', false, 'new', 'session_id.'),
       c('depth', 'Depth', 'int', 'count', false, 'new', 'Depth in the chain (0 for a lead blocker).'),
-      c('status', 'Status', 'text', '', true, 'new', 'As in Processes.'),
+      c('status', 'Status', 'text', '', true, 'new', 'As in Sessions.'),
       c('blockedSessions', 'Blocked Sessions', 'int', 'count', true, 'new', 'Sessions downstream of it.'),
       c('waitType', 'Wait Type', 'text', '', true, 'new', 'The wait on its parent in the chain.'),
       c('waitTimeMs', 'Wait (ms)', 'bigint', 'ms', true, 'new', 'How long it has waited on its parent.'),
@@ -404,7 +404,7 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
 }
 
 /** The live layer sorts and filters a probe's tables by column id, so ids are unique within a probe: its first table keeps
- *  its ids and the others take a prefix (Blocking's sessionId is chainSessionId). Sorting Processes then never reorders
+ *  its ids and the others take a prefix (Blocking's sessionId is chainSessionId). Sorting Sessions then never reorders
  *  the Blocking tree. */
 export const liveColumnPrefixes: { readonly [T in ActivityTable]?: string } = { blocking: 'chain', activeQueries: 'active', waitTypes: 'type', files: 'io' }
 export const liveColumnId = (table: ActivityTable, column: string): string => {
@@ -423,24 +423,22 @@ export interface PaneSpec {
   readonly badge: 'rows' | 'blocked'
 }
 export const paneSpecs: { readonly [P in ActivityPane]: PaneSpec } = {
-  processes: { title: 'Processes', probe: 'activity.sessions', tables: ['sessions'], badge: 'rows' },
+  processes: { title: 'Sessions', probe: 'activity.sessions', tables: ['sessions'], badge: 'rows' },
   blocking: { title: 'Blocking', probe: 'activity.sessions', tables: ['blocking'], badge: 'blocked' },
   waits: { title: 'Resource Waits', probe: 'activity.resources', tables: ['waitCategories', 'waitTypes'], badge: 'rows' },
   fileIo: { title: 'Data File I/O', probe: 'activity.resources', tables: ['files'], badge: 'rows' },
   recentQueries: { title: 'Recent Expensive Queries', probe: 'activity.queries', tables: ['recentQueries'], badge: 'rows' },
   activeQueries: { title: 'Active Expensive Queries', probe: 'activity.sessions', tables: ['activeQueries'], badge: 'rows' }
 }
-/** Split view's panes on first open: Processes beside Resource Waits. */
+/** Split view's panes on first open: Sessions beside Resource Waits. */
 export const defaultPanes = { primary: 'processes', secondary: 'waits' } as const satisfies { readonly primary: ActivityPane; readonly secondary: ActivityPane | 'none' }
 /** Panes whose grid the document does not draw yet: each says so where its grid goes, and its probe stays paused for it
- *  (no SQL runs for a pane nobody can read). Processes, Blocking and Active Expensive Queries arrive with the sessions
- *  grids, Resource Waits and Data File I/O with the resources probe, Recent Expensive Queries with query statistics. */
+ *  (no SQL runs for a pane nobody can read). Resource Waits and Data File I/O arrive with the resources grids, Recent
+ *  Expensive Queries with query statistics' grid. */
 export const pendingPanes: readonly ActivityPane[] = [
-  'blocking',
   'waits',
   'fileIo',
-  'recentQueries',
-  'activeQueries'
+  'recentQueries'
 ]
 export const pendingPaneNote = (pane: ActivityPane): string => `${paneSpecs[pane].title} is not shown yet; it arrives in a later version of Varia.`
 /** The probes that must run for these panes: each shown pane's probe, unless the pane's grid is pending. The overview runs
@@ -553,11 +551,11 @@ export const tileSpecs: readonly TileSpec[] = [
  *  categories (Idle) are never charted: their time is threads waiting for work. */
 export const waitsChartSeries = 5
 
-/** Processes' view chips (one at a time) and toggles. */
+/** Sessions' view chips (one at a time) and toggles. */
 export const viewChips = ['all', 'active', 'blocked', 'blocking', 'idleOpenTransaction', 'rollingBack'] as const
 export type ViewChip = typeof viewChips[number]
 export const viewChipTitles: { readonly [V in ViewChip]: string } = {
-  all: 'All', active: 'Active', blocked: 'Blocked', blocking: 'Blocking', idleOpenTransaction: 'Idle with open transaction', rollingBack: 'Rolling back'
+  all: 'All', active: 'Active', blocked: 'Blocked', blocking: 'Blocking', idleOpenTransaction: 'Idle in transaction', rollingBack: 'Rolling back'
 }
 export const viewChipNotes: { readonly [V in ViewChip]: string } = {
   all: 'Every session the toggles allow.',
@@ -568,8 +566,8 @@ export const viewChipNotes: { readonly [V in ViewChip]: string } = {
   rollingBack: 'Sessions rolling back after KILL.'
 }
 export const sessionToggles = {
-  showSystem: { title: 'System sessions', setting: 'activityMonitor.showSystemSessions', default: false },
-  showVaria: { title: 'Varia\'s own', setting: 'activityMonitor.showVariaSessions', default: false }
+  showSystem: { title: 'System sessions', label: 'System', note: 'Show system sessions (background tasks such as the checkpoint and the lock monitor).', setting: 'activityMonitor.showSystemSessions', default: false },
+  showVaria: { title: 'Varia\'s own', label: 'Varia\'s own', note: 'Show Varia\'s own sessions (this monitor\'s and Varia\'s other connections).', setting: 'activityMonitor.showVariaSessions', default: false }
 } as const
 /** Resource Waits' toggle (both of its tables): leaves out benign rows, the Idle category and its wait types. */
 export const waitToggles = {

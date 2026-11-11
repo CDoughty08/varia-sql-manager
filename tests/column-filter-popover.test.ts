@@ -8,7 +8,7 @@ import { createRoot } from 'react-dom/client'
 import type { DistinctValue, ResultsDistinctReadResult, ResultsDistinctTickResult } from '../src/shared/contracts'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
-import { ColumnFilterPopover } from '../src/renderer/src/results/ColumnFilterPopover'
+import { ColumnFilterPopover, resultsFilterSource } from '../src/renderer/src/results/ColumnFilterPopover'
 import type { DistinctList } from '../src/renderer/src/results/ResultClient'
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -57,7 +57,7 @@ function fixture(o: { hold?: boolean } = {}) {
   mounted.add(unmount)
   const anchor = { left: 0, top: 0, right: 300, bottom: 20, width: 300, height: 20, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
   act(() => {
-    root.render(createElement(WorkbenchProvider, { workbench, children: createElement(ColumnFilterPopover, { tabId: 't', index: 0, columnName: 'name', target: { column: 0, anchor }, filtered: false, grid, onClose }) }))
+    root.render(createElement(WorkbenchProvider, { workbench, children: createElement(ColumnFilterPopover, { source: resultsFilterSource(workbench.results, 't', 0), columnName: 'name', target: { column: 0, anchor }, filtered: false, grid, onClose }) }))
   })
   const dialog = () => document.querySelector('form[role="dialog"]') as HTMLFormElement
   const valueList = () => dialog().querySelector('[role="group"][aria-label="Values"]') as HTMLElement

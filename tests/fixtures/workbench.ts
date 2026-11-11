@@ -85,6 +85,7 @@ import { settingsContribution } from '../../src/renderer/src/contributions/setti
 import { notificationsContribution } from '../../src/renderer/src/contributions/notifications'
 import { NotificationService } from '../../src/renderer/src/core/notifications'
 import { UpdateService } from '../../src/renderer/src/updates/UpdateService'
+import { ReleaseNotesService } from '../../src/renderer/src/release-notes/ReleaseNotesService'
 import { updatesContribution } from '../../src/renderer/src/contributions/updates'
 import type { UpdateState } from '../../src/shared/updates'
 import { SettingsService } from '../../src/renderer/src/settings/SettingsService'
@@ -243,7 +244,8 @@ export function updatesApi(initial: UpdateState = { status: 'idle', currentVersi
     checkForUpdates: vi.fn<VariaApi['checkForUpdates']>(async () => ({ ok: true, value: current })),
     downloadUpdate: vi.fn<VariaApi['downloadUpdate']>(async () => ({ ok: true, value: current })),
     restartToUpdate: vi.fn<VariaApi['restartToUpdate']>(async () => ({ ok: true, value: current.status === 'ready' })),
-    openReleasesPage: vi.fn<VariaApi['openReleasesPage']>(async () => ({ ok: true, value: undefined }))
+    openReleasesPage: vi.fn<VariaApi['openReleasesPage']>(async () => ({ ok: true, value: undefined })),
+    openProductLink: vi.fn<VariaApi['openProductLink']>(async () => ({ ok: true, value: undefined }))
   }
 }
 
@@ -388,6 +390,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const inputMode = new InputModeService(fakeInputMode())
   const notifications = new NotificationService(options.timers ? { timers: options.timers } : {})
   const updates = new UpdateService(api)
+  const releaseNotes = new ReleaseNotesService(documents, () => updates.getSnapshot().currentVersion, vi.fn())
   const databaseGone = databaseGoneHandler({ documents, properties, notify: toast => { notifications.notify(toast) }, copy: text => { void api.writeClipboardText(text) } })
   const context = new ContextKeyService({
     platform,
@@ -492,6 +495,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     actionProgress,
     notifications,
     updates,
+    releaseNotes,
     activity,
     operations,
     objectSearch
@@ -575,6 +579,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     settings.dispose()
     notifications.dispose()
     updates.dispose()
+    releaseNotes.dispose()
     documents.dispose()
     backend.dispose()
   }
@@ -619,6 +624,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     focusEditor,
     notifications,
     updates,
+    releaseNotes,
     queries,
     files,
     recentFiles,

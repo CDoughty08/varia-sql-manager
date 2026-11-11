@@ -55,3 +55,39 @@ it('waits for a new XML document to finish filling before mapping the caret back
     expect(captured.viewer.mock.lastCall?.[0].xmlNavigation).toMatchObject({ statement: 0, operator: 1, nodeId: '1' })
   } finally { await act(async () => root.unmount()); host.remove(); vi.useRealTimers() }
 })
+
+it('keeps the XML caret independent of graph selection across a document tab round trip', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  const host = document.createElement('div'), root = createRoot(host)
+  document.body.append(host)
+  const text = '<ShowPlanXML xmlns="http://schemas.microsoft.com/sqlserver/2004/07/showplan"><StmtSimple><RelOp NodeId="0"><RelOp NodeId="1" /></RelOp></StmtSimple></ShowPlanXML>'
+  let position = { lineNumber: 1, column: text.indexOf('<RelOp NodeId="1"') + 2 }
+  const model = { getValue: () => text, getVersionId: () => 1, getPositionAt: (offset: number) => ({ lineNumber: 1, column: offset + 1 }), getOffsetAt: (value: typeof position) => value.column - 1,
+    onDidChangeContent: () => ({ dispose() {} }) }
+  const workbench = { documents: { getModel: () => model, isFilling: () => false, editorOf: () => ({ setSelection() {}, revealRangeInCenter() {}, focus() {}, getPosition: () => position, getSelection: () => undefined }) },
+    planPreparation: { takeXml: () => undefined, watchDocument() {} } } as unknown as Workbench
+  // The editor area keeps the Graph/XML mode with the document panel and unmounts the document while its tab is hidden.
+  let source = false
+  const render = (shown: boolean) => act(async () => root.render(createElement(WorkbenchProvider, { workbench,
+    children: shown ? createElement(PlanDocument, { documentId: 'saved', source, onSource: value => { source = value; void render(true) } }) : null })))
+  const buttons = () => host.querySelectorAll<HTMLButtonElement>('button')
+  try {
+    await render(true)
+    captured.viewer.mockClear()
+    await act(async () => buttons()[1].click())
+    expect(source).toBe(true)
+    await render(false)
+    await render(true)
+    expect(buttons()[1].getAttribute('aria-pressed')).toBe('true')
+    await act(async () => buttons()[0].click())
+    expect(captured.viewer).toHaveBeenCalled()
+    expect(captured.viewer.mock.lastCall?.[0].xmlNavigation).toBeUndefined()
+    // After another round trip, a moved caret still navigates the graph.
+    await act(async () => buttons()[1].click())
+    await render(false)
+    await render(true)
+    position = { lineNumber: 1, column: text.indexOf('<RelOp NodeId="0"') + 2 }
+    await act(async () => buttons()[0].click())
+    expect(captured.viewer.mock.lastCall?.[0].xmlNavigation).toMatchObject({ statement: 0, operator: 0, nodeId: '0' })
+  } finally { await act(async () => root.unmount()); host.remove() }
+})

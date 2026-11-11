@@ -100,6 +100,31 @@ describe('the recent files store', () => {
     expect(store.list().map(file => file.path)).toEqual(['/q/a.sql'])
     expect((await stat(path)).isDirectory()).toBe(true)
   })
+  // sandbox-guard.ts's profilePathsRefused: a packaged smoke run's profile belongs to whoever started it.
+  it('neither reads nor writes its file while paths are refused: the list is this run\'s own', async () => {
+    const path = join(directory, 'recent-files.json')
+    await new RecentFilesStore(path, { platform: 'linux', now: at(1) }).add('/q/planted.sql')
+    const planted = await readFile(path, 'utf8')
+    const system = { add: vi.fn(), clear: vi.fn() }
+    const store = new RecentFilesStore(path, { platform: 'linux', pathsRefused: true, system })
+    await store.load()
+    expect(store.list()).toEqual([])
+    // A file this run opened through main's dialog is listed and can be opened again, from memory.
+    await store.add('/q/opened.sql')
+    expect(store.list().map(file => file.path)).toEqual(['/q/opened.sql'])
+    expect(store.pathOf(store.list()[0].id)).toBe('/q/opened.sql')
+    await store.clear()
+    expect(store.list()).toEqual([])
+    expect(await readFile(path, 'utf8')).toBe(planted)
+    expect(await readdir(directory)).toEqual(['recent-files.json'])
+    // Not even an invalid file is touched (a normal run quarantines it).
+    await writeFile(path, '{ not json')
+    const invalid = new RecentFilesStore(path, { platform: 'linux', pathsRefused: true })
+    await invalid.add('/q/a.sql')
+    expect(await readFile(path, 'utf8')).toBe('{ not json')
+    expect(await readdir(directory)).toEqual(['recent-files.json'])
+  })
+
   it('accepts only its own strict shape', () => {
     const entry = { path: '/q/a.sql', openedAt: '2026-10-19T09:01:00.000Z' }
     expect(recentFilesFileSchema.safeParse({ version: 1, files: [entry] }).success).toBe(true)

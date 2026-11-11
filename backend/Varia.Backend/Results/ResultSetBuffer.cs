@@ -27,6 +27,7 @@ internal sealed class ResultSetBuffer
     private int sealedPages;
     private int leases;
     private bool freePending;
+    private TruncationReason refused;
     private volatile bool incomplete;
 
     /// <param name="metadata">Bytes already reserved for the column metadata; returned with everything else on release.</param>
@@ -92,24 +93,28 @@ internal sealed class ResultSetBuffer
     /// <summary>Records why a row was not stored; the first reason sticks.</summary>
     public void Skip(TruncationReason reason) => Interlocked.CompareExchange(ref truncated, (int)reason, 0);
 
-    /// <summary>A set made from stored results (a pivot), not read from the server: a refusal fails only this set, which its
-    /// caller then releases whole, and never stops its query from storing more, so a smaller pivot can still fit.</summary>
+    /// <summary>A set made from stored results (a pivot, a diff, a transpose), not read from the server: a refusal or low
+    /// system memory fails only this set, which its caller then releases whole, and never stops its query from storing
+    /// more, so a smaller one can still fit.</summary>
     public bool Derived { get; init; }
 
-    /// <summary>The builder for the next row, or null when this set stores nothing more (released, or its query stopped).</summary>
+    /// <summary>The builder for the next row, or null when this set stores nothing more: released, its query stopped, or,
+    /// for a derived set, a row the budget refused or a page sealed under low system memory.</summary>
     public PageBuilder? BeginRow()
     {
         lock (gate)
         {
             if (builder is null || state != 0) return null;
             if (Budget.Stopped is var stopped and not TruncationReason.None) { Skip(stopped); return null; }
+            if (refused != TruncationReason.None) { Skip(refused); return null; }
             builder.BeginRow();
             return builder;
         }
     }
 
     /// <summary>Commits the open row if the budget has room for it and for the builder's growth; otherwise rolls it back,
-    /// so a page never holds a partial row, and stops the query from storing more. Returns whether the row was stored.</summary>
+    /// so a page never holds a partial row, and stops the query from storing more (a derived set stops only itself).
+    /// Returns whether the row was stored.</summary>
     public bool TryCommitRow(int truncatedCellsInRow = 0)
     {
         lock (gate)
@@ -139,12 +144,12 @@ internal sealed class ResultSetBuffer
     /// belong together (a diff's changed pair) are stored both or neither. Their commits charge the rows (at most
     /// <paramref name="bytes"/>) and the builder's growth: what it grew by and is not charged for yet, and its buffers
     /// doubling, which adds at most their size and the rows' bytes again. False when it has not: the set stores nothing
-    /// more and the query stops, as when a row is refused.</summary>
+    /// more and the query stops (a derived set leaves it open), as when a row is refused.</summary>
     public bool TryReserveRows(long bytes)
     {
         lock (gate)
         {
-            if (builder is null || state != 0) return false;
+            if (builder is null || state != 0 || refused != TruncationReason.None) return false;
             var size = builder.WorkingBytes;
             var need = 2 * bytes + Math.Max(0, size - working) + size;
             return need <= slack || Reserve(need - slack);
@@ -184,8 +189,14 @@ internal sealed class ResultSetBuffer
         Volatile.Write(ref sealedPages, pages.Count);
         rowsAvailable += rows;
         bytesStored += page.Length;
-        // Checked at every seal: under memory pressure the page just sealed is kept, and nothing more is stored.
-        if (store.IsSystemMemoryLow()) Budget.Stop(TruncationReason.SystemMemory);
+        // Checked at every seal, the only low-memory check there is: the page just sealed is kept, and nothing more is
+        // stored. A query's own set stops its query, at its last seal too, so later sets store nothing. A derived set stops
+        // only itself, at its next row (its caller then refuses it whole), and the query can still store another. One whose
+        // last seal sees pressure (the seal inside Complete, or its last row filling a page) asks for no row after it, so
+        // it is whole and not truncated.
+        if (!store.IsSystemMemoryLow()) return;
+        if (Derived) refused = TruncationReason.SystemMemory;
+        else Budget.Stop(TruncationReason.SystemMemory);
     }
 
     private bool Reserve(long bytes)
@@ -198,7 +209,10 @@ internal sealed class ResultSetBuffer
             return true;
         }
         Skip(reason);
-        if (!Derived) Budget.Stop(reason);
+        // The first refusal ends the set, as it ends a query's: a later, smaller row must not be stored past the gap,
+        // because stored rows are a prefix of the rows read. A derived set ends only itself.
+        if (Derived) refused = reason;
+        else Budget.Stop(reason);
         return false;
     }
 

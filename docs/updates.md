@@ -4,6 +4,11 @@ Varia SQL Manager updates itself from this repository's [GitHub releases](https:
 Main does all of it (`src/main/updater.ts`, `src/main/update-install.ts`, `src/main/update-staging.ts`); the page only
 shows the state main pushes (`UpdateState` in `src/shared/updates.ts`) and runs the Help commands.
 
+**Help > Release Notes** reads bundled, curated notes inside Varia. A notification's **Release notes** action requests
+that notification's exact version; if its notes are not bundled, the reader says so and offers installed-version notes.
+**Open Release Downloads** separately opens the fixed GitHub releases page for manual installation and error remedies.
+Missing notes never block an update. See [Release Notes](release-notes.md).
+
 ## How a release is found
 
 Every release carries `varia-update-v2.json`, written by the release job (`scripts/update-manifest.mjs`): the version and,

@@ -40,6 +40,18 @@ with `node scripts/ci-timings.mjs` (add `--steps` for per-step times) before and
   are 20 seconds on Linux and 25 on Windows; the local Windows run took 7.5 seconds. The SQL language live suite additionally
   validates real syntax/binding issues, qualified joined completions and diagnostic cache refresh against marked fixtures.
 
+  About coverage shares `updates-smoke.mjs`: Help/palette opening, keyboard focus, clipboard success/failure, fixed
+  browser destinations, update states and restart through About. It adds no suite or job. The expanded suite took
+  5.1 seconds locally on Windows. PR #406's CI measured 6 seconds on Linux and 7 seconds on Windows; the shard weights
+  record those measurements.
+
+  The release reader's installed/history, same-release section/scroll preservation, exact-version/unavailable, About
+  navigation and light/dark checks also share that launch. PR #408's initial CI measured 6 seconds on Linux and 7 on
+  Windows. Content checks validate the checked-in archive with the same loader as publication; generic publication
+  fixtures and archive-derived smoke expectations allow new releases without changing test prose. Curated release-body
+  compilation uses the existing tag-publication job, with a script-free
+  dependency install for the shared schema. It creates no new job and does not run that install on ordinary PR checks.
+
   Smoke builds and packaging prepare Electron from its npm-pinned checksums, retrying transient official-download failures
   within a three-attempt, three-minute budget and seeding the shared archive cache so packaging verifies checksums offline.
   Publishing a verified SQL Tools archive or runtime retries brief Windows sharing violations up to seven times. Persistent
@@ -245,8 +257,13 @@ Considered and rejected (do not re-propose without new numbers):
   (`tests/release-workflow.test.ts`). Two overlapping pushes must fit in 20 slots. GitHub matches a pull request's `paths`
   against its first 300 changed files only, so a pull request over 300 changed files may skip Release builds silently: run
   them by hand (`workflow_dispatch`) when it touches packaging.
-- **Audit gate.** Check (ubuntu) runs `npm audit --audit-level=high` after `npm run check`, whatever its outcome, so an advisory
-  or a registry outage never hides the check's results. A high or critical advisory fails the job,
+- **Audit gate.** `npm audit` runs in a workflow of its own (`audit.yml`: one job that installs nothing), not in CI: as
+  a step of Check (ubuntu), an outage of npm's advisory endpoint or a new advisory against any installed package failed
+  every open pull request and main push, whatever it changed. It runs on pull requests and main pushes that change
+  `package.json` or `package-lock.json`, and daily on main, which is what reports an advisory published since.
+  `scripts/audit.mjs` retries an endpoint that gives no report, then warns without failing. Its paths filter means it must
+  not become a required check (a pull request it skips would wait for it forever), so look at it before merging a
+  dependency change. A high or critical advisory fails the job,
   so upgrade or override the package (and add its floor to `tests/dependency-floors.test.ts`). Moderate and low ones only
   report: minimatch's GHSA-g3hv-75wg-m249 (a glob-pattern DoS) has no fix below 11.0.1, a major version under
   electron-builder's own dependencies, and its patterns come only from Varia's build configuration.

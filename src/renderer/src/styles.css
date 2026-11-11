@@ -1,6 +1,6 @@
 :root { --varia-font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Ubuntu, Cantarell, 'Noto Sans', sans-serif; --varia-font-mono: 'Cascadia Mono', Consolas, 'SF Mono', Menlo, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono', monospace; font-family: var(--varia-font-ui); color: var(--varia-foreground); background: var(--varia-editor-background); font-synthesis: none; }
 /* Metric tokens, as src/shared/theme/metrics.ts defines them (tests/theme-css.test.ts compares the two). */
-:root { --varia-size-xs: 11px; --varia-line-xs: 16px; --varia-size-sm: 12px; --varia-line-sm: 16px; --varia-size-md: 13px; --varia-line-md: 20px; --varia-size-lg: 15px; --varia-line-lg: 20px; --varia-size-xl: 20px; --varia-line-xl: 26px; --varia-space-0: 2px; --varia-space-1: 4px; --varia-space-2: 8px; --varia-space-3: 12px; --varia-space-4: 16px; --varia-space-5: 24px; --varia-space-6: 32px; --varia-radius-sm: 4px; --varia-radius-lg: 8px; --varia-radius-pill: 999px; --varia-shadow-menu: 0 4px 12px; --varia-shadow-popover: 0 8px 24px; --varia-shadow-dialog: 0 16px 48px; --varia-motion-fast: 80ms; --varia-motion-base: 120ms; --varia-motion-spin: 1500ms; --varia-motion-pulse: 2000ms; --varia-motion-delay: 300ms; --varia-motion-ease: cubic-bezier(0.2, 0, 0, 1); --varia-glyph-badge: 9px; --varia-glyph-sm: 12px; --varia-glyph-md: 16px; --varia-glyph-lg: 24px; --varia-progress: 4px; --varia-header: 40px; --varia-bar: 36px; --varia-control: 26px; --varia-row: 22px; --varia-status: 24px; }
+:root { --varia-size-xs: 11px; --varia-line-xs: 16px; --varia-size-sm: 12px; --varia-line-sm: 16px; --varia-size-md: 13px; --varia-line-md: 20px; --varia-size-lg: 15px; --varia-line-lg: 20px; --varia-size-xl: 20px; --varia-line-xl: 26px; --varia-space-0: 2px; --varia-space-1: 4px; --varia-space-2: 8px; --varia-space-3: 12px; --varia-space-4: 16px; --varia-space-5: 24px; --varia-space-6: 32px; --varia-radius-sm: 4px; --varia-radius-lg: 8px; --varia-radius-pill: 999px; --varia-shadow-menu: 0 4px 12px; --varia-shadow-popover: 0 8px 24px; --varia-shadow-dialog: 0 16px 48px; --varia-motion-fast: 80ms; --varia-motion-base: 120ms; --varia-motion-spin: 1500ms; --varia-motion-pulse: 2000ms; --varia-motion-delay: 300ms; --varia-motion-ease: cubic-bezier(0.2, 0, 0, 1); --varia-glyph-badge: 9px; --varia-glyph-sm: 12px; --varia-glyph-md: 16px; --varia-glyph-lg: 24px; --varia-progress: 4px; --varia-header: 40px; --varia-bar: 36px; --varia-documentTab: 44px; --varia-control: 26px; --varia-row: 22px; --varia-status: 24px; }
 @media (prefers-reduced-motion: reduce) { :root { --varia-motion-fast: 0ms; --varia-motion-base: 0ms; } }
 @keyframes varia-appear { from { opacity: 0; } }
 /* VS Code variables standalone Monaco uses but never defines: the border width of the find widget's toggles, and the
@@ -314,6 +314,42 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* A bookmark in the indicator (glyph) margin: Edit › Bookmarks. */
 .monaco-editor .varia-bookmark { color: var(--varia-editorBookmark-foreground); }
 .filter-dialog { width: min(640px, calc(100vw - 40px)); }
+.connection-modal.about-dialog { width: min(520px, calc(100vw - 40px)); font-size: var(--varia-size-md); }
+.about-dialog .connection-scroll { display: flex; flex-direction: column; gap: var(--varia-space-4); padding: var(--varia-space-3) var(--varia-space-4) var(--varia-space-4); }
+.about-identity { display: flex; align-items: center; gap: var(--varia-space-3); }
+.about-identity > div:last-child { min-width: 0; }
+.about-identity h3 { margin: 0; font-size: var(--varia-size-xl); line-height: var(--varia-line-xl); font-weight: 500; }
+.about-identity p { margin: var(--varia-space-1) 0 0; font-size: var(--varia-size-sm); color: var(--varia-descriptionForeground); }
+.about-brand { display: grid; place-items: center; flex-shrink: 0; width: calc(var(--varia-space-6) + var(--varia-space-4)); height: calc(var(--varia-space-6) + var(--varia-space-4)); border-radius: var(--varia-radius-lg); background: var(--varia-badge-background); color: var(--varia-focusBorder); }
+.about-brand > .icon { font-size: var(--varia-glyph-lg); }
+.about-version { display: flex; align-items: center; flex-wrap: wrap; gap: var(--varia-space-3); margin: 0; }
+.about-version > span { font-size: var(--varia-size-sm); color: var(--varia-descriptionForeground); }
+.about-update { border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-sm); padding: var(--varia-space-3); }
+.about-update-heading { display: flex; align-items: flex-start; gap: var(--varia-space-2); }
+.about-update-heading > [data-icon] { flex-shrink: 0; color: var(--varia-descriptionForeground); }
+.about-update-heading > div { min-width: 0; overflow-wrap: anywhere; }
+.about-update-heading h3 { margin: 0; font-size: var(--varia-size-md); line-height: var(--varia-line-md); font-weight: 500; }
+.about-update-heading p { margin: var(--varia-space-1) 0 0; color: var(--varia-dialog-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-md); }
+.about-update-action { display: inline-flex; align-items: center; gap: var(--varia-space-2); margin-top: var(--varia-space-2); white-space: normal; }
+.about-update-action[aria-disabled="true"] { opacity: .5; cursor: default; }
+.about-progress { height: var(--varia-progress); margin-top: var(--varia-space-3); background: var(--varia-badge-background); overflow: hidden; }
+.about-progress > span { display: block; height: 100%; background: var(--varia-focusBorder); }
+.about-links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--varia-space-1) var(--varia-space-2); border-top: 1px solid var(--varia-dialog-separatorBackground); border-bottom: 1px solid var(--varia-dialog-separatorBackground); padding: var(--varia-space-2) 0; }
+.about-links > button { display: flex; align-items: center; justify-content: space-between; gap: var(--varia-space-2); white-space: normal; }
+.about-copy { display: flex; align-items: center; flex-wrap: wrap; gap: var(--varia-space-2); }
+.about-copy > button { display: flex; align-items: center; gap: var(--varia-space-2); border-color: var(--varia-button-border); }
+.about-copy > span { font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.about-details { font-size: var(--varia-size-sm); color: var(--varia-descriptionForeground); }
+.about-details > summary { cursor: pointer; }
+.about-details > pre { margin: var(--varia-space-2) 0 0; padding: var(--varia-space-3); background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); font: var(--varia-size-sm)/var(--varia-line-md) var(--varia-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.release-note-picker { display: flex; align-items: center; flex-wrap: wrap; gap: var(--varia-space-2); color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); }
+.release-note-picker > select { max-width: 100%; padding: var(--varia-space-1) var(--varia-space-2); }
+.release-note-intro { max-width: 880px; }
+.release-note-intro > p { margin: 0; font-size: var(--varia-size-md); line-height: var(--varia-line-md); }
+.release-note-intro > .release-note-build { margin-top: var(--varia-space-2); font-size: var(--varia-size-sm); color: var(--varia-descriptionForeground); }
+.release-note-list { display: flex; flex-direction: column; gap: var(--varia-space-5); max-width: 880px; user-select: text; }
+.release-note h3 { margin: 0 0 var(--varia-space-1); font-size: var(--varia-size-md); line-height: var(--varia-line-md); font-weight: 600; }
+.release-note p { margin: 0; font-size: var(--varia-size-md); line-height: var(--varia-line-md); color: var(--varia-descriptionForeground); overflow-wrap: anywhere; }
 .go-to-line-dialog { width: min(360px, calc(100vw - 40px)); }
 .go-to-line-dialog label { display: block; font-size: var(--varia-size-xs); color: var(--varia-dialog-labelForeground); margin-bottom: 6px; }
 .go-to-line-dialog input { width: 100%; height: 28px; }
@@ -609,7 +645,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
    workbench panel dragged over them passes through to the editor panel's own drop targets. */
 .editor-groups-root { flex: 1; position: relative; min-height: 0; min-width: 0; }
 .workbench.dock-dragging .editor-groups-root { pointer-events: none; }
-.editor-groups-dock { --dv-tabs-and-actions-container-height: var(--varia-bar); --dv-tab-font-size: var(--varia-size-sm); --dv-floating-titlebar-height: 16px; }
+.editor-groups-dock { --dv-tabs-and-actions-container-height: var(--varia-documentTab); --dv-tab-font-size: var(--varia-size-sm); --dv-floating-titlebar-height: 16px; }
 .editor-groups .dv-tabs-and-actions-container { background: var(--varia-documentTabs-background); }
 .editor-groups .dv-tab { padding: 0; background: none; }
 .editor-groups .query-shelves-header { align-items: flex-start; }
@@ -618,7 +654,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .editor-groups .query-shelves > .dv-tab { position: absolute; min-width: 0; box-sizing: border-box; }
 .editor-groups .query-shelves > .dv-tab[data-tab-overflow] { opacity: 0; pointer-events: none; }
 .query-shelf { position: absolute; left: 0; right: 0; pointer-events: none; border-bottom: 1px solid var(--varia-documentTabs-border); }
-.query-shelf-more { position: absolute; height: var(--varia-bar); box-sizing: border-box; padding: 0 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: start; color: var(--varia-documentTabs-inactiveForeground); background: var(--varia-documentTabs-background); border: 1px solid var(--varia-documentTabs-border); pointer-events: auto; }
+.query-shelf-more { position: absolute; height: var(--varia-documentTab); box-sizing: border-box; padding: 0 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: start; color: var(--varia-documentTabs-inactiveForeground); background: var(--varia-documentTabs-background); border: 1px solid var(--varia-documentTabs-border); pointer-events: auto; }
 .query-shelf-more:hover { color: var(--varia-foreground); background: var(--varia-list-hoverBackground); }
 .query-shelf-overflow { position: fixed; inset: auto; position-area: bottom span-left; position-try-fallbacks: flip-block, flip-inline; margin: 0; min-width: 220px; max-width: min(480px, 90vw); max-height: 50vh; overflow: auto; padding: 3px; pointer-events: auto; color: var(--varia-menu-foreground); background: var(--varia-menu-background); border: 1px solid var(--varia-menu-border); border-radius: var(--varia-radius-sm); box-shadow: var(--varia-shadow-menu) var(--varia-widget-shadow); }
 .query-shelf-overflow > button { display: block; width: 100%; padding: 5px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: start; }
@@ -628,10 +664,18 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 @container (width < 338px) {
   .query-tab .tab-select { gap: 4px; padding-inline: 4px; }
 }
-/* A narrow split can leave the tab only its buttons and SID: decoration and spacing yield before the session badge. */
+/* Decoration yields in narrow splits; the environment and SID still have their own row. */
 @container (width < 200px) {
   .query-tab .tab-select { gap: 0; padding-inline: 0; }
-  .query-tab .tab-select > .tab-icon, .query-tab .tab-select > .tab-readonly, .query-tab .tab-select > .tab-running, .query-tab .environment-tag[data-place="tab"] { display: none; }
+  .query-tab .tab-select > .tab-icon { display: none; }
+}
+/* Tiny floating groups reserve the second line for the complete SID; the environment remains in the tab's description. */
+@container (width < 140px) {
+  .query-tab .environment-tag[data-place="tab"] { display: none; }
+  .query-tab .tab-sid { padding-inline: var(--varia-space-0); }
+  /* Keep both action targets intact; their outer gutter gives wider platform fonts room for the whole SID. */
+  .query-tab .tab-close { margin-right: 0; }
+  .query-tab[data-dirty] .dirty-dot { right: 9px; }
 }
 /* A document tab's keyboard ring is a 1px inset outline, as the single strip drew it: the strip would clip the default ring,
    and forced colours drop box shadows. */
@@ -652,14 +696,20 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .query-tab.active { border-top-color: Highlight; forced-color-adjust: none; }
   .editor-groups .dv-groupview:not(.dv-active-group) .query-tab.active { border-top-color: GrayText; }
 }
-.tab-select { display: flex; flex: 1; min-width: 0; overflow: hidden; align-items: center; gap: 8px; height: calc(var(--varia-bar) - 3px); border: 0; border-radius: 0; padding: 0 10px 0 13px; color: inherit; }
+.tab-select { display: flex; flex: 1; min-width: 0; overflow: hidden; align-items: flex-start; gap: var(--varia-space-1); height: 100%; border: 0; border-radius: 0; padding: var(--varia-space-0) var(--varia-space-2) 0; color: inherit; }
 .tab-select:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.tab-select:has(.tab-title:only-child) { align-items: center; }
+.tab-content { display: flex; flex-direction: column; flex: 1; min-width: 0; height: 100%; }
+.tab-title { display: flex; align-items: center; flex: none; gap: var(--varia-space-1); min-width: 0; min-height: var(--varia-line-sm); line-height: var(--varia-line-sm); }
+.tab-title:only-child { margin-block: auto; }
+/* The automatic margins split the space below the title equally above and below the chips. */
+.tab-metadata { display: flex; align-items: center; flex: none; gap: var(--varia-space-1); min-width: 0; margin-block: auto; }
 .tab-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab-renaming { padding-right: 6px; }
 .tab-rename { flex: 1; min-width: 0; width: 180px; height: 20px; padding: 0 4px; border-color: var(--varia-focusBorder); }
-.tab-select .tab-readonly { font-size: var(--varia-glyph-sm); margin-left: -4px; }
-/* A query's live SQL session, after its name (SID and the server's session id, or a dash without one). */
-.tab-sid { flex: none; margin-left: auto; padding: 1px 4px; border-radius: var(--varia-radius-sm); background: var(--varia-badge-background); color: var(--varia-badge-foreground); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tab-select .tab-readonly { font-size: var(--varia-glyph-sm); }
+/* A query's live SQL session, below its name beside the environment (a dash without a session). */
+.tab-sid { flex: none; padding: 1px 4px; border-radius: var(--varia-radius-sm); background: var(--varia-badge-background); color: var(--varia-badge-foreground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .tab-pin, .tab-close { display: flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 4px; color: var(--varia-documentTabs-closeForeground); }
 .tab-close { margin-right: 6px; }
 .tab-pin .codicon { font-size: var(--varia-glyph-sm); }
@@ -671,7 +721,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .tab-icon { color: var(--varia-documentTabs-iconForeground); }
 /* Running turns a spinner after the name; unsaved changes are a dot in the close button's place, which the pointer or
    keyboard focus on Close turns back into the X. */
-.tab-select .tab-running { font-size: var(--varia-glyph-sm); margin-left: -4px; }
+.tab-select .tab-running { font-size: var(--varia-glyph-sm); }
 .query-tab .dirty-dot { position: absolute; top: calc(50% - 3px); right: 15px; pointer-events: none; }
 .query-tab[data-dirty] .tab-close .codicon { visibility: hidden; }
 /* Transparent rather than hidden, so screen readers still hear that the query has unsaved changes. */
@@ -888,6 +938,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
    stays, filled, while its column has a filter. */
 .rg-cf { position: absolute; top: 0; right: 0; display: flex; align-items: center; justify-content: center; width: 18px; height: 21px; background: inherit; color: var(--varia-resultsGrid-headerDescriptionForeground); visibility: hidden; cursor: pointer; }
 .rg-ch.fb .rg-cs { right: 18px; }
+.rg-ch:not(.fb) .rg-cf { display: none; }
 .rg-ch:hover .rg-cf, .rg-cf.on { visibility: visible; }
 .rg-cf.on { color: var(--varia-resultsGrid-headerForeground); }
 /* A sorted column's idle funnel still covers the header text beside the sort button, without its glyph. */
@@ -1850,16 +1901,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* Beside the active query's glyph (.oe-active and the gap before it), so the two together keep to that 40%. */
 .explorer-row.active-connection .environment-tag[data-place="explorer"] { max-width: min(40cqw - var(--varia-glyph-sm) - var(--varia-space-1), 12em); }
 .environment-tag[data-place="tab"] { max-width: 10em; }
-/* A bounded tab lets either kind yield so its name and session badge retain their space. */
-.query-tab .environment-tag[data-place="tab"] { flex: 0 1 auto; }
-/* A custom label (up to 32 characters) gives way before the name, so the name stays readable beside a long label; its
-   full text is in the tab's description and tooltip. Where the cell has room beside the SID and a running spinner, the
-   label keeps a few characters and its ellipsis; a narrower cell lets it go entirely rather than clip the SID. */
-.query-tab .environment-tag[data-place="tab"][data-custom] { flex-shrink: 100; }
+/* Metadata has its own row: a long environment yields only to the live session badge, never to the filename. */
+.query-tab .environment-tag[data-place="tab"] { flex: 0 1 auto; margin-left: 0; }
 @container (width >= 220px) {
   .query-tab .environment-tag[data-place="tab"][data-custom] { min-width: 3em; }
 }
-.environment-tag[data-place="tab"], .environment-tag[data-place="list"] { margin-left: 6px; }
+.environment-tag[data-place="list"] { margin-left: 6px; }
 .environment-tag[data-place="list"] { vertical-align: middle; }
 .query-status-environment { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; margin-right: 10px; }
 /* Apart from the backend's state, which it does not describe: beside it, outside its tooltip. */
@@ -1876,6 +1923,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* An on chip stays filled under the pointer, so the click that turned it on shows at once, as a key press does. */
 .chip[aria-pressed="true"]:hover:not(:disabled) { background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); transition: none; }
 .chip-count { font-weight: 600; font-variant-numeric: tabular-nums; }
+/* A pane toolbar's chips (ChipGroup dense): shorter than its controls, tighter, never wrapping their label. */
+.chip-group.dense { gap: var(--varia-space-0); }
+.chip-group.dense .chip { flex: none; height: calc(var(--varia-control) - var(--varia-space-1)); padding: 0 var(--varia-space-2); white-space: nowrap; }
+/* A scroll row (ChipGroup scroll) shrinks instead of wrapping its toolbar; its last chip shows cut at the edge, and a focused
+   chip scrolls into view. */
+.chip-group.scroll { flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .live-pill, .stale-badge { display: inline-flex; align-items: center; gap: 6px; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .live-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--varia-live-indicator); }
 /* A ring grows from the dot and fades; the dot keeps its color, so it reads at rest and mid-beat alike. */
@@ -2321,27 +2374,24 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* A pane with a grid: its toolbar, the grid (which scrolls itself) and a status line. */
 .activity-pane-content { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 .activity-pane-tools { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1) var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-2); border-bottom: 1px solid var(--varia-panel-border); }
-.activity-tools-separator { width: 1px; height: 18px; background: var(--varia-panel-border); }
-.activity-tools-spacer { flex: 1; }
-.activity-tool { display: inline-flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-control); padding: 0 var(--varia-space-2); }
+/* Each group keeps to one line. A wrapping row breaks by its items' basis before anything shrinks, so the filter box starts
+   small and grows to the right (its auto margin). A one-row toolbar (Sessions) never wraps: its scroll chip row gives way. */
+.activity-pane-tools > .chip-group { flex-wrap: nowrap; }
+.activity-pane-tools.one-row { flex-wrap: nowrap; }
+.activity-pane-tools.one-row > :not(.scroll) { flex-shrink: 0; }
+.activity-tools-separator { flex: none; width: 1px; height: var(--varia-space-4); background: var(--varia-panel-border); }
+.activity-tools-spacer { flex: 1 1 0; }
+.activity-tool { display: inline-flex; flex: none; align-items: center; gap: var(--varia-space-1); height: var(--varia-control); padding: 0 var(--varia-space-2); }
+.activity-tool.icon-only { justify-content: center; width: var(--varia-control); padding: 0; }
 .activity-tool[data-filtered] { color: var(--varia-list-activeSelectionForeground); }
-.activity-filter-box { display: inline-flex; align-items: center; gap: var(--varia-space-1); color: var(--varia-descriptionForeground); }
-.activity-filter-box input { width: 22ch; height: var(--varia-control); padding: 0 var(--varia-space-2); }
-.activity-column-filters { position: relative; }
-.activity-popover { position: fixed; inset: auto; margin: 0; flex-direction: column; gap: var(--varia-space-2); overscroll-behavior: contain; padding: var(--varia-space-2); border: 1px solid var(--varia-widget-border); border-radius: var(--varia-radius-lg); background: var(--varia-editorWidget-background); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); }
-.activity-popover:popover-open { display: flex; }
-.activity-popover-row { display: flex; align-items: center; gap: var(--varia-space-2); }
-.activity-popover-row select { flex: 1; }
-.activity-popover-values { display: flex; flex-direction: column; gap: 2px; min-height: 0; overflow: auto; }
-.activity-popover-values .checkbox-label { display: flex; align-items: center; gap: var(--varia-space-2); }
-.activity-popover-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.activity-popover-count { color: var(--varia-descriptionForeground); font-variant-numeric: tabular-nums; }
-.activity-popover-actions { display: flex; justify-content: flex-end; gap: var(--varia-space-2); }
+.activity-filter-box { display: inline-flex; flex: 1 1 10em; min-width: 10em; max-width: 20em; margin-left: auto; align-items: center; gap: var(--varia-space-1); color: var(--varia-descriptionForeground); }
+.activity-filter-box input { flex: 1 1 0; width: 0; min-width: 0; height: var(--varia-control); padding: 0 var(--varia-space-2); }
 .activity-pane-grid { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .activity-pane-notice { flex: none; margin: var(--varia-space-1) var(--varia-space-2); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-lg); }
 .activity-pane-rows { position: relative; display: flex; flex: 1; min-height: 0; }
 .activity-pane-grid[data-stale] .activity-pane-rows { opacity: 0.6; }
 .activity-pane-loading { position: absolute; inset: 0; z-index: 4; padding: var(--varia-space-2); background: var(--varia-resultsGrid-background); }
+.activity-pane-empty { position: absolute; inset: var(--varia-row) 0 auto; z-index: 3; padding: var(--varia-space-4) var(--varia-space-3); text-align: center; pointer-events: none; }
 .activity-pane-status { flex: none; margin: 0; padding: 0 var(--varia-space-2); height: var(--varia-status); line-height: var(--varia-status); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-top: 1px solid var(--varia-panel-border); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
 /* Two rows of four tiles under 960 px of document (where eight still leave SSMS's names whole; D-am §3.2 says 1,100,
    which at a 1,280 px window pushes the panes out of the document), four rows of two under 560 px. */

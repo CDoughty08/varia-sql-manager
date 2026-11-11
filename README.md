@@ -25,6 +25,7 @@ Varia is a cross-platform desktop workbench for Microsoft SQL Server. It combine
 - Profile a result's columns: the results toolbar's **Profile** (or **Column Profile** on the grid's menu) opens a panel with each column's NULLs, distinct values (exact up to 16,384, then estimated; equal under the column's collation), lowest and highest values, lengths in characters and bytes, and a histogram, computed in the backend over the rows the grid shows. **Row size** draws a bar behind each row number for the row's size (the sum of DATALENGTH over its columns); hover it for the bytes.
 - Use the Table Designer, Activity Monitor, live data views, and Integration Services Catalog tools.
 - Split query tabs into editor groups side by side or floating, as in VS Code, and keep them across restarts with hot exit.
+- Query tabs show the filename above their environment and live session ID, leaving short names readable without widening the tab.
 - Customize themes and workspace layouts, and access commands through the command palette.
 
 Varia targets SQL Server 2016 through 2025 and runs on Windows, Linux, and macOS. Some features require specific server versions or permissions; see the [documentation](#documentation) for details.
@@ -79,6 +80,13 @@ The [result grid tools](docs/results-tools.md) include **Copy Column Name**, key
 Certificate validation is enabled by default. For a trusted server with a self-signed certificate, enable **Trust server certificate** in the connection dialog. On Linux and macOS, Windows authentication requires the system Kerberos library, a valid ticket from `kinit`, and a server name or SPN configured for Kerberos. Entra Integrated authentication is available on Windows only. Remembered passwords are encrypted using the operating system's credential storage; on Linux this requires an available keyring.
 
 Press **F1** or **Ctrl+Shift+P** (**⌘Shift+P** on macOS) for the command palette. See the [command reference](docs/commands.md) for shortcuts and available commands.
+
+Open **Help > About Varia** for the running version, update status and copyable version details for support. The macOS
+app menu opens the same dialog. It works without a server connection; see [About Varia](docs/about.md).
+
+**Help > Release Notes** opens curated, offline notes for the running version, with a picker for bundled release
+history. Update notifications request their exact advertised version; missing notes are reported clearly. **Release
+Downloads** remains a separate browser action. See [Release Notes](docs/release-notes.md).
 
 ## Current limitations
 

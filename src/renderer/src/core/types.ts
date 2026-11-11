@@ -8,6 +8,8 @@ export type { CommandId } from '../../../shared/commands/catalog'
 export interface Disposable { dispose(): void }
 /** Renderer-only command arguments; they never cross IPC. */
 export interface CommandContext {
+  /** The exact advertised release; omitted when Help opens notes for the running application. */
+  readonly releaseVersion?: string
   /** The tab a tab-strip button acts on. */
   readonly tabId?: string
   /** New Query's explicit editor group, from that group's header or empty strip. */
@@ -43,6 +45,7 @@ export type WorkbenchEvent =
   | { type: 'query.connectRequested'; tabId: string }
   /** Activity Monitor ran with no server connected: the Connect dialog opens, and the monitor opens on the new connection. */
   | { type: 'activity.connectRequested' }
+  | { type: 'help.aboutRequested' }
   /** The query's SQL session ended (closed, or found lost), and its open transaction with it. */
   | { type: 'session.ended'; tabId: string }
   /** Save Results As wrote its file; `text` is the sentence the tab's toolbar shows, such as "Saved 400 rows to w1.csv." */

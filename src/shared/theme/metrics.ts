@@ -74,7 +74,7 @@ export const glyphSizes = {
   badge: { px: 9, use: 'The status mark at a tree icon\'s corner.' },
   sm: { px: 12, use: 'Glyphs in status bars and tab strips, beside xs and sm text.' },
   md: { px: 16, use: 'Every other icon: tree rows, toolbars, menus, the palette, tabs, dialogs.' },
-  lg: { px: 24, use: 'Large glyphs; none today (an empty state draws its glyph at md, as the states kit specifies).' }
+  lg: { px: 24, use: 'The brand mark in About Varia.' }
 } as const
 export type GlyphSizeName = keyof typeof glyphSizes
 /** The styles.css rules sized with each glyph size; tests/theme-metrics.test.ts checks the list both ways. */
@@ -86,7 +86,7 @@ export const glyphUse: Readonly<Record<GlyphSizeName, readonly string[]>> = {
     '.tile-caption > .codicon'
   ],
   md: ['.icon'],
-  lg: []
+  lg: ['.about-brand > .icon']
 }
 /** Glyph overrides that apply only inside a narrow size container; outside it the normal toolbar grid applies. */
 export const glyphConditions: Readonly<Record<string, { readonly container: string; readonly maxWidth: number; readonly outside: GlyphSizeName }>> = {
@@ -104,6 +104,8 @@ export interface DensityMetrics {
   readonly header: number
   /** `--varia-bar`: tab strips, the query bar, side-bar headers. */
   readonly bar: number
+  /** `--varia-documentTab`: two-line document tabs and their shelf overflow buttons. */
+  readonly documentTab: number
   /** `--varia-control`: buttons, inputs, selects. */
   readonly control: number
   /** `--varia-row`: tree, grid and list rows. */
@@ -112,7 +114,7 @@ export interface DensityMetrics {
   readonly status: number
 }
 export const densityPlanned: Readonly<Record<keyof DensityMetrics, string>> = {
-  header: 'The title bar.', bar: 'Tab strips, the query bar, side-bar headers.', control: 'Buttons, inputs, selects.', row: 'Tree, grid and list rows.', status: 'The status bars.'
+  header: 'The title bar.', bar: 'Tab strips, the query bar, side-bar headers.', documentTab: 'Two-line document tabs and their shelf overflow buttons.', control: 'Buttons, inputs, selects.', row: 'Tree, grid and list rows.', status: 'The status bars.'
 }
 /**
  * The styles.css rules whose height is each token today; tests/theme-metrics.test.ts checks the list both ways. The title
@@ -121,15 +123,16 @@ export const densityPlanned: Readonly<Record<keyof DensityMetrics, string>> = {
  */
 export const densityUse: Readonly<Record<keyof DensityMetrics, readonly string[]>> = {
   header: ['.title-bar'],
-  bar: ['.editor-empty > .editor-group-actions', '.explorer-header', '.peek-head', '.query-bar', '.query-shelf-more', '.output-toolbar', '.document-script-head', '.activity-pane-tabs [role="tab"]'],
+  bar: ['.editor-empty > .editor-group-actions', '.explorer-header', '.peek-head', '.query-bar', '.output-toolbar', '.document-script-head', '.activity-pane-tabs [role="tab"]'],
+  documentTab: ['.query-shelf-more'],
   control: ['.icon-button', '.object-search-field', '.object-search-filter-button', '.command-centre', '.query-bar-action', '.query-connection', '.document-verb', '.property-input', '.property-field-control > .property-input-action > .property-input', '.property-value.restore-to', '.activity-select', '.activity-tile-toggle', '.activity-tool', '.activity-filter-box input'],
   row: ['.explorer-row', '.explorer-pin-more', '.skeleton-row', '.document-nav-item', '.server-files-head', '.server-files-row', '.new-database-cell', '.attach-database-grid .attach-database-cell', '.user-mapping-head', '.new-login-credentials-grid th', '.new-login-credentials-grid td', '.shortcuts-table td', '.shortcuts-group th'],
   status: ['.status-bar', '.query-status-bar', '.activity-pane-status']
 }
 /** Bar and row heights in px. Compact is the default and the only one :root sets; Comfortable is the planned option. */
 export const densities = {
-  compact: { header: 40, bar: 36, control: 26, row: 22, status: 24 },
-  comfortable: { header: 44, bar: 40, control: 28, row: 26, status: 26 }
+  compact: { header: 40, bar: 36, documentTab: 44, control: 26, row: 22, status: 24 },
+  comfortable: { header: 44, bar: 40, documentTab: 48, control: 28, row: 26, status: 26 }
 } as const satisfies Record<string, DensityMetrics>
 export type Density = keyof typeof densities
 export const defaultDensity: Density = 'compact'

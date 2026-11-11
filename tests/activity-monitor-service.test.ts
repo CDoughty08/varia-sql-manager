@@ -149,8 +149,10 @@ describe('Activity Monitor document', () => {
     expect(paneProbes(['processes', 'waits'], [])).toEqual(['activity.overview', 'activity.sessions', 'activity.resources'])
     expect(paneProbes(['recentQueries'], [])).toEqual(['activity.overview', 'activity.queries'])
     expect(paneProbes(['processes', 'waits'])).toEqual(['activity.overview', 'activity.sessions'])
-    expect(paneProbes(['blocking', 'waits'])).toEqual(['activity.overview'])
-    expect(pendingPanes).toEqual(['blocking', 'waits', 'fileIo', 'recentQueries', 'activeQueries'])
+    expect(paneProbes(['blocking', 'waits'])).toEqual(['activity.overview', 'activity.sessions'])
+    expect(paneProbes(['activeQueries'])).toEqual(['activity.overview', 'activity.sessions'])
+    expect(paneProbes(['fileIo', 'waits'])).toEqual(['activity.overview'])
+    expect(pendingPanes).toEqual(['waits', 'fileIo', 'recentQueries'])
     const state = initialMonitor('m', 'server', defaultSettings)
     expect(shownPanes(state)).toEqual(['processes', 'waits'])
     expect(shownPanes({ ...state, split: false })).toEqual(['processes'])
@@ -169,10 +171,12 @@ describe('Activity Monitor document', () => {
     activity.toggleSplit(id)
     expect([activity.get(id)?.split, context.getState().activitySplit]).toEqual([false, false])
     expect(liveViews.last.calls).toEqual([{ method: 'setProbe', probe: 'activity.sessions', patch: { paused: true } }])
-    // A pending pane starts no SQL.
+    // A pending pane starts no SQL; Blocking reads the sessions probe, so showing it resumes that probe.
     liveViews.last.calls.length = 0
-    activity.setPane(id, 'primary', 'blocking')
+    activity.setPane(id, 'primary', 'fileIo')
     expect(liveViews.last.calls).toEqual([])
+    activity.setPane(id, 'primary', 'blocking')
+    expect(liveViews.last.calls).toEqual([{ method: 'setProbe', probe: 'activity.sessions', patch: { paused: false } }])
     activity.toggleTile(id, 4)
     expect(activity.get(id)?.expanded).toEqual([0, 1, 4])
     // Every tile may be expanded: an eighth never closes the first.

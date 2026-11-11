@@ -228,6 +228,14 @@ internal static class ActivityChecks
         check(order.Rows.Where(row => row.Depth == 0).Select(row => row.Node.SessionId).SequenceEqual([4, 8, 1]),
             "lead blockers come by sessions downstream, then by their chain's longest wait");
         check(BlockingGraph.Build([], 32, 2_000) is { Rows.Count: 0, Nodes.Count: 0, Truncated: false, BlockedSessions: 0 }, "no blocking is an empty graph");
+        // Row tones: every table that declares tones gets them, most urgent first, and only tones its catalogue lists.
+        check(ActivitySessionRows.SessionTone(true, true, true, true) == "blocked" && ActivitySessionRows.SessionTone(false, true, true, true) == "blocking"
+            && ActivitySessionRows.SessionTone(false, false, true, true) == "rollback" && ActivitySessionRows.SessionTone(false, false, false, true) == "system"
+            && ActivitySessionRows.SessionTone(false, false, false, false) is null, "a session is toned blocked, then blocking, rolling back or system, else not at all");
+        check(ActivitySessionRows.ChainTone(0) == "blocking" && ActivitySessionRows.ChainTone(1) == "blocked" && ActivitySessionRows.ChainTone(31) == "blocked", "a chain's lead blocker is toned blocking and every session under it blocked");
+        check(ActivitySessionRows.ActiveTone(true, true) == "blocked" && ActivitySessionRows.ActiveTone(false, true) == "rollback" && ActivitySessionRows.ActiveTone(false, false) is null, "a running request is toned blocked, else rolling back");
+        check(new[] { "blocked", "blocking", "rollback", "system" }.All(Catalog.Table("sessions").Tones.Contains) && new[] { "blocked", "blocking" }.All(Catalog.Table("blocking").Tones.Contains)
+            && new[] { "blocked", "rollback" }.All(Catalog.Table("activeQueries").Tones.Contains), "every tone the session rows set is one its table declares");
     }
 
     private static void Filters(Action<bool, string> check)
@@ -244,7 +252,8 @@ internal static class ActivityChecks
             ("a column without facets", new("sessions", ColumnFilters: [new("sessionId", ["1"])])), ("a column twice", new("sessions", ColumnFilters: [new("login", ["a"]), new("login", ["b"])])),
             ("no choice", new("sessions", ColumnFilters: [new("login")])), ("51 values", new("sessions", ColumnFilters: [new("login", [.. Enumerable.Range(0, 51).Select(index => index.ToString())])])),
             ("a 257-character value", new("sessions", ColumnFilters: [new("login", [new string('v', 257)])])), ("a 65-character column", new("sessions", ColumnFilters: [new(new string('c', 65), ["a"])])),
-            ("a facet of another table", new("files", ColumnFilters: [new("login", ["a"])]))
+            ("a facet of another table", new("files", ColumnFilters: [new("login", ["a"])])),
+            ("excluding nothing", new("sessions", ColumnFilters: [new("login", Blanks: true, Exclude: true)])), ("excluding with non-blanks", new("sessions", ColumnFilters: [new("login", ["a"], NonBlanks: true, Exclude: true)]))
         };
         var accepted = invalid.Where(entry => Refused(entry.Filter) != "INVALID_PARAMS").Select(entry => entry.Name).ToList();
         check(accepted.Count == 0 && Refused(new("sessions", "blocked", true, true, new string('x', 400), [new("login", [new string('v', 256)]), new("database", Blanks: true)])) == "accepted",
@@ -301,6 +310,10 @@ internal static class ActivityChecks
             && Shown(new("sessions", ColumnFilters: [new("application", Blanks: true)])) == "idle,rollback" && Shown(new("sessions", ColumnFilters: [new("database", NonBlanks: true)])) == "app,idle,rollback"
             && Shown(new("sessions", ColumnFilters: [new("database", ["Stage"], Blanks: true)])) == "blocked,tab,rollback" && Shown(new("sessions", ColumnFilters: [new("login", ["APP_USER"])])) == "",
             "column filters match values exactly, any value within a column and every column together, with (Blanks) for NULL and empty text");
+        check(Shown(new("sessions", ColumnFilters: [new("login", ["app_user", "report"], Blanks: true, Exclude: true)])) == "tab,rollback"
+            && Shown(new("sessions", ColumnFilters: [new("login", ["no such login"], Blanks: true, Exclude: true)])) == Shown(new("sessions"))
+            && Shown(new("sessions", ColumnFilters: [new("application", ["no such application"], Exclude: true)])) == "app,blocked,tab",
+            "an excluding column filter leaves out only the values it names: every other value passes, and blanks as Blanks says");
         var files = ActivityFilter.Compile(Catalog, new("files", Text: "tempdb"));
         check(files.Matches(column => column == "database" ? "tempdb" : null) && !files.Matches(column => column == "type" ? "tempdb" : null) && files.Table == "files",
             "other tables filter by their own text columns only");

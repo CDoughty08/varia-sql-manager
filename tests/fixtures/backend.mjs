@@ -16,6 +16,9 @@
 //   language-diagnostics enables deterministic SQL error/warning analysis for the diagnostics UI suite only
 //   language-fail       completion/hover refuse requests until removed, to exercise cache refresh recovery in the UI
 //   language-status-fail  availability fails until removed, to exercise same-generation manual recovery
+//   budget-stopped      results.pivot, results.diff and results.transpose answer BUDGET_STOPPED, as for a query whose
+//                       results filled its result memory; budget-stopped-low the same with the low-memory sentence,
+//                       budget-stopped-global with the global budget's
 //   hold/<method>       the method waits while this file exists; a directive with `hold` waits after its sets and
 //                       messages, and results.export after each page (so a test can cancel it mid-save)
 //   allow/audits        explorer.children may list audits (otherwise they fail as a permission error would)
@@ -279,6 +282,16 @@ async function controlled(name, consume = false) {
   try { await access(path) } catch { return false }
   if (consume) await rm(path, { force: true })
   return true
+}
+/**
+ * Answers BUDGET_STOPPED as SqlService.ThrowIfStopped does, while a budget-stopped control file exists: after the request
+ * and the result's state are checked. Unlike SqlService, a pivot's or transpose's view is looked up first (sourceOf).
+ */
+async function budgetStopped(id) {
+  if (await controlled('budget-stopped-low')) return fail(id, 'BUDGET_STOPPED', 'The computer was low on memory while this query ran, so it can store nothing more. Run the query again.'), true
+  if (await controlled('budget-stopped-global')) return fail(id, 'BUDGET_STOPPED', 'The result memory filled while this query ran, so it can store nothing more. Close other results, then run the query again.'), true
+  if (await controlled('budget-stopped')) return fail(id, 'BUDGET_STOPPED', "This query's results filled its result memory, so it can store nothing more. Run the query again returning fewer rows."), true
+  return false
 }
 // PING is answered from memory; silent-<generation> is looked for every 50 ms.
 let silent = false
@@ -1161,6 +1174,7 @@ function liveSubscribe(id, credit, params) {
     const kept = ended === 'sourceEnded' ? live.revisions.slice(-1) : []
     for (const resultId of live.revisions) if (!kept.includes(resultId)) stored.delete(resultId)
     for (const ids of live.kept.values()) for (const resultId of ids) stored.delete(resultId)
+    for (const ids of live.keptOthers?.values() ?? []) for (const resultId of ids) stored.delete(resultId)
     respond(id, { ended, ...error, ...(ended === 'sourceEnded' ? { kept } : {}), ticks: live.ticks, elapsedMs: Date.now() - live.started })
   }
   lives.set(id, live)
@@ -1212,18 +1226,40 @@ function sessionsShown(filter) {
     || (view === 'active' && row.command !== null) || (view === 'blocked' && row.blockedBy) || (view === 'blocking' && row.blocking)
     || (view === 'idleOpenTransaction' && row.command === null && row.openTransactions > 0) || (view === 'rollingBack' && false)))
 }
+// Blocking and Active Expensive Queries on the fake server: the chain 57 → 61 exists only while the control file
+// activity-blocked does (as the overview's Blocked Sessions tile reads it), so a test sees both the empty pane and the
+// chain; 61 and 66 are running. Cells are keyed by the catalogue's column id without the table's prefix.
+const fakeChain = [
+  { session: '57', sessionId: '57', depth: '0', status: 'sleeping', blockedSessions: '1', login: 'app_orders', hostName: 'APP-01', application: 'Orders.Api', database: 'SalesDb', openTransactions: '1', cycle: '0', lastBatch: 'BEGIN TRAN; UPDATE dbo.Orders SET Status = 2 WHERE OrderId = 1', tone: 'warning' },
+  { session: '└─ 61', sessionId: '61', depth: '1', status: 'suspended', blockedSessions: '0', waitType: 'LCK_M_S', waitTimeMs: '41200', waitResource: 'KEY: 7:72057594043695104 (8194443284a0)', login: 'svc_reporting', hostName: 'BI-01', application: 'Power BI', database: 'SalesDb', openTransactions: '0', cycle: '0', tone: 'error' }
+]
+const fakeActive = [
+  { query: 'SELECT o.OrderId, o.Total FROM dbo.Orders AS o WHERE o.Status = 2', sessionId: '61', requestId: '0', startTime: '2026-11-09 08:01:10.000', status: 'suspended', database: 'SalesDb', cpuMs: '120', elapsedMs: '41300', logicalReads: '512', waitType: 'LCK_M_S', blockedBy: '57', dop: '1', tone: 'error' },
+  { query: 'SELECT b.InvoiceId FROM dbo.Invoices AS b ORDER BY b.Due', sessionId: '66', requestId: '0', startTime: '2026-11-09 08:02:30.000', status: 'running', database: 'BillingDb', cpuMs: '8125', cpuRate: '812.5', elapsedMs: '9800', logicalReads: '981204', dop: '4', grantedMemoryKb: '10240', usedMemoryKb: '8192' }
+]
+function sessionTableResult(spec, prefix, rows) {
+  const id = column => column.id.slice(prefix.length, prefix.length + 1).toLowerCase() + column.id.slice(prefix.length + 1)
+  const columns = spec.columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true, ...(column.role ? { role: column.role } : {}) }))
+  return storeResult({ columns, rows: rows.map(row => spec.columns.map(column => row[id(column)] ?? null)) }, 0)
+}
 function activitySessionsSample(live, probe) {
   const filter = (live.args.filters ?? []).find(item => item.table === 'sessions') ?? {}
   const spec = liveProbes['activity.sessions'].tables[0]
   const shown = sessionsShown(filter)
   const facets = spec.facets.map(column => {
     const counts = new Map()
-    for (const row of shown) if (row[column]) counts.set(row[column], (counts.get(row[column]) ?? 0) + 1)
+    // As LiveTables.cs: a blank cell counts under empty text, the funnel's (Blanks).
+    for (const row of shown) counts.set(row[column] || '', (counts.get(row[column] || '') ?? 0) + 1)
     return { column, values: [...counts].sort((a, b) => b[1] - a[1]).map(([text, count]) => ({ text, count })) }
   })
   const text = filter.text?.toLowerCase()
   const rows = shown.filter(row => (!text || sessionTextColumns.some(column => row[column]?.toLowerCase().includes(text)))
-    && (filter.columnFilters ?? []).every(column => (column.values ?? []).includes(row[column.column]) || (column.blanks && !row[column.column]) || (column.nonBlanks && !!row[column.column])))
+    // As ActivityFilter.cs: a blank cell passes with blanks; another passes when listed, or, excluding, when not listed.
+    && (filter.columnFilters ?? []).every(column => !row[column.column] ? !!column.blanks
+      : column.exclude ? !(column.values ?? []).includes(row[column.column]) : (column.values ?? []).includes(row[column.column]) || !!column.nonBlanks))
+  // The probe's sort for this table (a header's sort button), by text with the session id breaking ties.
+  const sort = (probe.sort ?? []).filter(key => key.table === undefined || key.table === 0)
+  if (sort.length) rows.sort((a, b) => { for (const key of sort) { const left = String(a[key.column] ?? ''), right = String(b[key.column] ?? ''); if (left !== right) return (left < right ? -1 : 1) * (key.descending ? -1 : 1) } return a.sessionId - b.sessionId })
   const columns = spec.columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true }))
   const result = storeResult({ columns, rows: rows.map(row => spec.columns.map(column => column.id === 'sessionId' ? String(row.sessionId) : row[column.id] ?? null)) }, 0)
   const kept = live.kept.get(probe.probe) ?? []
@@ -1237,7 +1273,27 @@ function activitySessionsSample(live, probe) {
   const changed = facets.filter(facet => JSON.stringify(facet) !== sentFacets.get(facet.column))
   for (const facet of changed) sentFacets.set(facet.column, JSON.stringify(facet))
   const status = probe.samples === 1 ? [{ id: 'serverState', value: 1 }, { id: 'canKill', value: 1 }] : undefined
-  return { tables: [{ table: 0, descriptor: describe(result), revision: probe.samples, ...(retired ? { retired } : {}), ...(changed.length ? { facets: changed } : {}) }], ...(status ? { status } : {}) }
+  const blocked = !!controlDirectory && existsSync(join(controlDirectory, 'activity-blocked'))
+  const [, chainSpec, activeSpec] = liveProbes['activity.sessions'].tables
+  const chain = sessionTableResult(chainSpec, 'chain', blocked ? fakeChain : [])
+  const active = sessionTableResult(activeSpec, 'active', fakeActive)
+  // The other tables' results go the way Processes' do: two kept per table, the older retired.
+  const others = live.keptOthers ?? (live.keptOthers = new Map())
+  const keep = (table, resultId) => {
+    const ids = others.get(table) ?? []
+    ids.push(resultId)
+    others.set(table, ids)
+    if (ids.length <= 2) return undefined
+    const gone = ids.shift()
+    stored.delete(gone)
+    return [gone]
+  }
+  const chainRetired = keep(1, chain.resultId), activeRetired = keep(2, active.resultId)
+  return { tables: [
+    { table: 0, descriptor: describe(result), revision: probe.samples, ...(retired ? { retired } : {}), ...(changed.length ? { facets: changed } : {}) },
+    { table: 1, descriptor: describe(chain), revision: probe.samples, ...(chainRetired ? { retired: chainRetired } : {}) },
+    { table: 2, descriptor: describe(active), revision: probe.samples, ...(activeRetired ? { retired: activeRetired } : {}) }
+  ], ...(status ? { status } : {}) }
 }
 /** An overview sample: every series of the catalogue, a rate's first sample (and the first after a pause) without a value. */
 function overviewMetrics(n, first) {
@@ -1619,6 +1675,7 @@ async function workbench(id, method, params, credit) {
       if (!right) return missing(id, params.right)
       if (params.left === params.right || left.kind === 'diff' || right.kind === 'diff') return fail(id, 'INVALID_PARAMS', 'Only two result sets of the same query can be compared.')
       if (!left.complete || !right.complete) return fail(id, 'RESULT_OPEN', 'Compare the results after they finish loading.')
+      if (await budgetStopped(id)) return
       const diff = buildDiff(left, right, params.exact ?? false, params.context ?? 1)
       if (!diff) return fail(id, 'INVALID_PARAMS', 'These results have no column names in common, so they cannot be compared.')
       const result = storeResult(diff.set, right.index)
@@ -1630,6 +1687,8 @@ async function workbench(id, method, params, credit) {
       if (!source) return
       const result = stored.get(params.resultId)
       if (!result.complete) return fail(id, 'RESULT_OPEN', 'Pivot this result after it finishes loading.')
+      // Before the pivot is built, as in SqlService: its one refusal here (too many column groups) comes from the build.
+      if (await budgetStopped(id)) return
       const built = buildPivot(source, params)
       if (built.error) return fail(id, 'INVALID_PARAMS', built.error)
       const { set, ...counts } = built
@@ -1642,6 +1701,7 @@ async function workbench(id, method, params, credit) {
       if (result.kind === 'diff' || result.kind === 'executionPlan') return fail(id, 'INVALID_PARAMS', "Only a query's results, a pivot or a transpose can be transposed.")
       if (params.headerColumn !== undefined && params.headerColumn >= result.columns.length) return fail(id, 'INVALID_PARAMS', 'The header column must be a column of the result.')
       if (!result.complete) return fail(id, 'RESULT_OPEN', 'Transpose the results after they finish loading.')
+      if (await budgetStopped(id)) return
       const { set, ...counts } = buildTranspose(source, params)
       return respond(id, { descriptor: describe(storeResult(set, result.index)), ...counts })
     }

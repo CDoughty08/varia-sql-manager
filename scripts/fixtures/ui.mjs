@@ -51,12 +51,17 @@ export const part = {
   tabName: '.tab-name',
   /** The tab's bounded name, environment and live-session area, before Pin and Close. */
   tabSelect: '.tab-select',
+  /** The filename/state row and the environment/session row below it. */
+  tabTitle: '.tab-title',
+  tabMetadata: '.tab-metadata',
   /** Editor groups (src/renderer/src/editor-groups/): Dockview's groups inside the query editor panel, and the active one. */
   /** The editor area in the Query editor panel: every editor group, under the active query's bar. */
   editorArea: '.editor-groups-root',
   editorGroup: '.editor-groups .dv-groupview',
   activeEditorGroup: '.editor-groups .dv-groupview.dv-active-group',
   floatingEditorGroup: '.editor-groups .dv-resize-container .dv-groupview',
+  /** A floating editor group's right-edge resize handle, beside the group rather than inside it. */
+  floatingEditorResizeRight: '.editor-groups .dv-resize-container .dv-resize-handle-right',
   tabSid: '.tab-sid',
   /** The kind icon before a tab's name (kindIcon finds it by name; page code needs its box and stroke). */
   tabIcon: '.tab-icon',
@@ -291,7 +296,7 @@ export const gridPart = {
   sortButton: '.rg-cs',
   sortedButton: '.rg-cs.on',
   sortOrder: '.rg-co',
-  /** A header's funnel (results grids), hidden from screen readers (Filter Column Values, Alt+Down, opens the same
+  /** A header's funnel (results grids, and a live grid's filterable columns), hidden from screen readers (Filter Column Values, Alt+Down, opens the same
    *  popover); filled while its column has a filter. */
   funnelButton: '.rg-cf',
   funnelOn: '.rg-cf.on',
@@ -576,7 +581,7 @@ export const resultSplitters = page => page.getByRole('separator', { name: /^Res
 
 // Live grids (LiveGridPane): a grid its owner names, in a frame with the overlay, the error strip and the new-rows button.
 
-/** A live grid's own grid by the name its owner gives it, which its label starts with ("Processes, 12 rows, 9 columns"),
+/** A live grid's own grid by the name its owner gives it, which its label starts with ("Sessions, 12 rows, 9 columns"),
  *  for page code. */
 export const liveGridSelector = name => `[role="grid"]:is([aria-label="${name}"], [aria-label^="${name}, "])`
 const escaped = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -794,6 +799,8 @@ export const activeMenuItem = page => openMenus(page).locator('[role^="menuitem"
 export const menuItemNames = (menu, { disabled } = {}) => menu.locator(`[role^="menuitem"]${disabled ? '[aria-disabled="true"]' : ''}`)
   .evaluateAll(items => items.map(item => [...item.children].filter(child => child.getAttribute('aria-hidden') !== 'true').map(child => child.textContent).join('')))
 /** The command palette and the pickers that share its widget (a dialog named by its title or its input). */
+export const aboutDialog = page => page.getByRole('dialog', { name: 'About Varia', exact: true })
+export const releaseNotesPage = page => page.getByRole('region', { name: 'Release Notes', exact: true })
 export const quickInput = page => page.locator(part.quickInput)
 export const quickInputBox = page => quickInput(page).getByRole('combobox')
 export const quickInputRows = page => quickInput(page).getByRole('option')

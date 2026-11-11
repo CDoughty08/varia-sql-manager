@@ -57,20 +57,30 @@ probe stays paused: no SQL runs for a pane nobody can read.
 
 | Pane | Now |
 | --- | --- |
-| Processes | A live grid of sessions with view chips, toggles, column filters and a filter box (below). |
-| Blocking | Blocking is not shown yet; it arrives in a later version of Varia. |
+| Sessions | A live grid of sessions with view chips, Show chips, header funnels and a filter box (below); SSMS calls it Processes. |
+| Blocking | A live grid of the blocking chains, lead blockers first (below). |
 | Resource Waits | Resource Waits is not shown yet; it arrives in a later version of Varia. |
 | Data File I/O | Data File I/O is not shown yet; it arrives in a later version of Varia. |
 | Recent Expensive Queries | Recent Expensive Queries is not shown yet; it arrives in a later version of Varia. |
-| Active Expensive Queries | Active Expensive Queries is not shown yet; it arrives in a later version of Varia. |
+| Active Expensive Queries | A live grid of the running requests, the most CPU first (below). |
 
-Processes shows the sessions probe's rows in a live grid (one row per session, toned blocked, blocking, rolling back,
-system or departed). Its toolbar holds the view chips, the System sessions and Varia's own toggles, Column filters (a
-column, then its values with their counts from the facets, (Blanks) and (Non-blanks)), the filter box (sent when typing
-pauses, on Enter or on leaving it; Escape puts back what was sent) and Clear filters, which keeps the toggles. All of them
-travel as the source's args and the backend filters the sample, so the SQL never changes. A status line counts the
-sessions shown and says what is hidden or cut; the pane keeps its last rows, dimmed, with the reason when a sample fails.
-A chosen value the facets no longer list stays in Column filters, checked, with a dash for its count; a column takes at most 50 values, and the panel closes on Escape or a click outside. With no rows yet the pane says whether it waits for a sample, is paused or has stopped.
+Blocking and Active Expensive Queries show the sessions probe's other two tables, so showing them runs no extra SQL.
+Blocking lists each session in a chain once, indented under the session it waits on, lead blockers (toned blocking) first
+and every session under them toned blocked; Active Expensive Queries lists running requests, the 100 using the most CPU, toned
+blocked or rolling back. Each has a status line (the rows, and what cut them), says when its table is empty while the
+monitor samples, and only speaks for the last sample when it is paused or stopped. A table the login cannot read says so.
+
+Sessions shows the sessions probe's rows in a live grid (one row per session, toned blocked, blocking, rolling back,
+system or departed). It is the results grid with live rows: the same header, whose sort buttons (Shift+click adds a key)
+and funnels on the facet columns ask the backend, which sorts and filters each sample, and the same selection, keys,
+column sizing, Copy (Ctrl+C), Copy with Headers (Ctrl+Shift+C) and Query Output's context menu (Copy, Select All, Save
+Results As, Sort, Filter › Filter Column Values… and Clear Filters, Fit Column, White space). A funnel (or Alt+Down) lists the column's values with their counts from the facets
+and (Blanks), with a search, Select all and Select none; OK filters by the ticked values. The toolbar holds the view chips,
+the Show chips (System, Varia's own), the filter box (sent when typing pauses, on Enter or on leaving it; Escape puts
+back what was sent) and Clear filters, which keeps the Show chips. All of them travel as the source's args and the
+backend filters the sample, so the SQL never changes. A status line counts the sessions shown and says what is hidden or
+cut; the pane keeps its last rows, dimmed, with the reason when a sample fails.
+A chosen value the facets no longer list stays in its funnel, ticked, with a count of 0. A filter names at most 50 values: the ticked ones, or, when fewer are unticked, the unticked ones it leaves out (so values the funnel never listed still show). With no rows yet the pane says whether it waits for a sample, is paused or has stopped.
 
 | Command | Id | Windows and Linux | macOS |
 | --- | --- | --- | --- |
@@ -123,16 +133,16 @@ sessions and sees every file's name. The sessions probe sends what it found with
 
 | Status | Value 1 means |
 | --- | --- |
-| `serverState` | The login reads server state (VIEW SERVER PERFORMANCE STATE from SQL Server 2022, VIEW SERVER STATE before): without it, Processes shows only the monitor's own session and Blocking and Active Expensive Queries report PERMISSION_DENIED. |
+| `serverState` | The login reads server state (VIEW SERVER PERFORMANCE STATE from SQL Server 2022, VIEW SERVER STATE before): without it, Sessions shows only the monitor's own session and Blocking and Active Expensive Queries report PERMISSION_DENIED. |
 | `canKill` | The login holds ALTER ANY CONNECTION, which Kill Process needs. |
 
 Without server state the overview opens unavailable (PERMISSION_DENIED), or, when the capability probe could not run as
 the monitor opened (it opened paused, say), stops at its first sample with that error, running nothing. The sessions
-probe runs: SQL Server shows such a login only its own session, so Processes holds the monitor's session (not hidden as
+probe runs: SQL Server shows such a login only its own session, so Sessions holds the monitor's session (not hidden as
 Varia's then), and Blocking and Active Expensive Queries are PERMISSION_DENIED values beside each sample, read without SQL.
 
 The live layer sorts and filters a probe's tables by column id, so ids are unique within a probe: its first table keeps
-this catalogue's ids and the others take a prefix, so sorting Processes never reorders the Blocking tree.
+this catalogue's ids and the others take a prefix, so sorting Sessions never reorders the Blocking tree.
 
 | Table | Prefix | Key in the live layer |
 | --- | --- | --- |
@@ -144,10 +154,10 @@ this catalogue's ids and the others take a prefix, so sorting Processes never re
 | `files` | `io` | `ioDatabaseId`, `ioFileId` |
 | `recentQueries` | (none) | `queryHash` |
 
-Filters travel as the source's args: one per table (the view chip, the toggles, the filter box, column value filters, Hide
-benign waits), each replacing that table's, and a table without one shows the defaults. Processes' facets count the rows
+Filters travel as the source's args: one per table (the view chip, the Show chips, the filter box, column value filters, Hide
+benign waits), each replacing that table's, and a table without one shows the defaults. Sessions' facets count the rows
 its view chip and toggles show, before the filter box and column value filters, so they never offer a value only hidden
-sessions have, and a column's own value filter never empties its list. Processes arrives in Session ID order when no sort
+sessions have, and a column's own value filter never empties its list. Sessions arrives in Session ID order when no sort
 is set; the sessions statement ranks sessions only for its cap (sessions in a blocking wait, then sessions with a request).
 The two `focus.*` series follow the Details flyout's session (`focusSession`, 0 for none); the first sample after it
 names another session is marked `reset`, so a chart starts them again. Every sessions sample carries the status values
@@ -155,7 +165,7 @@ names another session is marked `reset`, so a chart starts them again. Every ses
 
 Per-session rates key a session by its login time and a request by its id and start time, so a reused id never yields a
 rate across two sessions. The sessions statement returns each of a session's requests as its own row (MARS sessions run
-several), ranked as Processes shows them, and its cap counts sessions. A session's own CPU and reads take in a request's
+several), ranked as Sessions shows them, and its cap counts sessions. A session's own CPU and reads take in a request's
 work only when the request ends, and SQL Server takes it in on a smaller scale than the request reported (a 1.2 s CPU loop
 on SQL Server 2025: 813 ms against 1,096 ms), so session plus request falls at every batch end. CPU (ms/s) therefore
 counts each running request by its own change, a new one whole, and the ones that ended only beyond what they had
@@ -173,14 +183,14 @@ exclusive database lock (SQL Server 2025). A wait that does happen is a BLOCKED 
 
 | Pane | Id | Probe | Tables | Badge counts |
 | --- | --- | --- | --- | --- |
-| Processes | `processes` | `activity.sessions` | `sessions` | Rows shown |
+| Sessions | `processes` | `activity.sessions` | `sessions` | Rows shown |
 | Blocking | `blocking` | `activity.sessions` | `blocking` | Blocked sessions |
 | Resource Waits | `waits` | `activity.resources` | `waitCategories`, `waitTypes` | Rows shown |
 | Data File I/O | `fileIo` | `activity.resources` | `files` | Rows shown |
 | Recent Expensive Queries | `recentQueries` | `activity.queries` | `recentQueries` | Rows shown |
 | Active Expensive Queries | `activeQueries` | `activity.sessions` | `activeQueries` | Rows shown |
 
-Split view shows two panes; on first open Processes and Resource Waits. Nothing is collapsed,
+Split view shows two panes; on first open Sessions and Resource Waits. Nothing is collapsed,
 and no pane needs expanding to show data.
 
 ## Tiles
@@ -235,7 +245,7 @@ were cleared; charts draw a gap there.
 
 ## Tables
 
-### Processes (`sessions`)
+### Sessions (`sessions`)
 
 Probe `activity.sessions`; key `sessionId` (with `loginTime` for rates); at most 10,000 rows. Default order: Session ID ascending. Row tones: blocked (error), blocking (warning), rollback (running), departed (muted), system (muted). A selected row whose session ended stays one more sample, toned departed.
 
@@ -285,7 +295,7 @@ Probe `activity.sessions`; key `sessionId`; at most 2,000 rows. Order: lead bloc
 | Session | `session` | text | — | Yes | New | The session id indented by its depth in the chain; lead blockers at depth 0. |
 | Session ID | `sessionId` | int | id |  | New | session_id. |
 | Depth | `depth` | int | count |  | New | Depth in the chain (0 for a lead blocker). |
-| Status | `status` | text | — | Yes | New | As in Processes. |
+| Status | `status` | text | — | Yes | New | As in Sessions. |
 | Blocked Sessions | `blockedSessions` | int | count | Yes | New | Sessions downstream of it. |
 | Wait Type | `waitType` | text | — | Yes | New | The wait on its parent in the chain. |
 | Wait (ms) | `waitTimeMs` | bigint | ms | Yes | New | How long it has waited on its parent. |
@@ -436,12 +446,12 @@ Filters run in the backend over the sample; the SQL never changes.
 | Active | `active` | Sessions with a request. |
 | Blocked | `blocked` | Sessions waiting on another session (a wait on a negative id, such as a latch owner, is not one). |
 | Blocking | `blocking` | Sessions another session waits on. |
-| Idle with open transaction | `idleOpenTransaction` | Sessions with no request and an open transaction: the classic forgotten transaction. |
+| Idle in transaction | `idleOpenTransaction` | Sessions with no request and an open transaction: the classic forgotten transaction. |
 | Rolling back | `rollingBack` | Sessions rolling back after KILL. |
 
 Toggles: System sessions (`activityMonitor.showSystemSessions`, off by default), Varia's own (`activityMonitor.showVariaSessions`, off by default). The filter box matches
 case-insensitively against Login, Database, Application, Host Name, Command, Wait Type, Status.
-Column value filters (Alt+Down on a header) offer (All), (Blanks), (Non-blanks) and each value with its count for Login, Database, Application, Host Name, Wait Type, Command, Status.
+Header funnels (or Alt+Down in a cell) list each value with its count, and (Blanks), with Select all and Select none, for Login, Database, Application, Host Name, Wait Type, Command, Status.
 Several values in one column match any of them; filters on several columns must all match.
 Resource Waits has Hide benign waits (on by default), which leaves out benign wait types and the Idle category.
 
@@ -466,7 +476,7 @@ blocks someone and waits on no one; an idle session holding a transaction is a l
 transactions from `sys.dm_exec_sessions` (SSMS shows 0). A cycle (a deadlock SQL Server has not resolved yet) is cut at its
 lowest session id, and its sessions are marked. Chains deeper than 32 or longer than 2,000 rows are cut and marked truncated.
 
-A wait on a negative id (below) is not a wait on a session: Processes shows its meaning in Blocked By, but the session
+A wait on a negative id (below) is not a wait on a session: Sessions shows its meaning in Blocked By, but the session
 is not counted as blocked (the Blocked Sessions tile and the Blocking badge count waits on sessions only), is a Blocking
 row only when it blocks someone, and a lead blocker waiting on a latch stays the head of its chain.
 
@@ -625,7 +635,7 @@ session it checks (below).
 
 ## Session actions
 
-Details and Kill Process act on a row of Processes, Blocking or Active Expensive Queries. Both name the session by its id
+Details and Kill Process act on a row of Sessions, Blocking or Active Expensive Queries. Both name the session by its id
 and its login time (`2026-10-22T06:50:12.347`: server local time, as `sys.dm_exec_sessions` has it, within `datetime`'s
 range), because SQL Server reuses session ids.
 
@@ -657,12 +667,12 @@ sessions (those of every connection in the window, whatever Application Name eac
 built on the server from the session id (an int parameter), never from text. One Kill runs at a time per connection and
 two in the window; another waits up to 5 seconds, then answers BUSY. A request has 25 s in all; sessions not tried by then
 are left alone and the answer says so. Rollback progress needs
-no polling: Processes shows "rolling back n %" from the session's own request. Kill's checks need server state to see
+no polling: Sessions shows "rolling back n %" from the session's own request. Kill's checks need server state to see
 the session too: without it every other session answers `ended`, and nothing is killed.
 
 | Outcome | Meaning |
 | --- | --- |
-| `killed` | SQL Server accepted KILL. An open transaction rolls back, which can take as long as the work it undoes; Processes shows its progress. |
+| `killed` | SQL Server accepted KILL. An open transaction rolls back, which can take as long as the work it undoes; Sessions shows its progress. |
 | `ended` | No session has that id any more. Nothing was killed. |
 | `changed` | The id now belongs to another session (its login time or host process id differs). Nothing was killed. |
 | `own` | The session Kill itself runs on. Nothing was killed. |
@@ -681,10 +691,10 @@ the session too: without it every other session answers `ended`, and nothing is 
 
 | Pane | Column | Varia |
 | --- | --- | --- |
-| Processes | Status | The request's status, else the session's; "rolling back 42 %" during KILLED/ROLLBACK and "sleeping · 1 open tran" for an idle session with an open transaction. SSMS's Task State shows neither. |
-| Processes | Blocked By | The session it waits on (its longest blocking wait); negative ids show their meaning. SSMS lists a session once per session it blocks. |
-| Processes | Head Blocker | Blocks another session and waits on none. SSMS marks it on each duplicate row. |
-| Processes | Open Transactions | The session's open transactions. SSMS reads the request's count, so an idle session holding a transaction shows 0. |
+| Sessions | Status | The request's status, else the session's; "rolling back 42 %" during KILLED/ROLLBACK and "sleeping · 1 open tran" for an idle session with an open transaction. SSMS's Task State shows neither. |
+| Sessions | Blocked By | The session it waits on (its longest blocking wait); negative ids show their meaning. SSMS lists a session once per session it blocks. |
+| Sessions | Head Blocker | Blocks another session and waits on none. SSMS marks it on each duplicate row. |
+| Sessions | Open Transactions | The session's open transactions. SSMS reads the request's count, so an idle session holding a transaction shows 0. |
 | Active Expensive Queries | CPU (ms) | The request's CPU so far. SSMS captions this total "CPU (ms/sec)". |
 | Active Expensive Queries | Physical Reads | Reads so far. SSMS captions this total "Physical Reads/sec". |
 | Active Expensive Queries | Logical Reads | Logical reads so far. SSMS captions this total "Logical Reads/sec". |
@@ -701,7 +711,7 @@ the session too: without it every other session answers `ended`, and nothing is 
 | --- | --- | --- |
 | `monitorsPerConnection` | 1 | Activity Monitors per connection; opening another activates it |
 | `probesPerMonitor` | 4 | Probes of the monitor's one subscription |
-| `sessions` | 10,000 | Processes rows; more set `truncated` and drop idle sessions first (sessions in a blocking wait come first, then those with a request) |
+| `sessions` | 10,000 | Sessions rows; more set `truncated` and drop idle sessions first (sessions in a blocking wait come first, then those with a request) |
 | `blockingEdges` | 20,000 | Blocking waits read per sample |
 | `blockingRows` | 2,000 | Blocking rows |
 | `blockingDepth` | 32 | Depth of a blocking chain the Blocking pane shows |

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { focusInRun } from '../src/renderer/src/grid/GridView'
 import { cellKey } from '../src/renderer/src/grid/marks'
 import { ResultError, type ResultHandle, type SearchOptions } from '../src/renderer/src/results/ResultClient'
-import type { GridSort, ResultSetEntry, TabResults } from '../src/renderer/src/results/ResultsService'
+import { entryOf, type EntryRef, type GridSort, type ResultSetEntry, type TabResults } from '../src/renderer/src/results/ResultsService'
 import { announceDelayMs, ResultsSearchService, searchAnnouncement, searchBoxKeyAction, searchCount, searchDelayMs, type TabSearch } from '../src/renderer/src/results/search'
 import type { ResultColumn, ResultDescriptor, ResultsSearchResult } from '../src/shared/contracts'
 import { manualTimers } from './fixtures/workbench'
@@ -44,12 +44,14 @@ function fixture(o: { maxMatches?: number } = {}) {
       }))
     } as unknown as ResultHandle
     const descriptor = { generation: 1, resultId: index + 1, index, columns: columns.map(column) } as unknown as ResultDescriptor
-    return { index, descriptor, handle }
+    // The entry's key and number are its result's, as ResultsService keeps them while the entry lives.
+    return { key: `e${index + 1}`, index, ordinal: index + 1, number: index + 1, descriptor, handle }
   }
   const results = {
     getSnapshot: () => (tab ? { t1: tab } : {}) as Readonly<Record<string, TabResults>>,
     subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener) },
-    sortOf: (_tabId: string, index: number) => sorts.get(index)
+    // `sorts` is by the place each set was made for (its result id less one), wherever the set stands now.
+    sortOf: (_tabId: string, ref: EntryRef) => { const entry = entryOf(tab?.sets, ref); return entry && sorts.get(entry.descriptor.resultId - 1) }
   }
   const service = new ResultsSearchService({ results, timers, maxMatches: o.maxMatches })
   const show = (sets: ResultSetEntry[], queryId = 'q1', settled = true) => {
@@ -382,6 +384,41 @@ describe('ResultsSearchService', () => {
   })
 
   // #367
+  it('keeps each grid\'s matches and the reveal on its entry when a middle entry goes', async () => {
+    const { service, set, show, answerAll, search } = fixture()
+    const first = set(0, ['a'], [[1, 0]]), middle = set(1, ['ab'], [[2, 0]]), last = set(2, ['abc', 'b'], [[3, 1], [4, 0]])
+    show([first, middle, last])
+    service.setText('t1', 'b', true)
+    await answerAll()
+    service.step('t1', 1)
+    service.step('t1', 1)
+    expect(search()).toMatchObject({ total: 4, current: 2, revealIndex: 2 })
+    expect(search().marks.get(2)).toMatchObject({ handle: last.handle, current: { row: 3, column: 1 } })
+    expect(service.pendingReveal('t1', 2)).toBe(true)
+    // The middle entry goes and the last moves up a place, as ResultsService publishes it: the same entry, a new index.
+    const moved = { ...last, index: 1 }
+    show([first, moved])
+    // Before the search again answers, the last matches show where their entries stand now, and the gone entry's nowhere.
+    expect(search()).toMatchObject({ status: 'searching', revealIndex: 1 })
+    expect(search().marks.get(0)).toMatchObject({ handle: first.handle })
+    expect(search().marks.get(1)).toMatchObject({ handle: last.handle, current: { row: 3, column: 1 } })
+    expect(search().marks.has(2)).toBe(false)
+    expect(service.pendingReveal('t1', 1)).toBe(true)
+    expect(service.pendingReveal('t1', 0)).toBe(false)
+    expect(service.pendingReveal('t1', 2)).toBe(false)
+    await answerAll()
+    expect(search()).toMatchObject({ status: 'done', total: 3 })
+    expect([...search().marks.get(1)!.cells!]).toEqual([cellKey(3, 1), cellKey(4, 0)])
+    expect(search().marks.has(2)).toBe(false)
+    // Column names are kept by entry too.
+    service.setMode('t1', 'columns')
+    expect([...search().marks.get(1)!.columns!]).toEqual([1, 1])
+    expect(search()).toMatchObject({ total: 2, current: 0, revealIndex: 1 })
+    show([{ ...moved, index: 0 }])
+    expect([...search().marks.get(0)!.columns!]).toEqual([1, 1])
+    expect(search()).toMatchObject({ total: 2, revealIndex: 0 })
+    expect(service.pendingReveal('t1', 0)).toBe(true)
+  })
   it('never matches or counts a diff\'s or live table\'s hidden tone column in a column-name search', () => {
     const { service, set, show, search } = fixture()
     const diff = set(0, ['id', 'note', 'tone'], [])

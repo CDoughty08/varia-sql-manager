@@ -88,6 +88,8 @@ internal sealed class SsisCatalog
     public IEnumerable<SsisActionSpec> Actions => actions.Values;
     /// <summary>Statuses an operation can still leave (created, running, pending, stopping), and those it cannot.</summary>
     public IReadOnlySet<int> OpenStatuses { get; }
+    /// <summary>Created: the one open status an operation can keep for good (create_execution with no start_execution).</summary>
+    public const int CreatedStatus = 1;
     public IReadOnlySet<int> FinalStatuses { get; }
     /// <summary>Operation types Stop Operation applies to: executions and validations.</summary>
     public IReadOnlySet<int> StoppableOperationTypes { get; }
