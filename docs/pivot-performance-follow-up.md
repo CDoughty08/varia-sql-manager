@@ -1,6 +1,6 @@
 # Pivot performance investigation follow up
 
-Status: not started. This investigation is separate from the [Grouped views implementation](grouped-results-implementation-plan.md), with one dependency: that plan's PR 17 rebuilds a Pivot automatically when its Table's filters change, below a source-row threshold that must come from this investigation's measurements. The rest of Grouped views (navigation, ownership, transformation eligibility) does not depend on it.
+Status: not started. Start from `main` with #427 (the number sort tie fix) merged, and use the result-scale benchmark's fixtures where they fit. This investigation is separate from the [Grouped views implementation](grouped-results-implementation-plan.md), with one dependency: that plan's PR 17 rebuilds a Pivot automatically when its Table's filters change, below a source-row threshold that must come from this investigation's measurements. The rest of Grouped views (navigation, ownership, transformation eligibility) does not depend on it.
 
 The reported problem is severe slowdown while using Pivot. Establish a reproducible case and separate backend work, result delivery, and UI work before choosing an optimization. Avoid attributing the problem to nested transformations or the vertical stack without measurements.
 

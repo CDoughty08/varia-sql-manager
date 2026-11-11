@@ -4,16 +4,18 @@ Give each original query result a group that owns its Table and, when built, one
 active grid or stacked as today; the user chooses. Transpose becomes a way of drawing a Table or a Pivot, not a stored
 result. Comparisons sit beside the groups and keep their own snapshots.
 
-Revision 6 (2026-11-10). It follows the owner's decisions, three independent reviews against the code, and the
-orientation spike's findings. The
-[Grouped views mock](../prototypes/results-pane/grouped-results-ui.html) is the visual reference for the Tabs layout only:
-palette, type, row and header heights, toolbar structure, side panels, Messages strip. Where it disagrees with this
-document it is wrong: Transpose as a stored inner tab, no Stacked layout, a picker that needs matching columns, comparing
-pivots and transposes, a native `<select>` for overflow, a cap of 8 comparisons, "Comparison N" names, and the notice that
-pivots keep the rows they were built from. Its HTML, data, simplified builder and Save placeholder are prototype code.
+Revision 7 (2026-11-11). It follows the owner's decisions, three independent reviews against the code, the orientation
+spike's findings, and what PRs 1 and 2a found when they merged.
+
+The visual references are the three mocks in [prototypes/results-pane](../prototypes/results-pane/README.md): Tabs,
+Stacked and the transposed grid. The owner accepted their defaults on 2026-11-11, to be adjusted as the PRs land: the
+choices the README lists where this plan leaves the interface open, and the A alternative of each transposed topic
+(1A, 2A and 5A are also what the spike decided). Where a mock and this document disagree, this document wins. The older
+`grouped-results-ui.html` is superseded and kept only for history.
 
 The [pivot performance investigation](pivot-performance-follow-up.md) is separate work; PR 17 cannot start until it has
-produced the measurements that set its threshold.
+produced the measurements that set its threshold. The [result memory work](#result-memory-work-alongside) under way
+beside this plan changes what some of its limits must be measured against.
 
 ## Decisions
 
@@ -141,7 +143,8 @@ A filter of its own (`keepRows`), not one of the value filters: those resolve to
 - Its chip reads "12 selected rows": the rows it names, though a later filter (duplicates, say) may show fewer.
 - It works wherever the other selection filters do: Tables, Pivots and comparisons.
 - It names no column, so header funnels do not mark any. Code that tells filters apart by their `rows` or `column` must
-  handle it: `ResultsService.ts` around lines 695, 1037, 1174 and 1215 and `filterLabel`; `column-filter.ts`
+  handle it: in `ResultsService.ts`, every place that reads a filter's `rows` or `column`, and `filterLabel`;
+  `column-filter.ts`
   (`columnFilterKind`, the not-NULL test); in C#, `FilterOp`, the view's key count (which must not count it as a key) and
   the filter validation in `SqlService.cs`.
 - While rows stream it keeps the rows it resolved; rows that arrive later are not kept.
@@ -234,6 +237,39 @@ There is no Undo for a close.
   strips use the same names. Main's shortening of a long name, which keeps only a `-Result{n}` suffix today
   (`results-jobs.ts`), and `suggestedName` keep the whole suffix.
 
+### Result memory work alongside
+
+Separate work is changing how much a result can hold, and this plan's limits were written against today's 2 GiB cap:
+
+- **A larger global budget** is proposed: a quarter of memory up to 16 GiB, with a setting. A query's budget is half of
+  it, so a source can hold several times the rows it does today. A result-scale benchmark at 1 to 8 GiB of rows
+  (`--result-scale-bench` in the .NET test project) is measuring sort, filter and pivot at those sizes.
+- **Compressed pages** are proposed after it: sealed pages compressed in place and decompressed per page on read, so
+  every scan pays for decompression.
+- **Two fixes are open as PRs:** #426 sends a set's truncation reason with `progress`, so the strip shows while the query
+  still runs; #427 stops a number sort reading the pages for every tie, which made sort, duplicate filters, distinct
+  values and Pivot several times slower on a column of repeated numbers.
+
+What that changes here:
+
+- **Limits that are counts stay.** 4,095 drawn rows, 4,096 columns, 256 ranges, 16 filters and 1,000 results do not
+  depend on the budget.
+- **The cap of four parallel builds is provisional.** Each build reserves working memory for its whole source out of the
+  query's budget. With larger sources, four builds are more likely to refuse each other and each holds its result slot
+  longer. PR 10 keeps four as the count but must check it against the benchmark's pivot timings at the largest budget,
+  and lower it or queue by reserved bytes if builds starve each other.
+- **PR 17's threshold is in source rows and comes from measurements taken after #427**, at the budget that ships. If
+  compressed pages land first it is measured over them. It must not be a number taken at 2 GiB.
+- **The pivot performance investigation** starts from `main` with #427 merged, since that fix removes one known cause
+  of a slow Pivot over repeated numbers, and uses the result-scale benchmark's fixtures where they fit instead of a
+  second harness.
+- **Out of date and Update (PR 11) matter more.** A rebuild over a large source takes seconds, so the marked state is
+  what users of large results will see most.
+- **PR 1's rules hold whatever the size**, but its checks name byte counts through a memory probe; they need another
+  look if what a stored page charges changes with compression.
+- **The transposed grid reads tiles of 32 rows by 128 columns** across many pages. Its frame numbers were taken over
+  uncompressed pages; PR 5b's benchmark entries are the place a compressed format would show a cost.
+
 ### Peek
 
 Peek shows one set of ten rows. It uses the shared component in a bare mode: the grid alone, no tabs, close buttons,
@@ -258,8 +294,10 @@ flat, ordered list. Groups arrive in PR 9, with the rules that make them true.
   the number it is named by today once the run ends. Names come from it: "Result 3", "Pivot of Result 3", comparison
   names.
 - **Derived entries have no ordinal.** Where one is numbered by position today (job labels, save names, splitter labels
-  and the grid's accessible name call a pivot at position 4 "Result 4"), PR 2 fixes that number at the position it was
-  appended at, for its life. So PR 2 changes nothing visible; PR 15 gives derived views their own names.
+  and the grid's accessible name call a pivot at position 4 "Result 4"), PR 2 fixes that number for the entry's life, as
+  the run's highest number so far plus one (the position it is appended at while nothing has been removed; a position
+  alone would repeat a number after a removal). So PR 2 changes nothing visible; PR 15 gives derived views their own
+  names.
 - **Grid names:** the accessible name stays "Result N of M, …" in PR 2, so scripts that assert it keep passing.
 - **Highlights:** an original result's are keyed by ordinal and follow a re-run; a derived entry's are keyed by entry key
   and do not.
@@ -384,9 +422,9 @@ No generic result-management RPC, and no rows in React.
 One `claude/grouped-results-<topic>` branch per PR off `main`, `npm run check` before each commit, the affected smoke
 suites, and generated pages regenerated in the same PR. Every PR leaves `main` shippable.
 
-**PR 0. Orientation spike: done.** Findings: [grouped-results-orientation-spike.md](grouped-results-orientation-spike.md)
-(on the spike branch `claude/angry-faraday-053377` until it merges; its prototype never lands as it is). Outcome, accepted
-by the owner:
+**PR 0. Orientation spike: done.** Findings: [grouped-results-orientation-spike.md](grouped-results-orientation-spike.md).
+Its prototype stays on the local branch `claude/angry-faraday-053377` for PR 5 to draw from and never lands as it is.
+Outcome, accepted by the owner:
 
 - **Approach:** rotation inside `GridView`. The grid keeps working in drawn rows and columns and turns coordinates at four
   seams: the selection it reads and writes, a cell's lookup, the tiles it asks for, and what it reports out (menu targets,
@@ -397,12 +435,21 @@ by the owner:
 - **Still open, for PR 5a to settle:** the table grid's first paint read 44 and 59 ms on the spike build against 40 and
   36 ms on `main`; two runs cannot call that noise. The Linux CI runner is unmeasured until a branch is pushed.
 
-1. **Budget fixes.** Checks in `DiffChecks.cs`, `PivotChecks.cs` and a store built with a memory probe: a refused or
+1. **Budget fixes. Merged as #411.** Checks in `DiffChecks.cs`, `PivotChecks.cs` and a store built with a memory probe: a refused or
    memory-pressed derived set leaves the budget open and Pivot usable; pressure at a derived set's last seal keeps it
    whole and unmarked; a partial diff is refused; a budget stopped at a query set's final seal answers `BUDGET_STOPPED`
    with the low-memory sentence.
 2. **Stable keys and ordinal names**, as 2a and 2b. No visible change. Checks: a simulated middle removal leaves every
    consumer on the right entry and every name unchanged; listed suites and scripts updated.
+   - **2a merged as #413.** It left adapters for 2b to remove: public methods that take a key or an index;
+     `ResultSetEntry.index`, `ResultJob.index` and `GridSelection.resultIndex` derived and rewritten when entries move;
+     `TabResults.sorts`, the search marks and reveal, the highlights snapshot and `PivotTab.source` still published by
+     set index; `PivotInfo.source`, `TransposeInfo.source` and `CompareInfo.left/right` captured as indexes (with
+     `leftNumber`/`rightNumber` beside them for names). It added `removeEntry(tabId, key)`, which nothing in the
+     interface calls until PR 3. The pivot panel's source follows an original result by ordinal and a derived entry by
+     key, as highlights do.
+   - **2b** moves the stack's own positional state (`weights`, `collapsed`, `focusedIndex`), the grid, panels,
+     contributions, menus, tests and script locators, and removes those adapters.
 3. **Lifecycle.** Close one entry, the cleanup path, per-result cancellation, per-target search invalidation, run totals,
    weights per entry. Close buttons on stack captions, behind an option that Peek's stack leaves off. The `emptied` flag
    and its `OutputPane` consumers (output view choice, tab list, badge, toolbar, strip, empty state) land here, because

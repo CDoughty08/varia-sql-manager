@@ -1,6 +1,6 @@
 # Results pane mocks
 
-Design references for [the grouped results plan](../../docs/grouped-results-implementation-plan.md) (revision 5). They are
+Design references for [the grouped results plan](../../docs/grouped-results-implementation-plan.md) (revision 7). They are
 not production code: each file is one self-contained page (inline CSS and JS, no network, no build step) that opens
 directly in a browser. Where a mock and the plan disagree, the plan wins.
 
@@ -27,7 +27,8 @@ no Stacked layout, a picker that needs matching columns, comparisons of pivots, 
   cancellation, refusals (`BUDGET_STOPPED`, `TOO_LARGE`, the 1,000-result rule) and retries are not shown.
 - A comparison's rows are invented from the sample data; no key is implied.
 - The running state uses a timer to stand in for pages arriving from the backend.
-- The Tabs and Stacked mocks draw Transposed with the A alternatives of the third mock, pending the spike.
+- The Tabs and Stacked mocks draw Transposed with the A alternatives of the third mock. The owner accepted those and
+  the choices below as defaults on 2026-11-11; the spike's decisions agree with 1A, 2A and 5A.
 
 ## Choices made where the plan leaves the interface open
 
