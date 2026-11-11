@@ -2,13 +2,16 @@
 
 Open **Window › Execution Plan › Plan history › Compare plans**. Choose a left and right retained snapshot or open
 `.sqlplan` document, then **Compare selected plans**. **Open saved plan…** uses the normal file loader; its document
-becomes another input choice. Two copies of the same input are allowed. Comparison is confined to this one pane per
-workbench window. Closing it releases its inputs, workers, layouts, view state and canvases. It is not persisted.
+becomes another input choice. Two copies of the same input are allowed. Choices that would read identically are told
+apart in the selector: documents by their folder, snapshots by the millisecond they started, then by a short
+identifier. The selected choice's full path or capture context is its tooltip and accessible description. Comparison
+is confined to this one pane per workbench window. Closing it releases its inputs, workers, layouts, view state and canvases. It is not persisted.
 
 Comparison freezes both XML strings at the moment Compare is pressed. For a document this includes its current
 unsaved edits, name/path and model revision. Subsequent edits, saves, renaming, source closure, history removal or
 eviction never rewrite an active comparison. Compare again to use the latest document contents. A document still
-being filled cannot be acquired. **Swap plans** reverses the frozen inputs, including delta direction. **Open frozen
+being filled cannot be acquired. **Swap plans** reverses the frozen inputs, including delta direction, and reuses
+their parses (finished or still pending) and layouts: only matching runs again. **Open frozen
 XML** opens an independent document containing exactly that side's comparison input.
 
 Each side retains its original source/statement/operator identities. Retained inputs preserve capture type (Actual,
@@ -23,6 +26,12 @@ Statements pair by unique exact trimmed statement text and type, followed by a u
 is not case folded or whitespace normalized: literals can be significant. Repeated statements are ambiguous; neither
 StatementId nor occurrence order establishes a counterpart. Optimizer hashes are matching hints, not proof of
 equivalent results. Materially different statements without either identity remain separate.
+
+The parser shortens long text and caps lists, and marks the statement or operator that lost something
+(`textShortened`, `identityShortened`, `detailsShortened`). A shortened value is evidence of its retained prefix
+only. Shortened statement text never forms an exact-text match (a complete unique query hash still can); operators
+with shortened names, object or details do not pair on those fields. Where the retained values of a shortened field
+agree, the pairing list and the difference tables say equality is unverified instead of `Same`.
 
 Within a paired statement, operators pair using unique physical/logical operation, object and normalized predicates,
 then unique physical/logical operation and object, then unique logical operation and object (allowing changed physical
@@ -73,7 +82,8 @@ existing canvas's fit, keyboard/outline navigation, search, ranking, warnings an
 Each input has the existing 8,388,608-character XML, 512-statement and 10,000-operator limits. There are exactly two
 frozen XML strings (at most 32 MiB of UTF-16 XML, plus their bounded metadata); retained strings are shared with history
 while present there. Preparation uses the existing window-owned parsed/layout caches and their independent budgets,
-producer cap and cancellation semantics. Comparison scopes are removed on input replacement, hide, error or close;
+producer cap and cancellation semantics. Each frozen input owns one preparation scope, which a swap keeps.
+Comparison scopes are removed on input replacement, hide, error or close;
 late unary parse replies cannot repopulate them. Already-sent backend parses cannot be cancelled, remain counted
 against the existing 64-producer cap until settled, and are never retried automatically.
 
@@ -82,6 +92,7 @@ in the bounded source data; no edit-distance matrix or ambiguous-candidate cross
 20,000 operator entries can be returned across two completely unpaired inputs. The worker returns IDs and flags,
 not duplicate normalized plan objects, and terminates on completion. Text cells display at most 4,096 characters
 with an explicit shortening notice, while equality uses the full retained value; frozen XML remains available.
+That display cap is separate from parser shortening, which is reported as unverified equality (see Pairing).
 There is a 35-second overall preparation
 deadline. Changing inputs/swapping/closing aborts consumers, terminates the old matching worker and layout workers,
 and prevents stale results from restoring UI. Each Pixi viewer retains the existing visibility gating and bounded

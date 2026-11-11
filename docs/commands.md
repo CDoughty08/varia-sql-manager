@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (296)
+## Commands (297)
 
 ### File
 
@@ -382,6 +382,7 @@ keys it uses are listed below.
 | Download Update | `help.downloadUpdate` | — | — | — | `updateAvailable` | — |
 | Restart to Update | `help.restartToUpdate` | — | — | — | `updateReady` | Help › Restart to Update |
 | Release Notes | `help.releaseNotes` | — | — | — | Always | Help › Release Notes |
+| Open Release Downloads | `help.openDownloads` | — | — | — | Always | — |
 
 ### Other
 
