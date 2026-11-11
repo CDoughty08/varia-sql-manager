@@ -76,12 +76,32 @@ export async function runTextQualityComparison({ browser, baseline = 'origin/mai
         }
         const screenshot = `comparison-${ratio}x.png`
         await page.locator('body').screenshot({ path: resolve(output, screenshot) })
+        // The capture is only evidence when every context survived rendering and the screenshot.
+        await page.evaluate(() => window.planTextQuality.check())
         reports.push({ ratio, screenshot, samples })
         console.log(`Plan text: 55%, 75%, 100%, 120%, 200%, 300% at ${ratio}× DPI; WebGL textures and pan reuse verified.`)
         await page.evaluate(() => window.planTextQuality.dispose())
       } finally { await context.close() }
     }
     assert.deepEqual(errors, [])
+    const context = await browser.newContext({ deviceScaleFactor: 1, viewport: { width: 1400, height: 1400 } })
+    try {
+      // Console output is not collected here: the injected context loss is reported there by design.
+      const page = await context.newPage()
+      page.setDefaultTimeout(15_000)
+      await page.goto(pathToFileURL(resolve(output, 'comparison.html')).href)
+      await page.evaluate(() => window.planTextQuality.ready())
+      const session = await page.evaluate(() => window.planTextQuality.zoomSession(2000))
+      assert.ok(session.labels >= 3 && session.sharp, 'Zoomed labels keep textures at their displayed resolution')
+      assert.ok(session.active > 0 && session.active <= session.labels, 'Only visible labels hold text cache keys')
+      assert.equal(session.released, 0, 'Retired text cache keys are released during a long zoom session')
+      console.log(`Plan text: ${session.active} text cache keys and no released keys after 2,000 zoom steps.`)
+      // A context lost after initialization must not produce a successful report.
+      assert.equal(await page.evaluate(() => window.planTextQuality.loseContext()), true)
+      await assert.rejects(page.evaluate(() => window.planTextQuality.ready()), /GPU failure|WebGL context lost/)
+      await assert.rejects(page.evaluate(() => window.planTextQuality.check()), /GPU failure|WebGL context lost/)
+      console.log('Plan text: a context lost after initialization fails the comparison.')
+    } finally { await context.close() }
     const report = { baselineRevision, sourceSha256: createHash('sha256').update(await readFile(resolve(root, sourcePath))).digest('hex'),
       browser: browser.version(), reports, errors }
     await writeFile(resolve(output, 'results.json'), JSON.stringify(report, null, 2) + '\n')
