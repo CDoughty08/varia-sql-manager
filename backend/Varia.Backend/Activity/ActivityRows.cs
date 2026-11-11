@@ -390,6 +390,7 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
             sessions.Set(cells, "hostProcessId", LiveCell.Of(rows.Long(row, "host_process_id")));
             sessions.Set(cells, "queryHash", LiveCell.Of(ActivityRowWriter.Hex(rows.Bytes(row, "query_hash"))));
             sessions.Set(cells, "varia", LiveCell.Of(label));
+            if (SessionTone(node?.BlockedBy > 0, node?.Downstream > 0, rollingBack, !rows.Flag(row, "is_user_process")) is { } tone) sessions.Tone(cells, tone, catalog);
             var live = new LiveRow(cells);
             built.Add(live);
             facts[live] = new(System: !rows.Flag(row, "is_user_process"), VariaPool: pool, Active: hasRequest, Blocked: node?.BlockedBy > 0, Blocking: node?.Downstream > 0,
@@ -423,6 +424,7 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
             blocking.Set(cells, "openTransactions", LiveCell.Of(info?.OpenTransactions));
             blocking.Set(cells, "cycle", LiveCell.Bit(node.Cycle));
             blocking.Set(cells, "lastBatch", LiveCell.Of(depth == 0 ? ActivityRowWriter.OneLine(batches.GetValueOrDefault(node.SessionId), catalog.Limit("lastBatchChars")) : null));
+            blocking.Tone(cells, ChainTone(depth), catalog);
             chain.Add(new LiveRow(cells));
         }
 
@@ -430,6 +432,16 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
         return new(built, Math.Max(0, grouped.Count - sessionsCap), facts, chain, graph.Truncated ? 1 : 0, activeRows, activeMore,
             focusCpu, focusReads, graph.BlockedSessions);
     }
+
+    /// <summary>A session's row tone, most urgent first: blocked, blocking others, rolling back, a system session.</summary>
+    public static string? SessionTone(bool blocked, bool blocking, bool rollingBack, bool system) =>
+        blocked ? "blocked" : blocking ? "blocking" : rollingBack ? "rollback" : system ? "system" : null;
+
+    /// <summary>A chain row's tone: a lead blocker (depth 0) blocks, every row under it is blocked.</summary>
+    public static string ChainTone(int depth) => depth == 0 ? "blocking" : "blocked";
+
+    /// <summary>A running request's tone: blocked, else rolling back.</summary>
+    public static string? ActiveTone(bool blocked, bool rollingBack) => blocked ? "blocked" : rollingBack ? "rollback" : null;
 
     private (List<LiveRow>? Rows, long More) Active(ActivityResult? requests, long at)
     {
@@ -469,9 +481,11 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
             active.Set(cells, "maxUsedMemoryKb", LiveCell.Of(requests.Long(row, "max_used_memory_kb")));
             active.Set(cells, "grantWaitMs", LiveCell.Of(requests.Long(row, "grant_wait_ms")));
             active.Set(cells, "waitType", LiveCell.Of(requests.Text(row, "wait_type")));
-            active.Set(cells, "blockedBy", requests.Long(row, "blocking_session_id") is { } blocker and not 0 ? LiveCell.Of(blocker) : LiveCell.Null);
+            var blockedBy = requests.Long(row, "blocking_session_id") is { } blocker and not 0 ? blocker : (long?)null;
+            active.Set(cells, "blockedBy", blockedBy is { } by ? LiveCell.Of(by) : LiveCell.Null);
             active.Set(cells, "percentComplete", requests.Double(row, "percent_complete") is { } percent and > 0 ? ActivityRowWriter.Decimal(percent, 1) : LiveCell.Null);
             active.Set(cells, "queryHash", LiveCell.Of(ActivityRowWriter.Hex(requests.Bytes(row, "query_hash"))));
+            if (ActiveTone(blockedBy is not null, requests.Text(row, "command") == "KILLED/ROLLBACK") is { } tone) active.Tone(cells, tone, catalog);
             rows.Add(new LiveRow(cells));
         }
         requestRates.EndSample();
