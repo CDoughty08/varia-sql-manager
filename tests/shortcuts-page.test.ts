@@ -136,6 +136,33 @@ describe('Shortcuts draft', () => {
     expect(removeEntries(shared, [0], 'darwin').bindings).toEqual([{ command: 'file.saveAs', key: 'alt+j', platform: 'win32' }, { command: 'file.saveAs', key: 'alt+j', platform: 'linux' }])
     expect(removeEntries(file([{ command: 'file.saveAs', key: 'alt+j', platform: 'darwin' }]), [0], 'darwin').bindings).toEqual([])
   })
+  it('Remove in the banner writes no copy the file already has, and drops entries outright when narrowing would not fit', () => {
+    // #293: the Windows copy is already there, so only the Linux one is written.
+    const twice = file([{ command: 'file.saveAs', key: 'alt+j' }, { command: 'file.closeAll', key: 'f5' }, { command: 'file.saveAs', key: 'alt+j', platform: 'win32' }])
+    expect(effectiveRules('darwin', twice).problems.map(problem => problem.index)).toContain(0)
+    const narrowed = removeEntries(twice, [0], 'darwin').bindings
+    expect(narrowed.filter(binding => binding.command === 'file.saveAs' && binding.platform === 'win32')).toHaveLength(1)
+    expect(new Set(narrowed.map(binding => JSON.stringify(binding))).size).toBe(narrowed.length)
+    // At the entry limit each narrowed entry would become two, and OK would fail with main's validation error.
+    const keys = ['mod+shift+alt', 'mod+alt', 'mod+shift', 'meta+alt', 'meta+shift'].flatMap(modifier => [...'abcdefghiklmnopqrstuvwxyz0123456789'].map(key => `${modifier}+${key}`))
+    const fillers = (count: number): ShortcutFile['bindings'] => [...keys, ...keys.map(key => `mod+shift+j ${key}`), ...keys.map(key => `mod+alt+j ${key}`), ...keys.map(key => `meta+alt+j ${key}`), ...keys.map(key => `meta+shift+j ${key}`), ...keys.map(key => `mod+shift+alt+j ${key}`)]
+      .slice(0, count).map(key => ({ command: 'file.closeAll', key, platform: 'linux' as const }))
+    const shared = [{ command: 'file.saveAs', key: 'alt+j' }, { command: 'file.saveAs', key: 'alt+k' }] as const
+    const full = file([...fillers(shortcutLimits.bindings - 2), ...shared])
+    expect(full.bindings).toHaveLength(shortcutLimits.bindings)
+    expect(storable(full)).toBe(true)
+    const problems = effectiveRules('darwin', full).problems.map(problem => problem.index).filter(at => at >= shortcutLimits.bindings - 2)
+    expect(problems).toHaveLength(2)
+    const removed = removeEntries(full, problems, 'darwin')
+    expect(storable(removed)).toBe(true)
+    expect(removed.bindings).toEqual(full.bindings.slice(0, -2))
+    // With room for the copies they are kept, up to the limit exactly.
+    const room = file([...fillers(shortcutLimits.bindings - 4), ...shared])
+    const kept = removeEntries(room, [shortcutLimits.bindings - 4, shortcutLimits.bindings - 3], 'darwin')
+    expect(kept.bindings).toHaveLength(shortcutLimits.bindings)
+    expect(storable(kept)).toBe(true)
+    expect(kept.bindings.slice(-4)).toEqual(shared.flatMap(binding => [{ ...binding, platform: 'win32' }, { ...binding, platform: 'linux' }]))
+  })
   it('finds a user rule by what it is when Reassign removes several', () => {
     // #221: the second conflict was resolved against the draft before the first removal.
     const draft = file([{ command: 'file.saveAs', key: 'mod+shift+e' }, { command: 'file.closeAll', key: 'mod+shift+e', scope: 'queryEditor' }])
