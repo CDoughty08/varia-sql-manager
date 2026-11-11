@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Numerics;
 using System.Text;
@@ -16,6 +17,14 @@ internal sealed record PivotSpec(int[] Rows, int Column, PivotValue[] Values);
 
 /// <summary>The pivot ran out of the memory its result's query budget had room for.</summary>
 internal sealed class PivotTooLargeException : Exception;
+
+/// <summary>Where one build's time went, for the pivot benchmark (--pivot-bench): Stopwatch ticks spent building sort keys,
+/// grouping (the sorts by row groups and by the column group), aggregating over the pages and counting distinct values. Times
+/// only: nothing of the rows.</summary>
+internal sealed class PivotStages
+{
+    public long Keys, Grouping, Aggregation, Distinct;
+}
 
 /// <summary>Groups and aggregates, ready to write: each row group's and column group's first row (by the source's row
 /// order), and each value's per-cell figures. Cell (g, c) is g * (ColumnGroups + 1) + c; c = ColumnGroups is the row group's
@@ -98,7 +107,7 @@ internal static class ResultPivoter
 
     /// <summary>Groups the rows (the view's, in its order, or the sealed ones) and aggregates each value. <paramref name="reserve"/>
     /// is asked for the figures' bytes once the groups are known; false throws <see cref="PivotTooLargeException"/>.</summary>
-    public static PivotModel Build(ResultSetBuffer set, StoredPage[] pages, int[]? order, PivotSpec spec, CancellationToken token, Func<long, bool> reserve)
+    public static PivotModel Build(ResultSetBuffer set, StoredPage[] pages, int[]? order, PivotSpec spec, CancellationToken token, Func<long, bool> reserve, PivotStages? stages = null)
     {
         long total = 0;
         foreach (var page in pages) total += page.Rows;
@@ -110,7 +119,11 @@ internal static class ResultPivoter
         ViewSorter.Key KeyOf(int column)
         {
             if (!keys.TryGetValue(column, out var key))
+            {
+                var started = Stopwatch.GetTimestamp();
                 keys[column] = key = ViewSorter.Build(set, source, new ViewKey(column, false, SortMode.Value), null, rows, token, ref approximate);
+                if (stages is not null) stages.Keys += Stopwatch.GetTimestamp() - started;
+            }
             return key;
         }
         int[] positions;
@@ -125,7 +138,9 @@ internal static class ResultPivoter
         // Each grouping keeps its groups' first rows only up to its bound, still counting past it for the refusal's message,
         // and is refused before the next grouping runs. The messages name no column or value (the renderer knows which).
         var rowKeys = spec.Rows.Select(KeyOf).ToArray();
+        var grouping = Stopwatch.GetTimestamp();
         var (groupOf, rowReps, rowGroups) = Group(rowKeys, positions, rows, scratch, token, all: true, MaxRowGroups);
+        if (stages is not null) stages.Grouping += Stopwatch.GetTimestamp() - grouping;
         if (rowGroups > MaxRowGroups)
             throw new RequestException("INVALID_PARAMS", string.Format(CultureInfo.InvariantCulture,
                 "The row groups make {0:N0} rows, and a pivot can have at most {1:N0}. Group by fewer columns, or filter the rows first.", rowGroups, MaxRowGroups));
@@ -134,7 +149,10 @@ internal static class ResultPivoter
         if (spec.Column >= 0)
         {
             var columnLimit = ColumnGroupLimit(spec);
-            (columnOf, columnReps, var counted) = Group([KeyOf(spec.Column)], positions, rows, scratch, token, all: false, columnLimit);
+            var columnKey = KeyOf(spec.Column);
+            grouping = Stopwatch.GetTimestamp();
+            (columnOf, columnReps, var counted) = Group([columnKey], positions, rows, scratch, token, all: false, columnLimit);
+            if (stages is not null) stages.Grouping += Stopwatch.GetTimestamp() - grouping;
             if (counted > columnLimit)
                 throw new RequestException("INVALID_PARAMS", string.Format(CultureInfo.InvariantCulture,
                     "The column group has {0:N0} distinct values, and a pivot can have at most {1:N0} column groups{2}. Choose a column with fewer values, or move it to Rows.",
@@ -167,6 +185,7 @@ internal static class ResultPivoter
         }
         var extremes = figures.Where(item => item.Value.Aggregate is PivotAggregate.Min or PivotAggregate.Max).Select(item => (Figures: item, Key: KeyOf(item.Value.Column))).ToArray();
         var counter = 0;
+        var aggregating = Stopwatch.GetTimestamp();
         foreach (var (index, page) in source.Pages())
         {
             var view = source.View(index);
@@ -211,8 +230,15 @@ internal static class ResultPivoter
                 }
             }
         }
+        if (stages is not null) stages.Aggregation += Stopwatch.GetTimestamp() - aggregating;
         foreach (var item in figures)
-            if (item.Value.Aggregate == PivotAggregate.CountDistinct) Distinct(item, KeyOf(item.Value.Column), positions, scratch, CellOf, token);
+        {
+            if (item.Value.Aggregate != PivotAggregate.CountDistinct) continue;
+            var distinctKey = KeyOf(item.Value.Column);
+            var counting = Stopwatch.GetTimestamp();
+            Distinct(item, distinctKey, positions, scratch, CellOf, token);
+            if (stages is not null) stages.Distinct += Stopwatch.GetTimestamp() - counting;
+        }
 
         return new PivotModel
         {
