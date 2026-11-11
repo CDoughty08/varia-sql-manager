@@ -23,10 +23,13 @@ const statementDiagnosticsSchema = z.object({
 export const planNodeSchema = z.object({
   id: z.string().max(64), parentId: z.string().max(64).nullable().default(null), nodeId: z.string().max(64), physicalOp: text, logicalOp: text, object: text,
   estimatedRows: number, estimatedCost: number, actualRows: number, elapsedMs: number, cpuMs: number, executions: number,
-  warnings: z.array(text).max(32), properties, diagnostics: operatorDiagnosticsSchema.optional(), liveActivity: z.boolean().optional()
+  warnings: z.array(text).max(32), properties, diagnostics: operatorDiagnosticsSchema.optional(), liveActivity: z.boolean().optional(),
+  // Set when the parser shortened or omitted part of this operator: such fields are evidence of a prefix, not of equality.
+  identityShortened: z.boolean().optional(), detailsShortened: z.boolean().optional()
 }).strict()
 export const planStatementSchema = z.object({
-  id: z.string().max(64), statementId: z.string().max(64).optional(), queryHash: z.string().max(64).optional(), text, type: text, estimatedCost: number, warnings: z.array(text).max(32), nodes: z.array(planNodeSchema).max(planLimits.nodes), diagnostics: statementDiagnosticsSchema.optional()
+  id: z.string().max(64), statementId: z.string().max(64).optional(), queryHash: z.string().max(64).optional(), text, type: text, estimatedCost: number, warnings: z.array(text).max(32), nodes: z.array(planNodeSchema).max(planLimits.nodes), diagnostics: statementDiagnosticsSchema.optional(),
+  textShortened: z.boolean().optional(), detailsShortened: z.boolean().optional()
 }).strict()
 export const planDocumentSchema = z.object({ version: text, build: text, statements: z.array(planStatementSchema).max(planLimits.statements), notices: z.array(text).max(8) }).strict()
 export const planParseSchema = z.object({ xml: z.string().min(1).max(planLimits.characters) }).strict()
