@@ -2,7 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { activeDocumentName, backendReady, caretStatus, closeDocumentButton, documentTab, documentTabFullyShown, documentTabs, editorGroups, editorGroupTabs, editorTextbox, emptyQueryStripPoint, floatingEditorGroups, inputModeStatus, menubar, newQueryInGroupButton, part, partiallyVisibleDocumentTab, pinDocumentButton, planCanvas, planViewer, queryBarButton, queryScope, queryServer, quickInput, quickInputActive, selectOpenDocument, tabNameBox, tabShelf, tabShelfRows, tabStackFeedback, tabStackScrollTop, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, caretStatus, closeDocumentButton, documentTab, documentTabFullyShown, documentTabs, editorGroups, editorGroupTabs, editorTextbox, emptyQueryStripPoint, environmentPill, floatingEditorGroups, inputModeStatus, menubar, newQueryInGroupButton, part, partiallyVisibleDocumentTab, pinDocumentButton, planCanvas, planViewer, queryBarButton, queryScope, queryServer, quickInput, quickInputActive, selectOpenDocument, tabNameBox, tabShelf, tabShelfRows, tabStackFeedback, tabStackScrollTop, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 // SSMS's editing commands in the real query editor, over the fake backend (no SQL Server): Comment and Uncomment
 // Selection, Make Uppercase and Lowercase, Increase and Decrease Line Indent from Edit › Advanced, Go To Line, Bookmarks
@@ -15,6 +15,7 @@ if (process.platform === 'darwin') {
 await mkdir('artifacts', { recursive: true })
 const control = await mkdtemp(resolve('artifacts', 'editor-backend-'))
 const profile = await mkdtemp(resolve('artifacts', 'editor-profile-'))
+await writeFile(join(control, 'wide-session-ids'), '')
 let application, page
 const failures = []
 const watchdog = setTimeout(() => { console.error('Editor suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 300000)
@@ -964,6 +965,15 @@ try {
   await page.keyboard.press('Control+O')
   await expect.poll(() => activeDocumentName(page)).toBe(planName)
   await expect(planCanvas(page).locator('canvas')).toBeVisible()
+  // A document without environment/session chips centres the kind icon with its single title row.
+  const planTab = documentTab(page, planName)
+  const planTabAligned = () => planTab.evaluate((tab, part) => {
+    const icon = tab.querySelector(part.tabIcon).getBoundingClientRect(), title = tab.querySelector(part.tabTitle).getBoundingClientRect()
+    return icon.width > 0 && Math.abs(icon.top + icon.height / 2 - title.top - title.height / 2) < 0.5
+  }, part)
+  await expect(planTab.locator(part.tabMetadata)).toHaveCount(0)
+  await expect.poll(planTabAligned).toBe(true)
+  await documentTabs(page).screenshot({ path: resolve('artifacts', 'query-tabs-plan.png') })
   await documentTab(page, planName).focus()
   await page.keyboard.press('Control+\\')
   await expect(editorGroups(page)).toHaveCount(2)
@@ -1009,6 +1019,7 @@ try {
   await expect(planText()).toContainText('group edit')
   await tabMenu(planName, 'Float')
   await expect(editorGroupTabs(floatingEditorGroups(page))).toHaveAttribute('aria-label', planName)
+  await expect.poll(planTabAligned).toBe(true)
   await expect(xml()).toHaveAttribute('aria-pressed', 'true')
   await expect(planText()).toContainText('group edit')
   await graph().click()
@@ -1196,6 +1207,84 @@ try {
   await page.keyboard.type('a')
   await expect.poll(editorText).toBe('a')
   console.log('Editor checks: a key 6 s after Ctrl+K types, so the chord timeout eats nothing.')
+
+  // A real Production query with a five-digit SID keeps its entire badge and actions in a 114 px floating tab.
+  const dockedQueries = await documentTabs(page).getByRole('tab').count()
+  await page.keyboard.press('Control+N')
+  await expect(documentTabs(page).getByRole('tab')).toHaveCount(dockedQueries + 1)
+  await toolbarButton(page, 'Connect').click()
+  const connectDialog = page.getByRole('dialog', { name: 'Connect', exact: true })
+  await connectDialog.getByLabel('Server Name', { exact: true }).fill('narrow-tab-server')
+  await connectDialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  const customProperties = connectDialog.getByRole('button', { name: 'Custom Properties', exact: true })
+  if (await customProperties.getAttribute('aria-expanded') !== 'true') await customProperties.click()
+  await connectDialog.getByLabel('Environment', { exact: true }).selectOption('Production')
+  await connectDialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(connectDialog).toHaveCount(0)
+  const narrowName = await activeDocumentName(page), narrowTab = documentTab(page, narrowName)
+  await expect(environmentPill(narrowTab, 'tab')).toHaveText('PROD')
+  await setText('SELECT 1')
+  await page.keyboard.press('F5')
+  await expect(narrowTab.locator(part.tabSid)).toHaveText(/^SID \d{5}$/)
+  await expect(queryBarButton(page, /Execute/)).toBeEnabled()
+  const narrowTabFit = () => narrowTab.evaluate((tab, part) => {
+    const box = element => element.getBoundingClientRect(), outer = box(tab), select = box(tab.querySelector(part.tabSelect))
+    const sidElement = tab.querySelector(part.tabSid), sid = box(sidElement)
+    const text = document.createRange()
+    text.selectNodeContents(sidElement)
+    const glyphs = text.getBoundingClientRect()
+    const inside = (inner, bounds) => inner.left >= bounds.left - 0.5 && inner.right <= bounds.right + 0.5 && inner.top >= bounds.top - 0.5 && inner.bottom <= bounds.bottom + 0.5
+    const dot = box(tab.querySelector('[role="img"][aria-label="Unsaved changes"]')), close = box(tab.querySelector('button[aria-label^="Close "]'))
+    return {
+      badge: inside(sid, select), text: inside(glyphs, select), actions: [...tab.querySelectorAll('button')].every(button => inside(box(button), outer)),
+      dirtyCentered: Math.abs(dot.left + dot.width / 2 - close.left - close.width / 2) < 0.5 && Math.abs(dot.top + dot.height / 2 - close.top - close.height / 2) < 0.5
+    }
+  }, part)
+  const narrowFit = { badge: true, text: true, actions: true, dirtyCentered: true }
+  // Measure wider glyphs while docked, before resizing: observing only the strip would leave that wider badge stale.
+  const tabFamily = await page.evaluate(() => { const root = document.documentElement, family = root.style.fontFamily; root.style.fontFamily = 'Verdana, DejaVu Sans, sans-serif'; return family })
+  try {
+    await narrowTab.focus()
+    await page.keyboard.press('F2')
+    await expect(tabNameBox(page)).toBeVisible()
+    await page.keyboard.press('Escape')
+    await tabMenu(narrowName, 'Float')
+    await expect(floatingEditorGroups(page)).toHaveCount(1)
+    await expect.poll(async () => (await floatingEditorGroups(page).boundingBox()).width).toBeLessThan(600)
+    const resizeHandle = await page.locator(part.floatingEditorResizeRight).boundingBox()
+    const resizeX = resizeHandle.x + resizeHandle.width / 2, resizeY = resizeHandle.y + resizeHandle.height / 2
+    const currentStripWidth = (await documentTabs(floatingEditorGroups(page)).boundingBox()).width
+    await page.mouse.move(resizeX, resizeY)
+    await page.mouse.down()
+    // Dockview captures the resize origin on the first pointer move, rather than on pointerdown.
+    await page.mouse.move(resizeX + 1, resizeY)
+    await page.mouse.move(resizeX + 1 + 114 - currentStripWidth, resizeY, { steps: 10 })
+    await page.mouse.up()
+    await expect.poll(async () => (await narrowTab.boundingBox()).width).toBe(114)
+    await expect(narrowTab).toHaveAttribute('aria-description', /Production environment/)
+    await expect(narrowTab.locator(part.tabSid)).toHaveCSS('font-family', 'Verdana, "DejaVu Sans", sans-serif')
+    await expect.poll(narrowTabFit, { message: '114 px after resizing with wider glyphs' }).toEqual(narrowFit)
+    await narrowTab.focus()
+    await page.keyboard.press('F2')
+    await expect(tabNameBox(page)).toBeVisible()
+    await expect.poll(narrowTabFit, { message: '114 px with wider glyphs while renaming' }).toEqual(narrowFit)
+    await page.keyboard.press('Escape')
+    await expect(tabNameBox(page)).toHaveCount(0)
+    await expect.poll(narrowTabFit, { message: '114 px with wider glyphs' }).toEqual(narrowFit)
+    await floatingEditorGroups(page).screenshot({ path: resolve('artifacts', 'query-tabs-narrow-wide-font.png') })
+  } finally {
+    await page.evaluate(family => { document.documentElement.style.fontFamily = family }, tabFamily)
+  }
+  await narrowTab.focus()
+  await page.keyboard.press('F2')
+  await expect(tabNameBox(page)).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect.poll(narrowTabFit, { message: '114 px with the platform font' }).toEqual(narrowFit)
+  await floatingEditorGroups(page).screenshot({ path: resolve('artifacts', 'query-tabs-narrow-floating.png') })
+  await tabMenu(narrowName, 'Dock')
+  await expect(floatingEditorGroups(page)).toHaveCount(0)
+  await expect(environmentPill(narrowTab, 'tab')).toBeVisible()
+  console.log('Editor checks: a plan tab without metadata aligns its icon with its title, and a 114 px floating Production tab preserves the full five-digit SID, action targets and centred unsaved dot with platform and wider fonts, including rename and chip restoration after docking.')
 
   expect(failures).toEqual([])
   await close()
