@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (296)
+## Commands (297)
 
 ### File
 
@@ -144,7 +144,7 @@ keys it uses are listed below.
 | Copy with Headers (not in the palette) | `output.copyWithHeaders` | Ctrl+Shift+C (`outputGridFocus`) | Ctrl+Shift+C (`outputGridFocus`) | ⇧⌘C (`outputGridFocus`) | Always | Query Output context menu › Copy with Headers |
 | Copy Column Name (not in the palette) | `output.copyColumnName` | — | — | — | Always | Query Output context menu › Copy Column Name |
 | Select All (not in the palette) | `output.selectAll` | Ctrl+A (`outputGridFocus \|\| messagesFocus`) | Ctrl+A (`outputGridFocus \|\| messagesFocus`) | ⌘A (`outputGridFocus \|\| messagesFocus`) | Always | Query Output context menu › Select All |
-| Save Results As… | `output.saveResultsAs` | Ctrl+S (`outputGridFocus`) | Ctrl+S (`outputGridFocus`) | ⌘S (`outputGridFocus`) | `hasResults` | Query Output context menu › Save Results As… |
+| Save Results As… | `output.saveResultsAs` | Ctrl+S (`outputGridFocus`) | Ctrl+S (`outputGridFocus`) | ⌘S (`outputGridFocus`) | Always | Query Output context menu › Save Results As… |
 | Close Results | `output.closeResults` | — | — | — | `!documentBusy` | Query Output context menu › Close Results |
 | Show Spaces and Tabs in Results | `output.showSpaces` | — | — | — | Always; checked when `resultsWhitespaceSpaces` | Query Output context menu › Show Spaces and Tabs |
 | Show All White Space in Results | `output.showAllWhitespace` | — | — | — | Always; checked when `resultsWhitespaceAll` | Query Output context menu › Show All White Space |
@@ -155,7 +155,7 @@ keys it uses are listed below.
 | Clear Sort (not in the palette) | `output.clearSort` | — | — | — | Always | Query Output context menu › Clear Sort |
 | Fit Column (not in the palette) | `output.fitColumn` | — | — | — | Always | Query Output context menu › Fit Column |
 | Go to Error Line (not in the palette) | `output.revealError` | — | — | — | `!documentBusy` | — |
-| Find in Results | `output.find` | Ctrl+F (`outputGridFocus`) | Ctrl+F (`outputGridFocus`) | ⌘F (`outputGridFocus`) | `hasResults` | — |
+| Find in Results | `output.find` | Ctrl+F (`outputGridFocus`) | Ctrl+F (`outputGridFocus`) | ⌘F (`outputGridFocus`) | Always | — |
 | Find Next in Results | `output.findNext` | F3 (`outputGridFocus`) | F3 (`outputGridFocus`) | ⌘G (`outputGridFocus`), F3 (`outputGridFocus`) | `hasResults` | — |
 | Find Previous in Results | `output.findPrevious` | Shift+F3 (`outputGridFocus`) | Shift+F3 (`outputGridFocus`) | ⇧⌘G (`outputGridFocus`), ⇧F3 (`outputGridFocus`) | `hasResults` | — |
 | Filter Column Values… (not in the palette) | `output.filterColumnValues` | Alt+Down (`outputGridFocus`) | Alt+Down (`outputGridFocus`) | ⌥↓ (`outputGridFocus`) | Always | Query Output context menu › Filter › Filter Column Values… |
@@ -382,6 +382,7 @@ keys it uses are listed below.
 | Download Update | `help.downloadUpdate` | — | — | — | `updateAvailable` | — |
 | Restart to Update | `help.restartToUpdate` | — | — | — | `updateReady` | Help › Restart to Update |
 | Release Notes | `help.releaseNotes` | — | — | — | Always | Help › Release Notes |
+| Open Release Downloads | `help.openDownloads` | — | — | — | Always | — |
 
 ### Other
 
@@ -819,26 +820,26 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
 | `1_copy` | **C**opy | `output.copy` | Always |
-| `1_copy` | Copy with **H**eaders | `output.copyWithHeaders` | `outputView == 'grid'` |
-| `1_copy` | Copy Column **N**ame | `output.copyColumnName` | `outputView == 'grid'` |
+| `1_copy` | Copy with **H**eaders | `output.copyWithHeaders` | `outputView == 'grid' \|\| outputView == 'live'` |
+| `1_copy` | Copy Column **N**ame | `output.copyColumnName` | `outputView == 'grid' \|\| outputView == 'live'` |
 | `2_select` | Select **A**ll | `output.selectAll` | Always |
-| `2_sort` | S**o**rt Ascending | `output.sortAscending` | `outputView == 'grid'` |
-| `2_sort` | Sort **D**escending | `output.sortDescending` | `outputView == 'grid'` |
-| `2_sort` | **T**hen Sort Ascending | `output.thenSortAscending` | `outputView == 'grid'` |
-| `2_sort` | Then **S**ort Descending | `output.thenSortDescending` | `outputView == 'grid'` |
-| `2_sort` | Clea**r** Sort | `output.clearSort` | `outputView == 'grid'` |
-| `2_sort` | Filt**e**r › | Submenu: Query Output context menu › Filter | `outputView == 'grid'` |
+| `2_sort` | S**o**rt Ascending | `output.sortAscending` | `outputView == 'grid' \|\| outputLiveSortable` |
+| `2_sort` | Sort **D**escending | `output.sortDescending` | `outputView == 'grid' \|\| outputLiveSortable` |
+| `2_sort` | **T**hen Sort Ascending | `output.thenSortAscending` | `outputView == 'grid' \|\| outputLiveSortable` |
+| `2_sort` | Then **S**ort Descending | `output.thenSortDescending` | `outputView == 'grid' \|\| outputLiveSortable` |
+| `2_sort` | Clea**r** Sort | `output.clearSort` | `outputView == 'grid' \|\| outputLiveSortable` |
+| `2_sort` | Filt**e**r › | Submenu: Query Output context menu › Filter | `outputView == 'grid' \|\| outputLiveFilterable` |
 | `2_sort` | Hi**g**hlight › | Submenu: Query Output context menu › Highlight | `outputView == 'grid'` |
 | `2_sort` | Co**m**pare with Previous Result | `output.compareWithPrevious` | `outputView == 'grid'` |
 | `2_sort` | Pivot Res**u**lts… | `output.pivot` | `outputView == 'grid'` |
 | `2_sort` | Trans**p**ose › | Submenu: Query Output context menu › Transpose | `outputGridTransposable` |
-| `2_width` | F**i**t Column | `output.fitColumn` | `outputView == 'grid'` |
-| `3_save` | Sa**v**e Results As… | `output.saveResultsAs` | `outputView == 'grid'` |
-| `4_view` | Show Spaces and Ta**b**s | `output.showSpaces` | `outputView == 'grid'` |
-| `4_view` | Show All **W**hite Space | `output.showAllWhitespace` | `outputView == 'grid'` |
+| `2_width` | F**i**t Column | `output.fitColumn` | `outputView == 'grid' \|\| outputView == 'live'` |
+| `3_save` | Sa**v**e Results As… | `output.saveResultsAs` | `outputView == 'grid' \|\| outputView == 'live'` |
+| `4_view` | Show Spaces and Ta**b**s | `output.showSpaces` | `outputView == 'grid' \|\| outputView == 'live'` |
+| `4_view` | Show All **W**hite Space | `output.showAllWhitespace` | `outputView == 'grid' \|\| outputView == 'live'` |
 | `4_view` | Column Pro**f**ile | `output.toggleColumnProfile` | `outputView == 'grid'` |
 | `4_view` | Show Row Si**z**e | `output.toggleRowSize` | `outputView == 'grid'` |
-| `z_close` | C**l**ose Results | `output.closeResults` | Always |
+| `z_close` | C**l**ose Results | `output.closeResults` | `outputView != 'live'` |
 
 #### Query Output context menu › Highlight
 
@@ -856,14 +857,14 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
-| `0_column` | Filter Column **V**alues… | `output.filterColumnValues` | `outputView == 'grid'` |
+| `0_column` | Filter Column **V**alues… | `output.filterColumnValues` | `outputView == 'grid' \|\| outputLiveFilterable` |
 | `1_values` | Filter for **S**elected Values | `output.filterSelection` | `outputView == 'grid'` |
 | `1_values` | **E**xclude Selected Values | `output.excludeSelection` | `outputView == 'grid'` |
 | `1_values` | Filter **B**etween Lowest and Highest Selected | `output.filterBetween` | `outputView == 'grid'` |
 | `2_nulls` | Exclude **N**ULLs | `output.excludeNulls` | `outputView == 'grid'` |
 | `3_duplicates` | Filter for **D**uplicates in Selected Columns | `output.filterDuplicates` | `outputView == 'grid'` |
 | `3_duplicates` | Filter for Duplicate **R**ows | `output.filterDuplicateRows` | `outputView == 'grid'` |
-| `4_clear` | **C**lear Filters | `output.clearFilters` | `outputView == 'grid'` |
+| `4_clear` | **C**lear Filters | `output.clearFilters` | `outputView == 'grid' \|\| outputLiveFilterable` |
 
 #### Query Output context menu › Transpose
 
@@ -942,7 +943,7 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
 | `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
 
-## Context keys (148)
+## Context keys (150)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -959,7 +960,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `inputFocus` | boolean | focus | Focus is on an input, text area, select, or editable element other than the editor text. The find widget's inputs count. |
 | `textInputFocus` | boolean | focus | `editorTextFocus \|\| inputFocus \|\| peekEditorFocus`: focus is where keys type or move a caret. |
 | `activePanel` | `'explorer'`, `'editor'`, `'output'`, `''` | focus | The pane that holds focus: Object Explorer, the query editor, an output panel (Results, Messages or Execution plan), or '' for none. |
-| `outputGridFocus` | boolean | focus | Focus is in a results grid, which copies its selected cells rather than text. |
+| `outputGridFocus` | boolean | focus | Focus is in a results grid (a query's, or a live view's with Query Output's menu), which copies its selected cells rather than text. |
 | `messagesFocus` | boolean | focus | Focus is in a Messages view; activePanel is then 'output'. |
 | `searchHitsFocus` | boolean | focus | Focus is on a Search Objects result (the Search Objects tab's or Object Explorer's search), whose Copy copies the object's name. |
 | `explorerFocus` | boolean | focus | Focus is in Object Explorer's tree (a row's inline rename box included), not its search box, toolbar or Peek card; activePanel is then 'explorer'. |
@@ -1092,8 +1093,10 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerNodeStatus` | `''`, `'disabled'`, `'unavailable'`, `'readOnly'`, `'noAccess'` | target | The status badge of the Object Explorer node the menu is for ('disabled', 'unavailable', 'readOnly' or 'noAccess'), or '' for none. |
 | `explorerServerEngine` | `''`, `'box'`, `'managedInstance'`, `'cloud'` | target | The kind of server the Object Explorer node the menu is for is on: 'box', 'managedInstance' or 'cloud', or '' for the empty area. |
 | `explorerServerLinux` | boolean | target | The menu is for a node on SQL Server on Linux. |
-| `outputView` | `'grid'`, `'messages'`, `''` | target | The Query Output view the menu is for: a results grid or the messages. |
+| `outputView` | `'grid'`, `'messages'`, `'live'`, `''` | target | The Query Output view the menu is for: a results grid, the messages, or a live view's grid (an Activity Monitor pane). |
 | `outputGridTransposable` | boolean | target | The menu is for a results grid Transpose can read: a query's rows, a pivot or a transpose, not a diff. |
+| `outputLiveFilterable` | boolean | target | The live view's grid the menu is for filters some columns by value at its source (its headers have funnels). |
+| `outputLiveSortable` | boolean | target | The live view's grid the menu is for sorts (its table is a snapshot, not a log that keeps arrival order). |
 | `pane` | `'explorer'`, `'editor'`, `'results'`, `'messages'`, `'plan'`, `'statistics'`, `''` | target | The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, Results, Messages, Execution plan, or Client Statistics. |
 | `paneFloating` | boolean | target | The panel the menu is for is floating. |
 | `panePopout` | boolean | target | The panel the menu is for is in a window of its own (Move into New Window). |

@@ -23,24 +23,41 @@ internal static class SequentialXml
     private static readonly FieldInfo? CurrentStream = typeof(SqlDataReader).GetField("_currentStream", Internal);
     private static readonly FieldInfo? LastColumnRead = typeof(SqlDataReader).GetField("_lastColumnWithDataChunkRead", Internal);
 
-    /// <summary>Whether this SqlClient has the internals <see cref="Open"/> uses, with the types it expects.</summary>
-    public static bool Available { get; } = NewStream is not null && typeof(Stream).IsAssignableFrom(NewStream.DeclaringType)
-        && CurrentStream?.FieldType == NewStream.DeclaringType && LastColumnRead?.FieldType == typeof(int);
-
     // Compiled once: reflection's Invoke and SetValue allocate an argument array and box the column on every cell.
-    private static readonly Func<SqlDataReader, int, Stream>? Opener = Available ? Compile() : null;
+    private static readonly Func<SqlDataReader, int, Stream>? Opener = Compile<SqlDataReader>(NewStream, CurrentStream, LastColumnRead);
 
-    private static Func<SqlDataReader, int, Stream> Compile()
+    /// <summary>Whether this SqlClient has the internals <see cref="Open"/> uses, with the types it expects.</summary>
+    public static bool Available => Opener is not null;
+
+    /// <summary>Whether <see cref="Compile"/> can use these members: a stream built from (reader, column), and writable
+    /// instance fields of the stream's type and of int (Expression.Assign refuses a readonly field).</summary>
+    internal static bool Usable(ConstructorInfo? newStream, FieldInfo? currentStream, FieldInfo? lastColumnRead) =>
+        newStream is not null && typeof(Stream).IsAssignableFrom(newStream.DeclaringType)
+        && currentStream is { IsInitOnly: false, IsStatic: false } && currentStream.FieldType == newStream.DeclaringType
+        && lastColumnRead is { IsInitOnly: false, IsStatic: false } && lastColumnRead.FieldType == typeof(int);
+
+    /// <summary>The opener over these members, or null when they are not <see cref="Usable"/> or do not compile: this runs
+    /// in the type initializer, where a throw would fail every xml cell instead of falling back to GetXmlReader.</summary>
+    internal static Func<TReader, int, Stream>? Compile<TReader>(ConstructorInfo? newStream, FieldInfo? currentStream, FieldInfo? lastColumnRead, bool check = true)
     {
-        var reader = Expression.Parameter(typeof(SqlDataReader), "reader");
-        var column = Expression.Parameter(typeof(int), "column");
-        var stream = Expression.Variable(NewStream!.DeclaringType!, "stream");
-        var body = Expression.Block([stream],
-            Expression.Assign(stream, Expression.New(NewStream, reader, column)),
-            Expression.Assign(Expression.Field(reader, CurrentStream!), stream),
-            Expression.Assign(Expression.Field(reader, LastColumnRead!), column),
-            Expression.Convert(stream, typeof(Stream)));
-        return Expression.Lambda<Func<SqlDataReader, int, Stream>>(body, reader, column).Compile();
+        if (check && !Usable(newStream, currentStream, lastColumnRead)) return null;
+        try
+        {
+            var reader = Expression.Parameter(typeof(TReader), "reader");
+            var column = Expression.Parameter(typeof(int), "column");
+            var stream = Expression.Variable(newStream!.DeclaringType!, "stream");
+            var body = Expression.Block([stream],
+                Expression.Assign(stream, Expression.New(newStream, reader, column)),
+                Expression.Assign(Expression.Field(reader, currentStream!), stream),
+                Expression.Assign(Expression.Field(reader, lastColumnRead!), column),
+                Expression.Convert(stream, typeof(Stream)));
+            return Expression.Lambda<Func<TReader, int, Stream>>(body, reader, column).Compile();
+        }
+        // What an expression tree throws for members it refuses: the fallback reads the cell.
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException or NotSupportedException or MemberAccessException)
+        {
+            return null;
+        }
     }
 
     /// <summary>The raw UTF-16 stream of column <paramref name="i"/>, whose IsDBNull was the reader's last call, or null when
@@ -57,7 +74,7 @@ internal static class SequentialXml
 /// buffer of its own. One feed serves a column plan's cells in turn (<see cref="Reset"/>).
 /// <para>So that a cut value still shows the start of the node it cut, as the first characters of the whole value would, the
 /// feed keeps the raw text from the first '&lt;' XmlReader has not yet returned a node for, up to <see cref="Keep"/>
-/// characters (<see cref="WriteTail"/>). Every markup node starts with a '&lt;', and only a comment, processing instruction or
+/// characters and one read more (<see cref="WriteTail"/>). Every markup node starts with a '&lt;', and only a comment, processing instruction or
 /// CDATA section holds more (a start tag's attribute values cannot), so counting them (<see cref="Returned"/>) finds it;
 /// text and whitespace hold none.</para></summary>
 internal sealed class XmlFeed(Func<int> output) : TextReader
@@ -83,10 +100,10 @@ internal sealed class XmlFeed(Func<int> output) : TextReader
     private int tailStart;
     private int tailLength;
     private long tailOrdinal;
-    // The tail reached Keep and stopped growing: the '<' after its retained part may be lost.
+    // The tail reached Keep at the start of a read and stopped growing: what is handed out is dropped until XmlReader
+    // returns the nodes the tail holds. A tail that starts again after that starts at the next '<' handed out, which is
+    // past the dropped ones XmlReader has yet to return (tailOrdinal > markup + 1 until it returns them).
     private bool clipped;
-    // A '<' XmlReader has not returned was not kept: no tail until every '<' handed out is returned.
-    private bool lost;
     private long lessThans;
     private long markup;
 
@@ -99,13 +116,16 @@ internal sealed class XmlFeed(Func<int> output) : TextReader
     public int Keep { get; set; }
 
     /// <summary>Writes the raw text of the node XmlReader was reading when the feed starved to <paramref name="sink"/>: from
-    /// its '&lt;' and at most <see cref="Keep"/> characters of it, or nothing when that start was not kept (a node with no
-    /// '&lt;' of its own, or one within XmlReader's look-ahead of a kept node that already reached <see cref="Keep"/>).</summary>
+    /// its '&lt;' and at most <see cref="Keep"/> characters of it, or nothing when that start was not kept: a node with no
+    /// '&lt;' of its own, or one whose '&lt;' was handed out while a node that had passed <see cref="Keep"/> before the read
+    /// it ends in was still being read, which is one that starts in that read (at most 4,096 characters). Nodes after that
+    /// read are kept again, however many follow.</summary>
     public void WriteTail(TextWriter sink)
     {
         Trim();
-        if (lost) return;
-        for (int at = tailStart, end = tailStart + tailLength; at < end;)
+        // The tail starts past a dropped '<' that XmlReader has not returned: the cut node is not the one it holds.
+        if (tailLength == 0 || tailOrdinal != markup + 1) return;
+        for (int at = tailStart, end = tailStart + Math.Min(tailLength, Keep); at < end;)
         {
             var take = Math.Min(end - at, Chunk - at % Chunk);
             sink.Write(chunks[at / Chunk].AsSpan(at % Chunk, take));
@@ -129,7 +149,7 @@ internal sealed class XmlFeed(Func<int> output) : TextReader
         Starved = false;
         tailStart = tailLength = 0;
         tailOrdinal = lessThans = markup = 0;
-        clipped = lost = false;
+        clipped = false;
         Release(0);
     }
 
@@ -186,15 +206,13 @@ internal sealed class XmlFeed(Func<int> output) : TextReader
     /// <summary>Drops the tail's start while XmlReader has returned the node it begins.</summary>
     private void Trim()
     {
-        if (lost && markup >= lessThans) lost = false;
         while (tailLength > 0 && tailOrdinal <= markup)
         {
             var next = LessThan(tailStart + 1, tailStart + tailLength);
             if (next < 0)
             {
+                // Every node a clipped tail kept is returned: the next '<' handed out starts a new one.
                 tailLength = 0;
-                // A '<' that is still to be returned lies past what a clipped tail kept.
-                lost = clipped && lessThans > markup;
                 clipped = false;
                 break;
             }
@@ -241,24 +259,24 @@ internal sealed class XmlFeed(Func<int> output) : TextReader
     {
         Trim();
         var count = text.Count('<');
-        if (lost || count == 0 && tailLength == 0)
-        {
-            lessThans += count;
-            return;
-        }
+        var next = lessThans + 1;
+        lessThans += count;
         if (tailLength == 0)
         {
-            // Every '<' handed out before was returned, so the first one here is the next node's.
-            var first = text.IndexOf('<');
-            text = text[first..];
-            tailOrdinal = lessThans + 1;
+            if (count == 0) return;
+            // The first '<' here starts the tail, whether or not XmlReader has returned every earlier one (WriteTail
+            // looks): waiting for that would wait for a read that ends exactly where a node does.
+            text = text[text.IndexOf('<')..];
+            tailOrdinal = next;
         }
-        lessThans += count;
-        if (clipped) return;
-        var take = Math.Min(text.Length, Keep - tailLength);
-        if (take < text.Length) clipped = true;
-        if (take <= 0) return;
-        text = text[..take];
+        else if (clipped) return;
+        else if (tailLength >= Keep)
+        {
+            clipped = true;
+            return;
+        }
+        // A read is kept whole, so the tail can pass Keep by one read: clipping inside a read would lose the start of a node
+        // that follows, in that read, nodes XmlReader returns before it reads again.
         while (!text.IsEmpty)
         {
             var at = tailStart + tailLength;

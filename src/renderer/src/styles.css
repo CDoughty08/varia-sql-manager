@@ -342,6 +342,14 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .about-details { font-size: var(--varia-size-sm); color: var(--varia-descriptionForeground); }
 .about-details > summary { cursor: pointer; }
 .about-details > pre { margin: var(--varia-space-2) 0 0; padding: var(--varia-space-3); background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); font: var(--varia-size-sm)/var(--varia-line-md) var(--varia-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.release-note-picker { display: flex; align-items: center; flex-wrap: wrap; gap: var(--varia-space-2); color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); }
+.release-note-picker > select { max-width: 100%; padding: var(--varia-space-1) var(--varia-space-2); }
+.release-note-intro { max-width: 880px; }
+.release-note-intro > p { margin: 0; font-size: var(--varia-size-md); line-height: var(--varia-line-md); }
+.release-note-intro > .release-note-build { margin-top: var(--varia-space-2); font-size: var(--varia-size-sm); color: var(--varia-descriptionForeground); }
+.release-note-list { display: flex; flex-direction: column; gap: var(--varia-space-5); max-width: 880px; user-select: text; }
+.release-note h3 { margin: 0 0 var(--varia-space-1); font-size: var(--varia-size-md); line-height: var(--varia-line-md); font-weight: 600; }
+.release-note p { margin: 0; font-size: var(--varia-size-md); line-height: var(--varia-line-md); color: var(--varia-descriptionForeground); overflow-wrap: anywhere; }
 .go-to-line-dialog { width: min(360px, calc(100vw - 40px)); }
 .go-to-line-dialog label { display: block; font-size: var(--varia-size-xs); color: var(--varia-dialog-labelForeground); margin-bottom: 6px; }
 .go-to-line-dialog input { width: 100%; height: 28px; }
@@ -930,6 +938,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
    stays, filled, while its column has a filter. */
 .rg-cf { position: absolute; top: 0; right: 0; display: flex; align-items: center; justify-content: center; width: 18px; height: 21px; background: inherit; color: var(--varia-resultsGrid-headerDescriptionForeground); visibility: hidden; cursor: pointer; }
 .rg-ch.fb .rg-cs { right: 18px; }
+.rg-ch:not(.fb) .rg-cf { display: none; }
 .rg-ch:hover .rg-cf, .rg-cf.on { visibility: visible; }
 .rg-cf.on { color: var(--varia-resultsGrid-headerForeground); }
 /* A sorted column's idle funnel still covers the header text beside the sort button, without its glyph. */
@@ -1914,6 +1923,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* An on chip stays filled under the pointer, so the click that turned it on shows at once, as a key press does. */
 .chip[aria-pressed="true"]:hover:not(:disabled) { background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); transition: none; }
 .chip-count { font-weight: 600; font-variant-numeric: tabular-nums; }
+/* A pane toolbar's chips (ChipGroup dense): shorter than its controls, tighter, never wrapping their label. */
+.chip-group.dense { gap: var(--varia-space-0); }
+.chip-group.dense .chip { flex: none; height: calc(var(--varia-control) - var(--varia-space-1)); padding: 0 var(--varia-space-2); white-space: nowrap; }
+/* A scroll row (ChipGroup scroll) shrinks instead of wrapping its toolbar; its last chip shows cut at the edge, and a focused
+   chip scrolls into view. */
+.chip-group.scroll { flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .live-pill, .stale-badge { display: inline-flex; align-items: center; gap: 6px; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .live-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--varia-live-indicator); }
 /* A ring grows from the dot and fades; the dot keeps its color, so it reads at rest and mid-beat alike. */
@@ -2359,22 +2374,18 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* A pane with a grid: its toolbar, the grid (which scrolls itself) and a status line. */
 .activity-pane-content { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 .activity-pane-tools { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1) var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-2); border-bottom: 1px solid var(--varia-panel-border); }
-.activity-tools-separator { width: 1px; height: 18px; background: var(--varia-panel-border); }
-.activity-tools-spacer { flex: 1; }
-.activity-tool { display: inline-flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-control); padding: 0 var(--varia-space-2); }
+/* Each group keeps to one line. A wrapping row breaks by its items' basis before anything shrinks, so the filter box starts
+   small and grows to the right (its auto margin). A one-row toolbar (Sessions) never wraps: its scroll chip row gives way. */
+.activity-pane-tools > .chip-group { flex-wrap: nowrap; }
+.activity-pane-tools.one-row { flex-wrap: nowrap; }
+.activity-pane-tools.one-row > :not(.scroll) { flex-shrink: 0; }
+.activity-tools-separator { flex: none; width: 1px; height: var(--varia-space-4); background: var(--varia-panel-border); }
+.activity-tools-spacer { flex: 1 1 0; }
+.activity-tool { display: inline-flex; flex: none; align-items: center; gap: var(--varia-space-1); height: var(--varia-control); padding: 0 var(--varia-space-2); }
+.activity-tool.icon-only { justify-content: center; width: var(--varia-control); padding: 0; }
 .activity-tool[data-filtered] { color: var(--varia-list-activeSelectionForeground); }
-.activity-filter-box { display: inline-flex; align-items: center; gap: var(--varia-space-1); color: var(--varia-descriptionForeground); }
-.activity-filter-box input { width: 22ch; height: var(--varia-control); padding: 0 var(--varia-space-2); }
-.activity-column-filters { position: relative; }
-.activity-popover { position: fixed; inset: auto; margin: 0; flex-direction: column; gap: var(--varia-space-2); overscroll-behavior: contain; padding: var(--varia-space-2); border: 1px solid var(--varia-widget-border); border-radius: var(--varia-radius-lg); background: var(--varia-editorWidget-background); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); }
-.activity-popover:popover-open { display: flex; }
-.activity-popover-row { display: flex; align-items: center; gap: var(--varia-space-2); }
-.activity-popover-row select { flex: 1; }
-.activity-popover-values { display: flex; flex-direction: column; gap: 2px; min-height: 0; overflow: auto; }
-.activity-popover-values .checkbox-label { display: flex; align-items: center; gap: var(--varia-space-2); }
-.activity-popover-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.activity-popover-count { color: var(--varia-descriptionForeground); font-variant-numeric: tabular-nums; }
-.activity-popover-actions { display: flex; justify-content: flex-end; gap: var(--varia-space-2); }
+.activity-filter-box { display: inline-flex; flex: 1 1 10em; min-width: 10em; max-width: 20em; margin-left: auto; align-items: center; gap: var(--varia-space-1); color: var(--varia-descriptionForeground); }
+.activity-filter-box input { flex: 1 1 0; width: 0; min-width: 0; height: var(--varia-control); padding: 0 var(--varia-space-2); }
 .activity-pane-grid { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .activity-pane-notice { flex: none; margin: var(--varia-space-1) var(--varia-space-2); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-lg); }
 .activity-pane-rows { position: relative; display: flex; flex: 1; min-height: 0; }

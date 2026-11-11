@@ -296,7 +296,7 @@ export const gridPart = {
   sortButton: '.rg-cs',
   sortedButton: '.rg-cs.on',
   sortOrder: '.rg-co',
-  /** A header's funnel (results grids), hidden from screen readers (Filter Column Values, Alt+Down, opens the same
+  /** A header's funnel (results grids, and a live grid's filterable columns), hidden from screen readers (Filter Column Values, Alt+Down, opens the same
    *  popover); filled while its column has a filter. */
   funnelButton: '.rg-cf',
   funnelOn: '.rg-cf.on',
@@ -581,7 +581,7 @@ export const resultSplitters = page => page.getByRole('separator', { name: /^Res
 
 // Live grids (LiveGridPane): a grid its owner names, in a frame with the overlay, the error strip and the new-rows button.
 
-/** A live grid's own grid by the name its owner gives it, which its label starts with ("Processes, 12 rows, 9 columns"),
+/** A live grid's own grid by the name its owner gives it, which its label starts with ("Sessions, 12 rows, 9 columns"),
  *  for page code. */
 export const liveGridSelector = name => `[role="grid"]:is([aria-label="${name}"], [aria-label^="${name}, "])`
 const escaped = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -800,6 +800,7 @@ export const menuItemNames = (menu, { disabled } = {}) => menu.locator(`[role^="
   .evaluateAll(items => items.map(item => [...item.children].filter(child => child.getAttribute('aria-hidden') !== 'true').map(child => child.textContent).join('')))
 /** The command palette and the pickers that share its widget (a dialog named by its title or its input). */
 export const aboutDialog = page => page.getByRole('dialog', { name: 'About Varia', exact: true })
+export const releaseNotesPage = page => page.getByRole('region', { name: 'Release Notes', exact: true })
 export const quickInput = page => page.locator(part.quickInput)
 export const quickInputBox = page => quickInput(page).getByRole('combobox')
 export const quickInputRows = page => quickInput(page).getByRole('option')

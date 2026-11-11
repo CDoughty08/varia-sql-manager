@@ -127,6 +127,7 @@ internal static partial class LiveSql
         + "    AND (@package IS NULL OR e.package_name LIKE @package ESCAPE N'\\') AND (@caller IS NULL OR o.caller_name = @caller)\n";
 
     private static string OpenStatuses => string.Join(", ", SsisCatalog.Current.OpenStatuses.Order());
+    private static string StartedStatuses => string.Join(", ", SsisCatalog.Current.OpenStatuses.Where(status => status != SsisCatalog.CreatedStatus).Order());
     private static string CountOf(OperationTile tile) => "COUNT_BIG(CASE WHEN o.status IN (" + string.Join(", ", tile.Statuses) + ") THEN 1 END) AS " + tile.Series;
 
     /// <summary>One Operations sample (SsisOperationsReader), in the catalog's database, its result sets in this order:
@@ -138,9 +139,13 @@ internal static partial class LiveSql
     /// ones never crowd a long run out of a new window;</item>
     /// <item>the open ones the window holds (@open, an xml list of ids) as they are now;</item>
     /// <item>the server's time;</item>
+    /// <item>the operations that were Created when the open watermark passed them (@created, an xml list of ids, at most
+    /// SsisOperationsWatermarks.MaxCreated), with their status now: one that never starts would otherwise hold the watermark
+    /// for as long as the catalog keeps it;</item>
     /// <item>the open tiles' counts (Running, Pending) over every operation the login may see, whatever the scope, from @openFrom
-    /// up (below it every operation has ended, and an ended one never opens again), with the lowest id there that is still open
-    /// and the highest id the login sees (the catalog's high-water mark, which the window settles on);</item>
+    /// up (below it every operation has ended, and an ended one never opens again, or is one of @created), with the lowest id
+    /// there that is Running, Pending or Stopping, the lowest that is Created, and the highest id the login sees (the catalog's
+    /// high-water mark, which the window settles on);</item>
     /// <item>when <paramref name="counts"/>, each final tile's count over its hours, also whatever the scope, from @countFrom up
     /// (below it every operation was created before the hours began, and they only move on), with the lowest id created within
     /// them.</item>
@@ -161,7 +166,9 @@ internal static partial class LiveSql
         text += "SELECT o.operation_id, o.status, o.start_time, o.end_time, o.stopped_by_name, DATEDIFF_BIG(millisecond, o.start_time, ISNULL(o.end_time, SYSDATETIMEOFFSET())) AS duration_ms\n"
             + "FROM [catalog].[operations] AS o WHERE o.operation_id IN (SELECT r.i.value('.', 'bigint') FROM @open.nodes('/i') AS r(i));\n"
             + "SELECT SYSDATETIMEOFFSET() AS server_now;\n"
-            + "SELECT " + string.Join(", ", open.Select(CountOf)) + ", MIN(CASE WHEN o.status IN (" + OpenStatuses + ") THEN o.operation_id END) AS lowest_open, MAX(o.operation_id) AS newest_id\n"
+            + "SELECT o.operation_id, o.status FROM [catalog].[operations] AS o WHERE o.operation_id IN (SELECT c.i.value('.', 'bigint') FROM @created.nodes('/i') AS c(i));\n"
+            + "SELECT " + string.Join(", ", open.Select(CountOf)) + ", MIN(CASE WHEN o.status IN (" + StartedStatuses + ") THEN o.operation_id END) AS lowest_open,\n"
+            + "    MIN(CASE WHEN o.status = " + SsisCatalog.CreatedStatus.ToString(System.Globalization.CultureInfo.InvariantCulture) + " THEN o.operation_id END) AS lowest_created, MAX(o.operation_id) AS newest_id\n"
             + "FROM [catalog].[operations] AS o WHERE o.operation_id >= @openFrom;";
         if (!counts) return text;
         // The catalogue gives every final tile the same hours, so one read counts them all.

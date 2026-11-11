@@ -103,6 +103,29 @@ describe('TransposeService', () => {
     expect(transpose.getSnapshot().get(setKey(sets[1].descriptor))).toMatchObject({ selected: true, rows: 6, transposed: 6, header: 'Id' })
   })
 
+  it("transposes the entry a grid names once a middle entry has gone, with that entry's selection, sort and name", async () => {
+    const { results, transpose, run } = fixture()
+    const [, , third] = run(3)
+    const sets = () => results.getSnapshot().t1.sets
+    results.setSelection('t1', 2, cells(2, [4, 5]))
+    results.removeEntry('t1', sets()[1].key)
+    // Result 3 stands second now; its selection came with it, and the place it left has none.
+    expect(transpose.selectedRows('t1', 1)).toEqual([[4, 2]])
+    expect(transpose.activeColumn('t1', 1)).toBe(1)
+    expect(transpose.selectedRows('t1', 2)).toBeUndefined()
+    expect(transpose.canTranspose('t1', 1)).toBe(true)
+    expect(transpose.canTranspose('t1', 2)).toBe(false)
+    await transpose.transpose('t1', 1, { selected: true })
+    await settle()
+    expect(third.transpose).toHaveBeenCalledWith({ rows: [[4, 2]] }, { signal: expect.any(AbortSignal) })
+    expect(sets()[2]).toMatchObject({ index: 2, number: 4, label: 'Transpose of Result 3', descriptor: { kind: 'transpose', resultId: 703 } })
+    expect(transpose.getSnapshot().get(setKey(sets()[2].descriptor))).toMatchObject({ source: 1, sourceLabel: 'Result 3', selected: true, transposed: 2 })
+    // A transpose of the transpose is named after it, by the entry's key as well as by its place.
+    await transpose.transpose('t1', sets()[2].key)
+    await settle()
+    expect(sets()[3]).toMatchObject({ number: 5, label: 'Transpose of Transpose of Result 3' })
+  })
+
   it('says why it transposes no selection of more than 256 separate runs of rows', async () => {
     const { results, transpose, run } = fixture()
     const [first] = run(1)

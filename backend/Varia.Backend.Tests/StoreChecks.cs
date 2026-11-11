@@ -113,7 +113,55 @@ internal static class StoreChecks
         low = true;
         Fill(set, 64, 9000);
         set.Complete();
-        check(set.Describe() is { Truncated: "systemMemory", RowsStored: < 9064 } && set.RowsAvailable == StoredRows(set) && set.RowsAvailable >= 64, "high memory load stops storing rows after the current page");
+        check(set.Describe() is { Truncated: "systemMemory", RowsStored: < 9064 } && set.RowsAvailable == StoredRows(set) && set.RowsAvailable >= 64 && query.Stopped == TruncationReason.SystemMemory,
+            "high memory load stops storing rows after the current page, and stops the query");
+        // A query's own set stops its query at its last seal too: the set is whole, and later sets store nothing.
+        query = store.BeginQuery("last");
+        set = Open(store, query);
+        Fill(set, 0, 10);
+        set.Complete();
+        check(set.Describe() is { Truncated: null, RowsStored: 10, State: "complete" } && query.Stopped == TruncationReason.SystemMemory && store.Open(query, 1, 1, 1, "rows", W1Columns, W1Wires) is null,
+            "high memory load at a query set's final seal keeps the set whole and stops the query");
+        // A derived set (a pivot, a diff, a transpose) stops only itself, at the row after the page sealed under pressure.
+        query = store.BeginQuery("derived");
+        var derived = store.Open(query, 0, 1, 1, "pivot", W1Columns, W1Wires, derived: true)!;
+        Fill(derived, 0, 9000);
+        derived.Complete();
+        check(derived.Describe() is { Truncated: "systemMemory", RowsStored: 64 } && derived.RowsAvailable == 64 && query.Stopped == TruncationReason.None,
+            $"high memory load stops a derived set after the current page and leaves its query's budget open: {derived.Describe().RowsStored} {query.Stopped}");
+        // Its last seal has no row after it: the set is whole, so nothing marks it.
+        var last = store.Open(query, 1, 1, 1, "pivot", W1Columns, W1Wires, derived: true)!;
+        Fill(last, 0, 10);
+        last.Complete();
+        var exact = store.Open(query, 2, 1, 1, "pivot", W1Columns, W1Wires, derived: true)!;
+        Fill(exact, 0, 64);
+        exact.Complete();
+        check(last.Describe() is { Truncated: null, RowsStored: 10, State: "complete" } && exact.Describe() is { Truncated: null, RowsStored: 64, State: "complete" } && query.Stopped == TruncationReason.None,
+            "a derived set whose last page is sealed under high memory load is kept whole and not marked truncated");
+        low = false;
+        var after = store.Open(query, 3, 1, 1, "pivot", W1Columns, W1Wires, derived: true)!;
+        Fill(after, 0, 200);
+        after.Complete();
+        check(after.Describe() is { Truncated: null, RowsStored: 200 }, "the query stores another derived set once memory is free again");
+        // A derived set's first refusal ends it, as it ends a query's: a smaller row that would fit is not stored after
+        // the gap, so its stored rows stay a prefix of the rows read.
+        store = new ResultStore(16 * 1024, 16 * 1024);
+        query = store.BeginQuery("gap");
+        var gap = store.Open(query, 0, 1, 1, "pivot", [new ResultColumn("t", "nvarchar(max)", "text")], [WireKind.Text], derived: true)!;
+        var kept = 0;
+        for (; kept < 1000; kept++)
+        {
+            gap.CountRow();
+            if (gap.BeginRow() is not { } builder) break;
+            builder.AppendText(new string('x', 1000));
+            if (!gap.TryCommitRow()) break;
+        }
+        var room = store.TryReserve(query, 64, false, out _);
+        if (room) store.Return(query, 64);
+        gap.CountRow();
+        var next = gap.BeginRow();
+        check(kept is > 0 and < 1000 && room && next is null && !gap.TryReserveRows(1) && gap.Describe() is { Truncated: "queryBudget" } described && described.RowsStored == kept && query.Stopped == TruncationReason.None,
+            $"a derived set stores nothing after the first row the budget refuses, though a smaller one would fit: {kept} {room} {next is null} {query.Stopped}");
 
         // Releases: re-executing on a session and results.close return the memory (closing a session or disconnecting does not
         // release anything; SqlService no longer calls the store then).

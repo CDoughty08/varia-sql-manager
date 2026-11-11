@@ -2,7 +2,8 @@ import { planLimits, type PlanNode, type PlanStatement } from '../../../shared/p
 
 export type PairStatus = 'paired' | 'ambiguous' | 'left-only' | 'right-only'
 export interface PlanPair<T> { left?: T; right?: T; status: PairStatus; reason: string }
-export interface OperatorPair extends PlanPair<PlanNode> { structural: boolean; structureUnknown?: boolean; propertiesChanged: boolean }
+/** `propertiesUnverified`: the retained values agree, but the parser shortened part of either operator, so equality is not established. */
+export interface OperatorPair extends PlanPair<PlanNode> { structural: boolean; structureUnknown?: boolean; propertiesChanged: boolean; propertiesUnverified?: boolean }
 export interface StatementPair extends PlanPair<PlanStatement> { operators: OperatorPair[] }
 
 function groups<T>(items: readonly T[], key: (item: T) => string): Map<string, T[]> {
@@ -39,12 +40,14 @@ function pairItems<T>(left: readonly T[], right: readonly T[], keys: readonly { 
   return { forward, backward, reasons, ambiguousLeft, ambiguousRight }
 }
 
-const identity = (node: PlanNode) => JSON.stringify([node.physicalOp, node.logicalOp, node.object])
+// A shortened field is evidence of its retained prefix only, so it never forms a matching key (an empty key matches nothing).
+const identity = (node: PlanNode) => node.identityShortened ? '' : JSON.stringify([node.physicalOp, node.logicalOp, node.object])
 const operatorKeys = [
-  { key: (node: PlanNode) => JSON.stringify([identity(node), node.diagnostics?.predicates ?? []]), reason: 'Unique operator, object and predicates' },
+  { key: (node: PlanNode) => node.identityShortened || node.detailsShortened ? '' : JSON.stringify([identity(node), node.diagnostics?.predicates ?? []]), reason: 'Unique operator, object and predicates' },
   { key: identity, reason: 'Unique physical/logical operator and object' },
-  { key: (node: PlanNode) => node.logicalOp ? JSON.stringify([node.logicalOp, node.object]) : '', reason: 'Unique logical operator and object' }
+  { key: (node: PlanNode) => node.logicalOp && !node.identityShortened ? JSON.stringify([node.logicalOp, node.object]) : '', reason: 'Unique logical operator and object' }
 ]
+const shortened = (node: PlanNode) => !!(node.identityShortened || node.detailsShortened)
 const values = (node: PlanNode) => JSON.stringify([node.physicalOp, node.logicalOp, node.object,
   node.properties.filter(property => property.name !== 'RelOp.NodeId').toSorted((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : a.value < b.value ? -1 : a.value > b.value ? 1 : 0),
   node.warnings, node.diagnostics?.parallel, node.diagnostics?.estimatedExecutionMode, node.diagnostics?.predicates,
@@ -78,10 +81,11 @@ export function pairOperators(left: readonly PlanNode[], right: readonly PlanNod
     const parentPair = parent && match.forward.get(parent)
     const parentKnown = first.parentId === null || second?.parentId === null || !!parentPair
     const sameParent = first.parentId === null ? second?.parentId === null : parentPair?.id === second?.parentId
+    const changed = !!second && values(first) !== values(second)
     return { left: first, right: second, status: second ? 'paired' : match.ambiguousLeft.has(first) ? 'ambiguous' : 'left-only',
       reason: second ? match.reasons.get(first)! : match.ambiguousLeft.has(first) ? 'Multiple plausible counterparts; no pairing inferred' : 'No conservative counterpart',
       structural: !!second && parentKnown && (!sameParent || aOrder.get(first.id) !== bOrder.get(second.id)), structureUnknown: !!second && !parentKnown,
-      propertiesChanged: !!second && values(first) !== values(second) }
+      propertiesChanged: changed, ...second && !changed && (shortened(first) || shortened(second)) ? { propertiesUnverified: true } : {} }
   })
   for (const second of right) if (!match.backward.has(second)) pairs.push({ right: second, status: match.ambiguousRight.has(second) ? 'ambiguous' : 'right-only',
     reason: match.ambiguousRight.has(second) ? 'Multiple plausible counterparts; no pairing inferred' : 'No conservative counterpart', structural: false, propertiesChanged: false })
@@ -103,17 +107,19 @@ export function comparePlans(left: readonly PlanStatement[], right: readonly Pla
     }
   }
   const match = pairItems(left, right, [
-    { key: (s: PlanStatement) => s.text.trim() ? JSON.stringify([s.type, s.text.trim()]) : '', reason: 'Unique exact statement text and type' },
+    // Shortened text shares a prefix with every statement that differs only past the cut; only complete text is exact.
+    { key: (s: PlanStatement) => s.text.trim() && !s.textShortened ? JSON.stringify([s.type, s.text.trim()]) : '', reason: 'Unique exact statement text and type' },
     { key: (s: PlanStatement) => s.queryHash ? JSON.stringify([s.type, s.queryHash]) : '', reason: 'Unique query hash and type (optimizer identity)' }
   ])
+  const unmatched = (s: PlanStatement) => s.textShortened ? 'Statement text was shortened, so exact text is unavailable; no unique query hash counterpart' : 'No exact text or unique query hash counterpart'
   const pairs: StatementPair[] = left.map(first => {
     const second = match.forward.get(first)
     return { left: first, right: second, status: second ? 'paired' : match.ambiguousLeft.has(first) ? 'ambiguous' : 'left-only',
-      reason: second ? match.reasons.get(first)! : match.ambiguousLeft.has(first) ? 'Repeated statement; no occurrence pairing inferred' : 'No exact text or unique query hash counterpart',
+      reason: second ? match.reasons.get(first)! : match.ambiguousLeft.has(first) ? 'Repeated statement; no occurrence pairing inferred' : unmatched(first),
       operators: second ? pairOperators(first.nodes, second.nodes) : first.nodes.map(node => ({ left: node, status: 'left-only', reason: 'Statement is unpaired', structural: false, propertiesChanged: false })) }
   })
   for (const second of right) if (!match.backward.has(second)) pairs.push({ right: second, status: match.ambiguousRight.has(second) ? 'ambiguous' : 'right-only',
-    reason: match.ambiguousRight.has(second) ? 'Repeated statement; no occurrence pairing inferred' : 'No exact text or unique query hash counterpart',
+    reason: match.ambiguousRight.has(second) ? 'Repeated statement; no occurrence pairing inferred' : unmatched(second),
     operators: second.nodes.map(node => ({ right: node, status: 'right-only', reason: 'Statement is unpaired', structural: false, propertiesChanged: false })) })
   return pairs
 }
@@ -128,15 +134,20 @@ export function metricDelta(left: number | null | undefined, right: number | nul
   return { left: a, right: b, absolute, percent: percent !== undefined && Number.isFinite(percent) ? percent : undefined, zeroBaseline: a === 0 && b !== 0 }
 }
 
-export interface Difference { name: string; left?: string; right?: string; changed: boolean }
-/** Preserve duplicate names and original order. An absent diagnostics block/list is unavailable, not empty. */
-export function propertyDifferences(left: readonly { name: string; value: string | undefined }[] | undefined, right: readonly { name: string; value: string | undefined }[] | undefined): Difference[] {
+export interface Difference { name: string; left?: string; right?: string; changed: boolean; unverified?: boolean }
+export interface ComparedProperty { name: string; value: string | undefined; partial?: boolean }
+/** Preserve duplicate names and original order. An absent diagnostics block/list is unavailable, not empty.
+ * `partial` marks a value the parser may have shortened: agreeing retained values are then `unverified`, not equal. */
+export function propertyDifferences(left: readonly ComparedProperty[] | undefined, right: readonly ComparedProperty[] | undefined): Difference[] {
   const index = (items: typeof left) => {
-    const counts = new Map<string, number>(), result = new Map<string, { name: string; value: string | undefined }>()
+    const counts = new Map<string, number>(), result = new Map<string, ComparedProperty>()
     for (const item of items ?? []) { const n = (counts.get(item.name) ?? 0) + 1; counts.set(item.name, n); result.set(JSON.stringify([item.name, n]), item) }
     return result
   }
   const a = index(left), b = index(right)
-  return [...new Set([...a.keys(), ...b.keys()])].map(key => ({ name: a.get(key)?.name ?? b.get(key)!.name, left: a.get(key)?.value, right: b.get(key)?.value,
-    changed: a.get(key)?.value !== b.get(key)?.value }))
+  return [...new Set([...a.keys(), ...b.keys()])].map(key => {
+    const first = a.get(key), second = b.get(key), changed = first?.value !== second?.value
+    return { name: first?.name ?? second!.name, left: first?.value, right: second?.value, changed,
+      ...!changed && first?.value !== undefined && (first.partial || second?.partial) ? { unverified: true } : {} }
+  })
 }

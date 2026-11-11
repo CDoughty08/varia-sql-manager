@@ -12,9 +12,10 @@ import { comparePlans } from '../src/renderer/src/plans/comparison'
 import type { PlanDocument, PlanStatement } from '../src/shared/plans'
 const deferred = <T,>() => { let resolve!: (value: T) => void; return { promise: new Promise<T>(done => { resolve = done }), resolve: (value: T) => resolve(value) } }
 
-const viewers = vi.hoisted(() => ({ navigation: [] as (PlanNavigation | undefined)[] }))
-vi.mock('../src/renderer/src/plans/PlanViewer', () => ({ default: (props: { navigation?: PlanNavigation; identity: string }) => {
+const viewers = vi.hoisted(() => ({ navigation: [] as (PlanNavigation | undefined)[], scopes: [] as (string | undefined)[] }))
+vi.mock('../src/renderer/src/plans/PlanViewer', () => ({ default: (props: { navigation?: PlanNavigation; identity: string; scope?: string }) => {
   viewers.navigation[props.identity.endsWith(':Left') ? 0 : 1] = props.navigation
+  viewers.scopes[props.identity.endsWith(':Left') ? 0 : 1] = props.scope
   return createElement('div', { 'aria-label': props.identity })
 } }))
 
@@ -48,7 +49,7 @@ beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
   cache = new PlanPreparationCache(); history = new RetainedPlansService(); close = vi.fn()
-  MatchingWorker.instances = []; viewers.navigation = []
+  MatchingWorker.instances = []; viewers.navigation = []; viewers.scopes = []
   parse = vi.fn(async () => ({ ok: true, value: model }))
   Object.assign(window, { varia: { parsePlan: parse } })
   vi.stubGlobal('Worker', MatchingWorker)
@@ -78,7 +79,7 @@ it('links only conservative counterparts and camera events, supports independent
   expect(cache.stats.parsed.entries).toBe(0); expect(cache.stats.layouts.entries).toBe(0)
 })
 
-it('ignores a stale matching reply after swapping, and clears selection and old cache scopes', async () => {
+it('ignores a stale matching reply after swapping, and clears selection', async () => {
   await render(); await click('Compare selected plans')
   const old = MatchingWorker.instances[0]
   await click('Swap plans')
@@ -125,11 +126,14 @@ it('closing while unary parses are pending releases inputs and ignores later res
   expect(MatchingWorker.instances).toHaveLength(0); expect(cache.stats.parsed.entries).toBe(0)
 })
 
-it('swapping while loads are pending prepares only the new ordering and ignores the abandoned parse replies', async () => {
+it('swapping while loads are pending joins the two parses already in flight and matches only the new ordering', async () => {
   const waiting = deferred<{ ok: true; value: PlanDocument }>()
   parse.mockImplementation(() => waiting.promise)
-  await render(); await click('Compare selected plans'); await click('Swap plans')
+  await render(); await click('Compare selected plans'); await click('Swap plans'); await click('Swap plans'); await click('Swap plans')
+  expect(parse).toHaveBeenCalledTimes(2)
+  expect(cache.stats.pending).toBe(2)
   await act(async () => waiting.resolve({ ok: true, value: model }))
+  expect(parse).toHaveBeenCalledTimes(2)
   expect(MatchingWorker.instances).toHaveLength(1)
   const worker = MatchingWorker.instances[0]
   expect(worker.data!.left[0].id).toBe('b:s'); expect(worker.data!.right[0].id).toBe('a:s')
@@ -156,4 +160,48 @@ it('clears stale preparation errors when a hidden comparison is shown and prepar
   await act(async () => MatchingWorker.instances.at(-1)!.complete())
   expect(host.textContent).not.toContain('Previous matching failure')
   expect(host.textContent).toContain('1 paired operators')
+})
+
+it('swapping a finished comparison reuses both parsed inputs and their layouts, and reverses the sides', async () => {
+  await render(); await click('Compare selected plans')
+  await act(async () => MatchingWorker.instances[0].complete())
+  expect(parse).toHaveBeenCalledTimes(2)
+  const before = [...viewers.scopes] as string[]
+  expect(new Set(before).size).toBe(2)
+  cache.rememberLayout(before[0], 'topology', { nodes: [], edges: [] } as never, [])
+  await click('Swap plans')
+  expect(MatchingWorker.instances[0].terminated).toBe(true)
+  const worker = MatchingWorker.instances[1]
+  expect(worker.data!.left[0].id).toBe('b:s'); expect(worker.data!.right[0].id).toBe('a:s')
+  await act(async () => worker.complete())
+  expect(parse).toHaveBeenCalledTimes(2)
+  expect(viewers.scopes).toEqual([before[1], before[0]])
+  expect(cache.layout(before[0], 'topology')).toBeDefined()
+  expect(cache.stats.parsed.entries).toBe(2)
+})
+
+it('comparing again replaces the inputs: the previous preparations and layouts are released and both inputs parse afresh', async () => {
+  await render(); await click('Compare selected plans')
+  await act(async () => MatchingWorker.instances[0].complete())
+  const before = [...viewers.scopes] as string[]
+  cache.rememberLayout(before[0], 'topology', { nodes: [], edges: [] } as never, [])
+  await click('Swap plans'); await click('Compare selected plans')
+  await act(async () => MatchingWorker.instances.at(-1)!.complete())
+  expect(parse).toHaveBeenCalledTimes(4)
+  expect(cache.layout(before[0], 'topology')).toBeUndefined()
+  expect(cache.stats.parsed.entries).toBe(2)
+  expect(viewers.scopes.some(scope => before.includes(scope!))).toBe(false)
+})
+
+it('tells apart open documents that share a name before either is acquired', async () => {
+  const original = docState.documents
+  docState.documents = [{ id: 'a', name: 'query.sqlplan', kind: 'sqlplan', dirty: false, file: { path: 'C:\\plans\\before\\query.sqlplan' } },
+    { id: 'b', name: 'query.sqlplan', kind: 'sqlplan', dirty: false, file: { path: 'C:\\plans\\after\\query.sqlplan' } }] as unknown as typeof original
+  try {
+    await render()
+    const select = host.querySelector<HTMLSelectElement>('select[aria-label="Left comparison input"]')!
+    expect(Array.from(select.options, option => option.textContent)).toEqual(['Document · query.sqlplan · C:\\plans\\before', 'Document · query.sqlplan · C:\\plans\\after'])
+    expect(select.getAttribute('aria-description')).toBe('C:\\plans\\before\\query.sqlplan')
+    expect(select.options[1].title).toBe('C:\\plans\\after\\query.sqlplan')
+  } finally { docState.documents = original }
 })

@@ -100,7 +100,12 @@ try {
   const copied = (await clipboard()).split('\t')
   expect(copied).toHaveLength(4)
   expect(copied.some(text => ['error', 'warning', 'running'].includes(text))).toBe(false)
-  console.log('Copy passed: a row copies its shown columns only.')
+  // Copy with Headers (Ctrl+Shift+C, as in a results grid) puts the shown columns' names first.
+  await app.evaluate(({ clipboard }) => clipboard.writeText('before'))
+  await grid.press(`${mod}+Shift+C`)
+  await expect.poll(clipboard).not.toBe('before')
+  expect((await clipboard()).split(/\r?\n/)[0]).toBe('itemId\tgroup\tname\tamount')
+  console.log('Copy passed: a row copies its shown columns only, and Copy with Headers names them.')
 
   step = 'save'
   // The dialog stays open for more than two samples, which retire the revision shown when Save was chosen.
@@ -119,12 +124,22 @@ try {
   console.log('Save passed: a dialog open across samples saved the newest revision.')
 
   step = 'sort'
+  // Query Output's context menu (the results grid's own) sorts by the active cell's column; the backend sorts the next revision.
+  const amount = grid.locator(gridPart.columnHeader).filter({ hasText: /^amount$/ })
+  const gridMenu = page.getByRole('menu', { name: 'Query output', exact: true })
+  const amountCell = grid.locator(`${gridPart.cell}[aria-colindex="5"]`).first()
+  await amountCell.click({ button: 'right' })
+  await gridMenu.getByRole('menuitem', { name: /^Sort Ascending/ }).click()
+  await expect.poll(async () => (await live('grid')).sort).toEqual([{ column: 'amount', descending: false }])
+  await expect(amount).toHaveAttribute('aria-sort', 'ascending')
+  // Sorting by a catalogue column id (the owner's commands, LiveGrid.sortBy) shows in the same header.
   await live('sortGrid', 'amount', true)
+  await expect(amount).toHaveAttribute('aria-sort', 'descending')
   await expect.poll(async () => { const amounts = (await rows()).map(row => Number(row.cells[3])); return amounts.length === 12 && amounts.every((value, index) => index === 0 || amounts[index - 1] >= value) }, { timeout: 20000 }).toBe(true)
   expect((await live('grid')).sort).toEqual([{ column: 'amount', descending: true }])
   await live('unmountGrid')
   await live('dispose', items)
-  console.log('Sort passed: the next revision came sorted by the catalogue column.')
+  console.log('Sort passed: the context menu and a sort by catalogue id sorted the grid, the header shows it, and the next revision came sorted.')
 
   step = 'follow tail'
   const log = await live('subscribeSynthetic', { probes: ['debug.synthetic.log'], tickMs: 300, logRows: 25 })

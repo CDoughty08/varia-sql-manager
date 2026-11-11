@@ -2,14 +2,14 @@ namespace Varia.Backend.Activity;
 
 /// <summary>A column value filter, as src/shared/activity/schema.ts declares it.</summary>
 // Members are nullable for the wire: JSON can send null for any of them, and Compile refuses it as zod does.
-internal sealed record ActivityColumnFilterDto(string? Column, List<string?>? Values = null, bool? Blanks = null, bool? NonBlanks = null);
+internal sealed record ActivityColumnFilterDto(string? Column, List<string?>? Values = null, bool? Blanks = null, bool? NonBlanks = null, bool? Exclude = null);
 
-/// <summary>The monitor's filter for one table (the live layer's `args.activity`): Processes' view chip and toggles, the
+/// <summary>The monitor's filter for one table (the live layer's `args.activity`): Sessions' view chip and toggles, the
 /// filter box, the column value filters, Resource Waits' Hide benign waits, and Data File I/O's chip and latency thresholds.</summary>
 internal sealed record ActivityFilterDto(string? Table, string? View = null, bool? ShowSystem = null, bool? ShowVaria = null, string? Text = null, List<ActivityColumnFilterDto?>? ColumnFilters = null,
     bool? HideBenign = null, string? FileView = null, int? LatencyWarningMs = null, int? LatencyErrorMs = null);
 
-/// <summary>What Processes' view chips and toggles test about a session, which the sessions probe works out per row.</summary>
+/// <summary>What Sessions' view chips and toggles test about a session, which the sessions probe works out per row.</summary>
 internal readonly record struct SessionFacts(bool System = false, bool VariaPool = false, bool Active = false, bool Blocked = false, bool Blocking = false,
     bool IdleOpenTransaction = false, bool RollingBack = false);
 
@@ -30,10 +30,10 @@ internal sealed class ActivityFilter
     private readonly bool hideBenign;
     private readonly string? fileView;
     private readonly IReadOnlyList<string> textColumns;
-    private readonly IReadOnlyList<(string Column, HashSet<string> Values, bool Blanks, bool NonBlanks)> columns;
+    private readonly IReadOnlyList<(string Column, HashSet<string> Values, bool Blanks, bool NonBlanks, bool Exclude)> columns;
 
     private ActivityFilter(string table, string? view, bool showSystem, bool showVaria, string? text, bool hideBenign, IReadOnlyList<string> textColumns,
-        IReadOnlyList<(string, HashSet<string>, bool, bool)> columns, string? fileView)
+        IReadOnlyList<(string, HashSet<string>, bool, bool, bool)> columns, string? fileView)
     {
         this.fileView = fileView;
         this.hideBenign = hideBenign;
@@ -57,7 +57,7 @@ internal sealed class ActivityFilter
     {
         if (dto.Table is null || !catalog.Tables.TryGetValue(dto.Table, out var table)) throw Invalid("Unknown Activity Monitor table.");
         var sessions = dto.Table == "sessions";
-        if (!sessions && (dto.View is not null || dto.ShowSystem is not null || dto.ShowVaria is not null)) throw Invalid("Only Processes takes a view or session toggles.");
+        if (!sessions && (dto.View is not null || dto.ShowSystem is not null || dto.ShowVaria is not null)) throw Invalid("Only Sessions takes a view or session toggles.");
         if (dto.View is not null && !catalog.Views.Contains(dto.View)) throw Invalid("Unknown Activity Monitor view.");
         var waits = catalog.HideBenignTables.Contains(dto.Table);
         if (!waits && dto.HideBenign is not null) throw Invalid("Only Resource Waits takes Hide benign waits.");
@@ -70,7 +70,7 @@ internal sealed class ActivityFilter
         var filters = dto.ColumnFilters ?? [];
         if (filters.Count > catalog.Limit("columnFilters")) throw Invalid("Too many column filters.");
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        var compiled = new List<(string, HashSet<string>, bool, bool)>();
+        var compiled = new List<(string, HashSet<string>, bool, bool, bool)>();
         foreach (var filter in filters)
         {
             if (filter?.Column is not { Length: > 0 and <= MaxColumnId } || !table.FacetColumns.Contains(filter.Column)) throw Invalid("The column has no value filter.");
@@ -79,7 +79,10 @@ internal sealed class ActivityFilter
             if (values.Any(value => value is null)) throw Invalid("A filter value cannot be null.");
             if (values.Count > catalog.Limit("columnFilterValues") || values.Any(value => value!.Length > catalog.Limit("columnFilterChars"))) throw Invalid("Too many or too long filter values.");
             if (values.Count == 0 && filter.Blanks != true && filter.NonBlanks != true) throw Invalid("A column filter needs a value, (Blanks) or (Non-blanks).");
-            compiled.Add((filter.Column, values.Select(value => value!).ToHashSet(StringComparer.Ordinal), filter.Blanks == true, filter.NonBlanks == true));
+            // Excluding: the values named are left out and every other non-blank value passes (a funnel unticking a few of the
+            // most frequent values keeps the ones it never listed).
+            if (filter.Exclude == true && (values.Count == 0 || filter.NonBlanks == true)) throw Invalid("An excluding filter names values, without (Non-blanks).");
+            compiled.Add((filter.Column, values.Select(value => value!).ToHashSet(StringComparer.Ordinal), filter.Blanks == true, filter.NonBlanks == true, filter.Exclude == true));
         }
         var textColumns = table.Columns.Where(column => table.TextColumns.Contains(column.Id)).Select(column => column.Id).ToList();
         return new(dto.Table, sessions ? dto.View ?? "all" : null, dto.ShowSystem == true, dto.ShowVaria == true, string.IsNullOrEmpty(dto.Text) ? null : dto.Text,
@@ -97,11 +100,11 @@ internal sealed class ActivityFilter
     {
         if (!Shows(facts, benign, file)) return false;
         if (text is not null && !textColumns.Any(column => cell(column)?.Contains(text, StringComparison.OrdinalIgnoreCase) == true)) return false;
-        foreach (var (column, values, blanks, nonBlanks) in columns)
+        foreach (var (column, values, blanks, nonBlanks, exclude) in columns)
         {
             var value = cell(column);
             var blank = string.IsNullOrEmpty(value);
-            if (!(blank ? blanks : nonBlanks || values.Contains(value!))) return false;
+            if (!(blank ? blanks : exclude ? !values.Contains(value!) : nonBlanks || values.Contains(value!))) return false;
         }
         return true;
     }
