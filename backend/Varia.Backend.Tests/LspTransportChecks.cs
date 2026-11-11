@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Varia.Backend.Common;
@@ -175,6 +176,15 @@ internal static class LspTransportChecks
             try { await failing.WaitAsync(CheckWait); } catch (IOException) { }
             check(settled && !overtaken && killedBeforeDisposeReturned && killedBeforeExit, "LSP disposal and the backend's exit wait for a tree kill another thread has under way");
         }
+        // The gate cannot cover a backend that main kills (SIGKILL) inside a tree kill, which left the SQL Tools Service stopped
+        // and retained-plans-smoke waiting 45 s for the app's pipes. Off Windows the kill is therefore one signal, with no
+        // stopped state in between; this child must still be ended by it.
+        var plainStart = new ProcessStartInfo(path) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var argument in arguments) plainStart.ArgumentList.Add(argument);
+        using var plain = Process.Start(plainStart)!;
+        LspClient.Kill(plain);
+        check(LspClient.KillsTree == OperatingSystem.IsWindows() && plain.WaitForExit(CheckWait),
+            "a language server is killed with its tree only on Windows; elsewhere by one signal that cannot leave it stopped, and the kill ends it");
     }
 
     /// <summary>A real stdio child, dispatched by Program before the regular test suite.</summary>

@@ -380,6 +380,17 @@ if (liveGroup is null)
         && Enumerable.Range(1, 8).All(lanes => OfflineSuites.Assign(suiteNames, lanes) is var assigned && assigned.Length == lanes && assigned.SelectMany(lane => lane).Order(StringComparer.Ordinal).SequenceEqual(suiteNames.Order(StringComparer.Ordinal)))
         && OfflineSuites.Assign(["Host", "Explorer", "LiveScheduler", "Page"], 2) is [["Host", "Page"], ["Explorer", "LiveScheduler"]],
         "the offline suites have unique names, the ones that must run alone and the weighted ones all exist, and every lane count puts each suite in exactly one lane, longest first onto the lightest lane");
+    {
+        // A suite that never ends is named and stopped, where it used to run the check to CI's 20 minute step timeout.
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        string? named = null;
+        var lines = new List<string>();
+        await OfflineSuites.RunAsync([("Quick", () => Task.CompletedTask), ("Hung", () => release.Task)], serial: false, limitMs: 200,
+            stuck: message => { named = message; release.TrySetResult(); }, log: line => { lock (lines) lines.Add(line); });
+        Check(named is not null && named.StartsWith("Offline suite", StringComparison.Ordinal) && named.Contains("Hung", StringComparison.Ordinal) && named.Contains(" did not finish within 200 ms; still running: ", StringComparison.Ordinal) && lines.Any(line => line.StartsWith("Offline suite Quick: ", StringComparison.Ordinal))
+            && OfflineSuites.DefaultSuiteLimitMs >= 60_000,
+            "an offline suite that does not end is named by the watchdog, which leaves the suites that end alone: " + named);
+    }
     await OfflineSuites.RunAsync(offlineSuites, serial: slowMs > 0);
     using (var offline = new SqlService())
     {
