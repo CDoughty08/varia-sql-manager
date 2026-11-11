@@ -192,7 +192,9 @@ export function buildLiveSchemas(catalog: LiveCatalogShape, o: { test: boolean }
   const dataColumns = (columns: LiveTableSpec['columns']) => columns.filter(column => column.role !== 'tone')
   const columnsOf = (spec: LiveProbeSpec, mode?: 'snapshot' | 'append') => new Set((spec.tables ?? []).filter(table => mode === undefined || table.mode === mode).flatMap(table => dataColumns(table.columns).map(column => column.id)))
 
-  const sortSchema = z.array(z.object({ column: catalogId, descending: z.boolean(), table: tableIndex.optional() }).strict()).min(1).max(L.sortColumns)
+  // Each table holds its own L.sortColumns keys (and the probe-wide keys theirs), so one grid's sort never evicts another's.
+  const sortGroups = Math.max(1, ...Object.values(catalog.probes).map(probe => (probe.tables?.length ?? 0) + 1))
+  const sortSchema = z.array(z.object({ column: catalogId, descending: z.boolean(), table: tableIndex.optional() }).strict()).min(1).max(L.sortColumns * sortGroups)
   const filterSchema = z.object({ text: z.string().min(1).max(L.filterCharacters), columns: z.array(catalogId).min(1).max(L.filterColumns).optional() }).strict()
   const probeSettings = z.object({
     probe: probeId,
@@ -213,6 +215,9 @@ export function buildLiveSchemas(catalog: LiveCatalogShape, o: { test: boolean }
     const sorted = settings.sort ?? [], table = (index: number) => spec.tables?.[index]
     const unsortable = (key: LiveSort) => key.table === undefined ? !sortable.has(key.column) : table(key.table)?.mode !== 'snapshot' || !dataColumns(table(key.table)!.columns).some(column => column.id === key.column)
     if (sorted.some(unsortable) || new Set(sorted.map(key => (key.table ?? '') + '/' + key.column)).size !== sorted.length) ctx.addIssue({ code: 'custom', message: 'Sort names a column the probe does not sort by.', path: [...path, 'sort'] })
+    const perTable = new Map<number | undefined, number>()
+    for (const key of sorted) perTable.set(key.table, (perTable.get(key.table) ?? 0) + 1)
+    if ([...perTable.values()].some(count => count > L.sortColumns)) ctx.addIssue({ code: 'custom', message: `A table sorts by at most ${L.sortColumns} columns.`, path: [...path, 'sort'] })
     if (settings.view !== undefined && !(spec.views ?? []).includes(settings.view)) ctx.addIssue({ code: 'custom', message: 'Unknown view.', path: [...path, 'view'] })
     if (settings.filter !== undefined) {
       const filterable = columnsOf(spec)

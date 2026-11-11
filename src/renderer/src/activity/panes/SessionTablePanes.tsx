@@ -1,6 +1,7 @@
 // Blocking and Active Expensive Queries (docs/activity-monitor.md, Panes): the sessions probe's other two tables, each in
 // a live grid (LiveGridPane, no React per row) with the pane's own states and a status line. They read the same sample as
-// Processes, so showing them runs no extra SQL.
+// Sessions, so showing them runs no extra SQL. Blocking's order is its chains (each waiter under its blocker), so its
+// header does not sort.
 import { activityLimits, tableSpecs, type ActivityTable } from '../../../../shared/activity/catalog'
 import type { TruncationReason } from '../../../../shared/contracts'
 import type { LiveTone } from '../../../../shared/live/catalog'
@@ -65,7 +66,7 @@ export function emptyNote(table: 'blocking' | 'activeQueries', facts: TableFacts
   return facts.rows === 0 && facts.live && !problem ? panes[table].empty : undefined
 }
 
-/** One of the sessions probe's tables other than Processes' own. */
+/** One of the sessions probe's tables other than Sessions' own. */
 export default function SessionTablePane({ table, state, handle, snapshot }: {
   readonly table: 'blocking' | 'activeQueries'
   readonly state: MonitorState
@@ -82,7 +83,7 @@ export default function SessionTablePane({ table, state, handle, snapshot }: {
   }
   return <div className="activity-pane-content" data-activity-grid={table}>
     <PaneState problem={problem} hasRows={!!current} waiting={facts.waiting} empty={emptyNote(table, facts, problem)}>
-      <LiveGridPane live={handle} probe={probe} table={index} label={pane.label} toneLabel={pane.toneLabel} state={activity.gridState(state.id, table)} />
+      <LiveGridPane live={handle} probe={probe} table={index} label={pane.label} toneLabel={pane.toneLabel} state={activity.gridState(state.id, table)} sortable={table !== 'blocking'} />
     </PaneState>
     <p className="activity-pane-status">{pane.status(facts)}</p>
   </div>

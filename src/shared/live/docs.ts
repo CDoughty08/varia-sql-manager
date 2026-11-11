@@ -85,7 +85,7 @@ export function renderLiveDocs(): string {
     `| Interval | ${seconds(L.intervalMs.min)} to ${seconds(L.intervalMs.max)} requested, then clamped to the probe's own minimum and maximum |`,
     `| Frames | one unacknowledged per subscription; initial credit ${L.initialCredit / 1024} KiB; at most ${limits.eventBody / 1024} KiB each, and the catalogue's worst case at most ${L.frameBudget / 1024} KiB |`,
     `| Series, status values, errors | ${L.series} series per probe; ${L.statuses} status values of ${L.statusCharacters} characters; ${L.errors} probe errors of ${L.messageCharacters.toLocaleString('en-US')} characters per tick |`,
-    `| Sort, filter, tracking | ${L.sortColumns} sort columns; filter text ${L.filterCharacters} characters on ${L.filterColumns} columns; ${L.trackedKeys} tracked keys of ${L.keyCharacters} characters per table |`,
+    `| Sort, filter, tracking | ${L.sortColumns} sort columns per table; filter text ${L.filterCharacters} characters on ${L.filterColumns} columns; ${L.trackedKeys} tracked keys of ${L.keyCharacters} characters per table |`,
     `| Resume token, kept results | ${L.resumeCharacters} base64url characters; ${L.kept} results kept when a source ends |`,
     `| Tables | a snapshot revision at most ${count(L.snapshotRows)} rows (a table's own cap may be lower); an append segment ${count(L.segmentRows)} rows or ${L.segmentBytes / 1024 / 1024} MiB, ${L.segments} segments' worth kept in at most ${L.segmentResults} results a table; at most ${count(L.batchRows)} new append rows a tick |`,
     `| Table memory | ${L.subscriptionBytes / 1024 / 1024} MiB per subscription, all live tables at most ${L.budgetShare * 100} % of the result budget; past either, a sample stores what fits and reports BUDGET |`,

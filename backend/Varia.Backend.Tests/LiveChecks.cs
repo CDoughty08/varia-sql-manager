@@ -272,6 +272,17 @@ internal static class LiveChecks
             && Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, probes = new[] { new { probe = SyntheticSampler.TableProbe, sort = new object[] { new { column = "id", descending = true, table = 0 }, new { column = "id", descending = false } } } }, track = new[] { new { probe = SyntheticSampler.TableProbe, table = 0, seq = 2, keys = new[] { "k" }, linger = 1 } } }) == "accepted",
             "live.update refuses what main's schema refuses and names only running subscriptions: " + string.Join(", ", updates.Where(item => item.Value != "INVALID_PARAMS").Select(item => item.Key + " " + item.Value)));
 
+        // Each table holds its own sort keys: a grid's four never evict a sibling table's (the probe sort holds both), while
+        // one table (or the probe-wide keys) still takes at most Limits.SortColumns.
+        var grid = Guid.NewGuid().ToString();
+        host.Request(++id, "live.subscribe", Subscribe(grid, connection, [SyntheticSampler.GridProbe]), credit: Credit);
+        host.Next(FrameKind.Event);
+        string? Sort(params object[] keys) => Update(new { subscriptionId = grid, source = SyntheticSampler.Source, probes = new[] { new { probe = SyntheticSampler.GridProbe, sort = keys } } });
+        object Key(string column, int? table) => table is { } index ? new { column, descending = false, table = index } : new { column, descending = false };
+        var perTable = Sort(Key("itemId", 0), Key("group", 0), Key("name", 0), Key("amount", 0), Key("groupName", 1), Key("items", 1));
+        var probeWide = Sort(Key("itemId", null), Key("group", null), Key("name", null), Key("amount", null), Key("groupName", null));
+        check(perTable == "accepted" && probeWide == "INVALID_PARAMS", $"live.update takes up to four sort keys per table, not per probe: per table {perTable}, five probe-wide {probeWide}");
+
         using var plain = new HostHarness(dispatcher: () => new SqlService(new ResultStore(1L << 30, 1L << 29)));
         plain.Hello();
         plain.Request(1, "live.subscribe", Subscribe(Guid.NewGuid().ToString(), connection), credit: Credit);

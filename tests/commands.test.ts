@@ -356,7 +356,7 @@ describe('context keys', () => {
     expect(evaluateWhen(compileWhen(commandDescriptor('query.changeConnection').precondition!), computeContextKeys({ ...base, documents: { ...documents, busy: false } }))).toBe(true)
   })
   it('derive focus keys from the focused element', () => {
-    const element = (tag: 'input' | 'textarea' | 'button' | 'div', options: { pane?: string; editorOwner?: string; editable?: boolean; grid?: boolean; designer?: boolean; queryBar?: boolean; monitor?: boolean; tab?: boolean; hits?: boolean; messages?: boolean; tree?: 'idle' | 'typing'; options?: boolean } = {}): FocusElement & { tag: string } => ({
+    const element = (tag: 'input' | 'textarea' | 'button' | 'div', options: { pane?: string; editorOwner?: string; editable?: boolean; grid?: boolean; designer?: boolean; queryBar?: boolean; monitor?: boolean; tab?: boolean; hits?: boolean; messages?: boolean; live?: boolean; tree?: 'idle' | 'typing'; options?: boolean } = {}): FocusElement & { tag: string } => ({
       tag, matches: selector => selector.split(', ').includes(tag),
       closest: selector => selector === '[data-pane]' ? options.pane === undefined ? null : { getAttribute: () => options.pane! }
         : selector === '[data-query-editor-id]' ? options.editorOwner === undefined ? null : { getAttribute: () => options.editorOwner! }
@@ -366,6 +366,7 @@ describe('context keys', () => {
           : selector === '[data-document-tab]' ? options.tab ? { getAttribute: () => '' } : null
           : selector === '[data-search-hits]' ? options.hits ? { getAttribute: () => '' } : null
           : selector === '[data-output-view="messages"]' ? options.messages ? { getAttribute: () => 'messages' } : null
+          : selector === '[data-output-view="live"]' ? options.live ? { getAttribute: () => 'live' } : null
           : selector === '[data-explorer-tree]' ? options.tree ? { getAttribute: (name: string) => name === 'data-type-ahead' && options.tree === 'typing' ? '' : name === 'data-explorer-tree' ? '' : null } : null
           : selector === '[data-options-dialog]' ? options.options ? { getAttribute: () => '' } : null
           : options.editable ? { getAttribute: () => 'true' } : null
@@ -392,6 +393,9 @@ describe('context keys', () => {
     expect(focusFacts(element('div'), editor(false))).toMatchObject({ activePanel: '', inputFocus: false })
     // Ctrl+Shift+C copies with headers only in a results grid, not in Messages.
     expect(focusFacts(element('div', { pane: 'results', grid: true }), editor(false))).toEqual({ editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: 'output', outputGridFocus: true, searchHitsFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false, messagesFocus: false, explorerFocus: false, explorerTypeAhead: false, optionsDialogFocus: false, peekFocus: false, peekTabFocus: false, peekEditorFocus: false })
+    // A live view's grid with Query Output's menu (an Activity Monitor pane) takes the results grid's keys too.
+    expect(focusFacts(element('div', { pane: 'editor', monitor: true, live: true }), editor(false))).toMatchObject({ activityMonitorFocus: true, outputGridFocus: true })
+    expect(focusFacts(element('div', { pane: 'editor', monitor: true }), editor(false))).toMatchObject({ activityMonitorFocus: true, outputGridFocus: false })
     // Each output panel (Results, Messages, Execution plan) is the output to the keybindings.
     expect(focusFacts(element('div', { pane: 'messages' }), editor(false))).toMatchObject({ activePanel: 'output', outputGridFocus: false })
     // A Search Objects result, in the tab or Object Explorer's search: Ctrl+Shift+C copies its fully qualified name.
