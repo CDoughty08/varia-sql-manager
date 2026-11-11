@@ -17,7 +17,8 @@
 //   language-fail       completion/hover refuse requests until removed, to exercise cache refresh recovery in the UI
 //   language-status-fail  availability fails until removed, to exercise same-generation manual recovery
 //   budget-stopped      results.pivot, results.diff and results.transpose answer BUDGET_STOPPED, as for a query whose
-//                       results filled its result memory; budget-stopped-low the same with the low-memory sentence
+//                       results filled its result memory; budget-stopped-low the same with the low-memory sentence,
+//                       budget-stopped-global with the global budget's
 //   hold/<method>       the method waits while this file exists; a directive with `hold` waits after its sets and
 //                       messages, and results.export after each page (so a test can cancel it mid-save)
 //   allow/audits        explorer.children may list audits (otherwise they fail as a permission error would)
@@ -288,6 +289,7 @@ async function controlled(name, consume = false) {
  */
 async function budgetStopped(id) {
   if (await controlled('budget-stopped-low')) return fail(id, 'BUDGET_STOPPED', 'The computer was low on memory while this query ran, so it can store nothing more. Run the query again.'), true
+  if (await controlled('budget-stopped-global')) return fail(id, 'BUDGET_STOPPED', 'The result memory filled while this query ran, so it can store nothing more. Close other results, then run the query again.'), true
   if (await controlled('budget-stopped')) return fail(id, 'BUDGET_STOPPED', "This query's results filled its result memory, so it can store nothing more. Run the query again returning fewer rows."), true
   return false
 }

@@ -1499,8 +1499,10 @@ receives a new result to read like any other, never the rows it grouped.
   budget, released with the query's other results and at once when its answer is not delivered (as a diff). It is
   stored whole or not at all: rows the budget refuses part-way release it with `TOO_LARGE`. A query that stopped
   storing keeps nothing more, whatever memory is free now, so it stores no pivot, diff or transpose: `BUDGET_STOPPED`,
-  with one of two sentences by why it stopped. Its result memory filled (the query or the global budget): "This query's
-  results filled its result memory, so it can store nothing more. Run the query again returning fewer rows." The
+  with one of three sentences by why it stopped. Its own results filled its share (the query budget): "This query's
+  results filled its result memory, so it can store nothing more. Run the query again returning fewer rows." Every
+  query's results together filled the memory (the global budget), where this one may be small: "The result memory
+  filled while this query ran, so it can store nothing more. Close other results, then run the query again." The
   computer was low on memory at one of its page seals, which may be its last, with every row stored: "The computer was
   low on memory while this query ran, so it can store nothing more. Run the query again." A row limit marks its set and
   never stops the query. The pivot is a derived set (`ResultStore.Open(derived: true)`): a refusal fails only it and

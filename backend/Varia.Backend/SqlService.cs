@@ -1877,6 +1877,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     {
         TruncationReason.None => null,
         TruncationReason.SystemMemory => new RequestException("BUDGET_STOPPED", BudgetStoppedLowMemory),
+        // Every query's results together filled the memory: this one may be small, so fewer rows is not the advice.
+        TruncationReason.GlobalBudget => new RequestException("BUDGET_STOPPED", BudgetStoppedGlobal),
         _ => new RequestException("BUDGET_STOPPED", BudgetStoppedFull)
     };
 
@@ -1890,6 +1892,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     }
 
     internal const string BudgetStoppedFull = "This query's results filled its result memory, so it can store nothing more. Run the query again returning fewer rows.";
+    internal const string BudgetStoppedGlobal = "The result memory filled while this query ran, so it can store nothing more. Close other results, then run the query again.";
     internal const string BudgetStoppedLowMemory = "The computer was low on memory while this query ran, so it can store nothing more. Run the query again.";
 
     /// <summary>results.diff: aligns two complete results of one query off the frame loop (ResultDiffer), charging its working

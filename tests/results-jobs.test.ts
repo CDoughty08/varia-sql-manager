@@ -364,13 +364,20 @@ describe('ResultsJobHost over the fake backend', () => {
       () => supervisor.request('results.diff', { left: first.resultId, right: second.resultId }),
       () => supervisor.request('results.transpose', { resultId: first.resultId })
     ]
-    await writeFile(join(control, 'budget-stopped'), '')
-    // A code main does not know would arrive as BACKEND_ERROR.
-    for (const ask of asks) expect(await failure(ask())).toMatchObject({ code: 'BUDGET_STOPPED', message: "This query's results filled its result memory, so it can store nothing more. Run the query again returning fewer rows." })
-    await writeFile(join(control, 'budget-stopped-low'), '')
-    for (const ask of asks) expect(await failure(ask())).toMatchObject({ code: 'BUDGET_STOPPED', message: 'The computer was low on memory while this query ran, so it can store nothing more. Run the query again.' })
-    await rm(join(control, 'budget-stopped'))
-    await rm(join(control, 'budget-stopped-low'))
+    // The fake's sentences are the backend's: each is written in SqlService.cs.
+    const service = await readFile(join('backend', 'Varia.Backend', 'SqlService.cs'), 'utf8')
+    const sentences = [
+      ['budget-stopped', "This query's results filled its result memory, so it can store nothing more. Run the query again returning fewer rows."],
+      ['budget-stopped-global', 'The result memory filled while this query ran, so it can store nothing more. Close other results, then run the query again.'],
+      ['budget-stopped-low', 'The computer was low on memory while this query ran, so it can store nothing more. Run the query again.']
+    ]
+    for (const [name, message] of sentences) {
+      await writeFile(join(control, name), '')
+      // A code main does not know would arrive as BACKEND_ERROR.
+      for (const ask of asks) expect(await failure(ask())).toMatchObject({ code: 'BUDGET_STOPPED', message })
+      expect(service).toContain(JSON.stringify(message))
+      await rm(join(control, name))
+    }
     for (const ask of asks) expect(await ask()).toMatchObject({ descriptor: { state: 'complete' } })
   })
   it('cancels a held save, leaving no file and no temporary file', async () => {

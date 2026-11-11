@@ -426,7 +426,7 @@ internal static class DiffChecks
             few.Left.Budget.Stop(TruncationReason.GlobalBudget);
             var lowMemory = Message(service, left, right);
             var filled = Message(service, few.Left, few.Right);
-            check(lowMemory == "BUDGET_STOPPED: " + SqlService.BudgetStoppedLowMemory && filled == "BUDGET_STOPPED: " + SqlService.BudgetStoppedFull,
+            check(lowMemory == "BUDGET_STOPPED: The computer was low on memory while this query ran, so it can store nothing more. Run the query again." && filled == "BUDGET_STOPPED: The result memory filled while this query ran, so it can store nothing more. Close other results, then run the query again.",
                 $"a diff of a query that stopped storing answers BUDGET_STOPPED with why: {lowMemory} / {filled}");
         }
 

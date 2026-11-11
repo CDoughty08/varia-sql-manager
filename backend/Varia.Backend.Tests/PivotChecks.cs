@@ -408,8 +408,9 @@ internal static class PivotChecks
         used = store.UsedBytes;
         sealing = () => set.Budget.Stop(TruncationReason.GlobalBudget);
         var during = Message(Grouped(set));
-        check(sealing is null && during == "BUDGET_STOPPED: " + SqlService.BudgetStoppedFull && store.UsedBytes == used,
-            $"a pivot whose query stops storing while it is written answers BUDGET_STOPPED and keeps nothing: {during} {store.UsedBytes - used}");
+        // Every query's results together filled the memory: closing other results is the advice, not fewer rows.
+        check(sealing is null && during == "BUDGET_STOPPED: The result memory filled while this query ran, so it can store nothing more. Close other results, then run the query again." && during == "BUDGET_STOPPED: " + SqlService.BudgetStoppedGlobal && store.UsedBytes == used,
+            $"a pivot whose query stops at the global budget while it is written answers BUDGET_STOPPED and says to close other results: {during} {store.UsedBytes - used}");
         var closing = Source(store, [.. Enumerable.Range(0, 200).Select(i => new string?[] { i.ToString(CultureInfo.InvariantCulture) })], [new("g", "int", "text")]);
         // As the tab running again does: the source and the pivot being written both go.
         sealing = () => store.ReleaseSession(closing.Budget.SessionId);

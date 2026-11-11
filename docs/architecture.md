@@ -76,8 +76,10 @@ being true.
   rows still to store, fails only that set (`TOO_LARGE`), so a smaller one can still fit. Only a query's own sets stop its
   budget (the query or global budget full, or low system memory at a page seal; a row limit never does); while a query is
   still reading, what a derived build holds counts against that budget like anything else. A derived set asked of a
-  stopped query is refused before any work with `BUDGET_STOPPED` and a sentence for why it stopped, and one whose query
-  stops, or whose source is released, while it is built answers that (`BUDGET_STOPPED`, `RESULT_RELEASED`), not `TOO_LARGE`.
+  stopped query is refused before any work with `BUDGET_STOPPED` and a sentence for why it stopped, and one refused
+  memory or cut short because its query stopped, or its source was released, while it was built answers that
+  (`BUDGET_STOPPED`, `RESULT_RELEASED`), not `TOO_LARGE`. Nothing looks again once the set is written whole: a source
+  closed during the write still leaves its derived set.
 - The grid renders cells only through `GridView` pools, and text only through `nodeValue` (`tests/grid-lint.test.ts`
   forbids HTML sinks under `grid/`, `results/`, `designer/` and `live/`); no React per row or cell, and frames stay
   O(visible cells).

@@ -27,7 +27,7 @@ internal sealed class ResultSetBuffer
     private int sealedPages;
     private int leases;
     private bool freePending;
-    private bool pressed;
+    private TruncationReason refused;
     private volatile bool incomplete;
 
     /// <param name="metadata">Bytes already reserved for the column metadata; returned with everything else on release.</param>
@@ -99,14 +99,14 @@ internal sealed class ResultSetBuffer
     public bool Derived { get; init; }
 
     /// <summary>The builder for the next row, or null when this set stores nothing more: released, its query stopped, or,
-    /// for a derived set, a page sealed under low system memory.</summary>
+    /// for a derived set, a row the budget refused or a page sealed under low system memory.</summary>
     public PageBuilder? BeginRow()
     {
         lock (gate)
         {
             if (builder is null || state != 0) return null;
             if (Budget.Stopped is var stopped and not TruncationReason.None) { Skip(stopped); return null; }
-            if (pressed) { Skip(TruncationReason.SystemMemory); return null; }
+            if (refused != TruncationReason.None) { Skip(refused); return null; }
             builder.BeginRow();
             return builder;
         }
@@ -149,7 +149,7 @@ internal sealed class ResultSetBuffer
     {
         lock (gate)
         {
-            if (builder is null || state != 0) return false;
+            if (builder is null || state != 0 || refused != TruncationReason.None) return false;
             var size = builder.WorkingBytes;
             var need = 2 * bytes + Math.Max(0, size - working) + size;
             return need <= slack || Reserve(need - slack);
@@ -195,7 +195,7 @@ internal sealed class ResultSetBuffer
         // last seal sees pressure (the seal inside Complete, or its last row filling a page) asks for no row after it, so
         // it is whole and not truncated.
         if (!store.IsSystemMemoryLow()) return;
-        if (Derived) pressed = true;
+        if (Derived) refused = TruncationReason.SystemMemory;
         else Budget.Stop(TruncationReason.SystemMemory);
     }
 
@@ -209,7 +209,10 @@ internal sealed class ResultSetBuffer
             return true;
         }
         Skip(reason);
-        if (!Derived) Budget.Stop(reason);
+        // The first refusal ends the set, as it ends a query's: a later, smaller row must not be stored past the gap,
+        // because stored rows are a prefix of the rows read. A derived set ends only itself.
+        if (Derived) refused = reason;
+        else Budget.Stop(reason);
         return false;
     }
 

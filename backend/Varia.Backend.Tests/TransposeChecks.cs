@@ -347,7 +347,7 @@ internal static class TransposeChecks
         used = store.UsedBytes;
         sealing = () => wide.Budget.Stop(TruncationReason.QueryBudget);
         var during = Message(wide);
-        check(sealing is null && during == "BUDGET_STOPPED: " + SqlService.BudgetStoppedFull && store.UsedBytes == used,
+        check(sealing is null && during == "BUDGET_STOPPED: This query's results filled its result memory, so it can store nothing more. Run the query again returning fewer rows." && store.UsedBytes == used,
             $"a transpose whose query stops storing while it is written answers BUDGET_STOPPED and keeps nothing: {during} {store.UsedBytes - used}");
         // The same while it is planned: the transpose is not opened.
         var wired = new Tripwire(People) { Within = nameof(ResultTransposer) };
