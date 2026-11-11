@@ -112,6 +112,7 @@ describe('shortened fields are never complete evidence', () => {
     expect(row(html, 'Parameter @p · type')).toContain('>Same<')
     // A list in a shortened owner may have lost entries.
     expect(row(html, 'Warning attributes')).toContain('equality unverified')
+    expect(row(html, 'Parameter availability')).toContain('equality unverified')
     const complete = render({ ...statement('l', whole), diagnostics: diagnostics(whole, whole) }, { ...statement('r', whole), diagnostics: diagnostics(whole, whole) })
     for (const name of ['Statement text', 'Parameter @p · compiled', 'Warning attributes']) expect(row(complete, name)).toContain('>Same<')
     expect(complete).not.toContain('equality unverified')

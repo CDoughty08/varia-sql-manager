@@ -33,8 +33,8 @@ const nodeFacts = (node?: PlanNode): Property[] => node ? [
 ] : []
 const statementFacts = (statement?: PlanStatement): Property[] => statement ? [
   { name: 'Statement text', value: statement.text, partial: statement.textShortened }, ...partial([{ name: 'Warnings', value: structured(statement.warnings)!, list: true },
-  { name: 'Memory grant availability', value: statement.diagnostics?.memoryGrant.length ? 'Reported attributes (subject to omission notices)' : undefined },
-  { name: 'Parameter availability', value: statement.diagnostics?.parameters.length ? `${statement.diagnostics.parameters.length} reported entries (subject to omission notices)` : undefined },
+  { name: 'Memory grant availability', value: statement.diagnostics?.memoryGrant.length ? 'Reported attributes (subject to omission notices)' : undefined, list: true },
+  { name: 'Parameter availability', value: statement.diagnostics?.parameters.length ? `${statement.diagnostics.parameters.length} reported entries (subject to omission notices)` : undefined, list: true },
   ...statement.diagnostics ? [
     { name: 'Warning attributes', value: structured(statement.diagnostics.warnings)!, list: true },
     { name: 'Missing indexes (optimizer suggestions)', value: structured(statement.diagnostics.missingIndexes)!, list: true },
