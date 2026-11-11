@@ -59,11 +59,18 @@ describe('Sessions pane', () => {
     await none.tick({ checked: false, nulls: false })
     expect(none.ticked()).toEqual({ values: ['sa'], unticked: ['app'], all: false, blanks: false })
     expect((await none.read({ order: 'value', offset: 0, count: 50, search: 'ap' })).total).toBe(1)
-    expect(facetList(0, undefined, undefined).ticked()).toEqual({ values: [], unticked: [], all: true, blanks: true })
+    expect(facetList(0, undefined, undefined).ticked()).toEqual({ values: [], unticked: [], all: true, blanks: undefined })
+    // A column with no blank cells offers no (Blanks), so OK never asks for blank rows that arrive later.
+    const full = facetList(0, { column: 'login', values: [{ text: 'sa', count: 2 }, { text: 'app', count: 1 }] }, undefined)
+    expect(full.summary).toMatchObject({ nulls: 0 })
+    await full.tick({ checked: false, groups: [1] })
+    expect(liveCondition({ kind: 'list', list: full }, full.texts, activityLimits.columnFilterValues)).toEqual({ filter: { values: ['app'] } })
+    await full.tick({ checked: true, groups: [1] })
+    expect(liveCondition({ kind: 'list', list: full }, full.texts, activityLimits.columnFilterValues)).toEqual({ filter: undefined })
   })
   it('turns the popover\'s condition into the filter the backend applies, or none, within the values a column filter holds', async () => {
     const max = activityLimits.columnFilterValues
-    const facet = { column: 'login', values: [{ text: 'sa', count: 2 }, { text: 'app', count: 1 }] }
+    const facet = { column: 'login', values: [{ text: 'sa', count: 2 }, { text: '', count: 3 }, { text: 'app', count: 1 }] }
     const ticked = async (groups: number[], blanks: boolean) => {
       const list = facetList(0, facet, undefined)
       await list.tick({ checked: false, all: true })
@@ -87,7 +94,7 @@ describe('Sessions pane', () => {
     const many = { column: 'login', values: Array.from({ length: max + 2 }, (_, index) => ({ text: `v${String(index).padStart(3, '0')}`, count: 1 })), more: true as const }
     const big = facetList(0, many, undefined)
     await big.tick({ checked: false, groups: [0] })
-    expect(liveCondition({ kind: 'list', list: big }, big.texts, max)).toEqual({ filter: { values: ['v000'], exclude: true, blanks: true } })
+    expect(liveCondition({ kind: 'list', list: big }, big.texts, max)).toEqual({ filter: { values: ['v000'], exclude: true } })
     // Only when both the ticked and the unticked values are too many does it refuse.
     const huge = facetList(0, { column: 'login', values: Array.from({ length: 2 * max + 4 }, (_, index) => ({ text: `v${String(index).padStart(3, '0')}`, count: 1 })) }, undefined)
     await huge.tick({ checked: false, groups: Array.from({ length: max + 2 }, (_, index) => index) })
@@ -109,7 +116,7 @@ describe('Sessions pane', () => {
     expect(source.apply(0, { kind: 'list', list })).toBe(true)
     expect(source.apply(0, { kind: 'notEquals', row: 0 } as never)).toEqual(expect.any(String))
     expect(source.apply(0, { kind: 'clear' })).toBe(true)
-    expect(applied).toEqual([['login', { values: ['app'], blanks: true }], ['login', undefined]])
+    expect(applied).toEqual([['login', { values: ['app'] }], ['login', undefined]])
     expect(activityLiveArgsSchema.safeParse({ filters: [processesActivityFilter(filter({ columnFilters: [{ column: 'login', values: ['sa'], exclude: true, blanks: true }] }))] }).success).toBe(true)
     // The pane's args carry the exclusion (and never a bare one, which would exclude nothing).
     expect(processesActivityFilter(filter({ columnFilters: [{ column: 'login', values: ['sa'], exclude: true }] })).columnFilters).toEqual([{ column: 'login', values: ['sa'], exclude: true }])

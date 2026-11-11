@@ -348,7 +348,7 @@ try {
   await filters.getByRole('button', { name: 'Clear filters', exact: true }).click()
   await expect(monitor().getByText(/^3 sessions/)).toBeVisible()
   // The toolbar keeps to one row in a pane 800 px wide (two panes side by side): its chips are dense, the Show chips are
-  // chips (no raw checkboxes), and the filter box gives way first.
+  // chips (no raw checkboxes), and the View chip row shrinks and scrolls sideways rather than wrap.
   const rows = await filters.evaluate(element => {
     const width = element.style.width
     element.style.width = '800px'

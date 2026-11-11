@@ -28,7 +28,7 @@ vi.mock('../src/renderer/src/grid/GridView', () => ({ GridView: FakeView }))
 const { default: GridShell, GridErrorBoundary } = await import('../src/renderer/src/grid/GridShell')
 type ShellProps = Parameters<typeof GridShell>[0]
 
-const settingsSnapshot = { values: { 'queryResults.grid.whitespace': 'none' } }
+const settingsSnapshot = { values: { 'queryResults.grid.whitespace': 'all' } }
 const settings = { subscribe: () => () => {}, getSnapshot: () => settingsSnapshot }
 const workbench = { resultClient: {}, platform: 'win32', settings } as unknown as Workbench
 const mounted: (() => void)[] = []
@@ -83,6 +83,14 @@ describe('GridShell', () => {
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Filter name')
     act(() => views[0].options.onFilter!(1, views[0].filterAnchor()))
     expect(document.querySelector('[role="dialog"]')).toBeNull()
+  })
+
+  it('follows the results white space setting unless the source sets its own (a grid whose menu has no White space item)', () => {
+    const props = (whitespace?: 'none'): ShellProps => ({ rootProps: {}, mountKey: 'k', ...whitespace ? { whitespace } : {}, mount: create => { create(spec); return () => {} } })
+    const { show } = render(createElement(GridShell, props()))
+    expect(views[0].options.whitespace).toBe('all')
+    show(createElement(GridShell, props('none')))
+    expect(views[0].updates.at(-1)).toMatchObject({ whitespace: 'none' })
   })
 
   it('gives a table that does not sort no header sort buttons', () => {

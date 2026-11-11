@@ -3,6 +3,7 @@ import { onUnexpectedError } from '../core/errors'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { ColumnFilterPopover, type ColumnFilterSource, type ColumnFilterTarget } from '../results/ColumnFilterPopover'
 import { GridView, type GridStatus, type GridViewOptions, type HeaderSortKey } from './GridView'
+import type { WhitespaceMode } from './whitespace'
 
 /** What a grid's source gives GridView; the shell adds its elements, the client, the platform, the white space setting, its
  *  status and errors, and the header's sort buttons and funnels. */
@@ -61,6 +62,8 @@ export interface GridShellProps {
   readonly strip?: { readonly text: string; readonly error?: boolean }
   /** What the render error strip calls the grid's contents. */
   readonly contents?: 'result' | 'rows'
+  /** How cells show white space, when not the results setting (a grid whose menu has no White space item). */
+  readonly whitespace?: WhitespaceMode
   onApi?(api: GridShellApi | undefined): void
   /** More inside the frame (a live log's "n new rows" button). */
   readonly children?: ReactNode
@@ -72,9 +75,10 @@ export interface GridShellProps {
  * what it shows: a query's result set (ResultGrid) or a live view's table (LiveGridPane), which differ only in how the view
  * is built and swapped, and in what the funnels and sort ask.
  */
-export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mount, mountKey, sort, onSort, funnels, update, gone, strip, contents = 'result', onApi, children }: GridShellProps) {
+export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mount, mountKey, sort, onSort, funnels, update, gone, strip, contents = 'result', whitespace: ownWhitespace, onApi, children }: GridShellProps) {
   const { resultClient, platform, settings } = useWorkbench()
-  const whitespace = useServiceSnapshot(settings).values['queryResults.grid.whitespace']
+  const setting = useServiceSnapshot(settings).values['queryResults.grid.whitespace']
+  const whitespace = ownWhitespace ?? setting
   const rootRef = useRef<HTMLDivElement | null>(null), scrollRef = useRef<HTMLDivElement>(null), viewRef = useRef<GridView | undefined>(undefined)
   const [status, setStatus] = useState<GridStatus>({})
   // The header funnel's popover, while open: its column and where it opens.

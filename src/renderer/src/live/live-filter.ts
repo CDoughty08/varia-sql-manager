@@ -17,10 +17,11 @@ export interface LiveValueFilter {
   readonly nonBlanks?: boolean
   readonly exclude?: boolean
 }
-/** A facet list's values by text, for OK: the ticked ones, and whether every listed value is ticked. */
+/** A facet list's values by text, for OK: the ticked ones, whether every listed value is ticked, and (Blanks)' tick
+ *  (`undefined` when the column offers no (Blanks)). */
 export interface FacetList extends DistinctList {
   readonly texts: readonly string[]
-  ticked(): { readonly values: readonly string[]; readonly unticked: readonly string[]; readonly all: boolean; readonly blanks: boolean }
+  ticked(): { readonly values: readonly string[]; readonly unticked: readonly string[]; readonly all: boolean; readonly blanks: boolean | undefined }
 }
 
 const empty = (filter: LiveValueFilter | undefined) => !filter || (!filter.values?.length && !filter.blanks && !filter.nonBlanks)
@@ -41,6 +42,9 @@ export function facetList(column: number, facet: LiveFacet | undefined, filter: 
   const on = (text: string) => empty(filter) || !!filter!.nonBlanks || (filter!.exclude ? !filter!.values?.includes(text) : !!filter!.values?.includes(text))
   const checked = new Set<number>(texts.flatMap((text, group) => on(text) ? [group] : []))
   let nullsChecked = empty(filter) || !!filter!.blanks
+  // (Blanks) is offered when the column has blank cells or the filter names them; otherwise blanks are neither asked for
+  // nor left out, so a value filter never lets in blank rows that arrive later.
+  const offered = nulls > 0 || !!filter?.blanks
   const values = (): DistinctValue[] => texts.map((text, group) => ({ group, row: group, text, count: counts.get(text) ?? 0, checked: checked.has(group) }))
   const matching = (search: string | undefined) => { const needle = search?.toLocaleLowerCase(); return needle ? values().filter(value => value.text.toLocaleLowerCase().includes(needle)) : values() }
   const summary: ResultsDistinctResult = {
@@ -61,7 +65,7 @@ export function facetList(column: number, facet: LiveFacet | undefined, filter: 
       return { checked: checked.size, nullsChecked }
     },
     close: async () => {},
-    ticked: () => ({ values: texts.filter((_, group) => checked.has(group)), unticked: texts.filter((_, group) => !checked.has(group)), all: checked.size === texts.length, blanks: nullsChecked })
+    ticked: () => ({ values: texts.filter((_, group) => checked.has(group)), unticked: texts.filter((_, group) => !checked.has(group)), all: checked.size === texts.length, blanks: offered ? nullsChecked : undefined })
   }
 }
 
@@ -71,7 +75,7 @@ export function liveCondition(condition: ColumnCondition, texts: readonly string
     case 'list': {
       const ticks = (condition.list as Partial<FacetList>).ticked?.()
       if (!ticks) return { error: 'The values could not be read.' }
-      if (ticks.all) return { filter: ticks.blanks ? undefined : { nonBlanks: true } }
+      if (ticks.all) return { filter: ticks.blanks === false ? { nonBlanks: true } : undefined }
       if (ticks.values.length === 0) return ticks.blanks ? { filter: { blanks: true } } : { error: 'Select at least one value.' }
       // Fewer unticked than ticked: leave those out (every other value passes, those the list never showed too), so
       // unticking one of many values never runs into the limit; otherwise only the ticked values pass.

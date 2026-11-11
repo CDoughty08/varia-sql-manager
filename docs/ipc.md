@@ -1859,7 +1859,7 @@ from its own state; the writers do the rest.
   decodes. A table with `departed` keeps a tracked row that left the source (not one its view or filter hides) for one more
   revision, at the row it had, and lists it in `departed`; the next revision drops it. Only the track list's first `linger`
   keys stay (LiveGrid's selected rows); the others are answered −1 at once. Facet columns carry their distinct
-  values over every row the source gave that its facet scope keeps (before the view and filter; NULL left out; the
+  values over every row the source gave that its facet scope keeps (before the view and filter; NULL counts with empty text as the column's blanks; the
   Activity Monitor's Sessions counts only the rows its view chip and toggles show, before its filter box and column value
   filters, so it never offers a value only hidden sessions have, and a column's own filter never empties its list), most frequent first, at most 100 of at
   most 128 characters (values that differ only past them count together), and only when they changed since the table's last

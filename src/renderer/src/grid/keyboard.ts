@@ -4,7 +4,8 @@ import { gridLimits as g } from './constants'
 // The grid's own keys, handled in the grid's React onKeyDown. They are not catalogue keybindings: the catalogue's
 // commands (Copy, Select All, Copy with Headers, Save Results As, F6, Ctrl+R, Shift+F10) reach a results grid through
 // KeybindingService, and Tab, Alt combinations and Previous/Next Query are left to the browser and the workbench. A live
-// grid (LiveGridPane) is outside Query Output, so it keeps mod+C, mod+shift+C and mod+A as its own keys (`clipboard`).
+// grid reaches them the same way (Query Output's view `live`); only one with its own menu (LiveGridPane
+// `contextMenu={false}`, SSIS Operations) keeps mod+C, mod+shift+C and mod+A as its own keys (`clipboard`).
 
 /** Where a move goes: one cell, a page, or an edge of the result (the last row is the last available one). */
 export type GridMove = 'up' | 'down' | 'left' | 'right' | 'pageUp' | 'pageDown' | 'firstRow' | 'lastRow' | 'firstColumn' | 'lastColumn' | 'firstCell' | 'lastCell'

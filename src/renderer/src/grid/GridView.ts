@@ -120,8 +120,9 @@ export interface GridViewOptions {
   /** Edit › Copy (the copy event), and a live grid's Ctrl+C (with `headers`, its Ctrl+Shift+C): runs Copy. */
   onCopy(headers?: boolean): void
   /**
-   * The grid serves Ctrl+A, Ctrl+C and Ctrl+Shift+C (⌘ on macOS) itself: a live grid's. A results grid leaves them to the catalogue's
-   * output.selectAll and output.copy, which KeybindingService dispatches, so they can be remapped.
+   * The grid serves Ctrl+A, Ctrl+C and Ctrl+Shift+C (⌘ on macOS) itself: a live grid with its own menu. A results grid, and a
+   * live grid in Query Output's menu, leave them to the catalogue's output.selectAll and output.copy, which KeybindingService
+   * dispatches, so they can be remapped.
    */
   readonly clipboardKeys?: boolean
   /** Escape outside a drag or resize: cancels the tab's copy or save; false when there was none. */

@@ -1235,7 +1235,8 @@ function activitySessionsSample(live, probe) {
   const shown = sessionsShown(filter)
   const facets = spec.facets.map(column => {
     const counts = new Map()
-    for (const row of shown) if (row[column]) counts.set(row[column], (counts.get(row[column]) ?? 0) + 1)
+    // As LiveTables.cs: a blank cell counts under empty text, the funnel's (Blanks).
+    for (const row of shown) counts.set(row[column] || '', (counts.get(row[column] || '') ?? 0) + 1)
     return { column, values: [...counts].sort((a, b) => b[1] - a[1]).map(([text, count]) => ({ text, count })) }
   })
   const text = filter.text?.toLowerCase()

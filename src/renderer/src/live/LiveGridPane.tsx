@@ -167,7 +167,7 @@ function LiveGridBody({ live, probe, table = 0, label, toneLabel, state, newRows
     frameProps={{ className: 'live-grid', 'data-live-probe': probe, 'data-live-table': table }}
     rootProps={{ 'aria-label': label, ...contextMenu ? { 'data-output-view': 'live' } : {} }} rootRef={setRoot}
     sort={headerSort} onSort={(column, add) => grid?.cycleSort(column, add)} {...funnels ? { funnels } : {}}
-    gone={gone} strip={notice ? { text: notice, error: true } : undefined}>
+    gone={gone} strip={notice ? { text: notice, error: true } : undefined} {...contextMenu ? {} : { whitespace: 'none' as const }}>
     {snapshot.newRows > 0 && <button className="live-grid-new-rows" onClick={() => grid?.jumpToEnd()}>{newRowsLabel(snapshot.newRows)}</button>}
   </GridShell>
 }
