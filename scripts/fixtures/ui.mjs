@@ -799,6 +799,7 @@ export const activeMenuItem = page => openMenus(page).locator('[role^="menuitem"
 export const menuItemNames = (menu, { disabled } = {}) => menu.locator(`[role^="menuitem"]${disabled ? '[aria-disabled="true"]' : ''}`)
   .evaluateAll(items => items.map(item => [...item.children].filter(child => child.getAttribute('aria-hidden') !== 'true').map(child => child.textContent).join('')))
 /** The command palette and the pickers that share its widget (a dialog named by its title or its input). */
+export const aboutDialog = page => page.getByRole('dialog', { name: 'About Varia', exact: true })
 export const quickInput = page => page.locator(part.quickInput)
 export const quickInputBox = page => quickInput(page).getByRole('combobox')
 export const quickInputRows = page => quickInput(page).getByRole('option')

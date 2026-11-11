@@ -21,6 +21,7 @@ import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/sche
 import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions.ts'
 import type { RecentFile } from './files/recent'
 import type { UpdateState } from './updates'
+import type { ProductLink } from './product'
 import type { RecoveredDocument, RecoveryEntry, RecoveryWrite } from './files/recovery'
 import type { ReloadPins, RestoredSession, SessionWrite } from './files/session'
 import type { LiveEnd, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from './live/schema'
@@ -828,6 +829,8 @@ export interface VariaApi {
   restartToUpdate(): Promise<ApiResult<boolean>>
   /** Opens the releases page in the browser; main names the page, never the renderer. */
   openReleasesPage(): Promise<ApiResult<void>>
+  /** Opens a fixed project/support destination; main validates the name and supplies the URL. */
+  openProductLink(target: ProductLink): Promise<ApiResult<void>>
   onUpdateState(callback: (state: UpdateState) => void): () => void
   /** Whether the main window is minimized or hidden, as main sees it: popouts turn its background throttling off, so the
    *  page's own visibility stays visible then. Sent on each change. */

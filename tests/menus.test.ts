@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { MenuItemConstructorOptions } from 'electron'
-import { applicationMenuTemplate, type ApplicationMenuActions } from '../src/main/application-menu'
+import { applicationMenuTemplate, dispatchApplicationCommand, type ApplicationMenuActions } from '../src/main/application-menu'
 import { applyMenuState, indexCommandItems, NativeMenuBridge, type MenuItemLike, type MenuLike } from '../src/main/native-menu'
 import { commandIds, type CommandId } from '../src/shared/commands/catalog'
 import { platforms, type Platform } from '../src/shared/commands/keybindings'
@@ -257,6 +257,33 @@ describe('application menu template', () => {
       }
     }
   })
+  it('routes the macOS application menu and Help to the same About command and updates both aliases', () => {
+    const { items, actions } = template('darwin')
+    const appAbout = item(items, 'help.about@app'), helpAbout = item(items, 'help.about')
+    expect(appAbout.label).toBe('About Varia')
+    appAbout.click!({} as never, {} as never, {} as never)
+    helpAbout.click!({} as never, {} as never, {} as never)
+    expect(actions.command.mock.calls).toEqual([['help.about'], ['help.about']])
+    const index = indexCommandItems({ items: [appAbout, helpAbout] } as unknown as MenuLike)
+    applyMenuState(index, { disabled: ['help.about'], checked: [] })
+    expect([appAbout.enabled, helpAbout.enabled]).toEqual([false, false])
+  })
+  it('answers both macOS About entries through the native panel when no workbench window remains', () => {
+    const { items, actions } = template('darwin'), showAbout = vi.fn()
+    actions.command.mockImplementation(id => dispatchApplicationCommand(id, null, showAbout))
+    item(items, 'help.about@app').click!({} as never, {} as never, {} as never)
+    item(items, 'help.about').click!({} as never, {} as never, {} as never)
+    expect(showAbout).toHaveBeenCalledTimes(2)
+    dispatchApplicationCommand('file.new', null, showAbout)
+    expect(showAbout).toHaveBeenCalledTimes(2)
+  })
+  it('keeps About and other menu commands in the renderer while a workbench window exists', () => {
+    const window = { webContents: { send: vi.fn() } }, showAbout = vi.fn()
+    dispatchApplicationCommand('help.about', window, showAbout)
+    dispatchApplicationCommand('file.new', window, showAbout)
+    expect(window.webContents.send.mock.calls).toEqual([['varia:command', 'help.about'], ['varia:command', 'file.new']])
+    expect(showAbout).not.toHaveBeenCalled()
+  })
   it('labels command items and never registers their accelerators', () => {
     for (const platform of platforms) {
       const commands = flatten(template(platform).items).filter(entry => entry.id && !entry.role && commandIds.includes(entry.id.split('@')[0] as CommandId))
@@ -283,7 +310,7 @@ describe('application menu template', () => {
         expect(entry, `${platform} ${id}`).toEqual({ id, label, role: commandDescriptor(id).role, accelerator: menuAccelerator(id, platform) ?? '' })
       }
       // Electron's own role accelerators never apply: every role item names its accelerator, if only as none.
-      for (const entry of flatten(template(platform).items)) if (entry.role && !['appMenu', 'window', 'minimize', 'zoom'].includes(entry.role)) expect(entry, `${platform} ${entry.role}`).toHaveProperty('accelerator')
+      for (const entry of flatten(template(platform).items)) if (entry.role && !['appMenu', 'window', 'minimize', 'zoom', 'services', 'hide', 'hideOthers', 'unhide', 'quit'].includes(entry.role)) expect(entry, `${platform} ${entry.role}`).toHaveProperty('accelerator')
     }
     const { items } = template('linux')
     expect(item(items, 'edit.copy')).toMatchObject({ role: 'copy', accelerator: 'Ctrl+C' })
@@ -340,6 +367,8 @@ describe('menu state', () => {
       'notifications.focus', 'notifications.clearAll',
       // Download Update is offered by the status bar and its toast while Automatically download updates is off.
       'help.downloadUpdate',
+      'help.openProject',
+      'help.reportIssue',
       // The table designer's menu and toolbar strip; its menubar menu is a follow-up.
       'tableDesigner.setPrimaryKey', 'tableDesigner.removePrimaryKey', 'tableDesigner.insertColumn', 'tableDesigner.deleteColumn', 'tableDesigner.generateChangeScript', 'tableDesigner.properties', 'tableDesigner.stop',
       // The SSIS Catalog's Properties on its tree nodes, and the properties documents' Refresh (their header and F5).

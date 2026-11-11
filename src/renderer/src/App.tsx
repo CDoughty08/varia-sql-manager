@@ -21,6 +21,7 @@ import OutputPane, { OutputAnnouncer, OutputViewSync, outputViewOf } from './res
 import MemoryIndicator from './results/MemoryIndicator'
 import IndexStatus from './search/IndexStatus'
 import UpdateStatus from './updates/UpdateStatus'
+import AboutDialog from './about/AboutDialog'
 import TitleBar from './TitleBar'
 import StandardToolbar, { CommandCentre } from './ShellToolbar'
 import QueryBar from './QueryBar'
@@ -74,6 +75,7 @@ export default function App() {
   const toasts = useServiceSnapshot(workbench.notifications)
   const [explorerError, setExplorerError] = useState('')
   const [showConnect, setShowConnect] = useState(false)
+  const [showAbout, setShowAbout] = useState(false)
   const [options, setOptions] = useState<ConnectionOptions>(() => connectionDefaults(workbench.platform))
   // The lost connection that the open Connect dialog replaces.
   const [reconnecting, setReconnecting] = useState<string>()
@@ -171,6 +173,7 @@ export default function App() {
       // Execute on a query with no connection: connect first, as SSMS does, then run it.
       if (event.type === 'query.connectRequested') { setReconnecting(undefined); setPendingExecute(event.tabId); setPendingMonitor(false); setShowConnect(true) }
       if (event.type === 'activity.connectRequested') { setReconnecting(undefined); setPendingExecute(undefined); setPendingMonitor(true); setShowConnect(true) }
+      if (event.type === 'help.aboutRequested') setShowAbout(true)
     })
     return () => subscription.dispose()
   }, [workbench, documents])
@@ -267,6 +270,7 @@ export default function App() {
     <ServerFilePicker />
     {editorDialogs.goToLine && <GoToLineDialog request={editorDialogs.goToLine} />}
     {recoveryOpen && <RecoveryDialog />}
+    {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
     <Toasts snapshot={toasts} notifications={workbench.notifications} focusFallback={() => documents.focusActive()} />
     <QuickInput />
     <MenuLayer />

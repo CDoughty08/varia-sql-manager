@@ -314,6 +314,34 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* A bookmark in the indicator (glyph) margin: Edit › Bookmarks. */
 .monaco-editor .varia-bookmark { color: var(--varia-editorBookmark-foreground); }
 .filter-dialog { width: min(640px, calc(100vw - 40px)); }
+.connection-modal.about-dialog { width: min(520px, calc(100vw - 40px)); font-size: var(--varia-size-md); }
+.about-dialog .connection-scroll { display: flex; flex-direction: column; gap: var(--varia-space-4); padding: var(--varia-space-3) var(--varia-space-4) var(--varia-space-4); }
+.about-identity { display: flex; align-items: center; gap: var(--varia-space-3); }
+.about-identity > div:last-child { min-width: 0; }
+.about-identity h3 { margin: 0; font-size: var(--varia-size-xl); line-height: var(--varia-line-xl); font-weight: 500; }
+.about-identity p { margin: var(--varia-space-1) 0 0; font-size: var(--varia-size-sm); color: var(--varia-descriptionForeground); }
+.about-brand { display: grid; place-items: center; flex-shrink: 0; width: calc(var(--varia-space-6) + var(--varia-space-4)); height: calc(var(--varia-space-6) + var(--varia-space-4)); border-radius: var(--varia-radius-lg); background: var(--varia-badge-background); color: var(--varia-focusBorder); }
+.about-brand > .icon { font-size: var(--varia-glyph-lg); }
+.about-version { display: flex; align-items: center; flex-wrap: wrap; gap: var(--varia-space-3); margin: 0; }
+.about-version > span { font-size: var(--varia-size-sm); color: var(--varia-descriptionForeground); }
+.about-update { border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-sm); padding: var(--varia-space-3); }
+.about-update-heading { display: flex; align-items: flex-start; gap: var(--varia-space-2); }
+.about-update-heading > [data-icon] { flex-shrink: 0; color: var(--varia-descriptionForeground); }
+.about-update-heading > div { min-width: 0; overflow-wrap: anywhere; }
+.about-update-heading h3 { margin: 0; font-size: var(--varia-size-md); line-height: var(--varia-line-md); font-weight: 500; }
+.about-update-heading p { margin: var(--varia-space-1) 0 0; color: var(--varia-dialog-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-md); }
+.about-update-action { display: inline-flex; align-items: center; gap: var(--varia-space-2); margin-top: var(--varia-space-2); white-space: normal; }
+.about-update-action[aria-disabled="true"] { opacity: .5; cursor: default; }
+.about-progress { height: var(--varia-progress); margin-top: var(--varia-space-3); background: var(--varia-badge-background); overflow: hidden; }
+.about-progress > span { display: block; height: 100%; background: var(--varia-focusBorder); }
+.about-links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--varia-space-1) var(--varia-space-2); border-top: 1px solid var(--varia-dialog-separatorBackground); border-bottom: 1px solid var(--varia-dialog-separatorBackground); padding: var(--varia-space-2) 0; }
+.about-links > button { display: flex; align-items: center; justify-content: space-between; gap: var(--varia-space-2); white-space: normal; }
+.about-copy { display: flex; align-items: center; flex-wrap: wrap; gap: var(--varia-space-2); }
+.about-copy > button { display: flex; align-items: center; gap: var(--varia-space-2); border-color: var(--varia-button-border); }
+.about-copy > span { font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.about-details { font-size: var(--varia-size-sm); color: var(--varia-descriptionForeground); }
+.about-details > summary { cursor: pointer; }
+.about-details > pre { margin: var(--varia-space-2) 0 0; padding: var(--varia-space-3); background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); font: var(--varia-size-sm)/var(--varia-line-md) var(--varia-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .go-to-line-dialog { width: min(360px, calc(100vw - 40px)); }
 .go-to-line-dialog label { display: block; font-size: var(--varia-size-xs); color: var(--varia-dialog-labelForeground); margin-bottom: 6px; }
 .go-to-line-dialog input { width: 100%; height: 28px; }
