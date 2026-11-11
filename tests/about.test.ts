@@ -20,7 +20,7 @@ describe('About update presentation', () => {
     const available: UpdateState = { ...base, status: 'available', version: '0.9.0', size: 1024 }
     expect(aboutUpdate(available, 'win32')).toMatchObject({ action: { command: 'help.downloadUpdate', label: 'Download Update' } })
     const manual: UpdateState = { ...base, kind: 'unsupported', status: 'available', version: '0.9.0' }
-    expect(aboutUpdate(manual, 'darwin')).toMatchObject({ detail: expect.stringContaining('manual downloads'), action: { command: 'help.releaseNotes' } })
+    expect(aboutUpdate(manual, 'darwin')).toMatchObject({ detail: expect.stringContaining('manual downloads'), action: { command: 'help.openDownloads' } })
     expect(aboutUpdate(manual, 'linux')).toMatchObject({ detail: expect.stringContaining('installed manually') })
     expect(aboutUpdate({ ...base, status: 'ready', version: '0.9.0' }, 'win32')).toMatchObject({ action: { command: 'help.restartToUpdate' }, detail: expect.stringContaining('save any unsaved work') })
   })

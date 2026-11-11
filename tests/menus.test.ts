@@ -367,6 +367,7 @@ describe('menu state', () => {
       'notifications.focus', 'notifications.clearAll',
       // Download Update is offered by the status bar and its toast while Automatically download updates is off.
       'help.downloadUpdate',
+      'help.openDownloads',
       'help.openProject',
       'help.reportIssue',
       // The table designer's menu and toolbar strip; its menubar menu is a follow-up.

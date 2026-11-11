@@ -56,6 +56,7 @@ import { backendContribution } from '../contributions/backend'
 import { helpContribution } from '../contributions/help'
 import { updatesContribution } from '../contributions/updates'
 import { UpdateService } from '../updates/UpdateService'
+import { ReleaseNotesService } from '../release-notes/ReleaseNotesService'
 import { editContribution } from '../contributions/edit'
 import { windowContribution } from '../contributions/window'
 import { menusContribution } from '../contributions/menus'
@@ -234,6 +235,7 @@ export interface Workbench extends Disposable {
   readonly notifications: NotificationService
   /** Help › Check for Updates, as main reports it. */
   readonly updates: UpdateService
+  readonly releaseNotes: ReleaseNotesService
   /**
    * Makes a popout window a full part of the workbench while it is open: its keys reach `KeybindingService`, its right-clicks
    * and presses `MenuService`, and its focus counts as the user's window (`windows`).
@@ -399,6 +401,13 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     peek, documents, connections,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-peek-tab="${CSS.escape(id)}"] [role="tab"][aria-selected="true"]`)?.focus())
   })
+  const releaseNotes = new ReleaseNotesService(documents, () => updates.getSnapshot().currentVersion,
+    id => focusLater(() => {
+      const target = document.querySelector<HTMLElement>(`[data-release-notes="${CSS.escape(id)}"] [aria-label="Release version"]`)
+      if (!target) return
+      if (windows.active() !== window) window.focus()
+      target.focus()
+    }))
   const searchDetails = new SearchDetailsService({ api, peek, connections, searches: objectSearch, scriptingOptions })
   const context = new ContextKeyService({
     platform,
@@ -538,6 +547,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     theme,
     notifications,
     updates,
+    releaseNotes,
     attachWindow: target => {
       const attached = [windows.add(target), keybindings.attach(target), menus.attach(target), blockPrimaryPaste(target, platform), trackWindowFocus(target, target.document.documentElement)]
       return { dispose: () => attached.forEach(item => item.dispose()) }
@@ -619,6 +629,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       shortcutsBinding.dispose()
       userShortcuts.dispose()
       notifications.dispose()
+      releaseNotes.dispose()
       updates.dispose()
       theme.dispose()
       events.dispose()
