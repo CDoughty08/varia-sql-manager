@@ -8,6 +8,10 @@
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <!-- The release RIDs (release.yml), so packages.lock.json covers their publish and package.yml restores it locked. -->
     <RuntimeIdentifiers>win-x64;linux-x64;osx-arm64;osx-x64</RuntimeIdentifiers>
+    <!-- That list alone makes every restore download each RID's runtime and apphost packs (about 257 MB). Only a
+         RID-specific publish uses them; builds and checks run on the SDK's own runtime and apphost (tests/backend-restore.test.ts). -->
+    <EnableRuntimePackDownload Condition="'$(RuntimeIdentifier)' == ''">false</EnableRuntimePackDownload>
+    <EnableAppHostPackDownload Condition="'$(RuntimeIdentifier)' == ''">false</EnableAppHostPackDownload>
     <!-- Release packages precompile Varia and its packages, which are otherwise JIT-compiled on every launch and first
          connect, execute and Script As. Only a RID-specific publish: builds and checks stay IL. -->
     <PublishReadyToRun Condition="'$(RuntimeIdentifier)' != ''">true</PublishReadyToRun>
