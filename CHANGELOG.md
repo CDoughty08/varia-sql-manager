@@ -5,81 +5,64 @@
 ### Added
 
 - **About Varia:** find the running version, platform and update status from Help or the command palette (also the app menu on macOS). Copy version details for support and open the project, issue form or release notes without needing a server connection.
+- **In-app release notes:** read curated release highlights and limits offline, browse bundled history and open notes for the exact version advertised by an update. Missing notes are reported clearly, with release downloads available separately.
 
 ## [0.8.0] - 2026-11-10
 
-A feature release focused on SQL IntelliSense, result transformations and everyday query workflows.
+Write SQL with connection\-aware suggestions, reshape results without running the query again, and see more of what your server is doing\.
 
-### Added
+### New and improved
 
-- **SQL IntelliSense:** bundled SQL Tools Service provides connection-aware completion, identifier hover, syntax and catalog diagnostics, and **Refresh Local Cache** (Ctrl+Shift+R). Suggestions distinguish columns from different sources, and SQL issues appear in the editor with keyboard navigation. See [language services](docs/language-services.md).
-- **Results filters:** filter by selected values, ranges, NULLs or duplicate rows without re-executing SQL. Each column's funnel offers a searchable distinct-value checklist with counts and custom conditions. Filters combine with sorting; search, profiles, highlights, copy and export follow the displayed rows.
-- **Pivot results:** group the displayed rows and calculate Count, Distinct Count, Sum, Average, Min or Max, with optional column groups and totals. The pivot opens as another result that can be sorted, filtered, copied and exported.
-- **Transpose results:** turn all displayed rows or selected rows into columns, optionally using a selected column's values as headers. NULLs and truncation marks are preserved; the new columns contain text.
-- **Activity Monitor Processes:** a live sessions grid with view chips, system-session and Varia-session toggles, column filters and text filtering. Every overview chart can now be expanded at once.
-- **Query workflows:** reopen closed queries with Ctrl+Shift+T as unsaved, disconnected copies, open queries in a specific editor group with its **+** button or a double-click, and see whether Execute will run a selection or the entire query. Status-bar controls offer Go to Line and insert/overtype switching.
-- **Results and error navigation:** Copy Column Name, keyboard-accessible Fit Column, a results-toolbar Close Results button, and Go to Line for SQL errors whose source location is still current. See [result grid tools](docs/results-tools.md).
+- **SQL IntelliSense:** Get suggestions for tables, columns and other database objects, inspect identifiers with hover, and see SQL issues in the editor\. Refresh Local Cache updates the schema information when objects change\.
+- **Filter results in place:** Use a column's funnel to choose values, search its value checklist, or filter by ranges, NULLs and duplicates\. Filters combine with sorting\. Search, copy, export, profiles and highlights follow the displayed rows; SQL is not executed again\.
+- **Pivot and transpose:** Group displayed results and calculate counts, sums, averages, minimums or maximums in a new pivot result\. Transpose turns displayed or selected rows into columns\. Both outputs can be sorted, filtered, copied and exported\.
+- **Activity Monitor Processes:** Inspect a live sessions grid with text and column filters, view chips, and switches for system sessions and Varia's own sessions\. Expand more than one overview chart at a time\.
+- **Recover a closed query:** Reopen closed queries as unsaved, disconnected copies\. Create a query directly in an editor group, and see whether Execute will run your selection or the entire query\. The status bar also offers Go to Line and insert/overtype switching\.
+- **More ways to work with results and errors:** Copy a column's name, fit columns with the keyboard, close results from their toolbar, and jump from a SQL error to its source line when the source has not changed\.
 
-### Changed
+### Changes to everyday use
 
-- **Updates on Windows:** an installed copy in a folder you can write (the installer's default) now unpacks a new release beside itself while you work, so **Restart to Update** swaps it in instead of running the installer. Installations for all users keep the installer. See [updates](docs/updates.md).
-- **Updates on macOS:** macOS builds no longer download updates. They are not code signed, so they tell you a release exists and open the releases page.
-- **Restart to Update** verifies the downloaded file again before installing it.
+- **Quicker updates on Windows:** An installed copy in a folder you can write now prepares a downloaded release while you work\. Restart to Update swaps it into place\. Installations for all users continue to use the installer\. Restart verifies the downloaded file again before installing\.
+- **Manual updates on macOS:** macOS builds tell you when a release is available and open its downloads page\. They no longer download an update that this unsigned copy cannot install itself\.
 
-### Fixed and improved
+### Fixes
 
-- Improve tab focus, rename and overflow behavior; single-row shelves scroll horizontally, stacked shelves expose hidden tabs, and each group's requested shelf heights restore with the workspace.
-- Show Object Explorer Peek definitions in a read-only editor with Find and SQL hover, page long definitions without silently cutting them, and keep Peek usable in narrow panels.
-- Improve saved-connection selection, Object Explorer recovery actions, database-scoped object search, compact controls and keyboard focus through menus.
-- Correct result highlight and comparison edge cases, filtered row counts and filter/sort key reuse; keep numeric pivot sums exact to 38 digits.
-- Harden shortcut import and persistence, cancellation responses, language-server cleanup, verified runtime downloads and packaged-app smoke checks.
+- **Tabs, Peek and everyday navigation:** Tab focus, renaming and overflow are more reliable\. Peek shows long definitions in a read\-only editor with Find and SQL hover, and remains usable in narrow panels\. Saved\-connection selection and Object Explorer recovery actions are improved\.
+- **Results remain consistent as you reshape them:** Corrected highlight and comparison edge cases, filtered row counts and reuse of filter/sort results\. Numeric pivot sums retain precision up to 38 digits\.
 
-### Availability and limits
+### Things to know
 
-- Connected IntelliSense supports SQL Login and Windows authentication. Entra IntelliSense is not yet available; query execution keeps its existing authentication support. Analysis uses a separate connection, so query-session temporary tables and uncommitted changes are unavailable to it.
-- Result transformations stay in memory. Transpose takes at most the first 4,095 displayed or selected rows and reports truncation. Pivots exceeding their group or figure limits are refused with an explanation.
-- Activity Monitor's Blocking, Resource Waits, Data File I/O and expensive-query panes are not yet shown; this release adds the Processes grid.
-- Builds remain unsigned, and macOS builds are not notarized. See the [current limitations](README.md#current-limitations).
+- **IntelliSense uses its own connection:** Connected IntelliSense currently supports SQL Login and Windows authentication\. Entra IntelliSense is not available yet; query execution keeps its existing authentication support\. Query\-session temporary tables and uncommitted changes are not visible to the analysis connection\.
+- **Results stay in memory:** Transpose uses at most the first 4,095 displayed or selected rows and reports truncation\. A pivot that exceeds its group or figure limits is refused with an explanation\.
+- **More Activity Monitor panes are still to come:** This release adds the Processes grid\. Blocking, Resource Waits, Data File I/O and expensive\-query panes are not shown yet\.
+- **Unsigned builds:** Builds remain unsigned, and macOS builds are not notarized\. Your operating system may ask you to confirm that you trust the application\.
 
 ## [0.7.0] - 2026-11-08
 
-A feature release focused on execution plans, results analysis and workspace customization.
+Explore execution plans, compare results, and arrange your SQL workspace around the way you work\.
 
-### Added
+### New and improved
 
-- **Execution plans:** a graphical viewer for Actual, Live and Estimated plans, with `.sqlplan`/Showplan XML opening and saving, pan/zoom/fit controls, a searchable operator outline and a properties inspector. Diagnostics show available runtime counters, predicates, parameters, memory grants, spills, warnings and missing-index details.
-- **Plan history and comparison:** retain and pin plan snapshots in memory, reopen them after re-execution or closing a query tab, and compare retained or saved plans side by side. History lasts until the workbench window closes or reloads.
-- **Estimated plans in the query session:** an explicit command compiles against the current tab's temporary objects and session context. The ordinary estimate command uses an isolated connection. See [estimated plans](docs/estimated-plans.md) for session effects and cancellation behavior.
-- **Client Statistics:** per-execution SqlClient traffic, counters and reply-wait timings, with comparisons and averages in a separate output tab.
-- **Results analysis:** multi-column sorting without re-execution, text sorting by character or byte length, cell and column search, column profiles and histograms, row-size bars and whitespace visualization. Copy and export follow the displayed sort order.
-- **Results highlights and comparison:** color rows across sorting and re-execution using detected row identities, and compare against the previous result in a unified diff, with an optional exact-text mode.
-- **Editor groups and tab shelves:** split, stack and float query groups inside the main window, pin query tabs in separate shelves, and adjust pinned and unpinned shelf row counts independently. Groups and pins restore through hot exit.
-- **Panel windows:** move Object Explorer, Results, Messages and Execution Plan panels into separate operating-system windows, then return them to the main window.
-- **Object Explorer Peek:** inspect supported objects' definitions, properties, columns or parameters, dependencies and top rows in a card or document tab. Pinned server headers keep server context visible while scrolling.
-- **Search Objects:** fuzzy name matching, searches across connected servers, a details pane, result context menus and improved keyboard navigation.
-- **Custom shortcuts:** an Environment › Shortcuts page for scoped keyboard bindings, conflict handling, supported mouse gesture modifiers, import/export and resets.
-- **Memory visibility:** live status-bar meters and details for search-index and retained-result memory budgets.
+- **Graphical execution plans:** Inspect Actual, Live and Estimated plans, open and save \.sqlplan files, and navigate with pan, zoom, fit, an operator outline and a properties inspector\. Available diagnostics include runtime counters, predicates, parameters, memory grants, spills and missing\-index details\.
+- **Plan history and comparison:** Retain and pin plan snapshots, reopen them after executing again or closing a query tab, and compare retained or saved plans side by side\. Plan history lasts until the workbench window closes or reloads\.
+- **Analyze the results you already have:** Sort by multiple columns without executing SQL again\. Search cells and columns, inspect column profiles and histograms, show row sizes and whitespace, and compare against a previous result\. Copy and export follow the displayed order\.
+- **Arrange your workspace:** Split, stack and float query editor groups\. Pin queries on separate shelves and adjust shelf heights\. Move Object Explorer, Results, Messages or Execution Plan panels into their own operating\-system windows and return them to the main window\.
+- **Inspect objects and find them faster:** Peek at supported objects' definitions, properties, columns, parameters, dependencies and top rows in a card or document tab\. Search Objects adds fuzzy matching, searches across connected servers and a details pane\.
+- **Shortcuts, statistics and memory visibility:** Customize scoped keyboard shortcuts and supported mouse modifiers, with conflict handling, import/export and resets\. Client Statistics compares per\-execution counters, while the status bar shows search\-index and retained\-result memory use\.
 
-### Fixed and improved
+### Fixes
 
-- Preserve restored query text through renderer crashes and Windows session ends, and protect newer external file edits when saving restored tabs.
-- Improve docking guides, floating and detached-panel focus, tab overflow and workspace restoration.
-- Bound and cancel result searches, profiles and comparisons reliably; preserve highlight identities through sorting and re-execution.
-- Reduce result-ingestion allocations and search/index work, improve large XML and SQL Server 2025 JSON handling, and bound SSIS Operations scans.
-- Improve macOS SQL-file paths and links, Linux middle-button paste handling, and saved-connection double-click behavior.
-- Harden the renderer origin, IPC validation and packaged Electron fuses; update Electron, DOMPurify and other dependencies.
-- Improve startup packaging and run packaged-app smoke checks before publishing installers for Windows, Linux and both macOS architectures.
+- **Safer recovery and more reliable focus:** Preserve restored query text through renderer crashes and Windows session ends, protect newer external file edits when saving restored tabs, and improve docking, detached\-panel focus, tab overflow and workspace restoration\.
 
-### Availability and limits
+### Things to know
 
-- Automatic Actual plan capture requires Extended Events permissions. Live plans require a supported server and profiling permissions; see [live plans](docs/live-plans.md) and [capture requirements](docs/plan-capture-hardening.md).
-- Results, searches, profiles, diffs and plan history remain bounded in memory. The application reports truncation, partial data and estimates.
-- Builds remain unsigned, and macOS builds are not notarized. See the [current limitations](README.md#current-limitations) for features still in development.
+- **Plan capture depends on server permissions:** Automatic Actual plan capture requires Extended Events permissions\. Live plans require a supported server and profiling permissions\. Estimating a plan in the query session is an explicit action; the ordinary estimate uses a separate connection\.
+- **Bounded, in\-memory analysis:** Results, searches, profiles, comparisons and plan history stay within memory limits\. Varia reports truncation, partial data and estimates\. Builds remain unsigned, and macOS builds are not notarized\.
 
 ## Earlier releases
 
 Release notes for [0.6.0 and earlier](https://github.com/CDoughty08/varia-sql-manager/releases/tag/v0.6.0) are available on GitHub.
 
 [Unreleased]: https://github.com/CDoughty08/varia-sql-manager/compare/v0.8.0...HEAD
-[0.8.0]: https://github.com/CDoughty08/varia-sql-manager/compare/v0.7.0...v0.8.0
-[0.7.0]: https://github.com/CDoughty08/varia-sql-manager/compare/v0.6.0...v0.7.0
+[0.8.0]: https://github.com/CDoughty08/varia-sql-manager/releases/tag/v0.8.0
+[0.7.0]: https://github.com/CDoughty08/varia-sql-manager/releases/tag/v0.7.0

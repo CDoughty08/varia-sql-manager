@@ -25,8 +25,8 @@ export default function AboutDialog({ onClose }: { readonly onClose: () => void 
   }
   const run = async (id: AboutUpdateCommand | 'help.openProject' | 'help.reportIssue') => {
     setError('')
-    // Restart's quit needs the modal gone before the normal window-close command can ask about unsaved work.
-    if (id === 'help.restartToUpdate') {
+    // Document navigation and restart leave the dialog before their normal focus/unsaved-work handling runs.
+    if (id === 'help.restartToUpdate' || id === 'help.releaseNotes') {
       flushSync(close)
       await commands.execute(id, undefined, 'toolbar')
       return
@@ -50,10 +50,10 @@ export default function AboutDialog({ onClose }: { readonly onClose: () => void 
           {update.percent !== undefined && <span style={{ width: `${update.percent}%` }} />}
         </div>}
         {(action || update.busy) && <button type="button" className="about-update-action" aria-disabled={!action || !actionEnabled || undefined}
-          onClick={() => { if (action && actionEnabled) void run(action.command) }}>{action?.label ?? 'Update in progress'}<Icon name={action?.command === 'help.releaseNotes' ? 'link-external' : 'chevron-right'} /></button>}
+          onClick={() => { if (action && actionEnabled) void run(action.command) }}>{action?.label ?? 'Update in progress'}<Icon name={action?.command === 'help.openDownloads' ? 'link-external' : 'chevron-right'} /></button>}
       </section>
       <div className="about-links">
-        <button type="button" onClick={() => { void run('help.releaseNotes') }}>Release Notes<Icon name="link-external" /></button>
+        <button type="button" onClick={() => { void run('help.releaseNotes') }}>Release Notes<Icon name="chevron-right" /></button>
         <button type="button" onClick={() => { void run('help.openProject') }}>Project on GitHub<Icon name="link-external" /></button>
         <button type="button" onClick={() => { void run('help.reportIssue') }}>Report an Issue<Icon name="link-external" /></button>
       </div>

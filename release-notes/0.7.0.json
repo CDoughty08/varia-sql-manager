@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "version": "0.7.0",
+  "releasedOn": "2026-11-08",
+  "summary": "Explore execution plans, compare results, and arrange your SQL workspace around the way you work.",
+  "changes": [
+    { "category": "added", "title": "Graphical execution plans", "text": "Inspect Actual, Live and Estimated plans, open and save .sqlplan files, and navigate with pan, zoom, fit, an operator outline and a properties inspector. Available diagnostics include runtime counters, predicates, parameters, memory grants, spills and missing-index details." },
+    { "category": "added", "title": "Plan history and comparison", "text": "Retain and pin plan snapshots, reopen them after executing again or closing a query tab, and compare retained or saved plans side by side. Plan history lasts until the workbench window closes or reloads." },
+    { "category": "added", "title": "Analyze the results you already have", "text": "Sort by multiple columns without executing SQL again. Search cells and columns, inspect column profiles and histograms, show row sizes and whitespace, and compare against a previous result. Copy and export follow the displayed order." },
+    { "category": "added", "title": "Arrange your workspace", "text": "Split, stack and float query editor groups. Pin queries on separate shelves and adjust shelf heights. Move Object Explorer, Results, Messages or Execution Plan panels into their own operating-system windows and return them to the main window." },
+    { "category": "added", "title": "Inspect objects and find them faster", "text": "Peek at supported objects' definitions, properties, columns, parameters, dependencies and top rows in a card or document tab. Search Objects adds fuzzy matching, searches across connected servers and a details pane." },
+    { "category": "added", "title": "Shortcuts, statistics and memory visibility", "text": "Customize scoped keyboard shortcuts and supported mouse modifiers, with conflict handling, import/export and resets. Client Statistics compares per-execution counters, while the status bar shows search-index and retained-result memory use." },
+    { "category": "fixed", "title": "Safer recovery and more reliable focus", "text": "Preserve restored query text through renderer crashes and Windows session ends, protect newer external file edits when saving restored tabs, and improve docking, detached-panel focus, tab overflow and workspace restoration." },
+    { "category": "limits", "title": "Plan capture depends on server permissions", "text": "Automatic Actual plan capture requires Extended Events permissions. Live plans require a supported server and profiling permissions. Estimating a plan in the query session is an explicit action; the ordinary estimate uses a separate connection." },
+    { "category": "limits", "title": "Bounded, in-memory analysis", "text": "Results, searches, profiles, comparisons and plan history stay within memory limits. Varia reports truncation, partial data and estimates. Builds remain unsigned, and macOS builds are not notarized." }
+  ]
+}

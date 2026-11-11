@@ -22,16 +22,17 @@ that opened it, or to the active document when that control has gone.
 phase. It includes no SQL text, server/database names, connection settings, paths or credentials. The **Version
 details** disclosure shows the same text. A clipboard write failure is reported beside the Copy button.
 
-**Project on GitHub**, **Report an Issue** and **Release Notes** open the fixed project, issue-composition and release
-destinations in the system browser. No issue is submitted automatically. Release Notes remains external in this
-first implementation; the in-app release-note reader is a separate change.
+**Project on GitHub** and **Report an Issue** open fixed destinations in the system browser. No issue is submitted
+automatically. **Release Notes** closes About and opens the running version's bundled notes in a read-only workbench
+tab; see [Release Notes](release-notes.md). Manual release downloads remain a separate browser action.
 
 ## Implementation
 
 `help.about` emits a renderer event; App owns one About dialog. The dialog reads `UpdateService` and reuses existing
 update commands rather than reading a second version source or creating another updater. Its own explicit controls
 use the programmatic command source while the modal is open, preserving command preconditions. Restart closes the
-modal synchronously and takes the ordinary toolbar command path so window-close handling is not suppressed.
+modal synchronously and takes the ordinary toolbar command path so window-close handling is not suppressed. Navigating
+to Release Notes also closes the modal before the document takes focus.
 
 The project/support IPC accepts only the names `project` and `issues`. Main validates that name and resolves a fixed
 URL in `src/shared/product.ts`; it does not accept a URL from the renderer. Existing sender checks still apply.
