@@ -1,5 +1,5 @@
 import { gridLimits as g } from './constants'
-import type { ColumnLayout } from './layout'
+import type { ColumnAxis } from './layout'
 
 // Vertical scrolling. Chromium lays out in physical pixels and clamps boxes at about 33.5 million layout units, so the
 // tallest spacer that still scrolls to its end is that limit divided by the device pixel ratio. Up to the cap the
@@ -109,7 +109,7 @@ export function applyWheel(model: ScrollModel, virtualTop: number, deltaPx: numb
  */
 export function ensureVisible(o: {
   readonly virtualTop: number; readonly scrollLeft: number; readonly viewportWidth: number; readonly viewportHeight: number
-  readonly rowHeader: number; readonly layout: ColumnLayout; readonly rows: number
+  readonly rowHeader: number; readonly layout: ColumnAxis; readonly rows: number
 }, row: number, column: number): { readonly virtualTop: number; readonly scrollLeft: number } {
   const bodyHeight = Math.max(g.rowHeight, o.viewportHeight - g.headerHeight), bodyWidth = Math.max(0, o.viewportWidth - o.rowHeader)
   const maxVirtual = Math.max(0, g.headerHeight + o.rows * g.rowHeight - o.viewportHeight)

@@ -7,7 +7,7 @@ import { searchHitNames, type ObjectSearchHit } from '../../../shared/explorer/s
 import type { PaneId } from '../../../shared/layouts'
 import { onUnexpectedError } from '../core/errors'
 import type { CommandArgs } from '../core/types'
-import { gridAnchor } from '../grid/anchor'
+import { gridAnchor, gridTarget } from '../grid/anchor'
 
 /**
  * The Object Explorer node a context menu is for, captured when it opened: what the node is (`ExplorerTarget`: its status,
@@ -56,6 +56,8 @@ export interface OutputTarget {
   readonly resultIndex: number
   /** The header or cell column captured when the menu opened (zero-based, without the row-number column). */
   readonly column?: number
+  /** The cell's or row number's row captured with it (zero-based, in the rows the grid shows). */
+  readonly row?: number
   /** Refuses commands after this grid was replaced by another execution at the same result index. */
   readonly result?: { readonly generation: number; readonly resultId: number }
   /** The grid's result kind ('rows', 'diff', 'pivot', 'transpose'…), for the commands only some kinds offer. */
@@ -239,6 +241,14 @@ export function selectedTextIn(element: Element): string {
   if (!selection?.anchorNode || !selection.focusNode || !element.contains(selection.anchorNode) || !element.contains(selection.focusNode)) return ''
   return selection.toString()
 }
+/** The result's row and column under `element`, as the grid there answers (grid/anchor.ts): a cell's both, a header's
+ *  column, a row number's row. Where no GridView is registered, the column by ARIA index. */
+function outputCell(element: Element, view: HTMLElement): { readonly row?: number; readonly column?: number } {
+  const grid = gridTarget(view, element)
+  if (grid.registered) return grid.target ?? {}
+  const column = outputColumn(element, view)
+  return column === undefined ? {} : { column }
+}
 /** Grid columns count past the row-number column, which has ARIA index 1. */
 function outputColumn(element: Element, view: HTMLElement): number | undefined {
   const cell = element.closest('[aria-colindex]'), value = cell?.getAttribute('aria-colindex')
@@ -251,16 +261,16 @@ export function outputTarget(element: Element): OutputTarget | undefined {
   const kind = view?.getAttribute('data-output-view') ?? '', tabId = view?.getAttribute('data-tab-id') ?? '', resultIndex = Number(view?.getAttribute('data-result-index') ?? 0)
   if (view && kind === 'live') {
     // A live grid belongs to no query: its commands come with it.
-    const live = liveOutputs.get(view), column = outputColumn(element, view)
-    return live ? { kind: 'output', tabId: '', view: 'live', resultIndex: 0, selectedText: '', element: view, live, ...(column !== undefined ? { column } : {}) } : undefined
+    const live = liveOutputs.get(view), { row, column } = outputCell(element, view)
+    return live ? { kind: 'output', tabId: '', view: 'live', resultIndex: 0, selectedText: '', element: view, live, ...(column !== undefined ? { column } : {}), ...(row !== undefined ? { row } : {}) } : undefined
   }
   if (!view || !outputViews.has(kind) || !tabId || !Number.isInteger(resultIndex) || resultIndex < 0) return undefined
-  const column = kind === 'grid' ? outputColumn(element, view) : undefined
+  const { row, column }: { readonly row?: number; readonly column?: number } = kind === 'grid' ? outputCell(element, view) : {}
   const generation = Number(view.getAttribute('data-result-generation')), resultId = Number(view.getAttribute('data-result-id'))
   const result = kind === 'grid' && Number.isSafeInteger(generation) && generation > 0 && Number.isSafeInteger(resultId) && resultId > 0 ? { generation, resultId } : undefined
   const resultKind = kind === 'grid' ? view.getAttribute('data-result-kind') ?? undefined : undefined
   return { kind: 'output', tabId, view: kind as OutputView, resultIndex, selectedText: kind === 'grid' ? '' : selectedTextIn(view), element: view,
-    ...(column !== undefined ? { column } : {}), ...(result ? { result } : {}), ...(resultKind ? { resultKind } : {}) }
+    ...(column !== undefined ? { column } : {}), ...(row !== undefined ? { row } : {}), ...(result ? { result } : {}), ...(resultKind ? { resultKind } : {}) }
 }
 
 /**
@@ -312,8 +322,10 @@ export class MenuTargetService {
       if (!output) return undefined
       // Keyboard menus open below the grid's active cell, else its first cell.
       const anchor = output.view !== 'messages' ? gridAnchor(output.element) ?? output.element.querySelector('.rg-c.is-act') ?? output.element.querySelector('.rg-c') ?? undefined : undefined
-      const column = output.column ?? (anchor ? outputColumn(anchor, output.element) : undefined)
-      const target = column === undefined ? output : { ...output, column }
+      // Without a clicked column the menu is for the anchor's cell: its column, and its row unless a row number was clicked.
+      const cell = output.column === undefined && anchor ? outputCell(anchor, output.element) : undefined
+      const column = cell?.column, row = output.row ?? cell?.row
+      const target = column === undefined && row === output.row ? output : { ...output, ...(column !== undefined ? { column } : {}), ...(row !== undefined ? { row } : {}) }
       return { target, element: output.element, focus: output.element, ...(anchor ? { anchor } : {}) }
     } catch (error) { onUnexpectedError(error); return undefined }
   }

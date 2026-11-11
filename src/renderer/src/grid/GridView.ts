@@ -11,12 +11,12 @@ import type { ResultHandle, RowWindow } from '../results/ResultClient'
 import type { GridViewState } from '../results/ResultsService'
 import { formatCount, plural } from '../results/status'
 import { FLAG_ERROR, FLAG_NULL, FLAG_TRUNCATED } from '../results/worker-protocol'
-import { registerGridAnchor } from './anchor'
+import { registerGridAnchor, registerGridTarget, type GridTarget } from './anchor'
 import { gridLimits as g } from './constants'
 import { GridData, portBusy } from './data'
 import { gridKeyAction, pageStep } from './keyboard'
 import { cellKey, type GridMarks } from './marks'
-import { ColumnLayout, hitTest, rowHeaderWidth, visibleRange, type VisibleRange } from './layout'
+import { ColumnLayout, hitTest, rowHeaderWidth, visibleRange, type ColumnAxis, type VisibleRange } from './layout'
 import { fitWidth, initialWidth, measureCharWidth, sqlTypeLabel, typeHintChars } from './measure'
 import { freshRing, ringStep, rotation, slotOf, type RowRing } from './ring'
 import { RowSizes } from './row-sizes'
@@ -25,7 +25,7 @@ import { columnTitle, covered, dragSelection, navigate, pressButton, pressSelect
 import type { GridStats } from './stats'
 import { remapSelection, remapTop, sameSelection, type RowMap } from './swap'
 import { colorAt, highlightColors, type RowHighlights } from './highlights'
-import { tileKey } from './tiles'
+import { tableTiles, tileKey, type TileShape } from './tiles'
 import { whitespaceRuns, type WhitespaceMode } from './whitespace'
 import { displayText } from '../../../shared/ipc/wire/cells'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
@@ -63,7 +63,7 @@ interface CellSlot { readonly el: HTMLDivElement; readonly text: Text; column: n
  */
 interface RowSlot {
   /** `size` is what the mark's row-size bar shows ('' for none), so it is written only when it changes. */
-  readonly el: HTMLDivElement; readonly header: HTMLDivElement; readonly number: Text; readonly mark?: { readonly el: HTMLDivElement; readonly text: Text; size: string }
+  readonly el: HTMLDivElement; readonly header: HTMLDivElement; readonly number: Text; readonly mark?: SizeMark & { readonly text: Text }
   readonly cells: CellSlot[]; readonly pin: CellSlot
   row: number; top: number; width: number; odd: boolean; headerSel: boolean; shown: boolean
   /** 0 for none, else 1 + the tone's index in rowTones. */
@@ -77,12 +77,15 @@ interface RowSlot {
   /** 0 for none, else 1 + the highlight's index in highlightColors. */
   highlight: number
 }
+/** What shows a row-size bar (a row's number). `size` is what the bar shows now. */
+interface SizeMark { readonly el: HTMLElement; size: string }
+interface SortButton { readonly el: HTMLSpanElement; readonly glyph: HTMLSpanElement; readonly order: Text; state: string }
 /** A pooled column header: the name, then the SQL type (`type`, in muted small text and hidden from screen readers, which read it in the tooltip). Each is
  *  in its own bidi isolate (.rg-cn, .rg-ct), so a name with an unterminated override cannot reorder the type after it. */
 interface HeaderSlot {
   readonly el: HTMLDivElement; readonly text: Text; readonly type: Text; column: number; sel: boolean; mark: number; shown: boolean; left: number; width: number
   /** The sort button (grids with `onSort`): its glyph, its place among several keys, and what it shows now ('' unsorted). */
-  readonly sort?: { readonly el: HTMLSpanElement; readonly glyph: HTMLSpanElement; readonly order: Text; state: string }
+  readonly sort?: SortButton
   /** The funnel button (grids with `onFilter`), filled while its column has a filter. */
   readonly funnel?: { readonly el: HTMLSpanElement; readonly glyph: HTMLSpanElement; on: boolean }
 }
@@ -176,7 +179,11 @@ export class GridView {
   private handle: ResultHandle
   private descriptor: ResultDescriptor
   private stopHandle: () => void = () => {}
-  private readonly layout: ColumnLayout
+  private readonly layout: ColumnAxis
+  /** The size of the tiles the grid reads and looks cells up in. */
+  private readonly tiles: TileShape = tableTiles
+  /** Where the view's scroll offsets are kept: the grid's saved state. */
+  private readonly offsets: { topRow: number; virtualTop: number; scrollLeft: number }
   /** The columns shown: all but a live table's hidden tone column (its last, at `tone`; -1 when it has none). */
   private readonly columns: number
   private readonly tone: number
@@ -297,6 +304,7 @@ export class GridView {
       o.state.widths = Float64Array.from(o.descriptor.columns.slice(0, this.columns), (column, index) => initialWidth(this.headerTextWidth(index), typeHintChars(column), this.charWidth))
       o.state.sized = false
     }
+    this.offsets = o.state
     this.layout = new ColumnLayout(o.state.widths, this.cap - rowHeaderWidth(0, this.charWidth))
     const doc = this.scroller.ownerDocument
     const div = (className: string, role?: string) => { const element = doc.createElement('div'); element.className = className; if (role) element.setAttribute('role', role); return element }
@@ -321,7 +329,7 @@ export class GridView {
     this.data = this.dataFor(o.handle)
     this.listen()
     this.stopHandle = o.handle.subscribe(() => this.schedule())
-    this.cleanup.push(() => this.stopHandle(), registerGridAnchor(this.root, () => this.menuAnchor()))
+    this.cleanup.push(() => this.stopHandle(), registerGridAnchor(this.root, () => this.menuAnchor()), registerGridTarget(this.root, element => this.targetOf(element)))
     if (o.stats) this.cleanup.push(o.stats.add({ counters: () => this.data.counters, nodes: () => this.root.getElementsByTagName('*').length + 1, setScrollCap: px => { this.capOverride = px; this.updateCap() } }))
     this.viewportWidth = this.scroller.clientWidth
     this.outerWidth = this.scroller.offsetWidth
@@ -433,7 +441,7 @@ export class GridView {
     }
     if (marks?.currentColumn !== undefined && marks.currentColumn < this.columns) {
       const rows = this.rows()
-      const row = Math.min(Math.max(0, rows - 1), this.viewport?.firstRow ?? this.o.state.selection?.active.row ?? 0)
+      const row = Math.min(Math.max(0, rows - 1), this.viewport?.firstRow ?? this.selection()?.active.row ?? 0)
       if (select && rows > 0) this.selectCell(row, marks.currentColumn)
       this.reveal(row, marks.currentColumn)
       return true
@@ -479,13 +487,13 @@ export class GridView {
     this.stopHandle = handle.subscribe(() => this.schedule())
     this.muted = new Set(o.muted ?? [])
     this.highlights = this.highlightSets.find(set => set.handle === handle)
-    const selection = this.selection()
+    const selection = this.sourceSelection()
     if (selection) {
       state.selection = remapSelection(selection, mapRow, handle.getSnapshot().rowsAvailable, this.columns)
       // The owner hears of a moved selection as of any other (a details pane, Kill, the active row's key).
       if (state.selection && !sameSelection(selection, state.selection)) this.o.onSelection(state.selection)
     }
-    this.pendingTop = o.top ?? remapTop(this.pendingTop ?? state.virtualTop, mapRow)
+    this.pendingTop = o.top ?? remapTop(this.pendingTop ?? this.offsets.virtualTop, mapRow)
     if (this.hovered) { this.hovered.removeAttribute('title'); this.hovered = undefined }
     this.schedule()
   }
@@ -494,7 +502,7 @@ export class GridView {
    * cache, so the swap paints whole rows at once rather than a frame of empty cells. Failures are left to the swap's reads.
    */
   prepare(handle: ResultHandle, firstRow: number, signal?: AbortSignal): Promise<void> {
-    const range = this.lastRange, rows = handle.getSnapshot().rowsAvailable
+    const range = this.lastRange && this.sourceRange(this.lastRange), rows = handle.getSnapshot().rowsAvailable
     if (!range || rows <= 0 || this.disposed) return Promise.resolve()
     const first = Math.max(0, Math.min(firstRow, rows - 1)), last = Math.min(rows - 1, first + Math.max(0, range.lastRow - range.firstRow))
     const data = this.dataFor(handle)
@@ -506,7 +514,7 @@ export class GridView {
     this.schedule()
   }
   /** The grid's selection, when it is in this grid. */
-  currentSelection(): GridSelection | undefined { return this.selection() }
+  currentSelection(): GridSelection | undefined { return this.sourceSelection() }
   /** What the last frame showed. */
   lastViewport(): GridViewport | undefined { return this.viewport }
   /**
@@ -535,25 +543,35 @@ export class GridView {
   private rows(): number { return this.handle.getSnapshot().rowsAvailable }
   private sizesFor(handle: ResultHandle): RowSizes { return new RowSizes(handle, () => this.schedule()) }
   private dataFor(handle: ResultHandle): GridData {
-    return new GridData({ handle, columns: this.columns, tone: this.tone, clientInflight: () => this.o.client.windowsInFlight, changed: () => this.schedule() })
+    return new GridData({ handle, columns: this.columns, tone: this.tone, shape: this.tiles, clientInflight: () => this.o.client.windowsInFlight, changed: () => this.schedule() })
   }
   private linksOf(descriptor: ResultDescriptor): Uint8Array {
     return Uint8Array.from(descriptor.columns, column => this.o.onOpenValue && (column.role === 'xml' || column.role === 'json' || column.role === 'plan') ? 1 : 0)
   }
-  private selection(): GridSelection | undefined {
+  // The seams between what the grid draws and the result's own rows and columns. Geometry, pools, scrolling, presses, drags
+  // and keys work in drawn rows and columns; the state, the marks and every callback are in the result's. Today the two are
+  // the same, so each seam is the identity: the selection read (`selection`) and written (`select`), the range the reads
+  // are asked for (`sourceRange`), a cell's lookup (`paintCell`), and what is reported out (`targetOf`, `buttonColumn`).
+  /** The grid's selection as its state keeps it: in the result's rows and columns. */
+  private sourceSelection(): GridSelection | undefined {
     const selection = this.o.state.selection
     return selection?.resultIndex === this.o.resultIndex && selection.blocks.length > 0 ? selection : undefined
   }
+  /** The selection as drawn, which presses, drags, keys and the frame work in. */
+  private selection(): GridSelection | undefined { return this.sourceSelection() }
+  /** Takes a selection as drawn; the state and the owner get it in the result's rows and columns. */
   private select(selection: GridSelection): void {
     if (selection === this.o.state.selection) return
     this.o.state.selection = selection
     this.o.onSelection(selection)
     this.schedule()
   }
+  /** A frame's range in the result's rows and columns, as the reads are asked for. */
+  private sourceRange(range: VisibleRange): VisibleRange { return range }
   /** Scrolls a cell into view on the next frame ('nearest', never smooth). */
   private reveal(row: number, column: number): void {
     const target = ensureVisible({
-      virtualTop: this.pendingTop ?? this.o.state.virtualTop, scrollLeft: this.pendingLeft ?? this.o.state.scrollLeft, viewportWidth: this.viewportWidth,
+      virtualTop: this.pendingTop ?? this.offsets.virtualTop, scrollLeft: this.pendingLeft ?? this.offsets.scrollLeft, viewportWidth: this.viewportWidth,
       viewportHeight: this.viewportHeight, rowHeader: this.rowHeader, layout: this.layout, rows: this.rows()
     }, row, column)
     this.pendingTop = target.virtualTop
@@ -693,11 +711,11 @@ export class GridView {
       // Control+wheel (and a trackpad pinch) zooms the window, as Chromium does elsewhere.
       if (!model || model.mode !== 'virtual' || this.gestures.matches('global.wheelZoom', event)) return
       const dy = normalizeWheel(event.deltaY, event.deltaMode, this.viewportHeight)
-      const step = applyWheel(model, this.pendingTop ?? this.o.state.virtualTop, dy)
+      const step = applyWheel(model, this.pendingTop ?? this.offsets.virtualTop, dy)
       if (!step.handled) return
       event.preventDefault()
       this.pendingTop = step.virtualTop
-      if (event.deltaX) this.pendingLeft = (this.pendingLeft ?? this.o.state.scrollLeft) + normalizeWheel(event.deltaX, event.deltaMode, this.viewportWidth)
+      if (event.deltaX) this.pendingLeft = (this.pendingLeft ?? this.offsets.scrollLeft) + normalizeWheel(event.deltaX, event.deltaMode, this.viewportWidth)
       this.schedule()
     } catch (error) { this.o.onError(error) }
   }
@@ -719,7 +737,7 @@ export class GridView {
       || (scroller.offsetHeight === scroller.clientHeight && scroller.scrollWidth > scroller.clientWidth && y >= this.viewportHeight - g.overlayScrollBar)
   }
   private hitAt(x: number, y: number, clamp = false) {
-    return hitTest(x, y, { viewport: { top: this.o.state.virtualTop, left: this.o.state.scrollLeft, width: this.viewportWidth, height: this.viewportHeight }, rows: this.rows(), layout: this.layout, rowHeader: this.rowHeader, clamp })
+    return hitTest(x, y, { viewport: { top: this.offsets.virtualTop, left: this.offsets.scrollLeft, width: this.viewportWidth, height: this.viewportHeight }, rows: this.rows(), layout: this.layout, rowHeader: this.rowHeader, clamp })
   }
 
   /** Native scrolling (including a cell's scrollIntoView) can precede its scroll event and our next frame. A press must
@@ -757,7 +775,7 @@ export class GridView {
     const onButton = press === 'primary' && hit?.kind !== 'resize'
     // A press on a header's funnel opens its popover; it selects nothing and starts no drag.
     const funnel = onButton && this.o.onFilter ? (event.target as Element | null)?.closest?.('.rg-cf') : null
-    const filterColumn = funnel ? this.slots.get(funnel.parentElement!)?.header?.column ?? -1 : -1
+    const filterColumn = funnel ? this.buttonColumn(funnel) : -1
     if (funnel && !this.canFilter(filterColumn)) { event.preventDefault(); return }
     if (filterColumn >= 0) {
       event.preventDefault()
@@ -766,7 +784,7 @@ export class GridView {
     }
     // A press on a header's sort button sorts; it selects nothing and starts no drag.
     const button = onButton && this.o.onSort ? (event.target as Element | null)?.closest?.('.rg-cs') : null
-    const column = button ? this.slots.get(button.parentElement!)?.header?.column ?? -1 : -1
+    const column = button ? this.buttonColumn(button) : -1
     if (column >= 0) {
       event.preventDefault()
       this.o.onSort!(column, this.gestures.matches('grid.addSortKey', event))
@@ -779,7 +797,7 @@ export class GridView {
       hit = { kind: 'column', column: hit.column }
     }
     const add = press === 'primary' && this.gestures.matches('grid.addToSelection', event), shift = this.gestures.matches('grid.extendSelection', event)
-    this.select(pressSelection(this.o.state.selection, hit, { resultIndex: this.o.resultIndex, shift, right: press === 'secondary', add, rows: this.rows(), columns: this.columns }))
+    this.select(pressSelection(this.selection(), hit, { resultIndex: this.o.resultIndex, shift, right: press === 'secondary', add, rows: this.rows(), columns: this.columns }))
     if (press !== 'primary' || hit.kind === 'corner') return
     this.drag = { pointerId: event.pointerId, x0: point.x, y0: point.y, x: point.x, y: point.y, dragging: false, hit, modifiers: shift || add }
     try { this.root.setPointerCapture(event.pointerId) } catch { /* A synthetic pointer has nothing to capture. */ }
@@ -829,6 +847,9 @@ export class GridView {
     this.resizeHover = over
     this.root.classList.toggle('rg-border-hover', over)
   }
+
+  /** The column a pressed sort button or funnel is for: that of the header it is in. */
+  private buttonColumn(button: Element): number { return this.slots.get(button.parentElement!)?.header?.column ?? -1 }
 
   /** A press on a header's right border: the column follows the pointer (a new resize stops a running fit). */
   private startResize(pointerId: number, x: number, column: number): void {
@@ -913,12 +934,12 @@ export class GridView {
     let scrolled = false
     if (above > 0 || below > 0) {
       const rows = Math.min(40, 1 + Math.floor(Math.max(above, below) / 16)) * (above > 0 ? -1 : 1)
-      this.pendingTop = Math.max(0, (this.pendingTop ?? this.o.state.virtualTop) + rows * g.rowHeight)
+      this.pendingTop = Math.max(0, (this.pendingTop ?? this.offsets.virtualTop) + rows * g.rowHeight)
       scrolled = true
     }
     if (before > 0 || after > 0) {
       const px = Math.min(240, 16 + 2 * Math.max(before, after)) * (before > 0 ? -1 : 1)
-      this.pendingLeft = Math.max(0, (this.pendingLeft ?? this.o.state.scrollLeft) + px)
+      this.pendingLeft = Math.max(0, (this.pendingLeft ?? this.offsets.scrollLeft) + px)
       scrolled = true
     }
     if (scrolled) this.schedule()
@@ -970,6 +991,9 @@ export class GridView {
     }
     const slot: RowSlot = { el, header, number, ...mark ? { mark } : {}, cells: [], pin: this.createCell(el), row: -1, top: Number.NaN, width: -1, odd: false, headerSel: false, shown: false, tone: 0, highlight: 0, toneText: '', toneOf: 0, cellMarks: undefined }
     this.slots.set(el, { row: slot })
+    // The active cell's spare slot and the row's number name their row too, for menu targets.
+    this.slots.set(slot.pin.el, { cell: slot.pin, row: slot })
+    if (mark) this.slots.set(mark.el, { row: slot })
     this.rowsEl.append(el)
     if (withCells) for (let index = 0; index < this.cellsPerRow; index++) slot.cells.push(this.createCell(el, slot))
     return slot
@@ -1087,6 +1111,20 @@ export class GridView {
     })
   }
 
+  /** What a menu opened on `element` is for, in the result's rows and columns (anchor.ts): a cell's row and column, a
+   *  header's column, a row number's row; undefined on the corner and on a slot that shows nothing. */
+  private targetOf(element: Element): GridTarget | undefined {
+    for (let at: Element | null = element; at && at !== this.root; at = at.parentElement) {
+      const slot = this.slots.get(at)
+      if (!slot) continue
+      if (slot.header) return slot.header.column < 0 ? undefined : { column: slot.header.column }
+      const row = slot.row && slot.row.row >= 0 ? slot.row.row : undefined
+      if (slot.cell) return row === undefined || slot.cell.column < 0 ? undefined : { row, column: slot.cell.column }
+      return row === undefined ? undefined : { row }
+    }
+    return undefined
+  }
+
   private render(): void {
     // A horizontal scroll bar that appears as columns widen shrinks the client box without resizing the scroller, and
     // ResizeObserver does not report it: a stale height hid the last row under the bar and undid scrolling to it. Read
@@ -1110,8 +1148,8 @@ export class GridView {
     if (this.pendingTop !== undefined) virtualTop = this.pendingTop
     // Follow tail: a log opens at its newest rows, and a view at the end as rows arrive stays at the end.
     else if (this.o.followTail && this.atEnd && (!previous || rows !== previous.rows)) virtualTop = Number.MAX_SAFE_INTEGER
-    else if (restore) virtualTop = state.virtualTop
-    else virtualTop = onNativeScroll(previous, scrollTop, state.virtualTop, this.written)
+    else if (restore) virtualTop = this.offsets.virtualTop
+    else virtualTop = onNativeScroll(previous, scrollTop, this.offsets.virtualTop, this.written)
     const mapped = remap(model, virtualTop)
     virtualTop = mapped.virtualTop
     this.pendingTop = undefined
@@ -1149,16 +1187,17 @@ export class GridView {
     }
     this.written = model.mode === 'virtual' ? top : undefined
     const maxLeft = Math.max(0, total - width)
-    const left = Math.min(maxLeft, Math.max(0, this.pendingLeft ?? (restore ? state.scrollLeft : scrollLeft)))
+    const left = Math.min(maxLeft, Math.max(0, this.pendingLeft ?? (restore ? this.offsets.scrollLeft : scrollLeft)))
     this.pendingLeft = undefined
     if (Math.abs(left - scrollLeft) >= 1) this.scroller.scrollLeft = left
     this.lastTop = top
     this.lastLeft = left
     this.model = model
-    state.virtualTop = virtualTop
-    state.topRow = topRowOf(virtualTop)
-    state.scrollLeft = left
-    const baseRow = model.mode === 'virtual' ? rebaseRow(state.topRow) : 0
+    const offsets = this.offsets
+    offsets.virtualTop = virtualTop
+    offsets.topRow = topRowOf(virtualTop)
+    offsets.scrollLeft = left
+    const baseRow = model.mode === 'virtual' ? rebaseRow(offsets.topRow) : 0
     const rebased = baseRow !== this.baseRow
     this.baseRow = baseRow
     const containerY = rowsContainerY(model, top, virtualTop, baseRow)
@@ -1168,7 +1207,7 @@ export class GridView {
     }
     // SSMS's current cell: once rows arrive, the first cell is selected until another is chosen, so Copy, Shift+click
     // and the keys start from it and screen readers hear it. It is not announced as a selection change.
-    if (rows > 0 && this.columns > 0 && !this.selection()) state.selection = firstCell(this.o.resultIndex)
+    if (rows > 0 && this.columns > 0 && !this.sourceSelection()) state.selection = firstCell(this.o.resultIndex)
 
     this.dragStep()
     const viewport = { top: virtualTop, left, width, height }
@@ -1185,11 +1224,13 @@ export class GridView {
     // An empty result still shows its column headers.
     const headerRange = rows > 0 ? range : visibleRange({ top: 0, left, width, height }, 1, this.layout, rowHeader, overscan)
     if (snapshot.state !== 'lost' && snapshot.state !== 'released') {
-      const again = this.data.ensure(range, rows, state.topRow - this.lastTopRow, Math.max(1, bodyRows), state.selection?.active)
+      // The reads are asked for in the result's rows and columns.
+      const view = this.sourceRange(range)
+      const again = this.data.ensure(view, rows, offsets.topRow - this.lastTopRow, Math.max(1, bodyRows), state.selection?.active)
       if (again) this.schedule()
-      this.sizes?.ensure(range.firstRow, range.lastRow)
+      this.sizes?.ensure(view.firstRow, view.lastRow)
     }
-    this.lastTopRow = state.topRow
+    this.lastTopRow = offsets.topRow
     const tileError = this.data.error
     if (tileError !== this.status.tileError) this.setStatus({ ...this.status, tileError })
     const visibleColumns = headerRange.lastColumn - headerRange.firstColumn + 1
@@ -1211,14 +1252,17 @@ export class GridView {
     this.o.onViewport?.(this.viewport)
   }
 
+  /** `rows`, the ranges, the selection and the active cell here are as drawn; `tile` and the marks take the result's own
+   *  rows and columns (paintCell is where a cell's place becomes the result's). */
   private paint(range: VisibleRange, headerRange: VisibleRange, rows: number, rebased: boolean, columnsMoved: boolean): void {
     const selection = this.selection()
     const window: CellRange = { top: range.firstRow, bottom: range.lastRow, left: range.firstColumn, right: range.lastColumn }
     const ranges = selection ? windowRanges(selection, rows, this.columns, window) : []
     const active = selection && rows > 0 && this.columns > 0 ? { row: Math.min(selection.active.row, rows - 1), column: Math.min(selection.active.column, this.columns - 1) } : undefined
     const tiles = new Map<number, RowWindow | null>()
+    const shape = this.tiles
     const tile = (row: number, column: number): RowWindow | null => {
-      const key = tileKey(Math.floor(row / g.tileRows), Math.floor(column / g.tileColumns))
+      const key = tileKey(Math.floor(row / shape.rows), Math.floor(column / shape.columns))
       let found = tiles.get(key)
       if (found === undefined) tiles.set(key, found = this.data.peek(key) ?? null)
       return found
@@ -1361,11 +1405,11 @@ export class GridView {
   }
 
   /**
-   * The row-size bar behind a row number: its share of the largest row (--rg-rs), marked large over half of it
+   * The row-size bar behind a row number (or whatever element stands for the row): its share of the largest row (--rg-rs), marked large over half of it
    * (data-large, which CSS draws in the warning colour), the number in italics when its size is an estimate, and the exact bytes in its tooltip. Written
    * only when what it shows changes; a row whose size is not read yet shows none.
    */
-  private paintSize(mark: NonNullable<RowSlot['mark']>, row: number): void {
+  private paintSize(mark: SizeMark, row: number): void {
     const size = this.sizes?.get(row)
     const share = size ? Math.round(size.share * 1000) / 1000 : 0
     const key = size ? `${row}|${share}|${size.large ? 1 : 0}|${size.estimated ? 1 : 0}|${size.bytes}` : ''
@@ -1407,22 +1451,24 @@ export class GridView {
     }
     if (!cell.shown) { cell.shown = true; cell.el.style.display = '' }
     let bits = 0, value = ''
-    const window = tile(row, column)
-    if (!window || row - window.first >= window.count) bits = LOAD
+    // The cell's place in the result: its text, link and marks are read there; the selection and the active cell are as drawn.
+    const sourceRow = row, sourceColumn = column
+    const window = tile(sourceRow, sourceColumn)
+    if (!window || sourceRow - window.first >= window.count) bits = LOAD
     else {
-      const index = (row - window.first) * (window.colEnd - window.colStart) + column - window.colStart
+      const index = (sourceRow - window.first) * (window.colEnd - window.colStart) + sourceColumn - window.colStart
       const flags = window.flags[index]
       if (flags & FLAG_ERROR) { value = 'NULL'; bits = ERR }
       else if (flags & FLAG_NULL) { value = 'NULL'; bits = NULL }
-      else { value = window.text[index]; if (flags & FLAG_TRUNCATED) bits = TRUNC; if (this.links[column]) bits |= LINK }
+      else { value = window.text[index]; if (flags & FLAG_TRUNCATED) bits = TRUNC; if (this.links[sourceColumn]) bits |= LINK }
     }
-    if (cellMarks && !(bits & LOAD)) bits |= cellMarks.get(column) ?? 0
+    if (cellMarks && !(bits & LOAD)) bits |= cellMarks.get(sourceColumn) ?? 0
     if (covered(ranges, row, column)) bits |= SEL
     if (active && active.row === row && active.column === column) bits |= ACT
     const marks = this.searchMarks
     if (marks) {
-      if (marks.cells && marks.handle === this.handle && marks.cells.has(cellKey(row, column))) bits |= marks.current && marks.current.row === row && marks.current.column === column ? HIT | CUR : HIT
-      if (marks.columns && !marks.columns[column]) bits |= DIM
+      if (marks.cells && marks.handle === this.handle && marks.cells.has(cellKey(sourceRow, sourceColumn))) bits |= marks.current && marks.current.row === sourceRow && marks.current.column === sourceColumn ? HIT | CUR : HIT
+      if (marks.columns && !marks.columns[sourceColumn]) bits |= DIM
     }
     if (bits !== cell.bits) {
       if ((bits ^ cell.bits) & SEL) cell.el.setAttribute('aria-selected', bits & SEL ? 'true' : 'false')
@@ -1513,7 +1559,7 @@ export class GridView {
         if (mark) header.el.classList.add(headerMarks[mark])
         header.mark = mark
       }
-      if (header.sort) this.paintSort(header, header.sort, column)
+      if (header.sort) this.paintSort(header.el, header.sort, column)
       if (header.funnel && header.funnel.on !== this.filtered.has(column)) {
         const on = header.funnel.on = this.filtered.has(column)
         header.funnel.el.classList.toggle('on', on)
@@ -1530,13 +1576,14 @@ export class GridView {
   /** Where a column's funnel popover opens: under its header's right end, clamped to the grid (Alt+Down in a grid). */
   filterAnchor(column: number): DOMRect {
     const box = this.scroller.getBoundingClientRect()
-    const right = Math.min(box.right, Math.max(box.left + this.rowHeader, box.left + this.rowHeader + this.layout.xOf(column) + this.layout.width(column) - this.o.state.scrollLeft))
+    const right = Math.min(box.right, Math.max(box.left + this.rowHeader, box.left + this.rowHeader + this.layout.xOf(column) + this.layout.width(column) - this.offsets.scrollLeft))
     return new DOMRect(right - 18, box.top, 18, g.headerHeight)
   }
 
-  /** A header's sort button: the direction's arrow, its place when the grid sorts by several columns, and aria-sort on the
-   *  first key's header (ARIA allows one at a time). Unsorted, the button shows only while the header is hovered. */
-  private paintSort(header: HeaderSlot, sort: NonNullable<HeaderSlot['sort']>, column: number): void {
+  /** A column's sort button: the direction's arrow, its place when the grid sorts by several columns, and aria-sort on
+   *  `target`, the element that heads the first key's column (ARIA allows one at a time). Unsorted, the button shows only
+   *  while its header is hovered. */
+  private paintSort(target: HTMLElement, sort: SortButton, column: number): void {
     const key = this.sortKeys.get(column)
     const state = key ? `${key.at}:${key.descending ? 1 : 0}:${this.sortKeys.size}` : ''
     if (state === sort.state) return
@@ -1545,8 +1592,8 @@ export class GridView {
     sort.glyph.className = codiconClass(key?.descending ? 'arrow-down' : 'arrow-up')
     sort.order.nodeValue = key && this.sortKeys.size > 1 ? String(key.at + 1) : ''
     sort.el.title = !key ? 'Sort ascending' : key.descending ? 'Clear sort' : 'Sort descending'
-    if (key && key.at === 0) header.el.setAttribute('aria-sort', key.descending ? 'descending' : 'ascending')
-    else header.el.removeAttribute('aria-sort')
+    if (key && key.at === 0) target.setAttribute('aria-sort', key.descending ? 'descending' : 'ascending')
+    else target.removeAttribute('aria-sort')
   }
 
   /** What a column's header needs for its text: the name, and the gap and type after it when types are shown. */
