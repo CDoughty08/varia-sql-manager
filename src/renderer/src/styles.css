@@ -2380,6 +2380,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .activity-pane-rows { position: relative; display: flex; flex: 1; min-height: 0; }
 .activity-pane-grid[data-stale] .activity-pane-rows { opacity: 0.6; }
 .activity-pane-loading { position: absolute; inset: 0; z-index: 4; padding: var(--varia-space-2); background: var(--varia-resultsGrid-background); }
+.activity-pane-empty { position: absolute; inset: var(--varia-row) 0 auto; z-index: 3; padding: var(--varia-space-4) var(--varia-space-3); text-align: center; pointer-events: none; }
 .activity-pane-status { flex: none; margin: 0; padding: 0 var(--varia-space-2); height: var(--varia-status); line-height: var(--varia-status); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-top: 1px solid var(--varia-panel-border); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
 /* Two rows of four tiles under 960 px of document (where eight still leave SSMS's names whole; D-am §3.2 says 1,100,
    which at a 1,280 px window pushes the panes out of the document), four rows of two under 560 px. */
