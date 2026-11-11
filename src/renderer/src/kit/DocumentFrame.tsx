@@ -268,8 +268,6 @@ export function DocumentSections({ id, title, sections, frame, onFrame, hint }: 
   const scrollKey = (event: KeyboardEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement
     if (event.defaultPrevented) return
-    // Tabbing to another control can scroll the column too, including when leaving an editable field.
-    if (event.key === 'Tab') { scrollInput(); return }
     if (target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return
     if (event.key === ' ' && target.closest('button, summary, [role="button"]')) return
     if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) scrollInput()
@@ -290,12 +288,13 @@ export function DocumentSections({ id, title, sections, frame, onFrame, hint }: 
       if (index >= 0) onFrame(scrolledTo(frame, sections[index].id))
     })
   }
-  return <div className="document-body">
+  // SectionNav handles Tab into the content and stops propagation, so release restoration before that transfer.
+  return <div className="document-body" onKeyDownCapture={event => { if (!event.defaultPrevented && event.key === 'Tab') scrollInput() }}>
     {sections.length > 1 && <SectionNav id={id} sections={sections} current={frame.section} onChoose={choose} />}
     {/* A tab stop of its own, so PageDown, PageUp and Space page through a section taller than the view; the list's keys
         only go from heading to heading. */}
     <div className="document-content document-sections" ref={content} onScroll={scrolled} onWheel={scrollInput} onTouchMove={scrollInput}
-      onPointerDown={event => { if (event.target === event.currentTarget) scrollInput() }}
+      onPointerDownCapture={scrollInput}
       onKeyDown={scrollKey}
       role="region" aria-label={`${title} sections`} tabIndex={0}>
       {sections.map(section => <FrameSectionView key={section.id} id={id} section={section} collapsed={frame.collapsed.includes(section.id)} onToggle={() => onFrame(toggleSection(frame, section.id))} />)}

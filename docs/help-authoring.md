@@ -32,7 +32,8 @@ to CLAUDE.md so Codex and Claude receive the same instructions.
    guide and verifies module parity, related links, section uniqueness, real source paths and declared references.
    It intentionally does not snapshot prose: reviewers still check correctness, prerequisites, failure remedies,
    persistence limits and whether the explanation helps the user finish their task. `tests/getting-started-loading.test.ts`
-   exercises delayed/rejected modules, recovery focus, closing during a load, tab reflow, scroll input and settings-sensitive samples.
+   exercises delayed/rejected modules, recovery focus, closing during a load, tab reflow and settings-sensitive samples.
+   Scroll checks include pointer input on nested content and Tab entry from the section list, as well as column input.
 
 ## Verify behavior
 

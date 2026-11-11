@@ -169,10 +169,13 @@ it('keeps a restored section current as the tab finishes laying out, until the u
   } finally { view.dispose(); clock.mockRestore() }
 })
 
-it.each([['clicked', 'wheel'], ['restored', 'wheel'], ['restored', 'keyboard'], ['restored', 'nested-keyboard'], ['restored', 'tab'], ['restored', 'scrollbar'], ['restored', 'touch']] as const)('marks the last section after %s navigation and %s scrolling directly to the end', async (mode, input) => {
+it.each([
+  ['clicked', 'wheel'], ['restored', 'wheel'], ['restored', 'keyboard'], ['restored', 'nested-keyboard'], ['restored', 'tab'],
+  ['restored', 'scrollbar'], ['restored', 'touch'], ['restored', 'middle-autoscroll'], ['restored', 'text-drag'], ['restored', 'section-list-tab']
+] as const)('marks the last section after %s navigation and %s scrolling directly to the end', async (mode, input) => {
   let pending: (() => void) | undefined
   const clock = vi.spyOn(frames, 'nextFrame').mockImplementation(callback => { pending = callback; return () => { pending = undefined } })
-  const sections = ['A', 'B', 'C', 'D'].map(id => ({ id, title: id, content: createElement('button', { type: 'button' }, id) })), onFrame = vi.fn()
+  const sections = ['A', 'B', 'C', 'D'].map(id => ({ id, title: id, content: createElement('div', null, createElement('button', { type: 'button' }, id), createElement('span', null, `Text ${id}`)) })), onFrame = vi.fn()
   const view = await mount(createElement(DocumentSections, { id: 'user-scroll', title: 'Guide', sections, frame: { ...initialFrameState(sections), section: mode === 'restored' ? 'B' : 'A' }, onFrame }))
   try {
     const column = view.host.querySelector<HTMLElement>('[aria-label="Guide sections"]')!
@@ -187,10 +190,26 @@ it.each([['clicked', 'wheel'], ['restored', 'wheel'], ['restored', 'keyboard'], 
       wheel: new WheelEvent('wheel', { bubbles: true, deltaY: 200 }), keyboard: new KeyboardEvent('keydown', { bubbles: true, key: 'End' }),
       'nested-keyboard': new KeyboardEvent('keydown', { bubbles: true, key: 'PageDown' }),
       tab: new KeyboardEvent('keydown', { bubbles: true, key: 'Tab' }),
-      scrollbar: new Event('pointerdown', { bubbles: true }), touch: new Event('touchmove', { bubbles: true })
+      scrollbar: new Event('pointerdown', { bubbles: true }), touch: new Event('touchmove', { bubbles: true }),
+      'middle-autoscroll': new PointerEvent('pointerdown', { bubbles: true, button: 1, pointerType: 'mouse' }),
+      'text-drag': new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerType: 'mouse' }),
+      'section-list-tab': new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Tab' })
     }[input]
-    const target = input === 'nested-keyboard' ? column.querySelector('button')! : column
+    let target: HTMLElement = input === 'nested-keyboard' ? column.querySelector('button')! : column
+    if (input === 'middle-autoscroll' || input === 'text-drag') {
+      target = column.querySelector<HTMLElement>('section[data-section="B"] span')!
+      target.addEventListener('pointerdown', event => event.stopPropagation())
+    }
+    if (input === 'section-list-tab') {
+      target = view.host.querySelector<HTMLElement>('nav [data-section="B"]')!
+      // happy-dom has no layout; make the current section's first control eligible for SectionNav's real Tab handler.
+      Object.defineProperty(column.querySelector('section[data-section="B"] button')!, 'getClientRects', { value: () => [new DOMRect()] })
+    }
     await act(async () => target.dispatchEvent(event))
+    if (input === 'section-list-tab') {
+      expect(event.defaultPrevented).toBe(true)
+      expect(document.activeElement).toBe(column.querySelector('section[data-section="B"] button'))
+    }
     column.scrollTop = 700
     await act(async () => column.dispatchEvent(new Event('scroll')))
     act(() => pending?.())
