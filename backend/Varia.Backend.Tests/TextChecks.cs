@@ -491,8 +491,9 @@ internal static class TextChecks
         }
         Refuses("a readonly stream field", Pinned("frozenCurrent"), Pinned("last"));
         Refuses("a readonly column field", Pinned("current"), Pinned("frozenLast"));
-        Refuses("a static column field", Pinned("sharedLast"), Pinned("last"));
-        Refuses("a static stream field", Pinned("current"), Pinned("sharedLast"));
+        Refuses("a static stream field", Pinned("sharedCurrent"), Pinned("last"));
+        Refuses("a static column field", Pinned("current"), Pinned("sharedLast"));
+        Refuses("a stream field of another type", Pinned("wideLast"), Pinned("last"));
         Refuses("a column field of another type", Pinned("current"), Pinned("wideLast"));
         check(refused.Count == 0 && SequentialXml.Compile<PinnedReader>(null, null, null) is null,
             "a sequential stream field that became readonly, static or of another type leaves no opener instead of throwing: " + string.Join("; ", refused));
@@ -687,6 +688,7 @@ internal static class TextChecks
         private int last;
         private readonly PinnedStream? frozenCurrent;
         private readonly int frozenLast;
+        private static PinnedStream? sharedCurrent;
         private static int sharedLast;
         private long wideLast;
         public PinnedStream? Current => current;
@@ -764,6 +766,7 @@ internal static class TextChecks
             // wherever XmlReader's reads end (it did so only once a read ended exactly where a node did).
             ("<r><a x=\"" + shrunk + "\"/>" + string.Concat(Enumerable.Repeat("<c x=\"1\"/>", 5000)) + "<b y=\"" + huge + "\"/></r>",
                 "<r><a x=\"" + new string('A', 600_000) + "\" />" + string.Concat(Enumerable.Repeat("<c x=\"1\" />", 5000)) + "<b y=\""),
+            // With text in the siblings a read did end at a node now and then, so this one was kept before too.
             ("<r><a x=\"" + shrunk + "\"/>" + string.Concat(Enumerable.Repeat("<c>t</c>", 5000)) + "<b y=\"" + huge + "\"/></r>",
                 "<r><a x=\"" + new string('A', 600_000) + "\" />" + string.Concat(Enumerable.Repeat("<c>t</c>", 5000)) + "<b y=\""),
         ];

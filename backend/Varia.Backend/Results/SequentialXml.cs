@@ -53,7 +53,7 @@ internal static class SequentialXml
                 Expression.Convert(stream, typeof(Stream)));
             return Expression.Lambda<Func<TReader, int, Stream>>(body, reader, column).Compile();
         }
-        // Whatever a changed SqlClient makes the expression tree refuse, the fallback reads the cell.
+        // What an expression tree throws for members it refuses: the fallback reads the cell.
         catch (Exception e) when (e is ArgumentException or InvalidOperationException or NotSupportedException or MemberAccessException)
         {
             return null;
@@ -117,9 +117,9 @@ internal sealed class XmlFeed(Func<int> output) : TextReader
 
     /// <summary>Writes the raw text of the node XmlReader was reading when the feed starved to <paramref name="sink"/>: from
     /// its '&lt;' and at most <see cref="Keep"/> characters of it, or nothing when that start was not kept: a node with no
-    /// '&lt;' of its own, or one whose '&lt;' was handed out while a node longer than <see cref="Keep"/> was still being read,
-    /// which is one that starts in the same read (at most 4,096 characters) as that node's end. Nodes after that read are
-    /// kept again, however many follow.</summary>
+    /// '&lt;' of its own, or one whose '&lt;' was handed out while a node that had passed <see cref="Keep"/> before the read
+    /// it ends in was still being read, which is one that starts in that read (at most 4,096 characters). Nodes after that
+    /// read are kept again, however many follow.</summary>
     public void WriteTail(TextWriter sink)
     {
         Trim();
