@@ -1373,6 +1373,21 @@ try {
     await page.keyboard.press('Enter')
     await expect(await explorerRow(page, 'server-b', 'Databases', 'AppData', 'Tables', 'dbo.table1')).toHaveAttribute('aria-selected', 'true')
     await expect(objectSearchGroup(page, 'server-b').getByRole('option').first()).toBeFocused()
+    // Home, End and the Page keys count the headers too, the same from a hit as from a header: Home from a hit in the later
+    // group reaches the first group's header, and End reaches the last hit from that header and from a hit.
+    await page.keyboard.press('Home')
+    await expect(groupHead).toBeFocused()
+    await page.keyboard.press('End')
+    await expect(objectSearchGroup(page, 'server-b').getByRole('option').nth(1)).toBeFocused()
+    await expect(objectSearchGroup(page, 'server-b').getByRole('option').nth(1)).toHaveAttribute('aria-selected', 'true')
+    await page.keyboard.press('PageUp')
+    await expect(groupHead).toBeFocused()
+    await page.keyboard.press('ArrowDown')
+    await expect(objectSearchGroup(page, 'server-a').getByRole('option').first()).toBeFocused()
+    await page.keyboard.press('End')
+    await expect(objectSearchGroup(page, 'server-b').getByRole('option').nth(1)).toBeFocused()
+    await page.keyboard.press('ArrowUp')
+    await expect(objectSearchGroup(page, 'server-b').getByRole('option').first()).toBeFocused()
     // ↑ on a group's first hit reaches its header, ← on a hit its own header, and ← and → on a header collapse and expand it. A
     // group that collapses on the selected hit hands the selection to the next shown hit.
     await page.keyboard.press('ArrowUp')

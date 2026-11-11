@@ -18,7 +18,7 @@ import { explorerSearchId, hitServer, mergeAnswers, ObjectSearchService, quickSe
 import { searchHitTarget } from '../src/renderer/src/search/hit-actions'
 import { insertTextFor } from '../src/shared/explorer/refs'
 import { indexSummary, searchHitPath, unindexedServers } from '../src/renderer/src/search/ObjectSearch'
-import { allIndexesSummary, allServersSummary, DatabaseScope, groupNote, indexGap, indexIncomplete, KindBadge, listTabStop, moreMatches } from '../src/renderer/src/search/SearchPanel'
+import { allIndexesSummary, allServersSummary, DatabaseScope, groupNote, indexGap, indexIncomplete, KindBadge, listTabStop, moreMatches, stopForKey } from '../src/renderer/src/search/SearchPanel'
 import { kindSpecs, nodeKinds } from '../src/shared/explorer/catalog'
 import { colorKeys } from '../src/shared/theme/registry'
 import { layoutFilters, minimumChips } from '../src/renderer/src/search/filter-layout'
@@ -569,6 +569,26 @@ describe('ObjectSearchService', () => {
     service.dispose()
   })
 
+  it('walks an All servers list\'s headers and hits as one run of stops, the same from a header and from a hit', () => {
+    // Two expanded groups: header a (0), its hits (1, 2), header b (3), its hits (4, 5). A page here is two stops.
+    const count = 6, page = (at: number) => (direction: 1 | -1) => Math.max(0, Math.min(count - 1, at + direction * 2))
+    const reach = (at: number, key: string) => stopForKey(count, at, key, page(at))
+    // Home from a hit in the later group reaches the first group's header, not its first hit; End the last stop.
+    expect([reach(4, 'Home'), reach(5, 'Home'), reach(3, 'Home'), reach(1, 'Home')]).toEqual([0, 0, 0, 0])
+    expect([reach(1, 'End'), reach(0, 'End'), reach(3, 'End')]).toEqual([5, 5, 5])
+    // The arrows and the Page keys count the headers too; ↑ above the first stop is the box, ↓ on the last stays.
+    expect([reach(2, 'ArrowDown'), reach(4, 'ArrowUp'), reach(0, 'ArrowUp'), reach(5, 'ArrowDown')]).toEqual([3, 3, -1, 5])
+    expect([reach(1, 'PageDown'), reach(3, 'PageDown'), reach(4, 'PageUp'), reach(1, 'PageUp')]).toEqual([3, 5, 2, 0])
+    // Every other key is the header's or the hit's own.
+    expect(['ArrowLeft', 'ArrowRight', 'Enter', 'Escape', ' ', 'a'].map(key => reach(2, key))).toEqual(Array(6).fill(undefined))
+    // The panel walks through it on both: neither a header nor a hit keeps Home, End or a Page key of its own.
+    const panel = readFileSync(new URL('../src/renderer/src/search/SearchPanel.tsx', import.meta.url), 'utf8')
+    const headKeys = panel.slice(panel.indexOf('const onHeadKey'), panel.indexOf('const onListKey')), spanningKeys = panel.slice(panel.indexOf('if (spanning) {', panel.indexOf('const onListKey')), panel.indexOf('const next = '))
+    expect(headKeys).toContain('walk(all, at, event.key)')
+    expect(headKeys).not.toMatch(/'Home'|'End'|'Page/)
+    expect(spanningKeys).toContain('walk(items, position, event.key)')
+  })
+
   it('roves the All servers list\'s one tab stop to the group header that has focus, so Tab from a header leaves the list', () => {
     const heads = ['a', 'b', 'c']
     // The selected hit holds it, or the first shown when the selection is hidden or none.
@@ -958,7 +978,7 @@ describe('Search Objects\' server picker', () => {
       { connectionId: 'b', label: 'srv-b', error: 'The search timed out.' },
       { connectionId: 'c', label: 'srv-c', pending: true }
     ]
-    const options = serverPickerOptions({ ...base, allServers: true, servers, result: mergeAnswers(servers), requestId: 'r' }, live)
+    const options = serverPickerOptions({ ...base, allServers: true, servers, result: mergeAnswers(servers), requestId: 'r', landed: 'r' }, live)
     expect(options.map(option => [option.value, option.label, option.color, option.environment, option.count, !!option.pending])).toEqual([
       [allServersValue, 'All servers', undefined, undefined, 12, true],
       ['a', 'Primary', 'red', 'Production', 12, false],
@@ -970,6 +990,47 @@ describe('Search Objects\' server picker', () => {
     expect(serverPickerOptions({ ...base, result: result(1) }, live).map(option => option.count)).toEqual([undefined, 1, undefined, undefined])
     expect(serverPickerOptions({ ...base, result: result(0, { problem: 'The regular expression is not valid.' }) }, live).map(option => option.count)).toEqual([undefined, undefined, undefined, undefined])
     expect(serverPickerOptions({ ...base, text: '', asked: undefined }, live).every(option => option.count === undefined && !option.pending)).toBe(true)
+  })
+
+  it('marks every server and All servers as searching, with no count, while a new All servers search has yet to land', async () => {
+    // The answers in view are the search before's (it keeps them until a server answers): its counts are not this search's.
+    const servers = [{ connectionId: 'a', label: 'Primary', result: result(12) }, { connectionId: 'b', label: 'srv-b', result: result(3) }]
+    const before = { ...base, allServers: true, servers, result: mergeAnswers(servers) }
+    expect(serverPickerOptions(before, live).map(option => [option.count, !!option.pending])).toEqual([[15, false], [12, false], [3, false], [undefined, false]])
+    const unlanded = serverPickerOptions({ ...before, text: 'y', requestId: 'r2' }, live)
+    expect(unlanded.map(option => [option.count, !!option.pending])).toEqual([[undefined, true], [undefined, true], [undefined, true], [undefined, true]])
+    expect(unlanded.map(serverOptionName)).toEqual(['All servers, searching', 'Primary, Production environment, searching', 'srv-b, searching', 'srv-c, QA lab environment, searching'])
+    // A search cancelled as it landed leaves its pending marks on the answers in view: they are still not the new search's.
+    const cancelled = [{ connectionId: 'a', label: 'Primary', result: result(12) }, { connectionId: 'b', label: 'srv-b', pending: true }]
+    expect(serverPickerOptions({ ...before, servers: cancelled, result: mergeAnswers(cancelled), landed: 'r1', requestId: 'r2' }, live).map(option => [option.count, !!option.pending]))
+      .toEqual([[undefined, true], [undefined, true], [undefined, true], [undefined, true]])
+
+    // Through the service: the second query's picker shows no count of the first's until a server answers it.
+    const { service, pendingSearch, connections, timers } = harness({ indexOnConnect: false })
+    const two = [connection('a'), connection('b')]
+    connections.set(two)
+    const id = service.open('a', undefined, true)!
+    const answer = (total: number): ApiResult<ObjectSearchResult> => ({ ok: true, value: result(total) })
+    const shown = () => serverPickerOptions(service.getSnapshot().documents[id], two).map(option => [option.count, !!option.pending])
+    service.setQuery(id, { text: 'orders' })
+    timers.run()
+    expect(shown()).toEqual([[undefined, true], [undefined, true], [undefined, true]])
+    pendingSearch[0]!(answer(12))
+    pendingSearch[1]!(answer(3))
+    await settle()
+    expect(shown()).toEqual([[15, false], [12, false], [3, false]])
+    service.setQuery(id, { text: 'customer' })
+    timers.run()
+    expect(service.getSnapshot().documents[id].result?.total).toBe(15)
+    expect(shown()).toEqual([[undefined, true], [undefined, true], [undefined, true]])
+    pendingSearch[2]!(answer(4))
+    await settle()
+    expect(shown()).toEqual([[4, true], [4, false], [undefined, true]])
+    pendingSearch[3]!(answer(1))
+    await settle()
+    expect(shown()).toEqual([[5, false], [4, false], [1, false]])
+    expect(service.getSnapshot().documents[id].landed).toBeUndefined()
+    service.dispose()
   })
 
   it('moves by type-ahead as a native select does: a prefix, or one letter typed again cycling', () => {
