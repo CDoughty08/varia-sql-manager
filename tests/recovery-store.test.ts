@@ -53,6 +53,22 @@ describe('the AutoRecover store', () => {
     expect(await records()).toEqual([])
   })
 
+  // sandbox-guard.ts's profilePathsRefused: a packaged smoke run's profile belongs to whoever started it.
+  it('hands a record over without its file path while paths are refused', async () => {
+    const kept = query({ text: 'SELECT 7' })
+    await new RecoveryStore(folder).write({ ...kept, path: 'C:\\Queries\\orders.sql' }, 1)
+    const refusing = new RecoveryStore(folder, { pathsRefused: true })
+    // The Recover dialog still shows where the query was saved.
+    expect((await refusing.list(1)).map(entry => entry.path)).toEqual(['C:\\Queries\\orders.sql'])
+    const taken = await refusing.take(kept.id, 1)
+    expect(taken).toMatchObject({ id: kept.id, text: 'SELECT 7', name: 'SQLQuery2.sql', kind: 'sql', eol: 'crlf' })
+    expect('path' in taken).toBe(false)
+    // Its own later write, with a path from main's registry, is handed back the same way.
+    await refusing.write({ ...kept, text: 'SELECT 8', path: 'C:\\Queries\\other.sql' }, 1)
+    expect((await refusing.list(2)).map(entry => entry.characters)).toEqual([8])
+    expect('path' in await refusing.take(kept.id, 2)).toBe(false)
+  })
+
   it('refuses writes to records another run or generation owns, and takes or discards only what it offered or owns', async () => {
     const first = new RecoveryStore(folder), kept = query()
     await first.write(kept, 1)

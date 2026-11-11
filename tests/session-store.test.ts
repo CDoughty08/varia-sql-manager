@@ -82,6 +82,23 @@ describe('the hot exit session store', () => {
     expect(await new SessionStore(folder).take(true)).toBeUndefined()
   })
 
+  // sandbox-guard.ts's profilePathsRefused: a packaged smoke run's profile belongs to whoever started it.
+  it('hands out no file path or baseline while paths are refused, from session.json or previous.json', async () => {
+    const baseline = 'a'.repeat(64)
+    const kept = { ...tabs, documents: [...tabs.documents, { name: 'edited.sql', kind: 'sql', eol: 'lf', dirty: true, path: 'C:\\Queries\\edited.sql', fileSha256: baseline, text: 'SELECT 5' } as const] }
+    await new SessionStore(folder).write(kept, 1)
+    const refusing = new SessionStore(folder, { pathsRefused: true })
+    const taken = await refusing.take(true)
+    // Every tab is still there, in order, with the text it kept: only the files are gone.
+    expect(taken).toMatchObject({ activeIndex: 1, documents: kept.documents.map(({ name }) => ({ name })) })
+    expect(taken?.documents.map(document => [document.path, document.fileSha256, document.text])).toEqual([[undefined, undefined, 'SELECT 2'], [undefined, undefined, 'SELECT 3'], [undefined, undefined, undefined], [undefined, undefined, '<a/>'], [undefined, undefined, 'SELECT 5']])
+    expect(JSON.stringify(taken)).not.toContain('Queries')
+    // The copy a crashed run leaves is the same file under another name.
+    expect(JSON.stringify(await new SessionStore(folder, { pathsRefused: true }).take(true))).not.toContain('Queries')
+    // The file itself is as it was written: a normal run still reopens the files.
+    expect((await new SessionStore(folder).take(true))?.documents.map(document => document.path)).toEqual([undefined, undefined, 'C:\\Queries\\orders.sql', undefined, 'C:\\Queries\\edited.sql'])
+  })
+
   it('drops a clean tab whose file main no longer knows, and moves the active index with the tabs that stay', async () => {
     const store = new SessionStore(folder)
     await store.write({ activeIndex: 2, documents: [{ name: 'gone.sql', kind: 'sql', eol: 'lf', dirty: false }, tabs.documents[0], tabs.documents[1]] }, 1)

@@ -1,8 +1,14 @@
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { describe, expect, it } from 'vitest'
-import { join } from 'node:path'
-import { launchFilesRefused, packagedSmokeVariable, remoteDebuggingSwitches, sandboxRefusal, smokeDebuggingProfile, stripRemoteDebugging } from '../src/main/sandbox-guard'
+import { join, resolve, sep } from 'node:path'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { RecentFilesStore } from '../src/main/recent-files-store'
+import { RecoveryStore } from '../src/main/recovery-store'
+import { SessionStore } from '../src/main/session-store'
+import { SqlFileStore } from '../src/main/sql-files'
+import { launchFilesRefused, packagedSmokeVariable, profilePathsRefused, remoteDebuggingSwitches, sandboxRefusal, smokeDebuggingProfile, stripRemoteDebugging } from '../src/main/sandbox-guard'
 import { LaunchQueue } from '../src/main/launch-files'
 import { lockedCipher } from '../src/main/secret-cipher'
 
@@ -133,6 +139,67 @@ describe('Chromium sandbox guard', () => {
     // Nor does a smoke run hand its own to another instance on its profile.
     expect(main).toContain('const ownFiles = launchFilesRefused(smokeProfile) ? [] : commandLineFiles(process.argv, process.cwd())')
     expect(main).toContain('app.requestSingleInstanceLock({ files: ownFiles }')
+  })
+
+  // #322 again: the program that starts the smoke run chooses its profile, so every path stored there is that program's.
+  it('reads no file a packaged smoke run\'s profile names: hot exit\'s session, AutoRecover or Recent Files', async () => {
+    expect(profilePathsRefused(null)).toBe(false)
+    expect(profilePathsRefused(join('somewhere', 'smoke-profile'))).toBe(true)
+    await mkdir('artifacts', { recursive: true })
+    const directory = await mkdtemp(join(resolve('artifacts'), 'smoke-profile-test-'))
+    try {
+      // The file the other program wants, and the profile it plants: each store names it as main itself would have.
+      const secret = join(directory, 'Documents', 'secret.sql'), profile = join(directory, 'profile'), id = randomUUID()
+      await mkdir(join(directory, 'Documents'))
+      await writeFile(secret, 'SELECT secret')
+      const plant = async () => {
+        await mkdir(join(profile, 'Session'), { recursive: true })
+        await mkdir(join(profile, 'AutoRecover'), { recursive: true })
+        const savedAt = '2026-11-10T09:00:00.000Z'
+        await writeFile(join(profile, 'Session', 'session.json'), JSON.stringify({ version: 1, savedAt, activeIndex: 0, documents: [
+          { name: 'secret.sql', kind: 'sql', eol: 'lf', dirty: false, path: secret },
+          { name: 'secret.sql', kind: 'sql', eol: 'lf', dirty: true, path: secret, text: 'x' }
+        ] }))
+        await writeFile(join(profile, 'AutoRecover', id + '.json'), JSON.stringify({ version: 1, id, owner: { instance: randomUUID(), generation: 0 }, name: 'secret.sql', kind: 'sql', path: secret, eol: 'lf', savedAt, text: 'x' }))
+        await writeFile(join(profile, 'recent-files.json'), JSON.stringify({ version: 1, files: [{ path: secret, openedAt: savedAt }] }))
+      }
+      // What main does with each store's answer (index.ts's reopenDocument, varia:recovery-take, openRecent): every path it
+      // is handed, and what reading those gives the page.
+      const handed = async (pathsRefused: boolean) => {
+        await plant()
+        const session = await new SessionStore(join(profile, 'Session'), { pathsRefused }).take(true)
+        const recovery = new RecoveryStore(join(profile, 'AutoRecover'), { pathsRefused })
+        await recovery.list(1)
+        const recovered = await recovery.take(id, 1)
+        const recent = new RecentFilesStore(join(profile, 'recent-files.json'), { pathsRefused })
+        await recent.load()
+        const paths = [...session?.documents.map(document => document.path) ?? [], recovered.path, ...recent.list().map(file => recent.pathOf(file.id))].filter(path => path !== undefined)
+        const files = new SqlFileStore()
+        return { paths, read: await Promise.all(paths.map(async path => (await files.read(path)).content)), texts: [...session?.documents.map(document => document.text) ?? [], recovered.text] }
+      }
+      // A normal run reopens the files; the planted records are valid, so this is what a smoke run did before.
+      expect(await handed(false)).toEqual({ paths: [secret, secret, secret, secret], read: Array(4).fill('SELECT secret'), texts: [undefined, 'x', 'x'] })
+      // A smoke run is handed no path, so it has nothing to read: the kept text still comes back.
+      expect(await handed(true)).toEqual({ paths: [], read: [], texts: [undefined, 'x', 'x'] })
+    } finally {
+      expect(directory.startsWith(resolve('artifacts') + sep)).toBe(true)
+      await rm(directory, { recursive: true, force: true })
+    }
+    const main = readFileSync('src/main/index.ts', 'utf8')
+    // The three stores that keep file paths in the profile all follow the smoke profile.
+    expect(main).toContain('const pathsRefused = profilePathsRefused(smokeProfile)')
+    expect(main).toContain("const recent = new RecentFilesStore(join(app.getPath('userData'), 'recent-files.json'), { ...systemRecent ? { system: systemRecent } : {}, pathsRefused })")
+    expect(main).toContain("const recovery = new RecoveryStore(join(app.getPath('userData'), 'AutoRecover'), { pathsRefused })")
+    expect(main).toContain("const openSession = new SessionStore(join(app.getPath('userData'), 'Session'), { pathsRefused })")
+    for (const store of ['RecentFilesStore', 'RecoveryStore', 'SessionStore']) expect(main.match(new RegExp(`new ${store}\\(`, 'g')), store).toHaveLength(1)
+    // Every read or registration of a path in main: launch files and Recent Files (openPath), a restored session
+    // (reopenDocument, twice), the Open dialog, and a recovered query. A new one needs its source checked against this rule.
+    expect(main.match(/files\.(read|register)\(/g)).toHaveLength(5)
+    expect(main).toContain('const file = record.path && generation === rendererGeneration ? await files.register(record.path, record.kind) : undefined')
+    expect(main.match(/(?<!shell\.)\bopenPath\(/g)).toHaveLength(2)
+    expect(main).toContain('open: openPath, describe: openFailure,')
+    // Nothing else in main reads a document: the stores go through json-file.ts, and imports take a dialog's path.
+    expect(main).not.toMatch(/\breadFile(Sync)?\(|readRegularFile\(|createReadStream\(/)
   })
 
   it('runs before main registers the app protocol or opens a window', () => {

@@ -44,6 +44,9 @@ export interface RecoveryStoreOptions {
   readonly now?: () => Date
   /** Smaller caps, for tests: records and bytes in all. */
   readonly caps?: { readonly records: number; readonly totalBytes: number }
+  /** `take` hands out a record without its file's path (sandbox-guard.ts's `profilePathsRefused`), so the query is
+   *  recovered without a file. The Recover dialog still names the path, which it only shows. */
+  readonly pathsRefused?: boolean
 }
 interface RecordFile { readonly id: string; readonly file: string; readonly canonical: boolean; readonly size: number; readonly mtimeMs: number }
 interface Listed { readonly size: number; readonly mtimeMs: number; readonly entry: RecoveryEntry; readonly owner: RecoveryRecord['owner'] }
@@ -172,7 +175,9 @@ export class RecoveryStore {
       if (!record) throw new Error('The AutoRecover copy of this query could not be read.')
       this.owned.set(id, generation)
       this.offered.delete(id)
-      return record
+      if (!this.options.pathsRefused) return record
+      const { path: _path, ...withoutFile } = record
+      return withoutFile
     })
   }
 
