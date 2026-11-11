@@ -102,7 +102,9 @@ it('reveals a host-linked selection in the virtual outline and the graph without
   await render(props({ selected: 'n85' }))
   await act(async () => button(host, 'Collapse inputs').click())
   expect(item('Operator 85').getAttribute('aria-expanded')).toBe('false')
-  selected.mockClear(); select.mockClear()
+  // Remote updates never echo. The local Collapse click above legitimately reported its selection to the host.
+  expect(selected).not.toHaveBeenCalled()
+  select.mockClear()
   await render(props({ selected: 'n88' }))
   expect(item('Operator 85').getAttribute('aria-expanded')).toBe('true')
   expect(item('Operator 88').getAttribute('aria-selected')).toBe('true')
@@ -119,6 +121,20 @@ it('reveals a host-linked selection in the virtual outline and the graph without
   // Remote updates never echo: no selection event and no host callback.
   expect(selected).not.toHaveBeenCalled()
   expect(select).not.toHaveBeenCalled()
+  // A host echoing a local selection leaves no reveal behind: filtering afterwards returns the outline to the top.
+  await render(props({ selected: 'n100' }))
+  await act(async () => item('Operator 99').click())
+  expect(select).toHaveBeenCalledExactlyOnceWith('n99')
+  await render(props({ selected: 'n99' }))
+  expect(tree.scrollTop).toBeGreaterThan(0)
+  await act(async () => {
+    const find = host.querySelector<HTMLInputElement>('[aria-label="Find plan operators"]')!
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(find, 'Operator 9')
+    find.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  // Operator 9 and 90 to 99 match; the selected Operator 99 is the eleventh row, just below the viewport.
+  expect(host.querySelector('[role="status"].plan-outline-summary')?.textContent).toContain('11 matching')
+  expect(tree.scrollTop).toBe(0)
   await act(async () => { if (!settings.values['queryResults.plan.outline']) button(host, 'Outline').click() })
 })
 

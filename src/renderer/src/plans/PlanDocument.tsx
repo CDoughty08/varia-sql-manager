@@ -23,7 +23,8 @@ export default function PlanDocument({ documentId, source, onSource }: { documen
     return model && position ? { offset: model.getOffsetAt(position), revision: model.getVersionId() } : undefined
   }
   const [version, setVersion] = useState<number | undefined>(() => documents.isFilling(documentId) ? undefined : model?.getVersionId() ?? 0)
-  useEffect(() => { if (xmlTarget) onSource(true) }, [])
+  // An explicit XML target handed to a remounting document is a navigation, like Go to XML: it replaces kept bookkeeping.
+  useEffect(() => { if (xmlTarget) { kept.preserve = false; kept.entry = undefined; onSource(true) } }, [])
   useEffect(() => { if (source && kept.preserve && !kept.entry) kept.entry = xmlPosition() }, [source])
   useLayoutEffect(() => {
     if (!source || !xmlTarget || !model || version === undefined || documents.isFilling(documentId) || xmlTarget.revision !== undefined && xmlTarget.revision !== model.getVersionId()) return

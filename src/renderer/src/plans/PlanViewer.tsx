@@ -230,8 +230,9 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
   useEffect(() => {
     const id = navigation?.selected
     if (id === undefined) return
-    // A host-controlled selection is revealed like a local one, but emits no selection event.
-    reveal.current = id ? { id, ancestors: true } : undefined
+    // A host-controlled selection is revealed like a local one, but emits no selection event. A host echoing this
+    // viewer's own selection changes nothing, so it must not leave a reveal waiting for a later render.
+    if (id !== latest.current.selected) reveal.current = id ? { id, ancestors: true } : undefined
     latest.current.selected = id
     setSelected(id)
   }, [navigation?.selected])
