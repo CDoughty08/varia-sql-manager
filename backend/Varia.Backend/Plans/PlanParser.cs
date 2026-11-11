@@ -26,6 +26,10 @@ internal sealed class PlanNode
     public double? Executions { get; set; }
     public List<string> Warnings { get; } = [];
     public List<PlanProperty> Properties { get; } = [];
+    // Completeness travels with the value: a shortened field is evidence of its retained prefix only, never of equality.
+    // True or absent. Identity covers the operator names and object; details cover properties, warnings and diagnostics.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? IdentityShortened { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? DetailsShortened { get; set; }
     // Live frames cannot refresh details; optional payloads also yield when the reply budget needs the legacy graph.
     [JsonIgnore] public OperatorDiagnostics Diagnostics { get; } = new();
     [JsonPropertyName("diagnostics"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -41,6 +45,9 @@ internal sealed class PlanStatement
     public double? EstimatedCost { get; init; }
     public List<string> Warnings { get; } = [];
     public List<PlanNode> Nodes { get; } = [];
+    // True or absent, as on PlanNode. Text covers the statement text and type; details cover warnings and diagnostics.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? TextShortened { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? DetailsShortened { get; set; }
     [JsonIgnore] public StatementDiagnostics Diagnostics { get; } = new();
     internal bool IncludeDiagnostics { get; set; } = true;
     [JsonPropertyName("diagnostics"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -90,16 +97,20 @@ internal static class PlanParser
             var count = 0;
             var remaining = Text;
             var stagedRemaining = Text;
-            var omitted = false;
+            // Counted, not flagged: a change across one element attributes the loss to the statement or operator that owns it.
+            var omissions = 0;
+            // Properties keep the first value of a repeated attribute by design; the structured diagnostics carry the repeats.
+            // That is worth the notice but is not a shortened field, or nearly every operator would be marked.
+            var repeated = false;
             // Stage at most one text budget of details, then fit them into what legacy fields leave unused.
             // Details must never change the identity-bearing raw properties of the same live/actual XML.
-            var diagnostics = new PlanDiagnostics((value, cap) => Budget(value, cap, ref stagedRemaining), () => omitted = true);
+            var diagnostics = new PlanDiagnostics((value, cap) => Budget(value, cap, ref stagedRemaining), () => omissions++);
             // Essential labels keep their own per-field caps: verbose early properties must not blank later operators.
             string Core(string? value, int cap = 1024)
             {
                 value ??= "";
                 if (value.Length <= cap) return value;
-                omitted = true;
+                omissions++;
                 return value[..(cap - 1)] + "…";
             }
             string Bound(string? value, int cap = 1024) => Budget(value, cap, ref remaining);
@@ -109,13 +120,13 @@ internal static class PlanParser
                 var length = Math.Min(value.Length, Math.Min(cap, available));
                 available -= length;
                 if (length == value.Length) return value;
-                omitted = true;
+                omissions++;
                 return length == 0 ? "" : value[..(length - 1)] + "…";
             }
             void Warn(List<string> target, string value)
             {
                 if (target.Count < 32 && !target.Contains(value)) target.Add(Core(value));
-                else if (target.Count >= 32) omitted = true;
+                else if (target.Count >= 32) omissions++;
             }
             while (xml.Read())
             {
@@ -140,11 +151,19 @@ internal static class PlanParser
                 if (xml.NamespaceURI != Namespace) continue;
                 var previous = (xml.Depth, statement, node, warning);
                 var scoped = false;
+                var mark = omissions;
                 if (name.StartsWith("Stmt", StringComparison.Ordinal))
                 {
                     if (statements.Count >= Statements) throw Limit();
-                    statement = new PlanStatement { Id = "s" + statements.Count, IncludeDiagnostics = includeDiagnostics, StatementId = Core(xml.GetAttribute("StatementId"), 64), QueryHash = Core(xml.GetAttribute("QueryHash"), 64), Text = Bound(xml.GetAttribute("StatementText"), 16_384),
-                        Type = Core(xml.GetAttribute("StatementType") ?? name, 128), EstimatedCost = Number(xml.GetAttribute("StatementSubTreeCost")) };
+                    var text = Bound(xml.GetAttribute("StatementText"), 16_384);
+                    var type = Core(xml.GetAttribute("StatementType") ?? name, 128);
+                    var textShortened = omissions != mark;
+                    // A hash that cannot be kept whole is not identity evidence, so it is dropped rather than shortened.
+                    var hash = xml.GetAttribute("QueryHash") ?? "";
+                    if (hash.Length > 64) { hash = ""; omissions++; }
+                    statement = new PlanStatement { Id = "s" + statements.Count, IncludeDiagnostics = includeDiagnostics, StatementId = Core(xml.GetAttribute("StatementId"), 64), QueryHash = hash, Text = text,
+                        Type = type, EstimatedCost = Number(xml.GetAttribute("StatementSubTreeCost")), TextShortened = textShortened ? true : null };
+                    if (textShortened) mark = omissions;
                     statements.Add(statement);
                     node = null;
                     warning = false;
@@ -158,6 +177,7 @@ internal static class PlanParser
                         EstimatedRows = Number(xml.GetAttribute("EstimateRows")), EstimatedCost = Number(xml.GetAttribute("EstimatedTotalSubtreeCost")) };
                     statement.Nodes.Add(node);
                     node.Diagnostics.RuntimeDetailsAvailable = includeDiagnostics;
+                    if (omissions != mark) { node.IdentityShortened = true; mark = omissions; }
                     scoped = true;
                 }
                 else if (name == "Warnings") { warning = true; scoped = true; }
@@ -167,7 +187,12 @@ internal static class PlanParser
                 if (node is not null)
                 {
                     var thread = name == "RunTimeCountersPerThread" && int.TryParse(xml.GetAttribute("Thread"), NumberStyles.None, CultureInfo.InvariantCulture, out var threadId) ? threadId : (int?)null;
-                    if (name == "Object") node.Object = Core(string.Join('.', new[] { "Database", "Schema", "Table", "Index" }.Select(xml.GetAttribute).Where(value => !string.IsNullOrEmpty(value))), 512);
+                    if (name == "Object")
+                    {
+                        var before = omissions;
+                        node.Object = Core(string.Join('.', new[] { "Database", "Schema", "Table", "Index" }.Select(xml.GetAttribute).Where(value => !string.IsNullOrEmpty(value))), 512);
+                        if (omissions != before) { node.IdentityShortened = true; mark += omissions - before; }
+                    }
                     if (name == "RunTimeCountersPerThread")
                     {
                         // The collector aggregates all counter entries, including entries beyond the detail cap.
@@ -182,19 +207,24 @@ internal static class PlanParser
                             if (warning && name == "Warnings" && xml.Value is not ("false" or "0")) Warn(node.Warnings, xml.LocalName);
                             var key = name + (thread is null ? "" : "[Thread=" + thread.Value.ToString(CultureInfo.InvariantCulture) + "]") + "." + xml.LocalName;
                             if (node.Properties.FirstOrDefault(property => property.Name == key) is { } previousProperty)
-                            { if (previousProperty.Value != xml.Value) omitted = true; continue; }
-                            if (node.Properties.Count >= Properties || remaining == 0) { omitted = true; continue; }
+                            { if (previousProperty.Value != xml.Value) repeated = true; continue; }
+                            if (node.Properties.Count >= Properties || remaining == 0) { omissions++; continue; }
                             node.Properties.Add(new(Bound(key, 128), Bound(xml.Value)));
                         } while (xml.MoveToNextAttribute());
                         xml.MoveToElement();
                     }
                 }
                 else if (warning && statement is not null && name != "Warnings") Warn(statement.Warnings, name);
+                if (omissions != mark)
+                {
+                    if (node is not null) node.DetailsShortened = true;
+                    else if (statement is not null) statement.DetailsShortened = true;
+                }
                 if (scoped && xml.IsEmptyElement) { statement = previous.statement; node = previous.node; warning = previous.warning; }
             }
             if (!found) throw new RequestException("INVALID_PARAMS", "This document is not SQL Server Showplan XML.");
             if (includeDiagnostics) PlanDiagnostics.ApplyTextBudget(statements, (value, cap) => Bound(value, cap), token);
-            var result = new PlanDocument(version, build, statements, omitted ? ["Some plan text, properties or diagnostic details were shortened to stay within the viewer's budgets. The XML source is unchanged."] : []);
+            var result = new PlanDocument(version, build, statements, omissions > 0 || repeated ? ["Some plan text, properties or diagnostic details were shortened to stay within the viewer's budgets. The XML source is unchanged."] : []);
             if (JsonSerializer.SerializeToUtf8Bytes(result).Length > ReplyBytes)
             {
                 if (!includeDiagnostics) throw Limit();

@@ -11,7 +11,7 @@ function details(state: UpdateState): { title: string; command?: CommandId } {
     case 'ready': return { title: `Varia SQL Manager ${state.version} is downloaded and verified. Select to restart and install it.`, command: 'help.restartToUpdate' }
     case 'available': return state.size !== undefined
       ? { title: `Varia SQL Manager ${state.version} is available (${formatBytes(state.size)}). Select to download it.`, command: 'help.downloadUpdate' }
-      : { title: `Varia SQL Manager ${state.version} is available. Select to open the releases page.`, command: 'help.releaseNotes' }
+      : { title: `Varia SQL Manager ${state.version} is available. Select to open the releases page.`, command: 'help.openDownloads' }
     case 'error': return { title: [state.message, state.hint, state.detail && `(${state.detail})`, 'Select to try again.'].filter(Boolean).join(' '), command: 'help.checkForUpdates' }
     default: return { title: 'Checking GitHub for a newer release.' }
   }

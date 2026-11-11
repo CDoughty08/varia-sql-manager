@@ -1,7 +1,8 @@
 # Codex instructions
 
 Read and follow [CLAUDE.md](CLAUDE.md) in this worktree before working in this repository. It contains the shared
-project, architecture, coding, and testing instructions. Keep those instructions there rather than duplicating them here.
+project, architecture, coding, testing, and user-facing documentation instructions. Keep those instructions there rather
+than duplicating them here.
 
 ## Worktrees
 
