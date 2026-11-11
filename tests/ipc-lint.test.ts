@@ -48,6 +48,17 @@ await import(${JSON.stringify(core)})`
     expect(result.stderr).toBe('')
     expect(result.status).toBe(0)
   })
+  it('knows every error code the backend throws by name, and documents every code', async () => {
+    const { errorCodes } = await import('../src/shared/ipc/wire/protocol')
+    // Main turns a code it does not know into BACKEND_ERROR, so a new backend code must be added to errorCodes. Only codes
+    // written where they are thrown are seen: one passed through a variable (a connection failure's) is not.
+    const sources = (directory: string): string[] => readdirSync(directory, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? (entry.name === 'bin' || entry.name === 'obj' ? [] : sources(join(directory, entry.name))) : entry.name.endsWith('.cs') ? [join(directory, entry.name)] : [])
+    const thrown = new Set(sources(join('backend', 'Varia.Backend')).flatMap(file => [...readFileSync(file, 'utf8').matchAll(/RequestException\("([A-Z_]+)"/g)].map(match => match[1])))
+    expect(thrown).toContain('BUDGET_STOPPED')
+    expect([...thrown].filter(code => !(errorCodes as readonly string[]).includes(code))).toEqual([])
+    const docs = readFileSync(join('docs', 'ipc.md'), 'utf8')
+    expect(errorCodes.filter(code => !docs.includes('`' + code + '`'))).toEqual([])
+  })
   it('honours the backend test seams only in unpackaged smoke runs', () => {
     const main = readFileSync(join('src', 'main', 'index.ts'), 'utf8')
     expect(main).toContain("const testSeams = process.env.VARIA_SMOKE_TEST === '1' && !app.isPackaged")
