@@ -38,7 +38,8 @@ export const paneWaitingText: Readonly<Record<PaneWaiting, string>> = {
   stopped: 'No rows: the monitor stopped sampling.'
 }
 
-export default function PaneState({ problem, hasRows, waiting, children }: { readonly problem: PaneProblem | undefined; readonly hasRows: boolean; readonly waiting: PaneWaiting; readonly children: ReactNode }) {
+/** `empty`: what the pane says over its grid's header when the table is there but has no rows (no blocking, nothing running). */
+export default function PaneState({ problem, hasRows, waiting, empty, children }: { readonly problem: PaneProblem | undefined; readonly hasRows: boolean; readonly waiting: PaneWaiting; readonly empty?: string; readonly children: ReactNode }) {
   if (problem?.kind === 'refused' && !hasRows) return <div className="activity-pane-grid"><InlineError className="activity-pane-notice" role="status" code={problem.code} message={problem.message} copy={false} /></div>
   return <div className="activity-pane-grid" data-stale={problem && hasRows ? '' : undefined}>
     {problem && <InlineError className="activity-pane-notice" role="status" code={problem.code} message={hasRows ? `${problem.message} The rows below are from the last sample that succeeded.` : problem.message} copy={false} />}
@@ -49,6 +50,7 @@ export default function PaneState({ problem, hasRows, waiting, children }: { rea
       {!hasRows && !problem && (waiting === 'loading'
         ? <div className="activity-pane-loading"><Skeleton rows={6} label="Waiting for the first sample" /></div>
         : <p className="activity-pane-loading activity-note">{paneWaitingText[waiting]}</p>)}
+      {hasRows && !problem && empty && <p className="activity-pane-empty activity-note">{empty}</p>}
     </div>
   </div>
 }
