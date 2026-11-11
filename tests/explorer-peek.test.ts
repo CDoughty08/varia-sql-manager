@@ -3,7 +3,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { explorerCatalogJson, maxBand, minBand } from '../src/shared/explorer/catalog'
 import { isPeekKind, isPeekListTab, peekCatalogBlock, peekFacts, peekFormats, peekHas, peekKinds, peekLimits, peekLists, peekListsOf, peekSpecs, peekTabsOf, peekTabTitle, type PeekDefinitionResult, type PeekDependenciesResult, type PeekResult } from '../src/shared/explorer/peek'
-import { peekDefinitionParamsSchema, peekDependenciesParamsSchema, peekParamsSchema } from '../src/shared/explorer/schema'
+import { explorerChildrenParamsSchema, peekDefinitionParamsSchema, peekDependenciesParamsSchema, peekParamsSchema } from '../src/shared/explorer/schema'
 import { requestSchemas } from '../src/main/validation'
 import { methodPolicies } from '../src/shared/ipc/methods'
 import { cancellableRequests } from '../src/main/backend/renderer-requests'
@@ -638,6 +638,13 @@ describe('Peek tabs', () => {
     expect(open().dependencies).toEqual({ status: 'ready', value: { uses: [{ name: 'Orders', schema: 'dbo', kind: 'table' }], usesTruncated: false, usedBy: [], usedByTruncated: true } })
     service.selectTab('dependencies')
     expect(api.explorerPeekDependencies).toHaveBeenCalledTimes(2)
+  })
+  it('asks for the Columns of a subtyped table with a request the children schema accepts', () => {
+    const { service, api } = setup()
+    service.peek({ ...node('table'), subtype: 'systemVersioned' }, 'hover')
+    service.selectTab('members')
+    const [request] = api.explorerChildren.mock.calls[0] as unknown as [unknown]
+    expect(explorerChildrenParamsSchema.safeParse({ ...(request as object), requestId }).success).toBe(true)
   })
   it('reads Columns or Parameters and Top rows only once their tab is chosen, and each once per card', async () => {
     const { service, api, children, executes, results, open } = setup()
