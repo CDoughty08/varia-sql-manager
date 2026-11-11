@@ -327,7 +327,8 @@ try {
   await writeFile(join(control, 'activity-blocked'), '')
   await expect(monitor().getByText('2 sessions in blocking chains', { exact: true })).toBeVisible()
   await expect(monitor().getByText(/^No blocking right now\./)).toHaveCount(0)
-  await expect(chains.getByRole('gridcell', { name: 'svc_reporting', exact: true })).toBeVisible()
+  // The first columns, in view at any width: the waiter indented under its lead blocker, and its wait.
+  await expect(chains.getByRole('gridcell', { name: '└─ 61', exact: true })).toBeVisible()
   await expect(chains.getByRole('gridcell', { name: 'LCK_M_S', exact: true })).toBeVisible()
   await rm(join(control, 'activity-blocked'))
   await expect(monitor().getByText('No blocking: no session waits on another.', { exact: true })).toBeVisible()
@@ -336,6 +337,9 @@ try {
   await expect(active).toBeVisible()
   await expect(monitor().getByText('2 running requests', { exact: true })).toBeVisible()
   await expect(active.getByRole('gridcell', { name: 'BillingDb', exact: true })).toBeVisible()
+  // A pane change sends its probe states at once if they change; give it a sample's time, then none may have resumed.
+  await expect(monitor().getByText('2 running requests', { exact: true })).toBeVisible()
+  await expect.poll(async () => (await viewOf(id)).probes['activity.resources']?.state).toBe('paused')
   expect((await calls('live.update')).slice(updatesBefore).flatMap(call => call.params.probes ?? []).filter(probe => probe.paused === false)).toEqual([])
   await firstTabs.getByRole('tab', { name: 'Processes', exact: true }).click()
   console.log('Blocking and active passed: the chain shows with its lead blocker and goes when blocking ends, running requests list, and neither starts a probe.')

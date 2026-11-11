@@ -1161,6 +1161,7 @@ function liveSubscribe(id, credit, params) {
     const kept = ended === 'sourceEnded' ? live.revisions.slice(-1) : []
     for (const resultId of live.revisions) if (!kept.includes(resultId)) stored.delete(resultId)
     for (const ids of live.kept.values()) for (const resultId of ids) stored.delete(resultId)
+    for (const ids of live.keptOthers?.values() ?? []) for (const resultId of ids) stored.delete(resultId)
     respond(id, { ended, ...error, ...(ended === 'sourceEnded' ? { kept } : {}), ticks: live.ticks, elapsedMs: Date.now() - live.started })
   }
   lives.set(id, live)
@@ -1216,8 +1217,8 @@ function sessionsShown(filter) {
 // activity-blocked does (as the overview's Blocked Sessions tile reads it), so a test sees both the empty pane and the
 // chain; 61 and 66 are running. Cells are keyed by the catalogue's column id without the table's prefix.
 const fakeChain = [
-  { session: '57', sessionId: '57', depth: '0', status: 'sleeping', blockedSessions: '1', login: 'app_orders', hostName: 'APP-01', application: 'Orders.Api', database: 'SalesDb', openTransactions: '1', cycle: 'False', lastBatch: 'BEGIN TRAN; UPDATE dbo.Orders SET Status = 2 WHERE OrderId = 1', tone: 'warning' },
-  { session: '    61', sessionId: '61', depth: '1', status: 'suspended', blockedSessions: '0', waitType: 'LCK_M_S', waitTimeMs: '41200', waitResource: 'KEY: 7:72057594043695104 (8194443284a0)', login: 'svc_reporting', hostName: 'BI-01', application: 'Power BI', database: 'SalesDb', openTransactions: '0', cycle: 'False', tone: 'error' }
+  { session: '57', sessionId: '57', depth: '0', status: 'sleeping', blockedSessions: '1', login: 'app_orders', hostName: 'APP-01', application: 'Orders.Api', database: 'SalesDb', openTransactions: '1', cycle: '0', lastBatch: 'BEGIN TRAN; UPDATE dbo.Orders SET Status = 2 WHERE OrderId = 1', tone: 'warning' },
+  { session: '└─ 61', sessionId: '61', depth: '1', status: 'suspended', blockedSessions: '0', waitType: 'LCK_M_S', waitTimeMs: '41200', waitResource: 'KEY: 7:72057594043695104 (8194443284a0)', login: 'svc_reporting', hostName: 'BI-01', application: 'Power BI', database: 'SalesDb', openTransactions: '0', cycle: '0', tone: 'error' }
 ]
 const fakeActive = [
   { query: 'SELECT o.OrderId, o.Total FROM dbo.Orders AS o WHERE o.Status = 2', sessionId: '61', requestId: '0', startTime: '2026-11-09 08:01:10.000', status: 'suspended', database: 'SalesDb', cpuMs: '120', elapsedMs: '41300', logicalReads: '512', waitType: 'LCK_M_S', blockedBy: '57', dop: '1', tone: 'error' },

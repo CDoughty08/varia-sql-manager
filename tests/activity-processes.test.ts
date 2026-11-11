@@ -5,7 +5,7 @@ import { defaultProcessesFilter, monitorArgs, processesActivityFilter, type Proc
 import { activeFilters, processesStatus, processesToneLabel, valueChoices } from '../src/renderer/src/activity/panes/ProcessesPane'
 import { paneProblem, paneWaiting } from '../src/renderer/src/activity/panes/PaneState'
 import type { LiveProbeSnapshot, LiveSnapshot } from '../src/renderer/src/live/LiveService'
-import { activeStatus, activeToneLabel, blockingStatus, blockingToneLabel, sessionTableIndex } from '../src/renderer/src/activity/panes/SessionTablePanes'
+import { activeStatus, activeToneLabel, blockingStatus, blockingToneLabel, emptyNote, sessionTableIndex, type TableFacts } from '../src/renderer/src/activity/panes/SessionTablePanes'
 import { liveProbes } from '../src/shared/live/catalog'
 
 const probe = (patch: Partial<LiveProbeSnapshot>): LiveProbeSnapshot => ({ state: 'fresh', intervalMs: 2000, effectiveIntervalMs: 2000, ...patch })
@@ -73,16 +73,36 @@ describe('Blocking and Active Expensive Queries panes', () => {
     expect(liveProbes['activity.sessions']?.tables?.map(table => table.id)).toEqual(['sessions', 'blocking', 'activeQueries'])
     expect([sessionTableIndex('blocking'), sessionTableIndex('activeQueries')]).toEqual([1, 2])
   })
-  it('name their tones and say what the table holds, is cut to, or that it is empty', () => {
-    expect(['error', 'warning', 'muted', 'running'].map(tone => blockingToneLabel(tone as never))).toEqual(['blocked', 'lead blocker', 'no longer blocked', undefined])
-    expect(['error', 'running', 'muted', 'warning'].map(tone => activeToneLabel(tone as never))).toEqual(['blocked', 'rolling back', 'finished', undefined])
-    expect(blockingStatus(0, false)).toBe('No blocking: no session waits on another.')
-    expect(blockingStatus(2, false)).toBe('2 sessions in blocking chains')
-    expect(blockingStatus(1, true)).toBe(`1 session in blocking chains · at most ${tableSpecs.blocking.rowCap.toLocaleString('en-US')} kept`)
-    expect(blockingStatus(undefined, false, 'paused')).toMatch(/^Paused/)
-    expect(activeStatus(0, false)).toBe('No requests running.')
-    expect(activeStatus(1, false)).toBe('1 running request')
-    expect(activeStatus(100, true)).toBe(`100 running requests · the ${tableSpecs.activeQueries.rowCap} using the most CPU`)
-    expect(activeStatus(undefined, false)).toBe('Waiting for the first sample…')
+  it('name the tones the backend sets on them', () => {
+    expect(['error', 'warning', 'muted', 'running'].map(tone => blockingToneLabel(tone as never))).toEqual(['blocked', 'lead blocker', 'left the chain', undefined])
+    expect(['error', 'running', 'muted', 'warning'].map(tone => activeToneLabel(tone as never))).toEqual(['blocked', 'rolling back', 'no longer listed', undefined])
+  })
+  it('say what the table holds, what cut it, that it is empty right now only while live, and why there is nothing', () => {
+    const facts = (patch: Partial<TableFacts>): TableFacts => ({ rows: 0, live: true, waiting: 'loading', refused: false, ...patch })
+    expect(blockingStatus(facts({}))).toBe('No blocking: no session waits on another.')
+    expect(blockingStatus(facts({ live: false }))).toBe('No blocking in the last sample.')
+    expect(blockingStatus(facts({ rows: 2 }))).toBe('2 sessions in blocking chains')
+    expect(blockingStatus(facts({ rows: 33, truncated: 'rowLimit' }))).toBe(`33 sessions in blocking chains · cut at ${tableSpecs.blocking.rowCap.toLocaleString('en-US')} sessions or ${activityLimits.blockingDepth} levels deep`)
+    expect(blockingStatus(facts({ rows: 5, truncated: 'globalBudget' }))).toBe('5 sessions in blocking chains · cut to stay inside the memory budget')
+    expect(blockingStatus(facts({ rows: undefined, waiting: 'paused' }))).toMatch(/^Paused/)
+    // A refusal at open sends no table: the status says so instead of waiting for a sample that never comes.
+    expect(blockingStatus(facts({ rows: undefined, refused: true }))).toBe('Blocking chains cannot be read on this server.')
+    expect(activeStatus(facts({}))).toBe('No requests running.')
+    expect(activeStatus(facts({ live: false }))).toBe('No requests running in the last sample.')
+    expect(activeStatus(facts({ rows: 1 }))).toBe('1 running request')
+    expect(activeStatus(facts({ rows: 100, truncated: 'rowLimit' }))).toBe(`100 running requests · the ${tableSpecs.activeQueries.rowCap} using the most CPU`)
+    expect(activeStatus(facts({ rows: 37, truncated: 'queryBudget' }))).toBe('37 running requests · cut to stay inside the memory budget')
+    expect(activeStatus(facts({ rows: undefined, refused: true }))).toBe('Running requests cannot be read on this server.')
+    expect(activeStatus(facts({ rows: undefined }))).toBe('Waiting for the first sample…')
+    // The empty note claims "right now" only while the table is current, and never over a failure.
+    expect(emptyNote('blocking', facts({}), undefined)).toMatch(/^No blocking right now\./)
+    expect(emptyNote('activeQueries', facts({}), undefined)).toBe('No requests are running right now.')
+    expect(emptyNote('blocking', facts({ live: false }), undefined)).toBeUndefined()
+    expect(emptyNote('blocking', facts({ rows: 1 }), undefined)).toBeUndefined()
+    expect(emptyNote('blocking', facts({}), { kind: 'failing', message: 'Blocked.' })).toBeUndefined()
+  })
+  it('take the probe\'s error only when it names their table', () => {
+    const denied = probe({ state: 'fresh', error: { code: 'PERMISSION_DENIED', message: 'No.', tables: [1, 2] } as never })
+    expect([paneProblem(denied, 0), paneProblem(denied, 1)?.kind, paneProblem(denied, 2)?.kind]).toEqual([undefined, 'refused', 'refused'])
   })
 })

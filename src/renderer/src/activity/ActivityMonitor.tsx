@@ -286,7 +286,7 @@ function Pane({ state, slot, blocked, handle, snapshot }: { readonly state: Moni
     </div>
     <div className="activity-pane-body" role="tabpanel" id={`${base}-panel`} aria-labelledby={`${base}-${current}`}>
       {current === 'processes' && <ProcessesPane state={state} handle={handle} snapshot={snapshot} facts={facts} labelledBy={`${base}-${current}`} />}
-      {(current === 'blocking' || current === 'activeQueries') && <SessionTablePane key={current} table={current} state={state} handle={handle} snapshot={snapshot} labelledBy={`${base}-${current}`} />}
+      {(current === 'blocking' || current === 'activeQueries') && <SessionTablePane key={current} table={current} state={state} handle={handle} snapshot={snapshot} />}
       {pendingPanes.includes(current) && <EmptyState icon="pulse" title={paneSpecs[current].title} detail={pendingPaneNote(current)} />}
     </div>
   </section>
