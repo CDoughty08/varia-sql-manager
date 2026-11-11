@@ -52,8 +52,18 @@ describe('Import preview', () => {
     // Unreadable records can also make Replace too large without being too many.
     const large = (name: string) => Array.from({ length: 100 }, (_, index) => ({ [name]: index, text: 'x'.repeat(900) }))
     const bulky = importSummary({ ...emptyShortcutFile, unknown: large('mine') }, { ...emptyShortcutFile, unknown: large('theirs') }, 'win32')
-    expect(bulky.over.replace).toBe('size')
+    expect(bulky.over).toEqual({ merge: 'size', replace: 'size' })
     expect(importRefusal(bulky, 'replace')).toMatch(/larger than the 128 KiB.*cannot be imported\.$/)
+    expect(importRefusal(bulky, 'merge')).not.toMatch(/remove some/i)
+    // Repeated records make the modes differ: the one that fits is the advice, never "cannot be imported".
+    const a = { record: 'a' }
+    const mergeFits = importSummary({ ...emptyShortcutFile, unknown: [a, ...records(0).concat(records(500)).slice(0, shortcutLimits.unknown - 1)] }, { ...emptyShortcutFile, unknown: [a, a] }, 'win32')
+    expect(mergeFits.over).toEqual({ merge: undefined, replace: 'unknown' })
+    expect(importRefusal(mergeFits, 'replace')).toMatch(/Choose Merge\.$/)
+    expect(importRefusal(mergeFits, 'replace')).not.toMatch(/cannot be imported/)
+    const replaceFits = importSummary({ ...emptyShortcutFile, unknown: [...Array.from({ length: 200 }, () => a), ...records(0).slice(0, 50)] }, { ...emptyShortcutFile, unknown: [a, ...records(1000).slice(0, 100)] }, 'win32')
+    expect(replaceFits.over).toEqual({ merge: 'unknown', replace: undefined })
+    expect(importRefusal(replaceFits, 'merge')).toMatch(/Choose Replace\.$/)
     // Too many shortcuts together is the user's to fix: Replace fits, and so would Merge with fewer of theirs.
     const letters = 'abcdefghijklmnopqrstuvwxyz'
     const some = (command: ShortcutBinding['command']): ShortcutBinding[] => Array.from({ length: 600 }, (_, index) => ({ command, key: `mod+alt+${letters[index % 26]} mod+${letters[Math.floor(index / 26)]}`, platform: 'win32' }))

@@ -272,19 +272,22 @@ describe('shortcuts file records kept for later', () => {
     expect(full.file.gestures).toEqual({ 'test.g0': 'zzz' })
     expect(full.file.unknown).toEqual(others)
     expect(full.problems).toEqual([`Unknown record 1 was dropped: the file keeps at most ${shortcutLimits.unknown} unknown records.`])
-    // Around the cap nothing is lost unreported: the record is live, kept in `unknown`, or named in a problem, and reading
-    // the result again changes nothing.
+    // Around the cap nothing is lost unreported: the record is live, kept in `unknown`, or named in a problem. Every own
+    // setting survives (keeping the record must not push one out), and reading the result again changes nothing.
     for (const otherCount of [shortcutLimits.unknown - 2, shortcutLimits.unknown - 1, shortcutLimits.unknown, shortcutLimits.unknown + 1])
-      for (const unofferedCount of [1, 2, 3]) {
-        const own = Object.fromEntries(ids.slice(0, unofferedCount).reverse().map(id => [id, 'zzz']))
-        const result = readShortcutFile(v1({ gestures: own, unknown: [record, ...others.slice(0, otherCount), ...otherCount > others.length ? [{ kept: 'more' }] : []] }), many)
-        if (!result.ok) throw new Error(result.error)
-        const name = `${otherCount}/${unofferedCount}`
-        const kept = result.file.gestures['test.g0'] === 'ctrl' || result.file.unknown.some(value => JSON.stringify(value) === JSON.stringify(record))
-        expect(kept || result.problems.length > 0, name).toBe(true)
-        expect(shortcutFileSchema.safeParse(result.file).success, name).toBe(true)
-        expect(readShortcutFile(JSON.parse(JSON.stringify(result.file)), many), name).toEqual({ ok: true, file: result.file, problems: [] })
-      }
+      for (const unofferedCount of [1, 2, 3, 5, 8])
+        for (const at of [0, unofferedCount - 1]) {
+          const own = Object.fromEntries(ids.slice(0, unofferedCount).map(id => [id, 'zzz']))
+          const shadowed = { gesture: ids[at], choice: 'ctrl' }
+          const result = readShortcutFile(v1({ gestures: own, unknown: [shadowed, ...others.slice(0, otherCount), ...otherCount > others.length ? [{ kept: 'more' }] : []] }), many)
+          if (!result.ok) throw new Error(result.error)
+          const name = `${otherCount}/${unofferedCount}/${at}`
+          const inUnknown = (value: unknown) => result.file.unknown.some(item => JSON.stringify(item) === JSON.stringify(value))
+          expect(result.file.gestures[shadowed.gesture] === 'ctrl' || inUnknown(shadowed) || result.problems.some(problem => problem.startsWith('Unknown record 1 ')), name).toBe(true)
+          for (const id of Object.keys(own)) expect(result.file.gestures[id] === 'zzz' || inUnknown({ gesture: id, choice: 'zzz' }), `${name} ${id}`).toBe(true)
+          expect(shortcutFileSchema.safeParse(result.file).success, name).toBe(true)
+          expect(readShortcutFile(JSON.parse(JSON.stringify(result.file)), many), name).toEqual({ ok: true, file: result.file, problems: [] })
+        }
   })
   it("keeps the bindings of a file a few bytes under the limit whose gesture moves to unknown (#237)", () => {
     // The issue's file: ten bindings, unknown records filling it to just under the limit, and a choice this build lacks.

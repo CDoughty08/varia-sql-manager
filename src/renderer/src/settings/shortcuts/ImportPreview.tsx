@@ -29,7 +29,7 @@ export default function ImportPreview({ summary, problems, onImport, onCancel }:
       <div><dt>Shortcuts</dt><dd>{summary.shortcuts}</dd></div>
       <div><dt>New</dt><dd>{summary.added}</dd></div>
       <div><dt>Same as yours</dt><dd>{summary.same}</dd></div>
-      {summary.repeated > 0 && <div><dt>Repeated</dt><dd>{plural(summary.repeated, 'entry', 'entries')} the file lists more than once; each is imported once.</dd></div>}
+      {summary.repeated > 0 && <div><dt>Repeated</dt><dd>{plural(summary.repeated, 'entry', 'entries')} {summary.repeated === 1 ? 'repeats' : 'repeat'} another of the file's.</dd></div>}
       <div><dt>Conflicts</dt><dd>{summary.conflicts.length ? <ul>{summary.conflicts.map((conflict, index) => <li key={index}>{conflict.label.text} for {conflict.command} takes it from {conflict.with.join(', ')}</li>)}</ul> : 0}</dd></div>
       {summary.clashes > 0 && <div><dt>Same keys</dt><dd>{plural(summary.clashes, 'entry', 'entries')} {summary.clashes === 1 ? 'takes' : 'take'} a key another of the file's entries has; they will show as problems.</dd></div>}
       {summary.ignored > 0 && <div><dt>Ignored removals</dt><dd>{plural(summary.ignored, 'removal')} of a locked key or one no command has here; they will show as problems.</dd></div>}

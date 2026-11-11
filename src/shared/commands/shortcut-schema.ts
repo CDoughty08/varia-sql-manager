@@ -242,13 +242,14 @@ function readOnce(raw: unknown, options: ShortcutReadOptions): ShortcutReadResul
     else gestures[id] = choice
   })
   else if (raw.gestures !== undefined) problems.push('The gesture settings were dropped: they were not an object.')
-  // The file's own setting, when this build offers it, wins over one kept for later. Counted above, so these fit; should one not, it goes back to its
+  // The file's own setting wins over one kept for later. Counted above, so these fit; should one not, it goes back to its
   // place in `unknown`, ahead of a record this read moved there.
   restoredGestures.forEach(({ id, choice, value, index }) => {
     if (Object.hasOwn(gestures, id)) {
-      // An own choice this build does not offer stayed live only because `unknown` was full. It is not a setting that
-      // replaces the record, so the record goes back to `unknown`, or is reported when that has no room (#383).
-      if (!offered(id, gestures[id])) keepRestored(value, index)
+      // An own choice this build does not offer stayed live only because `unknown` was full, so the record it shadows
+      // has nowhere to go. Losing it is damage, not a setting replacing it: report it, so main salvages the file (#383).
+      // Making room by dropping a record this read moved would cost another setting on every later read.
+      if (!offered(id, gestures[id])) problems.push(`Unknown record ${index + 1} was dropped: the file keeps at most ${shortcutLimits.unknown} unknown records.`)
       return
     }
     if (Object.keys(gestures).length < shortcutLimits.gestures) gestures[id] = choice
