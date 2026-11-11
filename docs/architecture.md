@@ -279,6 +279,11 @@ being true.
   `SsisOptions.CreateScratch` of the dry run), never a request field; Stop cancels any statement but the restore (whose
   reply waits for it to end), and a Stop or failure after the restore removes exactly what the request made, waiting at
   most 30 s per lock. Never log names, values, SQL or messages.
+- Release notes are reviewed, versioned plain-text records (`release-notes/*.json`), validated by
+  `src/shared/releases/schema.ts` and explicitly bundled by its catalog. Their read-only document uses the normal custom
+  provider and document frame; it has no SQL model or backend connection. Requested versions match exactly; missing
+  notes do not fall back silently or block the updater. `scripts/release-notes.mjs` also generates public release bodies
+  and published changelog sections from those records. Manual downloads remain the fixed main-owned releases URL.
 - Updates live in `src/shared/updates.ts` (feed, manifest schema, states, failure words); only main fetches (its own
   in-memory session, `net` through the system proxy and certificate store), verifies size and SHA-512 against the
   release's `varia-update-v2.json` (written by `scripts/update-manifest.mjs` in the release job), and installs, only after

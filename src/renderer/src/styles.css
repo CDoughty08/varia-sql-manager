@@ -342,6 +342,14 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .about-details { font-size: var(--varia-size-sm); color: var(--varia-descriptionForeground); }
 .about-details > summary { cursor: pointer; }
 .about-details > pre { margin: var(--varia-space-2) 0 0; padding: var(--varia-space-3); background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); font: var(--varia-size-sm)/var(--varia-line-md) var(--varia-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.release-note-picker { display: flex; align-items: center; flex-wrap: wrap; gap: var(--varia-space-2); color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); }
+.release-note-picker > select { max-width: 100%; padding: var(--varia-space-1) var(--varia-space-2); }
+.release-note-intro { max-width: 880px; }
+.release-note-intro > p { margin: 0; font-size: var(--varia-size-md); line-height: var(--varia-line-md); }
+.release-note-intro > .release-note-build { margin-top: var(--varia-space-2); font-size: var(--varia-size-sm); color: var(--varia-descriptionForeground); }
+.release-note-list { display: flex; flex-direction: column; gap: var(--varia-space-5); max-width: 880px; user-select: text; }
+.release-note h3 { margin: 0 0 var(--varia-space-1); font-size: var(--varia-size-md); line-height: var(--varia-line-md); font-weight: 600; }
+.release-note p { margin: 0; font-size: var(--varia-size-md); line-height: var(--varia-line-md); color: var(--varia-descriptionForeground); overflow-wrap: anywhere; }
 .go-to-line-dialog { width: min(360px, calc(100vw - 40px)); }
 .go-to-line-dialog label { display: block; font-size: var(--varia-size-xs); color: var(--varia-dialog-labelForeground); margin-bottom: 6px; }
 .go-to-line-dialog input { width: 100%; height: 28px; }
@@ -2380,6 +2388,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .activity-pane-rows { position: relative; display: flex; flex: 1; min-height: 0; }
 .activity-pane-grid[data-stale] .activity-pane-rows { opacity: 0.6; }
 .activity-pane-loading { position: absolute; inset: 0; z-index: 4; padding: var(--varia-space-2); background: var(--varia-resultsGrid-background); }
+.activity-pane-empty { position: absolute; inset: var(--varia-row) 0 auto; z-index: 3; padding: var(--varia-space-4) var(--varia-space-3); text-align: center; pointer-events: none; }
 .activity-pane-status { flex: none; margin: 0; padding: 0 var(--varia-space-2); height: var(--varia-status); line-height: var(--varia-status); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-top: 1px solid var(--varia-panel-border); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
 /* Two rows of four tiles under 960 px of document (where eight still leave SSMS's names whole; D-am §3.2 says 1,100,
    which at a 1,280 px window pushes the panes out of the document), four rows of two under 560 px. */

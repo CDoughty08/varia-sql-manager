@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "version": "0.8.0",
+  "releasedOn": "2026-11-10",
+  "summary": "Write SQL with connection-aware suggestions, reshape results without running the query again, and see more of what your server is doing.",
+  "changes": [
+    { "category": "added", "title": "SQL IntelliSense", "text": "Get suggestions for tables, columns and other database objects, inspect identifiers with hover, and see SQL issues in the editor. Refresh Local Cache updates the schema information when objects change." },
+    { "category": "added", "title": "Filter results in place", "text": "Use a column's funnel to choose values, search its value checklist, or filter by ranges, NULLs and duplicates. Filters combine with sorting. Search, copy, export, profiles and highlights follow the displayed rows; SQL is not executed again." },
+    { "category": "added", "title": "Pivot and transpose", "text": "Group displayed results and calculate counts, sums, averages, minimums or maximums in a new pivot result. Transpose turns displayed or selected rows into columns. Both outputs can be sorted, filtered, copied and exported." },
+    { "category": "added", "title": "Activity Monitor Processes", "text": "Inspect a live sessions grid with text and column filters, view chips, and switches for system sessions and Varia's own sessions. Expand more than one overview chart at a time." },
+    { "category": "added", "title": "Recover a closed query", "text": "Reopen closed queries as unsaved, disconnected copies. Create a query directly in an editor group, and see whether Execute will run your selection or the entire query. The status bar also offers Go to Line and insert/overtype switching." },
+    { "category": "added", "title": "More ways to work with results and errors", "text": "Copy a column's name, fit columns with the keyboard, close results from their toolbar, and jump from a SQL error to its source line when the source has not changed." },
+    { "category": "changed", "title": "Quicker updates on Windows", "text": "An installed copy in a folder you can write now prepares a downloaded release while you work. Restart to Update swaps it into place. Installations for all users continue to use the installer. Restart verifies the downloaded file again before installing." },
+    { "category": "changed", "title": "Manual updates on macOS", "text": "macOS builds tell you when a release is available and open its downloads page. They no longer download an update that this unsigned copy cannot install itself." },
+    { "category": "fixed", "title": "Tabs, Peek and everyday navigation", "text": "Tab focus, renaming and overflow are more reliable. Peek shows long definitions in a read-only editor with Find and SQL hover, and remains usable in narrow panels. Saved-connection selection and Object Explorer recovery actions are improved." },
+    { "category": "fixed", "title": "Results remain consistent as you reshape them", "text": "Corrected highlight and comparison edge cases, filtered row counts and reuse of filter/sort results. Numeric pivot sums retain precision up to 38 digits." },
+    { "category": "limits", "title": "IntelliSense uses its own connection", "text": "Connected IntelliSense currently supports SQL Login and Windows authentication. Entra IntelliSense is not available yet; query execution keeps its existing authentication support. Query-session temporary tables and uncommitted changes are not visible to the analysis connection." },
+    { "category": "limits", "title": "Results stay in memory", "text": "Transpose uses at most the first 4,095 displayed or selected rows and reports truncation. A pivot that exceeds its group or figure limits is refused with an explanation." },
+    { "category": "limits", "title": "More Activity Monitor panes are still to come", "text": "This release adds the Processes grid. Blocking, Resource Waits, Data File I/O and expensive-query panes are not shown yet." },
+    { "category": "limits", "title": "Unsigned builds", "text": "Builds remain unsigned, and macOS builds are not notarized. Your operating system may ask you to confirm that you trust the application." }
+  ]
+}

@@ -7,6 +7,27 @@ const flush = () => new Promise(resolve => setTimeout(resolve, 0))
 const error = (change: Partial<Extract<UpdateState, { status: 'error' }>>): UpdateState => ({ ...base, status: 'error', code: 'proxy', during: 'check', manual: false, ...updateErrors.proxy, detail: 'net::ERR_TUNNEL_CONNECTION_FAILED', ...change })
 
 describe('updates in the workbench', () => {
+  it('opens installed notes from Help, captures a toast version, and keeps download remedies external', async () => {
+    const fixture = workbenchFixture()
+    await flush()
+    const { api, commands, releaseNotes, notifications } = fixture
+    api.pushUpdate({ ...base, status: 'ready', version: '1.1.0' })
+    const advertised = notifications.getSnapshot().visible[0]!.actions!.find(action => action.label === 'Release notes')!
+    api.pushUpdate({ ...base, status: 'available', version: '1.2.0', size: 123 })
+    advertised.run()
+    await flush()
+    expect(releaseNotes.getSnapshot().version).toBe('1.1.0')
+    await commands.execute('help.releaseNotes', undefined, 'menu')
+    expect(releaseNotes.getSnapshot().version).toBe('1.0.0')
+    expect(api.openReleasesPage).not.toHaveBeenCalled()
+    await commands.execute('help.openDownloads', undefined, 'palette')
+    expect(api.openReleasesPage).toHaveBeenCalledTimes(1)
+    api.pushUpdate(error({ manual: true }))
+    notifications.getSnapshot().visible[0]!.actions!.find(action => action.label === 'Open releases page')!.run()
+    await flush()
+    expect(api.openReleasesPage).toHaveBeenCalledTimes(2)
+    fixture.dispose()
+  })
   it('follows main\'s state in the update context keys, so the commands enable as the state allows', async () => {
     const fixture = workbenchFixture()
     await flush()
@@ -92,7 +113,7 @@ describe('updates in the workbench', () => {
     await flush()
     const { api, notifications, commands } = fixture
     api.pushUpdate({ ...base, kind: 'unsupported', status: 'available', version: '1.1.0' })
-    expect(notifications.getSnapshot().visible[0]!.actions!.map(action => action.label)).toEqual(['Open releases page'])
+    expect(notifications.getSnapshot().visible[0]!.actions!.map(action => action.label)).toEqual(['Open releases page', 'Release notes'])
     api.checkForUpdates.mockImplementationOnce(async () => ({ ok: true, value: { ...base, enabled: false, status: 'idle' } }))
     await commands.execute('help.checkForUpdates', undefined, 'menu')
     expect(commands.getSnapshot()).toMatchObject({ kind: 'warning', error: 'This copy of Varia SQL Manager is a development build, which does not check for updates.' })

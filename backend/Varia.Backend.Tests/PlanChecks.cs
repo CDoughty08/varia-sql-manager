@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Text;
+using System.Text.Json;
 using Varia.Backend.Plans;
 
 namespace Varia.Backend.Tests;
@@ -14,6 +15,7 @@ internal static class PlanChecks
         var fixture = File.ReadAllText(Path.Combine("tests", "fixtures", "plans", "multiple.sqlplan"));
         var plan = Parse(fixture);
         DiagnosticChecks(check);
+        CompletenessChecks(check);
         check(plan.Statements.Count == 2 && plan.Version == "1.6" && plan.Build == "16.0.1000.6", "showplan batch statements and version");
         var root = plan.Statements[0].Nodes[0];
         var scan = plan.Statements[0].Nodes[1];
@@ -67,6 +69,36 @@ internal static class PlanChecks
         catch (OperationCanceledException) { check(true, "plan parse cancellation"); }
     }
 
+    /// <summary>A shortened field must say so on its owner: the comparison treats it as a prefix, never as equality.</summary>
+    private static void CompletenessChecks(Action<bool, string> check)
+    {
+        string Statement(string text, string hash, string body = "") => Open + "<StmtSimple StatementType=\"SELECT\" QueryHash=\"" + hash + "\" StatementText=\"" + text + "\"><QueryPlan>" + body + "</QueryPlan></StmtSimple>" + Close;
+        var prefix = "SELECT N'" + new string('x', 16_400);
+        var first = Parse(Statement(prefix + "A'", "0x1111111111111111")).Statements[0];
+        var second = Parse(Statement(prefix + "B'", "0x2222222222222222")).Statements[0];
+        check(first.Text == second.Text && first.Text.Length == 16_384 && first is { TextShortened: true, DetailsShortened: null } && second.TextShortened == true
+            && first.QueryHash == "0x1111111111111111" && second.QueryHash == "0x2222222222222222", "statements that differ past the text cap are marked shortened and keep their complete hashes");
+        string Parameters(char last) => "<ParameterList><ColumnReference Column=\"@p\" ParameterDataType=\"nvarchar(max)\" ParameterCompiledValue=\"" + new string('x', 4_100) + last + "\" ParameterRuntimeValue=\"(1)\"/></ParameterList>";
+        var compiledA = Parse(Statement("SELECT @p", "0x1", Parameters('A'))).Statements[0];
+        var compiledB = Parse(Statement("SELECT @p", "0x1", Parameters('B'))).Statements[0];
+        check(compiledA.Diagnostics.Parameters[0].CompiledValue == compiledB.Diagnostics.Parameters[0].CompiledValue && compiledA.Diagnostics.Parameters[0].CompiledValue!.Length == 4_096
+            && compiledA is { TextShortened: null, DetailsShortened: true } && compiledB.DetailsShortened == true, "parameter values that differ past their cap mark the statement's details shortened");
+        var operators = Parse(Statement("SELECT 1", "0x1",
+            "<RelOp NodeId=\"0\" PhysicalOp=\"Index Seek\" LogicalOp=\"Index Seek\"><Object Table=\"[" + new string('t', 600) + "]\"/>"
+            + "<RelOp NodeId=\"1\" PhysicalOp=\"Filter\" LogicalOp=\"Filter\"><Predicate><ScalarOperator ScalarString=\"" + new string('p', 5_000) + "\"/></Predicate>"
+            + "<RelOp NodeId=\"2\" PhysicalOp=\"" + new string('o', 200) + "\" LogicalOp=\"Scan\"/></RelOp></RelOp>")).Statements[0];
+        check(operators is { TextShortened: null, DetailsShortened: null } && operators.Nodes[0] is { IdentityShortened: true, DetailsShortened: null }
+            && operators.Nodes[1] is { IdentityShortened: null, DetailsShortened: true } && operators.Nodes[2] is { IdentityShortened: true, DetailsShortened: null },
+            "shortened object, operator name and predicate text mark only the operator and the kind of field that lost text");
+        var capped = Parse(Statement("SELECT 1", "0x1", "<RelOp NodeId=\"0\" PhysicalOp=\"Scan\"><OutputList>" + string.Concat(Enumerable.Repeat("<ColumnReference Column=\"x\"/>", 100)) + "</OutputList></RelOp><RelOp NodeId=\"1\" PhysicalOp=\"Sort\"/>")).Statements[0];
+        check(capped.Nodes[0] is { IdentityShortened: null, DetailsShortened: true } && capped.Nodes[1] is { IdentityShortened: null, DetailsShortened: null }, "a capped diagnostic list marks its operator and no other");
+        var longHash = Parse(Statement("SELECT 1", new string('f', 65))).Statements[0];
+        check(longHash.QueryHash == "" && longHash.TextShortened is null, "a query hash that cannot be kept whole is dropped, not shortened into false identity");
+        var web = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var complete = JsonSerializer.Serialize(Parse(File.ReadAllText(Path.Combine("tests", "fixtures", "plans", "diagnostics.sqlplan"))), web);
+        check(!complete.Contains("Shortened", StringComparison.Ordinal) && JsonSerializer.Serialize(first, web).Contains("\"textShortened\":true", StringComparison.Ordinal)
+            && JsonSerializer.Serialize(operators, web).Contains("\"identityShortened\":true", StringComparison.Ordinal), "completeness flags are serialized only when set");
+    }
     private static void DiagnosticChecks(Action<bool, string> check)
     {
         var plan = Parse(File.ReadAllText(Path.Combine("tests", "fixtures", "plans", "diagnostics.sqlplan")));
