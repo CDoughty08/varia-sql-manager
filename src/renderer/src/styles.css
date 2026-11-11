@@ -637,6 +637,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 @container (width < 140px) {
   .query-tab .environment-tag[data-place="tab"] { display: none; }
   .query-tab .tab-sid { padding-inline: var(--varia-space-0); }
+  /* Keep both action targets intact; their outer gutter gives wider platform fonts room for the whole SID. */
+  .query-tab .tab-close { margin-right: 0; }
+  .query-tab[data-dirty] .dirty-dot { right: 9px; }
 }
 /* A document tab's keyboard ring is a 1px inset outline, as the single strip drew it: the strip would clip the default ring,
    and forced colours drop box shadows. */

@@ -1227,20 +1227,6 @@ try {
   await page.keyboard.press('F5')
   await expect(narrowTab.locator(part.tabSid)).toHaveText(/^SID \d{5}$/)
   await expect(queryBarButton(page, /Execute/)).toBeEnabled()
-  await tabMenu(narrowName, 'Float')
-  await expect(floatingEditorGroups(page)).toHaveCount(1)
-  await expect.poll(async () => (await floatingEditorGroups(page).boundingBox()).width).toBeLessThan(600)
-  const resizeHandle = await page.locator(part.floatingEditorResizeRight).boundingBox()
-  const resizeX = resizeHandle.x + resizeHandle.width / 2, resizeY = resizeHandle.y + resizeHandle.height / 2
-  const currentStripWidth = (await documentTabs(floatingEditorGroups(page)).boundingBox()).width
-  await page.mouse.move(resizeX, resizeY)
-  await page.mouse.down()
-  // Dockview captures the resize origin on the first pointer move, rather than on pointerdown.
-  await page.mouse.move(resizeX + 1, resizeY)
-  await page.mouse.move(resizeX + 1 + 114 - currentStripWidth, resizeY, { steps: 10 })
-  await page.mouse.up()
-  await expect.poll(async () => (await narrowTab.boundingBox()).width).toBe(114)
-  await expect(narrowTab).toHaveAttribute('aria-description', /Production environment/)
   const narrowTabFit = () => narrowTab.evaluate((tab, part) => {
     const box = element => element.getBoundingClientRect(), outer = box(tab), select = box(tab.querySelector(part.tabSelect))
     const sidElement = tab.querySelector(part.tabSid), sid = box(sidElement)
@@ -1248,14 +1234,57 @@ try {
     text.selectNodeContents(sidElement)
     const glyphs = text.getBoundingClientRect()
     const inside = (inner, bounds) => inner.left >= bounds.left - 0.5 && inner.right <= bounds.right + 0.5 && inner.top >= bounds.top - 0.5 && inner.bottom <= bounds.bottom + 0.5
-    return { badge: inside(sid, select), text: inside(glyphs, select), actions: [...tab.querySelectorAll('button')].every(button => inside(box(button), outer)) }
+    const dot = box(tab.querySelector('[role="img"][aria-label="Unsaved changes"]')), close = box(tab.querySelector('button[aria-label^="Close "]'))
+    return {
+      badge: inside(sid, select), text: inside(glyphs, select), actions: [...tab.querySelectorAll('button')].every(button => inside(box(button), outer)),
+      dirtyCentered: Math.abs(dot.left + dot.width / 2 - close.left - close.width / 2) < 0.5 && Math.abs(dot.top + dot.height / 2 - close.top - close.height / 2) < 0.5
+    }
   }, part)
-  await expect.poll(narrowTabFit).toEqual({ badge: true, text: true, actions: true })
+  const narrowFit = { badge: true, text: true, actions: true, dirtyCentered: true }
+  // Measure wider glyphs while docked, before resizing: observing only the strip would leave that wider badge stale.
+  const tabFamily = await page.evaluate(() => { const root = document.documentElement, family = root.style.fontFamily; root.style.fontFamily = 'Verdana, DejaVu Sans, sans-serif'; return family })
+  try {
+    await narrowTab.focus()
+    await page.keyboard.press('F2')
+    await expect(tabNameBox(page)).toBeVisible()
+    await page.keyboard.press('Escape')
+    await tabMenu(narrowName, 'Float')
+    await expect(floatingEditorGroups(page)).toHaveCount(1)
+    await expect.poll(async () => (await floatingEditorGroups(page).boundingBox()).width).toBeLessThan(600)
+    const resizeHandle = await page.locator(part.floatingEditorResizeRight).boundingBox()
+    const resizeX = resizeHandle.x + resizeHandle.width / 2, resizeY = resizeHandle.y + resizeHandle.height / 2
+    const currentStripWidth = (await documentTabs(floatingEditorGroups(page)).boundingBox()).width
+    await page.mouse.move(resizeX, resizeY)
+    await page.mouse.down()
+    // Dockview captures the resize origin on the first pointer move, rather than on pointerdown.
+    await page.mouse.move(resizeX + 1, resizeY)
+    await page.mouse.move(resizeX + 1 + 114 - currentStripWidth, resizeY, { steps: 10 })
+    await page.mouse.up()
+    await expect.poll(async () => (await narrowTab.boundingBox()).width).toBe(114)
+    await expect(narrowTab).toHaveAttribute('aria-description', /Production environment/)
+    await expect(narrowTab.locator(part.tabSid)).toHaveCSS('font-family', 'Verdana, "DejaVu Sans", sans-serif')
+    await expect.poll(narrowTabFit, { message: '114 px after resizing with wider glyphs' }).toEqual(narrowFit)
+    await narrowTab.focus()
+    await page.keyboard.press('F2')
+    await expect(tabNameBox(page)).toBeVisible()
+    await expect.poll(narrowTabFit, { message: '114 px with wider glyphs while renaming' }).toEqual(narrowFit)
+    await page.keyboard.press('Escape')
+    await expect(tabNameBox(page)).toHaveCount(0)
+    await expect.poll(narrowTabFit, { message: '114 px with wider glyphs' }).toEqual(narrowFit)
+    await floatingEditorGroups(page).screenshot({ path: resolve('artifacts', 'query-tabs-narrow-wide-font.png') })
+  } finally {
+    await page.evaluate(family => { document.documentElement.style.fontFamily = family }, tabFamily)
+  }
+  await narrowTab.focus()
+  await page.keyboard.press('F2')
+  await expect(tabNameBox(page)).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect.poll(narrowTabFit, { message: '114 px with the platform font' }).toEqual(narrowFit)
   await floatingEditorGroups(page).screenshot({ path: resolve('artifacts', 'query-tabs-narrow-floating.png') })
   await tabMenu(narrowName, 'Dock')
   await expect(floatingEditorGroups(page)).toHaveCount(0)
   await expect(environmentPill(narrowTab, 'tab')).toBeVisible()
-  console.log('Editor checks: a plan tab without metadata aligns its icon with its title, and a 114 px floating Production tab preserves the full five-digit SID and actions, restoring its environment chip after docking.')
+  console.log('Editor checks: a plan tab without metadata aligns its icon with its title, and a 114 px floating Production tab preserves the full five-digit SID, action targets and centred unsaved dot with platform and wider fonts, including rename and chip restoration after docking.')
 
   expect(failures).toEqual([])
   await close()

@@ -181,7 +181,7 @@ function DocumentTab({ api, containerApi }: IDockviewPanelHeaderProps) {
   // The SID chip stays on whole pixels as its text changes. Shelf columns already keep tab origins on whole pixels.
   const sidText = tab && isQueryDocument(tab) ? String(spid ?? '') : undefined
   useLayoutEffect(() => {
-    const boxes = [...element.current?.querySelectorAll<HTMLElement>('.tab-sid') ?? []], strip = element.current?.closest('[role="tablist"]')
+    const host = element.current, boxes = [...host?.querySelectorAll<HTMLElement>('.tab-sid') ?? []]
     if (!boxes.length) return
     const snap = () => {
       for (const box of boxes) {
@@ -195,8 +195,9 @@ function DocumentTab({ api, containerApi }: IDockviewPanelHeaderProps) {
     snap()
     let current = true
     void document.fonts?.ready.then(() => { if (current) snap() })
-    const shown = typeof ResizeObserver === 'function' && strip ? new ResizeObserver(snap) : undefined
-    if (strip) shown?.observe(strip)
+    // Shelf layout can resize the slot after the strip's observer runs. Observe the tab's final width and padding.
+    const shown = typeof ResizeObserver === 'function' && host ? new ResizeObserver(snap) : undefined
+    if (host) shown?.observe(host)
     return () => { current = false; shown?.disconnect() }
   }, [name, sidText, renaming])
   // The close button and the rename box take the pointer for themselves: Dockview would otherwise choose the tab, or
