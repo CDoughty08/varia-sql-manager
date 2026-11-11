@@ -219,14 +219,20 @@ internal static class HostChecks
                 && thirdEvent?.Body.Length > 1024 * 1024 && eventsDone?.Header.Id == 8 && host.ArrivalOf(eventsDone.Value) > host.ArrivalOf(thirdEvent.Value) && host.Next(FrameKind.Event, 200) is null,
                 "a request's EVENT frames precede its RESPONSE; a droppable event over 256 KiB and an essential one over 4 MiB are dropped, a 1 MiB descriptor event is not");
 
-            // A PONG queued behind the slots would come when they free at 3 s; the 2 s bound leaves a starved CI runner
-            // seconds to answer. Shutdown waits for these handlers at most DrainTimeout (1.5 s), as it did at 1.5 s each.
-            for (var id = 10u; id < 18; id++) host.Request(id, "test.slow", new { ms = 3000 });
-            Thread.Sleep(100);
+            // The slots stay taken until the block ends (test.hold), so a PONG queued behind them would never come: no bound on
+            // its time is needed, and a 2 s one failed at 2,282 ms under the stress harness. Shutdown below waits for these
+            // handlers at most DrainTimeout (1.5 s).
+            var slotsHeld = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            host.Dispatcher.Release = slotsHeld;
+            var parkedBefore = Volatile.Read(ref host.Dispatcher.Parked);
+            var completedBefore = host.Dispatcher.Completed;
+            for (var id = 10u; id < 18; id++) host.Request(id, "test.hold", new { });
+            var slotsTaken = SpinWait.SpinUntil(() => Volatile.Read(ref host.Dispatcher.Parked) == parkedBefore + 8, 15000);
             watch.Restart();
             host.Send(FrameKind.Ping, 0, 4242, []);
             var pong = host.Next(FrameKind.Pong);
-            check(pong?.Header.Arg == 4242 && watch.ElapsedMilliseconds < 2000, "PING is answered by the reader thread while every metadata slot is busy (" + watch.ElapsedMilliseconds + " ms)");
+            check(slotsTaken && pong?.Header.Arg == 4242 && host.Dispatcher.Completed == completedBefore,
+                "PING is answered by the reader thread while every metadata slot is busy (slots taken " + slotsTaken + ", " + watch.ElapsedMilliseconds + " ms)");
 
             host.Request(20, "test.wait", new { });
             Thread.Sleep(100);
@@ -243,6 +249,7 @@ internal static class HostChecks
                 && host.Dispatcher.DrainCalls == 1 && !host.Dispatcher.DisposedBeforeDrain && closing.ElapsedMilliseconds >= 400,
                 "stdin EOF cancels everything, waits for the work that must not end half done (a Create Catalog past its restore), then disposes the service and exits 0 ("
                 + closing.ElapsedMilliseconds + " ms)");
+            slotsHeld.TrySetResult();
         }
 
         // Nothing here races a timer: request 1 holds the one metadata slot until Release, and request 2 stays in flight until
@@ -521,9 +528,9 @@ internal sealed class StubDispatcher : IRequestDispatcher
     public int CancelAllCalls;
     public int Unsent;
     public int LateStarted;
-    /// <summary>How many test.hold and test.park handlers have started; they end once Release is set.</summary>
+    /// <summary>How many test.hold and test.park handlers have started; each ends once the Release it started under is set.</summary>
     public int Parked;
-    public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public TaskCompletionSource Release { get; set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public bool Disposed;
     public bool Created;
     public IReadOnlyList<string> Methods { get; } = ["test.echo", "test.slow", "test.hold", "test.park","test.wait", "test.stream", "test.events", "test.unsent", "test.unsentLate", "test.failure", "test.certificate", "test.crash", "test.settle", "test.settleSsis", "test.secret"];

@@ -133,8 +133,14 @@ internal static class SsisCreateChecks
         // The outcomes say which wait answered, so no reply needs an upper bound on its time: only the job's answer inside the
         // grace is "answer" for a job that is not committed, and "cancelled" for one that has not ended (it ends only after
         // the check) is a reply that did not wait for it. On five copies sharing three CPUs the 1 s grace answered at 4.1 s.
+        // The two that end on a timer get a wait that timer cannot lose to, and cost nothing: each reply comes when its job
+        // ends. The quick job has a 30 s grace; the late one keeps the 1 s grace, which it outlasts, and has 30 s of drain.
+        reads.Options.StopGrace = TimeSpan.FromSeconds(30);
         var quick = await Run(After(20), false);
+        reads.Options.StopGrace = TimeSpan.FromMilliseconds(1_000);
+        reads.Options.CreateDrain = TimeSpan.FromSeconds(30);
         var late = await Run(After(2_000), true);
+        reads.Options.CreateDrain = TimeSpan.FromMilliseconds(2_000);
         var unended = new TaskCompletionSource<SsisExecuteResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         var abandoned = await Run(unended.Task, false);
         unended.TrySetResult(answer);

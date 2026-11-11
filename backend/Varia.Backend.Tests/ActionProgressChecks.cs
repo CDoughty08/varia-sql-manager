@@ -262,9 +262,10 @@ internal static class ActionProgressChecks
         await Task.WhenAll(stuckRun, shortRun, run);
         // The stuck drain's wait is 300 ms. Its upper bound only has to tell that from the waits it must not use (the default
         // Stop grace or cleanup budget, 10 s each), and five copies on three CPUs returned from it 5.3 s late; a wait with no
-        // bound never returns at all. The released job's drain returns true only once the job ended, which the release allows.
-        check(gaveUp && stillRunning && waited is >= 250 and < 9_000 && drained && drainedMs is >= 250 and < 30_000 && jobEnded,
+        // bound never returns at all. The released job's drain returns true only once the job ended, which the release allows;
+        // its bound sits under the 30 s Stop wait, which a drain that did not return when the job ended would take.
+        check(gaveUp && stillRunning && waited is >= 250 and < 9_000 && drained && drainedMs is >= 250 and < 25_000 && jobEnded,
             $"after CancelAll a shutdown waits for each long job (not the others) up to its Stop wait plus cleanup budget, and returns once they ended: gave up after {waited} ms"
-            + $" (jobs still running then: {stillRunning}), drained in {drainedMs} ms (job ended: {jobEnded})");
+            + $" (jobs still running then: {stillRunning}), drained in {drainedMs} ms (drained: {drained}, request answered: {jobEnded})");
     }
 }
