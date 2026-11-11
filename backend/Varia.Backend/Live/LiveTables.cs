@@ -470,7 +470,9 @@ internal sealed class LiveSnapshotTable
             var counts = new Dictionary<string, int>(StringComparer.Ordinal);
             for (var at = 0; at < source.Count; at++)
             {
-                if (kept?[at] == false || source[at].Cells[column].Text is not { } text) continue;
+                if (kept?[at] == false) continue;
+                // NULL counts with empty text as the column's blanks (the funnel's "(Blanks)"), as value filters treat both.
+                var text = source[at].Cells[column].Text ?? "";
                 var value = CellFormat.Prefix(text, limits.FacetCharacters, out _).ToString();
                 counts[value] = counts.GetValueOrDefault(value) + 1;
             }
