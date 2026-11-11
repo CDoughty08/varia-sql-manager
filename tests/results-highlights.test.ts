@@ -218,6 +218,59 @@ describe('highlights', () => {
     expect(highlightText(shown())).toBe('More than 100,000 rows have these highlights; only the first 100,000 are drawn.')
   })
 
+  it('keeps highlights on their entries when a middle entry goes: an original result\'s by its number, a derived entry\'s by the entry', async () => {
+    const { client, results, highlights } = fixture()
+    /** A run of three sets of ten rows: results `first` to `first + 2`. */
+    const three = (queryId: string, first: number) => {
+      results.begin('t1', queryId)
+      const values = [0, 1, 2].map(index => descriptor(first + index, { index, rowsRead: 10, rowsStored: 10, rowsAvailable: 10 }))
+      void results.finish('t1', queryId, { summary: summaryOf(values) })
+      return values.map(value => client.handle(value.resultId)!)
+    }
+    const at = (index: number) => highlights.getSnapshot().t1?.get(index)
+    const [, , third] = three('q1', 1)
+    results.addSet('t1', descriptor(803, { index: 2, kind: 'pivot', rowsRead: 10, rowsStored: 10, rowsAvailable: 10 }), 'Pivot of Result 3', ['1:3'])
+    const pivot = client.handle(803)!
+    results.setSelection('t1', 2, rows(2, 2, 3))
+    await highlights.highlight('t1', 2, 1)
+    results.setSelection('t1', 3, rows(3, 5, 5))
+    await highlights.highlight('t1', 3, 2)
+    await settle()
+    expect(at(2)).toMatchObject({ count: 2, found: 2 })
+    expect(at(3)).toMatchObject({ count: 1, found: 1 })
+
+    results.removeEntry('t1', results.getSnapshot().t1.sets[1].key)
+    await settle()
+    // Result 3 and the pivot each moved up a place with their highlights; neither was bound or searched again.
+    expect(at(1)).toMatchObject({ count: 2, found: 2 })
+    expect(at(1)!.rows.map(item => item.handle)).toEqual([third])
+    expect(at(2)).toMatchObject({ count: 1, found: 1 })
+    expect(at(2)!.rows.map(item => item.handle)).toEqual([pivot])
+    expect(at(3)).toBeUndefined()
+    expect(highlights.rowsFor('t1', 1).map(item => item.handle)).toEqual([third])
+    expect([1, 2, 3].map(index => highlights.hasHighlights('t1', index))).toEqual([true, true, false])
+    expect(third.identify).toHaveBeenCalledTimes(1)
+    expect(third.findRows).toHaveBeenCalledTimes(1)
+    // A command on the grid at the new place reaches Result 3's highlights.
+    results.setSelection('t1', 1, rows(1, 7, 7))
+    await highlights.highlight('t1', 1, 1)
+    expect(at(1)).toMatchObject({ count: 3, found: 3 })
+    expect(at(2)).toMatchObject({ count: 1 })
+
+    // The next run's third result takes Result 3's highlights, though they were last drawn at the second place; the
+    // pivot's went with the pivot.
+    const [, second, again] = three('q2', 11)
+    await settle()
+    expect(at(2)).toMatchObject({ count: 3, found: 3 })
+    expect(at(2)!.rows.map(item => item.handle)).toEqual([again])
+    expect(at(1)).toBeUndefined()
+    expect(second.identify).not.toHaveBeenCalled()
+    expect(highlights.hasHighlights('t1', 2)).toBe(true)
+    highlights.clear('t1', 2)
+    await settle()
+    expect(highlights.getSnapshot().t1).toBeUndefined()
+  })
+
   it('keeps the whole-row fallback, refuses too many rows at once, and forgets a closed tab', async () => {
     const { results, highlights, run, shown } = fixture()
     const handle = run(1, 20_000)

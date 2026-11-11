@@ -108,6 +108,34 @@ describe('PivotService', () => {
     expect(pivot.getSnapshot().tabs.t1.draft.rows).toEqual([0])
   })
 
+  it('follows the entry it pivots and not its place: when a middle entry goes, and by its number into the next run', async () => {
+    const { results, pivot, run } = fixture()
+    const [, , third] = run(3)
+    const sets = () => results.getSnapshot().t1.sets
+    pivot.open('t1', 2)
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
+    results.removeEntry('t1', sets()[1].key)
+    // Result 3 moved up a place: the panel is still on it, with its draft.
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: true, source: 1, draft: { rows: [0] } })
+    await pivot.run('t1')
+    await settle()
+    expect(third.pivot).toHaveBeenCalledOnce()
+    // The pivot is named after its source's number, and numbered after the run's highest, whatever places they have.
+    expect(sets()[2]).toMatchObject({ index: 2, number: 4, label: 'Pivot of Result 3', descriptor: { kind: 'pivot', resultId: 803 } })
+    expect(pivot.getSnapshot().info.get(setKey(sets()[2].descriptor))).toMatchObject({ source: 1, sourceLabel: 'Result 3' })
+    // A derived entry is followed by its key.
+    pivot.setSource('t1', 2)
+    results.removeEntry('t1', sets()[0].key)
+    expect(pivot.getSnapshot().tabs.t1.source).toBe(1)
+    expect(sets()[1].label).toBe('Pivot of Result 3')
+    // An original result is followed by its number into the next run: Result 3, though it stood first when the run began.
+    pivot.setSource('t1', 0)
+    expect(sets()[0]).toMatchObject({ ordinal: 3 })
+    run(3, { queryId: 'q2' })
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: 2, draft: { rows: [0] } })
+    expect(sets()[2]).toMatchObject({ ordinal: 3 })
+  })
+
   it("pivots nothing while the query runs, shows why a pivot failed, and keeps a new run's panel on its set", async () => {
     const { results, pivot, run } = fixture()
     run(2, { finish: false })
