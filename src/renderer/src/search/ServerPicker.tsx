@@ -39,11 +39,11 @@ export function serverPickerOptions(state: SearchDocumentState, live: readonly L
   const groups = state.allServers && answered ? serverGroups(state) : []
   const countFor = (connectionId: string): Pick<ServerOption, 'count' | 'pending'> => {
     if (unlanded) return { pending: true }
-    if (!answered) return {}
-    if (!state.allServers) return connectionId === state.connectionId && !state.result!.problem ? { count: state.result!.total } : {}
+    if (!state.allServers) return answered && connectionId === state.connectionId && !state.result!.problem ? { count: state.result!.total } : {}
+    // A server still on its way says so even while no server has a result yet (the first to answer failed, or none has).
+    const pending = state.servers?.find(answer => answer.connectionId === connectionId)?.pending ? { pending: true } : {}
     const group = groups.find(item => item.connectionId === connectionId)
-    if (!group) return {}
-    return { ...group.result && !group.result.problem && !group.error ? { count: group.result.total } : {}, ...group.pending ? { pending: true } : {} }
+    return { ...group?.result && !group.result.problem && !group.error ? { count: group.result.total } : {}, ...pending }
   }
   const all: ServerOption = {
     value: allServersValue, label: 'All servers',

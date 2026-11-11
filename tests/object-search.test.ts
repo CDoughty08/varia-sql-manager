@@ -1000,6 +1000,10 @@ describe('Search Objects\' server picker', () => {
     const unlanded = serverPickerOptions({ ...before, text: 'y', requestId: 'r2' }, live)
     expect(unlanded.map(option => [option.count, !!option.pending])).toEqual([[undefined, true], [undefined, true], [undefined, true], [undefined, true]])
     expect(unlanded.map(serverOptionName)).toEqual(['All servers, searching', 'Primary, Production environment, searching', 'srv-b, searching', 'srv-c, QA lab environment, searching'])
+    // The first landing is a server's error, so there is no result at all yet: the servers still on their way say so.
+    const failed = [{ connectionId: 'a', label: 'Primary', error: 'The search timed out.' }, { connectionId: 'b', label: 'srv-b', pending: true }, { connectionId: 'c', label: 'srv-c', pending: true }]
+    expect(serverPickerOptions({ ...base, allServers: true, servers: failed, landed: 'r2', requestId: 'r2' }, live).map(option => [option.count, !!option.pending]))
+      .toEqual([[undefined, true], [undefined, false], [undefined, true], [undefined, true]])
     // A search cancelled as it landed leaves its pending marks on the answers in view: they are still not the new search's.
     const cancelled = [{ connectionId: 'a', label: 'Primary', result: result(12) }, { connectionId: 'b', label: 'srv-b', pending: true }]
     expect(serverPickerOptions({ ...before, servers: cancelled, result: mergeAnswers(cancelled), landed: 'r1', requestId: 'r2' }, live).map(option => [option.count, !!option.pending]))
