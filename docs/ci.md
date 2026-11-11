@@ -42,7 +42,8 @@ with `node scripts/ci-timings.mjs` (add `--steps` for per-step times) before and
 
   About coverage shares `updates-smoke.mjs`: Help/palette opening, keyboard focus, clipboard success/failure, fixed
   browser destinations, update states and restart through About. It adds no suite or job. The expanded suite took
-  5.1 seconds locally on Windows; its existing Linux/Windows shard weights remain 6 seconds pending CI measurements.
+  5.1 seconds locally on Windows. PR #406's CI measured 6 seconds on Linux and 7 seconds on Windows; the shard weights
+  record those measurements.
 
   Smoke builds and packaging prepare Electron from its npm-pinned checksums, retrying transient official-download failures
   within a three-attempt, three-minute budget and seeding the shared archive cache so packaging verifies checksums offline.

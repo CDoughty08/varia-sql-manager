@@ -49,7 +49,7 @@ import { commandTitle } from '../shared/settings/catalog'
 import { popoutWindowName } from '../shared/popouts'
 import { windowControls } from '../shared/theme/metrics'
 import { AppearanceService, windowChromeFor } from './appearance'
-import { applicationMenuTemplate, type ApplicationMenuActions } from './application-menu'
+import { applicationMenuTemplate, dispatchApplicationCommand, type ApplicationMenuActions } from './application-menu'
 import { NativeMenuBridge } from './native-menu'
 import { rendererRoleSchema, runRole, UserActivation } from './window-roles'
 import { PopoutWindows } from './popout-windows'
@@ -79,7 +79,7 @@ import { Updater } from './updater'
 import { applyUpdate, installTargetFor, relaunchEnv, removeReplacedPortable, testUpdateTarget, type InstallTarget } from './update-install'
 import { applyStaged, helperStaging } from './update-staging'
 import { assetUrl, releasesPageUrl, updateErrors, updateFeedUrl, updateManifestName, type InstallKind } from '../shared/updates'
-import { productLinkUrl } from '../shared/product'
+import { productLinkUrl, productName } from '../shared/product'
 
 // First, before Chromium reads its command line for the DevTools handler: a packaged build never opens a debugging port,
 // except for its own smoke tests on a throwaway profile, where it decrypts no saved password (sandbox-guard.ts).
@@ -236,7 +236,7 @@ app.on('open-file', (event, path) => {
 })
 
 // Ids come from main's compiled catalogue; the renderer checks them again before executing.
-function command(id: CommandId): void { mainWindow?.webContents.send('varia:command', id) }
+function command(id: CommandId): void { dispatchApplicationCommand(id, mainWindow, () => app.showAboutPanel()) }
 
 function trusted(event: IpcMainInvokeEvent | IpcMainEvent): boolean {
   if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) return false
@@ -724,6 +724,7 @@ function reloadLostRenderer(window: BrowserWindow): void {
 }
 
 app.whenReady().then(async () => {
+  app.setAboutPanelOptions({ applicationName: productName, applicationVersion: app.getVersion() })
   if (!primaryInstance) return
   const refusal = sandboxRefusal({ packaged: app.isPackaged, platform: process.platform, noSandbox: app.commandLine.hasSwitch('no-sandbox'), remoteDebugging })
   if (refusal) {

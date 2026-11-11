@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom'
 import { productDescription, productName } from '../../../shared/product'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { useCommandEnabled } from '../core/useCommand'
-import { windows } from '../core/windows'
+import { focusToReturn, returnFocusTo } from '../core/focus'
 import Icon from '../Icon'
 import InlineError from '../kit/InlineError'
 import { copyStatus, copyText, type CopyRecord } from '../kit/format'
@@ -13,14 +13,14 @@ import { aboutUpdate, platformName, versionDetails, type AboutUpdateCommand } fr
 export default function AboutDialog({ onClose }: { readonly onClose: () => void }) {
   const { commands, documents, platform, updates } = useWorkbench()
   const state = useServiceSnapshot(updates), update = aboutUpdate(state, platform), details = versionDetails(state, platform)
-  const [returnFocus] = useState(() => windows.activeElement() as HTMLElement | null)
+  const [returnFocus] = useState(focusToReturn)
   const [copied, setCopied] = useState<CopyRecord>()
   const [error, setError] = useState('')
   const action = update.action
   const actionEnabled = useCommandEnabled(action?.command ?? 'help.checkForUpdates')
   const close = () => {
     onClose()
-    if (returnFocus?.isConnected) returnFocus.focus()
+    if (returnFocus?.isConnected) returnFocusTo(returnFocus)
     else documents.focusActive()
   }
   const run = async (id: AboutUpdateCommand | 'help.openProject' | 'help.reportIssue') => {

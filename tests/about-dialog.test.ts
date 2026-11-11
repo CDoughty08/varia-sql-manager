@@ -8,6 +8,7 @@ import type { Workbench } from '../src/renderer/src/core/workbench'
 import { CommandService } from '../src/renderer/src/core/commands'
 import { UpdateService } from '../src/renderer/src/updates/UpdateService'
 import { contextRecord } from '../src/shared/commands/context-keys'
+import { windows } from '../src/renderer/src/core/windows'
 import type { UpdateState } from '../src/shared/updates'
 import { updatesApi } from './fixtures/workbench'
 
@@ -75,6 +76,19 @@ describe('About dialog', () => {
     expect(view.runs['help.openProject']).toHaveBeenCalledTimes(1)
     expect(view.runs['help.reportIssue']).toHaveBeenCalledTimes(1)
     expect(view.runs['help.releaseNotes']).toHaveBeenCalledTimes(1)
+  })
+  it('brings the originating popout forward when closing', async () => {
+    const popoutDocument = document.implementation.createHTMLDocument(), raised = vi.fn(), focused = vi.fn()
+    Object.defineProperty(popoutDocument, 'defaultView', { value: { closed: false, focus: raised } })
+    const origin = popoutDocument.createElement('button')
+    popoutDocument.body.append(origin)
+    vi.spyOn(origin, 'focus').mockImplementation(focused)
+    vi.spyOn(windows, 'activeElement').mockReturnValue(origin)
+    const view = await mount()
+    await act(async () => { view.button('Done').click() })
+    expect(raised).toHaveBeenCalledTimes(1)
+    expect(focused).toHaveBeenCalledTimes(1)
+    expect(raised.mock.invocationCallOrder[0]).toBeLessThan(focused.mock.invocationCallOrder[0]!)
   })
   it('follows update pushes from download through preparation without offering Restart early', async () => {
     const view = await mount()

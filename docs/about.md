@@ -1,7 +1,9 @@
 # About Varia
 
 Open **Help > About Varia**, or find **About Varia** in the command palette. On macOS the application's **About Varia**
-menu item opens the same dialog. It is available without a SQL Server connection or a working SQL backend.
+menu item opens the same dialog while a workbench window is open. After closing the last window on macOS, About
+opens the system About panel with Varia's name and running version. It is available without a SQL Server connection
+or a working SQL backend.
 
 The dialog shows the running application version, operating-system platform and current update state. Opening it
 does not start an update check; it follows the same state as the status bar. Development builds say that they do not

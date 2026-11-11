@@ -6,6 +6,12 @@ import { themeMenuModel, type ThemeMenuItem } from '../shared/theme/menu'
 import { recentFilesMenuModel, type RecentMenuItem } from '../shared/files/recent'
 import type { ThemePreferencePatch, ThemeState } from '../shared/theme/types'
 
+/** A macOS app can remain open after its last workbench window closes. About must still answer there. */
+export function dispatchApplicationCommand(id: CommandId, window: { readonly webContents: { send(channel: string, id: CommandId): void } } | null, showAbout: () => void): void {
+  if (window) window.webContents.send('varia:command', id)
+  else if (id === 'help.about') showAbout()
+}
+
 export interface ApplicationMenuModel {
   theme: Pick<ThemeState, 'preference' | 'themes'>
   /** A command's title with its setting filled in (`commandTitle` over main's validated settings); the catalogue's otherwise. */

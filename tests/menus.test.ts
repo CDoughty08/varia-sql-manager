@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { MenuItemConstructorOptions } from 'electron'
-import { applicationMenuTemplate, type ApplicationMenuActions } from '../src/main/application-menu'
+import { applicationMenuTemplate, dispatchApplicationCommand, type ApplicationMenuActions } from '../src/main/application-menu'
 import { applyMenuState, indexCommandItems, NativeMenuBridge, type MenuItemLike, type MenuLike } from '../src/main/native-menu'
 import { commandIds, type CommandId } from '../src/shared/commands/catalog'
 import { platforms, type Platform } from '../src/shared/commands/keybindings'
@@ -267,6 +267,22 @@ describe('application menu template', () => {
     const index = indexCommandItems({ items: [appAbout, helpAbout] } as unknown as MenuLike)
     applyMenuState(index, { disabled: ['help.about'], checked: [] })
     expect([appAbout.enabled, helpAbout.enabled]).toEqual([false, false])
+  })
+  it('answers both macOS About entries through the native panel when no workbench window remains', () => {
+    const { items, actions } = template('darwin'), showAbout = vi.fn()
+    actions.command.mockImplementation(id => dispatchApplicationCommand(id, null, showAbout))
+    item(items, 'help.about@app').click!({} as never, {} as never, {} as never)
+    item(items, 'help.about').click!({} as never, {} as never, {} as never)
+    expect(showAbout).toHaveBeenCalledTimes(2)
+    dispatchApplicationCommand('file.new', null, showAbout)
+    expect(showAbout).toHaveBeenCalledTimes(2)
+  })
+  it('keeps About and other menu commands in the renderer while a workbench window exists', () => {
+    const window = { webContents: { send: vi.fn() } }, showAbout = vi.fn()
+    dispatchApplicationCommand('help.about', window, showAbout)
+    dispatchApplicationCommand('file.new', window, showAbout)
+    expect(window.webContents.send.mock.calls).toEqual([['varia:command', 'help.about'], ['varia:command', 'file.new']])
+    expect(showAbout).not.toHaveBeenCalled()
   })
   it('labels command items and never registers their accelerators', () => {
     for (const platform of platforms) {
