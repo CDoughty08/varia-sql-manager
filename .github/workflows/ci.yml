@@ -28,18 +28,62 @@ env:
   DOTNET_CLI_TELEMETRY_OPTOUT: '1'
   DOTNET_NOLOGO: '1'
 
-# Every job starts at once and builds what it needs itself: the checks, the live SQL Server checks, the smoke shards and
+# After the scope check, every validation job starts at once and builds what it needs itself: the checks, the live SQL Server checks, the smoke shards and
 # the benchmarks run side by side, so a failure in one hides nothing in the others and the run takes as long as its
-# longest job. Every pull request runs every platform, drafts included: the repository is public, so runners cost nothing.
+# longest job. Every code-changing pull request runs every platform, drafts included: the repository is public, so runners cost nothing.
 # What a public repository does pay in is concurrency (20 jobs at once across the account, 5 of them macOS), so a pull request
 # runs 13 jobs: a third Windows smoke shard keeps language-service coverage within the per-shard time budget; no job repeats
 # another's work. Report-only work stays off pull requests: Linux's 1024x768 repeats of suites the
 # Windows shards already run at that size run on main only, and the desktop benchmarks run daily (bench-desktop.yml).
+# Scope detection and the final required result add two short Linux jobs.
 # docs/ci.md measures all of this and holds the rules.
 jobs:
+  scope:
+    name: CI scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.scope.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Classify the complete change
+        id: scope
+        timeout-minutes: 1
+        env:
+          REGRESSION_SUITE: ${{ inputs.regression-suite }}
+        run: node scripts/ci-scope.mjs
+
+  docs:
+    name: Documentation checks
+    needs: scope
+    if: needs.scope.outputs.mode == 'docs'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      # Keep all source-only tests, including generated docs, README and published changelog validation.
+      # These need neither Electron's binary nor a .NET build or SQL Server.
+      - name: Validate documentation and source contracts
+        timeout-minutes: 5
+        run: npx vitest run --exclude tests/backend-sidecar.test.ts --exclude 'tests/*-live.test.ts'
+
   check:
     name: Check (${{ matrix.os }})
-    if: github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'
+    needs: scope
+    if: needs.scope.outputs.mode == 'full'
     strategy:
       fail-fast: false
       matrix:
@@ -71,7 +115,8 @@ jobs:
 
   live:
     name: Live SQL Server checks (Linux ${{ matrix.group }}/3)
-    if: github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'
+    needs: scope
+    if: needs.scope.outputs.mode == 'full'
     strategy:
       fail-fast: false
       matrix:
@@ -156,7 +201,8 @@ jobs:
 
   smoke-linux:
     name: Smoke (Linux ${{ matrix.shard }}/3)
-    if: github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'
+    needs: scope
+    if: needs.scope.outputs.mode == 'full'
     strategy:
       fail-fast: false
       matrix:
@@ -245,7 +291,8 @@ jobs:
     name: Smoke (Windows ${{ matrix.shard }}/3)
     # The smoke suites assert Windows/Linux window chrome (controls overlay, hidden menu bar, Ctrl shortcuts), so on macOS
     # they fail at the first check; they run there once its native menu bar and Cmd shortcuts are covered.
-    if: github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'
+    needs: scope
+    if: needs.scope.outputs.mode == 'full'
     strategy:
       fail-fast: false
       matrix:
@@ -285,7 +332,8 @@ jobs:
 
   bench-linux:
     name: Benchmarks (Linux)
-    if: github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'
+    needs: scope
+    if: needs.scope.outputs.mode == 'full'
     runs-on: ubuntu-24.04
     # Room for every timed step below (tests/ci-workflow.test.ts) plus the setup before them.
     timeout-minutes: 40
@@ -355,7 +403,27 @@ jobs:
           retention-days: 30
 
   regressions:
-    if: github.event_name == 'workflow_dispatch' && inputs.regression-suite != 'none'
+    needs: scope
+    if: needs.scope.outputs.mode == 'regressions'
     uses: ./.github/workflows/ci-regressions.yml
     with:
       suite: ${{ inputs.regression-suite }}
+
+  result:
+    name: CI result
+    if: always()
+    needs: [scope, docs, check, live, smoke-linux, smoke-windows, bench-linux, regressions]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Require every selected job to pass
+        timeout-minutes: 1
+        env:
+          CI_NEEDS: ${{ toJSON(needs) }}
+        run: node scripts/ci-result.mjs

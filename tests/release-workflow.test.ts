@@ -30,7 +30,7 @@ describe('Release builds', () => {
       expect(yaml, name).toMatch(/\n {2}cancel-in-progress: true\n/)
     }
   })
-  it('packages every main push, tag and manual run, and a pull request only when it changes what packaging reads', () => {
+  it('packages non-documentation main pushes, every tag and manual run, and a pull request only when it changes what packaging reads', () => {
     expect(triggers(release)).toMatch(/\n {2}push:\n {4}branches: \[main\]\n {4}tags: \['v\*'\]\n {2}schedule:\n {4}- cron: '[^']+'\n {2}workflow_dispatch:/)
     // Everything electron-builder, the fuses and the packaged smoke tests read, and nothing every pull request touches:
     // the smoke selectors (scripts/fixtures/ui.mjs) and main's index changed in a third of recent pull requests.
@@ -38,6 +38,14 @@ describe('Release builds', () => {
     expect(releasePaths).toContain('src/main/backend/sqltools-runtime.ts')
     expect(releasePaths).toContain('scripts/prepare-electron.mjs')
     for (const path of releasePaths) expect(path, path).not.toMatch(/^(src\/\*\*|src\/main\/index\.ts|scripts\/fixtures|package\.json|tests\/)/)
+  })
+  it('uses the complete Git diff only on main pushes and fails closed if classification fails', () => {
+    expect(triggers(release)).not.toContain('paths-ignore:')
+    const scope = release.slice(release.indexOf('  scope:\n'), release.indexOf('  build:\n'))
+    expect(scope).toContain("if: github.event_name == 'push' && github.ref == 'refs/heads/main'")
+    expect(scope).toContain('fetch-depth: 0')
+    expect(scope).toContain('run: node scripts/ci-scope.mjs')
+    expect(scope).toContain('mode: ${{ steps.scope.outputs.mode }}')
   })
   it('adds at most three jobs and one macOS job to a pull request push, and packages Intel macOS only for tags, manual runs and weekly', () => {
     const matrix = release.slice(release.indexOf('  build:\n'), release.indexOf('  build-intel:\n'))
@@ -50,7 +58,8 @@ describe('Release builds', () => {
     // Weekly, so an x64-only break (an Electron or runner image change) shows before the tag it would block; the other
     // packages, which every main push builds, skip that run.
     expect(intel).toMatch(/\n {4}if: startsWith\(github\.ref, 'refs\/tags\/'\) \|\| github\.event_name == 'workflow_dispatch' \|\| github\.event_name == 'schedule'\n/)
-    expect(matrix).toMatch(/\n {4}if: github\.event_name != 'schedule'\n/)
+    expect(matrix).toContain('needs: scope')
+    expect(matrix).toContain("if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.scope.result == 'skipped' || (needs.scope.result == 'success' && needs.scope.outputs.mode == 'full')) }}")
     expect(release).toMatch(/needs: \[build, build-intel\]/)
   })
   it('keeps the packaged checks, and leaves out the work CI already did or nobody uses', () => {
@@ -91,11 +100,11 @@ describe('Release builds', () => {
     expect(project).toContain('<PublishAot Condition="\'$(RuntimeIdentifier)\' != \'\'">true</PublishAot>')
     expect(project).toContain('<TreatWarningsAsErrors>true</TreatWarningsAsErrors>')
   })
-  // What the docs say about packaging must match the workflow: the weekly Intel run, and the paths filter's 300-file limit.
-  it('documents the weekly Intel run and the paths filter\'s 300-file limit', () => {
+  // What the docs say about packaging must match the workflow: the weekly Intel run, and the paths filter's 3,000-file limit.
+  it('documents the weekly Intel run and the paths filter\'s 3,000-file limit', () => {
     const ci = readFileSync('docs/ci.md', 'utf8').replace(/\n\s*/g, ' ')
     expect(ci).toContain('Intel macOS packages only for tags, manual runs and a weekly scheduled run on main')
-    for (const [name, doc] of [['release.yml', release.replace(/\n# /g, ' ')], ['docs/ci.md', ci]]) expect(doc, name).toMatch(/first 300/)
+    for (const [name, doc] of [['release.yml', release.replace(/\n# /g, ' ')], ['docs/ci.md', ci]]) expect(doc, name).toMatch(/first 3,000/)
     // Unreachable.Source is a malformed pipe address on purpose (a well-formed missing pipe crashed offline-stress copies).
     for (const file of ['docs/ci.md', 'backend/Varia.Backend.Tests/Unreachable.cs', 'tests/idle-waits.test.ts']) expect(readFileSync(file, 'utf8'), file).not.toMatch(/missing named pipe/)
   })

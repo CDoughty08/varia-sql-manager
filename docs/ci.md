@@ -8,7 +8,8 @@ with `node scripts/ci-timings.mjs` (add `--steps` for per-step times) before and
 - CI (`.github/workflows/ci.yml`) runs on every PR, drafts included (any base branch, so stacked PRs are tested), every
   push to main and manual runs (a newer push cancels the older run of its PR, or of main; manual runs always finish); the
   repository is public, so its minutes cost nothing, but GitHub runs only 20 of its jobs
-  at once (5 on macOS), so a PR runs at most 13 and no job repeats another's work. Every job starts at once and builds
+  at once (5 on macOS). A scope job classifies the complete change before the 13 full-validation jobs start together;
+  a final `CI result` job checks their outcomes. Each validation job builds
   what it needs, so one failure hides nothing and the run takes as long as its longest job: `npm run check` on Linux,
   Windows and macOS; the live .NET checks on Linux in three groups (`--live-group k/3`, each against its own SQL Server
   service; the first also runs `tests/*-live.test.ts`, the bundled SQL Tools Service against the container and Kerberos); the smoke suites in three shards on Linux (sandboxed,
@@ -19,10 +20,10 @@ with `node scripts/ci-timings.mjs` (add `--steps` for per-step times) before and
   this layout.
   The Windows suite weights already totaled 719 seconds across two shards against a 360-second budget each. The new
   language-service UI suite adds a third Windows shard, keeping the budget rather than reducing existing estimates.
-  Release builds (`release.yml`, through `package.yml`) package main pushes, tags and manual runs, and a pull request only when
+  Release builds (`release.yml`, through `package.yml`) package main pushes except documentation-only changes, tags and manual runs, and a pull request only when
   it changes what packaging reads (its `paths`); Intel macOS packages only for tags, manual runs and a weekly scheduled run on
   main (Intel alone), and installers upload only for tags and manual runs (`tests/release-workflow.test.ts`). A pull request
-  over 300 changed files may skip Release builds (GitHub reads only its first 300 for `paths`): run them by hand then. Every workflow a pull request triggers cancels its superseded runs.
+  over 3,000 changed files may skip Release builds (GitHub reads only its first 3,000 for `paths`): run them by hand then. Every workflow a pull request triggers cancels its superseded runs.
   `sql-matrix.yml` (manual runs only) repeats the .NET checks against SQL Server 2017, 2019, 2022 and 2025.
 
   SQL Tools Service is a build-time dependency pinned in `build/sqltools-service.json` for every release RID. Preparation
@@ -59,6 +60,40 @@ with `node scripts/ci-timings.mjs` (add `--steps` for per-step times) before and
   Packaged smoke reports its current phase, bounds application/window/CDP cleanup, and has a ten-minute runner-level
   timeout in addition to its five-minute body watchdog. The outer limit also catches synchronous work before that watchdog
   starts. It adds no jobs or normal-path waits; an earlier macOS smoke remained active beyond fourteen minutes.
+
+## Documentation-only changes
+
+`scripts/ci-scope.mjs` sends changes limited to `README.md`, `CHANGELOG.md`, `AGENTS.md`, `CLAUDE.md` and Markdown files
+under `docs/` through a Linux documentation lane. It installs npm dependencies with lifecycle scripts disabled (no Electron
+download) and runs source-only vitest, preserving generated-document, README and published-changelog assertions. It skips
+.NET builds/tests, typechecking, production builds, SQL services, smoke shards and benchmarks. Other paths, including
+`release-notes/*.json`, schema JSON, scripts, workflow files, build resources, tests and dependencies, still run full CI.
+Release builds use the same Git classifier in a short Linux job on main pushes and skip packaging for docs; their PR packaging-input filter is unchanged, and tags, manual
+runs and the weekly Intel package are unaffected. There is no app behavior change, so no README or changelog entry is needed.
+
+The scope job uses a full Git checkout and an untruncated, NUL-delimited diff: PR merge-base to head (including stacked
+PRs and earlier commits), or push before to after. Renames include both old and new paths. Unknown/empty changes or missing
+history fall back to full CI. Manual runs always execute the selected full or focused regression suite.
+
+**Required-check rollout:** after this PR's full checks pass, replace the main ruleset's 13 individual matrix check
+requirements with the single GitHub Actions check `CI result`. Keep strict/up-to-date checking enabled. The result job
+runs with `always()` and fails if classification or any selected job fails, is cancelled, is missing or is unexpectedly
+skipped. It also rejects failures in unselected jobs. Do this when merging the change; otherwise docs-only PRs will wait
+for the old matrix check names, which GitHub does not emit when an entire matrix is skipped. Repository rules are not
+changed by this PR. Workflow-level `paths-ignore` is deliberately absent from CI so its required check always reports. See
+[GitHub's required-check guidance](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks).
+The existing release PR filter still has GitHub's
+[3,000-file limit](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#git-diff-comparisons);
+CI and main-push packaging classification use Git directly to avoid that limit.
+
+Before this change, the three latest successful main runs measured with
+`node scripts/ci-timings.mjs --runs 3 --workflow ci.yml --workflow release.yml --branch main` on 2026-11-11 had median CI
+wall time **10.8 min**, with **47 Linux + 26 Windows + 5 macOS runner-minutes**. Packaging added **14.1 min** wall time and
+**3 Linux + 14 Windows + 4 macOS runner-minutes**. Documentation-only CI now schedules three Linux jobs (scope, docs,
+result), plus one packaging-scope job on its main push with no installers built. The source-only lane passed all
+296 test files locally without Electron installed in **35.0 s** (Windows; not a GitHub measurement). Code changes add the two short routing/result jobs to the existing 13;
+measure their overhead and the documentation lane on GitHub after deployment rather than treating these baseline savings
+as measured results. Main pushes also add the short packaging-scope job.
 
 ## Where the time goes (baseline, 2026-11-07)
 
@@ -252,17 +287,19 @@ Considered and rejected (do not re-propose without new numbers):
   shards, which are the critical path, to save about 2 runner-min.
 - **Caching `node_modules` or the Electron download.** `npm ci` from the npm cache takes 4 to 8 s on Linux. The 637 MB tree
   restores slower than that on Windows, and Electron downloads in 0.6 to 3.4 s.
-- **`paths-ignore` for docs.** No recent PR was docs-only, and `docs/*.md` are generated outputs that vitest compares.
+- **Skipping all checks for docs.** Generated docs, README and the published changelog have test assertions. The documentation
+  lane below retains source-only vitest checks while omitting builds and runtime checks.
 - **Folding bench-linux into Check ubuntu.** `services:` cannot be conditional on a matrix that includes Windows and
   macOS, and the fold saves at most 1 runner-min.
 - **Path-filtering the live or smoke jobs.** A safe filter (anything under `src/`) skipped 0 of 40 recent PRs.
 
 ## Rules for keeping CI lean
 
-- **Budget per push across all workflows.** A pull request push starts at most 13 CI jobs, 1 of them macOS
+- **Budget per push across all workflows.** A code-changing pull request push starts at most 13 validation jobs, 1 of them macOS,
+  plus two short Linux scope/result jobs
   (`tests/ci-workflow.test.ts`), plus at most 3 packaging jobs, and those only when it changes packaging
-  (`tests/release-workflow.test.ts`). Two overlapping pushes must fit in 20 slots. GitHub matches a pull request's `paths`
-  against its first 300 changed files only, so a pull request over 300 changed files may skip Release builds silently: run
+  (`tests/release-workflow.test.ts`). The scope and result jobs do not overlap their own validation jobs. GitHub matches a pull request's `paths`
+  against its first 3,000 changed files only, so a pull request over 3,000 changed files may skip Release builds silently: run
   them by hand (`workflow_dispatch`) when it touches packaging.
 - **Audit gate.** `npm audit` runs in a workflow of its own (`audit.yml`: one job that installs nothing), not in CI: as
   a step of Check (ubuntu), an outage of npm's advisory endpoint or a new advisory against any installed package failed
