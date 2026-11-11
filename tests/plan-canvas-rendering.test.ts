@@ -8,25 +8,54 @@ import { windows } from '../src/renderer/src/core/windows'
 
 const measured = vi.hoisted(() => ({ text: vi.fn((value: string) => ({ width: value.length * 7 })), number: vi.fn((value: number | null | undefined) => value == null ? 'Unavailable' : String(value)) }))
 vi.mock('../src/renderer/src/plans/diagnostics', async original => ({ ...await original<typeof import('../src/renderer/src/plans/diagnostics')>(), formatPlanMetric: measured.number }))
+// init: a pending initialization. limit: the advertised WebGL size limit. allocatable: what the browser really allocates.
+const gpu = vi.hoisted(() => ({ init: undefined as Promise<void> | undefined, limit: 0, allocatable: 0, texts: new Set<{ render(): void }>() }))
 vi.mock('pixi.js/unsafe-eval', () => ({}))
-vi.mock('pixi.js', () => {
+vi.mock('pixi.js', async original => {
+  // The real reference-counted text cache, without rasterizing: happy-dom has no canvas or WebGL.
+  const { AbstractTextSystem } = await original<typeof import('pixi.js')>()
+  class TextSystem extends AbstractTextSystem {
+    override getTexture() { return {} as ReturnType<InstanceType<typeof AbstractTextSystem>['getTexture']> }
+    override returnTexture() {}
+  }
+  let styles = 0, system: TextSystem
   class Container { position = { set() {} }; scale = { set() {} }; addChild() {} }
   class Graphics extends Container {
     context = this; visible = true
     clear() { return this } rect() { return this } roundRect() { return this } fill() { return this } stroke() { return this }
     moveTo() { return this } lineTo() { return this } save() { return this } translate() { return this } path() { return this } restore() { return this }
   }
-  class TextStyle { fill = ''; constructor(_options: unknown) {} destroy() {} }
+  class TextStyle { fill = ''; styleKey = `style${styles++}`; constructor(_options: unknown) {} destroy() {} }
   class Text extends Container {
-    text = ''; style: unknown; visible = true; private rasterResolution: number | null = null; roundPixels: boolean
+    text = ''; style: TextStyle; visible = true; private rasterResolution: number | null = null; roundPixels: boolean
+    _resolution: number | null = null; _autoResolution = false; private currentKey = ''
     get resolution() { return this.rasterResolution }
-    set resolution(value: number | null) { this.rasterResolution = value }
-    constructor(options: { style: unknown; roundPixels: boolean }) { super(); this.style = options.style; this.roundPixels = options.roundPixels }
-    destroy() {}
+    set resolution(value: number | null) { this.rasterResolution = this._resolution = value }
+    get styleKey() { return `${this.text}:${this.style.styleKey}:${this._resolution}` }
+    constructor(options: { style: TextStyle; roundPixels: boolean }) { super(); this.style = options.style; this.roundPixels = options.roundPixels; gpu.texts.add(this) }
+    // Pixi's CanvasTextPipe exchanges the managed texture whenever a visible label's key changes.
+    render() {
+      if (!this.visible || this.currentKey === this.styleKey) return
+      system.decreaseReferenceCount(this.currentKey)
+      system.getManagedTexture(this as never)
+      this.currentKey = this.styleKey
+    }
+    destroy() { gpu.texts.delete(this); system.decreaseReferenceCount(this.currentKey) }
   }
   class Application {
-    stage = new Container(); renderer = { resolution: 1, resize(_width: number, _height: number, resolution: number) { this.resolution = resolution } }
-    canvas = document.createElement('canvas'); async init() {} render() {} destroy() {}
+    stage = new Container(); canvas = document.createElement('canvas')
+    renderer = (canvas => {
+      const size = (pixels: number) => Math.max(1, Math.min(pixels, gpu.allocatable || gpu.limit))
+      const renderer = { resolution: 1, canvasText: system = new TextSystem({ resolution: 1 } as never, false),
+        gl: gpu.limit ? { MAX_RENDERBUFFER_SIZE: 1, MAX_TEXTURE_SIZE: 2, MAX_VIEWPORT_DIMS: 3, isContextLost: () => false,
+          getParameter: (name: number) => name === 3 ? [gpu.limit, gpu.limit] : gpu.limit,
+          get drawingBufferWidth() { return size(canvas.width) }, get drawingBufferHeight() { return size(canvas.height) } } : undefined,
+        resize(width: number, height: number, resolution: number) { renderer.resolution = resolution; canvas.width = Math.round(width * resolution); canvas.height = Math.round(height * resolution) } }
+      return renderer
+    })(this.canvas)
+    init() { return gpu.init ?? Promise.resolve() }
+    render() { for (const text of gpu.texts) text.render() }
+    destroy() {}
   }
   return { Application, Container, Graphics, GraphicsPath: class {}, Text, TextStyle, CanvasTextMetrics: { measureText: measured.text }, TexturePool: { clear() {} } }
 })
@@ -168,4 +197,140 @@ it('updates DPI without a size change, moves the watch into a popout, and remove
     root.remove(); await popout.happyDOM.close()
     frames.mockRestore(); targetFrames.mockRestore(); media.mockRestore(); targetMedia.mockRestore(); pixelRatio.mockRestore(); targetRatio.mockRestore()
   }
+})
+
+const colors = { background: '#000000', card: '#000000', text: '#ffffff', muted: '#aaaaaa', border: '#777777', accent: '#8888ff', warning: '#ffff00' }
+const seeks = (input: ReturnType<typeof largePlan>): PlanStatement => ({ id: input.id, text: '', type: 'SELECT', estimatedCost: null, warnings: [], nodes: input.nodes.map(node => ({ ...node,
+  nodeId: node.id, physicalOp: 'Index Seek', logicalOp: 'Index Seek', object: 'dbo.Orders', warnings: [], properties: [], estimatedRows: 10,
+  actualRows: null, estimatedCost: null, elapsedMs: null, cpuMs: null, executions: null })) })
+
+it('keeps an explicit camera requested while Pixi initializes instead of the default Fit', async () => {
+  const frames = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1)
+  const start = () => {
+    let initialized!: () => void
+    const pending = gpu.init = new Promise<void>(resolve => { initialized = resolve })
+    const root = document.createElement('div'), changed = vi.fn()
+    Object.defineProperty(root, 'clientWidth', { value: 600 }); Object.defineProperty(root, 'clientHeight', { value: 400 })
+    const canvas = new PlanCanvas({ root, statements: [], layout: layoutPlans([largePlan(200)]), colors,
+      select() {}, cameraChanged: changed, hover() {}, failed: () => { throw new Error('Canvas initialization failed') } })
+    return { canvas, changed, async finish() { initialized(); await pending; await Promise.resolve() } }
+  }
+  try {
+    const early = start()
+    early.canvas.setCamera({ x: 50, y: 40, scale: 2 })
+    await early.finish()
+    expect(early.canvas.getCamera()).toEqual({ x: 50, y: 40, scale: 2 })
+    expect(early.changed).toHaveBeenCalledExactlyOnceWith({ x: 50, y: 40, scale: 2 })
+    early.canvas.dispose()
+    // A request equal to the default camera is still a request.
+    const same = start()
+    same.canvas.setCamera({ x: 0, y: 0, scale: 1 })
+    await same.finish()
+    expect(same.canvas.getCamera()).toEqual({ x: 0, y: 0, scale: 1 })
+    same.canvas.dispose()
+    // Without a request, and after one that derives from the still unmeasured viewport, the plan is fitted.
+    for (const unmeasured of [(_canvas: PlanCanvas) => {}, (canvas: PlanCanvas) => canvas.zoom(2), (canvas: PlanCanvas) => canvas.setCamera({ x: NaN, y: 0, scale: 1 })]) {
+      const fitted = start()
+      unmeasured(fitted.canvas)
+      await fitted.finish()
+      expect(fitted.canvas.getCamera().scale).toBeLessThan(1)
+      fitted.canvas.dispose()
+    }
+  } finally { gpu.init = undefined; frames.mockRestore() }
+})
+
+it('releases retired text cache keys over a long zoom session and keeps shared textures while panning', async () => {
+  const frames = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1)
+  const root = document.createElement('div'), layout = layoutPlans([largePlan(2)]), statement = seeks(largePlan(2))
+  Object.defineProperty(root, 'clientWidth', { value: 1200 }); Object.defineProperty(root, 'clientHeight', { value: 800 })
+  const canvas = new PlanCanvas({ root, statements: [statement], layout, camera: { x: 0, y: 0, scale: 1 }, colors,
+    select() {}, cameraChanged() {}, hover() {}, failed: () => { throw new Error('Canvas initialization failed') } })
+  const rendering = canvas as unknown as { draw(): void; pool: { active: Map<string, { styleKey: string }> }
+    app: { renderer: { canvasText: { _activeTextures: Record<string, { texture: unknown; usageCount: number } | null>; getReferenceCount(key: string): number } } } }
+  const cache = () => rendering.app.renderer.canvasText._activeTextures
+  try {
+    await Promise.resolve()
+    rendering.draw()
+    expect(rendering.pool.active.size).toBe(5)
+    // Both operators have the same name and object, so each pair of labels shares one texture.
+    expect(Object.keys(cache()).length).toBe(3)
+    for (let step = 1; step <= 2000; step++) {
+      canvas.setCamera({ x: 0, y: 0, scale: 1 + step * 0.000001 })
+      rendering.draw()
+    }
+    expect(Object.keys(cache()).length).toBe(3)
+    expect(Object.values(cache()).every(Boolean)).toBe(true)
+    const operator = rendering.pool.active.get(layout.nodes[0].id + ':op')!.styleKey
+    expect(operator.endsWith(':' + (1 + 2000 * 0.000001))).toBe(true)
+    expect(rendering.app.renderer.canvasText.getReferenceCount(operator)).toBe(2)
+    const textures = Object.entries(cache()).map(([key, entry]) => [key, entry!.texture] as const)
+    canvas.pan(0.3, 0.6)
+    canvas.update([statement])
+    rendering.draw()
+    expect(Object.keys(cache()).length).toBe(3)
+    for (const [key, texture] of textures) expect(cache()[key]!.texture).toBe(texture)
+    // A live counter retires its previous text on every frame.
+    for (let rows = 1; rows <= 200; rows++) {
+      canvas.update([{ ...statement, nodes: statement.nodes.map(node => ({ ...node, object: '', actualRows: rows })) }])
+      rendering.draw()
+    }
+    expect(Object.keys(cache()).length).toBe(3)
+    expect(Object.values(cache()).every(Boolean)).toBe(true)
+  } finally { canvas.dispose(); frames.mockRestore() }
+  expect(gpu.texts.size).toBe(0)
+})
+
+it('lowers the effective resolution to the device drawing-buffer limit and falls back when it still cannot be allocated', async () => {
+  const pixelRatio = vi.spyOn(window, 'devicePixelRatio', 'get').mockReturnValue(3)
+  const frames = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1)
+  const queries: EventTarget[] = []
+  const media = vi.spyOn(window, 'matchMedia').mockImplementation(() => { const value = new EventTarget(); queries.push(value); return value as MediaQueryList })
+  const root = document.createElement('div'), layout = layoutPlans([largePlan(2)])
+  const size = { width: 1200, height: 20 }
+  Object.defineProperty(root, 'clientWidth', { get: () => size.width }); Object.defineProperty(root, 'clientHeight', { get: () => size.height })
+  const failed = vi.fn()
+  gpu.limit = 16384
+  const canvas = new PlanCanvas({ root, statements: [seeks(largePlan(2))], layout, camera: { x: 0, y: -layout.bounds.y, scale: 1 }, colors,
+    select() {}, cameraChanged() {}, hover() {}, failed })
+  const rendering = canvas as unknown as { draw(): void; resize(): void; pool: { active: Map<string, { resolution: number }> }
+    app: { canvas: HTMLCanvasElement; renderer: { resolution: number; gl: { drawingBufferWidth: number; drawingBufferHeight: number } } } }
+  const backing = () => ({ resolution: rendering.app.renderer.resolution, requested: rendering.app.canvas.width, actual: rendering.app.renderer.gl.drawingBufferWidth })
+  try {
+    await Promise.resolve()
+    // Full DPI while the backing store fits.
+    expect(backing()).toEqual({ resolution: 3, requested: 3600, actual: 3600 })
+    size.width = 5500
+    rendering.resize()
+    expect(backing()).toEqual({ resolution: 16384 / 5500, requested: 16384, actual: 16384 })
+    rendering.draw()
+    const labels = [...rendering.pool.active.values()]
+    expect(labels.length).toBeGreaterThan(0)
+    for (const label of labels) expect(label.resolution).toBe(16384 / 5500)
+    // A lower display DPI fits again; returning to 3x is limited again.
+    pixelRatio.mockReturnValue(2)
+    queries.at(-1)!.dispatchEvent(new Event('change'))
+    expect(backing()).toEqual({ resolution: 2, requested: 11000, actual: 11000 })
+    pixelRatio.mockReturnValue(3)
+    queries.at(-1)!.dispatchEvent(new Event('change'))
+    expect(backing()).toEqual({ resolution: 16384 / 5500, requested: 16384, actual: 16384 })
+    // The browser can allocate less than it advertises; the actual drawing buffer decides.
+    gpu.allocatable = 8192
+    rendering.resize()
+    expect(backing()).toEqual({ resolution: 8192 / 5500, requested: 8192, actual: 8192 })
+    // A collapsed root below 50% zoom rounds to a 0-pixel canvas; its 1-pixel drawing buffer is not a failure.
+    pixelRatio.mockReturnValue(0.4)
+    size.width = size.height = 0
+    rendering.resize()
+    expect(backing()).toEqual({ resolution: 0.4, requested: 0, actual: 1 })
+    expect(failed).not.toHaveBeenCalled()
+    pixelRatio.mockReturnValue(3)
+    size.width = 5500; size.height = 20
+    // A buffer that never matches the request, and one that cannot be allocated at all, both use the fallback.
+    Object.defineProperty(rendering.app.renderer.gl, 'drawingBufferWidth', { configurable: true, get: () => rendering.app.canvas.width - 1 })
+    rendering.resize()
+    expect(failed).toHaveBeenCalledOnce()
+    Object.defineProperty(rendering.app.renderer.gl, 'drawingBufferWidth', { value: 0 })
+    rendering.resize()
+    expect(failed).toHaveBeenCalledTimes(2)
+  } finally { gpu.limit = gpu.allocatable = 0; canvas.dispose(); frames.mockRestore(); media.mockRestore(); pixelRatio.mockRestore() }
 })

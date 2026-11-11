@@ -513,6 +513,126 @@ describe('SQL file encodings and save hardening', () => {
     expect(await readdir(join(directory, 'kept'))).toEqual([])
     expect((await readdir(directory)).sort()).toEqual(['chained.sql', 'gone.sql', 'kept', 'kept.sql'])
   })
+  // #319: a dangling link is the walk's one result that is still a link, and stat, access and chmod would follow it again.
+  it('treats a dangling link as a new file, whatever its target has become since the walk', async () => {
+    // A stand-in for alias.sql -> kept/q.sql, with q.sql missing when the walk looks. What following alias.sql finds
+    // afterwards is the file standing in for it: read-only, as a file another user made at the link's target can be.
+    await mkdir(join(directory, 'kept'))
+    const alias = join(directory, 'alias.sql')
+    await writeFile(alias, 'SELECT 0')
+    await chmod(alias, 0o444)
+    const seen: { target: number; saved: number }[] = []
+    const store = new SqlFileStore({
+      platform: 'linux', uid: 1000, folderStat: async () => ({ mode: 0o40755, uid: 1000 }),
+      lstat: async (path: string) => path === alias ? { mode: 0o120777, uid: 1000, isSymbolicLink: () => true } : lstat(path),
+      readlink: async (path: string) => { if (path !== alias) throw new Error(`not a link: ${path}`); return join('kept', 'q.sql') },
+      // The modes as the rename finds them. A rename replaces a link whatever it names; Windows replaces the file
+      // standing in for it only once that is writable.
+      replace: async (from, to) => {
+        seen.push({ target: (await stat(to)).mode & 0o777, saved: (await stat(from)).mode & 0o777 })
+        await chmod(to, 0o644)
+        await rename(from, to)
+      }
+    })
+    // Not refused as read-only, and the new file does not take the mode found through the link.
+    const saved = await store.save('SELECT 1', undefined, alias)
+    expect(saved).toMatchObject({ path: alias, readOnly: false })
+    expect(await readFile(alias, 'utf8')).toBe('SELECT 1')
+    await chmod(alias, 0o444)
+    // Root may write a read-only file, so there the question is no test.
+    if (process.getuid?.() !== 0) expect(await isReadOnly(alias)).toBe(true)
+    expect(await store.readOnly(saved.id)).toBe(false)
+    // Overwrite of a read-only file changes no mode through the link either.
+    await store.save('SELECT 2', saved.id, undefined, 'sql', { overwriteReadOnly: true })
+    expect(await readFile(alias, 'utf8')).toBe('SELECT 2')
+    expect(seen.map(modes => modes.target)).toEqual([0o444, 0o444])
+    for (const modes of seen) expect(modes.saved).not.toBe(0o444)
+    expect(await readdir(join(directory, 'kept'))).toEqual([])
+    expect((await readdir(directory)).sort()).toEqual(['alias.sql', 'kept'])
+  })
+  // #318: realpath fails on a missing file, so its spellings were compared as written and a Save As found no owner.
+  it('refuses Save As onto the missing file that an open dangling link leads to', async () => {
+    // Stand-ins for alias.sql -> kept/q.sql and second.sql -> kept/q.sql.
+    await mkdir(join(directory, 'kept'))
+    const alias = join(directory, 'alias.sql'), second = join(directory, 'second.sql'), target = join(directory, 'kept', 'q.sql')
+    await writeFile(alias, 'SELECT 1')
+    await writeFile(target, 'SELECT 1')
+    const store = new SqlFileStore({
+      platform: 'linux', uid: 1000, folderStat: async () => ({ mode: 0o40755, uid: 1000 }),
+      lstat: async (path: string) => path === alias || path === second ? { mode: 0o120777, uid: 1000, isSymbolicLink: () => true } : lstat(path),
+      readlink: async (path: string) => { if (path !== alias && path !== second) throw new Error(`not a link: ${path}`); return join('kept', 'q.sql') }
+    })
+    const viaLink = await store.read(alias)
+    const other = await store.save('SELECT 2', undefined, join(directory, 'other.sql'))
+    // Another program deletes the link's target and leaves its folder: the tab's file is now a dangling link.
+    await rm(target)
+    await expect(store.save('SELECT 3', other.id, target)).rejects.toThrow('alias.sql is open in another query tab')
+    await expect(store.save('SELECT 3', undefined, target)).rejects.toThrow('alias.sql is open in another query tab')
+    expect(await readdir(join(directory, 'kept'))).toEqual([])
+    // Another dangling link to that missing file is another file: its save replaces that link and writes no target.
+    expect(await store.save('SELECT 4', undefined, second)).toMatchObject({ path: second })
+    // And the tab's own Save keeps replacing its link.
+    expect(await store.save('SELECT 5', viaLink.id)).toMatchObject({ id: viaLink.id, path: alias })
+    expect(await readFile(alias, 'utf8')).toBe('SELECT 5')
+    expect(await readdir(join(directory, 'kept'))).toEqual([])
+  })
+  it('names a missing file by its folder, so its other case is the same file where the volume folds case', async () => {
+    const real = join(directory, 'Q', 'Report.sql'), other = join(directory, 'q', 'report.sql'), folder = dirname(real)
+    await mkdir(folder)
+    // On a case-sensitive file system the other spelling's folder is another folder.
+    await mkdir(dirname(other), { recursive: true })
+    await writeFile(real, 'SELECT 1')
+    // A stand-in for realpath on macOS: on a case-insensitive volume every spelling of Q gets its case on disk, on a
+    // case-sensitive one only Q itself is there. A missing file fails either way.
+    let folds = true, present = true
+    const same = (left: string, right: string) => folds ? left.toLowerCase() === right.toLowerCase() : left === right
+    const absent = (path: string) => Object.assign(new Error(`ENOENT: no such file or directory, realpath '${path}'`), { code: 'ENOENT' })
+    const store = new SqlFileStore({
+      platform: 'darwin', uid: 1000, realpath: async path => {
+        if (same(path, folder)) return folder
+        if (same(dirname(path), folder)) { if (present && same(basename(path), basename(real))) return real; throw absent(path) }
+        if (path.toLowerCase() === folder.toLowerCase()) throw absent(path)
+        return path
+      }
+    })
+    const first = await store.read(real)
+    const elsewhere = await store.save('SELECT 2', undefined, join(directory, 'elsewhere.sql'))
+    // Another program deletes the tab's file.
+    await rm(real)
+    present = false
+    await expect(store.save('SELECT 3', elsewhere.id, other)).rejects.toThrow('Report.sql is open in another query tab')
+    expect(await readdir(dirname(other))).toEqual([])
+    // Linux's realpath never gives a name another case, so a spelling that resolves to the folder is a link, not folding.
+    const linux = new SqlFileStore({ platform: 'linux', uid: 1000, realpath: async path => same(path, folder) ? folder : dirname(path) === folder ? Promise.reject(absent(path)) : path })
+    await writeFile(real, 'SELECT 1')
+    await linux.read(real)
+    await rm(real)
+    const upper = join(folder, 'REPORT.sql')
+    expect(await linux.save('SELECT 4', undefined, upper)).toMatchObject({ path: upper })
+    await rm(upper)
+    // On a case-sensitive volume the other case is another file, and is saved.
+    folds = false
+    expect(await store.save('SELECT 3', elsewhere.id, other)).toMatchObject({ id: elsewhere.id, path: other })
+    expect(store.get(first.id).path).toBe(real)
+  })
+  // #301: one store-wide queue made every read wait for the resolutions of the reads before it.
+  it('does not queue a Reload, or an Open of a tab\'s own path, behind another file\'s resolution', async () => {
+    const offline = join(directory, 'offline.sql'), changed = join(directory, 'changed.sql'), unrelated = join(directory, 'unrelated.sql')
+    for (const path of [offline, changed, unrelated]) await writeFile(path, 'SELECT 1')
+    // A stand-in for a share that has gone offline: resolving the file on it does not come back.
+    let stuck = false
+    const store = new SqlFileStore({ realpath: path => stuck && basename(path) === basename(offline) ? new Promise<string>(() => {}) : Promise.resolve(path) })
+    const onShare = await store.read(offline), tab = await store.read(changed)
+    stuck = true
+    let settled = false
+    void store.read(unrelated).then(() => { settled = true }, () => { settled = true })
+    await writeFile(changed, 'SELECT 2')
+    expect(await store.reload(tab.id)).toMatchObject({ id: tab.id, content: 'SELECT 2' })
+    expect(await store.read(changed)).toMatchObject({ id: tab.id, path: changed })
+    expect(await store.read(offline)).toMatchObject({ id: onShare.id })
+    // The unrelated open is still waiting for the share, and the reads above did not wait for it.
+    expect(settled).toBe(false)
+  })
   // The restore that #163 names, the Open dialog and the files handed to main (arguments, a second instance, a drop) each
   // share one cache across their burst; a per-file cache would bring back n² resolutions with every check above green.
   it('shares one target cache across every open of a burst in main', async () => {

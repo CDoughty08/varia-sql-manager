@@ -1,14 +1,18 @@
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
-import type { ResultSetEntry, ResultsService } from './ResultsService'
-import { setKey } from './ResultsService'
+import type { EntryRef, ResultSetEntry, ResultsService } from './ResultsService'
+import { entryIndex, entryName, entryOf, setKey } from './ResultsService'
 import { formatCount } from './status'
 
 /** What a diff set compared, for its grid's strip. */
 export interface CompareInfo {
-  /** The compared sets' places in the run. */
+  /** The compared sets' places in the run when they were compared. */
   readonly left: number
   readonly right: number
+  /** The numbers the compared results are named by ("Result 3"), which their places do not give once an entry before
+   *  them has gone. Without them the strip names the results by their places. */
+  readonly leftNumber?: number
+  readonly rightNumber?: number
   /** The column whose values matched rows, or null when whole rows did. */
   readonly key: string | null
   readonly exact: boolean
@@ -55,12 +59,12 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
   }
 
   /** The set a grid's set is compared with: the nearest set before it of rows, with every row and a column name in common. */
-  previousOf(tabId: string, index: number): number | undefined {
+  previousOf(tabId: string, ref: EntryRef): number | undefined {
     const tab = this.results.getSnapshot()[tabId]
-    const right = tab?.sets[index]
+    const right = entryOf(tab?.sets, ref)
     if (!tab || tab.status === 'running' || !comparable(right)) return undefined
     const columns = names(right)
-    for (let left = index - 1; left >= 0; left--) {
+    for (let left = right.index - 1; left >= 0; left--) {
       const entry = tab.sets[left]
       if (comparable(entry) && [...names(entry)].some(name => columns.has(name))) return left
     }
@@ -68,24 +72,27 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
   }
 
   /** Whether a grid's set can be compared now: it has a previous set, and no comparison runs in its tab. */
-  canCompare(tabId: string, index: number): boolean { return !this.running.has(tabId) && this.previousOf(tabId, index) !== undefined }
+  canCompare(tabId: string, ref: EntryRef): boolean { return !this.running.has(tabId) && this.previousOf(tabId, ref) !== undefined }
 
   /** Compares a grid's set with its previous set and appends the diff; a failure is said in the toolbar. */
-  async compare(tabId: string, index: number, o: { exact?: boolean } = {}): Promise<void> {
-    const left = this.previousOf(tabId, index)
-    const tab = this.results.getSnapshot()[tabId]
-    if (left === undefined || !tab || this.running.has(tabId)) return
-    const from = tab.sets[left], to = tab.sets[index]
+  async compare(tabId: string, ref: EntryRef, o: { exact?: boolean } = {}): Promise<void> {
+    const previous = this.previousOf(tabId, ref)
+    const tab = this.results.getSnapshot()[tabId], to = entryOf(tab?.sets, ref)
+    if (previous === undefined || !tab || !to || this.running.has(tabId)) return
+    const from = tab.sets[previous]
     const abort = new AbortController()
     const item = { abort, queryId: tab.queryId }
     this.running.set(tabId, item)
     try {
       const result = await from.handle.diff(to.handle, { exact: o.exact ?? false, signal: abort.signal })
-      const label = `Differences: ${from.label ?? `Result ${left + 1}`} → ${to.label ?? `Result ${index + 1}`}`
+      const label = `Differences: ${entryName(from)} → ${entryName(to)}`
       // Only the run that holds both sets takes the diff; otherwise (a re-run, a closed tab) it is released.
       if (this.results.addSet(tabId, result.descriptor, label, [setKey(from.descriptor), setKey(to.descriptor)]) === undefined) return
+      // Where the two stand now: an entry before them may have gone while they were compared.
+      const sets = this.results.getSnapshot()[tabId]?.sets ?? []
+      const left = entryIndex(sets, from.key, from.index), right = entryIndex(sets, to.key, to.index)
       const info: CompareInfo = {
-        left, right: index, key: result.key, exact: o.exact ?? false, same: result.same, changed: result.changed, added: result.added, removed: result.removed,
+        left: left < 0 ? from.index : left, right: right < 0 ? to.index : right, leftNumber: from.number, rightNumber: to.number, key: result.key, exact: o.exact ?? false, same: result.same, changed: result.changed, added: result.added, removed: result.removed,
         soft: result.soft, leftOnly: result.leftOnly, rightOnly: result.rightOnly, approximate: result.approximate
       }
       // Only diffs some run still shows are kept.
@@ -112,10 +119,11 @@ const count = (value: number, one: string, many = one + 's') => `${formatCount(v
 /** What a diff grid's strip says: what was compared and how, the counts, soft differences and the columns left out. */
 export function compareText(info: CompareInfo): string {
   const by = info.key ? `rows matched by ${info.key}` : 'whole rows matched'
-  const parts = [`Result ${info.left + 1} → Result ${info.right + 1}, ${by}${info.exact ? ', text compared exactly' : ''}: ${count(info.changed, 'changed row')}, ${count(info.added, 'added row')}, ${count(info.removed, 'removed row')}, ${formatCount(info.same)} unchanged.`]
+  const leftNumber = info.leftNumber ?? info.left + 1, rightNumber = info.rightNumber ?? info.right + 1
+  const parts = [`Result ${leftNumber} → Result ${rightNumber}, ${by}${info.exact ? ', text compared exactly' : ''}: ${count(info.changed, 'changed row')}, ${count(info.added, 'added row')}, ${count(info.removed, 'removed row')}, ${formatCount(info.same)} unchanged.`]
   if (info.soft > 0) parts.push(`${count(info.soft, 'value differs', 'values differ')} only by collation (case or trailing spaces), underlined.`)
   if (info.approximate) parts.push('Long values were compared by the part these results keep, so a difference past it does not show.')
-  const others = [...info.leftOnly.map(name => `${name} (Result ${info.left + 1})`), ...info.rightOnly.map(name => `${name} (Result ${info.right + 1})`)]
+  const others = [...info.leftOnly.map(name => `${name} (Result ${leftNumber})`), ...info.rightOnly.map(name => `${name} (Result ${rightNumber})`)]
   if (others.length > 0) parts.push(`Not compared: ${others.join(', ')}.`)
   return parts.join(' ')
 }

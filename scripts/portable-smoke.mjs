@@ -1,10 +1,12 @@
 import { chromium, expect } from '@playwright/test'
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
+import { exited, removeProfile } from './fixtures/owned-app.mjs'
+import { closeMs } from './fixtures/smoke.mjs'
 import { backendReady } from './fixtures/ui.mjs'
 
 const executable = process.env.VARIA_PORTABLE_EXECUTABLE
@@ -47,5 +49,8 @@ try {
 } finally {
   await browser?.close().catch(() => {})
   if (child.exitCode === null) spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
-  rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 })
+  // taskkill returns before the launcher, the app and the backend have let go of the profile's files.
+  if (!await exited(child, closeMs)) console.warn('Warning: the portable launcher was still running 45 s after it was stopped.')
+  // Best effort: a throw here would replace the error that failed the smoke, or fail one that passed.
+  removeProfile(profile)
 }

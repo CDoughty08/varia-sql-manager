@@ -133,18 +133,30 @@ describe('CI workflow', () => {
     }
   })
   // npm audit ran nowhere in CI, so dompurify and undici sat on critical and high advisories with fixes available (#267).
-  it('audits the lockfile on Linux in every run, failing on high and critical advisories only', () => {
+  // Then it ran as a step of Check (ubuntu), where an endpoint outage or an unrelated new advisory failed every pull request (#310).
+  it('audits the lockfile in a workflow of its own: where the dependencies change and daily, never in a CI job', () => {
+    for (const [name, job] of workflow) expect(job.steps.filter(step => /\bnpm audit\b|audit\.mjs/.test(step.run)), name).toEqual([])
     const check = workflow.get('check')!
-    const audit = check.steps.filter(step => /\bnpm audit\b/.test(step.run))
-    expect(audit).toHaveLength(1)
-    expect(audit[0].run.trim()).toBe('npm audit --audit-level=high')
-    // After the check and whatever its outcome: a failed audit ahead of it skipped Linux's type check, vitest and build.
-    expect(audit[0].if).toBe("matrix.os == 'ubuntu-24.04' && !cancelled()")
-    expect(audit[0].timeout).toBeGreaterThan(0)
     const at = (pattern: RegExp) => check.steps.findIndex(step => pattern.test(step.run))
     expect(at(/^npm ci\b/)).toBeLessThan(at(/\bnpm run check\b/))
-    expect(at(/\bnpm run check\b/)).toBeLessThan(at(/\bnpm audit\b/))
     expect(check.steps[at(/\bnpm run check\b/)].if).toBeUndefined()
+
+    const yaml = readFileSync('.github/workflows/audit.yml', 'utf8'), on = yaml.slice(yaml.indexOf('\non:'), yaml.indexOf('\nconcurrency:'))
+    const paths = '[package.json, package-lock.json, scripts/audit.mjs, .github/workflows/audit.yml]'
+    // A pull request or main push that leaves the dependencies alone starts nothing; the daily run reports advisories published since.
+    expect(on).toBe(`\non:\n  pull_request:\n    types: [opened, synchronize, reopened]\n    paths: ${paths}\n  push:\n    branches: [main]\n    paths: ${paths}\n  schedule:\n    - cron: '43 6 * * *'\n  workflow_dispatch:\n`)
+    expect(yaml).toContain("group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' || github.event_name == 'push') && github.ref || github.run_id }}")
+    expect(yaml).toMatch(/\n {2}cancel-in-progress: true\n/)
+    const audit = jobs('.github/workflows/audit.yml')
+    expect([...audit.keys()]).toEqual(['audit'])
+    const job = audit.get('audit')!
+    expect(job.runsOn).toBe('ubuntu-24.04')
+    // The lockfile alone is audited: no install. The script separates an endpoint outage from an advisory (tests/audit.test.ts).
+    expect(job.steps.map(step => step.run).filter(Boolean)).toEqual(['node scripts/audit.mjs'])
+    const step = job.steps.find(step => step.run)!
+    expect(step.timeout).toBeGreaterThan(0)
+    expect(job.timeout).toBeGreaterThan(step.timeout!)
+    expect(readFileSync('scripts/audit.mjs', 'utf8')).toContain("'npm audit --package-lock-only --json --audit-level=high'")
   })
   it('type-checks on Linux in every run, and states its job count truly', () => {
     const yaml = readFileSync('.github/workflows/ci.yml', 'utf8')

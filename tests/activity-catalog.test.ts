@@ -19,7 +19,7 @@ describe('activity monitor catalogue', () => {
     expect([activitySource, activityPoolSuffix]).toEqual(['activity', ' - Activity Monitor'])
     expect(activityProbes).toEqual(['activity.overview', 'activity.sessions', 'activity.resources', 'activity.queries'])
     expect(activityLimits.probesPerMonitor).toBe(activityProbes.length)
-    expect(activityPanes.map(pane => paneSpecs[pane].title)).toEqual(['Processes', 'Blocking', 'Resource Waits', 'Data File I/O', 'Recent Expensive Queries', 'Active Expensive Queries'])
+    expect(activityPanes.map(pane => paneSpecs[pane].title)).toEqual(['Sessions', 'Blocking', 'Resource Waits', 'Data File I/O', 'Recent Expensive Queries', 'Active Expensive Queries'])
     for (const pane of activityPanes) {
       const spec = paneSpecs[pane]
       for (const table of spec.tables) expect(probeSpecs[spec.probe].tables, `${pane} ${table}`).toContain(table)
@@ -31,7 +31,7 @@ describe('activity monitor catalogue', () => {
     }
     expect(defaultPanes).toEqual({ primary: 'processes', secondary: 'waits' })
     // The owner's name for the grid (SSMS's), with "sessions" as a palette keyword later.
-    expect(tableSpecs.sessions.title).toBe('Processes')
+    expect(tableSpecs.sessions.title).toBe('Sessions')
   })
   it('samples every 2 s by default within SSMS-free bounds: resources every 5 s at most, query statistics 30 s and never under 15 s', () => {
     expect(activityIntervalsSeconds).toEqual([1, 2, 3, 5, 10, 15, 30, 60])
@@ -88,7 +88,7 @@ describe('activity monitor catalogue', () => {
     expect(tableSpecs.recentQueries.columns.filter(column => column.capability).map(column => [column.id, column.capability])).toEqual([['spills', 'totalSpills']])
     expect(activityCapabilities).toEqual(['totalSpills'])
   })
-  it('keeps the Processes columns DBAs need visible: Blocked By, Host, Application and Elapsed', () => {
+  it('keeps the Sessions columns DBAs need visible: Blocked By, Host, Application and Elapsed', () => {
     const visible = tableSpecs.sessions.columns.filter(column => column.visible).map(column => column.caption)
     for (const caption of ['Session ID', 'Status', 'Blocked By', 'Head Blocker', 'Blocking', 'Host Name', 'Application', 'Elapsed (s)', 'Open Transactions', 'Wait Type']) expect(visible).toContain(caption)
     expect(tableSpecs.sessions.columns.find(column => column.id === 'openTransactions')).toMatchObject({ parity: 'fix', type: 'int', unit: 'count' })
@@ -156,7 +156,7 @@ describe('activity monitor catalogue', () => {
         .toEqual(platform === 'darwin' ? [undefined, ['activity.open']] : ['AltGr types characters with Ctrl+Alt', []])
     }
   })
-  it('validates filters strictly: Processes-only fields, facet columns, one filter per column, and the bounds', () => {
+  it('validates filters strictly: Sessions-only fields, facet columns, one filter per column, and the bounds', () => {
     const ok = (value: unknown) => activityFilterSchema.safeParse(value).success
     expect(ok({ table: 'sessions', view: 'blocked', showSystem: true, showVaria: false, text: 'app', columnFilters: [{ column: 'login', values: ['sa'] }, { column: 'database', blanks: true }] })).toBe(true)
     expect(viewChips.every(view => ok({ table: 'sessions', view }) && viewChipTitles[view].length > 0)).toBe(true)

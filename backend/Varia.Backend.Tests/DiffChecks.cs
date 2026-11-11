@@ -30,6 +30,7 @@ internal static class DiffChecks
         Halves(check);
         Sizes(check);
         Host(check);
+        Refusals(check);
     }
 
     private static ResultSetBuffer Fill(ResultStore store, QueryBudget budget, int index, string?[][] rows, ResultColumn[]? columns = null)
@@ -336,7 +337,8 @@ internal static class DiffChecks
         var b = tight.Open(budget, 1, 1, 1, "rows", [new("id", "int", "text")], [WireKind.Text])!;
         foreach (var set in new[] { a, b })
         {
-            for (var row = 0; row < 10_000; row++)
+            // Nearly full, not stopped: a stopped query answers BUDGET_STOPPED instead (Refusals).
+            for (var row = 0; row < 10_000 && tight.UsedBytes < (set == a ? 3500 : 7000); row++)
             {
                 if (set.BeginRow() is not { } builder) break;
                 builder.AppendText(row.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -348,6 +350,130 @@ internal static class DiffChecks
         string? refused;
         try { small.DispatchAsync("results.diff", JsonSerializer.SerializeToElement(new { left = a.ResultId, right = b.ResultId }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); refused = null; }
         catch (RequestException error) { refused = error.Code; }
-        check(refused == "TOO_LARGE" && tight.UsedBytes == used, "a diff the budget has no room for answers TOO_LARGE and takes nothing");
+        check(refused == "TOO_LARGE" && budget.Stopped == TruncationReason.None && tight.UsedBytes == used, "a diff the budget has no room for answers TOO_LARGE and takes nothing: " + refused + " " + budget.Stopped);
+    }
+
+    /// <summary>A diff is a derived set, stored whole or not at all: one the budget or low system memory cuts short is refused
+    /// and leaves its query able to store another; a query that stopped storing answers BUDGET_STOPPED; a source released
+    /// while it was compared ends the diff.</summary>
+    private static void Refusals(Action<bool, string> check)
+    {
+        static string?[][] Rows(int count, string price, int pad = 0) => [.. Enumerable.Range(1, count).Select(i => new[] { i.ToString(System.Globalization.CultureInfo.InvariantCulture), new string('n', pad) + i.ToString(System.Globalization.CultureInfo.InvariantCulture), price })];
+        static string? Message(SqlService service, ResultSetBuffer left, ResultSetBuffer right)
+        {
+            try { service.DispatchAsync("results.diff", JsonSerializer.SerializeToElement(new { left = left.ResultId, right = right.ResultId, context = -1 }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); return null; }
+            catch (RequestException error) { return error.Code + ": " + error.Message; }
+        }
+        const string tooLarge = "TOO_LARGE: There is not enough result memory to show the differences. Close other results and try again.";
+
+        // The budget runs out part-way: the sources, the alignment and about half the diff's rows fit.
+        var roomy = new ResultStore(1L << 30, 1L << 29);
+        Pair(roomy, Rows(400, "1.00", 200), Rows(400, "2.00", 200));
+        var sources = roomy.UsedBytes;
+        var working = ResultDiffer.WorkingBytes(400, 400) + ResultDiffer.CellChunk * ResultDiffer.CellBytes;
+        var store = new ResultStore(1L << 30, sources + working + sources / 2);
+        using (var service = new SqlService(store))
+        {
+            var (left, right) = Pair(store, Rows(400, "1.00", 200), Rows(400, "2.00", 200));
+            var used = store.UsedBytes;
+            // What the writer leaves under this budget: some of the rows, which results.diff must not answer with.
+            var model = ResultDiffer.Compare(left, left.SealedSnapshot(), right, right.SealedSnapshot(), false, CancellationToken.None);
+            store.TryReserve(left.Budget, working, false, out _);
+            var part = store.Open(left.Budget, 2, 1, 1, "diff", UnifiedDiff.Columns(right, model), UnifiedDiff.Wires(right, model), lengths: UnifiedDiff.Lengths(right, model), derived: true)!;
+            UnifiedDiff.Write(part, left, left.SealedSnapshot(), right, right.SealedSnapshot(), model, -1, CancellationToken.None);
+            var written = part.Describe();
+            store.Release(part.ResultId);
+            store.Return(left.Budget, working);
+            var refused = Message(service, left, right);
+            check(written is { RowsStored: > 0 and < 800 } && written.RowsStored < written.RowsRead && refused == tooLarge && store.UsedBytes == used && left.Budget.Stopped == TruncationReason.None,
+                $"a diff the budget cuts short is refused whole, releases what it stored and leaves its query's budget open: {written.RowsStored}/{written.RowsRead} {refused} {store.UsedBytes - used} {left.Budget.Stopped}");
+        }
+
+        // Low system memory: the diff's first page seals after 64 rows.
+        var low = false;
+        // The probe runs at every page seal: what happens to the query while a diff's first page is sealed.
+        Action? sealing = null;
+        var probed = new ResultStore(1L << 30, 1L << 29, () =>
+        {
+            var action = sealing;
+            sealing = null;
+            action?.Invoke();
+            return (low ? 100 : 0, 50);
+        });
+        using (var service = new SqlService(probed))
+        {
+            var written = Pair(probed, Rows(100, "1.00"), Rows(100, "2.00"));
+            var before = probed.UsedBytes;
+            sealing = () => written.Left.Budget.Stop(TruncationReason.QueryBudget);
+            var cut = Message(service, written.Left, written.Right);
+            check(sealing is null && cut == "BUDGET_STOPPED: " + SqlService.BudgetStoppedFull && probed.UsedBytes == before,
+                $"a diff whose query stops storing while it is written answers BUDGET_STOPPED and keeps nothing: {cut} {probed.UsedBytes - before}");
+
+            var (left, right) = Pair(probed, Rows(100, "1.00"), Rows(100, "2.00"));
+            var few = Pair(probed, Rows(2, "1.00"), Rows(2, "2.00"));
+            var used = probed.UsedBytes;
+            low = true;
+            var pressed = Message(service, left, right);
+            check(pressed == tooLarge && left.Budget.Stopped == TruncationReason.None && probed.UsedBytes == used,
+                $"a diff cut short by low system memory is refused whole and leaves its query's budget open: {pressed} {left.Budget.Stopped} {probed.UsedBytes - used}");
+            var whole = (ResultsDiffResult)service.DispatchAsync("results.diff", JsonSerializer.SerializeToElement(new { left = few.Left.ResultId, right = few.Right.ResultId }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult()!;
+            check(whole.Descriptor is { RowsStored: 4, Truncated: null, State: "complete" } && few.Left.Budget.Stopped == TruncationReason.None,
+                $"a diff whose last page is sealed under low system memory is kept whole and not marked truncated: {whole.Descriptor.RowsStored} {whole.Descriptor.Truncated}");
+            low = false;
+            var again = Message(service, left, right);
+            check(again is null, "the same diff is stored once memory is free again: " + again);
+            left.Budget.Stop(TruncationReason.SystemMemory);
+            few.Left.Budget.Stop(TruncationReason.GlobalBudget);
+            var lowMemory = Message(service, left, right);
+            var filled = Message(service, few.Left, few.Right);
+            check(lowMemory == "BUDGET_STOPPED: The computer was low on memory while this query ran, so it can store nothing more. Run the query again." && filled == "BUDGET_STOPPED: The result memory filled while this query ran, so it can store nothing more. Close other results, then run the query again.",
+                $"a diff of a query that stopped storing answers BUDGET_STOPPED with why: {lowMemory} / {filled}");
+        }
+
+        // A source released while it was compared: the diff ends rather than describe results that are gone.
+        var open = new ResultStore(1L << 30, 1L << 29);
+        using (var service = new SqlService(open))
+        {
+            (Tripwire Columns, ResultSetBuffer Left, ResultSetBuffer Right) Wired(string session)
+            {
+                var budget = open.BeginQuery(session);
+                var columns = new Tripwire(Columns) { Within = nameof(ResultDiffer) };
+                var left = open.Open(budget, 0, 1, 1, "rows", columns, Wires)!;
+                left.CountRow();
+                var builder = left.BeginRow()!;
+                foreach (var cell in new[] { "1", "a", "1.00" }) builder.AppendText(cell);
+                left.TryCommitRow();
+                left.Complete();
+                return (columns, left, Fill(open, budget, 1, [["1", "a", "2.00"]]));
+            }
+            var gone = Wired("released");
+            var count = open.Count;
+            gone.Columns.OnRead = () => open.Release(gone.Left.ResultId);
+            var released = Message(service, gone.Left, gone.Right);
+            check(gone.Columns.OnRead is null && released == "RESULT_RELEASED: These results were closed. Execute the query again to see them." && open.Count == count - 1,
+                $"a diff whose source is released while it is compared answers RESULT_RELEASED and stores nothing: {released} {open.Count - count}");
+            // The sources are complete, but their query may still be reading later sets: one that stops storing while they
+            // are compared is why the diff was not kept, not the memory left.
+            var stopping = Wired("stopping");
+            var used = open.UsedBytes;
+            stopping.Columns.OnRead = () => stopping.Left.Budget.Stop(TruncationReason.SystemMemory);
+            var during = Message(service, stopping.Left, stopping.Right);
+            check(stopping.Columns.OnRead is null && during == "BUDGET_STOPPED: " + SqlService.BudgetStoppedLowMemory && open.UsedBytes == used,
+                $"a diff whose query stops storing while it is compared answers BUDGET_STOPPED and keeps nothing: {during} {open.UsedBytes - used}");
+            // The same while it compares, with the budget full: the differing cells are refused their memory.
+            var filling = Wired("filling");
+            used = open.UsedBytes;
+            long taken = 0;
+            filling.Columns.OnRead = () =>
+            {
+                taken = open.QueryBytes - filling.Left.Budget.UsedBytes;
+                open.TryReserve(filling.Left.Budget, taken, false, out _);
+                filling.Left.Budget.Stop(TruncationReason.QueryBudget);
+            };
+            var cells = Message(service, filling.Left, filling.Right);
+            open.Return(filling.Left.Budget, taken);
+            check(filling.Columns.OnRead is null && taken > 0 && cells == "BUDGET_STOPPED: " + SqlService.BudgetStoppedFull && open.UsedBytes == used,
+                $"a diff refused memory for its differing cells because its query filled the budget answers BUDGET_STOPPED: {cells} {open.UsedBytes - used}");
+        }
     }
 }

@@ -263,7 +263,8 @@ describe('results service', () => {
     const first = client.handle(1)!, second = client.handle(2)!
     service.gridState('t1', 1).scrollLeft = 40
     service.setSelection('t1', 1, selectAll(1))
-    expect(service.viewState('t1').grids.get(1)).toMatchObject({ scrollLeft: 40, selection: selectAll(1) })
+    // Grid state is the entry's, by its key.
+    expect(service.viewState('t1').grids.get(tab().sets[1].key)).toMatchObject({ scrollLeft: 40, selection: selectAll(1) })
     // Closing results keeps Messages and frees the sets; a running query's results cannot be closed.
     service.closeResults('t1')
     // One request closes every set of the run.
@@ -677,6 +678,176 @@ describe('results service', () => {
     expect(timers.pending.size).toBe(0)
     service.begin('t1', 'q2')
     expect(client.listening('q2')).toBe(0)
+  })
+})
+
+describe('results service entry keys', () => {
+  /** Results 1 to 3 and a pivot of Result 3 appended after them. */
+  const four = () => {
+    const f = fixture()
+    f.service.begin('t1', 'q1')
+    f.service.finish('t1', 'q1', { summary: summaryOf([descriptor(1), descriptor(2, { index: 1 }), descriptor(3, { index: 2 })]) })
+    expect(f.service.addSet('t1', descriptor(803, { index: 2, kind: 'pivot' }), 'Pivot of Result 3', ['1:3'])).toBe(3)
+    f.flush()
+    return { ...f, keys: f.tab().sets.map(set => set.key) }
+  }
+  it('mints a key for each entry, numbers an original result by its ordinal and a derived one by the place it was appended at', () => {
+    const { service, tab, keys } = four()
+    expect(new Set(keys).size).toBe(4)
+    expect(tab().sets.map(set => [set.index, set.ordinal, set.number, set.label])).toEqual([[0, 1, 1, undefined], [1, 2, 2, undefined], [2, 3, 3, undefined], [3, undefined, 4, 'Pivot of Result 3']])
+    // A key is not the stored result's: another run's entries have other keys, though its results may have the same ids.
+    service.begin('t1', 'q2')
+    service.finish('t1', 'q2', { summary: summaryOf([descriptor(1)]) })
+    expect(keys).not.toContain(tab().sets[0].key)
+    // A place and a key name the same entry.
+    expect(service.gridState('t1', 0)).toBe(service.gridState('t1', tab().sets[0].key))
+  })
+  it('leaves every other entry its sort, views, grid state, selection, grid, job and names when a middle entry goes', async () => {
+    const { service, client, api, tab, flush, keys } = four()
+    const third = client.handle(3)!, building = deferred<ResultView>(), copying = deferred<ApiResult<ResultsJobResult>>()
+    third.sort.mockReturnValueOnce(building.promise)
+    service.sortBy('t1', 2, 0, 'descending')
+    service.gridState('t1', 2).scrollLeft = 30
+    service.gridState('t1', 3).scrollLeft = 70
+    service.setSelection('t1', 2, selectAll(2))
+    const controller = { selectAll: vi.fn(), repaint: vi.fn(), fitColumn: vi.fn() }
+    service.registerGrid('t1', 2, controller)
+    api.copyResults.mockReturnValueOnce(copying.promise)
+    const copied = service.copy('t1', 2, false)
+    flush()
+    expect(tab().jobs).toMatchObject([{ kind: 'copy', index: 2, entry: keys[2], label: 'Result 3' }])
+    expect(tab().sorts.get(2)).toMatchObject({ sorting: true })
+
+    expect(service.removeEntry('t1', keys[1])).toBe(true)
+    expect(service.removeEntry('t1', keys[1])).toBe(false)
+    // The entries after it move up a place and keep their keys, numbers and names; only its result is released.
+    expect(tab().sets.map(set => [set.index, set.key, set.descriptor.resultId, set.number, set.label])).toEqual([[0, keys[0], 1, 1, undefined], [1, keys[2], 3, 3, undefined], [2, keys[3], 803, 4, 'Pivot of Result 3']])
+    expect(client.released()).toEqual([2])
+    expect(client.handle(2)!.dispose).toHaveBeenCalledOnce()
+    expect(tab().settled.has('1:2')).toBe(false)
+    // Result 3's state is at its new place; nothing of it stayed at the old one, where the pivot now stands.
+    expect(service.gridState('t1', 1).scrollLeft).toBe(30)
+    expect(service.gridState('t1', 2).scrollLeft).toBe(70)
+    expect(service.selection('t1', 1)).toEqual(selectAll(1))
+    expect(service.selection('t1', keys[2])).toEqual(selectAll(1))
+    expect(service.selection('t1', 2)).toBeUndefined()
+    expect(tab().jobs).toMatchObject([{ kind: 'copy', index: 1, entry: keys[2], label: 'Result 3' }])
+    expect(tab().sorts.get(1)).toMatchObject({ sorting: true })
+    expect(tab().sorts.has(2)).toBe(false)
+    service.fitColumn('t1', 1, 0)
+    expect(controller.fitColumn).toHaveBeenCalledWith(0)
+    expect(service.canFitColumn('t1', 2, 0)).toBe(false)
+
+    // A view asked for before the entry moved comes back to that entry, not to the place it had.
+    const view = fakeView(third, 9, [{ column: 0, descending: true, mode: 'value' }])
+    building.resolve(view)
+    await settle()
+    flush()
+    expect(tab().sorts.get(1)).toMatchObject({ sorting: false, view })
+    expect(tab().sorts.has(2)).toBe(false)
+    expect(service.sortOf('t1', keys[2])).toBe(service.sortOf('t1', 1))
+    expect(service.sortOf('t1', keys[3])).toBeUndefined()
+    service.viewShown('t1', 1, view)
+    copying.resolve({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false } })
+    await copied
+    // Names follow the entry: Result 3 and the pivot save under the numbers they had, at the places they have now.
+    await service.saveAs('t1', 1, 'SQLQuery1')
+    await service.saveAs('t1', 2, 'SQLQuery1')
+    expect(api.saveResults.mock.calls.map(([request]) => [request.resultId, request.suggestedName, request.viewId])).toEqual([[3, 'SQLQuery1-Result3', 9], [803, 'SQLQuery1-Result4', undefined]])
+    // A result made afterwards takes the next number, not the pivot's.
+    expect(service.addSet('t1', descriptor(701, { index: 0, kind: 'transpose' }), 'Transpose of Result 1', ['1:1'])).toBe(3)
+    flush()
+    expect(tab().sets.map(set => set.number)).toEqual([1, 3, 4, 5])
+  })
+  it('moves an entry\'s state with it when a set arrives before it in a streaming run', async () => {
+    const { service, client, tab, flush } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1) })
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(3, { index: 2 }) })
+    flush()
+    const third = client.handle(3)!, key = tab().sets[1].key, building = deferred<ResultView>()
+    expect(tab().sets.map(set => [set.index, set.number])).toEqual([[0, 1], [1, 3]])
+    third.sort.mockReturnValueOnce(building.promise)
+    service.sortBy('t1', 1, 0, 'ascending')
+    service.gridState('t1', 1).scrollLeft = 30
+    service.setSelection('t1', 1, selectAll(1))
+    const controller = { selectAll: vi.fn(), repaint: vi.fn(), fitColumn: vi.fn() }
+    service.registerGrid('t1', 1, controller)
+    // The second set's event comes late: it takes the second place and a state of its own.
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(2, { index: 1 }) })
+    flush()
+    expect(tab().sets.map(set => [set.index, set.number, set.descriptor.resultId])).toEqual([[0, 1, 1], [1, 2, 2], [2, 3, 3]])
+    expect(tab().sets[2].key).toBe(key)
+    expect(service.gridState('t1', 1).scrollLeft).toBe(0)
+    expect(service.gridState('t1', 2).scrollLeft).toBe(30)
+    expect(service.selection('t1', 1)).toBeUndefined()
+    expect(service.selection('t1', 2)).toEqual(selectAll(2))
+    expect(tab().sorts.has(1)).toBe(false)
+    expect(tab().sorts.get(2)).toMatchObject({ sorting: true })
+    expect(service.canFitColumn('t1', 1, 0)).toBe(false)
+    service.fitColumn('t1', 2, 0)
+    expect(controller.fitColumn).toHaveBeenCalledWith(0)
+    const view = fakeView(third, 5, [{ column: 0, descending: false, mode: 'value' }])
+    building.resolve(view)
+    await settle()
+    flush()
+    expect(tab().sorts.get(2)).toMatchObject({ sorting: false, view })
+    expect(tab().sorts.has(1)).toBe(false)
+  })
+  it('publishes the same map of sorts until a sort or the list of sets changes, and closes a moved entry\'s old view once its grid shows the new one', async () => {
+    const { service, client, tab, flush, keys } = four()
+    const third = client.handle(3)!
+    const first = fakeView(third, 1, [{ column: 0, descending: false, mode: 'value' }]), second = fakeView(third, 2, [{ column: 0, descending: true, mode: 'value' }])
+    third.sort.mockResolvedValueOnce(first).mockResolvedValueOnce(second)
+    service.sortBy('t1', 2, 0, 'ascending')
+    await settle()
+    flush()
+    service.viewShown('t1', 2, first)
+    const sorts = tab().sorts
+    expect(sorts.get(2)).toMatchObject({ view: first })
+    // A change that is neither a sort nor a set publishes the map it had.
+    service.setStrip('t1', true)
+    expect(tab().sorts).toBe(sorts)
+    service.removeEntry('t1', keys[1])
+    expect(tab().sorts).not.toBe(sorts)
+    expect(tab().sorts.get(1)).toMatchObject({ view: first })
+    // The held views are the entry's: sorted again at its new place, the old view closes once the grid shows the new one.
+    service.sortBy('t1', 1, 0, 'descending')
+    await settle()
+    flush()
+    expect(first.close).not.toHaveBeenCalled()
+    service.viewShown('t1', 1, second)
+    expect(first.close).toHaveBeenCalledOnce()
+    expect(second.close).not.toHaveBeenCalled()
+  })
+  it('gives up the removed entry\'s own work, and removes nothing from a run still running or already closed', async () => {
+    const { service, client, api, tab, flush, keys } = four()
+    const second = client.handle(2)!, building = deferred<ResultView>(), copying = deferred<ApiResult<ResultsJobResult>>()
+    second.sort.mockReturnValueOnce(building.promise)
+    service.sortBy('t1', 1, 0, 'ascending')
+    service.setSelection('t1', 1, selectAll(1))
+    api.copyResults.mockReturnValueOnce(copying.promise)
+    const copied = service.copy('t1', 1, false)
+    expect(service.removeEntry('t1', keys[1])).toBe(true)
+    expect(api.cancelResultsJob).toHaveBeenCalledWith('job-1')
+    // Its sort's late view is closed and shows nowhere: not at its old place, where Result 3 stands now.
+    const late = fakeView(second, 4, [{ column: 0, descending: false, mode: 'value' }])
+    building.resolve(late)
+    await settle()
+    flush()
+    expect(late.close).toHaveBeenCalledOnce()
+    expect(tab().sorts.size).toBe(0)
+    expect(service.viewState('t1').grids.has(keys[1])).toBe(false)
+    copying.resolve({ ok: false, error: 'Cancelled', code: 'CANCELLED' })
+    await copied
+
+    service.closeResults('t1')
+    expect(service.removeEntry('t1', keys[0])).toBe(false)
+    service.begin('t1', 'q2')
+    client.emit('q2', { type: 'resultSet.opened', descriptor: descriptor(5, { index: 0, state: 'open' }) })
+    flush()
+    expect(service.removeEntry('t1', tab().sets[0].key)).toBe(false)
+    expect(tab().sets).toHaveLength(1)
   })
 })
 

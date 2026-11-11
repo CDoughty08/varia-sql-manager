@@ -5,7 +5,7 @@ import { validateShortcut, type ShortcutVerdict } from '../../../../shared/comma
 import { effectiveRules, type EffectiveShortcuts } from '../../../../shared/commands/effective'
 import { keybindingLabel, KeySpecError, parseKeySpec, splitChord, type KeybindingLabel, type Platform, type ResolvedRule } from '../../../../shared/commands/keybindings'
 import { scopeOfWhen, shortcutScope, type ScopeId, type ScopeKind } from '../../../../shared/commands/scopes'
-import { bindingApplies, shortcutFileSchema, shortcutFileText, type ShortcutBinding, type ShortcutFile } from '../../../../shared/commands/shortcut-schema'
+import { bindingApplies, shortcutFileSchema, shortcutFileText, shortcutLimits, type ShortcutBinding, type ShortcutFile } from '../../../../shared/commands/shortcut-schema'
 import { sameChords, shortcutLock, type ShortcutLock } from '../../../../shared/commands/shortcut-rules'
 import { gestureOverrides } from '../../../../shared/commands/gesture-choices'
 import { gestureErrors, validateGestures } from '../../../../shared/commands/gesture-validate'
@@ -178,14 +178,35 @@ export function draftProblems(file: ShortcutFile, platform: Platform, effective:
 }
 /**
  * The problems banner's Remove: entries that do not apply here are dropped. One written for every platform keeps working
- * on the others, so it is narrowed to those where it still applies instead of deleted.
+ * on the others, so it is narrowed to those where it still applies instead of deleted. A copy the file already has is
+ * not written again, and copies that would take the file past what main stores (each entry can become two) are left
+ * out, last first: Remove must leave a draft OK can save (#293).
  */
 export function removeEntries(file: ShortcutFile, indexes: Iterable<number>, platform: Platform): ShortcutFile {
   const drop = new Set(indexes)
   // An entry for every platform keeps a copy for each other platform where it still applies cleanly.
   const fine = new Map(otherPlatforms(platform).map(other => [other, new Set(effectiveRules(other, file).problems.map(problem => problem.index))]))
-  return withBindings(file, file.bindings.flatMap((binding, index) => !drop.has(index) ? [binding]
-    : binding.platform ? [] : [...fine].filter(([, problems]) => !problems.has(index)).map(([other]) => ({ ...binding, platform: other }))))
+  const have = new Set(without(file, drop).bindings.map(binding => entryKey(normalEntry(binding))))
+  const entries = file.bindings.flatMap((binding, index): { binding: ShortcutBinding; copy: boolean }[] => {
+    if (!drop.has(index)) return [{ binding, copy: false }]
+    if (binding.platform) return []
+    // Members in the order main writes them, so a copy compares equal to the entry the file already has.
+    const { command, key, ...rest } = binding
+    return [...fine].filter(([, problems]) => !problems.has(index)).map(([other]) => ({ command, key, platform: other, ...rest }) as ShortcutBinding).filter(copy => {
+      const entry = entryKey(normalEntry(copy))
+      if (have.has(entry)) return false
+      have.add(entry)
+      return true
+    }).map(copy => ({ binding: copy, copy: true }))
+  })
+  let next = withBindings(file, entries.map(entry => entry.binding))
+  while (!storable(next)) {
+    const last = entries.findLastIndex(entry => entry.copy)
+    if (last < 0) break
+    entries.splice(last, 1)
+    next = withBindings(file, entries.map(entry => entry.binding))
+  }
+  return next
 }
 
 const entryKey = (value: unknown) => JSON.stringify(value)
@@ -206,7 +227,10 @@ export interface ImportSummary {
   readonly shortcuts: number
   /** Entries the draft does not have yet. */
   readonly added: number
+  /** Entries the draft already has. */
   readonly same: number
+  /** Entries that repeat another of the file's, which the draft does not have. */
+  readonly repeated: number
   /** Additions on this platform that take a key from another command (Merge reassigns it). */
   readonly conflicts: readonly { readonly label: KeybindingLabel; readonly command: string; readonly with: readonly string[] }[]
   /** Additions on this platform that take a key another of the file's entries has: they show as problems after Merge. */
@@ -220,6 +244,42 @@ export interface ImportSummary {
   readonly yours: number
   /** Whether each mode's result is a file main can store (its limits, and its size as main writes it). */
   readonly fits: Readonly<Record<'merge' | 'replace', boolean>>
+  /** Which limit each mode's result breaks, when it does not fit. */
+  readonly over: Readonly<Record<'merge' | 'replace', ImportOver | undefined>>
+}
+/** The limit a file is over: its shortcuts, its records this build cannot read, its gestures, or its size. */
+export type ImportOver = 'shortcuts' | 'unknown' | 'gestures' | 'size'
+const overLimit = (file: ShortcutFile): ImportOver | undefined =>
+  file.bindings.length > shortcutLimits.bindings ? 'shortcuts' : file.unknown.length > shortcutLimits.unknown ? 'unknown'
+    : Object.keys(file.gestures).length > shortcutLimits.gestures ? 'gestures' : storable(file) ? undefined : 'size'
+const counted = (value: number) => value.toLocaleString('en-US')
+const overText: Readonly<Record<'merge' | 'replace', Readonly<Record<ImportOver, string>>>> = (() => {
+  const merge = {
+    shortcuts: `Together they would be more than the ${counted(shortcutLimits.bindings)} shortcuts a file may hold.`,
+    gestures: `Together they would set more than the ${counted(shortcutLimits.gestures)} gestures a file may hold.`,
+    unknown: `Together they would keep more than the ${counted(shortcutLimits.unknown)} records this version cannot read that a file may hold.`,
+    size: `Together they would be larger than the ${shortcutLimits.fileBytes / 1024} KiB a shortcuts file may be.`
+  }
+  return { merge, replace: {
+    ...merge,
+    unknown: `Replace keeps your records this version cannot read, and with the file's they would be more than the ${counted(shortcutLimits.unknown)} a file may hold.`,
+    size: `Replace keeps your records this version cannot read, and with them the file would be larger than the ${shortcutLimits.fileBytes / 1024} KiB a shortcuts file may be.`
+  } }
+})()
+/**
+ * Why Import refuses `mode`, worded by its cause, or undefined when the result fits. The advice names only what the user
+ * can do: the other mode when that fits, removing their own shortcuts when that would help, and otherwise that the file
+ * cannot be imported. The page has no way to remove records this version cannot read, so it never asks for that (#292).
+ */
+export function importRefusal(summary: Pick<ImportSummary, 'over'>, mode: 'merge' | 'replace'): string | undefined {
+  const cause = summary.over[mode]
+  if (!cause) return undefined
+  const other = mode === 'merge' ? 'replace' : 'merge', otherFits = !summary.over[other]
+  // Replace's result holds none of the user's shortcuts, and when it is over too, Merge's size is not theirs to fix.
+  const removable = mode === 'merge' && (cause === 'shortcuts' || cause === 'gestures' || (cause === 'size' && otherFits))
+  const advice = otherFits ? (removable ? 'Choose Replace, or remove some of yours first.' : `Choose ${other === 'merge' ? 'Merge' : 'Replace'}.`)
+    : removable ? 'Remove some of yours first.' : 'The records this version cannot read cannot be removed here, so this file cannot be imported.'
+  return `${overText[mode][cause]} ${advice}`
 }
 /** A file main would store: valid, within every limit, and under the size limit in the form main writes. */
 export const storable = (file: ShortcutFile): boolean => shortcutFileSchema.safeParse(file).success && shortcutFileText(file) !== undefined
@@ -230,11 +290,15 @@ const normalEntry = (binding: ShortcutBinding): ShortcutBinding => {
   return rest
 }
 export function importSummary(draft: ShortcutFile, incoming: ShortcutFile, platform: Platform): ImportSummary {
-  const have = new Set(draft.bindings.map(binding => entryKey(normalEntry(binding))))
+  const have = new Set(draft.bindings.map(binding => entryKey(normalEntry(binding)))), listed = new Set<string>()
   const added: ShortcutBinding[] = []
+  // An entry the file lists twice is not one the draft has: it counts as repeated, not as the same as the user's (#292).
+  let same = 0, repeated = 0
   for (const binding of incoming.bindings.map(normalEntry)) {
     const entry = entryKey(binding)
-    if (!have.has(entry)) { have.add(entry); added.push(binding) }
+    if (have.has(entry)) same++
+    else if (listed.has(entry)) repeated++
+    else { listed.add(entry); added.push(binding) }
   }
   const effective = effectiveRules(platform, draft)
   const conflicts: ImportSummary['conflicts'][number][] = []
@@ -258,10 +322,10 @@ export function importSummary(draft: ShortcutFile, incoming: ShortcutFile, platf
     if (seen.has(keyed)) clashes++
     else seen.add(keyed)
   }
+  const over = { merge: overLimit(mergeImport(draft, incoming, platform)), replace: overLimit(replaceImport(draft, incoming)) }
   return {
-    shortcuts: incoming.bindings.length, added: added.length, same: incoming.bindings.length - added.length, conflicts, clashes, ignored, unknown: incoming.unknown.length,
-    gestures: Object.keys(incoming.gestures).length, yours: draft.bindings.length,
-    fits: { merge: storable(mergeImport(draft, incoming, platform)), replace: storable(replaceImport(draft, incoming)) }
+    shortcuts: incoming.bindings.length, added: added.length, same, repeated, conflicts, clashes, ignored, unknown: incoming.unknown.length,
+    gestures: Object.keys(incoming.gestures).length, yours: draft.bindings.length, fits: { merge: !over.merge, replace: !over.replace }, over
   }
 }
 /**

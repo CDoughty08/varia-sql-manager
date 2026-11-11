@@ -9,7 +9,8 @@ namespace Varia.Backend.Tests;
 /// tones, its SQL against the live and SSIS lints (the counts outside the filters' scope), its args against main's schema
 /// through tests/fixtures/live/ssis-operations-args.json, the filters it binds, the window's state machine (baseline, settle
 /// from the catalogue, open refreshes in turn, rows a refresh no longer finds, the status filter's followed rows, open
-/// operations of any age and first within the limit), the rows it writes, and why it cannot open the catalog (missing,
+/// operations of any age and first within the limit, the read from scratch every rebase interval), the tiles' watermarks (a
+/// Created operation that never starts read by key instead of holding the open one), the rows it writes, and why it cannot open the catalog (missing,
 /// unavailable, closed to the login; Linux and versions before 2016), all without SQL Server.</summary>
 internal static class SsisOperationsChecks
 {
@@ -67,7 +68,7 @@ internal static class SsisOperationsChecks
             + string.Join("; ", problems));
         var full = LiveSql.Operations(true, true).Split(";\n");
         var steady = LiveSql.Operations(false, false).Split(";\n");
-        check(full.Length == 6 && steady.Length == 4 && full[0].Contains("o.status IN (1, 2, 5, 8)", StringComparison.Ordinal) && full[0].Contains("NOT IN (200, 300, 301, 101)", StringComparison.Ordinal)
+        check(full.Length == 7 && steady.Length == 5 && full[0].Contains("o.status IN (1, 2, 5, 8)", StringComparison.Ordinal) && full[0].Contains("NOT IN (200, 300, 301, 101)", StringComparison.Ordinal)
             && full[1].Contains("WHERE o.status IN (1, 2, 5, 8)\n", StringComparison.Ordinal) && !full[1].Contains("DATEADD", StringComparison.Ordinal) && full[1].Contains("@folder", StringComparison.Ordinal)
             && !LiveSql.Operations(false, false).Contains("created_time >= DATEADD(hour, -24", StringComparison.Ordinal) && full[^1].Contains("created_time >= DATEADD(hour, -24", StringComparison.Ordinal),
             "a new window also reads the open operations of its scope whatever their age, and only the counting sample reads the last 24 hours; Other is every type the other kinds leave out");
@@ -76,13 +77,18 @@ internal static class SsisOperationsChecks
         static string[] Parameters(string text) => [.. System.Text.RegularExpressions.Regex.Matches(text, @"@\w+").Select(match => match.Value).Distinct()];
         check(tileCounts.All(text => text.StartsWith("SELECT COUNT_BIG(", StringComparison.Ordinal) && !text.Contains("JOIN", StringComparison.Ordinal))
             && Parameters(full[^2]) is ["@openFrom"] && Parameters(steady[^1]) is ["@openFrom"] && Parameters(full[^1]) is ["@countFrom"]
-            && steady[^1].Contains("AS running, COUNT_BIG(CASE WHEN o.status IN (5) THEN 1 END) AS pending, MIN(CASE WHEN o.status IN (1, 2, 5, 8) THEN o.operation_id END) AS lowest_open, "
-                + "MAX(o.operation_id) AS newest_id\n", StringComparison.Ordinal)
+            && steady[^1].Contains("AS running, COUNT_BIG(CASE WHEN o.status IN (5) THEN 1 END) AS pending, MIN(CASE WHEN o.status IN (2, 5, 8) THEN o.operation_id END) AS lowest_open,\n"
+                + "    MIN(CASE WHEN o.status = 1 THEN o.operation_id END) AS lowest_created, MAX(o.operation_id) AS newest_id\n", StringComparison.Ordinal)
             && steady[^1].EndsWith("FROM [catalog].[operations] AS o WHERE o.operation_id >= @openFrom;", StringComparison.Ordinal)
             && full[^1].Contains("AS canceled24h, MIN(o.operation_id) AS lowest_recent FROM", StringComparison.Ordinal)
             && full[^1].Contains("WHERE o.operation_id >= @countFrom AND o.created_time >= DATEADD(hour, -24, SYSDATETIMEOFFSET());", StringComparison.Ordinal),
             "every sample counts Running and Pending, and every 30 s the last 24 hours, over every operation whatever the filters, each from its watermark up (a range of the "
-            + "clustered key, not a scan of every operation), with the lowest open id, the catalog's high-water mark and the lowest id of the 24 hours: " + string.Join(" | ", tileCounts));
+            + "clustered key, not a scan of every operation), with the lowest started id, the lowest Created one apart (it may never start, so it must not hold the watermark), "
+            + "the catalog's high-water mark and the lowest id of the 24 hours: " + string.Join(" | ", tileCounts));
+        // The Created operations the open watermark passed are read by key, never by a range or the scope.
+        check(steady[^2] == full[^3] && Parameters(steady[^2]) is ["@created"]
+            && steady[^2] == "SELECT o.operation_id, o.status FROM [catalog].[operations] AS o WHERE o.operation_id IN (SELECT c.i.value('.', 'bigint') FROM @created.nodes('/i') AS c(i))",
+            "every sample reads the Created operations below the open watermark by key, with their status now: " + steady[^2]);
         check(full[0].Contains("COALESCE(e.folder_name, v.folder_name)", StringComparison.Ordinal) && full[0].Contains("CASE WHEN o.operation_type = 101 THEN o.object_name END", StringComparison.Ordinal)
             && full[0].Contains("n.project_name LIKE @project", StringComparison.Ordinal) && full[0].Contains("e.package_name LIKE @package", StringComparison.Ordinal),
             "Folder and Project match a validation's names as an execution's, and Project a deployment's project; Package is an execution's");
@@ -123,7 +129,7 @@ internal static class SsisOperationsChecks
         new(id, type, status, created ?? Now.AddMinutes(-30), Now.AddMinutes(-29), status is 2 or 5 or 8 or 1 ? null : Now.AddMinutes(-20), "Loads", folder, "Loads", "Daily.dtsx",
             "CORP\\etl", status == 8 ? "CORP\\dba" : null, "SQL01", "SQL01", 9 * 60_000);
 
-    private static SsisOperationsWindow New() => new(SsisCatalog.Current, SsisOperationsWindow.CatalogueSettle);
+    private static SsisOperationsWindow New() => new(SsisCatalog.Current, SsisOperationsWindow.CatalogueSettle, SsisCatalog.Current.Limit("operationsRebaseMs"));
 
     private static void Window(Action<bool, string> check)
     {
@@ -204,24 +210,59 @@ internal static class SsisOperationsChecks
         crowded.Baseline([], Now, 0, highWater: 5);
         check(waiting == SsisOperationsWindow.MaxMarks && crowded.Marks == 1 && crowded.SettledId == 0, "high-water marks waiting to settle are bounded, and a baseline forgets them: " + waiting + " " + crowded.Marks);
 
-        // The tiles' watermarks: the open count reads from the lowest open id, the 24-hour count from the lowest id created within
-        // them, neither past the settled id (an id above it may still commit), and a baseline or a clock gone back reads from 0.
         var countMs = SsisCatalog.Current.Limit("operationsCountMs");
         var rebaseMs = SsisCatalog.Current.Limit("operationsRebaseMs");
+
+        // A filtered view under READ_COMMITTED_SNAPSHOT (#298): operation 90 is in the scope but its insert has not committed,
+        // while operation 100, outside the scope, has, and is the catalog's high-water mark. Each sample reads as the reader
+        // does: the committed in-scope rows above the settled id, or all of them when the window asks for a baseline.
+        var late = New();
+        var committed = new List<SsisOperation>();
+        var lateReads = new List<string>();
+        void LateSample(long nowMs)
+        {
+            late.Begin(nowMs);
+            lateReads.Add(late.NeedsBaseline ? "baseline" : "above " + late.SettledId);
+            if (late.NeedsBaseline) late.Baseline(committed, Now, nowMs, highWater: 100);
+            else late.Merge([.. committed.Where(row => row.Id > late.SettledId)], [], [], Now, nowMs, highWater: 100);
+        }
+        LateSample(0);
+        for (var tick = 1; tick <= settle.Ticks; tick++) LateSample(tick * settle.Ms);
+        var passed = late.SettledId;
+        committed.Add(Operation(90, 2, Now.AddSeconds(-30)));
+        LateSample(rebaseMs - 1);
+        var missed = Ids(late);
+        LateSample(rebaseMs);
+        var found = Ids(late);
+        LateSample(rebaseMs + 1);
+        LateSample(2 * rebaseMs - 1);
+        LateSample(2 * rebaseMs);
+        // New filters or a lost connection may be another scope or server: that baseline settles only what it read.
+        late.Reset();
+        LateSample(2 * rebaseMs + 1);
+        var afterReset = late.SettledId;
+        check(passed == 100 && missed.Length == 0 && found is [90] && Ids(late) is [90] && lateReads[^6] == "above 100" && lateReads[^5..] is ["baseline", "above 100", "above 100", "baseline", "baseline"]
+            && afterReset == 90,
+            "an in-scope operation whose insert commits after the catalog's high-water mark settled above it is missed by the reads above the settled id, and shown once the window "
+            + "is read from scratch again, every " + rebaseMs + " ms, which keeps the settled id (the reads after it stay above the high-water mark) unless the connection was lost: settled "
+            + passed + ", then [" + string.Join(",", missed) + "], then [" + string.Join(",", found) + "]; " + string.Join(", ", lateReads) + "; " + afterReset);
+
+        // The tiles' watermarks: the open count reads from the lowest open id, the 24-hour count from the lowest id created within
+        // them, neither past the settled id (an id above it may still commit), and a baseline or a clock gone back reads from 0.
         var marks = new SsisOperationsWatermarks(countMs, rebaseMs);
         var start = (marks.OpenFrom, marks.CountFrom);
-        var back0 = marks.Opened(null, 0, Now);
+        var back0 = marks.Opened(null, null, 0, Now);
         var empty0 = marks.OpenFrom;
-        marks.Opened(40, 90, Now.AddSeconds(2));
+        marks.Opened(40, null, 90, Now.AddSeconds(2));
         marks.Counted(70, 90, 0);
         var low = (marks.OpenFrom, marks.CountFrom);
-        marks.Opened(null, 120, Now.AddSeconds(4));
+        marks.Opened(null, null, 120, Now.AddSeconds(4));
         marks.Counted(null, 120, 0);
         var none = (marks.OpenFrom, marks.CountFrom);
-        marks.Opened(130, 120, Now.AddSeconds(6));
+        marks.Opened(130, null, 120, Now.AddSeconds(6));
         marks.Counted(150, 120, 0);
         var capped = (marks.OpenFrom, marks.CountFrom);
-        var back = marks.Opened(null, 200, Now.AddSeconds(5));
+        var back = marks.Opened(null, null, 200, Now.AddSeconds(5));
         var afterBack = (marks.OpenFrom, marks.CountFrom);
         marks.Reset();
         check(rebaseMs >= 10 * countMs && start == (0, 0) && !back0 && empty0 == 1 && low == (40, 70) && none == (121, 121) && capped == (121, 121) && back && afterBack == (201, 0)
@@ -238,33 +279,85 @@ internal static class SsisOperationsChecks
         var timed = new SsisOperationsWatermarks(countMs, rebaseMs);
         var firstCounts = timed.Begin(t);
         timed.Counted(70, 90, t);
-        timed.Opened(40, 90, Now);
+        timed.Opened(40, null, 90, Now);
         var quiet = timed.Begin(t + countMs - 1);
-        timed.Opened(40, 90, Now.AddSeconds(2));
+        timed.Opened(40, null, 90, Now.AddSeconds(2));
         var due = timed.Begin(t + countMs);
         timed.Counted(70, 90, t + countMs);
         var steadyMarks = (timed.OpenFrom, timed.CountFrom);
-        var wentBack = timed.Opened(40, 90, Now.AddSeconds(1));
+        var wentBack = timed.Opened(40, null, 90, Now.AddSeconds(1));
         var afterClock = timed.Begin(t + countMs + 1);
         var fromZero = timed.CountFrom;
         timed.Counted(70, 90, t + countMs + 1);
-        timed.Opened(40, 90, Now.AddSeconds(3));
+        timed.Opened(40, null, 90, Now.AddSeconds(3));
         var settledAgain = timed.Begin(t + countMs + 2);
         var later = timed.Begin(t + 2 * countMs + 1);
         timed.Counted(70, 90, t + 2 * countMs + 1);
-        timed.Opened(40, 90, Now.AddSeconds(5));
+        timed.Opened(40, null, 90, Now.AddSeconds(5));
         var beforeRebase = (Counts: timed.Begin(t + rebaseMs - 1), timed.OpenFrom, timed.CountFrom);
         timed.Counted(70, 90, t + rebaseMs - 1);
-        timed.Opened(40, 90, Now.AddSeconds(6));
+        timed.Opened(40, null, 90, Now.AddSeconds(6));
         // Due 1 ms after the last count, the rebase counts the 24 hours again too.
         var rebase = (Counts: timed.Begin(t + rebaseMs), timed.OpenFrom, timed.CountFrom);
         timed.Counted(70, 90, t + rebaseMs);
-        timed.Opened(40, 90, Now.AddSeconds(7));
+        timed.Opened(40, null, 90, Now.AddSeconds(7));
         var afterRebase = (Counts: timed.Begin(t + rebaseMs + 1), timed.OpenFrom, timed.CountFrom);
         check(firstCounts && !quiet && due && steadyMarks == (40, 70) && wentBack && afterClock && fromZero == 0 && !settledAgain && later
             && beforeRebase == (true, 40, 70) && rebase == (true, 0, 0) && afterRebase == (false, 40, 70),
             "the 24-hour counts are read on the first sample and every " + countMs + " ms, at once from 0 after the server's clock goes back and on schedule after that, and every "
             + rebaseMs + " ms one sample reads both counts from 0: " + string.Join(" ", firstCounts, quiet, due, wentBack, afterClock, settledAgain, later, beforeRebase, rebase, afterRebase));
+
+        // An operation left Created (#297: create_execution with no start_execution) is the lowest open id for as long as the
+        // catalog keeps it. A million ended operations later it must not hold the open count's range at its id: once settled it
+        // is read by key, and the range starts above it.
+        var openStatuses = SsisCatalog.Current.OpenStatuses;
+        IReadOnlyCollection<int> running = [2], pendingTile = [5];
+        var orphan = new SsisOperationsWatermarks(countMs, rebaseMs);
+        orphan.Begin(0);
+        orphan.Opened(null, 10, 9, Now);
+        var unsettledOrphan = (orphan.OpenFrom, orphan.Created.Count);
+        orphan.Opened(null, 10, 1_000_000, Now);
+        var listed = (orphan.OpenFrom, Ids: string.Join(",", orphan.Created));
+        orphan.Read([(10, 1)], openStatuses);
+        orphan.Opened(null, null, 1_000_000, Now);
+        var past = (orphan.OpenFrom, Ids: string.Join(",", orphan.Created), Running: orphan.Listed(running), Pending: orphan.Listed(pendingTile));
+        // It starts after all: the read by key counts it in its tile, below the range, until it ends.
+        orphan.Read([(10, 5)], openStatuses);
+        var queued = (orphan.Listed(running), orphan.Listed(pendingTile));
+        orphan.Read([(10, 2)], openStatuses);
+        orphan.Opened(1_000_020, null, 1_000_050, Now);
+        var started = (orphan.OpenFrom, Ids: string.Join(",", orphan.Created), Running: orphan.Listed(running), Pending: orphan.Listed(pendingTile));
+        orphan.Read([(10, 7)], openStatuses);
+        var ended = (orphan.Created.Count, orphan.Listed(running));
+        // A Created id above a started one stays in the range; one the cleanup removed leaves the list; an id never listed is not taken from a read.
+        orphan.Opened(1_000_020, 1_000_030, 1_000_050, Now);
+        var above = (orphan.OpenFrom, orphan.Created.Count);
+        orphan.Opened(null, 1_000_030, 1_000_050, Now);
+        orphan.Read([(77, 2)], openStatuses);
+        var gone = (orphan.OpenFrom, orphan.Created.Count, orphan.Listed(running));
+        check(unsettledOrphan == (10, 0) && listed == (11, "10") && past == (1_000_001, "10", 0, 0) && queued == (0, 1) && started == (1_000_020, "10", 1, 0) && ended == (0, 0)
+            && above == (1_000_020, 0) && gone == (1_000_031, 0, 0),
+            "an operation left Created does not hold the open watermark once it settles: it is read by key (counted in Pending or Running if it starts after all, until it ends or the "
+            + "cleanup removes it) and the range starts above it: " + string.Join(" ", unsettledOrphan, listed, past, queued, started, ended, above, gone));
+        // Bounded: one a sample, at most MaxCreated; the next one holds the watermark as before. A rebase and a baseline forget them.
+        var crowd = new SsisOperationsWatermarks(countMs, rebaseMs);
+        crowd.Begin(0);
+        var steps = new List<long>();
+        for (var id = 1; id <= SsisOperationsWatermarks.MaxCreated + 2; id++)
+        {
+            crowd.Opened(null, Math.Min(id, SsisOperationsWatermarks.MaxCreated + 1), 5000, Now);
+            crowd.Read(crowd.Created.Select(listedId => (listedId, 1)).ToList(), openStatuses);
+            steps.Add(crowd.OpenFrom);
+        }
+        var crowded2 = (crowd.OpenFrom, crowd.Created.Count);
+        crowd.Begin(rebaseMs);
+        var rebasedCrowd = (crowd.OpenFrom, crowd.Created.Count);
+        crowd.Opened(null, 1, 5000, Now);
+        crowd.Reset();
+        check(steps.Take(SsisOperationsWatermarks.MaxCreated).SequenceEqual(Enumerable.Range(2, SsisOperationsWatermarks.MaxCreated).Select(id => (long)id))
+            && crowded2 == (SsisOperationsWatermarks.MaxCreated + 1, SsisOperationsWatermarks.MaxCreated) && rebasedCrowd == (0, 0) && crowd.Created.Count == 0,
+            "the open watermark passes one Created operation a sample and at most " + SsisOperationsWatermarks.MaxCreated + ": the next one holds it, and a rebase or a baseline reads them in the range again: "
+            + string.Join(",", steps) + " " + crowded2 + " " + rebasedCrowd);
 
         // More open operations than one sample reads again: they take turns, newest first, and every one is read within a few samples.
         var many = New();

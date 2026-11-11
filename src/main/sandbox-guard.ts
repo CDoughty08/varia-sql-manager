@@ -28,6 +28,15 @@ export function smokeDebuggingProfile(options: { packaged: boolean, env: NodeJS.
 }
 
 /**
+ * Whether main opens no file another program hands it: the command line's, a second instance's, macOS's open-file and
+ * drops. A smoke run that keeps its debugging port lets any program of the same user read the page, and macOS grants
+ * file access (TCC's Files and Folders) to the app, not to the profile: a program without that grant could start Varia
+ * on a throwaway profile with ~/Documents/secret.sql as its argument and read the editor's text through the port. The
+ * smoke scripts hand over no files.
+ */
+export function launchFilesRefused(smokeProfile: string | null): boolean { return smokeProfile !== null }
+
+/**
  * Takes the remote debugging switches off a packaged build's command line, and says whether there were any. Main runs it
  * as its module loads, before Chromium starts the DevTools handler (which reads its command line once the app is getting
  * ready), so a shortcut, file association or other program that adds one never gets a debugging port, even for the

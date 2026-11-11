@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { describe, expect, it } from 'vitest'
 import { join } from 'node:path'
-import { packagedSmokeVariable, remoteDebuggingSwitches, sandboxRefusal, smokeDebuggingProfile, stripRemoteDebugging } from '../src/main/sandbox-guard'
+import { launchFilesRefused, packagedSmokeVariable, remoteDebuggingSwitches, sandboxRefusal, smokeDebuggingProfile, stripRemoteDebugging } from '../src/main/sandbox-guard'
+import { LaunchQueue } from '../src/main/launch-files'
 import { lockedCipher } from '../src/main/secret-cipher'
 
 const require = createRequire(import.meta.url)
@@ -105,6 +106,33 @@ describe('Chromium sandbox guard', () => {
       expect(source, file).toContain("VARIA_PACKAGED_SMOKE: '1'")
       expect(source, file).toContain('`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`')
     }
+  })
+
+  // #322: macOS grants file access to the app, so a program without it could read a file through a smoke run's port.
+  it('opens no launch file in a packaged smoke run: from the command line, a second instance, open-file or a drop', () => {
+    expect(launchFilesRefused(null)).toBe(false)
+    expect(launchFilesRefused(join('somewhere', 'smoke-profile'))).toBe(true)
+    const file = process.platform === 'win32' ? 'C:\\Users\\me\\Documents\\secret.sql' : '/Users/me/Documents/secret.sql'
+    const closed = new LaunchQueue(launchFilesRefused('smoke-profile')), open = new LaunchQueue(launchFilesRefused(null))
+    closed.add([file])
+    open.add([file])
+    expect(closed.take()).toEqual([])
+    expect(open.take()).toEqual([file])
+    const main = readFileSync('src/main/index.ts', 'utf8')
+    // The one queue main delivers files from is closed by the smoke profile.
+    expect(main.match(/new LaunchQueue\(/g)).toHaveLength(1)
+    expect(main).toContain('const launchFiles = new LaunchQueue(launchFilesRefused(smokeProfile))')
+    expect(main.match(/deliverWaiting\(/g)).toHaveLength(1)
+    expect(main).toContain('deliverWaiting(launchFiles, {')
+    // All four sources reach the page only through that queue: nothing else calls what reads them.
+    expect(main.match(/openPaths/g)).toHaveLength(2)
+    expect(main).toContain('open: openPaths,')
+    expect(main.match(/launchFiles\.add\(/g)).toHaveLength(4)
+    const handler = (start: string) => { const from = main.indexOf(start); expect(from, start).toBeGreaterThan(-1); return main.slice(from, from + 400) }
+    for (const start of ["app.on('second-instance'", "app.on('open-file'", "ipcMain.on('varia:files-dropped'"]) expect(handler(start), start).toContain('launchFiles.add(')
+    // Nor does a smoke run hand its own to another instance on its profile.
+    expect(main).toContain('const ownFiles = launchFilesRefused(smokeProfile) ? [] : commandLineFiles(process.argv, process.cwd())')
+    expect(main).toContain('app.requestSingleInstanceLock({ files: ownFiles }')
   })
 
   it('runs before main registers the app protocol or opens a window', () => {

@@ -153,7 +153,8 @@ What the checks prove:
   Offline (`SsisOperationsChecks`), the window's state machine is driven without SQL Server: settling ids that commit out of
   order (after the catalogue's settle window), open operations refreshed in turns of 256, rows a refresh no longer finds,
   followed operations a status filter hides, open operations older than the window or behind more than twice the limit of
-  finished ones, and the limit with open operations first; the args against `tests/fixtures/live/ssis-operations-args.json`,
+  finished ones, the limit with open operations first, an in-scope operation that commits below the settled high-water
+  mark (shown at the next rebase), and an operation left Created that the open watermark passes and reads by key; the args against `tests/fixtures/live/ssis-operations-args.json`,
   which the zod schema must accept and refuse alike; why a connection cannot open the catalog; and the Linux and pre-2016
   notes.
 - **Operations against the real catalog** (`SsisOperationsLiveChecks.RealAsync`, `VARIA_TEST_SSIS=1`, when SSISDB exists):
@@ -458,8 +459,12 @@ sample, in turn), counts the running and pending operations, and drops what it n
 id settles like a row's, so the read stays above the newest operations even when the filters match none of them, and each
 count reads only from its watermark up: the lowest open id (an ended operation never opens again) and the lowest id created
 in the 24 hours, neither past the settled id, both 0 on a new window and the 24-hour one again if the server's clock goes back.
-Every 5 minutes both counts read from 0 again, which picks up an operation below a watermark that the login
-was only just allowed to read, or whose commit outlasted the settle window. A row a refresh no longer
+An operation left Created (`create_execution` with no `start_execution`) would hold the open watermark for as long as the
+catalog keeps it, so once it is settled and the lowest open id the watermark passes it, one a sample and at most 16, and each
+sample reads those by key instead, counting any that started since.
+Every 5 minutes both counts read from 0 again and the window is read from scratch, which picks up an operation
+below a watermark or the settled id that the login was only just allowed to read, or whose commit outlasted the settle window
+(with READ_COMMITTED_SNAPSHOT on, an insert held open while a higher id, in the filters' scope or not, settles). A row a refresh no longer
 finds (removed by the retention cleanup, or a dirty read rolled back) leaves the window. Folder and Project match an
 execution's or a validation's names (`catalog.executions`, `catalog.validations`) and Project a deployment's project (its
 `object_name`); Package matches an execution's.
@@ -642,4 +647,4 @@ Environment reference types: `R` Relative, `A` Absolute. Parameter value types: 
 | `operationsWindowHours` | 8,760 | The longest window, in hours (`windowHours`) |
 | `operationsDefaultWindowHours` | 24 | The window unless told otherwise, in hours |
 | `operationsCountMs` | 30,000 | How often the 24-hour counts are read, in ms |
-| `operationsRebaseMs` | 300,000 | How often the counts read every operation again instead of from their watermarks, in ms |
+| `operationsRebaseMs` | 300,000 | How often the counts read every operation again instead of from their watermarks, and the window from scratch instead of above its settled id, in ms |
