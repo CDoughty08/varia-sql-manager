@@ -1380,7 +1380,9 @@ try {
     await page.keyboard.press('End')
     await expect(objectSearchGroup(page, 'server-b').getByRole('option').nth(1)).toBeFocused()
     await expect(objectSearchGroup(page, 'server-b').getByRole('option').nth(1)).toHaveAttribute('aria-selected', 'true')
-    await page.keyboard.press('PageUp')
+    // Page Up moves at least one stop each time, whatever the list's height shows, so one press per stop ends on the first
+    // header (on hits alone it would end on the first hit).
+    for (let stop = 0; stop < 6; stop++) await page.keyboard.press('PageUp')
     await expect(groupHead).toBeFocused()
     await page.keyboard.press('ArrowDown')
     await expect(objectSearchGroup(page, 'server-a').getByRole('option').first()).toBeFocused()
