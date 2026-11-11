@@ -120,6 +120,13 @@ describe('About dialog', () => {
     expect(view.closed).toHaveBeenCalledTimes(1)
     expect(view.runs['help.restartToUpdate']).toHaveBeenCalledTimes(1)
   })
+  it('closes before opening the release-notes document', async () => {
+    const view = await mount()
+    view.runs['help.releaseNotes'].mockImplementation(() => { expect(view.host.querySelector('[aria-modal="true"]')).toBeNull() })
+    await act(async () => { view.button('Release Notes').click() })
+    expect(view.closed).toHaveBeenCalledTimes(1)
+    expect(view.runs['help.releaseNotes']).toHaveBeenCalledTimes(1)
+  })
   it('copies the current support details through main and reports a refused clipboard write', async () => {
     const view = await mount()
     await act(async () => { view.button('Copy Version Details').click() })

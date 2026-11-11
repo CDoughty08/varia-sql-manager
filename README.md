@@ -83,6 +83,10 @@ Press **F1** or **Ctrl+Shift+P** (**⌘Shift+P** on macOS) for the command palet
 Open **Help > About Varia** for the running version, update status and copyable version details for support. The macOS
 app menu opens the same dialog. It works without a server connection; see [About Varia](docs/about.md).
 
+**Help > Release Notes** opens curated, offline notes for the running version, with a picker for bundled release
+history. Update notifications request their exact advertised version; missing notes are reported clearly. **Release
+Downloads** remains a separate browser action. See [Release Notes](docs/release-notes.md).
+
 ## Current limitations
 
 - Turn on **Include Live Execution Plan** in the query toolbar or Query menu before executing a query in Varia. The same **Execution Plan** output tab shows **Live** operator row counts and activity during execution, then switches to **Actual** captured data. Camera, statement and operator selection survive counter updates and matching actual plans. Completed statements and `GO` repetitions stay distinct; cancellation or a lost backend retains explicitly partial live data. Hidden views follow the live-data pause settings and are never polled by the renderer.
