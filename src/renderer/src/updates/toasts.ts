@@ -7,7 +7,8 @@ export const updateToastKey = 'updates'
 export interface UpdateToastActions {
   readonly restart: () => void
   readonly download: () => void
-  readonly releaseNotes: () => void
+  readonly releaseNotes: (version: string) => void
+  readonly openDownloads: () => void
   readonly retry: () => void
 }
 
@@ -17,16 +18,16 @@ export interface UpdateToastActions {
  * and a failure says what to do about it, with Copy details. One key, so a later state replaces the earlier toast.
  */
 export function updateToast(state: UpdateState, run: UpdateToastActions): ToastInput | undefined {
-  const notes: ToastAction = { label: 'Release notes', run: run.releaseNotes }
+  const notes = (version: string): ToastAction => ({ label: 'Release notes', run: () => run.releaseNotes(version) })
   switch (state.status) {
     case 'upToDate': return { severity: 'info', key: updateToastKey, message: `Varia SQL Manager ${state.currentVersion} is the latest version.` }
-    case 'ready': return { severity: 'info', key: updateToastKey, message: `Varia SQL Manager ${state.version} is ready to install. It installs when Varia restarts.`, actions: [{ label: 'Restart to update', run: run.restart }, notes] }
+    case 'ready': return { severity: 'info', key: updateToastKey, message: `Varia SQL Manager ${state.version} is ready to install. It installs when Varia restarts.`, actions: [{ label: 'Restart to update', run: run.restart }, notes(state.version)] }
     case 'available': return state.size !== undefined
-      ? { severity: 'info', key: updateToastKey, message: `Varia SQL Manager ${state.version} is available (${formatBytes(state.size)}).`, actions: [{ label: 'Download', run: run.download }, notes] }
-      : { severity: 'info', key: updateToastKey, message: `Varia SQL Manager ${state.version} is available. ${state.kind === 'unsupported' ? unsupportedUpdateHint : 'This release has no download for this computer.'}`, actions: [{ label: 'Open releases page', run: run.releaseNotes }] }
+      ? { severity: 'info', key: updateToastKey, message: `Varia SQL Manager ${state.version} is available (${formatBytes(state.size)}).`, actions: [{ label: 'Download', run: run.download }, notes(state.version)] }
+      : { severity: 'info', key: updateToastKey, message: `Varia SQL Manager ${state.version} is available. ${state.kind === 'unsupported' ? unsupportedUpdateHint : 'This release has no download for this computer.'}`, actions: [{ label: 'Open releases page', run: run.openDownloads }, notes(state.version)] }
     case 'error': return {
       severity: 'error', key: updateToastKey, message: `${state.message} ${state.hint}`,
-      actions: [{ label: 'Try again', run: run.retry }, { label: 'Open releases page', run: run.releaseNotes }],
+      actions: [{ label: 'Try again', run: run.retry }, { label: 'Open releases page', run: run.openDownloads }],
       report: { code: `UPDATE_${state.code.replace(/[A-Z]/g, letter => '_' + letter).toUpperCase()}`, context: state.during === 'check' ? 'Checking for updates' : state.during === 'download' ? `Downloading Varia SQL Manager ${state.version ?? ''}`.trim() : 'Installing the update', ...(state.detail ? { extra: `Detail: ${state.detail}` } : {}) }
     }
     default: return undefined

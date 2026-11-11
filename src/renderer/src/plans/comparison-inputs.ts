@@ -26,3 +26,39 @@ export function documentInput(document: { id: string; name: string; dirty: boole
     document: Object.freeze({ id: document.id, revision, file: document.file?.path, dirty: document.dirty }),
     provenance: `Document · ${document.file?.path ?? document.name} · revision ${revision}${document.dirty ? ' · Unsaved edits included' : ''} · Capture type, estimation mode and execution status unavailable` })
 }
+
+export interface ComparisonChoice { readonly id: string; readonly label: string; readonly detail: string }
+const clampEnd = (value: string, cap: number) => value.length > cap ? value.slice(0, cap - 1) + '…' : value
+const clampStart = (value: string, cap: number) => value.length > cap ? '…' + value.slice(value.length - cap + 1) : value
+const parentPath = (path: string) => path.replace(/[\\/]+[^\\/]*$/, '')
+const preciseTime = (time: number) => {
+  const date = new Date(time)
+  return Number.isNaN(date.getTime()) ? 'time unavailable' : `${date.toLocaleTimeString()} +${String(date.getMilliseconds()).padStart(3, '0')} ms`
+}
+/** Selector choices. Labels that would read identically gain the context that tells them apart (a document's folder,
+ * a snapshot's millisecond), then a short identifier, so no two choices share a label. Labels stay bounded; `detail`
+ * carries the full path or capture context for a tooltip and the accessible description. */
+export function comparisonChoices(entries: readonly RetainedPlan[],
+  documents: readonly { id: string; name: string; dirty: boolean; kind?: string; file?: { path: string } }[]): ComparisonChoice[] {
+  const choices = [
+    ...entries.map(entry => ({ id: 'snapshot:' + entry.id, tag: entry.id,
+      label: `${entry.captureType} · ${clampEnd(entry.context.name, 80)} · batch ${entry.batchNumber}, repetition ${entry.iteration} · ${new Date(entry.context.startedAt).toLocaleString()}`,
+      context: [preciseTime(entry.context.startedAt), entry.context.file && parentPath(entry.context.file) ? clampStart(parentPath(entry.context.file), 48) : ''].filter(Boolean).join(' · '),
+      detail: [entry.context.file ?? entry.context.name, `${entry.context.server ?? 'Server unavailable'} / ${entry.context.database}`, `started ${new Date(entry.context.startedAt).toLocaleDateString()} ${preciseTime(entry.context.startedAt)}`].join(' · ') })),
+    ...documents.filter(document => document.kind === 'sqlplan').map(document => ({ id: 'document:' + document.id, tag: document.id,
+      label: `Document · ${clampEnd(document.name, 80)}${document.dirty ? ' · edited' : ''}`,
+      context: document.file ? clampStart(parentPath(document.file.path) || document.file.path, 48) : 'not saved',
+      detail: `${document.file?.path ?? 'Not saved to a file'}${document.dirty ? ' · unsaved edits' : ''}` }))
+  ]
+  const collisions = () => {
+    const counts = new Map<string, number>()
+    for (const choice of choices) counts.set(choice.label, (counts.get(choice.label) ?? 0) + 1)
+    return new Set(choices.filter(choice => counts.get(choice.label)! > 1))
+  }
+  for (const choice of collisions()) choice.label += ' · ' + choice.context
+  for (const choice of collisions()) choice.label += ' · #' + choice.tag.slice(-6)
+  // Identifier tails can still coincide; the position in the list cannot.
+  const seen = new Map<string, number>()
+  for (const choice of collisions()) { const n = (seen.get(choice.label) ?? 0) + 1; seen.set(choice.label, n); choice.label += ` · (${n})` }
+  return choices.map(({ id, label, detail }) => ({ id, label, detail }))
+}
