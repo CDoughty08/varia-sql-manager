@@ -813,6 +813,7 @@ export const commandCatalog = {
     title: 'Release Notes', category: 'Help', icon: 'link-external', keywords: ['update', 'changelog', 'news', 'release', 'download', 'github'],
     menus: [{ menu: 'help', group: '2_updates', order: 3, mnemonic: 'n' }]
   },
+  'help.openDownloads': { title: 'Open Release Downloads', category: 'Help', icon: 'link-external', keywords: ['update', 'download', 'installer', 'manual'] },
   // The Query Output menu and the results grid's keys: the grid copies its selected cells, and Messages their selected
   // text (Ctrl+C there is Chromium's copy). Select All selects the grid's cells, or only the text of Messages.
   'output.copy': {
