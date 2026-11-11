@@ -1,16 +1,16 @@
-import { Component, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ErrorInfo, type KeyboardEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { QueryResult } from '../../../shared/contracts'
-import { onUnexpectedError } from '../core/errors'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import type { ResultHandle } from '../results/ResultClient'
 import { filteredColumns, setKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
-import { ColumnFilterPopover, type ColumnFilterTarget } from '../results/ColumnFilterPopover'
+import { resultsFilterSource } from '../results/ColumnFilterPopover'
 import { compareText } from '../results/CompareService'
 import { highlightText } from '../results/HighlightsService'
 import { pivotStrip } from '../results/pivot'
 import { transposeStrip } from '../results/TransposeService'
 import { formatBytes, formatCount } from '../results/status'
-import { GridView, type GridStatus } from './GridView'
+import GridShell, { GridErrorBoundary, instanceKey, type GridFunnels, type GridShellApi, type GridSpec } from './GridShell'
+import type { GridView } from './GridView'
 import { describeSelection } from './selection'
 
 export interface ResultGridProps {
@@ -43,56 +43,45 @@ function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: n
   return undefined
 }
 
-/** The React shell of one grid: its root and scroller, strips and overlay. GridView renders and handles everything inside. */
 /** The sort's keys and filters as a string: a new order or other rows put the grid back at its first row; the same view
  *  built again (once every row is in) keeps its place. */
 const keysOf = (sort: GridSort | undefined) => (sort?.keys.map(key => `${key.column}${key.descending ? 'd' : 'a'}`).join(',') ?? '') + '|' + JSON.stringify(sort?.filters.map(item => item.filter) ?? [])
 
-function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, onWide }: ResultGridProps) {
-  const { results, resultClient, commands, platform, gridStats, panes, settings, resultsSearch, highlights, compare, pivot, transpose } = useWorkbench()
+/**
+ * A query's result set in the results grid (GridShell): the set's handle and its sorted views, ResultsService's sort and
+ * filters for the header, and the strips (truncation, highlights, compare, pivot, transpose). A live view mounts the same
+ * shell with its own source (LiveGridPane).
+ */
+function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, onWide }: ResultGridProps) {
+  const { results, commands, gridStats, panes, settings, resultsSearch, highlights, compare, pivot, transpose } = useWorkbench()
   const marked = useSyncExternalStore(highlights.subscribe, () => highlights.getSnapshot()[tabId]?.get(entry.index))
   const compared = useSyncExternalStore(compare.subscribe, () => compare.getSnapshot().get(setKey(entry.descriptor)))
   const pivoted = useSyncExternalStore(pivot.subscribe, () => pivot.getSnapshot().info.get(setKey(entry.descriptor)))
   const transposed = useSyncExternalStore(transpose.subscribe, () => transpose.getSnapshot().get(setKey(entry.descriptor)))
   const values = useServiceSnapshot(settings).values
-  const showTypes = values['queryResults.grid.showColumnTypes'], whitespace = values['queryResults.grid.whitespace'], rowSize = values['queryResults.grid.rowSize']
-  const showTypesRef = useRef(showTypes), whitespaceRef = useRef(whitespace), rowSizeRef = useRef(rowSize)
-  showTypesRef.current = showTypes
-  whitespaceRef.current = whitespace
-  rowSizeRef.current = rowSize
-  const rootRef = useRef<HTMLDivElement>(null), scrollRef = useRef<HTMLDivElement>(null), viewRef = useRef<GridView | undefined>(undefined)
+  const showTypes = values['queryResults.grid.showColumnTypes'], rowSize = values['queryResults.grid.rowSize']
+  const viewRef = useRef<GridView | undefined>(undefined), apiRef = useRef<GridShellApi | undefined>(undefined)
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
   // Search in results: this grid's marks, and the tab's reveal of the active match.
   const search = useServiceSnapshot(resultsSearch)[tabId]
   const marks = search?.marks.get(entry.index)
-  const marksRef = useRef(marks)
   // Bumped by each swap, so a reveal waiting for the sorted rows runs once they show.
   const [swaps, setSwaps] = useState(0)
-  marksRef.current = marks
-  const [status, setStatus] = useState<GridStatus>({})
-  // The header funnel's popover, while open: its column and where it opens.
-  const [funnel, setFunnel] = useState<ColumnFilterTarget | undefined>()
   const filtered = useMemo(() => filteredColumns(sort), [sort])
-  const filteredRef = useRef(filtered)
-  filteredRef.current = filtered
   const index = entry.index
-  const countRef = useRef(count)
-  countRef.current = count
-  const onWideRef = useRef(onWide)
-  onWideRef.current = onWide
-  const sortRef = useRef(sort)
-  sortRef.current = sort
+  const latest = useRef({ count, onWide, sort, marks, showTypes, rowSize })
+  latest.current = { count, onWide, sort, marks, showTypes, rowSize }
   /** The handle the view shows, and the keys it was sorted by. */
   const shownRef = useRef<{ handle: ResultHandle; keys: string }>({ handle: entry.handle, keys: '' })
-  // Before the shell paints: the view draws its first frame as it is built, so the grid never paints empty first.
-  useLayoutEffect(() => {
+  const mount = (create: (spec: GridSpec) => GridView) => {
+    const now = latest.current
     // A grid mounted again (a tab switch) shows its sorted view from the start.
-    const sorted = sortRef.current?.view
-    shownRef.current = { handle: sorted ?? entry.handle, keys: sorted ? keysOf(sortRef.current) : '' }
+    const sorted = now.sort?.view
+    shownRef.current = { handle: sorted ?? entry.handle, keys: sorted ? keysOf(now.sort) : '' }
     results.viewShown(tabId, index, sorted)
-    const view = new GridView({
-      root: rootRef.current!, scroller: scrollRef.current!, handle: shownRef.current.handle, client: resultClient, descriptor: entry.descriptor, state: results.gridState(tabId, index),
-      resultIndex: index, resultCount: countRef.current, platform, stats: gridStats, showTypes: showTypesRef.current, whitespace: whitespaceRef.current, rowSize: rowSizeRef.current,
+    const view = create({
+      handle: shownRef.current.handle, descriptor: entry.descriptor, state: results.gridState(tabId, index),
+      resultIndex: index, resultCount: now.count, stats: gridStats, showTypes: now.showTypes, rowSize: now.rowSize,
       onSelection: selection => {
         const current = entry.handle.getSnapshot()
         results.announceSelection(tabId, describeSelection(selection, current.rowsAvailable, entry.descriptor.columns.length))
@@ -100,21 +89,14 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
       // Edit › Copy's copy event; Ctrl+C and Ctrl+A are the catalogue's output.copy and output.selectAll.
       onCopy: () => { void commands.execute('output.copy', undefined, 'keybinding') },
       onEscape: () => results.cancelTabJob(tabId),
-      onStatus: setStatus,
-      onWide: wide => onWideRef.current?.(index, wide),
-      onError: onUnexpectedError,
-      onOpenValue: (row, column) => { void commands.execute('output.openValue', { tabId, cell: { resultIndex: index, row, column } }, 'keybinding') },
-      sort: sortRef.current?.keys,
-      onSort: (column, add) => results.cycleSort(tabId, index, column, add),
-      filtered: filteredRef.current,
-      // A press on the open column's funnel closes its popover, as pressing a menu's button again does.
-      onFilter: (column, anchor) => setFunnel(current => current?.column === column ? undefined : { column, anchor })
+      onWide: wide => latest.current.onWide?.(index, wide),
+      onOpenValue: (row, column) => { void commands.execute('output.openValue', { tabId, cell: { resultIndex: index, row, column } }, 'keybinding') }
     })
     viewRef.current = view
-    view.setMarks(marksRef.current)
+    view.setMarks(now.marks)
     const registration = results.registerGrid(tabId, index, {
       selectAll: () => view.selectAll(), repaint: () => view.repaint(), fitColumn: column => view.fitColumn(column),
-      filterColumn: column => setFunnel({ column, anchor: view.filterAnchor(column) })
+      filterColumn: column => apiRef.current?.openFunnel(column)
     })
     // Closing and opening the pane within one frame moves the grid without resizing it, and the move drops the scroller's
     // offsets: the frame this asks for writes them back (GridView's offsetsDropped), and a press before it keeps them.
@@ -125,13 +107,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
       view.dispose()
       if (viewRef.current === view) viewRef.current = undefined
     }
-  }, [tabId, index, entry, results, resultClient, commands, platform, gridStats, panes])
-  useEffect(() => { viewRef.current?.update({ resultCount: count, showTypes, whitespace, sort: sort?.keys, rowSize, filtered }) }, [count, showTypes, whitespace, sort?.keys, rowSize, filtered])
-  // Closing the popover gives the focus back to the grid, as a menu does, unless a press elsewhere took it.
-  const closeFunnel = useCallback((refocus = true) => {
-    setFunnel(undefined)
-    if (refocus) rootRef.current?.focus({ preventScroll: true })
-  }, [])
+  }
   // The grid draws the highlighted rows of the handle it shows, and switches with its swaps.
   const highlightRows = marked?.rows
   useLayoutEffect(() => { viewRef.current?.setHighlights(highlightRows ?? []) }, [highlightRows, tabId, index, entry])
@@ -151,7 +127,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
   useEffect(() => {
     const view = viewRef.current, shown = shownRef.current
     if (!view || !target || target === shown.handle) return
-    const keys = target === entry.handle ? '' : keysOf(sortRef.current), top = keys !== shown.keys ? 0 : undefined
+    const keys = target === entry.handle ? '' : keysOf(latest.current.sort), top = keys !== shown.keys ? 0 : undefined
     const abort = new AbortController()
     const swap = () => {
       if (abort.signal.aborted || viewRef.current !== view) return
@@ -166,48 +142,23 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
     else void view.prepare(target, 0, abort.signal).then(swap)
     return () => abort.abort()
   }, [target, entry])
-  const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.defaultPrevented || (event.target as Element).closest('button')) return
-    if (viewRef.current?.key(event.nativeEvent)) { event.preventDefault(); event.stopPropagation() }
-  }
+  const source = useMemo(() => resultsFilterSource(results, tabId, index), [results, tabId, index])
+  const funnels = useMemo<GridFunnels>(() => ({ source, filtered, columnName: column => entry.descriptor.columns[column]?.name }), [source, filtered, entry])
+  const onApi = useCallback((api: GridShellApi | undefined) => { apiRef.current = api }, [])
   const lost = snapshot.state === 'lost'
   const truncation = truncationText({ truncated: snapshot.truncated, rowsStored: snapshot.rowsStored, rowsRead: snapshot.rowsRead, budget })
-  const retry = () => viewRef.current?.retry()
   const highlightNote = !lost && snapshot.state === 'complete' ? compared ? compareText(compared) : pivoted ? pivotStrip(pivoted, highlightText(marked)) : transposed ? transposeStrip(transposed, highlightText(marked)) : highlightText(marked) : undefined
-  // The grid holds only rows; its strip and the lost overlay are its siblings, outside the table structure.
-  return <div className="rg-frame">
-    <div ref={rootRef} className="results-grid rg" role="grid" tabIndex={0} data-result-grid="" data-output-view="grid" data-tab-id={tabId} data-result-index={index}
-      data-result-generation={entry.descriptor.generation} data-result-id={entry.descriptor.resultId} data-result-kind={entry.descriptor.kind}
-      data-pane-focus={focused ? 'selected' : 'grid'} aria-multiselectable="true" aria-readonly="true" onKeyDown={keyDown} onFocus={() => onFocus(index)}>
-      <div ref={scrollRef} className="rg-scroll" tabIndex={-1} />
-    </div>
-    {lost && <div className="rg-overlay" role="status">{lostText}</div>}
-    {!lost && status.renderError ? <div className="rg-strip error" role="status">This result could not be displayed. <button onClick={retry}>Retry</button></div>
-      : !lost && status.tileError ? <div className="rg-strip error" role="status">Some rows could not be loaded: {status.tileError} <button onClick={retry}>Retry</button></div>
-        : !lost && snapshot.incomplete ? <div className="rg-strip" role="status" title={incompleteText}>{incompleteText}</div>
-          : !lost && truncation ? <div className="rg-strip" role="status" title={truncation}>{truncation}</div>
-            : highlightNote ? <div className="rg-strip" role="status" title={highlightNote}>{highlightNote}</div> : null}
-    {funnel && !lost && funnel.column < entry.descriptor.columns.length && <ColumnFilterPopover key={funnel.column} tabId={tabId} index={index} target={funnel}
-      columnName={entry.descriptor.columns[funnel.column].name || '(No column name)'} filtered={filtered.has(funnel.column)} grid={rootRef.current!} onClose={closeFunnel} />}
-  </div>
+  const note = lost ? undefined : snapshot.incomplete ? incompleteText : truncation ?? highlightNote
+  return <GridShell mountKey={`${tabId}|${index}|${instanceKey(entry)}`} mount={mount} onApi={onApi}
+    rootProps={{
+      'data-result-grid': '', 'data-output-view': 'grid', 'data-tab-id': tabId, 'data-result-index': index, 'data-result-generation': entry.descriptor.generation,
+      'data-result-id': entry.descriptor.resultId, 'data-result-kind': entry.descriptor.kind, 'data-pane-focus': focused ? 'selected' : 'grid', onFocus: () => onFocus(index)
+    }}
+    sort={sort?.keys} onSort={(column, add) => results.cycleSort(tabId, index, column, add)} funnels={funnels}
+    update={{ resultCount: count, showTypes, rowSize }} gone={lost ? lostText : undefined} strip={note ? { text: note } : undefined} />
 }
 
-/** A grid whose shell failed to render shows the render-error strip; Retry renders it again. */
-class GridErrorBoundary extends Component<{ children: ReactNode; index: number }, { failed: boolean; attempt: number }> {
-  state = { failed: false, attempt: 0 }
-  static getDerivedStateFromError(): Partial<{ failed: boolean }> { return { failed: true } }
-  componentDidCatch(error: Error, info: ErrorInfo): void { onUnexpectedError(Object.assign(error, { componentStack: info.componentStack })) }
-  render(): ReactNode {
-    if (this.state.failed) {
-      return <div className="rg-frame failed" data-result-index={this.props.index}>
-        <div className="rg-strip error" role="status">This result could not be displayed. <button onClick={() => this.setState(state => ({ failed: false, attempt: state.attempt + 1 }))}>Retry</button></div>
-      </div>
-    }
-    return <ErrorBoundaryKey key={this.state.attempt}>{this.props.children}</ErrorBoundaryKey>
-  }
-}
-function ErrorBoundaryKey({ children }: { children: ReactNode }) { return <>{children}</> }
-
+/** A result set's grid: a throw while rendering it stays in its frame (GridErrorBoundary), whose Retry renders it again. */
 export default function ResultGrid(props: ResultGridProps) {
-  return <GridErrorBoundary index={props.entry.index}><ResultGridShell {...props} /></GridErrorBoundary>
+  return <GridErrorBoundary frameProps={{ 'data-result-index': props.entry.index }}><ResultGridBody {...props} /></GridErrorBoundary>
 }

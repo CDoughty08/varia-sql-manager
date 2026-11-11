@@ -16,6 +16,9 @@
 //   language-diagnostics enables deterministic SQL error/warning analysis for the diagnostics UI suite only
 //   language-fail       completion/hover refuse requests until removed, to exercise cache refresh recovery in the UI
 //   language-status-fail  availability fails until removed, to exercise same-generation manual recovery
+//   budget-stopped      results.pivot, results.diff and results.transpose answer BUDGET_STOPPED, as for a query whose
+//                       results filled its result memory; budget-stopped-low the same with the low-memory sentence,
+//                       budget-stopped-global with the global budget's
 //   hold/<method>       the method waits while this file exists; a directive with `hold` waits after its sets and
 //                       messages, and results.export after each page (so a test can cancel it mid-save)
 //   allow/audits        explorer.children may list audits (otherwise they fail as a permission error would)
@@ -279,6 +282,16 @@ async function controlled(name, consume = false) {
   try { await access(path) } catch { return false }
   if (consume) await rm(path, { force: true })
   return true
+}
+/**
+ * Answers BUDGET_STOPPED as SqlService.ThrowIfStopped does, while a budget-stopped control file exists: after the request
+ * and the result's state are checked. Unlike SqlService, a pivot's or transpose's view is looked up first (sourceOf).
+ */
+async function budgetStopped(id) {
+  if (await controlled('budget-stopped-low')) return fail(id, 'BUDGET_STOPPED', 'The computer was low on memory while this query ran, so it can store nothing more. Run the query again.'), true
+  if (await controlled('budget-stopped-global')) return fail(id, 'BUDGET_STOPPED', 'The result memory filled while this query ran, so it can store nothing more. Close other results, then run the query again.'), true
+  if (await controlled('budget-stopped')) return fail(id, 'BUDGET_STOPPED', "This query's results filled its result memory, so it can store nothing more. Run the query again returning fewer rows."), true
+  return false
 }
 // PING is answered from memory; silent-<generation> is looked for every 50 ms.
 let silent = false
@@ -1235,12 +1248,18 @@ function activitySessionsSample(live, probe) {
   const shown = sessionsShown(filter)
   const facets = spec.facets.map(column => {
     const counts = new Map()
-    for (const row of shown) if (row[column]) counts.set(row[column], (counts.get(row[column]) ?? 0) + 1)
+    // As LiveTables.cs: a blank cell counts under empty text, the funnel's (Blanks).
+    for (const row of shown) counts.set(row[column] || '', (counts.get(row[column] || '') ?? 0) + 1)
     return { column, values: [...counts].sort((a, b) => b[1] - a[1]).map(([text, count]) => ({ text, count })) }
   })
   const text = filter.text?.toLowerCase()
   const rows = shown.filter(row => (!text || sessionTextColumns.some(column => row[column]?.toLowerCase().includes(text)))
-    && (filter.columnFilters ?? []).every(column => (column.values ?? []).includes(row[column.column]) || (column.blanks && !row[column.column]) || (column.nonBlanks && !!row[column.column])))
+    // As ActivityFilter.cs: a blank cell passes with blanks; another passes when listed, or, excluding, when not listed.
+    && (filter.columnFilters ?? []).every(column => !row[column.column] ? !!column.blanks
+      : column.exclude ? !(column.values ?? []).includes(row[column.column]) : (column.values ?? []).includes(row[column.column]) || !!column.nonBlanks))
+  // The probe's sort for this table (a header's sort button), by text with the session id breaking ties.
+  const sort = (probe.sort ?? []).filter(key => key.table === undefined || key.table === 0)
+  if (sort.length) rows.sort((a, b) => { for (const key of sort) { const left = String(a[key.column] ?? ''), right = String(b[key.column] ?? ''); if (left !== right) return (left < right ? -1 : 1) * (key.descending ? -1 : 1) } return a.sessionId - b.sessionId })
   const columns = spec.columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true }))
   const result = storeResult({ columns, rows: rows.map(row => spec.columns.map(column => column.id === 'sessionId' ? String(row.sessionId) : row[column.id] ?? null)) }, 0)
   const kept = live.kept.get(probe.probe) ?? []
@@ -1656,6 +1675,7 @@ async function workbench(id, method, params, credit) {
       if (!right) return missing(id, params.right)
       if (params.left === params.right || left.kind === 'diff' || right.kind === 'diff') return fail(id, 'INVALID_PARAMS', 'Only two result sets of the same query can be compared.')
       if (!left.complete || !right.complete) return fail(id, 'RESULT_OPEN', 'Compare the results after they finish loading.')
+      if (await budgetStopped(id)) return
       const diff = buildDiff(left, right, params.exact ?? false, params.context ?? 1)
       if (!diff) return fail(id, 'INVALID_PARAMS', 'These results have no column names in common, so they cannot be compared.')
       const result = storeResult(diff.set, right.index)
@@ -1667,6 +1687,8 @@ async function workbench(id, method, params, credit) {
       if (!source) return
       const result = stored.get(params.resultId)
       if (!result.complete) return fail(id, 'RESULT_OPEN', 'Pivot this result after it finishes loading.')
+      // Before the pivot is built, as in SqlService: its one refusal here (too many column groups) comes from the build.
+      if (await budgetStopped(id)) return
       const built = buildPivot(source, params)
       if (built.error) return fail(id, 'INVALID_PARAMS', built.error)
       const { set, ...counts } = built
@@ -1679,6 +1701,7 @@ async function workbench(id, method, params, credit) {
       if (result.kind === 'diff' || result.kind === 'executionPlan') return fail(id, 'INVALID_PARAMS', "Only a query's results, a pivot or a transpose can be transposed.")
       if (params.headerColumn !== undefined && params.headerColumn >= result.columns.length) return fail(id, 'INVALID_PARAMS', 'The header column must be a column of the result.')
       if (!result.complete) return fail(id, 'RESULT_OPEN', 'Transpose the results after they finish loading.')
+      if (await budgetStopped(id)) return
       const { set, ...counts } = buildTranspose(source, params)
       return respond(id, { descriptor: describe(storeResult(set, result.index)), ...counts })
     }

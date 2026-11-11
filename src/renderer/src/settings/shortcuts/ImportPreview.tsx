@@ -1,7 +1,7 @@
 import { useId, useState } from 'react'
 import Icon from '../../Icon'
 import { Sheet } from './ConflictSheet'
-import type { ImportSummary } from './shortcut-draft'
+import { importRefusal, type ImportSummary } from './shortcut-draft'
 
 export type ImportMode = 'merge' | 'replace'
 interface Props {
@@ -22,12 +22,14 @@ export default function ImportPreview({ summary, problems, onImport, onCancel }:
   const [mode, setMode] = useState<ImportMode>('merge')
   const name = useId()
   // Either mode can be over main's limits (Replace keeps the draft's unreadable records too), so each is checked.
-  const blocked = !summary.fits[mode]
+  const refusal = importRefusal(summary, mode)
+  const blocked = refusal !== undefined
   return <Sheet title="Import shortcuts" role="dialog" onCancel={onCancel} className="shortcuts-import">
     <dl className="shortcuts-facts">
       <div><dt>Shortcuts</dt><dd>{summary.shortcuts}</dd></div>
       <div><dt>New</dt><dd>{summary.added}</dd></div>
       <div><dt>Same as yours</dt><dd>{summary.same}</dd></div>
+      {summary.repeated > 0 && <div><dt>Repeated</dt><dd>{plural(summary.repeated, 'entry', 'entries')} {summary.repeated === 1 ? 'repeats' : 'repeat'} another of the file's.</dd></div>}
       <div><dt>Conflicts</dt><dd>{summary.conflicts.length ? <ul>{summary.conflicts.map((conflict, index) => <li key={index}>{conflict.label.text} for {conflict.command} takes it from {conflict.with.join(', ')}</li>)}</ul> : 0}</dd></div>
       {summary.clashes > 0 && <div><dt>Same keys</dt><dd>{plural(summary.clashes, 'entry', 'entries')} {summary.clashes === 1 ? 'takes' : 'take'} a key another of the file's entries has; they will show as problems.</dd></div>}
       {summary.ignored > 0 && <div><dt>Ignored removals</dt><dd>{plural(summary.ignored, 'removal')} of a locked key or one no command has here; they will show as problems.</dd></div>}
@@ -44,7 +46,7 @@ export default function ImportPreview({ summary, problems, onImport, onCancel }:
       <label><input type="radio" name={name} checked={mode === 'replace'} onChange={() => setMode('replace')} /><span><strong>Replace</strong>
         <span className="shortcuts-muted">{summary.yours ? `Remove your ${plural(summary.yours, 'change')} first, then apply the file.` : 'Apply the file as it is.'}</span></span></label>
     </fieldset>
-    {blocked && <p className="shortcuts-message" data-kind="refused" role="alert">{mode === 'merge' ? 'Together they' : 'The file and your unreadable records'} would be more than a shortcuts file may hold.{mode === 'merge' && summary.fits.replace ? ' Choose Replace, or remove some first.' : ' Remove some first.'}</p>}
+    {blocked && <p className="shortcuts-message" data-kind="refused" role="alert">{refusal}</p>}
     <p className="shortcuts-muted">Imported shortcuts are staged like any change: review them, then choose OK.</p>
     <div className="shortcuts-sheet-actions">
       <button type="button" className="primary" autoFocus disabled={blocked} onClick={() => onImport(mode)}>Import</button>

@@ -468,6 +468,35 @@ internal static class TextChecks
     private static void XmlCells(Action<bool, string> check)
     {
         check(SequentialXml.Available, "SqlClient still has the sequential stream internals that xml cells are read through (SequentialXml)");
+        // A SqlClient that changed them must leave the opener null (GetXmlReader reads the cell), never throw from the type
+        // initializer: Expression.Assign refuses a readonly field, and Expression.Field an instance of a static one.
+        const System.Reflection.BindingFlags Any = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
+        var newStream = typeof(PinnedStream).GetConstructor(Any, [typeof(PinnedReader), typeof(int)]);
+        System.Reflection.FieldInfo Pinned(string name) => typeof(PinnedReader).GetField(name, Any)!;
+        var opener = SequentialXml.Compile<PinnedReader>(newStream, Pinned("current"), Pinned("last"));
+        var pinned = new PinnedReader();
+        var opened = opener?.Invoke(pinned, 7);
+        check(opened is PinnedStream { Column: 7 } && ReferenceEquals(pinned.Current, opened) && pinned.Last == 7,
+            "the compiled opener builds the column's stream and sets the reader's two fields");
+        var refused = new List<string>();
+        void Refuses(string name, System.Reflection.FieldInfo current, System.Reflection.FieldInfo last)
+        {
+            try
+            {
+                if (SequentialXml.Usable(newStream, current, last)) refused.Add(name + " is usable");
+                // Past the check too: what it does not foresee must still fall back.
+                if (SequentialXml.Compile<PinnedReader>(newStream, current, last) is not null || SequentialXml.Compile<PinnedReader>(newStream, current, last, check: false) is not null) refused.Add(name + " compiled");
+            }
+            catch (Exception e) { refused.Add(name + " threw " + e.GetType().Name); }
+        }
+        Refuses("a readonly stream field", Pinned("frozenCurrent"), Pinned("last"));
+        Refuses("a readonly column field", Pinned("current"), Pinned("frozenLast"));
+        Refuses("a static stream field", Pinned("sharedCurrent"), Pinned("last"));
+        Refuses("a static column field", Pinned("current"), Pinned("sharedLast"));
+        Refuses("a stream field of another type", Pinned("wideLast"), Pinned("last"));
+        Refuses("a column field of another type", Pinned("current"), Pinned("wideLast"));
+        check(refused.Count == 0 && SequentialXml.Compile<PinnedReader>(null, null, null) is null,
+            "a sequential stream field that became readonly, static or of another type leaves no opener instead of throwing: " + string.Join("; ", refused));
         // Without them, a cell is stored before the rest of its value is read past: a parse failure there must end the
         // read-past, not fail the cell, which ReadRow would then append a second time.
         static System.Xml.XmlReader Fragment(string text) => System.Xml.XmlReader.Create(new StringReader(text), new System.Xml.XmlReaderSettings { ConformanceLevel = System.Xml.ConformanceLevel.Fragment });
@@ -651,6 +680,32 @@ internal static class TextChecks
         public Span<byte> GetSpan(int sizeHint = 0) => buffer;
     }
 
+    /// <summary>Stand-ins for SqlDataReader and SqlSequentialStream, with the field shapes a later SqlClient could have.</summary>
+#pragma warning disable CS0649, CS0169, CS0414, IDE0044, IDE0051, CA1823
+    private sealed class PinnedReader
+    {
+        private PinnedStream? current;
+        private int last;
+        private readonly PinnedStream? frozenCurrent;
+        private readonly int frozenLast;
+        private static PinnedStream? sharedCurrent;
+        private static int sharedLast;
+        private long wideLast;
+        public PinnedStream? Current => current;
+        public int Last => last;
+    }
+#pragma warning restore CS0649, CS0169, CS0414, IDE0044, IDE0051, CA1823
+
+    private sealed class PinnedStream : MemoryStream
+    {
+        internal PinnedStream(PinnedReader reader, int column)
+        {
+            ArgumentNullException.ThrowIfNull(reader);
+            Column = column;
+        }
+        public int Column { get; }
+    }
+
     private sealed class OneByteStream(byte[] bytes) : MemoryStream(bytes)
     {
         public override int Read(byte[] buffer, int offset, int count) => base.Read(buffer, offset, Math.Min(count, 1));
@@ -693,6 +748,7 @@ internal static class TextChecks
         var stream = new MemoryStream();
         var cells = new XmlCellWriter();
         var huge = new string('v', 5 * 1024 * 1024);
+        var shrunk = string.Concat(Enumerable.Repeat("&#x41;", 600_000));
         (string Xml, string Start)[] cases =
         [
             ("<r a=\"1\"><c x=\"" + huge + "\"/></r>", "<r a=\"1\"><c x=\""),
@@ -705,6 +761,14 @@ internal static class TextChecks
             // The tail moves past several of its chunks before the cut node starts.
             ("<r>" + string.Concat(Enumerable.Repeat("<n/>", 40_000)) + "<!-- " + new string('w', 3 * XmlFeed.Chunk + 7) + " --><c x=\"" + huge + "\"/></r>",
                 "<r>" + string.Concat(Enumerable.Repeat("<n />", 40_000)) + "<!-- " + new string('w', 3 * XmlFeed.Chunk + 7) + " --><c x=\""),
+            // A start tag read whole but longer than the feed keeps (character references shrink it below the limit) loses
+            // only the nodes that start in the read its end is in: 5,000 siblings later the feed keeps a node's start again,
+            // wherever XmlReader's reads end (it did so only once a read ended exactly where a node did).
+            ("<r><a x=\"" + shrunk + "\"/>" + string.Concat(Enumerable.Repeat("<c x=\"1\"/>", 5000)) + "<b y=\"" + huge + "\"/></r>",
+                "<r><a x=\"" + new string('A', 600_000) + "\" />" + string.Concat(Enumerable.Repeat("<c x=\"1\" />", 5000)) + "<b y=\""),
+            // With text in the siblings a read did end at a node now and then, so this one was kept before too.
+            ("<r><a x=\"" + shrunk + "\"/>" + string.Concat(Enumerable.Repeat("<c>t</c>", 5000)) + "<b y=\"" + huge + "\"/></r>",
+                "<r><a x=\"" + new string('A', 600_000) + "\" />" + string.Concat(Enumerable.Repeat("<c>t</c>", 5000)) + "<b y=\""),
         ];
         var wrong = new List<string>();
         foreach (var (xml, start) in cases)
@@ -719,7 +783,11 @@ internal static class TextChecks
 
         // A start tag read whole but longer than the feed keeps (character references shrink it below the limit) loses the
         // next node's start: the cut keeps what was written, with the parent's start tag closed.
-        var shrunk = string.Concat(Enumerable.Repeat("&#x41;", 600_000));
+        // A limit below one read: the feed keeps reads whole, so a node that character references shrink does not use up
+        // what the next node's text needs (clipping at the limit inside the read kept 3,000 raw characters for both).
+        var small = Cut(cells, stream, "<r><a x=\"" + shrunk[..2400] + "\"/><b y=\"" + huge + "\"/></r>", 3000);
+        check(small == ("<r><a x=\"" + new string('A', 400) + "\" /><b y=\"" + huge)[..3000],
+            "a cut node keeps its text up to the limit after a node that character references shrank (" + small?.Length + " of 3000 characters)");
         var lost = Cut(cells, stream, "<r><a x=\"" + shrunk + "\"><b y=\"" + huge + "\"/></a></r>", Limit);
         check(lost == "<r><a x=\"" + new string('A', 600_000) + "\">", "a cut whose node start the feed could not keep ends with the parent's start tag closed (" + lost?.Length + " characters)");
     }

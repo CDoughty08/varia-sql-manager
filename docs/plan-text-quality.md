@@ -12,7 +12,7 @@ Before is on the left and after is on the right. Open the images at their origin
 
 ![100% zoom on a 3× display](images/plan-text-quality-high-dpi.png)
 
-The comparison command verifies actual WebGL text texture resolution, canvas backing dimensions, texture updates after zooming, and texture reuse during panning and unchanged counter frames. It also fails on browser console or page errors. These checks validate rendering behavior; the sharpness assessment above comes from inspecting the rendered images.
+The comparison command verifies actual WebGL text texture resolution, canvas backing dimensions, texture updates after zooming, and texture reuse during panning and unchanged counter frames. It also fails on browser console or page errors. These checks validate rendering behavior; the sharpness assessment above comes from inspecting the rendered images. A final page runs 2,000 fractional zoom steps and requires that Pixi's text cache holds no released keys, then loses an initialized WebGL context and requires the comparison to fail: a recorded GPU failure or a lost context rejects the report before rendering, after rendering and after each capture.
 
 Run with an installed Chrome browser:
 
@@ -30,3 +30,5 @@ npm run test:plan-text-quality -- --baseline 1be5ef0b
 Outputs are `artifacts/plan-text-quality/comparison-{dpi}x.png`, `comparison.html`, and `results.json`. The report records the baseline commit, current source hash, browser version and each label's GPU texture resolution. The generated HTML uses a local script bundle with strict CSP and no network requests, so it works without a dev server. The comparison is a focused renderer check; it does not replace Electron integration checks.
 
 Zooming regenerates visible text textures. Panning and unchanged counters keep their existing textures. This improves fidelity at the cost of additional rasterization during zoom; it preserves the existing culling and bounded label pool.
+
+Pixi 8 leaves a `null` entry in its text cache for every released text, style and resolution key, so `PlanCanvas` deletes those entries after each frame. When the canvas at full DPI would exceed the device's WebGL size limits, or the browser allocates a smaller drawing buffer than requested, the renderer and its labels use the highest resolution that fits; if no resolution matches the allocated buffer, the viewer shows its GPU fallback.

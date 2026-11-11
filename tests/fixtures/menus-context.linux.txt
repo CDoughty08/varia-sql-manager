@@ -377,7 +377,7 @@ output.context, for a results grid with selected cells
   ---
   F&it Column  ----
   ---
-  Sa&ve Results As…  Ctrl+S  ----
+  Sa&ve Results As…  Ctrl+S  ++++
   ---
   Show Spaces and Ta&bs [ ]  ++++
   Show All &White Space [ ]  ++++
@@ -429,7 +429,7 @@ output.context, for a results grid without
   ---
   F&it Column  ----
   ---
-  Sa&ve Results As…  Ctrl+S  ----
+  Sa&ve Results As…  Ctrl+S  ++++
   ---
   Show Spaces and Ta&bs [ ]  ++++
   Show All &White Space [ ]  ++++
