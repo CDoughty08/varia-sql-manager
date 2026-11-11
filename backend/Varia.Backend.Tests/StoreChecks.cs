@@ -427,6 +427,35 @@ internal static class StoreChecks
             check(firstAtOnce == sets && spaced > 0 && laterAtOnce == 0, "each set's first sealed page is reported at once, bypassing the coalescing; its later pages are not ("
                 + firstAtOnce + " of " + sets + " first pages at once, " + laterAtOnce + " of " + spaced + " later pages within 100 ms)");
         }
+
+        // A set that stopped storing says why in its progress, not only when it closes: the statement may read on for minutes.
+        var said = new List<(uint ResultId, string? Truncated, long RowsRead, long RowsStored)>();
+        using (var sink = new QueryEventSink((value, _) =>
+        {
+            var body = JsonSerializer.SerializeToElement(value, HostChecks.Json);
+            if (body.GetProperty("type").GetString() != "progress") return;
+            lock (said) foreach (var result in body.GetProperty("results").EnumerateArray())
+                said.Add((result.GetProperty("resultId").GetUInt32(), result.TryGetProperty("truncated", out var reason) ? reason.GetString() : null, result.GetProperty("rowsRead").GetInt64(), result.GetProperty("rowsStored").GetInt64()));
+        }))
+        {
+            var small = new ResultStore(4L << 20, 1L << 20);
+            var query = small.BeginQuery("full");
+            var whole = Open(small, query);
+            sink.Opened(whole);
+            Fill(whole, 0, 1);
+            whole.Seal();
+            sink.Sealed(whole);
+            var full = Open(small, query, 1);
+            sink.Opened(full);
+            Fill(full, 0, 200_000);
+            full.Seal();
+            sink.Sealed(full);
+            List<(uint ResultId, string? Truncated, long RowsRead, long RowsStored)> seen;
+            lock (said) seen = [.. said];
+            check(query.Stopped == TruncationReason.QueryBudget && seen.Where(item => item.ResultId == whole.ResultId).All(item => item.Truncated is null)
+                && seen.Any(item => item.ResultId == full.ResultId && item.Truncated == "queryBudget" && item.RowsRead == 200_000 && item.RowsStored < item.RowsRead),
+                "progress says why a set stopped storing rows while it is still open, and nothing for a set that stores them all");
+        }
     }
 
     private static string Type(JsonElement body) => body.GetProperty("type").GetString()!;
