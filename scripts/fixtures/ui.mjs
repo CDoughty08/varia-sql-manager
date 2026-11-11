@@ -51,12 +51,17 @@ export const part = {
   tabName: '.tab-name',
   /** The tab's bounded name, environment and live-session area, before Pin and Close. */
   tabSelect: '.tab-select',
+  /** The filename/state row and the environment/session row below it. */
+  tabTitle: '.tab-title',
+  tabMetadata: '.tab-metadata',
   /** Editor groups (src/renderer/src/editor-groups/): Dockview's groups inside the query editor panel, and the active one. */
   /** The editor area in the Query editor panel: every editor group, under the active query's bar. */
   editorArea: '.editor-groups-root',
   editorGroup: '.editor-groups .dv-groupview',
   activeEditorGroup: '.editor-groups .dv-groupview.dv-active-group',
   floatingEditorGroup: '.editor-groups .dv-resize-container .dv-groupview',
+  /** A floating editor group's right-edge resize handle, beside the group rather than inside it. */
+  floatingEditorResizeRight: '.editor-groups .dv-resize-container .dv-resize-handle-right',
   tabSid: '.tab-sid',
   /** The kind icon before a tab's name (kindIcon finds it by name; page code needs its box and stroke). */
   tabIcon: '.tab-icon',

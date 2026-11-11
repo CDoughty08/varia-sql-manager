@@ -33,7 +33,7 @@ function fixture(pinnedCount = 6, unpinnedCount = 6, restoredRows = { pinned: 1,
   header.className = 'dv-tabs-and-actions-container'
   element.append(header, content)
   header.append(list)
-  list.style.setProperty('--varia-bar', '36px')
+  list.style.setProperty('--varia-documentTab', '36px')
   Object.defineProperty(list, 'clientWidth', { get: () => size.width })
   Object.defineProperty(element, 'clientHeight', { get: () => size.height })
   list.getBoundingClientRect = () => new DOMRect(20, 100, size.width, parseFloat(list.style.height) || 36)
@@ -125,6 +125,18 @@ afterEach(() => {
 })
 
 describe('editor group tab shelves', () => {
+  it('uses the two-line document height for both shelves and every tab slot, independently of toolbar height', () => {
+    const view = fixture()
+    view.list.style.setProperty('--varia-documentTab', '44px')
+    view.list.style.setProperty('--varia-bar', '36px')
+    view.layout.refresh()
+    expect(view.shelves().map(shelf => [shelf.top, shelf.height])).toEqual([[0, 44], [44, 44]])
+    expect(view.nodes.get('q1')!.style.height).toBe('44px')
+    expect(view.nodes.get('q1')!.style.top).toBe('44px')
+    view.wheel(20, 40)
+    expect(view.shelves().map(shelf => [shelf.top, shelf.height])).toEqual([[0, 88], [88, 44]])
+    expect(view.nodes.get('q1')!.style.top).toBe('88px')
+  })
   it('adds and removes rows independently over pinned and unpinned tabs, while ordinary wheel input only scrolls', () => {
     const view = fixture()
     expect(view.shelves().map(shelf => shelf.rows)).toEqual([1, 1])
