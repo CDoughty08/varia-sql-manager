@@ -3,8 +3,8 @@ import type { Disposable } from '../core/types'
 import { resolveBlocks } from '../grid/selection'
 import { mergeRows } from './HighlightsService'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
-import type { ResultSetEntry, ResultsService } from './ResultsService'
-import { resultLimits, setKey } from './ResultsService'
+import type { EntryRef, ResultSetEntry, ResultsService } from './ResultsService'
+import { entryIndex, entryName, entryOf, resultLimits, setKey } from './ResultsService'
 import { formatCount, plural } from './status'
 
 /** What a transpose set holds, for its grid's strip. */
@@ -57,10 +57,10 @@ export class TransposeService extends SnapshotStore<TransposeSnapshot> implement
 
   /** Whether a grid's set can be transposed now: its run has ended, its rows have all loaded, its grid's sort or filter is
    *  built (the transpose reads the rows the grid shows), and no transpose runs in its tab. */
-  canTranspose(tabId: string, index: number): boolean {
-    const tab = this.results.getSnapshot()[tabId]
-    const sort = this.results.sortOf(tabId, index)
-    return !!tab && tab.status !== 'running' && tab.status !== 'closed' && !this.running.has(tabId) && transposable(tab.sets[index])
+  canTranspose(tabId: string, ref: EntryRef): boolean {
+    const tab = this.results.getSnapshot()[tabId], entry = entryOf(tab?.sets, ref)
+    const sort = entry && this.results.sortOf(tabId, entry.key)
+    return !!tab && tab.status !== 'running' && tab.status !== 'closed' && !this.running.has(tabId) && transposable(entry)
       && !(sort && (sort.sorting || sort.stale || !sort.view))
   }
 
@@ -71,33 +71,32 @@ export class TransposeService extends SnapshotStore<TransposeSnapshot> implement
 
   /** The grid's selected rows as [first, count] position ranges (merged), or undefined without any. A transpose takes at
    *  most 256 of them, and says so for more. */
-  selectedRows(tabId: string, index: number): [number, number][] | undefined {
-    const entry = this.results.getSnapshot()[tabId]?.sets[index]
-    const selection = entry && this.results.selection(tabId, index)
+  selectedRows(tabId: string, ref: EntryRef): [number, number][] | undefined {
+    const entry = entryOf(this.results.getSnapshot()[tabId]?.sets, ref)
+    const selection = entry && this.results.selection(tabId, entry.key)
     if (!entry || !selection) return undefined
-    const sort = this.results.sortOf(tabId, index)
+    const sort = this.results.sortOf(tabId, entry.key)
     const rows = (sort?.view ?? entry.handle).getSnapshot().rowsAvailable
     const merged = mergeRows(resolveBlocks(selection, rows, entry.descriptor.columns.length).map(block => [block.top, block.bottom] as const))
     return merged.length > 0 ? merged.map(([top, bottom]) => [top, bottom - top + 1]) : undefined
   }
 
   /** The column of the grid's active cell, which Transpose Using Column as Headers names the columns by. */
-  activeColumn(tabId: string, index: number): number | undefined {
-    const entry = this.results.getSnapshot()[tabId]?.sets[index]
-    const column = entry && this.results.selection(tabId, index)?.active.column
+  activeColumn(tabId: string, ref: EntryRef): number | undefined {
+    const entry = entryOf(this.results.getSnapshot()[tabId]?.sets, ref)
+    const column = entry && this.results.selection(tabId, entry.key)?.active.column
     return entry && column !== undefined && column >= 0 && column < entry.descriptor.columns.length && entry.descriptor.columns[column].role !== 'tone' ? column : undefined
   }
 
   /** Transposes a grid's set and appends the transpose to the run; a failure is said in the toolbar. */
-  async transpose(tabId: string, index: number, o: TransposeOptions = {}): Promise<void> {
-    const tab = this.results.getSnapshot()[tabId]
-    if (!tab || !this.canTranspose(tabId, index)) return
-    const entry = tab.sets[index]
-    const rows = o.selected ? this.selectedRows(tabId, index) : undefined
+  async transpose(tabId: string, ref: EntryRef, o: TransposeOptions = {}): Promise<void> {
+    const tab = this.results.getSnapshot()[tabId], entry = entryOf(tab?.sets, ref)
+    if (!tab || !entry || !this.canTranspose(tabId, entry.key)) return
+    const rows = o.selected ? this.selectedRows(tabId, entry.key) : undefined
     if (o.selected && !rows) return
     if (rows && rows.length > wire.transpose.maxRanges)
       return this.results.notify(tabId, `Transpose takes up to ${wire.transpose.maxRanges} separate runs of selected rows; these are ${formatCount(rows.length)}. Select fewer runs, or filter the rows and transpose them all.`)
-    const sort = this.results.sortOf(tabId, index)
+    const sort = this.results.sortOf(tabId, entry.key)
     // The grid's view when it shows one: the transpose reads its rows as the grid shows them.
     const handle = sort?.view ?? entry.handle
     const abort = new AbortController()
@@ -106,7 +105,7 @@ export class TransposeService extends SnapshotStore<TransposeSnapshot> implement
     this.publish(new Map(this.getSnapshot()))
     try {
       const result = await handle.transpose({ ...(rows ? { rows } : {}), ...(o.header === undefined ? {} : { headerColumn: o.header }) }, { signal: abort.signal })
-      const sourceLabel = entry.label ?? `Result ${entry.index + 1}`
+      const sourceLabel = entryName(entry)
       // Only the run that holds the set takes the transpose; otherwise (a re-run, a closed tab) it is released.
       if (this.results.addSet(tabId, result.descriptor, `Transpose of ${sourceLabel}`, [setKey(entry.descriptor)]) === undefined) {
         const now = this.results.getSnapshot()[tabId]
@@ -114,8 +113,10 @@ export class TransposeService extends SnapshotStore<TransposeSnapshot> implement
           this.results.notify(tabId, `These results already show ${resultLimits.sets.toLocaleString('en-US')} sets, so the transpose was not added. Close Results or run the query again.`)
         return
       }
+      // Where the source stands now: an entry before it may have gone while the transpose was built.
+      const at = entryIndex(this.results.getSnapshot()[tabId]?.sets ?? [], entry.key, entry.index)
       const info: TransposeInfo = {
-        source: entry.index, sourceLabel, viewed: !!sort?.view, selected: !!rows, rows: result.rows, transposed: result.transposed, columns: result.columns,
+        source: at < 0 ? entry.index : at, sourceLabel, viewed: !!sort?.view, selected: !!rows, rows: result.rows, transposed: result.transposed, columns: result.columns,
         ...(o.header === undefined ? {} : { header: entry.descriptor.columns[o.header]?.name })
       }
       const key = setKey(result.descriptor)

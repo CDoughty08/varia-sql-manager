@@ -20,7 +20,8 @@ export interface ServerOption {
   readonly color?: string
   readonly environment?: string
   /** Its results for the tab's current search, when the tab has them: a server's from its group (All servers) or from the
-   *  tab's own answer (that server alone), All servers' total from the merged answer. Never asked for on its own. */
+   *  tab's own answer (that server alone), All servers' total from the merged answer. Never asked for on its own, and none
+   *  while an All servers search has yet to land (the answers in view are the search before's). */
   readonly count?: number
   /** Its answer to the current search is still on its way. */
   readonly pending?: boolean
@@ -32,17 +33,21 @@ export interface ServerOption {
  */
 export function serverPickerOptions(state: SearchDocumentState, live: readonly LiveConnection[]): ServerOption[] {
   const answered = !!state.result && !!state.asked?.text.trim()
+  // An All servers search before its first landing: the answers in view are the search before's, so every connected server and
+  // All servers are searching, with no count yet.
+  const unlanded = !!state.allServers && !!state.requestId && state.landed !== state.requestId
   const groups = state.allServers && answered ? serverGroups(state) : []
   const countFor = (connectionId: string): Pick<ServerOption, 'count' | 'pending'> => {
-    if (!answered) return {}
-    if (!state.allServers) return connectionId === state.connectionId && !state.result!.problem ? { count: state.result!.total } : {}
+    if (unlanded) return { pending: true }
+    if (!state.allServers) return answered && connectionId === state.connectionId && !state.result!.problem ? { count: state.result!.total } : {}
+    // A server still on its way says so even while no server has a result yet (the first to answer failed, or none has).
+    const pending = state.servers?.find(answer => answer.connectionId === connectionId)?.pending ? { pending: true } : {}
     const group = groups.find(item => item.connectionId === connectionId)
-    if (!group) return {}
-    return { ...group.result && !group.result.problem && !group.error ? { count: group.result.total } : {}, ...group.pending ? { pending: true } : {} }
+    return { ...group?.result && !group.result.problem && !group.error ? { count: group.result.total } : {}, ...pending }
   }
   const all: ServerOption = {
     value: allServersValue, label: 'All servers',
-    ...state.allServers && answered && !state.result!.problem ? { count: state.result!.total } : {}, ...state.allServers && state.requestId ? { pending: true } : {}
+    ...state.allServers && answered && !unlanded && !state.result!.problem ? { count: state.result!.total } : {}, ...state.allServers && state.requestId ? { pending: true } : {}
   }
   return [all, ...live.map(connection => ({
     value: connection.id, label: connection.displayName || connection.server, ...connection.color ? { color: connection.color } : {},

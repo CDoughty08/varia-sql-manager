@@ -4,7 +4,7 @@ using Varia.Backend.Search;
 namespace Varia.Backend.Tests;
 
 /// <summary>Offline checks of what a search and a build spend: hits past the candidate cap are counted without being kept, results
-/// are built only for the answered hits, a read past the budget cancels its batch instead of draining it, definitions the budget
+/// are built only for the answered hits, a read past the budget or one that throws cancels its batch instead of draining it, definitions the budget
 /// would refuse are read only as far as a repeat the read holds, and one connection reads two databases at once, both stopped
 /// when one fails or on Stop, with progress that only grows and skipped databases in listing order.</summary>
 internal static class SearchCostChecks
@@ -182,6 +182,19 @@ internal static class SearchCostChecks
         var used = budget.Used;
         held.Dispose();
         check(threw && used > 0 && budget.Used == 0, "a read whose reader fails as it closes is already held, so dropping the index gives back all it took: " + budget.Used);
+
+        // A read that throws cancels its batch before its reader closes, as one that stops early does, and its own error is the
+        // one that comes out, not the cancelled batch's on close.
+        var broken = Procedures(200);
+        broken.FailOnClose = true;
+        Exception? thrown = null;
+        try
+        {
+            await ObjectSearchService.ReadThenStopAsync<DatabaseIndex>(() => Task.FromResult<System.Data.Common.DbDataReader>(broken),
+                async read => { await read.ReadAsync(); throw new InvalidCastException("The column's type is not the catalog's."); }, () => broken.Cancelled = true, _ => { });
+        }
+        catch (Exception error) { thrown = error; }
+        check(thrown is InvalidCastException && broken.Cancelled && broken.Drained == 0, "a read that throws cancels its batch, so nothing drains before its own error comes out: " + broken.Drained + " drained, " + thrown?.GetType().Name);
 
         // Below the names' reserve the pool refuses every definition the read does not hold yet: each counts as cut, and only as
         // much of it is read as could show it is a short text the read holds.

@@ -45,7 +45,7 @@ export interface MonitorState {
   readonly expanded: readonly number[]
   /** Bumps when the monitor subscribes again (Retry), so the view takes the new handle. */
   readonly generation: number
-  /** Processes' view chip, toggles, filter box and column value filters, sent as the source's args (the backend filters). */
+  /** Sessions' view chip, Show chips, filter box and column value filters, sent as the source's args (the backend filters). */
   readonly processes: ProcessesFilter
 }
 export interface ProcessesFilter {
@@ -67,18 +67,20 @@ export interface MonitorFacts {
 export interface ActivityFactsSnapshot { readonly byMonitor: Readonly<Record<string, MonitorFacts>> }
 const noFacts: MonitorFacts = { facets: {}, status: {} }
 
-/** A Processes filter as the backend's `ActivityFilter` (src/shared/activity/schema.ts), bounded as the schema bounds it. */
+/** A Sessions filter as the backend's `ActivityFilter` (src/shared/activity/schema.ts), bounded as the schema bounds it. */
 export function processesActivityFilter(filter: ProcessesFilter): ActivityFilterArgs {
   const text = filter.text.trim().slice(0, activityLimits.filterText)
   const columnFilters = filter.columnFilters.filter(column => column.values?.length || column.blanks || column.nonBlanks).slice(0, activityLimits.columnFilters)
     .map(column => ({
       column: column.column,
       ...column.values?.length ? { values: column.values.slice(0, activityLimits.columnFilterValues).map(value => value.slice(0, activityLimits.columnFilterChars)) } : {},
-      ...column.blanks ? { blanks: true } : {}, ...column.nonBlanks ? { nonBlanks: true } : {}
+      ...column.blanks ? { blanks: true } : {}, ...column.nonBlanks ? { nonBlanks: true } : {},
+      // An excluding filter names the values it leaves out; without them it would exclude nothing, so it is never sent bare.
+      ...column.exclude && column.values?.length && !column.nonBlanks ? { exclude: true } : {}
     }))
   return { table: 'sessions', view: filter.view, showSystem: filter.showSystem, showVaria: filter.showVaria, ...text ? { text } : {}, ...columnFilters.length ? { columnFilters } : {} }
 }
-/** The monitor's live args: Processes' filter (the other tables keep the catalogue's defaults until their panes filter). */
+/** The monitor's live args: Sessions' filter (the other tables keep the catalogue's defaults until their panes filter). */
 export const monitorArgs = (state: Pick<MonitorState, 'processes'>): ActivityArgs => ({ filters: [processesActivityFilter(state.processes)] })
 
 /** Merges a sample's facets (only the columns whose values changed come) into what the monitor knew. */
@@ -162,7 +164,7 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
     return state
   }
 
-  /** Changes Processes' filter; the backend filters the next sample (live.update args), and the SQL stays the same. */
+  /** Changes Sessions' filter; the backend filters the next sample (live.update args), and the SQL stays the same. */
   setProcessesFilter(id: string, change: Partial<ProcessesFilter>): void {
     const state = this.get(id)
     if (!state) return
