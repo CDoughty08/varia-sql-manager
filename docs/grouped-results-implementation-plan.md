@@ -4,7 +4,8 @@ Give each original query result a group that owns its Table and, when built, one
 active grid or stacked as today; the user chooses. Transpose becomes a way of drawing a Table or a Pivot, not a stored
 result. Comparisons sit beside the groups and keep their own snapshots.
 
-Revision 5 (2026-11-10). It follows the owner's decisions and three independent reviews against the code. The
+Revision 6 (2026-11-10). It follows the owner's decisions, three independent reviews against the code, and the
+orientation spike's findings. The
 [Grouped views mock](../prototypes/results-pane/grouped-results-ui.html) is the visual reference for the Tabs layout only:
 palette, type, row and header heights, toolbar structure, side panels, Messages strip. Where it disagrees with this
 document it is wrong: Transpose as a stored inner tab, no Stacked layout, a picker that needs matching columns, comparing
@@ -19,7 +20,7 @@ produced the measurements that set its threshold.
 | Topic | Decision |
 | --- | --- |
 | Layout | A Stacked / Tabs choice. Tabs shows one view at a time. Stacked shows every view, a group's Pivot under its Table. |
-| Transpose | A display orientation of a Table or a Pivot, subject to the spike. No stored transpose result. |
+| Transpose | A display orientation of a Table or a Pivot, drawn by rotation inside the grid (the spike passed). No stored transpose result. |
 | Selected rows | "Keep Selected Rows": a filter on the source of at most 4,095 rows, so it composes with sort, filters and orientation. |
 | Nesting | Pivot only from a group's Table. Either can be shown transposed. Nothing deeper. |
 | Composition | A transposed view follows its source by construction. A Pivot is marked out of date, later rebuilt, when its Table's filters change. Comparisons are snapshots. |
@@ -101,20 +102,28 @@ renderer and the menus' context keys, each in the PR named under Delivery.
 
 ### Transposed orientation
 
-Subject to PR 0. Transposed draws a view's columns as rows and its rows as columns. It is per view, kept with the view's
+Transposed draws a view's columns as rows and its rows as columns. It is per view, kept with the view's
 other state, and available while rows stream (the drawn columns grow as rows arrive).
 
 - Nothing is stored. The grid reads the windows it reads today (the worker serves 4,096 rows by 262,144 cells per request;
   a rotated tile is far inside that) and draws them rotated, so the view shows its source's current sort and filters.
+  It reads tiles 32 rows by 128 columns, not 128 by 32, since a transposed view spans few source rows and many columns.
+- Source column names sit in a frozen first column, with each column's sort and filter controls in its name cell. There
+  are no column ordinals.
 - Selection, search matches, highlights and filters stay in source coordinates. A command that names a column (sort,
-  filter, Copy Column Name, Fit Column) resolves it from the source column a transposed row stands for; menu targets must
-  not read it from the drawn column index.
+  filter, Copy Column Name) resolves it from the source column a transposed row stands for; menu targets carry the source
+  row and column and never read them from the drawn index.
+- Widths: one shared width for the drawn columns, at most 240 px, plus at most 256 columns sized on their own, which a
+  re-sort clears. Fit Column fits the drawn column (a source row).
+- A highlighted source row tints its drawn column; row-size bars and highlight colours sit on the drawn columns' headers.
+- Past the cap: Find Next onto a match in a row the view does not draw says so and does not move. Select All still
+  selects everything; a copy then writes the rows drawn and says how many it left out.
 - **Using Column as Headers** is a display option: each drawn column's header is that source column's value for the row,
   written as a pivot names a column group today (`NULL`, `(blank)`, binary as hex, cut at 128 characters), repeats
   included, once its window has been read, and "Row N" until then. The header column is still drawn as a row.
 - **Cap:** the first 4,095 rows of the view are drawn as columns, with a strip that says so and suggests filtering.
-  The cap cannot simply be raised: the column layout holds every column at 32 px or more inside the 15,000,000 px scroll
-  range (about 468,000 columns), and resizing is linear in columns.
+  With the shared-width layout, resizing no longer grows with the column count; what still bounds the cap is the scroll
+  range (about 468,000 columns at 32 px), the 4,096-row window limit, and Copy and Save.
 - Copy and Save write the transposed text (see Protocol).
 - The command IDs `output.transpose`, `output.transposeSelectedRows` and `output.transposeWithHeaders` stay, so user
   shortcuts keep working: the first toggles the orientation; the second keeps the selected rows and turns it on; the third
@@ -277,7 +286,8 @@ Consumers to move off position (PR 2's scope):
   does not change.
 
 It lands as two PRs: 2a moves the service and its state maps to entry keys, keeping `data-result-index` as a derived
-attribute so nothing outside the services changes; 2b moves the DOM, menu targets, tests and script locators.
+attribute so nothing outside the services changes; 2b moves the DOM, menu targets (which then carry the source row as
+well as the column, as the orientation needs), tests and script locators.
 
 From PR 9:
 
@@ -374,43 +384,18 @@ No generic result-management RPC, and no rows in React.
 One `claude/grouped-results-<topic>` branch per PR off `main`, `npm run check` before each commit, the affected smoke
 suites, and generated pages regenerated in the same PR. Every PR leaves `main` shippable.
 
-**PR 0. Orientation spike (not merged; its findings are written into this document, and the owner decides on them).**
-Exit criteria, each answered in writing with a prototype behind it:
+**PR 0. Orientation spike: done.** Findings: [grouped-results-orientation-spike.md](grouped-results-orientation-spike.md)
+(on the spike branch `claude/angry-faraday-053377` until it merges; its prototype never lands as it is). Outcome, accepted
+by the owner:
 
-- Approach: rotation inside `GridView`, against a rotating `ResultHandle` adapter that re-indexes window text and flags
-  and hands `GridView` a synthesized descriptor. Choose one, with the reasons.
-- Gutter and header: what the frozen first column and the header row show, and where sort and filter controls sit.
-- Using Column as Headers: header text that arrives asynchronously, when the grid paints and measures headers
-  synchronously from its descriptor.
-- Streaming: the drawn column count grows at every page seal, while the column layout is built for a fixed count.
-- Re-sort and re-filter while transposed.
-- Widths: one shared width with bounded user overrides, or per column; what Fit Column means.
-- Marks: how a highlighted source row tints a drawn column (cell classes have no free bit); search in column-name mode;
-  row-size marks; white-space marks; the column-type row; link cells (Open Value); keyboard movement; the cap's strip.
-- Past the cap: what Find Next, Ctrl+End, Select All, an existing selection, the active cell and a highlight do when
-  their source row is at or beyond row 4,095.
-- Targets and ARIA: how a menu target and a screen reader get the source row and column.
-- Stack sizing for a transposed item.
-- Pass numbers. The fake backend gains a shape of 4,096 columns with long text (its widest today is 300). Measured with
-  4,095 columns drawn: frame p95 after a jump, frame p95 during horizontal and vertical wheel, and main-thread task time
-  per jump. Pass is at or under the **targets** of `grid.x1.jumpFrameP95Ms`, `grid.x1.horizontalFrameP95Ms` and
-  `grid.x1.jumpTaskP95Ms` in `tests/bench/floors.json` on the owner's machine, under their floors on the Linux CI runner
-  (the floors are lenient by design), and no task past `grid.longTaskMaxMs`.
-
-An approach passes only with an acceptable answer to every criterion, not the numbers alone.
-
-**Fallback, if no approach passes.** The stored transpose stays, as a slot:
-
-- PR 4 (Keep Selected Rows) still lands, and the stored transpose reads the filtered view; it no longer takes row ranges.
-- PRs 5 to 8 are dropped. After PR 10, one PR adds a Transpose slot kind: a Table and a Pivot may each have one, built
-  from that view; `results.transpose` takes `rows` and `pivot` sources only.
-- It is out of date when its source's resolved filters, sort keys or header column differ from those it recorded.
-- Closing or replacing a Pivot closes that Pivot's Transpose, and says so.
-- It refuses on a stopped budget (`BUDGET_STOPPED`, from PR 1), and keeps today's row and cell limits.
-- In PR 9 a stored transpose stays a flat item after the groups, until the Transpose slot PR places it.
-- Peek loses Transpose: its bare mode is one grid and cannot show a second view.
-- Still given up: nesting, several transposes of one view, and transposing a selection without filtering the source.
-  Regained: sorting, filtering, profiling and searching the transposed set, and a table beside its transpose in Stacked.
+- **Approach:** rotation inside `GridView`. The grid keeps working in drawn rows and columns and turns coordinates at four
+  seams: the selection it reads and writes, a cell's lookup, the tiles it asks for, and what it reports out (menu targets,
+  Open Value, sort and filter). The rotating-handle adapter met the numbers too but cannot freeze names, place controls,
+  draw links or highlights, show late header text or grow while rows stream. The stored-transpose fallback is not needed.
+- **Numbers** (owner's machine, 4,095 columns drawn over a 4,096-column long-text source): frame p95 1 ms after a jump and
+  0.5 ms during wheel either way; main-thread task per jump 47 ms against a 50 ms target; no long task.
+- **Still open, for PR 5a to settle:** the table grid's first paint read 44 and 59 ms on the spike build against 40 and
+  36 ms on `main`; two runs cannot call that noise. The Linux CI runner is unmeasured until a branch is pushed.
 
 1. **Budget fixes.** Checks in `DiffChecks.cs`, `PivotChecks.cs` and a store built with a memory probe: a refused or
    memory-pressed derived set leaves the budget open and Pivot usable; pressure at a derived set's last seal keeps it
@@ -424,12 +409,22 @@ An approach passes only with an acceptable answer to every criterion, not the nu
    this is the PR that first lets the last entry be closed. Checks: a source closed under pending work; late answers;
    save and copy leases; the retained-plan lease; re-execution; backend loss; the last entry closed.
 4. **Keep Selected Rows.** Filter, command, chip, limits.
-5. **Orientation in the grid**, by the spike's approach, driven by tests and the benchmark; not yet bound to commands.
+5. **Orientation in the grid**, as two PRs, from the spike's prototype (its adapter and its global test switch do not
+   land).
+   - **5a, no visible change:** a column-axis abstraction, tile shape as a parameter and a column read with every row
+     tile, the selection seam and offsets indirection in `GridView`, sort and size painting on any element, and grid
+     targets that `menus/targets.ts` reads. It must show `grid.firstPaintMs` unchanged against `main` over repeated runs.
+   - **5b, the orientation:** the turned selection, the shared-width layout, the `transposed` and header-column options
+     and per-view orientation in the grid state, set by a test hook only until PR 7. Also the name column's drag, fit and
+     saved width; names of an empty result; name-cell tooltips; theme keys for the column tint; a transposed locator in
+     `ui.mjs`; the benchmark's transposed metrics with entries in `tests/bench/floors.json`, which is where Linux CI
+     first measures them; `docs/architecture.md`'s grid bullet.
 6. **Transposed copy and save.**
-7. **Commands switch to the orientation.** The three transpose commands, the header option, the cap's strip, smoke steps.
+7. **Commands switch to the orientation.** The three transpose commands, the header option, the cap's strip, the Find Next
+   message past the cap, a context key for "this grid is transposed" so Transpose reads as a toggle, smoke steps.
 8. **Remove the stored transpose.**
-9. **Groups.** The group and slot model drawn in the stack (a Pivot under its Table), plan-set groups, and the bare mode
-   Peek uses. The renderer's rules land here so every list is representable: Pivot is offered only on Tables, the "Pivot
+9. **Groups.** The group and slot model drawn in the stack (a Pivot under its Table; a transposed item sized by its
+   drawn rows), plan-set groups, and the bare mode Peek uses. The renderer's rules land here so every list is representable: Pivot is offered only on Tables, the "Pivot
    source" picker goes, and building a group's Pivot again releases the old one first and then shows the new (not yet
    atomic). `results-smoke`'s pivot steps change here. Checks: no nested pivot from menu, palette, key or service.
 10. **Atomic Pivot replacement.** Stored recipe and per-group draft, provenance, replacement that keeps the old Pivot
