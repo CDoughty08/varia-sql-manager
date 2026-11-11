@@ -242,6 +242,9 @@ internal static class ActionProgressChecks
         var watch = Stopwatch.StartNew();
         var gaveUp = !stuckService.DrainLong();
         var waited = watch.ElapsedMilliseconds;
+        // Neither job can end before stuck.Release below (their requests answer sooner), so a drain that returned gave up on
+        // a job still running.
+        var stillRunning = stuckService.ActiveJobs == 2;
         // The same job finishing inside its wait: the drain returns once it ended.
         var held = new HeldHost { IgnoreStop = true };
         // A 30 s Stop wait, so a release a starved CI runner fires late still lands well inside it, and drainedMs's bound can be wide.
@@ -249,14 +252,19 @@ internal static class ActionProgressChecks
         var run = Outcome(service.ExecuteStepsAsync("A", Guid.NewGuid().ToString(), "delete", Nothing, null, CancellationToken.None));
         SpinWait.SpinUntil(() => held.Opened.Count == 1, 15_000);
         service.CancelAll();
-        _ = Task.Delay(300).ContinueWith(_ => held.Release.TrySetResult(), TaskScheduler.Default);
+        // The watch starts before the release is scheduled, so a stall between the two cannot make the drain look too quick.
         watch.Restart();
+        _ = Task.Delay(300).ContinueWith(_ => held.Release.TrySetResult(), TaskScheduler.Default);
         var drained = service.DrainLong();
         var drainedMs = watch.ElapsedMilliseconds;
         var jobEnded = run.IsCompleted || await Task.WhenAny(run, Task.Delay(15_000)) == run;
         stuck.Release.TrySetResult();
         await Task.WhenAll(stuckRun, shortRun, run);
-        check(gaveUp && waited is >= 250 and < 5_000 && drained && drainedMs is >= 250 and < 15_000 && jobEnded,
-            $"after CancelAll a shutdown waits for each long job (not the others) up to its Stop wait plus cleanup budget, and returns once they ended: gave up after {waited} ms, drained in {drainedMs} ms");
+        // The stuck drain's wait is 300 ms. Its upper bound only has to tell that from the waits it must not use (the default
+        // Stop grace or cleanup budget, 10 s each), and five copies on three CPUs returned from it 5.3 s late; a wait with no
+        // bound never returns at all. The released job's drain returns true only once the job ended, which the release allows.
+        check(gaveUp && stillRunning && waited is >= 250 and < 9_000 && drained && drainedMs is >= 250 and < 30_000 && jobEnded,
+            $"after CancelAll a shutdown waits for each long job (not the others) up to its Stop wait plus cleanup budget, and returns once they ended: gave up after {waited} ms"
+            + $" (jobs still running then: {stillRunning}), drained in {drainedMs} ms (job ended: {jobEnded})");
     }
 }

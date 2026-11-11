@@ -121,17 +121,23 @@ internal static class SsisCreateChecks
             var watch = Stopwatch.StartNew();
             try
             {
-                var result = await service.AfterStopAsync(job, progress, new CancellationToken(true));
+                var result = await service.AfterStopAsync(job, progress, new CancellationToken(true)).WaitAsync(TimeSpan.FromSeconds(30));
                 return (result.Error?.Code ?? "answer", watch.ElapsedMilliseconds);
             }
             catch (RequestException error) { return ("request " + error.Code, watch.ElapsedMilliseconds); }
             catch (OperationCanceledException) { return ("cancelled", watch.ElapsedMilliseconds); }
+            catch (TimeoutException) { return ("no reply", watch.ElapsedMilliseconds); }
         }
         async Task<SsisExecuteResult> After(int ms) { await Task.Delay(ms); return answer; }
         reads.Options.CreateDrain = TimeSpan.FromMilliseconds(2_000);
+        // The outcomes say which wait answered, so no reply needs an upper bound on its time: only the job's answer inside the
+        // grace is "answer" for a job that is not committed, and "cancelled" for one that has not ended (it ends only after
+        // the check) is a reply that did not wait for it. On five copies sharing three CPUs the 1 s grace answered at 4.1 s.
         var quick = await Run(After(20), false);
         var late = await Run(After(2_000), true);
-        var abandoned = await Run(After(2_000), false);
+        var unended = new TaskCompletionSource<SsisExecuteResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var abandoned = await Run(unended.Task, false);
+        unended.TrySetResult(answer);
         var early = await Run(Task.FromException<SsisExecuteResult>(new OperationCanceledException()), false);
         // A committed job that never ends (a restore waiting on a lock): Stop, and a disconnect, which answers the same way, still answer.
         var stuckJob = new TaskCompletionSource<SsisExecuteResult>().Task;
@@ -142,7 +148,7 @@ internal static class SsisCreateChecks
         try { stuckAnswer = await service.AfterStopAsync(stuckJob, progressOf, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30)); }
         catch (TimeoutException) { /* An unbounded wait: the check below fails. */ }
         var stuckMs = stuckWatch.ElapsedMilliseconds;
-        check(quick is ("answer", < 1_000) && late is ("answer", >= 1_900) && abandoned is ("cancelled", >= 950 and < 1_900) && early.Outcome == "CANCELLED"
+        check(quick.Outcome == "answer" && late is ("answer", >= 1_900) && abandoned is ("cancelled", >= 950) && early.Outcome == "CANCELLED"
             && stuckAnswer is { Steps: [], Error.Code: "CANCELLED" } && stuckAnswer.Error.Message.Contains("goes on on the server", StringComparison.Ordinal) && stuckMs is >= 2_900 and < 15_000,
             "Stop's reply is the job's answer within the grace; past it, a job that answers Stop itself is waited for up to CreateDrain more, then answers CANCELLED as not known yet, "
             + "and any other job answers CANCELLED; a job that ended on the Stop before a step is a CANCELLED value: " + string.Join(", ", quick, late, abandoned, early) + ", stuck " + stuckMs + " ms");
@@ -152,9 +158,10 @@ internal static class SsisCreateChecks
         var jobs = new SsisActionService.CommittedJobs();
         var never = new TaskCompletionSource().Task;
         jobs.Track(never, Progress(false));
+        // Started before the job's delay, so a stall between the two cannot make the drain look quicker than the job.
+        var watch = Stopwatch.StartNew();
         var finishing = Task.Delay(300);
         jobs.Track(finishing, Progress(true));
-        var watch = Stopwatch.StartNew();
         var drained = jobs.Wait(TimeSpan.FromSeconds(10));
         var drainedMs = watch.ElapsedMilliseconds;
         var stuck = new SsisActionService.CommittedJobs();
