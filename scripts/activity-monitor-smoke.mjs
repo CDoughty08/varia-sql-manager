@@ -1,7 +1,7 @@
 // The Activity Monitor document in the real app on the fake backend's activity source (tests/fixtures/backend.mjs,
 // workbench mode): with no server connected it opens the Connect dialog and then the monitor; it opens from Object
 // Explorer's server menu, the View menu, the palette and the toolbar, one tab per connection;
-// its tiles fill after two samples and two charts are open (all eight may be); Processes shows the sessions probe's rows and its filters reach the backend; and a failed sample keeps them and says why; Pause stops sampling and Resume starts it again; the
+// its tiles fill after two samples and two charts are open (all eight may be); Processes shows the sessions probe's rows and its filters reach the backend; Blocking and Active Expensive Queries show its other tables; and a failed sample keeps them and says why; Pause stops sampling and Resume starts it again; the
 // interval and the chart window reach the live layer; a tab switch pauses it while hidden and keeps its choices; the
 // panes, Split View and F6 work; the header, tiles and panes fit common window sizes; a login without server state gets
 // the permission message and its GRANT statement; a lost backend reports it and
@@ -313,6 +313,32 @@ try {
   await filters.getByRole('button', { name: 'Clear filters', exact: true }).click()
   await expect(monitor().getByText(/^3 sessions/)).toBeVisible()
   console.log('Processes passed: rows from the sessions probe, the view chip, toggles, filter box and column filters reach the backend, and Clear filters resets them.')
+
+  step = 'blocking and active'
+  // Blocking and Active Expensive Queries read the sessions probe's other tables: no new probe, no extra SQL.
+  const firstTabs = monitor().getByRole('tablist', { name: 'First pane', exact: true })
+  const updatesBefore = (await calls('live.update')).length
+  await firstTabs.getByRole('tab', { name: /^Blocking/ }).click()
+  const chains = monitor().getByRole('grid', { name: /^Blocking/ })
+  await expect(chains).toBeVisible()
+  await expect(monitor().getByText('No blocking: no session waits on another.', { exact: true })).toBeVisible()
+  await expect(monitor().getByText(/^No blocking right now\./)).toBeVisible()
+  // A chain appears with the next sample, lead blocker first, and goes when the blocking ends.
+  await writeFile(join(control, 'activity-blocked'), '')
+  await expect(monitor().getByText('2 sessions in blocking chains', { exact: true })).toBeVisible()
+  await expect(monitor().getByText(/^No blocking right now\./)).toHaveCount(0)
+  await expect(chains.getByRole('gridcell', { name: 'svc_reporting', exact: true })).toBeVisible()
+  await expect(chains.getByRole('gridcell', { name: 'LCK_M_S', exact: true })).toBeVisible()
+  await rm(join(control, 'activity-blocked'))
+  await expect(monitor().getByText('No blocking: no session waits on another.', { exact: true })).toBeVisible()
+  await firstTabs.getByRole('tab', { name: 'Active Expensive Queries', exact: true }).click()
+  const active = monitor().getByRole('grid', { name: /^Active Expensive Queries/ })
+  await expect(active).toBeVisible()
+  await expect(monitor().getByText('2 running requests', { exact: true })).toBeVisible()
+  await expect(active.getByRole('gridcell', { name: 'BillingDb', exact: true })).toBeVisible()
+  expect((await calls('live.update')).slice(updatesBefore).flatMap(call => call.params.probes ?? []).filter(probe => probe.paused === false)).toEqual([])
+  await firstTabs.getByRole('tab', { name: 'Processes', exact: true }).click()
+  console.log('Blocking and active passed: the chain shows with its lead blocker and goes when blocking ends, running requests list, and neither starts a probe.')
 
   step = 'panes'
   const first = monitor().getByRole('tablist', { name: 'First pane', exact: true })

@@ -27,6 +27,7 @@ import { freshness, pillStatus } from '../live/status'
 import { splitLimits, type MonitorState, type PaneSlot } from './ActivityMonitorService'
 import { tileName } from '../kit/Tile'
 import ProcessesPane from './panes/ProcessesPane'
+import SessionTablePane from './panes/SessionTablePanes'
 import { chartScaleOf, gridRows, latestValue, monitorFacts, monitorNotice, nextAnnouncement, overviewProbe, seriesIndex, tileReadings, type Announcement, type TileReading } from './tiles'
 
 const noHandle = { subscribe: () => () => {}, getSnapshot: () => undefined }
@@ -285,6 +286,7 @@ function Pane({ state, slot, blocked, handle, snapshot }: { readonly state: Moni
     </div>
     <div className="activity-pane-body" role="tabpanel" id={`${base}-panel`} aria-labelledby={`${base}-${current}`}>
       {current === 'processes' && <ProcessesPane state={state} handle={handle} snapshot={snapshot} facts={facts} labelledBy={`${base}-${current}`} />}
+      {(current === 'blocking' || current === 'activeQueries') && <SessionTablePane key={current} table={current} state={state} handle={handle} snapshot={snapshot} labelledBy={`${base}-${current}`} />}
       {pendingPanes.includes(current) && <EmptyState icon="pulse" title={paneSpecs[current].title} detail={pendingPaneNote(current)} />}
     </div>
   </section>

@@ -58,11 +58,11 @@ probe stays paused: no SQL runs for a pane nobody can read.
 | Pane | Now |
 | --- | --- |
 | Processes | A live grid of sessions with view chips, toggles, column filters and a filter box (below). |
-| Blocking | Blocking is not shown yet; it arrives in a later version of Varia. |
+| Blocking | Shown. |
 | Resource Waits | Resource Waits is not shown yet; it arrives in a later version of Varia. |
 | Data File I/O | Data File I/O is not shown yet; it arrives in a later version of Varia. |
 | Recent Expensive Queries | Recent Expensive Queries is not shown yet; it arrives in a later version of Varia. |
-| Active Expensive Queries | Active Expensive Queries is not shown yet; it arrives in a later version of Varia. |
+| Active Expensive Queries | Shown. |
 
 Processes shows the sessions probe's rows in a live grid (one row per session, toned blocked, blocking, rolling back,
 system or departed). Its toolbar holds the view chips, the System sessions and Varia's own toggles, Column filters (a

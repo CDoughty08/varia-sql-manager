@@ -5,6 +5,8 @@ import { defaultProcessesFilter, monitorArgs, processesActivityFilter, type Proc
 import { activeFilters, processesStatus, processesToneLabel, valueChoices } from '../src/renderer/src/activity/panes/ProcessesPane'
 import { paneProblem, paneWaiting } from '../src/renderer/src/activity/panes/PaneState'
 import type { LiveProbeSnapshot, LiveSnapshot } from '../src/renderer/src/live/LiveService'
+import { activeStatus, activeToneLabel, blockingStatus, blockingToneLabel, sessionTableIndex } from '../src/renderer/src/activity/panes/SessionTablePanes'
+import { liveProbes } from '../src/shared/live/catalog'
 
 const probe = (patch: Partial<LiveProbeSnapshot>): LiveProbeSnapshot => ({ state: 'fresh', intervalMs: 2000, effectiveIntervalMs: 2000, ...patch })
 const view = (patch: Partial<LiveSnapshot>, sessions?: Partial<LiveProbeSnapshot>): LiveSnapshot => ({ status: 'live', connectionId: 'c1', probes: sessions ? { 'activity.sessions': probe(sessions) } : {}, ...patch })
@@ -63,5 +65,24 @@ describe('Processes pane', () => {
     expect(paneWaiting(view({ status: 'paused', pausedBy: 'user' }), 'activity.sessions')).toBe('paused')
     expect(paneWaiting(view({ status: 'ended' }, { state: 'fresh' }), 'activity.sessions')).toBe('stopped')
     expect(paneWaiting(view({ status: 'lost' }), 'activity.sessions')).toBe('stopped')
+  })
+})
+
+describe('Blocking and Active Expensive Queries panes', () => {
+  it('read the sessions probe\'s second and third tables, in the catalogue\'s order', () => {
+    expect(liveProbes['activity.sessions']?.tables?.map(table => table.id)).toEqual(['sessions', 'blocking', 'activeQueries'])
+    expect([sessionTableIndex('blocking'), sessionTableIndex('activeQueries')]).toEqual([1, 2])
+  })
+  it('name their tones and say what the table holds, is cut to, or that it is empty', () => {
+    expect(['error', 'warning', 'muted', 'running'].map(tone => blockingToneLabel(tone as never))).toEqual(['blocked', 'lead blocker', 'no longer blocked', undefined])
+    expect(['error', 'running', 'muted', 'warning'].map(tone => activeToneLabel(tone as never))).toEqual(['blocked', 'rolling back', 'finished', undefined])
+    expect(blockingStatus(0, false)).toBe('No blocking: no session waits on another.')
+    expect(blockingStatus(2, false)).toBe('2 sessions in blocking chains')
+    expect(blockingStatus(1, true)).toBe(`1 session in blocking chains · at most ${tableSpecs.blocking.rowCap.toLocaleString('en-US')} kept`)
+    expect(blockingStatus(undefined, false, 'paused')).toMatch(/^Paused/)
+    expect(activeStatus(0, false)).toBe('No requests running.')
+    expect(activeStatus(1, false)).toBe('1 running request')
+    expect(activeStatus(100, true)).toBe(`100 running requests · the ${tableSpecs.activeQueries.rowCap} using the most CPU`)
+    expect(activeStatus(undefined, false)).toBe('Waiting for the first sample…')
   })
 })
