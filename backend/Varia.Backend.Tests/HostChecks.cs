@@ -93,21 +93,33 @@ internal static class HostChecks
             check(secret?.Header.Id == 61 && Body(secret.Value).GetProperty("result").GetProperty("value").GetString() == "s3cret" && host.Dispatcher.AskedSensitive.Contains("test.secret"),
                 "the host asks the dispatcher whether a request is sensitive before it parses the frame, and still answers it");
 
-            // The answer comes at the deadline, before the handler's own end. A starved CI runner fires the 100 ms timer late, so
-            // the bound leaves 900 ms; CancelAfter never fires early, so a deadline rounded to whole seconds still fails it.
-            // test.late takes no lane: a metadata request whose deadline passes before its task reaches the slot wait (the
+            // The answer comes at the deadline while the handler is still running: test.park ends only when Release lets it, so
+            // an answer that waited for the handler would never come. CancelAfter never fires early, so a deadline rounded to
+            // whole seconds answers at 1000 ms or later every time, while a starved CI runner fires the 100 ms timer that late
+            // only now and then (2,973 ms under the stress harness): a late answer is asked for again, twice at most.
+            // test.park takes no lane: a metadata request whose deadline passes before its task reaches the slot wait (the
             // thread pool late on a starved runner) is rightly never dispatched, and would leave no late result to discard.
-            var watch = Stopwatch.StartNew();
-            host.Request(3, "test.late", new { ms = 2500 }, deadline: 100);
-            var timedOut = host.Next(FrameKind.Response);
-            var elapsed = watch.ElapsedMilliseconds;
-            check(timedOut?.Header.Id == 3 && ErrorCode(timedOut.Value) == "TIMEOUT" && elapsed is >= 90 and < 1000 && host.Dispatcher.Completed == 0,
-                "a deadline answers TIMEOUT at 100 ms, before the handler ends, while the handler keeps running (" + elapsed + " ms)");
-            check(Body(timedOut!.Value).GetProperty("error").GetProperty("message").GetString() == "The operation exceeded its time limit of 1 seconds.", "TIMEOUT names the deadline");
-            SpinWait.SpinUntil(() => host.Dispatcher.Completed == 1, 15000);
+            var watch = new Stopwatch();
+            var deadlines = new List<(uint Id, uint? Answered, string? Code, long Ms)>();
+            Frame? timedOut = null;
+            foreach (var id in new uint[] { 3, 70, 71 })
+            {
+                watch.Restart();
+                host.Request(id, "test.park", new { }, deadline: 100);
+                timedOut = host.Next(FrameKind.Response);
+                deadlines.Add((id, timedOut?.Header.Id, timedOut is { } answered ? ErrorCode(answered) : null, watch.ElapsedMilliseconds));
+                if (deadlines[^1].Ms < 1000) break;
+            }
+            var parked = SpinWait.SpinUntil(() => Volatile.Read(ref host.Dispatcher.Parked) == deadlines.Count, 15000);
+            check(deadlines.All(answer => answer.Answered == answer.Id && answer.Code == "TIMEOUT" && answer.Ms >= 90) && deadlines[^1].Ms < 1000 && parked && host.Dispatcher.Completed == 0,
+                "a deadline answers TIMEOUT at 100 ms, before the handler ends, while the handler keeps running (handlers running " + host.Dispatcher.Parked + ", ended " + host.Dispatcher.Completed
+                + "; " + string.Join(", ", deadlines.Select(answer => answer.Id + " " + (answer.Code ?? "no answer") + " " + answer.Ms + " ms")) + ")");
+            check(timedOut is { } named && Body(named).GetProperty("error").GetProperty("message").GetString() == "The operation exceeded its time limit of 1 seconds.", "TIMEOUT names the deadline");
+            host.Dispatcher.Release.TrySetResult();
+            SpinWait.SpinUntil(() => host.Dispatcher.Completed == deadlines.Count, 15000);
             var stray = host.Next(FrameKind.Response, 300);
-            check(host.Dispatcher.Completed == 1 && stray is null, "the late result of a timed-out request is discarded: exactly one RESPONSE per id (completed "
-                + host.Dispatcher.Completed + (stray is { } late ? ", a RESPONSE for " + late.Header.Id + " " + (ErrorCode(late) ?? "ok") : "") + ")");
+            check(host.Dispatcher.Completed == deadlines.Count && stray is null, "the late result of a timed-out request is discarded: exactly one RESPONSE per id (completed "
+                + host.Dispatcher.Completed + " of " + deadlines.Count + (stray is { } late ? ", a RESPONSE for " + late.Header.Id + " " + (ErrorCode(late) ?? "ok") : "") + ")");
 
             host.Send(FrameKind.Request, 4, 0, new byte[ProtocolLimits.RequestBody + 1]);
             host.Request(5, "test.echo", new { b = true });
@@ -207,14 +219,20 @@ internal static class HostChecks
                 && thirdEvent?.Body.Length > 1024 * 1024 && eventsDone?.Header.Id == 8 && host.ArrivalOf(eventsDone.Value) > host.ArrivalOf(thirdEvent.Value) && host.Next(FrameKind.Event, 200) is null,
                 "a request's EVENT frames precede its RESPONSE; a droppable event over 256 KiB and an essential one over 4 MiB are dropped, a 1 MiB descriptor event is not");
 
-            // A PONG queued behind the slots would come when they free at 3 s; the 2 s bound leaves a starved CI runner
-            // seconds to answer. Shutdown waits for these handlers at most DrainTimeout (1.5 s), as it did at 1.5 s each.
-            for (var id = 10u; id < 18; id++) host.Request(id, "test.slow", new { ms = 3000 });
-            Thread.Sleep(100);
+            // The slots stay taken until the block ends (test.hold), so a PONG queued behind them would never come: no bound on
+            // its time is needed, and a 2 s one failed at 2,282 ms under the stress harness. Shutdown below waits for these
+            // handlers at most DrainTimeout (1.5 s).
+            var slotsHeld = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            host.Dispatcher.Release = slotsHeld;
+            var parkedBefore = Volatile.Read(ref host.Dispatcher.Parked);
+            var completedBefore = host.Dispatcher.Completed;
+            for (var id = 10u; id < 18; id++) host.Request(id, "test.hold", new { });
+            var slotsTaken = SpinWait.SpinUntil(() => Volatile.Read(ref host.Dispatcher.Parked) == parkedBefore + 8, 15000);
             watch.Restart();
             host.Send(FrameKind.Ping, 0, 4242, []);
             var pong = host.Next(FrameKind.Pong);
-            check(pong?.Header.Arg == 4242 && watch.ElapsedMilliseconds < 2000, "PING is answered by the reader thread while every metadata slot is busy (" + watch.ElapsedMilliseconds + " ms)");
+            check(slotsTaken && pong?.Header.Arg == 4242 && host.Dispatcher.Completed == completedBefore,
+                "PING is answered by the reader thread while every metadata slot is busy (slots taken " + slotsTaken + ", " + watch.ElapsedMilliseconds + " ms)");
 
             host.Request(20, "test.wait", new { });
             Thread.Sleep(100);
@@ -231,22 +249,44 @@ internal static class HostChecks
                 && host.Dispatcher.DrainCalls == 1 && !host.Dispatcher.DisposedBeforeDrain && closing.ElapsedMilliseconds >= 400,
                 "stdin EOF cancels everything, waits for the work that must not end half done (a Create Catalog past its restore), then disposes the service and exits 0 ("
                 + closing.ElapsedMilliseconds + " ms)");
+            slotsHeld.TrySetResult();
         }
 
-        // Requests 1 and 2 race for the one slot on their own tasks, so either may lose. The slot wait (1 s) must outlast the
-        // reader reaching request 3, and the winner's 5 s must outlast the loser's wait even when a starved CI runner (macOS's
-        // 3 vCPUs) starts the loser's task seconds late. It costs nothing: the harness's close waits for the winner only the
-        // host's DrainTimeout (1.5 s).
+        // Nothing here races a timer: request 1 holds the one metadata slot until Release, and request 2 stays in flight until
+        // its CANCEL, so request 3 finds the cap reached whenever the reader gets to it. Once request 2 is gone (InFlight says
+        // so), request 4 waits the whole slot wait behind request 1. Two slow requests racing for the slot, with the third
+        // sent behind them, answered in another order on a starved CI runner (macOS's 3 vCPUs).
         using (var host = new HostHarness(new HostOptions { MaxInFlight = 2, MetadataSlots = 1, MetadataWait = TimeSpan.FromMilliseconds(1000) }))
         {
             host.Hello();
-            host.Request(1, "test.slow", new { ms = 5000 });
-            host.Request(2, "test.slow", new { ms = 5000 });
+            var seen = new List<string>();
+            var clock = Stopwatch.StartNew();
+            Frame? Answer()
+            {
+                var frame = host.Next(FrameKind.Response);
+                seen.Add(frame is { } answer ? answer.Header.Id + " " + (ErrorCode(answer) ?? "ok") + " at " + clock.ElapsedMilliseconds + " ms" : "no answer at " + clock.ElapsedMilliseconds + " ms");
+                return frame;
+            }
+            host.Request(1, "test.hold", new { });
+            var holding = SpinWait.SpinUntil(() => Volatile.Read(ref host.Dispatcher.Parked) == 1, 15000);
+            host.Request(2, "test.wait", new { });
+            var full = SpinWait.SpinUntil(() => host.Host.InFlight == 2, 15000);
             host.Request(3, "test.echo", new { });
-            var busy = host.Next(FrameKind.Response);
-            var waited = host.Next(FrameKind.Response);
-            check(busy?.Header.Id == 3 && ErrorCode(busy.Value) == "BUSY" && waited?.Header.Id is 1 or 2 && ErrorCode(waited.Value) == "BUSY",
-                "past the in-flight cap a request is answered BUSY, and a metadata request answers BUSY once its slot wait expires");
+            var busy = Answer();
+            host.Send(FrameKind.Cancel, 2, 3, []);
+            var cancelled = Answer();
+            var freed = SpinWait.SpinUntil(() => host.Host.InFlight == 1, 15000);
+            var slotWait = Stopwatch.StartNew();
+            host.Request(4, "test.hold", new { });
+            var waited = Answer();
+            var waitedMs = slotWait.ElapsedMilliseconds;
+            var stillHeld = host.Dispatcher.Completed == 0 && Volatile.Read(ref host.Dispatcher.Parked) == 1;
+            host.Dispatcher.Release.TrySetResult();
+            var done = Answer();
+            check(holding && full && busy?.Header.Id == 3 && ErrorCode(busy.Value) == "BUSY" && cancelled?.Header.Id == 2 && ErrorCode(cancelled.Value) == "CANCELLED" && freed
+                && waited?.Header.Id == 4 && ErrorCode(waited.Value) == "BUSY" && waitedMs >= 900 && stillHeld && done?.Header.Id == 1 && ErrorCode(done.Value) is null,
+                "past the in-flight cap a request is answered BUSY, and a metadata request answers BUSY once its slot wait expires (slot held " + holding + ", cap reached " + full
+                + ", cancelled request gone " + freed + ", slot wait " + waitedMs + " ms, slot still held then " + stillHeld + "; answers: " + string.Join(", ", seen) + ")");
         }
 
         using (var host = new HostHarness())
@@ -479,18 +519,22 @@ internal static class HostChecks
     }
 }
 
-/// <summary>Methods that exercise the host: an echo, a slow handler that ignores its token (test.slow on the metadata
-/// lane, test.late on none, so it always runs), one that waits for its token, and a stream of DATA pages.</summary>
+/// <summary>Methods that exercise the host: an echo, a slow handler that ignores its token (test.slow, on the metadata
+/// lane), handlers that ignore it until a check releases them (test.hold on the metadata lane, test.park on none, so it
+/// always runs), one that waits for its token, and a stream of DATA pages.</summary>
 internal sealed class StubDispatcher : IRequestDispatcher
 {
     public int Completed;
     public int CancelAllCalls;
     public int Unsent;
     public int LateStarted;
+    /// <summary>How many test.hold and test.park handlers have started; each ends once the Release it started under is set.</summary>
+    public int Parked;
+    public TaskCompletionSource Release { get; set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public bool Disposed;
     public bool Created;
-    public IReadOnlyList<string> Methods { get; } = ["test.echo", "test.slow", "test.late", "test.wait", "test.stream", "test.events", "test.unsent", "test.unsentLate", "test.failure", "test.certificate", "test.crash", "test.settle", "test.settleSsis", "test.secret"];
-    public RequestLane LaneOf(string method) => method switch { "test.slow" => RequestLane.Metadata, "test.stream" => RequestLane.Results, "test.settle" => RequestLane.Actions, "test.settleSsis" => RequestLane.Ssis, _ => RequestLane.Control };
+    public IReadOnlyList<string> Methods { get; } = ["test.echo", "test.slow", "test.hold", "test.park","test.wait", "test.stream", "test.events", "test.unsent", "test.unsentLate", "test.failure", "test.certificate", "test.crash", "test.settle", "test.settleSsis", "test.secret"];
+    public RequestLane LaneOf(string method) => method switch { "test.slow" or "test.hold" => RequestLane.Metadata, "test.stream" => RequestLane.Results, "test.settle" => RequestLane.Actions, "test.settleSsis" => RequestLane.Ssis, _ => RequestLane.Control };
     public bool AnswersStop(string method) => method is "test.settle" or "test.settleSsis";
     public readonly ConcurrentQueue<string> AskedSensitive = new();
     public bool Sensitive(string method)
@@ -505,8 +549,13 @@ internal sealed class StubDispatcher : IRequestDispatcher
         switch (method)
         {
             case "test.echo" or "test.secret": return parameters;
-            case "test.slow" or "test.late":
+            case "test.slow":
                 await Task.Delay(parameters.GetProperty("ms").GetInt32());
+                Interlocked.Increment(ref Completed);
+                return new { Done = true };
+            case "test.hold" or "test.park":
+                Interlocked.Increment(ref Parked);
+                await Release.Task;
                 Interlocked.Increment(ref Completed);
                 return new { Done = true };
             case "test.wait":

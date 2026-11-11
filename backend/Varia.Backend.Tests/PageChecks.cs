@@ -182,17 +182,22 @@ internal static class PageChecks
             for (var i = 0; i < 10_000; i++) sum += builder.WorkingBytes;
             return sum;
         }
-        // The runtime may allocate on this thread the first time the loop runs (tiering it up, or on-stack replacement
-        // while other suites keep the CPUs busy), so it is measured again after a first run; a real allocation per read
-        // shows in every run.
+        // The runtime allocates on this thread when it tiers the loop up or replaces it on the stack, whenever that lands
+        // while other suites keep the CPUs busy (2,264 and 4,904 bytes on CI). So the loop is warmed past the tier-up call
+        // count first, the lowest of several runs counts, and the bound is a byte a read: the smallest object is 24 bytes,
+        // so a real allocation per read is 240,000 bytes or more in every run.
         long sum = 0, allocated = long.MaxValue;
-        for (var attempt = 0; attempt < 3 && allocated != 0; attempt++)
+        for (var warm = 0; warm < 40; warm++) sum = Sum(builder);
+        var runs = new List<long>();
+        for (var attempt = 0; attempt < 5 && allocated != 0; attempt++)
         {
             var before = GC.GetAllocatedBytesForCurrentThread();
             sum = Sum(builder);
-            allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            runs.Add(GC.GetAllocatedBytesForCurrentThread() - before);
+            allocated = Math.Min(allocated, runs[^1]);
         }
-        check(allocated == 0 && sum == 10_000 * grown && grown > start, "a page builder's working bytes are summed per row without allocating (" + allocated + " bytes for 10,000 reads)");
+        check(allocated < 10_000 && sum == 10_000 * grown && grown > start,
+            "a page builder's working bytes are summed per row without allocating (" + string.Join(", ", runs) + " bytes for 10,000 reads, run by run)");
     }
 
     private static void Builder(Action<bool, string> check)
