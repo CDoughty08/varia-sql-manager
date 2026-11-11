@@ -199,6 +199,7 @@ const api: VariaApi = {
   downloadUpdate: () => ipcRenderer.invoke('varia:updates-download'),
   restartToUpdate: () => ipcRenderer.invoke('varia:updates-restart'),
   openReleasesPage: () => ipcRenderer.invoke('varia:updates-releases-page'),
+  openProductLink: target => ipcRenderer.invoke('varia:product-link', target),
   onUpdateState: callback => {
     const listener = (_event: Electron.IpcRendererEvent, state: UpdateState) => callback(state)
     ipcRenderer.on('varia:updates-changed', listener)

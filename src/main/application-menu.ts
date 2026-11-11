@@ -117,5 +117,11 @@ export function applicationMenuTemplate(model: ApplicationMenuModel, actions: Ap
   const menus = applicationMenus.map((menu): MenuItemConstructorOptions => ({
     id: 'menu.' + menu.id, label: menu.label, ...(platform === 'darwin' && menu.id === 'window' ? { role: 'window' as const } : {}), submenu: menuItems(menu.id, model, actions, platform)
   }))
-  return platform === 'darwin' ? [{ role: 'appMenu' }, ...menus] : menus
+  if (platform !== 'darwin') return menus
+  // Keep the standard system actions, but send the app menu's About item to Varia's own dialog too.
+  const about = menuItems('help', model, actions, platform).find(item => item.id === 'help.about')!
+  return [{ role: 'appMenu', submenu: [
+    { ...about, id: 'help.about@app' }, { type: 'separator' }, { role: 'services' }, { type: 'separator' },
+    { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }
+  ] }, ...menus]
 }

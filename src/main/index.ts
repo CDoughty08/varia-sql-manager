@@ -79,6 +79,7 @@ import { Updater } from './updater'
 import { applyUpdate, installTargetFor, relaunchEnv, removeReplacedPortable, testUpdateTarget, type InstallTarget } from './update-install'
 import { applyStaged, helperStaging } from './update-staging'
 import { assetUrl, releasesPageUrl, updateErrors, updateFeedUrl, updateManifestName, type InstallKind } from '../shared/updates'
+import { productLinkUrl } from '../shared/product'
 
 // First, before Chromium reads its command line for the DevTools handler: a packaged build never opens a debugging port,
 // except for its own smoke tests on a throwaway profile, where it decrypts no saved password (sandbox-guard.ts).
@@ -859,6 +860,7 @@ app.whenReady().then(async () => {
     return true
   })
   handle('varia:updates-releases-page', () => shell.openExternal(releasesPageUrl))
+  handle('varia:product-link', value => shell.openExternal(productLinkUrl(value)))
   // Invalid payloads are dropped: the menu keeps its last valid state, and every command re-checks enablement when it runs.
   ipcMain.on('varia:menu-state', (event, state: unknown) => { if (trusted(event)) menuBridge.applyState(state) })
   handle('varia:connections-load', async () => ({ ...await library.load(), windowsIdentity: process.platform === 'win32' ? [process.env.USERDOMAIN, userInfo().username].filter(Boolean).join('\\') : userInfo().username }))
@@ -1104,7 +1106,7 @@ app.whenReady().then(async () => {
   handle('varia:files-reveal', value => { shell.showItemInFolder(files.get(z.uuid().parse(value)).path) })
   // Write only (the page's one path to clipboard contents is the Paste role, gated above); the length is bounded like
   // a full results grid copy.
-  handle('varia:clipboard-write', value => { clipboard.writeText(z.string().max(maxClipboardText).parse(value)) })
+  handle('varia:clipboard-write', value => clipboard.writeText(z.string().max(maxClipboardText).parse(value)))
   // Raises one of the page's own popouts, named as it opened it, without activating it.
   handle('varia:popout-raise', value => {
     const name = z.string().regex(popoutWindowName).parse(value), main = mainWindow

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **About Varia:** find the running version, platform and update status from Help or the command palette (also the app menu on macOS). Copy version details for support and open the project, issue form or release notes without needing a server connection.
+
 ## [0.8.0] - 2026-11-10
 
 A feature release focused on SQL IntelliSense, result transformations and everyday query workflows.

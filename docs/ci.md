@@ -40,6 +40,10 @@ with `node scripts/ci-timings.mjs` (add `--steps` for per-step times) before and
   are 20 seconds on Linux and 25 on Windows; the local Windows run took 7.5 seconds. The SQL language live suite additionally
   validates real syntax/binding issues, qualified joined completions and diagnostic cache refresh against marked fixtures.
 
+  About coverage shares `updates-smoke.mjs`: Help/palette opening, keyboard focus, clipboard success/failure, fixed
+  browser destinations, update states and restart through About. It adds no suite or job. The expanded suite took
+  5.1 seconds locally on Windows; its existing Linux/Windows shard weights remain 6 seconds pending CI measurements.
+
   Smoke builds and packaging prepare Electron from its npm-pinned checksums, retrying transient official-download failures
   within a three-attempt, three-minute budget and seeding the shared archive cache so packaging verifies checksums offline.
   Publishing a verified SQL Tools archive or runtime retries brief Windows sharing violations up to seven times. Persistent
