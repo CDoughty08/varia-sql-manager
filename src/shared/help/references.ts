@@ -6,10 +6,11 @@ import { evaluateWhen } from '../commands/when'
 import { commandTitle, settingDef, type SettingKey, type SettingsValues } from '../settings/catalog'
 import type { LessonContext } from './catalog'
 
+const connectedQuery = { hasActiveDocument: true, activeDocumentIsText: true, activeDocumentIsQuery: true, hasConnection: true, activeDocumentConnected: true, backendReady: true }
 export const lessonContexts: Record<LessonContext, { readonly title: string; readonly values: Partial<ContextKeys> }> = {
   workbench: { title: 'In the workbench', values: {} },
-  queryEditor: { title: 'In the SQL query editor', values: { activePanel: 'editor', editorFocus: true, editorTextFocus: true, textInputFocus: true, activeDocumentIsQuery: true, activeDocumentConnected: true, backendReady: true } },
-  resultsGrid: { title: 'In the results grid', values: { activePanel: 'output', outputGridFocus: true, activeDocumentIsQuery: true, activeDocumentConnected: true, hasResults: true } }
+  queryEditor: { title: 'In the SQL query editor', values: { ...connectedQuery, activePanel: 'editor', editorFocus: true, editorTextFocus: true, textInputFocus: true } },
+  resultsGrid: { title: 'In the results grid', values: { ...connectedQuery, activePanel: 'output', outputGridFocus: true, outputView: 'grid', hasResults: true } }
 }
 
 /** Lesson focus is deliberate: reading Help must not hide the editor/grid shortcut it is teaching. */

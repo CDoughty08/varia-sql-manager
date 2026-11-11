@@ -37,5 +37,5 @@ export function GestureRef({ id }: { readonly id: GestureId }) {
 /** Only explicit, non-executing entry points. Sample controls never dispatch application commands. */
 export function GuideAction({ command, label }: { readonly command: 'connection.connect' | 'file.new'; readonly label: string }) {
   const { commands } = useWorkbench()
-  return <button type="button" className="document-verb outline" onClick={() => { void commands.execute(command, undefined, 'toolbar') }}>{label}</button>
+  return <button type="button" className="document-verb outline" data-help-action={command} onClick={() => { void commands.execute(command, undefined, 'toolbar') }}>{label}</button>
 }

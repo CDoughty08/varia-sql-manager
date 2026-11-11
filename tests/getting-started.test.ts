@@ -33,9 +33,10 @@ describe('Getting Started registration and dependencies', () => {
         const Page = (await guideLoaders[`./guides/${id}.tsx`]()).default
         const html = renderToStaticMarkup(createElement(WorkbenchProvider, { workbench: fixture as unknown as Workbench, children: createElement(Page, { documentId: fixture.help.getSnapshot().documentId! }) }))
         for (const section of guide.sections) expect(html).toContain(section.title)
-        expect([...html.matchAll(/data-help-command="([^"]+)" data-help-context="([^"]+)"/g)].map(match => ({ id: match[1], context: match[2] }))).toEqual(guide.commands)
-        expect([...html.matchAll(/data-help-setting="([^"]+)"/g)].map(match => match[1])).toEqual(guide.settings)
-        expect([...html.matchAll(/data-help-gesture="([^"]+)"/g)].map(match => match[1])).toEqual(guide.gestures)
+        expect(new Set([...html.matchAll(/data-help-command="([^"]+)" data-help-context="([^"]+)"/g)].map(match => `${match[1]}:${match[2]}`))).toEqual(new Set(guide.commands.map(ref => `${ref.id}:${ref.context}`)))
+        for (const [, command] of html.matchAll(/data-help-action="([^"]+)"/g)) expect(guide.commands.some(ref => ref.id === command)).toBe(true)
+        expect(new Set([...html.matchAll(/data-help-setting="([^"]+)"/g)].map(match => match[1]))).toEqual(new Set(guide.settings))
+        expect(new Set([...html.matchAll(/data-help-gesture="([^"]+)"/g)].map(match => match[1]))).toEqual(new Set(guide.gestures))
         expect(html).not.toMatch(/<iframe|<script|contenteditable|type="password"/)
       }
       expect(fixture.api.execute).not.toHaveBeenCalled()
@@ -61,6 +62,9 @@ describe('contextual references', () => {
     expect(lessonShortcut('query.execute', 'queryEditor', platform, remapped)).toBe(platform === 'darwin' ? '⇧⌘↩' : 'Ctrl+Shift+Enter')
   })
   it('suppresses global shortcuts shadowed by a narrower scope and respects native editor prefixes', () => {
+    const queryRule = resolveKeybinding('query.execute', { key: 'f9', when: 'hasActiveDocument && activeDocumentIsText && activeDocumentIsQuery && hasConnection && backendReady' }, 'win32')!
+    expect(lessonShortcut('query.execute', 'queryEditor', 'win32', [queryRule])).toBe('F9')
+    expect(lessonShortcut('query.execute', 'resultsGrid', 'win32', [queryRule])).toBe('F9')
     expect(lessonShortcut('view.zoomIn', 'workbench', 'win32', defaultRules('win32'))).toBe('Ctrl+=')
     expect(lessonShortcut('edit.copy', 'resultsGrid', 'win32', defaultRules('win32'))).toBeUndefined()
     const global = resolveKeybinding('file.new', { key: 'f5' }, 'win32')!
