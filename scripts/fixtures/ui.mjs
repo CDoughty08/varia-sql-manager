@@ -51,6 +51,9 @@ export const part = {
   tabName: '.tab-name',
   /** The tab's bounded name, environment and live-session area, before Pin and Close. */
   tabSelect: '.tab-select',
+  /** The filename/state row and the environment/session row below it. */
+  tabTitle: '.tab-title',
+  tabMetadata: '.tab-metadata',
   /** Editor groups (src/renderer/src/editor-groups/): Dockview's groups inside the query editor panel, and the active one. */
   /** The editor area in the Query editor panel: every editor group, under the active query's bar. */
   editorArea: '.editor-groups-root',

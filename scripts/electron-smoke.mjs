@@ -535,27 +535,32 @@ try {
   const tabGeometry = (target = connectedTab) => target.evaluate((tab, part) => {
     const box = element => element?.getBoundingClientRect()
     const inside = (inner, outer) => !!inner && !!outer && inner.width > 0 && inner.left >= outer.left - 0.5 && inner.right <= outer.right + 0.5 && inner.top >= outer.top - 0.5 && inner.bottom <= outer.bottom + 0.5
-    const bounds = box(tab), select = box(tab.querySelector(part.tabSelect)), name = box(tab.querySelector(part.tabName)), sid = box(tab.querySelector(part.tabSid))
+    const bounds = box(tab), select = box(tab.querySelector(part.tabSelect)), title = box(tab.querySelector(part.tabTitle)), name = box(tab.querySelector(part.tabName)), metadata = box(tab.querySelector(part.tabMetadata)), sid = box(tab.querySelector(part.tabSid))
     const pin = box(tab.querySelector('button[aria-label^="Pin "], button[aria-label^="Unpin "]')), close = box(tab.querySelector('button[aria-label^="Close "]'))
     return {
       cellWidth: bounds.width,
-      nameVisible: inside(name, select) && name.right <= sid.left + 0.5,
+      rowHeight: bounds.height,
+      nameVisible: inside(name, select) && name.bottom <= metadata.top + 0.5,
+      nameUnclipped: !!name && tab.querySelector(part.tabName).scrollWidth <= tab.querySelector(part.tabName).clientWidth + 0.5,
       sidVisible: inside(sid, select),
+      chipsCentered: Math.abs((metadata.top - title.bottom) - (bounds.bottom - metadata.bottom)) < 0.5,
       actionsVisible: inside(pin, bounds) && inside(close, bounds) && sid.right <= pin.left + 0.5 && pin.right <= close.left + 0.5
     }
   }, part)
   const beforeSidRegression = await page.evaluate(() => [innerWidth, innerHeight])
   await resizeContent(application, page, 1440, 900)
-  await expect.poll(tabGeometry).toMatchObject({ nameVisible: true, sidVisible: true, actionsVisible: true })
+  await expect.poll(tabGeometry).toMatchObject({ rowHeight: 44, nameVisible: true, nameUnclipped: true, sidVisible: true, chipsCentered: true, actionsVisible: true })
+  await documentTabs(page).screenshot({ path: artifact('query-tabs-two-line.png') })
+  await page.screenshot({ path: artifact('query-tabs-workbench.png') })
   await resizeContent(application, page, 1024, 720)
   await page.keyboard.press('Control+\\')
   await expect(editorGroups(page)).toHaveCount(2)
   await expect(connectedTab).toHaveAttribute('aria-description', connectedDescription)
-  await expect.poll(tabGeometry).toMatchObject({ nameVisible: true, sidVisible: true, actionsVisible: true })
+  await expect.poll(tabGeometry).toMatchObject({ nameVisible: true, nameUnclipped: true, sidVisible: true, chipsCentered: true, actionsVisible: true })
   await connectedTab.focus()
   await page.keyboard.press('F2')
   await expect(tabNameBox(page)).toBeVisible()
-  await expect.poll(tabGeometry).toMatchObject({ sidVisible: true, actionsVisible: true })
+  await expect.poll(tabGeometry).toMatchObject({ sidVisible: true, chipsCentered: true, actionsVisible: true })
   await page.keyboard.press('Escape')
   await page.keyboard.press('Alt+w')
   await page.getByRole('menu', { name: 'Window', exact: true }).getByRole('menuitem', { name: 'Join All Editor Groups', exact: true }).click()
@@ -596,7 +601,7 @@ try {
   await expect(crowdedTab).toHaveAttribute('title', /Executing/)
   await expect(crowdedTab).toHaveAttribute('title', /Staging environment/)
   await expect(crowdedTab.locator(part.tabSid)).toHaveText(/^SID \d{5}$/)
-  await expect.poll(() => tabGeometry(crowdedTab)).toMatchObject({ nameVisible: true, sidVisible: true, actionsVisible: true })
+  await expect.poll(() => tabGeometry(crowdedTab)).toMatchObject({ nameVisible: true, sidVisible: true, chipsCentered: true, actionsVisible: true })
   await queryBarButton(page, 'Cancel').click()
   await expect(executingMark(crowdedTab)).toHaveCount(0)
   await expect(crowdedTab).not.toHaveAttribute('aria-description', /Executing/)
