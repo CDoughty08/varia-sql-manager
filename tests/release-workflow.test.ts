@@ -16,6 +16,12 @@ const release = text('release.yml'), pack = text('package.yml')
 const releasePaths = [...triggers(release).matchAll(/^ {6}- (\S+)$/gm)].map(match => match[1])
 
 describe('Release builds', () => {
+  it('publishes the same curated record as the app and refuses missing or mismatched tag notes', () => {
+    expect(release).toContain('node scripts/release-notes.mjs "$RELEASE_TAG" release-notes.md')
+    expect(release).toContain('args=(--verify-tag --notes-file release-notes.md)')
+    expect(release).not.toContain('--generate-notes')
+    expect(release.indexOf('- name: Prepare curated release notes')).toBeLessThan(release.indexOf('- name: Create release with curated notes'))
+  })
   it('cancels the superseded run of every workflow a pull request triggers, but never a tag or a manual run', () => {
     for (const name of readdirSync(dir).filter(file => file.endsWith('.yml'))) {
       const yaml = text(name)

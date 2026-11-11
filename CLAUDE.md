@@ -98,6 +98,15 @@ After changing a catalogue, regenerate its outputs with the matching command and
 | `src/shared/settings/` | `npx vitest run tests/settings-catalog.test.ts -u` |
 | `src/shared/theme/metrics.ts` | `npx vitest run tests/theme-metrics.test.ts -u` |
 | `src/shared/icons.ts` | `npx vitest run tests/icons.test.ts -u` |
+| Published `release-notes/*.json` records | `node scripts/release-notes.mjs --changelog` |
+
+## User-facing documentation
+
+For a user-facing feature or behavior change, update the affected README, docs and guides in the same PR, along with
+CHANGELOG.md's Unreleased summary, or explain concretely why no documentation changes are needed. Published release
+records are frozen: feature PRs do not add their work to an older release. Release preparation curates the versioned
+plain-text records and regenerates the published changelog; docs/release-notes.md describes that process and the shared
+producer for in-app and public notes. Keep guidance for both Codex and Claude here; AGENTS.md delegates to this file.
 
 ## Testing expectations
 

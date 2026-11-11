@@ -14,10 +14,11 @@ const announcement = (state: UpdateState) => state.status === 'ready' || state.s
  * release (once a version) or a download fails; one that fails quietly shows in the status bar alone, so a network that
  * blocks GitHub is not a toast every few hours. Check for Updates always answers, the latest version included.
  */
-export function updatesContribution({ commands, notifications, updates }: Pick<Workbench, 'commands' | 'notifications' | 'updates'>, api: UpdateCommandsApi): Disposable {
+export function updatesContribution({ commands, notifications, updates, releaseNotes }: Pick<Workbench, 'commands' | 'notifications' | 'updates' | 'releaseNotes'>, api: UpdateCommandsApi): Disposable {
   const announced = new Set<string>()
-  const run = (id: 'help.checkForUpdates' | 'help.downloadUpdate' | 'help.restartToUpdate' | 'help.releaseNotes') => () => { void commands.execute(id, undefined, 'toolbar') }
-  const actions: UpdateToastActions = { restart: run('help.restartToUpdate'), download: run('help.downloadUpdate'), releaseNotes: run('help.releaseNotes'), retry: run('help.checkForUpdates') }
+  const run = (id: 'help.checkForUpdates' | 'help.downloadUpdate' | 'help.restartToUpdate' | 'help.openDownloads') => () => { void commands.execute(id, undefined, 'toolbar') }
+  const actions: UpdateToastActions = { restart: run('help.restartToUpdate'), download: run('help.downloadUpdate'), openDownloads: run('help.openDownloads'),
+    releaseNotes: version => { void commands.execute('help.releaseNotes', { releaseVersion: version }, 'toolbar') }, retry: run('help.checkForUpdates') }
   const show = (state: UpdateState) => { const toast = updateToast(state, actions); if (toast) notifications.notify(toast) }
   let previous = updates.getSnapshot()
   const unsubscribe = updates.subscribe(() => {
@@ -55,6 +56,9 @@ export function updatesContribution({ commands, notifications, updates }: Pick<W
       }
     }),
     commands.register('help.releaseNotes', {
+      run: args => releaseNotes.open(args?.releaseVersion)
+    }),
+    commands.register('help.openDownloads', {
       run: async () => {
         const result = await api.openReleasesPage()
         if (!result.ok) throw new Error(result.error)
