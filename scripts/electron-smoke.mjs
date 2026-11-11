@@ -3,6 +3,7 @@ import { resizeContent } from './fixtures/window-resize.mjs'
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { parseCalls } from './fixtures/call-log.mjs'
 import { explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, anyResultGrid, backendReady, closeDocumentButton, documentTab, documentTabs, editorStatus, editorText as editorTextOf, emptyState, emptyStateIcon, emptyStateTitle, errorMessages,
@@ -20,7 +21,7 @@ await mkdir(join(control, 'hold'))
 await mkdir(join(control, 'allow'))
 await mkdir(join(control, 'extra'))
 await writeFile(join(control, 'wide-session-ids'), '')
-const calls = async () => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
+const calls = async () => parseCalls(await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => ''))
 const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }
 delete env.ELECTRON_RUN_AS_NODE
 // Playwright adds --no-sandbox on Linux unless chromiumSandbox is set; only root (cloud sessions) needs it, as Chromium will not start sandboxed there.
