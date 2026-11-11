@@ -24,7 +24,7 @@ describe('Help › Clear Entra ID Token Cache in the workbench', () => {
   function harness(answer: Awaited<ReturnType<VariaApi['clearEntraTokenCache']>>) {
     const commands = new CommandService()
     const api = { clearEntraTokenCache: vi.fn(async () => answer), openProductLink: vi.fn<VariaApi['openProductLink']>() }
-    const contribution = helpContribution({ commands, events: new EventBus() }, api)
+    const contribution = helpContribution({ commands, events: new EventBus(), help: { open: vi.fn() } }, api)
     return { commands, api, contribution }
   }
   it('says the cache was cleared, says nothing when the user cancelled, and shows a failure in the command banner', async () => {

@@ -3,8 +3,10 @@ import type { Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 
 /** About and fixed project/support links, plus the confirmed Entra token-cache action. */
-export function helpContribution({ commands, events }: Pick<Workbench, 'commands' | 'events'>, api: Pick<VariaApi, 'clearEntraTokenCache' | 'openProductLink'>): Disposable {
+export function helpContribution({ commands, events, help }: Pick<Workbench, 'commands' | 'events'> & { help: Pick<Workbench['help'], 'open'> }, api: Pick<VariaApi, 'clearEntraTokenCache' | 'openProductLink'>): Disposable {
   const registrations = [
+    commands.register('help.gettingStarted', { run: () => help.open() }),
+    commands.register('help.openGuide', { run: args => help.open(args?.guideId ?? '') }),
     commands.register('help.about', { run: () => { events.emit({ type: 'help.aboutRequested' }) } }),
     commands.register('help.openProject', { run: async () => { const result = await api.openProductLink('project'); if (!result.ok) throw new Error(result.error) } }),
     commands.register('help.reportIssue', { run: async () => { const result = await api.openProductLink('issues'); if (!result.ok) throw new Error(result.error) } }),
