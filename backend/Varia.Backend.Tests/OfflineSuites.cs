@@ -45,32 +45,77 @@ static class OfflineSuites
         return assigned;
     }
 
+    // A suite that never ends used to run the check to the CI step's 20 minute timeout, which named only the lane's output so
+    // far. Every suite ends within a minute even on a stalled runner, so past this the run names the suites still going and
+    // exits. VARIA_TEST_OFFLINE_SUITE_MS overrides it (a debugger held at a breakpoint).
+    public const int DefaultSuiteLimitMs = 180_000;
+
+    public static int SuiteLimitMs => int.TryParse(Environment.GetEnvironmentVariable("VARIA_TEST_OFFLINE_SUITE_MS"), out var limit) && limit > 0 ? limit : DefaultSuiteLimitMs;
+
+    static void Stuck(string message)
+    {
+        Console.Error.WriteLine(message);
+        Console.Out.Flush();
+        Environment.Exit(1);
+    }
+
     static double Weight(string name) => Weights.TryGetValue(name, out var seconds) ? seconds : 0.1;
 
-    public static async Task RunAsync((string Name, Func<Task> Run)[] suites, bool serial)
+    /// <param name="limitMs">How long one suite may run before <paramref name="stuck"/> is told (by default the run exits).</param>
+    public static async Task RunAsync((string Name, Func<Task> Run)[] suites, bool serial, int? limitMs = null, Action<string>? stuck = null, Action<string>? log = null)
     {
+        log ??= Console.WriteLine;
+        stuck ??= Stuck;
+        var limit = limitMs ?? SuiteLimitMs;
         var started = Stopwatch.StartNew();
         var times = new ConcurrentDictionary<string, long>();
+        var underWay = new ConcurrentDictionary<string, long>();
         var byName = suites.ToDictionary(suite => suite.Name, suite => suite.Run);
         async Task Timed(string name)
         {
             var watch = Stopwatch.StartNew();
+            underWay[name] = started.ElapsedMilliseconds;
             await byName[name]();
+            underWay.TryRemove(name, out _);
             times[name] = watch.ElapsedMilliseconds;
-            Console.WriteLine("Offline suite " + name + ": " + watch.ElapsedMilliseconds + " ms");
+            log("Offline suite " + name + ": " + watch.ElapsedMilliseconds + " ms");
         }
+        // Its own thread: a pool timer would wait behind the very starvation or deadlock it is there to report.
+        using var ended = new ManualResetEventSlim();
+        var watchdog = new Thread(() =>
+        {
+            while (!ended.Wait(Math.Clamp(limit / 4, 10, 1000)))
+            {
+                var now = started.ElapsedMilliseconds;
+                var late = underWay.Where(pair => now - pair.Value >= limit).Select(pair => pair.Key).Order(StringComparer.Ordinal).ToArray();
+                if (late.Length == 0) continue;
+                stuck("Offline " + (late.Length == 1 ? "suite " : "suites ") + string.Join(", ", late) + " did not finish within " + limit + " ms; still running: "
+                    + string.Join(", ", underWay.Keys.Order(StringComparer.Ordinal)) + ". The suites queued behind them in their lanes never ran.");
+                return;
+            }
+        }) { IsBackground = true, Name = "Offline suite watchdog" };
+        watchdog.Start();
         // VARIA_TEST_SLOW_MS times the gaps between checks, which only means something one suite at a time.
         var lanes = serial ? 1 : Lanes;
-        if (lanes == 1)
+        try
         {
-            foreach (var (name, _) in suites) await Timed(name);
+            if (lanes == 1)
+            {
+                foreach (var (name, _) in suites) await Timed(name);
+            }
+            else
+            {
+                foreach (var name in Alone.Where(byName.ContainsKey)) await Timed(name);
+                var rest = suites.Select(suite => suite.Name).Where(name => !Alone.Contains(name));
+                await Task.WhenAll(Assign(rest, lanes).Select(lane => Task.Run(async () => { foreach (var name in lane) await Timed(name); })));
+            }
         }
-        else
+        finally
         {
-            foreach (var name in Alone) await Timed(name);
-            var rest = suites.Select(suite => suite.Name).Where(name => !Alone.Contains(name));
-            await Task.WhenAll(Assign(rest, lanes).Select(lane => Task.Run(async () => { foreach (var name in lane) await Timed(name); })));
+            // The watchdog has left before its event is disposed.
+            ended.Set();
+            watchdog.Join();
         }
-        Console.WriteLine("Offline suites: " + started.ElapsedMilliseconds + " ms in " + lanes + (lanes == 1 ? " lane" : " lanes") + " (their sum " + times.Values.Sum() + " ms)");
+        log("Offline suites: " + started.ElapsedMilliseconds + " ms in " + lanes + (lanes == 1 ? " lane" : " lanes") + " (their sum " + times.Values.Sum() + " ms)");
     }
 }

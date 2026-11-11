@@ -175,7 +175,14 @@ run's lane times; re-measure on the next CI run):
   Service the backend's exit had left stopped in the middle of its tree kill kept language-services-live-smoke waiting out
   those 45 s after main had exited with code 0; the backend's exit now waits for the kill (`ExitGate`), and on Linux a
   hung close names the processes still in the app's process group. It still fails the suite: a process left behind after
-  quit is a product bug.
+  quit is a product bug. The gate could not cover a backend that main kills: retained-plans-smoke closes every query and
+  then kills the backend, and Smoke (Linux 3/3) failed again with the service stopped, so Linux and macOS now kill it
+  with one signal instead of a tree kill.
+- **A hung offline suite names itself.** A Windows runner stalled for about 20 s (Diff took 22.6 s against 0.4 s), the
+  ActionProgress gate check's 15 s wait for its two holding actions ran out unnoticed, and the probe it then awaited took
+  the free gate and waited for a release that came only after it: Check (windows-latest) ran to the step's 20 minute
+  timeout. The check now waits 60 s for its holders and fails by name without probing when they are late, and
+  `OfflineSuites` names any suite still running after 3 minutes and exits.
 - **Coverage restored or pinned.** The Host shutdown check proves again that Dispose comes before the exit (by sequence, or
   by the exit waiting out DrainTimeout for a starved Dispose); three timing bounds widened for starved runners were tightened
   back to what their regressions need (Host's deadline < 1 s, Entra's connect bound < 8 s, DrainLong < 5 s). Tests now pin
