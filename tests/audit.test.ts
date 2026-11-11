@@ -35,6 +35,11 @@ describe('dependency audit', () => {
     expect(readAudit(JSON.stringify({ metadata: { vulnerabilities: { moderate: 1 } } }))).toMatchObject({ kind: 'unavailable' })
     expect(readAudit(JSON.stringify({ error: { summary: 'x'.repeat(1000) } }))).toEqual({ kind: 'unavailable', reason: 'x'.repeat(300) })
   })
+  it('fails on errors about the checkout itself, which are not an outage', () => {
+    expect(readAudit(JSON.stringify({ error: { code: 'ENOLOCK', summary: 'This command requires an existing lockfile.', detail: '' } })))
+      .toEqual({ kind: 'broken', reason: 'This command requires an existing lockfile.' })
+    expect(readAudit(JSON.stringify({ error: { code: 'EJSONPARSE' } }))).toEqual({ kind: 'broken', reason: 'EJSONPARSE' })
+  })
   it('retries a missing report within the step\'s five minutes', () => {
     expect(retryAfterSeconds.length).toBeGreaterThan(0)
     // Each attempt is bounded at 60 s (scripts/audit.mjs).

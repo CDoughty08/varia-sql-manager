@@ -34,9 +34,11 @@ describe('dependency floors', () => {
       for (const [path, { version }] of copies) if (!(name === 'undici' && parse(version!)[0] < 7)) expect(atLeast(version!, floor), `${path} ${version} < ${floor}`).toBe(true)
     }
   })
-  it('pins dompurify\'s override at or above its floor', () => {
-    const { overrides } = JSON.parse(readFileSync('package.json', 'utf8')) as { overrides: Record<string, string> }
-    expect(atLeast(overrides.dompurify, floors.dompurify)).toBe(true)
+  it('pins dompurify at or above its floor, with the override following the direct dependency', () => {
+    const { overrides, devDependencies } = JSON.parse(readFileSync('package.json', 'utf8')) as { overrides: Record<string, string>; devDependencies: Record<string, string> }
+    // One version to bump: npm refuses an override that disagrees with the direct dependency.
+    expect(overrides.dompurify).toBe('$dompurify')
+    expect(atLeast(devDependencies.dompurify, floors.dompurify)).toBe(true)
   })
   // Monaco sanitises markdown with a DOMPurify it vendors, which the override and the lockfile never reach (#309): bundle
   // Monaco's sanitiser the way the renderer build does and read the version that ships.

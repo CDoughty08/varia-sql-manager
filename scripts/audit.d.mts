@@ -6,5 +6,5 @@ export interface AuditReport {
   failing: { name: string; severity: string; advisories: string[] }[]
   failed: boolean
 }
-export interface AuditUnavailable { kind: 'unavailable'; reason: string }
+export interface AuditUnavailable { kind: 'unavailable' | 'broken'; reason: string }
 export function readAudit(stdout: string): AuditReport | AuditUnavailable

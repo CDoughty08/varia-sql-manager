@@ -9,12 +9,14 @@ import { pathToFileURL } from 'node:url'
 
 const blocking = ['high', 'critical']
 const command = 'npm audit --package-lock-only --json --audit-level=high'
+// npm's own errors about the checkout or the command, which no retry mends: these fail, so a broken audit is never green.
+const localErrors = ['ENOLOCK', 'EJSONPARSE', 'EUSAGE', 'ELOCKVERIFY', 'EAUDITNOPJSON', 'EAUDITNOLOCK', 'EAUDITGLOBAL', 'ENOENT']
 /** Seconds to wait before each further attempt: an endpoint outage is retried, then reported. */
 export const retryAfterSeconds = [10, 30]
 
 /**
- * What one `npm audit --json` run said: the advisory counts with the packages that fail the audit, or that the endpoint
- * gave no report (an error object, or output that is not the report at all).
+ * What one `npm audit --json` run said: the advisory counts with the packages that fail the audit, that the endpoint gave
+ * no report (an error object, or output that is not the report at all), or that the audit itself is broken (no lockfile).
  */
 export function readAudit(stdout) {
   let report
@@ -22,7 +24,7 @@ export function readAudit(stdout) {
   const counts = report?.metadata?.vulnerabilities
   if (!counts || typeof counts !== 'object' || !blocking.every(severity => Number.isInteger(counts[severity]))) {
     const error = report?.error
-    return { kind: 'unavailable', reason: String(error?.summary || error?.code || report?.message || 'npm audit returned no advisory counts').slice(0, 300) }
+    return { kind: localErrors.includes(error?.code) ? 'broken' : 'unavailable', reason: String(error?.summary || error?.code || report?.message || 'npm audit returned no advisory counts').slice(0, 300) }
   }
   const failing = Object.values(report.vulnerabilities ?? {}).filter(entry => blocking.includes(entry.severity)).map(entry => ({
     name: entry.name,
@@ -36,7 +38,9 @@ export function readAudit(stdout) {
 function run() {
   // npm is a .cmd on Windows, which Node starts only through a shell; the command is constant.
   const result = spawnSync(command, { shell: true, encoding: 'utf8', timeout: 60_000, maxBuffer: 64 * 1024 * 1024 })
-  return result.error ? { kind: 'unavailable', reason: result.error.message } : readAudit(result.stdout)
+  // A run past its minute is the endpoint not answering; any other failure to start npm is the runner's.
+  if (result.error) return { kind: result.error.code === 'ETIMEDOUT' ? 'unavailable' : 'broken', reason: result.error.message }
+  return readAudit(result.stdout)
 }
 
 const annotate = (level, message) => console.log(process.env.GITHUB_ACTIONS ? `::${level}::${message}` : `${level}: ${message}`)
@@ -52,6 +56,11 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
         annotate('error', 'npm audit reports high or critical advisories: upgrade or override the package and add its floor to tests/dependency-floors.test.ts.')
         process.exitCode = 1
       }
+      break
+    }
+    if (result.kind === 'broken') {
+      annotate('error', `npm audit could not run (${result.reason}), so nothing was audited.`)
+      process.exitCode = 1
       break
     }
     if (attempt === retryAfterSeconds.length) {
