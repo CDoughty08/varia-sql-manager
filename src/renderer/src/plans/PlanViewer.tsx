@@ -16,7 +16,9 @@ import { PlanPaneSizer } from './PlanPaneSizer'
 import Icon from '../Icon'
 import type { PlanXmlTarget } from './navigation'
 
-export interface PlanViewerHandle { getCamera(): Camera | undefined; setCamera(camera: Camera): void; getSelectedOperator(): string; selectOperator(id: string): void }
+export interface PlanViewerHandle { getCamera(): Camera | undefined; setCamera(camera: Camera): void; getSelectedOperator(): string
+  /** Selects a known operator, or clears the selection when given ''. Unknown non-empty ids are ignored. `onSelectionChanged` fires only when the selection changes, so linked viewers can echo it. */
+  selectOperator(id: string): void }
 export interface PlanViewerProps {
   sources: readonly PlanSource[]; identity: string; scope?: string; visible?: boolean; live?: QueryPlanState
   openDocument?(sourceKey: string, target?: PlanXmlTarget): void
@@ -127,6 +129,15 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
   navigationRef.current = navigation
   const selection = useRef<(id: string) => void>(() => {})
   const revealPending = useRef(false)
+  // A selection whose graph ancestors and outline row are still to be revealed, once its operator and row are known.
+  const reveal = useRef<{ id: string; ancestors: boolean } | undefined>(undefined)
+  const clearSelection = () => {
+    reveal.current = undefined
+    if (!latest.current.selected) return
+    latest.current.selected = ''
+    setSelected('')
+    events.current.onSelectionChanged?.('')
+  }
   const latest = useRef({ selected, statement, xmlSource, query, collapsed: [...collapsed] })
   latest.current = { selected, statement, xmlSource, query, collapsed: [...collapsed] }
   const events = useRef({ onCameraChanged, onSelectionChanged })
@@ -134,7 +145,7 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
   useImperativeHandle(controllerRef, () => ({ getCamera: () => camera.current ? { ...camera.current } : undefined,
     getSelectedOperator: () => latest.current.selected,
     setCamera: value => { if (canvas.current) canvas.current.setCamera(value); else if ([value.x, value.y, value.scale].every(Number.isFinite) && value.scale > 0) camera.current = { ...value, scale: Math.max(0.00001, Math.min(3, value.scale)) } },
-    selectOperator: id => selection.current(id) }), [])
+    selectOperator: id => { if (id) selection.current(id); else clearSelection() } }), [])
   const sourceRef = useRef(sources)
   sourceRef.current = sources
   const preparedSources = useRef<{ generation: number; sources: readonly PlanSource[] } | undefined>(undefined)
@@ -194,6 +205,9 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
     muted: colors.descriptionForeground, border: colors['panel.border'], accent: colors.focusBorder, warning: colors.warningForeground }), [colors])
   const paletteRef = useRef(palette)
   paletteRef.current = palette
+  // The canvas is created after an asynchronous import, so it reads the preferences current at that moment.
+  const canvasPreferences = useRef({ minimap, flow, collapsed })
+  canvasPreferences.current = { minimap, flow, collapsed }
   useEffect(() => {
     const element = root.current, layout = content.layout
     if (!graphActive || !element || !layout) return
@@ -202,7 +216,7 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
       if (disposed) return
       canvas.current = new PlanCanvas({ root: element, statements: statementsRef.current, layout, colors: paletteRef.current, camera: camera.current,
         select: id => selection.current(id), hover: setHovered,
-        minimap, rowFlow: flow, collapsed,
+        minimap: canvasPreferences.current.minimap, rowFlow: canvasPreferences.current.flow, collapsed: canvasPreferences.current.collapsed,
         cameraChanged: value => { camera.current = value; setZoom(current => current === value.scale ? current : value.scale); events.current.onCameraChanged?.(value); navigationRef.current?.cameraChanged?.(value) }, failed: () => setGpuFailed(true) })
       canvas.current.select(latest.current.selected, revealPending.current)
       revealPending.current = false
@@ -213,7 +227,14 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
   useEffect(() => { canvas.current?.colors(palette) }, [palette])
   useEffect(() => { canvas.current?.preferences(minimap, flow, collapsed) }, [minimap, flow, collapsed])
   useEffect(() => { canvas.current?.select(selected, true) }, [selected])
-  useEffect(() => { if (navigation?.selected !== undefined) setSelected(navigation.selected) }, [navigation?.selected])
+  useEffect(() => {
+    const id = navigation?.selected
+    if (id === undefined) return
+    // A host-controlled selection is revealed like a local one, but emits no selection event.
+    reveal.current = id ? { id, ancestors: true } : undefined
+    latest.current.selected = id
+    setSelected(id)
+  }, [navigation?.selected])
   useEffect(() => {
     if (navigation?.statement === undefined) return
     const entry = statements.find(entry => entry.id === navigation.statement)
@@ -255,6 +276,8 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
     const revealed = revealAncestors(id, parents, collapsed)
     if (revealed.size !== collapsed.size) { revealPending.current = true; setCollapsed(revealed) }
     const changed = latest.current.selected !== id
+    // The outline may list another statement until this selection renders; the reveal effect scrolls to the row then.
+    reveal.current = changed ? { id, ancestors: false } : undefined
     latest.current.selected = id
     setSelected(id)
     if (changed) events.current.onSelectionChanged?.(id)
@@ -273,6 +296,26 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
     }
   }
   selection.current = choose
+  useLayoutEffect(() => {
+    const pending = reveal.current, match = pending && pending.id === selected ? allNodes.get(pending.id) : undefined
+    if (!pending || !match) return
+    if (pending.ancestors) {
+      pending.ancestors = false
+      const revealed = revealAncestors(pending.id, parents, collapsed)
+      if (revealed.size !== collapsed.size) { revealPending.current = true; setCollapsed(revealed) }
+      const { id, sourceKey } = content.statements[match.statement]
+      setStatement(previous => previous?.id === id ? previous : { id, sourceKey })
+    }
+    // A hidden outline has no viewport and a filter can exclude the row: stay pending until it can be shown.
+    const element = tree.current, index = shown.findIndex(entry => entry.node.id === pending.id)
+    if (!element?.clientHeight || index < 0) return
+    reveal.current = undefined
+    if (index * rowHeight < element.scrollTop) element.scrollTop = index * rowHeight
+    else if ((index + 1) * rowHeight > element.scrollTop + element.clientHeight) element.scrollTop = (index + 1) * rowHeight - element.clientHeight
+    else return
+    outlineScroll.current = element.scrollTop
+    setScroll(element.scrollTop)
+  }, [selected, shown, outline, allNodes, parents, collapsed])
   useEffect(() => {
     if (!xmlNavigation) return
     const statement = statementsRef.current.find(s => s.sourceStatementIndex === xmlNavigation.statement)
@@ -311,8 +354,7 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
     if (index < 0) return
     setStatement({ id, sourceKey: content.statements[index].sourceKey })
     setXmlSource(undefined)
-    setSelected('')
-    if (selected) events.current.onSelectionChanged?.('')
+    clearSelection()
     navigationRef.current?.selectStatement?.(id)
     setScroll(0)
     if (tree.current) tree.current.scrollTop = 0
@@ -368,7 +410,8 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
             <option value="plan">Plan order</option><option value="cpu">CPU · summed threads</option><option value="elapsed">Elapsed · max thread</option><option value="rows">Row-estimate discrepancy</option>
           </select></div>
         <div className="plan-operator-tree" ref={tree} role="tree" aria-label="Plan operators" aria-description="Lists all operators, including inputs collapsed in the graph. Selecting an operator reveals its ancestors. Left collapses graph inputs; Right expands them." tabIndex={0} onKeyDown={navigate} onScroll={event => {
-          if (event.currentTarget.clientHeight) { outlineScroll.current = event.currentTarget.scrollTop; setScroll(outlineScroll.current) }
+          // Scrolling a visible outline by hand replaces any reveal still waiting for its row.
+          if (event.currentTarget.clientHeight) { reveal.current = undefined; outlineScroll.current = event.currentTarget.scrollTop; setScroll(outlineScroll.current) }
         }}
           aria-activedescendant={shown.slice(first, last).some(match => match.node.id === selected) ? labelId + selected : undefined}>
           <div style={{ height: shown.length * rowHeight, position: 'relative' }}>{shown.slice(first, last).map(({ node }, offset) => <div key={node.id} id={labelId + node.id}

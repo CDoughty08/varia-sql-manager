@@ -3,14 +3,20 @@ import { useWorkbench } from '../core/WorkbenchContext'
 import PlanViewer from './PlanViewer'
 import { locateXml, targetAtXmlOffset, type PlanXmlTarget } from './navigation'
 
+interface SourceBookkeeping { entry?: { offset: number; revision: number }; preserve: boolean }
+// The editor area unmounts a plan document whose tab is not showing, so the XML entry position that keeps the
+// caret independent of graph selection is kept with the document's text model, for the document's lifetime.
+const bookkeeping = new WeakMap<object, SourceBookkeeping>()
+
 /** Keep the original text model for Save, recovery and an editable XML source view. */
 export default function PlanDocument({ documentId, source, onSource }: { documentId: string; source: boolean; onSource(value: boolean): void }) {
   const { documents, planPreparation } = useWorkbench()
   const model = documents.getModel(documentId)
   const [xmlTarget, setXmlTarget] = useState(() => planPreparation.takeXml(documentId))
   const [navigation, setNavigation] = useState<PlanXmlTarget>()
-  const sourceEntry = useRef<{ offset: number; revision: number } | undefined>(undefined)
-  const preserveXml = useRef(false)
+  const detached = useRef<SourceBookkeeping>({ preserve: false })
+  const kept = (model ? bookkeeping.get(model) : undefined) ?? detached.current
+  if (model && kept === detached.current) bookkeeping.set(model, kept)
   const xmlPosition = () => {
     const editor = documents.editorOf(documentId), selection = editor?.getSelection()
     const position = selection && !selection.isEmpty() ? { lineNumber: selection.startLineNumber, column: selection.startColumn } : editor?.getPosition()
@@ -18,7 +24,7 @@ export default function PlanDocument({ documentId, source, onSource }: { documen
   }
   const [version, setVersion] = useState<number | undefined>(() => documents.isFilling(documentId) ? undefined : model?.getVersionId() ?? 0)
   useEffect(() => { if (xmlTarget) onSource(true) }, [])
-  useEffect(() => { if (source && preserveXml.current && !sourceEntry.current) sourceEntry.current = xmlPosition() }, [source])
+  useEffect(() => { if (source && kept.preserve && !kept.entry) kept.entry = xmlPosition() }, [source])
   useLayoutEffect(() => {
     if (!source || !xmlTarget || !model || version === undefined || documents.isFilling(documentId) || xmlTarget.revision !== undefined && xmlTarget.revision !== model.getVersionId()) return
     const location = locateXml(model.getValue(), xmlTarget), editor = documents.editorOf(documentId)
@@ -40,7 +46,7 @@ export default function PlanDocument({ documentId, source, onSource }: { documen
     <div className="plan-document-tools" role="group" aria-label="Execution plan document views">
       <button type="button" aria-pressed={!source} disabled={version === undefined || documents.isFilling(documentId)} onClick={() => {
         if (source && model) {
-          const position = xmlPosition(), previous = preserveXml.current ? sourceEntry.current : undefined
+          const position = xmlPosition(), previous = kept.preserve ? kept.entry : undefined
           // A view switch preserves independent editor and graph positions. Moving the XML caret,
           // editing XML, or explicitly navigating to XML supplies a new graph target.
           const moved = !previous || position?.offset !== previous.offset || position?.revision !== previous.revision
@@ -49,11 +55,11 @@ export default function PlanDocument({ documentId, source, onSource }: { documen
         if (!documents.isFilling(documentId)) setVersion(model?.getVersionId() ?? 0); onSource(false)
       }}>Graph</button>
       <button type="button" aria-pressed={source} onClick={() => {
-        if (!source) { preserveXml.current = true; sourceEntry.current = xmlPosition() }
+        if (!source) { kept.preserve = true; kept.entry = xmlPosition() }
         onSource(true)
       }}>XML source</button>
     </div>
     {!source && <PlanViewer key={documentId} sources={sources} identity={'document:' + documentId} scope={documentId} xmlNavigation={navigation}
-      navigateXml={target => { preserveXml.current = false; sourceEntry.current = undefined; setXmlTarget(target); onSource(true) }} />}
+      navigateXml={target => { kept.preserve = false; kept.entry = undefined; setXmlTarget(target); onSource(true) }} />}
   </>
 }
