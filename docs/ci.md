@@ -250,8 +250,13 @@ Considered and rejected (do not re-propose without new numbers):
   (`tests/release-workflow.test.ts`). Two overlapping pushes must fit in 20 slots. GitHub matches a pull request's `paths`
   against its first 300 changed files only, so a pull request over 300 changed files may skip Release builds silently: run
   them by hand (`workflow_dispatch`) when it touches packaging.
-- **Audit gate.** Check (ubuntu) runs `npm audit --audit-level=high` after `npm run check`, whatever its outcome, so an advisory
-  or a registry outage never hides the check's results. A high or critical advisory fails the job,
+- **Audit gate.** `npm audit` runs in a workflow of its own (`audit.yml`: one job that installs nothing), not in CI: as
+  a step of Check (ubuntu), an outage of npm's advisory endpoint or a new advisory against any installed package failed
+  every open pull request and main push, whatever it changed. It runs on pull requests and main pushes that change
+  `package.json` or `package-lock.json`, and daily on main, which is what reports an advisory published since.
+  `scripts/audit.mjs` retries an endpoint that gives no report, then warns without failing. Its paths filter means it must
+  not become a required check (a pull request it skips would wait for it forever), so look at it before merging a
+  dependency change. A high or critical advisory fails the job,
   so upgrade or override the package (and add its floor to `tests/dependency-floors.test.ts`). Moderate and low ones only
   report: minimatch's GHSA-g3hv-75wg-m249 (a glob-pattern DoS) has no fix below 11.0.1, a major version under
   electron-builder's own dependencies, and its patterns come only from Varia's build configuration.

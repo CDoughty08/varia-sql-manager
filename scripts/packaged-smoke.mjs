@@ -1,12 +1,13 @@
 import { chromium, expect } from '@playwright/test'
 import { spawn, spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { getCurrentFuseWire } from '@electron/fuses'
+import { exited, removeProfile } from './fixtures/owned-app.mjs'
 import { closeMs, within } from './fixtures/smoke.mjs'
 import { backendReady } from './fixtures/ui.mjs'
 import { asarProblems, isReadyToRun, readAsar, readyToRunAssemblies } from './packaged-contents.mjs'
@@ -124,12 +125,15 @@ try {
       else child.kill('SIGKILL')
     }
   } catch { stopFailure = new Error('Packaged smoke could not stop its owned application.') }
+  // The kill returns before the app, its helpers and the backend have let go of the profile's files.
+  if (!await exited(child, closeMs)) console.warn('Warning: the packaged application was still running 45 s after it was stopped.')
   try {
     phase('disconnecting application browser')
     if (browser) await within(browser.close().catch(() => {}), closeMs, () => { throw new Error('Packaged browser cleanup did not complete within 45 s.') })
   } finally {
     phase('removing temporary profile')
-    if (temporaryProfile) rmSync(temporaryProfile, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 })
+    // Best effort: a throw here would replace the error that failed the smoke, or fail one that passed.
+    if (temporaryProfile) removeProfile(temporaryProfile)
   }
   if (stopFailure) throw stopFailure
 }

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { build, type Plugin } from 'vite'
+import { domPurifyVersions, patchedDomPurify } from '../electron.vite.config'
 
-// The lowest versions with the security fixes Varia relies on. CI's npm audit (ci.yml) catches a new advisory; this catches a
+// The lowest versions with the security fixes Varia relies on. The audit workflow's npm audit (audit.yml) catches a new advisory; this catches a
 // downgrade below a fix offline, in npm run check, including ones the advisory database does not list.
 const floors: Record<string, string> = {
   electron: '44.9.1',
@@ -35,6 +37,32 @@ describe('dependency floors', () => {
   it('pins dompurify\'s override at or above its floor', () => {
     const { overrides } = JSON.parse(readFileSync('package.json', 'utf8')) as { overrides: Record<string, string> }
     expect(atLeast(overrides.dompurify, floors.dompurify)).toBe(true)
+  })
+  // Monaco sanitises markdown with a DOMPurify it vendors, which the override and the lockfile never reach (#309): bundle
+  // Monaco's sanitiser the way the renderer build does and read the version that ships.
+  describe('the DOMPurify Monaco bundles', () => {
+    const shipped = async (plugins: Plugin[]) => {
+      const built = await build({ configFile: false, logLevel: 'silent', plugins, build: { write: false, minify: true, rollupOptions: { input: 'node_modules/monaco-editor/esm/vs/base/browser/domSanitize.js', preserveEntrySignatures: 'strict' } } })
+      return [built].flat().flatMap(result => 'output' in result ? result.output : []).flatMap(chunk => chunk.type === 'chunk' ? domPurifyVersions(chunk.code) : [])
+    }
+    it('is the installed package, at or above its floor, in place of the vendored copy', async () => {
+      const versions = await shipped([patchedDomPurify()])
+      expect(versions).toEqual([lock.packages['node_modules/dompurify'].version])
+      expect(atLeast(versions[0], floors.dompurify)).toBe(true)
+    }, 120_000)
+    it('would otherwise be the copy Monaco vendors, which the build refuses below the installed version', async () => {
+      const vendored = domPurifyVersions(readFileSync('node_modules/monaco-editor/esm/vs/base/browser/dompurify/dompurify.js', 'utf8'))
+      expect(vendored).toHaveLength(1)
+      expect(await shipped([])).toEqual(vendored)
+      // The plugin's own check on the finished bundle, with its redirect taken away.
+      const { resolveId: _, ...checkOnly } = patchedDomPurify()
+      const refused = shipped([checkOnly])
+      if (vendored[0] === lock.packages['node_modules/dompurify'].version) await expect(refused).resolves.toEqual(vendored)
+      else await expect(refused).rejects.toThrow(`ships DOMPurify ${vendored[0]}`)
+    }, 120_000)
+    it('is in the plugins of the renderer build', () => {
+      expect(readFileSync('electron.vite.config.ts', 'utf8')).toMatch(/renderer: \{\s+plugins: \[[^\]]*patchedDomPurify\(\)/)
+    })
   })
   it('compares versions numerically', () => {
     expect(atLeast('44.10.2', '44.9.1')).toBe(true)

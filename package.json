@@ -43,6 +43,7 @@
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "5.2.0",
     "dockview-react": "8.4.1",
+    "dompurify": "3.4.17",
     "electron": "44.10.2",
     "electron-builder": "26.18.1",
     "electron-vite": "5.0.0",
