@@ -7,6 +7,7 @@
 // Save writes the table's newest revision once the file is chosen, since the samples retire the one shown while the
 // dialog is open.
 import type { ApiResult, ResultsFormat, ResultsJobResult, SavedResults, VariaApi } from '../../../shared/contracts'
+import { cycleSortKeys, sortKeysBy } from '../grid/sort-keys'
 import { limits, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import { liveProbes, type LiveProbeId, type LiveTableSpec } from '../../../shared/live/catalog'
 import type { LiveSort } from '../../../shared/live/schema'
@@ -14,7 +15,7 @@ import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable } from '../core/types'
-import type { GridViewport } from '../grid/GridView'
+import type { GridViewport, HeaderSortKey } from '../grid/GridView'
 import { copyPlan, type GridSelection } from '../grid/selection'
 import type { RowMap } from '../grid/swap'
 import type { ResultHandle, RowWindow } from '../results/ResultClient'
@@ -234,17 +235,44 @@ export class LiveGrid extends SnapshotStore<LiveGridSnapshot> implements Disposa
    * Sorts this grid's snapshot table by a shown column (its index) or a catalogue column id; `undefined` goes back to the
    * source's order. The backend sorts, and its next revision arrives sorted: the probe's sort setting holds a key for
    * this table (`table`), so the probe's other tables keep theirs. A probe-wide key (no table) gives way to it here, and
-   * stays on the other tables as their own keys.
+   * stays on the other tables as their own keys. With `add` the column becomes a further key (Then Sort).
    */
-  sortBy(column: number | string | undefined, descending = false): void {
+  sortBy(column: number | string | undefined, descending = false, add = false): void {
     if (this.spec.mode !== 'snapshot') return
-    const others = this.siblingKeys()
-    if (column === undefined) this.o.live.setProbe(this.o.probe, { sort: others.length > 0 ? others.slice(0, limits.live.sortColumns) : undefined })
-    else {
-      const id = typeof column === 'number' ? this.spec.columns[column]?.id : this.spec.columns.find(item => item.id === column)?.id
-      if (!id || this.spec.columns.find(item => item.id === id)?.role === 'tone') return
-      this.o.live.setProbe(this.o.probe, { sort: [{ column: id, descending, table: this.index }, ...others].slice(0, limits.live.sortColumns) })
-    }
+    if (column === undefined) return this.setSort([])
+    const id = this.sortColumn(column)
+    // Then Sort: the column becomes the last key, as in a results grid (the shared sortKeysBy).
+    if (id) this.setSort(sortKeysBy(this.sortOf() ?? [], id, descending ? 'descending' : 'ascending', add, limits.live.sortColumns, key(id)))
+  }
+  /**
+   * A header's sort button, as in a results grid (the shared cycleSortKeys, which ResultsService.cycleSort uses): without
+   * `add` only the sole key cycles (ascending, descending, unsorted) and any other click sorts by the column alone,
+   * ascending; with `add` the column becomes a further key, or its key cycles (ascending, descending, removed). At most
+   * limits.live.sortColumns keys for this table: the oldest goes first.
+   */
+  cycleSort(column: number | string, add = false): void {
+    if (this.spec.mode !== 'snapshot') return
+    const id = this.sortColumn(column)
+    if (id) this.setSort(cycleSortKeys(this.sortOf() ?? [], id, add, limits.live.sortColumns, key(id)))
+  }
+  /** Whether a shown column sorts (never the tone column). */
+  canSort(column: number): boolean { return this.sortable && this.sortColumn(column) !== undefined }
+  /** Whether the header sorts this table: snapshot tables only, since an append table keeps its arrival order. */
+  get sortable(): boolean { return this.spec.mode === 'snapshot' }
+  /** This table's sort as its header shows it: shown column indexes, in order. */
+  headerSort(sort: readonly LiveSort[] | undefined = this.getSnapshot().sort): HeaderSortKey[] {
+    return (sort ?? []).flatMap(key => { const column = this.spec.columns.findIndex(item => item.id === key.column); return column < 0 ? [] : [{ column, descending: key.descending }] })
+  }
+  /** A shown column index or catalogue id as a sortable column's id (never the tone column). */
+  private sortColumn(column: number | string): string | undefined {
+    const spec = typeof column === 'number' ? this.spec.columns[column] : this.spec.columns.find(item => item.id === column)
+    return spec && spec.role !== 'tone' ? spec.id : undefined
+  }
+  /** Replaces this table's keys in the probe's sort setting; the probe's other tables keep theirs. */
+  private setSort(own: readonly { readonly column: string; readonly descending: boolean }[]): void {
+    // Each table has its own limits.live.sortColumns keys: this one's never evict a sibling's (the probe sort holds both).
+    const sort = [...own.slice(-limits.live.sortColumns).map(key => ({ column: key.column, descending: key.descending, table: this.index })), ...this.siblingKeys()]
+    this.o.live.setProbe(this.o.probe, { sort: sort.length > 0 ? sort : undefined })
     this.changed()
   }
 
@@ -553,3 +581,6 @@ export class LiveGrid extends SnapshotStore<LiveGridSnapshot> implements Disposa
     this.watched = table && { handle: table.handle, stop: table.handle.subscribe(() => this.changed()) }
   }
 }
+
+/** A live sort key on a catalogue column, as the shared sort functions make one. */
+const key = (column: string) => (descending: boolean) => ({ column, descending })

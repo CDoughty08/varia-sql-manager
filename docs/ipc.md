@@ -1419,7 +1419,8 @@ receives a new result to read like any other, never rows to compare.
 
 - **`results.diff { left, right, exact?, context? }`** answers `{ descriptor, key, same, changed, added, removed, soft,
   approximate, leftOnly, rightOnly }`. Both results must belong to the same query (`INVALID_PARAMS` otherwise, and for a diff
-  of a diff) and be complete (`RESULT_OPEN`, "Compare the results after they finish loading."). Columns pair by name,
+  of a diff) and be complete (`RESULT_OPEN`, "Compare the results after they finish loading."), and the query must not
+  have stopped storing (`BUDGET_STOPPED`, as a pivot). Columns pair by name,
   case-insensitively, in `left`'s order, when both hold text or both binary; at least one must pair (`INVALID_PARAMS`), at
   most 4,092 may (`INVALID_PARAMS`: the unified result adds four columns to a page's 4,096), and `leftOnly` and `rightOnly`
   name up to 64 that do not, which are not compared.
@@ -1443,10 +1444,13 @@ receives a new result to read like any other, never rows to compare.
   than fit stops at a whole entry and ends with `…`, and the cells past it are not marked. A changed
   row is its old row (−) then its new one (+). Only `context` unchanged rows (default 1, at most 100, -1 for all) show on
   each side of a change. Each copied cell's lengths are its source cell's, so `results.rowBytes` sums the shown values
-  (not the marker, row numbers or tone). It is a result of the same query, charged to its budget (rows stop when it is
-  full, with the usual truncation, never between a changed row's two halves), released with the query's other results,
-  and released at once when its answer is not delivered: a CANCEL or the deadline answered first (the backend), its
-  answer failed validation or its port went (main), or the page gave it up (the worker).
+  (not the marker, row numbers or tone). It is a derived set (`ResultStore.Open(derived: true)`) of the same query,
+  charged to its budget and stored whole or not at all: its counts would otherwise describe rows it does not show, so
+  when the budget or low system memory refuses a row the diff is released with `TOO_LARGE` ("There is not enough result
+  memory to show the differences. Close other results and try again."), and the refusal never stops its query. It is
+  released with the query's other results, and released at once when its answer is not delivered: a CANCEL or the
+  deadline answered first (the backend), its answer failed validation or its port went (main), or the page gave it up
+  (the worker). A source released while the results were compared ends it (`RESULT_RELEASED`).
   While it is built the alignment holds about 80 bytes a row of both results (`ResultDiffer.WorkingBytes`) and 12 bytes
   a differing cell, charged to the budget too as they grow (`TOO_LARGE` without room).
 - **Renderer.** `ResultHandle.diff(right, { exact, context, signal })` relays it; `CompareService` appends the new result
@@ -1493,10 +1497,21 @@ receives a new result to read like any other, never the rows it grouped.
   name no column or value. Main checks the answer's shape against the request: a row per row group, and exactly the row
   columns plus (column groups + 1) × values columns. It is a result of the source's query, charged to its
   budget, released with the query's other results and at once when its answer is not delivered (as a diff). It is
-  stored whole or not at all: rows the budget refuses part-way release it with `TOO_LARGE`, and a query whose results
-  were already cut short (its row limit or its budget) stores no pivot, with a `TOO_LARGE` message that names which. The
-  pivot is a derived set (`ResultStore.Open(derived: true)`): a refusal fails only it and never stops its query, so a
-  smaller pivot of the same results can still fit.
+  stored whole or not at all: rows the budget refuses part-way release it with `TOO_LARGE`. A query that stopped
+  storing keeps nothing more, whatever memory is free now, so it stores no pivot, diff or transpose: `BUDGET_STOPPED`,
+  with one of three sentences by why it stopped. Its own results filled its share (the query budget): "This query's
+  results filled its result memory, so it can store nothing more. Run the query again returning fewer rows." Every
+  query's results together filled the memory (the global budget), where this one may be small: "The result memory
+  filled while this query ran, so it can store nothing more. Close other results, then run the query again." The
+  computer was low on memory at one of its page seals, which may be its last, with every row stored: "The computer was
+  low on memory while this query ran, so it can store nothing more. Run the query again." A row limit marks its set and
+  never stops the query. The pivot is a derived set (`ResultStore.Open(derived: true)`): a refusal fails only it and
+  never stops its query, so a smaller pivot of the same results can still fit. Low system memory is checked when a
+  page is sealed; a derived set sealing one under it stores no further row (so it is refused, `TOO_LARGE`) and leaves
+  the query's budget open, and one whose last page is sealed under it is whole. A source is complete while its query may
+  still be reading later sets: a pivot, diff or transpose refused memory for its figures or differing cells, not opened,
+  or cut short, because that query stopped storing or a source was released while it was built, answers
+  `BUDGET_STOPPED` or `RESULT_RELEASED`, not `TOO_LARGE`.
 - **Work.** One pass sorts the rows by each grouped column's key (`ResultPivoter.WorkingBytes`: the sort keys and 12 bytes
   a row); each grouping keeps its groups' first rows only up to its bound and is refused before the next runs. Then the
   figures (4 to 25 bytes a cell and value) are charged to the query budget before they are computed
@@ -1539,9 +1554,8 @@ a pivot, the renderer receives a new result to read like any other, never the ro
 - **Memory.** It is a derived set (`ResultStore.Open(derived: true)`) of the source's query, charged to its budget,
   released with the query's other results and at once when its answer is not delivered. It is stored whole or not at
   all: rows the budget refuses part-way release it with `TOO_LARGE` ("There is not enough result memory to transpose these
-  rows. Close other results, or select fewer rows, and try again."), and a query whose results were already cut short (its
-  row limit or its budget) stores no transpose, with a `TOO_LARGE` message that names which. A refusal never stops its
-  query. The worker's `cancel` stops it (`CANCELLED`).
+  rows. Close other results, or select fewer rows, and try again."), and a query that stopped storing stores no
+  transpose (`BUDGET_STOPPED`, as a pivot). A refusal never stops its query. The worker's `cancel` stops it (`CANCELLED`).
 - **Renderer.** `ResultHandle.transpose(spec?, { signal })` validates the ranges and header column before sending.
   `TransposeService` runs Transpose (the results toolbar and the grid menu's Transpose › All Rows), Selected Rows (the
   selection's rows as merged ranges; offered when rows are selected) and Using Column as Headers (the active cell's
@@ -1793,7 +1807,7 @@ errorEvery?: 1..1,000, logRows?: 0..10,000, logLevel?: 0..3, lateEvery?: 1..1,00
 minimum so tests run fast (samples still report the requested interval), a sample count after which the source ends, an
 error value every n-th table sample, and its log's messages per sample, lowest level, late messages and start. `activity`
 takes `{ filters?: activity filter[1..7], focusSession?: 0..32,767 }` (`activityLiveArgsSchema`), at least one member: one filter
-per table (`activityFilterSchema`: Processes' view chip and System and Varia toggles, the filter box ≤ 400 characters, ≤ 8
+per table (`activityFilterSchema`: Sessions' view chip and System and Varia's own chips, the filter box ≤ 400 characters, ≤ 8
 column value filters of ≤ 50 values ≤ 256 characters on the table's facet columns, Hide benign waits on Resource Waits), and
 the session the sessions probe's two series follow (the Details flyout; 0 for none). The first sessions sample after
 `focusSession` names another session is marked `gap: 'reset'`, so a chart starts the series again rather than join one
@@ -1859,8 +1873,8 @@ from its own state; the writers do the rest.
   decodes. A table with `departed` keeps a tracked row that left the source (not one its view or filter hides) for one more
   revision, at the row it had, and lists it in `departed`; the next revision drops it. Only the track list's first `linger`
   keys stay (LiveGrid's selected rows); the others are answered −1 at once. Facet columns carry their distinct
-  values over every row the source gave that its facet scope keeps (before the view and filter; NULL left out; the
-  Activity Monitor's Processes counts only the rows its view chip and toggles show, before its filter box and column value
+  values over every row the source gave that its facet scope keeps (before the view and filter; NULL counts with empty text as the column's blanks; the
+  Activity Monitor's Sessions counts only the rows its view chip and toggles show, before its filter box and column value
   filters, so it never offers a value only hidden sessions have, and a column's own filter never empties its list), most frequent first, at most 100 of at
   most 128 characters (values that differ only past them count together), and only when they changed since the table's last
   facets; a tick's facet text is shared by its tables up to 32 KiB, counting only the facets a sample sends, and what does
@@ -2256,11 +2270,32 @@ and results worker](#results-port-and-results-worker)). Views never call it them
   its `refresh`, Retry a new handle. The view reads the overview's ring for its tiles and charts and runs no timer but the
   states kit's one-second age ticker.
 
-**LiveGrid** (`live/LiveGrid.ts`, its React shell `live/LiveGridPane.tsx`): a live table in a results grid. It wraps
-`GridView`, which renders it as any result (pools, tiles, `nodeValue` text, keys, selection, Copy) with three additions:
-`GridView.swap(handle, descriptor, mapRow)` shows another result with the same columns in place (widths and scroll stay;
-the first row shown, the active cell and each block move through `mapRow`, `grid/swap.ts`), a hidden tone column, and
-follow tail.
+**LiveGrid** (`live/LiveGrid.ts`, mounted by `live/LiveGridPane.tsx`): a live table in the results grid. There is one grid
+component tree: `grid/GridShell.tsx` (the root and scroller, the header's sort buttons and funnels with `ColumnFilterPopover`,
+the strips and the gone overlay) over `GridView`, which renders it as any result (pools, tiles, `nodeValue` text, keys,
+selection, Copy). `ResultGrid` mounts it for a query's result set and `LiveGridPane` for a live table; each supplies only
+its source. A live source adds `GridView.swap(handle, descriptor, mapRow)`, which shows another result with the same
+columns in place (widths and scroll stay; the first row shown, the active cell and each block move through `mapRow`,
+`grid/swap.ts`), a hidden tone column, follow tail, and the "n new rows" button.
+- **What a live source gives the shared components.** Header sort: a snapshot table's sort buttons call `LiveGrid.cycleSort`,
+  which uses the same `cycleSortKeys` (`grid/sort-keys.ts`) as `ResultsService.cycleSort` (Shift+click adds a key; Then
+  Sort uses `sortKeysBy`). It sets the probe's sort for this table, and the backend sorts each revision; the header shows the
+  probe's sort. Each table holds its own `sortColumns` keys, so one grid's sort never evicts a sibling table's. An owner
+  whose order is its meaning (a tree in chain order; SSIS Operations) passes `sortable={false}`: no sort buttons and no Sort
+  items. Funnels: an owner that filters some columns at its source (`filters`: the Activity Monitor's facet columns) gets
+  funnels on just those headers (`GridViewOptions.filterable`), and `ColumnFilterPopover` runs over a `ColumnFilterSource`
+  (`live/live-filter.ts`): the column's facet as an in-memory `DistinctList`, the conditions a value filter can express
+  (values, Equals, Is blank, Is not blank) and OK as the filter the owner sends as the source's args, never filtering on
+  the client. The facets, not the backend's distinct snapshot of the revision, are the list because they ignore the
+  column's own filter (a filtered column still lists the values it hid). OK names the ticked values, or, when fewer are
+  unticked, the unticked ones with `exclude`, so unticking one of many values stays within the limit and keeps the values
+  the facets did not list. Menu and keys: the grid is Query Output's view `live` (`data-output-view="live"`, its
+  `LiveOutput` registered with `registerLiveOutput`), so `output.context` and the `output.*` commands act on it, and
+  `outputGridFocus` holds in it, so its keys are the catalogue's (Ctrl+C honouring Include column headers, Ctrl+Shift+C,
+  Ctrl+A, Ctrl+S, Alt+Down, Ctrl+F to the owner's filter box) and Shortcut Mapping remaps them. Items for a query's result
+  sets hide (`outputView != 'live'`); Sort shows with `outputLiveSortable`, Filter with `outputLiveFilterable`. An owner
+  with a menu of its own (SSIS Operations) turns the menu off, and its grid serves its own Ctrl+C, Ctrl+Shift+C and Ctrl+A.
+  The error boundary (`GridErrorBoundary`) wraps the whole grid, source and shell, so a throw in either stays in its frame.
 - **Snapshot revisions.** After each applied tick (before it is acknowledged) the grid first reads the rows the new revision
   will show into the window cache (`GridView.prepare`, at most 250 ms), then swaps it in, so a swap never paints a frame of
   empty cells; a newer revision arriving meanwhile has retired the one shown and swaps in at once. The grid tracks the
@@ -2519,7 +2554,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | FOR XML / FOR JSON value | 2,097,152 characters, the rest marks it truncated | backend |
 | Row sizes a request | `results.rowBytes`: 1 – 16,384 rows (`rowSizes.maxRows`) | zod and backend |
 | Row identities | `results.rowIds` 1 – 16,384 rows; `results.findRows` 1 – 10,000 ids, 100,000 matches (`limits.identity`); 24 bytes a row while identifying, 8 kept, under the query budget | zod and backend |
-| Result diffs | context -1 – 100 rows, 64 one-sided column names each side (`limits.diff`); about 80 bytes a row of both results and 12 a differing cell while aligning, the diff's rows under the query budget | zod and backend |
+| Result diffs | context -1 – 100 rows, 64 one-sided column names each side (`limits.diff`); about 80 bytes a row of both results and 12 a differing cell while aligning, the diff's rows under the query budget, whole or refused | zod and backend |
 | Sorted views | 0 – 16 keys and 0 – 16 filters a view (one at least), 4,096 distinct values a filter, 256 cell ranges a selection, 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key or filtered column while building, 4 bytes a row kept, under the query budget | zod and backend |
 | Transpose | 1 – 256 row ranges, at most 4,095 rows taken and 4,000,000 cells, the first rows taken past either with explicit truncation (`limits.transpose`); the stored set under the query budget, whole or refused | zod and backend |
 | Pivots | 0 – 8 row columns, 1 – 16 values, 100,000 row groups, 256 column groups, 4,000,000 figures, refused past any of them (`INVALID_PARAMS`), column-group names cut to 128 characters (`limits.pivot`); a sort key per grouped column and 12 bytes a row while grouping, and the figures, under the query budget | zod and backend |
@@ -2599,7 +2634,7 @@ access, choose Help › Clear Entra ID Token Cache, then connect again." The sam
 
 | Origin | Codes |
 | --- | --- |
-| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN` |
+| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot, diff or transpose of a query that stopped storing; [Pivots](#pivots)) |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
 | Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads, scripting, object actions and SSIS requests), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs), `STALE` (a shortcuts save based on an older revision), `DUPLICATE_REQUEST` and `NOT_FOUND` (live streams of the results port); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |

@@ -1,4 +1,4 @@
-// The strict zod schema of the Activity Monitor's filter: Processes' view chip and toggles, the filter box and the column
+// The strict zod schema of the Activity Monitor's filter: Sessions' view chip and toggles, the filter box and the column
 // value filters. The live layer carries it as `args.activity` (L2b); the backend re-checks every bound and column id against
 // the catalogue (Activity/ActivityFilter.cs) and filters the snapshot in memory, so the SQL never changes. Below it, the
 // session actions' requests (main's requestSchemas) and answers; Activity/SessionActions.cs re-checks the same bounds.
@@ -14,12 +14,15 @@ export interface ActivityColumnFilter {
   readonly blanks?: boolean
   /** Rows whose cell is not empty. */
   readonly nonBlanks?: boolean
+  /** `values` are the ones to leave out: every other non-blank value passes (blanks as `blanks` says), so a funnel whose
+   *  most frequent values are listed can untick a few without dropping the values it never listed. */
+  readonly exclude?: boolean
 }
 export interface ActivityFilter {
   readonly table: ActivityTable
-  /** Processes only. */
+  /** Sessions only. */
   readonly view?: ViewChip
-  /** Processes only: SQL Server's own sessions, and Varia's pool sessions (query tabs always show). */
+  /** Sessions only: SQL Server's own sessions, and Varia's pool sessions (query tabs always show). */
   readonly showSystem?: boolean
   readonly showVaria?: boolean
   /** Resource Waits' tables only: leave out benign rows (on when absent). */
@@ -43,7 +46,8 @@ export const activityColumnFilterSchema = z.object({
   column: z.string().min(1).max(64),
   values: z.array(z.string().max(activityLimits.columnFilterChars)).max(activityLimits.columnFilterValues).optional(),
   blanks: z.boolean().optional(),
-  nonBlanks: z.boolean().optional()
+  nonBlanks: z.boolean().optional(),
+  exclude: z.boolean().optional()
 }).strict()
 
 export const activityFilterSchema = z.object({
@@ -60,7 +64,7 @@ export const activityFilterSchema = z.object({
 }).strict().superRefine((filter, context) => {
   const spec = tableSpecs[filter.table]
   if (filter.table !== 'sessions') {
-    for (const key of processesOnly) if (filter[key] !== undefined) context.addIssue({ code: 'custom', path: [key], message: `Only Processes takes ${key}.` })
+    for (const key of processesOnly) if (filter[key] !== undefined) context.addIssue({ code: 'custom', path: [key], message: `Only Sessions takes ${key}.` })
   }
   if (filter.table !== 'files') {
     for (const key of filesOnly) if (filter[key] !== undefined) context.addIssue({ code: 'custom', path: [key], message: `Only Data File I/O takes ${key}.` })
@@ -72,6 +76,7 @@ export const activityFilterSchema = z.object({
     if (seen.has(columnFilter.column)) context.addIssue({ code: 'custom', path: ['columnFilters', index, 'column'], message: 'One filter per column.' })
     seen.add(columnFilter.column)
     if (!columnFilter.values?.length && !columnFilter.blanks && !columnFilter.nonBlanks) context.addIssue({ code: 'custom', path: ['columnFilters', index], message: 'A column filter needs a value, (Blanks) or (Non-blanks).' })
+    if (columnFilter.exclude && (!columnFilter.values?.length || columnFilter.nonBlanks)) context.addIssue({ code: 'custom', path: ['columnFilters', index], message: 'An excluding filter names values, without (Non-blanks).' })
   })
 }) satisfies z.ZodType<ActivityFilter>
 

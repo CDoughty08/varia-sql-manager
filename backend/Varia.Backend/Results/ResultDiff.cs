@@ -307,8 +307,9 @@ internal static class ResultDiffer
 /// and the second ("R2"), the shared columns (the second result's names and types), and a hidden tone column: "added" or
 /// "removed" ("same" for an unchanged row with soft differences), then the differing cells as column indexes, a soft one with
 /// a leading "~". Each data cell's bytes are its source cell's, so the row-size bar sums the values shown, not the marker,
-/// row numbers or tone. Rows stop when the query's budget is full, never between a changed row's two halves; the result
-/// then says why it was truncated.</summary>
+/// row numbers or tone. Rows stop at the first one refused, and the set then says why it was truncated: a full budget never
+/// stops between a changed row's two halves, though a page sealed under low system memory can. results.diff refuses a
+/// diff cut short either way whole (SqlService.DiffAsync).</summary>
 internal static class UnifiedDiff
 {
     public const string Removed = "−", Added = "+";

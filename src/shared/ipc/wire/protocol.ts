@@ -115,6 +115,9 @@ export const errorCodes = [
   // Backend, results jobs: an export failure (its message is one token: ACCESS, DISK_FULL, IN_USE, NOT_FOUND,
   // IS_DIRECTORY or IO) and an export of a set still loading.
   'EXPORT_FAILED', 'RESULT_OPEN',
+  // Backend: a pivot, diff or transpose of a query that stopped storing (its result memory filled, or the computer was low
+  // on memory while it ran); the message says which, and what to do.
+  'BUDGET_STOPPED',
   // Backend and main: an Object Explorer requestId that is already running.
   'DUPLICATE_REQUEST',
   // GOAWAY.

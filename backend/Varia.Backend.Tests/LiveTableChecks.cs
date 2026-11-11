@@ -283,10 +283,10 @@ internal static class LiveTableChecks
         var same = table.Write(rows, new()).Sample!;
         set.BeginTick();
         var moved = table.Write([.. rows, Item(6, "c", 1)], new()).Sample!;
-        check(first.Facets is [{ Column: "grp", More: null } facet] && facet.Values.SequenceEqual([new LiveFacetValue("b", 2), new LiveFacetValue("a", 1), new LiveFacetValue("c", 1)])
+        check(first.Facets is [{ Column: "grp", More: null } facet] && facet.Values.SequenceEqual([new LiveFacetValue("b", 2), new LiveFacetValue("", 1), new LiveFacetValue("a", 1), new LiveFacetValue("c", 1)])
             && firstRows.Count == 0 && same.Facets is null
-            && moved.Facets is [{ Values: [{ Text: "b", Count: 2 }, { Text: "c", Count: 2 }, { Text: "a", Count: 1 }] }],
-            "facets count each value over every row the source gave (before the filter, NULL left out), most frequent first, and are sent only when they change");
+            && moved.Facets is [{ Values: [{ Text: "b", Count: 2 }, { Text: "c", Count: 2 }, { Text: "", Count: 1 }, { Text: "a", Count: 1 }] }],
+            "facets count each value over every row the source gave (before the filter, NULL counted as blank text), most frequent first, and are sent only when they change");
 
         var many = Enumerable.Range(0, 150).Select(i => Item(i, (i < 120 ? "v" + i.ToString("D3") : new string('w', 200)), 1)).ToList();
         set.BeginTick();
@@ -307,8 +307,9 @@ internal static class LiveTableChecks
             tight.BeginTick();
             ticks.Add((tight.Snapshot(twoTables, 0).Write(rows, new()).Sample!, tight.Snapshot(twoTables, 1).Write(rows, new()).Sample!));
         }
-        check(ticks[0].First.Facets is [{ More: null, Values.Count: 3 }] && ticks[0].Second.Facets is [{ More: true, Values.Count: 1 }]
-            && ticks[1].First.Facets is null && ticks[1].Second.Facets is [{ Values.Count: 3, More: null }] && ticks[2].First.Facets is null && ticks[2].Second.Facets is null,
+        // The blank value's empty text costs nothing, so the second table's first cut keeps "b" and "".
+        check(ticks[0].First.Facets is [{ More: null, Values.Count: 4 }] && ticks[0].Second.Facets is [{ More: true, Values.Count: 2 }]
+            && ticks[1].First.Facets is null && ticks[1].Second.Facets is [{ Values.Count: 4, More: null }] && ticks[2].First.Facets is null && ticks[2].Second.Facets is null,
             "a tick's facet text is bounded across its tables (limits.live.facetBytes): what does not fit is left out (more), and the next tick sends it, since unchanged facets cost nothing");
     }
 

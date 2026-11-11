@@ -55,6 +55,25 @@ describe('result diffs', () => {
     expect(compare.canCompare('t1', 2)).toBe(false)
   })
 
+  it('names a comparison by its results\' numbers, not their places, once an entry before them has gone', async () => {
+    const { results, compare, run } = fixture()
+    const [, second, third] = run(3)
+    const sets = () => results.getSnapshot().t1.sets
+    results.removeEntry('t1', sets()[0].key)
+    // Result 3 stands second and is compared with Result 2, which stands first.
+    expect(compare.previousOf('t1', 1)).toBe(0)
+    expect(compare.previousOf('t1', sets()[1].key)).toBe(0)
+    expect(compare.canCompare('t1', 0)).toBe(false)
+    await compare.compare('t1', 1)
+    await settle()
+    expect(second.diff).toHaveBeenCalledWith(third, { exact: false, signal: expect.any(AbortSignal) })
+    expect(sets()[2]).toMatchObject({ index: 2, number: 4, label: 'Differences: Result 2 → Result 3', descriptor: { kind: 'diff', resultId: 902 } })
+    const info = compare.getSnapshot().get(setKey(sets()[2].descriptor))!
+    expect(info).toMatchObject({ left: 0, right: 1, leftNumber: 2, rightNumber: 3 })
+    expect(compareText(info)).toBe('Result 2 → Result 3, rows matched by Id: 1 changed row, 1 added row, 0 removed rows, 1 unchanged.')
+    expect(compareText({ ...info, leftOnly: ['Old'], rightOnly: ['New'] })).toContain('Not compared: Old (Result 2), New (Result 3).')
+  })
+
   it('compares nothing while the query runs, says why a comparison failed, and keeps only diffs a run still shows', async () => {
     const { results, compare, run } = fixture()
     run(2, { finish: false })
