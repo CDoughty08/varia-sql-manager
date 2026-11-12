@@ -2,13 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { shardBudgetSeconds, shardSuites, smokeSuites, suiteSeconds } from '../scripts/smoke-shards.mjs'
 
-// CI's own contract (docs/ci.md, Layout): every job starts at once, so one run reports every suite it reaches, the
+// CI's own contract (docs/ci.md, Layout): validation jobs start together after scope detection, so one run reports every suite it reaches, the
 // smoke suites run in shards that cover test:smoke exactly and stay within their time budget, and every pull request runs
 // every platform in few enough jobs that two runs fit GitHub's concurrency for a public repository. The workflow is plain
 // YAML in a fixed layout, so its jobs and steps are read by indentation.
 
 interface Step { name: string; id?: string; if?: string; run: string; timeout?: number }
-interface Job { if?: string; needs?: string; runsOn?: string; timeout?: number; matrix: Map<string, string>; steps: Step[] }
+interface Job { name?: string; if?: string; needs?: string; runsOn?: string; timeout?: number; matrix: Map<string, string>; steps: Step[] }
 function jobs(path: string): Map<string, Job> {
   const lines = readFileSync(path, 'utf8').split('\n'), found = new Map<string, Job>()
   let inJobs = false, job: Job | undefined, step: Step | undefined, block: 'run' | undefined
@@ -18,10 +18,11 @@ function jobs(path: string): Map<string, Job> {
     const jobName = /^ {2}([\w-]+):\s*$/.exec(line)
     if (jobName) { job = { matrix: new Map(), steps: [] }; found.set(jobName[1], job); step = undefined; block = undefined; continue }
     if (!job) continue
-    const own = /^ {4}(if|needs|runs-on|timeout-minutes): (.*)$/.exec(line)
+    const own = /^ {4}(name|if|needs|runs-on|timeout-minutes): (.*)$/.exec(line)
     if (own) {
       const [, key, value] = own
-      if (key === 'if') job.if = value
+      if (key === 'name') job.name = value
+      else if (key === 'if') job.if = value
       else if (key === 'needs') job.needs = value
       else if (key === 'runs-on') job.runsOn = value
       else job.timeout = Number(value)
@@ -46,14 +47,14 @@ function jobs(path: string): Map<string, Job> {
 }
 const smoke = (step: Step) => /test:smoke|-smoke\.mjs|smoke-shards\.mjs/.test(step.run)
 const bench = (step: Step) => /npm run bench|check-bench/.test(step.run)
-const runAlways = "github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'"
+const runAlways = "needs.scope.outputs.mode == 'full'"
 const liveGroups = Number(/CiGroups = (\d+);/.exec(readFileSync('backend/Varia.Backend.Tests/LiveGroups.cs', 'utf8'))?.[1])
 
 describe('CI workflow', () => {
   const workflow = jobs('.github/workflows/ci.yml')
-  const own = [...workflow].filter(([name]) => name !== 'regressions')
-  it('starts every job at once, with the smoke suites and the benchmarks in jobs of their own', () => {
-    expect(own.filter(([, job]) => job.needs).map(([name]) => name)).toEqual([])
+  const own = [...workflow].filter(([name]) => !['scope', 'docs', 'result', 'regressions'].includes(name))
+  it('starts validation jobs together after scope detection, with the smoke suites and the benchmarks in jobs of their own', () => {
+    for (const [name, job] of own) expect(job.needs, name).toBe('scope')
     for (const [name, job] of own) {
       const kinds = new Set(job.steps.flatMap(step => smoke(step) ? ['smoke'] : bench(step) ? ['bench'] : []))
       expect(kinds.size, name).toBeLessThanOrEqual(1)
@@ -68,6 +69,32 @@ describe('CI workflow', () => {
     expect(live.matrix.get('group')!.split(', ').map(Number)).toEqual(Array.from({ length: liveGroups }, (_, index) => index + 1))
     expect(live.steps.find(step => step.run.trim().endsWith('--live-group ${{ matrix.group }}/' + liveGroups))?.id).toBe('test')
     for (const suite of ['tests/*-live.test.ts', 'kerberos-live']) expect(live.steps.find(step => step.run.includes(suite))?.if).toBe('matrix.group == 1 && (success() || failure())')
+  })
+  it('keeps triggers unfiltered, validates docs without installing runtimes, and always aggregates every job', () => {
+    const yaml = readFileSync('.github/workflows/ci.yml', 'utf8')
+    expect(yaml.slice(0, yaml.indexOf('\nconcurrency:'))).not.toMatch(/paths:|paths-ignore:/)
+    const scope = workflow.get('scope')!, docs = workflow.get('docs')!, result = workflow.get('result')!
+    expect(yaml).toContain("fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}")
+    expect(scope.steps.some(step => step.run === 'node scripts/ci-scope.mjs')).toBe(true)
+    for (const name of ['scope', 'result']) {
+      const job = yaml.slice(yaml.indexOf(`\n  ${name}:`)).split(/\n {2}[\w-]+:/)[1]
+      expect(job, name).not.toContain('actions/setup-node')
+      expect(job, name).toContain(`sparse-checkout: scripts/ci-${name}.mjs`)
+    }
+    expect(yaml).toContain('options: [none, docs, dialogs, results, tail, all, activity]')
+    expect(docs.needs).toBe('scope')
+    expect(docs.if).toBe("needs.scope.outputs.mode == 'docs'")
+    expect(docs.steps.map(step => step.run).filter(Boolean)).toEqual(['npm ci --ignore-scripts --no-audit --no-fund', "npx vitest run --exclude tests/backend-sidecar.test.ts --exclude 'tests/*-live.test.ts'"])
+    expect(result.if).toBe('always()')
+    expect(result.needs).toBe('[scope, docs, check, live, smoke-linux, smoke-windows, bench-linux, regressions]')
+    expect(result.steps.some(step => step.run === 'node scripts/ci-result.mjs')).toBe(true)
+    expect(workflow.get('regressions')!.if).toBe("needs.scope.outputs.mode == 'regressions'")
+    expect(workflow.get('regressions')!.needs).toBe('scope')
+  })
+  it('gives every manual run a separate result name, independent of the selected suite', () => {
+    expect(workflow.get('result')!.name).toBe("${{ github.event_name == 'workflow_dispatch' && 'Manual CI result' || 'CI result' }}")
+    // Skipping a same-named job can still satisfy a required check: run the aggregator under a distinct name instead.
+    expect(workflow.get('result')!.if).toBe('always()')
   })
   it('runs every smoke suite in exactly one shard, and later Linux suites after a shard failure too', () => {
     for (const name of ['smoke-linux', 'smoke-windows']) {
@@ -104,7 +131,7 @@ describe('CI workflow', () => {
     expect(job).toContain('image: mcr.microsoft.com/mssql/server:2022-latest')
     expect(job).toContain('VARIA_TEST_SQL_USER: sa')
   })
-  it('runs every platform on every pull request, drafts included, in at most 13 jobs', () => {
+  it('runs every platform on every code-changing pull request, drafts included, in at most 13 jobs', () => {
     expect([...workflow.values()].map(job => job.if ?? '').filter(condition => /draft/.test(condition))).toEqual([])
     for (const [name, job] of own) expect(job.if, name).toBe(runAlways)
     const pullRequest = own.filter(([, job]) => job.if === runAlways)
@@ -116,7 +143,7 @@ describe('CI workflow', () => {
     // Linux repeats at 1024x768 only on main: the Windows shards run those suites at that size on every pull request.
     for (const step of workflow.get('smoke-linux')!.steps.filter(step => /1024x768x24/.test(step.run))) expect(step.if, step.name).toMatch(/github\.event_name == 'push'/)
   })
-  it('cancels a superseded pull request or main run, never a manual one, and runs report-only benchmarks daily, not per push', () => {
+  it('cancels superseded PR and full main runs, preserves manual runs, and keeps desktop benchmarks daily', () => {
     const yaml = readFileSync('.github/workflows/ci.yml', 'utf8')
     expect(yaml).toContain("group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' || github.event_name == 'push') && github.ref || github.run_id }}")
     expect(yaml).toMatch(/\n {2}cancel-in-progress: true\n/)
@@ -158,13 +185,13 @@ describe('CI workflow', () => {
     expect(job.timeout).toBeGreaterThan(step.timeout!)
     expect(readFileSync('scripts/audit.mjs', 'utf8')).toContain("'npm audit --package-lock-only --json --audit-level=high'")
   })
-  it('type-checks on Linux in every run, and states its job count truly', () => {
+  it('type-checks on Linux in every full run, and states its job count truly', () => {
     const yaml = readFileSync('.github/workflows/ci.yml', 'utf8')
     // Windows and macOS skip tsc: it reads only sources and installed types, and Linux's case-sensitive paths are strictest.
     expect(yaml).toContain("VARIA_CHECK_SKIP: ${{ matrix.os != 'ubuntu-24.04' && 'typecheck' || '' }}")
     expect(workflow.get('check')!.matrix.get('os')!.split(', ')).toContain('ubuntu-24.04')
     const size = (job: Job) => [...job.matrix.values()].reduce((product, axis) => product * axis.split(',').length, 1)
     const count = own.filter(([, job]) => job.if === runAlways).reduce((sum, [, job]) => sum + size(job), 0)
-    expect(yaml).toContain(`runs ${count} jobs:`)
+    expect(yaml).toContain(`runs ${count + 2} jobs: ${count} validation jobs plus scope and result.`)
   })
 })

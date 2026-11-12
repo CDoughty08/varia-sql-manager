@@ -33,8 +33,9 @@ internal static class ColumnProfiler
     public static long WorkingBytes(long baseRows, int columns, int workers = 1) =>
         baseRows / 8 + 1024 + (long)workers * columns * (24L * Math.Min(baseRows, ExactDistinct) + Registers + 4 * DisplayBytes + 4096);
 
-    /// <summary>The fewest rows a thread of a profile reads; a smaller result is read on one.</summary>
-    internal const int MinSlice = 1 << 15;
+    /// <summary>The fewest rows a thread of a profile reads (a page's): a result of several pages is read on several
+    /// threads however few its rows, as its columns' sort keys are what takes the time.</summary>
+    internal const int MinSlice = 1 << 12;
 
     /// <summary>Threads a profile of these rows reads their pages on: each a run of pages of its own.</summary>
     public static int WorkersFor(long baseRows, int pages) => (int)Math.Clamp(Math.Min(baseRows / MinSlice, pages), 1, ViewSorter.Workers);
@@ -61,7 +62,7 @@ internal static class ColumnProfiler
     /// at once (<see cref="WorkersFor"/> by default, and no more than the operations running leave free), each with figures of its own, merged in page order: every figure is a
     /// count, a sum, a lowest or highest, or a set, so the profile is the one a single thread gives, whose lowest and highest
     /// cells are the first rows to hold those values.</summary>
-    public static ResultsProfileResult Profile(ResultSetBuffer set, StoredPage[] pages, ResultView? view, IReadOnlyList<int> columns, bool complete, CancellationToken token, Charges? charges = null, int? workers = null)
+    public static ResultsProfileResult Profile(ResultSetBuffer set, StoredPage[] pages, ResultView? view, IReadOnlyList<int> columns, bool complete, CancellationToken token, Charges? charges = null, int? workers = null, ViewSorter.WorkerGate? gate = null)
     {
         charges ??= new Charges(_ => true);
         long baseRows = 0;
@@ -77,7 +78,7 @@ internal static class ColumnProfiler
         var guessed = set.Lengths.Any(length => length.Estimated);
         var count = set.Wires.Count;
         // At most the threads asked for, and no more than the operations running leave free.
-        using var threads = ViewSorter.Gate.Take(workers ?? WorkersFor(baseRows, pages.Length));
+        using var threads = (gate ?? ViewSorter.Gate).Take(workers ?? WorkersFor(baseRows, pages.Length));
         var runs = Math.Clamp(threads.Count, 1, Math.Max(1, pages.Length));
         int From(int run) => (int)((long)pages.Length * run / runs);
         void Each(Action<int> read)
@@ -291,8 +292,9 @@ internal static class ColumnProfiler
                 (maxKey, maxLength, maxCell, maxCut) = (later.maxKey, later.maxLength, later.maxCell, later.maxCut);
             if (later.charStats is not null) charStats?.Merge(later.charStats);
             if (later.byteStats is not null) byteStats?.Merge(later.byteStats);
-            low = Math.Min(low, later.low);
-            high = Math.Max(high, later.high);
+            // As the rows pass: an equal value later never replaces one (so the first zero keeps its sign).
+            if (later.low < low) low = later.low;
+            if (later.high > high) high = later.high;
         }
 
         public void AddBins(long[] counts)

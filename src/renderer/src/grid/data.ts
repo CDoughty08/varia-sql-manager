@@ -2,7 +2,7 @@ import { browserTimers, type Timers } from '../core/timers'
 import type { ResultHandle, RowWindow } from '../results/ResultClient'
 import { gridLimits as g } from './constants'
 import type { VisibleRange } from './layout'
-import { isFastScroll, isFrontier, planTiles, prefetchTiles, tileColumnOf, tileKey, tileRowOf } from './tiles'
+import { isFastScroll, isFrontier, planTiles, prefetchTiles, tableTiles, tileColumnOf, tileKey, tileRowOf, type TileShape } from './tiles'
 
 /** Tile reads of one grid: counters for test mode's `__variaGrid.stats()`. */
 export interface TileCounters { hits: number; misses: number }
@@ -30,8 +30,13 @@ export class GridData {
   readonly counters: TileCounters = { hits: 0, misses: 0 }
   private readonly handle: Pick<ResultHandle, 'getWindow' | 'peekWindow' | 'prefetch'>
   private readonly columns: number
+  /** The tiles' size (tiles.ts); 128 rows × 32 columns unless the grid asks for another. */
+  private readonly shape: TileShape
   /** The hidden tone column (the result's last), or -1; tiles end at it rather than at `columns`. */
   private readonly tone: number
+  /** A column whose tile is read with every row tile of the frame, wherever the view's columns are (as the tone column's
+   *  is): a transposed grid's header column. */
+  also: number | undefined
   private readonly clientInflight: () => number
   private readonly changed: () => void
   private readonly timers: Timers
@@ -56,10 +61,12 @@ export class GridData {
   private prefetched = ''
   private disposed = false
 
-  constructor(o: { handle: Pick<ResultHandle, 'getWindow' | 'peekWindow' | 'prefetch'>; columns: number; tone?: number; clientInflight: () => number; changed: () => void; timers?: Timers; now?: () => number }) {
+  constructor(o: { handle: Pick<ResultHandle, 'getWindow' | 'peekWindow' | 'prefetch'>; columns: number; tone?: number; shape?: TileShape; also?: number; clientInflight: () => number; changed: () => void; timers?: Timers; now?: () => number }) {
     this.handle = o.handle
     this.columns = o.columns
     this.tone = o.tone ?? -1
+    this.shape = o.shape ?? tableTiles
+    this.also = o.also
     this.clientInflight = o.clientInflight
     this.changed = o.changed
     this.timers = o.timers ?? browserTimers
@@ -69,16 +76,16 @@ export class GridData {
   /** The tile's window, if the cache has it (and now as its most recently used): from the tile's first row, its parts
    *  joined up to the first one missing. */
   peek(key: number): RowWindow | undefined {
-    const first = tileRowOf(key) * g.tileRows, colStart = tileColumnOf(key) * g.tileColumns
+    const first = tileRowOf(key) * this.shape.rows, colStart = tileColumnOf(key) * this.shape.columns
     const shape = { colStart, colEnd: this.colEnd(colStart), maxCellChars: g.maxCellChars, display: false }
-    const head = this.handle.peekWindow(first, g.tileRows, shape)
+    const head = this.handle.peekWindow(first, this.shape.rows, shape)
     const starts = this.parts.get(key)
     if (!starts) return head
     const windows: RowWindow[] = []
     let end = first
     for (const start of starts) {
       if (start > end) break
-      const window = start === first ? head : this.handle.peekWindow(start, first + g.tileRows - start, shape)
+      const window = start === first ? head : this.handle.peekWindow(start, first + this.shape.rows - start, shape)
       if (!window || window.first + window.count <= end) continue
       windows.push(window)
       end = window.first + window.count
@@ -97,7 +104,7 @@ export class GridData {
     return window
   }
   /** The tile holding a row's tone, or undefined when the result has no tone column. */
-  toneTile(row: number): number | undefined { return this.tone < 0 ? undefined : tileKey(Math.floor(row / g.tileRows), Math.floor(this.tone / g.tileColumns)) }
+  toneTile(row: number): number | undefined { return this.tone < 0 ? undefined : tileKey(Math.floor(row / this.shape.rows), Math.floor(this.tone / this.shape.columns)) }
   /** The first failed read's message, while any tile has failed. */
   get error(): string | undefined { return this.errors.values().next().value }
   get reading(): number { return this.inflight.size }
@@ -119,10 +126,10 @@ export class GridData {
     this.rows = rows
     const plan = this.plan(range, rows)
     if (active && active.row >= 0 && active.row < rows && active.column >= 0 && active.column < this.columns) {
-      const key = tileKey(Math.floor(active.row / g.tileRows), Math.floor(active.column / g.tileColumns))
+      const key = tileKey(Math.floor(active.row / this.shape.rows), Math.floor(active.column / this.shape.columns))
       if (!plan.includes(key)) plan.push(key)
     }
-    const ring = prefetchTiles(range, rows, this.columns)
+    const ring = prefetchTiles(range, rows, this.columns, this.shape)
     const wanted = new Set([...plan, ...ring])
     for (const [key, tile] of this.inflight) {
       if (wanted.has(key)) tile.missed = 0
@@ -147,7 +154,7 @@ export class GridData {
       if (this.inflight.has(key)) { if (!window) missing++; continue }
       if (window) {
         this.counters.hits++
-        if (isFrontier(window, rows)) {
+        if (isFrontier(window, rows, this.shape)) {
           // Rows that arrived since are read at most 10 times a second; rows the worker could not hold with the rest at once.
           const shortened = this.shortened.has(key)
           if (!shortened && !this.refetchAllowed(now)) { this.wake(1000 / g.frontierPerSecond); continue }
@@ -177,14 +184,18 @@ export class GridData {
 
   /** The tiles a range shows, centre first, with the tile that holds each row tile's tone. */
   plan(range: VisibleRange, rows: number): number[] {
-    const plan = planTiles(range, rows, this.columns)
-    if (this.tone >= 0) for (const key of [...plan]) { const tone = this.toneTile(tileRowOf(key) * g.tileRows)!; if (!plan.includes(tone)) plan.push(tone) }
+    const plan = planTiles(range, rows, this.columns, this.shape)
+    if (this.tone >= 0) for (const key of [...plan]) { const tone = this.toneTile(tileRowOf(key) * this.shape.rows)!; if (!plan.includes(tone)) plan.push(tone) }
+    if (this.also !== undefined && this.also >= 0 && this.also < this.columns) {
+      const columnTile = Math.floor(this.also / this.shape.columns)
+      for (const key of [...plan]) { const also = tileKey(tileRowOf(key), columnTile); if (!plan.includes(also)) plan.push(also) }
+    }
     return plan
   }
   /** Reads a tile into the client's window cache as a frame would, outside this grid's own reads (a live swap's prepare). */
   fetch(key: number, signal?: AbortSignal): Promise<RowWindow> {
-    const colStart = tileColumnOf(key) * g.tileColumns
-    return this.handle.getWindow(tileRowOf(key) * g.tileRows, g.tileRows, { colStart, colEnd: this.colEnd(colStart), maxCellChars: g.maxCellChars, textBudget: g.textBudget, display: false, signal })
+    const colStart = tileColumnOf(key) * this.shape.columns
+    return this.handle.getWindow(tileRowOf(key) * this.shape.rows, this.shape.rows, { colStart, colEnd: this.colEnd(colStart), maxCellChars: g.maxCellChars, textBudget: g.textBudget, display: false, signal })
   }
 
   dispose(): void {
@@ -197,8 +208,8 @@ export class GridData {
     this.timer = undefined
   }
 
-  /** A tile's end: its 32 columns, the shown ones, and the tone column when it is in the tile. */
-  private colEnd(colStart: number): number { return Math.min(colStart + g.tileColumns, this.tone >= 0 ? this.tone + 1 : this.columns) }
+  /** A tile's end: its columns, the shown ones, and the tone column when it is in the tile. */
+  private colEnd(colStart: number): number { return Math.min(colStart + this.shape.columns, this.tone >= 0 ? this.tone + 1 : this.columns) }
 
   private capacity(): boolean { return this.inflight.size < g.fetchesPerGrid && this.clientInflight() < g.fetchesPerClient }
 
@@ -214,9 +225,9 @@ export class GridData {
   }
 
   /** Reads a tile from `from` (its first row, or where its rows end) to its end. */
-  private read(key: number, from = tileRowOf(key) * g.tileRows): void {
+  private read(key: number, from = tileRowOf(key) * this.shape.rows): void {
     const controller = new AbortController(), tile: Inflight = { controller, missed: 0 }
-    const first = tileRowOf(key) * g.tileRows, end = first + g.tileRows, colStart = tileColumnOf(key) * g.tileColumns
+    const first = tileRowOf(key) * this.shape.rows, end = first + this.shape.rows, colStart = tileColumnOf(key) * this.shape.columns
     this.inflight.set(key, tile)
     this.shortened.delete(key)
     if (from > first) {

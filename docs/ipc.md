@@ -1423,7 +1423,8 @@ the rows it holds (`Results/RowIdentity.cs`); the renderer never compares rows.
 - **`results.findRows { resultId, ids: 1 – 10,000 in 0 – 2⁵³ − 1, viewId? }`** answers `{ positions, marks, truncated, rows }`:
   the ascending positions (view positions with `viewId`) of the rows whose identity is in `ids`, each with the index in
   `ids` it matched, at most 100,000 (`truncated`).
-- **Renderer.** `HighlightsService` keeps highlights per tab and result set index: the first highlight identifies the set
+- **Renderer.** `HighlightsService` keeps highlights per tab and result (a query's own result by its number in the run, which a re-run's
+  result of that number takes over; a pivot, transpose or diff by its entry, and gone with it): the first highlight identifies the set
   (`auto`) and fixes how its rows are told apart (the key column's name and base type, or the whole row); a re-run of the
   tab's query identifies its new set the same way once complete (a column whose length changed still counts) and finds the
   highlighted ids there, and a sorted view finds them by view position. A re-run without the key column finds nothing: the
@@ -1644,11 +1645,11 @@ renderer (`Results/ColumnProfiles.cs`): `results.profile` answers aggregates, ne
 - **`rowBytes`** is the rows' sizes, `{ min, max, average, exact }` from each page's row sums: the grid's row-size bar
   scales to its `max`.
 - **Work.** Two passes over the sealed pages, off the frame loop, reading rows in base order through a bitmap of the
-  view's rows. The pages are read in runs on several threads (one per 32,768 rows, up to the sort's threads), each with
+  view's rows. The pages are read in runs on several threads (one per 4,096 rows, up to the threads the operations share), each with
   figures of its own, merged in page order: every figure is a count, a sum, a lowest or highest, or a set, so the profile
   is the one a single thread gives, and a lowest or highest value shows the first row that holds it. Its working memory
   (a bit a row, and per column and thread the exact distinct set up to its cap, 16 KiB of estimator registers and the
-  kept values; one thread's when there is no room for them all) is charged to the result's query budget while it runs (`TOO_LARGE` when there is no
+  kept values; one thread's when the budget has no room to spare for them all, or when a long value was refused) is charged to the result's query budget while it runs (`TOO_LARGE` when there is no
   room) and returned when it ends. Longer keys (a long lowest or highest value, a long collation sort key) are charged
   as the profile meets them, and a refusal ends it with `TOO_LARGE`. With no columns it reads only the pages' row sums,
   never their bodies. The worker's `cancel` stops it (`CANCELLED`).

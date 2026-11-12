@@ -13,19 +13,19 @@ export function highlightsContribution({ commands, highlights, menuTargets }: Pi
   let last = 1
   const targetOf = (args?: CommandArgs) => {
     const target = outputOf(args) ?? (args?.target ? undefined : focusedOutput(menuTargets))
-    return target?.view === 'grid' && highlights.canHighlight(target.tabId, target.resultIndex) ? target : undefined
+    return target?.view === 'grid' && target.entry !== undefined && highlights.canHighlight(target.tabId, target.entry) ? { tabId: target.tabId, key: target.entry } : undefined
   }
   const highlight = (color: () => number) => ({
     when: (args?: CommandArgs) => !!targetOf(args),
-    run: async (args?: CommandArgs) => { const target = targetOf(args); if (target) await highlights.highlight(target.tabId, target.resultIndex, color()) }
+    run: async (args?: CommandArgs) => { const target = targetOf(args); if (target) await highlights.highlight(target.tabId, target.key, color()) }
   })
   const registrations = [
     commands.register('output.highlightRows', highlight(() => last)),
     ...highlightColors.map((color, index) => commands.register(`output.highlight${color[0].toUpperCase()}${color.slice(1)}` as 'output.highlightYellow', highlight(() => (last = index + 1)))),
     commands.register('output.clearHighlight', highlight(() => 0)),
     commands.register('output.clearAllHighlights', {
-      when: args => { const target = targetOf(args); return !!target && highlights.hasHighlights(target.tabId, target.resultIndex) },
-      run: args => { const target = targetOf(args); if (target) highlights.clear(target.tabId, target.resultIndex) }
+      when: args => { const target = targetOf(args); return !!target && highlights.hasHighlights(target.tabId, target.key) },
+      run: args => { const target = targetOf(args); if (target) highlights.clear(target.tabId, target.key) }
     })
   ]
   return { dispose: () => { for (const registration of registrations) registration.dispose() } }

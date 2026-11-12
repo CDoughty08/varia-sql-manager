@@ -44,7 +44,7 @@ function render(node: ReactNode) {
   return { container, show }
 }
 const source: ColumnFilterSource = { columnValues: () => new Promise(() => {}), apply: () => true }
-const spec = { resultIndex: 0, resultCount: 1 } as never
+const spec = { entry: 'e1', resultNumber: 1, resultCount: 1 } as never
 
 describe('GridShell', () => {
   it('builds its view once per mount key, and cleans up what it built when the key changes', () => {
