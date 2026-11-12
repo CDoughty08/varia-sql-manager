@@ -11,7 +11,7 @@
 ### Improved
 
 - **Results:** sorting, filtering for duplicates, listing a column's values and pivoting are several times faster on number columns with many repeated values (a status, a flag, a foreign key).
-- **Results:** the same operations on text columns are many times faster on large results, most of all when values share their first characters (names, paths, codes), and now use several processor cores. When result memory is too full to do this quickly, they say so instead of running for minutes.
+- **Results:** the same operations on text, date and binary columns are many times faster on large results, most of all when values repeat or share their first characters (names, paths, codes, the dates of a month), and now use several processor cores, shared between the operations running. When result memory is too full to do this in time, they say so instead of running to their time limit.
 - **Results:** column profiles of several columns are faster on large results: each column is read on its own processor core.
 
 ### Fixed

@@ -320,9 +320,9 @@ internal static class ColumnProfiler
                         chars = new char[grown];
                     }
                     var text = chars.AsSpan(0, Encoding.UTF8.GetChars(trimmed, chars));
-                    var size = compare.Info.GetSortKeyLength(text, compare.Options);
-                    Grow(size);
-                    return key.AsSpan(0, compare.Info.GetSortKey(text, key, compare.Options));
+                    // Asked for once; a longer key than the buffer grows it, charged as any growth is.
+                    var written = ViewSorter.SortKey(compare.Info, compare.Options, text, ref key, grown => charges.Add(grown));
+                    return key.AsSpan(0, written);
                 }
                 default: return trim ? ViewSorter.TrimEnd(cell) : cell;
             }
