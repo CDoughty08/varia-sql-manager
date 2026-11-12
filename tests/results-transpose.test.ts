@@ -9,10 +9,11 @@ import { ResultsService, setKey } from '../src/renderer/src/results/ResultsServi
 import { TransposeService, transposable, transposeStrip, transposeText } from '../src/renderer/src/results/TransposeService'
 import { descriptor, fakeResultClient, summaryOf, type FakeHandle } from './fixtures/results'
 import { manualTimers } from './fixtures/workbench'
+import { keyAt } from './fixtures/entries'
 
 const settle = async () => { for (let i = 0; i < 10; i++) await Promise.resolve() }
-const cells = (resultIndex: number, ...blocks: [number, number][]): GridSelection => ({
-  resultIndex, blocks: blocks.map(([top, bottom]) => ({ kind: 'cells' as const, anchor: { row: top, column: 1 }, focus: { row: bottom, column: 1 } })), active: { row: blocks[0][0], column: 1 }
+const cells = (entry: string, ...blocks: [number, number][]): GridSelection => ({
+  entry, blocks: blocks.map(([top, bottom]) => ({ kind: 'cells' as const, anchor: { row: top, column: 1 }, focus: { row: bottom, column: 1 } })), active: { row: blocks[0][0], column: 1 }
 })
 
 function fixture(o: { frames?: (() => void)[] } = {}) {
@@ -64,7 +65,7 @@ describe('transpose schemas', () => {
 
 describe('transpose strip', () => {
   it('says what was transposed, through a view, by selection or header, and how to see rows past the limit', () => {
-    const info = { source: 0, sourceLabel: 'Result 1', viewed: false, selected: false, rows: 5, transposed: 5, columns: 3 }
+    const info = { source: 'e1', sourceLabel: 'Result 1', viewed: false, selected: false, rows: 5, transposed: 5, columns: 3 }
     expect(transposeText(info)).toBe('Transpose of Result 1: 3 columns as rows, 5 rows as columns.')
     expect(transposeText({ ...info, viewed: true, selected: true, rows: 1, transposed: 1, columns: 1, header: 'Name' })).toBe('Transpose of Result 1 (as sorted and filtered): 1 column as rows, 1 selected row as columns, named by Name.')
     expect(transposeText({ ...info, rows: 10_000, transposed: 4095 })).toBe('Transposed the first 4,095 of 10,000 rows; filter or select rows to transpose others.')
@@ -77,27 +78,27 @@ describe('TransposeService', () => {
   it("transposes a grid's set, appends it as the run's last set named after its source, and says what it holds", async () => {
     const { results, transpose, run } = fixture()
     const [, second] = run(2)
-    expect(transpose.canTranspose('t1', 1)).toBe(true)
-    await transpose.transpose('t1', 1)
+    expect(transpose.canTranspose('t1', keyAt(results, 't1', 1))).toBe(true)
+    await transpose.transpose('t1', keyAt(results, 't1', 1))
     await settle()
     expect(second.transpose).toHaveBeenCalledWith({}, { signal: expect.any(AbortSignal) })
     const sets = results.getSnapshot().t1.sets
     expect(sets).toHaveLength(3)
-    expect(sets[2]).toMatchObject({ index: 2, label: 'Transpose of Result 2', descriptor: { kind: 'transpose', resultId: 702 } })
-    expect(transpose.getSnapshot().get(setKey(sets[2].descriptor))).toEqual({ source: 1, sourceLabel: 'Result 2', viewed: false, selected: false, rows: 10, transposed: 10, columns: 2 })
+    expect(sets[2]).toMatchObject({ number: 3, label: 'Transpose of Result 2', descriptor: { kind: 'transpose', resultId: 702 } })
+    expect(transpose.getSnapshot().get(setKey(sets[2].descriptor))).toEqual({ source: keyAt(results, 't1', 1), sourceLabel: 'Result 2', viewed: false, selected: false, rows: 10, transposed: 10, columns: 2 })
     // A transpose can be transposed again; a diff cannot.
     expect(transposable(sets[2])).toBe(true)
-    expect(transpose.canTranspose('t1', 2)).toBe(true)
+    expect(transpose.canTranspose('t1', keyAt(results, 't1', 2))).toBe(true)
   })
 
   it('transposes only the selected rows, merged, and names the columns by the active column', async () => {
     const { results, transpose, run } = fixture()
     const [first] = run(1)
-    expect(transpose.selectedRows('t1', 0)).toBeUndefined()
-    results.setSelection('t1', 0, cells(0, [6, 7], [0, 1], [2, 2], [7, 8]))
-    expect(transpose.selectedRows('t1', 0)).toEqual([[0, 3], [6, 3]])
-    expect(transpose.activeColumn('t1', 0)).toBe(1)
-    await transpose.transpose('t1', 0, { selected: true, header: 0 })
+    expect(transpose.selectedRows('t1', keyAt(results, 't1', 0))).toBeUndefined()
+    results.setSelection('t1', keyAt(results, 't1', 0), cells(keyAt(results, 't1', 0), [6, 7], [0, 1], [2, 2], [7, 8]))
+    expect(transpose.selectedRows('t1', keyAt(results, 't1', 0))).toEqual([[0, 3], [6, 3]])
+    expect(transpose.activeColumn('t1', keyAt(results, 't1', 0))).toBe(1)
+    await transpose.transpose('t1', keyAt(results, 't1', 0), { selected: true, header: 0 })
     expect(first.transpose).toHaveBeenCalledWith({ rows: [[0, 3], [6, 3]], headerColumn: 0 }, { signal: expect.any(AbortSignal) })
     const sets = results.getSnapshot().t1.sets
     expect(transpose.getSnapshot().get(setKey(sets[1].descriptor))).toMatchObject({ selected: true, rows: 6, transposed: 6, header: 'Id' })
@@ -107,19 +108,23 @@ describe('TransposeService', () => {
     const { results, transpose, run } = fixture()
     const [, , third] = run(3)
     const sets = () => results.getSnapshot().t1.sets
-    results.setSelection('t1', 2, cells(2, [4, 5]))
-    results.removeEntry('t1', sets()[1].key)
-    // Result 3 stands second now; its selection came with it, and the place it left has none.
-    expect(transpose.selectedRows('t1', 1)).toEqual([[4, 2]])
-    expect(transpose.activeColumn('t1', 1)).toBe(1)
-    expect(transpose.selectedRows('t1', 2)).toBeUndefined()
-    expect(transpose.canTranspose('t1', 1)).toBe(true)
-    expect(transpose.canTranspose('t1', 2)).toBe(false)
-    await transpose.transpose('t1', 1, { selected: true })
+    const [one, two, three] = sets().map(set => set.key)
+    results.setSelection('t1', three, cells(three, [4, 5]))
+    results.removeEntry('t1', two)
+    // Result 3 stands second now; its selection came with it, Result 1 has none of it, and the entry that went has nothing.
+    expect(keyAt(results, 't1', 1)).toBe(three)
+    expect(transpose.selectedRows('t1', three)).toEqual([[4, 2]])
+    expect(transpose.activeColumn('t1', three)).toBe(1)
+    expect(transpose.selectedRows('t1', one)).toBeUndefined()
+    expect(transpose.selectedRows('t1', two)).toBeUndefined()
+    expect([...results.viewState('t1').grids.keys()]).toEqual([three])
+    expect(transpose.canTranspose('t1', three)).toBe(true)
+    expect(transpose.canTranspose('t1', two)).toBe(false)
+    await transpose.transpose('t1', keyAt(results, 't1', 1), { selected: true })
     await settle()
     expect(third.transpose).toHaveBeenCalledWith({ rows: [[4, 2]] }, { signal: expect.any(AbortSignal) })
-    expect(sets()[2]).toMatchObject({ index: 2, number: 4, label: 'Transpose of Result 3', descriptor: { kind: 'transpose', resultId: 703 } })
-    expect(transpose.getSnapshot().get(setKey(sets()[2].descriptor))).toMatchObject({ source: 1, sourceLabel: 'Result 3', selected: true, transposed: 2 })
+    expect(sets()[2]).toMatchObject({ number: 4, label: 'Transpose of Result 3', descriptor: { kind: 'transpose', resultId: 703 } })
+    expect(transpose.getSnapshot().get(setKey(sets()[2].descriptor))).toMatchObject({ source: keyAt(results, 't1', 1), sourceLabel: 'Result 3', selected: true, transposed: 2 })
     // A transpose of the transpose is named after it, by the entry's key as well as by its place.
     await transpose.transpose('t1', sets()[2].key)
     await settle()
@@ -131,10 +136,10 @@ describe('TransposeService', () => {
     const [first] = run(1)
     first.snapshot = { ...first.snapshot, rowsAvailable: 1000, rowsStored: 1000 }
     const runs = Array.from({ length: limits.transpose.maxRanges + 1 }, (_, at) => [2 * at, 2 * at] as [number, number])
-    results.setSelection('t1', 0, cells(0, ...runs))
-    expect(transpose.selectedRows('t1', 0)).toHaveLength(limits.transpose.maxRanges + 1)
+    results.setSelection('t1', keyAt(results, 't1', 0), cells(keyAt(results, 't1', 0), ...runs))
+    expect(transpose.selectedRows('t1', keyAt(results, 't1', 0))).toHaveLength(limits.transpose.maxRanges + 1)
     const notify = vi.spyOn(results, 'notify')
-    await transpose.transpose('t1', 0, { selected: true })
+    await transpose.transpose('t1', keyAt(results, 't1', 0), { selected: true })
     expect(first.transpose).not.toHaveBeenCalled()
     expect(notify).toHaveBeenCalledWith('t1', 'Transpose takes up to 256 separate runs of selected rows; these are 257. Select fewer runs, or filter the rows and transpose them all.')
   })
@@ -142,23 +147,23 @@ describe('TransposeService', () => {
   it("transposes nothing while the query runs or of a diff, waits for the grid's sort, and says why one failed", async () => {
     const { results, transpose, run } = fixture()
     run(1, { finish: false })
-    expect(transpose.canTranspose('t1', 0)).toBe(false)
+    expect(transpose.canTranspose('t1', keyAt(results, 't1', 0))).toBe(false)
     run(1, { queryId: 'q2', kind: 'diff' })
-    expect(transpose.canTranspose('t1', 0)).toBe(false)
+    expect(transpose.canTranspose('t1', keyAt(results, 't1', 0))).toBe(false)
     const [first] = run(1, { queryId: 'q3' })
     const sortOf = vi.spyOn(results, 'sortOf')
     const view = { rows: 3 } as unknown as NonNullable<ReturnType<ResultsService['sortOf']>>['view']
     const sort = { keys: [], filters: [], applied: [], view, sorting: false, approximate: false, stale: false }
     for (const pending of [{ sorting: true }, { stale: true }, { view: undefined }]) {
       sortOf.mockReturnValue({ ...sort, ...pending })
-      expect(transpose.canTranspose('t1', 0)).toBe(false)
-      await transpose.transpose('t1', 0)
+      expect(transpose.canTranspose('t1', keyAt(results, 't1', 0))).toBe(false)
+      await transpose.transpose('t1', keyAt(results, 't1', 0))
       expect(first.transpose).not.toHaveBeenCalled()
     }
     sortOf.mockRestore()
     const notify = vi.spyOn(results, 'notify')
     vi.mocked(first.transpose).mockRejectedValueOnce(new ResultError('TOO_LARGE', 'There is not enough result memory to transpose these rows. Close other results, or select fewer rows, and try again.'))
-    await transpose.transpose('t1', 0)
+    await transpose.transpose('t1', keyAt(results, 't1', 0))
     expect(notify).toHaveBeenCalledWith('t1', 'There is not enough result memory to transpose these rows. Close other results, or select fewer rows, and try again.')
     expect(results.getSnapshot().t1.sets).toHaveLength(1)
   })
@@ -166,7 +171,7 @@ describe('TransposeService', () => {
   it("releases a transpose with its run's others when the tab closes, and offers none of a backend that was lost", async () => {
     const { client, events, results, transpose, run } = fixture()
     run(1)
-    await transpose.transpose('t1', 0)
+    await transpose.transpose('t1', keyAt(results, 't1', 0))
     const id = results.getSnapshot().t1.sets[1].descriptor.resultId
     events.emit({ type: 'documents.closed', tabId: 't1' })
     expect(client.released()).toEqual(expect.arrayContaining([1, id]))
@@ -174,11 +179,11 @@ describe('TransposeService', () => {
     expect(transpose.getSnapshot().size).toBe(0)
     // A new backend lost every result: the transpose (and its source) can be transposed no more.
     run(1, { queryId: 'q2' })
-    await transpose.transpose('t1', 0)
+    await transpose.transpose('t1', keyAt(results, 't1', 0))
     expect(results.getSnapshot().t1.sets).toHaveLength(2)
     client.lose()
     expect(results.getSnapshot().t1.sets.map(set => set.handle.getSnapshot().state)).toEqual(['lost', 'lost'])
-    expect([transpose.canTranspose('t1', 0), transpose.canTranspose('t1', 1)]).toEqual([false, false])
+    expect([transpose.canTranspose('t1', keyAt(results, 't1', 0)), transpose.canTranspose('t1', keyAt(results, 't1', 1))]).toEqual([false, false])
   })
 
   it("keeps a new transpose's strip when the results show its set only on the next frame", async () => {
@@ -186,7 +191,7 @@ describe('TransposeService', () => {
     const { results, transpose, run } = fixture({ frames })
     run(1)
     while (frames.length > 0) frames.shift()!()
-    await transpose.transpose('t1', 0)
+    await transpose.transpose('t1', keyAt(results, 't1', 0))
     while (frames.length > 0) frames.shift()!()
     const sets = results.getSnapshot().t1.sets
     expect(sets).toHaveLength(2)
@@ -198,7 +203,7 @@ describe('TransposeService', () => {
     const { results, transpose, run } = fixture({ frames })
     run(1)
     while (frames.length > 0) frames.shift()!()
-    await transpose.transpose('t1', 0)
+    await transpose.transpose('t1', keyAt(results, 't1', 0))
     // Another tab starts a query at once: the results publish it now, still without the transpose's set.
     results.begin('t2', 'other')
     expect(transpose.getSnapshot().size).toBe(1)
@@ -212,13 +217,13 @@ describe('TransposeService', () => {
   })
 
   it('says a transpose runs: its tab is busy from the request to the answer, and subscribers hear both', async () => {
-    const { transpose, run } = fixture()
+    const { results, transpose, run } = fixture()
     const [first] = run(1)
     let answer!: (value: Awaited<ReturnType<FakeHandle['transpose']>>) => void
     vi.mocked(first.transpose).mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
     const heard = vi.fn()
     transpose.subscribe(heard)
-    const transposing = transpose.transpose('t1', 0)
+    const transposing = transpose.transpose('t1', keyAt(results, 't1', 0))
     expect([transpose.isRunning('t1'), heard.mock.calls.length]).toEqual([true, 1])
     answer({ descriptor: descriptor(980, { index: 1, kind: 'transpose' }), rows: 10, transposed: 10, columns: 2 })
     await transposing
@@ -229,7 +234,7 @@ describe('TransposeService', () => {
   it('gives up a transpose a new run replaces, releases its late answer, and drops strips of closed transposes', async () => {
     const { client, results, transpose, run } = fixture()
     const [first] = run(1)
-    await transpose.transpose('t1', 0)
+    await transpose.transpose('t1', keyAt(results, 't1', 0))
     expect(transpose.getSnapshot().size).toBe(1)
     // Close Results drops the transpose's strip with the transpose.
     results.closeResults('t1')
@@ -238,9 +243,9 @@ describe('TransposeService', () => {
     let answer!: (value: Awaited<ReturnType<FakeHandle['transpose']>>) => void
     let signal: AbortSignal | undefined
     vi.mocked(again.transpose).mockImplementationOnce((_spec, o) => { signal = o?.signal; return new Promise(resolve => { answer = resolve }) })
-    const transposing = transpose.transpose('t1', 0)
+    const transposing = transpose.transpose('t1', keyAt(results, 't1', 0))
     // Only one transpose runs per tab.
-    expect(transpose.canTranspose('t1', 0)).toBe(false)
+    expect(transpose.canTranspose('t1', keyAt(results, 't1', 0))).toBe(false)
     run(1, { queryId: 'q3', finish: false })
     expect(signal?.aborted).toBe(true)
     answer({ descriptor: descriptor(990, { index: 1, kind: 'transpose' }), rows: 1, transposed: 1, columns: 2 })

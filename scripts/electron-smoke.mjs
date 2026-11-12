@@ -679,7 +679,7 @@ try {
   // A plan's XML is a grid cell's text, never markup.
   await typeSql('XML_PLAN_FIXTURE')
   await queryBarButton(page, /Execute/).click()
-  await expect(resultGrid(page, 1)).toContainText('<ShowPlanXML xmlns=')
+  await expect(resultGrid(page, 'Result 2')).toContainText('<ShowPlanXML xmlns=')
   await expect(page.locator('ShowPlanXML')).toHaveCount(0)
   await typeSql('SELECT 1;')
   await queryBarButton(page, /Execute/).click()

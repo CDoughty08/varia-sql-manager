@@ -14,8 +14,8 @@ const rows = 1_000_000, columns = 300, view = { rows: 45, columns: 40 }
 
 it('resolves a 64-block selection and tests every visible cell', () => {
   let selection: GridSelection | undefined
-  for (let index = 0; index < 64; index++) selection = select(selection, { kind: 'cell', row: (index * 7) % view.rows, column: (index * 13) % view.columns }, { resultIndex: 0, extend: false, add: index > 0 })
-  selection = select(selection, { kind: 'cell', row: 30, column: 30 }, { resultIndex: 0, extend: true, add: false })
+  for (let index = 0; index < 64; index++) selection = select(selection, { kind: 'cell', row: (index * 7) % view.rows, column: (index * 13) % view.columns }, { entry: 'a', extend: false, add: index > 0 })
+  selection = select(selection, { kind: 'cell', row: 30, column: 30 }, { entry: 'a', extend: true, add: false })
   const test = () => {
     // As a frame does: clip the blocks to the window, then test each cell against them.
     const ranges = windowRanges(selection!, rows, columns, { top: 0, left: 0, bottom: view.rows - 1, right: view.columns - 1 })
