@@ -192,6 +192,15 @@ try {
     before: async () => { if (await show('Row size').getAttribute('aria-pressed') !== 'true') await show('Row size').click() }
   })
   if (!only) await show('Row size').click()
+  // A search term in the results toolbar: every result is searched, the new pivot included.
+  await pivotCase('search', narrow(reported, 40) + String.fromCharCode(10) + narrow(reported, 40), 2, 'status', {
+    detail: 'the reported shape with a results search for "1" active',
+    before: async () => {
+      await resultsToolbar(page).getByRole('textbox', { name: 'Search results', exact: true }).fill('1')
+      await expect(resultsToolbar(page).getByRole('button', { name: 'Next match', exact: true })).toBeEnabled({ timeout: 30000 })
+    }
+  })
+  if (!only) await resultsToolbar(page).getByRole('textbox', { name: 'Search results', exact: true }).fill('')
   if (!only) {
   // Pivots pile up: each build appends one to the run. Do the builds get slower as the stack grows?
   step = 'repeat'

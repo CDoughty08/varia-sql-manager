@@ -649,16 +649,26 @@ internal static partial class ViewSorter
     }
 
     /// <summary>A number's double; for exact numerics, equal doubles (rounding is monotonic, so unequal ones already order
-    /// the values) compare their text exactly.</summary>
+    /// the values) compare their text exactly. Only while a value may have more than <see cref="DoubleDigits"/> significant
+    /// digits, though: up to that many a double tells any two values apart, so equal doubles are equal values, and a
+    /// column of repeated values (a status, a flag, a foreign key) sorts without two reads of the pages per tie.</summary>
     private sealed class NumberKey(int rows, int[]? map, PageSource source, int column, bool exact) : Key(rows, map)
     {
+        /// <summary>The significant decimal digits every double keeps (DBL_DIG); a cell this long or shorter has no more.</summary>
+        internal const int DoubleDigits = 15;
         private readonly double[] values = new double[rows];
-        public override void Set(int row, ReadOnlySpan<byte> cell) =>
-            values[row] = double.TryParse(cell, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ? value : double.NaN;
+        // Set by the first cell whose double may not be the whole value (too long, or not a number).
+        private bool textTies;
+        public override void Set(int row, ReadOnlySpan<byte> cell)
+        {
+            var parsed = double.TryParse(cell, NumberStyles.Float, CultureInfo.InvariantCulture, out var value);
+            values[row] = parsed ? value : double.NaN;
+            if (!parsed || cell.Length > DoubleDigits) textTies = true;
+        }
         public override int Compare(int a, int b)
         {
             var compared = values[a].CompareTo(values[b]);
-            if (compared != 0 || !exact) return compared;
+            if (compared != 0 || !exact || !textTies) return compared;
             return CompareNumericText(source.Cell(Row(a), column), source.Cell(Row(b), column));
         }
     }

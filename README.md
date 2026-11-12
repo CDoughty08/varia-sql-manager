@@ -84,6 +84,9 @@ Press **F1** or **Ctrl+Shift+P** (**⌘Shift+P** on macOS) for the command palet
 Open **Help > About Varia** for the running version, update status and copyable version details for support. The macOS
 app menu opens the same dialog. It works without a server connection; see [About Varia](docs/about.md).
 
+**Help > Getting Started** opens searchable offline connection, query and results guides. References follow your
+applied shortcuts, mouse gestures and options; interactive examples use fictional data. See [Getting Started](docs/getting-started.md).
+
 **Help > Release Notes** opens curated, offline notes for the running version, with a picker for bundled release
 history. Update notifications request their exact advertised version; missing notes are reported clearly. **Release
 Downloads** remains a separate browser action. See [Release Notes](docs/release-notes.md).

@@ -191,6 +191,8 @@ export interface DocumentFrameViewProps extends Omit<HeaderProps, 'verbs'> {
   readonly banner?: ReactNode
   /** Sections with a list beside them; without them the frame shows `children` under the header. */
   readonly sections?: readonly FrameSection[]
+  /** Content with its own scrolling structure (for example lazy sections), keeping the header mounted while it loads. */
+  readonly body?: ReactNode
   readonly children?: ReactNode
   /** What the content column ends with, pinned to its bottom edge over the rows: a property sheet's FieldHintStrip. */
   readonly hint?: ReactNode
@@ -211,13 +213,13 @@ export interface DocumentFrameViewProps extends Omit<HeaderProps, 'verbs'> {
  * service, and every change goes back through `onFrame`.
  */
 export function DocumentFrameView(props: DocumentFrameViewProps) {
-  const { id, title, crumbs, subtitle, state, tools, verbs, facts = [], banner, sections, children, hint, frame, onFrame, script, attributes, onKeyDown } = props
+  const { id, title, crumbs, subtitle, state, tools, verbs, facts = [], banner, sections, body, children, hint, frame, onFrame, script, attributes, onKeyDown } = props
   const change = onFrame ?? (() => {})
   return <div className="document-frame" role="region" aria-labelledby={`${id}-title`} data-document-frame={id} {...attributes} onKeyDown={onKeyDown}>
     <DocumentHeader id={id} title={title} crumbs={crumbs} subtitle={subtitle} state={state} tools={tools} verbs={verbs} />
     {facts.length > 0 && <FactLine facts={facts} />}
     {banner && <div className="document-banner">{banner}</div>}
-    {sections && frame ? <SectionedBody id={id} title={title} sections={sections} frame={frame} onFrame={change} hint={hint} /> : <div className="document-content">{children}{hint}</div>}
+    {body ?? (sections && frame ? <DocumentSections id={id} title={title} sections={sections} frame={frame} onFrame={change} hint={hint} /> : <div className="document-content">{children}{hint}</div>)}
     {script && frame && <ScriptDrawer id={id} open={frame.scriptOpen} size={frame.scriptSize} {...script}
       onToggle={() => change(setScriptOpen(frame, !frame.scriptOpen))} onResize={size => change(resizeScript(frame, size))} />}
   </div>
@@ -228,7 +230,7 @@ export function DocumentFrameView(props: DocumentFrameViewProps) {
  * section in view, checked once a frame. Near the end, where the last sections cannot reach the top, the one chosen
  * stays marked (`spySection`).
  */
-function SectionedBody({ id, title, sections, frame, onFrame, hint }: { readonly id: string; readonly title: string; readonly sections: readonly FrameSection[]; readonly frame: FrameState; readonly onFrame: (next: FrameState) => void; readonly hint?: ReactNode }) {
+export function DocumentSections({ id, title, sections, frame, onFrame, hint }: { readonly id: string; readonly title: string; readonly sections: readonly FrameSection[]; readonly frame: FrameState; readonly onFrame: (next: FrameState) => void; readonly hint?: ReactNode }) {
   const content = useRef<HTMLDivElement>(null)
   // The latest frame and handler for the scroll callback, which runs a frame after the render that set it up.
   const latest = useRef({ frame, onFrame, sections })
@@ -236,6 +238,7 @@ function SectionedBody({ id, title, sections, frame, onFrame, hint }: { readonly
   // A tab switched back to remounts its frame: the column starts at the top, so it scrolls to the section its list marks
   // (the effect below), which counts as chosen so the end of the scroll keeps it marked.
   const restored = useRef(restoredSection(frame, sections)).current
+  const restoring = useRef(restored !== undefined)
   const chosen = useRef<string | undefined>(restored)
   const reveal = useRef<string | undefined>(restored)
   const pending = useRef<(() => void) | undefined>(undefined)
@@ -249,6 +252,7 @@ function SectionedBody({ id, title, sections, frame, onFrame, hint }: { readonly
     if (element) column.scrollTop = element.offsetTop
   })
   const choose = (section: string) => {
+    restoring.current = false
     chosen.current = section
     const element = content.current?.querySelector<HTMLElement>(`#${CSS.escape(sectionDomId(id, section))}`)
     // An open section scrolls now; a collapsed one once it has opened (the render that opens it runs the effect above).
@@ -256,26 +260,43 @@ function SectionedBody({ id, title, sections, frame, onFrame, hint }: { readonly
     else reveal.current = section
     onFrame(selectSection(frame, sections, section))
   }
+  const scrollInput = () => {
+    if (!restoring.current) return
+    restoring.current = false
+    chosen.current = undefined
+  }
+  const scrollKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement
+    if (event.defaultPrevented) return
+    if (target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return
+    if (event.key === ' ' && target.closest('button, summary, [role="button"]')) return
+    if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) scrollInput()
+  }
   const scrolled = () => {
     pending.current?.()
     pending.current = nextFrame(() => {
       pending.current = undefined
       const column = content.current
-      if (!column) return
+      // Dockview can hide a tab before React unmounts it; zero-size sections must not replace its reading position.
+      if (!column || column.clientHeight === 0) return
       const { frame, onFrame, sections } = latest.current
       const tops = sections.map(section => column.querySelector<HTMLElement>(`#${CSS.escape(sectionDomId(id, section.id))}`)?.offsetTop ?? 0)
       const chosenIndex = chosen.current === undefined ? undefined : sections.findIndex(section => section.id === chosen.current)
       const index = spySection(tops, column, chosenIndex)
-      // Away from the end the scroll decides, so a later choice is needed to pin a section again.
-      if (column.scrollTop + column.clientHeight < column.scrollHeight - 1) chosen.current = undefined
+      // Only remount restoration survives layout changes until scroll input; ordinary choices keep the original rule.
+      if (!restoring.current && column.scrollTop + column.clientHeight < column.scrollHeight - 1) chosen.current = undefined
       if (index >= 0) onFrame(scrolledTo(frame, sections[index].id))
     })
   }
-  return <div className="document-body">
+  // SectionNav handles Tab into the content and stops propagation, so release restoration before that transfer.
+  return <div className="document-body" onKeyDownCapture={event => { if (!event.defaultPrevented && event.key === 'Tab') scrollInput() }}>
     {sections.length > 1 && <SectionNav id={id} sections={sections} current={frame.section} onChoose={choose} />}
     {/* A tab stop of its own, so PageDown, PageUp and Space page through a section taller than the view; the list's keys
         only go from heading to heading. */}
-    <div className="document-content document-sections" ref={content} onScroll={scrolled} role="region" aria-label={`${title} sections`} tabIndex={0}>
+    <div className="document-content document-sections" ref={content} onScroll={scrolled} onWheel={scrollInput} onTouchMove={scrollInput}
+      onPointerDownCapture={scrollInput}
+      onKeyDown={scrollKey}
+      role="region" aria-label={`${title} sections`} tabIndex={0}>
       {sections.map(section => <FrameSectionView key={section.id} id={id} section={section} collapsed={frame.collapsed.includes(section.id)} onToggle={() => onFrame(toggleSection(frame, section.id))} />)}
       {hint}
     </div>

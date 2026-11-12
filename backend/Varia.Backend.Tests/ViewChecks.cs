@@ -108,6 +108,27 @@ internal static class ViewChecks
             "an int column sorts as numbers with NULL first ascending and last descending, and equal values keep their row order (" + Show(ids) + " / " + Show(idsDown) + ")");
         check(Show(Order(set, (1, false, SortMode.Value))) == "4,1,3,2,0", "decimal(38) values past double's precision still order exactly, and -0.00 ties 0 in row order");
         check(Show(Order(set, (2, false, SortMode.Value))) == "2,1,3,4,0", "float values sort as doubles, 1E+20 last");
+        // Equal doubles are equal values while no cell has more digits than a double keeps, so those ties never read the
+        // pages; one longer cell and ties compare their text again.
+        int[] Exact(params string[] values)
+        {
+            var numbers = store.Open(store.BeginQuery("exact" + Guid.NewGuid()), 0, 1, 1, "rows", [new("n", "decimal", "text", Precision: 38, Scale: 2)], [WireKind.Text])
+                ?? throw new InvalidOperationException("The result set was not kept.");
+            foreach (var value in values)
+            {
+                numbers.CountRow();
+                numbers.BeginRow()!.AppendText(value);
+                numbers.TryCommitRow();
+            }
+            numbers.Complete();
+            return Order(numbers, (0, false, SortMode.Value));
+        }
+        var shortTies = Exact("1.50", "0", "1.5", "-0.00", "2", "1.50");
+        var atLimit = Exact("100000000000002", "100000000000001", "-99999999999.99", "100000000000001", "-99999999999.98");
+        var pastLimit = Exact("9007199254740993", "1.50", "9007199254740992", "1.5", "9007199254740993", "9007199254740992.5");
+        check(Show(shortTies) == "1,3,0,2,5,4" && Show(atLimit) == "2,4,1,3,0" && Show(pastLimit) == "1,3,2,5,0,4",
+            "exact numerics tie by value in row order whether their doubles settle it (15 characters or fewer) or their text does (a longer cell in the column): "
+            + Show(shortTies) + " / " + Show(atLimit) + " / " + Show(pastLimit));
         check(Show(Order(set, (3, false, SortMode.Value))) == "2,3,0,4,1", "datetimeoffset sorts by its UTC instant, not its display text");
         check(Show(Order(set, (4, false, SortMode.Value))) == "2,1,4,3,0", "uniqueidentifier sorts in SQL Server's byte order (its last six bytes first)");
         check(Show(Order(set, (5, false, SortMode.Value))) == "4,1,2,0,3",

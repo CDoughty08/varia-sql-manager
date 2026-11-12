@@ -24,6 +24,10 @@ the rules that keep it lean.
 - `npm run bench` (node harness, Release backend), `npm run bench:e2e [-- --live]` and `npm run bench:grid [-- --live]`
   (Electron, need `out/`): the IPC and results grid benchmarks, not part of `check`. `node scripts/check-bench.mjs
   [--enforce]` compares them with `tests/bench/floors.json`; CI enforces floors on Linux only.
+- The pivot benchmarks are run by hand and enforce nothing: `dotnet run --project
+  backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --pivot-bench` (backend, stage by
+  stage) and `node scripts/pivot-bench.mjs` (the built app against `VARIA_TEST_SQL_SERVER`).
+  docs/pivot-performance-findings.md has their options and what they measured.
 
 ## Environment
 

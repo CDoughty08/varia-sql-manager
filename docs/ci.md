@@ -52,6 +52,15 @@ with `node scripts/ci-timings.mjs` (add `--steps` for per-step times) before and
   compilation uses the existing tag-publication job, with a script-free
   dependency install for the shared schema. It creates no new job and does not run that install on ordinary PR checks.
 
+  Getting Started also shares `updates-smoke.mjs`, including search, lazy routing/focus, interactive fictional samples,
+  live shortcut/gesture/settings changes, Options navigation and a narrow layout under reduced motion. The expanded
+  suite took 9.1 seconds locally on Windows. [PR #424's successful run](https://github.com/CDoughty08/varia-sql-manager/actions/runs/42976652703)
+  measured 11 seconds on both Linux and Windows; the shard weights record those measurements. This adds no launch or
+  job. Registration/reference checks load every bundled page without SQL.
+  DOM checks hold and reject real guide-module imports to cover focus ownership, failure recovery and closing during
+  a load; scroll checks cover hidden tabs and reflow on remount. The shared smoke also checks numeric sample ordering
+  under each text-sort mode and focus/section restoration after a tab switch.
+
   Smoke builds and packaging prepare Electron from its npm-pinned checksums, retrying transient official-download failures
   within a three-attempt, three-minute budget and seeding the shared archive cache so packaging verifies checksums offline.
   Publishing a verified SQL Tools archive or runtime retries brief Windows sharing violations up to seven times. Persistent
