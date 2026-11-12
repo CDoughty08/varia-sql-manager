@@ -5,7 +5,8 @@
 // whole view while its tab is hidden.
 import {
   activityLiveProbes, activityPanes, chartWindowsMinutes, defaultChartWindowMinutes, defaultPanes, paneProbes, probeIntervalMs, tileSpecs,
-  activityIntervalsSeconds, activityIntervalDefaults, activityLimits, probeSpecs, sessionToggles, viewChips, type ActivityPane, type ActivityProbe, type ActivityTable, type ChartWindowMinutes, type ViewChip
+  activityIntervalsSeconds, activityIntervalDefaults, activityLimits, fileLatencyDefaults, fileViews, probeSpecs, sessionToggles, viewChips, waitToggles, type ActivityPane, type ActivityProbe, type ActivityTable,
+  type ChartWindowMinutes, type FileView, type ViewChip
 } from '../../../shared/activity/catalog'
 import type { ActivityColumnFilter } from '../../../shared/activity/schema'
 import type { LiveFacet, LiveArgs } from '../../../shared/live/schema'
@@ -47,7 +48,22 @@ export interface MonitorState {
   readonly generation: number
   /** Sessions' view chip, Show chips, filter box and column value filters, sent as the source's args (the backend filters). */
   readonly processes: ProcessesFilter
+  /** Resource Waits: by category or by type, and Hide benign waits (both tables), sent as the source's args. */
+  readonly waits: WaitsFilter
+  /** Data File I/O: its view chip, and the latency thresholds (the activityMonitor.fileLatency* settings) that tone rows. */
+  readonly files: FilesFilter
 }
+export interface WaitsFilter {
+  readonly table: 'waitCategories' | 'waitTypes'
+  readonly hideBenign: boolean
+}
+export interface FilesFilter {
+  readonly view: FileView
+  readonly warningMs: number
+  readonly errorMs: number
+}
+export const defaultWaitsFilter: WaitsFilter = { table: 'waitCategories', hideBenign: waitToggles.hideBenign.default }
+export const defaultFilesFilter: FilesFilter = { view: 'all', warningMs: fileLatencyDefaults.warning, errorMs: fileLatencyDefaults.error }
 export interface ProcessesFilter {
   readonly view: ViewChip
   readonly showSystem: boolean
@@ -80,8 +96,21 @@ export function processesActivityFilter(filter: ProcessesFilter): ActivityFilter
     }))
   return { table: 'sessions', view: filter.view, showSystem: filter.showSystem, showVaria: filter.showVaria, ...text ? { text } : {}, ...columnFilters.length ? { columnFilters } : {} }
 }
-/** The monitor's live args: Sessions' filter (the other tables keep the catalogue's defaults until their panes filter). */
-export const monitorArgs = (state: Pick<MonitorState, 'processes'>): ActivityArgs => ({ filters: [processesActivityFilter(state.processes)] })
+/** A latency threshold from the settings, kept to what the files filter accepts (whole milliseconds, 1 to the limit). */
+export function latencyMs(value: unknown, fallback: number): number {
+  const number = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : NaN
+  return Number.isFinite(number) ? Math.min(activityLimits.fileLatencyMs, Math.max(1, Math.round(number))) : fallback
+}
+/** The monitor's live args: Sessions' filter, Hide benign waits for both of Resource Waits' tables, and Data File I/O's
+ *  view and thresholds. Blocking and Active Expensive Queries keep the catalogue's defaults. */
+export const monitorArgs = (state: Pick<MonitorState, 'processes' | 'waits' | 'files'>): ActivityArgs => ({
+  filters: [
+    processesActivityFilter(state.processes),
+    { table: 'waitCategories', hideBenign: state.waits.hideBenign },
+    { table: 'waitTypes', hideBenign: state.waits.hideBenign },
+    { table: 'files', fileView: state.files.view, latencyWarningMs: state.files.warningMs, latencyErrorMs: state.files.errorMs }
+  ]
+})
 
 /** Merges a sample's facets (only the columns whose values changed come) into what the monitor knew. */
 export function mergeFacets(known: Readonly<Record<string, LiveFacet>> | undefined, changed: readonly LiveFacet[]): Readonly<Record<string, LiveFacet>> {
@@ -118,7 +147,9 @@ export function initialMonitor(id: string, server: string, values: SettingsValue
     id, server, primary, secondary: secondary === primary ? activityPanes.find(item => item !== primary)! : secondary, split: second !== 'none' && secondary !== primary,
     intervalSeconds: (activityIntervalsSeconds as readonly number[]).includes(interval) ? interval : activityIntervalDefaults.refreshIntervalSeconds,
     windowMinutes: (chartWindowsMinutes as readonly number[]).includes(window) ? window as ChartWindowMinutes : defaultChartWindowMinutes,
-    processes: defaultProcessesFilter, paused: false, splitRatio: splitLimits.default, expanded: tileSpecs.flatMap((tile, index) => tile.defaultExpanded ? [index] : []), generation: 0
+    processes: defaultProcessesFilter, waits: defaultWaitsFilter,
+    files: { view: 'all', warningMs: latencyMs(values['activityMonitor.fileLatencyWarningMs'], fileLatencyDefaults.warning), errorMs: latencyMs(values['activityMonitor.fileLatencyErrorMs'], fileLatencyDefaults.error) },
+    paused: false, splitRatio: splitLimits.default, expanded: tileSpecs.flatMap((tile, index) => tile.defaultExpanded ? [index] : []), generation: 0
   }
 }
 
@@ -157,7 +188,7 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
   get facts(): ExternalStore<ActivityFactsSnapshot> { return this.factsStore }
   factsOf(id: string): MonitorFacts { return this.factsStore.getSnapshot().byMonitor[id] ?? noFacts }
   /** A pane grid's scroll, widths and selection, kept across tab switches and pane changes. */
-  gridState(id: string, pane: ActivityPane): LiveGridState {
+  gridState(id: string, pane: ActivityPane | ActivityTable): LiveGridState {
     const key = id + '/' + pane
     let state = this.gridStates.get(key)
     if (!state) this.gridStates.set(key, state = { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: false })
@@ -169,11 +200,30 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
     const state = this.get(id)
     if (!state) return
     const view = change.view !== undefined && (viewChips as readonly string[]).includes(change.view) ? change.view : state.processes.view
-    const processes: ProcessesFilter = { ...state.processes, ...change, view }
-    const before = JSON.stringify(monitorArgs(state)), after = JSON.stringify(monitorArgs({ processes }))
-    if (before === after && processes.text === state.processes.text) return
-    this.put({ ...state, processes })
-    if (before !== after) this.handles.get(id)?.setArgs(monitorArgs({ processes }))
+    this.filter(state, { ...state, processes: { ...state.processes, ...change, view } })
+  }
+  /** Resource Waits' table (the view's choice: both tables come in every sample) and Hide benign waits (the backend's). */
+  setWaitsFilter(id: string, change: Partial<WaitsFilter>): void {
+    const state = this.get(id)
+    if (!state) return
+    const table = change.table === 'waitCategories' || change.table === 'waitTypes' ? change.table : state.waits.table
+    this.filter(state, { ...state, waits: { table, hideBenign: change.hideBenign ?? state.waits.hideBenign } })
+  }
+  /** Data File I/O's view chip, and its thresholds as the settings change them. */
+  setFilesFilter(id: string, change: Partial<FilesFilter>): void {
+    const state = this.get(id)
+    if (!state) return
+    const view = change.view !== undefined && (fileViews as readonly string[]).includes(change.view) ? change.view : state.files.view
+    const files: FilesFilter = { view, warningMs: latencyMs(change.warningMs ?? state.files.warningMs, state.files.warningMs), errorMs: latencyMs(change.errorMs ?? state.files.errorMs, state.files.errorMs) }
+    this.filter(state, { ...state, files })
+  }
+  /** Keeps a filter change, and sends the args only when what the backend reads changed: the filter box's draft text and
+   *  Resource Waits' table change the view alone. */
+  private filter(state: MonitorState, next: MonitorState): void {
+    if (JSON.stringify([next.processes, next.waits, next.files]) === JSON.stringify([state.processes, state.waits, state.files])) return
+    const before = JSON.stringify(monitorArgs(state)), after = monitorArgs(next)
+    this.put(next)
+    if (before !== JSON.stringify(after)) this.handles.get(state.id)?.setArgs(after)
   }
   /** Clear filters: the view chip, the filter box and the column filters; the toggles stay as chosen. */
   clearProcessesFilter(id: string): void {

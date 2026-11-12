@@ -259,8 +259,8 @@ What a new Activity Monitor starts with, and when its tiles warn. Not in SSMS.
 | `activityMonitor.cpuWarningPercent` | Processor time warning | Integer 50–100 percent | 80 percent |  | All | At once | The % Processor Time tile is outlined as a warning from this much SQL Server CPU, and as an error from 95 %. Not in SSMS. |
 | `activityMonitor.blockedWarningSeconds` | Blocking warning after | Integer 1–3,600 seconds | 5 seconds |  | All | At once | The Blocked Sessions tile is outlined as a warning once a session has waited on another this long. Not in SSMS. |
 | `activityMonitor.blockedErrorSeconds` | Blocking error after | Integer 1–3,600 seconds | 30 seconds |  | All | At once | The Blocked Sessions tile is outlined as an error once a session has waited on another this long. Not in SSMS. |
-| `activityMonitor.fileLatencyWarningMs` | I/O latency warning | Integer 1–10,000 ms | 20 ms |  | All | At once | The Database I/O tile is outlined as a warning when reads or writes take this long on average over the interval. Not in SSMS. |
-| `activityMonitor.fileLatencyErrorMs` | I/O latency error | Integer 1–10,000 ms | 50 ms |  | All | At once | The Database I/O tile is outlined as an error when reads or writes take this long on average over the interval. Not in SSMS. |
+| `activityMonitor.fileLatencyWarningMs` | I/O latency warning | Integer 1–10,000 ms | 20 ms |  | All | At once | The Database I/O tile is outlined as a warning, and Data File I/O tones a file as a warning, when reads or writes take this long on average over the interval. Not in SSMS. |
+| `activityMonitor.fileLatencyErrorMs` | I/O latency error | Integer 1–10,000 ms | 50 ms |  | All | At once | The Database I/O tile is outlined as an error, and Data File I/O tones a file as an error, when reads or writes take this long on average over the interval. Below the warning threshold it acts as the warning one. Not in SSMS. |
 
 ### SQL Server Integration Services
 

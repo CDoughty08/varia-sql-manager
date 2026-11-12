@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { activityLiveProbes, paneProbes, pendingPanes } from '../src/shared/activity/catalog'
 import { defaultSettings } from '../src/shared/settings/catalog'
-import { defaultProcessesFilter, initialMonitor, mergeFacets, monitorArgs, monitorTitle, probeSettings, processesActivityFilter, shownPanes } from '../src/renderer/src/activity/ActivityMonitorService'
+import { defaultFilesFilter, defaultProcessesFilter, defaultWaitsFilter, initialMonitor, latencyMs, mergeFacets, monitorArgs, monitorTitle, probeSettings, processesActivityFilter, shownPanes } from '../src/renderer/src/activity/ActivityMonitorService'
 import type { AppliedTick } from '../src/renderer/src/live/LiveService'
 import { cyclePanel } from '../src/renderer/src/contributions/activity'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
@@ -22,6 +22,8 @@ function monitorFixture(settings = {}) {
 }
 const serverNode = (connectionId: string, lost = false): ExplorerMenuNode => ({ id: 1, lost, kind: 'server', connectionId, label: connectionId, ref: { type: 'object', object: { kind: 'server', name: connectionId } } } as unknown as ExplorerMenuNode)
 
+const resourceFilters = [{ table: 'waitCategories', hideBenign: true }, { table: 'waitTypes', hideBenign: true }, { table: 'files', fileView: 'all', latencyWarningMs: 20, latencyErrorMs: 50 }]
+
 describe('Activity Monitor document', () => {
   it('opens one tab per connection, subscribed once to every activity probe, with only what a shown pane reads running', async () => {
     const { activity, documents, connect, liveViews, commands } = monitorFixture()
@@ -32,10 +34,11 @@ describe('Activity Monitor document', () => {
     expect(liveViews.views).toHaveLength(1)
     expect(liveViews.last.spec).toEqual({
       connectionId: 'c1', source: 'activity',
-      // Processes' filter goes with the subscription, so its first sample is already filtered.
-      args: { filters: [{ table: 'sessions', view: 'all', showSystem: false, showVaria: false }] },
-      // The tiles' overview and Processes' sessions sample; the other panes' grids are still to come, so their probes wait, paused.
-      probes: [{ probe: 'activity.overview', intervalMs: 2000, paused: false }, { probe: 'activity.sessions', intervalMs: 2000, paused: false }, { probe: 'activity.resources', intervalMs: 5000, paused: true }, { probe: 'activity.queries', intervalMs: 30_000, paused: true }]
+      // The panes' filters go with the subscription, so the first sample is already filtered.
+      args: { filters: [{ table: 'sessions', view: 'all', showSystem: false, showVaria: false }, ...resourceFilters] },
+      // The tiles' overview, Sessions' sessions sample and Resource Waits' resources sample; Recent Expensive Queries' grid is
+      // still to come (and not shown), so its probe waits, paused.
+      probes: [{ probe: 'activity.overview', intervalMs: 2000, paused: false }, { probe: 'activity.sessions', intervalMs: 2000, paused: false }, { probe: 'activity.resources', intervalMs: 5000, paused: false }, { probe: 'activity.queries', intervalMs: 30_000, paused: true }]
     })
     expect(liveViews.last.owner.key).toBe(`tab:${id}`)
     // Opening it again activates the same tab and subscribes nothing new; another server gets its own.
@@ -148,11 +151,12 @@ describe('Activity Monitor document', () => {
   it('runs a probe only while a shown pane whose grid exists reads it', () => {
     expect(paneProbes(['processes', 'waits'], [])).toEqual(['activity.overview', 'activity.sessions', 'activity.resources'])
     expect(paneProbes(['recentQueries'], [])).toEqual(['activity.overview', 'activity.queries'])
-    expect(paneProbes(['processes', 'waits'])).toEqual(['activity.overview', 'activity.sessions'])
-    expect(paneProbes(['blocking', 'waits'])).toEqual(['activity.overview', 'activity.sessions'])
+    expect(paneProbes(['processes', 'waits'])).toEqual(['activity.overview', 'activity.sessions', 'activity.resources'])
+    expect(paneProbes(['blocking', 'fileIo'])).toEqual(['activity.overview', 'activity.sessions', 'activity.resources'])
     expect(paneProbes(['activeQueries'])).toEqual(['activity.overview', 'activity.sessions'])
-    expect(paneProbes(['fileIo', 'waits'])).toEqual(['activity.overview'])
-    expect(pendingPanes).toEqual(['waits', 'fileIo', 'recentQueries'])
+    expect(paneProbes(['fileIo', 'waits'])).toEqual(['activity.overview', 'activity.resources'])
+    expect(paneProbes(['recentQueries'])).toEqual(['activity.overview'])
+    expect(pendingPanes).toEqual(['recentQueries'])
     const state = initialMonitor('m', 'server', defaultSettings)
     expect(shownPanes(state)).toEqual(['processes', 'waits'])
     expect(shownPanes({ ...state, split: false })).toEqual(['processes'])
@@ -171,10 +175,14 @@ describe('Activity Monitor document', () => {
     activity.toggleSplit(id)
     expect([activity.get(id)?.split, context.getState().activitySplit]).toEqual([false, false])
     expect(liveViews.last.calls).toEqual([{ method: 'setProbe', probe: 'activity.sessions', patch: { paused: true } }])
-    // A pending pane starts no SQL; Blocking reads the sessions probe, so showing it resumes that probe.
+    // Data File I/O reads the same probe as Resource Waits, so nothing changes; a pending pane starts no SQL (and stops
+    // the resources probe); Blocking reads the sessions probe, so showing it resumes that probe.
     liveViews.last.calls.length = 0
     activity.setPane(id, 'primary', 'fileIo')
     expect(liveViews.last.calls).toEqual([])
+    activity.setPane(id, 'primary', 'recentQueries')
+    expect(liveViews.last.calls).toEqual([{ method: 'setProbe', probe: 'activity.resources', patch: { paused: true } }])
+    liveViews.last.calls.length = 0
     activity.setPane(id, 'primary', 'blocking')
     expect(liveViews.last.calls).toEqual([{ method: 'setProbe', probe: 'activity.sessions', patch: { paused: false } }])
     activity.toggleTile(id, 4)
@@ -203,16 +211,39 @@ describe('Activity Monitor document', () => {
     // A view the catalogue does not offer is ignored.
     activity.setProcessesFilter(id, { view: 'nope' as never })
     expect(liveViews.last.calls.filter(call => call.method === 'setArgs').map(call => call.method === 'setArgs' ? call.args : undefined)).toEqual([
-      { filters: [{ table: 'sessions', view: 'blocked', showSystem: false, showVaria: false }] },
-      { filters: [{ table: 'sessions', view: 'blocked', showSystem: false, showVaria: false, text: 'orders' }] },
-      { filters: [{ table: 'sessions', view: 'blocked', showSystem: false, showVaria: false, text: 'orders', columnFilters: [{ column: 'login', values: ['app_orders'] }] }] },
-      { filters: [{ table: 'sessions', view: 'blocked', showSystem: false, showVaria: true, text: 'orders', columnFilters: [{ column: 'login', values: ['app_orders'] }] }] }
+      { filters: [{ table: 'sessions', view: 'blocked', showSystem: false, showVaria: false }, ...resourceFilters] },
+      { filters: [{ table: 'sessions', view: 'blocked', showSystem: false, showVaria: false, text: 'orders' }, ...resourceFilters] },
+      { filters: [{ table: 'sessions', view: 'blocked', showSystem: false, showVaria: false, text: 'orders', columnFilters: [{ column: 'login', values: ['app_orders'] }] }, ...resourceFilters] },
+      { filters: [{ table: 'sessions', view: 'blocked', showSystem: false, showVaria: true, text: 'orders', columnFilters: [{ column: 'login', values: ['app_orders'] }] }, ...resourceFilters] }
     ])
     expect(activity.get(id)?.processes).toMatchObject({ view: 'blocked', text: 'orders  ', showVaria: true })
     // Clear filters keeps the toggles.
     activity.clearProcessesFilter(id)
     expect(activity.get(id)?.processes).toEqual({ ...defaultProcessesFilter, showVaria: true })
-    expect(liveViews.last.calls.at(-1)).toEqual({ method: 'setArgs', args: { filters: [{ table: 'sessions', view: 'all', showSystem: false, showVaria: true }] } })
+    expect(liveViews.last.calls.at(-1)).toEqual({ method: 'setArgs', args: { filters: [{ table: 'sessions', view: 'all', showSystem: false, showVaria: true }, ...resourceFilters] } })
+  })
+  it('sends Hide benign waits and Data File I/O\'s view and thresholds as args, and Resource Waits\' table as none', () => {
+    const { activity, connect, liveViews } = monitorFixture()
+    connect(connectionInfo('c1'))
+    const id = activity.open('c1')
+    const sent = () => liveViews.last.calls.filter(call => call.method === 'setArgs').map(call => call.method === 'setArgs' && 'filters' in call.args ? call.args.filters?.slice(1) : undefined)
+    // Both tables come in every sample, so showing the types sends nothing.
+    activity.setWaitsFilter(id, { table: 'waitTypes' })
+    expect([activity.get(id)?.waits, sent()]).toEqual([{ table: 'waitTypes', hideBenign: true }, []])
+    activity.setWaitsFilter(id, { hideBenign: false })
+    activity.setFilesFilter(id, { view: 'overThreshold' })
+    // Thresholds are whole milliseconds within the filter's bounds; the same ones again, or an unknown view, send nothing.
+    activity.setFilesFilter(id, { warningMs: 0.4, errorMs: 99_999 })
+    activity.setFilesFilter(id, { warningMs: 1, errorMs: 10_000, view: 'nope' as never })
+    activity.setFilesFilter(id, { warningMs: Number.NaN })
+    expect(sent()).toEqual([
+      [{ table: 'waitCategories', hideBenign: false }, { table: 'waitTypes', hideBenign: false }, resourceFilters[2]],
+      [{ table: 'waitCategories', hideBenign: false }, { table: 'waitTypes', hideBenign: false }, { table: 'files', fileView: 'overThreshold', latencyWarningMs: 20, latencyErrorMs: 50 }],
+      [{ table: 'waitCategories', hideBenign: false }, { table: 'waitTypes', hideBenign: false }, { table: 'files', fileView: 'overThreshold', latencyWarningMs: 1, latencyErrorMs: 10_000 }]
+    ])
+    // A new monitor takes its thresholds from the settings.
+    expect(initialMonitor('m', 's', { ...defaultSettings, 'activityMonitor.fileLatencyWarningMs': 35, 'activityMonitor.fileLatencyErrorMs': 90 } as never).files).toEqual({ view: 'all', warningMs: 35, errorMs: 90 })
+    expect(latencyMs('', 20)).toBe(20)
   })
   it('bounds a filter as the schema does', () => {
     const long = 'x'.repeat(1_000)
@@ -221,7 +252,10 @@ describe('Activity Monitor document', () => {
     expect(filter.columnFilters).toHaveLength(8)
     expect(filter.columnFilters?.[0].values).toHaveLength(50)
     expect(filter.columnFilters?.[0].values?.[0]).toHaveLength(256)
-    expect(monitorArgs({ processes: defaultProcessesFilter })).toEqual({ filters: [{ table: 'sessions', view: 'all', showSystem: false, showVaria: false }] })
+    expect(monitorArgs({ processes: defaultProcessesFilter, waits: defaultWaitsFilter, files: defaultFilesFilter })).toEqual({ filters: [
+      { table: 'sessions', view: 'all', showSystem: false, showVaria: false }, { table: 'waitCategories', hideBenign: true }, { table: 'waitTypes', hideBenign: true },
+      { table: 'files', fileView: 'all', latencyWarningMs: 20, latencyErrorMs: 50 }
+    ] })
   })
   it('keeps each table\'s facets, merged as columns change, and the status values, until it subscribes again', () => {
     const { activity, connect, liveViews } = monitorFixture()

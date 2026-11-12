@@ -17,6 +17,8 @@ export const copyKeys = {
 const shownPaneNotes: { readonly [P in (typeof activityPanes)[number]]?: string } = {
   processes: 'A live grid of sessions with view chips, Show chips, header funnels and a filter box (below); SSMS calls it Processes.',
   blocking: 'A live grid of the blocking chains, lead blockers first (below).',
+  waits: 'A live grid of the wait categories, or By type of the wait types, the most wait time first, with Hide benign waits (below).',
+  fileIo: 'A live grid of the database files, the busiest first, toned by read and write latency, with view chips (below).',
   activeQueries: 'A live grid of the running requests, the most CPU first (below).'
 }
 export const documentCommands = {

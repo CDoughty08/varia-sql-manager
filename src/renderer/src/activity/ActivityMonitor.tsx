@@ -27,6 +27,7 @@ import { freshness, pillStatus } from '../live/status'
 import { splitLimits, type MonitorState, type PaneSlot } from './ActivityMonitorService'
 import { tileName } from '../kit/Tile'
 import ProcessesPane from './panes/ProcessesPane'
+import { FileIoPane, WaitsPane } from './panes/ResourcePanes'
 import SessionTablePane from './panes/SessionTablePanes'
 import { chartScaleOf, gridRows, latestValue, monitorFacts, monitorNotice, nextAnnouncement, overviewProbe, seriesIndex, tileReadings, type Announcement, type TileReading } from './tiles'
 
@@ -45,6 +46,9 @@ export default function ActivityMonitor({ documentId }: { readonly documentId: s
   const tab = useServiceSnapshot(workbench.documents).documents.find(item => item.id === documentId)
   const connectionList = useServiceSnapshot(connections)
   const { values: settings } = useServiceSnapshot(workbench.settings)
+  // Data File I/O's thresholds are the settings' (they tone its rows in the backend), so a change reaches an open monitor.
+  const warningMs = Number(settings['activityMonitor.fileLatencyWarningMs']), errorMs = Number(settings['activityMonitor.fileLatencyErrorMs'])
+  useEffect(() => activity.setFilesFilter(documentId, { warningMs, errorMs }), [activity, documentId, warningMs, errorMs])
   // A new handle comes with Retry, which bumps the generation.
   const handle = useMemo(() => activity.handle(documentId), [activity, documentId, state?.generation]) // eslint-disable-line react-hooks/exhaustive-deps
   const snapshot = useSyncExternalStore(handle?.subscribe ?? noHandle.subscribe, handle?.getSnapshot ?? noHandle.getSnapshot)
@@ -287,6 +291,8 @@ function Pane({ state, slot, blocked, handle, snapshot }: { readonly state: Moni
     <div className="activity-pane-body" role="tabpanel" id={`${base}-panel`} aria-labelledby={`${base}-${current}`}>
       {current === 'processes' && <ProcessesPane state={state} handle={handle} snapshot={snapshot} facts={facts} labelledBy={`${base}-${current}`} />}
       {(current === 'blocking' || current === 'activeQueries') && <SessionTablePane key={current} table={current} state={state} handle={handle} snapshot={snapshot} />}
+      {current === 'waits' && <WaitsPane state={state} handle={handle} snapshot={snapshot} />}
+      {current === 'fileIo' && <FileIoPane state={state} handle={handle} snapshot={snapshot} />}
       {pendingPanes.includes(current) && <EmptyState icon="pulse" title={paneSpecs[current].title} detail={pendingPaneNote(current)} />}
     </div>
   </section>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { activityLimits, tableSpecs } from '../src/shared/activity/catalog'
 import { activityLiveArgsSchema } from '../src/shared/activity/schema'
-import { defaultProcessesFilter, monitorArgs, processesActivityFilter, type ProcessesFilter } from '../src/renderer/src/activity/ActivityMonitorService'
+import { defaultFilesFilter, defaultProcessesFilter, defaultWaitsFilter, monitorArgs, processesActivityFilter, type ProcessesFilter } from '../src/renderer/src/activity/ActivityMonitorService'
 import { activeFilters, processesStatus, processesToneLabel } from '../src/renderer/src/activity/panes/ProcessesPane'
 import { facetList, liveCondition, liveFilterSource, type FacetList } from '../src/renderer/src/live/live-filter'
 import { paneProblem, paneWaiting } from '../src/renderer/src/activity/panes/PaneState'
@@ -19,7 +19,7 @@ describe('Sessions filter args', () => {
     expect(columns.length).toBeGreaterThan(0)
     const long = 'x'.repeat(1_000)
     const full = filter({ view: 'blocked', showSystem: true, showVaria: true, text: long, columnFilters: columns.map(column => ({ column, values: Array.from({ length: 80 }, (_, index) => `${index}${long}`), blanks: true, nonBlanks: false })) })
-    for (const args of [monitorArgs({ processes: defaultProcessesFilter }), monitorArgs({ processes: full }), { filters: [processesActivityFilter(filter({ columnFilters: [{ column: columns[0], blanks: true }] }))] }]) {
+    for (const args of [monitorArgs({ processes: defaultProcessesFilter, waits: defaultWaitsFilter, files: defaultFilesFilter }), monitorArgs({ processes: full, waits: defaultWaitsFilter, files: defaultFilesFilter }), { filters: [processesActivityFilter(filter({ columnFilters: [{ column: columns[0], blanks: true }] }))] }]) {
       // What the main process's validation would do to a live.update: a shape the backend refuses fails here, not at runtime.
       expect(activityLiveArgsSchema.safeParse(args).success, JSON.stringify(args).slice(0, 200)).toBe(true)
     }

@@ -59,8 +59,8 @@ probe stays paused: no SQL runs for a pane nobody can read.
 | --- | --- |
 | Sessions | A live grid of sessions with view chips, Show chips, header funnels and a filter box (below); SSMS calls it Processes. |
 | Blocking | A live grid of the blocking chains, lead blockers first (below). |
-| Resource Waits | Resource Waits is not shown yet; it arrives in a later version of Varia. |
-| Data File I/O | Data File I/O is not shown yet; it arrives in a later version of Varia. |
+| Resource Waits | A live grid of the wait categories, or By type of the wait types, the most wait time first, with Hide benign waits (below). |
+| Data File I/O | A live grid of the database files, the busiest first, toned by read and write latency, with view chips (below). |
 | Recent Expensive Queries | Recent Expensive Queries is not shown yet; it arrives in a later version of Varia. |
 | Active Expensive Queries | A live grid of the running requests, the most CPU first (below). |
 
