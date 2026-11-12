@@ -29,6 +29,8 @@ import { tileName } from '../kit/Tile'
 import ProcessesPane from './panes/ProcessesPane'
 import { FileIoPane, WaitsPane } from './panes/ResourcePanes'
 import SessionTablePane from './panes/SessionTablePanes'
+import SessionDetails from './SessionDetails'
+import { KillConfirm, KillReportBanner } from './KillConfirm'
 import RecentQueriesPane from './panes/RecentQueriesPane'
 import { chartScaleOf, gridRows, latestValue, monitorFacts, monitorNotice, nextAnnouncement, overviewProbe, seriesIndex, tileReadings, type Announcement, type TileReading } from './tiles'
 
@@ -68,16 +70,23 @@ export default function ActivityMonitor({ documentId }: { readonly documentId: s
   ] as const
   return <DocumentFrame id={`activity-${documentId}`} title="Activity Monitor" crumbs={[{ label: server, title: connection ? `${connection.server} · ${connection.serverVersion}` : state.server }]}
     state={pill && <><LivePill {...pill} /><StaleBadge updatedAt={fresh.updatedAt} stale={fresh.stale} now={now} /></>}
-    tools={<HeaderTools state={state} snapshot={snapshot} />} verbs={verbs} facts={monitorFacts(connection)} attributes={{ 'data-activity-monitor': documentId }}>
-    <div className="activity-body">
-      <Banner snapshot={snapshot} documentId={documentId} login={connection?.login} version={connection?.productVersion ?? connection?.serverVersion} edition={connection?.engineEdition} />
-      <Tiles documentId={documentId} state={state} handle={handle} readings={readings} snapshot={snapshot} />
-      {state.expanded.length > 0 && <Charts count={state.expanded.length}>
-        {state.expanded.map(index => <ExpandedChart key={index} index={index} handle={handle} state={state} link={link} />)}
-      </Charts>}
-      <Panes state={state} ring={ring} handle={handle} snapshot={snapshot} />
-    </div>
-  </DocumentFrame>
+    tools={<HeaderTools state={state} snapshot={snapshot} />} verbs={verbs} facts={monitorFacts(connection)} attributes={{ 'data-activity-monitor': documentId }}
+    // The Details flyout sits beside the monitor, which keeps sampling and stays usable (nonmodal).
+    body={<div className="document-body activity-layout">
+      <div className="document-content">
+        <div className="activity-body">
+          <Banner snapshot={snapshot} documentId={documentId} login={connection?.login} version={connection?.productVersion ?? connection?.serverVersion} edition={connection?.engineEdition} />
+          <KillReportBanner state={state} />
+          <Tiles documentId={documentId} state={state} handle={handle} readings={readings} snapshot={snapshot} />
+          {state.expanded.length > 0 && <Charts count={state.expanded.length}>
+            {state.expanded.map(index => <ExpandedChart key={index} index={index} handle={handle} state={state} link={link} />)}
+          </Charts>}
+          <Panes state={state} ring={ring} handle={handle} snapshot={snapshot} />
+        </div>
+      </div>
+      {state.details && <SessionDetails monitorId={documentId} details={state.details} />}
+      {state.kill && <KillConfirm monitorId={documentId} kill={state.kill} />}
+    </div>} />
 }
 
 /** The interval picker, the chart window and what sampling costs. */

@@ -43,8 +43,9 @@ export interface TransposeOptions { readonly selected?: boolean; readonly header
  */
 export class TransposeService extends SnapshotStore<TransposeSnapshot> implements Disposable {
   private readonly results: Results
-  /** Transposes in flight by tab, with the run they read: a newer run (or none) gives them up. */
-  private readonly running = new Map<string, { readonly abort: AbortController; readonly queryId: string }>()
+  /** Transposes in flight by tab, with the run and the entry they read: a newer run (or none), or that entry closed, gives
+   *  them up. */
+  private readonly running = new Map<string, { readonly abort: AbortController; readonly queryId: string; readonly source: EntryKey }>()
   private readonly unsubscribe: () => void
   /** Strips of transposes added whose sets the results have not shown yet (they publish them on the next frame), with the
    *  tab and run they were added to: a publish for another tab in between must not drop them. */
@@ -101,7 +102,7 @@ export class TransposeService extends SnapshotStore<TransposeSnapshot> implement
     // The grid's view when it shows one: the transpose reads its rows as the grid shows them.
     const handle = sort?.view ?? entry.handle
     const abort = new AbortController()
-    const item = { abort, queryId: tab.queryId }
+    const item = { abort, queryId: tab.queryId, source: entry.key }
     this.running.set(tabId, item)
     this.publish(new Map(this.getSnapshot()))
     try {
@@ -149,10 +150,11 @@ export class TransposeService extends SnapshotStore<TransposeSnapshot> implement
     return new Map([...info].filter(([key]) => shown.has(key) || this.fresh.has(key)))
   }
 
-  /** A new run (or a closed tab) gives up its tab's running transpose; strips of sets no run shows go. */
+  /** A new run (or a closed tab) gives up its tab's running transpose, and so does closing the result it reads; strips of
+   *  sets no run shows go. */
   private sync(): void {
     const snapshot = this.results.getSnapshot()
-    for (const [tabId, item] of this.running) if (snapshot[tabId]?.queryId !== item.queryId) item.abort.abort()
+    for (const [tabId, item] of this.running) if (snapshot[tabId]?.queryId !== item.queryId || !entryOf(snapshot[tabId].sets, item.source)) item.abort.abort()
     const current = this.getSnapshot()
     if (current.size === 0) return
     const kept = this.shown(current)

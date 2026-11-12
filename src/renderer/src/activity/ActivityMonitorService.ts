@@ -8,7 +8,10 @@ import {
   activityIntervalsSeconds, activityIntervalDefaults, activityLimits, fileLatencyDefaults, fileViews, probeSpecs, sessionToggles, viewChips, waitToggles, type ActivityPane, type ActivityProbe, type ActivityTable,
   type ChartWindowMinutes, type FileView, type ViewChip
 } from '../../../shared/activity/catalog'
-import type { ActivityColumnFilter } from '../../../shared/activity/schema'
+import type { ActivityColumnFilter, ActivityDetailsResult } from '../../../shared/activity/schema'
+import type { VariaApi } from '../../../shared/contracts'
+import type { LiveRowActions } from '../menus/targets'
+import { killOffer, killReport, sameSession, type KillReport, type SessionRef } from './session-actions'
 import type { LiveFacet, LiveArgs } from '../../../shared/live/schema'
 
 /** The activity source's args as the live layer sends them (src/shared/activity/schema.ts's ActivityLiveArgs, mutable). */
@@ -54,6 +57,29 @@ export interface MonitorState {
   readonly waits: WaitsFilter
   /** Data File I/O: its view chip, and the latency thresholds (the activityMonitor.fileLatency* settings) that tone rows. */
   readonly files: FilesFilter
+  /** The Details flyout, while it is open (nonmodal: the monitor goes on sampling beside it). */
+  readonly details?: DetailsPanel
+  /** Kill Process's confirm, while it asks or runs. */
+  readonly kill?: KillPanel
+  /** What the last Kill Process answered, until dismissed or the next Kill. */
+  readonly killReport?: KillReport & { readonly id: number }
+}
+/** The Details flyout's session and what its last read answered. */
+export interface DetailsPanel {
+  readonly session: SessionRef
+  /** loading: a read (the first, Refresh or Load locks) runs; ready: `result` came back (its state may say the session
+   *  left); failed: the request itself failed (`error`). */
+  readonly status: 'loading' | 'ready' | 'failed'
+  readonly result?: ActivityDetailsResult
+  readonly error?: string
+  /** Load locks: the costly read the user asks for. */
+  readonly locks: 'none' | 'loading' | 'loaded'
+  /** Bumps on each read, so an older answer never replaces a newer one. */
+  readonly read: number
+}
+export interface KillPanel {
+  readonly session: SessionRef
+  readonly phase: 'confirm' | 'running'
 }
 export interface WaitsFilter {
   readonly table: 'waitCategories' | 'waitTypes'
@@ -135,6 +161,9 @@ export interface ActivityMonitorServiceOptions {
   readonly settings: () => SettingsValues
   /** Puts focus in the monitor's view once it has rendered. */
   readonly focus?: (documentId: string) => void
+  /** Details and Kill Process (activity.details, activity.kill, varia:activity-cancel); without it they say they are unavailable. */
+  readonly api?: Pick<VariaApi, 'activityDetails' | 'activityKill' | 'cancelActivity'>
+  readonly newId?: () => string
 }
 
 /** The settings' choices for a new monitor, each kept to what the catalogue offers. */
@@ -178,6 +207,11 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
   private readonly tones = new Map<string, readonly (TileTone | undefined)[]>()
   private readonly registration: Disposable
   private readonly contextStore = new (class extends SnapshotStore<ActivityContextState> { set(value: ActivityContextState) { this.publish(value) } clear() { this.clearListeners() } })({ byDocument: {} })
+  /** Each monitor's session panes' row actions, the last focused first: what Details and Kill from the palette act on. */
+  private readonly sessionRows = new Map<string, LiveRowActions[]>()
+  /** Each monitor's Details read in flight, cancelled when the flyout closes or reads again. */
+  private readonly detailsRequests = new Map<string, string>()
+  private reports = 0
   private disposed = false
 
   constructor(private readonly options: ActivityMonitorServiceOptions) {
@@ -281,7 +315,8 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
         facts = { ...facts, facets: { ...facts.facets, [table]: mergeFacets(facts.facets[table], entry.facets) } }
         changed = true
       }
-      if (sample.status?.length) {
+      // Every sessions sample carries its status values: only a value that changed publishes.
+      if (sample.status?.some(entry => facts.status[entry.id] !== entry.value)) {
         facts = { ...facts, status: { ...facts.status, ...Object.fromEntries(sample.status.map(entry => [entry.id, entry.value])) } }
         changed = true
       }
@@ -294,6 +329,129 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
     if (facts) byMonitor[id] = facts
     else delete byMonitor[id]
     this.factsStore.set({ byMonitor })
+  }
+
+  // --- Session actions: Details and Kill Process (docs/activity-monitor.md, Session actions) ----------------------------
+
+  /** A session pane's row actions while it is mounted, for the palette's Details and Kill (the last focused pane's). */
+  registerSessionRows(id: string, rows: LiveRowActions): Disposable {
+    // The newest pane comes first until one is focused: the palette acts on the pane just opened, not the first ever mounted.
+    this.sessionRows.set(id, [rows, ...(this.sessionRows.get(id) ?? []).filter(item => item !== rows)])
+    return {
+      dispose: () => {
+        const list = (this.sessionRows.get(id) ?? []).filter(item => item !== rows)
+        if (list.length) this.sessionRows.set(id, list)
+        else this.sessionRows.delete(id)
+      }
+    }
+  }
+  /** A session pane's grid took focus: the palette's Details and Kill act on its rows now. */
+  focusSessionRows(id: string, rows: LiveRowActions): void {
+    const list = this.sessionRows.get(id)
+    if (list?.includes(rows) && list[0] !== rows) this.sessionRows.set(id, [rows, ...list.filter(item => item !== rows)])
+  }
+  activeSessionRows(id: string): LiveRowActions | undefined { return this.sessionRows.get(id)?.[0] }
+
+  /** Opens the Details flyout on a session (or reads it again), cancelling a read still running. */
+  openDetails(id: string, session: SessionRef): void {
+    const details = this.get(id)?.details
+    const same = sameSession(details?.session, session)
+    this.readDetails(id, {
+      session, status: 'loading', locks: same && details?.locks === 'loaded' ? 'loading' : 'none', read: (details?.read ?? 0) + 1,
+      ...same && details?.result ? { result: details.result } : {}
+    })
+  }
+  /** Refresh: reads the flyout's session again (with its locks when they were loaded). */
+  refreshDetails(id: string): void {
+    const details = this.get(id)?.details
+    if (details) this.readDetails(id, { ...details, status: 'loading', locks: details.locks === 'none' ? 'none' : 'loading', read: details.read + 1 })
+  }
+  /** Load locks: reads every section again with the session's locks (costly, so only on request). */
+  loadLocks(id: string): void {
+    const details = this.get(id)?.details
+    if (details && details.locks !== 'loading') this.readDetails(id, { ...details, status: 'loading', locks: 'loading', read: details.read + 1 })
+  }
+  /** Closing the flyout cancels its read (an attention ends it in SQL Server). */
+  closeDetails(id: string): void {
+    this.cancelDetails(id)
+    const state = this.get(id)
+    if (state?.details) this.put({ ...state, details: undefined })
+  }
+  private cancelDetails(id: string): void {
+    const requestId = this.detailsRequests.get(id)
+    this.detailsRequests.delete(id)
+    if (requestId) this.options.api?.cancelActivity([requestId]).catch(onUnexpectedError)
+  }
+  private readDetails(id: string, details: DetailsPanel): void {
+    const state = this.get(id), connectionId = this.options.documents.get(id)?.connectionId
+    if (!state) return
+    this.cancelDetails(id)
+    const api = this.options.api
+    if (!api || !connectionId) {
+      this.put({ ...state, details: { ...details, status: 'failed', locks: 'none', error: 'Details is not available: the monitor has no connection.' } })
+      return
+    }
+    const requestId = this.options.newId?.() ?? crypto.randomUUID()
+    this.detailsRequests.set(id, requestId)
+    this.put({ ...state, details })
+    const withLocks = details.locks === 'loading'
+    const settle = (change: Partial<DetailsPanel>) => {
+      if (this.detailsRequests.get(id) === requestId) this.detailsRequests.delete(id)
+      const now = this.get(id)
+      // An answer to an older read (another session, Refresh since, the flyout closed) changes nothing.
+      if (!now?.details || now.details.read !== details.read) return
+      this.put({ ...now, details: { ...now.details, ...change } })
+    }
+    api.activityDetails({ requestId, connectionId, sessionId: details.session.sessionId, loginTime: details.session.loginTime, ...withLocks ? { locks: true } : {} }).then(result => {
+      if (result.ok) settle({ status: 'ready', result: result.value, error: undefined, locks: withLocks ? 'loaded' : 'none' })
+      else if (result.code !== 'CANCELLED') settle({ status: 'failed', error: result.error, locks: 'none' })
+    }, (error: unknown) => settle({ status: 'failed', error: error instanceof Error ? error.message : 'Details could not be read.', locks: 'none' }))
+  }
+
+  /** Kill Process…: asks first; the confirm names the session and warns about rollback. */
+  askKill(id: string, session: SessionRef): void {
+    const state = this.get(id)
+    if (!state || state.kill?.phase === 'running') return
+    this.put({ ...state, kill: { session, phase: 'confirm' } })
+  }
+  cancelKill(id: string): void {
+    const state = this.get(id)
+    if (state?.kill?.phase === 'confirm') this.put({ ...state, kill: undefined })
+  }
+  /** Whether Kill may run on a session now (the login's ALTER ANY CONNECTION, never Varia's own pools), and why not. */
+  killOffer(id: string, session: SessionRef | undefined): ReturnType<typeof killOffer> { return killOffer(session, this.factsOf(id).status.canKill) }
+  /** The confirm's Kill: one session, which the backend checks against the row's login time and host process id. */
+  async confirmKill(id: string): Promise<void> {
+    const state = this.get(id), connectionId = this.options.documents.get(id)?.connectionId
+    const session = state?.kill?.phase === 'confirm' ? state.kill.session : undefined
+    if (!state || !session) return
+    // The permission can go while the confirm is open (the next sample says so): say why, rather than doing nothing.
+    const offer = this.killOffer(id, session)
+    if (!offer.allowed) {
+      this.put({ ...state, kill: undefined, killReport: { ...killReport(session, undefined, offer.reason), id: ++this.reports } })
+      return
+    }
+    this.put({ ...state, kill: { session, phase: 'running' }, killReport: undefined })
+    let report: KillReport
+    const api = this.options.api
+    if (!api || !connectionId) report = killReport(session, undefined, 'Kill Process is not available: the monitor has no connection.')
+    else {
+      try {
+        const result = await api.activityKill({ connectionId, sessions: [{ sessionId: session.sessionId, loginTime: session.loginTime, hostProcessId: session.hostProcessId }] })
+        report = result.ok ? killReport(session, result.value) : killReport(session, undefined, result.error)
+      } catch (error) {
+        report = killReport(session, undefined, error instanceof Error ? error.message : undefined)
+      }
+    }
+    const now = this.get(id)
+    if (!now) return
+    this.put({ ...now, kill: undefined, killReport: { ...report, id: ++this.reports } })
+    // The next sample shows the session gone, or rolling back, without waiting for the interval.
+    if (report.tone === 'success') this.refresh(id)
+  }
+  dismissKillReport(id: string): void {
+    const state = this.get(id)
+    if (state?.killReport) this.put({ ...state, killReport: undefined })
   }
 
   /** Subscribes again (Retry after an error, or after the view ended): history starts over with a new handle. */
@@ -394,6 +552,8 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
     this.ticks.delete(id)
     for (const key of [...this.gridStates.keys()]) if (key.startsWith(id + '/')) this.gridStates.delete(key)
     this.setFacts(id, undefined)
+    this.cancelDetails(id)
+    this.sessionRows.delete(id)
     try { handle?.dispose() } catch (error) { onUnexpectedError(error) }
     if (!this.get(id)) return
     const monitors = { ...this.getSnapshot().monitors }
@@ -409,6 +569,8 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
     this.handles.clear()
     for (const tick of this.ticks.values()) tick.dispose()
     this.ticks.clear()
+    for (const id of [...this.detailsRequests.keys()]) this.cancelDetails(id)
+    this.sessionRows.clear()
     this.factsStore.clear()
     this.registration.dispose()
     this.clearListeners()
