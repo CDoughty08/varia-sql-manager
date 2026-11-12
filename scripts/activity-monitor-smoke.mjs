@@ -423,6 +423,8 @@ try {
   step = 'resource waits and file io'
   // Resource Waits shows in the second pane from the start, by category with benign waits hidden. Wait Category and Wait
   // Type are the first columns, in view at any width.
+  // A filter change shows with the resources probe's next sample, up to its interval (5 s) away, so those waits are longer.
+  const nextSample = { timeout: 15_000 }
   const secondTabs = monitor().getByRole('tablist', { name: 'Second pane', exact: true })
   await expect(secondTabs.getByRole('tab', { name: 'Resource Waits', exact: true })).toHaveAttribute('aria-selected', 'true')
   const waitTools = monitor().getByRole('toolbar', { name: 'Resource Waits filters', exact: true })
@@ -432,8 +434,8 @@ try {
   await expect(categories.getByRole('gridcell', { name: 'Idle', exact: true })).toHaveCount(0)
   // Hide benign waits off: the backend filters the next sample, and Idle shows.
   await waitTools.getByRole('button', { name: 'Hide benign waits', exact: true }).click()
-  await expect(monitor().getByText('5 wait categories', { exact: true })).toBeVisible()
-  await expect(categories.getByRole('gridcell', { name: 'Idle', exact: true })).toBeVisible()
+  await expect(monitor().getByText('5 wait categories', { exact: true })).toBeVisible(nextSample)
+  await expect(categories.getByRole('gridcell', { name: 'Idle', exact: true })).toBeVisible(nextSample)
   await expect.poll(async () => (await calls('live.update')).some(call => JSON.stringify(call.params.args ?? {}).includes('{"table":"waitTypes","hideBenign":false}'))).toBe(true)
   // By type shows the other table of the same sample: no args change, so nothing is sent.
   const argsBefore = (await calls('live.update')).filter(call => call.params.args).length
@@ -443,8 +445,8 @@ try {
   await expect(monitor().getByText('5 wait types', { exact: true })).toBeVisible()
   expect((await calls('live.update')).filter(call => call.params.args).length).toBe(argsBefore)
   await waitTools.getByRole('button', { name: 'Hide benign waits', exact: true }).click()
-  await expect(monitor().getByText('4 wait types · benign waits hidden', { exact: true })).toBeVisible()
-  await expect(types.getByRole('gridcell', { name: 'SLEEP_TASK', exact: true })).toHaveCount(0)
+  await expect(monitor().getByText('4 wait types · benign waits hidden', { exact: true })).toBeVisible(nextSample)
+  await expect(types.getByRole('gridcell', { name: 'SLEEP_TASK', exact: true })).toHaveCount(0, nextSample)
   await waitTools.getByRole('button', { name: 'By category', exact: true }).click()
   await expect(monitor().getByText('4 wait categories · benign waits hidden', { exact: true })).toBeVisible()
   // Data File I/O reads the same probe, so showing it beside Resource Waits starts nothing new.
@@ -457,13 +459,13 @@ try {
   // Over threshold keeps the files the backend toned (SalesDb's log at 61.5 ms and data at 34 ms); Log keeps the logs.
   const fileTools = monitor().getByRole('toolbar', { name: 'Data File I/O filters', exact: true })
   await fileTools.getByRole('button', { name: 'Over threshold', exact: true }).click()
-  await expect(monitor().getByText('2 files · Over threshold only · warning at 20 ms, error at 50 ms', { exact: true })).toBeVisible()
-  await expect(fileGrid.getByRole('gridcell', { name: 'master', exact: true })).toHaveCount(0)
+  await expect(monitor().getByText('2 files · Over threshold only · warning at 20 ms, error at 50 ms', { exact: true })).toBeVisible(nextSample)
+  await expect(fileGrid.getByRole('gridcell', { name: 'master', exact: true })).toHaveCount(0, nextSample)
   await expect.poll(async () => (await calls('live.update')).some(call => JSON.stringify(call.params.args ?? {}).includes('"fileView":"overThreshold"'))).toBe(true)
   await fileTools.getByRole('button', { name: 'Log', exact: true }).click()
-  await expect(monitor().getByText('2 files · Log only · warning at 20 ms, error at 50 ms', { exact: true })).toBeVisible()
+  await expect(monitor().getByText('2 files · Log only · warning at 20 ms, error at 50 ms', { exact: true })).toBeVisible(nextSample)
   await fileTools.getByRole('button', { name: 'Log', exact: true }).click()
-  await expect(monitor().getByText('5 files · warning at 20 ms, error at 50 ms', { exact: true })).toBeVisible()
+  await expect(monitor().getByText('5 files · warning at 20 ms, error at 50 ms', { exact: true })).toBeVisible(nextSample)
   await page.screenshot({ path: join('artifacts', 'activity-monitor-resources.png') })
   await firstTabs.getByRole('tab', { name: 'Sessions', exact: true }).click()
   console.log('Resource waits and file I/O passed: categories and types from one sample, Hide benign waits and the file chips reach the backend, and Data File I/O starts no probe beside Resource Waits.')
