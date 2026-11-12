@@ -108,6 +108,11 @@ records are frozen: feature PRs do not add their work to an older release. Relea
 plain-text records and regenerates the published changelog; docs/release-notes.md describes that process and the shared
 producer for in-app and public notes. Keep guidance for both Codex and Claude here; AGENTS.md delegates to this file.
 
+Getting Started pages register in `src/shared/help/catalog.ts` with typed references and advisory source areas;
+follow docs/help-authoring.md to add or update guides and samples. Review those dependencies for every feature PR
+and record the guide/sample impact or a concrete no-impact reason. Use live reference components, not copied keys,
+defaults or menu labels. Samples are fictional and never execute SQL or connect automatically.
+
 ## Testing expectations
 
 - Every behaviour change or bug fix comes with a check that would have caught it.

@@ -86,6 +86,8 @@ import { notificationsContribution } from '../../src/renderer/src/contributions/
 import { NotificationService } from '../../src/renderer/src/core/notifications'
 import { UpdateService } from '../../src/renderer/src/updates/UpdateService'
 import { ReleaseNotesService } from '../../src/renderer/src/release-notes/ReleaseNotesService'
+import { HelpService } from '../../src/renderer/src/help/HelpService'
+import { GestureService } from '../../src/renderer/src/core/gestures'
 import { updatesContribution } from '../../src/renderer/src/contributions/updates'
 import type { UpdateState } from '../../src/shared/updates'
 import { SettingsService } from '../../src/renderer/src/settings/SettingsService'
@@ -253,7 +255,7 @@ export function updatesApi(initial: UpdateState = { status: 'idle', currentVersi
  * The renderer's services and every command contribution, wired as createWorkbench does but with fake IPC and a fake
  * shell host, so command enablement can be tested in Node.
  */
-export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; settings?: Partial<SettingsValues>; recovery?: RecoveryEntry[] } = {}) {
+export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; settings?: Partial<SettingsValues>; recovery?: RecoveryEntry[]; helpFocus?: (id: string) => void } = {}) {
   // Settings apply to documents as createWorkbench applies them; `settings` exists before the first document does.
   const doc = documentFixture(settingsDocumentOptions(() => settings.getSnapshot().values))
   /** What query.session.state answers for each tab's session: its @@TRANCOUNT, or 'unchecked'; a tab without one has no session. */
@@ -391,6 +393,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const notifications = new NotificationService(options.timers ? { timers: options.timers } : {})
   const updates = new UpdateService(api)
   const releaseNotes = new ReleaseNotesService(documents, () => updates.getSnapshot().currentVersion, vi.fn())
+  const help = new HelpService(documents, options.helpFocus ?? vi.fn()), gestures = new GestureService(platform)
   const databaseGone = databaseGoneHandler({ documents, properties, notify: toast => { notifications.notify(toast) }, copy: text => { void api.writeClipboardText(text) } })
   const context = new ContextKeyService({
     platform,
@@ -496,6 +499,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     notifications,
     updates,
     releaseNotes,
+    help,
+    gestures,
     activity,
     operations,
     objectSearch
@@ -580,6 +585,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     notifications.dispose()
     updates.dispose()
     releaseNotes.dispose()
+    help.dispose()
     documents.dispose()
     backend.dispose()
   }
@@ -625,6 +631,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     notifications,
     updates,
     releaseNotes,
+    help,
+    gestures,
     queries,
     files,
     recentFiles,

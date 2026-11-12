@@ -5,7 +5,7 @@ import { clientStatisticsSchema } from '../client-statistics'
 import type { BackendStatus, MemoryOrder, QueryEvent, ResultsCloseResult, ResultsDiffResult, ResultsDistinctCloseResult, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsTransposeResult, ResultsReadResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult } from '../contracts'
 import { maxQueryPlanDocuments } from '../plans'
 import { liveSubscribeParamsSchema, liveUpdateParamsSchema, testLiveSubscribeParamsSchema, testLiveUpdateParamsSchema, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../live/schema'
-import { backendDescriptorSchema } from './descriptors'
+import { backendDescriptorSchema, truncationSchema } from './descriptors'
 import { limits, type ErrorCode } from './wire/protocol'
 
 export { backendDescriptorSchema }
@@ -185,7 +185,7 @@ export const queryEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('resultSet.closed'), descriptor: backendDescriptorSchema }).strict(),
   z.object({
     type: z.literal('progress'), completedBatches: count, totalBatches: count, batchNumber: count, iteration: count,
-    results: z.array(z.object({ resultId: u32, rowsRead: count, rowsStored: count, rowsAvailable: count, bytesStored: count }).strict()).max(64)
+    results: z.array(z.object({ resultId: u32, rowsRead: count, rowsStored: count, rowsAvailable: count, bytesStored: count, truncated: truncationSchema.optional() }).strict()).max(64)
   }).strict(),
   z.object({ type: z.literal('messages'), messages: z.array(message).min(1).max(limits.messages.count) }).strict()
 ])

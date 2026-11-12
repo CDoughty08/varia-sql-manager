@@ -215,8 +215,8 @@ export interface QueryResult {
 export interface SessionState { transactionCount: number; checked: boolean }
 /** Orders each feature's memory reports. Results events and summaries share a sequence within a backend generation. */
 export interface MemoryOrder { generation: number; seq: number }
-/** Rows read so far for one result set of a running script. */
-export interface ResultProgress { resultId: number; rowsRead: number; rowsStored: number; rowsAvailable: number; bytesStored: number }
+/** Rows read so far for one result set of a running script, and why it stopped storing them once it has. */
+export interface ResultProgress { resultId: number; rowsRead: number; rowsStored: number; rowsAvailable: number; bytesStored: number; truncated?: TruncationReason }
 /** Pushed while a script runs (EVENT frames, then the results port). The summary is authoritative once it arrives. */
 export type QueryEvent =
   | { type: 'session.opened'; spid: number; login?: string }

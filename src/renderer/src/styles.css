@@ -2584,3 +2584,36 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .pivot-section > button { display: inline-flex; align-items: center; gap: 4px; }
 .pivot-foot { display: flex; flex-shrink: 0; flex-direction: column; gap: 4px; padding: 6px 8px; border-top: 1px solid var(--varia-panel-border); }
 .pivot-foot > button { align-self: flex-end; }
+
+/* Bundled guides: normal document chrome and bounded, synthetic teaching illustrations. */
+.help-home { max-width: 72em; margin: 0 auto; padding: var(--varia-space-5); }
+.help-intro p { margin: var(--varia-space-2) 0; max-width: 72em; }
+.help-intro h2 { font-size: var(--varia-size-xl); line-height: var(--varia-line-xl); }
+.help-muted { color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); }
+.help-search { display: flex; flex-direction: column; gap: var(--varia-space-2); margin-top: var(--varia-space-5); }
+.help-search input { width: 100%; max-width: 40em; }
+.help-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 18em), 1fr)); gap: var(--varia-space-4); }
+.help-card { display: flex; flex-direction: column; align-items: flex-start; gap: var(--varia-space-3); text-align: left; white-space: normal; padding: var(--varia-space-4); border: 1px solid var(--varia-panel-border); background: var(--varia-editor-background); }
+.help-card strong { font-size: var(--varia-size-lg); line-height: var(--varia-line-lg); }
+.help-card span { line-height: var(--varia-line-md); }
+.help-card-open { margin-top: auto; color: var(--varia-foreground); }
+.help-prose { max-width: 72em; line-height: var(--varia-line-md); }
+.help-prose p { margin: 0 0 var(--varia-space-4); }
+.help-prose li { margin-bottom: var(--varia-space-3); }
+.help-reference { display: inline; overflow-wrap: anywhere; }
+.help-reference button { white-space: normal; border-color: var(--varia-panel-border); }
+.help-sample { margin: var(--varia-space-5) 0; padding: var(--varia-space-4); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-lg); background: var(--varia-sideBar-background); }
+.help-sample figcaption { font-weight: 600; margin-bottom: var(--varia-space-4); }
+.help-sample label { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-3); }
+.help-sample select { min-width: 0; max-width: 100%; }
+.help-sample pre { overflow: auto; font: var(--varia-size-sm)/var(--varia-line-md) var(--varia-font-mono); padding: var(--varia-space-3); border: 1px solid var(--varia-panel-border); background: var(--varia-editor-background); }
+.help-sample mark { color: var(--varia-list-activeSelectionForeground); background: var(--varia-list-activeSelectionBackground); }
+.help-sample-controls { display: flex; flex-wrap: wrap; gap: var(--varia-space-2); margin-bottom: var(--varia-space-3); }
+.help-sample-controls button { border-color: var(--varia-panel-border); white-space: normal; }
+.help-sample-controls button[aria-pressed="true"] { color: var(--varia-button-foreground); background: var(--varia-button-background); transition: none; }
+.help-sample-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13em), 1fr)); gap: var(--varia-space-4); }
+.help-sample-fields dt { color: var(--varia-descriptionForeground); }
+.help-sample-fields dd { margin: 0; overflow-wrap: anywhere; }
+.help-sample table { width: 100%; border-collapse: collapse; }
+.help-sample th, .help-sample td { text-align: left; padding: var(--varia-space-2); border-bottom: 1px solid var(--varia-panel-border); }
+.help-sample-output { display: flex; flex-wrap: wrap; gap: var(--varia-space-5); padding: var(--varia-space-3); border: 1px solid var(--varia-panel-border); }
