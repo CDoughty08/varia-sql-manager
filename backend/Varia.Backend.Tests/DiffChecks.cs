@@ -414,8 +414,8 @@ internal static class DiffChecks
             var used = probed.UsedBytes;
             low = true;
             var pressed = Message(service, left, right);
-            check(pressed == tooLarge && left.Budget.Stopped == TruncationReason.None && probed.UsedBytes == used,
-                $"a diff cut short by low system memory is refused whole and leaves its query's budget open: {pressed} {left.Budget.Stopped} {probed.UsedBytes - used}");
+            check(pressed == "TOO_LARGE: " + SqlService.LowMemory && pressed != tooLarge && left.Budget.Stopped == TruncationReason.None && probed.UsedBytes == used,
+                $"a diff cut short by low system memory is refused whole, saying the computer is low on memory, and leaves its query's budget open: {pressed} {left.Budget.Stopped} {probed.UsedBytes - used}");
             var whole = (ResultsDiffResult)service.DispatchAsync("results.diff", JsonSerializer.SerializeToElement(new { left = few.Left.ResultId, right = few.Right.ResultId }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult()!;
             check(whole.Descriptor is { RowsStored: 4, Truncated: null, State: "complete" } && few.Left.Budget.Stopped == TruncationReason.None,
                 $"a diff whose last page is sealed under low system memory is kept whole and not marked truncated: {whole.Descriptor.RowsStored} {whole.Descriptor.Truncated}");

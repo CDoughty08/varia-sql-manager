@@ -7,10 +7,10 @@ import { dirname, join, resolve } from 'node:path'
 import type { BackendState, QueryEvent } from '../src/shared/contracts'
 import { FrameKind, encodeFrame } from '../src/shared/ipc/wire/frames'
 import { encodeControl } from '../src/shared/ipc/wire/msgpack'
-import { BackendSupervisor, type SupervisorDeps } from '../src/main/backend/supervisor'
+import { BackendSupervisor, type SupervisorDeps, firstLaunchWaitMs } from '../src/main/backend/supervisor'
 import { BackendError, sentences } from '../src/main/backend/errors'
 import type { LiveEvent } from '../src/shared/live/schema'
-import { backendSpawnSpec } from '../src/main/backend/spawn-spec'
+import { backendSpawnSpec, resultMemoryEnvironment } from '../src/main/backend/spawn-spec'
 import { sqlToolsEnvironment } from '../src/main/backend/sqltools-runtime'
 import { fakeSpawn, manualClock, settle, type FakeBackend } from './fixtures/fake-process'
 
@@ -407,6 +407,109 @@ describe('smoke-test backends', () => {
     expect(backendSpawnSpec({ ...base, smokeTest: false, env })).toMatchObject({ command: 'dotnet', requires: join(base.root, 'backend/Varia.Backend/bin/Debug/net10.0/Varia.Backend.dll') })
     expect(backendSpawnSpec({ ...base, packaged: true, smokeTest: true, env })).toMatchObject({ args: [], cwd: base.resourcesPath, packaged: true })
     expect(() => backendSpawnSpec({ ...base, smokeTest: true, env: { ...env, VARIA_TEST_NODE: 'node' } })).toThrow('absolute VARIA_TEST_NODE')
+  })
+  it('gives the backend the result memory limit of the settings, at each launch and once they are read', async () => {
+    expect(resultMemoryEnvironment(0)).toEqual({})
+    expect(resultMemoryEnvironment(8)).toEqual({ VARIA_RESULT_MEMORY_MIB: '8192' })
+    expect(resultMemoryEnvironment(4096)).toEqual({ VARIA_RESULT_MEMORY_MIB: '1048576' })
+    for (const value of [-1, 1.5, Number.NaN, '8', undefined, null]) expect(resultMemoryEnvironment(value), String(value)).toEqual({})
+    // A limit in the shell's environment is not the user's setting.
+    const base = { packaged: false, root: resolve('app'), resourcesPath: resolve('resources'), platform: process.platform, smokeTest: false }
+    expect(backendSpawnSpec({ ...base, env: { PATH: '/bin', VARIA_RESULT_MEMORY_MIB: '64' } }).env).not.toHaveProperty('VARIA_RESULT_MEMORY_MIB')
+    expect(backendSpawnSpec({ ...base, packaged: true, env: { PATH: '/bin', VARIA_RESULT_MEMORY_MIB: '64' } }).env).not.toHaveProperty('VARIA_RESULT_MEMORY_MIB')
+    // Windows reads environment names without regard to case, and so does .NET there.
+    expect(backendSpawnSpec({ ...base, env: { PATH: '/bin', varia_result_memory_mib: '64', Varia_Result_Memory_MiB: '64' } }).env).toEqual(backendSpawnSpec({ ...base, env: { PATH: '/bin' } }).env)
+
+    const processes = fakeSpawn()
+    const environments: (NodeJS.ProcessEnv | undefined)[] = []
+    const spying = ((command: string, args: readonly string[], options: { env?: NodeJS.ProcessEnv }) => {
+      environments.push(options.env)
+      return (processes.spawn as unknown as (...given: unknown[]) => unknown)(command, args, options)
+    }) as unknown as typeof processes.spawn
+    let settled!: () => void
+    const before = new Promise<void>(resolve => { settled = resolve })
+    let limit = 0
+    const value = new BackendSupervisor({ command: 'backend', args: [], cwd: '.', env: { PATH: '/bin' }, packaged: true }, {
+      spawn: spying,
+      before, environment: () => resultMemoryEnvironment(limit)
+    })
+    supervisors.push(value)
+    // Started, and asked something, before the settings are read: nothing is spawned yet, and the request waits.
+    value.start()
+    const asked = value.request('system.health', {})
+    asked.catch(() => {})
+    await settle()
+    expect(environments).toEqual([])
+    // Meanwhile it is starting, not stopped, and a restart or another start is the launch still to come: not a second one.
+    expect(value.state).toMatchObject({ status: 'starting', generation: 1 })
+    await value.restart('manual')
+    await value.restart('reload')
+    value.start()
+    await settle()
+    expect(environments).toEqual([])
+    limit = 8
+    settled()
+    await settle()
+    expect(environments).toEqual([{ PATH: '/bin', VARIA_RESULT_MEMORY_MIB: '8192' }])
+    expect(processes.backends).toHaveLength(1)
+    expect(value.state).toMatchObject({ generation: 1 })
+    // What was asked during the wait is answered by that first generation.
+    expect(await asked).toMatchObject({ generation: 1 })
+    // Once launched, a restart is a restart: the next generation, with the limit as it is then.
+    limit = 2
+    await value.restart('manual')
+    await settle()
+    expect(environments).toHaveLength(2)
+    expect(environments[1]).toEqual({ PATH: '/bin', VARIA_RESULT_MEMORY_MIB: '2048' })
+    expect(value.state).toMatchObject({ generation: 2 })
+
+    // Stopped while it waits: nothing is ever launched, what was asked is refused, and no timer is left running.
+    let late!: () => void
+    const timing = manualClock()
+    const timers = new Set<unknown>()
+    const counting = {
+      ...timing.clock,
+      setTimeout: (run: () => void, ms: number) => { const timer = timing.clock.setTimeout(run, ms); timers.add(timer); return timer },
+      clearTimeout: (timer: unknown) => { timers.delete(timer); timing.clock.clearTimeout(timer as never) }
+    }
+    const stopped = new BackendSupervisor({ command: 'backend', args: [], cwd: '.', env: { PATH: '/bin' }, packaged: true }, { spawn: spying, clock: counting as never, before: new Promise<void>(resolve => { late = resolve }) })
+    stopped.start()
+    const refused = failure(stopped.request('system.health', {}))
+    await settle()
+    expect(timers.size).toBe(1)
+    await stopped.stop()
+    expect(timers.size).toBe(0)
+    late()
+    await timing.advance(firstLaunchWaitMs)
+    expect(environments).toHaveLength(2)
+    expect(await refused).toBeDefined()
+    // Automatic adds nothing, and a launch that waits for nothing starts at once.
+    const plain = new BackendSupervisor({ command: 'backend', args: [], cwd: '.', env: { PATH: '/bin' }, packaged: true }, {
+      spawn: spying, environment: () => resultMemoryEnvironment(0)
+    })
+    supervisors.push(plain)
+    plain.start()
+    expect(environments.at(-1)).toEqual({ PATH: '/bin' })
+    expect(environments).toHaveLength(3)
+
+    // Settings that never arrive do not keep the backend from starting: after the bound it starts without them, once,
+    // and a read that settles later launches nothing more.
+    const { clock, advance } = manualClock()
+    let never!: () => void
+    const patient = new BackendSupervisor({ command: 'backend', args: [], cwd: '.', env: { PATH: '/bin' }, packaged: true }, {
+      spawn: spying, clock, before: new Promise<void>(resolve => { never = resolve }), environment: () => resultMemoryEnvironment(0)
+    })
+    supervisors.push(patient)
+    patient.start()
+    const waiting = patient.request('system.health', {})
+    await advance(firstLaunchWaitMs - 1)
+    expect(environments).toHaveLength(3)
+    await advance(1)
+    expect(environments).toHaveLength(4)
+    expect(await waiting).toMatchObject({ generation: 1 })
+    never()
+    await settle()
+    expect(environments).toHaveLength(4)
   })
   it('passes the OS locale to the real backend, which dates script headers in it', () => {
     const base = { packaged: false, root: resolve('app'), resourcesPath: resolve('resources'), platform: process.platform, smokeTest: false, env: { PATH: '/bin', VARIA_BACKEND_TEST_HOOKS: '1' } }

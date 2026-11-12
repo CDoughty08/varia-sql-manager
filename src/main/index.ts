@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { fileURLToPath } from 'node:url'
 import { BackendSupervisor } from './backend/supervisor'
 import { BackendError } from './backend/errors'
-import { backendSpawnSpec } from './backend/spawn-spec'
+import { backendSpawnSpec, resultMemoryEnvironment } from './backend/spawn-spec'
 import { rendererUrlVerifier } from './trusted-renderer'
 import { appIndexUrl, appProtocolHandler, appScheme, appSchemePrivileges } from './app-protocol'
 import { installTestHooks, type BackendTestHooks, type RendererLossSource } from './backend/test-hooks'
@@ -745,8 +745,15 @@ app.whenReady().then(async () => {
   // Smoke tests shorten the silence that counts as unresponsive; PING then runs often enough for a healthy backend.
   const livenessMs = testSeams ? Number(process.env.VARIA_BACKEND_LIVENESS_MS) : NaN
   const liveness = Number.isInteger(livenessMs) && livenessMs >= 200 ? { unresponsiveMs: livenessMs, limits: { pingMs: Math.floor(livenessMs / 4) } } : {}
+  // Read early, but never awaited before the window: the renderer waits at most 1.5 s for it.
+  const loaded = settings.load()
+  loaded.catch(() => {})
   backend = new BackendSupervisor(backendSpawnSpec({ packaged: app.isPackaged, root, resourcesPath: process.resourcesPath, platform: process.platform, smokeTest: process.env.VARIA_SMOKE_TEST === '1', env: process.env, locale: app.getSystemLocale() }), {
     appVersion: app.getVersion(),
+    // The backend sizes its result memory once, as it starts: its first launch waits for the settings (a read of one
+    // small file), and every launch takes the limit as it is then.
+    before: loaded,
+    environment: () => resultMemoryEnvironment(settings.current()['queryResults.grid.memoryLimitGiB']),
     // Frame kinds, ids and lengths only; never bodies.
     trace: !app.isPackaged && process.env.VARIA_IPC_TRACE === '1' ? line => console.error(line) : undefined,
     power: powerMonitor,
@@ -759,9 +766,6 @@ app.whenReady().then(async () => {
   // Test-only live sources (debug.synthetic) are accepted only in unpackaged smoke runs, whose backend has its test hooks.
   const results = resultsPort = new ResultsPortHost({ backend: supervisorResults(backend), createChannel: () => new MessageChannelMain(), testSources: testSeams })
   const explorerRequests = new ExplorerRequests(backend)
-  // Read early, but never awaited before the window: the renderer waits at most 1.5 s for it.
-  const loaded = settings.load()
-  loaded.catch(() => {})
   // AutoRecover's copies older than Keep AutoRecover information for go before the page can list them; with settings
   // unreadable, or a retention reset because settings.json was invalid, nothing is deleted under a retention the user
   // may have changed.

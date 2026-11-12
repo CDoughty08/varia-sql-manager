@@ -40,7 +40,7 @@ function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: n
     const bytes = o.truncated === 'queryBudget' ? o.budget?.queryBytes : o.budget?.globalBytes
     return `${shown}: the result memory budget${bytes ? ` (${formatBytes(bytes)})` : ''} is full. Execution continued; close other results to free memory.`
   }
-  if (o.truncated === 'rowLimit') return `${shown}. Execution continued.`
+  if (o.truncated === 'rowLimit') return `${shown}: the limit on rows kept per execution was reached (Tools › Options › Query Results › SQL Server › Results to Grid). Execution continued.`
   return undefined
 }
 

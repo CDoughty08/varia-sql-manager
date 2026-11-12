@@ -503,6 +503,18 @@ describe('real .NET sidecar results (test hooks)', () => {
     await expect(call(connection, 'system.health', {})).resolves.toMatchObject({ protocolVersion: 2 })
   }, 60_000)
 
+  it('sizes its result budget by the limit main gives it (VARIA_RESULT_MEMORY_MIB), and automatically without one', async () => {
+    const MiB = 1024 * 1024
+    // A limit under the least a budget is, which every machine has room for, is that least; a query has half.
+    expect((await backend({ VARIA_RESULT_MEMORY_MIB: '300' }).ready).resultBudget).toEqual({ globalBytes: 300 * MiB, queryBytes: 150 * MiB })
+    expect((await backend({ VARIA_RESULT_MEMORY_MIB: '64' }).ready).resultBudget).toEqual({ globalBytes: 256 * MiB, queryBytes: 128 * MiB })
+    // Automatic: a quarter of the memory, between 256 MiB and 16 GiB. A value that is no number is ignored.
+    const automatic = (await backend({ VARIA_RESULT_MEMORY_MIB: '' }).ready).resultBudget!
+    expect(automatic.globalBytes).toBeGreaterThanOrEqual(256 * MiB)
+    expect(automatic.globalBytes).toBeLessThanOrEqual(16 * 1024 * MiB)
+    expect((await backend({ VARIA_RESULT_MEMORY_MIB: 'lots' }).ready).resultBudget).toEqual(automatic)
+  }, 60_000)
+
   it('truncates at the result budget (VARIA_RESULT_BUDGET_BYTES) and frees it on close', async () => {
     const connection = backend({ ...hooks, VARIA_RESULT_BUDGET_BYTES: String(4 * 1024 * 1024) })
     expect((await connection.ready).resultBudget).toEqual({ globalBytes: 4 * 1024 * 1024, queryBytes: 2 * 1024 * 1024 })

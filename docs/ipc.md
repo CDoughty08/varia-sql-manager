@@ -1165,8 +1165,20 @@ PageBody := array(7)
 Results stay in backend memory, never on disk (`ResultStore`).
 
 - **Budget.** Global: a quarter of the memory available to the process (container-aware `TotalAvailableMemoryBytes`),
-  within 256 MiB – 2 GiB. One query may use half of it. Nothing more is stored while the operating system reports high
-  memory load (checked at every page seal). `VARIA_RESULT_BUDGET_BYTES` replaces the global figure only with the test
+  within 256 MiB – 16 GiB, or the limit of Tools › Options (`queryResults.grid.memoryLimitGiB`, 0 for automatic), used as it
+  is up to three quarters of that memory. Main reads the setting and gives it to the backend in its environment
+  (`VARIA_RESULT_MEMORY_MIB`) at each launch; the backend sizes its store once, as it starts, so a change applies after a
+  restart (of Varia, or Restart SQL Backend). The budget holds the rows and the working memory of the operations on
+  them alike (a sort's keys, a profile's figures), so the budget is all the backend commits to results (a quarter of memory unless the user set more); a
+  result that fills its query's half leaves no room to sort it. Working memory of 64 MiB or more, and any memory that
+  only makes an operation faster once 64 MiB of it is held, is refused under high system memory load as rows are
+  (`TOO_LARGE`, saying the computer is low on memory, as does a pivot, diff or transpose refused while the load is
+  high). One query may use half of it. Nothing more is stored while the operating system reports high
+  memory load (checked at every page seal; the load is the runtime's reading at its last garbage collection, taken
+  again by a collection of the youngest generation when it is more than a second old). A release's forced collection
+  compacts, which alone returns the memory to the operating system, only when what remains is no more than was
+  released and no more than 8 GiB (compacting stops every thread for 0.1 to 0.2 s per GiB it copies); under high
+  memory load the 8 GiB does not apply. `VARIA_RESULT_BUDGET_BYTES` replaces the global figure only with the test
   hooks, and turns the memory-load check off so tests see their budget's truncation reasons on a busy machine (the offline
   checks' stores never check it unless given a probe).
 - **Charges.** Each sealed page costs its length plus 96 bytes plus its cell lengths ([Cell lengths and row sizes](#cell-lengths-and-row-sizes)); a result set's metadata 512 bytes plus 2 per name
@@ -1174,8 +1186,9 @@ Results stay in backend memory, never on disk (`ResultStore`).
   returned when the set ends. A failed reservation rolls back the current row, so pages never hold partial rows; later
   rows are still read and counted in `rowsRead` but not stored, later result sets of the query are not kept (they count
   in `discardedResultSets`), and execution always continues.
-- **Rows per query.** `maxRows` 0 – 2,147,483,647 counted across result sets (0 means the budget only; the PR6 table
-  sends 1,000). **Result sets kept** `maxResultSets` 1 – 1,000 (default 10); later sets are counted, not stored. The
+- **Rows per query.** `maxRows` 0 – 2,147,483,647 counted across result sets (0 means the budget only; the renderer
+  sends `queryResults.grid.maxRows`, 0 by default). A row of an execution plan returned with the rows (the first row of a
+  plan set) is kept past it and not counted. **Result sets kept** `maxResultSets` 1 – 1,000 (default 10); later sets are counted, not stored. The
   summary must fit the 16 MiB response: kept sets' descriptors may take 8 MiB, each bounded by `512 + Σ(UTF-8 name +
   UTF-8 type + 96)` bytes (messages and the error text take the rest, with room to spare), so once a set's column list
   would pass that, it and later sets are counted as discarded.
@@ -2627,7 +2640,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Stored cells | text 65,535 characters; xml, json and showplan 2,097,152; vector 65,535; binary and CLR types 32,766 bytes | backend |
 | Result sets kept per query | 1 – 1,000 (default 10) | zod and backend |
 | Rows stored per query | 0 – 2,147,483,647 (0 = budget only) | zod and backend |
-| Result budget | `clamp(available memory / 4, 256 MiB, 2 GiB)`; 50 % per query; none under high system memory load | backend |
+| Result budget | `clamp(available memory / 4, 256 MiB, 16 GiB)`, or the Options limit up to three quarters of memory; 50 % per query; none under high system memory load | backend |
 | Messages | 1,000 entries / 1,000,000 characters, then up to 20 more errors; error text 16,384 characters | backend |
 | Descriptors per summary | 8 MiB (bounded per set by names, types and 96 bytes per column) | backend |
 | FOR XML / FOR JSON value | 2,097,152 characters, the rest marks it truncated | backend |

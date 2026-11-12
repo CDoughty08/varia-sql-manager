@@ -165,7 +165,9 @@ internal static class ResultDiffer
         long leftTotal = 0, rightTotal = 0;
         foreach (var page in leftPages) leftTotal += page.Rows;
         foreach (var page in rightPages) rightTotal += page.Rows;
-        if (leftTotal > int.MaxValue / 2 || rightTotal > int.MaxValue / 2) throw new RequestException("TOO_LARGE", "These results have too many rows to compare.");
+        // The unified list holds a row of each at most: together they must fit one array.
+        if (leftTotal > int.MaxValue / 2 || rightTotal > int.MaxValue / 2 || leftTotal + rightTotal > Array.MaxLength)
+            throw new RequestException("TOO_LARGE", "These results have too many rows to compare.");
         var leftHasher = new CellHasher(left.Columns, left.Wires);
         // The second result's shared columns hash by the first's type and collation, so equal values hash alike in both.
         var compared = right.Columns.ToArray();

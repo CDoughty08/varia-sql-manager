@@ -39,8 +39,6 @@ export const lostSessionMessage = 'This query opened a new SQL session. The prev
 const noticeMessages: Readonly<Record<SessionNotice, string>> = { restarted: newSessionMessage, lost: lostSessionMessage }
 /** A live connection: its Advanced properties' command timeout, when the profile set one, wins over Tools › Options. */
 type QueryConnection = ConnectionInfo & { readonly lost?: true; readonly options?: { readonly advanced?: { readonly commandTimeout?: number } } }
-/** Rows are bounded only by the backend's memory budget; result sets by Tools › Options (up to 1,000, by default all). */
-export const queryLimits = { maxRows: 0 } as const
 /** Failures after which the tab has no session, so no open transaction. */
 const sessionGone: ReadonlySet<ErrorCode | undefined> = new Set<ErrorCode | undefined>(['SESSION_LOST', 'SESSION_CLOSED', 'NOT_CONNECTED', 'CONNECTION_LOST', 'BACKEND_LOST'])
 /** How long ending sessions waits for the queries it cancelled to stop; their sessions close (and roll back) either way. */
@@ -159,11 +157,12 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const state = this.getSnapshot()[id]
     if (state?.session) this.update(id, { ...state, session: undefined })
   }
-  /** What Tools › Options and the connection's Advanced properties ask of an execution; `stopOnError` only when on. */
+  /** What Tools › Options and the connection's Advanced properties ask of an execution; `stopOnError` only when on. Rows
+   *  are bounded by the backend's memory budget, and by Options' limit on rows kept when one is set (0 is none). */
   private executionOptions(connection: QueryConnection) {
     const settings = this.settings()
     return {
-      ...queryLimits, maxResultSets: settings['queryResults.grid.maxResultSets'],
+      maxRows: settings['queryResults.grid.maxRows'], maxResultSets: settings['queryResults.grid.maxResultSets'],
       timeoutSeconds: connection.options?.advanced?.commandTimeout ?? settings['queryExecution.executionTimeout'],
       ...settings['queryExecution.stopOnError'] ? { stopOnError: true } : {}
     }

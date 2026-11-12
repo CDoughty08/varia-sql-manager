@@ -77,25 +77,54 @@ internal sealed class ResultStore
         LiveBytes = globalBytes / 4;
     }
 
-    /// <summary>A quarter of the memory available to the process (container-aware), within 256 MiB to 2 GiB, half of it
-    /// per query, storing nothing more under high system memory load. <paramref name="globalOverride"/>
+    /// <summary>The least a budget is, and the most it is without a limit of the user's.</summary>
+    public const long MinBytes = 256L << 20, MaxAutomaticBytes = 16L << 30;
+
+    /// <summary>The global budget on a machine of this much memory: a quarter of it within <see cref="MinBytes"/> and
+    /// <see cref="MaxAutomaticBytes"/>, or the limit the user set (Tools › Options), as it is up to three quarters of the
+    /// memory. The budget holds the rows and the working memory of the sorts, pivots and profiles of them alike, so it
+    /// is all the backend commits to results: a quarter of memory unless the user set more.</summary>
+    public static long GlobalBytesFor(long memoryBytes, long? limitBytes = null) =>
+        limitBytes is > 0 ? Math.Clamp(limitBytes.Value, MinBytes, Math.Max(MinBytes, memoryBytes / 4 * 3)) : Math.Clamp(memoryBytes / 4, MinBytes, MaxAutomaticBytes);
+
+    /// <summary>The budget for this machine (<see cref="GlobalBytesFor"/>, of the memory available to the process,
+    /// container-aware), half of it per query, storing nothing more under high system memory load.
+    /// <paramref name="limitBytes"/> is the user's limit (VARIA_RESULT_MEMORY_MIB, from main). <paramref name="globalOverride"/>
     /// (VARIA_RESULT_BUDGET_BYTES, test hooks only) replaces the global figure and turns the memory-load check off, so the
     /// tests that set it see the budget they chose and its truncation reasons however busy the machine is.</summary>
-    public static ResultStore FromSystem(long? globalOverride = null)
+    public static ResultStore FromSystem(long? globalOverride = null, long? limitBytes = null)
     {
         if (globalOverride is > 0) return new ResultStore(globalOverride.Value, globalOverride.Value / 2);
-        var global = Math.Clamp(GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / 4, 256L << 20, 2L << 30);
+        var global = GlobalBytesFor(GC.GetGCMemoryInfo().TotalAvailableMemoryBytes, limitBytes);
         return new ResultStore(global, global / 2, OperatingSystemMemory);
     }
 
     /// <summary>Whether reservations checked at a seal stop under high memory load.</summary>
     internal bool ChecksSystemMemory => memory is not null;
 
-    internal static (long Load, long Threshold) OperatingSystemMemory()
+    /// <summary>How long a reading of the memory load is good for.</summary>
+    internal const long LoadReadingMs = 1000;
+    private static long loadReadAt;
+
+    /// <summary>The machine's memory load and the load the runtime calls high. The runtime's figure is the load at its
+    /// last garbage collection, and an idle backend may not have collected for hours: a reading older than
+    /// <see cref="LoadReadingMs"/> is taken again by a collection of the youngest generation, which takes a millisecond
+    /// or so. Without that a sort would be refused for a load that passed long ago, or allowed on a machine since filled.</summary>
+    internal static (long Load, long Threshold) OperatingSystemMemory() => OperatingSystemMemory(Environment.TickCount64);
+
+    internal static (long Load, long Threshold) OperatingSystemMemory(long now)
     {
+        var last = Interlocked.Read(ref loadReadAt);
+        if ((now - last >= LoadReadingMs || now < last) && Interlocked.CompareExchange(ref loadReadAt, now, last) == last)
+            GC.Collect(0, GCCollectionMode.Forced, blocking: true);
         var info = GC.GetGCMemoryInfo();
         return (info.MemoryLoadBytes, info.HighMemoryLoadThresholdBytes);
     }
+
+    /// <summary>The user's limit from VARIA_RESULT_MEMORY_MIB as main sets it: digits alone, 1 to 1,048,576 MiB. Anything
+    /// else is no limit.</summary>
+    public static long? LimitFromEnvironment(string? value) =>
+        long.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var mib) && mib is > 0 and <= 1L << 20 ? mib << 20 : null;
 
     public long GlobalBytes { get; }
     public long QueryBytes { get; }
@@ -152,7 +181,7 @@ internal sealed class ResultStore
     }
 
     /// <summary>Reserves bytes for a query. Checks run in this order: the system's memory load (only when asked, at page
-    /// seals), the query's half of the budget, for a live table its subscription's limit (QueryBudget) and the live share
+    /// seals, and by working and spare memory of some size), the query's half of the budget, for a live table its subscription's limit (QueryBudget) and the live share
     /// (GlobalBudget), then the global budget.</summary>
     public bool TryReserve(QueryBudget query, long bytes, bool checkSystem, out TruncationReason reason)
     {
@@ -198,12 +227,25 @@ internal sealed class ResultStore
     /// <summary>Takes bytes for what only makes a request faster (a sort's whole keys), leaving an eighth of the query's
     /// room and of the store's free: a query still loading into this budget goes on storing rows meanwhile, where a
     /// reservation of its own that found the budget full would stop it for good.</summary>
-    public bool TryReserveSpare(QueryBudget query, long bytes)
+    /// <param name="checkSystem">Whether to ask the system's memory load too. By default as working memory is asked
+    /// (<see cref="WorkCheckBytes"/> or more): what is taken in small pieces (a sort key's pages) asks once for every
+    /// that much taken, so a busy machine does not lose a few kilobytes that make a sort many times faster.</param>
+    public bool TryReserveSpare(QueryBudget query, long bytes, bool? checkSystem = null)
     {
         var limit = Math.Min(QueryBytes, query.MaxBytes);
         if (query.UsedBytes + bytes > limit - limit / 8 || UsedBytes + bytes > GlobalBytes - GlobalBytes / 8) return false;
-        return TryReserve(query, bytes, false, out _);
+        return TryReserve(query, bytes, checkSystem ?? bytes >= WorkCheckBytes, out _);
     }
+
+    /// <summary>Working memory at this size or more is refused while the operating system reports high memory load, as a
+    /// page of rows is: the budget is a share of the machine's memory, not of what is free, and a sort of a large result
+    /// would otherwise take gigabytes from a machine with none to spare. Smaller requests are not asked: a busy machine
+    /// still sorts a small result. (What is taken in many small steps, a profile's long values or a diff's cells, is
+    /// not asked either.)</summary>
+    public const long WorkCheckBytes = 64L << 20;
+
+    /// <summary>Takes the working memory of an operation on a result (a sort's keys, a profile's figures).</summary>
+    public bool TryReserveWork(QueryBudget query, long bytes) => TryReserve(query, bytes, bytes >= WorkCheckBytes, out _);
 
     /// <summary>Charges bytes whatever the budget: the few bytes by which a sealed page exceeds its rows' estimate.</summary>
     internal void Force(QueryBudget query, long bytes)
@@ -475,10 +517,23 @@ internal sealed class ResultStore
         }, TaskScheduler.Default);
     }
 
+    /// <summary>The most a compacting collection copies while the machine has memory to spare. Every thread of the backend
+    /// stops while it copies: measured, 0.1 to 0.2 s for each GiB that remains, so a second or two here. It is the most
+    /// the automatic budget can leave after a release that large; a limit the user set higher can leave more.</summary>
+    internal const long CompactAtMostBytes = 8L << 30;
+
+    /// <summary>Whether a collection now may compact: what remains is no more than was released since the last one that
+    /// did, and no more than <see cref="CompactAtMostBytes"/> unless the machine is short of memory. Nothing else gives
+    /// the released memory back (a non-compacting collection, however often it runs, keeps it committed), so a machine
+    /// short of memory takes the longer pause: what is kept would go on refusing rows and sorts.</summary>
+    internal static bool MayCompact(long usedBytes, long freedSinceCompact, bool memoryLow) =>
+        usedBytes <= freedSinceCompact && (usedBytes <= CompactAtMostBytes || memoryLow);
+
     private void CollectNow()
     {
         Interlocked.Exchange(ref freedSinceCollect, 0);
-        if (UsedBytes <= Interlocked.Read(ref freedSinceCompact))
+        var used = UsedBytes;
+        if (MayCompact(used, Interlocked.Read(ref freedSinceCompact), used > CompactAtMostBytes && IsSystemMemoryLow()))
         {
             Interlocked.Exchange(ref freedSinceCompact, 0);
             GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
