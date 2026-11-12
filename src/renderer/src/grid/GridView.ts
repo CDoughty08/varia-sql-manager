@@ -1047,7 +1047,7 @@ export class GridView {
     const hit = this.hitAt(point.x, point.y)
     if (hit?.kind !== 'resize' || !this.gestures.matches('grid.fitColumn', event)) return
     // Transposed, the corner's border fits the name column to its names, and a header's its drawn column, which is a row.
-    if (hit.column === frozenColumn) { this.setNameWidth(this.fittedNameWidth(g.columnMaxWidth)); this.schedule() }
+    if (hit.column === frozenColumn) this.fitNames()
     else if (this.rotated) this.fitRow(hit.column)
     else this.fitColumn(hit.column)
   }
@@ -1082,6 +1082,14 @@ export class GridView {
       // A full results port has room again shortly; a released or lost result is shown as such by its shell.
       if (portBusy(error)) setTimeout(() => { if (!this.disposed && !abort.signal.aborted && !this.fitting) this.fitColumn(column) }, g.busyRetryMs)
     })
+  }
+
+  /** Transposed: fits the name column to its names, past the width it takes on its own (the corner border's double-click,
+   *  Fit Column on a name). Nothing in a table. */
+  fitNames(): void {
+    if (!this.rotated || this.disposed) return
+    this.setNameWidth(this.fittedNameWidth(g.columnMaxWidth))
+    this.schedule()
   }
 
   /**

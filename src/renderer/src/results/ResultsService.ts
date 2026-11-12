@@ -126,7 +126,7 @@ export interface GridViewState {
   /** A follow-tail grid (a live log): whether its last frame showed the last row. A grid built over a state with false
    *  opens where it was rather than at the tail. */
   following?: boolean
-  /** How the view is drawn: as a table (absent), or transposed, its columns as rows. Nothing sets it yet but test mode. */
+  /** How the view is drawn: as a table (absent), or transposed, its columns as rows (ResultsService.setOrientation). */
   orientation?: 'transposed'
   /** Transposed: the column whose value heads each drawn column in place of "Row N" (Using Column as Headers). */
   headerColumn?: number
@@ -141,9 +141,17 @@ export interface GridViewState {
  * caption toggles it), `grids` each grid's own state.
  */
 export interface TabViewState { stackScrollTop: number; weights?: ReadonlyMap<EntryKey, number>; focused?: EntryKey; grids: Map<EntryKey, GridViewState>; collapsed: ReadonlySet<EntryKey> }
+/** How a view is drawn, read from its grid state: transposed or as a table, and, transposed, the column that heads its
+ *  drawn columns (Using Column as Headers). */
+export interface ViewOrientation { readonly transposed: boolean; readonly headerColumn?: number }
+/** The entry kinds a view can be drawn transposed for: a query's rows and a pivot. Never a comparison (its tone column
+ *  marks rows), a plan set, or a stored transpose. */
+export const turnableKinds: ReadonlySet<string> = new Set(['rows', 'pivot'])
 /** A mounted grid, for the commands that act on it. */
 export interface GridController {
   selectAll(): void; repaint(): void; fitColumn(column: number): void
+  /** Transposed: fits the drawn column that shows a row of the result, or, without one, the name column to its names. */
+  fitDrawn?(row: number | undefined): void
   /** Opens the header funnel's popover for a column (results grids). */
   filterColumn?(column: number): void
 }
@@ -279,6 +287,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private readonly contextStore = new (class extends SnapshotStore<Readonly<Record<string, true>>> { set(value: Readonly<Record<string, true>>) { this.publish(value) } clear() { this.clearListeners() } })({})
   /** The tabs whose results can be saved or closed (`hasResults`); it publishes only when that set of tabs changes. */
   readonly context: ExternalStore<Readonly<Record<string, true>>> = this.contextStore
+  private readonly turnedStore = new (class extends SnapshotStore<Readonly<Record<string, FocusedOrientation>>> { set(value: Readonly<Record<string, FocusedOrientation>>) { this.publish(value) } clear() { this.clearListeners() } })({})
+  /** The tabs whose focused grid (the one a command acts on when it names none) is drawn transposed, with that grid's entry
+   *  and header column: the `resultsGridTransposed` key and the toolbar's Transposed button. It publishes only when one changes. */
+  readonly turned: ExternalStore<Readonly<Record<string, FocusedOrientation>>> = this.turnedStore
   private scheduled = false
   private disposed = false
   private announcedCount = 0
@@ -482,6 +494,50 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     return state
   }
 
+  /** A grid took the focus: its entry is the one commands act on when they name none. */
+  focusEntry(tabId: string, key: EntryKey): void {
+    const run = this.runs.get(tabId)
+    if (!run?.entries.has(key)) return
+    this.viewState(tabId).focused = key
+    this.updateTurned()
+  }
+  /** Whether an entry's view can be drawn transposed: a query's rows or a pivot (never a comparison or a plan set), while its
+   *  results are open and readable. It can while rows still arrive: the drawn columns grow with them. */
+  canTranspose(tabId: string, key: EntryKey): boolean {
+    const run = this.runs.get(tabId), set = this.entry(run, key), state = set?.handle.getSnapshot().state
+    return !!run && !!set && run.status !== 'closed' && run.status !== 'lost' && turnable(set) && state !== 'released' && state !== 'lost'
+  }
+  /** How an entry's view is drawn. A header column the result does not have heads nothing. */
+  orientation(tabId: string, key: EntryKey): ViewOrientation {
+    const set = this.entry(this.runs.get(tabId), key), state = set && this.views.get(tabId)?.grids.get(set.key)
+    if (!set || !state || state.orientation !== 'transposed' || !turnable(set)) return table
+    const header = state.headerColumn
+    return header !== undefined && headerable(set, header) ? { transposed: true, headerColumn: header } : turnedPlain
+  }
+  /**
+   * Draws an entry's view transposed or as a table, and sets the column that heads its drawn columns (`headerColumn`: a
+   * column, null for "Row N", absent to keep the one it has; it is kept while the view is a table). Only the view's grid
+   * state changes: nothing is stored, and the selection, sort and filters stay as they are. False when nothing changed.
+   */
+  setOrientation(tabId: string, key: EntryKey, o: { readonly transposed: boolean; readonly headerColumn?: number | null }): boolean {
+    const set = this.entry(this.runs.get(tabId), key)
+    if (!set || !this.canTranspose(tabId, set.key)) return false
+    if (typeof o.headerColumn === 'number' && !headerable(set, o.headerColumn)) return false
+    const state = this.gridState(tabId, set.key), before = this.orientation(tabId, set.key)
+    if (o.transposed) state.orientation = 'transposed'
+    else delete state.orientation
+    if (o.headerColumn === null) delete state.headerColumn
+    else if (o.headerColumn !== undefined) state.headerColumn = o.headerColumn
+    const after = this.orientation(tabId, set.key)
+    if (before.transposed === after.transposed && before.headerColumn === after.headerColumn) return false
+    this.publishNow(tabId)
+    return true
+  }
+  /** Transposed, a search match in a row past those drawn was asked for: the toolbar says so, and nothing moved. */
+  beyondCap(tabId: string, row: number): void {
+    this.notify(tabId, beyondCapText(row))
+  }
+
   /** The user picked an output pane: automatic switching stops until the next run. */
   setView(tabId: string, view: OutputViewName): void {
     // An isolated estimate may own the output before this tab has ordinary results.
@@ -519,6 +575,17 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   fitColumn(tabId: string, key: EntryKey, column: number): void {
     const set = this.entry(this.runs.get(tabId), key)
     if (set && this.canFitColumn(tabId, set.key, column)) this.controllers.get(set.key)?.fitColumn(column)
+  }
+  /** Transposed, Fit Column fits a drawn column, which shows one row of the result (`row`), or without a row the name
+   *  column: whether the mounted grid can. */
+  canFitDrawn(tabId: string, key: EntryKey, row: number | undefined): boolean {
+    const set = this.entry(this.runs.get(tabId), key), snapshot = set?.handle.getSnapshot()
+    return !!set && !!snapshot && this.orientation(tabId, set.key).transposed && snapshot.state !== 'released' && snapshot.state !== 'lost'
+      && (row === undefined || (Number.isInteger(row) && row >= 0 && row < wire.transpose.maxRows)) && !!this.controllers.get(set.key)?.fitDrawn
+  }
+  fitDrawn(tabId: string, key: EntryKey, row: number | undefined): void {
+    const set = this.entry(this.runs.get(tabId), key)
+    if (set && this.canFitDrawn(tabId, set.key, row)) this.controllers.get(set.key)?.fitDrawn?.(row)
   }
   selection(tabId: string, key: EntryKey): GridSelection | undefined {
     const set = this.entry(this.runs.get(tabId), key)
@@ -895,6 +962,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.noticeTimers.clear()
     this.controllers.clear()
     this.contextStore.clear()
+    this.turnedStore.clear()
     this.clearListeners()
   }
 
@@ -1305,6 +1373,21 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   protected override publish(snapshot: Readonly<Record<string, TabResults>>): void {
     super.publish(snapshot)
     this.updateContext()
+    this.updateTurned()
+  }
+  /** `turned` per tab: its focused entry, when that view is drawn transposed. */
+  private updateTurned(): void {
+    const current = this.turnedStore.getSnapshot(), next: Record<string, FocusedOrientation> = {}
+    let changed = false
+    for (const tabId of this.runs.keys()) {
+      const focused = this.focusedEntry(tabId), orientation = focused && this.orientation(tabId, focused.key)
+      if (!focused || !orientation?.transposed) continue
+      const was = current[tabId]
+      next[tabId] = was && was.entry === focused.key && was.headerColumn === orientation.headerColumn ? was
+        : { entry: focused.key, ...orientation.headerColumn === undefined ? {} : { headerColumn: orientation.headerColumn } }
+      if (next[tabId] !== was) changed = true
+    }
+    if (changed || Object.keys(current).length !== Object.keys(next).length) this.turnedStore.set(next)
   }
   /** `hasResults` per tab: a set the backend still holds, in results neither closed nor lost with the backend. */
   private updateContext(): void {
@@ -1335,6 +1418,20 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
 
   private entry(run: Run | undefined, key: EntryKey): ResultSetEntry | undefined { return run?.entries.get(key) }
 }
+
+const table: ViewOrientation = { transposed: false }, turnedPlain: ViewOrientation = { transposed: true }
+/** A focused grid drawn transposed (`ResultsService.turned`): its entry and the column that heads its drawn columns. */
+export interface FocusedOrientation { readonly entry: EntryKey; readonly headerColumn?: number }
+/** An entry whose view can be drawn transposed (`turnableKinds`, and no tone column whatever its kind). */
+const turnable = (set: ResultSetEntry): boolean => turnableKinds.has(set.descriptor.kind) && !set.descriptor.columns.some(column => column.role === 'tone')
+/** A column that can head a transposed view's drawn columns: one of the result's own. */
+const headerable = (set: ResultSetEntry, column: number): boolean => Number.isInteger(column) && column >= 0 && column < set.descriptor.columns.length && set.descriptor.columns[column].role !== 'tone'
+/** What the toolbar says when Find Next lands on a match in a row a transposed grid does not draw. */
+export const beyondCapText = (row: number): string =>
+  `The match is in row ${formatCount(row + 1)}, and a transposed grid draws only the first ${formatCount(wire.transpose.maxRows)} rows. Filter the rows, or turn Transposed off, to see it.`
+/** A transposed grid's strip when the view has more rows than it draws as columns. */
+export const capStripText = (rows: number, pivot: boolean): string =>
+  `Showing the first ${formatCount(wire.transpose.maxRows)} of ${formatCount(rows)} rows as columns. Filter the ${pivot ? 'Pivot' : 'Table'} to see other rows.`
 
 /** A column whose order Sort text by changes (ViewSorter.IsText in C#, plus binary for Bytes). */
 const lengthTypes = new Set(['char', 'varchar', 'nchar', 'nvarchar', 'text', 'ntext', 'sysname', 'xml', 'json'])

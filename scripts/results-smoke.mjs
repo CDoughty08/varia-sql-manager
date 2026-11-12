@@ -14,8 +14,8 @@ import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, anyResultGrid, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice,
   jobProgress, kindIcon, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
-  outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, resultClose, resultGrid, resultSplitters, resultsToolbar, resultToggle, statusBar,
-  pivotPanel, profileCard, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, unsavedMark
+  outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultToggle, statusBar,
+  pivotPanel, profileCard, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark
 } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -1585,60 +1585,112 @@ try {
   await expect(anyResultGrid(page)).toHaveCount(1)
   console.log('Results checks: Pivot groups the rows of a grid by a column in the backend and adds the counts and maxima as a new result, offering Sum only for numeric columns and refusing a pivot past its bounds in the panel.')
 
-  // 13b3. Transpose: the results toolbar's Transpose turns the grid's 8 columns into rows and its 100 rows into columns in
-  // the backend (results.transpose), added as the run's next result, which sorts as any other. The grid menu's Transpose
-  // submenu takes only the selected rows, or names the columns by the active cell's column; past 4,095 rows it takes the
-  // first ones and says so. Running again releases the transposes with the run's other results.
-  const transposeMenu = async (row, column, name) => {
-    await cell(row, column).click({ button: 'right' })
+  // 13b3. Transposed: the results toolbar's Transposed (and the grid menu's Transpose › Transposed) draws the grid's 8
+  // columns as rows and its 100 rows as columns. It is the same grid over the same result: nothing is added to the run,
+  // its highlights, sort and filters stay, and the commands on its cells and names act on the result's own rows and
+  // columns. Using Column as Headers heads the drawn columns with a column's values, Choose Headers goes back to row
+  // numbers, Selected Rows keeps the selected rows first, and past 4,095 rows the strip and Find Next say so.
+  const transposeMenu = async (target, name, role = 'menuitem') => {
+    await target.click({ button: 'right' })
     await outputMenu.getByRole('menuitem', { name: 'Transpose', exact: true }).click()
-    await page.getByRole('menu', { name: 'Transpose', exact: true }).getByRole('menuitem', { name, exact: true }).click()
+    return page.getByRole('menu', { name: 'Transpose', exact: true }).getByRole(role, { name, exact: true })
   }
-  // A window narrower than 1180 pixels (Windows CI's display) hides the toolbar's Transpose; the grid's menu has it too.
-  if (await show('Transpose').isVisible()) await show('Transpose').click()
-  else await transposeMenu(0, 0, 'All Rows')
-  const transposed = grid('Result 2')
-  await expect(cell(0, 0, transposed)).toHaveText('id')
-  expect(await Promise.all([0, 1, 2].map(column => cell(0, column, transposed).textContent()))).toEqual(['id', '0', '1'])
-  for (const name of ['Column', 'Row 1', 'Row 2']) await expect(transposed.getByRole('columnheader', { name: new RegExp(`^${name}\\b`) }).first()).toBeVisible()
-  await expect(cell(6, 0, transposed)).toHaveText('active')
-  await expect(strip('Result 2')).toContainText('Transpose of Result 1: 8 columns as rows, 100 rows as columns.')
-  await expect(page.getByRole('button', { name: 'Transpose of Result 1', exact: true })).toBeVisible()
-  await page.screenshot({ path: resolve('artifacts', 'results-transpose.png') })
-  // The transpose sorts as any result: its Column column ascending puts active first.
-  await cell(0, 0, transposed).click({ button: 'right' })
-  await outputMenu.getByRole('menuitem', { name: 'Sort Ascending', exact: true }).click()
-  await expect(cell(0, 0, transposed)).toHaveText('active')
-  // Selected rows (rows 3 and 4 of Result 1) make a record view, its columns named by position.
+  const turned = () => matching(grid(), transposedGridSelector)
+  const nameCell = name => grid().locator(gridPart.nameCell).filter({ visible: true }).filter({ hasText: new RegExp(`^${name}`) })
+  const drawnHeader = name => grid().getByRole('columnheader', { name: new RegExp(`^${name}\\b`) }).first()
   const firstName = await cell(0, 1).textContent()
+  // A highlighted row, to follow through the turn.
+  await cell(1, 1).click({ button: 'right' })
+  await outputMenu.getByRole('menuitem', { name: 'Highlight', exact: true }).click()
+  await page.getByRole('menu', { name: 'Highlight', exact: true }).getByRole('menuitem', { name: 'Yellow', exact: true }).click()
+  await expect(grid().locator(gridPart.highlightedRow)).toHaveCount(1)
+  // A window narrower than 1180 pixels (Windows CI's display) hides the toolbar's Transposed; the grid's menu has it too.
+  const byToolbar = await show('Transposed').isVisible()
+  if (byToolbar) {
+    await expect(show('Transposed')).toHaveAttribute('aria-pressed', 'false')
+    await show('Transposed').click()
+    await expect(show('Transposed')).toHaveAttribute('aria-pressed', 'true')
+    await expect(resultsToolbar(page).getByRole('button', { name: 'Headers: Row number', exact: true })).toBeVisible()
+  } else await (await transposeMenu(cell(0, 0), 'Transposed', 'menuitemcheckbox')).click()
+  await expect(turned()).toHaveCount(1)
+  // Still the run's one grid: the result's cells by their own row and column, its columns named down the frozen column.
+  await expect(anyResultGrid(page)).toHaveCount(1)
+  await expect(transposedCell(grid(), 0, 0)).toHaveText('0')
+  expect(await Promise.all([[0, 0], [1, 0], [2, 0], [0, 1]].map(([row, column]) => transposedCell(grid(), row, column).textContent()))).toEqual(['0', '1', '2', firstName])
+  await expect(transposedName(grid(), 0)).toHaveText(/^id/)
+  for (const name of ['id', 'name', 'active', 'score']) await expect(nameCell(name)).toHaveCount(1)
+  for (const name of ['Row 1', 'Row 2']) await expect(drawnHeader(name)).toBeVisible()
+  await expect(grid()).toHaveAttribute('aria-colcount', '101')
+  // The highlighted row is a tinted column now, and its header says so.
+  await expect(grid().locator(gridPart.highlightBand).filter({ visible: true })).toHaveCount(1)
+  await expect(grid().getByRole('columnheader', { name: /^Row 2\b/ }).first()).toHaveAttribute('aria-description', /Highlighted yellow/)
+  await page.screenshot({ path: resolve('artifacts', 'results-transpose.png') })
+  // The menu reads as a toggle, and the commands on a name act on that column of the result: id descending puts row 99
+  // in the first drawn column.
+  await expect(await transposeMenu(transposedCell(grid(), 0, 0), 'Transposed', 'menuitemcheckbox')).toHaveAttribute('aria-checked', 'true')
+  await page.keyboard.press('Escape')
+  await page.keyboard.press('Escape')
+  await nameCell('id').click({ button: 'right' })
+  await outputMenu.getByRole('menuitem', { name: 'Sort Descending', exact: true }).click()
+  await expect(transposedCell(grid(), 0, 0)).toHaveText('99')
+  await expect(turned()).toHaveCount(1)
+  await nameCell('id').click({ button: 'right' })
+  await outputMenu.getByRole('menuitem', { name: 'Clear Sort', exact: true }).click()
+  await expect(transposedCell(grid(), 0, 0)).toHaveText('0')
+  // Using Column as Headers, from the name column's own name: each drawn column is headed by its row's name.
+  await (await transposeMenu(nameCell('name'), 'Using Column as Headers')).click()
+  await expect(grid().getByRole('columnheader', { name: new RegExp(`^${firstName}`) })).toHaveCount(1)
+  await expect(drawnHeader('Row 1')).toHaveCount(0)
+  if (byToolbar) await expect(resultsToolbar(page).getByRole('button', { name: 'Headers: name', exact: true })).toBeVisible()
+  // The header column is still drawn as a row.
+  await expect(transposedCell(grid(), 0, 1)).toHaveText(firstName)
+  // Choose Headers lists Row number and the columns, on the current one; Row number brings "Row N" back.
+  if (byToolbar) await resultsToolbar(page).getByRole('button', { name: 'Headers: name', exact: true }).click()
+  else await (await transposeMenu(transposedCell(grid(), 0, 0), 'Choose Headers…')).click()
+  await expect(quickInputActive(page)).toContainText('name')
+  await quickInputRows(page).filter({ hasText: 'Row number' }).click()
+  await expect(drawnHeader('Row 1')).toBeVisible()
+  // Turned back: the table as it was, its highlighted row still highlighted.
+  await (await transposeMenu(transposedCell(grid(), 0, 0), 'Transposed', 'menuitemcheckbox')).click()
+  await expect(turned()).toHaveCount(0)
+  await expect(cell(0, 0)).toHaveText('0')
+  await expect(grid().locator(gridPart.highlightedRow)).toHaveCount(1)
+  if (byToolbar) await expect(show('Transposed')).toHaveAttribute('aria-pressed', 'false')
+  // Highlights follow a re-run, so this one comes off before the next.
+  await cell(1, 1).click({ button: 'right' })
+  await outputMenu.getByRole('menuitem', { name: 'Highlight', exact: true }).click()
+  await page.getByRole('menu', { name: 'Highlight', exact: true }).getByRole('menuitem', { name: 'Clear All Highlights', exact: true }).click()
+  await expect(grid().locator(gridPart.highlightedRow)).toHaveCount(0)
+  // Selected Rows keeps rows 3 and 4 (a Keep Selected Rows filter) and turns the grid: a record view of two columns.
   await cell(2, 0).click()
   await cell(3, 0).click({ modifiers: ['Shift'] })
-  await transposeMenu(3, 0, 'Selected Rows')
-  const selectedRows = grid('Result 3')
-  await expect(cell(0, 1, selectedRows)).toHaveText('2')
-  expect(await Promise.all([0, 1, 2].map(column => cell(0, column, selectedRows).textContent()))).toEqual(['id', '2', '3'])
-  await expect(strip('Result 3')).toContainText('Transpose of Result 1: 8 columns as rows, 2 selected rows as columns.')
-  // Using Column as Headers names the columns by the name column's values. Running again releases the transposes first,
-  // so the new one is the second set, in view.
-  await run('-- varia-fake: sets=W1*100')
-  await settled()
+  await (await transposeMenu(cell(3, 0), 'Selected Rows')).click()
+  await expect(turned()).toHaveCount(1)
+  await expect(grid()).toHaveAttribute('aria-colcount', '3')
+  expect(await Promise.all([0, 1].map(row => transposedCell(grid(), row, 0).textContent()))).toEqual(['2', '3'])
   await expect(anyResultGrid(page)).toHaveCount(1)
-  await cell(0, 1).click()
-  await transposeMenu(0, 1, 'Using Column as Headers')
-  const named = grid('Result 2')
-  await expect(cell(0, 1, named)).toHaveText('0')
-  await expect(named.getByRole('columnheader', { name: new RegExp(`^${firstName}`) })).toHaveCount(1)
-  await expect(strip('Result 2')).toContainText(', named by name.')
-  // Past 4,095 rows: the first ones, and the strip says how to transpose the others.
+  // Past 4,095 rows: the first ones are drawn, the strip says so, and Find Next onto a match in a row past them says so
+  // in the toolbar and moves nothing.
   await run('-- varia-fake: sets=W1*5000')
   await settled()
   await expect(anyResultGrid(page)).toHaveCount(1)
-  await transposeMenu(0, 0, 'All Rows')
-  await expect(strip('Result 2')).toContainText('Transposed the first 4,095 of 5,000 rows; filter or select rows to transpose others.')
+  await expect(turned()).toHaveCount(0)
+  await (await transposeMenu(cell(0, 0), 'Transposed', 'menuitemcheckbox')).click()
+  await expect(turned()).toHaveCount(1)
+  await expect(strip()).toContainText('Showing the first 4,095 of 5,000 rows as columns. Filter the Table to see other rows.')
+  await expect(grid()).toHaveAttribute('aria-colcount', '4096')
+  const findBox = resultsToolbar(page).getByRole('textbox', { name: 'Search results', exact: true })
+  await findBox.fill('Note 4999:')
+  await expect(resultsSearchCount(page)).toContainText('of 1')
+  await findBox.press('Enter')
+  await expect(jobNotice(page)).toContainText('The match is in row 5,000, and a transposed grid draws only the first 4,095 rows.')
+  await expect(transposedCell(grid(), 0, 0)).toHaveText('0')
+  await findBox.press('Escape')
   await run('-- varia-fake: sets=W1*100')
   await settled()
   await expect(anyResultGrid(page)).toHaveCount(1)
-  console.log('Results checks: Transpose turns a grid into a new result of its columns as rows in the backend, of all rows, the selected ones or named by a column, sorts it as any result, and says when it took the first 4,095 rows only.')
+  await expect(turned()).toHaveCount(0)
+  console.log('Results checks: Transposed draws a grid with its columns as rows by command and back, storing nothing: cells, names, sort from a name, the header column and its picker, highlights through the turn, Selected Rows, the 4,095-row strip and Find Next past it.')
 
   // 13c. Filters: the grid menu's Filter submenu filters by the selected cells' values, without NULL, between the lowest and
   // highest selected value and to duplicates; the caption counts the rows kept and lists each filter, named by its values,
@@ -1991,8 +2043,8 @@ try {
       groups: [...tools.children].filter(child => child.getBoundingClientRect().width > 0).map(child => ({ name: child.getAttribute('aria-label'), width: child.getBoundingClientRect().width })) }
   })
   expect(toolsLayout.fits, JSON.stringify(toolsLayout)).toBe(true)
-  // Transpose gives way in a narrow window (it is in the grid's menu and the palette), so the other groups fit.
-  await expect(resultsToolbar(page).getByRole('button', { name: 'Transpose', exact: true })).toBeHidden()
+  // Transposed gives way in a narrow window (it is in the grid's menu and the palette), so the other groups fit.
+  await expect(resultsToolbar(page).getByRole('button', { name: 'Transposed', exact: true })).toBeHidden()
   await expect(resultsToolbar(page).getByRole('button', { name: 'Close Results', exact: true })).toBeInViewport({ ratio: 1 })
   await cell(0, 0).click()
   await page.keyboard.press('Control+F')

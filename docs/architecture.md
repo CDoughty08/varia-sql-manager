@@ -100,9 +100,15 @@ being true.
   drawn column through pooled bands and colours that column's header, which also carries the row-size bar; a search match
   past the cap is reported (`onBeyondCap`) and never scrolled to. The orientation, the header column and the transposed
   view's own offsets and widths are per view in `GridViewState` (`orientation`, `headerColumn`, `transposed`); the option is
-  fixed for a view's life, so a change builds the grid again. Until the transpose commands set it, only test mode's
-  `__variaGrid.setOrientation` does. A result with a tone column (a comparison, a live table) is never transposed.
-  `tests/grid-orientation.test.ts` holds this.
+  fixed for a view's life, so a change builds the grid again. `ResultsService.setOrientation` is the only writer of the
+  orientation and the header column: the transpose commands (`contributions/transpose.ts`) call it, it publishes, and
+  `ResultGrid` reads `orientation()`. Its `turned` store (the focused grid of each tab, when transposed) feeds the
+  `resultsGridTransposed` key and the toolbar; a grid's own menu reads that grid's orientation from its target
+  (`argsFor`'s stand-in state), so a Peek card's grid toggles too. Fit Column on a transposed grid fits the target's row
+  (`fitDrawn`), or the name column for a name. The stored transpose (`results.transpose`, `TransposeService`) is no longer
+  reached by any command and is removed separately; Copy and Save do not write the transposed text yet. A result with a
+  tone column (a comparison, a live table) is never transposed. `tests/grid-orientation.test.ts`,
+  `tests/results-orientation.test.ts` and `tests/results-toolbar-transpose.test.ts` hold this.
   Live tables show through `LiveGrid` (`src/renderer/src/live/`), which swaps each revision into its `GridView`; a table's row
   tone column (catalogue `role: 'tone'`, its last) is hidden by the grid and left out of Copy and Save (`ResultJobs`).
 - Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never

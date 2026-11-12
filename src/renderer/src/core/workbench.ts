@@ -431,6 +431,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     quickInput: quickInput.visibility,
     explorer: explorer.context,
     results: results.context,
+    resultsTurned: results.turned,
     scripting: scripting.running,
     bookmarks,
     inputMode,

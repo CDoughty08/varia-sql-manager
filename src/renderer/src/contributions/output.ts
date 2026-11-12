@@ -81,6 +81,15 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     return shown && column !== undefined && Number.isInteger(column) && column >= 0 && column < shown.columns && shown.set.descriptor.columns[column].role !== 'tone'
       ? { tabId: shown.tabId, key: shown.key, set: shown.set, column } : undefined
   }
+  /**
+   * Fit Column in a grid drawn transposed: a drawn column there shows one row of the result, so it is the target's row
+   * that is fitted (a cell's or a drawn header's; from the keyboard the active cell's). A target with a column and no row
+   * is a name in the frozen first column, and fits that column to its names.
+   */
+  const drawnFit = (args?: CommandArgs) => {
+    const target = targetOf(args), shown = grid(target)
+    return shown && results.orientation(shown.tabId, shown.key).transposed ? { tabId: shown.tabId, key: shown.key, row: target?.row } : undefined
+  }
   const liveSort = (args?: CommandArgs) => { const at = liveColumn(args); return at && at.live.sortable && at.live.canSort(at.column) ? at : undefined }
   const sortCommand = (direction: 'ascending' | 'descending', add: boolean) => ({
     when: (args?: CommandArgs) => !!sortTarget(args) || !!liveSort(args),
@@ -183,8 +192,16 @@ export function outputContribution({ commands, results, menuTargets, documents, 
       }
     }),
     commands.register('output.fitColumn', {
-      when: args => { const at = sortTarget(args), live = liveColumn(args); return live ? live.live.hasRows() : !!at && results.canFitColumn(at.tabId, at.key, at.column) },
-      run: args => { const at = sortTarget(args), live = liveColumn(args); if (live) live.live.fitColumn(live.column); else if (at) results.fitColumn(at.tabId, at.key, at.column) }
+      when: args => {
+        const drawn = drawnFit(args), at = sortTarget(args), live = liveColumn(args)
+        return live ? live.live.hasRows() : drawn ? results.canFitDrawn(drawn.tabId, drawn.key, drawn.row) : !!at && results.canFitColumn(at.tabId, at.key, at.column)
+      },
+      run: args => {
+        const drawn = drawnFit(args), at = sortTarget(args), live = liveColumn(args)
+        if (live) live.live.fitColumn(live.column)
+        else if (drawn) results.fitDrawn(drawn.tabId, drawn.key, drawn.row)
+        else if (at) results.fitColumn(at.tabId, at.key, at.column)
+      }
     }),
     commands.register('output.saveResultsAs', {
       unavailable: args => liveOf(args) ? undefined : noResults,

@@ -2,15 +2,12 @@ import type { TileCounters } from './data'
 
 /** What test mode reads from a mounted grid. */
 export interface StatsSource { counters(): TileCounters; nodes(): number; setScrollCap(px: number | undefined): void }
-/** What test mode asks of the results grids' orientation: every grid's, or those of one tab or one entry. */
-export interface OrientationRequest { readonly transposed: boolean; readonly headerColumn?: number; readonly tabId?: string; readonly entry?: string }
 export interface GridStatsSnapshot { frames: number[]; hits: number; misses: number; nodes: number; grids: number }
 
 /**
  * Test mode's grid counters (`window.__variaGrid`, smoke tests and the grid benchmark): the last 1,024 frame times, tile
  * hits and misses, and the DOM elements of the mounted grids. `setScrollCap` lowers the scroll cap of every grid, so a
- * smoke test reaches Mode B without a million-pixel spacer. `setOrientation` stands in for the transpose commands until
- * they set a view's orientation: each results grid it names writes the request to its own grid state and is built again.
+ * smoke test reaches Mode B without a million-pixel spacer.
  */
 export class GridStats {
   private readonly times = new Float64Array(1024)
@@ -19,13 +16,6 @@ export class GridStats {
   private retired: TileCounters = { hits: 0, misses: 0 }
   private cap: number | undefined
   get scrollCap(): number | undefined { return this.cap }
-  private readonly orienters = new Set<(request: OrientationRequest) => void>()
-  /** A results grid listens for orientation requests while it is rendered; the returned function stops it. */
-  onOrientation(listener: (request: OrientationRequest) => void): () => void {
-    this.orienters.add(listener)
-    return () => { this.orienters.delete(listener) }
-  }
-  setOrientation(request: OrientationRequest): void { for (const listener of [...this.orienters]) listener(request) }
   frame(ms: number): void { this.times[this.count++ % this.times.length] = ms }
   add(source: StatsSource): () => void {
     this.sources.add(source)
