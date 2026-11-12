@@ -376,11 +376,11 @@ before publishing.
 
 ### Backend and protocol
 
-`results.pivot`, `results.diff`, `results.view` and `results.transpose` are results-port methods: their places are
+`results.pivot`, `results.diff` and `results.view` are results-port methods (as `results.transpose` was until PR 8): their places are
 `RpcMethods`, `methodPolicies`, `ipc/port-messages.ts`, `main/backend/results-port.ts`, the worker protocol and client,
 and the C# records and dispatch. `results.copy` and `results.export` also have zod schemas in `main/validation.ts`.
 
-Smoke suites and the grid benchmark run on a fake backend with its own filters, pivot, diff, transpose, copy and export
+Smoke suites and the grid benchmark run on a fake backend with its own filters, pivot, diff, copy and export
 (`tests/fixtures/backend.mjs`), and the text goldens are checked against its writer too
 (`tests/fixtures/backend/text-writer.mjs`). Every backend change below is made there as well.
 
@@ -527,7 +527,22 @@ Outcome, accepted by the owner:
 7. **Commands switch to the orientation.** In progress. If it merges before PR 6, Copy and Save of a grid turned by
    command still go through the stored path, so the two PRs say which order they need. The three transpose commands, the header option, the cap's strip, the Find Next
    message past the cap, a context key for "this grid is transposed" so Transpose reads as a toggle, smoke steps.
-8. **Remove the stored transpose.** After PRs 6 and 7.
+8. **Remove the stored transpose.** After PRs 6 and 7. What it settled or left:
+   - Gone: `results.transpose` (`RpcMethods`, `methodPolicies`, the port request and answer schemas, `ResultsPortHost`,
+     the worker protocol and core, `ResultHandle.transpose`, `SqlService`'s dispatch, lane, `MethodNames` entry and
+     `TransposeAsync`, the two records in `Contracts.cs`), `ResultTransposer`, `TransposeService` with its strip, the
+     `transpose` result kind in `ResultDescriptor` and the descriptor schema, the fake backend's handler, and
+     `TransposeChecks.cs`. It was a port method, so it never had a preload method or a schema in `main/validation.ts`.
+   - Kept: `limits.transpose.maxRows` (the 4,095 rows a transposed grid draws, a transposed copy or save writes and a
+     `keepRows` filter names), now the limit's only member (`maxCells` and `maxRanges` went with the method), and not
+     renamed; `ResultTextWriter.MaxTransposedRows`, which `ViewSorter.MaxKeepRows` now reads directly; `RowAccess`,
+     `ViewSorter.Merge`, `ColumnNames.Unique` and `PivotOutput.GroupName`, which the text writer, filters and pivots use.
+   - The backend answers `results.transpose` `METHOD_NOT_FOUND` (`HostChecks`' retired methods) and the port refuses a
+     `transpose` request as invalid; `tests/results-transpose.test.ts` now pins that the method, the request, the kind
+     and the service stay gone. No protocol version change: main and the backend ship together.
+   - `ResultsService` had no branch on the `transpose` kind (only comments), so nothing there changed for PR 9 to
+     conflict with. If PR 9 merges after this one it drops its own allowance: `ResultGroup.transposes`, the `'transpose'`
+     `ViewKind` and its branches, and the transposes test in `tests/results-groups.test.ts`.
 9. **Groups.** In progress. It also takes what PR 3 left: closing through a command or menu target, and a Results badge
    that counts original groups. The group and slot model drawn in the stack (a Pivot under its Table; a transposed item sized by its
    drawn rows), plan-set groups, and the bare mode Peek uses. The renderer's rules land here so every list is representable: Pivot is offered only on Tables, the "Pivot
@@ -567,7 +582,7 @@ shared width by hand; a screen reader pass over the transposed grid.
 | Budgets | backend `DiffChecks.cs`, `PivotChecks.cs`, result store checks |
 | Identity and cleanup | `tests/results-service.test.ts`, `tests/result-client.test.ts`, `tests/results-port.test.ts` |
 | Pivot slot | `tests/results-pivot.test.ts`, backend `PivotChecks.cs` |
-| Orientation | grid tests, `tests/results-transpose.test.ts`, `tests/results-toolbar-transpose.test.ts`, text-writer goldens, grid benchmark |
+| Orientation | grid tests, `tests/results-orientation.test.ts`, `tests/results-toolbar-transpose.test.ts`, `tests/results-transpose.test.ts` (the stored transpose stays gone), text-writer goldens, grid benchmark |
 | Filters | backend `FilterChecks.cs`, `tests/results-service.test.ts` |
 | Comparisons | `tests/results-diff.test.ts`, backend `DiffChecks.cs`, shared pairing fixtures |
 | Search and highlights | `tests/results-search.test.ts`, `tests/results-highlights.test.ts` |

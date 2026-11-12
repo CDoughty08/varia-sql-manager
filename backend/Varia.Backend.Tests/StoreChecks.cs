@@ -122,7 +122,7 @@ internal static class StoreChecks
         set.Complete();
         check(set.Describe() is { Truncated: null, RowsStored: 10, State: "complete" } && query.Stopped == TruncationReason.SystemMemory && store.Open(query, 1, 1, 1, "rows", W1Columns, W1Wires) is null,
             "high memory load at a query set's final seal keeps the set whole and stops the query");
-        // A derived set (a pivot, a diff, a transpose) stops only itself, at the row after the page sealed under pressure.
+        // A derived set (a pivot, a diff) stops only itself, at the row after the page sealed under pressure.
         query = store.BeginQuery("derived");
         var derived = store.Open(query, 0, 1, 1, "pivot", W1Columns, W1Wires, derived: true)!;
         Fill(derived, 0, 9000);

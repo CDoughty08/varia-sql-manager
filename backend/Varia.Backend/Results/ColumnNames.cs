@@ -2,7 +2,7 @@ using System.Globalization;
 
 namespace Varia.Backend.Results;
 
-/// <summary>Distinct column names for a derived result (a pivot, a transpose), so no two headers match (ignoring case) and a
+/// <summary>Distinct column names for a derived result (a pivot), so no two headers match (ignoring case) and a
 /// JSON save has no repeated key.</summary>
 internal static class ColumnNames
 {

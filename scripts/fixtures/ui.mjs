@@ -591,7 +591,7 @@ export const resultGridSelector = (name = 'Result 1') => {
  * A results grid by its entry's name, as the user reads it: "Result 2" is the grid whose accessible name starts with it;
  * any other name ("Pivot of Result 1") is the grid under the caption that carries it. A grid has no place to be found
  * by: results come and go around it, and their ids come from one backend counter no script can predict. `scope` is a
- * page or a locator. Two results under one caption name (two transposes of Result 1) match two grids, which a strict
+ * page or a locator. Two results under one caption name (two pivots of Result 1) match two grids, which a strict
  * locator refuses: name those by their number.
  */
 export const resultGrid = (scope, name = 'Result 1') => {

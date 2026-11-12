@@ -27,7 +27,7 @@ export type EntryKey = string
 /**
  * One result set of the run, named everywhere by its `key` (the grid's `data-result-entry`), never by its place in the
  * list. `ordinal` is an original result's number in its run (`descriptor.index + 1`); a result Varia made (a pivot, a
- * transpose, a diff) has none. `number` is what the entry is numbered by where it has no name of its own ("Result 4" in
+ * diff) has none. `number` is what the entry is numbered by where it has no name of its own ("Result 4" in
  * its caption, on a job's strip, in a save's suggested name): the ordinal, or for a derived entry the next number after
  * the run's highest when it was appended, fixed for its life. That is the place it was appended at, and stays unique when
  * an entry before it has gone.
@@ -147,7 +147,7 @@ export interface TabViewState { stackScrollTop: number; weights?: ReadonlyMap<En
  *  drawn columns (Using Column as Headers). */
 export interface ViewOrientation { readonly transposed: boolean; readonly headerColumn?: number }
 /** The entry kinds a view can be drawn transposed for: a query's rows and a pivot. Never a comparison (its tone column
- *  marks rows), a plan set, or a stored transpose. */
+ *  marks rows) or a plan set. */
 export const turnableKinds: ReadonlySet<string> = new Set(['rows', 'pivot'])
 /** A mounted grid, for the commands that act on it. */
 export interface GridController {
@@ -474,7 +474,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /**
    * Closes one entry of a run that has ended (a caption's close button): it leaves the run and its result is released
    * (`drop`); the entries after it move up a place and keep their keys, numbers, names and state. A result made from it (a
-   * pivot, a transpose, a diff) is a stored result of its own and stays, under its name. The run's status, summary and row
+   * pivot, a diff) is a stored result of its own and stays, under its name. The run's status, summary and row
    * total do not change; closing its last entry marks it `emptied`. Unavailable while the query runs. False when there is
    * no such entry.
    */

@@ -69,7 +69,7 @@ async function ran(o: { running?: boolean } = {}) {
 describe('Transpose Results', () => {
   it('turns the grid that last had the focus and turns it back, storing nothing and asking the backend nothing', async () => {
     const { commands, results, tab, key, orientation, handle } = await ran()
-    const transpose = vi.spyOn(handle(), 'transpose'), added = vi.spyOn(results, 'addSet')
+    const added = vi.spyOn(results, 'addSet')
     const before = results.getSnapshot()[tab.id].sets.length
     expect(orientation()).toEqual({ transposed: false })
     expect(await commands.execute('output.transpose', { tabId: tab.id }, 'toolbar')).toBe(true)
@@ -80,7 +80,8 @@ describe('Transpose Results', () => {
     expect(await commands.execute('output.transpose', undefined, 'palette')).toBe(true)
     expect(orientation()).toEqual({ transposed: false })
     expect(results.viewState(tab.id).grids.get(key())).not.toHaveProperty('orientation')
-    expect(transpose).not.toHaveBeenCalled()
+    // No request of the result's handle makes a transposed result: there is none to make (results.transpose is gone).
+    expect(handle()).not.toHaveProperty('transpose')
     expect(added).not.toHaveBeenCalled()
     expect(results.getSnapshot()[tab.id].sets).toHaveLength(before)
   })
