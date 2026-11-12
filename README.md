@@ -75,7 +75,7 @@ Explorer's recovery rows offer **Retry**, **Continue loading**, and **Filter** a
 database starts with that database's visible, removable scope.
 
 The [result grid tools](docs/results-tools.md) include **Copy Column Name**, keyboard-accessible **Fit Column**, and
-**Close Results** beside the results. Located SQL errors offer **Go to line** while the source text is unchanged.
+**Close Results** beside the results; each result's caption has a button that closes that result alone. Located SQL errors offer **Go to line** while the source text is unchanged.
 
 Certificate validation is enabled by default. For a trusted server with a self-signed certificate, enable **Trust server certificate** in the connection dialog. On Linux and macOS, Windows authentication requires the system Kerberos library, a valid ticket from `kinit`, and a server name or SPN configured for Kerberos. Entra Integrated authentication is available on Windows only. Remembered passwords are encrypted using the operating system's credential storage; on Linux this requires an available keyring.
 

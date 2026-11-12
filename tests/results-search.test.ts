@@ -54,8 +54,8 @@ function fixture(o: { maxMatches?: number } = {}) {
     sortOf: (_tabId: string, key: EntryKey) => { const entry = entryOf(tab?.sets, key); return entry && sorts.get(entry.descriptor.resultId - 1) }
   }
   const service = new ResultsSearchService({ results, timers, maxMatches: o.maxMatches })
-  const show = (sets: ResultSetEntry[], queryId = 'q1', settled = true) => {
-    tab = { queryId, status: 'completed', sets, settled: new Map(settled ? sets.map(entry => [`1:${entry.descriptor.resultId}`, { rows: 100, strip: false }]) : []) } as unknown as TabResults
+  const show = (sets: ResultSetEntry[], queryId = 'q1', settled = true, status: TabResults['status'] = 'completed') => {
+    tab = { queryId, status, sets, settled: new Map(settled ? sets.map(entry => [`1:${entry.descriptor.resultId}`, { rows: 100, strip: false }]) : []) } as unknown as TabResults
     for (const listener of [...listeners]) listener()
   }
   const hide = () => { tab = undefined; for (const listener of [...listeners]) listener() }
@@ -192,6 +192,106 @@ describe('ResultsSearchService', () => {
     service.setText('t1', 'z', true)
     expect(first.o.signal?.aborted).toBe(true)
     expect(searches.at(-1)!.text).toBe('z')
+  })
+
+  it('searches again only the grid that changed, and moves the active match off a closed grid to the next one', async () => {
+    const { service, searches, set, show, answerAll, search, sorts } = fixture()
+    const one = set(0, ['a'], [[1, 0], [2, 0]]), two = set(1, ['a'], [[5, 0]]), three = set(2, ['a'], [[7, 0], [8, 0]])
+    show([one, two, three])
+    service.setText('t1', 'x', true)
+    await answerAll()
+    service.step('t1', 1)
+    service.step('t1', 1)
+    service.step('t1', 1)
+    // The active match is the first of the third grid.
+    expect(search()).toMatchObject({ total: 5, current: 3, revealEntry: three.key })
+    // The first grid is sorted: its view is searched, the other two are not, and the active match stays the third grid's first.
+    const sorted = backendOf([[0, 0]], 100)
+    const view = { key: one.handle.key, viewId: 4, search: vi.fn(async (text: string, fromRow: number, o: SearchOptions = {}) => sorted(text, fromRow, o)) } as unknown as GridSort['view']
+    sorts.set(0, { keys: [], filters: [], applied: [], view, sorting: false, approximate: false, stale: false })
+    show([one, two, three])
+    await answerAll()
+    expect(searches).toHaveLength(0)
+    expect(view!.search).toHaveBeenCalledOnce()
+    expect([one, two, three].map(entry => (entry.handle.search as ReturnType<typeof vi.fn>).mock.calls.length)).toEqual([1, 1, 1])
+    expect(search()).toMatchObject({ status: 'done', total: 4, current: 2, revealEntry: three.key })
+    expect(search().marks.get(three.key)).toMatchObject({ current: { row: 7, column: 0 } })
+    // The run's status changing with every grid as it was (all their rows in) searches nothing.
+    show([one, two, three], 'q1', true, 'completedWithErrors')
+    expect(view!.search).toHaveBeenCalledOnce()
+    expect(searches).toHaveLength(0)
+    expect(search()).toMatchObject({ status: 'done', total: 4, current: 2 })
+    // The grid holding the active match is closed: the next grid's first match takes its place, or the last of all when
+    // none follows. Nothing is searched for it.
+    service.step('t1', -1)
+    expect(search()).toMatchObject({ current: 1, revealEntry: two.key })
+    show([one, three])
+    expect(search()).toMatchObject({ status: 'done', total: 3, current: 1 })
+    expect(search().marks.get(three.key)).toMatchObject({ current: { row: 7, column: 0 } })
+    service.step('t1', 1)
+    expect(search()).toMatchObject({ current: 2 })
+    show([one])
+    expect(search()).toMatchObject({ status: 'done', total: 1, current: 0 })
+    expect(view!.search).toHaveBeenCalledOnce()
+    expect(searches).toHaveLength(0)
+  })
+
+  it('searches a grid again when the run ends if it was searched while its rows were still arriving', async () => {
+    const { service, searches, set, show, answerAll, search } = fixture()
+    const one = set(0, ['a'], [[1, 0]]), loading = set(1, ['a'], [[2, 0]], 100, false)
+    show([one, loading], 'q1', false, 'running')
+    service.setText('t1', 'x', true)
+    await answerAll()
+    expect(search()).toMatchObject({ status: 'done', total: 2, partial: true })
+    // The run ends without the sets settling (it failed): what was found mid-stream is not kept as if it were all.
+    show([one, loading], 'q1', false, 'failed')
+    expect(searches.map(entry => entry.index)).toEqual([1])
+    await answerAll()
+    expect(loading.handle.search).toHaveBeenCalledTimes(2)
+    expect(one.handle.search).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the active match on its own grid when a grid before it is searched for the first time', async () => {
+    const { service, searches, set, show, answerAll, search, settle } = fixture()
+    const one = set(0, ['a'], [[1, 0], [2, 0], [3, 0]]), two = set(1, ['a'], [[5, 0], [6, 0]])
+    show([one, two])
+    service.setText('t1', 'x', true)
+    // The first grid's search fails; the second answers.
+    searches.shift()!.reject(new Error('The results could not be searched.'))
+    await settle()
+    await answerAll()
+    service.step('t1', 1)
+    expect(search()).toMatchObject({ total: 2, current: 1 })
+    expect(search().marks.get(two.key)).toMatchObject({ current: { row: 6, column: 0 } })
+    // Searched again (the run's status changed), the first grid answers with three matches: the active match is still the
+    // second grid's second, now the fifth of all.
+    show([one, two], 'q1', true, 'completedWithErrors')
+    await answerAll()
+    expect(search()).toMatchObject({ status: 'done', total: 5, current: 4 })
+    expect(search().marks.get(two.key)).toMatchObject({ current: { row: 6, column: 0 } })
+    expect(two.handle.search).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the active column on its own column when an entry before it is closed', () => {
+    const { service, set, show, search } = fixture()
+    const one = set(0, ['ab', 'b'], []), two = set(1, ['b', 'xb', 'c'], [])
+    show([one, two])
+    service.setMode('t1', 'columns')
+    service.setText('t1', 'b', true)
+    service.step('t1', 1)
+    service.step('t1', 1)
+    expect(search()).toMatchObject({ total: 4, current: 2 })
+    expect(search().marks.get(two.key)).toMatchObject({ currentColumn: 0 })
+    show([two])
+    expect(search()).toMatchObject({ total: 2, current: 0 })
+    expect(search().marks.get(two.key)).toMatchObject({ currentColumn: 0 })
+    // Its own entry closed: the first matching column after where it stood, or the last of all.
+    show([one, two])
+    expect(search()).toMatchObject({ total: 4, current: 2 })
+    service.step('t1', -1)
+    expect(search()).toMatchObject({ total: 4, current: 1 })
+    show([two])
+    expect(search()).toMatchObject({ total: 2, current: 0 })
   })
 
   it('says a failure only when no grid could be searched, counts a loading grid as partial, and forgets a closed tab', async () => {
@@ -385,7 +485,7 @@ describe('ResultsSearchService', () => {
 
   // #367
   it('keeps each grid\'s matches and the reveal on its entry when a middle entry goes', async () => {
-    const { service, set, show, answerAll, search } = fixture()
+    const { service, set, show, answerAll, search, searches } = fixture()
     const first = set(0, ['a'], [[1, 0]]), middle = set(1, ['ab'], [[2, 0]]), last = set(2, ['abc', 'b'], [[3, 1], [4, 0]])
     show([first, middle, last])
     service.setText('t1', 'b', true)
@@ -397,9 +497,11 @@ describe('ResultsSearchService', () => {
     expect(service.pendingReveal('t1', last.key)).toBe(true)
     // The middle entry goes and the last moves up a place, as ResultsService publishes it: the same entry.
     show([first, last])
-    // Before the search again answers, the last matches still show on their entries, and the gone entry's nowhere: the
-    // entry now second has its own marks, not those of the one that stood there.
-    expect(search()).toMatchObject({ status: 'searching', revealEntry: last.key })
+    // Nothing is searched again: the grids that stay show the rows they showed, so their matches stand at once, the gone
+    // entry's are nowhere, and the entry now second has its own marks, not those of the one that stood there. The active
+    // match is still the same match of the same grid, one place earlier among them all.
+    expect(searches).toHaveLength(0)
+    expect(search()).toMatchObject({ status: 'done', total: 3, current: 1, revealEntry: last.key })
     expect([...search().marks.keys()]).toEqual([first.key, last.key])
     expect(search().marks.get(first.key)).toMatchObject({ handle: first.handle })
     expect(search().marks.get(last.key)).toMatchObject({ handle: last.handle, current: { row: 3, column: 1 } })
@@ -407,7 +509,8 @@ describe('ResultsSearchService', () => {
     expect(service.pendingReveal('t1', first.key)).toBe(false)
     expect(service.pendingReveal('t1', middle.key)).toBe(false)
     await answerAll()
-    expect(search()).toMatchObject({ status: 'done', total: 3 })
+    expect(first.handle.search).toHaveBeenCalledOnce()
+    expect(last.handle.search).toHaveBeenCalledOnce()
     expect([...search().marks.get(last.key)!.cells!]).toEqual([cellKey(3, 1), cellKey(4, 0)])
     expect(search().marks.has(middle.key)).toBe(false)
     // Column names are kept by entry too.

@@ -35,11 +35,12 @@ vi.mock('../src/renderer/src/grid/ResultGrid', async () => {
   }
 })
 
-const paneHeight = 2000
+let paneHeight = 2000
 let root: Root | undefined, container: HTMLElement | undefined
 let clientHeight: PropertyDescriptor | undefined
 
 beforeEach(() => {
+  paneHeight = 2000
   // The stack lays out only in a pane with a height, which no layout engine gives it here.
   clientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
   Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get(this: HTMLElement) { return this.classList.contains('rs-stack') ? paneHeight : 0 } })
@@ -79,8 +80,8 @@ function fixture() {
   root = createRoot(container)
   const host = container
   /** Draws the stack over the results as published now, and lets it mount its grids (two a frame). */
-  const draw = () => {
-    act(() => { root!.render(createElement(WorkbenchProvider, { workbench, children: createElement(ResultsStack, { tabId: 't1', tab: results.getSnapshot().t1 }) })) })
+  const draw = (closable = false) => {
+    act(() => { root!.render(createElement(WorkbenchProvider, { workbench, children: createElement('div', { className: 'output-panel' }, createElement('button', { role: 'tab', 'data-output-tab': 'results' }), createElement(ResultsStack, { tabId: 't1', tab: results.getSnapshot().t1, closable })) })) })
     for (let frame = 0; frame < 4; frame++) act(() => { vi.advanceTimersByTime(50) })
   }
   const all = <T extends Element = HTMLElement>(selector: string) => [...host.querySelectorAll<T>(selector)]
@@ -104,8 +105,11 @@ describe('the stacked results', () => {
     expect([...collapsedPlaces(sets, new Set(['c', 'gone']))]).toEqual([2])
     expect(collapsedPlaces(sets, new Set()).size).toBe(0)
     expect(weightsOf(sets, new Map([['c', 3], ['a', 1], ['b', 2], ['gone', 9]]))).toEqual([1, 2, 3])
-    // An entry without a share (a result added since the drag) puts every entry back on equal shares.
-    expect(weightsOf(sets, new Map([['a', 1], ['c', 3]]))).toBeUndefined()
+    // An entry without a share (a result added since the drag) takes the mean of the others', which keep theirs.
+    expect(weightsOf(sets, new Map([['a', 1], ['c', 5]]))).toEqual([1, 3, 5])
+    expect(weightsOf(sets, new Map([['b', 4]]))).toEqual([4, 4, 4])
+    // Equal shares when no entry drawn has one.
+    expect(weightsOf(sets, new Map([['gone', 9]]))).toBeUndefined()
     expect(weightsOf(sets, undefined)).toBeUndefined()
   })
 
@@ -157,7 +161,8 @@ describe('the stacked results', () => {
     expect(focused()).toEqual([three])
     expect(grid(three)!.dataset.sorted).toBe('true')
     expect(grid(one)!.dataset.sorted).toBe('false')
-    expect(grid(one)!.dataset.count).toBe('3')
+    // "Result 3 of 4" still: closing a result renames and renumbers nothing, and no grid reads "Result 3 of 2".
+    expect(grid(one)!.dataset.count).toBe('4')
     // The pivot is still the collapsed one, not Result 3, which now stands where Result 2 was, nor whatever is third.
     expect(collapsed()).toEqual([false, false, true])
     // Each kept the share the drag left it: Result 1 is still the taller, by the proportion it had over Result 3.
@@ -195,5 +200,107 @@ describe('the stacked results', () => {
     expect(names()).toEqual(['Result 1', 'Pivot of Result 3'])
     expect(focused()).toEqual([one])
     expect(collapsed()).toEqual([false, false])
+  })
+
+  it('give a result made after a splitter drag the mean share, so the others keep their proportions', () => {
+    const { results, keys, draw, heights, key } = fixture()
+    const [one, two, three] = keys
+    draw()
+    for (let press = 0; press < 5; press++) key('ArrowDown', 0)
+    draw()
+    const before = heights()
+    expect(before[0]).toBeGreaterThan(before[1])
+    const added = results.addSet('t1', descriptor(804, { index: 0, kind: 'pivot', rowsRead: 10_000, rowsStored: 10_000, rowsAvailable: 10_000 }), 'Pivot of Result 1', ['1:1'])!
+    draw()
+    const after = heights()
+    expect(after).toHaveLength(5)
+    // Not back to equal shares: Result 1 is still taller than Result 2 by the proportion the drag left.
+    expect(after[0] / after[1]).toBeCloseTo(before[0] / before[1], 1)
+    expect(after[1] / after[2]).toBeCloseTo(before[1] / before[2], 1)
+    expect(results.viewState('t1').weights!.has(added)).toBe(false)
+    expect([one, two, three].every(entry => results.viewState('t1').weights!.has(entry))).toBe(true)
+  })
+
+  it('close a result by its caption\'s button where the stack allows it, moving the focus to the next caption, then the Results tab', () => {
+    const { results, client, keys, draw, names, grids } = fixture()
+    const [one, two, three, pivot] = keys
+    const closers = () => [...container!.querySelectorAll<HTMLButtonElement>('.rs-caption-close')]
+    // Peek's stack has no close buttons.
+    draw()
+    expect(closers()).toHaveLength(0)
+    draw(true)
+    expect(closers().map(button => button.getAttribute('aria-label'))).toEqual(['Close Result 1', 'Close Result 2', 'Close Result 3', 'Close Pivot of Result 3'])
+    expect(closers().every(button => !button.disabled)).toBe(true)
+    // Closing Result 3 releases it alone: its pivot is a result of its own and stays, under its name.
+    closers()[2].focus()
+    act(() => { closers()[2].click() })
+    draw(true)
+    expect(names()).toEqual(['Result 1', 'Result 2', 'Pivot of Result 3'])
+    expect(client.released()).toEqual([3])
+    expect(grids()).toEqual([one, two, pivot])
+    // The focus went to the caption that took its place.
+    expect((document.activeElement as HTMLElement).dataset.captionEntry).toBe(pivot)
+    // The last one's close moves it to the one before.
+    closers()[2].focus()
+    act(() => { closers()[2].click() })
+    draw(true)
+    expect((document.activeElement as HTMLElement).dataset.captionEntry).toBe(two)
+    // A close from elsewhere (the focus in another result's grid) leaves the focus alone.
+    const first = container!.querySelector<HTMLElement>(`[data-caption-entry="${one}"]`)!
+    first.focus()
+    act(() => { closers()[1].click() })
+    draw(true)
+    expect(document.activeElement).toBe(first)
+    expect(names()).toEqual(['Result 1'])
+    // The last result closed: the run is emptied, not closed, and the focus is on the Results tab, which stays.
+    closers()[0].focus()
+    act(() => { closers()[0].click() })
+    expect(results.getSnapshot().t1).toMatchObject({ status: 'completed', sets: [], emptied: true })
+    expect((document.activeElement as HTMLElement).dataset.outputTab).toBe('results')
+    expect(client.released()).toEqual([3, 803, 2, 1])
+    expect(three).toBeDefined()
+  })
+
+  it('move the focus once after a close, to the Results tab when the next caption is not drawn, and never steal it later', () => {
+    // A pane too short for a caption, a header and four rows: one result left shows its grid without its caption.
+    paneHeight = 60
+    const { results, keys, draw, names } = fixture()
+    const [one, two, three, pivot] = keys
+    results.removeEntry('t1', three)
+    results.removeEntry('t1', pivot)
+    draw(true)
+    const closers = () => [...container!.querySelectorAll<HTMLButtonElement>('.rs-caption-close')]
+    // Only the first of the two is in view, so the caption after it is not drawn.
+    expect(names()).toEqual(['Result 1'])
+    closers()[0].focus()
+    act(() => { closers()[0].click() })
+    draw(true)
+    expect(container!.querySelectorAll('.rs-caption')).toHaveLength(0)
+    expect((document.activeElement as HTMLElement).dataset.outputTab).toBe('results')
+    // The user moves on; a result added later draws captions again, and the focus stays where they put it.
+    const elsewhere = document.createElement('input')
+    document.body.append(elsewhere)
+    elsewhere.focus()
+    results.addSet('t1', descriptor(802, { index: 1, kind: 'pivot' }), 'Pivot of Result 2', ['1:2'])
+    draw(true)
+    expect(names()).toContain('Result 2')
+    expect(document.activeElement).toBe(elsewhere)
+    elsewhere.remove()
+    expect([one, two]).toHaveLength(2)
+  })
+
+  it('disable the close buttons while the query runs', () => {
+    const { results, client, draw } = fixture()
+    results.begin('t1', 'q2')
+    client.emit('q2', { type: 'resultSet.opened', descriptor: descriptor(11, { index: 0, state: 'open' }) })
+    draw(true)
+    const [button] = [...container!.querySelectorAll<HTMLButtonElement>('.rs-caption-close')]
+    expect(button.disabled).toBe(true)
+    expect(button.title).toBe('Close Result 1 (unavailable while the query runs)')
+    act(() => { button.click() })
+    expect(results.getSnapshot().t1.sets).toHaveLength(1)
+    void results.finish('t1', 'q2', { summary: summaryOf([descriptor(11, { index: 0 })]) })
+    draw(true)
+    expect(container!.querySelector<HTMLButtonElement>('.rs-caption-close')!.disabled).toBe(false)
   })
 })
