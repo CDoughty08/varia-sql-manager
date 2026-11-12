@@ -29,6 +29,7 @@ import { tileName } from '../kit/Tile'
 import ProcessesPane from './panes/ProcessesPane'
 import { FileIoPane, WaitsPane } from './panes/ResourcePanes'
 import SessionTablePane from './panes/SessionTablePanes'
+import RecentQueriesPane from './panes/RecentQueriesPane'
 import { chartScaleOf, gridRows, latestValue, monitorFacts, monitorNotice, nextAnnouncement, overviewProbe, seriesIndex, tileReadings, type Announcement, type TileReading } from './tiles'
 
 const noHandle = { subscribe: () => () => {}, getSnapshot: () => undefined }
@@ -293,6 +294,7 @@ function Pane({ state, slot, blocked, handle, snapshot }: { readonly state: Moni
       {(current === 'blocking' || current === 'activeQueries') && <SessionTablePane key={current} table={current} state={state} handle={handle} snapshot={snapshot} />}
       {current === 'waits' && <WaitsPane state={state} handle={handle} snapshot={snapshot} />}
       {current === 'fileIo' && <FileIoPane state={state} handle={handle} snapshot={snapshot} />}
+      {current === 'recentQueries' && <RecentQueriesPane state={state} handle={handle} snapshot={snapshot} />}
       {pendingPanes.includes(current) && <EmptyState icon="pulse" title={paneSpecs[current].title} detail={pendingPaneNote(current)} />}
     </div>
   </section>

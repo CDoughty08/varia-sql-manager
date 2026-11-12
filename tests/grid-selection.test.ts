@@ -10,14 +10,15 @@ import {
 import { ResultSelectionService } from '../src/renderer/src/services/result-selection'
 import { ResultsService } from '../src/renderer/src/results/ResultsService'
 import { descriptor, fakeResultClient, summaryOf } from './fixtures/results'
+import { keyAt } from './fixtures/entries'
 
 /** One block from `anchor` to `focus`, the active cell at its focus, as a press and a Shift+press make it. */
-const block = (kind: BlockKind, anchor: [number, number], focus: [number, number] = anchor, resultIndex = 0): GridSelection =>
-  ({ resultIndex, blocks: [{ kind, anchor: { row: anchor[0], column: anchor[1] }, focus: { row: focus[0], column: focus[1] } }], active: { row: focus[0], column: focus[1] } })
-const cells = (anchor: [number, number], focus: [number, number], resultIndex = 0): GridSelection => block('cells', anchor, focus, resultIndex)
+const block = (kind: BlockKind, anchor: [number, number], focus: [number, number] = anchor, entry = 'a'): GridSelection =>
+  ({ entry, blocks: [{ kind, anchor: { row: anchor[0], column: anchor[1] }, focus: { row: focus[0], column: focus[1] } }], active: { row: focus[0], column: focus[1] } })
+const cells = (anchor: [number, number], focus: [number, number], entry = 'a'): GridSelection => block('cells', anchor, focus, entry)
 /** Ctrl+presses on each hit in turn, after a plain press on the first. */
-const added = (hits: readonly GridHit[], resultIndex = 0): GridSelection =>
-  hits.reduce<GridSelection | undefined>((current, hit, index) => select(current, hit, { resultIndex, extend: false, add: index > 0 }), undefined)!
+const added = (hits: readonly GridHit[], entry = 'a'): GridSelection =>
+  hits.reduce<GridSelection | undefined>((current, hit, index) => select(current, hit, { entry, extend: false, add: index > 0 }), undefined)!
 const cell = (row: number, column: number): GridHit => ({ kind: 'cell', row, column })
 
 describe('grid selection', () => {
@@ -28,11 +29,11 @@ describe('grid selection', () => {
     expect(rangeOf(block('rows', [2, 1], [0, 2]), 3, 3)).toEqual({ top: 0, left: 0, bottom: 2, right: 2 })
     expect(rangeOf(block('rows', [2, 1]), 3, 3)).toEqual({ top: 2, left: 0, bottom: 2, right: 2 })
     expect(rangeOf(block('columns', [2, 2], [0, 1]), 3, 3)).toEqual({ top: 0, left: 1, bottom: 2, right: 2 })
-    expect(rangeOf(selectAll(0), 4, 2)).toEqual({ top: 0, left: 0, bottom: 3, right: 1 })
+    expect(rangeOf(selectAll('a'), 4, 2)).toEqual({ top: 0, left: 0, bottom: 3, right: 1 })
     // A result without rows selects nothing, even all of it.
-    expect(isEmptyRange(rangeOf(selectAll(0), 0, 2))).toBe(true)
+    expect(isEmptyRange(rangeOf(selectAll('a'), 0, 2))).toBe(true)
     expect(isEmptyRange(rangeOf(cells([0, 0], [0, 0]), 0, 0))).toBe(true)
-    expect(isEmptyRange(rangeOf({ resultIndex: 0, blocks: [], active: { row: 0, column: 0 } }, 3, 3))).toBe(true)
+    expect(isEmptyRange(rangeOf({ entry: 'a', blocks: [], active: { row: 0, column: 0 } }, 3, 3))).toBe(true)
     expect(inRange({ top: 0, left: 1, bottom: 2, right: 2 }, { row: 1, column: 1 })).toBe(true)
     expect(inRange({ top: 0, left: 1, bottom: 2, right: 2 }, { row: 1, column: 0 })).toBe(false)
   })
@@ -42,8 +43,8 @@ describe('grid selection', () => {
     expect(columnTitle('a\r\nb\rc')).toBe('a b c')
   })
   it('selects what a press lands on, extends with Shift, and drags the far corner', () => {
-    const press = (current: GridSelection | undefined, hit: GridHit, options: { shift?: boolean; right?: boolean; resultIndex?: number } = {}) =>
-      pressSelection(current, hit, { resultIndex: options.resultIndex ?? 0, shift: !!options.shift, right: !!options.right, rows: 3, columns: 3 })
+    const press = (current: GridSelection | undefined, hit: GridHit, options: { shift?: boolean; right?: boolean; entry?: string } = {}) =>
+      pressSelection(current, hit, { entry: options.entry ?? 'a', shift: !!options.shift, right: !!options.right, rows: 3, columns: 3 })
     const one = press(undefined, cell(1, 2))
     expect(one).toEqual(cells([1, 2], [1, 2]))
     expect(press(one, cell(0, 0), { shift: true })).toEqual(cells([1, 2], [0, 0]))
@@ -51,32 +52,32 @@ describe('grid selection', () => {
     expect(rangeOf(press(one, { kind: 'row', row: 0 }, { shift: true }), 3, 3)).toEqual({ top: 0, left: 0, bottom: 1, right: 2 })
     expect(press(one, { kind: 'column', column: 1 })).toEqual(block('columns', [0, 1]))
     expect(rangeOf(press(one, { kind: 'column', column: 0 }, { shift: true }), 3, 3)).toEqual({ top: 0, left: 0, bottom: 2, right: 2 })
-    expect(press(one, { kind: 'corner' })).toEqual(selectAll(0, { row: 1, column: 2 }))
+    expect(press(one, { kind: 'corner' })).toEqual(selectAll('a', { row: 1, column: 2 }))
     // Shift with nothing selected in this result set, or a selection from another one, selects plainly.
-    expect(press(cells([0, 0], [0, 0], 1), cell(2, 2), { shift: true })).toEqual(cells([2, 2], [2, 2]))
+    expect(press(cells([0, 0], [0, 0], 'b'), cell(2, 2), { shift: true })).toEqual(cells([2, 2], [2, 2]))
     const grown = dragSelection(dragSelection(one, cell(2, 0)), { kind: 'row', row: 0 })
     expect(rangeOf(grown, 3, 3)).toEqual({ top: 0, left: 0, bottom: 1, right: 2 })
     expect(grown.active).toEqual({ row: 0, column: 0 })
     const rows = press(undefined, { kind: 'row', row: 1 })
     expect(rangeOf(dragSelection(rows, cell(2, 2)), 3, 3)).toEqual({ top: 1, left: 0, bottom: 2, right: 2 })
-    expect(dragSelection(selectAll(0), cell(1, 1))).toEqual(selectAll(0))
+    expect(dragSelection(selectAll('a'), cell(1, 1))).toEqual(selectAll('a'))
     expect(dragSelection(one, cell(1, 2))).toBe(one)
   })
   it('keeps the selection for a right press inside any block and selects the cell for one outside, as SSMS does', () => {
-    const right = (current: GridSelection, hit: GridHit) => pressSelection(current, hit, { resultIndex: 0, shift: false, right: true, rows: 3, columns: 3 })
+    const right = (current: GridSelection, hit: GridHit) => pressSelection(current, hit, { entry: 'a', shift: false, right: true, rows: 3, columns: 3 })
     const square = cells([0, 0], [1, 1])
     expect(right(square, cell(1, 0))).toBe(square)
     expect(right(square, cell(2, 2))).toEqual(cells([2, 2], [2, 2]))
     // Shift does not extend, and Ctrl does not add, on a right press.
-    expect(pressSelection(square, cell(2, 2), { resultIndex: 0, shift: true, right: true, rows: 3, columns: 3 })).toEqual(cells([2, 2], [2, 2]))
-    expect(pressSelection(square, cell(2, 2), { resultIndex: 0, shift: false, right: true, add: true, rows: 3, columns: 3 })).toEqual(cells([2, 2], [2, 2]))
+    expect(pressSelection(square, cell(2, 2), { entry: 'a', shift: true, right: true, rows: 3, columns: 3 })).toEqual(cells([2, 2], [2, 2]))
+    expect(pressSelection(square, cell(2, 2), { entry: 'a', shift: false, right: true, add: true, rows: 3, columns: 3 })).toEqual(cells([2, 2], [2, 2]))
     // A row number or header keeps the selection only when its whole row or column is selected.
     expect(right(square, { kind: 'row', row: 0 })).toEqual(block('rows', [0, 0]))
     const fullRows = cells([0, 0], [1, 2])
     expect(right(fullRows, { kind: 'row', row: 1 })).toBe(fullRows)
-    expect(right(selectAll(0), { kind: 'column', column: 2 })).toEqual(selectAll(0))
-    expect(right(selectAll(0), { kind: 'corner' })).toEqual(selectAll(0))
-    expect(right(square, { kind: 'corner' })).toEqual(selectAll(0, { row: 1, column: 1 }))
+    expect(right(selectAll('a'), { kind: 'column', column: 2 })).toEqual(selectAll('a'))
+    expect(right(selectAll('a'), { kind: 'corner' })).toEqual(selectAll('a'))
+    expect(right(square, { kind: 'corner' })).toEqual(selectAll('a', { row: 1, column: 1 }))
     // Any block counts, not only the last.
     const two = added([cell(0, 0), cell(2, 2)])
     expect(right(two, cell(0, 0))).toBe(two)
@@ -88,7 +89,7 @@ describe('grid selection', () => {
     // Elsewhere Control+click is a left press.
     for (const platform of ['win32', 'linux'] as const) expect([press(0, true, platform), press(2, true, platform)]).toEqual(['primary', 'secondary'])
     const square = cells([0, 0], [1, 1])
-    expect(pressSelection(square, cell(1, 1), { resultIndex: 0, shift: false, right: press(0, true, 'darwin') === 'secondary', rows: 3, columns: 3 })).toBe(square)
+    expect(pressSelection(square, cell(1, 1), { entry: 'a', shift: false, right: press(0, true, 'darwin') === 'secondary', rows: 3, columns: 3 })).toBe(square)
   })
   it('describes the selection for screen readers', () => {
     expect(describeRange({ top: 0, left: 0, bottom: 0, right: 0 })).toBe('1 row, 1 column selected')
@@ -96,10 +97,10 @@ describe('grid selection', () => {
     expect(describeRange({ top: 0, left: 0, bottom: -1, right: 2 })).toBe('No cells selected')
     expect(describeRange({ top: 0, left: 0, bottom: 999_999, right: 1_199 })).toBe('1,000,000 rows, 1,200 columns selected')
     expect(describeSelection(cells([0, 0], [1, 1]), 5, 5)).toBe('2 rows, 2 columns selected')
-    expect(describeSelection(selectAll(0), 0, 5)).toBe('No cells selected')
+    expect(describeSelection(selectAll('a'), 0, 5)).toBe('No cells selected')
     // Overlapping blocks count their shared cells once: 4 + 4 − 1.
-    const overlapping = select(cells([0, 0], [1, 1]), cell(1, 1), { resultIndex: 0, extend: false, add: true })
-    expect(describeSelection(select(overlapping, cell(2, 2), { resultIndex: 0, extend: true, add: false }), 5, 5)).toBe('2 ranges selected, 7 cells')
+    const overlapping = select(cells([0, 0], [1, 1]), cell(1, 1), { entry: 'a', extend: false, add: true })
+    expect(describeSelection(select(overlapping, cell(2, 2), { entry: 'a', extend: true, add: false }), 5, 5)).toBe('2 ranges selected, 7 cells')
     const crossing = added([{ kind: 'row', row: 1 }, { kind: 'column', column: 3 }, cell(4, 4)])
     expect(describeSelection(crossing, 5, 5)).toBe('3 ranges selected, 10 cells')
   })
@@ -113,12 +114,12 @@ describe('selection blocks', () => {
     expect(resolveBlocks(three, 5, 4)).toEqual([{ top: 0, left: 0, bottom: 0, right: 0 }, { top: 3, left: 0, bottom: 3, right: 3 }, { top: 0, left: 2, bottom: 4, right: 2 }])
     expect([contains(three, 0, 0, 5, 4), contains(three, 3, 1, 5, 4), contains(three, 4, 2, 5, 4), contains(three, 1, 1, 5, 4), contains(three, 9, 2, 5, 4)]).toEqual([true, true, true, false, false])
     // Shift extends only the last block.
-    const extended = select(three, cell(4, 3), { resultIndex: 0, extend: true, add: false })
+    const extended = select(three, cell(4, 3), { entry: 'a', extend: true, add: false })
     expect(extended.blocks.slice(0, 2)).toEqual(three.blocks.slice(0, 2))
     expect(extended.blocks[2]).toEqual({ kind: 'cells', anchor: { row: 0, column: 2 }, focus: { row: 4, column: 3 } })
     // A plain press, or a Ctrl+press in another result set, starts over.
-    expect(select(three, cell(1, 1), { resultIndex: 0, extend: false, add: false })).toEqual(cells([1, 1], [1, 1]))
-    expect(select(three, cell(1, 1), { resultIndex: 1, extend: false, add: true })).toEqual(cells([1, 1], [1, 1], 1))
+    expect(select(three, cell(1, 1), { entry: 'a', extend: false, add: false })).toEqual(cells([1, 1], [1, 1]))
+    expect(select(three, cell(1, 1), { entry: 'b', extend: false, add: true })).toEqual(cells([1, 1], [1, 1], 'b'))
     const many = added(Array.from({ length: 70 }, (_, index) => cell(index, 0)))
     expect(many.blocks).toHaveLength(64)
     expect(many.blocks[0].anchor).toEqual({ row: 6, column: 0 })
@@ -133,9 +134,9 @@ describe('selection blocks', () => {
     expect(resolveBlocks(selection, 3, 2)).toEqual([{ top: 0, left: 1, bottom: 2, right: 1 }, { top: 2, left: 0, bottom: 2, right: 0 }, { top: 1, left: 0, bottom: 1, right: 1 }])
     expect(resolveBlocks(selection, 100, 2)).toEqual([{ top: 0, left: 1, bottom: 99, right: 1 }, { top: 2, left: 0, bottom: 2, right: 0 }, { top: 1, left: 0, bottom: 1, right: 1 }])
     expect(resolveBlocks(selection, 0, 2)).toEqual([])
-    expect(blockRange(selectAll(0).blocks[0], 1_000_000, 4)).toEqual({ top: 0, left: 0, bottom: 999_999, right: 3 })
-    expect(contains(selectAll(0), 999_999, 3, 1_000_000, 4)).toBe(true)
-    expect(contains(selectAll(0), 1_000_000, 3, 1_000_000, 4)).toBe(false)
+    expect(blockRange(selectAll('a').blocks[0], 1_000_000, 4)).toEqual({ top: 0, left: 0, bottom: 999_999, right: 3 })
+    expect(contains(selectAll('a'), 999_999, 3, 1_000_000, 4)).toBe(true)
+    expect(contains(selectAll('a'), 1_000_000, 3, 1_000_000, 4)).toBe(false)
   })
   it('clip the blocks to a frame\'s window, so each painted cell is tested against at most 64 rectangles', () => {
     const selection = added([{ kind: 'column', column: 1 }, cell(500, 0), { kind: 'row', row: 40 }])
@@ -217,24 +218,24 @@ describe('copy plan', () => {
     expect(plan(cells([2, 3], [0, 1]))).toEqual([{ rows: [[0, 2]], columns: [[1, 3]] }])
     expect(plan(block('rows', [4, 0], [2, 3]))).toEqual([{ rows: [[2, 4]], columns: [[0, 4]] }])
     expect(plan(block('columns', [0, 3], [7, 1]))).toEqual([{ rows: [[0, openEnd]], columns: [[1, 3]] }])
-    expect(plan(selectAll(0, { row: 5, column: 2 }))).toEqual([{ rows: [[0, openEnd]], columns: [[0, 4]] }])
+    expect(plan(selectAll('a', { row: 5, column: 2 }))).toEqual([{ rows: [[0, openEnd]], columns: [[0, 4]] }])
     expect(openEnd).toBe(2 ** 53 - 1)
-    expect(plan(selectAll(0), 0)).toEqual([])
-    expect(plan({ resultIndex: 0, blocks: [], active: { row: 0, column: 0 } })).toEqual([])
+    expect(plan(selectAll('a'), 0)).toEqual([])
+    expect(plan({ entry: 'a', blocks: [], active: { row: 0, column: 0 } })).toEqual([])
   })
   it('merges blocks that share columns into their row union, and blocks that share rows into their column union', () => {
     // Ctrl+click on the headers of columns A and C copies them side by side.
     expect(plan(added([{ kind: 'column', column: 2 }, { kind: 'column', column: 0 }]))).toEqual([{ rows: [[0, openEnd]], columns: [[0, 0], [2, 2]] }])
     // Row numbers 6, 2 and 3: one part, rows sorted and adjacent ones merged.
     expect(plan(added([{ kind: 'row', row: 6 }, { kind: 'row', row: 2 }, { kind: 'row', row: 3 }]))).toEqual([{ rows: [[2, 3], [6, 6]], columns: [[0, 4]] }])
-    const sameColumns = select(select(cells([5, 1], [6, 2]), cell(0, 1), { resultIndex: 0, extend: false, add: true }), cell(3, 2), { resultIndex: 0, extend: true, add: false })
+    const sameColumns = select(select(cells([5, 1], [6, 2]), cell(0, 1), { entry: 'a', extend: false, add: true }), cell(3, 2), { entry: 'a', extend: true, add: false })
     expect(plan(sameColumns)).toEqual([{ rows: [[0, 3], [5, 6]], columns: [[1, 2]] }])
-    const sameRows = select(select(cells([1, 4], [2, 4]), cell(1, 0), { resultIndex: 0, extend: false, add: true }), cell(2, 1), { resultIndex: 0, extend: true, add: false })
+    const sameRows = select(select(cells([1, 4], [2, 4]), cell(1, 0), { entry: 'a', extend: false, add: true }), cell(2, 1), { entry: 'a', extend: true, add: false })
     expect(plan(sameRows)).toEqual([{ rows: [[1, 2]], columns: [[0, 1], [4, 4]] }])
   })
   it('copies unaligned blocks as one part each, in the order they were selected', () => {
     const first = cells([3, 2], [4, 4])
-    const two = select(select(first, cell(0, 0), { resultIndex: 0, extend: false, add: true }), cell(1, 1), { resultIndex: 0, extend: true, add: false })
+    const two = select(select(first, cell(0, 0), { entry: 'a', extend: false, add: true }), cell(1, 1), { entry: 'a', extend: true, add: false })
     expect(plan(two)).toEqual([{ rows: [[3, 4]], columns: [[2, 4]] }, { rows: [[0, 1]], columns: [[0, 1]] }])
     const many = added(Array.from({ length: 64 }, (_, index) => cell(index * 2, index % 5)))
     const parts = plan(many)
@@ -258,41 +259,53 @@ describe('result selection service', () => {
       results.begin(tabId, 'q-' + tabId)
       results.finish(tabId, 'q-' + tabId, { summary: summaryOf([...sets]) })
     }
-    return { events, results, service: new ResultSelectionService(results) }
+    /** The key of the entry at a place of a tab's run. */
+    const key = (tabId: string, place: number) => keyAt(results, tabId, place)
+    return { events, results, key, service: new ResultSelectionService(results) }
   }
   it('keeps one selection per result set of a query, read through the grids\' view state', () => {
-    const { results, service } = selections()
-    const selection = cells([0, 0], [1, 1], 1)
+    const { results, service, key } = selections()
+    const selection = cells([0, 0], [1, 1], key('t1', 1))
     service.set('t1', selection)
-    expect(service.get('t1', 1)).toBe(selection)
-    expect(results.gridState('t1', 1).selection).toBe(selection)
-    expect(service.get('t1', 0)).toBeUndefined()
+    expect(service.get('t1', key('t1', 1))).toBe(selection)
+    expect(results.gridState('t1', key('t1', 1)).selection).toBe(selection)
+    expect(service.get('t1', key('t1', 0))).toBeUndefined()
+    // Without a grid named, the one that last had focus: the first, before any did.
+    expect(service.get('t1')).toBeUndefined()
     expect(service.get('t2')).toBeUndefined()
     expect(service.get('__proto__')).toBeUndefined()
-    // Without a result index, the grid that last had focus.
-    results.viewState('t1').focusedIndex = 1
+    results.viewState('t1').focused = key('t1', 1)
     expect(service.get('t1')).toBe(selection)
-    service.selectAll('t2', 0)
-    expect(service.get('t2', 0)).toEqual(selectAll(0))
-    // A result set the run does not have takes no selection.
-    service.set('t2', cells([0, 0], [0, 0], 5))
-    expect(service.get('t2', 5)).toBeUndefined()
+    service.selectAll('t2', key('t2', 0))
+    expect(service.get('t2', key('t2', 0))).toEqual(selectAll(key('t2', 0)))
+    // A result set the run does not have takes no selection, nor does another tab's.
+    service.set('t2', cells([0, 0], [0, 0], 'no-such-entry'))
+    expect(service.get('t2', 'no-such-entry')).toBeUndefined()
+    service.set('t2', cells([0, 0], [0, 0], key('t1', 0)))
+    expect(service.get('t2', key('t1', 0))).toBeUndefined()
+    expect(service.get('t1', key('t1', 0))).toBeUndefined()
     service.clear('t1')
-    expect(service.get('t1', 1)).toBeUndefined()
+    expect(service.get('t1', key('t1', 1))).toBeUndefined()
     service.clear('missing')
   })
   it('forgets a query\'s selections when it runs again or closes, and keeps them when it finishes', () => {
-    const { events, results, service } = selections()
-    service.set('t1', cells([0, 0], [0, 0]))
-    service.set('t2', cells([1, 1], [1, 1]))
+    const { events, results, service, key } = selections()
+    const before = key('t1', 0)
+    service.set('t1', cells([0, 0], [0, 0], before))
+    service.set('t2', cells([1, 1], [1, 1], key('t2', 0)))
     results.begin('t1', 'q-again')
-    expect(service.get('t1', 0)).toBeUndefined()
-    expect(service.get('t2', 0)).toBeDefined()
+    expect(service.get('t1', before)).toBeUndefined()
+    expect(service.get('t2', key('t2', 0))).toBeDefined()
     results.finish('t1', 'q-again', { summary: summaryOf([descriptor(4, { index: 0 })]) })
-    service.set('t1', cells([0, 0], [0, 0]))
-    expect(service.get('t1', 0)).toBeDefined()
+    // The new run's first result is another entry: the old key names nothing now.
+    expect(key('t1', 0)).not.toBe(before)
+    service.set('t1', cells([0, 0], [0, 0], before))
+    expect(service.get('t1', before)).toBeUndefined()
+    service.set('t1', cells([0, 0], [0, 0], key('t1', 0)))
+    expect(service.get('t1', key('t1', 0))).toBeDefined()
+    expect(service.get('t1')).toBeDefined()
     events.emit({ type: 'documents.closed', tabId: 't1' })
-    expect(service.get('t1', 0)).toBeUndefined()
-    expect(service.get('t2', 0)).toBeDefined()
+    expect(service.get('t1')).toBeUndefined()
+    expect(service.get('t2', key('t2', 0))).toBeDefined()
   })
 })

@@ -11,11 +11,10 @@ export function pivotContribution({ commands, pivot, results, documents, menuTar
   const targetOf = (args?: CommandArgs) => {
     const target = outputOf(args) ?? (args?.tabId || args?.target ? undefined : focusedOutput(menuTargets))
     if (args?.target && !target) return undefined
-    if (target) return target.view === 'grid' ? { tabId: target.tabId, index: target.resultIndex } : undefined
+    if (target) return target.view === 'grid' && target.entry !== undefined ? { tabId: target.tabId, key: target.entry } : undefined
     const tabId = args?.tabId ?? documents.getSnapshot().activeId
-    const tab = tabId ? results.getSnapshot()[tabId] : undefined
-    if (!tabId || !tab || tab.sets.length === 0) return undefined
-    return { tabId, index: results.viewState(tabId).focusedIndex }
+    const focused = tabId ? results.focusedEntry(tabId) : undefined
+    return tabId && focused ? { tabId, key: focused.key } : undefined
   }
   const registration = commands.register('output.pivot', {
     when: (args?: CommandArgs) => {
@@ -26,7 +25,7 @@ export function pivotContribution({ commands, pivot, results, documents, menuTar
     run: (args?: CommandArgs) => {
       const target = targetOf(args)
       if (!target) return
-      pivot.open(target.tabId, target.index)
+      pivot.open(target.tabId, target.key)
       results.setView(target.tabId, 'results')
     }
   })

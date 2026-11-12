@@ -7,10 +7,14 @@
 - **Getting Started:** read offline connection, query and results guides with live shortcuts, option values and mouse gestures, plus interactive fictional examples. Open it from Help or the command palette. Navigation stays available if a guide cannot load.
 - **About Varia:** find the running version, platform and update status from Help or the command palette (also the app menu on macOS). Copy version details for support and open the project, issue form or release notes without needing a server connection.
 - **In-app release notes:** read curated release highlights and limits offline, browse bundled history and open notes for the exact version advertised by an update. Missing notes are reported clearly, with release downloads available separately.
+- **Activity Monitor Recent Expensive Queries:** see the statements that finished since the previous sample, grouped by query hash with per-second rates, and rank them by CPU, duration, reads, writes or executions. The plan cache is read only while the pane is shown, at its own interval (Settings › Activity Monitor › Query statistics interval, 30 seconds by default).
+- **Activity Monitor Resource Waits and Data File I/O:** see where the server waits, by wait category or by wait type, with a 1-minute average and benign waits hidden by default, and each database file's throughput, read and write latency, response time and size. Files over the I/O latency thresholds (Settings › Activity Monitor) are highlighted, and Over threshold, Rows and Log narrow the list. Both panes read one sample, every 5 seconds by default, only while either is shown.
 
 ### Improved
 
 - **Results:** sorting, filtering for duplicates, listing a column's values and pivoting are several times faster on number columns with many repeated values (a status, a flag, a foreign key).
+- **Results:** the same operations on text, date and binary columns are many times faster on large results, most of all when values repeat or share their first characters (names, paths, codes, the dates of a month), and now use several processor cores, shared between the operations running. When result memory is too full to do this in time, they say so instead of running to their time limit.
+- **Results:** column profiles of several columns are faster on large results: each column is read on its own processor core.
 
 ### Fixed
 

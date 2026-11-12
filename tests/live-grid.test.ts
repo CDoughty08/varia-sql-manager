@@ -19,7 +19,7 @@ import { manualTimers } from './fixtures/workbench'
 
 const map = (moves: Record<number, number>): RowMap => row => moves[row] ?? row
 const cell = (row: number, column = 0) => ({ row, column })
-const selection = (o: Partial<GridSelection> & Pick<GridSelection, 'active'>): GridSelection => ({ resultIndex: 0, blocks: [{ kind: 'cells', anchor: o.active, focus: o.active }], ...o })
+const selection = (o: Partial<GridSelection> & Pick<GridSelection, 'active'>): GridSelection => ({ entry: 'a', blocks: [{ kind: 'cells', anchor: o.active, focus: o.active }], ...o })
 
 describe('grid swap', () => {
   it('moves the active row with its key, and to the nearest surviving row when it is gone', () => {
@@ -42,7 +42,7 @@ describe('grid swap', () => {
   })
   it('remaps blocks by their rows, collapses a block whose row is gone to the active cell, and keeps whole columns whole', () => {
     const before: GridSelection = {
-      resultIndex: 0, active: cell(4, 1),
+      entry: 'a', active: cell(4, 1),
       blocks: [{ kind: 'cells', anchor: cell(2, 0), focus: cell(4, 1) }, { kind: 'rows', anchor: cell(7, 0), focus: cell(8, 0) }, { kind: 'columns', anchor: cell(0, 2), focus: cell(0, 2) }]
     }
     const after = remapSelection(before, map({ 2: 12, 4: 14, 7: -1 }), 50, 3)!
@@ -53,7 +53,7 @@ describe('grid swap', () => {
       { kind: 'columns', anchor: cell(14, 2), focus: cell(14, 2) }
     ])
     // Two blocks that collapse to the same cell are one; columns stay within the grid's.
-    const collapsed = remapSelection({ resultIndex: 0, active: cell(1, 9), blocks: [{ kind: 'cells', anchor: cell(1, 0), focus: cell(1, 0) }, { kind: 'cells', anchor: cell(3, 0), focus: cell(3, 0) }] }, () => -1, 5, 2)!
+    const collapsed = remapSelection({ entry: 'a', active: cell(1, 9), blocks: [{ kind: 'cells', anchor: cell(1, 0), focus: cell(1, 0) }, { kind: 'cells', anchor: cell(3, 0), focus: cell(3, 0) }] }, () => -1, 5, 2)!
     expect(collapsed.blocks).toEqual([{ kind: 'cells', anchor: cell(1, 1), focus: cell(1, 1) }])
     expect(remapSelection(before, map({}), 0, 3)).toBeUndefined()
     expect(remapSelection(undefined, map({}), 5, 3)).toBeUndefined()
@@ -127,7 +127,7 @@ describe('LiveGrid helpers', () => {
   })
   it('follows the selected rows first (they linger), then the active row\'s neighbours and the first row shown, each once, within the rows', () => {
     const viewport: GridViewport = { firstRow: 10, lastRow: 40, rows: 100, atEnd: false }
-    const chosen: GridSelection = { resultIndex: 0, active: cell(12), blocks: [{ kind: 'cells', anchor: cell(12), focus: cell(15) }, { kind: 'all', anchor: cell(50), focus: cell(60) }, { kind: 'rows', anchor: cell(200), focus: cell(12) }] }
+    const chosen: GridSelection = { entry: 'a', active: cell(12), blocks: [{ kind: 'cells', anchor: cell(12), focus: cell(15) }, { kind: 'all', anchor: cell(50), focus: cell(60) }, { kind: 'rows', anchor: cell(200), focus: cell(12) }] }
     expect(selectedRows(chosen)).toEqual([12, 15, 200])
     // 200 is past the rows: the active row and one corner are selected, then the neighbours and the first row shown.
     expect(wantedRows(chosen, viewport)).toEqual({ rows: [12, 15, 13, 11, 10], selected: 2 })
@@ -137,7 +137,7 @@ describe('LiveGrid helpers', () => {
     // A view at the top stays at the top whatever moves there: its first row is not followed (nor kept when it leaves).
     expect(wantedRows(selection({ active: cell(5) }), { ...viewport, firstRow: 0 })).toEqual({ rows: [5, 6, 4], selected: 1 })
     expect(wantedRows(undefined, { ...viewport, firstRow: 0 })).toEqual({ rows: [], selected: 0 })
-    const many: GridSelection = { resultIndex: 0, active: cell(0), blocks: Array.from({ length: 64 }, (_, index) => ({ kind: 'cells' as const, anchor: cell(index * 2), focus: cell(index * 2 + 1) })) }
+    const many: GridSelection = { entry: 'a', active: cell(0), blocks: Array.from({ length: 64 }, (_, index) => ({ kind: 'cells' as const, anchor: cell(index * 2), focus: cell(index * 2 + 1) })) }
     expect(wantedRows(many, { ...viewport, rows: 1000 })).toEqual({ rows: Array.from({ length: 64 }, (_, index) => index), selected: 64 })
   })
   it('builds a key from the key columns\' stored text as the backend does: NULL as empty, joined with U+001F, never a cut cell', () => {
@@ -503,7 +503,7 @@ describe('LiveGrid', () => {
     const { grid, view, emit, copies, api } = harness()
     const shown = table({ ids: ['1', '2', '3'] })
     emit(shown)
-    view.selection = { resultIndex: 0, active: cell(0), blocks: [{ kind: 'rows', anchor: cell(0), focus: cell(1) }] }
+    view.selection = { entry: 'a', active: cell(0), blocks: [{ kind: 'rows', anchor: cell(0), focus: cell(1) }] }
     await grid.copy(true)
     expect(copies).toEqual([{ jobId: 'job', generation: 1, resultId: shown.descriptor.resultId, headers: true, parts: [{ rows: [[0, 1]], columns: [[0, 1]] }] }])
     await grid.save('Processes.csv', 'csv')

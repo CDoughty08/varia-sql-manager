@@ -39,6 +39,17 @@ describe('Release builds', () => {
     expect(releasePaths).toContain('scripts/prepare-electron.mjs')
     for (const path of releasePaths) expect(path, path).not.toMatch(/^(src\/\*\*|src\/main\/index\.ts|scripts\/fixtures|package\.json|tests\/)/)
   })
+  it('keeps complete packaging on every main push so cancellation cannot discard unfinished code validation', () => {
+    expect(triggers(release)).not.toContain('paths-ignore:')
+    expect(release).not.toContain('  scope:')
+    expect(release).not.toContain('needs.scope')
+    expect(release).toContain("group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && github.ref || github.run_id }}")
+  })
+  it('publishes tags only when both packaging jobs succeeded', () => {
+    const publish = release.slice(release.indexOf('  release:\n'))
+    expect(publish).toContain("if: ${{ !cancelled() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && needs.build.result == 'success' && needs.build-intel.result == 'success' }}")
+    expect(publish).toContain('needs: [build, build-intel]')
+  })
   it('adds at most three jobs and one macOS job to a pull request push, and packages Intel macOS only for tags, manual runs and weekly', () => {
     const matrix = release.slice(release.indexOf('  build:\n'), release.indexOf('  build-intel:\n'))
     const runners = [...matrix.matchAll(/- runner: (\S+)/g)].map(match => match[1])
@@ -91,11 +102,11 @@ describe('Release builds', () => {
     expect(project).toContain('<PublishAot Condition="\'$(RuntimeIdentifier)\' != \'\'">true</PublishAot>')
     expect(project).toContain('<TreatWarningsAsErrors>true</TreatWarningsAsErrors>')
   })
-  // What the docs say about packaging must match the workflow: the weekly Intel run, and the paths filter's 300-file limit.
-  it('documents the weekly Intel run and the paths filter\'s 300-file limit', () => {
+  // What the docs say about packaging must match the workflow: the weekly Intel run, and the paths filter's 3,000-file limit.
+  it('documents the weekly Intel run and the paths filter\'s 3,000-file limit', () => {
     const ci = readFileSync('docs/ci.md', 'utf8').replace(/\n\s*/g, ' ')
     expect(ci).toContain('Intel macOS packages only for tags, manual runs and a weekly scheduled run on main')
-    for (const [name, doc] of [['release.yml', release.replace(/\n# /g, ' ')], ['docs/ci.md', ci]]) expect(doc, name).toMatch(/first 300/)
+    for (const [name, doc] of [['release.yml', release.replace(/\n# /g, ' ')], ['docs/ci.md', ci]]) expect(doc, name).toMatch(/first 3,000/)
     // Unreachable.Source is a malformed pipe address on purpose (a well-formed missing pipe crashed offline-stress copies).
     for (const file of ['docs/ci.md', 'backend/Varia.Backend.Tests/Unreachable.cs', 'tests/idle-waits.test.ts']) expect(readFileSync(file, 'utf8'), file).not.toMatch(/missing named pipe/)
   })

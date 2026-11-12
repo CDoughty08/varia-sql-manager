@@ -8,6 +8,7 @@ import { paneProblem, paneWaiting } from '../src/renderer/src/activity/panes/Pan
 import type { LiveProbeSnapshot, LiveSnapshot } from '../src/renderer/src/live/LiveService'
 import { activeStatus, activeToneLabel, blockingStatus, blockingToneLabel, emptyNote, sessionTableIndex, type TableFacts } from '../src/renderer/src/activity/panes/SessionTablePanes'
 import { liveProbes } from '../src/shared/live/catalog'
+import { pressedRank, rankSort, recentQueriesEmpty, recentQueriesStatus } from '../src/renderer/src/activity/panes/RecentQueriesPane'
 
 const probe = (patch: Partial<LiveProbeSnapshot>): LiveProbeSnapshot => ({ state: 'fresh', intervalMs: 2000, effectiveIntervalMs: 2000, ...patch })
 const view = (patch: Partial<LiveSnapshot>, sessions?: Partial<LiveProbeSnapshot>): LiveSnapshot => ({ status: 'live', connectionId: 'c1', probes: sessions ? { 'activity.sessions': probe(sessions) } : {}, ...patch })
@@ -179,5 +180,38 @@ describe('Blocking and Active Expensive Queries panes', () => {
   it('take the probe\'s error only when it names their table', () => {
     const denied = probe({ state: 'fresh', error: { code: 'PERMISSION_DENIED', message: 'No.', tables: [1, 2] } as never })
     expect([paneProblem(denied, 0), paneProblem(denied, 1)?.kind, paneProblem(denied, 2)?.kind]).toEqual([undefined, 'refused', 'refused'])
+  })
+})
+
+describe('Recent Expensive Queries pane', () => {
+  const facts = (patch: Partial<TableFacts>): TableFacts => ({ rows: 0, live: true, waiting: 'loading', refused: false, ...patch })
+  it('reads the query statistics probe\'s one table, which declares no row tones for the backend to set', () => {
+    expect(liveProbes['activity.queries']?.tables?.map(table => table.id)).toEqual(['recentQueries'])
+    expect(tableSpecs.recentQueries.tones).toBeUndefined()
+    expect(liveProbes['activity.queries']?.tables?.[0]?.columns.some(column => column.role === 'tone')).toBe(false)
+  })
+  it('presses the chip of the table\'s sole descending key, CPU with no key (the default sort), and none for any other sort', () => {
+    expect(pressedRank(undefined)).toBe('cpu')
+    expect(pressedRank([])).toBe('cpu')
+    expect(pressedRank(rankSort('executions'))).toBe('executions')
+    expect(pressedRank([{ column: 'logicalReadsRate', descending: true }])).toBe('logicalReads')
+    // An ascending key, two keys or a column no chip ranks by (the header's sort buttons) press none.
+    expect(pressedRank([{ column: 'cpuRate', descending: false, table: 0 }])).toBeUndefined()
+    expect(pressedRank([...rankSort('cpu'), { column: 'database', descending: false, table: 0 }])).toBeUndefined()
+    expect(pressedRank([{ column: 'database', descending: true, table: 0 }])).toBeUndefined()
+    expect(rankSort('duration')).toEqual([{ column: 'averageDurationMs', descending: true, table: 0 }])
+  })
+  it('says what the table holds, what cut it, that a chip ranks from the next sample, and why there is nothing', () => {
+    expect(recentQueriesStatus(facts({ rows: 1 }))).toBe('1 query by query hash')
+    expect(recentQueriesStatus(facts({ rows: 3 }), 'executions')).toBe('3 queries by query hash · ranked by Executions from the next sample')
+    expect(recentQueriesStatus(facts({ rows: 200, truncated: 'rowLimit' }))).toBe(`200 queries by query hash · the ${tableSpecs.recentQueries.rowCap} that used the most CPU`)
+    expect(recentQueriesStatus(facts({ rows: 9, truncated: 'globalBudget' }))).toBe('9 queries by query hash · cut to stay inside the memory budget')
+    expect(recentQueriesStatus(facts({}))).toBe('No statement finished since the previous sample.')
+    expect(recentQueriesStatus(facts({ live: false }))).toBe('No statements in the last sample.')
+    expect(recentQueriesStatus(facts({ rows: undefined, refused: true }))).toBe('Query statistics cannot be read on this server.')
+    expect(recentQueriesStatus(facts({ rows: undefined, waiting: 'paused' }))).toMatch(/^Paused/)
+    expect(recentQueriesEmpty(facts({}), undefined)).toMatch(/^No statement finished since the previous sample\./)
+    expect(recentQueriesEmpty(facts({ live: false }), undefined)).toBeUndefined()
+    expect(recentQueriesEmpty(facts({}), { kind: 'failing', message: 'Blocked.' })).toBeUndefined()
   })
 })

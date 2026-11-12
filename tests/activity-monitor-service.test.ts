@@ -155,8 +155,8 @@ describe('Activity Monitor document', () => {
     expect(paneProbes(['blocking', 'fileIo'])).toEqual(['activity.overview', 'activity.sessions', 'activity.resources'])
     expect(paneProbes(['activeQueries'])).toEqual(['activity.overview', 'activity.sessions'])
     expect(paneProbes(['fileIo', 'waits'])).toEqual(['activity.overview', 'activity.resources'])
-    expect(paneProbes(['recentQueries'])).toEqual(['activity.overview'])
-    expect(pendingPanes).toEqual(['recentQueries'])
+    expect(paneProbes(['recentQueries'])).toEqual(['activity.overview', 'activity.queries'])
+    expect(pendingPanes).toEqual([])
     const state = initialMonitor('m', 'server', defaultSettings)
     expect(shownPanes(state)).toEqual(['processes', 'waits'])
     expect(shownPanes({ ...state, split: false })).toEqual(['processes'])
@@ -175,16 +175,17 @@ describe('Activity Monitor document', () => {
     activity.toggleSplit(id)
     expect([activity.get(id)?.split, context.getState().activitySplit]).toEqual([false, false])
     expect(liveViews.last.calls).toEqual([{ method: 'setProbe', probe: 'activity.sessions', patch: { paused: true } }])
-    // Data File I/O reads the same probe as Resource Waits, so nothing changes; a pending pane starts no SQL (and stops
-    // the resources probe); Blocking reads the sessions probe, so showing it resumes that probe.
+    // Data File I/O reads the same probe as Resource Waits, so nothing changes; Recent Expensive Queries reads query
+    // statistics, so the resources probe pauses and that one resumes; Blocking reads the sessions probe, so showing it
+    // resumes that probe.
     liveViews.last.calls.length = 0
     activity.setPane(id, 'primary', 'fileIo')
     expect(liveViews.last.calls).toEqual([])
     activity.setPane(id, 'primary', 'recentQueries')
-    expect(liveViews.last.calls).toEqual([{ method: 'setProbe', probe: 'activity.resources', patch: { paused: true } }])
+    expect(liveViews.last.calls).toEqual([{ method: 'setProbe', probe: 'activity.resources', patch: { paused: true } }, { method: 'setProbe', probe: 'activity.queries', patch: { paused: false } }])
     liveViews.last.calls.length = 0
     activity.setPane(id, 'primary', 'blocking')
-    expect(liveViews.last.calls).toEqual([{ method: 'setProbe', probe: 'activity.sessions', patch: { paused: false } }])
+    expect(liveViews.last.calls).toEqual([{ method: 'setProbe', probe: 'activity.sessions', patch: { paused: false } }, { method: 'setProbe', probe: 'activity.queries', patch: { paused: true } }])
     activity.toggleTile(id, 4)
     expect(activity.get(id)?.expanded).toEqual([0, 1, 4])
     // Every tile may be expanded: an eighth never closes the first.
@@ -282,6 +283,17 @@ describe('Activity Monitor document', () => {
     expect(initialMonitor('m', 's', { ...defaultSettings, 'activityMonitor.refreshIntervalSeconds': '5', 'activityMonitor.chartWindowMinutes': '60', 'activityMonitor.primaryPane': 'blocking', 'activityMonitor.secondaryPane': 'none' }))
       .toMatchObject({ intervalSeconds: 5, windowMinutes: 60, primary: 'blocking', split: false })
     expect(initialMonitor('m', 's', { ...defaultSettings, 'activityMonitor.primaryPane': 'waits', 'activityMonitor.secondaryPane': 'waits' })).toMatchObject({ primary: 'waits', secondary: 'processes', split: false })
+  })
+  it('reads query statistics at their own interval from the settings, and only while Recent Expensive Queries shows', () => {
+    const queries = (state: ReturnType<typeof initialMonitor>) => probeSettings(state).find(entry => entry.probe === 'activity.queries')
+    const state = initialMonitor('m', 's', { ...defaultSettings, 'activityMonitor.queriesIntervalSeconds': 45 })
+    expect(state.queriesIntervalSeconds).toBe(45)
+    expect(queries(state)).toEqual({ probe: 'activity.queries', intervalMs: 45_000, paused: true })
+    expect(queries({ ...state, secondary: 'recentQueries' })).toEqual({ probe: 'activity.queries', intervalMs: 45_000, paused: false })
+    // The monitor's own interval raises it only past the setting; a value outside the bounds falls back to the default.
+    expect(queries({ ...state, intervalSeconds: 60 })?.intervalMs).toBe(60_000)
+    expect(initialMonitor('m', 's', { ...defaultSettings, 'activityMonitor.queriesIntervalSeconds': 5 }).queriesIntervalSeconds).toBe(30)
+    expect(initialMonitor('m', 's', defaultSettings).queriesIntervalSeconds).toBe(30)
   })
   it('closes like a tab, ending its view, and follows a reconnect only to its own server', async () => {
     const { activity, commands, connect, liveViews, documents, targets } = monitorFixture()

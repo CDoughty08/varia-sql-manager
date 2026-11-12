@@ -19,7 +19,8 @@ const shownPaneNotes: { readonly [P in (typeof activityPanes)[number]]?: string 
   blocking: 'A live grid of the blocking chains, lead blockers first (below).',
   waits: 'A live grid of the wait categories, or By type of the wait types, the most wait time first, with Hide benign waits (below).',
   fileIo: 'A live grid of the database files, the busiest first, toned by read and write latency, with view chips (below).',
-  activeQueries: 'A live grid of the running requests, the most CPU first (below).'
+  activeQueries: 'A live grid of the running requests, the most CPU first (below).',
+  recentQueries: 'A live grid of the statements that ran since the previous sample, grouped by query hash, with rank chips (below).'
 }
 export const documentCommands = {
   'activity.open': { title: 'Activity Monitor', other: '—', darwin: '⌥⌘A' },
@@ -336,7 +337,7 @@ export function renderActivityMonitorDocs(): string {
     `Data File I/O tones a row warning when its read or write latency reaches ${fileLatencyDefaults.warning} ms and error from ${fileLatencyDefaults.error} ms; the files filter carries the`,
     `\`activityMonitor.fileLatency*\` settings in their place (1 to ${number(activityLimits.fileLatencyMs)} ms). An error threshold below the warning one acts as the warning one.`,
     '',
-    `Recent Expensive Queries ranks by ${Object.values(rankChips).map(chip => chip.title).join(', ')}, re-sorted from the last sample without new SQL.`,
+    `Recent Expensive Queries ranks by ${Object.values(rankChips).map(chip => chip.title).join(', ')}, each sorting the next sample in memory (no extra SQL); until it arrives, the status line says the rows are still in the previous order.`,
     '',
     '## Blocking',
     '',

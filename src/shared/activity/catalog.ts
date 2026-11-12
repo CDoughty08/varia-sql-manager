@@ -433,10 +433,8 @@ export const paneSpecs: { readonly [P in ActivityPane]: PaneSpec } = {
 /** Split view's panes on first open: Sessions beside Resource Waits. */
 export const defaultPanes = { primary: 'processes', secondary: 'waits' } as const satisfies { readonly primary: ActivityPane; readonly secondary: ActivityPane | 'none' }
 /** Panes whose grid the document does not draw yet: each says so where its grid goes, and its probe stays paused for it
- *  (no SQL runs for a pane nobody can read). Recent Expensive Queries arrives with query statistics' grid. */
-export const pendingPanes: readonly ActivityPane[] = [
-  'recentQueries'
-]
+ *  (no SQL runs for a pane nobody can read). Every pane's grid has arrived, so none is pending now. */
+export const pendingPanes: readonly ActivityPane[] = []
 export const pendingPaneNote = (pane: ActivityPane): string => `${paneSpecs[pane].title} is not shown yet; it arrives in a later version of Varia.`
 /** The probes that must run for these panes: each shown pane's probe, unless the pane's grid is pending. The overview runs
  *  whenever the document shows (its tiles are always visible), so it is not a pane's to start or stop. */

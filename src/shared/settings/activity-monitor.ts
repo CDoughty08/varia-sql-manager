@@ -1,4 +1,4 @@
-import { activityIntervalsSeconds, activityLimits, activityPanes, chartWindowsMinutes, defaultChartWindowMinutes, defaultPanes, paneSpecs, tileSpecs } from '../activity/catalog.ts'
+import { activityIntervalDefaults, activityIntervalsSeconds, activityLimits, activityPanes, chartWindowsMinutes, defaultChartWindowMinutes, defaultPanes, paneSpecs, tileSpecs } from '../activity/catalog.ts'
 import { liveProbes } from '../live/catalog.ts'
 import type { SettingDef } from './types'
 
@@ -24,6 +24,12 @@ export const activityMonitorSettings = [
     values: intervals.map(value => ({ value: String(value), label: seconds(value) })), default: String(overview.default / 1_000),
     keywords: ['activity', 'monitor', 'refresh', 'interval', 'sample', 'live'],
     description: 'How often a new Activity Monitor samples the server. Resource waits and file I/O are read every 5 seconds at most, and the header changes an open monitor\'s interval.'
+  },
+  {
+    key: 'activityMonitor.queriesIntervalSeconds', page: 'activityMonitor', group: 'New monitors', label: 'Query statistics interval', type: 'integer',
+    min: activityIntervalDefaults.queriesIntervalSeconds.min, max: activityIntervalDefaults.queriesIntervalSeconds.max, unit: 'seconds', varia: true,
+    default: activityIntervalDefaults.queriesIntervalSeconds.default, keywords: ['activity', 'monitor', 'recent', 'expensive', 'queries', 'plan cache', 'interval'],
+    description: 'How often a new Activity Monitor reads the plan cache for Recent Expensive Queries, and the window its rates span. Reading the plan cache costs more than the other samples, so it has its own, longer interval; it runs only while that pane is shown.'
   },
   {
     key: 'activityMonitor.chartWindowMinutes', page: 'activityMonitor', group: 'New monitors', label: 'Chart window', type: 'enum', varia: true,

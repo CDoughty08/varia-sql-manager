@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { dialogLifecycle, longRunRefusals, rendererWatchdog } from './fixtures/dialog-lifecycle.mjs'
 import { sessionPrompts } from './fixtures/session-prompts.mjs'
-import { activeDocumentName, activeMenuItem, anyResultGrid, backendReady, banner, documentTabFullyShown, documentTabs, documentTabSlots, slotTab, editorText as editorTextOf, errorMessages, explorerLabel, gridCell, gridPart, matching, memoryBreakdown, memoryIndicator, menuItemNames, messages as messagesOf, openMenus as openMenusOf, outputPane, outputView, paneMenuButton, paneTab, part, quickInput, searchBox, serverRows, statusBar, titleBar, toolbarButton } from './fixtures/ui.mjs'
+import { activeDocumentName, activeMenuItem, anyResultGrid, resultGrid, backendReady, banner, documentTabFullyShown, documentTabs, documentTabSlots, slotTab, editorText as editorTextOf, errorMessages, explorerLabel, gridCell, gridPart, matching, memoryBreakdown, memoryIndicator, menuItemNames, messages as messagesOf, openMenus as openMenusOf, outputPane, outputView, paneMenuButton, paneTab, part, quickInput, searchBox, serverRows, statusBar, titleBar, toolbarButton } from './fixtures/ui.mjs'
 
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
 if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
@@ -995,7 +995,7 @@ try {
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await typeSql('SELECT Id, Name, Note FROM dbo.Notes -- MENUS_GRID_FIXTURE')
   await page.keyboard.press('F5')
-  const grid = page.locator('[data-result-grid]').first(), outputMenu = menu('Query output'), eol = process.platform === 'win32' ? '\r\n' : '\n'
+  const grid = anyResultGrid(page).first(), outputMenu = menu('Query output'), eol = process.platform === 'win32' ? '\r\n' : '\n'
   const cell = (row, column, of = grid) => gridCell(of, row, column), selected = () => grid.locator(gridPart.selectedCell)
   const outputLabels = () => menuItemNames(outputMenu)
   await expect(grid).toContainText('n3')
@@ -1102,7 +1102,7 @@ try {
   await page.keyboard.press('F5')
   await outputView(page, /^Results/).click()
   // The plan's result set is stacked below the first, as SSMS stacks them.
-  const planGrid = page.locator('[data-result-grid][data-result-index="1"]')
+  const planGrid = resultGrid(page, 'Result 2')
   await expect(planGrid).toContainText('ShowPlanXML')
   // These presses skip the stability check. An element out of view is scrolled first, and the menu opens
   // only after the scroll event, which would otherwise close it. The find widget slides in, so a press there waits for
