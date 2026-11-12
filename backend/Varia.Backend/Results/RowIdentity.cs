@@ -253,9 +253,7 @@ internal sealed class CellHasher
             {
                 var (info, options) = cultures[column]!.Value;
                 var text = Decode(ViewSorter.TrimEnd(cell));
-                var length = info.GetSortKeyLength(text, options);
-                if (length > sortKey.Length) sortKey = new byte[Math.Max(length, 2 * sortKey.Length)];
-                var written = info.GetSortKey(text, sortKey, options);
+                var written = ViewSorter.SortKey(info, options, text, ref sortKey);
                 return Bytes(hash, sortKey.AsSpan(0, written));
             }
             case Kind.Trimmed: return Bytes(hash, ViewSorter.TrimEnd(cell));

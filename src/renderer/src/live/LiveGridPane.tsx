@@ -5,7 +5,7 @@ import { onUnexpectedError } from '../core/errors'
 import { useWorkbench } from '../core/WorkbenchContext'
 import GridShell, { GridErrorBoundary, instanceKey, type GridFunnels, type GridShellApi, type GridSpec } from '../grid/GridShell'
 import type { GridView } from '../grid/GridView'
-import { registerLiveOutput, type LiveOutput } from '../menus/targets'
+import { registerLiveOutput, type LiveOutput, type LiveRowActions } from '../menus/targets'
 import { formatCount, plural } from '../results/status'
 import { liveFilterSource, type LiveValueFilter } from './live-filter'
 import { LiveGrid, liveGridText, type LiveGridSnapshot, type LiveGridState } from './LiveGrid'
@@ -59,6 +59,9 @@ export interface LiveGridPaneProps {
   readonly sortable?: boolean
   /** Find in Results (Ctrl+F) in this grid: the owner's own filter box, since a live view has no Find. */
   onFind?(): void
+  /** The owner's actions on the active row, offered in Query Output's menu and by their commands (an Activity Monitor
+   *  pane's Details and Kill Process). Its presence and kind are read when the grid is built. */
+  readonly rows?: LiveRowActions
 }
 
 const defaultNewRows = (count: number) => `${formatCount(count)} new ${plural(count, 'row')} · Jump to latest`
@@ -72,14 +75,15 @@ const indexesOf = (ids: readonly string[], columns: readonly { readonly id: stri
  * the source's args, and the grid says so when its rows are gone. This adds the "n new rows" button. Until the view's
  * first sample the grid area is empty.
  */
-function LiveGridBody({ live, probe, table = 0, label, toneLabel, state, newRowsLabel = defaultNewRows, onGrid, filters, contextMenu = true, sortable = true, onFind }: LiveGridPaneProps) {
+function LiveGridBody({ live, probe, table = 0, label, toneLabel, state, newRowsLabel = defaultNewRows, onGrid, filters, contextMenu = true, sortable = true, onFind, rows: rowActions }: LiveGridPaneProps) {
   const { commands } = useWorkbench()
   const columns = liveProbes[probe]?.tables?.[table]?.columns ?? []
   const [grid, setGrid] = useState<LiveGrid>()
   const [notice, setNotice] = useState<string>()
   const apiRef = useRef<GridShellApi | undefined>(undefined)
-  const latest = useRef({ toneLabel, onGrid, filters, label, onFind })
-  latest.current = { toneLabel, onGrid, filters, label, onFind }
+  const latest = useRef({ toneLabel, onGrid, filters, label, onFind, rowActions })
+  latest.current = { toneLabel, onGrid, filters, label, onFind, rowActions }
+  const rowKind = rowActions?.kind
   const report = useCallback((what: string) => (result: { ok: boolean; error?: string; code?: string } | undefined) =>
     setNotice(result && !result.ok && result.code !== 'CANCELLED' ? `Could not ${what}: ${result.error}` : undefined), [])
   const mount = (create: (spec: GridSpec) => GridView) => {
@@ -90,7 +94,7 @@ function LiveGridBody({ live, probe, table = 0, label, toneLabel, state, newRows
         handle: first.handle, descriptor: first.descriptor, state: own,
         // No SQL type hints: a live catalogue's columns name a type without its length, so a header would invent one
         // ("nvarchar(max)"), and live views follow SSMS's monitors, whose headers are names alone.
-        resultIndex: 0, resultCount: 1, label, followTail: first.mode === 'append', showTypes: false,
+        entry: 'live', resultNumber: 1, resultCount: 1, label, followTail: first.mode === 'append', showTypes: false,
         // With Query Output's menu its keys are the catalogue's (outputGridFocus); without, the grid serves its own.
         clipboardKeys: !contextMenu,
         // The header sorts a snapshot table as a results grid's does; the backend sorts each sample (the probe's sort).
@@ -155,9 +159,11 @@ function LiveGridBody({ live, probe, table = 0, label, toneLabel, state, newRows
       fitColumn: column => view()?.fitColumn(column),
       filterColumn: column => apiRef.current?.openFunnel(column),
       clearFilters: () => latest.current.filters?.clear(),
-      save: () => { void grid.save(latest.current.label).then(report('save the rows'), onUnexpectedError) }
+      save: () => { void grid.save(latest.current.label).then(report('save the rows'), onUnexpectedError) },
+      // The owner's latest actions: it builds them each render.
+      ...rowKind ? { rows: { kind: rowKind, can: action => !!latest.current.rowActions?.can(action), run: action => latest.current.rowActions?.run(action) } satisfies LiveRowActions } : {}
     }
-  }, [grid, columns, report, sortable])
+  }, [grid, columns, report, sortable, rowKind])
   const [root, setRoot] = useState<HTMLDivElement | null>(null)
   useEffect(() => output && root && contextMenu ? registerLiveOutput(root, output) : undefined, [output, root, contextMenu])
   const onApi = useCallback((api: GridShellApi | undefined) => { apiRef.current = api }, [])

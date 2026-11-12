@@ -13,28 +13,28 @@ export function transposeContribution({ commands, transpose, results, documents,
   const targetOf = (args?: CommandArgs) => {
     const target = outputOf(args) ?? (args?.tabId || args?.target ? undefined : focusedOutput(menuTargets))
     if (args?.target && !target) return undefined
-    const found = target ? target.view === 'grid' ? { tabId: target.tabId, index: target.resultIndex } : undefined : (() => {
+    const found = target ? target.view === 'grid' && target.entry !== undefined ? { tabId: target.tabId, key: target.entry } : undefined : (() => {
       const tabId = args?.tabId ?? documents.getSnapshot().activeId
-      const tab = tabId ? results.getSnapshot()[tabId] : undefined
-      return tabId && tab && tab.sets.length > 0 ? { tabId, index: results.viewState(tabId).focusedIndex } : undefined
+      const focused = tabId ? results.focusedEntry(tabId) : undefined
+      return tabId && focused ? { tabId, key: focused.key } : undefined
     })()
-    return found && transpose.canTranspose(found.tabId, found.index) ? found : undefined
+    return found && transpose.canTranspose(found.tabId, found.key) ? found : undefined
   }
   const registrations = [
     commands.register('output.transpose', {
       when: (args?: CommandArgs) => !!targetOf(args),
-      run: async (args?: CommandArgs) => { const target = targetOf(args); if (target) await transpose.transpose(target.tabId, target.index) }
+      run: async (args?: CommandArgs) => { const target = targetOf(args); if (target) await transpose.transpose(target.tabId, target.key) }
     }),
     commands.register('output.transposeSelectedRows', {
-      when: (args?: CommandArgs) => { const target = targetOf(args); return !!target && transpose.selectedRows(target.tabId, target.index) !== undefined },
-      run: async (args?: CommandArgs) => { const target = targetOf(args); if (target) await transpose.transpose(target.tabId, target.index, { selected: true }) }
+      when: (args?: CommandArgs) => { const target = targetOf(args); return !!target && transpose.selectedRows(target.tabId, target.key) !== undefined },
+      run: async (args?: CommandArgs) => { const target = targetOf(args); if (target) await transpose.transpose(target.tabId, target.key, { selected: true }) }
     }),
     commands.register('output.transposeWithHeaders', {
-      when: (args?: CommandArgs) => { const target = targetOf(args); return !!target && transpose.activeColumn(target.tabId, target.index) !== undefined },
+      when: (args?: CommandArgs) => { const target = targetOf(args); return !!target && transpose.activeColumn(target.tabId, target.key) !== undefined },
       run: async (args?: CommandArgs) => {
         const target = targetOf(args)
-        const header = target && transpose.activeColumn(target.tabId, target.index)
-        if (target && header !== undefined) await transpose.transpose(target.tabId, target.index, { header })
+        const header = target && transpose.activeColumn(target.tabId, target.key)
+        if (target && header !== undefined) await transpose.transpose(target.tabId, target.key, { header })
       }
     })
   ]

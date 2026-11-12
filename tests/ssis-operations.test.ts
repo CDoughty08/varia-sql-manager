@@ -40,7 +40,7 @@ class FakeGrid extends SnapshotStore<LiveGridSnapshot> {
   select(key: string | undefined, cells: string[] = [], read?: Promise<void>) {
     this.cells = cells
     const handle = { getWindow: async () => { await read; return { first: 0, count: 1, colStart: 0, colEnd: 7, text: cells, flags: new Uint8Array(7) } } }
-    this.publish({ newRows: 0, following: true, lost: false, ...key === undefined ? {} : { activeKey: key, selection: { resultIndex: 0, active: { row: 3, col: 1 }, anchor: { row: 3, col: 1 }, blocks: [] }, table: { handle } } } as unknown as LiveGridSnapshot)
+    this.publish({ newRows: 0, following: true, lost: false, ...key === undefined ? {} : { activeKey: key, selection: { entry: 'live', active: { row: 3, col: 1 }, anchor: { row: 3, col: 1 }, blocks: [] }, table: { handle } } } as unknown as LiveGridSnapshot)
   }
 }
 

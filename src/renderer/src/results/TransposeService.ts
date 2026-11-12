@@ -3,13 +3,14 @@ import type { Disposable } from '../core/types'
 import { resolveBlocks } from '../grid/selection'
 import { mergeRows } from './HighlightsService'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
-import type { EntryRef, ResultSetEntry, ResultsService } from './ResultsService'
-import { entryIndex, entryName, entryOf, resultLimits, setKey } from './ResultsService'
+import type { EntryKey, ResultSetEntry, ResultsService } from './ResultsService'
+import { entryName, entryOf, resultLimits, setKey } from './ResultsService'
 import { formatCount, plural } from './status'
 
 /** What a transpose set holds, for its grid's strip. */
 export interface TransposeInfo {
-  readonly source: number
+  /** The transposed entry's key. */
+  readonly source: EntryKey
   readonly sourceLabel: string
   /** It read the grid's view: the rows as its sort and filters show them. */
   readonly viewed: boolean
@@ -42,8 +43,9 @@ export interface TransposeOptions { readonly selected?: boolean; readonly header
  */
 export class TransposeService extends SnapshotStore<TransposeSnapshot> implements Disposable {
   private readonly results: Results
-  /** Transposes in flight by tab, with the run they read: a newer run (or none) gives them up. */
-  private readonly running = new Map<string, { readonly abort: AbortController; readonly queryId: string }>()
+  /** Transposes in flight by tab, with the run and the entry they read: a newer run (or none), or that entry closed, gives
+   *  them up. */
+  private readonly running = new Map<string, { readonly abort: AbortController; readonly queryId: string; readonly source: EntryKey }>()
   private readonly unsubscribe: () => void
   /** Strips of transposes added whose sets the results have not shown yet (they publish them on the next frame), with the
    *  tab and run they were added to: a publish for another tab in between must not drop them. */
@@ -57,8 +59,8 @@ export class TransposeService extends SnapshotStore<TransposeSnapshot> implement
 
   /** Whether a grid's set can be transposed now: its run has ended, its rows have all loaded, its grid's sort or filter is
    *  built (the transpose reads the rows the grid shows), and no transpose runs in its tab. */
-  canTranspose(tabId: string, ref: EntryRef): boolean {
-    const tab = this.results.getSnapshot()[tabId], entry = entryOf(tab?.sets, ref)
+  canTranspose(tabId: string, key: EntryKey): boolean {
+    const tab = this.results.getSnapshot()[tabId], entry = entryOf(tab?.sets, key)
     const sort = entry && this.results.sortOf(tabId, entry.key)
     return !!tab && tab.status !== 'running' && tab.status !== 'closed' && !this.running.has(tabId) && transposable(entry)
       && !(sort && (sort.sorting || sort.stale || !sort.view))
@@ -71,8 +73,8 @@ export class TransposeService extends SnapshotStore<TransposeSnapshot> implement
 
   /** The grid's selected rows as [first, count] position ranges (merged), or undefined without any. A transpose takes at
    *  most 256 of them, and says so for more. */
-  selectedRows(tabId: string, ref: EntryRef): [number, number][] | undefined {
-    const entry = entryOf(this.results.getSnapshot()[tabId]?.sets, ref)
+  selectedRows(tabId: string, key: EntryKey): [number, number][] | undefined {
+    const entry = entryOf(this.results.getSnapshot()[tabId]?.sets, key)
     const selection = entry && this.results.selection(tabId, entry.key)
     if (!entry || !selection) return undefined
     const sort = this.results.sortOf(tabId, entry.key)
@@ -82,15 +84,15 @@ export class TransposeService extends SnapshotStore<TransposeSnapshot> implement
   }
 
   /** The column of the grid's active cell, which Transpose Using Column as Headers names the columns by. */
-  activeColumn(tabId: string, ref: EntryRef): number | undefined {
-    const entry = entryOf(this.results.getSnapshot()[tabId]?.sets, ref)
+  activeColumn(tabId: string, key: EntryKey): number | undefined {
+    const entry = entryOf(this.results.getSnapshot()[tabId]?.sets, key)
     const column = entry && this.results.selection(tabId, entry.key)?.active.column
     return entry && column !== undefined && column >= 0 && column < entry.descriptor.columns.length && entry.descriptor.columns[column].role !== 'tone' ? column : undefined
   }
 
   /** Transposes a grid's set and appends the transpose to the run; a failure is said in the toolbar. */
-  async transpose(tabId: string, ref: EntryRef, o: TransposeOptions = {}): Promise<void> {
-    const tab = this.results.getSnapshot()[tabId], entry = entryOf(tab?.sets, ref)
+  async transpose(tabId: string, key: EntryKey, o: TransposeOptions = {}): Promise<void> {
+    const tab = this.results.getSnapshot()[tabId], entry = entryOf(tab?.sets, key)
     if (!tab || !entry || !this.canTranspose(tabId, entry.key)) return
     const rows = o.selected ? this.selectedRows(tabId, entry.key) : undefined
     if (o.selected && !rows) return
@@ -100,7 +102,7 @@ export class TransposeService extends SnapshotStore<TransposeSnapshot> implement
     // The grid's view when it shows one: the transpose reads its rows as the grid shows them.
     const handle = sort?.view ?? entry.handle
     const abort = new AbortController()
-    const item = { abort, queryId: tab.queryId }
+    const item = { abort, queryId: tab.queryId, source: entry.key }
     this.running.set(tabId, item)
     this.publish(new Map(this.getSnapshot()))
     try {
@@ -113,15 +115,13 @@ export class TransposeService extends SnapshotStore<TransposeSnapshot> implement
           this.results.notify(tabId, `These results already show ${resultLimits.sets.toLocaleString('en-US')} sets, so the transpose was not added. Close Results or run the query again.`)
         return
       }
-      // Where the source stands now: an entry before it may have gone while the transpose was built.
-      const at = entryIndex(this.results.getSnapshot()[tabId]?.sets ?? [], entry.key, entry.index)
       const info: TransposeInfo = {
-        source: at < 0 ? entry.index : at, sourceLabel, viewed: !!sort?.view, selected: !!rows, rows: result.rows, transposed: result.transposed, columns: result.columns,
+        source: entry.key, sourceLabel, viewed: !!sort?.view, selected: !!rows, rows: result.rows, transposed: result.transposed, columns: result.columns,
         ...(o.header === undefined ? {} : { header: entry.descriptor.columns[o.header]?.name })
       }
-      const key = setKey(result.descriptor)
-      this.fresh.set(key, { tabId, queryId: tab.queryId })
-      this.publish(new Map([...this.shown(this.getSnapshot()), [key, info]]))
+      const added = setKey(result.descriptor)
+      this.fresh.set(added, { tabId, queryId: tab.queryId })
+      this.publish(new Map([...this.shown(this.getSnapshot()), [added, info]]))
     } catch (error) {
       if (!abort.signal.aborted) this.results.notify(tabId, error instanceof Error ? error.message : 'The results could not be transposed.')
     } finally {
@@ -150,10 +150,11 @@ export class TransposeService extends SnapshotStore<TransposeSnapshot> implement
     return new Map([...info].filter(([key]) => shown.has(key) || this.fresh.has(key)))
   }
 
-  /** A new run (or a closed tab) gives up its tab's running transpose; strips of sets no run shows go. */
+  /** A new run (or a closed tab) gives up its tab's running transpose, and so does closing the result it reads; strips of
+   *  sets no run shows go. */
   private sync(): void {
     const snapshot = this.results.getSnapshot()
-    for (const [tabId, item] of this.running) if (snapshot[tabId]?.queryId !== item.queryId) item.abort.abort()
+    for (const [tabId, item] of this.running) if (snapshot[tabId]?.queryId !== item.queryId || !entryOf(snapshot[tabId].sets, item.source)) item.abort.abort()
     const current = this.getSnapshot()
     if (current.size === 0) return
     const kept = this.shown(current)

@@ -268,6 +268,8 @@ export const queryFacts = {
 
 /** GridView's parts inside a results grid (`[data-result-grid]`), by role where the grid has one. */
 export const gridPart = {
+  /** A results grid's root: the element with the grid role, its accessible name and its result's entry key. */
+  root: '[data-result-grid]',
   scroller: '.rg-scroll',
   frame: '.rg-frame',
   strip: '.rg-strip',
@@ -564,13 +566,37 @@ export const messages = page => page.getByRole('log', { name: 'Messages', exact:
 /** Each message and tail line; an error's differs only in its colour. */
 export const messageLines = page => messages(page).locator('pre')
 export const errorMessages = page => messages(page).locator(part.errorMessage)
-export const resultGrid = (page, index = 0) => page.locator(`[data-result-grid][data-result-index="${index}"]`)
-export const anyResultGrid = page => page.locator('[data-result-grid]')
+/**
+ * CSS for the results grid of the result numbered so ("Result 2"): the grid whose accessible name starts with it
+ * ("Result 2 of 3, 5 rows, …"). For code that runs in the page and cannot hold a locator; a result Varia made (a pivot, a
+ * diff) is numbered like the others by its grid's name, after the query's own.
+ */
+export const resultGridSelector = (name = 'Result 1') => {
+  if (!/^Result \d+$/.test(name)) throw new Error(`"${name}" is not a result's number; find its grid with resultGrid.`)
+  return `${gridPart.root}[aria-label^="${name} of "]`
+}
+/**
+ * A results grid by its entry's name, as the user reads it: "Result 2" is the grid whose accessible name starts with it;
+ * any other name ("Pivot of Result 1") is the grid under the caption that carries it. A grid has no place to be found
+ * by: results come and go around it, and their ids come from one backend counter no script can predict. `scope` is a
+ * page or a locator. Two results under one caption name (two transposes of Result 1) match two grids, which a strict
+ * locator refuses: name those by their number.
+ */
+export const resultGrid = (scope, name = 'Result 1') => {
+  if (typeof name !== 'string') throw new Error(`resultGrid takes a result's name ("Result 2"), not ${JSON.stringify(name)}.`)
+  if (/^Result \d+$/.test(name)) return scope.locator(resultGridSelector(name))
+  // The caption is looked for inside each stack item, so its locator starts at the page, not at `scope`.
+  const page = typeof scope.page === 'function' ? scope.page() : scope
+  return scope.locator(part.resultItem).filter({ has: page.getByRole('button', { name, exact: true }) }).locator(gridPart.root)
+}
+export const anyResultGrid = page => page.locator(gridPart.root)
 export const gridCell = (grid, row, column) => grid.locator(gridCellSelector(row, column))
 /** Whether a locator's element also matches a part's selector, for the drawn states (`gridPart.linkCell`). */
 export const matching = (locator, selector) => locator.and(locator.page().locator(selector))
-/** A set's caption Collapse button, named by the set ("Result 2"). */
-export const resultToggle = (page, index = 0) => outputPane(page).getByRole('button', { name: `Result ${index + 1}`, exact: true })
+/** A set's caption Collapse button, named by the set ("Result 2", "Pivot of Result 1"). */
+export const resultToggle = (page, name = 'Result 1') => outputPane(page).getByRole('button', { name, exact: true })
+/** A set's caption close button, named by the set ("Close Result 2", "Close Pivot of Result 1"): it closes that result alone. */
+export const resultClose = (page, name = 'Result 1') => outputPane(page).getByRole('button', { name: 'Close ' + name, exact: true })
 /** The Messages strip's line under the results, drawn "Messages · 2 · no errors" and named "Messages, 2 messages, no errors",
  *  a button that opens and closes it. */
 export const messagesStrip = page => outputPane(page).getByRole('button', { name: /^Messages, [\d,]+ messages?, / })

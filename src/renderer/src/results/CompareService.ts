@@ -1,18 +1,17 @@
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
-import type { EntryRef, ResultSetEntry, ResultsService } from './ResultsService'
-import { entryIndex, entryName, entryOf, setKey } from './ResultsService'
+import type { EntryKey, ResultSetEntry, ResultsService } from './ResultsService'
+import { entryName, entryOf, setKey } from './ResultsService'
 import { formatCount } from './status'
 
 /** What a diff set compared, for its grid's strip. */
 export interface CompareInfo {
-  /** The compared sets' places in the run when they were compared. */
-  readonly left: number
-  readonly right: number
-  /** The numbers the compared results are named by ("Result 3"), which their places do not give once an entry before
-   *  them has gone. Without them the strip names the results by their places. */
-  readonly leftNumber?: number
-  readonly rightNumber?: number
+  /** The compared entries' keys. */
+  readonly left: EntryKey
+  readonly right: EntryKey
+  /** The numbers the compared results are named by ("Result 3"). */
+  readonly leftNumber: number
+  readonly rightNumber: number
   /** The column whose values matched rows, or null when whole rows did. */
   readonly key: string | null
   readonly exact: boolean
@@ -44,8 +43,9 @@ const names = (entry: ResultSetEntry) => new Set(entry.descriptor.columns.filter
  */
 export class CompareService extends SnapshotStore<CompareSnapshot> implements Disposable {
   private readonly results: Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'notify'>
-  /** Comparisons in flight by tab, with the run they compare: a newer run (or none) gives them up. */
-  private readonly running = new Map<string, { readonly abort: AbortController; readonly queryId: string }>()
+  /** Comparisons in flight by tab, with the run and the two entries they compare: a newer run (or none), or either entry
+   *  closed, gives them up. */
+  private readonly running = new Map<string, { readonly abort: AbortController; readonly queryId: string; readonly left: EntryKey; readonly right: EntryKey }>()
   private readonly unsubscribe: () => void
 
   constructor(results: Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'notify'>) {
@@ -54,45 +54,45 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     this.unsubscribe = results.subscribe(() => {
       if (this.running.size === 0) return
       const snapshot = this.results.getSnapshot()
-      for (const [tabId, item] of this.running) if (snapshot[tabId]?.queryId !== item.queryId) item.abort.abort()
+      for (const [tabId, item] of this.running) {
+        const tab = snapshot[tabId]
+        if (tab?.queryId !== item.queryId || !entryOf(tab.sets, item.left) || !entryOf(tab.sets, item.right)) item.abort.abort()
+      }
     })
   }
 
   /** The set a grid's set is compared with: the nearest set before it of rows, with every row and a column name in common. */
-  previousOf(tabId: string, ref: EntryRef): number | undefined {
+  previousOf(tabId: string, key: EntryKey): ResultSetEntry | undefined {
     const tab = this.results.getSnapshot()[tabId]
-    const right = entryOf(tab?.sets, ref)
+    const right = entryOf(tab?.sets, key)
     if (!tab || tab.status === 'running' || !comparable(right)) return undefined
     const columns = names(right)
-    for (let left = right.index - 1; left >= 0; left--) {
-      const entry = tab.sets[left]
-      if (comparable(entry) && [...names(entry)].some(name => columns.has(name))) return left
+    // Back from where it is listed, to the first that fits.
+    for (let place = tab.sets.indexOf(right) - 1; place >= 0; place--) {
+      const entry = tab.sets[place]
+      if (comparable(entry) && [...names(entry)].some(name => columns.has(name))) return entry
     }
     return undefined
   }
 
   /** Whether a grid's set can be compared now: it has a previous set, and no comparison runs in its tab. */
-  canCompare(tabId: string, ref: EntryRef): boolean { return !this.running.has(tabId) && this.previousOf(tabId, ref) !== undefined }
+  canCompare(tabId: string, key: EntryKey): boolean { return !this.running.has(tabId) && this.previousOf(tabId, key) !== undefined }
 
   /** Compares a grid's set with its previous set and appends the diff; a failure is said in the toolbar. */
-  async compare(tabId: string, ref: EntryRef, o: { exact?: boolean } = {}): Promise<void> {
-    const previous = this.previousOf(tabId, ref)
-    const tab = this.results.getSnapshot()[tabId], to = entryOf(tab?.sets, ref)
-    if (previous === undefined || !tab || !to || this.running.has(tabId)) return
-    const from = tab.sets[previous]
+  async compare(tabId: string, key: EntryKey, o: { exact?: boolean } = {}): Promise<void> {
+    const from = this.previousOf(tabId, key)
+    const tab = this.results.getSnapshot()[tabId], to = entryOf(tab?.sets, key)
+    if (!from || !tab || !to || this.running.has(tabId)) return
     const abort = new AbortController()
-    const item = { abort, queryId: tab.queryId }
+    const item = { abort, queryId: tab.queryId, left: from.key, right: to.key }
     this.running.set(tabId, item)
     try {
       const result = await from.handle.diff(to.handle, { exact: o.exact ?? false, signal: abort.signal })
       const label = `Differences: ${entryName(from)} → ${entryName(to)}`
       // Only the run that holds both sets takes the diff; otherwise (a re-run, a closed tab) it is released.
       if (this.results.addSet(tabId, result.descriptor, label, [setKey(from.descriptor), setKey(to.descriptor)]) === undefined) return
-      // Where the two stand now: an entry before them may have gone while they were compared.
-      const sets = this.results.getSnapshot()[tabId]?.sets ?? []
-      const left = entryIndex(sets, from.key, from.index), right = entryIndex(sets, to.key, to.index)
       const info: CompareInfo = {
-        left: left < 0 ? from.index : left, right: right < 0 ? to.index : right, leftNumber: from.number, rightNumber: to.number, key: result.key, exact: o.exact ?? false, same: result.same, changed: result.changed, added: result.added, removed: result.removed,
+        left: from.key, right: to.key, leftNumber: from.number, rightNumber: to.number, key: result.key, exact: o.exact ?? false, same: result.same, changed: result.changed, added: result.added, removed: result.removed,
         soft: result.soft, leftOnly: result.leftOnly, rightOnly: result.rightOnly, approximate: result.approximate
       }
       // Only diffs some run still shows are kept.
@@ -119,7 +119,7 @@ const count = (value: number, one: string, many = one + 's') => `${formatCount(v
 /** What a diff grid's strip says: what was compared and how, the counts, soft differences and the columns left out. */
 export function compareText(info: CompareInfo): string {
   const by = info.key ? `rows matched by ${info.key}` : 'whole rows matched'
-  const leftNumber = info.leftNumber ?? info.left + 1, rightNumber = info.rightNumber ?? info.right + 1
+  const { leftNumber, rightNumber } = info
   const parts = [`Result ${leftNumber} → Result ${rightNumber}, ${by}${info.exact ? ', text compared exactly' : ''}: ${count(info.changed, 'changed row')}, ${count(info.added, 'added row')}, ${count(info.removed, 'removed row')}, ${formatCount(info.same)} unchanged.`]
   if (info.soft > 0) parts.push(`${count(info.soft, 'value differs', 'values differ')} only by collation (case or trailing spaces), underlined.`)
   if (info.approximate) parts.push('Long values were compared by the part these results keep, so a difference past it does not show.')

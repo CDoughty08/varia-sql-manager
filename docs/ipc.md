@@ -1354,7 +1354,26 @@ itself by view position.
   first row. Values are equal and ordered as the sort compares them, so a column's collation decides which texts match
   (case and trailing spaces under a CI collation) and `2` equals `2.0` in a float column; a truncated value compares by
   its stored prefix (`approximate`).
-- **Memory.** A sort holds 8 to 16 bytes per row and key while it runs (a filter, per column it compares, and 16 bytes a row
+- **Threads.** Keys are built a page at a time and rows sorted in slices that are merged, on several threads, with the
+  order one thread would give. All the operations running share those threads (three quarters of the machine's, 16 at
+  most): each takes what is free when it starts a step, and one at least, so several sorts at once leave the thread pool
+  that answers requests alone.
+- **Text, dates and bytes.** A key ordered by bytes (a collation's sort key for collated text; the value's own bytes for
+  `_BIN` and `_BIN2` text, binary values and the date and time types' fixed-width text) first samples 4,096 of its rows.
+  Where values repeat in the sample it ranks them: each distinct value is numbered once (65,536 at most, or one in 32
+  rows; their bytes taken from the query budget) and a row keeps its value's rank, so comparisons are of integers.
+  Otherwise it keeps 8 bytes of each value after the bytes seven in eight of the sampled values start with (a shared
+  path, a code's prefix, a month of dates), and a row that starts otherwise is marked and compared whole. When the sample
+  says those 8 bytes tell nearly every row apart, that is all it keeps. When it says they do not, it keeps the rest of
+  each value too, taken from the query budget a page at a time, so equal 8 bytes compare bytes; that memory never takes
+  the last eighth of the query's room or of the store's (a query still loading goes on storing rows), and a refusal
+  returns what was taken at once. Without the values, equal 8 bytes read both cells again from their pages; a sort,
+  duplicates filter, distinct list or pivot expected to spend about a minute doing that (by a sample of 65,536 rows, with
+  a later key charged only the comparisons the keys before it leave to it) is refused with `TOO_LARGE` ("There is not
+  enough result memory to compare this much text...") rather than run to its deadline. The same keys serve
+  `results.distinct` and `results.pivot`. `results.profile` reads the pages once per column, each column on its own
+  thread.
+- **Memory.** A sort holds 8 to 16 bytes per row and key while it runs, 8 bytes a row for the positions it sorts and merges, and what a text, date or binary key keeps beyond its 8 bytes while the budget has room (a filter, per column it compares, and 16 bytes a row
   for the rows it keeps, a selection's rows or duplicates' groups; a `value` sort key on a filtered column is that filter's
   key and is charged once, and other sort keys are built over only the rows the filters kept), and a view keeps 4 bytes a row it shows, all charged
   to the result's query budget (`TOO_LARGE` past it); what building needed is returned at once, the order when the view is closed,
@@ -1401,7 +1420,8 @@ the rows it holds (`Results/RowIdentity.cs`); the renderer never compares rows.
 - **`results.findRows { resultId, ids: 1 – 10,000 in 0 – 2⁵³ − 1, viewId? }`** answers `{ positions, marks, truncated, rows }`:
   the ascending positions (view positions with `viewId`) of the rows whose identity is in `ids`, each with the index in
   `ids` it matched, at most 100,000 (`truncated`).
-- **Renderer.** `HighlightsService` keeps highlights per tab and result set index: the first highlight identifies the set
+- **Renderer.** `HighlightsService` keeps highlights per tab and result (a query's own result by its number in the run, which a re-run's
+  result of that number takes over; a pivot, transpose or diff by its entry, and gone with it): the first highlight identifies the set
   (`auto`) and fixes how its rows are told apart (the key column's name and base type, or the whole row); a re-run of the
   tab's query identifies its new set the same way once complete (a column whose length changed still counts) and finds the
   highlighted ids there, and a sorted view finds them by view position. A re-run without the key column finds nothing: the
@@ -2568,7 +2588,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Row sizes a request | `results.rowBytes`: 1 – 16,384 rows (`rowSizes.maxRows`) | zod and backend |
 | Row identities | `results.rowIds` 1 – 16,384 rows; `results.findRows` 1 – 10,000 ids, 100,000 matches (`limits.identity`); 24 bytes a row while identifying, 8 kept, under the query budget | zod and backend |
 | Result diffs | context -1 – 100 rows, 64 one-sided column names each side (`limits.diff`); about 80 bytes a row of both results and 12 a differing cell while aligning, the diff's rows under the query budget, whole or refused | zod and backend |
-| Sorted views | 0 – 16 keys and 0 – 16 filters a view (one at least), 4,096 distinct values a filter, 256 cell ranges a selection, 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key or filtered column while building, 4 bytes a row kept, under the query budget | zod and backend |
+| Sorted views | 0 – 16 keys and 0 – 16 filters a view (one at least), 4,096 distinct values a filter, 256 cell ranges a selection, 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key or filtered column while building (and a text, date or binary key's ranked or whole values while there is room), 4 bytes a row kept, under the query budget | zod and backend |
 | Transpose | 1 – 256 row ranges, at most 4,095 rows taken and 4,000,000 cells, the first rows taken past either with explicit truncation (`limits.transpose`); the stored set under the query budget, whole or refused | zod and backend |
 | Pivots | 0 – 8 row columns, 1 – 16 values, 100,000 row groups, 256 column groups, 4,000,000 figures, refused past any of them (`INVALID_PARAMS`), column-group names cut to 128 characters (`limits.pivot`); a sort key per grouped column and 12 bytes a row while grouping, and the figures, under the query budget | zod and backend |
 | Search in results | 1 – 1,024 characters of text, 1 – 10,000 matches an answer plus its last row's columns (`limits.search`); no budget held | zod and backend |

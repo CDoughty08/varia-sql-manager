@@ -223,6 +223,14 @@ export type Capability = 'totalSpills'
 export const activityCapabilities = ['totalSpills'] as const satisfies readonly Capability[]
 export const activityPermissions = ['viewServerState', 'viewServerPerformanceState', 'alterAnyConnection', 'viewAnyDefinition', 'viewDatabaseState', 'killDatabaseConnection'] as const
 
+/** Hidden columns Blocking and Active Expensive Queries carry from the session's row, so Details and Kill Process can name
+ *  the session (its id and login time, and Kill's host process id) and refuse Varia's own from either pane. */
+const sessionIdentityColumns: readonly ColumnSpec[] = [
+  c('loginTime', 'Login Time', 'datetime', '', false, 'new', 'The session\'s login_time; with the session id it identifies the session for Details and Kill Process.'),
+  c('hostProcessId', 'Host PID', 'int', 'id', false, 'new', 'The session\'s host_process_id, which Kill Process checks.'),
+  c('varia', 'Varia', 'text', '', false, 'new', 'What a Varia session is, as in Sessions; Kill Process is not offered for Varia\'s own pools.')
+]
+
 export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
   sessions: {
     probe: 'activity.sessions', title: 'Sessions', key: ['sessionId'], identity: ['loginTime'], rowCap: 10_000, departedLinger: true,
@@ -286,7 +294,8 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
       c('database', 'Database', 'text', '', true, 'new', 'The request\'s database, else the session\'s.'),
       c('openTransactions', 'Open Transactions', 'int', 'count', true, 'new', 'The session\'s open transactions.'),
       c('cycle', 'Cycle', 'bool', '', true, 'new', 'Part of a cycle (a deadlock SQL Server has not resolved yet); the chain is cut at its lowest session id.'),
-      c('lastBatch', 'Last Batch', 'text', '', true, 'new', 'Lead blockers only: the start of the last batch it sent (sys.dm_exec_input_buffer).')
+      c('lastBatch', 'Last Batch', 'text', '', true, 'new', 'Lead blockers only: the start of the last batch it sent (sys.dm_exec_input_buffer).'),
+      ...sessionIdentityColumns
     ]
   },
   activeQueries: {
@@ -318,7 +327,11 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
       c('waitType', 'Wait Type', 'text', '', true, 'new', 'The request\'s wait type.'),
       c('blockedBy', 'Blocked By', 'int', 'id', true, 'new', 'The session it waits on.'),
       c('percentComplete', '% Complete', 'decimal', '%', false, 'new', 'For commands that report progress (BACKUP, RESTORE, DBCC, rollback).'),
-      c('queryHash', 'Query Hash', 'text', '', false, 'new', 'query_hash.')
+      c('queryHash', 'Query Hash', 'text', '', false, 'new', 'query_hash.'),
+      c('login', 'Login', 'text', '', false, 'new', 'The session\'s login_name, which Kill Process names.'),
+      c('hostName', 'Host Name', 'text', '', false, 'new', 'The session\'s host_name, which Kill Process names.'),
+      c('openTransactions', 'Open Transactions', 'int', 'count', false, 'new', 'The session\'s open transactions, which Kill Process warns about.'),
+      ...sessionIdentityColumns
     ]
   },
   waitCategories: {
