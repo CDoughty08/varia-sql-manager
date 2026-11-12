@@ -4,8 +4,9 @@ Give each original query result a group that owns its Table and, when built, one
 active grid or stacked as today; the user chooses. Transpose becomes a way of drawing a Table or a Pivot, not a stored
 result. Comparisons sit beside the groups and keep their own snapshots.
 
-Revision 7 (2026-11-11). It follows the owner's decisions, three independent reviews against the code, the orientation
-spike's findings, and what PRs 1 and 2a found when they merged.
+Revision 8 (2026-11-12). It follows the owner's decisions, three independent reviews against the code, the orientation
+spike's findings, what PRs 1 to 5b found when they merged, and the
+[pivot performance findings](pivot-performance-findings.md). PRs 6, 7 and 9 are in progress.
 
 The visual references are the three mocks in [prototypes/results-pane](../prototypes/results-pane/README.md): Tabs,
 Stacked and the transposed grid. The owner accepted their defaults on 2026-11-11, to be adjusted as the PRs land: the
@@ -13,9 +14,9 @@ choices the README lists where this plan leaves the interface open, and the A al
 (1A, 2A and 5A are also what the spike decided). Where a mock and this document disagree, this document wins. The older
 `grouped-results-ui.html` is superseded and kept only for history.
 
-The [pivot performance investigation](pivot-performance-follow-up.md) is separate work; PR 17 cannot start until it has
-produced the measurements that set its threshold. The [result memory work](#result-memory-work-alongside) under way
-beside this plan changes what some of its limits must be measured against.
+The [pivot performance investigation](pivot-performance-follow-up.md) was separate work and is done; its findings set
+PR 17's threshold. The [result memory work](#result-memory-work-alongside) beside this plan changes what some of its
+limits must be measured against.
 
 ## Decisions
 
@@ -248,23 +249,29 @@ Separate work is changing how much a result can hold, and this plan's limits wer
   (`--result-scale-bench` in the .NET test project) is measuring sort, filter and pivot at those sizes.
 - **Compressed pages** are proposed after it: sealed pages compressed in place and decompressed per page on read, so
   every scan pays for decompression.
-- **Two fixes are open as PRs:** #426 sends a set's truncation reason with `progress`, so the strip shows while the query
-  still runs; #427 stops a number sort reading the pages for every tie, which made sort, duplicate filters, distinct
-  values and Pivot several times slower on a column of repeated numbers.
+- **Merged since:** #426 sends a set's truncation reason with `progress`, so the strip shows while the query still
+  runs. #427, then #432, #435 and #439, stopped sorts and groupings reading the pages for every tie (numbers first, then
+  text, dates and binary values) and put keys, sorts and scans on several threads. A million-row Count by a column of
+  40 values went from about 0.2 s (numbers) or 1.4 to 2.7 s (dates, text) to 30 to 95 ms.
 
 What that changes here:
 
 - **Limits that are counts stay.** 4,095 drawn rows, 4,096 columns, 256 ranges, 16 filters and 1,000 results do not
   depend on the budget.
-- **The cap of four parallel builds is provisional.** Each build reserves working memory for its whole source out of the
-  query's budget. With larger sources, four builds are more likely to refuse each other and each holds its result slot
-  longer. PR 10 keeps four as the count but must check it against the benchmark's pivot timings at the largest budget,
-  and lower it or queue by reserved bytes if builds starve each other.
-- **PR 17's threshold is in source rows and comes from measurements taken after #427**, at the budget that ships. If
-  compressed pages land first it is measured over them. It must not be a number taken at 2 GiB.
-- **The pivot performance investigation** starts from `main` with #427 merged, since that fix removes one known cause
-  of a slow Pivot over repeated numbers, and uses the result-scale benchmark's fixtures where they fit instead of a
-  second harness.
+- **The cap of four parallel builds stands.** The findings measured builds of one source side by side: four of a
+  5,000,000-row source each took 1.25 s against 1.11 s alone, so they do not starve each other. At a 20,000,000-row
+  source under a 1 GiB query budget, the second build is refused at once by the budget, which changes nothing and is
+  what the plan's refusal sentence is for. Those timings predate the threaded sorts; PR 10 runs the findings' parallel
+  case once more, since a build now uses up to three quarters of the cores by itself.
+- **PR 17's threshold is 500,000 source rows and a last build under 250 ms**, both required. Rows are those stored in
+  the Table's result, not those its filters keep. The findings first gave 100,000 and, re-measured on 2026-11-12 after
+  the sort work, say the same reasoning now reaches 500,000 (the slowest recipe found takes 189 ms there on a 24-core
+  machine). The time condition is what covers machines with few cores, long decimals and Distinct Count, so it is not
+  optional. The row figure is this plan's pick from those measurements, not the owner's decision; it does not rise with
+  a larger budget, and it is measured again if compressed pages land before PR 17.
+- **The reported slow Pivot was not reproduced.** At the reported shape (about 20,000 rows of one `int` column) a build
+  takes 110 to 180 ms from the click to the painted pivot, before and after the sort fixes. If it is seen again it needs
+  the machine, the build and the result's shape recorded.
 - **Out of date and Update (PR 11) matter more.** A rebuild over a large source takes seconds, so the marked state is
   what users of large results will see most.
 - **PR 1's rules hold whatever the size**, but its checks name byte counts through a memory probe; they need another
@@ -434,8 +441,8 @@ Outcome, accepted by the owner:
   draw links or highlights, show late header text or grow while rows stream. The stored-transpose fallback is not needed.
 - **Numbers** (owner's machine, 4,095 columns drawn over a 4,096-column long-text source): frame p95 1 ms after a jump and
   0.5 ms during wheel either way; main-thread task per jump 47 ms against a 50 ms target; no long task.
-- **Still open, for PR 5a to settle:** the table grid's first paint read 44 and 59 ms on the spike build against 40 and
-  36 ms on `main`; two runs cannot call that noise. The Linux CI runner is unmeasured until a branch is pushed.
+- **Settled by PR 5a:** the table grid's first paint is unchanged. The spike's 44 and 59 ms were not reproduced over 24
+  runs (none above 46 ms); the 59 ms was a median of five that held one 89 ms sample.
 
 1. **Budget fixes. Merged as #411.** Checks in `DiffChecks.cs`, `PivotChecks.cs` and a store built with a memory probe: a refused or
    memory-pressed derived set leaves the budget open and Pivot usable; pressure at a derived set's last seal keeps it
@@ -450,9 +457,12 @@ Outcome, accepted by the owner:
      `leftNumber`/`rightNumber` beside them for names). It added `removeEntry(tabId, key)`, which nothing in the
      interface calls until PR 3. The pivot panel's source follows an original result by ordinal and a derived entry by
      key, as highlights do.
-   - **2b** moves the stack's own positional state (`weights`, `collapsed`, `focusedIndex`), the grid, panels,
-     contributions, menus, tests and script locators, and removes those adapters.
-3. **Lifecycle.** Close one entry, the cleanup path, per-result cancellation, per-target search invalidation, run totals,
+   - **2b merged as #429**, as one PR: it moved the stack's own positional state (`weights`, `collapsed`,
+     `focusedIndex`), the grid, panels, contributions, menus, tests and script locators, and removed those adapters.
+     `PivotTab` gained `sourceName`, so the panel can name a followed result a new run has not returned yet. The stack
+     uses saved weights only while every drawn entry has one, so a result added after a splitter drag still resets the
+     stack to equal shares.
+3. **Lifecycle. Merged as #441.** Close one entry, the cleanup path, per-result cancellation, per-target search invalidation, run totals,
    weights per entry. Close buttons on stack captions, behind an option that Peek's stack leaves off. The `emptied` flag
    and its `OutputPane` consumers (output view choice, tab list, badge, toolbar, strip, empty state) land here, because
    this is the PR that first lets the last entry be closed. Checks: a source closed under pending work; late answers;
@@ -474,22 +484,52 @@ Outcome, accepted by the owner:
      - Open Value drops a value read for an entry closed meanwhile. A Save Results As whose file is not yet chosen when
        its result is closed fails with the backend's sentence; one already writing finishes.
      - No backend change was needed.
-4. **Keep Selected Rows.** Filter, command, chip, limits.
+4. **Keep Selected Rows. Merged as #442.** Filter, command, chip, limits. What it settled or left:
+   - A new Keep filter goes last when a duplicates filter follows the one it replaces (agreed with the owner); otherwise
+     it replaces in place.
+   - The backend enforces the row limit too (`TOO_LARGE` past 4,095, counted after merging and clipping the ranges) and
+     refuses a selection that covers no row (`INVALID_PARAMS`).
+   - It is in the grid menu's Filter submenu, not the palette. The mock's Actions menu does not exist yet.
+   - The chip counts the rows the view resolved, which differs from the selection only while rows stream.
+   - Left: if the view a selection was made on is closed before the filter resolves and the user sorts meanwhile, the
+     Keep is dropped with "Could not sort…". The other selection filters share the race; see Follow-ups. Keep Selected
+     Rows on Pivot and comparison grids has no check of its own.
 5. **Orientation in the grid**, as two PRs, from the spike's prototype (its adapter and its global test switch do not
    land).
-   - **5a, no visible change:** a column-axis abstraction, tile shape as a parameter and a column read with every row
+   - **5a, no visible change, merged as #430:** a column-axis abstraction, tile shape as a parameter and a column read with every row
      tile, the selection seam and offsets indirection in `GridView`, sort and size painting on any element, and grid
      targets that `menus/targets.ts` reads. It must show `grid.firstPaintMs` unchanged against `main` over repeated runs.
-   - **5b, the orientation:** the turned selection, the shared-width layout, the `transposed` and header-column options
+   - **5b, the orientation, merged as #443:** the turned selection, the shared-width layout, the `transposed` and header-column options
      and per-view orientation in the grid state, set by a test hook only until PR 7. Also the name column's drag, fit and
      saved width; names of an empty result; name-cell tooltips; theme keys for the column tint; a transposed locator in
      `ui.mjs`; the benchmark's transposed metrics with entries in `tests/bench/floors.json`, which is where Linux CI
      first measures them; `docs/architecture.md`'s grid bullet.
-6. **Transposed copy and save.**
-7. **Commands switch to the orientation.** The three transpose commands, the header option, the cap's strip, the Find Next
+   - **What 5b settled or left:**
+     - The test hook is `__variaGrid.setOrientation`; it writes each view's grid state through the grid. PR 7 adds the
+       service's way to set it.
+     - `fitColumn` does nothing while transposed and `fitRow` fits a drawn column. The Fit Column command passes a
+       column, so it does nothing in a transposed grid until PR 7 passes the target's row.
+     - The column tint is 12 %, not the row highlight's 14 %, which failed contrast for NULL text over a striped row.
+     - A result with a tone column (a comparison) is never turned.
+     - Past the cap means source row 4,095 or later, not "not drawn yet", so a match in a row still streaming in is
+       revealed once it is drawn.
+     - A transposed grid in the stack keeps its table's height until PR 9 sizes it by drawn rows.
+     - The transposed jump task read a median of 58 ms (46 to 79) on the owner's machine while other sessions were
+       running on it, against the spike's 47 ms and the 50 ms target; Linux CI read 90 ms against a floor of 170. Load
+       was not separated from a cost of the port. PR 7 measures it again on a quiet machine and looks for the cost if
+       it is still over 50 ms.
+     - `grid.transposed.jumpPaintP95Ms` (596 ms on Linux CI) is reported without a floor; it is mostly the fake backend
+       encoding and the worker decoding 0.75 MB pages.
+     - Highlights after an orientation change were lost and are fixed, with no automated check until PR 7's smoke
+       steps.
+     - Not done: changing the shared width by hand, and a pass with a screen reader; see Follow-ups.
+6. **Transposed copy and save.** In progress.
+7. **Commands switch to the orientation.** In progress. If it merges before PR 6, Copy and Save of a grid turned by
+   command still go through the stored path, so the two PRs say which order they need. The three transpose commands, the header option, the cap's strip, the Find Next
    message past the cap, a context key for "this grid is transposed" so Transpose reads as a toggle, smoke steps.
-8. **Remove the stored transpose.**
-9. **Groups.** The group and slot model drawn in the stack (a Pivot under its Table; a transposed item sized by its
+8. **Remove the stored transpose.** After PRs 6 and 7.
+9. **Groups.** In progress. It also takes what PR 3 left: closing through a command or menu target, and a Results badge
+   that counts original groups. The group and slot model drawn in the stack (a Pivot under its Table; a transposed item sized by its
    drawn rows), plan-set groups, and the bare mode Peek uses. The renderer's rules land here so every list is representable: Pivot is offered only on Tables, the "Pivot
    source" picker goes, and building a group's Pivot again releases the old one first and then shows the new (not yet
    atomic). `results-smoke`'s pivot steps change here. Checks: no nested pivot from menu, palette, key or service.
@@ -497,7 +537,9 @@ Outcome, accepted by the owner:
     until the new one publishes, `results.pivot` from Tables only in the backend, parallel builds with their cap and
     retry, the 1,000 rule. Checks: replacement success, cancellation, failure, late answer, memory overlap.
 11. **Out of date and Update.**
-12. **`hasResultSets`** and its consumers: `contributions/output.ts`, `pivot.ts`, `transpose.ts`, `PivotService`'s sync,
+12. **`hasResultSets`** and its consumers (after PRs 7 and 9, which edit the same contributions). Until then an
+    emptied run with captured plans still has `hasResults`, so Find and Save Results As are enabled and do nothing.
+    Consumers: `contributions/output.ts`, `pivot.ts`, `transpose.ts`, `PivotService`'s sync,
     the catalogue's preconditions for Save and Find, `PeekCard`.
 13. **Tabs layout**, default still Stacked. Tabs, the toggle and setting, view tabs, selection rules, Find Next across
     tabs, the strip rule, focus fallback. Existing smoke suites pin Stacked by setting; a new `grouped-results` suite
@@ -507,14 +549,16 @@ Outcome, accepted by the owner:
     benchmark case, not smoke.
 15. **Save names, narrow and short panes, popouts.**
 16. **Compare picker**, Tables only, with the backend restriction, the pairing fixtures, and parallel comparisons.
-17. **Pivots follow filters.** Automatic under a source-row threshold from the performance investigation (each build
-    reserves and keys the whole source, not the filtered rows); Update above it. Only a shown Pivot rebuilds; another
+17. **Pivots follow filters.** Automatic when the Table's result stores at most 500,000 rows and the Pivot's last build
+    took under 250 ms (each build reserves and keys the whole source, not the filtered rows); Update otherwise. Only a shown Pivot rebuilds; another
     stays marked and rebuilds when shown. A newer filter change cancels the build in flight.
 18. **Integration.** Remove what nothing uses, update `docs/results-tools.md`, `docs/architecture.md` and `README.md`,
     review Dark and Light, short panes, docked, floating and popped out.
 
 Follow-ups, not in this work: Pivot with Pivot comparison (explicit diff key); a Plan tab inside a group; uncapped
-transposed columns; value-based filters that survive a Pivot rebuild; opening one view in its own window.
+transposed columns; value-based filters that survive a Pivot rebuild; opening one view in its own window; a selection
+filter (Keep Selected Rows included) that survives its view closing while it resolves; changing a transposed grid's
+shared width by hand; a screen reader pass over the transposed grid.
 
 ## Validation
 
