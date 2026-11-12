@@ -435,13 +435,16 @@ try {
   // The widest result there is, 4,096 columns of long text, over 5,000 rows: 4,096 drawn rows by 4,095 drawn columns.
   await segment('transposed: 4,096 columns')
   await run('-- varia-fake: sets=T1*5000', 120000)
-  await expect(cell(0, 0)).toHaveText(shapes.T1.row(0)[0])
+  // These waits are not what is measured: a first window of 4,096 columns, and the grid turned, take seconds on a hosted
+  // runner (a jump to paint here has taken three on a desktop held to four cores), where a cell's five would do elsewhere.
+  const slowly = { timeout: 60000 }
+  await expect(cell(0, 0)).toHaveText(shapes.T1.row(0)[0], slowly)
   await cell(0, 0).click()
   await orient(true)
-  await expect(matching(grid(), transposedGridSelector)).toHaveCount(1)
-  await expect(grid()).toHaveAttribute('aria-label', 'Result 1 of 1, transposed, 4,096 columns as rows, the first 4,095 of 5,000 rows as columns')
+  await expect(matching(grid(), transposedGridSelector)).toHaveCount(1, slowly)
+  await expect(grid()).toHaveAttribute('aria-label', 'Result 1 of 1, transposed, 4,096 columns as rows, the first 4,095 of 5,000 rows as columns', slowly)
   // Cells are named by the result's row and column whatever the orientation: each shows the value the table showed.
-  for (const [row, column] of [[0, 0], [3, 2], [1, 7]]) await expect(transposedCell(grid(), row, column)).toHaveText(shapes.T1.row(row)[column])
+  for (const [row, column] of [[0, 0], [3, 2], [1, 7]]) await expect(transposedCell(grid(), row, column)).toHaveText(shapes.T1.row(row)[column], slowly)
   await expect(transposedName(grid(), 2)).toHaveText(shapes.T1.columns[2].name)
   await expect(grid().locator(gridPart.nameCell).filter({ visible: true }).first()).toContainText(shapes.T1.columns[0].name)
   await expect(grid().getByRole('columnheader', { name: 'Row 1', exact: true })).toBeVisible()
