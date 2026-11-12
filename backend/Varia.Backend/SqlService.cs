@@ -1685,30 +1685,40 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
-        // Each thread reading the pages holds figures of its own; without room for them all, one thread reads them.
+        // Each thread reading the pages holds figures of its own. They are taken only with room to spare (a query still
+        // loading into this budget goes on storing rows); without it, one thread reads the pages.
+        const string tooLarge = "There is not enough result memory to profile these rows. Close other results and try again.";
         var workers = ColumnProfiler.WorkersFor(rows, pages.Length);
         var working = ColumnProfiler.WorkingBytes(rows, args.Columns.Length, workers);
-        if (!store.TryReserve(set.Budget, working, false, out _))
+        if (workers > 1 && !store.TryReserveSpare(set.Budget, working)) workers = 1;
+        while (true)
         {
-            workers = 1;
-            working = ColumnProfiler.WorkingBytes(rows, args.Columns.Length);
-            if (!store.TryReserve(set.Budget, working, false, out _))
-                throw new RequestException("TOO_LARGE", "There is not enough result memory to profile these rows. Close other results and try again.");
+            if (workers == 1)
+            {
+                working = ColumnProfiler.WorkingBytes(rows, args.Columns.Length);
+                if (!store.TryReserve(set.Budget, working, false, out _)) throw new RequestException("TOO_LARGE", tooLarge);
+            }
+            // Large values (a long lowest or highest key, a long sort key) are charged as the profile meets them.
+            var charges = new ColumnProfiler.Charges(bytes => store.TryReserve(set.Budget, bytes, false, out _));
+            try
+            {
+                var threads = workers;
+                var result = await Task.Run(() => ColumnProfiler.Profile(set, pages, view, args.Columns, complete, token, charges, threads), token);
+                if (set.IsReleased) throw Unavailable(args.ResultId);
+                if (view is not null && !store.HasView(view)) throw ViewClosed();
+                return result;
+            }
+            catch (ColumnProfiler.ProfileTooLargeException) when (workers > 1)
+            {
+                // Every thread keeps long values of its own: one thread's may still fit.
+                workers = 1;
+            }
+            catch (ColumnProfiler.ProfileTooLargeException)
+            {
+                throw new RequestException("TOO_LARGE", tooLarge);
+            }
+            finally { store.Return(set.Budget, working + charges.Extra); }
         }
-        // Large values (a long lowest or highest key, a long sort key) are charged as the profile meets them.
-        var charges = new ColumnProfiler.Charges(bytes => store.TryReserve(set.Budget, bytes, false, out _));
-        try
-        {
-            var result = await Task.Run(() => ColumnProfiler.Profile(set, pages, view, args.Columns, complete, token, charges, workers), token);
-            if (set.IsReleased) throw Unavailable(args.ResultId);
-            if (view is not null && !store.HasView(view)) throw ViewClosed();
-            return result;
-        }
-        catch (ColumnProfiler.ProfileTooLargeException)
-        {
-            throw new RequestException("TOO_LARGE", "There is not enough result memory to profile these rows. Close other results and try again.");
-        }
-        finally { store.Return(set.Budget, working + charges.Extra); }
     }
 
     /// <summary>results.distinct: keeps a column's distinct values with their counts (ViewSorter.DistinctValues) over a
