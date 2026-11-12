@@ -104,9 +104,13 @@ export interface GridViewOptions {
   readonly client: { readonly windowsInFlight: number }
   readonly descriptor: ResultDescriptor
   readonly state: GridViewState
-  readonly resultIndex: number
+  /** What the grid's selection belongs to: a result's entry key (a live grid has one of its own). A selection made for
+   *  another counts as none. */
+  readonly entry: string
+  /** The number the result is named by, and how many the run shows: "Result 2 of 3". */
+  readonly resultNumber: number
   readonly resultCount: number
-  /** The grid's name, which its accessible label starts with (a live grid's "Sessions"); "Result i of n" otherwise. */
+  /** The grid's name, which its accessible label starts with (a live grid's "Sessions"); "Result N of M" otherwise. */
   readonly label?: string
   readonly platform: Platform
   readonly stats?: GridStats
@@ -355,7 +359,7 @@ export class GridView {
         default: {
           const rows = this.rows()
           if (rows <= 0 || this.columns <= 0) return true
-          const current = this.selection() ?? firstCell(this.o.resultIndex)
+          const current = this.selection() ?? firstCell(this.o.entry)
           const next = navigate(current, action, { rows, columns: this.columns, pageRows: pageStep(this.viewportHeight - g.headerHeight) })
           this.select(next)
           this.reveal(next.active.row, next.active.column)
@@ -366,7 +370,7 @@ export class GridView {
   }
 
   /** Select All (Ctrl+A and the command): an open-ended block that grows as rows stream in. */
-  selectAll(): void { this.select(selectAll(this.o.resultIndex, this.selection()?.active)) }
+  selectAll(): void { this.select(selectAll(this.o.entry, this.selection()?.active)) }
   /** The selection changed elsewhere (a command): paint it. */
   repaint(): void { this.schedule() }
   /** The active cell's box, which keyboard-opened menus open below. */
@@ -442,7 +446,7 @@ export class GridView {
   }
   private focusInRun(): boolean { return focusInRun(this.root, this.root.ownerDocument.activeElement) }
   private selectCell(row: number, column: number): void {
-    this.select(cellSelection(this.o.resultIndex, row, column))
+    this.select(cellSelection(this.o.entry, row, column))
     this.root.focus({ preventScroll: true })
   }
 
@@ -542,7 +546,7 @@ export class GridView {
   }
   private selection(): GridSelection | undefined {
     const selection = this.o.state.selection
-    return selection?.resultIndex === this.o.resultIndex && selection.blocks.length > 0 ? selection : undefined
+    return selection?.entry === this.o.entry && selection.blocks.length > 0 ? selection : undefined
   }
   private select(selection: GridSelection): void {
     if (selection === this.o.state.selection) return
@@ -779,7 +783,7 @@ export class GridView {
       hit = { kind: 'column', column: hit.column }
     }
     const add = press === 'primary' && this.gestures.matches('grid.addToSelection', event), shift = this.gestures.matches('grid.extendSelection', event)
-    this.select(pressSelection(this.o.state.selection, hit, { resultIndex: this.o.resultIndex, shift, right: press === 'secondary', add, rows: this.rows(), columns: this.columns }))
+    this.select(pressSelection(this.o.state.selection, hit, { entry: this.o.entry, shift, right: press === 'secondary', add, rows: this.rows(), columns: this.columns }))
     if (press !== 'primary' || hit.kind === 'corner') return
     this.drag = { pointerId: event.pointerId, x0: point.x, y0: point.y, x: point.x, y: point.y, dragging: false, hit, modifiers: shift || add }
     try { this.root.setPointerCapture(event.pointerId) } catch { /* A synthetic pointer has nothing to capture. */ }
@@ -1168,7 +1172,7 @@ export class GridView {
     }
     // SSMS's current cell: once rows arrive, the first cell is selected until another is chosen, so Copy, Shift+click
     // and the keys start from it and screen readers hear it. It is not announced as a selection change.
-    if (rows > 0 && this.columns > 0 && !this.selection()) state.selection = firstCell(this.o.resultIndex)
+    if (rows > 0 && this.columns > 0 && !this.selection()) state.selection = firstCell(this.o.entry)
 
     this.dragStep()
     const viewport = { top: virtualTop, left, width, height }
@@ -1558,7 +1562,7 @@ export class GridView {
   /** The grid's own ARIA: counts change at most once a second while rows stream in. */
   private aria(state: string, rows: number): void {
     const open = state === 'open'
-    const label = gridLabel(this.o.label ?? `Result ${this.o.resultIndex + 1} of ${this.resultCount}`, rows, this.columns, open)
+    const label = gridLabel(this.o.label ?? `Result ${this.o.resultNumber} of ${this.resultCount}`, rows, this.columns, open)
     if (label === this.ariaLabel) return
     const now = performance.now()
     if (open && rows !== this.ariaRows && now - this.ariaAt < g.ariaRowCountMs) {
@@ -1603,11 +1607,11 @@ export function toneColumnOf(descriptor: Pick<ResultDescriptor, 'columns'>): num
 }
 
 /** The first cell, as the current cell of a grid nothing has been selected in. */
-function firstCell(resultIndex: number): GridSelection { return cellSelection(resultIndex, 0, 0) }
+function firstCell(entry: string): GridSelection { return cellSelection(entry, 0, 0) }
 /** One cell, selected and active. */
-function cellSelection(resultIndex: number, row: number, column: number): GridSelection {
+function cellSelection(entry: string, row: number, column: number): GridSelection {
   const cell = { row, column }
-  return { resultIndex, blocks: [{ kind: 'cells', anchor: cell, focus: cell }], active: cell }
+  return { entry, blocks: [{ kind: 'cells', anchor: cell, focus: cell }], active: cell }
 }
 
 let measureContext: CanvasRenderingContext2D | null | undefined

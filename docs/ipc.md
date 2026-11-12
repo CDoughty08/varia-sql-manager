@@ -1406,7 +1406,8 @@ the rows it holds (`Results/RowIdentity.cs`); the renderer never compares rows.
 - **`results.findRows { resultId, ids: 1 – 10,000 in 0 – 2⁵³ − 1, viewId? }`** answers `{ positions, marks, truncated, rows }`:
   the ascending positions (view positions with `viewId`) of the rows whose identity is in `ids`, each with the index in
   `ids` it matched, at most 100,000 (`truncated`).
-- **Renderer.** `HighlightsService` keeps highlights per tab and result set index: the first highlight identifies the set
+- **Renderer.** `HighlightsService` keeps highlights per tab and result (a query's own result by its number in the run, which a re-run's
+  result of that number takes over; a pivot, transpose or diff by its entry, and gone with it): the first highlight identifies the set
   (`auto`) and fixes how its rows are told apart (the key column's name and base type, or the whole row); a re-run of the
   tab's query identifies its new set the same way once complete (a column whose length changed still counts) and finds the
   highlighted ids there, and a sorted view finds them by view position. A re-run without the key column finds nothing: the

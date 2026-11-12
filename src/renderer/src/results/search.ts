@@ -10,7 +10,7 @@ import type { Disposable } from '../core/types'
 import { toneColumnOf } from '../grid/GridView'
 import { cellKey, type GridMarks } from '../grid/marks'
 import { ResultError, type ResultHandle } from './ResultClient'
-import { entryIndex, setKey, type EntryKey, type ResultsService, type TabResults } from './ResultsService'
+import { setKey, type EntryKey, type ResultsService, type TabResults } from './ResultsService'
 import { formatCount } from './status'
 
 export type { GridMarks }
@@ -21,9 +21,9 @@ export type SearchMode = 'values' | 'columns'
  * One tab's search. `total` counts the matches (values) or matching columns (columns) over every grid, `current` is the
  * active one's place among them (-1 for none). `partial`: a grid was still loading, so more rows may match; `approximate`:
  * a truncated value was searched by its stored prefix. `reveal` changes when the active match should scroll into view
- * (`revealIndex` is its grid; `revealSelect`: the grid also makes it its active cell, for a step taken from a grid);
- * `focus` when the search box should take the focus. `marks` and `revealIndex` are by set index, for the grids: derived
- * from the entries' keys each time the search is published. `announcement` is what the box's live region says: the count once it
+ * (`revealEntry` is its grid's entry; `revealSelect`: the grid also makes it its active cell, for a step taken from a
+ * grid); `focus` when the search box should take the focus. `marks` and `revealEntry` are by entry key, and name only
+ * entries the run still has. `announcement` is what the box's live region says: the count once it
  * has settled for announceDelayMs, so typing and grids arriving one by one do not read out every count in between.
  */
 export interface TabSearch {
@@ -37,19 +37,18 @@ export interface TabSearch {
   readonly partial: boolean
   readonly approximate: boolean
   readonly error?: string
-  readonly marks: ReadonlyMap<number, GridMarks>
+  readonly marks: ReadonlyMap<EntryKey, GridMarks>
   readonly reveal: number
-  readonly revealIndex: number
+  readonly revealEntry?: EntryKey
   readonly revealSelect: boolean
   readonly focus: number
   readonly announcement: string
 }
 
-/** A grid's search: the entry it searched (`key`; `index` is where the entry stood then), what it searched (`handle`,
- *  `signature`), how many matched, and the run of matches held. */
+/** A grid's search: the entry it searched (`key`), what it searched (`handle`, `signature`), how many matched, and the
+ *  run of matches held. */
 interface GridRun {
   readonly key: EntryKey
-  readonly index: number
   readonly handle: ResultHandle
   readonly signature: string
   total: number
@@ -79,9 +78,8 @@ interface TabState {
   fetch?: AbortController
   timer?: unknown
   reveal: number
-  /** The entry the active match is in, and where it stood when the reveal was asked for. */
+  /** The entry the active match is in. */
   revealKey?: EntryKey
-  revealIndex: number
   revealSelect: boolean
   /** The reveal a grid has carried out. */
   revealed?: number
@@ -96,7 +94,7 @@ interface TabState {
   published?: TabSearch
 }
 
-const idle: TabSearch = { text: '', mode: 'values', status: 'idle', total: 0, current: -1, columns: 0, partial: false, approximate: false, marks: new Map(), reveal: 0, revealIndex: -1, revealSelect: false, focus: 0, announcement: '' }
+const idle: TabSearch = { text: '', mode: 'values', status: 'idle', total: 0, current: -1, columns: 0, partial: false, approximate: false, marks: new Map(), reveal: 0, revealSelect: false, focus: 0, announcement: '' }
 const isAbort = (error: unknown) => error instanceof DOMException && error.name === 'AbortError'
 /** Column names match ignoring case and accents, as identifiers do under the usual _CI_AI collations. */
 const fold = (text: string) => text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
@@ -157,11 +155,11 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
     if (tab.mode === 'values') void this.ensureRun(tabId, tab)
   }
 
-  /** Whether grid `index` should scroll the active match into view: the tab's latest reveal is in it and no grid has shown
-   *  it yet (a grid mounted later, once the stack scrolled to it, still does). `revealed` records that one did. */
-  pendingReveal(tabId: string, index: number): boolean {
+  /** Whether the grid of the entry `key` should scroll the active match into view: the tab's latest reveal is in it and no
+   *  grid has shown it yet (a grid mounted later, once the stack scrolled to it, still does). `revealed` records that one did. */
+  pendingReveal(tabId: string, key: EntryKey): boolean {
     const tab = this.tabs.get(tabId)
-    return !!tab && tab.reveal > 0 && tab.revealKey !== undefined && this.results.getSnapshot()[tabId]?.sets[index]?.key === tab.revealKey && tab.revealed !== tab.reveal
+    return !!tab && tab.reveal > 0 && tab.revealKey === key && tab.revealed !== tab.reveal
   }
   revealed(tabId: string): void { const tab = this.tabs.get(tabId); if (tab) tab.revealed = tab.reveal }
 
@@ -196,7 +194,7 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
   private state(tabId: string): TabState {
     let tab = this.tabs.get(tabId)
     if (!tab) {
-      tab = { text: '', mode: 'values', status: 'idle', current: -1, grids: [], names: new Map(), columnCount: 0, signature: '', reveal: 0, revealIndex: -1, revealSelect: false, focus: 0, announcement: '' }
+      tab = { text: '', mode: 'values', status: 'idle', current: -1, grids: [], names: new Map(), columnCount: 0, signature: '', reveal: 0, revealSelect: false, focus: 0, announcement: '' }
       this.tabs.set(tabId, tab)
     }
     return tab
@@ -229,11 +227,11 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
   }
 
   /** The grids a search covers now: each set, through the view its grid shows (or is about to). */
-  private targets(tabId: string, results: TabResults | undefined): { key: EntryKey; index: number; handle: ResultHandle; signature: string }[] {
+  private targets(tabId: string, results: TabResults | undefined): { key: EntryKey; handle: ResultHandle; signature: string }[] {
     if (!results) return []
     return results.sets.map(set => {
       const view = this.results.sortOf(tabId, set.key)?.view
-      return { key: set.key, index: set.index, handle: view ?? set.handle, signature: `${setKey(set.descriptor)}#${view?.viewId ?? ''}${results.settled.has(setKey(set.descriptor)) ? '' : '+'}` }
+      return { key: set.key, handle: view ?? set.handle, signature: `${setKey(set.descriptor)}#${view?.viewId ?? ''}${results.settled.has(setKey(set.descriptor)) ? '' : '+'}` }
     })
   }
 
@@ -324,8 +322,8 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
     })()
   }
 
-  private gridRun(target: { key: EntryKey; index: number; handle: ResultHandle; signature: string }, found: ResultsSearchResult): GridRun {
-    return { key: target.key, index: target.index, handle: target.handle, signature: target.signature, total: found.total, approximate: found.approximate, complete: found.complete, searched: found.rows,
+  private gridRun(target: { key: EntryKey; handle: ResultHandle; signature: string }, found: ResultsSearchResult): GridRun {
+    return { key: target.key, handle: target.handle, signature: target.signature, total: found.total, approximate: found.approximate, complete: found.complete, searched: found.rows,
       first: found.first, rows: found.matchRows, columns: found.matchColumns }
   }
 
@@ -399,43 +397,40 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
   private reveal(tab: TabState, select = false): void {
     tab.reveal++
     tab.revealSelect = select
-    const grid = tab.mode === 'columns' ? undefined : this.locate(tab)?.grid
-    tab.revealKey = tab.mode === 'columns' ? this.locateColumn(tab)?.key : grid?.key
-    // Where the entry stood when it was searched: publishing looks there first.
-    tab.revealIndex = grid?.index ?? -1
+    tab.revealKey = tab.mode === 'columns' ? this.locateColumn(tab)?.key : this.locate(tab)?.grid.key
   }
 
   private publishTab(tabId: string, tab: TabState): void {
     if (this.disposed) return
-    const marks = new Map<number, GridMarks>()
+    const marks = new Map<EntryKey, GridMarks>()
     let partial = false, approximate = false
-    // Marks and the reveal go to the grids by the place each entry stands at now; an entry that has gone has none.
+    // Marks and the reveal go to the grids by entry key; an entry that has gone has none.
     const sets = this.results.getSnapshot()[tabId]?.sets ?? []
-    tab.revealIndex = tab.revealKey === undefined ? -1 : entryIndex(sets, tab.revealKey, tab.revealIndex)
+    const shown = new Set(sets.map(set => set.key))
+    const revealEntry = tab.revealKey !== undefined && shown.has(tab.revealKey) ? tab.revealKey : undefined
     if (tab.mode === 'columns' && tab.text) {
       const active = this.locateColumn(tab)
       for (const set of sets) {
         const columns = new Uint8Array(set.descriptor.columns.length)
         for (const column of tab.names.get(set.key) ?? []) columns[column] = 1
-        marks.set(set.index, active?.key === set.key ? { columns, currentColumn: active.column } : { columns })
+        marks.set(set.key, active?.key === set.key ? { columns, currentColumn: active.column } : { columns })
       }
     } else if (tab.text) {
       const active = this.locate(tab)
       for (const grid of tab.grids) {
         partial ||= !grid.complete
         approximate ||= grid.approximate
-        const index = entryIndex(sets, grid.key, grid.index)
-        if (grid.rows.length === 0 || index < 0) continue
+        if (grid.rows.length === 0 || !shown.has(grid.key)) continue
         const cells = new Set<number>()
         for (let k = 0; k < grid.rows.length; k++) cells.add(cellKey(grid.rows[k], grid.columns[k]))
         const at = active?.grid === grid ? active.local - grid.first : -1
         const current = at >= 0 && at < grid.rows.length ? { row: grid.rows[at], column: grid.columns[at] } : undefined
-        marks.set(index, current ? { handle: grid.handle, cells, current } : { handle: grid.handle, cells })
+        marks.set(grid.key, current ? { handle: grid.handle, cells, current } : { handle: grid.handle, cells })
       }
     }
     tab.published = {
       text: tab.text, mode: tab.mode, status: tab.status, total: this.total(tab), current: tab.current, columns: tab.columnCount, partial, approximate,
-      ...tab.error ? { error: tab.error } : {}, marks, reveal: tab.reveal, revealIndex: tab.revealIndex, revealSelect: tab.revealSelect, focus: tab.focus,
+      ...tab.error ? { error: tab.error } : {}, marks, reveal: tab.reveal, ...revealEntry === undefined ? {} : { revealEntry }, revealSelect: tab.revealSelect, focus: tab.focus,
       announcement: tab.announcement
     }
     this.announce(tabId, tab, tab.published)

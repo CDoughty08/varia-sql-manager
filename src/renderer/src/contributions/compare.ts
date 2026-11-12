@@ -10,11 +10,11 @@ import { focusedOutput } from './output'
 export function compareContribution({ commands, compare, menuTargets }: Pick<Workbench, 'commands' | 'compare' | 'menuTargets'>): Disposable {
   const targetOf = (args?: CommandArgs) => {
     const target = outputOf(args) ?? (args?.target ? undefined : focusedOutput(menuTargets))
-    return target?.view === 'grid' && compare.canCompare(target.tabId, target.resultIndex) ? target : undefined
+    return target?.view === 'grid' && target.entry !== undefined && compare.canCompare(target.tabId, target.entry) ? { tabId: target.tabId, key: target.entry } : undefined
   }
   const command = (exact: boolean) => ({
     when: (args?: CommandArgs) => !!targetOf(args),
-    run: async (args?: CommandArgs) => { const target = targetOf(args); if (target) await compare.compare(target.tabId, target.resultIndex, { exact }) }
+    run: async (args?: CommandArgs) => { const target = targetOf(args); if (target) await compare.compare(target.tabId, target.key, { exact }) }
   })
   const registrations = [commands.register('output.compareWithPrevious', command(false)), commands.register('output.compareWithPreviousExact', command(true))]
   return { dispose: () => { for (const registration of registrations) registration.dispose() } }

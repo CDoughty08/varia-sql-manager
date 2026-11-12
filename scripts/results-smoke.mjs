@@ -14,7 +14,7 @@ import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, anyResultGrid, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice,
   jobProgress, kindIcon, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
-  outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, resultsToolbar, resultToggle, statusBar,
+  outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, resultGrid, resultSplitters, resultsToolbar, resultToggle, statusBar,
   pivotPanel, profileCard, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, unsavedMark
 } from './fixtures/ui.mjs'
 
@@ -47,12 +47,13 @@ const setClipboard = text => application.evaluate(({ clipboard }, value) => clip
 const status = () => outputStatus(page)
 const queryTabs = () => documentTabs(page).getByRole('tab')
 const server = () => page.getByLabel('Query server', { exact: true })
-const grid = (index = 0) => page.locator(`[data-result-grid][data-result-index="${index}"]`)
-const scroller = (index = 0) => grid(index).locator(gridPart.scroller)
+/** A result's grid by the result's name, as its accessible name starts ("Result 2 of 3, …"). */
+const grid = (name = 'Result 1') => resultGrid(page, name)
+const scroller = (name = 'Result 1') => grid(name).locator(gridPart.scroller)
 const cell = (row, column, of = grid()) => gridCell(of, row, column)
 const header = (name, of = grid()) => of.getByRole('columnheader', { name, exact: true })
 /** A grid's strip, beside the grid rather than inside its table structure. */
-const strip = (index = 0) => page.locator(gridPart.frame).filter({ has: grid(index) }).locator(gridPart.strip)
+const strip = (name = 'Result 1') => grid(name).locator('xpath=..').locator(gridPart.strip)
 /** A row's number as drawn in the sticky row-number column (screen readers read the row's own header instead). */
 const rowNumber = (row, of = grid()) => of.locator(gridPart.rowNumber + ':visible').filter({ hasText: new RegExp(`^${row + 1}$`) })
 const outputTab = name => outputView(page, name)
@@ -75,7 +76,7 @@ async function run(sql, { running = false } = {}) {
   else await expect(status()).toContainText(/^Completed( with errors)? · /)
 }
 /** The active cell as screen readers find it: the element `aria-activedescendant` names, with its row and column. */
-const active = (index = 0) => grid(index).evaluate(root => {
+const active = (name = 'Result 1') => grid(name).evaluate(root => {
   const id = root.getAttribute('aria-activedescendant'), element = id ? document.getElementById(id) : null
   if (!element || !root.contains(element)) return { id, resolved: false }
   return {
@@ -84,7 +85,7 @@ const active = (index = 0) => grid(index).evaluate(root => {
   }
 })
 /** Records the active cell's name each time aria-activedescendant moves, as a screen reader reads it then. */
-const watchActiveNames = (index = 0) => grid(index).evaluate(root => {
+const watchActiveNames = (name = 'Result 1') => grid(name).evaluate(root => {
   window.__variaActiveObserver?.disconnect()
   window.__variaActiveNames = []
   window.__variaActiveObserver = new MutationObserver(() => {
@@ -95,15 +96,15 @@ const watchActiveNames = (index = 0) => grid(index).evaluate(root => {
 })
 const activeNames = () => page.evaluate(() => { window.__variaActiveObserver.disconnect(); return window.__variaActiveNames })
 /** The active cell once keys and drags are painted: its row and the scroll position no longer change. */
-async function settled(index = 0) {
-  const position = async () => JSON.stringify([(await active(index)).row, await scroller(index).evaluate(element => element.scrollTop)])
+async function settled(name = 'Result 1') {
+  const position = async () => JSON.stringify([(await active(name)).row, await scroller(name).evaluate(element => element.scrollTop)])
   let previous
   await expect.poll(async () => { const now = await position(), same = now === previous; previous = now; return same }, { intervals: [100] }).toBe(true)
-  return active(index)
+  return active(name)
 }
 /** The first and last row numbers drawn inside the grid's body; NaN, which fails every comparison, before a scroll's rows are drawn
  * (Math.min of none is Infinity, which passed `toBeGreaterThan` polls before any row was there). */
-const visibleRows = (index = 0) => grid(index).evaluate((root, gridPart) => {
+const visibleRows = (name = 'Result 1') => grid(name).evaluate((root, gridPart) => {
   const body = root.querySelector(gridPart.scroller).getBoundingClientRect(), head = root.querySelector(gridPart.head).getBoundingClientRect()
   const numbers = [...root.querySelectorAll(gridPart.row)].filter(row => row.style.display !== 'none').filter(row => {
     const box = row.getBoundingClientRect()
@@ -112,15 +113,15 @@ const visibleRows = (index = 0) => grid(index).evaluate((root, gridPart) => {
   return numbers.length === 0 ? [NaN, NaN] : [Math.min(...numbers), Math.max(...numbers)]
 }, gridPart)
 /** The shown rows' numbers in DOM order, which browse-mode screen readers follow: ascending, whatever was scrolled. */
-const rowOrder = (index = 0) => grid(index).evaluate((root, row) => [...root.querySelectorAll(row)].filter(item => item.style.display !== 'none').map(item => Number(item.getAttribute('aria-rowindex'))), gridPart.row)
+const rowOrder = (name = 'Result 1') => grid(name).evaluate((root, row) => [...root.querySelectorAll(row)].filter(item => item.style.display !== 'none').map(item => Number(item.getAttribute('aria-rowindex'))), gridPart.row)
 const ascending = values => values.length > 0 && values.every((value, index) => index === 0 || value > values[index - 1])
 /** True when the element is drawn inside the grid's body, not scrolled away. */
-const insideGrid = (locator, index = 0) => locator.evaluate((element, { gridIndex, scroller }) => {
-  const root = document.querySelector(`[data-result-grid][data-result-index="${gridIndex}"]`), box = element.getBoundingClientRect(), body = root.querySelector(scroller).getBoundingClientRect()
+const insideGrid = locator => locator.evaluate((element, { grid, scroller }) => {
+  const root = element.closest(grid), box = element.getBoundingClientRect(), body = root.querySelector(scroller).getBoundingClientRect()
   return element.style.display !== 'none' && box.left >= body.left - 1 && box.right <= body.right + 1 && box.top >= body.top - 1 && box.bottom <= body.bottom + 1
-}, { gridIndex: index, scroller: gridPart.scroller })
+}, { grid: gridPart.root, scroller: gridPart.scroller })
 /** How many cells inside the grid's body are still waiting for their rows. */
-const loadingInView = (index = 0) => grid(index).evaluate((root, gridPart) => {
+const loadingInView = (name = 'Result 1') => grid(name).evaluate((root, gridPart) => {
   const body = root.querySelector(gridPart.scroller).getBoundingClientRect(), head = root.querySelector(gridPart.head).getBoundingClientRect()
   return [...root.querySelectorAll(gridPart.loadingCell)].filter(cell => {
     const box = cell.getBoundingClientRect()
@@ -391,7 +392,7 @@ try {
   expect(Number(range[1])).toBeGreaterThan(0)
   expect(Math.abs(Number(range[1]) + Number(range[2]) - upper - lower)).toBeLessThanOrEqual(2)
   expect(range[3]).toBe(`Result 1 height ${range[0]} pixels`)
-  await grid(0).focus()
+  await grid().focus()
   await page.keyboard.press('Tab')
   await expect(splitter).toBeFocused()
   // In forced colors (Windows High Contrast) a splitter is drawn, and its focus shows.
@@ -399,11 +400,11 @@ try {
   await page.emulateMedia({ forcedColors: 'active' })
   const splitterStyle = () => splitter.evaluate(element => { const style = getComputedStyle(element); return { background: style.backgroundColor, outline: style.outlineStyle } })
   // The grid's own background is forced to the system's Canvas.
-  const canvas = await grid(0).evaluate(element => getComputedStyle(element).backgroundColor)
+  const canvas = await grid().evaluate(element => getComputedStyle(element).backgroundColor)
   const focusedSplitter = await splitterStyle()
   expect(focusedSplitter.background).not.toBe(canvas)
   expect(focusedSplitter.outline).toBe('solid')
-  await grid(0).focus()
+  await grid().focus()
   expect(await splitterStyle()).not.toEqual(focusedSplitter)
   expect((await splitterStyle()).background).not.toBe(canvas)
   await page.emulateMedia({ forcedColors: null })
@@ -411,11 +412,11 @@ try {
   await expect(splitter).toBeFocused()
   // The next set's caption comes first: its Collapse button and Save Results As, then its grid.
   await page.keyboard.press('Tab')
-  await expect(resultToggle(page, 1)).toBeFocused()
+  await expect(resultToggle(page, 'Result 2')).toBeFocused()
   await page.keyboard.press('Tab')
   await expect(outputPane(page).getByRole('button', { name: 'Save Result 2 As…', exact: true })).toBeFocused()
   await page.keyboard.press('Tab')
-  await expect(grid(1)).toBeFocused()
+  await expect(grid('Result 2')).toBeFocused()
   await measured('a thousand stacked sets', async () => {
     await run('-- varia-fake: sets=M1*1000')
     await expect(outputTab(/^Results/)).toContainText('1000')
@@ -450,10 +451,10 @@ try {
   await expect(captions.nth(0)).toContainText('Result 1')
   await expect(captions.nth(0)).toContainText('3 rows · 7 columns')
   await expect(captions.nth(1)).toContainText('2,000 rows · 8 columns')
-  await expect(resultToggle(page, 0)).toHaveAttribute('aria-expanded', 'true')
+  await expect(resultToggle(page)).toHaveAttribute('aria-expanded', 'true')
   const fitted = async () => {
     const [small, large] = await heights()
-    const shown = await scroller(0).evaluate(element => element.scrollHeight <= element.clientHeight + 1)
+    const shown = await scroller().evaluate(element => element.scrollHeight <= element.clientHeight + 1)
     const stack = await page.locator(part.resultStack).evaluate(element => element.scrollHeight <= element.clientHeight + 1)
     return { smaller: small < large, shown, stack }
   }
@@ -461,8 +462,8 @@ try {
   await expect.poll(fitted).toEqual({ smaller: true, shown: true, stack: true })
   // Collapsing a set leaves its caption; its grid goes and the other set grows; expanding brings it back.
   const [, before] = await heights()
-  await resultToggle(page, 0).click()
-  await expect(resultToggle(page, 0)).toHaveAttribute('aria-expanded', 'false')
+  await resultToggle(page).click()
+  await expect(resultToggle(page)).toHaveAttribute('aria-expanded', 'false')
   await expect(page.locator('[data-result-grid]')).toHaveCount(1)
   await expect.poll(async () => (await heights())[0]).toBe(await captions.nth(0).evaluate(element => element.getBoundingClientRect().height))
   await expect.poll(async () => (await heights())[1]).toBeGreaterThan(before)
@@ -477,7 +478,7 @@ try {
   await page.mouse.move(line.x + 40, line.y + line.height / 2 + 30, { steps: 3 })
   await page.mouse.up()
   expect(await heights()).toEqual(collapsedHeights)
-  await resultToggle(page, 0).click()
+  await resultToggle(page).click()
   await expect(page.locator('[data-result-grid]')).toHaveCount(2)
   await expect.poll(fitted).toEqual({ smaller: true, shown: true, stack: true })
   // The 3-row set is shorter than four rows: ArrowUp on the splitter below it keeps it at its rows (it never grows), and
@@ -496,14 +497,14 @@ try {
   await page.keyboard.press('Enter')
   await expect.poll(async () => (await heights())[0]).toBe(sized[0])
   // Headers show each column's SQL type, drawn after the name and kept out of its accessible name.
-  await expect(header('id', grid(1))).toHaveCount(1)
-  await expect(header('id', grid(1)).locator(gridPart.columnType)).toHaveText('int')
-  await expect(header('amount', grid(1)).locator(gridPart.columnType)).toHaveText('decimal(18,2)')
-  expect((await computed(header('amount', grid(1)).locator(gridPart.columnType))).color).toBe(await tokenColor('resultsGrid.headerDescriptionForeground'))
+  await expect(header('id', grid('Result 2'))).toHaveCount(1)
+  await expect(header('id', grid('Result 2')).locator(gridPart.columnType)).toHaveText('int')
+  await expect(header('amount', grid('Result 2')).locator(gridPart.columnType)).toHaveText('decimal(18,2)')
+  expect((await computed(header('amount', grid('Result 2')).locator(gridPart.columnType))).color).toBe(await tokenColor('resultsGrid.headerDescriptionForeground'))
   expect((await page.evaluate(() => window.varia.updateSettings({ 'queryResults.grid.showColumnTypes': false }))).ok).toBe(true)
-  await expect(header('id', grid(1)).locator(gridPart.columnType)).toHaveText('')
+  await expect(header('id', grid('Result 2')).locator(gridPart.columnType)).toHaveText('')
   expect((await page.evaluate(() => window.varia.updateSettings({ 'queryResults.grid.showColumnTypes': null }))).ok).toBe(true)
-  await expect(header('id', grid(1)).locator(gridPart.columnType)).toHaveText('int')
+  await expect(header('id', grid('Result 2')).locator(gridPart.columnType)).toHaveText('int')
   // Closed, the strip stays closed for the run; the next run's PRINT output opens it again.
   await messagesStrip(page).click()
   await expect(messagesStrip(page)).toHaveAttribute('aria-expanded', 'false')
@@ -645,7 +646,7 @@ try {
   await application.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('layout.reset').click())
   /** Whether an element lies inside the output view, and how many of a grid's data rows show whole in the stack. */
   const inView = locator => locator.evaluate((element, view) => { const box = element.getBoundingClientRect(), outer = element.closest(view).getBoundingClientRect(); return box.height > 0 && box.top >= outer.top - 0.5 && box.bottom <= outer.bottom + 0.5 }, '[role="tabpanel"]')
-  const rowsShown = (index = 0) => grid(index).evaluate((root, stack) => {
+  const rowsShown = (name = 'Result 1') => grid(name).evaluate((root, stack) => {
     const scroller = root.querySelector('[tabindex="-1"]').getBoundingClientRect(), view = root.closest(stack).getBoundingClientRect()
     const top = Math.max(scroller.top, view.top) + 22, bottom = Math.min(scroller.bottom, view.bottom)
     return [...root.querySelectorAll('[role="row"]')].filter(row => { const box = row.getBoundingClientRect(); return box.height > 0 && row.querySelector('[role="gridcell"]') && box.top >= top - 0.5 && box.bottom <= bottom + 0.5 }).length
@@ -656,7 +657,7 @@ try {
     await expect(messagesStrip(page)).toContainText(/ · 1 error/)
     await expect(messagesStrip(page)).toContainText('Fake error 1.')
     expect(await inView(messagesStrip(page))).toBe(true)
-    await expect.poll(() => rowsShown(0)).toBeGreaterThanOrEqual(1)
+    await expect.poll(() => rowsShown()).toBeGreaterThanOrEqual(1)
   }
   await page.screenshot({ path: resolve('artifacts', 'results-default-split.png') })
   // Opened by hand it takes at least a few lines and shows the first error, not the tail.
@@ -673,7 +674,7 @@ try {
   expect(Math.abs(await sizeResultStack(page, 26 + 22 + 3 * 20 + 2) - (26 + 22 + 3 * 20 + 2))).toBeLessThanOrEqual(1)
   await expect.poll(() => page.locator(part.resultStack).evaluate(stack => stack.clientHeight)).toBeLessThan(26 + 22 + 4 * 20 + 2)
   await expect(page.locator(part.resultCaption)).toHaveCount(0)
-  await expect.poll(() => rowsShown(0)).toBeGreaterThanOrEqual(1)
+  await expect.poll(() => rowsShown()).toBeGreaterThanOrEqual(1)
   await resize(...fullSize)
   await enlargeOutput(page)
   console.log('Results checks: at the default split the Messages strip yields to the grids and shows the first error in its line.')
@@ -1093,7 +1094,7 @@ try {
   expect(await calls('query.session.close')).toBe(sessionCloses)
   // Enter on a plan cell opens it as an execution plan, in XML.
   await run('SELECT 1 -- XML_PLAN_FIXTURE')
-  await cell(0, 0, grid(1)).click({ modifiers: ['Shift'] })
+  await cell(0, 0, grid('Result 2')).click({ modifiers: ['Shift'] })
   await expect(queryTabs()).toHaveCount(1)
   await page.keyboard.press('Enter')
   // The session's second plan document: the Execution plan view opened the first (section 4b).
@@ -1520,11 +1521,11 @@ try {
   await pivoting.getByRole('combobox', { name: 'Value 1 aggregate', exact: true }).selectOption({ label: 'Count' })
   await pivoting.getByRole('combobox', { name: 'Value 1 column', exact: true }).selectOption({ label: '(Rows)' })
   await pivoting.getByRole('button', { name: 'Build Pivot', exact: true }).click()
-  const pivoted = grid(1)
+  const pivoted = grid('Pivot of Result 1')
   await expect(cell(1, 2, pivoted)).toHaveText('99')
   for (const name of ['active', 'Count of rows', 'Max of id']) await expect(pivoted.getByRole('columnheader', { name: new RegExp(`^${name}`) })).toHaveCount(1)
   expect(await Promise.all([0, 1].map(row => Promise.all([0, 1, 2].map(column => cell(row, column, pivoted).textContent()))))).toEqual([['0', '66', '98'], ['1', '34', '99']])
-  await expect(strip(1)).toContainText('Pivot of Result 1: 100 rows in 2 row groups.')
+  await expect(strip('Pivot of Result 1')).toContainText('Pivot of Result 1: 100 rows in 2 row groups.')
   await expect(page.getByRole('button', { name: 'Pivot of Result 1', exact: true })).toBeVisible()
   await expect(pivoting.getByRole('combobox', { name: 'Pivot source', exact: true }).getByRole('option', { name: 'Pivot of Result 1', exact: true })).toHaveCount(1)
   await page.screenshot({ path: resolve('artifacts', 'results-pivot.png') })
@@ -1560,12 +1561,12 @@ try {
   // A window narrower than 1180 pixels (Windows CI's display) hides the toolbar's Transpose; the grid's menu has it too.
   if (await show('Transpose').isVisible()) await show('Transpose').click()
   else await transposeMenu(0, 0, 'All Rows')
-  const transposed = grid(1)
+  const transposed = grid('Result 2')
   await expect(cell(0, 0, transposed)).toHaveText('id')
   expect(await Promise.all([0, 1, 2].map(column => cell(0, column, transposed).textContent()))).toEqual(['id', '0', '1'])
   for (const name of ['Column', 'Row 1', 'Row 2']) await expect(transposed.getByRole('columnheader', { name: new RegExp(`^${name}\\b`) }).first()).toBeVisible()
   await expect(cell(6, 0, transposed)).toHaveText('active')
-  await expect(strip(1)).toContainText('Transpose of Result 1: 8 columns as rows, 100 rows as columns.')
+  await expect(strip('Result 2')).toContainText('Transpose of Result 1: 8 columns as rows, 100 rows as columns.')
   await expect(page.getByRole('button', { name: 'Transpose of Result 1', exact: true })).toBeVisible()
   await page.screenshot({ path: resolve('artifacts', 'results-transpose.png') })
   // The transpose sorts as any result: its Column column ascending puts active first.
@@ -1577,10 +1578,10 @@ try {
   await cell(2, 0).click()
   await cell(3, 0).click({ modifiers: ['Shift'] })
   await transposeMenu(3, 0, 'Selected Rows')
-  const selectedRows = grid(2)
+  const selectedRows = grid('Result 3')
   await expect(cell(0, 1, selectedRows)).toHaveText('2')
   expect(await Promise.all([0, 1, 2].map(column => cell(0, column, selectedRows).textContent()))).toEqual(['id', '2', '3'])
-  await expect(strip(2)).toContainText('Transpose of Result 1: 8 columns as rows, 2 selected rows as columns.')
+  await expect(strip('Result 3')).toContainText('Transpose of Result 1: 8 columns as rows, 2 selected rows as columns.')
   // Using Column as Headers names the columns by the name column's values. Running again releases the transposes first,
   // so the new one is the second set, in view.
   await run('-- varia-fake: sets=W1*100')
@@ -1588,16 +1589,16 @@ try {
   await expect(anyResultGrid(page)).toHaveCount(1)
   await cell(0, 1).click()
   await transposeMenu(0, 1, 'Using Column as Headers')
-  const named = grid(1)
+  const named = grid('Result 2')
   await expect(cell(0, 1, named)).toHaveText('0')
   await expect(named.getByRole('columnheader', { name: new RegExp(`^${firstName}`) })).toHaveCount(1)
-  await expect(strip(1)).toContainText(', named by name.')
+  await expect(strip('Result 2')).toContainText(', named by name.')
   // Past 4,095 rows: the first ones, and the strip says how to transpose the others.
   await run('-- varia-fake: sets=W1*5000')
   await settled()
   await expect(anyResultGrid(page)).toHaveCount(1)
   await transposeMenu(0, 0, 'All Rows')
-  await expect(strip(1)).toContainText('Transposed the first 4,095 of 5,000 rows; filter or select rows to transpose others.')
+  await expect(strip('Result 2')).toContainText('Transposed the first 4,095 of 5,000 rows; filter or select rows to transpose others.')
   await run('-- varia-fake: sets=W1*100')
   await settled()
   await expect(anyResultGrid(page)).toHaveCount(1)
@@ -2020,7 +2021,7 @@ try {
   await expect(searchCount).toHaveText('1 of 24')
   await page.keyboard.press('Shift+Enter')
   await expect(searchCount).toHaveText('24 of 24')
-  const lastMatch = grid(2).locator(gridPart.searchCurrent).filter({ visible: true })
+  const lastMatch = grid('Result 3').locator(gridPart.searchCurrent).filter({ visible: true })
   await expect(lastMatch).toHaveText('complete 19')
   await expect(lastMatch).toBeInViewport({ ratio: 1 })
   await searchBox.press('Escape')
@@ -2037,10 +2038,10 @@ try {
   // unified diff as a third result: a changed row as its old row (−) then its new one (+) with the changed price marked, a
   // name changed only in case underlined (equal by the collation), a removed and an added row, a row of context between.
   await run('SELECT * FROM Items -- DIFF_FIXTURE')
-  await expect(cell(3, 0, grid(1))).toHaveText('5')
-  await cell(0, 0, grid(1)).click({ button: 'right' })
+  await expect(cell(3, 0, grid('Result 2'))).toHaveText('5')
+  await cell(0, 0, grid('Result 2')).click({ button: 'right' })
   await outputMenu.getByRole('menuitem', { name: 'Compare with Previous Result', exact: true }).click()
-  const diff = grid(2)
+  const diff = grid('Result 3')
   await expect(cell(5, 3, diff)).toHaveText('5')
   for (const name of ['Change', 'R1', 'R2', 'ItemId', 'Name', 'Price']) await expect(diff.getByRole('columnheader', { name: new RegExp(`^${name}`) })).toHaveCount(1)
   const diffRows = () => Promise.all([0, 1, 2, 3, 4, 5].map(row => Promise.all([0, 1, 2, 3, 4, 5].map(column => cell(row, column, diff).textContent()))))
@@ -2058,7 +2059,7 @@ try {
   await expect(cell(0, 5, diff).and(diff.locator(gridPart.changedCell))).toHaveCount(1)
   await expect(cell(1, 5, diff).and(diff.locator(gridPart.changedCell))).toHaveCount(1)
   await expect(cell(2, 4, diff).and(diff.locator(gridPart.softCell))).toHaveCount(1)
-  await expect(strip(2)).toContainText('Result 1 \u2192 Result 2, rows matched by ItemId: 1 changed row, 1 added row, 1 removed row, 2 unchanged.')
+  await expect(strip('Result 3')).toContainText('Result 1 \u2192 Result 2, rows matched by ItemId: 1 changed row, 1 added row, 1 removed row, 2 unchanged.')
   await expect(page.getByText('Differences: Result 1 \u2192 Result 2', { exact: true })).toBeVisible()
   // The active cell names a changed value and its row's kind for screen readers.
   await cell(1, 5, diff).click()
