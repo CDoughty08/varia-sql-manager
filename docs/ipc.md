@@ -1371,7 +1371,8 @@ itself by view position.
   fixed-width text, so 8 bytes a row are the whole value, as a number's are; a column with a cell written any other way,
   or of another width than the first, is ordered by its text's bytes instead (the same order).
 - **Text and bytes.** A key ordered by bytes (a collation's sort key for collated text; the value's own bytes for
-  `_BIN` and `_BIN2` text, binary values and any other type's text) first samples 4,096 of its rows.
+  `_BIN` and `_BIN2` text, binary values and any other type's text) first samples 4,096 of its rows, scattered rather than
+  evenly spaced, so that values lying in runs (rows sorted by the column) or coming round at a period are still seen to repeat.
   Where values repeat in the sample it ranks them: each distinct value is numbered once (65,536 at most, or one in 32
   rows; their bytes taken from the query budget) and a row keeps its value's rank, so comparisons are of integers.
   Otherwise it keeps 8 bytes of each value after the bytes seven in eight of the sampled values start with (a shared
