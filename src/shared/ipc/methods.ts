@@ -101,7 +101,6 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'results.profile': { kind: 'unary', lane: 'results', deadlineMs: 120_000 },
   // Groups and aggregates stored rows in memory off the frame loop, then stores the pivot as a result; Stop cancels it.
   'results.pivot': { kind: 'unary', lane: 'results', deadlineMs: 120_000 },
-  // Copies stored cells into a new stored result off the frame loop, columns as rows; Stop cancels it.
   // Groups a column's stored values in memory off the frame loop, as a filter compares them; a newer request cancels it.
   'results.distinct': { kind: 'unary', lane: 'results', deadlineMs: 120_000 },
   // A window of a kept snapshot; a new search scans its values once, in memory, off the frame loop.

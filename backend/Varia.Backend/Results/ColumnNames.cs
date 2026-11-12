@@ -23,8 +23,5 @@ internal static class ColumnNames
         }
     }
 
-    /// <summary>Distinct names keeping the columns' order: earlier columns keep theirs.</summary>
-    public static void Unique(List<ResultColumn> columns) => Unique(columns, Enumerable.Range(0, columns.Count));
-
     private static string Numbered(string name, int n) => name + " (" + n.ToString(CultureInfo.InvariantCulture) + ")";
 }

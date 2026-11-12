@@ -345,6 +345,9 @@ describe('ResultClient', () => {
       { rows: [0, 1, 2, 3, 4, 5, 6, 7, 8], values: [{ aggregate: 'count' as const }] },
       { rows: [], values: Array.from({ length: 17 }, () => ({ aggregate: 'count' as const })) }
     ]) await expect(handle.pivot(spec)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    // A transposed grid is drawn from its result: neither a result nor a view can be asked for a stored one.
+    expect(handle).not.toHaveProperty('transpose')
+    expect(view).not.toHaveProperty('transpose')
     expect(worker().fromWorker.length).toBe(pivotBefore)
     const pivoting = view.pivot({ rows: [], column: 0, values: [{ aggregate: 'max', column: 0 }] })
     const pivotAnswer = { descriptor: descriptor({ resultId: 11, kind: 'pivot' }), rows: 10, rowGroups: 2, columnGroups: 3, approximate: false }

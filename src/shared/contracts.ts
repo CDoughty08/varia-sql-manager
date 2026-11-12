@@ -512,7 +512,6 @@ export interface PortMethods {
   'results.profile': { params: ResultsProfileParams; result: ResultsProfileResult }
   /** A pivot of a result's rows or a view's, grouped by collation, stored as a new result. */
   'results.pivot': { params: ResultsPivotParams; result: ResultsPivotResult }
-  /** A result's columns as rows and its rows (a view's, or the selected ones) as columns, stored as a new result. */
   /** A column's distinct values and their counts over a result's rows or a view's, for the header funnel's checklist. */
   'results.distinct': { params: ResultsDistinctParams; result: ResultsDistinctResult }
   /** A window of a distinct snapshot's values, narrowed to a search's matches when one is given. */

@@ -319,7 +319,7 @@ Consumers to move off position (PR 2's scope):
   `ResultGrid`, `ColumnFilterPopover`, `ResultsStack` (weights, collapsed, mounted, narrow, focused, splitter labels,
   `settledContent`).
 - Results tools: search (matches, names, reveal), `HighlightsService` (keyed by ordinal so highlights follow re-runs),
-  `ColumnProfilePanel`, `PivotService`, `PivotPanel`, `TransposeService`, `CompareService`, `OutputPane`'s profile target.
+  `ColumnProfilePanel`, `PivotService`, `PivotPanel`, `TransposeService` (until PR 8), `CompareService`, `OutputPane`'s profile target.
 - Commands and menus: `core/types.ts` cell targets, `services/result-selection.ts`, `menus/targets.ts`,
   `contributions/output.ts`, `pivot.ts`, `transpose.ts`, `compare.ts`, `highlights.ts`; `plans/ResultPlans.tsx`.
 - Tests that assert positions change with it and are listed in the PR: `grid-selection`, `grid-stack`, `live-grid`,
@@ -523,9 +523,8 @@ Outcome, accepted by the owner:
      - Highlights after an orientation change were lost and are fixed, with no automated check until PR 7's smoke
        steps.
      - Not done: changing the shared width by hand, and a pass with a screen reader; see Follow-ups.
-6. **Transposed copy and save.** In progress.
-7. **Commands switch to the orientation.** In progress. If it merges before PR 6, Copy and Save of a grid turned by
-   command still go through the stored path, so the two PRs say which order they need. The three transpose commands, the header option, the cap's strip, the Find Next
+6. **Transposed copy and save. Merged as #448.**
+7. **Commands switch to the orientation. Merged as #449.** The three transpose commands, the header option, the cap's strip, the Find Next
    message past the cap, a context key for "this grid is transposed" so Transpose reads as a toggle, smoke steps.
 8. **Remove the stored transpose.** After PRs 6 and 7. What it settled or left:
    - Gone: `results.transpose` (`RpcMethods`, `methodPolicies`, the port request and answer schemas, `ResultsPortHost`,
@@ -536,7 +535,9 @@ Outcome, accepted by the owner:
    - Kept: `limits.transpose.maxRows` (the 4,095 rows a transposed grid draws, a transposed copy or save writes and a
      `keepRows` filter names), now the limit's only member (`maxCells` and `maxRanges` went with the method), and not
      renamed; `ResultTextWriter.MaxTransposedRows`, which `ViewSorter.MaxKeepRows` now reads directly; `RowAccess`,
-     `ViewSorter.Merge`, `ColumnNames.Unique` and `PivotOutput.GroupName`, which the text writer, filters and pivots use.
+     `ViewSorter.Merge`, `ColumnNames.Unique` (the overload a pivot calls) and `PivotOutput.GroupName`, which the text writer,
+     filters and pivots use. `GroupName`'s hex, 128-character cut and blank rules were checked only through a transpose's
+     header column; those checks moved to `PivotChecks.cs`.
    - The backend answers `results.transpose` `METHOD_NOT_FOUND` (`HostChecks`' retired methods) and the port refuses a
      `transpose` request as invalid; `tests/results-transpose.test.ts` now pins that the method, the request, the kind
      and the service stay gone. No protocol version change: main and the backend ship together.
