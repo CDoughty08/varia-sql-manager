@@ -6,7 +6,7 @@ with `node scripts/ci-timings.mjs` (add `--steps` for per-step times) before and
 ## Layout
 
 - CI (`.github/workflows/ci.yml`) runs on every PR, drafts included (any base branch, so stacked PRs are tested), every
-  push to main and manual runs (a newer push cancels the older run of its PR, or of main; manual runs always finish); the
+  push to main and manual runs (a newer PR push cancels that PR's older run; main pushes and manual runs always finish); the
   repository is public, so its minutes cost nothing, but GitHub runs only 20 of its jobs
   at once (5 on macOS). A scope job classifies the complete change before the 13 full-validation jobs start together;
   a final `CI result` job checks their outcomes. Each validation job builds
@@ -71,9 +71,18 @@ download) and runs source-only vitest, preserving generated-document, README and
 Release builds use the same Git classifier in a short Linux job on main pushes and skip packaging for docs; their PR packaging-input filter is unchanged, and tags, manual
 runs and the weekly Intel package are unaffected. There is no app behavior change, so no README or changelog entry is needed.
 
-The scope job uses a full Git checkout and an untruncated, NUL-delimited diff: PR merge-base to head (including stacked
+The scope job fetches full Git history but checks out only its classifier, then reads an untruncated, NUL-delimited diff: PR merge-base to head (including stacked
 PRs and earlier commits), or push before to after. Renames include both old and new paths. Unknown/empty changes or missing
-history fall back to full CI. Manual runs always execute the selected full or focused regression suite.
+history fall back to full CI. Manual runs execute the selected suite: `regression-suite=docs` exercises the exact documentation
+lane on any branch, `none` runs full CI, and the other choices run focused Electron regressions. Scope and result jobs use
+the Ubuntu runner's bundled Node for their dependency-free scripts; application test jobs still select Node 24 explicitly.
+The result job checks out only its script.
+
+Only PR updates cancel superseded CI and packaging runs. Every main push has its own concurrency group, so a docs-only
+push cannot cancel a code push's installers, packaged smoke or main-only 1024x768 repeats. Unique groups also preserve
+pending main runs: a shared group with `cancel-in-progress: false` could still discard an older pending code run.
+Tag publication explicitly overrides the implicit ancestor-success condition and requires both packaging jobs to succeed,
+so the intentionally skipped packaging-scope job cannot suppress publication or permit publishing failed packages.
 
 **Required-check rollout:** after this PR's full checks pass, replace the main ruleset's 13 individual matrix check
 requirements with the single GitHub Actions check `CI result`. Keep strict/up-to-date checking enabled. The result job
@@ -94,6 +103,9 @@ result), plus one packaging-scope job on its main push with no installers built.
 296 test files locally without Electron installed in **35.0 s** (Windows; not a GitHub measurement). Code changes add the two short routing/result jobs to the existing 13;
 measure their overhead and the documentation lane on GitHub after deployment rather than treating these baseline savings
 as measured results. Main pushes also add the short packaging-scope job.
+PR #431's original scope job took 8 seconds on GitHub (including a 4-second checkout). The follow-up removes setup-node
+from the routing jobs and checks out only their scripts. The manual Linux documentation run and updated timings are
+recorded in [PR #431](https://github.com/CDoughty08/varia-sql-manager/pull/431).
 
 ## Where the time goes (baseline, 2026-11-07)
 
@@ -151,7 +163,7 @@ the previous one, about 64 s of the 75.6 s. The waits:
 | `VARIA_TEST_SLOW_MS=<ms>` prints each offline or live .NET check reached later than that after the previous one (offline suites then run in one lane) | A tool for finding waits |
 | Smoke `suiteSeconds` refreshed from PR #166's run, after the idle timers went | Declared weights matched reality again: shards 338/336 s (Linux) and 342/340 s (Windows) against the 360 s budget, where the old weights had drifted 12 to 21% low. Main then added the 64 s Live Plan suite and a third Linux shard (about 250 s each) |
 | The Windows and macOS benchmarks run daily and by hand (`bench-desktop.yml`), not on every main push | 2 jobs (1 macOS) and about 5.7 runner-min off each of 9 to 20 main pushes a day, for one daily run |
-| A newer main push cancels the older main run (`ci.yml`'s concurrency), as pull requests already did | Up to 74 runner-min and 13 jobs per superseded main push; 30 of 73 main pushes came within 20 min of the previous one, so an estimated 1,000 to 2,000 slot-min a week. Each PR already tested its merge with main, and the newest main commit always gets a complete run. |
+| At PR #166, a newer main push cancelled the older main run. Superseded by documentation routing: main pushes now have unique groups so a docs push cannot discard code validation or packaging. | The original estimate was up to 74 runner-min per superseded push, but it depended on every subsequent main run repeating the complete work. |
 
 After these changes, a PR push that does not touch packaging runs 11 jobs (12 since main's third Linux smoke shard), an estimated 55 to 60 runner-min, and 1 macOS job (from 15
 jobs, 89 runner-min, 3 macOS). That is about a quarter fewer jobs and 30% fewer runner-minutes. Since queueing dominates,
@@ -238,7 +250,7 @@ and session prompts pressing F5 during a connection change.
 
 Savings are corrected figures from an adversarial review of each proposal against CI logs. "Owner" marks changes that
 contradict a rule written in CLAUDE.md, so the owner decides them (the owner chose to move the desktop benchmarks and
-cancel superseded main runs, now done).
+cancel superseded main runs at that time; documentation routing now preserves main runs as described above).
 
 1. **Settle vitest tests with `setImmediate`, not `setTimeout(0)` loops** (S). Windows rounds each timer to about 15.6 ms.
    ssis-tree-probe takes 16.7 s on Windows against 2.2 s on Linux (425 timer hops, about 34 ms each). 45 files use the
@@ -288,7 +300,7 @@ Considered and rejected (do not re-propose without new numbers):
 - **Caching `node_modules` or the Electron download.** `npm ci` from the npm cache takes 4 to 8 s on Linux. The 637 MB tree
   restores slower than that on Windows, and Electron downloads in 0.6 to 3.4 s.
 - **Skipping all checks for docs.** Generated docs, README and the published changelog have test assertions. The documentation
-  lane below retains source-only vitest checks while omitting builds and runtime checks.
+  lane above retains source-only vitest checks while omitting builds and runtime checks.
 - **Folding bench-linux into Check ubuntu.** `services:` cannot be conditional on a matrix that includes Windows and
   macOS, and the fold saves at most 1 runner-min.
 - **Path-filtering the live or smoke jobs.** A safe filter (anything under `src/`) skipped 0 of 40 recent PRs.
@@ -311,8 +323,9 @@ Considered and rejected (do not re-propose without new numbers):
   so upgrade or override the package (and add its floor to `tests/dependency-floors.test.ts`). Moderate and low ones only
   report: minimatch's GHSA-g3hv-75wg-m249 (a glob-pattern DoS) has no fix below 11.0.1, a major version under
   electron-builder's own dependencies, and its patterns come only from Varia's build configuration.
-- **Cancel superseded runs.** Every workflow a pull request triggers has a concurrency group keyed by `github.ref` with
-  `cancel-in-progress`, and so do main pushes. Tags and manual runs are never cancelled.
+- **Cancel superseded PR runs.** Every workflow a pull request triggers has a concurrency group keyed by `github.ref` with
+  `cancel-in-progress`. CI and Release builds use unique groups for main pushes, tags and manual runs so partial docs
+  validation cannot discard a preceding code push's running or pending work.
 - **Don't starve small runners.** CI's runners have 3 or 4 vCPUs. Running every check lane at once there made tsc 13 times
   slower and failed 1 to 3 s polls. Add work as a lane in a chain (`scripts/check.mjs`), and give waits that return as soon
   as their condition holds generous bounds.

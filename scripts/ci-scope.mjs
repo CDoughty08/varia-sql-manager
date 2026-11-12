@@ -21,7 +21,7 @@ export function changeRange(eventName, event) {
 }
 
 export function detectScope(eventName, event, { regressionSuite = 'none', diff = range => execFileSync('git', ['diff', '--name-only', '--no-renames', '-z', range, '--'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }), warn = console.warn } = {}) {
-  if (eventName === 'workflow_dispatch') return regressionSuite && regressionSuite !== 'none' ? 'regressions' : 'full'
+  if (eventName === 'workflow_dispatch') return regressionSuite === 'docs' ? 'docs' : regressionSuite && regressionSuite !== 'none' ? 'regressions' : 'full'
   const range = changeRange(eventName, event)
   if (!range) return 'full'
   try {

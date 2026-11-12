@@ -9,16 +9,15 @@ on:
   workflow_dispatch:
     inputs:
       regression-suite:
-        description: Focused regressions (none runs full CI; all runs Electron suites)
+        description: Suite (none runs full CI; docs runs documentation; all runs Electron suites)
         type: choice
-        options: [none, dialogs, results, tail, all, activity]
+        options: [none, docs, dialogs, results, tail, all, activity]
         default: none
 
 concurrency:
-  # A new push supersedes the earlier run of its pull request, or of main: each pull request already tested its merge with main,
-  # and main pushes often come minutes apart (30 of 73 within 20 minutes), so a superseded main run mostly repeats that work.
-  # The newest main commit always gets a complete run. Manual runs are never cancelled.
-  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' || github.event_name == 'push') && github.ref || github.run_id }}
+  # Only PR updates supersede earlier runs. A docs-only main push must not cancel a code push's main-only checks.
+  # Unique groups also preserve pending main runs; cancel-in-progress: false in a shared group would still replace them.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -31,8 +30,8 @@ env:
 # After the scope check, every validation job starts at once and builds what it needs itself: the checks, the live SQL Server checks, the smoke shards and
 # the benchmarks run side by side, so a failure in one hides nothing in the others and the run takes as long as its
 # longest job. Every code-changing pull request runs every platform, drafts included: the repository is public, so runners cost nothing.
-# What a public repository does pay in is concurrency (20 jobs at once across the account, 5 of them macOS), so a pull request
-# runs 13 jobs: a third Windows smoke shard keeps language-service coverage within the per-shard time budget; no job repeats
+# What a public repository does pay in is concurrency (20 jobs at once across the account, 5 of them macOS). A code-changing PR
+# runs 15 jobs: 13 validation jobs plus scope and result. A third Windows smoke shard keeps language-service coverage within the per-shard time budget; no job repeats
 # another's work. Report-only work stays off pull requests: Linux's 1024x768 repeats of suites the
 # Windows shards already run at that size run on main only, and the desktop benchmarks run daily (bench-desktop.yml).
 # Scope detection and the final required result add two short Linux jobs.
@@ -49,9 +48,8 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
+          sparse-checkout: scripts/ci-scope.mjs
+          sparse-checkout-cone-mode: false
       - name: Classify the complete change
         id: scope
         timeout-minutes: 1
@@ -419,9 +417,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
+          sparse-checkout: scripts/ci-result.mjs
+          sparse-checkout-cone-mode: false
       - name: Require every selected job to pass
         timeout-minutes: 1
         env:

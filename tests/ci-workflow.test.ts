@@ -75,6 +75,12 @@ describe('CI workflow', () => {
     const scope = workflow.get('scope')!, docs = workflow.get('docs')!, result = workflow.get('result')!
     expect(yaml).toContain('fetch-depth: 0')
     expect(scope.steps.some(step => step.run === 'node scripts/ci-scope.mjs')).toBe(true)
+    for (const name of ['scope', 'result']) {
+      const job = yaml.slice(yaml.indexOf(`\n  ${name}:`)).split(/\n {2}[\w-]+:/)[1]
+      expect(job, name).not.toContain('actions/setup-node')
+      expect(job, name).toContain(`sparse-checkout: scripts/ci-${name}.mjs`)
+    }
+    expect(yaml).toContain('options: [none, docs, dialogs, results, tail, all, activity]')
     expect(docs.needs).toBe('scope')
     expect(docs.if).toBe("needs.scope.outputs.mode == 'docs'")
     expect(docs.steps.map(step => step.run).filter(Boolean)).toEqual(['npm ci --ignore-scripts --no-audit --no-fund', "npx vitest run --exclude tests/backend-sidecar.test.ts --exclude 'tests/*-live.test.ts'"])
@@ -131,9 +137,9 @@ describe('CI workflow', () => {
     // Linux repeats at 1024x768 only on main: the Windows shards run those suites at that size on every pull request.
     for (const step of workflow.get('smoke-linux')!.steps.filter(step => /1024x768x24/.test(step.run))) expect(step.if, step.name).toMatch(/github\.event_name == 'push'/)
   })
-  it('cancels a superseded pull request or main run, never a manual one, and runs report-only benchmarks daily, not per push', () => {
+  it('cancels superseded PR runs but preserves every running and pending main push, and keeps desktop benchmarks daily', () => {
     const yaml = readFileSync('.github/workflows/ci.yml', 'utf8')
-    expect(yaml).toContain("group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' || github.event_name == 'push') && github.ref || github.run_id }}")
+    expect(yaml).toContain("group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}")
     expect(yaml).toMatch(/\n {2}cancel-in-progress: true\n/)
     const desktop = readFileSync('.github/workflows/bench-desktop.yml', 'utf8'), on = desktop.slice(desktop.indexOf('\non:'), desktop.indexOf('\nconcurrency:'))
     expect(on).toMatch(/\n {2}schedule:\n {4}- cron: '[^']+'\n {2}workflow_dispatch:\n?$/)
@@ -180,6 +186,6 @@ describe('CI workflow', () => {
     expect(workflow.get('check')!.matrix.get('os')!.split(', ')).toContain('ubuntu-24.04')
     const size = (job: Job) => [...job.matrix.values()].reduce((product, axis) => product * axis.split(',').length, 1)
     const count = own.filter(([, job]) => job.if === runAlways).reduce((sum, [, job]) => sum + size(job), 0)
-    expect(yaml).toContain(`runs ${count} jobs:`)
+    expect(yaml).toContain(`runs ${count + 2} jobs: ${count} validation jobs plus scope and result.`)
   })
 })

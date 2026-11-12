@@ -31,28 +31,38 @@ describe('CI scope', () => {
     expect(detectScope('push', {})).toBe('full')
     expect(detectScope('unknown', {})).toBe('full')
     expect(detectScope('workflow_dispatch', {}, { regressionSuite: 'none' })).toBe('full')
+    expect(detectScope('workflow_dispatch', {}, { regressionSuite: 'docs' })).toBe('docs')
     expect(detectScope('workflow_dispatch', {}, { regressionSuite: 'dialogs' })).toBe('regressions')
+    expect(detectScope('push', event, { regressionSuite: 'docs', diff: () => 'src/main/index.ts\0' })).toBe('full')
   })
 
   let directory: string | undefined
   afterAll(() => { if (directory) rmSync(directory, { recursive: true, force: true }) })
-  it('reads real Git history, including earlier code commits and both sides of a code-to-doc rename', () => {
+  it('reads real Git history and renames even with global signing and hooks configured', () => {
     mkdirSync('artifacts', { recursive: true })
     directory = mkdtempSync(resolve('artifacts/ci-scope-'))
-    const git = (...args: string[]) => execFileSync('git', args, { cwd: directory, encoding: 'utf8' }).trim()
-    git('init', '--quiet')
+    const emptyHooks = join(directory, 'empty-hooks'), hostileHooks = join(directory, 'hostile-hooks'), globalConfig = join(directory, 'gitconfig')
+    mkdirSync(emptyHooks)
+    mkdirSync(hostileHooks)
+    writeFileSync(join(hostileHooks, 'pre-commit'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    writeFileSync(globalConfig, `[commit]\n  gpgsign = true\n[gpg]\n  program = varia-ci-fixture-missing-signer\n[core]\n  hooksPath = "${hostileHooks.replaceAll('\\', '/')}"\n`)
+    // Keep this repository independent of the machine's config, templates and GIT_* environment overrides.
+    // The hostile config proves real commits still work when signing and hooks are enabled globally.
+    const gitEnv = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^GIT_/i.test(name))), GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: globalConfig }
+    const git = (...args: string[]) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', `core.hooksPath=${emptyHooks}`, '-c', `init.templateDir=${emptyHooks}`, ...args], { cwd: directory, env: gitEnv, encoding: 'utf8', timeout: 10000 }).trim()
+    git('init', '--quiet', '--initial-branch=main')
     git('config', 'user.name', 'CI fixture')
     git('config', 'user.email', 'ci-fixture@example.invalid')
     writeFileSync(join(directory, 'README.md'), 'before')
     writeFileSync(join(directory, 'code.ts'), 'export const x = 1')
-    git('add', '.')
+    git('add', 'README.md', 'code.ts')
     git('commit', '--quiet', '-m', 'Initial fixture')
     const initial = git('rev-parse', 'HEAD')
     const classify = (event: object, eventName = 'pull_request') => {
       const output = join(directory!, 'output'), eventPath = join(directory!, 'event.json')
       writeFileSync(output, '')
       writeFileSync(eventPath, JSON.stringify(event))
-      execFileSync(process.execPath, [resolve('scripts/ci-scope.mjs')], { cwd: directory, env: { ...process.env, GITHUB_EVENT_NAME: eventName, GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: output }, encoding: 'utf8' })
+      execFileSync(process.execPath, [resolve('scripts/ci-scope.mjs')], { cwd: directory, env: { ...gitEnv, GITHUB_EVENT_NAME: eventName, GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: output }, encoding: 'utf8', timeout: 10000 })
       return readFileSync(output, 'utf8')
     }
     writeFileSync(join(directory, 'README.md'), 'after')

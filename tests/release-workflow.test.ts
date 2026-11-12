@@ -46,6 +46,15 @@ describe('Release builds', () => {
     expect(scope).toContain('fetch-depth: 0')
     expect(scope).toContain('run: node scripts/ci-scope.mjs')
     expect(scope).toContain('mode: ${{ steps.scope.outputs.mode }}')
+    expect(scope).not.toContain('actions/setup-node')
+    expect(scope).toContain('sparse-checkout: scripts/ci-scope.mjs')
+    // Unique non-PR groups protect both in-progress and pending packaging from later docs-only main pushes.
+    expect(release).toContain("group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}")
+  })
+  it('publishes tags after a skipped scope ancestor only when both packaging jobs succeeded', () => {
+    const publish = release.slice(release.indexOf('  release:\n'))
+    expect(publish).toContain("if: ${{ !cancelled() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && needs.build.result == 'success' && needs.build-intel.result == 'success' }}")
+    expect(publish).toContain('needs: [build, build-intel]')
   })
   it('adds at most three jobs and one macOS job to a pull request push, and packages Intel macOS only for tags, manual runs and weekly', () => {
     const matrix = release.slice(release.indexOf('  build:\n'), release.indexOf('  build-intel:\n'))

@@ -123,7 +123,7 @@ producer for in-app and public notes. Keep guidance for both Codex and Claude he
 
 - TypeScript: no semicolons, single quotes, 2-space indent, long lines. C#: 4-space indent, nullable enabled, warnings
   as errors. LF line endings. Comments explain why, sparingly.
-- One `claude/<topic>` branch per PR, off `main` or, for a stacked PR, off the branch it builds on. Merge with merge
+- One `claude/<topic>` branch for Claude or `codex/<topic>` branch for Codex per PR, off `main` or, for a stacked PR, off the branch it builds on. Merge with merge
   commits (never squash or rebase); imperative commit subjects.
 - CI (`.github/workflows/ci.yml`) runs on every PR, with a source-only documentation lane for known Markdown paths; its layout is pinned by `tests/ci-workflow.test.ts` and
   `tests/release-workflow.test.ts` and described in docs/ci.md.
