@@ -62,8 +62,13 @@ export async function start(root: Root): Promise<void> {
         reset: () => stats?.reset(),
         setScrollCap: (px?: number) => stats?.setScrollCap(px),
         // Draws results grids transposed or as tables again (every grid, or one tab's or entry's), with an optional header
-        // column: the only thing that sets a view's orientation until the transpose commands do.
-        setOrientation: (transposed: boolean, o: { headerColumn?: number; tabId?: string; entry?: string } = {}) => stats?.setOrientation({ ...o, transposed })
+        // column, as the transpose commands do (ResultsService.setOrientation): the grid benchmark turns its grid with it.
+        setOrientation: (transposed: boolean, o: { headerColumn?: number; tabId?: string; entry?: string } = {}) => {
+          for (const [tabId, tab] of Object.entries(workbench.results.getSnapshot())) {
+            if (o.tabId !== undefined && o.tabId !== tabId) continue
+            for (const entry of tab.sets) if (o.entry === undefined || o.entry === entry.key) workbench.results.setOrientation(tabId, entry.key, { transposed, headerColumn: o.headerColumn ?? null })
+          }
+        }
       },
       // AutoRecover's save now, rather than in five minutes (files-smoke.mjs).
       __variaRecovery: { flush: () => workbench.recovery.flush() },

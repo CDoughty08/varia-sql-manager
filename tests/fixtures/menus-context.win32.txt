@@ -372,10 +372,11 @@ output.context, for a results grid with selected cells
   Co&mpare with Previous Result  ++++
   Pivot Res&ults…  ++++
   Trans&pose >
-    &All Rows  ++++
+    &Transposed [ ]  ++++
     &Selected Rows  ++++
     ---
     Using Column as &Headers  ++++
+    &Choose Headers…  ++++
   ---
   F&it Column  ----
   ---
@@ -427,10 +428,11 @@ output.context, for a results grid without
   Co&mpare with Previous Result  ----
   Pivot Res&ults…  ++++
   Trans&pose >
-    &All Rows  ++++
+    &Transposed [ ]  ++++
     &Selected Rows  ----
     ---
     Using Column as &Headers  ----
+    &Choose Headers…  ++++
   ---
   F&it Column  ----
   ---

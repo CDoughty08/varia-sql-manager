@@ -8,6 +8,7 @@ import type { PaneId } from '../../../shared/layouts'
 import { onUnexpectedError } from '../core/errors'
 import type { CommandArgs } from '../core/types'
 import { gridAnchor, gridTarget } from '../grid/anchor'
+import { turnableKinds } from '../results/ResultsService'
 
 /**
  * The Object Explorer node a context menu is for, captured when it opened: what the node is (`ExplorerTarget`: its status,
@@ -65,6 +66,8 @@ export interface OutputTarget {
   readonly resultKind?: string
   /** The grid is drawn bare (Peek's rows): Pivot, Compare and the close commands are off for it. */
   readonly bare?: true
+  /** The grid is drawn transposed: `column` and `row` are still the result's own. */
+  readonly transposed?: boolean
   readonly selectedText: string
   readonly element: HTMLElement
   /** A live grid's own commands (view `live`): its table is not a result set in ResultsService. */
@@ -160,7 +163,7 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
     explorerServerEngine: target?.kind === 'explorer' ? target.node?.engine ?? '' : '',
     explorerServerLinux: target?.kind === 'explorer' && !!target.node?.linux,
     outputView: target?.kind === 'output' ? target.view : '',
-    outputGridTransposable: target?.kind === 'output' && target.view === 'grid' && transposableKinds.has(target.resultKind ?? ''),
+    outputGridTransposable: target?.kind === 'output' && target.view === 'grid' && turnableKinds.has(target.resultKind ?? ''),
     outputGridBare: target?.kind === 'output' && target.view === 'grid' && !!target.bare,
     outputLiveSortable: target?.kind === 'output' && !!target.live?.sortable,
     outputLiveFilterable: target?.kind === 'output' && !!target.live?.filterable,
@@ -174,11 +177,13 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
 }
 /**
  * The arguments a context menu's commands run with: the target, the tab it is about, so the File commands act on that tab, and
- * the state keys a Search Objects result stands in for the selection's.
+ * the state keys the target stands in: a Search Objects result's for the selection's, and a results grid's own orientation
+ * for the focused grid's (a Peek card's grid belongs to no query tab).
  */
 export function argsFor(target: MenuTarget): CommandArgs {
   const tabId = target.kind === 'editor' || target.kind === 'documentTab' || target.kind === 'output' || target.kind === 'tableDesigner' || target.kind === 'ssisOperations' ? target.tabId : undefined
-  return { target, ...(tabId ? { tabId } : {}), ...(target.kind === 'searchHit' ? { state: target.state } : {}) }
+  const state = target.kind === 'searchHit' ? target.state : target.kind === 'output' && target.view === 'grid' ? { resultsGridTransposed: !!target.transposed } : undefined
+  return { target, ...(tabId ? { tabId } : {}), ...(state ? { state } : {}) }
 }
 export const inputOf = (args: CommandArgs | undefined): InputTarget | undefined => args?.target?.kind === 'input' ? args.target : undefined
 /** The Object Explorer node a context menu was opened for; undefined for its empty area and for other targets. */
@@ -247,8 +252,6 @@ const focusable = 'button, [tabindex], input, textarea, [contenteditable]'
 const editorChrome = '.scrollbar, .decorationsOverviewRuler, .contentWidgets, .overflowingContentWidgets, .overlayWidgets'
 const documentCommandEnabled: CommandEnabled = command => typeof document === 'undefined' || document.queryCommandEnabled(command)
 const outputViews: ReadonlySet<string> = new Set<OutputView>(['grid', 'messages', 'live'])
-/** The result kinds Transpose reads (TransposeService's `transposable`): never a diff's paired changes. */
-const transposableKinds: ReadonlySet<string> = new Set(['rows', 'pivot', 'transpose'])
 
 /** The text selected inside `element`, or '' when the selection is elsewhere or crosses its edge. */
 export function selectedTextIn(element: Element): string {
@@ -286,8 +289,9 @@ export function outputTarget(element: Element): OutputTarget | undefined {
   const result = kind === 'grid' && Number.isSafeInteger(generation) && generation > 0 && Number.isSafeInteger(resultId) && resultId > 0 ? { generation, resultId } : undefined
   const resultKind = kind === 'grid' ? view.getAttribute('data-result-kind') ?? undefined : undefined
   const bare = kind === 'grid' && view.hasAttribute('data-result-bare')
+  const transposed = kind === 'grid' && view.getAttribute('data-orientation') === 'transposed'
   return { kind: 'output', tabId, view: kind as OutputView, ...(kind === 'grid' ? { entry } : {}), selectedText: kind === 'grid' ? '' : selectedTextIn(view), element: view,
-    ...(column !== undefined ? { column } : {}), ...(row !== undefined ? { row } : {}), ...(result ? { result } : {}), ...(resultKind ? { resultKind } : {}), ...(bare ? { bare: true as const } : {}) }
+    ...(column !== undefined ? { column } : {}), ...(row !== undefined ? { row } : {}), ...(result ? { result } : {}), ...(resultKind ? { resultKind } : {}), ...(transposed ? { transposed } : {}), ...(bare ? { bare: true as const } : {}) }
 }
 
 /**

@@ -69,10 +69,12 @@ export class CommandService extends SnapshotStore<CommandSnapshot> implements Di
   unavailableReason(id: CommandId, args?: CommandArgs): string | undefined {
     try { return this.handlers.get(id)?.unavailable?.(args) } catch (error) { onUnexpectedError(error); return undefined }
   }
-  isToggled(id: CommandId): boolean {
+  /** Whether a toggle command is on: for a menu's target (`args`), by the keys the target stands in (a results grid's own
+   *  orientation, not the focused grid's). */
+  isToggled(id: CommandId, args?: CommandArgs): boolean {
     const { toggled } = commandDescriptor(id)
     if (toggled === undefined) return false
-    try { return evaluateWhen(compileWhen(toggled), this.state()) } catch (error) { onUnexpectedError(error); return false }
+    try { return evaluateWhen(compileWhen(toggled), this.stateFor(args)) } catch (error) { onUnexpectedError(error); return false }
   }
   /** The keys a command's precondition reads: the workbench's, with those its menu target stands in (`CommandArgs.state`). */
   private stateFor(args: CommandArgs | undefined) { return args?.state ? { ...this.state(), ...args.state } : this.state() }

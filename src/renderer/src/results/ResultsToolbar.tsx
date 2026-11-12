@@ -3,8 +3,10 @@ import type { CommandId } from '../../../shared/commands/catalog'
 import type { ViewSortMode } from '../../../shared/contracts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { useCommandEnabled } from '../core/useCommand'
+import { columnTitle } from '../grid/selection'
 import type { WhitespaceMode } from '../grid/whitespace'
 import Icon from '../Icon'
+import { entryOf } from './ResultsService'
 import { searchBoxKeyAction, searchCount, type SearchMode } from './search'
 import { formatCount } from './status'
 
@@ -80,7 +82,7 @@ function ResultsSearchBox({ tabId }: { tabId: string }) {
  * ARIA toolbar pattern: one Tab stop, Left and Right (Home, End) move between them; the search box is a Tab stop of its own.
  */
 export default function ResultsToolbar({ tabId }: { tabId: string }) {
-  const { commands, settings, results, pivot, transpose } = useWorkbench()
+  const { commands, settings, results, pivot } = useWorkbench()
   const values = useServiceSnapshot(settings).values
   // The addressed query can update while another query is active; the command hook also follows global busy state.
   useServiceSnapshot(results)
@@ -88,9 +90,11 @@ export default function ResultsToolbar({ tabId }: { tabId: string }) {
   const canPivot = useCommandEnabled('output.pivot', { tabId })
   const canTranspose = useCommandEnabled('output.transpose', { tabId })
   const pivotOpen = !!useServiceSnapshot(pivot).tabs[tabId]?.open
-  // A transpose publishes when it starts and ends, so the button shows it running.
-  useServiceSnapshot(transpose)
-  const transposing = transpose.isRunning(tabId)
+  // The grid the toolbar's commands act on (the one that last had the focus), while it is drawn transposed: the button is
+  // pressed, and Headers beside it names the column that heads the drawn columns.
+  const turned = useServiceSnapshot(results.turned)[tabId]
+  const headerColumn = turned?.headerColumn === undefined ? undefined : entryOf(results.getSnapshot()[tabId]?.sets, turned.entry)?.descriptor.columns[turned.headerColumn]
+  const headers = headerColumn ? columnTitle(headerColumn.name) : 'Row number'
   const whitespace = values['queryResults.grid.whitespace'], sortText = values['queryResults.grid.sortText']
   const profile = values['queryResults.grid.columnProfile'], rowSize = values['queryResults.grid.rowSize']
   // Off (or Value) runs the command of the choice that is on, which turns it off.
@@ -132,9 +136,12 @@ export default function ResultsToolbar({ tabId }: { tabId: string }) {
       <button type="button" className="results-icon-toggle" aria-label="Pivot" aria-pressed={pivotOpen} tabIndex={-1} disabled={!pivotOpen && !canPivot}
         title="Pivot: group the focused grid's rows by columns and summarize them (count, sum, average, min, max) as a new result"
         onClick={() => { if (pivotOpen) pivot.close(tabId); else void commands.execute('output.pivot', { tabId }, 'toolbar') }}><Icon name="pivot" /></button>
-      <button type="button" className="results-icon-toggle results-transpose" aria-label="Transpose" tabIndex={-1} disabled={!canTranspose} aria-busy={transposing}
-        title={transposing ? 'Transposing…' : "Transpose: the focused grid's columns as rows and its rows as columns, as a new result"}
+      <button type="button" className="results-icon-toggle results-transpose" aria-label="Transposed" aria-pressed={!!turned} tabIndex={-1} disabled={!canTranspose}
+        title="Transposed: draw the focused grid's columns as rows and its rows as columns. Nothing is copied; the grid follows its sort and filters"
         onClick={() => void commands.execute('output.transpose', { tabId }, 'toolbar')}><Icon name="transpose" /></button>
+      {turned && <button type="button" className="results-transpose results-headers" aria-haspopup="listbox" tabIndex={-1} disabled={!canTranspose}
+        title={`Using Column as Headers: the drawn columns are headed by ${headerColumn ? `the values of ${headers}` : 'row numbers'}. Choose another column`}
+        onClick={event => void commands.execute('output.transposeChooseHeaders', { tabId, anchor: event.currentTarget }, 'toolbar')}><span>Headers: {headers}</span><Icon name="chevron-down" /></button>}
     </div>
     <div className="results-segments" role="group" aria-label="Results">
       <button type="button" className="results-icon-toggle" aria-label="Close Results" tabIndex={-1} disabled={!canClose}

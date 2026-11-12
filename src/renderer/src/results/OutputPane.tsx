@@ -185,7 +185,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
   // only when the stack keeps room for its sets at their floors.
   const stripSummary = tab ? messagesSummary(tab.messages) : undefined
   const showStrip = !!tab && pane === 'results' && hasSets && messages > 0 && (stripSummary!.readable || tab.strip)
-  const need = tab && showStrip && shown ? stackNeed(tab, results.viewState(tabId).collapsed) : 0
+  const need = tab && showStrip && shown ? stackNeed(tab, results.viewState(tabId).collapsed, results.viewState(tabId).grids) : 0
   const stripFits = viewHeight > 0 && viewHeight >= need + g.messagesStripOpen
   const stripMax = viewHeight > 0 ? Math.max(g.messagesStripOpen, Math.min(Math.floor(viewHeight * 0.4), viewHeight - need)) : undefined
   // The results tools sit in the head beside the views, taking no rows from the grids: results panes are often short.

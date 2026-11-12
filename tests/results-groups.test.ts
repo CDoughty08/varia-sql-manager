@@ -130,10 +130,21 @@ describe('result groups', () => {
     expect(tab().focused).toBe(second)
     expect(results.removeEntry('t1', second)).toBe(true)
     expect(tab().focused).toBe(one)
-    // With only comparisons left there are no groups: what the Results badge counts.
-    expect(names()).toEqual(['Result 1'])
+    // The focus the service moves is a selected view like any other: closing Result 3 below a Pivot never focused
+    // leaves the focus on that Pivot, which is then its group's selected view.
+    run(2, { queryId: 'q-selected' })
+    const [first1, second1] = tab().sets.map(set => set.key)
+    await build(first1)
+    results.focusEntry('t1', second1)
+    expect(tab().groups[0].selected).toBe('table')
+    expect(results.removeEntry('t1', second1)).toBe(true)
+    expect(tab().focused).toBe(tab().groups[0].pivot!.key)
+    expect(tab().groups[0].selected).toBe('pivot')
+    expect(results.removeEntry('t1', tab().groups[0].pivot!.key)).toBe(true)
+    expect(tab().groups[0].selected).toBe('table')
+    expect(tab().sets.map(set => set.key)).toEqual([first1])
     expect(tab().groups).toHaveLength(1)
-    expect(one).toBe(tab().groups[0].table.key)
+    expect(one).not.toBe(tab().groups[0].table.key)
   })
 
   it('keep group order, names and the focus by ordinal through a re-run, with nothing derived rebuilt', async () => {

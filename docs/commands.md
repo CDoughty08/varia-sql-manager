@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (303)
+## Commands (304)
 
 ### File
 
@@ -180,9 +180,10 @@ keys it uses are listed below.
 | Clear All Highlights (not in the palette) | `output.clearAllHighlights` | — | — | — | Always | Query Output context menu › Highlight › Clear All Highlights |
 | Compare with Previous Result | `output.compareWithPrevious` | — | — | — | Always | Query Output context menu › Compare with Previous Result |
 | Pivot Results… | `output.pivot` | — | — | — | Always | Query Output context menu › Pivot Results… |
-| Transpose Results | `output.transpose` | — | — | — | Always | Query Output context menu › Transpose › All Rows |
+| Transpose Results | `output.transpose` | — | — | — | Always; checked when `resultsGridTransposed` | Query Output context menu › Transpose › Transposed |
 | Transpose Selected Rows | `output.transposeSelectedRows` | — | — | — | Always | Query Output context menu › Transpose › Selected Rows |
 | Transpose Using Column as Headers | `output.transposeWithHeaders` | — | — | — | Always | Query Output context menu › Transpose › Using Column as Headers |
+| Choose Headers for Transposed Results… | `output.transposeChooseHeaders` | — | — | — | Always | Query Output context menu › Transpose › Choose Headers… |
 | Compare with Previous Result (Exact Text) | `output.compareWithPreviousExact` | — | — | — | Always | — |
 | Show Column Profile | `output.toggleColumnProfile` | — | — | — | Always; checked when `resultsColumnProfile` | Query Output context menu › Column Profile |
 | Show Row Size in Results | `output.toggleRowSize` | — | — | — | Always; checked when `resultsRowSize` | Query Output context menu › Show Row Size |
@@ -881,9 +882,10 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
-| `1_rows` | **A**ll Rows | `output.transpose` | `outputGridTransposable` |
+| `1_rows` | **T**ransposed | `output.transpose` | `outputGridTransposable` |
 | `1_rows` | **S**elected Rows | `output.transposeSelectedRows` | `outputGridTransposable` |
 | `2_headers` | Using Column as **H**eaders | `output.transposeWithHeaders` | `outputGridTransposable` |
+| `2_headers` | **C**hoose Headers… | `output.transposeChooseHeaders` | `outputGridTransposable` |
 
 #### Panel tab context menu (`dockTab.context`)
 
@@ -954,7 +956,7 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
 | `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
 
-## Context keys (152)
+## Context keys (153)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1041,6 +1043,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `resultsSortTextChars` | boolean | state | Sorted results grids order text columns by their length in characters (Sort Text by Length in Characters). |
 | `resultsSortTextBytes` | boolean | state | Sorted results grids order text and binary columns by their length in bytes (Sort Text by Length in Bytes). |
 | `resultsColumnProfile` | boolean | state | The column profile panel shows beside the results (Show Column Profile). |
+| `resultsGridTransposed` | boolean | state | The results grid that last had the focus in the active query is drawn transposed (Transpose Results); in a results grid's own menu, that grid is. |
 | `resultsRowSize` | boolean | state | A bar behind each row number shows the row's size (Show Row Size in Results). |
 | `hasBookmarks` | boolean | state | An open document has a bookmark. |
 | `activeDocumentHasBookmarks` | boolean | state | The active document has a bookmark. |
@@ -1105,7 +1108,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerServerEngine` | `''`, `'box'`, `'managedInstance'`, `'cloud'` | target | The kind of server the Object Explorer node the menu is for is on: 'box', 'managedInstance' or 'cloud', or '' for the empty area. |
 | `explorerServerLinux` | boolean | target | The menu is for a node on SQL Server on Linux. |
 | `outputView` | `'grid'`, `'messages'`, `'live'`, `''` | target | The Query Output view the menu is for: a results grid, the messages, or a live view's grid (an Activity Monitor pane). |
-| `outputGridTransposable` | boolean | target | The menu is for a results grid Transpose can read: a query's rows, a pivot or a transpose, not a diff. |
+| `outputGridTransposable` | boolean | target | The menu is for a results grid that can be drawn transposed: a query's rows or a pivot, not a comparison or a plan set. |
 | `outputGridBare` | boolean | target | The menu is for a results grid drawn bare (Peek's rows): Pivot, Compare and the close commands are not offered for it. |
 | `outputLiveFilterable` | boolean | target | The live view's grid the menu is for filters some columns by value at its source (its headers have funnels). |
 | `outputLiveRows` | `'session'`, `''` | target | What the rows of the live view's grid the menu is for are: 'session' for an Activity Monitor pane of sessions (Details and Kill Process act on its active row), else ''. |

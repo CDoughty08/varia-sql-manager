@@ -5,13 +5,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import type { VariaApi } from '../src/shared/contracts'
+import type { ResultColumn, VariaApi } from '../src/shared/contracts'
 import { EventBus } from '../src/renderer/src/core/events'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import type { ResultGridProps } from '../src/renderer/src/grid/ResultGrid'
-import ResultsStack, { collapsedPlaces, settledContent, weightsOf } from '../src/renderer/src/grid/ResultsStack'
-import { ResultsService, setKey, type GridSort, type ResultSetEntry } from '../src/renderer/src/results/ResultsService'
+import ResultsStack, { collapsedPlaces, settledContent, stackNeed, turnedEntries, weightsOf } from '../src/renderer/src/grid/ResultsStack'
+import { ResultsService, setKey, type GridSort, type GridViewState, type ResultSetEntry } from '../src/renderer/src/results/ResultsService'
 import type { ResultView } from '../src/renderer/src/results/ResultClient'
 import type { TabSearch } from '../src/renderer/src/results/search'
 import { descriptor, fakeResultClient, summaryOf } from './fixtures/results'
@@ -29,7 +29,7 @@ vi.mock('../src/renderer/src/grid/ResultGrid', async () => {
       if (instance.current === 0) instance.current = ++made
       return createElement('div', {
         'data-grid': props.entry.key, 'data-instance': instance.current, 'data-focused': String(props.focused), 'data-count': props.count, 'data-sorted': String(!!props.sort),
-        'data-view': props.view, 'data-group': props.group, 'data-bare': String(!!props.bare),
+        'data-view': props.view, 'data-group': props.group, 'data-bare': String(!!props.bare), 'data-pane-focus': 'grid', tabIndex: 0,
         onClick: () => props.onFocus(props.entry.key)
       })
     }
@@ -242,6 +242,19 @@ describe('the stacked results', () => {
     // A Table's button says what goes with it.
     expect(closers().map(button => button.title)).toEqual(['Close Result 1', 'Close Result 2', 'Close Result 3 and its Pivot', 'Close Pivot of Result 3', 'Close Differences: Result 1 → Result 2'])
     expect(closers().every(button => !button.disabled)).toBe(true)
+    // A Pivot's close closes it alone and leaves the focus in its group: on the Table's caption, where the service
+    // leaves the grid focus, not on whatever is drawn next.
+    const other = results.addSet('t1', descriptor(802, { index: 1, kind: 'pivot', ...rows }), 'Pivot of Result 2', ['1:2'])!
+    draw()
+    expect(names()).toEqual(['Result 1', 'Result 2', 'Pivot of Result 2', 'Result 3', 'Pivot of Result 3', 'Differences: Result 1 → Result 2'])
+    results.focusEntry('t1', other)
+    closers()[2].focus()
+    act(() => { closers()[2].click() })
+    draw()
+    expect(names()).toEqual(['Result 1', 'Result 2', 'Result 3', 'Pivot of Result 3', 'Differences: Result 1 → Result 2'])
+    expect((document.activeElement as HTMLElement).dataset.captionEntry).toBe(two)
+    expect(results.getSnapshot().t1.focused).toBe(two)
+    client.release.mockClear()
     // Closing Result 3 closes its group: its Pivot goes with it, in one release.
     closers()[2].focus()
     act(() => { closers()[2].click() })
@@ -301,6 +314,21 @@ describe('the stacked results', () => {
     draw({ ...results.getSnapshot().peek, sorts: new Map([[key, sort]]) })
     expect([...container.querySelectorAll('.rs-filter-text')].map(element => element.textContent)).toEqual(['1 selected row'])
     expect(container.querySelectorAll('.rs-caption-close')).toHaveLength(0)
+    // The last filter is removed from its chip, which first hands the focus to the caption: the caption goes, and the
+    // focus goes to the grid, not to the page (Peek's card keeps its keys only while the focus is inside it).
+    container.querySelector<HTMLElement>('.rs-caption-toggle')!.focus()
+    expect(document.activeElement).toBe(container.querySelector('.rs-caption-toggle'))
+    draw()
+    expect(container.querySelectorAll('.rs-caption')).toHaveLength(0)
+    expect(document.activeElement).toBe(container.querySelector('[data-grid]'))
+    // A focus that is elsewhere when the caption goes is left alone.
+    draw({ ...results.getSnapshot().peek, sorts: new Map([[key, sort]]) })
+    const outside = document.createElement('button')
+    document.body.append(outside)
+    outside.focus()
+    draw()
+    expect(document.activeElement).toBe(outside)
+    outside.remove()
 
     // settledContent: a table of 2 rows and 2 columns is sized by its rows; drawn transposed, by its 2 columns, however
     // many rows it has.
@@ -310,6 +338,40 @@ describe('the stacked results', () => {
     const [table] = settledContent(tab, new Set(['e']))
     const [turned] = settledContent(tab, new Set(['e']), new Set(['e']))
     expect(table! - turned!).toBe((500 - wide.columns.length) * 20)
+    // Which entries are turned is read from each grid's state by the rule the grid follows: never a comparison (its tone
+    // column marks rows), whatever its state says.
+    const toned = { key: 'd', number: 2, descriptor: descriptor(2, { kind: 'diff', columns: [...wide.columns, { name: '', dataType: 'tinyint', wire: 'text', nullable: true, role: 'tone' }] as ResultColumn[] }) } as unknown as ResultSetEntry
+    const state = (orientation?: 'transposed'): GridViewState => ({ topRow: 0, virtualTop: 0, scrollLeft: 0, sized: false, ...orientation ? { orientation } : {} })
+    expect([...turnedEntries([entry, toned], new Map([['e', state('transposed')], ['d', state('transposed')]]))]).toEqual(['e'])
+    expect(turnedEntries([entry, toned], new Map([['e', state()]])).size).toBe(0)
+    // The room the Messages strip leaves the stack counts the rows drawn too: two results of 500 rows need their floors,
+    // and less when one is drawn transposed as 2 rows.
+    const other = { key: 'f', number: 2, ordinal: 2, descriptor: descriptor(2, { index: 1, rowsRead: 500, rowsStored: 500, rowsAvailable: 500 }) } as unknown as ResultSetEntry
+    const two = { sets: [entry, other], settled: new Map([[setKey(wide), { rows: 500, strip: false }], [setKey(other.descriptor), { rows: 500, strip: false }]]) }
+    const plain = stackNeed(two, new Set()), withTurned = stackNeed(two, new Set(), new Map([['e', state('transposed')]]))
+    expect(plain - withTurned).toBe(2 * 20)
+    expect(stackNeed(two, new Set(), new Map())).toBe(plain)
+
+    // In the stack: the service's setOrientation publishes, and the item is sized again though nothing else changed.
+    act(() => { root!.unmount() })
+    root = createRoot(container)
+    results.begin('t2', 'q2')
+    const many = { rowsRead: 10_000, rowsStored: 10_000, rowsAvailable: 10_000 }
+    void results.finish('t2', 'q2', { summary: summaryOf([descriptor(11, { index: 0, ...many }), descriptor(12, { index: 1, ...many })]) })
+    const drawTwo = () => {
+      act(() => { root!.render(createElement(WorkbenchProvider, { workbench, children: createElement(ResultsStack, { tabId: 't2', tab: results.getSnapshot().t2 }) })) })
+      for (let frame = 0; frame < 4; frame++) act(() => { vi.advanceTimersByTime(50) })
+    }
+    const heights = () => [...container!.querySelectorAll<HTMLElement>('.rs-item')].map(item => parseFloat(item.style.height))
+    drawTwo()
+    const before = heights()
+    expect(Math.abs(before[0] - before[1])).toBeLessThanOrEqual(1)
+    expect(results.setOrientation('t2', results.getSnapshot().t2.sets[0].key, { transposed: true })).toBe(true)
+    drawTwo()
+    const after = heights()
+    // Result 1 draws its 2 columns as rows and takes only their height; Result 2 takes the rest.
+    expect(after[0]).toBeLessThan(200)
+    expect(after[1]).toBeGreaterThan(before[1])
   })
 
   it('move the focus once after a close, to the Results tab when the next caption is not drawn, and never steal it later', () => {

@@ -814,7 +814,7 @@ describe('Query Output commands', () => {
     expect(commands.isEnabled('output.copy', bare(1))).toBe(commands.isEnabled('output.copy', on('grid', { place: 1 })))
   })
   it('Close Result closes the view the grid shows: a Table with its group, a Pivot or a comparison alone, and nothing while the query runs', async () => {
-    const { commands, results, resultClient, queries, pivot, compare, tab, on, key, startQuery } = await ran('win32', { ...queryOutput, resultSets: [descriptor(1), descriptor(2, { index: 1 })] })
+    const { commands, results, resultClient, queries, pivot, compare, tab, on, key, element, startQuery } = await ran('win32', { ...queryOutput, resultSets: [descriptor(1), descriptor(2, { index: 1 })] })
     const names = () => results.getSnapshot()[tab.id].sets.map(set => set.label ?? set.number)
     const build = async (place: number) => { pivot.open(tab.id, key(place)); pivot.setDraft(tab.id, { rows: [0], values: [{ aggregate: 'count' }] }); await pivot.run(tab.id) }
     await build(0)
@@ -833,11 +833,23 @@ describe('Query Output commands', () => {
     results.focusEntry(tab.id, key(1))
     expect(await commands.execute('output.closeResult', { tabId: tab.id }, 'palette')).toBe(true)
     expect(names()).toEqual([2])
+    // With the focus in Messages a key or the palette names no grid: the view last used closes, as from the editor.
+    vi.stubGlobal('document', { activeElement: null })
+    cleanups.push(() => vi.unstubAllGlobals())
+    const active = vi.spyOn(windowTools.windows, 'activeElement').mockReturnValue(element('messages').dom)
+    cleanups.push(() => active.mockRestore())
+    expect(commands.isEnabled('output.closeResult')).toBe(true)
+    // The Messages menu itself offers no Close Result.
+    expect(commands.isEnabled('output.closeResult', on('messages'))).toBe(false)
+    active.mockReturnValue(null)
     // A menu left open on a view that has gone closes nothing.
     const last = on('grid')
     expect(await commands.execute('output.closeResult', last, 'menu')).toBe(true)
     expect(results.getSnapshot()[tab.id]).toMatchObject({ sets: [], emptied: true })
     expect(commands.isEnabled('output.closeResult', last)).toBe(false)
+    const releases = resultClient.release.mock.calls.length
+    expect(await commands.execute('output.closeResult', last, 'menu')).toBe(false)
+    expect(resultClient.release.mock.calls).toHaveLength(releases)
     expect(commands.isEnabled('output.closeResult')).toBe(false)
     // While a query runs nothing closes one at a time.
     const running = startQuery()

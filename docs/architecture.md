@@ -100,10 +100,15 @@ being true.
   drawn column through pooled bands and colours that column's header, which also carries the row-size bar; a search match
   past the cap is reported (`onBeyondCap`) and never scrolled to. The orientation, the header column and the transposed
   view's own offsets and widths are per view in `GridViewState` (`orientation`, `headerColumn`, `transposed`); the option is
-  fixed for a view's life, so a change builds the grid again. Until the transpose commands set it, only test mode's
-  `__variaGrid.setOrientation` does. A result with a tone column (a comparison, a live table) is never transposed
-  (`transposedView` in `ResultsService.ts` is the one rule, for the grid and for its Copy and Save).
-  `tests/grid-orientation.test.ts` holds this.
+  fixed for a view's life, so a change builds the grid again. `ResultsService.setOrientation` is the only writer of the
+  orientation and the header column: the transpose commands (`contributions/transpose.ts`) call it, it publishes, and
+  `ResultGrid` reads `orientation()`. Its `turned` store (the focused grid of each tab, when transposed) feeds the
+  `resultsGridTransposed` key and the toolbar; a grid's own menu reads that grid's orientation from its target
+  (`argsFor`'s stand-in state), so a Peek card's grid toggles too. Fit Column on a transposed grid fits the target's row
+  (`fitDrawn`), or the name column for a name. The stored transpose (`results.transpose`, `TransposeService`) is no longer
+  reached by any command and is removed separately. A result with a tone column (a comparison, a live table) is never
+  transposed (`transposedView` in `ResultsService.ts` is the one rule, for the grid, `orientation()` and Copy and Save).
+  `tests/grid-orientation.test.ts`, `tests/results-orientation.test.ts` and `tests/results-toolbar-transpose.test.ts` hold this.
   A grid drawn transposed copies and saves as drawn, still with nothing stored: the request says `transposed` (and the
   header column), its parts stay in the result's rows and columns for the blocks that grid shows selected
   (`transposedCopyPlan`), and `ResultTextWriter`'s column-major mode writes a line per column and a field per row for the

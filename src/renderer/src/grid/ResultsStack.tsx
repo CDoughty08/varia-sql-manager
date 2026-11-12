@@ -3,7 +3,7 @@ import { nextFrame } from '../core/frame'
 import { observeResize } from '../core/windows'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
-import { entryName, setKey, transposedView, type EntryKey, type GridSort, type ResultSetEntry, type TabResults } from '../results/ResultsService'
+import { entryName, setKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultSetEntry, type TabResults } from '../results/ResultsService'
 import { formatCount, plural, rowsFact } from '../results/status'
 import { gridLimits as g } from './constants'
 import ResultGrid from './ResultGrid'
@@ -32,6 +32,12 @@ export function settledContent(tab: Pick<TabResults, 'sets' | 'settled'>, narrow
     return set ? contentHeight(turned?.has(entry.key) ? entry.descriptor.columns.length : set.rows, narrow?.has(entry.key) ? 0 : scrollbarSize(), set.strip) : undefined
   })
 }
+/** The entries drawn transposed, by the one rule the grid, Copy and Save follow (`transposedView`) over each grid's state. */
+export function turnedEntries(sets: readonly ResultSetEntry[], grids: ReadonlyMap<EntryKey, GridViewState>): ReadonlySet<EntryKey> {
+  const turned = new Set<EntryKey>()
+  if (grids.size > 0) for (const entry of sets) if (transposedView(grids.get(entry.key), entry.descriptor)) turned.add(entry.key)
+  return turned
+}
 // The stack keeps what it knows of an entry by the entry's key, so it stays with the entry when one before it goes. The
 // layout (stack.ts) is geometry over the entries as they are drawn, top to bottom, so these two turn the one into the other.
 /** The places, in the order drawn, of the entries that are collapsed. */
@@ -52,8 +58,8 @@ export function weightsOf(sets: readonly ResultSetEntry[], weights: ReadonlyMap<
   return sets.map(entry => weights.get(entry.key) ?? mean)
 }
 /** The room a run's stack needs before it scrolls: every set at its floor (what the Messages strip leaves it, at least). */
-export function stackNeed(tab: Pick<TabResults, 'sets' | 'settled'>, collapsed: ReadonlySet<EntryKey>): number {
-  const minHeight = minGridHeight(scrollbarSize()), content = settledContent(tab), count = tab.sets.length, places = collapsedPlaces(tab.sets, collapsed)
+export function stackNeed(tab: Pick<TabResults, 'sets' | 'settled'>, collapsed: ReadonlySet<EntryKey>, grids?: ReadonlyMap<EntryKey, GridViewState>): number {
+  const minHeight = minGridHeight(scrollbarSize()), content = settledContent(tab, undefined, grids && turnedEntries(tab.sets, grids)), count = tab.sets.length, places = collapsedPlaces(tab.sets, collapsed)
   if (count === 0) return 0
   return count === 1 ? places.has(0) ? g.captionHeight : Math.min(minHeight, content[0] ?? minHeight) : stackMinimum(count, minHeight, { content, collapsed: places })
 }
@@ -67,11 +73,11 @@ export function batchText(batchNumber: number, iteration: number, totalBatches: 
 /**
  * A set's caption: Collapse, its name, rows (counting while they stream) and columns, the batch it came from, Save
  * Results As for it and, in a stack that closes results (`onClose`), its close button, which is disabled while the query
- * runs (`running`). A Table's closes its group, so its tooltip names the Pivot that goes with it (`pivot`); a Pivot's or a
- * comparison's closes that view alone. It renders for each set in view, so a set's facts show before its grid mounts.
+ * runs (`running`). A Table's closes its group, so its tooltip says what goes with it (`others`: its Pivot, and any stored
+ * transposes); a Pivot's or a comparison's closes that view alone. It renders for each set in view, so a set's facts show before its grid mounts.
  */
-const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, totalBatches, sort, running, pivot, onToggle, onClose }: {
-  tabId: string; entry: ResultSetEntry; collapsed: boolean; totalBatches: number; sort?: GridSort; running: boolean; pivot: boolean; onToggle(key: EntryKey): void; onClose?(key: EntryKey): void
+const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, totalBatches, sort, running, others, onToggle, onClose }: {
+  tabId: string; entry: ResultSetEntry; collapsed: boolean; totalBatches: number; sort?: GridSort; running: boolean; others: string; onToggle(key: EntryKey): void; onClose?(key: EntryKey): void
 }) {
   const { commands, results } = useWorkbench()
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
@@ -101,7 +107,7 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
     {batch && <span className="rs-caption-batch">{batch}</span>}
     {held && <button type="button" className="icon-button rs-caption-save" aria-label={`Save ${name} As…`} title={`Save ${name} As…`} onClick={save}><Icon name="save-as" /></button>}
     {/* A Table closes its group, its Pivot with it; a comparison made from it stays. There is no undo. */}
-    {onClose && <button type="button" className="icon-button rs-caption-close" aria-label={`Close ${name}`} title={running ? `Close ${name} (unavailable while the query runs)` : pivot ? `Close ${name} and its Pivot` : `Close ${name}`}
+    {onClose && <button type="button" className="icon-button rs-caption-close" aria-label={`Close ${name}`} title={running ? `Close ${name} (unavailable while the query runs)` : `Close ${name}${others}`}
       disabled={running} onClick={() => onClose(entry.key)}><Icon name="close" /></button>}
   </div>
 })
@@ -125,13 +131,16 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
   const sets = tab.sets, count = sets.length, closable = !tab.bare
   // What each entry shows of its group, for its grid's attributes and its caption.
   const slots = useMemo(() => {
-    const map = new Map<EntryKey, { view: 'table' | 'pivot' | 'comparison' | 'plan' | 'transpose'; group?: number; pivot: boolean }>()
+    const map = new Map<EntryKey, { view: 'table' | 'pivot' | 'comparison' | 'plan' | 'transpose'; group?: number; others: string }>()
     for (const group of tab.groups) {
-      map.set(group.table.key, { view: group.planSet ? 'plan' : 'table', group: group.ordinal, pivot: !!group.pivot })
-      if (group.pivot) map.set(group.pivot.key, { view: 'pivot', group: group.ordinal, pivot: false })
-      for (const slot of group.transposes) map.set(slot.key, { view: 'transpose', group: group.ordinal, pivot: false })
+      // What a Table's close takes with it, for its button's tooltip.
+      const more = group.transposes.length, also = more === 0 ? '' : more === 1 ? 'its transpose' : `its ${more} transposes`
+      const others = group.pivot ? ` and its Pivot${also && ' and ' + also}` : also && ' and ' + also
+      map.set(group.table.key, { view: group.planSet ? 'plan' : 'table', group: group.ordinal, others })
+      if (group.pivot) map.set(group.pivot.key, { view: 'pivot', group: group.ordinal, others: '' })
+      for (const slot of group.transposes) map.set(slot.key, { view: 'transpose', group: group.ordinal, others: '' })
     }
-    for (const slot of tab.comparisons) map.set(slot.key, { view: slot.view === 'transpose' ? 'transpose' : 'comparison', pivot: false })
+    for (const slot of tab.comparisons) map.set(slot.key, { view: slot.view === 'transpose' ? 'transpose' : 'comparison', others: '' })
     return map
   }, [tab.groups, tab.comparisons])
   const stackRef = useRef<HTMLDivElement>(null)
@@ -143,8 +152,9 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
   const [mounted, setMounted] = useState<ReadonlySet<EntryKey>>(() => new Set())
   // The sets whose grids said their columns fit, so their content height leaves out the horizontal scroll bar.
   const [narrow, setNarrow] = useState<ReadonlySet<EntryKey>>(() => new Set())
-  // The sets drawn transposed, which are sized by their columns: from each grid's saved state, then as grids say.
-  const [turned, setTurned] = useState<ReadonlySet<EntryKey>>(() => new Set(sets.filter(entry => !!transposedView(view.grids.get(entry.key), entry.descriptor)).map(entry => entry.key)))
+  // The sets drawn transposed, which are sized by their columns. The orientation is in each grid's state and the service
+  // publishes when it changes (`setOrientation`), so it is read again with every snapshot, mounted grid or not.
+  const turned = useMemo(() => turnedEntries(sets, view.grids), [tab, sets, view])
   const minHeight = useMemo(() => minGridHeight(scrollbarSize()), [])
   const settled = tab.settled
   const content = useMemo(() => settledContent({ sets, settled }, narrow, turned), [sets, settled, narrow, turned])
@@ -213,12 +223,15 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
     const stack = stackRef.current, list = results.getSnapshot()[tabId]?.sets ?? []
     const gone = new Set(results.closing(tabId, key).map(entry => entry.key))
     const places = list.flatMap((entry, place) => gone.has(entry.key) ? [place] : [])
-    const next = places.length ? list[places[places.length - 1] + 1] ?? list[places[0] - 1] : undefined
+    // A Pivot (or a stored transpose) leaves the focus in its group, on the Table's caption, as the service leaves the
+    // grid focus on the Table; a group or a comparison passes it to the next surviving item, else the one before.
+    const slot = slots.get(key), table = slot?.group !== undefined && slot.view !== 'table' && slot.view !== 'plan' ? list.find(entry => entry.ordinal === slot.group) : undefined
+    const next = table ?? (places.length ? list[places[places.length - 1] + 1] ?? list[places[0] - 1] : undefined)
     const active = stack?.ownerDocument.activeElement
     const own = !active || active === stack?.ownerDocument.body || gone.has(active.closest('.rs-item')?.querySelector('[data-caption-entry]')?.getAttribute('data-caption-entry') ?? '')
     if (own && !next) resultsTab()?.focus({ preventScroll: true })
     if (results.removeEntry(tabId, key) && own && next) pendingFocus.current = { closed: key, next: next.key }
-  }, [results, tabId])
+  }, [results, tabId, slots])
   const resultsTab = () => stackRef.current?.closest('.output-panel')?.querySelector<HTMLElement>('[role="tab"][data-output-tab="results"]')
   useLayoutEffect(() => {
     const pending = pendingFocus.current
@@ -233,15 +246,17 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
   })
 
   const focus = (key: EntryKey) => { results.focusEntry(tabId, key); setFocused(key) }
-  const turn = useCallback((key: EntryKey, isTurned: boolean) => {
-    setTurned(current => {
-      if (current.has(key) === isTurned) return current
-      const next = new Set(current)
-      if (isTurned) next.add(key)
-      else next.delete(key)
-      return next
-    })
-  }, [])
+  // A bare run's one grid has a caption only while it has filters (or is collapsed). When the caption goes with the focus
+  // in it (the last filter removed from its chip), the focus goes to the grid, not to the page: Peek's card keeps its
+  // keys only while the focus is inside it.
+  const captionless = !!tab.bare && count === 1 && !collapsed.has(0) && !tab.sorts.get(sets[0].key)?.filters.length
+  const hadCaption = useRef(!captionless)
+  useLayoutEffect(() => {
+    const went = hadCaption.current && captionless
+    hadCaption.current = !captionless
+    const stack = stackRef.current, active = stack?.ownerDocument.activeElement
+    if (went && stack && (!active || active === stack.ownerDocument.body)) stack.querySelector<HTMLElement>('[data-pane-focus]')?.focus({ preventScroll: true })
+  }, [captionless])
   const wide = useCallback((key: EntryKey, isWide: boolean) => {
     setNarrow(current => {
       if (current.has(key) === !isWide) return current
@@ -322,11 +337,11 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
     if (!entry) continue
     const shut = collapsed.has(index), slot = slots.get(entry.key), sort = tab.sorts.get(entry.key)
     // A bare run's one grid stands alone, unless it has filters to show and remove.
-    const plain = bare || (!!tab.bare && count === 1 && !shut && !sort?.filters.length)
+    const plain = bare || captionless
     items.push(<div key={`item-${entry.key}`} className="rs-item" data-collapsed={shut || undefined} style={{ top: layout.offsets[index], height: layout.heights[index] }}>
-      {!plain && <ResultCaption tabId={tabId} entry={entry} collapsed={shut} totalBatches={tab.totalBatches} sort={sort} running={tab.status === 'running'} pivot={!!slot?.pivot} onToggle={toggle} onClose={closable ? close : undefined} />}
+      {!plain && <ResultCaption tabId={tabId} entry={entry} collapsed={shut} totalBatches={tab.totalBatches} sort={sort} running={tab.status === 'running'} others={slot?.others ?? ''} onToggle={toggle} onClose={closable ? close : undefined} />}
       {!shut && mounted.has(entry.key) && <ResultGrid tabId={tabId} entry={entry} count={tab.numbered} focused={entry.key === focused} budget={tab.summary?.budget} sort={sort}
-        view={slot?.view} group={slot?.group} bare={tab.bare} onFocus={focus} onWide={wide} onTurned={turn} />}
+        view={slot?.view} group={slot?.group} bare={tab.bare} onFocus={focus} onWide={wide} />}
     </div>)
     if (index < count - 1) {
       const top = layout.offsets[index] + layout.heights[index]

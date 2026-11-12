@@ -221,6 +221,9 @@ describe('PivotService', () => {
     expect(tab.groups[0].pivot!.key).not.toBe(old.key)
     expect([...pivot.getSnapshot().info.keys()]).toEqual(['1:811'])
     expect(pivot.getSnapshot().tabs.t1).toMatchObject({ running: false, pivot: tab.sets[1].key })
+    // The old Pivot's grid had the focus: the new one has it, and is its group's selected view again.
+    expect(tab.focused).toBe(tab.sets[1].key)
+    expect(tab.groups[0].selected).toBe('pivot')
     // The service keeps the rule whoever adds one: a second pivot of the Table takes the slot, releasing the one in it.
     const third = results.addSet('t1', descriptor(821, { index: 0, kind: 'pivot' }), 'Pivot of Result 1', [setKey(tab.sets[0].descriptor)])!
     expect(client.released()).toEqual([801, 811])
@@ -359,6 +362,91 @@ describe('PivotService', () => {
     expect(client.released()).toContain(990)
     expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()
     // The earlier pivot's run is gone, and its strip with it.
+    expect(pivot.getSnapshot().info.size).toBe(0)
+  })
+
+  it('keeps a build and its failure with the group they are for when the builder moves to another', async () => {
+    const { results, pivot, run } = fixture()
+    const [first] = run(2)
+    const [one, two] = results.getSnapshot().t1.sets.map(set => set.key)
+    pivot.open('t1', one)
+    const building = deferred<Awaited<ReturnType<FakeHandle['pivot']>>>()
+    let fail!: (reason: unknown) => void
+    vi.mocked(first.pivot).mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; void building.promise }))
+    const pivoting = pivot.run('t1')
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: one, running: true })
+    // Another grid takes the focus while Result 1 builds: the builder is Result 2's, which is not building, and says
+    // whose build is in the way.
+    results.focusEntry('t1', two)
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: two, running: false, busy: 'Result 1' })
+    expect(pivot.canPivot('t1', two)).toBe(false)
+    fail(new ResultError('TOO_LARGE', 'Not enough memory for Result 1.'))
+    await pivoting
+    // The failure is Result 1's: Result 2's builder shows none, and Result 1's shows it when the builder is back.
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: two, running: false })
+    expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()
+    expect(pivot.getSnapshot().tabs.t1.busy).toBeUndefined()
+    expect(pivot.canPivot('t1', two)).toBe(true)
+    results.focusEntry('t1', one)
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: one, error: 'Not enough memory for Result 1.' })
+    // Editing Result 2's draft leaves it; editing Result 1's clears it.
+    results.focusEntry('t1', two)
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
+    results.focusEntry('t1', one)
+    expect(pivot.getSnapshot().tabs.t1.error).toBe('Not enough memory for Result 1.')
+    pivot.setDraft('t1', { rows: [1], values: [{ aggregate: 'count' }] })
+    expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()
+  })
+
+  it('follows a stored transpose to its group, and keeps a group\'s draft untouched while a new run has yet to return it', async () => {
+    const { client, results, pivot, run } = fixture()
+    run(2)
+    const sets = () => results.getSnapshot().t1.sets
+    const two = sets()[1].key
+    pivot.open('t1', two)
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
+    const turned = results.addSet('t1', descriptor(702, { index: 1, kind: 'transpose' }), 'Transpose of Result 2', [setKey(sets()[1].descriptor)])!
+    results.focusEntry('t1', sets()[0].key)
+    expect(pivot.getSnapshot().tabs.t1.sourceName).toBe('Result 1')
+    // The transpose is one of Result 2's views: the builder is Result 2's, not the first group's.
+    results.focusEntry('t1', turned)
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: two, sourceName: 'Result 2', draft: { rows: [0] } })
+    // A new run that has returned only Result 1: the builder still names Result 2, and an edit made now writes nothing
+    // over the draft it keeps for it.
+    results.begin('t1', 'q-streaming')
+    client.emit('q-streaming', { type: 'resultSet.opened', descriptor: descriptor(50, { index: 0, columns }) })
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: undefined, sourceName: 'Result 2' })
+    pivot.setDraft('t1', { rows: [], values: [{ aggregate: 'count' }] })
+    run(2, { queryId: 'q2', columns: [columns[1], columns[0]] })
+    // Fitted by name to the moved columns: Region is the second column now.
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ sourceName: 'Result 2', draft: { rows: [1] } })
+  })
+
+  it('keeps a new Pivot\'s strip when another tab publishes before the frame that shows the Pivot', async () => {
+    const client = fakeResultClient(), events = new EventBus(), timers = manualTimers()
+    const api = { copyResults: vi.fn<VariaApi['copyResults']>(), saveResults: vi.fn<VariaApi['saveResults']>(), cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(), onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}) }
+    const frames: (() => void)[] = []
+    const results = new ResultsService({ client, api, events, frame: callback => { frames.push(callback) }, timers: timers.timers, newId: () => crypto.randomUUID() })
+    const pivot = new PivotService(results)
+    for (const [tabId, id] of [['a', 1], ['b', 2]] as const) {
+      const value = descriptor(id, { index: 0, columns })
+      results.begin(tabId, 'q' + tabId)
+      client.emit('q' + tabId, { type: 'resultSet.opened', descriptor: value })
+      void results.finish(tabId, 'q' + tabId, { summary: summaryOf([value]) })
+    }
+    pivot.open('a', results.getSnapshot().a.sets[0].key)
+    await pivot.run('a')
+    // The pivot is added, but tab a's snapshot shows it only on the next frame.
+    expect(results.getSnapshot().a.sets).toHaveLength(1)
+    expect([...pivot.getSnapshot().info.keys()]).toEqual(['1:801'])
+    // Tab b publishes first.
+    results.focusEntry('b', results.getSnapshot().b.sets[0].key)
+    expect([...pivot.getSnapshot().info.keys()]).toEqual(['1:801'])
+    for (const frame of frames.splice(0)) frame()
+    expect(results.getSnapshot().a.sets).toHaveLength(2)
+    expect([...pivot.getSnapshot().info.keys()]).toEqual(['1:801'])
+    // Once shown it is kept only while shown.
+    results.removeEntry('a', results.getSnapshot().a.sets[1].key)
     expect(pivot.getSnapshot().info.size).toBe(0)
   })
 

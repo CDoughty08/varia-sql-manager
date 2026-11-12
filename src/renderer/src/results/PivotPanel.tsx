@@ -65,7 +65,7 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
       {/* The group it belongs to; a result a new run has yet to return is still named. */}
       <div className="pivot-field" role="group" aria-label="Pivot source">
         <span>Source</span>
-        <span className="pivot-source">{entry ? entryName(entry) : state.sourceName ?? ''}</span>
+        <span className="pivot-source" aria-live="polite">{entry ? entryName(entry) : state.sourceName ?? ''}</span>
       </div>
       <section className="pivot-section" aria-labelledby={ids + 'rows'}>
         <h3 id={ids + 'rows'}>Rows</h3>
@@ -115,6 +115,7 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
       {!entry ? <div className="profile-note">{state.sourceName ? `${state.sourceName} is not among these results.` : 'None of these results can be pivoted.'}</div>
         : !pivotable(entry) && !state.running ? <div className="profile-note">{entry.handle.getSnapshot().state === 'complete' ? 'This result cannot be pivoted.' : 'Pivot this result after it finishes loading.'}</div> : null}
       {entry && pivotable(entry) && sorting && !state.running && <div className="profile-note">Pivot after the grid finishes sorting and filtering.</div>}
+      {state.busy && <div className="profile-note">Pivot of {state.busy} is being built. Build this one when it has finished.</div>}
       {viewed && <div className="profile-note">The pivot reads the rows as the grid shows them, sorted and filtered.</div>}
       {entry && state.pivot !== undefined && !state.running && <div className="profile-note">Building again replaces Pivot of {entryName(entry)}.</div>}
       {state.running

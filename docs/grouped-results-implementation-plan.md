@@ -557,8 +557,11 @@ Outcome, accepted by the owner:
        (`outputGridBare`). No comparison has a source link yet, so "reads closed" has nothing to draw until PR 16;
        the frozen references are there for it.
      - The Results badge counts groups.
-     - A transposed item is sized by its drawn rows once its grid has said it is turned (or from saved grid state when
-       the stack mounts); PR 7's service call should publish so an unmounted grid's item resizes too.
+     - A transposed item is sized by its drawn rows from each grid's state, read again with every snapshot (PR 7's
+       `setOrientation` publishes), so an item whose grid is not mounted resizes too; the Messages strip's room
+       (`stackNeed`) counts the same rows.
+     - A build and its failure belong to one group: the builder shows "running" and the message only while it is that
+       group's, and names the group that is building when it is another's (one build per tab until PR 10).
 10. **Atomic Pivot replacement.** Stored recipe and per-group draft, provenance, replacement that keeps the old Pivot
     until the new one publishes, `results.pivot` from Tables only in the backend, parallel builds with their cap and
     retry, the 1,000 rule. Checks: replacement success, cancellation, failure, late answer, memory overlap.
