@@ -16,6 +16,8 @@ export interface SubDialogProps {
   readonly className?: string
   /** A line beside OK and Cancel (the server file picker's count and hint). */
   readonly status?: ReactNode
+  /** A destructive OK (Kill Process): Cancel takes focus as the dialog opens, so a stray Enter cancels, and OK is drawn as danger. */
+  readonly destructive?: boolean
   readonly children: ReactNode
 }
 
@@ -24,17 +26,23 @@ export interface SubDialogProps {
  * OK and Cancel. Tab stays inside it, and Escape and Enter are handled here, so only this dialog closes; focus returns
  * to where it was.
  */
-export default function SubDialog({ title, okLabel = 'OK', cancelLabel = 'Cancel', okDisabled, onOk, onCancel, initialFocus, className, status, children }: SubDialogProps) {
+export default function SubDialog({ title, okLabel = 'OK', cancelLabel = 'Cancel', okDisabled, onOk, onCancel, initialFocus, className, status, destructive, children }: SubDialogProps) {
   const titleId = useId()
   const form = useRef<HTMLFormElement>(null)
+  const cancel = useRef<HTMLButtonElement>(null)
   // Read while rendering, before the dialog takes focus.
   const returnFocus = useRef(focusToReturn())
   useEffect(() => {
-    const target = (initialFocus ? document.getElementById(initialFocus) : null) ?? form.current?.querySelector<HTMLElement>('input:not(:disabled), select:not(:disabled), button:not(:disabled)')
+    const target = (destructive ? cancel.current : null) ?? (initialFocus ? document.getElementById(initialFocus) : null) ?? form.current?.querySelector<HTMLElement>('input:not(:disabled), select:not(:disabled), button:not(:disabled)')
     target?.focus()
     const previous = returnFocus.current
     return () => returnFocusTo(previous)
-  }, [initialFocus])
+  }, [initialFocus, destructive])
+  // OK disabled while its work runs (Killing…) drops focus to the page: keep it in the dialog, where Tab and Escape work.
+  useEffect(() => {
+    const active = document.activeElement
+    if (okDisabled && form.current && (!active || active === document.body)) form.current.focus()
+  }, [okDisabled])
   const keyDown = (event: KeyboardEvent<HTMLFormElement>) => {
     // A portal's events still bubble to the dialog it opened over, which must not also act on them.
     event.stopPropagation()
@@ -42,7 +50,8 @@ export default function SubDialog({ title, okLabel = 'OK', cancelLabel = 'Cancel
     if (event.key === 'Escape') { event.preventDefault(); onCancel() }
     else if (event.key === 'Enter') {
       // A button presses itself and a drop-down list opens; a list box (Select Database Owner's) chooses, as OK does.
-      if (event.target instanceof HTMLButtonElement || (event.target instanceof HTMLSelectElement && event.target.size <= 1)) return
+      // A destructive OK runs only from its own button.
+      if (event.target instanceof HTMLButtonElement || (event.target instanceof HTMLSelectElement && event.target.size <= 1) || destructive) return
       event.preventDefault()
       if (!okDisabled) onOk()
     }
@@ -54,8 +63,8 @@ export default function SubDialog({ title, okLabel = 'OK', cancelLabel = 'Cancel
     <div className="sub-dialog-body">{children}</div>
     <div className="connection-footer">
       <span className="sub-dialog-status">{status}</span>
-      <button className="primary" type="submit" disabled={okDisabled}>{okLabel}</button>
-      <button type="button" onClick={onCancel}>{cancelLabel}</button>
+      <button className={destructive ? 'danger' : 'primary'} type="submit" disabled={okDisabled}>{okLabel}</button>
+      <button type="button" ref={cancel} onClick={onCancel}>{cancelLabel}</button>
     </div>
   </form></div>, document.body)
 }

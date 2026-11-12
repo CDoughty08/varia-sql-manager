@@ -893,7 +893,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rs-caption-toggle { display: inline-flex; flex-shrink: 0; align-items: center; gap: 2px; height: 22px; padding: 0 6px 0 0; border-radius: var(--varia-radius-sm); color: var(--varia-foreground); font-size: var(--varia-size-sm); font-weight: 600; }
 .rs-caption-facts { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 .rs-caption-batch { flex-shrink: 0; }
-.rs-caption-save { flex-shrink: 0; }
+.rs-caption-save, .rs-caption-close { flex-shrink: 0; }
 /* A filtered result's filters (results PR 4), after its facts: each its words and a Remove button; they give way to the name. */
 .rs-filters { display: flex; flex: 0 1 auto; align-items: center; gap: var(--varia-space-1); min-width: 0; overflow: hidden; }
 .rs-filter { display: inline-flex; flex: 0 1 auto; align-items: center; gap: var(--varia-space-1); min-width: 0; height: 20px; padding: 0 0 0 var(--varia-space-2); border: 1px solid var(--varia-chip-activeBorder); border-radius: var(--varia-radius-pill); background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); }
@@ -902,7 +902,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rs-filters-clear { flex-shrink: 0; height: 20px; padding: 0 var(--varia-space-1); border-radius: var(--varia-radius-sm); color: var(--varia-foreground); text-decoration: underline; }
 .rs-filter-remove:focus-visible, .rs-filters-clear:focus-visible { outline-offset: -2px; }
 /* Captions and the Messages strip sit against the stack's and the pane's clipping edges: their rings go inside. */
-.rs-caption-toggle:focus-visible, .rs-caption-save:focus-visible, .messages-strip-toggle:focus-visible { outline-offset: -2px; }
+.rs-caption-toggle:focus-visible, .rs-caption-save:focus-visible, .rs-caption-close:focus-visible, .messages-strip-toggle:focus-visible { outline-offset: -2px; }
 .rs-splitter { position: absolute; left: 0; right: 0; height: 5px; cursor: row-resize; background: var(--varia-resultsGrid-splitterBackground); outline: none; touch-action: none; }
 .rs-splitter:hover, .rs-splitter:active, .rs-splitter:focus-visible { background: var(--varia-sash-hoverBorder); }
 /* Beside a collapsed set a splitter only divides. */
@@ -2425,6 +2425,43 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .activity-filter-box input { flex: 1 1 0; width: 0; min-width: 0; height: var(--varia-control); padding: 0 var(--varia-space-2); }
 .activity-pane-grid { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .activity-pane-notice { flex: none; margin: var(--varia-space-1) var(--varia-space-2); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-lg); }
+/* Session actions: the Details flyout beside the monitor (nonmodal), Kill Process's confirm and its report. */
+.activity-layout > .document-content { flex: 1; }
+.activity-details { display: flex; flex: 0 0 clamp(300px, 32%, 480px); flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--varia-panel-border); background: var(--varia-sideBar-background); }
+.activity-details:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.activity-details-head { display: flex; flex: none; align-items: center; gap: var(--varia-space-1); padding: var(--varia-space-2) var(--varia-space-2) var(--varia-space-2) var(--varia-space-3); border-bottom: 1px solid var(--varia-panel-border); }
+.activity-details-title { flex: 1; min-width: 0; margin: 0; overflow: hidden; font-size: var(--varia-size-md); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.activity-details-login { color: var(--varia-descriptionForeground); font-weight: 400; }
+.activity-details-body { display: flex; flex: 1; flex-direction: column; gap: var(--varia-space-3); min-height: 0; overflow: auto; padding: var(--varia-space-3); }
+.activity-details-section > h3 { margin: 0 0 var(--varia-space-1); font-size: var(--varia-size-sm); font-weight: 600; }
+.activity-details-fields { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px var(--varia-space-3); margin: 0; font-size: var(--varia-size-sm); }
+.activity-details-fields > div { display: contents; }
+.activity-details-fields dt { color: var(--varia-descriptionForeground); }
+.activity-details-fields dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.activity-details-text { max-height: 16em; margin: 0; overflow: auto; padding: var(--varia-space-2); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-editor-background); font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); white-space: pre-wrap; overflow-wrap: anywhere; }
+.activity-details-text:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.activity-details-table { width: 100%; border-collapse: collapse; font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; }
+.activity-details-table th, .activity-details-table td { padding: 2px var(--varia-space-1); border-bottom: 1px solid var(--varia-panel-border); text-align: left; overflow-wrap: anywhere; }
+.activity-details-table thead th { color: var(--varia-descriptionForeground); font-weight: 600; }
+.activity-details-table tbody th { font-weight: 400; }
+.activity-details-load { display: flex; flex-direction: column; align-items: flex-start; gap: var(--varia-space-1); }
+.activity-details-foot { flex: none; padding: var(--varia-space-1) var(--varia-space-3); border-top: 1px solid var(--varia-panel-border); }
+.connection-modal.sub-dialog.activity-kill { width: min(460px, calc(100vw - 48px)); }
+.activity-kill-question { margin: 0; font-weight: 600; }
+.activity-kill-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px var(--varia-space-3); margin: 0; }
+.activity-kill-facts > div { display: contents; }
+.activity-kill-facts dt { color: var(--varia-descriptionForeground); }
+.activity-kill-facts dd { margin: 0; overflow-wrap: anywhere; }
+.activity-kill-warning, .activity-kill-refusal { display: flex; align-items: flex-start; gap: var(--varia-space-1); margin: 0; }
+.activity-kill-warning > .codicon { color: var(--varia-banner-warningForeground); }
+.activity-kill-refusal { color: var(--varia-errorForeground); }
+.activity-kill button.danger, .activity-kill button.danger:hover:not(:disabled) { color: var(--varia-errorForeground); font-weight: 600; }
+.activity-report { display: flex; flex: none; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-2) var(--varia-space-1) var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-lg); font-size: var(--varia-size-sm); }
+.activity-report > p { flex: 1; min-width: 0; margin: 0; }
+.activity-report[data-tone="success"] > .codicon { color: var(--varia-successForeground); }
+.activity-report[data-tone="info"] > .codicon { color: var(--varia-descriptionForeground); }
+.activity-report[data-tone="warning"] { background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); }
+.activity-report[data-tone="error"] { background: var(--varia-banner-errorBackground); color: var(--varia-banner-errorForeground); }
 .activity-pane-rows { position: relative; display: flex; flex: 1; min-height: 0; }
 .activity-pane-grid[data-stale] .activity-pane-rows { opacity: 0.6; }
 .activity-pane-loading { position: absolute; inset: 0; z-index: 4; padding: var(--varia-space-2); background: var(--varia-resultsGrid-background); }

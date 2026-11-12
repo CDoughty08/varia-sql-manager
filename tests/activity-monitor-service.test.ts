@@ -152,7 +152,8 @@ describe('Activity Monitor document', () => {
     expect(paneProbes(['blocking', 'waits'])).toEqual(['activity.overview', 'activity.sessions'])
     expect(paneProbes(['activeQueries'])).toEqual(['activity.overview', 'activity.sessions'])
     expect(paneProbes(['fileIo', 'waits'])).toEqual(['activity.overview'])
-    expect(pendingPanes).toEqual(['waits', 'fileIo', 'recentQueries'])
+    expect(pendingPanes).toEqual(['waits', 'fileIo'])
+    expect(paneProbes(['recentQueries'])).toEqual(['activity.overview', 'activity.queries'])
     const state = initialMonitor('m', 'server', defaultSettings)
     expect(shownPanes(state)).toEqual(['processes', 'waits'])
     expect(shownPanes({ ...state, split: false })).toEqual(['processes'])
@@ -248,6 +249,17 @@ describe('Activity Monitor document', () => {
     expect(initialMonitor('m', 's', { ...defaultSettings, 'activityMonitor.refreshIntervalSeconds': '5', 'activityMonitor.chartWindowMinutes': '60', 'activityMonitor.primaryPane': 'blocking', 'activityMonitor.secondaryPane': 'none' }))
       .toMatchObject({ intervalSeconds: 5, windowMinutes: 60, primary: 'blocking', split: false })
     expect(initialMonitor('m', 's', { ...defaultSettings, 'activityMonitor.primaryPane': 'waits', 'activityMonitor.secondaryPane': 'waits' })).toMatchObject({ primary: 'waits', secondary: 'processes', split: false })
+  })
+  it('reads query statistics at their own interval from the settings, and only while Recent Expensive Queries shows', () => {
+    const queries = (state: ReturnType<typeof initialMonitor>) => probeSettings(state).find(entry => entry.probe === 'activity.queries')
+    const state = initialMonitor('m', 's', { ...defaultSettings, 'activityMonitor.queriesIntervalSeconds': 45 })
+    expect(state.queriesIntervalSeconds).toBe(45)
+    expect(queries(state)).toEqual({ probe: 'activity.queries', intervalMs: 45_000, paused: true })
+    expect(queries({ ...state, secondary: 'recentQueries' })).toEqual({ probe: 'activity.queries', intervalMs: 45_000, paused: false })
+    // The monitor's own interval raises it only past the setting; a value outside the bounds falls back to the default.
+    expect(queries({ ...state, intervalSeconds: 60 })?.intervalMs).toBe(60_000)
+    expect(initialMonitor('m', 's', { ...defaultSettings, 'activityMonitor.queriesIntervalSeconds': 5 }).queriesIntervalSeconds).toBe(30)
+    expect(initialMonitor('m', 's', defaultSettings).queriesIntervalSeconds).toBe(30)
   })
   it('closes like a tab, ending its view, and follows a reconnect only to its own server', async () => {
     const { activity, commands, connect, liveViews, documents, targets } = monitorFixture()

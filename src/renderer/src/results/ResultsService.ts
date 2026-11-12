@@ -112,6 +112,12 @@ export interface TabResults {
   readonly jobNotice: string
   /** Each sorted grid's sort, by entry key. */
   readonly sorts: ReadonlyMap<EntryKey, GridSort>
+  /** The highest number an entry of the run was given: the M of a grid's "Result N of M", which closing a result does not
+   *  lower (so no grid reads "Result 3 of 2"). */
+  readonly numbered: number
+  /** The run's last result was closed one at a time (not by Close Results): its status and summary stay as they were, and
+   *  the Results view stays, saying so, in place of "returned no result sets". Captured plans are not affected. */
+  readonly emptied?: true
 }
 /** One grid's view, outside React and never in a snapshot: it survives tab switches, Ctrl+R and unmounting. */
 export interface GridViewState {
@@ -190,6 +196,8 @@ interface Run {
   /** Each grid's views still open (its current one, the one it shows, and those superseded since), by entry key: a view
    *  closes only once the grid shows another or none, so a re-sort keeps painting the old order until the new one is read. */
   readonly held: Map<EntryKey, { shown?: ResultHandle; readonly views: Set<ResultView> }>
+  /** Its last entry was closed by `removeEntry`. */
+  emptied: boolean
 }
 interface RunningJob { job: ResultJob; readonly tabId: string; timer?: unknown }
 
@@ -314,7 +322,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const run: Run = {
       queryId, startedAt: this.now(), status: 'running', sets: [], planSets: [], setKeys: new Set(), entries: new Map(), numbered: 0, setsPublished: false, rowsRead: new Map(), messages: [], notices: [], messagesTruncated: false,
       completedBatches: 0, totalBatches: 0, view: 'messages', manualView: false, strip: this.stripChoices.get(tabId) === true, stripManual: false,
-      settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: '', sorts: new Map(), sorting: new Map(), held: new Map()
+      settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: '', sorts: new Map(), sorting: new Map(), held: new Map(), emptied: false
     }
     run.subscription = this.client.onQueryEvent(queryId, event => {
       if (event.type === 'session.opened') {
@@ -368,6 +376,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     // A run with sets stays on Results even when it failed: the strip under the grids shows its errors beside them.
     if (!run.manualView) run.view = run.sets.length ? 'results' : run.status === 'completed' && run.planSets.length ? 'plan' : 'messages'
     this.announce(tabId, completionSentence(run.status, run.sets.length, this.totalRows(run)))
+    let retaining: Promise<void> | undefined
     if (end.planContext && this.retainedPlans) {
       const sources: SnapshotSource[] = []
       let available = 0
@@ -390,7 +399,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       const context = end.planContext, history = this.retainedPlans, endedAt = run.endedAt
       // Install ownership before capture publishes: a subscriber may close/reset output synchronously.
       let copied!: () => void, failed!: (error: unknown) => void
-      run.retaining = new Promise<void>((resolve, reject) => { copied = resolve; failed = reject })
+      const copying = retaining = run.retaining = new Promise<void>((resolve, reject) => { copied = resolve; failed = reject })
+      // Once the copy has ended a close releases at once.
+      const ended = () => { if (run.retaining === copying) run.retaining = undefined }
+      void copying.then(ended, ended)
       void history.capture(context, {
         status: summary?.status ?? (end.code === 'BACKEND_LOST' ? 'lost' : 'failed'), endedAt,
         completedAt: summary?.completedAt, elapsedMs: summary?.elapsedMs, database: summary?.database,
@@ -399,7 +411,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       }, sources, Math.max(0, available - sources.length)).then(copied, failed)
     }
     this.publishNow(tabId)
-    return run.retaining
+    return retaining
   }
 
   /** The tab closed: its results are released and forgotten (a running save still finishes its file). */
@@ -422,65 +434,27 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   closeResults(tabId: string): void {
     const run = this.runs.get(tabId)
     if (!run || run.status === 'running' || run.status === 'closed') return
-    for (const controller of run.sorting.values()) controller.abort()
-    run.sorting.clear()
-    run.held.clear()
-    run.sorts = new Map()
-    this.closeHandles(run)
-    run.sets = []
-    run.planSets = []
-    run.setKeys.clear()
-    run.entries.clear()
+    this.drop(tabId, run, run.sets, run.planSets)
     run.closedFrom = run.status
     run.status = 'closed'
+    run.emptied = false
     run.view = 'results'
-    run.settled = new Map()
-    run.settledPublished = false
     this.views.set(tabId, emptyView())
     this.publishNow(tabId)
   }
 
   /**
-   * Takes one entry out of a run that has ended and releases its result; the entries after it move up a place and keep
-   * their keys, numbers, names and state. Nothing in the interface calls this yet: it is the operation closing one result
-   * is built on, and what the checks use to show that state follows an entry and not its place. The entry's part of the
-   * stack's state (its weight, collapsed, the focus) goes with it; the run's totals are not touched. False when there is
+   * Closes one entry of a run that has ended (a caption's close button): it leaves the run and its result is released
+   * (`drop`); the entries after it move up a place and keep their keys, numbers, names and state. A result made from it (a
+   * pivot, a transpose, a diff) is a stored result of its own and stays, under its name. The run's status, summary and row
+   * total do not change; closing its last entry marks it `emptied`. Unavailable while the query runs. False when there is
    * no such entry.
    */
   removeEntry(tabId: string, key: EntryKey): boolean {
     const run = this.runs.get(tabId), entry = run?.entries.get(key)
     if (!run || !entry || run.status === 'running' || run.status === 'closed') return false
-    run.sorting.get(key)?.abort()
-    run.sorting.delete(key)
-    // Releasing the result closes its views; the sort goes with its filters' snapshots.
-    run.held.delete(key)
-    this.setSort(tabId, run, key, undefined)
-    if (this.copying?.job.entry === key && this.runs.get(this.copying.tabId) === run) this.cancelRunning(this.copying)
-    this.controllers.delete(key)
-    const view = this.views.get(tabId)
-    if (view) {
-      view.grids.delete(key)
-      if (view.collapsed.has(key)) { const collapsed = new Set(view.collapsed); collapsed.delete(key); view.collapsed = collapsed }
-      // The others keep their shares of what is left.
-      if (view.weights?.has(key)) { const weights = new Map(view.weights); weights.delete(key); view.weights = weights }
-      if (view.focused === key) view.focused = undefined
-    }
-    run.sets = run.sets.filter(other => other !== entry)
-    run.setsPublished = false
-    run.entries.delete(key)
-    run.setKeys.delete(setKey(entry.descriptor))
-    if (run.settled.has(setKey(entry.descriptor))) {
-      run.settled = new Map(run.settled)
-      run.settledPublished = false
-      run.settled.delete(setKey(entry.descriptor))
-    }
-    const release = () => {
-      void this.client.release([entry.handle.key]).catch(() => {})
-      entry.handle.dispose()
-    }
-    // As Close Results: a retained-plan copy in progress reads the result first.
-    if (run.retaining) void run.retaining.then(release, release)
-    else release()
+    this.drop(tabId, run, [entry])
+    if (run.sets.length === 0) run.emptied = true
     this.publishNow(tabId)
     return true
   }
@@ -664,12 +638,17 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       // Rows are the grid's: a sorted grid's are its view's positions.
       const handle = (capturedPlan ? undefined : run?.sorts.get(set.key)?.view) ?? set.handle
       const value = await handle.getCell(row, column, { format: spec.kind === 'json' ? 'json' : 'xml' })
-      if (this.disposed || value.isNull || value.error) return { opened: false }
+      // A value read for a result closed meanwhile opens nothing.
+      if (this.disposed || !this.has(tabId, run, set) || value.isNull || value.error) return { opened: false }
       const base = spec.base ?? valueBase(info, spec.kind), number = (this.valueNumbers.get(base + spec.extension) ?? 0) + 1
       this.valueNumbers.set(base + spec.extension, number)
       this.documents.openText({ name: `${base}${number}${spec.extension}`, text: value.text, kind: spec.kind })
       return { opened: true, ...value.truncated ? { message: `This ${kindInfo[spec.kind].value} value was truncated at 2,097,152 characters, so it opened unformatted.` } : {} }
-    } catch (error) { return { opened: false, message: 'Could not open the value: ' + (error instanceof Error ? error.message : 'The value could not be read.') } }
+    } catch (error) {
+      // Its result was closed while the value was read: that is not a failure to report.
+      if (!this.has(tabId, run, set)) return { opened: false }
+      return { opened: false, message: 'Could not open the value: ' + (error instanceof Error ? error.message : 'The value could not be read.') }
+    }
     finally { this.opening.delete(cell) }
   }
 
@@ -971,7 +950,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** A save's outcome: announced, and shown in the toolbar until the next run or save, or for a few seconds. */
   /** Shows `text` in the tab's results toolbar for a few seconds and reads it out. */
   /** Adds a result Varia made from the run's own (a diff, results.diff) after the run ended, as its last set, named
-   *  `label`; it is released with the run's others. `sources` are the set keys it was made from: a run without them (a
+   *  `label`; it is released with the run's others, and its rows are not counted among those the query read. `sources` are the set keys it was made from: a run without them (a
    *  newer one) does not take it. Returns its entry's key, or undefined when the run is gone, still running, lacks a source,
    *  or has its most sets; the result is then released, since nothing else would close it. */
   addSet(tabId: string, descriptor: ResultDescriptor, label: string, sources: readonly string[] = []): EntryKey | undefined {
@@ -991,7 +970,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (run.settledPublished) { run.settled = new Map(run.settled); run.settledPublished = false }
     // Its grid always shows a strip: what was compared.
     run.settled.set(key, { rows: descriptor.rowsStored, strip: true })
-    run.rowsRead.set(descriptor.resultId, descriptor.rowsRead)
+    run.emptied = false
     run.view = 'results'
     this.schedule(tabId)
     return entry.key
@@ -1187,32 +1166,75 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     }
   }
 
-  /** One release for all of a run's sets: main refuses requests past 64 at a time, and a request closes 1,024 ids. */
-  private closeHandles(run: Run): void {
-    if (this.copying && this.runs.get(this.copying.tabId) === run) this.cancelRunning(this.copying)
-    const sets = [...run.sets, ...run.planSets]
-    if (sets.length === 0) return
-    const keys: ResultKey[] = sets.map(set => set.handle.key)
-    const release = () => {
-      void this.client.release(keys).catch(() => {})
-      for (const set of sets) set.handle.dispose()
+  /**
+   * The one way results leave a run: closing one entry, Close Results, the run starting again and the tab closing all come
+   * here. For each entry it gives up the sort or filter being built (a view that answers later is closed, not shown),
+   * forgets the views its grid held and its sort (closing its filters' distinct snapshots), its grid's controller and
+   * state, its share of the stack, its collapse and the focus, and cancels a copy of it; a save the backend already
+   * accepted finishes under its lease. Then the stored results are released, in one request (main refuses requests past
+   * 64 at a time, and a request closes 1,024 ids), which drops their views and snapshots in the backend and makes their
+   * handles report them released, so work other services have in flight on them fails and is dropped. A retained-plan
+   * copy in progress reads its results first. The caller publishes.
+   */
+  private drop(tabId: string, run: Run, entries: readonly ResultSetEntry[], plans: readonly ResultSetEntry[] = []): void {
+    const gone = [...entries, ...plans]
+    if (gone.length === 0) return
+    const keys = new Set(gone.map(entry => entry.key))
+    const view = this.views.get(tabId)
+    let sorts: Map<EntryKey, GridSort> | undefined, collapsed: Set<EntryKey> | undefined, weights: Map<EntryKey, number> | undefined
+    for (const entry of entries) {
+      const key = entry.key
+      run.sorting.get(key)?.abort()
+      run.sorting.delete(key)
+      // Releasing the result closes its views.
+      run.held.delete(key)
+      const sort = run.sorts.get(key)
+      if (sort) {
+        for (const list of new Set([...sort.filters, ...sort.applied].flatMap(item => item.list ? [item.list] : []))) void list.close()
+        sorts ??= new Map(run.sorts)
+        sorts.delete(key)
+      }
+      this.controllers.delete(key)
+      run.entries.delete(key)
+      run.setKeys.delete(setKey(entry.descriptor))
+      if (run.settled.has(setKey(entry.descriptor))) {
+        if (run.settledPublished) { run.settled = new Map(run.settled); run.settledPublished = false }
+        run.settled.delete(setKey(entry.descriptor))
+      }
+      if (!view) continue
+      view.grids.delete(key)
+      if (view.collapsed.has(key)) { collapsed ??= new Set(view.collapsed); collapsed.delete(key) }
+      // The others keep their shares of what is left.
+      if (view.weights?.has(key)) { weights ??= new Map(view.weights); weights.delete(key) }
+      if (view.focused === key) view.focused = undefined
     }
-    // Close Results/tab may race a bounded XML copy. The copy owns this temporary lease; history owns no handles.
+    if (sorts) run.sorts = sorts
+    if (view && collapsed) view.collapsed = collapsed
+    if (view && weights) view.weights = weights
+    if (entries.length) { run.sets = run.sets.filter(entry => !keys.has(entry.key)); run.setsPublished = false }
+    if (plans.length) run.planSets = run.planSets.filter(entry => !keys.has(entry.key))
+    if (this.copying && this.runs.get(this.copying.tabId) === run && keys.has(this.copying.job.entry)) this.cancelRunning(this.copying)
+    const released: ResultKey[] = gone.map(entry => entry.handle.key)
+    const release = () => {
+      void this.client.release(released).catch(() => {})
+      for (const entry of gone) entry.handle.dispose()
+    }
+    // A close may race a bounded XML copy. The copy owns this temporary lease; history owns no handles.
     if (run.retaining) void run.retaining.then(release, release)
     else release()
+  }
+
+  /** Whether a run still shows an entry (or captured plan set): work that answers for one it does not is dropped. */
+  private has(tabId: string, run: Run | undefined, entry: ResultSetEntry): boolean {
+    return !!run && this.runs.get(tabId) === run && (entry.capturedPlan ? run.planSets.includes(entry) : run.entries.get(entry.key) === entry)
   }
 
   private disposeRun(tabId: string): void {
     const run = this.runs.get(tabId)
     if (!run) return
     run.subscription?.dispose()
-    // Releasing a set frees its views too.
-    for (const controller of run.sorting.values()) controller.abort()
-    run.sorting.clear()
-    run.held.clear()
-    this.closeHandles(run)
+    this.drop(tabId, run, run.sets, run.planSets)
     this.runs.delete(tabId)
-    for (const key of run.entries.keys()) this.controllers.delete(key)
   }
 
   private schedule(tabId: string): void {
@@ -1264,7 +1286,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       messagesTruncated: run.messagesTruncated, rowsRead: this.totalRows(run), completedBatches: run.completedBatches, totalBatches: run.totalBatches,
       ...run.summary ? { summary: run.summary } : {}, ...run.error ? { error: run.error } : {}, view: run.view, manualView: run.manualView, strip: run.strip, stripChosen: run.stripManual, settled: run.settled,
       ...run.endedAt !== undefined ? { endedAt: run.endedAt } : {}, ...run.closedFrom ? { closedFrom: run.closedFrom } : {}, jobs: run.jobs, announcement: run.announcement, announced: run.announced,
-      jobNotice: run.jobNotice, sorts: run.sorts
+      jobNotice: run.jobNotice, sorts: run.sorts, numbered: run.numbered, ...run.emptied ? { emptied: true as const } : {}
     }
   }
 

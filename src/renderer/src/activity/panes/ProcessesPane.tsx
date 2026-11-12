@@ -14,6 +14,7 @@ import type { LiveHandle, LiveSnapshot } from '../../live/LiveService'
 import { formatCount, plural } from '../../results/status'
 import type { MonitorFacts, MonitorState, ProcessesFilter } from '../ActivityMonitorService'
 import PaneState, { paneProblem, paneWaiting, paneWaitingText, type PaneWaiting } from './PaneState'
+import { useSessionRows } from './useSessionRows'
 
 const probe = 'activity.sessions'
 const sessions = tableSpecs.sessions
@@ -53,6 +54,7 @@ export default function ProcessesPane({ state, handle, snapshot, facts, labelled
   const tools = useRef<HTMLDivElement>(null)
   const find = () => { const box = tools.current?.querySelector<HTMLInputElement>('input[type="search"]'); box?.focus(); box?.select() }
   const set = (change: Partial<ProcessesFilter>) => activity.setProcessesFilter(state.id, change)
+  const sessionRows = useSessionRows(state.id, 'sessions')
   // The header's funnels: one per facet column, each a value filter the backend applies (ActivityFilter.cs).
   const filters: LiveFilters = {
     columns: sessions.facetColumns ?? [],
@@ -65,7 +67,7 @@ export default function ProcessesPane({ state, handle, snapshot, facts, labelled
     clear: () => set({ columnFilters: [] }),
     maxValues: activityLimits.columnFilterValues
   }
-  return <div className="activity-pane-content" data-activity-grid="processes">
+  return <div className="activity-pane-content" data-activity-grid="processes" onFocus={sessionRows.onFocus}>
     <div ref={tools} className="activity-pane-tools one-row" role="toolbar" aria-label="Sessions filters">
       <ChipGroup label="View" dense scroll>
         {viewChips.map(view => <Chip key={view} label={viewChipTitles[view]} title={viewChipNotes[view]} pressed={filter.view === view} onToggle={() => set({ view: filter.view === view ? 'all' : view })} />)}
@@ -82,7 +84,8 @@ export default function ProcessesPane({ state, handle, snapshot, facts, labelled
       </button>
     </div>
     <PaneState problem={problem} hasRows={!!table} waiting={waiting}>
-      <LiveGridPane live={handle} probe={probe} table={0} label="Sessions" toneLabel={processesToneLabel} state={activity.gridState(state.id, 'processes')} filters={filters} onFind={find} />
+      <LiveGridPane live={handle} probe={probe} table={0} label="Sessions" toneLabel={processesToneLabel} state={activity.gridState(state.id, 'processes')} filters={filters} onFind={find}
+        onGrid={sessionRows.onGrid} rows={sessionRows.rows} />
     </PaneState>
     {/* Not a live region: the count changes with every sample on a busy server, and re-announcing it would be noise. */}
     <p className="activity-pane-status" aria-labelledby={labelledBy}>{processesStatus(table?.descriptor.rowsAvailable, !!table?.descriptor.truncated, filter, waiting)}</p>

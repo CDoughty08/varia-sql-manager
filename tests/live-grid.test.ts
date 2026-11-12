@@ -401,6 +401,22 @@ describe('LiveGrid', () => {
     expect(grid.getSnapshot()).toMatchObject({ selection: { active: cell(2, 1) }, activeKey: '14' })
   })
 
+  it('reads the active row\'s cells for its owner\'s row actions, never a row the selection only sits on before a swap is placed', async () => {
+    const { grid, emit, frame } = harness()
+    expect(await grid.activeRow(['id'])).toBeUndefined()
+    emit(table({ ids: ['10', '11', '12'] }))
+    frame({ selection: selection({ active: cell(1, 1) }), viewport: { firstRow: 0, lastRow: 2, rows: 3, atEnd: true } })
+    await settle()
+    expect(await grid.activeRow(['id'])).toEqual({ id: '11' })
+    expect(await grid.activeRow(['nope'])).toBeUndefined()
+    // A revision the backend sampled under an older track list: the selection stays at row 1, which now holds 12, while
+    // the grid still follows 11, so no action may name what row 1 holds.
+    emit(table({ ids: ['10', '12'] }))
+    await settle()
+    expect(grid.getSnapshot().activeKey).toBe('11')
+    expect(await grid.activeRow(['id'])).toBeUndefined()
+  })
+
   it('moves a selection whose row and tracked neighbours all left to its old index, not to a row it only guessed', async () => {
     // As the synthetic grid does: each revision drops the lowest ids and adds new ones at the bottom.
     const { grid, live, emit, frame } = harness()

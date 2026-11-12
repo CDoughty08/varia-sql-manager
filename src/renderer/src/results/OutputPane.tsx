@@ -64,15 +64,25 @@ export function OutputAnnouncer({ tabId }: { tabId: string }) {
 function plansOf(tab: TabResults | undefined): readonly ResultSetEntry[] {
   return tab && tab.status !== 'closed' ? [...tab.planSets, ...tab.sets.filter(set => set.descriptor.kind === 'executionPlan')] : []
 }
+/** Whether the run has a Results view: it has sets, or had them until they were closed (all at once, or one at a time
+ *  down to the last, `emptied`), which the view then says. */
+export const hasResultsView = (tab: TabResults | undefined): boolean => !!tab && (tab.sets.length > 0 || tab.status === 'closed' || !!tab.emptied)
+/** What the Results view says in place of grids, when it shows none. */
+export function emptyResultsText(tab: Pick<TabResults, 'status' | 'emptied'>): string {
+  return tab.status === 'closed' ? 'Results were closed to free memory. Execute the query again to see them.'
+    : tab.emptied ? 'Results were closed. Execute the query again to see them.'
+    : tab.status === 'running' ? 'Result sets appear here as the query returns them.' : 'The query returned no result sets.'
+}
 /**
  * An estimate keeps its chosen output independently of ordinary runs. Otherwise show Messages until a set opens,
  * then Results unless the user picked a view; Execution plan only while the run has a plan. Undefined before either ran.
+ * A run whose results were closed stays on Results: closing the last one does not jump to Messages.
  */
 export function outputViewOf(tab: TabResults | undefined, estimated?: EstimatedPlanState, livePlan = false): OutputViewName | undefined {
   if (estimated) return estimated.view ?? 'plan'
   if (!tab) return undefined
   if (tab.view === 'statistics') return 'statistics'
-  const hasSets = tab.sets.length > 0 || tab.status === 'closed'
+  const hasSets = hasResultsView(tab)
   return tab.view === 'plan' && (plansOf(tab).length > 0 || livePlan) ? 'plan' : tab.view !== 'messages' && hasSets ? 'results' : 'messages'
 }
 
@@ -156,7 +166,9 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
   const tab = tabId ? all[tabId] : undefined
   const leader = outputPaneIds.find(id => visible[id]) === pane
   const now = useTicker(leader && tab?.status === 'running')
-  const hasSets = !!tab && (tab.sets.length > 0 || tab.status === 'closed')
+  const hasSets = hasResultsView(tab)
+  // Grids to show: not when the results were closed, all at once or down to the last.
+  const shown = !!tab && tab.status !== 'closed' && tab.sets.length > 0
   const plans = plansOf(tab)
   const planCount = estimated ? estimated.result?.plans.length ?? 0 : plans.length
   const errors = !!tab?.messages.some(entry => entry.kind === 'error')
@@ -172,11 +184,11 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
   // only when the stack keeps room for its sets at their floors.
   const stripSummary = tab ? messagesSummary(tab.messages) : undefined
   const showStrip = !!tab && pane === 'results' && hasSets && messages > 0 && (stripSummary!.readable || tab.strip)
-  const need = tab && showStrip && tab.status !== 'closed' ? stackNeed(tab, results.viewState(tabId).collapsed) : 0
+  const need = tab && showStrip && shown ? stackNeed(tab, results.viewState(tabId).collapsed) : 0
   const stripFits = viewHeight > 0 && viewHeight >= need + g.messagesStripOpen
   const stripMax = viewHeight > 0 ? Math.max(g.messagesStripOpen, Math.min(Math.floor(viewHeight * 0.4), viewHeight - need)) : undefined
   // The results tools sit in the head beside the views, taking no rows from the grids: results panes are often short.
-  const showTools = !!tab && pane === 'results' && visible[pane] && hasSets && tab.status !== 'closed'
+  const showTools = pane === 'results' && visible[pane] && shown
   /** Shows another output panel of this group; with `focus` (a click or a key on these tabs), focus moves to its tab, since the one pressed leaves with its panel. */
   const select = (view: OutputPaneId, focus = false) => {
     if (view === pane) return
@@ -243,12 +255,11 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
             const entry = grid?.getAttribute('data-result-entry')
             if (entry) setProfiled({ tabId, target: profileTarget(tab.sets, entry) })
           }}>
-            {tab.status === 'closed' ? <EmptyState className="output-empty" detail="Results were closed to free memory. Execute the query again to see them." />
-              : hasSets ? <ResultsStack key={'stack:' + tab.queryId} tabId={tabId} tab={tab} />
-              : <EmptyState className="output-empty" icon="table" detail={tab.status === 'running' ? 'Result sets appear here as the query returns them.' : 'The query returned no result sets.'} />}
-            {profileOpen && hasSets && tab.status !== 'closed' && <ColumnProfilePanel key={'profile:' + tab.queryId} tabId={tabId} tab={tab}
+            {shown ? <ResultsStack key={'stack:' + tab.queryId} tabId={tabId} tab={tab} closable />
+              : <EmptyState className="output-empty" {...hasSets ? {} : { icon: 'table' as const }} detail={emptyResultsText(tab)} />}
+            {profileOpen && shown && <ColumnProfilePanel key={'profile:' + tab.queryId} tabId={tabId} tab={tab}
               shown={profiled?.tabId === tabId ? profiledEntry(tab.sets, profiled.target)?.key : undefined} />}
-            {pivotOpen && hasSets && tab.status !== 'closed' && <PivotPanel key={'pivot:' + tab.queryId} tabId={tabId} tab={tab} />}
+            {pivotOpen && shown && <PivotPanel key={'pivot:' + tab.queryId} tabId={tabId} tab={tab} />}
           </div>
           {showStrip && <MessagesStrip tabId={tabId} tab={tab} fits={stripFits} maxHeight={stripMax} />}
         </> : pane === 'plan' ? plans.length > 0 || livePlan ? visible.plan && <ResultPlans tabId={tabId} queryId={tab.queryId} plans={plans} visible={visible.plan} order={tab.summary?.planOrder} live={livePlan} />
