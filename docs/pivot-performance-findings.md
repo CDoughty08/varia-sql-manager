@@ -1,5 +1,8 @@
 # Pivot performance findings
 
+> Re-measured on 2026-11-12 after the sort keys changed (#432, #435, #439): see [Re-measured](#re-measured-on-2026-11-12).
+> The figures for text, date and binary groups, the proposal and the threshold below are of 2026-11-11.
+
 The investigation [pivot-performance-follow-up.md](pivot-performance-follow-up.md) asked for, measured on 2026-11-11. It
 serves the [Grouped views plan](grouped-results-implementation-plan.md): PR 17's automatic rebuild needs a source-row
 threshold, and PR 10's cap of four parallel builds needed checking.
@@ -23,6 +26,90 @@ threshold, and PR 10's cap of four parallel builds needed checking.
   filters keep. See [Threshold](#threshold-for-the-automatic-rebuild).
 - **Four parallel builds per window is safe.** They do not slow each other much; what stops them at large sources is
   the query's budget, by an immediate refusal that changes nothing. See [Parallel builds](#parallel-builds).
+
+## Re-measured on 2026-11-12
+
+`--pivot-bench` again, on the same machine and budget, on `main` after #432, #435 and #439 (text, date and binary sort
+keys held by rank or whole, keys built and rows sorted on several threads, dates read as ticks) with the sampling change
+that followed them. The sections below are the record of 2026-11-11 and are left as measured; where this section and
+they disagree, this one is current. Median of warm builds, a million rows unless a row says otherwise.
+
+| Case | `main` on 2026-11-11 | Now |
+| --- | ---: | ---: |
+| Count by an `int` of 40 values | 183 ms | 32 ms |
+| By a `decimal(18,2)` of 40 | 206 ms | 35 ms |
+| By a `decimal(38,10)` of 30 digits, 40 values | 2.01 s | 290 ms |
+| By a `datetime2` of 40 | 1.42 s | 86 ms |
+| By a text, case-insensitive collation, 40 | 2.42 s | 51 ms |
+| By a text, binary collation, 40 | 1.75 s | 46 ms |
+| By a text of 190 characters with a shared start, 40 | 5.94 s | 95 ms |
+| By a text, case-insensitive, 50,000 values | 2.8 to 3.1 s | 92 ms |
+| By a text of 190 characters, 50,000 | 7.4 s | 162 ms |
+| By a `decimal(38,10)`, 50,000 | 2.1 to 2.3 s | 677 ms |
+| Row groups an `int` then a text of 12 values | 2.93 s | 72 ms |
+| Row group the `int`, column group the text | 2.33 s | 79 ms |
+| Distinct Count of a `decimal` | 703 ms | 287 ms |
+| Distinct Count of a text of 12 values | 3.01 s | 306 ms |
+| 5,000,000 rows by an `int` | 1.57 s | 315 ms |
+| 20,000,000 rows by an `int` | 7.3 s | 1.63 s |
+| 5,000,000 rows through a filter keeping half | 601 ms | 171 ms |
+
+What changed in the conclusions:
+
+- **Text, date and time, and binary groups are no longer slower than numbers by more than about three times.** The 8
+  to 30 times of the summary is gone; the change this page proposed (#437) was closed in favour of #432, which does the
+  same for repeated values and more for values that do not repeat.
+- **What is still slow:** a `decimal` past 15 digits (its ties still read their cells, now on several threads), and
+  Distinct Count, whose own sort is still one thread (250 ms of each 290 to 330 ms build).
+- **The grouping sort is still the largest part of most builds** (40 to 95 % in these cases), but of a build four to fifty times shorter.
+- **Small sources did not reproduce this page's figures.** 20,463 rows by the `int` takes 12 ms here now, where the page
+  has 2.9 ms. #436's own commit, built and run on this machine on 2026-11-12, takes 32 ms for it, so today's code is
+  faster at that size too; the 2.9 ms was not seen again and the cause was not found. The end-to-end figures of "The
+  reported shape" (110 to 180 ms to paint) were not re-measured: `scripts/pivot-bench.mjs` needs a SQL Server this
+  session did not have.
+
+The threshold's cases:
+
+| Recipe | 50,000 rows | 100,000 | 250,000 | 500,000 |
+| --- | ---: | ---: | ---: | ---: |
+| Count by an `int` of 40 values | 6 ms | 7 ms | 12 ms | 21 ms |
+| By a text of 40 values | 9 ms | 11 ms | 18 ms | 29 ms |
+| By a `datetime2` of 40 values | 8 ms | 12 ms | 22 ms | 40 ms |
+| By a text with a value every 20 rows | 10 ms | 14 ms | 27 ms | 48 ms |
+| By a `decimal(38,10)` of 40 values | 30 ms | 37 ms | 68 ms | 119 ms |
+| By a text of 190 characters with a value every 20 rows | 15 ms | 20 ms | 46 ms | 83 ms |
+| Two row groups, Count, Sum and Distinct Count of a text that never repeats | 25 ms | 44 ms | 95 ms | 189 ms |
+
+- **By this page's own reasoning the threshold could rise to 500,000 rows.** It stopped at 100,000 because the slow
+  recipes passed a second at 250,000. The slowest found now takes 189 ms at 500,000, under the 250 ms the page gives an
+  ordinary rebuild. Larger sizes were not run as threshold cases; a million rows by one column is 32 to 95 ms above,
+  290 to 680 ms for the long `decimal` and for Distinct Count.
+- **"With a larger budget: do not raise it" was about the budget, and still holds.** What moved the figures is the
+  code, not the budget.
+- **These builds now use threads the machine may not have.** Keys and sorts take up to three quarters of the cores (16
+  here). A four-core laptop gets three, and its builds will be nearer the single-thread figures than these. The second
+  condition the page recommends (rebuild automatically only if the last build took under 250 ms) is what covers that,
+  and matters more with a higher row threshold.
+- The decision is the Grouped views plan's to take; this is the measurement for it.
+
+Parallel builds, 5,000,000 rows at 1 GiB a query:
+
+| Builds at once | Each took | Refused |
+| ---: | ---: | ---: |
+| 1 | 345 ms | 0 |
+| 2 | 1.21 s | 0 |
+| 4 | 1.25 s | 0 |
+| 8 | 1.27 s | 3 |
+
+- **Builds at once share the threads, and the first to ask takes them.** One build alone has them all; a second that
+  starts while the first holds them gets one thread for that step and runs at about the old single-thread speed
+  (1.1 to 1.3 s here, as on 2026-11-11). Nothing is slower than it was, but two builds at once finish later than the
+  same two one after the other would (0.7 s). Dividing the threads between the operations that are running is the
+  change that would fix it; it was not made here.
+- Four at once are still safe, and still refused only by the query's budget.
+
+Cancellation stopped a 2.3 s build of five million rows within 0.2 to 15 ms at seven points; a source that leaves no
+room for the working memory is refused in 0.1 ms with nothing reserved.
 
 ## Environment
 
