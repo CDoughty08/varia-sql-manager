@@ -1716,7 +1716,9 @@ try {
   await (await transposeMenu(cell(3, 0), 'Selected Rows')).click()
   await expect(turned()).toHaveCount(1)
   await expect(grid()).toHaveAttribute('aria-colcount', '3')
-  expect(await Promise.all([0, 1].map(row => transposedCell(grid(), row, 0).textContent()))).toEqual(['2', '3'])
+  // The turned grid reads its tiles after it is built: wait for the cells' text, not one read of it.
+  await expect(transposedCell(grid(), 0, 0)).toHaveText('2')
+  await expect(transposedCell(grid(), 1, 0)).toHaveText('3')
   await expect(anyResultGrid(page)).toHaveCount(1)
   // Past 4,095 rows: the first ones are drawn, the strip says so, and Find Next onto a match in a row past them says so
   // in the toolbar and moves nothing.
