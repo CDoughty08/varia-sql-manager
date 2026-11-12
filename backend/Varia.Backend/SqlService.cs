@@ -193,7 +193,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     {
         var hooks = Environment.GetEnvironmentVariable("VARIA_BACKEND_TEST_HOOKS") == "1";
         long? budget = hooks && long.TryParse(Environment.GetEnvironmentVariable("VARIA_RESULT_BUDGET_BYTES"), NumberStyles.None, CultureInfo.InvariantCulture, out var bytes) && bytes > 0 ? bytes : null;
-        return new SqlService(ResultStore.FromSystem(budget), hooks, publish);
+        // The user's limit, in MiB, as main read it from the settings when it started this process.
+        long? limit = long.TryParse(Environment.GetEnvironmentVariable("VARIA_RESULT_MEMORY_MIB"), NumberStyles.None, CultureInfo.InvariantCulture, out var mib) && mib is > 0 and <= 1L << 20 ? mib << 20 : null;
+        return new SqlService(ResultStore.FromSystem(budget, limit), hooks, publish);
     }
 
     public IReadOnlyList<string> Methods { get; }

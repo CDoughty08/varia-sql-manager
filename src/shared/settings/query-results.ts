@@ -19,6 +19,16 @@ export const queryResultsSettings = [
     description: 'Result sets after this many still run and are counted, but their rows are not kept; the Messages tab says so.'
   },
   {
+    key: 'queryResults.grid.maxRows', page: 'queryResults.sqlServer.grid', label: 'Maximum rows kept per execution (0: no limit)', type: 'integer', min: 0, max: 2_147_483_647, default: 0,
+    varia: true, applies: 'nextExecution', keywords: ['rows', 'limit', 'truncated', 'large', 'million', 'top'],
+    description: 'Rows after this many, counted over every result set of one execution, are still read and counted, but not kept; the grid says how many of how many it shows. The query itself is not changed, so the server still returns every row.'
+  },
+  {
+    key: 'queryResults.grid.memoryLimitGiB', page: 'queryResults.sqlServer.grid', label: 'Result memory limit in GiB (0: automatic)', type: 'integer', min: 0, max: 1024, default: 0,
+    varia: true, applies: 'restart', keywords: ['memory', 'budget', 'limit', 'rows', 'truncated', 'large', 'million'],
+    description: 'How much memory all query results may hold together; one query may use half of it. Automatic is a quarter of the computer\'s memory, at least 256 MiB and at most 16 GiB. A limit set here is used as it is, up to three quarters of the computer\'s memory. Rows past the limit are still read and counted, but not kept; sorting or pivoting a large result needs room beside its rows.'
+  },
+  {
     key: 'queryResults.grid.showColumnTypes', page: 'queryResults.sqlServer.grid', label: 'Show column data types in the column headers', type: 'boolean', default: true,
     varia: true, keywords: ['type', 'data type', 'header', 'int', 'nvarchar'],
     description: 'Each column header shows the column\'s SQL type after its name, in smaller text: int, nvarchar(50), decimal(18,2). The header\'s tooltip names the type either way. Column widths already set are kept when this changes.'

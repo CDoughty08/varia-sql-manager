@@ -30,6 +30,11 @@ export interface SupervisorDeps extends ConnectionDeps {
   /** Silence before the backend counts as unresponsive; smoke tests shorten it (VARIA_BACKEND_LIVENESS_MS). */
   unresponsiveMs?: number
   power?: PowerMonitorLike
+  /** What the first launch waits for (the settings its environment is read from), settled either way. Requests made
+   *  meanwhile wait for the connection, as they do while one starts. */
+  before?: Promise<unknown>
+  /** Added to the spawn environment at every launch: what the user may have changed since the last one. */
+  environment?: () => Record<string, string>
 }
 export interface RequestOptions extends Pick<SendOptions, 'stream' | 'credit'> {
   /** Query events, validated and stamped with the generation; an invalid one fails the request (STREAM_PROTOCOL). */
@@ -131,7 +136,9 @@ export class BackendSupervisor {
   start(): void {
     if (this.started || this.closing) return
     this.started = true
-    this.launch()
+    const before = this.deps.before
+    if (!before) return this.launch()
+    void before.then(() => {}, () => {}).then(() => { if (!this.closing) this.launch() })
   }
 
   /** The generation whose results can be read now: the current one while it is ready. */
@@ -302,7 +309,8 @@ export class BackendSupervisor {
       this.retired = { generation, reason: loss.reason, loss, uptimeMs: 0 }
       return this.fail('spawn', failureMessage(loss, this.spec.packaged)!)
     }
-    const connection = new BackendConnection(this.spec, generation, this.deps)
+    const added = this.deps.environment?.()
+    const connection = new BackendConnection(added && Object.keys(added).length > 0 ? { ...this.spec, env: { ...this.spec.env ?? process.env, ...added } } : this.spec, generation, this.deps)
     this.connection = connection
     this.readySince = undefined
     this.setState({ status: 'starting', generation })

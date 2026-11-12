@@ -13,6 +13,7 @@
 
 - **Keep Selected Rows:** filter a results grid to exactly the rows you selected, from the grid menu's Filter submenu. It works on sorted and filtered grids, pivots and comparisons, combines with other filters and sorting, and shows as one removable "12 selected rows" filter. Up to 4,095 rows.
 - **Close one result:** each result's caption has a close button that frees that result's memory and leaves the others as they are, with their names, numbers, sort and filters. Pivots, transposes and comparisons made from it stay. Closing the last one keeps the Results view, Messages and captured plans.
+- **Larger results:** query results can now use a quarter of the computer's memory up to 16 GiB (it was 2 GiB), half of it for one query, so a query of several million rows keeps them all on a machine with the memory for it. Tools › Options › Query Results has a **Result memory limit** to set it yourself, and a **Maximum rows kept per execution** for when you only want the first rows.
 
 ### Improved
 

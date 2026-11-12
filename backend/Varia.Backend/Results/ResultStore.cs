@@ -77,14 +77,25 @@ internal sealed class ResultStore
         LiveBytes = globalBytes / 4;
     }
 
-    /// <summary>A quarter of the memory available to the process (container-aware), within 256 MiB to 2 GiB, half of it
-    /// per query, storing nothing more under high system memory load. <paramref name="globalOverride"/>
+    /// <summary>The least a budget is, and the most it is without a limit of the user's.</summary>
+    public const long MinBytes = 256L << 20, MaxAutomaticBytes = 16L << 30;
+
+    /// <summary>The global budget on a machine of this much memory: a quarter of it within <see cref="MinBytes"/> and
+    /// <see cref="MaxAutomaticBytes"/>, or the limit the user set (Tools › Options), as it is up to three quarters of the
+    /// memory. Sorting, pivoting or profiling a result that fills its half holds as much again beside it for a moment,
+    /// which is why the automatic figure is a quarter.</summary>
+    public static long GlobalBytesFor(long memoryBytes, long? limitBytes = null) =>
+        limitBytes is > 0 ? Math.Clamp(limitBytes.Value, MinBytes, Math.Max(MinBytes, memoryBytes / 4 * 3)) : Math.Clamp(memoryBytes / 4, MinBytes, MaxAutomaticBytes);
+
+    /// <summary>The budget for this machine (<see cref="GlobalBytesFor"/>, of the memory available to the process,
+    /// container-aware), half of it per query, storing nothing more under high system memory load.
+    /// <paramref name="limitBytes"/> is the user's limit (VARIA_RESULT_MEMORY_MIB, from main). <paramref name="globalOverride"/>
     /// (VARIA_RESULT_BUDGET_BYTES, test hooks only) replaces the global figure and turns the memory-load check off, so the
     /// tests that set it see the budget they chose and its truncation reasons however busy the machine is.</summary>
-    public static ResultStore FromSystem(long? globalOverride = null)
+    public static ResultStore FromSystem(long? globalOverride = null, long? limitBytes = null)
     {
         if (globalOverride is > 0) return new ResultStore(globalOverride.Value, globalOverride.Value / 2);
-        var global = Math.Clamp(GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / 4, 256L << 20, 2L << 30);
+        var global = GlobalBytesFor(GC.GetGCMemoryInfo().TotalAvailableMemoryBytes, limitBytes);
         return new ResultStore(global, global / 2, OperatingSystemMemory);
     }
 

@@ -32,6 +32,22 @@ internal static class StoreChecks
 
     public static void Run(Action<bool, string> check)
     {
+        // The budget's size: a quarter of the machine's memory between 256 MiB and 16 GiB, or the user's limit as it is,
+        // up to three quarters of the memory and never under 256 MiB. A query has half.
+        const long MiB = 1L << 20, GiB = 1L << 30;
+        check(ResultStore.GlobalBytesFor(8 * GiB) == 2 * GiB && ResultStore.GlobalBytesFor(32 * GiB) == 8 * GiB && ResultStore.GlobalBytesFor(64 * GiB) == 16 * GiB
+            && ResultStore.GlobalBytesFor(256 * GiB) == 16 * GiB && ResultStore.GlobalBytesFor(512 * MiB) == 256 * MiB && ResultStore.GlobalBytesFor(0) == 256 * MiB,
+            "the automatic result budget is a quarter of the memory, at least 256 MiB and at most 16 GiB");
+        check(ResultStore.GlobalBytesFor(8 * GiB, 4 * GiB) == 4 * GiB && ResultStore.GlobalBytesFor(8 * GiB, 32 * GiB) == 6 * GiB && ResultStore.GlobalBytesFor(256 * GiB, 64 * GiB) == 64 * GiB
+            && ResultStore.GlobalBytesFor(8 * GiB, 100 * MiB) == 256 * MiB && ResultStore.GlobalBytesFor(128 * MiB, 8 * GiB) == 256 * MiB
+            && ResultStore.GlobalBytesFor(8 * GiB, 0) == 2 * GiB && ResultStore.GlobalBytesFor(8 * GiB, -5) == 2 * GiB,
+            "a result memory limit is used as it is, past the automatic 16 GiB too, up to three quarters of the memory and never under 256 MiB; none or a bad one is automatic");
+        var limited = ResultStore.FromSystem(null, 300 * MiB);
+        var automatic = ResultStore.FromSystem();
+        check(limited.GlobalBytes is >= 256 * MiB and <= 300 * MiB && limited.QueryBytes == limited.GlobalBytes / 2 && limited.ChecksSystemMemory
+            && automatic.GlobalBytes is >= 256 * MiB and <= 16 * GiB && automatic.QueryBytes == automatic.GlobalBytes / 2 && ResultStore.FromSystem(4L << 20, 300 * MiB).GlobalBytes == 4L << 20,
+            "a store with the user's limit still gives a query half and still stops under low memory; the test hooks' budget wins over it");
+
         var low = false;
         var store = new ResultStore(1000, 600, () => (low ? 100 : 0, 50));
         var a = store.BeginQuery("s1");

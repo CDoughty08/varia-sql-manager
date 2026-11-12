@@ -10,7 +10,7 @@ import { encodeControl } from '../src/shared/ipc/wire/msgpack'
 import { BackendSupervisor, type SupervisorDeps } from '../src/main/backend/supervisor'
 import { BackendError, sentences } from '../src/main/backend/errors'
 import type { LiveEvent } from '../src/shared/live/schema'
-import { backendSpawnSpec } from '../src/main/backend/spawn-spec'
+import { backendSpawnSpec, resultMemoryEnvironment } from '../src/main/backend/spawn-spec'
 import { sqlToolsEnvironment } from '../src/main/backend/sqltools-runtime'
 import { fakeSpawn, manualClock, settle, type FakeBackend } from './fixtures/fake-process'
 
@@ -407,6 +407,49 @@ describe('smoke-test backends', () => {
     expect(backendSpawnSpec({ ...base, smokeTest: false, env })).toMatchObject({ command: 'dotnet', requires: join(base.root, 'backend/Varia.Backend/bin/Debug/net10.0/Varia.Backend.dll') })
     expect(backendSpawnSpec({ ...base, packaged: true, smokeTest: true, env })).toMatchObject({ args: [], cwd: base.resourcesPath, packaged: true })
     expect(() => backendSpawnSpec({ ...base, smokeTest: true, env: { ...env, VARIA_TEST_NODE: 'node' } })).toThrow('absolute VARIA_TEST_NODE')
+  })
+  it('gives the backend the result memory limit of the settings, at each launch and once they are read', async () => {
+    expect(resultMemoryEnvironment(0)).toEqual({})
+    expect(resultMemoryEnvironment(8)).toEqual({ VARIA_RESULT_MEMORY_MIB: '8192' })
+    expect(resultMemoryEnvironment(4096)).toEqual({ VARIA_RESULT_MEMORY_MIB: '1048576' })
+    for (const value of [-1, 1.5, Number.NaN, '8', undefined, null]) expect(resultMemoryEnvironment(value), String(value)).toEqual({})
+    // A limit in the shell's environment is not the user's setting.
+    const base = { packaged: false, root: resolve('app'), resourcesPath: resolve('resources'), platform: process.platform, smokeTest: false }
+    expect(backendSpawnSpec({ ...base, env: { PATH: '/bin', VARIA_RESULT_MEMORY_MIB: '64' } }).env).not.toHaveProperty('VARIA_RESULT_MEMORY_MIB')
+    expect(backendSpawnSpec({ ...base, packaged: true, env: { PATH: '/bin', VARIA_RESULT_MEMORY_MIB: '64' } }).env).not.toHaveProperty('VARIA_RESULT_MEMORY_MIB')
+
+    const processes = fakeSpawn()
+    const environments: (NodeJS.ProcessEnv | undefined)[] = []
+    const spying = ((command: string, args: readonly string[], options: { env?: NodeJS.ProcessEnv }) => {
+      environments.push(options.env)
+      return (processes.spawn as unknown as (...given: unknown[]) => unknown)(command, args, options)
+    }) as unknown as typeof processes.spawn
+    let settled!: () => void
+    const before = new Promise<void>(resolve => { settled = resolve })
+    let limit = 0
+    const value = new BackendSupervisor({ command: 'backend', args: [], cwd: '.', env: { PATH: '/bin' }, packaged: true }, {
+      spawn: spying,
+      before, environment: () => resultMemoryEnvironment(limit)
+    })
+    supervisors.push(value)
+    // Started, and asked something, before the settings are read: nothing is spawned yet, and the request waits.
+    value.start()
+    const asked = value.request('system.health', {})
+    asked.catch(() => {})
+    await settle()
+    expect(environments).toEqual([])
+    limit = 8
+    settled()
+    await settle()
+    expect(environments).toEqual([{ PATH: '/bin', VARIA_RESULT_MEMORY_MIB: '8192' }])
+    // Automatic adds nothing, and a launch that waits for nothing starts at once.
+    const plain = new BackendSupervisor({ command: 'backend', args: [], cwd: '.', env: { PATH: '/bin' }, packaged: true }, {
+      spawn: spying, environment: () => resultMemoryEnvironment(0)
+    })
+    supervisors.push(plain)
+    plain.start()
+    expect(environments.at(-1)).toEqual({ PATH: '/bin' })
+    expect(environments).toHaveLength(2)
   })
   it('passes the OS locale to the real backend, which dates script headers in it', () => {
     const base = { packaged: false, root: resolve('app'), resourcesPath: resolve('resources'), platform: process.platform, smokeTest: false, env: { PATH: '/bin', VARIA_BACKEND_TEST_HOOKS: '1' } }

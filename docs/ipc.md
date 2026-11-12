@@ -1165,7 +1165,11 @@ PageBody := array(7)
 Results stay in backend memory, never on disk (`ResultStore`).
 
 - **Budget.** Global: a quarter of the memory available to the process (container-aware `TotalAvailableMemoryBytes`),
-  within 256 MiB – 2 GiB. One query may use half of it. Nothing more is stored while the operating system reports high
+  within 256 MiB – 16 GiB, or the limit of Tools › Options (`queryResults.grid.memoryLimitGiB`, 0 for automatic), used as it
+  is up to three quarters of that memory. Main reads the setting and gives it to the backend in its environment
+  (`VARIA_RESULT_MEMORY_MIB`) at each launch; the backend sizes its store once, as it starts, so a change applies after a
+  restart. The automatic figure is a quarter because a sort, pivot or profile of a result that fills its half holds
+  nearly as much again beside it while it runs. One query may use half of it. Nothing more is stored while the operating system reports high
   memory load (checked at every page seal). `VARIA_RESULT_BUDGET_BYTES` replaces the global figure only with the test
   hooks, and turns the memory-load check off so tests see their budget's truncation reasons on a busy machine (the offline
   checks' stores never check it unless given a probe).
@@ -2603,7 +2607,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Stored cells | text 65,535 characters; xml, json and showplan 2,097,152; vector 65,535; binary and CLR types 32,766 bytes | backend |
 | Result sets kept per query | 1 – 1,000 (default 10) | zod and backend |
 | Rows stored per query | 0 – 2,147,483,647 (0 = budget only) | zod and backend |
-| Result budget | `clamp(available memory / 4, 256 MiB, 2 GiB)`; 50 % per query; none under high system memory load | backend |
+| Result budget | `clamp(available memory / 4, 256 MiB, 16 GiB)`, or the Options limit up to three quarters of memory; 50 % per query; none under high system memory load | backend |
 | Messages | 1,000 entries / 1,000,000 characters, then up to 20 more errors; error text 16,384 characters | backend |
 | Descriptors per summary | 8 MiB (bounded per set by names, types and 96 bytes per column) | backend |
 | FOR XML / FOR JSON value | 2,097,152 characters, the rest marks it truncated | backend |
