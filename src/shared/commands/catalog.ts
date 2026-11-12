@@ -784,6 +784,11 @@ export const commandCatalog = {
     title: 'Toggle Developer Tools', category: 'Developer', icon: 'tools', role: 'toggleDevTools', keybindings: [{ win: 'ctrl+shift+i', linux: 'ctrl+shift+i', mac: 'alt+meta+i', native: true }],
     menus: [{ menu: 'view', group: 'z_developer', order: 2, mnemonic: 'd' }]
   },
+  'help.gettingStarted': {
+    title: 'Getting Started', category: 'Help', icon: 'info', keywords: ['guide', 'learn', 'tutorial', 'help', 'start'],
+    menus: [{ menu: 'help', group: '0_guides', order: 1, mnemonic: 'g' }]
+  },
+  'help.openGuide': { title: 'Open Getting Started Guide', category: 'Help', palette: false },
   'help.about': {
     title: 'About Varia', category: 'Help', icon: 'info', keywords: ['version', 'build', 'support', 'product'],
     menus: [{ menu: 'help', group: 'z_about', order: 1, mnemonic: 'a' }]

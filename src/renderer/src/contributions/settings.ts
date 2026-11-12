@@ -9,7 +9,7 @@ import type { Workbench } from '../core/workbench'
  */
 export function settingsContribution({ commands, settings }: Pick<Workbench, 'commands' | 'settings'>): Disposable {
   const registrations = [
-    commands.register('preferences.options', { run: async () => { if (await settings.load()) settings.openDialog() } }),
+    commands.register('preferences.options', { run: async args => { if (await settings.load()) settings.openDialog(args?.settingsPage) } }),
     commands.register('options.focusSearch', {
       run: () => {
         const search = windows.activeElement()?.closest('[data-options-dialog]')?.querySelector<HTMLInputElement>('[data-options-search]')
