@@ -36,12 +36,114 @@ internal static class ViewChecks
     public static void Run(Action<bool, string> check)
     {
         Ordering(check);
+        WholeKeys(check);
+        RankChecks.Run(check);
         Registry(check);
         HostReads(check);
         Jobs(check).GetAwaiter().GetResult();
+        Instants(check);
         check(ViewSorter.CompareNumericText("12345678901234567890123456789012.5"u8, "12345678901234567890123456789012.25"u8) > 0
             && ViewSorter.CompareNumericText("-0.00"u8, "0"u8) == 0 && ViewSorter.CompareNumericText("-10"u8, "-9.5"u8) < 0 && ViewSorter.CompareNumericText("0.10"u8, "0.1"u8) == 0,
             "exact numerics compare as numbers at any precision: digits past double's, a negative zero, and trailing zeros");
+    }
+
+    /// <summary>Date and time text read directly is what the general parser reads: the same ticks for the text the backend
+    /// writes, and nothing for any other text, which the general parser is then left to read.</summary>
+    private static void Instants(Action<bool, string> check)
+    {
+        var invariant = System.Globalization.CultureInfo.InvariantCulture;
+        string[] written =
+        [
+            "2024-01-01", "0001-01-01", "9999-12-31", "2024-02-29", "2024-01-01 10:20:30", "2024-01-01 10:20:30.5", "2024-01-01 10:20:30.123", "2024-01-01 23:59:59.9999999",
+            "1900-01-01 00:00:00.0000000", "10:20:30", "23:59:59.9999999", "00:00:00.0000001", "2024-01-01 10:00:00.0000000 +02:00", "2024-01-01 10:00:00.0000000 -05:30",
+            "0001-01-01 00:00:00.0000000 +00:00", "9999-12-31 23:59:59.9999999 -14:00", "2024-06-30 12:00:00 +14:00"
+        ];
+        string[] other =
+        [
+            "", "2024-1-1", "2023-02-29", "2024-13-01", "2024-01-32", "0000-01-01", "2024-01-01T10:20:30", "2024-01-01 24:00:00", "2024-01-01 10:60:00", "2024-01-01 10:20:60",
+            "2024-01-01 10:20:30.", "2024-01-01 10:20:30.12345678", "2024-01-01 10:20", "2024-01-01 ", "10:20", "1.10:20:30", "2024-01-01 10:00:00 +15:00", "2024-01-01 10:00:00 +14:30",
+            "2024-01-01 10:00:00 Z", "2024-01-01 10:00:00+02:00", " 2024-01-01", "2024-01-01 10:00:00 +02:0", "abcd-ef-gh", "2024-01-01 1a:00:00", "Jan 1 2024"
+        ];
+        var same = new List<string>();
+        var wrong = new List<string>();
+        // What kind each text is, said here and not taken from the reader: a date (with or without a time), a time, or an
+        // instant with its offset, each against the parser its column type used.
+        string Kind(string text) => text.Length > 10 && text[^6] is '+' or '-' && text[^3] == ':' && text[^7] == ' ' ? "zoned" : text.Length >= 10 && text[4] == '-' ? "dated" : "time";
+        foreach (var text in written)
+        {
+            var read = ViewSorter.TryInstant(Encoding.UTF8.GetBytes(text), out var ticks, out var offset, out var dated, out var zoned);
+            var kind = Kind(text);
+            long? expected = kind == "zoned" ? (DateTimeOffset.TryParse(text, invariant, System.Globalization.DateTimeStyles.None, out var instant) ? instant.UtcTicks : null)
+                : kind == "dated" ? (DateTime.TryParse(text, invariant, System.Globalization.DateTimeStyles.None, out var date) ? date.Ticks : null)
+                : TimeSpan.TryParse(text, invariant, out var time) ? time.Ticks : null;
+            // The last instant of year 9999 at -14:00 is past the range once in UTC: read as written, and left to the general parser as an instant.
+            var utc = kind == "zoned" ? ViewSorter.UtcTicks(Encoding.UTF8.GetBytes(text)) : ticks;
+            if (read && zoned == (kind == "zoned") && dated == (kind != "time") && utc == expected) same.Add(text);
+            else wrong.Add(text);
+        }
+        // A time with an offset is read, as neither a time nor an instant: every use asks for the kind its column holds.
+        if (!ViewSorter.TryInstant("10:20:30 +02:00"u8, out _, out _, out var datedTime, out var zonedTime) || datedTime || !zonedTime || ViewSorter.UtcTicks("10:20:30 +02:00"u8) is not null
+            || ViewSorter.UtcTicks("2024-01-01 10:00:00"u8) is not null || ViewSorter.UtcTicks("2024-01-01"u8) is not null) wrong.Add("a time with an offset, or an instant without one");
+
+        // Through the columns that use the reader: cells written for another type are still read by the general parser,
+        // so a column sorts and profiles as it did.
+        var store = new ResultStore(1L << 30, 1L << 29);
+        (int[] Order, ColumnProfile Profile) Through(string type, params string[] cells)
+        {
+            var set = store.Open(store.BeginQuery("instants" + Guid.NewGuid()), 0, 1, 1, "rows", [new("at", type, "text")], [WireKind.Text]) ?? throw new InvalidOperationException("The result set was not kept.");
+            foreach (var cell in cells)
+            {
+                set.CountRow();
+                set.BeginRow()!.AppendText(cell);
+                set.TryCommitRow();
+            }
+            set.Complete();
+            var pages = set.SealedSnapshot();
+            return (ViewSorter.Sort(set, pages, [new ViewKey(0, false, SortMode.Value)], CancellationToken.None).Order, ColumnProfiler.Profile(set, pages, null, [0], true, CancellationToken.None).Columns[0]);
+        }
+        // Cells without an offset are read in the zone of the machine that runs this: the others are at minutes no zone's
+        // offset puts a whole hour on, so they are five instants wherever that is.
+        string[] zonedCells = ["2024-03-01 10:07:13.0000000 +02:00", "2024-03-01", "2024-03-01 07:59:59.0000000 +00:00", "2024-03-01 09:00:00", "not an instant", "2024-03-01 10:07:13.0000000 +02:00"];
+        long Utc(string text) => DateTimeOffset.TryParse(text, invariant, System.Globalization.DateTimeStyles.None, out var value) ? value.UtcTicks : long.MinValue;
+        var expectedOrder = Enumerable.Range(0, zonedCells.Length).ToArray();
+        Array.Sort(expectedOrder, (a, b) => Utc(zonedCells[a]) != Utc(zonedCells[b]) ? Utc(zonedCells[a]).CompareTo(Utc(zonedCells[b])) : a.CompareTo(b));
+        var zonedColumn = Through("datetimeoffset", zonedCells);
+        var parsed = zonedCells.Where(cell => Utc(cell) != long.MinValue).Select(cell => (double)Utc(cell)).ToArray();
+        if (!zonedColumn.Order.SequenceEqual(expectedOrder) || zonedColumn.Profile.Histogram is not { } zonedBars || zonedBars.Low != parsed.Min() || zonedBars.High != parsed.Max() || zonedColumn.Profile.Distinct != 5)
+            wrong.Add("a datetimeoffset column with cells without an offset: " + string.Join(",", zonedColumn.Order));
+        string[] datedCells = ["2024-03-01 10:00:00.0000000", "2024-03-02 10:00:00.0000000 +02:00", "2024-02-29", "not a date"];
+        var datedBars = Through("datetime2", datedCells).Profile.Histogram;
+        var datedTicks = datedCells.Select(cell => DateTime.TryParse(cell, invariant, System.Globalization.DateTimeStyles.None, out var value) ? value.Ticks : (double?)null).Where(value => value is not null).Select(value => value!.Value).ToArray();
+        if (datedBars is null || datedBars.Low != datedTicks.Min() || datedBars.High != datedTicks.Max()) wrong.Add("a datetime2 column with a cell that has an offset, or no date");
+        string[] timeCells = ["10:20:30.0000000", "1.10:20:30", "23:59:59.9999999", "2024-03-01 00:00:01"];
+        var timeBars = Through("time", timeCells).Profile.Histogram;
+        var timeTicks = timeCells.Select(cell => TimeSpan.TryParse(cell, invariant, out var value) ? value.Ticks : (double?)null).Where(value => value is not null).Select(value => value!.Value).ToArray();
+        if (timeBars is null || timeBars.Low != timeTicks.Min() || timeBars.High != timeTicks.Max()) wrong.Add("a time column with a cell of more than a day, or with a date");
+        foreach (var text in other)
+            if (ViewSorter.TryInstant(Encoding.UTF8.GetBytes(text), out _, out _, out _, out _)) wrong.Add(text);
+        // A date column is held by its ticks while every cell is written as the backend writes it, all of one width; one
+        // that is not gives the column back to its text's bytes, which order it the same.
+        string[] Held(params string[] cells)
+        {
+            var held = new ResultStore(1L << 30, 1L << 29);
+            var set = held.Open(held.BeginQuery("dates" + Guid.NewGuid()), 0, 1, 1, "rows", [new("at", "datetime2", "text")], [WireKind.Text]) ?? throw new InvalidOperationException("The result set was not kept.");
+            foreach (var cell in cells)
+            {
+                set.CountRow();
+                set.BeginRow()!.AppendText(cell);
+                set.TryCommitRow();
+            }
+            set.Complete();
+            var approximate = false;
+            var key = ViewSorter.Build(set, new ViewSorter.PageSource(set.SealedSnapshot(), 1), new ViewKey(0, false, SortMode.Value), null, cells.Length, CancellationToken.None, ref approximate);
+            return [key.Layout, string.Join(",", ViewSorter.Sort(set, set.SealedSnapshot(), [new ViewKey(0, false, SortMode.Value)], CancellationToken.None).Order)];
+        }
+        var byTicks = Held("2024-03-01 10:00:00.0000000", "2023-12-31 23:59:59.9999999", "2024-03-01 10:00:00.0000000", "2024-01-15 00:00:00.0000001");
+        var mixed = Held("2024-03-01 10:00:00.0000000", "2023-12-31 23:59:59.9999999", "not a date", "2024-01-15 00:00:00.0000001");
+        var widths = Held("2024-03-01 10:00:00.0000000", "2023-12-31 23:59:59.99", "2024-01-15 00:00:00.0000001");
+        check(byTicks is ["ticks", "1,3,0,2"] && mixed[0] != "ticks" && mixed[1] == "1,3,0,2" && widths[0] != "ticks" && widths[1] == "1,2,0",
+            "a date column sorts by its ticks while its cells are all written one way, and by its text's bytes once one is not: " + string.Join(" / ", byTicks.Concat(mixed).Concat(widths)));
+        check(wrong.Count == 0 && same.Count == written.Length, "date and time text read directly gives the general parser's ticks for the text the backend writes, and declines any other; columns holding cells of another kind sort and profile as that parser has them: " + string.Join(" | ", wrong));
     }
 
     private static ResultSetBuffer Fill(ResultStore store)
@@ -95,6 +197,242 @@ internal static class ViewChecks
         try { await TextChecks.Copy(jobs, new ResultsCopyArgs(set.ResultId, [new([[0, 0]], [[0, 0]])], false, "crlf", 1 << 20, view.ViewId)); }
         catch (RequestException error) { code = error.Code; }
         check(code == "VIEW_NOT_FOUND", "a copy through a closed view is VIEW_NOT_FOUND (" + code + ")");
+    }
+
+    /// <summary>A key over row numbers that says how many of its comparisons would read their cells again.</summary>
+    private sealed class SlowKey(double share, Func<int, int>? value = null) : ViewSorter.Key(0)
+    {
+        public override double TieShare => share;
+        public override bool IsNull(int row) => false;
+        public override void Set(int row, ReadOnlySpan<byte> cell, ViewSorter.Scratch scratch) { }
+        public override int Compare(int a, int b) => value is null ? 0 : value(a).CompareTo(value(b));
+    }
+
+    /// <summary>Text, date and binary keys: how each column is held (ranked, 8 bytes after a shared start, whole values), the
+    /// budget they take from, and the threads keys are built and rows sorted on. Whatever the memory and however many
+    /// threads, the order is the one comparing the cells gives.</summary>
+    private static void WholeKeys(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        ResultColumn[] columns =
+        [
+            new("id", "int", "text"), new("name", "nvarchar", "text", Collation: CaseInsensitive), new("code", "nvarchar", "text", Collation: CaseInsensitive),
+            new("path", "nvarchar", "text", Collation: CaseInsensitive), new("folder", "nvarchar", "text", Collation: CaseInsensitive),
+            new("at", "datetime2", "text"), new("day", "date", "text"), new("blob", "varbinary", "binary"), new("tag", "varchar", "text", Collation: Bin2)
+        ];
+        var set = store.Open(store.BeginQuery("whole"), 0, 1, 1, "rows", columns, [.. columns.Select(column => column.Wire == "binary" ? WireKind.Binary : WireKind.Text)])
+            ?? throw new InvalidOperationException("The result set was not kept.");
+        // name: shares its first characters, repeats (each some thirty times, in either case), NULL now and then.
+        // path: each its own, starting alike but for a few rows (other text, less of the start, or none) and for one row
+        // in a hundred that is empty. folder: three long starts, so 8 bytes past the shared one tell nothing apart.
+        // at: an instant of one month. day: one of its thirty days. blob: one of sixteen values. tag: its own, no shared start.
+        string[] others = ["/srv", "Zed", "/srv/data/customers", "/opt/data"];
+        string[] folders = ["alpha-long-directory-name", "beta-long-directory-name", "gamma-long-directory-name"];
+        const int rows = 150_000;
+        var invariant = System.Globalization.CultureInfo.InvariantCulture;
+        var names = new HashSet<uint>();
+        string[] at = new string[rows], day = new string[rows], tag = new string[rows];
+        var blob = new int[rows];
+        for (var i = 0; i < rows; i++)
+        {
+            var scrambled = (uint)i * 2654435761u;
+            set.CountRow();
+            var builder = set.BeginRow()!;
+            builder.AppendText(i.ToString(invariant));
+            if (i % 97 == 0) builder.AppendNull();
+            else
+            {
+                names.Add(scrambled % 5_000);
+                builder.AppendText("Customer " + (scrambled % 5_000).ToString("D8", invariant) + (i % 2 == 0 ? " gmbh" : " GMBH"));
+            }
+            builder.AppendText(((uint)i * 2246822519u).ToString("X8", invariant));
+            if (i % 7919 == 5) builder.AppendText(others[i / 7919 % others.Length]);
+            else if (i % 100 == 42) builder.AppendText("");
+            else builder.AppendText("/srv/data/customers/" + (scrambled % 10_000_000).ToString("D7", invariant) + "/Invoice.pdf");
+            builder.AppendText("/srv/data/" + folders[scrambled % 3] + "/" + (scrambled % 1_000_000).ToString("D6", invariant));
+            var instant = new DateTime(2026, 11, 1).AddTicks((long)(scrambled % 2_500_000) * 10_000_000 + i % 10);
+            builder.AppendText(at[i] = instant.ToString("yyyy-MM-dd HH:mm:ss.fffffff", invariant));
+            builder.AppendText(day[i] = instant.ToString("yyyy-MM-dd", invariant));
+            blob[i] = (int)(scrambled % 16);
+            builder.AppendBinary([(byte)(blob[i] * 16), (byte)blob[i], 7]);
+            builder.AppendText(tag[i] = (scrambled ^ 0x5bd1e995u).ToString("x8", invariant));
+            set.TryCommitRow();
+        }
+        set.Complete();
+        var pages = set.SealedSnapshot();
+        var none = CancellationToken.None;
+        long reserved = 0, returned = 0, asked = 0;
+        var counted = new ViewSorter.KeyMemory(bytes => { Interlocked.Add(ref reserved, bytes); return true; }, bytes => Interlocked.Add(ref returned, bytes));
+        var refusing = new ViewSorter.KeyMemory(_ => false, _ => { });
+        // Room for a few pages' values, then none: the ones kept are let go.
+        ViewSorter.KeyMemory Some(long room) => new(bytes => Interlocked.Add(ref asked, bytes) <= room, _ => { });
+        int[] Sorted(int column, ViewSorter.KeyMemory? memory) => ViewSorter.Build(set, pages, [new ViewKey(column, false, SortMode.Value)], [], none, memory).Order;
+        int[] Alone(int column)
+        {
+            var workers = ViewSorter.Workers;
+            try
+            {
+                ViewSorter.Workers = 1;
+                return Sorted(column, refusing);
+            }
+            finally { ViewSorter.Workers = workers; }
+        }
+        var approximate = false;
+        var source = new ViewSorter.PageSource(pages, columns.Length);
+        string Layout(int column, ViewSorter.KeyMemory? memory)
+        {
+            var key = ViewSorter.Build(set, source, new ViewKey(column, false, SortMode.Value), null, rows, none, ref approximate, memory);
+            var layout = key.Layout;
+            key.Drop();
+            return layout;
+        }
+        // Every column, every way of holding it, one order.
+        var different = new List<string>();
+        var orders = new int[columns.Length][];
+        for (var column = 1; column < columns.Length; column++)
+        {
+            orders[column] = Sorted(column, counted);
+            asked = 0;
+            if (!orders[column].AsSpan().SequenceEqual(Sorted(column, refusing))) different.Add(columns[column].Name + " without memory");
+            if (!orders[column].AsSpan().SequenceEqual(Sorted(column, Some(300_000)))) different.Add(columns[column].Name + " with some memory");
+            if (!orders[column].AsSpan().SequenceEqual(Alone(column))) different.Add(columns[column].Name + " on one thread");
+        }
+        // The columns whose order is their text's own bytes, against a plain stable sort of the text.
+        int[] Plain(Comparison<int> values)
+        {
+            var order = new int[rows];
+            for (var i = 0; i < rows; i++) order[i] = i;
+            Array.Sort(order, (a, b) => values(a, b) is var compared && compared != 0 ? compared : a.CompareTo(b));
+            return order;
+        }
+        if (!orders[5].AsSpan().SequenceEqual(Plain((a, b) => string.CompareOrdinal(at[a], at[b])))) different.Add("at against its text");
+        if (!orders[6].AsSpan().SequenceEqual(Plain((a, b) => string.CompareOrdinal(day[a], day[b])))) different.Add("day against its text");
+        if (!orders[7].AsSpan().SequenceEqual(Plain((a, b) => blob[a].CompareTo(blob[b])))) different.Add("blob against its bytes");
+        if (!orders[8].AsSpan().SequenceEqual(Plain((a, b) => string.CompareOrdinal(tag[a], tag[b])))) different.Add("tag against its text");
+        check(pages.Length > 8 && different.Count == 0 && orders[1][0] == 0 && orders[1][1] == 97 && orders[1][rows / 97 + 1] % 97 != 0 && reserved > 0 && reserved == returned,
+            "text, date and binary columns sort to one order with all the key memory they ask for, with none, with some and on one thread, and the byte-ordered ones as their text sorts: "
+            + string.Join(", ", different));
+
+        // How each is held: repeated values by rank (text, days and bytes alike); values whose 8 bytes past a shared
+        // start tell nothing apart, whole; a start most rows share is left out though some rows have another.
+        string name = Layout(1, counted), nameBare = Layout(1, refusing), path = Layout(3, counted), folder = Layout(4, counted), folderBare = Layout(4, refusing);
+        string instants = Layout(5, counted), days = Layout(6, counted), blobs = Layout(7, counted), tags = Layout(8, counted);
+        int Shared(string layout) => int.Parse(layout.Split(", ")[1].Split(' ')[0], invariant);
+        int Odd(string layout) => int.Parse(layout.Split(", ")[2].Split(' ')[0], invariant);
+        check(name.StartsWith("ranked", StringComparison.Ordinal) && days == "ticks" && instants == "ticks" && blobs.StartsWith("ranked", StringComparison.Ordinal)
+            && nameBare.StartsWith("prefix", StringComparison.Ordinal),
+            "repeated text and bytes are ranked, dates and times are held by their ticks, and text by its 8 bytes without room for the values: " + name + " / " + days + " / " + blobs + " / " + nameBare);
+        check(Shared(path) >= 8 && Odd(path) == rows / 7919 + 1 + rows / 100 && folder.StartsWith("whole", StringComparison.Ordinal) && Shared(folder) >= 8 && Odd(folder) == 0
+            && folderBare.StartsWith("prefix", StringComparison.Ordinal)
+            && tags.StartsWith("prefix, 0 shared", StringComparison.Ordinal) && reserved == returned,
+            "a start most rows share is left out, the rows that start otherwise marked (" + path + "); values alike past it are kept whole (" + folder + ", " + instants
+            + "), and values 8 bytes tell apart are not (" + tags + ")");
+
+        // Filters and a second key go through the same keys: duplicates of a name, by name descending then code.
+        ViewKey[] twoKeys = [new(1, true, SortMode.Value), new(2, false, SortMode.Value)];
+        ViewFilter[] duplicates = [new(FilterOp.Duplicates, 0, null, false, null, [1])];
+        var kept = ViewSorter.Build(set, pages, twoKeys, duplicates, none, counted).Order;
+        var keptCells = ViewSorter.Build(set, pages, twoKeys, duplicates, none, refusing).Order;
+        var listed = ViewSorter.DistinctValues(set, pages, null, 1, true, none, null, counted);
+        var listedCells = ViewSorter.DistinctValues(set, pages, null, 1, true, none, null, refusing);
+        // Ranked values are grouped by their ranks in one pass; without the ranks, by a sort. The same groups either way.
+        var grouped = ViewSorter.Build(set, pages, [], duplicates, none, counted).Order;
+        var groupedCells = ViewSorter.Build(set, pages, [], duplicates, none, refusing).Order;
+        string Listed(DistinctSnapshot snapshot) => JsonSerializer.Serialize(new { byValue = snapshot.Read(DistinctOrder.Value, 0, ViewSorter.MaxDistinctWindow, null, none), byCount = snapshot.Read(DistinctOrder.Count, 0, ViewSorter.MaxDistinctWindow, null, none), frozen = snapshot.Freeze().Rows, snapshot.Nulls, snapshot.Rows }, HostChecks.Json);
+        var ids = ViewSorter.DistinctValues(set, pages, null, 0, true, none, null, counted);
+        check(grouped.Length == kept.Length && grouped.AsSpan().SequenceEqual(groupedCells) && grouped[0] == 0 && grouped[1] == 97 && Listed(listed) == Listed(listedCells)
+            && ids.Distinct == rows && ViewSorter.Build(set, pages, [], [new ViewFilter(FilterOp.Duplicates, 0, null, false, null, [0])], none, counted).Order.Length == 0,
+            "duplicates and distinct values grouped by rank in one pass are the ones a sort groups, in the same order; more values than are grouped that way (" + ids.Distinct + ") are sorted");
+        check(kept.Length > rows / 2 && kept.AsSpan().SequenceEqual(keptCells) && listed.Distinct == names.Count && listedCells.Distinct == names.Count && reserved == returned,
+            "filtered rows sorted by two keys, and a column's distinct values, are the same with key memory and without (" + kept.Length + " rows kept, " + listed.Distinct + " values)");
+
+        // Without its values a key says how many comparisons would read their cells again, and a sort that would spend its
+        // request's time there is refused. A later key is only charged the comparisons the keys before it leave to it.
+        var bare = ViewSorter.Build(set, source, new ViewKey(4, false, SortMode.Value), null, rows, none, ref approximate, refusing);
+        var held = ViewSorter.Build(set, source, new ViewKey(4, false, SortMode.Value), null, rows, none, ref approximate, counted);
+        static string? Refused(Action sort)
+        {
+            try { sort(); return null; }
+            catch (RequestException error) { return error.Code + ": " + error.Message; }
+        }
+        var many = new int[12_000_000];
+        for (var i = 0; i < many.Length; i++) many[i] = i;
+        string? first, afterRepeats, afterUnique, settled, small;
+        double cost1, cost16;
+        var before = ViewSorter.Workers;
+        try
+        {
+            ViewSorter.Workers = 1;
+            first = Refused(() => ViewSorter.ThrowIfSlow([new SlowKey(1)], many));
+            afterRepeats = Refused(() => ViewSorter.ThrowIfSlow([new SlowKey(0, row => row % 10), new SlowKey(1)], many));
+            afterUnique = Refused(() => ViewSorter.ThrowIfSlow([new SlowKey(0, row => row), new SlowKey(1)], many));
+            settled = Refused(() => ViewSorter.ThrowIfSlow([new SlowKey(0)], many));
+            small = Refused(() => ViewSorter.ThrowIfSlow([new SlowKey(1)], many.AsSpan(0, 1 << 16)));
+            cost1 = ViewSorter.SortCost(1 << 24);
+            ViewSorter.Workers = 16;
+            cost16 = ViewSorter.SortCost(1 << 24);
+        }
+        finally { ViewSorter.Workers = before; }
+        check(bare.TieShare > 0.9 && held.TieShare == 0 && first == "TOO_LARGE: " + ViewSorter.TooSlow && afterRepeats is not null && afterUnique is null && settled is null && small is null,
+            "a sort whose ties would read cells for its request's time is refused as TOO_LARGE (a key without its values says " + bare.TieShare + " of them would); not a small one, one whose keys "
+            + "settle their ties, or one whose slow key comes after a key that is each row's own");
+        held.Drop();
+        // 2^24 rows on one thread: 24 comparisons a row. On sixteen: 20 a row in sixteen slices side by side, then four
+        // rounds of merges on 8, 4, 2 and 1 threads.
+        check(cost1 == 24.0 * (1 << 24) && Math.Abs(cost16 - (1 << 24) * (20.0 / 16 + 1.0 / 8 + 1.0 / 4 + 1.0 / 2 + 1)) < 1,
+            "a sort's cost counts its merges, which do not spread over the threads as its slices do (" + cost1 / (1 << 24) + " and " + cost16 / (1 << 24) + " comparisons a row)");
+
+        // Operations share their threads: what is free when each asks, and one at least.
+        var gate = new ViewSorter.WorkerGate(() => 6);
+        ViewSorter.WorkerGate.Lease a = gate.Take(4), b = gate.Take(4), c = gate.Take(4);
+        var taken = (a.Count, b.Count, c.Count, gate.Busy);
+        a.Dispose();
+        b.Dispose();
+        c.Dispose();
+        using (var again = gate.Take(9)) taken.Busy += 100 * again.Count;
+        check(taken == (4, 2, 1, 607) && gate.Busy == 0, "operations take the threads that are free of the ones they share, one at least, and give them back: " + taken);
+
+        // A sort key is asked for once; a buffer too short for it grows, and says by how much.
+        var info = System.Globalization.CultureInfo.GetCultureInfo("en-US").CompareInfo;
+        var text = string.Concat(Enumerable.Repeat("Straße № 12 ", 40));
+        var exact = new byte[info.GetSortKeyLength(text, System.Globalization.CompareOptions.IgnoreCase)];
+        info.GetSortKey(text, exact, System.Globalization.CompareOptions.IgnoreCase);
+        var buffer = new byte[8];
+        var grew = 0;
+        var written = ViewSorter.SortKey(info, System.Globalization.CompareOptions.IgnoreCase, text, ref buffer, bytes => grew += bytes);
+        var size = buffer.Length;
+        var second = ViewSorter.SortKey(info, System.Globalization.CompareOptions.IgnoreCase, text, ref buffer, _ => grew = -1);
+        check(written == exact.Length && buffer.AsSpan(0, written).SequenceEqual(exact) && grew == size - 8 && second == written && buffer.Length == size,
+            "a sort key is written in one call, into a buffer that grows only when it is too short (" + written + " bytes, buffer " + size + ")");
+
+        // Key memory leaves an eighth of the query's room and of the store's: a query still loading goes on storing.
+        var tight = new ResultStore(8L << 20, 4L << 20);
+        var loading = tight.BeginQuery("loading");
+        check(tight.TryReserve(loading, 3L << 20, false, out _) && !tight.TryReserveSpare(loading, 1L << 20) && tight.TryReserveSpare(loading, 400_000)
+            && loading.UsedBytes == (3L << 20) + 400_000 && !tight.TryReserveSpare(loading, 200_000) && tight.TryReserve(loading, 200_000, false, out _),
+            "key memory is refused the last eighth of a query's room, which a query's own rows still get");
+        var other = tight.BeginQuery("other");
+        check(tight.TryReserve(other, 3L << 20, false, out _) && !tight.TryReserveSpare(other, 500_000) && tight.TryReserveSpare(other, 300_000), "and the last eighth of the store's");
+
+        // The parallel sort is the sort: any range, the same order as one thread's.
+        var values = new int[200_003];
+        var random = new Random(7);
+        for (var i = 0; i < values.Length; i++) values[i] = random.Next(5_000);
+        var comparer = Comparer<int>.Create((x, y) => values[x] != values[y] ? values[x].CompareTo(values[y]) : x.CompareTo(y));
+        var sorted = new int[values.Length];
+        var expected = new int[values.Length];
+        for (var i = 0; i < values.Length; i++) sorted[i] = expected[i] = values.Length - 1 - i;
+        Array.Sort(expected, 7, values.Length - 20, comparer);
+        ViewSorter.Sort(sorted, 7, values.Length - 20, comparer);
+        string? cancelled = null;
+        using (var stop = new CancellationTokenSource())
+        {
+            stop.Cancel();
+            try { ViewSorter.Build(set, pages, [new ViewKey(4, false, SortMode.Value)], [], stop.Token, counted); }
+            catch (OperationCanceledException) { cancelled = "cancelled"; }
+        }
+        check(sorted.AsSpan().SequenceEqual(expected) && cancelled == "cancelled" && reserved == returned && ViewSorter.Gate.Busy >= 0,
+            "a sort on several threads orders a range as one thread does and leaves the rest alone; a cancelled build stops as a cancellation and returns its keys");
     }
 
     private static void Ordering(Action<bool, string> check)

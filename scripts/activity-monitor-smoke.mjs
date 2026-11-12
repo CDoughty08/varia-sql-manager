@@ -415,6 +415,115 @@ try {
   await firstTabs.getByRole('tab', { name: 'Sessions', exact: true }).click()
   console.log('Blocking and active passed: the chain shows with its lead blocker and goes when blocking ends, running requests list, and neither starts a probe.')
 
+  step = 'session actions'
+  // Details… and Kill Process… head Query Output's menu on a session row (Sessions, Blocking, Active Expensive Queries).
+  const sessionMenu = async (grid, cell) => {
+    // A click selects the row first, so the menu's enablement reads that row's session.
+    await grid.getByRole('gridcell', { name: cell, exact: true }).click()
+    await grid.getByRole('gridcell', { name: cell, exact: true }).click({ button: 'right' })
+    await expect(gridMenu).toBeVisible()
+    return gridMenu
+  }
+  await (await sessionMenu(sessionsGrid, 'app_orders')).getByRole('menuitem', { name: /^Details…/ }).click()
+  const details = monitor().getByRole('dialog', { name: /^Session 57/ })
+  await expect(details).toBeVisible()
+  await expect(details).toBeFocused()
+  await expect(details.getByRole('heading', { name: 'Identity and Now', exact: true })).toBeVisible()
+  await expect(details.getByText('BEGIN TRAN; UPDATE dbo.Orders SET Status = 2 WHERE OrderId = 1', { exact: true })).toBeVisible()
+  // A section a permission kept out says why; the others show.
+  await expect(details.getByText('tempdb usage needs VIEW SERVER STATE.', { exact: true })).toBeVisible()
+  await expect.poll(async () => (await calls('activity.details')).at(-1)?.params).toMatchObject({ sessionId: 57, loginTime: '2026-11-09T08:00:00.000' })
+  await details.getByRole('button', { name: 'Load locks', exact: true }).click()
+  await expect(details.getByRole('rowheader', { name: 'KEY', exact: true })).toBeVisible()
+  expect((await calls('activity.details')).at(-1).params.locks).toBe(true)
+  // The monitor keeps sampling beside it (nonmodal), and Escape closes it.
+  await expect(monitor().getByText(/^3 sessions/)).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(details).toHaveCount(0)
+  // From Active Expensive Queries: the hidden identity columns name the session.
+  await firstTabs.getByRole('tab', { name: 'Active Expensive Queries', exact: true }).click()
+  await (await sessionMenu(active, 'BillingDb')).getByRole('menuitem', { name: /^Details…/ }).click()
+  const billing = monitor().getByRole('dialog', { name: /^Session 66/ })
+  await expect(billing.getByText('app_billing', { exact: true }).first()).toBeVisible()
+  await billing.getByRole('button', { name: 'Close details', exact: true }).click()
+  await expect(billing).toHaveCount(0)
+  // From Blocking: the lead blocker, named by its hidden identity columns, as Kill would name it.
+  await writeFile(join(control, 'activity-blocked'), '')
+  await firstTabs.getByRole('tab', { name: /^Blocking/ }).click()
+  await expect(chains.getByRole('gridcell', { name: '└─ 61', exact: true })).toBeVisible({ timeout: 15_000 })
+  await (await sessionMenu(chains, '57')).getByRole('menuitem', { name: /^Details…/ }).click()
+  const lead = monitor().getByRole('dialog', { name: /^Session 57/ })
+  await expect(lead).toBeVisible()
+  await expect.poll(async () => (await calls('activity.details')).at(-1)?.params).toMatchObject({ sessionId: 57, loginTime: '2026-11-09T08:00:00.000' })
+  await lead.getByRole('button', { name: 'Close details', exact: true }).click()
+  await expect(lead).toHaveCount(0)
+  await rm(join(control, 'activity-blocked'))
+  await firstTabs.getByRole('tab', { name: 'Sessions', exact: true }).click()
+  // Kill Process asks first, naming the session, and Cancel (which has focus) kills nothing.
+  await (await sessionMenu(sessionsGrid, 'app_billing')).getByRole('menuitem', { name: /^Kill Process…/ }).click()
+  const kill = page.getByRole('dialog', { name: 'Kill Process', exact: true })
+  await expect(kill.getByText('Kill session 66?', { exact: true })).toBeVisible()
+  await expect(kill.getByText('APP-07', { exact: true })).toBeVisible()
+  await expect(kill.getByText(/rolls back, which can take as long as the work it undoes/)).toBeVisible()
+  await expect(kill.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(kill).toHaveCount(0)
+  expect(await calls('activity.kill')).toEqual([])
+  // Without ALTER ANY CONNECTION (canKill 0 in the next sample) the confirm refuses, with the reason.
+  await writeFile(join(control, 'activity-no-kill'), '')
+  await (await sessionMenu(sessionsGrid, 'app_billing')).getByRole('menuitem', { name: /^Kill Process…/ }).click()
+  await expect(kill.getByRole('alert')).toHaveText(/needs ALTER ANY CONNECTION/, { timeout: 15_000 })
+  await expect(kill.getByRole('button', { name: 'Kill Process', exact: true })).toBeDisabled()
+  await kill.getByRole('button', { name: 'Cancel', exact: true }).click()
+  expect(await calls('activity.kill')).toEqual([])
+  await rm(join(control, 'activity-no-kill'))
+  // Confirmed: the backend gets the row's identity, the outcome is reported, and the session leaves Sessions.
+  await (await sessionMenu(sessionsGrid, 'app_billing')).getByRole('menuitem', { name: /^Kill Process…/ }).click()
+  await expect(kill.getByRole('button', { name: 'Kill Process', exact: true })).toBeEnabled({ timeout: 15_000 })
+  await kill.getByRole('button', { name: 'Kill Process', exact: true }).click()
+  await expect(kill).toHaveCount(0)
+  await expect(monitor().getByRole('status').filter({ hasText: 'Session 66 was killed.' })).toBeVisible()
+  expect((await calls('activity.kill')).map(call => call.params.sessions)).toEqual([[{ sessionId: 66, loginTime: '2026-11-09T08:02:00.000', hostProcessId: 6300 }]])
+  await expect(monitor().getByText(/^2 sessions/)).toBeVisible()
+  await monitor().getByRole('button', { name: 'Dismiss', exact: true }).click()
+  // Varia's own pool sessions are never offered to Kill.
+  await showVaria.click()
+  await expect(async () => {
+    await sessionMenu(sessionsGrid, 'Varia SQL Manager - Object Explorer')
+    try { await expect(gridMenu.getByRole('menuitem', { name: /^Kill Process…/ })).toBeDisabled({ timeout: 500 }) } finally { await page.keyboard.press('Escape') }
+  }).toPass()
+  await showVaria.click()
+  console.log('Session actions passed: Details opens from Sessions and Active Expensive Queries with its sections and locks; Kill asks, cancels, refuses without permission or for Varia\'s own, and reports a kill.')
+  step = 'recent queries'
+  // Recent Expensive Queries reads the query statistics probe: it resumes only while the pane shows, at its own interval.
+  const queriesUpdates = (await calls('live.update')).length
+  const queriesPatches = async () => (await calls('live.update')).slice(queriesUpdates).flatMap(call => call.params.probes ?? []).filter(probe => probe.probe === 'activity.queries')
+  await firstTabs.getByRole('tab', { name: 'Recent Expensive Queries', exact: true }).click()
+  await expect.poll(async () => (await queriesPatches()).some(probe => probe.paused === false)).toBe(true)
+  const recent = monitor().getByRole('grid', { name: /^Recent Expensive Queries/ })
+  await expect(recent).toBeVisible()
+  await expect(monitor().getByText('3 queries by query hash', { exact: true })).toBeVisible()
+  // The first sample has no window: its rows go by total CPU. Query is the first column, in view at any width.
+  const queryAt = row => recent.locator(gridCellSelector(row, 0))
+  await expect(queryAt(0)).toHaveText(/^SELECT c\.CustomerId/)
+  const rankBy = monitor().getByRole('group', { name: 'Rank by', exact: true })
+  await expect(rankBy.getByRole('button', { name: 'CPU', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  // A rank chip is the table's sort, sent to the probe; the status line says the rows keep their order until the next sample.
+  await rankBy.getByRole('button', { name: 'Executions', exact: true }).click()
+  await expect(rankBy.getByRole('button', { name: 'Executions', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(rankBy.getByRole('button', { name: 'CPU', exact: true })).toHaveAttribute('aria-pressed', 'false')
+  await expect(monitor().getByText('3 queries by query hash · ranked by Executions from the next sample', { exact: true })).toBeVisible()
+  await expect.poll(async () => (await queriesPatches()).map(probe => probe.sort).filter(Boolean).at(-1)).toEqual([{ column: 'executionsPerMinute', descending: true, table: 0 }])
+  // Refresh Now brings the next sample, in the chip's order (most executions first), and the note goes.
+  await rankBy.getByRole('button', { name: 'Executions', exact: true }).focus()
+  await page.keyboard.press('F5')
+  await expect(queryAt(0)).toHaveText(/^UPDATE dbo\.Invoices/)
+  await expect(monitor().getByText('3 queries by query hash', { exact: true })).toBeVisible()
+  // Leaving the pane pauses the probe again: the plan cache is read only for a pane someone can see.
+  await firstTabs.getByRole('tab', { name: 'Sessions', exact: true }).click()
+  await expect.poll(async () => (await queriesPatches()).at(-1)?.paused).toBe(true)
+  console.log('Recent queries passed: the probe runs only while the pane shows, rows arrive by CPU, a rank chip sorts the next sample and says so until it comes.')
+
   step = 'panes'
   const first = monitor().getByRole('tablist', { name: 'First pane', exact: true })
   await expect(first.getByRole('tab', { name: 'Sessions', exact: true })).toHaveAttribute('aria-selected', 'true')
@@ -438,8 +547,9 @@ try {
   await expect(monitor().getByRole('tablist', { name: 'Second pane', exact: true })).toHaveCount(0)
   await split.click()
   await expect(monitor().getByRole('separator', { name: 'Resize the panes', exact: true })).toBeVisible()
-  // Showing pending panes starts no SQL: their probes stay paused (Sessions' probe ran from the start).
-  expect((await calls('live.update')).flatMap(call => call.params.probes ?? []).filter(probe => probe.probe !== 'activity.overview' && probe.probe !== 'activity.sessions' && probe.paused === false)).toEqual([])
+  // Showing pending panes starts no SQL: their probes stay paused (Sessions' probe ran from the start; query statistics
+  // only while Recent Expensive Queries showed, above).
+  expect((await calls('live.update')).flatMap(call => call.params.probes ?? []).filter(probe => probe.probe === 'activity.resources' && probe.paused === false)).toEqual([])
   // The resources probe samples now, but its panes are still pending: the view holds it paused, so it runs no SQL.
   expect((await viewOf(id)).probes['activity.resources']).toMatchObject({ state: 'paused' })
   console.log('Panes passed: tabs with arrow keys, F6 and Shift+F6 between regions, Split View, and no probe started for a pending pane.')

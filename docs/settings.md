@@ -253,6 +253,7 @@ What a new Activity Monitor starts with, and when its tiles warn. Not in SSMS.
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `activityMonitor.refreshIntervalSeconds` | Refresh interval | One of `1` (1 second), `2` (2 seconds), `3` (3 seconds), `5` (5 seconds), `10` (10 seconds), `15` (15 seconds), `30` (30 seconds), `60` (60 seconds) | 2 seconds |  | All | At once | How often a new Activity Monitor samples the server. Resource waits and file I/O are read every 5 seconds at most, and the header changes an open monitor's interval. Not in SSMS. |
+| `activityMonitor.queriesIntervalSeconds` | Query statistics interval | Integer 15–60 seconds | 30 seconds |  | All | At once | How often a new Activity Monitor reads the plan cache for Recent Expensive Queries, and the window its rates span. Reading the plan cache costs more than the other samples, so it has its own, longer interval; it runs only while that pane is shown. Not in SSMS. |
 | `activityMonitor.chartWindowMinutes` | Chart window | One of `1` (1 minute), `5` (5 minutes), `15` (15 minutes), `60` (60 minutes) | 15 minutes |  | All | At once | How much time a new Activity Monitor's tiles and charts show. Charts reach back only as far as Environment › Live Data keeps history. Not in SSMS. |
 | `activityMonitor.primaryPane` | First pane | One of `processes` (Sessions), `blocking` (Blocking), `waits` (Resource Waits), `fileIo` (Data File I/O), `recentQueries` (Recent Expensive Queries), `activeQueries` (Active Expensive Queries) | Sessions |  | All | At once | The pane a new Activity Monitor shows first (on the left, or on top in a narrow window). Not in SSMS. |
 | `activityMonitor.secondaryPane` | Second pane | One of `processes` (Sessions), `blocking` (Blocking), `waits` (Resource Waits), `fileIo` (Data File I/O), `recentQueries` (Recent Expensive Queries), `activeQueries` (Active Expensive Queries), `none` (None (no split view)) | Resource Waits |  | All | At once | The pane a new Activity Monitor shows beside the first in split view. None opens it with one pane; Split View shows a second one again. Not in SSMS. |
@@ -305,4 +306,4 @@ How Varia follows the SSIS Catalog (SSISDB) as it changes. Not in SSMS.
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (110 today).
+A patch holds at most one entry per setting (111 today).

@@ -3,10 +3,10 @@ name: Release builds
 # Packaging (installers, the packaged and portable smoke tests, Electron fuses and asar integrity read back) is the slowest
 # and most macOS-heavy work in CI: about 21 runner-minutes, 13 of them on the 5 macOS slots, for each push. It used to run on
 # every pull request push, where it caught nothing CI did not, and its jobs queued every run behind the 20-job limit
-# (docs/ci.md). It now runs on every main push (so packaging is checked within minutes of a merge), on tags and by hand, and
+# (docs/ci.md). It runs on every main push, on tags and by hand, and
 # on pull requests only when they change what packaging reads. Intel macOS, twice as slow as arm64 on a scarcer runner,
 # packages for tags and manual runs, and once a week on main alone, so an x64-only break shows before a tag it would block.
-# GitHub matches a pull request's paths against its first 300 changed files only, so a larger pull request (a big stacked
+# GitHub matches a pull request's paths against its first 3,000 changed files only, so a larger pull request (a big stacked
 # branch, or a merge of main) can skip Release builds silently: run them by hand (workflow_dispatch) when it touches packaging.
 on:
   pull_request:
@@ -41,7 +41,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  # A new push supersedes a pull request's or main's earlier packaging; tags and manual runs always finish.
+  # Every main push packages, so newer main or PR pushes supersede earlier runs. Tags and manual runs always finish.
   group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && github.ref || github.run_id }}
   cancel-in-progress: true
 
@@ -51,7 +51,7 @@ permissions:
 jobs:
   build:
     name: Package ${{ matrix.rid }}
-    # Every main push packages these already; the weekly run is for Intel alone.
+    # Every main push packages these; the weekly run is for Intel alone.
     if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
@@ -98,7 +98,8 @@ jobs:
         dist/*.zip
 
   release:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    # Publish only after both package jobs succeed; cancellation or skipped packages must never publish partial assets.
+    if: ${{ !cancelled() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && needs.build.result == 'success' && needs.build-intel.result == 'success' }}
     needs: [build, build-intel]
     runs-on: ubuntu-24.04
     permissions:

@@ -11,6 +11,7 @@ import type { LiveHandle, LiveSnapshot } from '../../live/LiveService'
 import { formatCount, plural } from '../../results/status'
 import type { MonitorState } from '../ActivityMonitorService'
 import PaneState, { paneProblem, paneWaiting, paneWaitingText, type PaneProblem, type PaneWaiting } from './PaneState'
+import { useSessionRows } from './useSessionRows'
 
 const probe = 'activity.sessions'
 /** The tables' places in the sessions probe's sample, in the catalogue's order. */
@@ -75,15 +76,17 @@ export default function SessionTablePane({ table, state, handle, snapshot }: {
 }) {
   const { activity } = useWorkbench()
   const pane = panes[table], index = sessionTableIndex(table)
+  const sessionRows = useSessionRows(state.id, table)
   const current = handle.table(probe, index)
   const problem = paneProblem(snapshot.probes[probe], index)
   const facts: TableFacts = {
     rows: current?.descriptor.rowsAvailable, truncated: current?.descriptor.truncated, waiting: paneWaiting(snapshot, probe), refused: problem?.kind === 'refused',
     live: snapshot.status === 'live' && snapshot.probes[probe]?.state === 'fresh'
   }
-  return <div className="activity-pane-content" data-activity-grid={table}>
+  return <div className="activity-pane-content" data-activity-grid={table} onFocus={sessionRows.onFocus}>
     <PaneState problem={problem} hasRows={!!current} waiting={facts.waiting} empty={emptyNote(table, facts, problem)}>
-      <LiveGridPane live={handle} probe={probe} table={index} label={pane.label} toneLabel={pane.toneLabel} state={activity.gridState(state.id, table)} sortable={table !== 'blocking'} />
+      <LiveGridPane live={handle} probe={probe} table={index} label={pane.label} toneLabel={pane.toneLabel} state={activity.gridState(state.id, table)} sortable={table !== 'blocking'}
+        onGrid={sessionRows.onGrid} rows={sessionRows.rows} />
     </PaneState>
     <p className="activity-pane-status">{pane.status(facts)}</p>
   </div>

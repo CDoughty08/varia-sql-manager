@@ -148,7 +148,9 @@ internal static class PivotBench
         {
             var stages = new PivotStages();
             PivotModel model;
-            try { model = ResultPivoter.Build(set, pages, order, spec, token, Reserve, stages); }
+            // The keys' memory as the host gives it: from the query's budget, with room to spare.
+            var keyMemory = new ViewSorter.KeyMemory(bytes => store.TryReserveSpare(set.Budget, bytes), bytes => store.Return(set.Budget, bytes));
+            try { model = ResultPivoter.Build(set, pages, order, spec, token, Reserve, keyMemory, stages); }
             catch (RequestException refusal) { sample.Refused = refusal.Code + " (bounds)"; model = null!; }
             catch (PivotTooLargeException) { sample.Refused = "TOO_LARGE (figures)"; model = null!; }
             (sample.Keys, sample.Grouping, sample.Aggregation, sample.Distinct) = (Ms(stages.Keys), Ms(stages.Grouping), Ms(stages.Aggregation), Ms(stages.Distinct));

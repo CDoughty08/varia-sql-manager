@@ -595,6 +595,8 @@ export const gridCell = (grid, row, column) => grid.locator(gridCellSelector(row
 export const matching = (locator, selector) => locator.and(locator.page().locator(selector))
 /** A set's caption Collapse button, named by the set ("Result 2", "Pivot of Result 1"). */
 export const resultToggle = (page, name = 'Result 1') => outputPane(page).getByRole('button', { name, exact: true })
+/** A set's caption close button, named by the set ("Close Result 2", "Close Pivot of Result 1"): it closes that result alone. */
+export const resultClose = (page, name = 'Result 1') => outputPane(page).getByRole('button', { name: 'Close ' + name, exact: true })
 /** The Messages strip's line under the results, drawn "Messages · 2 · no errors" and named "Messages, 2 messages, no errors",
  *  a button that opens and closes it. */
 export const messagesStrip = page => outputPane(page).getByRole('button', { name: /^Messages, [\d,]+ messages?, / })

@@ -193,7 +193,13 @@ internal static partial class ViewSorter
     /// <paramref name="kept"/>, another view of the result, ticked when a row of that view holds it (equal as above), so a
     /// checklist over one view starts as a filtered view shows it; NULL likewise.
     /// </summary>
-    public static DistinctSnapshot DistinctValues(ResultSetBuffer set, StoredPage[] pages, ResultView? view, int column, bool complete, CancellationToken token, ResultView? kept = null)
+    public static DistinctSnapshot DistinctValues(ResultSetBuffer set, StoredPage[] pages, ResultView? view, int column, bool complete, CancellationToken token, ResultView? kept = null, KeyMemory? memory = null)
+    {
+        try { return DistinctValues(set, pages, view, column, complete, kept, memory, token); }
+        finally { memory?.ReturnAll(); }
+    }
+
+    private static DistinctSnapshot DistinctValues(ResultSetBuffer set, StoredPage[] pages, ResultView? view, int column, bool complete, ResultView? kept, KeyMemory? memory, CancellationToken token)
     {
         long total = 0;
         foreach (var page in pages) total += page.Rows;
@@ -201,7 +207,7 @@ internal static partial class ViewSorter
         var rows = (int)total;
         var source = new PageSource(pages, set.Wires.Count);
         var approximate = false;
-        var key = Build(set, source, new ViewKey(column, false, SortMode.Value), null, rows, token, ref approximate);
+        var key = Build(set, source, new ViewKey(column, false, SortMode.Value), null, rows, token, ref approximate, memory);
         var looked = view?.Order.Length ?? rows;
         var values = new int[looked];
         var count = 0;
@@ -237,8 +243,14 @@ internal static partial class ViewSorter
                 if (key.IsNull(row)) nullTicked = true;
             }
         }
+        if (key.Coded && Grouped(key, values, count, marks, token) is { } grouped)
+        {
+            token.ThrowIfCancellationRequested();
+            return new DistinctSnapshot(set, column, source, grouped.Reps, grouped.Counts, ByCount(grouped.Counts), grouped.Ticks, looked, nulls, nullTicked, complete, approximate);
+        }
         // Ties fall back to the base row, so each run of equal values starts with the lowest row holding it.
-        if (count > 1) Array.Sort(values, 0, count, new Comparer([key], null, token));
+        ThrowIfSlow([key], values.AsSpan(0, count));
+        Sort(values, 0, count, new Comparer([key], null, token));
         // Groups in value order, in place: the representative rows over the front of `values` (a group's slot is never past
         // its first row), their counts and ticks beside them.
         var counts = new int[count];
@@ -265,12 +277,50 @@ internal static partial class ViewSorter
         Array.Resize(ref values, groups);
         Array.Resize(ref counts, groups);
         Array.Resize(ref ticks, groups);
-        // Most frequent first: the group's place in value order breaks count ties, so equal counts stay in it.
-        var ranked = new int[groups];
-        for (var i = 0; i < groups; i++) ranked[i] = i;
-        Array.Sort(ranked, (a, b) => counts[a] != counts[b] ? counts[b].CompareTo(counts[a]) : a.CompareTo(b));
         token.ThrowIfCancellationRequested();
-        return new DistinctSnapshot(set, column, source, values, counts, ranked, ticks, looked, nulls, nullTicked, complete, approximate);
+        return new DistinctSnapshot(set, column, source, values, counts, ByCount(counts), ticks, looked, nulls, nullTicked, complete, approximate);
+    }
+
+    /// <summary>The groups, most frequent first: a group's place in value order breaks count ties, so equal counts stay in it.</summary>
+    private static int[] ByCount(int[] counts)
+    {
+        var ranked = new int[counts.Length];
+        for (var i = 0; i < ranked.Length; i++) ranked[i] = i;
+        Array.Sort(ranked, (a, b) => counts[a] != counts[b] ? counts[b].CompareTo(counts[a]) : a.CompareTo(b));
+        return ranked;
+    }
+
+    /// <summary>The rows' values by a key whose codes are its values, counted in one pass without sorting the rows: each
+    /// value's lowest row, its count and its tick, in value order. Null past <see cref="MaxGroups"/> values, which a sort
+    /// then groups.</summary>
+    private static (int[] Reps, int[] Counts, bool[] Ticks)? Grouped(Key key, int[] rows, int count, bool[]? marks, CancellationToken token)
+    {
+        var groups = new Dictionary<ulong, int>();
+        var reps = new List<int>();
+        var counts = new List<int>();
+        var ticks = new List<bool>();
+        for (var i = 0; i < count; i++)
+        {
+            if ((i & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+            var row = rows[i];
+            ref var slot = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(groups, key.Code(row), out var known);
+            if (!known)
+            {
+                if (reps.Count >= MaxGroups) return null;
+                slot = reps.Count;
+                reps.Add(row);
+                counts.Add(0);
+                ticks.Add(marks is null);
+            }
+            var group = slot;
+            counts[group]++;
+            if (row < reps[group]) reps[group] = row;
+            if (marks is not null && marks[row]) ticks[group] = true;
+        }
+        var order = new int[reps.Count];
+        for (var i = 0; i < order.Length; i++) order[i] = i;
+        Array.Sort(order, (a, b) => key.Compare(reps[a], reps[b]));
+        return ([.. order.Select(group => reps[group])], [.. order.Select(group => counts[group])], [.. order.Select(group => ticks[group])]);
     }
 
     /// <summary>A cell's grid text, cut to <see cref="DistinctValueChars"/> characters with "…": binary as 0x and hex, and

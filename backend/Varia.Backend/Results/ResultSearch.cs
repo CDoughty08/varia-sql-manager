@@ -38,37 +38,111 @@ internal static class ResultSearcher
     public static Func<bool> Stopped(ResultStore store, ResultSetBuffer set, ResultView? view) =>
         () => set.IsReleased || (view is not null && !store.HasView(view));
 
+    /// <summary>The fewest positions a thread of a search reads; fewer than two of these are read on one.</summary>
+    internal const int MinSlice = 1 << 15;
+
+    /// <summary>What one run of positions found: its matches, and the ones a run of the outcome may take, in whole rows
+    /// (forward the first from FromRow, backward the last before it, each to MaxMatches as the whole search keeps them).</summary>
+    private sealed class Part
+    {
+        public long Total, Before;
+        public bool Approximate, Stopped;
+        public readonly List<long> Rows = [];
+        public readonly List<int> Columns = [];
+        /// <summary>Where each kept row's matches begin (backward only), from <see cref="Head"/>.</summary>
+        public readonly List<int> RowStarts = [];
+        public int Head, Start;
+    }
+
+    /// <summary>The positions are read in runs on several threads (one per <see cref="MinSlice"/> positions, up to the
+    /// sort's threads, or <paramref name="workers"/>), each keeping what the outcome may take of it, joined in order: the
+    /// outcome is the one a single pass gives.</summary>
     /// <returns>The outcome, or null when <paramref name="stopped"/> said so at a checkpoint (or the view names a row past
     /// <paramref name="pages"/>, which only a release that emptied them can cause).</returns>
-    public static SearchOutcome? Search(ResultSetBuffer set, StoredPage[] pages, ResultView? view, string text, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped = null)
+    public static SearchOutcome? Search(ResultSetBuffer set, StoredPage[] pages, ResultView? view, string text, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped = null, int? workers = null)
     {
         var columns = set.Wires.Count;
         var matchers = new Matcher?[columns];
         // A hidden column (a diff's or live table's row tone) is not in the grid, so its text never matches.
         for (var c = 0; c < columns; c++) matchers[c] = ResultTextWriter.Hidden(set.Columns[c]) ? null : MatcherFor(set.Columns[c], set.Wires[c], text);
-        var source = new Source(pages, columns, view is null ? 1 : LayoutCacheBytes / (4 * PageView.ScratchLength(Math.Max(1, columns))));
-        long rows = view?.Rows ?? source.Rows;
-        var found = new List<int>(16);
+        long baseRows = 0;
+        foreach (var page in pages) baseRows += page.Rows;
+        long rows = view?.Rows ?? baseRows;
+        // At most the threads asked for, and no more than the operations running leave free.
+        using var threads = ViewSorter.Gate.Take((int)Math.Max(1, workers ?? Math.Min(rows / MinSlice, ViewSorter.Workers)));
+        var runs = (int)Math.Clamp(threads.Count, 1, Math.Max(1, Math.Min(rows, int.MaxValue)));
+        var parts = new Part[runs];
+        long From(int run) => rows * run / runs;
+        var slots = view is null ? 1 : Math.Max(1, LayoutCacheBytes / (4 * PageView.ScratchLength(Math.Max(1, columns))) / runs);
+        void Read(int run)
+        {
+            var part = parts[run] = new Part();
+            Scan(part, new Source(pages, columns, slots), view, matchers, From(run), From(run + 1), text.Length, fromRow, backward, maxMatches, token, stopped);
+        }
+        if (runs == 1) Read(0);
+        else
+            try { Parallel.For(0, runs, new ParallelOptions { MaxDegreeOfParallelism = runs }, Read); }
+            catch (AggregateException error) when (error.InnerExceptions.Count > 0)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerExceptions[0]).Throw();
+            }
+        long total = 0, before = 0, first = -1;
+        var approximate = false;
         var keptRows = new List<long>();
         var keptColumns = new List<int>();
-        // Backward keeps whole rows from `start`: rowStarts[head..] are where each kept row's matches begin.
         var rowStarts = new List<int>();
-        int head = 0, start = 0;
-        long total = 0, first = -1, before = 0;
-        var approximate = false;
+        foreach (var part in parts)
+        {
+            if (part.Stopped) return null;
+            approximate |= part.Approximate;
+            before += part.Before;
+            if (!backward)
+            {
+                // A run's kept matches are its first from FromRow: the ones before them in it are those before FromRow.
+                if (first < 0 && part.Rows.Count > 0) first = total + part.Before;
+                for (var i = 0; i < part.Rows.Count && keptRows.Count < maxMatches;)
+                {
+                    var row = part.Rows[i];
+                    for (; i < part.Rows.Count && part.Rows[i] == row; i++) { keptRows.Add(row); keptColumns.Add(part.Columns[i]); }
+                }
+            }
+            else
+            {
+                for (var i = part.Start; i < part.Rows.Count; i++)
+                {
+                    if (i == part.Start || part.Rows[i] != part.Rows[i - 1]) rowStarts.Add(keptRows.Count);
+                    keptRows.Add(part.Rows[i]);
+                    keptColumns.Add(part.Columns[i]);
+                }
+            }
+            total += part.Total;
+        }
+        if (!backward) return new SearchOutcome(rows, total, first < 0 ? total : first, [.. keptRows], [.. keptColumns], approximate);
+        // The oldest rows go while the rows after them still hold maxMatches.
+        var head = 0;
+        while (rowStarts.Count - head > 1 && keptRows.Count - rowStarts[head + 1] >= maxMatches) head++;
+        var start = rowStarts.Count == 0 ? 0 : rowStarts[head];
+        var kept = keptRows.Count - start;
+        return new SearchOutcome(rows, total, before - kept, keptRows.GetRange(start, kept).ToArray(), keptColumns.GetRange(start, kept).ToArray(), approximate);
+    }
+
+    private static void Scan(Part part, Source source, ResultView? view, Matcher?[] matchers, long from, long to, int textLength, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped)
+    {
+        var columns = matchers.Length;
+        var found = new List<int>(16);
         var scratch = new Scratch();
         long work = 0;
-        var cellWork = CellWork + text.Length;
-        for (long position = 0; position < rows; position++)
+        var cellWork = CellWork + textLength;
+        for (var position = from; position < to; position++)
         {
             if (work <= 0)
             {
                 token.ThrowIfCancellationRequested();
-                if (stopped?.Invoke() == true) return null;
+                if (stopped?.Invoke() == true) { part.Stopped = true; return; }
                 work = CheckEvery;
             }
             var row = view is null ? position : view.Order[position];
-            if (row >= source.Rows) return null;
+            if (row >= source.Rows) { part.Stopped = true; return; }
             var page = source.ViewOf(row, out var local);
             found.Clear();
             work -= CellWork;
@@ -79,32 +153,26 @@ internal static class ResultSearcher
                 var cell = page.Span(c, local);
                 work -= cellWork + cell.Length;
                 if (matcher.Matches(cell, scratch)) found.Add(c);
-                else if (truncated) approximate = true;
+                else if (truncated) part.Approximate = true;
             }
             if (found.Count == 0) continue;
+            part.Total += found.Count;
+            if (position < fromRow) part.Before += found.Count;
             if (!backward)
             {
-                if (position >= fromRow && keptRows.Count < maxMatches)
-                {
-                    if (first < 0) first = total;
-                    foreach (var c in found) { keptRows.Add(position); keptColumns.Add(c); }
-                }
+                if (position >= fromRow && part.Rows.Count < maxMatches)
+                    foreach (var c in found) { part.Rows.Add(position); part.Columns.Add(c); }
             }
             else if (position < fromRow)
             {
-                before += found.Count;
-                rowStarts.Add(keptRows.Count);
-                foreach (var c in found) { keptRows.Add(position); keptColumns.Add(c); }
+                part.RowStarts.Add(part.Rows.Count);
+                foreach (var c in found) { part.Rows.Add(position); part.Columns.Add(c); }
                 // Drop the oldest row while the rows after it still hold maxMatches.
-                while (rowStarts.Count - head > 1 && keptRows.Count - rowStarts[head + 1] >= maxMatches) head++;
-                start = rowStarts[head];
-                if (start > 4096 && start > keptRows.Count / 2) Compact(keptRows, keptColumns, rowStarts, ref head, ref start);
+                while (part.RowStarts.Count - part.Head > 1 && part.Rows.Count - part.RowStarts[part.Head + 1] >= maxMatches) part.Head++;
+                part.Start = part.RowStarts[part.Head];
+                if (part.Start > 4096 && part.Start > part.Rows.Count / 2) Compact(part.Rows, part.Columns, part.RowStarts, ref part.Head, ref part.Start);
             }
-            total += found.Count;
         }
-        if (!backward) return new SearchOutcome(rows, total, first < 0 ? total : first, [.. keptRows], [.. keptColumns], approximate);
-        var kept = keptRows.Count - start;
-        return new SearchOutcome(rows, total, before - kept, keptRows.GetRange(start, kept).ToArray(), keptColumns.GetRange(start, kept).ToArray(), approximate);
     }
 
     private static void Compact(List<long> rows, List<int> columns, List<int> rowStarts, ref int head, ref int start)

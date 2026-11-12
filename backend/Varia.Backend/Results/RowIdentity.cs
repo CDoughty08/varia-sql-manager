@@ -34,9 +34,17 @@ internal static class RowIdentity
     public const long Mask = (1L << 53) - 1;
     private const int CancelEvery = 1 << 12;
 
-    /// <summary>Bytes the check for uniqueness holds per row while it runs (one HashSet, its entry and bucket, reused by every
-    /// column Auto tries and by the whole-row fallback), on top of the one ids array they all fill.</summary>
-    public static long WorkingBytes(long rows) => rows * 24;
+    /// <summary>Bytes the check for uniqueness holds while it runs (the identities again, spread into parts that are each
+    /// sorted, and a set of the first rows'), on top of the one ids array every column Auto tries and the whole-row
+    /// fallback fill.</summary>
+    public static long WorkingBytes(long rows) => rows * 8 + Math.Min(rows, Probe) * 24;
+
+    /// <summary>What the check for uniqueness holds, made once and used by every pass over a result.</summary>
+    internal sealed class Working(int rows)
+    {
+        public readonly HashSet<long> Seen = new(Math.Min(rows, Probe));
+        public readonly long[] Spread = new long[rows];
+    }
 
     public static (int Column, bool Unique, bool Approximate, long[] Ids) Build(ResultSetBuffer set, StoredPage[] pages, IdentityBy by, int column, CancellationToken token)
     {
@@ -45,63 +53,161 @@ internal static class RowIdentity
         if (total > Array.MaxLength) throw new RequestException("TOO_LARGE", "This result has too many rows to tell apart.");
         var rows = (int)total;
         var hasher = new CellHasher(set.Columns, set.Wires);
-        // One array and one set serve every pass, so Auto's candidates and fallback hold no more than WorkingBytes and the ids.
+        // One array and one working set serve every pass, so Auto's candidates and fallback hold no more than WorkingBytes and the ids.
         var ids = new long[rows];
-        var seen = new HashSet<long>(rows);
+        var working = new Working(rows);
         if (by == IdentityBy.Column)
         {
-            var (unique, approximate) = Fill(hasher, pages, column, ids, stopEarly: false, token, seen);
+            var (unique, approximate) = Fill(hasher, pages, column, ids, stopEarly: false, token, working);
             return (column, unique, approximate, ids);
         }
         if (by == IdentityBy.Auto)
         {
             foreach (var candidate in Candidates(set.Columns, set.Wires).Take(MaxCandidates))
             {
-                var (unique, approximate) = Fill(hasher, pages, candidate, ids, stopEarly: true, token, seen);
+                var (unique, approximate) = Fill(hasher, pages, candidate, ids, stopEarly: true, token, working);
                 if (unique && !approximate) return (candidate, true, false, ids);
             }
         }
-        var (rowsUnique, rowsApproximate) = Fill(hasher, pages, -1, ids, stopEarly: false, token, seen);
+        var (rowsUnique, rowsApproximate) = Fill(hasher, pages, -1, ids, stopEarly: false, token, working);
         return (-1, rowsUnique, rowsApproximate, ids);
     }
 
-    /// <summary>Hashes each row's identity into <paramref name="ids"/> (column -1: the whole row); whether they were all
-    /// distinct (a key column also needs no NULL), and whether a truncated value was hashed. With <paramref name="stopEarly"/>
-    /// it stops at the first NULL, truncated value or repeat, leaving the rest of the array unset. <paramref name="seen"/>, when
-    /// given, is cleared and reused.</summary>
-    internal static (bool Unique, bool Approximate) Fill(CellHasher hasher, StoredPage[] pages, int column, long[] ids, bool stopEarly, CancellationToken token,
-        HashSet<long>? seen = null)
+    /// <summary>The fewest rows a thread hashing a result reads; a smaller result is hashed on one.</summary>
+    internal const int MinSlice = 1 << 15;
+    /// <summary>Rows a column is tried on, on one thread, before all of them are hashed: most columns that are no key say
+    /// so within these.</summary>
+    internal const int Probe = 1 << 15;
+
+    internal delegate void PageRead(CellHasher hasher, StoredPage page, PageView view);
+
+    /// <summary>Reads the pages in runs on several threads (one per <see cref="MinSlice"/> rows, up to the sort's threads),
+    /// each with a hasher of its own.</summary>
+    internal static void EachPage(CellHasher hasher, StoredPage[] pages, long rows, CancellationToken token, PageRead read)
     {
-        if (seen is null) seen = new HashSet<long>(ids.Length);
-        else seen.Clear();
-        var unique = true;
-        var approximate = false;
-        var columns = hasher.Count;
-        var scratch = new int[PageView.ScratchLength(columns)];
-        var counter = 0;
-        foreach (var page in pages)
+        using var threads = ViewSorter.Gate.Take((int)Math.Clamp(Math.Min(rows / MinSlice, pages.Length), 1, ViewSorter.Workers));
+        var runs = threads.Count;
+        void Run(int run)
         {
-            token.ThrowIfCancellationRequested();
-            var view = PageView.Parse(page.Body, columns, scratch);
-            var first = (int)page.FirstRow;
-            for (var r = 0; r < page.Rows; r++)
+            var own = run == 0 ? hasher : hasher.Fork();
+            var scratch = new int[PageView.ScratchLength(own.Count)];
+            for (int index = (int)((long)pages.Length * run / runs), end = (int)((long)pages.Length * (run + 1) / runs); index < end; index++)
             {
-                if (++counter == CancelEvery) { counter = 0; token.ThrowIfCancellationRequested(); }
-                long id;
-                if (column < 0) id = hasher.Row(view, r, ref approximate);
-                else
-                {
-                    if (view.IsNull(column, r)) unique = false;
-                    if (view.IsTruncated(column, r)) approximate = true;
-                    id = hasher.Cell(view, column, r);
-                }
-                id &= Mask;
-                ids[first + r] = id;
-                if (unique && !seen.Add(id)) unique = false;
-                if (stopEarly && (!unique || approximate)) return (unique, approximate);
+                token.ThrowIfCancellationRequested();
+                read(own, pages[index], PageView.Parse(pages[index].Body, own.Count, scratch));
             }
         }
-        return (unique, approximate);
+        if (runs == 1)
+        {
+            Run(0);
+            return;
+        }
+        try { Parallel.For(0, runs, new ParallelOptions { MaxDegreeOfParallelism = runs }, Run); }
+        catch (AggregateException error) when (error.InnerExceptions.Count > 0)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerExceptions[0]).Throw();
+        }
+    }
+
+    /// <summary>Hashes each row's identity into <paramref name="ids"/> (column -1: the whole row), the pages in runs on
+    /// several threads; whether they were all distinct (a key column also needs no NULL), and whether a truncated value was
+    /// hashed. With <paramref name="stopEarly"/> it stops at a NULL, a truncated value or, among the first
+    /// <see cref="Probe"/> rows, a repeat, leaving the array partly set: such a column is no key.</summary>
+    internal static (bool Unique, bool Approximate) Fill(CellHasher hasher, StoredPage[] pages, int column, long[] ids, bool stopEarly, CancellationToken token, Working? working = null)
+    {
+        working ??= new Working(ids.Length);
+        if (stopEarly)
+        {
+            var unique = true;
+            var approximate = false;
+            var seen = working.Seen;
+            seen.Clear();
+            var scratch = new int[PageView.ScratchLength(hasher.Count)];
+            var probed = 0;
+            foreach (var page in pages)
+            {
+                token.ThrowIfCancellationRequested();
+                var view = PageView.Parse(page.Body, hasher.Count, scratch);
+                var first = (int)page.FirstRow;
+                for (var r = 0; r < page.Rows && probed < Probe; r++, probed++)
+                {
+                    long id;
+                    if (column < 0) id = hasher.Row(view, r, ref approximate);
+                    else
+                    {
+                        if (view.IsNull(column, r)) unique = false;
+                        if (view.IsTruncated(column, r)) approximate = true;
+                        id = hasher.Cell(view, column, r);
+                    }
+                    id &= Mask;
+                    ids[first + r] = id;
+                    if (!seen.Add(id)) unique = false;
+                    if (!unique || approximate) return (unique, approximate);
+                }
+                if (probed == Probe) break;
+            }
+            if (probed == ids.Length) return (true, false);
+        }
+        int nulls = 0, cut = 0, stop = 0;
+        EachPage(hasher, pages, ids.Length, token, (own, page, view) =>
+        {
+            if (stopEarly && Volatile.Read(ref stop) != 0) return;
+            var first = (int)page.FirstRow;
+            bool isNull = false, inexact = false;
+            for (var r = 0; r < page.Rows; r++)
+            {
+                long id;
+                if (column < 0) id = own.Row(view, r, ref inexact);
+                else
+                {
+                    if (view.IsNull(column, r)) isNull = true;
+                    if (view.IsTruncated(column, r)) inexact = true;
+                    id = own.Cell(view, column, r);
+                }
+                ids[first + r] = id & Mask;
+            }
+            if (isNull) Volatile.Write(ref nulls, 1);
+            if (inexact) Volatile.Write(ref cut, 1);
+            if (stopEarly && (isNull || inexact)) Volatile.Write(ref stop, 1);
+        });
+        if (nulls != 0 || (stopEarly && cut != 0)) return (false, cut != 0);
+        return (Distinct(ids, working.Spread, token), cut != 0);
+    }
+
+    /// <summary>Whether no two identities are equal. They are hashes, so their high bits spread them evenly over as many
+    /// parts as there are threads; each part is sorted on its own, and equal ones end side by side.</summary>
+    internal static bool Distinct(long[] ids, long[] spread, CancellationToken token)
+    {
+        if (ids.Length < 2) return true;
+        using var threads = ViewSorter.Gate.Take(Math.Max(1, Math.Min(ViewSorter.Workers, ids.Length / MinSlice)));
+        var bits = 0;
+        while (2 << bits <= threads.Count && ids.Length >> (bits + 1) >= MinSlice) bits++;
+        var parts = 1 << bits;
+        var shift = 53 - bits;
+        var starts = new int[parts + 1];
+        foreach (var id in ids) starts[(id >> shift) + 1]++;
+        for (var part = 0; part < parts; part++) starts[part + 1] += starts[part];
+        token.ThrowIfCancellationRequested();
+        var places = starts.AsSpan(0, parts).ToArray();
+        foreach (var id in ids) spread[places[id >> shift]++] = id;
+        var repeated = 0;
+        void Part(int part)
+        {
+            if (Volatile.Read(ref repeated) != 0) return;
+            token.ThrowIfCancellationRequested();
+            var span = spread.AsSpan(starts[part], starts[part + 1] - starts[part]);
+            span.Sort();
+            for (var i = 1; i < span.Length; i++)
+                if (span[i] == span[i - 1]) { Volatile.Write(ref repeated, 1); return; }
+        }
+        if (parts == 1) Part(0);
+        else
+            try { Parallel.For(0, parts, new ParallelOptions { MaxDegreeOfParallelism = parts }, Part); }
+            catch (AggregateException error) when (error.InnerExceptions.Count > 0)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerExceptions[0]).Throw();
+            }
+        return repeated == 0;
     }
 
     /// <summary>The columns Auto tries, likeliest key first: names ending in id, key or guid, then integer and
@@ -143,6 +249,17 @@ internal sealed class CellHasher
     private byte[] sortKey = new byte[512];
     private const ulong Offset = 14695981039346656037UL, Prime = 1099511628211UL;
     private const ulong NullHash = 0x9e3779b97f4a7c15UL;
+
+    private CellHasher(CellHasher other)
+    {
+        Count = other.Count;
+        kinds = other.kinds;
+        cultures = other.cultures;
+        hidden = other.hidden;
+    }
+
+    /// <summary>A hasher of the same columns with buffers of its own, for another thread.</summary>
+    public CellHasher Fork() => new(this);
 
     public CellHasher(IReadOnlyList<ResultColumn> columns, IReadOnlyList<WireKind> wires)
     {
@@ -253,9 +370,7 @@ internal sealed class CellHasher
             {
                 var (info, options) = cultures[column]!.Value;
                 var text = Decode(ViewSorter.TrimEnd(cell));
-                var length = info.GetSortKeyLength(text, options);
-                if (length > sortKey.Length) sortKey = new byte[Math.Max(length, 2 * sortKey.Length)];
-                var written = info.GetSortKey(text, sortKey, options);
+                var written = ViewSorter.SortKey(info, options, text, ref sortKey);
                 return Bytes(hash, sortKey.AsSpan(0, written));
             }
             case Kind.Trimmed: return Bytes(hash, ViewSorter.TrimEnd(cell));

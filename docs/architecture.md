@@ -85,11 +85,27 @@ being true.
 - The grid renders cells only through `GridView` pools, and text only through `nodeValue` (`tests/grid-lint.test.ts`
   forbids HTML sinks under `grid/`, `results/`, `designer/` and `live/`); no React per row or cell, and frames stay
   O(visible cells).
+  `GridView` works in drawn rows and columns for geometry, pools and scrolling, and meets the result's own rows and columns
+  at named seams (its `selection`/`select`, `sourceRange`, a cell's lookup in `paintCell`, `targetOf`), each the identity
+  today; its saved state, marks and callbacks are always in the result's. Columns are placed through `ColumnAxis`
+  (`grid/layout.ts`) and tiles have a `TileShape` (`grid/tiles.ts`). A menu's row and column come from the grid
+  (`gridTarget`, `grid/anchor.ts`); an ARIA index is read only where no `GridView` is registered. `tests/grid-view.test.ts` holds the seams.
   Live tables show through `LiveGrid` (`src/renderer/src/live/`), which swaps each revision into its `GridView`; a table's row
   tone column (catalogue `role: 'tone'`, its last) is hidden by the grid and left out of Copy and Save (`ResultJobs`).
 - Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never
   leave main except to the backend.
-- Results are released on re-execute, tab close, Close Results and backend loss; jobs lease them.
+- Results are released on re-execute, tab close, Close Results, closing one result and backend loss; jobs lease them.
+- Every way a result leaves its run goes through one cleanup, `ResultsService.drop`: closing one entry (`removeEntry`, a
+  stack caption's close button, on an ended run only), Close Results, a new run and the tab closing. It aborts the entry's
+  sort or filter being built, forgets its held views, sort, distinct snapshots, grid controller and state and its part of
+  the stack's state, cancels a copy of it (a save the backend accepted finishes under its lease), and releases the stored
+  results in one request, after a retained-plan copy in progress has read them. Add a new piece of per-entry state there,
+  not in a caller. Services that follow the results give up their own work on an entry that has gone when the snapshot
+  loses it (`PivotService`, `TransposeService` and `CompareService` abort a build whose source closed; search re-searches
+  only the grids whose target changed; highlights unbind), and `addSet` releases a derived result whose source the run no
+  longer has, so a late answer is released once and never shown. A derived result outlives a closed source. Closing does
+  not change the run's status, summary or row total (which counts the query's own rows, never a derived result's);
+  closing the last entry sets `TabResults.emptied`, which keeps the Results view (`hasResultsView`, `OutputPane.tsx`).
 - In the renderer a result is an entry of its run, named everywhere by the opaque key `ResultsService` mints for it
   (`EntryKey`, the grid's `data-result-entry`), never by its place in the list: sorts, held views, grid state, the
   stack's weights, collapse and focus, search marks, highlights, panels, commands and menu targets all follow the key, so

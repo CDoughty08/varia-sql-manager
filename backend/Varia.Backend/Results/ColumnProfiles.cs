@@ -29,8 +29,32 @@ internal static class ColumnProfiler
     private const int DisplayBytes = 4 * ValueChars;
 
     /// <summary>What a profile holds while it runs, charged to the result's budget: the view's row bitmap, and per column
-    /// an exact distinct set at its cap (about 24 bytes an entry), the estimator's registers and its two kept values.</summary>
-    public static long WorkingBytes(long baseRows, int columns) => baseRows / 8 + 1024 + columns * (24L * Math.Min(baseRows, ExactDistinct) + Registers + 4 * DisplayBytes + 4096);
+    /// and thread an exact distinct set (about 24 bytes an entry; at most its cap, and the rows a thread reads,
+    /// <paramref name="runRows"/>), the estimator's registers and its two kept values.</summary>
+    public static long WorkingBytes(long baseRows, int columns, int workers = 1, long runRows = long.MaxValue) =>
+        baseRows / 8 + 1024 + (long)workers * columns * (24L * Math.Min(Math.Min(baseRows, runRows), ExactDistinct) + Registers + 4 * DisplayBytes + 4096);
+
+    /// <summary>Threads a profile reads these pages on, each a run of pages of its own: a result of several pages is
+    /// read on several threads however few its rows (a page of long values holds few), as its columns' sort keys are
+    /// what takes the time.</summary>
+    public static int WorkersFor(int pages) => Math.Clamp(pages, 1, ViewSorter.Workers);
+
+    /// <summary>The page a run starts at, of <paramref name="runs"/> runs of <paramref name="pages"/> pages.</summary>
+    internal static int RunStart(int pages, int run, int runs) => (int)((long)pages * run / runs);
+
+    /// <summary>The most rows one of <paramref name="runs"/> runs of these pages reads.</summary>
+    public static long RunRows(StoredPage[] pages, int runs)
+    {
+        runs = Math.Clamp(runs, 1, Math.Max(1, pages.Length));
+        long most = 0;
+        for (var run = 0; run < runs; run++)
+        {
+            long rows = 0;
+            for (int index = RunStart(pages.Length, run, runs), end = RunStart(pages.Length, run + 1, runs); index < end; index++) rows += pages[index].Rows;
+            most = Math.Max(most, rows);
+        }
+        return most;
+    }
 
     /// <summary>Memory a profile takes beyond <see cref="WorkingBytes"/> as it meets large values (a lowest or highest
     /// key, a sort key's buffers), reserved from the result's budget as it grows; the caller returns <see cref="Extra"/>.
@@ -50,7 +74,11 @@ internal static class ColumnProfiler
 
     internal sealed class ProfileTooLargeException() : Exception("The profile needs more result memory than the budget has.");
 
-    public static ResultsProfileResult Profile(ResultSetBuffer set, StoredPage[] pages, ResultView? view, IReadOnlyList<int> columns, bool complete, CancellationToken token, Charges? charges = null)
+    /// <summary>The profile of a result's sealed rows, or of a view's. The pages are read in <paramref name="workers"/> runs
+    /// at once (<see cref="WorkersFor"/> by default, and no more than the operations running leave free), each with figures of its own, merged in page order: every figure is a
+    /// count, a sum, a lowest or highest, or a set, so the profile is the one a single thread gives, whose lowest and highest
+    /// cells are the first rows to hold those values.</summary>
+    public static ResultsProfileResult Profile(ResultSetBuffer set, StoredPage[] pages, ResultView? view, IReadOnlyList<int> columns, bool complete, CancellationToken token, Charges? charges = null, int? workers = null, ViewSorter.WorkerGate? gate = null)
     {
         charges ??= new Charges(_ => true);
         long baseRows = 0;
@@ -63,41 +91,94 @@ internal static class ColumnProfiler
         }
         bool Included(long row) => included is null || (included[row >> 3] & (1 << (int)(row & 7))) != 0;
         var rows = view?.Rows ?? baseRows;
-        var accumulators = columns.Select(column => new Accumulator(set, column, charges)).ToArray();
-        var sizes = new LengthStats();
         var guessed = set.Lengths.Any(length => length.Estimated);
         var count = set.Wires.Count;
-        var scratch = new int[PageView.ScratchLength(count)];
-        foreach (var page in pages)
+        // At most the threads asked for, and no more than the operations running leave free.
+        using var threads = (gate ?? ViewSorter.Gate).Take(workers ?? WorkersFor(pages.Length));
+        var runs = Math.Clamp(threads.Count, 1, Math.Max(1, pages.Length));
+        int From(int run) => RunStart(pages.Length, run, runs);
+        // Once a run has failed (a refused charge, a cancellation) the others stop at their next page: nothing is merged.
+        var failed = 0;
+        void Each(Action<int> read)
         {
-            token.ThrowIfCancellationRequested();
-            var first = page.FirstRow;
-            var measured = page.Lengths.Rows == page.Rows;
-            var estimated = new HashSet<int>();
-            if (measured) page.Lengths.EstimatedRows(0, page.Rows, row => estimated.Add(row));
-            // Row sizes come from the page's lengths: with no columns asked (the row-size bar), the body is never parsed.
-            var parsed = accumulators.Length > 0 ? PageView.Parse(page.Body, count, scratch) : default;
-            for (var r = 0; r < page.Rows; r++)
+            try
             {
-                if (!Included(first + r)) continue;
-                if (measured) sizes.Add(page.Lengths.RowBytes(r), !guessed && !estimated.Contains(r));
-                else sizes.Add(0, false);
-                foreach (var accumulator in accumulators) accumulator.Add(parsed, page.Lengths, r);
+                Parallel.For(0, runs, new ParallelOptions { MaxDegreeOfParallelism = runs }, run =>
+                {
+                    try { read(run); }
+                    catch
+                    {
+                        Volatile.Write(ref failed, 1);
+                        throw;
+                    }
+                });
             }
+            catch (AggregateException error) when (error.InnerExceptions.Count > 0)
+            {
+                // What the one thread would have thrown: a cancellation, or a refusal of the room a value needed.
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerExceptions[0]).Throw();
+            }
+        }
+        var parts = new Accumulator[runs][];
+        var sized = new LengthStats[runs];
+        Each(run =>
+        {
+            var own = parts[run] = [.. columns.Select(column => new Accumulator(set, column, charges))];
+            var size = sized[run] = new LengthStats();
+            var scratch = new int[PageView.ScratchLength(count)];
+            for (var index = From(run); index < From(run + 1); index++)
+            {
+                if (Volatile.Read(ref failed) != 0) return;
+                token.ThrowIfCancellationRequested();
+                var page = pages[index];
+                var first = page.FirstRow;
+                var measured = page.Lengths.Rows == page.Rows;
+                var estimated = new HashSet<int>();
+                if (measured) page.Lengths.EstimatedRows(0, page.Rows, row => estimated.Add(row));
+                // Row sizes come from the page's lengths: with no columns asked (the row-size bar), the body is never parsed.
+                var parsed = own.Length > 0 ? PageView.Parse(page.Body, count, scratch) : default;
+                for (var r = 0; r < page.Rows; r++)
+                {
+                    if (!Included(first + r)) continue;
+                    if (measured) size.Add(page.Lengths.RowBytes(r), !guessed && !estimated.Contains(r));
+                    else size.Add(0, false);
+                    foreach (var accumulator in own) accumulator.Add(parsed, page.Lengths, r);
+                }
+            }
+        });
+        var accumulators = parts[0];
+        var sizes = sized[0];
+        for (var run = 1; run < runs; run++)
+        {
+            sizes.Merge(sized[run]);
+            for (var c = 0; c < accumulators.Length; c++) accumulators[c].Merge(parts[run][c]);
         }
         // The histograms' buckets span each column's range, known only now: a second pass fills them.
         var binned = accumulators.Where(accumulator => accumulator.NeedsBins).ToArray();
         if (binned.Length > 0)
-            foreach (var page in pages)
+        {
+            var counts = new long[runs][][];
+            Each(run =>
             {
-                token.ThrowIfCancellationRequested();
-                var parsed = PageView.Parse(page.Body, count, scratch);
-                for (var r = 0; r < page.Rows; r++)
+                var own = counts[run] = [.. binned.Select(_ => new long[Bins])];
+                var scratch = new int[PageView.ScratchLength(count)];
+                for (var index = From(run); index < From(run + 1); index++)
                 {
-                    if (!Included(page.FirstRow + r)) continue;
-                    foreach (var accumulator in binned) accumulator.Bin(parsed, page.Lengths, r);
+                    if (Volatile.Read(ref failed) != 0) return;
+                    token.ThrowIfCancellationRequested();
+                    var page = pages[index];
+                    var parsed = PageView.Parse(page.Body, count, scratch);
+                    for (var r = 0; r < page.Rows; r++)
+                    {
+                        if (!Included(page.FirstRow + r)) continue;
+                        for (var b = 0; b < binned.Length; b++)
+                            if (binned[b].BinOf(parsed, page.Lengths, r) is >= 0 and var bin) own[b][bin]++;
+                    }
                 }
-            }
+            });
+            foreach (var own in counts)
+                for (var b = 0; b < binned.Length; b++) binned[b].AddBins(own[b]);
+        }
         return new ResultsProfileResult(rows, complete, sizes.Result(), [.. accumulators.Select(accumulator => accumulator.Result(rows))]);
     }
 
@@ -128,6 +209,16 @@ internal static class ColumnProfiler
             if (!exact) Exact = false;
         }
 
+        /// <summary>Lengths are whole numbers, so their sum is the same in any order.</summary>
+        public void Merge(LengthStats other)
+        {
+            Count += other.Count;
+            Min = Math.Min(Min, other.Min);
+            Max = Math.Max(Max, other.Max);
+            Sum += other.Sum;
+            Exact &= other.Exact;
+        }
+
         public ProfileLengths? Result() => Count == 0 ? null : new ProfileLengths(Min, Max, Sum / Count, Exact);
     }
 
@@ -142,6 +233,7 @@ internal static class ColumnProfiler
         private readonly Basis basis;
         private readonly (CompareInfo Info, CompareOptions Options)? culture;
         private readonly bool trim;
+        private readonly bool timeOnly;
         private readonly Charges charges;
         private long values;
         private bool approximate;
@@ -170,6 +262,7 @@ internal static class ColumnProfiler
             basis = BasisOf(meta, wire, kind);
             culture = kind == ViewSorter.Kind.Collated ? ViewSorter.Culture(meta.Collation) : null;
             trim = meta.Collation is not null;
+            timeOnly = ViewSorter.TypeName(meta) == "time";
             if (wire == WireKind.Binary || ViewSorter.IsText(meta))
             {
                 charStats = wire == WireKind.Binary ? null : new LengthStats();
@@ -203,9 +296,47 @@ internal static class ColumnProfiler
             }
         }
 
-        public void Bin(PageView view, PageLengths lengths, int row)
+        /// <summary>The figures of the pages after this one's, added to its own. A lowest or highest value that both hold stays
+        /// this one's: its row came first.</summary>
+        public void Merge(Accumulator later)
         {
-            if (view.IsNull(column, row)) return;
+            values += later.values;
+            approximate |= later.approximate;
+            if (later.exact is { } hashes)
+            {
+                foreach (var hash in hashes) Count(hash);
+            }
+            else
+            {
+                if (exact is { } own)
+                {
+                    registers = new byte[Registers];
+                    foreach (var seen in own) Register(seen);
+                    exact = null;
+                }
+                for (var i = 0; i < Registers; i++)
+                    if (later.registers![i] > registers![i]) registers[i] = later.registers[i];
+            }
+            if (later.minLength >= 0 && (minLength < 0 || Compare(later.minKey.AsSpan(0, later.minLength), minKey.AsSpan(0, minLength)) < 0))
+                (minKey, minLength, minCell, minCut) = (later.minKey, later.minLength, later.minCell, later.minCut);
+            if (later.maxLength >= 0 && (maxLength < 0 || Compare(later.maxKey.AsSpan(0, later.maxLength), maxKey.AsSpan(0, maxLength)) > 0))
+                (maxKey, maxLength, maxCell, maxCut) = (later.maxKey, later.maxLength, later.maxCell, later.maxCut);
+            if (later.charStats is not null) charStats?.Merge(later.charStats);
+            if (later.byteStats is not null) byteStats?.Merge(later.byteStats);
+            // As the rows pass: an equal value later never replaces one (so the first zero keeps its sign).
+            if (later.low < low) low = later.low;
+            if (later.high > high) high = later.high;
+        }
+
+        public void AddBins(long[] counts)
+        {
+            for (var i = 0; i < Bins; i++) bins[i] += counts[i];
+        }
+
+        /// <summary>The histogram bucket a row's cell falls in, or -1 for none; reads the figures only, so on any thread.</summary>
+        public int BinOf(PageView view, PageLengths lengths, int row)
+        {
+            if (view.IsNull(column, row)) return -1;
             var cell = view.Span(column, row);
             double? measure = basis switch
             {
@@ -213,10 +344,9 @@ internal static class ColumnProfiler
                 Basis.Bytes => Size(lengths, row, cell, view.IsTruncated(column, row)).Bytes,
                 _ => Measure(cell)
             };
-            if (measure is not { } value) return;
+            if (measure is not { } value) return -1;
             var (from, to) = Range();
-            var bin = to <= from ? 0 : (int)Math.Min(Bins - 1, Math.Max(0, Math.Floor((value - from) / (to - from) * Bins)));
-            bins[bin]++;
+            return to <= from ? 0 : (int)Math.Min(Bins - 1, Math.Max(0, Math.Floor((value - from) / (to - from) * Bins)));
         }
 
         private (double From, double To) Range() => basis switch
@@ -250,10 +380,17 @@ internal static class ColumnProfiler
         {
             if (basis == Basis.Value)
                 return double.TryParse(cell, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) && double.IsFinite(number) ? number : null;
+            // The text the backend writes is read directly; anything else by the general parser.
+            if (ViewSorter.TryInstant(cell, out var written, out var offset, out var dated, out var zoned))
+            {
+                if (timeOnly) { if (!dated && !zoned) return written; }
+                else if (kind == ViewSorter.Kind.Ticks) { if (dated && zoned && written - offset is >= 0 and <= 3155378975999999999) return written - offset; }
+                else if (dated && !zoned) return written;
+            }
             Span<char> text = stackalloc char[64];
             var count = Encoding.UTF8.GetChars(cell[..Math.Min(cell.Length, 64)], text);
             var shown = text[..count];
-            if (ViewSorter.TypeName(meta) == "time") return TimeSpan.TryParse(shown, CultureInfo.InvariantCulture, out var time) ? time.Ticks : null;
+            if (timeOnly) return TimeSpan.TryParse(shown, CultureInfo.InvariantCulture, out var time) ? time.Ticks : null;
             if (kind == ViewSorter.Kind.Ticks) return DateTimeOffset.TryParse(shown, CultureInfo.InvariantCulture, DateTimeStyles.None, out var instant) ? instant.UtcTicks : null;
             return DateTime.TryParse(shown, CultureInfo.InvariantCulture, DateTimeStyles.None, out var date) ? date.Ticks : null;
         }
@@ -274,6 +411,7 @@ internal static class ColumnProfiler
                 }
                 case ViewSorter.Kind.Ticks:
                 {
+                    if (ViewSorter.UtcTicks(cell) is { } instant) return Eight((ulong)instant ^ 0x8000_0000_0000_0000UL);
                     Span<char> text = stackalloc char[64];
                     var count = Encoding.UTF8.GetChars(cell[..Math.Min(cell.Length, 64)], text);
                     var ticks = DateTimeOffset.TryParse(text[..count], CultureInfo.InvariantCulture, DateTimeStyles.None, out var value) ? value.UtcTicks : long.MinValue;
@@ -299,9 +437,9 @@ internal static class ColumnProfiler
                         chars = new char[grown];
                     }
                     var text = chars.AsSpan(0, Encoding.UTF8.GetChars(trimmed, chars));
-                    var size = compare.Info.GetSortKeyLength(text, compare.Options);
-                    Grow(size);
-                    return key.AsSpan(0, compare.Info.GetSortKey(text, key, compare.Options));
+                    // Asked for once; a longer key than the buffer grows it, charged as any growth is.
+                    var written = ViewSorter.SortKey(compare.Info, compare.Options, text, ref key, grown => charges.Add(grown));
+                    return key.AsSpan(0, written);
                 }
                 default: return trim ? ViewSorter.TrimEnd(cell) : cell;
             }
@@ -362,9 +500,10 @@ internal static class ColumnProfiler
             return key.AsSpan(0, at);
         }
 
-        private void Distinct(ReadOnlySpan<byte> normal)
+        private void Distinct(ReadOnlySpan<byte> normal) => Count(Hash(normal));
+
+        private void Count(ulong hash)
         {
-            var hash = Hash(normal);
             if (exact is not null)
             {
                 if (exact.Add(hash) && exact.Count > ExactDistinct)

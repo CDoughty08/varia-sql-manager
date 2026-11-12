@@ -107,7 +107,14 @@ internal static class ResultPivoter
 
     /// <summary>Groups the rows (the view's, in its order, or the sealed ones) and aggregates each value. <paramref name="reserve"/>
     /// is asked for the figures' bytes once the groups are known; false throws <see cref="PivotTooLargeException"/>.</summary>
-    public static PivotModel Build(ResultSetBuffer set, StoredPage[] pages, int[]? order, PivotSpec spec, CancellationToken token, Func<long, bool> reserve, PivotStages? stages = null)
+    public static PivotModel Build(ResultSetBuffer set, StoredPage[] pages, int[]? order, PivotSpec spec, CancellationToken token, Func<long, bool> reserve, ViewSorter.KeyMemory? memory = null,
+        PivotStages? stages = null)
+    {
+        try { return Build(set, pages, order, spec, reserve, memory, stages, token); }
+        finally { memory?.ReturnAll(); }
+    }
+
+    private static PivotModel Build(ResultSetBuffer set, StoredPage[] pages, int[]? order, PivotSpec spec, Func<long, bool> reserve, ViewSorter.KeyMemory? memory, PivotStages? stages, CancellationToken token)
     {
         long total = 0;
         foreach (var page in pages) total += page.Rows;
@@ -121,7 +128,7 @@ internal static class ResultPivoter
             if (!keys.TryGetValue(column, out var key))
             {
                 var started = Stopwatch.GetTimestamp();
-                keys[column] = key = ViewSorter.Build(set, source, new ViewKey(column, false, SortMode.Value), null, rows, token, ref approximate);
+                keys[column] = key = ViewSorter.Build(set, source, new ViewKey(column, false, SortMode.Value), null, rows, token, ref approximate, memory);
                 if (stages is not null) stages.Keys += Stopwatch.GetTimestamp() - started;
             }
             return key;
@@ -268,7 +275,8 @@ internal static class ResultPivoter
         }
         positions.CopyTo(scratch, 0);
         var comparer = new ViewSorter.Comparer(keys, null, token);
-        if (scratch.Length > 1) Array.Sort(scratch, comparer);
+        ViewSorter.ThrowIfSlow(keys, scratch);
+        ViewSorter.Sort(scratch, 0, scratch.Length, comparer);
         long count = 0;
         for (var i = 0; i < scratch.Length; i++)
         {

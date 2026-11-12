@@ -43,8 +43,9 @@ const names = (entry: ResultSetEntry) => new Set(entry.descriptor.columns.filter
  */
 export class CompareService extends SnapshotStore<CompareSnapshot> implements Disposable {
   private readonly results: Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'notify'>
-  /** Comparisons in flight by tab, with the run they compare: a newer run (or none) gives them up. */
-  private readonly running = new Map<string, { readonly abort: AbortController; readonly queryId: string }>()
+  /** Comparisons in flight by tab, with the run and the two entries they compare: a newer run (or none), or either entry
+   *  closed, gives them up. */
+  private readonly running = new Map<string, { readonly abort: AbortController; readonly queryId: string; readonly left: EntryKey; readonly right: EntryKey }>()
   private readonly unsubscribe: () => void
 
   constructor(results: Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'notify'>) {
@@ -53,7 +54,10 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     this.unsubscribe = results.subscribe(() => {
       if (this.running.size === 0) return
       const snapshot = this.results.getSnapshot()
-      for (const [tabId, item] of this.running) if (snapshot[tabId]?.queryId !== item.queryId) item.abort.abort()
+      for (const [tabId, item] of this.running) {
+        const tab = snapshot[tabId]
+        if (tab?.queryId !== item.queryId || !entryOf(tab.sets, item.left) || !entryOf(tab.sets, item.right)) item.abort.abort()
+      }
     })
   }
 
@@ -80,7 +84,7 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     const tab = this.results.getSnapshot()[tabId], to = entryOf(tab?.sets, key)
     if (!from || !tab || !to || this.running.has(tabId)) return
     const abort = new AbortController()
-    const item = { abort, queryId: tab.queryId }
+    const item = { abort, queryId: tab.queryId, left: from.key, right: to.key }
     this.running.set(tabId, item)
     try {
       const result = await from.handle.diff(to.handle, { exact: o.exact ?? false, signal: abort.signal })
