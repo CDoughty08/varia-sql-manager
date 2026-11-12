@@ -17,7 +17,7 @@
 - **Results:** the run summary's row count is the rows the query returned; a pivot, transpose or comparison no longer adds its rows to it. A result added after you drag a splitter no longer resets the other results' heights. Search in results looks again only at the grids that changed.
 - **Results:** sorting, filtering for duplicates, listing a column's values and pivoting are several times faster on number columns with many repeated values (a status, a flag, a foreign key).
 - **Results:** the same operations on text, date and binary columns are many times faster on large results, most of all when values repeat or share their first characters (names, paths, codes, the dates of a month), and now use several processor cores, shared between the operations running. When result memory is too full to do this in time, they say so instead of running to their time limit.
-- **Results:** column profiles of several columns are faster on large results: each column is read on its own processor core.
+- **Results:** column profiles are several times faster on large results: they now use several processor cores.
 
 ### Fixed
 

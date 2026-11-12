@@ -700,6 +700,63 @@ internal static partial class ViewSorter
         return Math.Sign(fracA.SequenceCompareTo(fracB));
     }
 
+    /// <summary>Reads the date and time types' display text as the backend writes it, without the general parser (which
+    /// is several times slower and allocates for every cell): <c>yyyy-MM-dd</c>, <c>HH:mm:ss</c> with up to seven
+    /// fraction digits, both with a space between, and a <c>+hh:mm</c> or <c>-hh:mm</c> offset after a space. False for
+    /// anything else, which the general parser then reads. <paramref name="ticks"/> is the date and time as written.</summary>
+    internal static bool TryInstant(ReadOnlySpan<byte> text, out long ticks, out long offset, out bool dated, out bool zoned)
+    {
+        ticks = 0;
+        offset = 0;
+        dated = false;
+        zoned = false;
+        static bool Number(ReadOnlySpan<byte> digits, out int value)
+        {
+            value = 0;
+            foreach (var digit in digits)
+            {
+                if (digit is < (byte)'0' or > (byte)'9') return false;
+                value = value * 10 + (digit - '0');
+            }
+            return true;
+        }
+        var at = 0;
+        if (text.Length >= 10 && text[4] == (byte)'-' && text[7] == (byte)'-')
+        {
+            if (!Number(text[..4], out var year) || !Number(text.Slice(5, 2), out var month) || !Number(text.Slice(8, 2), out var day)) return false;
+            if (year < 1 || month is < 1 or > 12 || day < 1 || day > DateTime.DaysInMonth(year, month)) return false;
+            ticks = new DateTime(year, month, day).Ticks;
+            dated = true;
+            at = 10;
+            if (at == text.Length) return true;
+            if (text[at++] != (byte)' ') return false;
+        }
+        if (text.Length - at < 8 || text[at + 2] != (byte)':' || text[at + 5] != (byte)':') return false;
+        if (!Number(text.Slice(at, 2), out var hour) || !Number(text.Slice(at + 3, 2), out var minute) || !Number(text.Slice(at + 6, 2), out var second)) return false;
+        if (hour > 23 || minute > 59 || second > 59) return false;
+        ticks += hour * TimeSpan.TicksPerHour + minute * TimeSpan.TicksPerMinute + second * TimeSpan.TicksPerSecond;
+        at += 8;
+        if (at < text.Length && text[at] == (byte)'.')
+        {
+            var start = ++at;
+            long fraction = 0;
+            for (; at < text.Length && at - start < 7 && text[at] is >= (byte)'0' and <= (byte)'9'; at++) fraction = fraction * 10 + (text[at] - '0');
+            if (at == start) return false;
+            for (var digits = at - start; digits < 7; digits++) fraction *= 10;
+            ticks += fraction;
+        }
+        if (at == text.Length) return true;
+        if (text.Length - at != 7 || text[at] != (byte)' ' || text[at + 1] is not ((byte)'+' or (byte)'-') || text[at + 4] != (byte)':') return false;
+        if (!Number(text.Slice(at + 2, 2), out var hours) || !Number(text.Slice(at + 5, 2), out var minutes) || hours > 14 || minutes > 59 || (hours == 14 && minutes > 0)) return false;
+        offset = (hours * 60L + minutes) * TimeSpan.TicksPerMinute * (text[at + 1] == (byte)'-' ? -1 : 1);
+        zoned = true;
+        return true;
+    }
+
+    /// <summary>A datetimeoffset's UTC instant from its display text, or null when it is not written as the backend writes it.</summary>
+    internal static long? UtcTicks(ReadOnlySpan<byte> text) =>
+        TryInstant(text, out var ticks, out var offset, out var dated, out var zoned) && dated && zoned && ticks - offset is >= 0 and <= 3155378975999999999 ? ticks - offset : null;
+
     /// <summary>The first 8 bytes of a span, big-endian, so that comparing two prefixes as numbers orders them as their spans
     /// would (a shorter span pads with zeros, so equal prefixes still need the spans themselves).</summary>
     internal static ulong Prefix(ReadOnlySpan<byte> bytes)
@@ -845,6 +902,7 @@ internal static partial class ViewSorter
         private readonly long[] values = new long[rows];
         public override void Set(int row, ReadOnlySpan<byte> cell, Scratch scratch)
         {
+            if (UtcTicks(cell) is { } instant) { values[row] = instant; return; }
             Span<char> chars = stackalloc char[64];
             var length = Encoding.UTF8.GetChars(cell[..Math.Min(cell.Length, 64)], chars);
             values[row] = DateTimeOffset.TryParse(chars[..length], CultureInfo.InvariantCulture, DateTimeStyles.None, out var value) ? value.UtcTicks : long.MinValue;

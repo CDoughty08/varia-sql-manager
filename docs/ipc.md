@@ -1371,8 +1371,7 @@ itself by view position.
   duplicates filter, distinct list or pivot expected to spend about a minute doing that (by a sample of 65,536 rows, with
   a later key charged only the comparisons the keys before it leave to it) is refused with `TOO_LARGE` ("There is not
   enough result memory to compare this much text...") rather than run to its deadline. The same keys serve
-  `results.distinct` and `results.pivot`. `results.profile` reads the pages once per column, each column on its own
-  thread.
+  `results.distinct` and `results.pivot`. `results.profile` reads its pages in runs on several threads as well (below).
 - **Memory.** A sort holds 8 to 16 bytes per row and key while it runs, 8 bytes a row for the positions it sorts and merges, and what a text, date or binary key keeps beyond its 8 bytes while the budget has room (a filter, per column it compares, and 16 bytes a row
   for the rows it keeps, a selection's rows or duplicates' groups; a `value` sort key on a filtered column is that filter's
   key and is charged once, and other sort keys are built over only the rows the filters kept), and a view keeps 4 bytes a row it shows, all charged
@@ -1642,8 +1641,11 @@ renderer (`Results/ColumnProfiles.cs`): `results.profile` answers aggregates, ne
 - **`rowBytes`** is the rows' sizes, `{ min, max, average, exact }` from each page's row sums: the grid's row-size bar
   scales to its `max`.
 - **Work.** Two passes over the sealed pages, off the frame loop, reading rows in base order through a bitmap of the
-  view's rows. Its working memory (a bit a row, and per column the exact distinct set up to its cap, 16 KiB of estimator
-  registers and the kept values) is charged to the result's query budget while it runs (`TOO_LARGE` when there is no
+  view's rows. The pages are read in runs on several threads (a run of pages each, up to the threads the operations share), each with
+  figures of its own, merged in page order: every figure is a count, a sum, a lowest or highest, or a set, so the profile
+  is the one a single thread gives, and a lowest or highest value shows the first row that holds it. Its working memory
+  (a bit a row, and per column and thread the exact distinct set up to its cap, 16 KiB of estimator registers and the
+  kept values; half the threads' while the budget has no room to spare for them all, down to one thread's, and one thread's when a long value was refused) is charged to the result's query budget while it runs (`TOO_LARGE` when there is no
   room) and returned when it ends. Longer keys (a long lowest or highest value, a long collation sort key) are charged
   as the profile meets them, and a refusal ends it with `TOO_LARGE`. With no columns it reads only the pages' row sums,
   never their bodies. The worker's `cancel` stops it (`CANCELLED`).
