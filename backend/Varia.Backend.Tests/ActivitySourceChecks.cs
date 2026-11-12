@@ -317,7 +317,10 @@ internal static class ActivitySourceChecks
             [Edge(69, 60, 5_000), Edge(70, 69, 4_000), Edge(70, 69, 3_000, context: 2), Edge(70, 70, 9_000, "CXPACKET", 1)],
             [new Dictionary<string, object?> { ["session_id"] = 60, ["event_type"] = "Language Event", ["event_info"] = "BEGIN TRAN;\n\tUPDATE dbo.t\n   SET x = 1 " + new string('y', 400) }],
             [new Dictionary<string, object?> { ["session_id"] = 69, ["request_id"] = 0, ["start_time"] = Login, ["status"] = "suspended", ["cpu_time"] = 5, ["statement_text"] = "SELECT *\nFROM   dbo.t", ["blocking_session_id"] = (short)60,
-                ["query_hash"] = new byte[] { 1, 2 } }]);
+                ["query_hash"] = new byte[] { 1, 2 }, ["login_time"] = Login, ["host_process_id"] = 4242, ["login_name"] = "app_user", ["host_name"] = Host, ["open_transaction_count"] = 0 },
+                // Session 70's id, reused by a new login between the sessions statement and this one: the row is that login's.
+                new Dictionary<string, object?> { ["session_id"] = 70, ["request_id"] = 0, ["start_time"] = Login, ["status"] = "running", ["cpu_time"] = 1, ["statement_text"] = "SELECT 1",
+                ["blocking_session_id"] = (short)0, ["login_time"] = Login.AddMinutes(5), ["host_process_id"] = 777, ["login_name"] = "other_user", ["host_name"] = "OTHER", ["open_transaction_count"] = 2 }]);
         var sample = builder.Build(results, 0, varia, 99, 0);
         var sessions = builder.SessionsWriter;
         string? P(int id, string column) => Cell(sessions, sample.Sessions.Single(row => Cell(sessions, row, "sessionId") == id.ToString()), column);
@@ -334,14 +337,18 @@ internal static class ActivitySourceChecks
             && Cell(chain, rows[0], "cycle") == "0" && Cell(chain, rows[0], "openTransactions") == "1",
             "the Blocking table is the chain as rows with text guides, each session's wait on its parent, and the lead blocker's last batch on one line, 200 characters");
         var active = builder.ActiveWriter;
-        check(sample.Active is [{ } query] && Cell(active, query, "query") == "SELECT * FROM dbo.t" && Cell(active, query, "blockedBy") == "60" && Cell(active, query, "queryHash") == "0x0102"
+        check(sample.Active is [{ } query, _] && Cell(active, query, "query") == "SELECT * FROM dbo.t" && Cell(active, query, "blockedBy") == "60" && Cell(active, query, "queryHash") == "0x0102"
             && Cell(active, query, "percentComplete") is null,
             "Active Expensive Queries show the statement on one line and the session the request waits on");
         var request = sample.Active![0];
         check(Cell(chain, rows[0], "loginTime") is { Length: > 0 } lead && lead == P(60, "loginTime") && Cell(chain, rows[0], "hostProcessId") == "4242" && Cell(chain, rows[0], "varia") is null
             && Cell(active, request, "loginTime") == P(69, "loginTime") && Cell(active, request, "hostProcessId") == "4242" && Cell(active, request, "login") == "app_user"
             && Cell(active, request, "hostName") == P(69, "hostName") && Cell(active, request, "openTransactions") == "0" && Cell(active, request, "varia") is null,
-            "Blocking and Active Expensive Queries carry each session's login time, host process id and Varia label (and a request's login, host and open transactions) from its Sessions row, for Details and Kill Process");
+            "Blocking rows carry each session's login time, host process id and Varia label from its Sessions row, and Active Expensive Queries rows the request's own session identity, for Details and Kill Process");
+        var reused = sample.Active![1];
+        check(Cell(active, reused, "loginTime") is { } own && own != P(70, "loginTime") && Cell(active, reused, "hostProcessId") == "777" && Cell(active, reused, "login") == "other_user"
+            && Cell(active, reused, "hostName") == "OTHER" && Cell(active, reused, "openTransactions") == "2",
+            "an Active Expensive Queries row whose session id was reused since the sessions statement names the request's own session, never the Sessions row's");
     }
 
     private static void Varia(Action<bool, string> check)

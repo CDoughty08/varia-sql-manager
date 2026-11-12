@@ -285,7 +285,8 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
 
   /** A session pane's row actions while it is mounted, for the palette's Details and Kill (the last focused pane's). */
   registerSessionRows(id: string, rows: LiveRowActions): Disposable {
-    this.sessionRows.set(id, [...(this.sessionRows.get(id) ?? []).filter(item => item !== rows), rows])
+    // The newest pane comes first until one is focused: the palette acts on the pane just opened, not the first ever mounted.
+    this.sessionRows.set(id, [rows, ...(this.sessionRows.get(id) ?? []).filter(item => item !== rows)])
     return {
       dispose: () => {
         const list = (this.sessionRows.get(id) ?? []).filter(item => item !== rows)
@@ -373,7 +374,13 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
   async confirmKill(id: string): Promise<void> {
     const state = this.get(id), connectionId = this.options.documents.get(id)?.connectionId
     const session = state?.kill?.phase === 'confirm' ? state.kill.session : undefined
-    if (!state || !session || !this.killOffer(id, session).allowed) return
+    if (!state || !session) return
+    // The permission can go while the confirm is open (the next sample says so): say why, rather than doing nothing.
+    const offer = this.killOffer(id, session)
+    if (!offer.allowed) {
+      this.put({ ...state, kill: undefined, killReport: { ...killReport(session, undefined, offer.reason), id: ++this.reports } })
+      return
+    }
     this.put({ ...state, kill: { session, phase: 'running' }, killReport: undefined })
     let report: KillReport
     const api = this.options.api

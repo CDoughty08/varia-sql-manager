@@ -649,7 +649,9 @@ session it checks (below).
 Details and Kill Process act on a row of Sessions, Blocking or Active Expensive Queries. Both name the session by its id
 and its login time (`2026-10-22T06:50:12.347`: server local time, as `sys.dm_exec_sessions` has it, within `datetime`'s
 range), because SQL Server reuses session ids. Blocking and Active Expensive Queries carry the session's login time, host
-process id and Varia label (and Active Expensive Queries its login, host and open transactions) as hidden columns for them.
+process id and Varia label (and Active Expensive Queries its login, host and open transactions) as hidden columns for them;
+Active Expensive Queries reads them with the request, so a session id reused between statements never names another session.
+A row whose session left the sample before it was read names no session, and neither action acts on it.
 
 Right-click a row: **Details…** and **Kill Process…** head Query Output's menu in those three panes, and the palette has
 **Session Details…** and **Kill Process…**, which act on the row the menu was opened on, else the focused grid's active

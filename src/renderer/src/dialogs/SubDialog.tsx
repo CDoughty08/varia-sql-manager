@@ -38,6 +38,11 @@ export default function SubDialog({ title, okLabel = 'OK', cancelLabel = 'Cancel
     const previous = returnFocus.current
     return () => returnFocusTo(previous)
   }, [initialFocus, destructive])
+  // OK disabled while its work runs (Killing…) drops focus to the page: keep it in the dialog, where Tab and Escape work.
+  useEffect(() => {
+    const active = document.activeElement
+    if (okDisabled && form.current && (!active || active === document.body)) form.current.focus()
+  }, [okDisabled])
   const keyDown = (event: KeyboardEvent<HTMLFormElement>) => {
     // A portal's events still bubble to the dialog it opened over, which must not also act on them.
     event.stopPropagation()

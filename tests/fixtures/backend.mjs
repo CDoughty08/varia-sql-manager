@@ -1258,8 +1258,9 @@ function activityKill(params) {
     const row = fakeSessionOf(session.sessionId)
     if (denied) return { sessionId: session.sessionId, outcome: 'denied' }
     if (!row) return { sessionId: session.sessionId, outcome: 'ended' }
-    if (!sameLoginTime(row, session.loginTime) || String(session.hostProcessId ?? '') !== String(row.hostProcessId ?? '')) return { sessionId: session.sessionId, outcome: 'changed' }
+    // In the real batch's order (ActivitySql Kill): ended, system, changed, then Varia's own.
     if (row.system) return { sessionId: session.sessionId, outcome: 'system' }
+    if (!sameLoginTime(row, session.loginTime) || String(session.hostProcessId ?? '') !== String(row.hostProcessId ?? '')) return { sessionId: session.sessionId, outcome: 'changed' }
     if (row.pool) return { sessionId: session.sessionId, outcome: 'varia' }
     killedSessions.add(row.sessionId)
     return { sessionId: session.sessionId, outcome: 'killed' }

@@ -289,8 +289,8 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
 
     private sealed record SessionInfo(string? Status, string? Login, string? Host, string? Application, string? Database, int? OpenTransactions, DateTime? LoginTime, long? HostProcessId, string? Varia);
 
-    /// <summary>The session's identity (login time, host process id) and Varia label on a Blocking or Active Expensive
-    /// Queries row, from its Sessions row, so Details and Kill Process can name it from either pane.</summary>
+    /// <summary>The session's identity (login time, host process id) and Varia label on a Blocking row, from its
+    /// Sessions row, so Details and Kill Process can name it from that pane.</summary>
     private static void SetIdentity(ActivityRowWriter writer, LiveCell[] cells, SessionInfo? info)
     {
         writer.Set(cells, "loginTime", ActivityRowWriter.Time(info?.LoginTime));
@@ -495,11 +495,15 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
             active.Set(cells, "blockedBy", blockedBy is { } by ? LiveCell.Of(by) : LiveCell.Null);
             active.Set(cells, "percentComplete", requests.Double(row, "percent_complete") is { } percent and > 0 ? ActivityRowWriter.Decimal(percent, 1) : LiveCell.Null);
             active.Set(cells, "queryHash", LiveCell.Of(ActivityRowWriter.Hex(requests.Bytes(row, "query_hash"))));
+            // The identity is this statement's own; the Sessions row gives only the Varia label, and only for the same login.
+            var loginTime = requests.Time(row, "login_time");
             var info = infos.GetValueOrDefault(session);
-            active.Set(cells, "login", LiveCell.Of(info?.Login));
-            active.Set(cells, "hostName", LiveCell.Of(info?.Host));
-            active.Set(cells, "openTransactions", LiveCell.Of(info?.OpenTransactions));
-            SetIdentity(active, cells, info);
+            active.Set(cells, "login", LiveCell.Of(requests.Text(row, "login_name")));
+            active.Set(cells, "hostName", LiveCell.Of(requests.Text(row, "host_name")));
+            active.Set(cells, "openTransactions", LiveCell.Of(requests.Int(row, "open_transaction_count")));
+            active.Set(cells, "loginTime", ActivityRowWriter.Time(loginTime));
+            active.Set(cells, "hostProcessId", LiveCell.Of(requests.Long(row, "host_process_id")));
+            active.Set(cells, "varia", LiveCell.Of(info is not null && loginTime is not null && info.LoginTime == loginTime ? info.Varia : null));
             if (ActiveTone(blockedBy is not null, requests.Text(row, "command") == "KILLED/ROLLBACK") is { } tone) active.Tone(cells, tone, catalog);
             rows.Add(new LiveRow(cells));
         }

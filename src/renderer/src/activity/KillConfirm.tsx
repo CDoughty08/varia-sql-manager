@@ -1,6 +1,7 @@
 // Kill Process (docs/activity-monitor.md, Session actions): the confirm that names the session (its login, host and open
 // transactions) and warns about rollback, and the report of what the backend answered. Cancel has focus, so a stray Enter
 // never ends a session; Kill is disabled, with the reason, when the login may not end sessions or the session is Varia's own.
+import { useSyncExternalStore } from 'react'
 import { useWorkbench } from '../core/WorkbenchContext'
 import SubDialog from '../dialogs/SubDialog'
 import Icon from '../Icon'
@@ -11,6 +12,8 @@ export function KillConfirm({ monitorId, kill }: { readonly monitorId: string; r
   const { activity } = useWorkbench()
   const { session, phase } = kill
   const question = killQuestion(session)
+  // Read with the facts, so a permission the next sample takes away disables Kill while the confirm is open.
+  useSyncExternalStore(activity.facts.subscribe, () => activity.factsOf(monitorId))
   const offer = activity.killOffer(monitorId, session)
   const running = phase === 'running'
   return <SubDialog title="Kill Process" okLabel={running ? 'Killing…' : 'Kill Process'} okDisabled={!offer.allowed || running} destructive className="activity-kill"

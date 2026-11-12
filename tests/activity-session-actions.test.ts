@@ -177,9 +177,22 @@ describe('ActivityMonitorService session actions', () => {
     expect(activity.killOffer(id, session57)).toMatchObject({ allowed: false })
     await activity.confirmKill(id)
     expect(api.activityKill).not.toHaveBeenCalled()
-    expect(activity.get(id)?.kill?.phase).toBe('confirm')
+    // A permission gone while the confirm was open closes it with the reason, rather than doing nothing.
+    expect(activity.get(id)?.kill).toBeUndefined()
+    expect(activity.get(id)?.killReport).toMatchObject({ tone: 'error', title: 'Session 57 was not killed.', detail: expect.stringMatching(/needs ALTER ANY CONNECTION.*Nothing was killed\./) })
     liveViews.last.tick(tick(1))
     expect(activity.killOffer(id, { ...session57, varia: 'Varia Object Explorer' }).allowed).toBe(false)
+  })
+  it('gives the palette the focused pane, else the newest mounted', () => {
+    const { activity, id } = monitorFixture()
+    const first = { kind: 'session' as const, can: () => true, run: () => {} }, second = { ...first }
+    const one = activity.registerSessionRows(id, first)
+    activity.registerSessionRows(id, second)
+    expect(activity.activeSessionRows(id)).toBe(second)
+    activity.focusSessionRows(id, first)
+    expect(activity.activeSessionRows(id)).toBe(first)
+    one.dispose()
+    expect(activity.activeSessionRows(id)).toBe(second)
   })
   it('reports a kill the backend could not try as nothing killed', async () => {
     const { activity, api, id } = monitorFixture()
