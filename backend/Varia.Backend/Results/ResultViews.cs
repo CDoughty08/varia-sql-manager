@@ -56,7 +56,10 @@ internal sealed class ResultView(uint viewId, ResultSetBuffer set, int[] order, 
 /// binary values byte by byte; character columns by their collation (its locale and Ignore flags, or code-point order for
 /// _BIN and _BIN2), ignoring trailing spaces as SQL Server does; every other type by its display text's code points.
 /// Each row keeps 8 to 16 bytes per key while sorting (a number, or a prefix of its collation sort key), so most
-/// comparisons never touch the stored cell; ties read it again from its page.</summary>
+/// comparisons never touch the stored cell. A collated column of repeated values keeps each row's rank among them instead,
+/// and any other keeps its rows' whole sort keys as well (less the bytes they all start with) while the budget has room
+/// for them (<see cref="KeyMemory"/>), so its ties compare bytes; without them, and for the other kinds, a tie reads the
+/// cells again from their pages. Keys are built and rows sorted on several threads (<see cref="Workers"/>).</summary>
 internal static partial class ViewSorter
 {
     public const int MaxKeys = 16;
@@ -70,8 +73,195 @@ internal static partial class ViewSorter
     public const int FilterBytes = 16;
     internal const int CancelEvery = 1 << 14;
 
-    /// <summary>Bytes a sort holds per row and key while it runs: the key's 8- or 16-byte value and a NULL bit.</summary>
-    public static long WorkingBytes(long rows, int keys) => rows * (16L * keys + 4) + rows / 8 * keys;
+    /// <summary>Bytes a sort holds per row and key while it runs: the key's 8- or 16-byte value and two bits (NULL, and a
+    /// collated key's rows that start unlike the rest), and per row the positions sorted and the buffer their slices merge through. A collated key's whole sort keys come on top,
+    /// reserved as they are built (<see cref="KeyMemory"/>).</summary>
+    public static long WorkingBytes(long rows, int keys) => rows * (16L * keys + 8) + (rows / 4 + 8) * keys;
+
+    /// <summary>Threads the results' operations use between them: most of the machine's, leaving some for the queries
+    /// still reading and for the requests the thread pool answers.</summary>
+    internal static int Workers { get; set; } = Math.Clamp(Environment.ProcessorCount * 3 / 4, 1, 16);
+    /// <summary>The fewest rows a slice of a parallel sort holds; fewer rows than two of these sort on one thread.</summary>
+    internal const int MinSlice = 1 << 15;
+    /// <summary>Rows sampled to learn how a column's values repeat.</summary>
+    internal const int Sampled = 4096;
+    /// <summary>Comparisons that read their cells again from the pages, counted as one thread would make them one after
+    /// another, past which a sort is refused rather than left to run until its request's deadline: a text, date or binary
+    /// column whose rows mostly share the 8 bytes kept of each, when the budget had no room for more. About 0.4
+    /// microseconds each, so about a minute; the requests that sort have two.</summary>
+    internal const long MaxSlowCompares = 150_000_000;
+    internal const string TooSlow = "There is not enough result memory to compare this much text. Close other results and try again.";
+
+    /// <summary>The threads operations share. Each takes what is free of <see cref="Workers"/> when it starts a parallel
+    /// step, and one at least (its own), so several operations at once do not ask the thread pool for several times the
+    /// machine's cores and leave the requests it answers waiting.</summary>
+    internal sealed class WorkerGate(Func<int> limit)
+    {
+        private int busy;
+        public int Busy => Volatile.Read(ref busy);
+
+        public Lease Take(int wanted)
+        {
+            while (true)
+            {
+                var now = Volatile.Read(ref busy);
+                var take = Math.Max(1, Math.Min(wanted, limit() - now));
+                if (Interlocked.CompareExchange(ref busy, now + take, now) == now) return new Lease(this, take);
+            }
+        }
+
+        internal readonly struct Lease(WorkerGate gate, int count) : IDisposable
+        {
+            public int Count => count;
+            public void Dispose() => Interlocked.Add(ref gate.busy, -count);
+        }
+    }
+
+    internal static readonly WorkerGate Gate = new(() => Workers);
+
+    /// <summary>The budget a build's keys take what they hold beyond their rows' fixed bytes from, and give it back to.</summary>
+    internal sealed class KeyMemory(Func<long, bool> reserve, Action<long> release)
+    {
+        private long held;
+        public bool TryReserve(long bytes)
+        {
+            if (!reserve(bytes)) return false;
+            Interlocked.Add(ref held, bytes);
+            return true;
+        }
+        public void Return(long bytes)
+        {
+            if (bytes <= 0) return;
+            Interlocked.Add(ref held, -bytes);
+            release(bytes);
+        }
+        /// <summary>What the keys still hold: they are done with once their build's order is.</summary>
+        public void ReturnAll() => Return(Interlocked.Read(ref held));
+    }
+
+    private static int Slices(int count, int threads)
+    {
+        var slices = 1;
+        while (slices * 2 <= threads && count / (slices * 2) >= MinSlice) slices *= 2;
+        return slices;
+    }
+
+    /// <summary>Sorts <paramref name="count"/> items from <paramref name="start"/>: slices on the threads the gate has
+    /// free, merged pairwise. The comparer orders any two items (ties by index), so the result is the one a single sort
+    /// gives, and it is called from several threads at once.</summary>
+    internal static void Sort(int[] items, int start, int count, IComparer<int> comparer)
+    {
+        if (count < 2 * MinSlice)
+        {
+            if (count > 1) Array.Sort(items, start, count, comparer);
+            return;
+        }
+        using var threads = Gate.Take(Math.Min(Workers, count / MinSlice));
+        var slices = Slices(count, threads.Count);
+        if (slices == 1)
+        {
+            Array.Sort(items, start, count, comparer);
+            return;
+        }
+        int At(int slice, int of) => start + (int)((long)count * slice / of);
+        var options = new ParallelOptions { MaxDegreeOfParallelism = threads.Count };
+        try
+        {
+            Parallel.For(0, slices, options, slice => Array.Sort(items, At(slice, slices), At(slice + 1, slices) - At(slice, slices), comparer));
+            int[] from = items, to = new int[items.Length];
+            for (var width = slices; width > 1; width /= 2)
+            {
+                var (source, target, of) = (from, to, width);
+                Parallel.For(0, width / 2, options, pair =>
+                {
+                    int left = At(2 * pair, of), middle = At(2 * pair + 1, of), end = At(2 * pair + 2, of);
+                    int a = left, b = middle, at = left;
+                    while (a < middle && b < end) target[at++] = comparer.Compare(source[b], source[a]) < 0 ? source[b++] : source[a++];
+                    while (a < middle) target[at++] = source[a++];
+                    while (b < end) target[at++] = source[b++];
+                });
+                (from, to) = (to, from);
+            }
+            if (from != items) Array.Copy(from, start, items, start, count);
+        }
+        catch (AggregateException error) when (error.InnerExceptions.Count > 0)
+        {
+            // What one thread's sort would have thrown (a cancellation, or the sort's wrapping of one).
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerExceptions[0]).Throw();
+        }
+    }
+
+    /// <summary>A sort's comparisons as the time one thread would take to make that many one after another: the slices
+    /// are sorted side by side, but each round of merges runs on half the threads of the one before, the last on one.</summary>
+    internal static double SortCost(int count)
+    {
+        var slices = Slices(count, Workers);
+        var cost = count * Math.Log2(Math.Max(2.0, (double)count / slices)) / slices;
+        for (var width = slices; width > 1; width /= 2) cost += (double)count / (width / 2);
+        return cost;
+    }
+
+    /// <summary>About how many distinct values <paramref name="rows"/> rows hold, from a sample of <paramref name="taken"/>
+    /// that held <paramref name="distinct"/>: about that many when the sample repeats itself often; otherwise by how
+    /// rarely it does (two of a sample share a value about once in twice the number of values).</summary>
+    internal static double Distinct(int distinct, int taken, long rows)
+    {
+        if (taken == 0) return 0;
+        if (distinct * 10L < taken * 9L) return distinct;
+        return Math.Min(rows, (double)taken * taken / (2.0 * Math.Max(1, taken - distinct)));
+    }
+
+    /// <summary>About how many of the rows hold each value of a key (NULL as a value), from a sample of them.</summary>
+    internal static double GroupSize(Key key, ReadOnlySpan<int> rows)
+    {
+        var taken = Math.Min(rows.Length, Sampled);
+        if (taken == 0) return 1;
+        var sample = new int[taken];
+        for (var i = 0; i < taken; i++) sample[i] = rows[(int)((long)rows.Length * i / taken)];
+        int Compare(int a, int b)
+        {
+            bool nullA = key.IsNull(a), nullB = key.IsNull(b);
+            return nullA || nullB ? nullB.CompareTo(nullA) : key.Compare(a, b);
+        }
+        Array.Sort(sample, Compare);
+        var distinct = 1;
+        for (var i = 1; i < taken; i++) if (Compare(sample[i - 1], sample[i]) != 0) distinct++;
+        return rows.Length / Math.Max(1, Distinct(distinct, taken, rows.Length));
+    }
+
+    /// <summary>Refuses a sort of these rows that would spend its request's time reading cells again from their pages. The
+    /// first key is compared by every comparison; a later key only by those between rows the keys before it hold equal,
+    /// which are few when those keys' values seldom repeat (none, after a key that is each row's own).</summary>
+    internal static void ThrowIfSlow(ReadOnlySpan<Key> keys, ReadOnlySpan<int> rows)
+    {
+        if (rows.Length < MinSlice) return;
+        var slow = false;
+        foreach (var key in keys) slow |= key.TieShare > 0;
+        if (!slow) return;
+        double reaching = 1, reading = 0;
+        for (var k = 0; k < keys.Length && reaching > 0; k++)
+        {
+            reading += reaching * keys[k].TieShare;
+            if (k + 1 < keys.Length) reaching *= Math.Min(1, Math.Log2(Math.Max(1, GroupSize(keys[k], rows))) / Math.Log2(rows.Length));
+        }
+        if (reading * SortCost(rows.Length) > MaxSlowCompares) throw new RequestException("TOO_LARGE", TooSlow);
+    }
+
+    /// <summary>A collation's sort key of a text, in <paramref name="buffer"/> (grown when the key is longer): asked for
+    /// once, where asking for its length first computes it twice.</summary>
+    internal static int SortKey(CompareInfo info, CompareOptions options, ReadOnlySpan<char> text, ref byte[] buffer, Action<int>? growing = null)
+    {
+        try { return info.GetSortKey(text, buffer, options); }
+        catch (ArgumentException)
+        {
+            var size = info.GetSortKeyLength(text, options);
+            if (size <= buffer.Length) throw;
+            var grown = Math.Max(size, 2 * buffer.Length);
+            growing?.Invoke(grown - buffer.Length);
+            buffer = new byte[grown];
+            return info.GetSortKey(text, buffer, options);
+        }
+    }
 
     public static (int[] Order, bool Approximate) Sort(ResultSetBuffer set, StoredPage[] pages, IReadOnlyList<ViewKey> keys, CancellationToken token)
     {
@@ -98,7 +288,13 @@ internal static partial class ViewSorter
     /// <summary>A view's order: the sealed rows its filters keep, in turn (each over the rows the ones before it kept), then
     /// sorted by its keys. Without keys, rows keep the result's order, except that Duplicates puts each group of equal rows
     /// together, in the order of their first rows. Returns the filters with their cells resolved to rows.</summary>
-    public static (int[] Order, bool Approximate, ViewFilter[] Filters) Build(ResultSetBuffer set, StoredPage[] pages, IReadOnlyList<ViewKey> keys, IReadOnlyList<ViewFilter> filters, CancellationToken token)
+    public static (int[] Order, bool Approximate, ViewFilter[] Filters) Build(ResultSetBuffer set, StoredPage[] pages, IReadOnlyList<ViewKey> keys, IReadOnlyList<ViewFilter> filters, CancellationToken token, KeyMemory? memory = null)
+    {
+        try { return Build(set, pages, keys, filters, memory, token); }
+        finally { memory?.ReturnAll(); }
+    }
+
+    private static (int[] Order, bool Approximate, ViewFilter[] Filters) Build(ResultSetBuffer set, StoredPage[] pages, IReadOnlyList<ViewKey> keys, IReadOnlyList<ViewFilter> filters, KeyMemory? memory, CancellationToken token)
     {
         long total = 0;
         foreach (var page in pages) total += page.Rows;
@@ -110,7 +306,7 @@ internal static partial class ViewSorter
         Key ValueKey(int column)
         {
             if (!values.TryGetValue(column, out var key))
-                values[column] = key = Build(set, source, new ViewKey(column, false, SortMode.Value), null, rows, token, ref approximate);
+                values[column] = key = Build(set, source, new ViewKey(column, false, SortMode.Value), null, rows, token, ref approximate, memory);
             return key;
         }
         var order = new int[rows];
@@ -176,18 +372,22 @@ internal static partial class ViewSorter
             if (keys[k].Mode == SortMode.Value && values.TryGetValue(keys[k].Column, out var shared)) built[k] = kept is null ? shared : new MappedKey(shared, kept);
         }
         // Filter keys no sort key shares are done with: let them go before the sort keys are built.
+        foreach (var (column, key) in values)
+            if (!keys.Any(sort => sort.Mode == SortMode.Value && sort.Column == column)) key.Drop();
         values.Clear();
         for (var k = 0; k < keys.Count; k++)
-            built[k] ??= Build(set, source, keys[k], kept, rows, token, ref approximate);
+            built[k] ??= Build(set, source, keys[k], kept, rows, token, ref approximate, memory);
         var comparer = new Comparer(built, descending, token);
         if (kept is null)
         {
-            Array.Sort(order, comparer);
+            ThrowIfSlow(built, order);
+            Sort(order, 0, order.Length, comparer);
             return (order, approximate, resolved);
         }
         var sorted = new int[kept.Length];
         for (var i = 0; i < sorted.Length; i++) sorted[i] = i;
-        Array.Sort(sorted, comparer);
+        ThrowIfSlow(built, sorted);
+        Sort(sorted, 0, sorted.Length, comparer);
         for (var i = 0; i < sorted.Length; i++) sorted[i] = kept[sorted[i]];
         return (sorted, approximate, resolved);
     }
@@ -306,7 +506,8 @@ internal static partial class ViewSorter
     /// <summary>The first <paramref name="count"/> rows, sorted and reduced in place to one per distinct value.</summary>
     private static int[] Unique(Key key, int[] rows, int count, CancellationToken token)
     {
-        if (count > 1) Array.Sort(rows, 0, count, new Comparer([key], null, token));
+        ThrowIfSlow([key], rows.AsSpan(0, count));
+        Sort(rows, 0, count, new Comparer([key], null, token));
         var unique = 0;
         for (var i = 0; i < count; i++)
             if (unique == 0 || key.Compare(rows[unique - 1], rows[i]) != 0) rows[unique++] = rows[i];
@@ -354,7 +555,8 @@ internal static partial class ViewSorter
         for (var i = 0; i < positions.Length; i++) positions[i] = i;
         var equal = new Comparer(columns, null, token);
         int Same(int a, int b) => equal.Values(order[a], order[b]);
-        if (positions.Length > 1) Array.Sort(positions, Comparer<int>.Create((a, b) => Same(a, b) is var c && c != 0 ? c : a.CompareTo(b)));
+        ThrowIfSlow(columns, order);
+        Sort(positions, 0, positions.Length, Comparer<int>.Create((a, b) => Same(a, b) is var c && c != 0 ? c : a.CompareTo(b)));
         // Each group is a run of positions whose first is its first row's (ties keep their order); a run's start names it.
         var starts = new List<int>();
         var total = 0;
@@ -382,7 +584,7 @@ internal static partial class ViewSorter
 
     /// <summary>A key over every row (indexed by base row), or over only <paramref name="kept"/>'s rows, in ascending base
     /// row order (indexed by their place in it). Its direction is the comparer's: keys compare ascending.</summary>
-    internal static Key Build(ResultSetBuffer set, PageSource source, ViewKey sort, int[]? kept, int rows, CancellationToken token, ref bool approximate)
+    internal static Key Build(ResultSetBuffer set, PageSource source, ViewKey sort, int[]? kept, int rows, CancellationToken token, ref bool approximate, KeyMemory? memory = null)
     {
         var column = sort.Column;
         var meta = set.Columns[column];
@@ -398,49 +600,77 @@ internal static partial class ViewSorter
             Kind.Approximate => new NumberKey(capacity, kept, source, column, exact: false),
             Kind.Ticks => new TicksKey(capacity),
             Kind.Guid => new GuidKey(capacity),
-            Kind.Collated when Culture(meta.Collation) is { } culture => new CollatedKey(capacity, kept, source, column, culture.Info, culture.Options),
-            _ => new OrdinalKey(capacity, kept, source, column, trim: meta.Collation is not null)
+            Kind.Collated when Culture(meta.Collation) is { } culture => new CollatedKey(capacity, kept, source, column, culture.Info, culture.Options, memory),
+            _ => new OrdinalKey(capacity, kept, source, column, memory, trim: meta.Collation is not null)
         };
         var lengths = set.Lengths[column];
-        var next = 0;
-        foreach (var (index, page) in source.Pages())
+        // Each page's rows in the key: its own, or the kept rows that fall in it (kept is in base row order).
+        int[]? starts = null;
+        if (kept is not null)
         {
-            token.ThrowIfCancellationRequested();
-            var first = (int)page.FirstRow;
-            var end = first + page.Rows;
-            int start, stop;
-            if (kept is null) (start, stop) = (first, end);
-            else
+            starts = new int[source.Count + 1];
+            var next = 0;
+            for (var index = 0; index < source.Count; index++)
             {
-                start = next;
-                while (next < kept.Length && kept[next] < end) next++;
-                stop = next;
-                if (start == stop) continue;
+                var page = source.Page(index);
+                starts[index] = next;
+                while (next < kept.Length && kept[next] < page.FirstRow + page.Rows) next++;
             }
-            var view = source.View(index);
-            for (var row = start; row < stop; row++)
-            {
-                var r = (kept is null ? row : kept[row]) - first;
-                if (view.IsNull(column, r)) { key.SetNull(row); continue; }
-                var span = view.Span(column, r);
-                var truncated = view.IsTruncated(column, r);
-                if (kind is Kind.Chars or Kind.Bytes)
-                {
-                    CellSize size;
-                    if (page.Lengths.TryCell(r, column, out var cell)) size = new CellSize(cell.Chars, cell.Bytes, cell.Exact && !lengths.Estimated);
-                    else
-                    {
-                        size = lengths.Derive(span, wire);
-                        if (truncated || lengths.Rule == LengthRule.Recorded) size = size with { Exact = false };
-                    }
-                    if (!size.Exact) approximate = true;
-                    ((LengthKey)key).Values[row] = kind == Kind.Chars ? size.Chars : size.Bytes;
-                    continue;
-                }
-                if (truncated) approximate = true;
-                key.Set(row, span);
-            }
+            starts[source.Count] = next;
         }
+        // Pages are independent: each is read once, in order, on whichever thread takes it. A key that gave up ranking its
+        // values asks for the pages again.
+        var inexact = 0;
+        using var threads = Gate.Take(Math.Min(Workers, source.Count));
+        key.Begin();
+        do
+        try
+        {
+            Parallel.For(0, source.Count, new ParallelOptions { MaxDegreeOfParallelism = threads.Count, CancellationToken = token }, () => new Scratch(), (index, _, scratch) =>
+            {
+                var page = source.Page(index);
+                var first = (int)page.FirstRow;
+                var (start, stop) = starts is null ? (first, first + page.Rows) : (starts[index], starts[index + 1]);
+                if (start == stop) return scratch;
+                var view = source.View(index);
+                key.BeginPage(scratch, index);
+                for (var row = start; row < stop; row++)
+                {
+                    var r = (kept is null ? row : kept[row]) - first;
+                    if (view.IsNull(column, r))
+                    {
+                        key.SetNull(row);
+                        key.Skip(row, scratch);
+                        continue;
+                    }
+                    var span = view.Span(column, r);
+                    var truncated = view.IsTruncated(column, r);
+                    if (kind is Kind.Chars or Kind.Bytes)
+                    {
+                        CellSize size;
+                        if (page.Lengths.TryCell(r, column, out var cell)) size = new CellSize(cell.Chars, cell.Bytes, cell.Exact && !lengths.Estimated);
+                        else
+                        {
+                            size = lengths.Derive(span, wire);
+                            if (truncated || lengths.Rule == LengthRule.Recorded) size = size with { Exact = false };
+                        }
+                        if (!size.Exact) Volatile.Write(ref inexact, 1);
+                        ((LengthKey)key).Values[row] = kind == Kind.Chars ? size.Chars : size.Bytes;
+                        continue;
+                    }
+                    if (truncated) Volatile.Write(ref inexact, 1);
+                    key.Set(row, span, scratch);
+                }
+                key.EndPage(scratch, index);
+                return scratch;
+            }, _ => { });
+        }
+        catch (AggregateException error) when (error.InnerExceptions.Count > 0)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerExceptions[0]).Throw();
+        }
+        while (key.Finish());
+        if (inexact != 0) approximate = true;
         return key;
     }
 
@@ -584,6 +814,9 @@ internal static partial class ViewSorter
             }
         }
 
+        public int Count => pages.Length;
+        public StoredPage Page(int index) => pages[index];
+
         public IEnumerable<(int Index, StoredPage Page)> Pages()
         {
             for (var i = 0; i < pages.Length; i++) yield return (i, pages[i]);
@@ -613,12 +846,28 @@ internal static partial class ViewSorter
     /// place in that list; <see cref="Comparer"/> applies a sort key's direction.</summary>
     internal abstract class Key(int rows, int[]? map = null)
     {
-        private readonly byte[] nulls = new byte[(rows + 7) / 8];
-        public void SetNull(int row) => nulls[row >> 3] |= (byte)(1 << (row & 7));
-        public virtual bool IsNull(int row) => (nulls[row >> 3] & (1 << (row & 7))) != 0;
+        private readonly int[] nulls = new int[(rows + 31) / 32];
+        // Pages are filled on several threads, and two pages' rows can share a word.
+        public void SetNull(int row) => Interlocked.Or(ref nulls[row >> 5], 1 << (row & 31));
+        public virtual bool IsNull(int row) => (nulls[row >> 5] & (1 << (row & 31))) != 0;
         /// <summary>The base row at an index, where a comparison reads the stored cell again.</summary>
         protected int Row(int index) => map is null ? index : map[index];
-        public abstract void Set(int row, ReadOnlySpan<byte> cell);
+        /// <summary>A row's value, from the thread filling its page: rows of one page come in order, on one thread.</summary>
+        public abstract void Set(int row, ReadOnlySpan<byte> cell, Scratch scratch);
+        /// <summary>A NULL row of the page being filled.</summary>
+        public virtual void Skip(int row, Scratch scratch) { }
+        public virtual void BeginPage(Scratch scratch, int page) { }
+        public virtual void EndPage(Scratch scratch, int page) { }
+        /// <summary>Before the first page: what the key learns from a sample of its rows.</summary>
+        public virtual void Begin() { }
+        /// <summary>Every page is filled. True to fill them all again (the key changed how it holds its rows).</summary>
+        public virtual bool Finish() => false;
+        /// <summary>How the key holds its rows, for the checks.</summary>
+        public virtual string Layout => "";
+        /// <summary>The share of comparisons expected to read both cells again from their pages (<see cref="ThrowIfSlow"/>).</summary>
+        public virtual double TieShare => 0;
+        /// <summary>Gives back what the key holds beyond its rows' fixed bytes; it compares no more.</summary>
+        public virtual void Drop() { }
         /// <summary>Two non-NULL rows, ascending.</summary>
         public abstract int Compare(int a, int b);
     }
@@ -626,7 +875,7 @@ internal static partial class ViewSorter
     private sealed class LengthKey(int rows) : Key(rows)
     {
         public readonly long[] Values = new long[rows];
-        public override void Set(int row, ReadOnlySpan<byte> cell) { }
+        public override void Set(int row, ReadOnlySpan<byte> cell, Scratch scratch) { }
         public override int Compare(int a, int b) => Values[a].CompareTo(Values[b]);
     }
 
@@ -641,7 +890,7 @@ internal static partial class ViewSorter
         private readonly double[] values = new double[rows];
         // Set by the first cell whose double may not be the whole value (too long, or not a number).
         private bool textTies;
-        public override void Set(int row, ReadOnlySpan<byte> cell)
+        public override void Set(int row, ReadOnlySpan<byte> cell, Scratch scratch)
         {
             var parsed = double.TryParse(cell, NumberStyles.Float, CultureInfo.InvariantCulture, out var value);
             values[row] = parsed ? value : double.NaN;
@@ -658,7 +907,7 @@ internal static partial class ViewSorter
     private sealed class TicksKey(int rows) : Key(rows)
     {
         private readonly long[] values = new long[rows];
-        public override void Set(int row, ReadOnlySpan<byte> cell)
+        public override void Set(int row, ReadOnlySpan<byte> cell, Scratch scratch)
         {
             Span<char> chars = stackalloc char[64];
             var length = Encoding.UTF8.GetChars(cell[..Math.Min(cell.Length, 64)], chars);
@@ -671,7 +920,7 @@ internal static partial class ViewSorter
     {
         private readonly ulong[] high = new ulong[rows];
         private readonly ulong[] low = new ulong[rows];
-        public override void Set(int row, ReadOnlySpan<byte> cell)
+        public override void Set(int row, ReadOnlySpan<byte> cell, Scratch scratch)
         {
             Span<char> chars = stackalloc char[40];
             var length = Encoding.UTF8.GetChars(cell[..Math.Min(cell.Length, 40)], chars);
@@ -684,52 +933,353 @@ internal static partial class ViewSorter
         }
     }
 
-    /// <summary>Code-point order (UTF-8 bytes order as code points do), for binary values, _BIN and _BIN2 text and types
-    /// with no collation.</summary>
-    private sealed class OrdinalKey(int rows, int[]? map, PageSource source, int column, bool trim) : Key(rows, map)
+    /// <summary>What one thread filling a key's pages reuses from page to page.</summary>
+    internal sealed class Scratch
     {
+        public char[] Chars = new char[256];
+        public byte[] SortKey = new byte[512];
+        /// <summary>The page's sort keys end to end, <see cref="Used"/> bytes of them.</summary>
+        public byte[] Keys = [];
+        public int Used;
+        public int Page;
+    }
+
+    private sealed class ByteComparer : IEqualityComparer<byte[]>, IAlternateEqualityComparer<ReadOnlySpan<byte>, byte[]>, IComparer<byte[]>
+    {
+        public static readonly ByteComparer Instance = new();
+        public bool Equals(byte[]? a, byte[]? b) => a.AsSpan().SequenceEqual(b);
+        public int GetHashCode(byte[] value) => GetHashCode(value.AsSpan());
+        public bool Equals(ReadOnlySpan<byte> alternate, byte[] other) => alternate.SequenceEqual(other);
+        public int GetHashCode(ReadOnlySpan<byte> alternate)
+        {
+            var hash = new HashCode();
+            hash.AddBytes(alternate);
+            return hash.ToHashCode();
+        }
+        public byte[] Create(ReadOnlySpan<byte> alternate) => alternate.ToArray();
+        public int Compare(byte[]? a, byte[]? b) => a.AsSpan().SequenceCompareTo(b);
+    }
+
+    /// <summary>A key whose order is the byte order of each row's value in some form (<see cref="Bytes"/>): a collation's
+    /// sort key, or the value's own bytes. It holds its rows in one of three ways that a sample of them chooses between
+    /// (<see cref="Begin"/>).
+    /// <para>Ranked, when values repeat (a status, a category, a day): each distinct value is numbered as it is met, the
+    /// distinct values are sorted once, and a row keeps its value's rank, so every comparison is of two integers. Past
+    /// its limit of values (65,536, or one in 32 rows), or a refusal of the room for them, the pages are filled again
+    /// another way.</para>
+    /// <para>Otherwise 8 bytes of each value, after the bytes most of the sampled values start with (values that share
+    /// their first characters, as names, paths, codes and the dates of one month do). When the sample says those 8 bytes
+    /// tell nearly every row apart, that is all; when it says they do not, the rest of each value is kept too while the
+    /// budget has room, a block a page, so that equal 8 bytes compare bytes. A row whose value starts otherwise is
+    /// marked, keeps its value whole, and compares by it. Without the blocks (not wanted, or refused, which lets them all
+    /// go at once), equal 8 bytes and marked rows read their cells again from their pages.</para></summary>
+    private abstract class BytesKey(int rows, int[]? map, PageSource source, int column, KeyMemory? memory) : Key(rows, map)
+    {
+        /// <summary>The most distinct values a key ranks, whatever its rows; more when they are many (one in 32).</summary>
+        internal const int MinRanked = 1 << 16;
+        /// <summary>Charged per distinct value while ranking, besides its bytes.</summary>
+        private const int RankedOverhead = 64;
+        protected readonly PageSource Source = source;
+        protected readonly int Column = column;
+        // A row's rank, or 8 bytes of its value after the shared ones.
         private readonly ulong[] prefixes = new ulong[rows];
-        public override void Set(int row, ReadOnlySpan<byte> cell) => prefixes[row] = Prefix(trim ? TrimEnd(cell) : cell);
+        // Where each row's value starts: its page's block (the high half) and the offset in it. A row's value ends where
+        // the next row's starts, or with the block.
+        private long[]? offsets;
+        private byte[][]? blocks;
+        // The bytes most sampled values start with, and the rows whose values start otherwise.
+        private byte[] shared = [];
+        private int[]? odd;
+        private int odds;
+        private bool ranked, wanted;
+        private int rankLimit;
+        private System.Collections.Concurrent.ConcurrentDictionary<byte[], int>? ranks;
+        private System.Collections.Concurrent.ConcurrentDictionary<byte[], int>.AlternateLookup<ReadOnlySpan<byte>> rankOf;
+        private int nextRank;
+        private long rankHeld;
+        private int abandoned;
+        private int refused;
+        private long held;
+        private double tieShare;
+
+        /// <summary>The cell as the bytes whose order is the key's; they may lie in the scratch, until its next use.</summary>
+        protected abstract ReadOnlySpan<byte> Bytes(ReadOnlySpan<byte> cell, Scratch scratch);
+        /// <summary>Two rows' cells, read again from their pages and compared.</summary>
+        protected abstract int Cells(int a, int b);
+
+        public override string Layout => (ranked ? "ranked" : blocks is null ? "prefix" : "whole") + ", " + shared.Length + " shared, " + odds + " odd";
+
+        public override void Begin()
+        {
+            var count = prefixes.Length;
+            var scratch = new Scratch();
+            var values = new List<byte[]>();
+            var samples = Math.Min(count, Sampled);
+            for (var i = 0; i < samples; i++)
+            {
+                var view = Source.ViewOf(Row((int)((long)count * i / samples)), out var local);
+                if (!view.IsNull(Column, local)) values.Add(Bytes(view.Span(Column, local), scratch).ToArray());
+            }
+            values.Sort(ByteComparer.Instance);
+            var taken = values.Count;
+            var distinct = taken == 0 ? 0 : 1;
+            for (var i = 1; i < taken; i++) if (!values[i].AsSpan().SequenceEqual(values[i - 1])) distinct++;
+            // Values that repeat in a sample this small are few among all the rows.
+            rankLimit = Math.Max(MinRanked, count / 32);
+            ranked = taken - distinct >= 2 && Distinct(distinct, taken, count) <= rankLimit;
+            // The longest start seven in eight of the sampled values share: sorted, such values lie side by side, and a
+            // run's shared start is that of its first and last. A few values that start otherwise (empty ones, a
+            // different kind of code) do not take it from the rest.
+            if (taken > 1)
+            {
+                var run = taken - taken / 8;
+                int best = 0, at = 0;
+                for (var i = 0; i + run <= taken; i++)
+                {
+                    var length = values[i].AsSpan().CommonPrefixLength(values[i + run - 1]);
+                    if (length > best) (best, at) = (length, i);
+                }
+                shared = values[at][..best];
+            }
+            // Whether 8 bytes after those tell the rows apart: when about two rows or fewer hold each, the few ties are
+            // cheaper read from their cells than every row's value is kept.
+            var starts = new HashSet<ulong>();
+            var alike = 0;
+            foreach (var value in values)
+            {
+                if (!value.AsSpan().StartsWith(shared)) continue;
+                alike++;
+                starts.Add(Prefix(value.AsSpan(shared.Length)));
+            }
+            wanted = alike > 0 && count / Math.Max(1, Distinct(starts.Count, alike, count)) > 2;
+            if (ranked)
+            {
+                ranks = new(ByteComparer.Instance);
+                rankOf = ranks.GetAlternateLookup<ReadOnlySpan<byte>>();
+            }
+            else Unranked();
+        }
+
+        private void Unranked()
+        {
+            odd = shared.Length > 0 ? new int[(prefixes.Length + 31) / 32] : null;
+            if (!wanted) return;
+            offsets = new long[prefixes.Length];
+            blocks = new byte[Source.Count][];
+        }
+
+        public override void BeginPage(Scratch scratch, int page)
+        {
+            scratch.Used = 0;
+            scratch.Page = page;
+        }
+
+        public override void Set(int row, ReadOnlySpan<byte> cell, Scratch scratch)
+        {
+            if (ranked)
+            {
+                if (Volatile.Read(ref abandoned) != 0) return;
+                var value = Bytes(cell, scratch);
+                if (!rankOf.TryGetValue(value, out var id))
+                {
+                    var bytes = value.Length + RankedOverhead;
+                    if (Volatile.Read(ref nextRank) >= rankLimit || (memory is not null && !memory.TryReserve(bytes)))
+                    {
+                        Volatile.Write(ref abandoned, 1);
+                        return;
+                    }
+                    Interlocked.Add(ref rankHeld, bytes);
+                    id = ranks!.GetOrAdd(value.ToArray(), _ => Interlocked.Increment(ref nextRank) - 1);
+                }
+                prefixes[row] = (ulong)id;
+                return;
+            }
+            var key = Bytes(cell, scratch);
+            if (key.StartsWith(shared))
+            {
+                key = key[shared.Length..];
+                prefixes[row] = Prefix(key);
+            }
+            else
+            {
+                Interlocked.Or(ref odd![row >> 5], 1 << (row & 31));
+                Interlocked.Increment(ref odds);
+            }
+            if (offsets is not { } places || Volatile.Read(ref refused) != 0) return;
+            if ((long)scratch.Used + key.Length > int.MaxValue) { Refuse(); return; }
+            if (scratch.Used + key.Length > scratch.Keys.Length) Array.Resize(ref scratch.Keys, (int)Math.Min(int.MaxValue, Math.Max(2L * scratch.Keys.Length, Math.Max(scratch.Used + key.Length, 1 << 16))));
+            key.CopyTo(scratch.Keys.AsSpan(scratch.Used));
+            places[row] = (long)scratch.Page << 32 | (uint)scratch.Used;
+            scratch.Used += key.Length;
+        }
+
+        public override void Skip(int row, Scratch scratch)
+        {
+            if (!ranked && offsets is { } places) places[row] = (long)scratch.Page << 32 | (uint)scratch.Used;
+        }
+
+        public override void EndPage(Scratch scratch, int page)
+        {
+            if (ranked || blocks is not { } all || Volatile.Read(ref refused) != 0) return;
+            if (memory is not null && !memory.TryReserve(scratch.Used)) { Refuse(); return; }
+            Interlocked.Add(ref held, scratch.Used);
+            all[page] = scratch.Keys.AsSpan(0, scratch.Used).ToArray();
+        }
+
+        /// <summary>No room for a page's values: the ones kept go back at once, not when the pages are all read, so what
+        /// else takes from the budget meanwhile (a query still loading) is not refused in their place.</summary>
+        private void Refuse()
+        {
+            Volatile.Write(ref refused, 1);
+            memory?.Return(Interlocked.Exchange(ref held, 0));
+            if (blocks is { } all) Array.Clear(all);
+        }
+
+        public override bool Finish()
+        {
+            if (ranked)
+            {
+                var found = ranks!;
+                ranks = null;
+                rankOf = default;
+                var charged = Interlocked.Exchange(ref rankHeld, 0);
+                if (abandoned != 0)
+                {
+                    // More values than a key ranks, or no room for them: the other way, from the first page again.
+                    memory?.Return(charged);
+                    ranked = false;
+                    abandoned = 0;
+                    nextRank = 0;
+                    Unranked();
+                    return true;
+                }
+                // Ids are in the order values were met (and may skip a few, where two threads met one together).
+                var keys = new byte[nextRank][];
+                foreach (var (key, id) in found) keys[id] = key;
+                var order = Enumerable.Range(0, keys.Length).Where(id => keys[id] is not null).ToArray();
+                Array.Sort(order, (a, b) => keys[a].AsSpan().SequenceCompareTo(keys[b]));
+                var rank = new ulong[keys.Length];
+                for (var i = 0; i < order.Length; i++) rank[order[i]] = (ulong)i;
+                if (rank.Length > 0)
+                    for (var row = 0; row < prefixes.Length; row++) prefixes[row] = rank[prefixes[row]];
+                memory?.Return(charged);
+                return false;
+            }
+            if (refused != 0) Drop();
+            if (blocks is not null) return false;
+            // Without the values a tie reads its cells again, and so does a row marked odd: how many do is how many rows
+            // share their 8 bytes or are marked, by a sample.
+            const int sample = 1 << 16;
+            var count = prefixes.Length;
+            if (count < sample) return false;
+            var seen = new HashSet<ulong>();
+            int taken = 0, slow = 0;
+            for (var i = 0; i < sample; i++)
+            {
+                var row = (int)((long)count * i / sample);
+                if (IsNull(row)) continue;
+                taken++;
+                if (IsOdd(row) || !seen.Add(prefixes[row])) slow++;
+            }
+            tieShare = taken == 0 ? 0 : (double)slow / taken;
+            return false;
+        }
+
+        public override double TieShare => tieShare;
+
+        public override void Drop()
+        {
+            memory?.Return(Interlocked.Exchange(ref held, 0));
+            blocks = null;
+            offsets = null;
+        }
+
+        private bool IsOdd(int row) => odd is { } marks && (marks[row >> 5] & (1 << (row & 31))) != 0;
+
+        private static ReadOnlySpan<byte> Whole(byte[][] blocks, long[] offsets, int row)
+        {
+            var at = offsets[row];
+            var page = (int)(at >> 32);
+            var block = blocks[page];
+            var start = (int)(uint)at;
+            var end = row + 1 < offsets.Length && (int)(offsets[row + 1] >> 32) == page ? (int)(uint)offsets[row + 1] : block.Length;
+            return block.AsSpan(start, end - start);
+        }
+
         public override int Compare(int a, int b)
         {
+            if (odds != 0)
+            {
+                bool oddA = IsOdd(a), oddB = IsOdd(b);
+                if (oddA || oddB)
+                {
+                    if (blocks is not { } all || offsets is not { } places) return Cells(a, b);
+                    ReadOnlySpan<byte> x = Whole(all, places, a), y = Whole(all, places, b);
+                    return oddA && oddB ? Math.Sign(x.SequenceCompareTo(y)) : oddA ? AgainstShared(x) : -AgainstShared(y);
+                }
+            }
             var compared = prefixes[a].CompareTo(prefixes[b]);
-            if (compared != 0) return compared;
-            var left = source.Cell(Row(a), column);
-            var right = source.Cell(Row(b), column);
-            if (trim) { left = TrimEnd(left); right = TrimEnd(right); }
-            return Math.Sign(left.SequenceCompareTo(right));
+            if (compared != 0 || ranked) return compared;
+            if (blocks is { } whole && offsets is { } starts) return Math.Sign(Whole(whole, starts, a).SequenceCompareTo(Whole(whole, starts, b)));
+            return Cells(a, b);
+        }
+
+        /// <summary>A marked row's whole value against any value that starts with the shared bytes: they differ within
+        /// those bytes, or the marked value ends there and so sorts first.</summary>
+        private int AgainstShared(ReadOnlySpan<byte> key)
+        {
+            var length = Math.Min(key.Length, shared.Length);
+            var compared = key[..length].SequenceCompareTo(shared.AsSpan(0, length));
+            return compared != 0 ? Math.Sign(compared) : -1;
         }
     }
 
-    /// <summary>A collation's order: the first 8 bytes of each value's sort key, and the full comparison for equal prefixes.</summary>
-    private sealed class CollatedKey(int rows, int[]? map, PageSource source, int column, CompareInfo info, CompareOptions options) : Key(rows, map)
+    /// <summary>A collation's order: by each value's sort key, and by the collation itself where cells are read again.</summary>
+    private sealed class CollatedKey(int rows, int[]? map, PageSource source, int column, CompareInfo info, CompareOptions options, KeyMemory? memory)
+        : BytesKey(rows, map, source, column, memory)
     {
-        private readonly ulong[] prefixes = new ulong[rows];
-        private char[] left = new char[256], right = new char[256];
-        private byte[] sortKey = new byte[512];
+        [ThreadStatic] private static char[]? left;
+        [ThreadStatic] private static char[]? right;
 
-        public override void Set(int row, ReadOnlySpan<byte> cell)
+        protected override ReadOnlySpan<byte> Bytes(ReadOnlySpan<byte> cell, Scratch scratch)
         {
-            var text = Decode(TrimEnd(cell), ref left);
-            var length = info.GetSortKeyLength(text, options);
-            if (length > sortKey.Length) sortKey = new byte[Math.Max(length, 2 * sortKey.Length)];
-            var written = info.GetSortKey(text, sortKey, options);
-            prefixes[row] = Prefix(sortKey.AsSpan(0, written));
+            // The key may grow the buffer: its length first, then the buffer it is in.
+            var written = SortKey(info, options, Decode(TrimEnd(cell), ref scratch.Chars!), ref scratch.SortKey);
+            return scratch.SortKey.AsSpan(0, written);
         }
 
-        public override int Compare(int a, int b)
+        // Sorts compare on several threads.
+        protected override int Cells(int a, int b)
         {
-            var compared = prefixes[a].CompareTo(prefixes[b]);
-            if (compared != 0) return compared;
-            var x = Decode(TrimEnd(source.Cell(Row(a), column)), ref left);
-            var y = Decode(TrimEnd(source.Cell(Row(b), column)), ref right);
+            var x = Decode(TrimEnd(Source.Cell(Row(a), Column)), ref left);
+            var y = Decode(TrimEnd(Source.Cell(Row(b), Column)), ref right);
             return Math.Sign(info.Compare(x, y, options));
         }
 
-        private static ReadOnlySpan<char> Decode(ReadOnlySpan<byte> utf8, ref char[] buffer)
+        private static ReadOnlySpan<char> Decode(ReadOnlySpan<byte> utf8, ref char[]? buffer)
         {
-            if (buffer.Length < utf8.Length) buffer = new char[Math.Max(utf8.Length, 2 * buffer.Length)];
+            if (buffer is null || buffer.Length < utf8.Length) buffer = new char[Math.Max(Math.Max(utf8.Length, 256), 2 * (buffer?.Length ?? 0))];
             return buffer.AsSpan(0, Encoding.UTF8.GetChars(utf8, buffer));
+        }
+    }
+
+    /// <summary>Code-point order (UTF-8 bytes order as code points do), for binary values, _BIN and _BIN2 text and types
+    /// with no collation, the date and time types' fixed-width text among them.</summary>
+    private sealed class OrdinalKey(int rows, int[]? map, PageSource source, int column, KeyMemory? memory, bool trim)
+        : BytesKey(rows, map, source, column, memory)
+    {
+        protected override ReadOnlySpan<byte> Bytes(ReadOnlySpan<byte> cell, Scratch scratch) => trim ? TrimEnd(cell) : cell;
+
+        protected override int Cells(int a, int b)
+        {
+            var x = Source.Cell(Row(a), Column);
+            var y = Source.Cell(Row(b), Column);
+            if (trim)
+            {
+                x = TrimEnd(x);
+                y = TrimEnd(y);
+            }
+            return Math.Sign(x.SequenceCompareTo(y));
         }
     }
 
@@ -738,15 +1288,18 @@ internal static partial class ViewSorter
     private sealed class MappedKey(Key inner, int[] map) : Key(0)
     {
         public override bool IsNull(int row) => inner.IsNull(map[row]);
-        public override void Set(int row, ReadOnlySpan<byte> cell) => throw new InvalidOperationException("A mapped key is built by its own.");
+        public override void Set(int row, ReadOnlySpan<byte> cell, Scratch scratch) => throw new InvalidOperationException("A mapped key is built by its own.");
         public override int Compare(int a, int b) => inner.Compare(map[a], map[b]);
+        public override double TieShare => inner.TieShare;
+        public override void Drop() => inner.Drop();
     }
 
     /// <summary>The keys in order, each descending where <paramref name="descending"/> says (null: all ascending), NULL
     /// lowest, then the index, so equal rows keep their order (a stable sort).</summary>
     internal sealed class Comparer(Key[] keys, bool[]? descending, CancellationToken token) : IComparer<int>
     {
-        private int calls;
+        // A sort compares on several threads: one counter between them would be the cache line they all write.
+        [ThreadStatic] private static int calls;
 
         public int Compare(int a, int b)
         {

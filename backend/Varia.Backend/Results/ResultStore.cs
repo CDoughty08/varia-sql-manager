@@ -195,6 +195,16 @@ internal sealed class ResultStore
         return true;
     }
 
+    /// <summary>Takes bytes for what only makes a request faster (a sort's whole keys), leaving an eighth of the query's
+    /// room and of the store's free: a query still loading into this budget goes on storing rows meanwhile, where a
+    /// reservation of its own that found the budget full would stop it for good.</summary>
+    public bool TryReserveSpare(QueryBudget query, long bytes)
+    {
+        var limit = Math.Min(QueryBytes, query.MaxBytes);
+        if (query.UsedBytes + bytes > limit - limit / 8 || UsedBytes + bytes > GlobalBytes - GlobalBytes / 8) return false;
+        return TryReserve(query, bytes, false, out _);
+    }
+
     /// <summary>Charges bytes whatever the budget: the few bytes by which a sealed page exceeds its rows' estimate.</summary>
     internal void Force(QueryBudget query, long bytes)
     {
