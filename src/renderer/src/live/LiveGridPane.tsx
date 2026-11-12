@@ -94,7 +94,7 @@ function LiveGridBody({ live, probe, table = 0, label, toneLabel, state, newRows
         handle: first.handle, descriptor: first.descriptor, state: own,
         // No SQL type hints: a live catalogue's columns name a type without its length, so a header would invent one
         // ("nvarchar(max)"), and live views follow SSMS's monitors, whose headers are names alone.
-        resultIndex: 0, resultCount: 1, label, followTail: first.mode === 'append', showTypes: false,
+        entry: 'live', resultNumber: 1, resultCount: 1, label, followTail: first.mode === 'append', showTypes: false,
         // With Query Output's menu its keys are the catalogue's (outputGridFocus); without, the grid serves its own.
         clipboardKeys: !contextMenu,
         // The header sorts a snapshot table as a results grid's does; the backend sorts each sample (the probe's sort).

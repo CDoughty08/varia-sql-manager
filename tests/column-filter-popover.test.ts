@@ -57,7 +57,7 @@ function fixture(o: { hold?: boolean } = {}) {
   mounted.add(unmount)
   const anchor = { left: 0, top: 0, right: 300, bottom: 20, width: 300, height: 20, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
   act(() => {
-    root.render(createElement(WorkbenchProvider, { workbench, children: createElement(ColumnFilterPopover, { source: resultsFilterSource(workbench.results, 't', 0), columnName: 'name', target: { column: 0, anchor }, filtered: false, grid, onClose }) }))
+    root.render(createElement(WorkbenchProvider, { workbench, children: createElement(ColumnFilterPopover, { source: resultsFilterSource(workbench.results, 't', 'e1'), columnName: 'name', target: { column: 0, anchor }, filtered: false, grid, onClose }) }))
   })
   const dialog = () => document.querySelector('form[role="dialog"]') as HTMLFormElement
   const valueList = () => dialog().querySelector('[role="group"][aria-label="Values"]') as HTMLElement
@@ -119,7 +119,7 @@ describe('column filter popover', () => {
     await view.ok()
     await view.settle()
     expect(view.list.read).toHaveBeenLastCalledWith({ order: 'value', offset: 0, count: 1 })
-    expect(view.results.applyColumnFilter).toHaveBeenCalledWith('t', 0, 0, { kind: 'all' })
+    expect(view.results.applyColumnFilter).toHaveBeenCalledWith('t', 'e1', 0, { kind: 'all' })
     view.unmount()
   })
 

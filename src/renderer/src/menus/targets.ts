@@ -53,10 +53,11 @@ export interface OutputTarget {
   readonly kind: 'output'
   readonly tabId: string
   readonly view: OutputView
-  readonly resultIndex: number
+  /** The grid's result, by its entry key (ResultsService): a `grid` view always has one, Messages and a live grid none. */
+  readonly entry?: string
   /** The header or cell column captured when the menu opened (zero-based, without the row-number column). */
   readonly column?: number
-  /** Refuses commands after this grid was replaced by another execution at the same result index. */
+  /** Refuses commands after the entry came to show another stored result than the one the menu opened on. */
   readonly result?: { readonly generation: number; readonly resultId: number }
   /** The grid's result kind ('rows', 'diff', 'pivot', 'transpose'…), for the commands only some kinds offer. */
   readonly resultKind?: string
@@ -259,18 +260,19 @@ function outputColumn(element: Element, view: HTMLElement): number | undefined {
 /** The Query Output view `element` is in: OutputPane marks each with its query, view, and result set. */
 export function outputTarget(element: Element): OutputTarget | undefined {
   const view = element.closest<HTMLElement>('[data-output-view]')
-  const kind = view?.getAttribute('data-output-view') ?? '', tabId = view?.getAttribute('data-tab-id') ?? '', resultIndex = Number(view?.getAttribute('data-result-index') ?? 0)
+  const kind = view?.getAttribute('data-output-view') ?? '', tabId = view?.getAttribute('data-tab-id') ?? '', entry = view?.getAttribute('data-result-entry') ?? ''
   if (view && kind === 'live') {
     // A live grid belongs to no query: its commands come with it.
     const live = liveOutputs.get(view), column = outputColumn(element, view)
-    return live ? { kind: 'output', tabId: '', view: 'live', resultIndex: 0, selectedText: '', element: view, live, ...(column !== undefined ? { column } : {}) } : undefined
+    return live ? { kind: 'output', tabId: '', view: 'live', selectedText: '', element: view, live, ...(column !== undefined ? { column } : {}) } : undefined
   }
-  if (!view || !outputViews.has(kind) || !tabId || !Number.isInteger(resultIndex) || resultIndex < 0) return undefined
+  // A grid that does not say which entry it shows is no target: nothing could act on it.
+  if (!view || !outputViews.has(kind) || !tabId || (kind === 'grid' && !entry)) return undefined
   const column = kind === 'grid' ? outputColumn(element, view) : undefined
   const generation = Number(view.getAttribute('data-result-generation')), resultId = Number(view.getAttribute('data-result-id'))
   const result = kind === 'grid' && Number.isSafeInteger(generation) && generation > 0 && Number.isSafeInteger(resultId) && resultId > 0 ? { generation, resultId } : undefined
   const resultKind = kind === 'grid' ? view.getAttribute('data-result-kind') ?? undefined : undefined
-  return { kind: 'output', tabId, view: kind as OutputView, resultIndex, selectedText: kind === 'grid' ? '' : selectedTextIn(view), element: view,
+  return { kind: 'output', tabId, view: kind as OutputView, ...(kind === 'grid' ? { entry } : {}), selectedText: kind === 'grid' ? '' : selectedTextIn(view), element: view,
     ...(column !== undefined ? { column } : {}), ...(result ? { result } : {}), ...(resultKind ? { resultKind } : {}) }
 }
 

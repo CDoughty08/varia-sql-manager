@@ -8,10 +8,11 @@ import { HighlightsService, highlightLimits, highlightText, mergeRows, trackedCo
 import { ResultsService } from '../src/renderer/src/results/ResultsService'
 import { descriptor, fakeResultClient, summaryOf, type FakeHandle } from './fixtures/results'
 import { manualTimers } from './fixtures/workbench'
+import { keyAt } from './fixtures/entries'
 
 const settle = async () => { for (let i = 0; i < 10; i++) await Promise.resolve() }
-const rows = (resultIndex: number, top: number, bottom: number): GridSelection => ({
-  resultIndex, blocks: [{ kind: 'rows', anchor: { row: top, column: 0 }, focus: { row: bottom, column: 0 } }], active: { row: top, column: 0 }
+const rows = (entry: string, top: number, bottom: number): GridSelection => ({
+  entry, blocks: [{ kind: 'rows', anchor: { row: top, column: 0 }, focus: { row: bottom, column: 0 } }], active: { row: top, column: 0 }
 })
 
 function fixture() {
@@ -31,7 +32,8 @@ function fixture() {
     void results.finish('t1', queryId, { summary: summaryOf([value]) })
     return results.getSnapshot().t1.sets[0].handle as FakeHandle
   }
-  const shown = () => highlights.getSnapshot().t1?.get(0)
+  /** What the grid of the tab's one result draws. */
+  const shown = () => highlights.getSnapshot().t1?.get(keyAt(results, 't1', 0))
   return { client, results, highlights, run, shown, timers }
 }
 
@@ -47,8 +49,8 @@ describe('highlights', () => {
   it('tells the rows apart on the first highlight, colours the selected rows, and turns a colour off when every row has it', async () => {
     const { results, highlights, run, shown } = fixture()
     const handle = run(1)
-    results.setSelection('t1', 0, rows(0, 2, 3))
-    await highlights.highlight('t1', 0, 1)
+    results.setSelection('t1', keyAt(results, 't1', 0), rows(keyAt(results, 't1', 0), 2, 3))
+    await highlights.highlight('t1', keyAt(results, 't1', 0), 1)
     await settle()
     expect(handle.identify).toHaveBeenCalledWith('auto', { signal: expect.any(AbortSignal) })
     expect(handle.rowIds).toHaveBeenCalledWith(2, 2, expect.any(AbortSignal))
@@ -57,25 +59,25 @@ describe('highlights', () => {
     expect([...drawn.positions]).toEqual([2, 3])
     expect([...drawn.colors]).toEqual([1, 1])
     // Another colour replaces it; the same colour on rows that all have it takes it off.
-    results.setSelection('t1', 0, rows(0, 3, 4))
-    await highlights.highlight('t1', 0, 3)
+    results.setSelection('t1', keyAt(results, 't1', 0), rows(keyAt(results, 't1', 0), 3, 4))
+    await highlights.highlight('t1', keyAt(results, 't1', 0), 3)
     expect([...shown()!.rows[0].colors]).toEqual([1, 3, 3])
-    await highlights.highlight('t1', 0, 3)
+    await highlights.highlight('t1', keyAt(results, 't1', 0), 3)
     expect(shown()).toMatchObject({ count: 1 })
     expect([...shown()!.rows[0].positions]).toEqual([2])
     expect(handle.identify).toHaveBeenCalledTimes(1)
-    expect(highlights.hasHighlights('t1', 0)).toBe(true)
-    highlights.clear('t1', 0)
+    expect(highlights.hasHighlights('t1', keyAt(results, 't1', 0))).toBe(true)
+    highlights.clear('t1', keyAt(results, 't1', 0))
     await settle()
-    expect(highlights.hasHighlights('t1', 0)).toBe(false)
+    expect(highlights.hasHighlights('t1', keyAt(results, 't1', 0))).toBe(false)
     expect(shown()).toBeUndefined()
   })
 
   it('follows its rows into a sorted view and through a re-run, by the column it first followed', async () => {
     const { results, highlights, run, shown, client } = fixture()
     const first = run(1)
-    results.setSelection('t1', 0, rows(0, 1, 1))
-    await highlights.highlight('t1', 0, 2)
+    results.setSelection('t1', keyAt(results, 't1', 0), rows(keyAt(results, 't1', 0), 1, 1))
+    await highlights.highlight('t1', keyAt(results, 't1', 0), 2)
     // A re-run's result: the same identities, found again by the same column.
     const second = run(2, 6, 'q2')
     await settle()
@@ -92,7 +94,7 @@ describe('highlights', () => {
     // A sorted view of the set finds its rows by view position.
     const view = { ...third, base: third, viewId: 4, keys: [], rows: 1, baseRows: 1, complete: true, approximate: false, findRows: vi.fn<ResultHandle['findRows']>(async () => ({ positions: [0], marks: [0], truncated: false, rows: 1 })) } as unknown as ResultView
     vi.mocked(third.sort).mockResolvedValueOnce(view)
-    results.sortBy('t1', 0, 0, 'descending')
+    results.sortBy('t1', keyAt(results, 't1', 0), 0, 'descending')
     await settle()
     expect(view.findRows).toHaveBeenCalledWith([1001], expect.any(AbortSignal))
     expect(shown()!.rows.find(item => item.handle === view)?.positions[0]).toBe(0)
@@ -128,8 +130,8 @@ describe('highlights', () => {
     }
     const first = runWith(1)
     vi.mocked(first.identify).mockResolvedValueOnce({ column: 1, unique: true, approximate: false, rows: 10 })
-    results.setSelection('t1', 0, rows(0, 1, 1))
-    await highlights.highlight('t1', 0, 1)
+    results.setSelection('t1', keyAt(results, 't1', 0), rows(keyAt(results, 't1', 0), 1, 1))
+    await highlights.highlight('t1', keyAt(results, 't1', 0), 1)
     const second = runWith(2)
     await settle()
     expect(second.identify).toHaveBeenCalledWith('column', { column: 1, signal: expect.any(AbortSignal) })
@@ -138,8 +140,8 @@ describe('highlights', () => {
   it('does not search again for rows after a failed search until the highlights change', async () => {
     const { results, highlights, run, shown, timers } = fixture()
     run(1)
-    results.setSelection('t1', 0, rows(0, 1, 1))
-    await highlights.highlight('t1', 0, 2)
+    results.setSelection('t1', keyAt(results, 't1', 0), rows(keyAt(results, 't1', 0), 1, 1))
+    await highlights.highlight('t1', keyAt(results, 't1', 0), 2)
     const second = run(2, 6, 'q2')
     vi.mocked(second.findRows).mockRejectedValue(Object.assign(new Error('Tell the rows apart first.'), { code: 'IDENTITY_NOT_FOUND' }))
     // The failure's notice publishes the results again, now and when it goes; neither searches again.
@@ -149,8 +151,8 @@ describe('highlights', () => {
     // A new highlight is a new version, searched for again.
     vi.mocked(second.findRows).mockReset()
     vi.mocked(second.findRows).mockResolvedValue({ positions: [1, 2], marks: [0, 1], truncated: false, rows: 6 })
-    results.setSelection('t1', 0, rows(0, 2, 2))
-    await highlights.highlight('t1', 0, 2)
+    results.setSelection('t1', keyAt(results, 't1', 0), rows(keyAt(results, 't1', 0), 2, 2))
+    await highlights.highlight('t1', keyAt(results, 't1', 0), 2)
     expect(second.findRows).toHaveBeenCalledTimes(1)
     expect(shown()).toMatchObject({ count: 2, found: 2 })
   })
@@ -158,8 +160,8 @@ describe('highlights', () => {
   it('tries a search that failed with a passing error again after a backoff, and again when the user highlights', async () => {
     const { results, highlights, run, shown, timers } = fixture()
     run(1)
-    results.setSelection('t1', 0, rows(0, 1, 1))
-    await highlights.highlight('t1', 0, 2)
+    results.setSelection('t1', keyAt(results, 't1', 0), rows(keyAt(results, 't1', 0), 1, 1))
+    await highlights.highlight('t1', keyAt(results, 't1', 0), 2)
     const notify = vi.spyOn(results, 'notify')
     const second = run(2, 6, 'q2')
     vi.mocked(second.findRows).mockRejectedValue(Object.assign(new Error('The backend is busy.'), { code: 'BUSY' }))
@@ -179,8 +181,8 @@ describe('highlights', () => {
     await settle()
     expect(second.findRows).toHaveBeenCalledTimes(1 + highlightLimits.retryMs.length)
     // The user acting searches again at once, even when the command changes nothing, and earns a fresh set of retries.
-    results.setSelection('t1', 0, undefined)
-    await highlights.highlight('t1', 0, 2)
+    results.setSelection('t1', keyAt(results, 't1', 0), undefined)
+    await highlights.highlight('t1', keyAt(results, 't1', 0), 2)
     await settle()
     expect(second.findRows).toHaveBeenCalledTimes(2 + highlightLimits.retryMs.length)
     expect(notify).toHaveBeenCalledTimes(1)
@@ -194,8 +196,8 @@ describe('highlights', () => {
   it('says when the key column is gone, or more rows match than one search draws', async () => {
     const { results, highlights, run, shown, client } = fixture()
     run(1)
-    results.setSelection('t1', 0, rows(0, 1, 2))
-    await highlights.highlight('t1', 0, 1)
+    results.setSelection('t1', keyAt(results, 't1', 0), rows(keyAt(results, 't1', 0), 1, 2))
+    await highlights.highlight('t1', keyAt(results, 't1', 0), 1)
     // Re-run without the Id column highlights follow: nothing can be found, and the strip and the command say why.
     results.begin('t1', 'q2')
     const value = descriptor(2, { index: 0, rowsRead: 5, rowsStored: 5, rowsAvailable: 5, columns: [{ name: 'Name', dataType: 'nvarchar', wire: 'text', nullable: true }] })
@@ -207,8 +209,8 @@ describe('highlights', () => {
     expect(shown()).toMatchObject({ count: 2, lacks: 'Id' })
     expect(highlightText(shown())).toBe('2 highlights follow Id, which these results lack. Clear All Highlights to highlight rows here.')
     const notify = vi.spyOn(results, 'notify')
-    results.setSelection('t1', 0, rows(0, 0, 0))
-    await highlights.highlight('t1', 0, 1)
+    results.setSelection('t1', keyAt(results, 't1', 0), rows(keyAt(results, 't1', 0), 0, 0))
+    await highlights.highlight('t1', keyAt(results, 't1', 0), 1)
     expect(notify).toHaveBeenCalledWith('t1', '2 highlights follow Id, which these results lack. Clear All Highlights to highlight rows here.')
     // A search that lists only the first matches says so instead of calling the rest missing.
     const third = run(3, 10, 'q3')
@@ -227,46 +229,48 @@ describe('highlights', () => {
       void results.finish('t1', queryId, { summary: summaryOf(values) })
       return values.map(value => client.handle(value.resultId)!)
     }
-    const at = (index: number) => highlights.getSnapshot().t1?.get(index)
+    const at = (key: string) => highlights.getSnapshot().t1?.get(key)
     const [, , third] = three('q1', 1)
     results.addSet('t1', descriptor(803, { index: 2, kind: 'pivot', rowsRead: 10, rowsStored: 10, rowsAvailable: 10 }), 'Pivot of Result 3', ['1:3'])
     const pivot = client.handle(803)!
-    results.setSelection('t1', 2, rows(2, 2, 3))
-    await highlights.highlight('t1', 2, 1)
-    results.setSelection('t1', 3, rows(3, 5, 5))
-    await highlights.highlight('t1', 3, 2)
+    const [, two, three3, pivoted] = results.getSnapshot().t1.sets.map(set => set.key)
+    results.setSelection('t1', three3, rows(three3, 2, 3))
+    await highlights.highlight('t1', three3, 1)
+    results.setSelection('t1', pivoted, rows(pivoted, 5, 5))
+    await highlights.highlight('t1', pivoted, 2)
     await settle()
-    expect(at(2)).toMatchObject({ count: 2, found: 2 })
-    expect(at(3)).toMatchObject({ count: 1, found: 1 })
+    expect(at(three3)).toMatchObject({ count: 2, found: 2 })
+    expect(at(pivoted)).toMatchObject({ count: 1, found: 1 })
 
-    results.removeEntry('t1', results.getSnapshot().t1.sets[1].key)
+    results.removeEntry('t1', two)
     await settle()
-    // Result 3 and the pivot each moved up a place with their highlights; neither was bound or searched again.
-    expect(at(1)).toMatchObject({ count: 2, found: 2 })
-    expect(at(1)!.rows.map(item => item.handle)).toEqual([third])
-    expect(at(2)).toMatchObject({ count: 1, found: 1 })
-    expect(at(2)!.rows.map(item => item.handle)).toEqual([pivot])
-    expect(at(3)).toBeUndefined()
-    expect(highlights.rowsFor('t1', 1).map(item => item.handle)).toEqual([third])
-    expect([1, 2, 3].map(index => highlights.hasHighlights('t1', index))).toEqual([true, true, false])
+    // Result 3 and the pivot each moved up a place and kept their own highlights; neither was bound or searched again.
+    expect([...highlights.getSnapshot().t1!.keys()]).toEqual([three3, pivoted])
+    expect(at(three3)).toMatchObject({ count: 2, found: 2 })
+    expect(at(three3)!.rows.map(item => item.handle)).toEqual([third])
+    expect(at(pivoted)).toMatchObject({ count: 1, found: 1 })
+    expect(at(pivoted)!.rows.map(item => item.handle)).toEqual([pivot])
+    expect(highlights.rowsFor('t1', three3).map(item => item.handle)).toEqual([third])
+    expect([two, three3, pivoted].map(key => highlights.hasHighlights('t1', key))).toEqual([false, true, true])
     expect(third.identify).toHaveBeenCalledTimes(1)
     expect(third.findRows).toHaveBeenCalledTimes(1)
-    // A command on the grid at the new place reaches Result 3's highlights.
-    results.setSelection('t1', 1, rows(1, 7, 7))
-    await highlights.highlight('t1', 1, 1)
-    expect(at(1)).toMatchObject({ count: 3, found: 3 })
-    expect(at(2)).toMatchObject({ count: 1 })
+    // A command on the grid, now second in the stack, reaches Result 3's highlights.
+    expect(keyAt(results, 't1', 1)).toBe(three3)
+    results.setSelection('t1', three3, rows(three3, 7, 7))
+    await highlights.highlight('t1', three3, 1)
+    expect(at(three3)).toMatchObject({ count: 3, found: 3 })
+    expect(at(pivoted)).toMatchObject({ count: 1 })
 
     // The next run's third result takes Result 3's highlights, though they were last drawn at the second place; the
     // pivot's went with the pivot.
     const [, second, again] = three('q2', 11)
     await settle()
-    expect(at(2)).toMatchObject({ count: 3, found: 3 })
-    expect(at(2)!.rows.map(item => item.handle)).toEqual([again])
-    expect(at(1)).toBeUndefined()
+    expect([...highlights.getSnapshot().t1!.keys()]).toEqual([keyAt(results, 't1', 2)])
+    expect(at(keyAt(results, 't1', 2))).toMatchObject({ count: 3, found: 3 })
+    expect(at(keyAt(results, 't1', 2))!.rows.map(item => item.handle)).toEqual([again])
     expect(second.identify).not.toHaveBeenCalled()
-    expect(highlights.hasHighlights('t1', 2)).toBe(true)
-    highlights.clear('t1', 2)
+    expect(highlights.hasHighlights('t1', keyAt(results, 't1', 2))).toBe(true)
+    highlights.clear('t1', keyAt(results, 't1', 2))
     await settle()
     expect(highlights.getSnapshot().t1).toBeUndefined()
   })
@@ -282,8 +286,8 @@ describe('highlights', () => {
     const [, second] = two('q1', 1)
     let fail!: (error: Error) => void
     vi.mocked(second.findRows).mockReturnValueOnce(new Promise((_, reject) => { fail = reject }))
-    results.setSelection('t1', 1, rows(1, 2, 3))
-    const marking = highlights.highlight('t1', 1, 1)
+    results.setSelection('t1', keyAt(results, 't1', 1), rows(keyAt(results, 't1', 1), 2, 3))
+    const marking = highlights.highlight('t1', keyAt(results, 't1', 1), 1)
     await settle()
     results.removeEntry('t1', results.getSnapshot().t1.sets[1].key)
     fail(Object.assign(new Error('The result was released.'), { code: 'RESULT_RELEASED' }))
@@ -293,27 +297,29 @@ describe('highlights', () => {
     // The next run's second result takes them up.
     const [, again] = two('q2', 11)
     await settle()
-    expect(highlights.getSnapshot().t1?.get(1)).toMatchObject({ count: 2, found: 2 })
-    expect(highlights.getSnapshot().t1!.get(1)!.rows.map(item => item.handle)).toEqual([again])
+    expect(highlights.getSnapshot().t1?.get(keyAt(results, 't1', 1))).toMatchObject({ count: 2, found: 2 })
+    expect(highlights.getSnapshot().t1!.get(keyAt(results, 't1', 1))!.rows.map(item => item.handle)).toEqual([again])
   })
 
   it('keeps the whole-row fallback, refuses too many rows at once, and forgets a closed tab', async () => {
     const { results, highlights, run, shown } = fixture()
     const handle = run(1, 20_000)
     vi.mocked(handle.identify).mockResolvedValueOnce({ column: -1, unique: false, approximate: false, rows: 20_000 })
-    results.setSelection('t1', 0, rows(0, 0, 0))
-    await highlights.highlight('t1', 0, 1)
+    results.setSelection('t1', keyAt(results, 't1', 0), rows(keyAt(results, 't1', 0), 0, 0))
+    await highlights.highlight('t1', keyAt(results, 't1', 0), 1)
     expect(shown()).toMatchObject({ by: '', unique: false })
     const notify = vi.spyOn(results, 'notify')
-    results.setSelection('t1', 0, rows(0, 0, highlightLimits.rowsPerCommand))
-    await highlights.highlight('t1', 0, 1)
+    results.setSelection('t1', keyAt(results, 't1', 0), rows(keyAt(results, 't1', 0), 0, highlightLimits.rowsPerCommand))
+    await highlights.highlight('t1', keyAt(results, 't1', 0), 1)
     expect(notify).toHaveBeenCalledWith('t1', 'Highlight up to 10,000 rows at a time.')
     const next = run(2, 5, 'q2')
     await settle()
     expect(next.identify).toHaveBeenCalledWith('row', { signal: expect.any(AbortSignal) })
+    const released = keyAt(results, 't1', 0)
+    expect(highlights.canHighlight('t1', released)).toBe(true)
     results.release('t1')
     await settle()
     expect(highlights.getSnapshot().t1).toBeUndefined()
-    expect(highlights.canHighlight('t1', 0)).toBe(false)
+    expect(highlights.canHighlight('t1', released)).toBe(false)
   })
 })

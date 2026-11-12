@@ -14,7 +14,7 @@ describe('menu targets', () => {
     const hitObject = { kind: 'table', database: 'd', schema: 'dbo', name: 'Orders' } as const
     const targets: MenuTarget[] = [
       { kind: 'editor', tabId: 't1' }, { kind: 'explorer', node: { id: 7, lost: false, kind: 'table', connectionId: 'c', label: 's.n', ref: { type: 'object', object: { kind: 'table', database: 'd', schema: 's', name: 'n' } } } }, { kind: 'tableDesigner', tabId: 't4' },
-      { kind: 'documentTab', tabId: 't2' }, { kind: 'output', tabId: 't3', view: 'messages', resultIndex: 0, selectedText: '', element: element('div').dom }, { kind: 'dockTab', pane: 'results', floating: true, popout: false }, input, { kind: 'ssisOperations', tabId: 't5' },
+      { kind: 'documentTab', tabId: 't2' }, { kind: 'output', tabId: 't3', view: 'messages', selectedText: '', element: element('div').dom }, { kind: 'dockTab', pane: 'results', floating: true, popout: false }, input, { kind: 'ssisOperations', tabId: 't5' },
       { kind: 'searchHit', searchId: 's', index: 0, hit: { object: hitObject, folder: 'tables', label: 'dbo.Orders' }, pane: false, node: { lost: false, kind: 'table', connectionId: 'c', label: 'dbo.Orders', ref: { type: 'object', object: hitObject } }, state: { explorerScriptTitle: 'table' } }
     ]
     expect(targets.map(target => menuForTarget[target.kind])).toEqual(contextMenuIds)
@@ -177,15 +177,16 @@ describe('menu target service', () => {
   })
   it('resolves Query Output\'s views: the grid below its active cell, and Messages with their selected text', () => {
     const doc = fakeDocument(), make = (tag: string, init?: ConstructorParameters<typeof FakeElement>[2]) => new FakeElement(doc, tag, init)
-    const view = (kind: string, attributes: Record<string, string> = {}) => make('div', { attributes: { 'data-output-view': kind, 'data-tab-id': 't1', 'data-result-index': '2', ...attributes } })
+    const view = (kind: string, attributes: Record<string, string> = {}) => make('div', { attributes: { 'data-output-view': kind, 'data-tab-id': 't1', ...attributes } })
     const number = make('div', { className: 'rg-rh' }), first = make('div', { className: 'rg-c' })
     const active = make('div', { className: 'rg-c is-act' })
-    const grid = view('grid', { 'data-result-grid': '' }).append(make('div', { className: 'rg-scroll' }).append(make('div', { className: 'rg-row' }).append(number, first), make('div', { className: 'rg-row' }).append(active)))
-    const text = make('pre', { textContent: 'hello' }), messages = view('messages', { 'data-result-index': '0' }).append(text), plan = view('plan').append(make('pre'))
+    const grid = view('grid', { 'data-result-grid': '', 'data-result-entry': 'e3' }).append(make('div', { className: 'rg-scroll' }).append(make('div', { className: 'rg-row' }).append(number, first), make('div', { className: 'rg-row' }).append(active)))
+    const text = make('pre', { textContent: 'hello' }), messages = view('messages').append(text), plan = view('plan').append(make('pre'))
     make('body').append(grid, messages, plan)
     const service = new MenuTargetService()
-    const output = { kind: 'output', tabId: 't1', resultIndex: 2, selectedText: '' }
-    expect(service.targetFor(dom(number))).toEqual({ target: { ...output, view: 'grid', element: grid }, element: grid, focus: grid, anchor: active })
+    const output = { kind: 'output', tabId: 't1', selectedText: '' }
+    // A grid's target names its result by the entry key the grid carries; Messages name none.
+    expect(service.targetFor(dom(number))).toEqual({ target: { ...output, view: 'grid', entry: 'e3', element: grid }, element: grid, focus: grid, anchor: active })
     active.classes.delete('is-act')
     expect(service.targetFor(dom(active))?.anchor).toBe(first)
     // A mounted grid names its anchor at event time, after painting a pending frame (a click just before Shift+F10
@@ -197,26 +198,30 @@ describe('menu target service', () => {
     expect(service.targetFor(dom(first))?.anchor).toBe(first)
     // Selected text counts only inside the view.
     doc.selection = 'hello'
-    expect(service.targetFor(dom(text))?.target).toEqual({ ...output, resultIndex: 0, view: 'messages', element: messages })
+    expect(service.targetFor(dom(text))?.target).toEqual({ ...output, view: 'messages', element: messages })
     doc.selectionIn = text
-    expect(service.targetFor(dom(text))).toEqual({ target: { ...output, resultIndex: 0, view: 'messages', selectedText: 'hello', element: messages }, element: messages, focus: messages })
+    expect(service.targetFor(dom(text))).toEqual({ target: { ...output, view: 'messages', selectedText: 'hello', element: messages }, element: messages, focus: messages })
     // Execution plans open as documents now; there is no plan view.
     expect(service.targetFor(dom(plan))).toBeUndefined()
     // The grid's cells are selected, not its text.
     doc.selectionIn = first
     expect(service.targetFor(dom(first))?.target).toMatchObject({ view: 'grid', selectedText: '' })
-    for (const attributes of [{ 'data-output-view': 'chart' }, { 'data-tab-id': '' }, { 'data-result-index': '-1' }, { 'data-result-index': '1.5' }] as Record<string, string>[]) {
+    for (const attributes of [{ 'data-output-view': 'chart' }, { 'data-tab-id': '' }] as Record<string, string>[]) {
       expect(service.targetFor(dom(make('div').append(view('messages', attributes)).children[0])), JSON.stringify(attributes)).toBeUndefined()
+    }
+    // A grid that names no entry is no target: no command could say which result it means.
+    for (const attributes of [{}, { 'data-result-entry': '' }] as Record<string, string>[]) {
+      expect(service.targetFor(dom(make('div').append(view('grid', attributes)).children[0])), JSON.stringify(attributes)).toBeUndefined()
     }
   })
   it('captures the clicked column and result identity, or the keyboard menu\'s active column', () => {
     const doc = fakeDocument(), make = (tag: string, init?: ConstructorParameters<typeof FakeElement>[2]) => new FakeElement(doc, tag, init)
     const text = make('span'), header = make('div', { attributes: { 'aria-colindex': '3' } }).append(text)
     const active = make('div', { className: 'rg-c is-act', attributes: { 'aria-colindex': '4' } })
-    const grid = make('div', { attributes: { 'data-output-view': 'grid', 'data-tab-id': 'query', 'data-result-index': '1', 'data-result-generation': '2', 'data-result-id': '7' } }).append(header, active)
+    const grid = make('div', { attributes: { 'data-output-view': 'grid', 'data-tab-id': 'query', 'data-result-entry': 'e2', 'data-result-generation': '2', 'data-result-id': '7' } }).append(header, active)
     const service = new MenuTargetService()
     const clicked = service.targetFor(dom(text))!.target
-    expect(clicked).toMatchObject({ kind: 'output', tabId: 'query', resultIndex: 1, column: 1, result: { generation: 2, resultId: 7 } })
+    expect(clicked).toMatchObject({ kind: 'output', tabId: 'query', entry: 'e2', column: 1, result: { generation: 2, resultId: 7 } })
     expect(service.targetFor(dom(grid))!.target).toMatchObject({ column: 2 })
     header.setAttribute('aria-colindex', '5')
     expect(clicked).toMatchObject({ column: 1 })
@@ -239,7 +244,7 @@ describe('menu target service', () => {
     const live = { sortable: true, filterable: false } as LiveOutput
     const unregister = registerLiveOutput(dom(grid), live)
     const hit = service.targetFor(dom(header))!
-    expect(hit).toMatchObject({ target: { kind: 'output', view: 'live', tabId: '', resultIndex: 0, column: 1, live }, element: grid, anchor: active })
+    expect(hit).toMatchObject({ target: { kind: 'output', view: 'live', tabId: '', column: 1, live }, element: grid, anchor: active })
     expect(menuForTarget[hit.target.kind]).toBe('output.context')
     expect(service.targetFor(dom(grid))!.target).toMatchObject({ column: 2 })
     // It names no query, so File commands and Close Results have no tab to act on.
