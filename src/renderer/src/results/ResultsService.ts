@@ -317,8 +317,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.now = o.now ?? (() => Date.now())
     this.newId = o.newId ?? (() => crypto.randomUUID())
     const events = o.events.subscribe(event => { if (event.type === 'documents.closed') this.release(event.tabId) })
-    // A new backend lost every result: nothing is left to save or close.
-    const generations = this.client.onGeneration(() => this.updateContext())
+    // A new backend lost every result: nothing is left to save or close, or to turn back.
+    const generations = this.client.onGeneration(() => { this.updateContext(); this.updateTurned() })
     this.subscriptions.push(() => events.dispose(), () => generations.dispose(), this.api.onResultsJob(progress => this.progress(progress)))
   }
 
@@ -1375,13 +1375,14 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.updateContext()
     this.updateTurned()
   }
-  /** `turned` per tab: its focused entry, when that view is drawn transposed. */
+  /** `turned` per tab: its focused entry, when that view is drawn transposed and can still be turned back. Results lost
+   *  with the backend keep their grids as they were drawn, under the overlay, but nothing reads as pressed for them. */
   private updateTurned(): void {
     const current = this.turnedStore.getSnapshot(), next: Record<string, FocusedOrientation> = {}
     let changed = false
     for (const tabId of this.runs.keys()) {
       const focused = this.focusedEntry(tabId), orientation = focused && this.orientation(tabId, focused.key)
-      if (!focused || !orientation?.transposed) continue
+      if (!focused || !orientation?.transposed || !this.canTranspose(tabId, focused.key)) continue
       const was = current[tabId]
       next[tabId] = was && was.entry === focused.key && was.headerColumn === orientation.headerColumn ? was
         : { entry: focused.key, ...orientation.headerColumn === undefined ? {} : { headerColumn: orientation.headerColumn } }

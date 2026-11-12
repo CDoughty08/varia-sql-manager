@@ -39,7 +39,7 @@ Nothing is stored, so it follows the grid's sort and filters and is available wh
 | Command | What it does |
 | --- | --- |
 | Transpose Results (`output.transpose`) | Turns the grid transposed, or back. The toolbar's Transposed button and the grid menu's Transpose › Transposed show which it is. |
-| Transpose Selected Rows (`output.transposeSelectedRows`) | Applies Keep Selected Rows, then turns the grid. If that filter refuses the selection (more than 4,095 rows or 256 ranges) the grid stays as it is. The filter stays until removed from the caption. |
+| Transpose Selected Rows (`output.transposeSelectedRows`) | Applies Keep Selected Rows, then turns the grid once the kept rows show. If that filter refuses the selection (more than 4,095 rows or 256 ranges) or fails, the grid stays as it is. The filter stays until removed from the caption. |
 | Transpose Using Column as Headers (`output.transposeWithHeaders`) | Heads each drawn column with a column's value for its row, and turns the grid. From a menu it is the column under the pointer; otherwise the active cell's. |
 | Choose Headers for Transposed Results… (`output.transposeChooseHeaders`) | Lists Row number and every column, starting on the current choice. The toolbar's Headers button opens it below itself. |
 

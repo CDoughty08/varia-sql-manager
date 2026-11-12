@@ -9,6 +9,7 @@ import { limits as wire } from '../src/shared/ipc/wire/protocol'
 import type { CommandArgs } from '../src/renderer/src/core/types'
 import { selectAll, type GridSelection } from '../src/renderer/src/grid/selection'
 import { argsFor, type OutputTarget } from '../src/renderer/src/menus/targets'
+import type { ResultView } from '../src/renderer/src/results/ResultClient'
 import { beyondCapText, capStripText, type GridController } from '../src/renderer/src/results/ResultsService'
 import { resolveMenu } from '../src/renderer/src/menus/resolve'
 import { descriptor, summaryOf, type FakeHandle } from './fixtures/results'
@@ -16,6 +17,16 @@ import { keyAt } from './fixtures/entries'
 import { workbenchFixture } from './fixtures/workbench'
 
 const cleanups: (() => void)[] = []
+const settle = async () => { for (let i = 0; i < 10; i++) await Promise.resolve() }
+/** The view a handle's next `sort` builds, answered when the test says: with the filters asked for, or a failure. */
+function nextView(handle: FakeHandle) {
+  let answer!: () => void, fail!: (error: Error) => void
+  vi.mocked(handle.sort).mockImplementationOnce((keys, o) => new Promise<ResultView>((resolve, reject) => {
+    answer = () => resolve({ ...handle, viewId: 1, base: handle, keys, filters: (o?.filters ?? []).map(filter => filter.op === 'keepRows' ? { op: 'keepRows', rows: [2, 3, 4] } : filter), rows: 3, baseRows: 20, complete: true, approximate: false, close: vi.fn(async () => {}) } as unknown as ResultView)
+    fail = reject
+  }))
+  return { answer: async () => { answer(); await settle() }, fail: async (text: string) => { fail(new Error(text)); await settle() } }
+}
 afterEach(() => { for (const cleanup of cleanups.splice(0)) cleanup() })
 
 const columns: ResultColumn[] = [
@@ -152,6 +163,18 @@ describe('the resultsGridTransposed key', () => {
     expect(results.turned.getSnapshot()).toEqual({})
   })
 
+  it('is off for results lost with the backend, which can no longer be turned back', async () => {
+    const { commands, context, resultClient, results, tab, key } = await ran()
+    results.setOrientation(tab.id, key(), { transposed: true, headerColumn: 1 })
+    expect(context.getState().resultsGridTransposed).toBe(true)
+    resultClient.lose()
+    await settle()
+    // The grid stays as it was drawn, under its overlay; nothing reads as pressed, and no command acts on it.
+    expect(commands.isEnabled('output.transpose', { tabId: tab.id })).toBe(false)
+    expect(results.turned.getSnapshot()).toEqual({})
+    expect([context.getState().resultsGridTransposed, commands.isToggled('output.transpose')]).toEqual([false, false])
+  })
+
   it('is the menu\'s own grid in that grid\'s menu, whichever grid has the focus', async () => {
     const { commands, keybindings, results, tab, key, on } = await ran()
     results.setOrientation(tab.id, key(1), { transposed: true })
@@ -167,8 +190,9 @@ describe('the resultsGridTransposed key', () => {
 })
 
 describe('Transpose Selected Rows', () => {
-  it('keeps the selected rows as a filter and turns the grid', async () => {
-    const { commands, results, resultSelection, tab, key, on, cells, orientation } = await ran()
+  it('keeps the selected rows as a filter and turns the grid once the filtered rows show', async () => {
+    const { commands, results, resultSelection, tab, key, on, cells, orientation, handle } = await ran()
+    const view = nextView(handle())
     expect(commands.isEnabled('output.transposeSelectedRows', on())).toBe(false)
     resultSelection.set(tab.id, cells(0, 2, 4))
     expect(commands.isEnabled('output.transposeSelectedRows', on())).toBe(true)
@@ -176,10 +200,37 @@ describe('Transpose Selected Rows', () => {
     expect(commands.isEnabled('output.transposeSelectedRows', on(1))).toBe(false)
     const keep = vi.spyOn(results, 'keepSelectedRows')
     expect(await commands.execute('output.transposeSelectedRows', on(), 'menu')).toBe(true)
-    // The filter is Keep Selected Rows' own (its checks are tests/results-service.test.ts's); the grid turns once it is taken.
+    // The filter is Keep Selected Rows' own (its checks are tests/results-service.test.ts's). While the backend builds its
+    // view the grid stays a table: turned now, it would draw every row of the result as a column first.
     expect(keep.mock.calls).toEqual([[tab.id, key()]])
     expect(keep.mock.results[0].value).toBe(true)
+    expect(results.sortOf(tab.id, key())).toMatchObject({ sorting: true })
+    expect(orientation()).toEqual({ transposed: false })
+    await view.answer()
+    expect(results.sortOf(tab.id, key())?.applied.map(item => item.filter.op)).toEqual(['keepRows'])
     expect(orientation()).toEqual({ transposed: true })
+    // It turned once: turning it back is the user's, and a later publish does not turn it again.
+    results.setOrientation(tab.id, key(), { transposed: false })
+    results.notify(tab.id, 'something else')
+    expect(orientation()).toEqual({ transposed: false })
+  })
+
+  it('leaves the grid a table when the filter fails, or its result is closed before it shows', async () => {
+    const { commands, results, resultSelection, tab, key, on, cells, orientation, handle } = await ran()
+    const failing = nextView(handle())
+    resultSelection.set(tab.id, cells(0, 2, 4))
+    await commands.execute('output.transposeSelectedRows', on(), 'menu')
+    await failing.fail('The view could not be built.')
+    expect(results.getSnapshot()[tab.id].jobNotice).toContain('Could not filter the results')
+    expect(orientation()).toEqual({ transposed: false })
+    // Result 2: closed while its view is built.
+    const closing = nextView(handle(1)), closed = key(1)
+    resultSelection.set(tab.id, cells(1, 0, 1))
+    await commands.execute('output.transposeSelectedRows', on(1), 'menu')
+    results.removeEntry(tab.id, closed)
+    await closing.answer()
+    expect(results.orientation(tab.id, closed)).toEqual({ transposed: false })
+    expect(results.turned.getSnapshot()).toEqual({})
   })
 
   it('leaves the grid as it is drawn when Keep Selected Rows refuses the selection', async () => {
@@ -316,9 +367,9 @@ describe('a Peek card\'s grid', () => {
     resultSelection.set(peek, { entry: entry.key, blocks: [{ kind: 'cells', anchor: { row: 1, column: 0 }, focus: { row: 2, column: 0 } }], active: { row: 2, column: 0 } })
     await commands.execute('output.transpose', on({ transposed: true }), 'menu')
     expect(results.orientation(peek, entry.key)).toEqual({ transposed: false })
-    const keep = vi.spyOn(results, 'keepSelectedRows')
+    const view = nextView(entry.handle as FakeHandle)
     await commands.execute('output.transposeSelectedRows', on(), 'menu')
-    expect(keep.mock.results.map(result => result.value)).toEqual([true])
+    await view.answer()
     expect(results.orientation(peek, entry.key)).toEqual({ transposed: true, headerColumn: 1 })
   })
 })
