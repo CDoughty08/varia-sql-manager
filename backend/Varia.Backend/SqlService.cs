@@ -1573,7 +1573,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 : "There is not enough result memory to sort these rows. Close other results and try again.");
         (int[] Order, bool Approximate, ViewFilter[] Filters) built;
         // A collated column's whole sort keys come out of the budget as they are built, and go back with the build.
-        var keyMemory = new ViewSorter.KeyMemory(bytes => store.TryReserve(set.Budget, bytes, false, out _), bytes => store.Return(set.Budget, bytes));
+        var keyMemory = new ViewSorter.KeyMemory(bytes => store.TryReserveSpare(set.Budget, bytes), bytes => store.Return(set.Budget, bytes));
         try { built = await Task.Run(() => ViewSorter.Build(set, pages, keys, filters, token, keyMemory), token); }
         catch
         {
@@ -1733,7 +1733,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         DistinctSnapshot snapshot;
         try
         {
-            var keyMemory = new ViewSorter.KeyMemory(bytes => store.TryReserve(set.Budget, bytes, false, out _), bytes => store.Return(set.Budget, bytes));
+            var keyMemory = new ViewSorter.KeyMemory(bytes => store.TryReserveSpare(set.Budget, bytes), bytes => store.Return(set.Budget, bytes));
             snapshot = await Task.Run(() => ViewSorter.DistinctValues(set, pages, view, args.Column, complete, token, keptView, keyMemory), token);
             if (set.IsReleased) throw Unavailable(args.ResultId);
             if ((view is not null && !store.HasView(view)) || (keptView is not null && !store.HasView(keptView))) throw ViewClosed();
@@ -2007,7 +2007,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         try
         {
             PivotModel model;
-            var keyMemory = new ViewSorter.KeyMemory(bytes => store.TryReserve(set.Budget, bytes, false, out _), bytes => store.Return(set.Budget, bytes));
+            var keyMemory = new ViewSorter.KeyMemory(bytes => store.TryReserveSpare(set.Budget, bytes), bytes => store.Return(set.Budget, bytes));
             try { model = await Task.Run(() => ResultPivoter.Build(set, pages, view?.Order, spec, token, Reserve, keyMemory), token); }
             catch (PivotTooLargeException) { throw NotStored(set.Budget, tooLarge, (set, args.ResultId)); }
             if (set.IsReleased) throw Unavailable(args.ResultId);

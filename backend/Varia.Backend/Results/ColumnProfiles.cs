@@ -58,7 +58,7 @@ internal static class ColumnProfiler
     internal sealed class ProfileTooLargeException() : Exception("The profile needs more result memory than the budget has.");
 
     /// <summary>The profile of a result's sealed rows, or of a view's. The pages are read in <paramref name="workers"/> runs
-    /// at once (<see cref="WorkersFor"/> by default), each with figures of its own, merged in page order: every figure is a
+    /// at once (<see cref="WorkersFor"/> by default, and no more than the operations running leave free), each with figures of its own, merged in page order: every figure is a
     /// count, a sum, a lowest or highest, or a set, so the profile is the one a single thread gives, whose lowest and highest
     /// cells are the first rows to hold those values.</summary>
     public static ResultsProfileResult Profile(ResultSetBuffer set, StoredPage[] pages, ResultView? view, IReadOnlyList<int> columns, bool complete, CancellationToken token, Charges? charges = null, int? workers = null)
@@ -76,7 +76,9 @@ internal static class ColumnProfiler
         var rows = view?.Rows ?? baseRows;
         var guessed = set.Lengths.Any(length => length.Estimated);
         var count = set.Wires.Count;
-        var runs = Math.Clamp(workers ?? WorkersFor(baseRows, pages.Length), 1, Math.Max(1, pages.Length));
+        // At most the threads asked for, and no more than the operations running leave free.
+        using var threads = ViewSorter.Gate.Take(workers ?? WorkersFor(baseRows, pages.Length));
+        var runs = Math.Clamp(threads.Count, 1, Math.Max(1, pages.Length));
         int From(int run) => (int)((long)pages.Length * run / runs);
         void Each(Action<int> read)
         {
@@ -402,9 +404,9 @@ internal static class ColumnProfiler
                         chars = new char[grown];
                     }
                     var text = chars.AsSpan(0, Encoding.UTF8.GetChars(trimmed, chars));
-                    var size = compare.Info.GetSortKeyLength(text, compare.Options);
-                    Grow(size);
-                    return key.AsSpan(0, compare.Info.GetSortKey(text, key, compare.Options));
+                    // Asked for once; a longer key than the buffer grows it, charged as any growth is.
+                    var written = ViewSorter.SortKey(compare.Info, compare.Options, text, ref key, grown => charges.Add(grown));
+                    return key.AsSpan(0, written);
                 }
                 default: return trim ? ViewSorter.TrimEnd(cell) : cell;
             }
