@@ -1363,6 +1363,64 @@ function activitySessionsSample(live, probe) {
     { table: 2, descriptor: describe(active), revision: probe.samples, ...(activeRetired ? { retired: activeRetired } : {}) }
   ], ...(status ? { status } : {}) }
 }
+// Resource Waits and Data File I/O on the fake server: lock waits behind the blocked session, some buffer and network I/O,
+// and benign Idle waits (SLEEP_TASK) that Hide benign waits leaves out, as the real backend's ActivityFilter does. Files are
+// toned by the files filter's thresholds as ActivityResourceRows tones them (an error threshold below the warning one acts
+// as the warning one), and the view chip keeps Rows, Log or the toned files. Cells are keyed without the table's prefix.
+const fakeWaitCategories = [
+  { categoryId: 'lock', category: 'Lock', waitRate: '812.4', signalRate: '0.6', minuteAverage: '640.2', averageWaiters: '0.8', currentWaiters: '1', cumulativeSeconds: '1824.5', topWaitType: 'LCK_M_S' },
+  { categoryId: 'bufferIo', category: 'Buffer IO', waitRate: '96.1', signalRate: '0.2', minuteAverage: '88.0', averageWaiters: '0.1', currentWaiters: '0', cumulativeSeconds: '402.7', topWaitType: 'PAGEIOLATCH_SH' },
+  { categoryId: 'networkIo', category: 'Network IO', waitRate: '23.8', signalRate: '0.1', minuteAverage: '19.4', averageWaiters: '0.0', currentWaiters: '0', cumulativeSeconds: '96.2', topWaitType: 'ASYNC_NETWORK_IO' },
+  { categoryId: 'cpu', category: 'CPU', waitRate: '4.2', signalRate: '38.9', minuteAverage: '5.1', averageWaiters: '0.0', currentWaiters: '0', cumulativeSeconds: '12.9', topWaitType: 'SOS_SCHEDULER_YIELD' },
+  { categoryId: 'idle', category: 'Idle', waitRate: '4980.0', signalRate: '0.0', minuteAverage: '4975.3', averageWaiters: '5.0', currentWaiters: '9', cumulativeSeconds: '88210.4', topWaitType: 'SLEEP_TASK', benign: true }
+]
+const fakeWaitTypes = [
+  { waitType: 'LCK_M_S', category: 'Lock', waitRate: '812.4', signalRate: '0.6', waitsRate: '0.1', averageWaitMs: '8130.0', maxWaitMs: '41200', currentWaiters: '1', cumulativeSeconds: '1824.5', benign: '0' },
+  { waitType: 'PAGEIOLATCH_SH', category: 'Buffer IO', waitRate: '96.1', signalRate: '0.2', waitsRate: '41.0', averageWaitMs: '2.3', maxWaitMs: '310', currentWaiters: '0', cumulativeSeconds: '402.7', benign: '0' },
+  { waitType: 'ASYNC_NETWORK_IO', category: 'Network IO', waitRate: '23.8', signalRate: '0.1', waitsRate: '12.5', averageWaitMs: '1.9', maxWaitMs: '84', currentWaiters: '0', cumulativeSeconds: '96.2', benign: '0' },
+  { waitType: 'SOS_SCHEDULER_YIELD', category: 'CPU', waitRate: '4.2', signalRate: '38.9', waitsRate: '611.0', averageWaitMs: '0.1', maxWaitMs: '12', currentWaiters: '0', cumulativeSeconds: '12.9', benign: '0' },
+  { waitType: 'SLEEP_TASK', category: 'Idle', waitRate: '4980.0', signalRate: '0.0', waitsRate: '980.0', averageWaitMs: '5.1', maxWaitMs: '1004', currentWaiters: '9', cumulativeSeconds: '88210.4', benign: '1' }
+]
+const fakeFiles = [
+  { databaseId: '7', fileId: '2', database: 'SalesDb', file: 'SalesDb_log', type: 'Log', fileName: '/var/opt/mssql/data/SalesDb_log.ldf', readMbRate: '0.0', writeMbRate: '6.2', totalMbRate: '6.2', readsRate: '0.0', writesRate: '96.0', writeLatencyMs: '61.5', responseTimeMs: '61.5', throttledRate: '0.0', sizeMb: '2048.0' },
+  { databaseId: '7', fileId: '1', database: 'SalesDb', file: 'SalesDb', type: 'Rows', fileName: '/var/opt/mssql/data/SalesDb.mdf', readMbRate: '4.8', writeMbRate: '0.4', totalMbRate: '5.2', readsRate: '610.0', writesRate: '12.0', readLatencyMs: '34.0', writeLatencyMs: '3.1', responseTimeMs: '33.4', throttledRate: '0.0', sizeMb: '8192.0' },
+  { databaseId: '8', fileId: '1', database: 'BillingDb', file: 'BillingDb', type: 'Rows', fileName: '/var/opt/mssql/data/BillingDb.mdf', readMbRate: '1.1', writeMbRate: '0.2', totalMbRate: '1.3', readsRate: '140.0', writesRate: '8.0', readLatencyMs: '4.1', writeLatencyMs: '3.2', responseTimeMs: '4.1', throttledRate: '0.0', sizeMb: '1024.0' },
+  { databaseId: '1', fileId: '1', database: 'master', file: 'master', type: 'Rows', fileName: '/var/opt/mssql/data/master.mdf', readMbRate: '0.1', writeMbRate: '0.0', totalMbRate: '0.1', readsRate: '3.0', writesRate: '0.5', readLatencyMs: '2.0', writeLatencyMs: '1.0', responseTimeMs: '1.9', throttledRate: '0.0', sizeMb: '6.0' },
+  { databaseId: '1', fileId: '2', database: 'master', file: 'mastlog', type: 'Log', fileName: '/var/opt/mssql/data/mastlog.ldf', readMbRate: '0.0', writeMbRate: '0.0', totalMbRate: '0.0', readsRate: '0.0', writesRate: '1.0', writeLatencyMs: '1.2', responseTimeMs: '1.2', throttledRate: '0.0', sizeMb: '2.0' }
+]
+function activityResourcesSample(live, probe, first) {
+  const filterOf = table => (live.args.filters ?? []).find(item => item.table === table) ?? {}
+  const hide = table => filterOf(table).hideBenign !== false
+  const files = filterOf('files'), warning = files.latencyWarningMs ?? 20, error = Math.max(warning, files.latencyErrorMs ?? 50)
+  // A first sample has no interval, so no rate, latency or tone (ActivityResourceRows): only names, types and sizes.
+  const unrated = row => Object.fromEntries(Object.entries(row).filter(([key]) => !/Rate$|Ms$/.test(key)))
+  const toned = fakeFiles.map(row => {
+    if (first) return { ...unrated(row), tone: null }
+    const worst = Math.max(Number(row.readLatencyMs ?? 0), Number(row.writeLatencyMs ?? 0))
+    return { ...row, tone: worst >= error ? 'error' : worst >= warning ? 'warning' : null }
+  })
+  const view = files.fileView ?? 'all'
+  const shownFiles = toned.filter(row => view === 'all' || (view === 'rows' && row.type === 'Rows') || (view === 'log' && row.type === 'Log') || (view === 'overThreshold' && row.tone))
+  const [categorySpec, typeSpec, fileSpec] = liveProbes['activity.resources'].tables
+  const results = [
+    sessionTableResult(categorySpec, '', fakeWaitCategories.filter(row => !(hide('waitCategories') && row.benign)).map(row => first ? unrated(row) : row)),
+    sessionTableResult(typeSpec, 'type', fakeWaitTypes.filter(row => !(hide('waitTypes') && row.benign === '1')).map(row => first ? unrated(row) : row)),
+    sessionTableResult(fileSpec, 'io', shownFiles)
+  ]
+  const kept = live.keptResources ?? (live.keptResources = new Map())
+  const tables = results.map((result, table) => {
+    const ids = kept.get(table) ?? []
+    ids.push(result.resultId)
+    kept.set(table, ids)
+    const retired = ids.length > 2 ? [ids.shift()] : undefined
+    if (retired) stored.delete(retired[0])
+    return { table, descriptor: describe(result), revision: probe.samples, ...(retired ? { retired } : {}) }
+  })
+  // The wait.<category> series (wait time less signal wait, per second) and wait.signal; none on a sample without a rate.
+  const rates = Object.fromEntries(fakeWaitCategories.map(row => ['wait.' + row.categoryId, Number(row.waitRate)]))
+  const signal = fakeWaitCategories.reduce((sum, row) => sum + Number(row.signalRate), 0)
+  return { tables, metrics: liveProbes['activity.resources'].series.map(series => first ? null : series.id === 'wait.signal' ? signal : rates[series.id] ?? 0) }
+}
 // Recent Expensive Queries on the fake server: three query groups, keyed by query hash. A first sample has no window, so its
 // rate cells are blank and its rows go by total CPU (as ActivityQueryRows); later samples carry the rates. The probe's
 // sort for the table (a rank chip, a header's sort button) orders them, numbers as numbers, the query hash breaking ties.
@@ -1428,6 +1486,7 @@ function wakeLive(live) {
     else if (probe.probe === 'activity.overview' && controlDirectory && existsSync(join(controlDirectory, 'activity-failing'))) errors.push({ probe: probe.probe, code: 'BLOCKED', message: 'The overview waited too long for a lock and will try again.', retryInMs: probe.intervalMs, terminal: false })
     else if (probe.probe === 'activity.overview') samples.push({ ...sample, metrics: overviewMetrics(n, sample.gap === 'baseline' || sample.gap === 'resumed') })
     else if (probe.probe === 'activity.sessions') samples.push({ ...sample, ...activitySessionsSample(live, probe) })
+    else if (probe.probe === 'activity.resources') samples.push({ ...sample, ...activityResourcesSample(live, probe, sample.gap === 'baseline' || sample.gap === 'resumed') })
     else if (probe.probe === 'activity.queries') samples.push({ ...sample, ...activityQueriesSample(live, probe) })
     else if (live.source === 'activity') samples.push(sample)
     else if (probe.probe === 'debug.synthetic.metrics') samples.push({ ...sample, metrics: [n, 50 + 50 * Math.sin(n / 4), sample.elapsedMs === undefined || sample.gap === 'resumed' ? null : (50 + 50 * Math.sin(n / 4)) * 1000 / Math.max(1, sample.elapsedMs)] })
