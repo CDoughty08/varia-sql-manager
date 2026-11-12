@@ -106,9 +106,13 @@ being true.
   `resultsGridTransposed` key and the toolbar; a grid's own menu reads that grid's orientation from its target
   (`argsFor`'s stand-in state), so a Peek card's grid toggles too. Fit Column on a transposed grid fits the target's row
   (`fitDrawn`), or the name column for a name. The stored transpose (`results.transpose`, `TransposeService`) is no longer
-  reached by any command and is removed separately; Copy and Save do not write the transposed text yet. A result with a
-  tone column (a comparison, a live table) is never transposed. `tests/grid-orientation.test.ts`,
-  `tests/results-orientation.test.ts` and `tests/results-toolbar-transpose.test.ts` hold this.
+  reached by any command and is removed separately. A result with a tone column (a comparison, a live table) is never
+  transposed (`transposedView` in `ResultsService.ts` is the one rule, for the grid, `orientation()` and Copy and Save).
+  `tests/grid-orientation.test.ts`, `tests/results-orientation.test.ts` and `tests/results-toolbar-transpose.test.ts` hold this.
+  A grid drawn transposed copies and saves as drawn, still with nothing stored: the request says `transposed` (and the
+  header column), its parts stay in the result's rows and columns for the blocks that grid shows selected
+  (`transposedCopyPlan`), and `ResultTextWriter`'s column-major mode writes a line per column and a field per row for the
+  rows drawn, counting the rest in `capped`, which the toolbar says (docs/ipc.md, Copy and Save Results As).
   Live tables show through `LiveGrid` (`src/renderer/src/live/`), which swaps each revision into its `GridView`; a table's row
   tone column (catalogue `role: 'tone'`, its last) is hidden by the grid and left out of Copy and Save (`ResultJobs`).
 - Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never

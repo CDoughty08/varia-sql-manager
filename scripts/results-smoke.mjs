@@ -12,7 +12,7 @@ import { checkClientStatistics } from './fixtures/client-statistics.mjs'
 import { enlargeOutput, sizeResultStack } from './fixtures/results-pane.mjs'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
-  activeDocument, anyResultGrid, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice,
+  activeDocument, anyResultGrid, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice, transposedCell, transposedGridSelector,
   jobProgress, kindIcon, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
   outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultToggle, statusBar,
   pivotPanel, profileCard, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark
@@ -798,6 +798,33 @@ try {
   await setClipboard('')
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.copy())
   await expect.poll(clipboard).toBe(tsv(Array.from({ length: 400 }, (_, row) => w1(row))))
+  // A grid drawn transposed copies as drawn, with nothing stored (test mode turns it until the commands do): a line per
+  // column and a field per row, named "Column" and "Row N" with headers, or by a header column's values.
+  const turnedRows = Array.from({ length: 400 }, (_, row) => row)
+  await page.evaluate(() => window.__variaGrid.setOrientation(true))
+  await expect(matching(grid(), transposedGridSelector)).toHaveCount(1)
+  await transposedCell(grid(), 0, 0).click()
+  await page.keyboard.press('Control+A')
+  await setClipboard('')
+  await page.keyboard.press('Control+C')
+  await expect.poll(clipboard).toBe(tsv(w1Names.map((_, column) => turnedRows.map(row => w1(row)[column]))))
+  await page.keyboard.press('Control+Shift+C')
+  await expect.poll(clipboard).toBe(tsv([['Column', ...turnedRows.map(row => `Row ${row + 1}`)], ...w1Names.map((name, column) => [name, ...turnedRows.map(row => w1(row)[column])])]))
+  // A block selected in the transposed grid is the result's rows 2 and 3 of its columns 2 and 3, copied turned.
+  await transposedCell(grid(), 1, 1).click()
+  await transposedCell(grid(), 2, 2).click({ modifiers: ['Shift'] })
+  await expect.poll(selected).toBe(4)
+  await page.keyboard.press('Control+C')
+  await expect.poll(clipboard).toBe(tsv([1, 2].map(column => [1, 2].map(row => w1(row)[column]))))
+  await page.evaluate(() => window.__variaGrid.setOrientation(true, { headerColumn: 0 }))
+  await expect(transposedCell(grid(), 1, 1)).toHaveAttribute('aria-selected', 'true')
+  await transposedCell(grid(), 1, 1).click()
+  await transposedCell(grid(), 2, 2).click({ modifiers: ['Shift'] })
+  await page.keyboard.press('Control+Shift+C')
+  await expect.poll(clipboard).toBe(tsv([['Column', w1(1)[0], w1(2)[0]], ...[1, 2].map(column => [w1Names[column], w1(1)[column], w1(2)[column]])]))
+  await page.evaluate(() => window.__variaGrid.setOrientation(false))
+  await expect(matching(grid(), transposedGridSelector)).toHaveCount(0)
+  console.log('Results checks: a grid drawn transposed copies what it draws, with and without headers and a header column.')
   // Values the backend stored cut are copied cut, and the copy says how many, in the toolbar and to screen readers.
   await run('-- varia-fake: sets=N1*20')
   await cell(0, 0).click()

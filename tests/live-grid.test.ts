@@ -212,7 +212,7 @@ function harness(spec: LiveTableSpec = keySpec, o: { index?: number; state?: Liv
     dispose: () => { view.disposed = true }
   }
   const copies: unknown[] = []
-  const api = { copyResults: vi.fn(async (request: unknown) => { copies.push(request); return { ok: true as const, value: { rows: 1, bytes: 1, truncatedCells: 0, partial: false } } }), saveResults: vi.fn(async () => ({ ok: true as const, value: null })) }
+  const api = { copyResults: vi.fn(async (request: unknown) => { copies.push(request); return { ok: true as const, value: { rows: 1, bytes: 1, truncatedCells: 0, partial: false, capped: 0 } } }), saveResults: vi.fn(async () => ({ ok: true as const, value: null })) }
   const grid = new LiveGrid({
     live, probe: 'debug.synthetic.grid', spec, api, newId: () => 'job', timers: timers.timers, ...o.index !== undefined ? { table: o.index } : {}, ...o.state ? { state: o.state } : {},
     createView: (first, hooks) => { view.created = first; view.hooks = hooks; return fake }

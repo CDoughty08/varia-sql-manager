@@ -48,11 +48,17 @@ internal sealed class ChunkedBuffer(int size = ChunkedBuffer.DefaultSize) : IBuf
     }
 
     public bool TryTake(out byte[] next) => full.TryDequeue(out next!);
+
+    /// <summary>A chunk waits to be taken: a writer of one long line stops here so the job can send or write it.</summary>
+    public bool HasFull => full.Count > 0;
 }
 
 /// <summary>results.copy and results.export: the text of a stored result, formatted by <see cref="ResultTextWriter"/>
 /// and either streamed to main as DATA (copy, which main puts on the clipboard) or written to the file main's save
-/// dialog chose (export). Both lease the result, so a release while they run takes effect when they end.</summary>
+/// dialog chose (export). Both lease the result, so a release while they run takes effect when they end. Transposed, they
+/// write a grid drawn transposed as it is drawn, with nothing stored: a line per source column and a field per source row,
+/// for the rows such a grid draws (the view's first <see cref="ResultTextWriter.MaxTransposedRows"/>), read row by row
+/// through the stored pages; the rows past them are counted in the answer's Capped.</summary>
 internal sealed class ResultJobs(ResultStore store)
 {
     public const long MaxCopyBytes = 64L * 1024 * 1024;
@@ -64,7 +70,8 @@ internal sealed class ResultJobs(ResultStore store)
     private const UnixFileMode PermissionBits = (UnixFileMode)0b111_111_111;
     /// <summary>Read and write for owner, group and others: the most a new file gets before the umask.</summary>
     private const UnixFileMode NewFileBits = (UnixFileMode)0b110_110_110;
-    private static readonly TimeSpan ProgressInterval = TimeSpan.FromMilliseconds(250);
+    /// <summary>How often a job reports its progress at most; the checks shorten it to see every report.</summary>
+    internal TimeSpan ProgressInterval { get; init; } = TimeSpan.FromMilliseconds(250);
 
     /// <summary>Called after each page is written: the checks release or cancel mid-job through it.</summary>
     internal Action? AfterPage { get; init; }
@@ -78,42 +85,111 @@ internal sealed class ResultJobs(ResultStore store)
     /// <summary>A part with its rows clamped to what is stored and its column ranges expanded to indexes.</summary>
     private sealed record Plan(List<(long First, long Last)> Rows, int[] Columns);
 
+    /// <summary>A part as a transposed grid draws it: the rows written (their view positions, each one's page and index in
+    /// it), their fields' names, the columns (its lines), and the rows left out for lying past the rows drawn.</summary>
+    private sealed record TurnedPlan(int[] Positions, int[] PageOf, int[] IndexOf, string[] Names, int[] Columns, long Capped);
+
+    /// <summary>Reads a source column by column: each row's page is found once, then every line reads it there, so no rows
+    /// are copied and nothing is held but the stored pages themselves.</summary>
+    /// <param name="named">The fields' names are written (headers, or JSON): otherwise none are read or made.</param>
+    private sealed class Turner(Source source, int? headerColumn, bool named)
+    {
+        /// <summary>Cells written between looks at the token and the output.</summary>
+        private const int Step = 1 << 10;
+        private readonly RowAccess access = new(source.Set.SealedSnapshot(), source.Set.Columns.Count);
+
+        public TurnedPlan Plan(Plan plan)
+        {
+            var positions = new List<int>();
+            long capped = 0;
+            foreach (var (first, last) in plan.Rows)
+            {
+                for (var position = first; position <= Math.Min(last, ResultTextWriter.MaxTransposedRows - 1); position++) positions.Add((int)position);
+                capped += Math.Max(0, last - Math.Max(first, ResultTextWriter.MaxTransposedRows) + 1);
+            }
+            var pageOf = new int[positions.Count];
+            var indexOf = new int[positions.Count];
+            var names = new string[named ? positions.Count : 0];
+            for (var i = 0; i < pageOf.Length; i++)
+            {
+                pageOf[i] = access.PageOf(source.View is { } view ? view.Order[positions[i]] : positions[i], out indexOf[i]);
+                if (named) names[i] = headerColumn is { } header ? ResultTextWriter.FieldName(access.Page(pageOf[i], out _), indexOf[i], header) : ResultTextWriter.RowName(positions[i]);
+            }
+            return new TurnedPlan([.. positions], pageOf, indexOf, ResultTextWriter.UniqueFields(names), plan.Columns, capped);
+        }
+
+        /// <summary>Whether the part writes anything: rows, or with names its columns' names alone.</summary>
+        public static bool Written(TurnedPlan plan, bool names) => plan.Columns.Length > 0 && (names || plan.Positions.Length > 0);
+
+        /// <summary>An upper bound on the part's Copy bytes: its cells, read in runs of neighbouring rows, and the rest.</summary>
+        public long Estimate(TurnedPlan plan, bool headers, int eolBytes)
+        {
+            if (!Written(plan, headers)) return 0;
+            var total = ResultTextWriter.EstimateTransposed(source.Set.Columns, plan.Columns, plan.Positions.Length, plan.Names, headers, eolBytes);
+            for (var i = 0; i < plan.PageOf.Length;)
+            {
+                var last = i;
+                while (last + 1 < plan.PageOf.Length && plan.PageOf[last + 1] == plan.PageOf[i] && plan.IndexOf[last + 1] == plan.IndexOf[last] + 1) last++;
+                total += ResultTextWriter.EstimateCopyCells(access.Page(plan.PageOf[i], out _), plan.IndexOf[i], plan.IndexOf[last], plan.Columns);
+                i = last + 1;
+            }
+            return total;
+        }
+
+        /// <summary>Writes a column's cells from row <paramref name="next"/> on, until a chunk is full or a step's cells
+        /// are written; returns the row to go on from.</summary>
+        public int Write(ResultTextWriter writer, TurnedPlan plan, int column, int next, ChunkedBuffer output)
+        {
+            var end = Math.Min(plan.Positions.Length, next + Step);
+            for (; next < end && !output.HasFull; next++) writer.ColumnCell(access.Page(plan.PageOf[next], out _), plan.IndexOf[next], column);
+            return next;
+        }
+    }
+
     public async Task<ResultsJobResult> CopyAsync(ResultsCopyArgs args, RequestContext? context)
     {
         if (args.ResultId == 0 || args.Parts is not { Length: >= 1 and <= MaxParts } || args.Parts.Any(part => part is null) || args.Eol is not ("crlf" or "lf")
-            || args.MaxBytes is < 1 or > MaxCopyBytes || args.ViewId == 0)
+            || args.MaxBytes is < 1 or > MaxCopyBytes || args.ViewId == 0 || !ValidTurn(args.Transposed, args.HeaderColumn))
             throw new RequestException("INVALID_PARAMS", "The copy request is invalid.");
         if (context is not { IsStream: true }) throw new RequestException("INVALID_REQUEST", "Copied text is sent as a stream with credit.");
         var set = Lease(args.ResultId);
         try
         {
+            CheckHeaderColumn(set, args.HeaderColumn);
             var source = SourceOf(set, args.ResultId, args.ViewId);
             var available = source.Available;
             var partial = source.View is { } view ? !view.Complete : set.IsOpen;
             var plans = args.Parts.Select(part => Resolve(part, set.Columns, available)).ToList();
             var eolBytes = args.Eol == "crlf" ? 2 : 1;
-            var estimate = Estimate(source, plans, args.Headers, eolBytes);
+            var turner = args.Transposed ? new Turner(source, args.HeaderColumn, args.Headers) : null;
+            var turned = turner is null ? [] : plans.Select(turner.Plan).ToList();
+            var estimate = turner is null ? Estimate(source, plans, args.Headers, eolBytes) : turned.Sum(plan => turner.Estimate(plan, args.Headers, eolBytes));
             if (estimate > args.MaxBytes)
                 throw new RequestException("TOO_LARGE", "The selection is too large to copy (" + Size(estimate) + "; the limit is " + Size(args.MaxBytes) + "). Use Save Results As instead.");
             var output = new ChunkedBuffer();
             var writer = new ResultTextWriter(output, TextOptions.Copy(args.Headers, args.Eol == "crlf"), set.Columns);
-            var total = plans.Sum(plan => plan.Rows.Sum(range => range.Last - range.First + 1));
-            var progress = new Progress(context, total);
+            // Transposed, progress counts lines (source columns): no source row is finished before the last line.
+            var total = turner is null ? plans.Sum(plan => plan.Rows.Sum(range => range.Last - range.First + 1)) : turned.Sum(plan => (long)plan.Columns.Length);
+            var progress = new Progress(context, total, ProgressInterval);
+            async Task Drain()
+            {
+                while (output.TryTake(out var chunk)) await context.SendDataAsync(chunk);
+                progress.Report(turner is null ? writer.Rows : writer.Columns, writer.Bytes);
+            }
             writer.Begin();
             foreach (var plan in plans)
             {
+                if (turner is not null) break;
                 if (args.Headers) writer.Header(plan.Columns);
-                foreach (var (first, last) in plan.Rows)
-                    await WriteRowsAsync(source, writer, plan.Columns, first, last, async () =>
-                    {
-                        while (output.TryTake(out var chunk)) await context.SendDataAsync(chunk);
-                        progress.Report(writer.Rows, writer.Bytes);
-                    }, context.Token);
+                foreach (var (first, last) in plan.Rows) await WriteRowsAsync(source, writer, plan.Columns, first, last, Drain, context.Token);
             }
+            foreach (var plan in turned)
+                if (Turner.Written(plan, args.Headers)) await WriteColumnsAsync(turner!, writer, plan, output, Drain, context.Token);
             writer.End();
             output.Seal();
             while (output.TryTake(out var chunk)) await context.SendDataAsync(chunk);
-            return new ResultsJobResult(writer.Rows, writer.Bytes, writer.TruncatedCells, partial);
+            return turner is null ? new ResultsJobResult(writer.Rows, writer.Bytes, writer.TruncatedCells, partial)
+                : new ResultsJobResult(turned.Sum(plan => (long)plan.Positions.Length), writer.Bytes, writer.TruncatedCells, partial, turned.Sum(plan => plan.Capped));
         }
         finally { set.ReleaseLease(); }
     }
@@ -122,12 +198,13 @@ internal sealed class ResultJobs(ResultStore store)
     {
         var format = args.Format switch { "csv" => TextFormat.Csv, "tsv" => TextFormat.Tsv, "json" => TextFormat.Json, _ => (TextFormat?)null };
         if (args.ResultId == 0 || format is null || args.NullText is not ("empty" or "NULL") || !IsExportPath(args.Path)
-            || args.TemporaryId is not { Length: 32 } || !Guid.TryParseExact(args.TemporaryId, "N", out _) || args.ViewId == 0)
+            || args.TemporaryId is not { Length: 32 } || !Guid.TryParseExact(args.TemporaryId, "N", out _) || args.ViewId == 0 || !ValidTurn(args.Transposed, args.HeaderColumn))
             throw new RequestException("INVALID_PARAMS", "The export request is invalid.");
         var set = Lease(args.ResultId);
         string? temporary = null;
         try
         {
+            CheckHeaderColumn(set, args.HeaderColumn);
             if (!set.IsComplete) throw new RequestException("RESULT_OPEN", "Save the results after this result set finishes loading.");
             var source = SourceOf(set, args.ResultId, args.ViewId);
             // A view sorted while rows were still arriving lacks the later ones; the grid sorts again once they are in.
@@ -140,8 +217,12 @@ internal sealed class ResultJobs(ResultStore store)
             temporary = Path.Combine(directory, ".varia-" + args.TemporaryId + ".tmp");
             var output = new ChunkedBuffer();
             var writer = new ResultTextWriter(output, TextOptions.Export(format.Value, args.Headers, args.NullText), set.Columns);
-            var progress = new Progress(context, source.Available);
             int[] all = [.. Enumerable.Range(0, set.Columns.Count).Where(column => !ResultTextWriter.Hidden(set.Columns[column]))];
+            // A JSON object always names its column and its fields; a line without headers has only its rows' values.
+            var named = args.Headers || format == TextFormat.Json;
+            var turner = args.Transposed ? new Turner(source, args.HeaderColumn, named) : null;
+            var turned = turner?.Plan(new Plan(source.Available > 0 ? [(0, source.Available - 1)] : [], all));
+            var progress = new Progress(context, turned is null ? source.Available : all.Length, ProgressInterval);
             // A file the user chose to replace keeps its permissions: a private (0600) results file must not come back
             // readable by others. A symbolic link there is replaced, not followed; the file it points to may only narrow
             // the new file's default permissions.
@@ -167,11 +248,18 @@ internal sealed class ResultJobs(ResultStore store)
                         await file.WriteAsync(chunk, token);
                         if (chunk.Length == output.Size) output.Spare.Push(chunk);
                     }
-                    progress.Report(writer.Rows, writer.Bytes);
+                    progress.Report(turned is null ? writer.Rows : writer.Columns, writer.Bytes);
                 }
                 writer.Begin();
-                writer.Header(all);
-                if (source.Available > 0) await WriteRowsAsync(source, writer, all, 0, source.Available - 1, Drain, token);
+                if (turned is not null)
+                {
+                    if (Turner.Written(turned, named)) await WriteColumnsAsync(turner!, writer, turned, output, Drain, token);
+                }
+                else
+                {
+                    writer.Header(all);
+                    if (source.Available > 0) await WriteRowsAsync(source, writer, all, 0, source.Available - 1, Drain, token);
+                }
                 writer.End();
                 output.Seal();
                 await Drain();
@@ -182,7 +270,8 @@ internal sealed class ResultJobs(ResultStore store)
             if (replacing && OperatingSystem.IsWindows()) ReplaceFile(temporary, args.Path, Path.Combine(directory, ".varia-" + args.TemporaryId + ".bak"), File.Replace);
             else File.Move(temporary, args.Path, overwrite: true);
             temporary = null;
-            return new ResultsJobResult(writer.Rows, writer.Bytes, writer.TruncatedCells, false);
+            return turned is null ? new ResultsJobResult(writer.Rows, writer.Bytes, writer.TruncatedCells, false)
+                : new ResultsJobResult(turned.Positions.Length, writer.Bytes, writer.TruncatedCells, false, turned.Capped);
         }
         catch (Exception error) when (error is not (RequestException or OperationCanceledException)) { throw Failed(ExportToken(error)); }
         finally
@@ -254,6 +343,15 @@ internal sealed class ResultJobs(ResultStore store)
         && !path.StartsWith(@"\\.\", StringComparison.Ordinal) && !path.StartsWith(@"\\?\", StringComparison.Ordinal)
         && !path.StartsWith("//./", StringComparison.Ordinal) && !path.StartsWith("//?/", StringComparison.Ordinal);
 
+    /// <summary>A header column names a transposed job's fields, so only such a job has one.</summary>
+    private static bool ValidTurn(bool transposed, int? headerColumn) => headerColumn is null || transposed && headerColumn is >= 0 and < PageBuilder.MaxColumns;
+
+    private static void CheckHeaderColumn(ResultSetBuffer set, int? headerColumn)
+    {
+        if (headerColumn is { } header && (header >= set.Columns.Count || ResultTextWriter.Hidden(set.Columns[header])))
+            throw new RequestException("INVALID_PARAMS", "The header column must be a column of the result.");
+    }
+
     private ResultSetBuffer Lease(uint resultId)
     {
         var set = store.Find(resultId);
@@ -292,10 +390,14 @@ internal sealed class ResultJobs(ResultStore store)
     }
 
     /// <summary>Copy's size estimate for parts of a set (the checks compare it with the text written).</summary>
-    internal static long EstimateCopy(ResultSetBuffer set, CopyPartArgs[] parts, bool headers, bool crlf)
+    internal static long EstimateCopy(ResultSetBuffer set, CopyPartArgs[] parts, bool headers, bool crlf, bool transposed = false, int? headerColumn = null, ResultView? view = null)
     {
-        var available = set.RowsAvailable;
-        return Estimate(new Source(set, null), [.. parts.Select(part => Resolve(part, set.Columns, available))], headers, crlf ? 2 : 1);
+        var source = new Source(set, view);
+        var available = source.Available;
+        var plans = parts.Select(part => Resolve(part, set.Columns, available)).ToList();
+        if (!transposed) return Estimate(source, plans, headers, crlf ? 2 : 1);
+        var turner = new Turner(source, headerColumn, headers);
+        return plans.Sum(plan => turner.Estimate(turner.Plan(plan), headers, crlf ? 2 : 1));
     }
 
     private static long Estimate(Source source, List<Plan> plans, bool headers, int eolBytes)
@@ -359,6 +461,27 @@ internal sealed class ResultJobs(ResultStore store)
         }
     }
 
+    /// <summary>Writes a transposed part: the line that names its fields, then a line per column. Within a line the token is
+    /// checked every step and <paramref name="drain"/> runs whenever a chunk is ready, so one long line is never held whole.</summary>
+    private async Task WriteColumnsAsync(Turner turner, ResultTextWriter writer, TurnedPlan plan, ChunkedBuffer output, Func<Task> drain, CancellationToken token)
+    {
+        writer.TransposedHeader(plan.Names);
+        foreach (var column in plan.Columns)
+        {
+            token.ThrowIfCancellationRequested();
+            writer.BeginColumn(column);
+            for (var next = 0; next < plan.Positions.Length;)
+            {
+                next = turner.Write(writer, plan, column, next, output);
+                token.ThrowIfCancellationRequested();
+                if (output.HasFull) await drain();
+            }
+            writer.EndColumn();
+            AfterPage?.Invoke();
+            await drain();
+        }
+    }
+
     private static void WritePage(StoredPage page, int columnCount, ResultTextWriter writer, int[] columns, int from, int to, int[] scratch)
     {
         var view = PageView.Parse(page.Body, columnCount, scratch);
@@ -370,13 +493,13 @@ internal sealed class ResultJobs(ResultStore store)
         : bytes.ToString("N0", CultureInfo.InvariantCulture) + " bytes";
 
     /// <summary>job.progress EVENTs, droppable, at most every 250 ms.</summary>
-    private sealed class Progress(RequestContext? context, long total)
+    private sealed class Progress(RequestContext? context, long total, TimeSpan interval)
     {
         private readonly Stopwatch since = Stopwatch.StartNew();
 
         public void Report(long rows, long bytes)
         {
-            if (context is null || since.Elapsed < ProgressInterval) return;
+            if (context is null || since.Elapsed < interval) return;
             since.Restart();
             context.SendEvent(new { Type = "job.progress", RowsDone = rows, RowsTotal = total, Bytes = bytes }, true);
         }

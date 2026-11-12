@@ -22,7 +22,7 @@ import { fitWidth, initialWidth, measureCharWidth, sqlTypeLabel, typeHintChars }
 import { freshRing, ringStep, rotation, slotOf, type RowRing } from './ring'
 import { RowSizes } from './row-sizes'
 import { applyWheel, ensureVisible, normalizeWheel, offsetsDropped, onNativeScroll, rebaseRow, remap, rowsContainerY, rowTop, scrollCap, scrollModel, topRowOf, type ScrollModel } from './scroll'
-import { columnTitle, covered, dragSelection, navigate, pressButton, pressSelection, rotateSelection, selectAll, windowRanges, type CellRange, type GridHit, type GridSelection } from './selection'
+import { columnTitle, covered, dragSelection, navigate, pressButton, pressSelection, rotateSelection, selectAll, windowRanges, type CellRange, type GridHit, type GridSelection, withinCap } from './selection'
 import type { GridStats } from './stats'
 import { remapSelection, remapTop, sameSelection, type RowMap } from './swap'
 import { colorAt, highlightColors, type RowHighlights } from './highlights'
@@ -1993,18 +1993,7 @@ export function transposedLabel(name: string, rows: number, columns: number, dra
   const shown = drawn < rows ? `the first ${formatCount(drawn)} of ${formatCount(rows)} rows as columns` : `${formatCount(rows)} ${plural(rows, 'row')} as columns`
   return `${name}, transposed, ${formatCount(columns)} ${plural(columns, 'column')} as rows, ${shown}${open ? ', still loading' : ''}`
 }
-/**
- * A turned selection without the blocks that lie wholly past the rows a transposed grid draws (they were made in the
- * table). `blockRange` clamps a block to the grid, which would draw such a block on the last drawn column and let a
- * right-press there keep it; left out, it draws nothing and no press or key extends it. With none left the active cell is
- * the selection, as in a grid nothing was selected in. The state keeps every block until a new selection is made here.
- */
-export function withinCap(drawn: GridSelection): GridSelection {
-  const cap = wire.transpose.maxRows
-  const blocks = drawn.blocks.filter(block => !((block.kind === 'cells' || block.kind === 'columns') && Math.min(block.anchor.column, block.focus.column) >= cap))
-  if (blocks.length === drawn.blocks.length) return drawn
-  return { ...drawn, blocks: blocks.length > 0 ? blocks : [{ kind: 'cells', anchor: drawn.active, focus: drawn.active }] }
-}
+export { withinCap }
 /** A stand-in axis of one column, for the rows a transposed grid shows while it has no column to draw. */
 const oneColumn: ColumnAxis = { count: 1, total: 1, width: () => 1, xOf: column => column <= 0 ? 0 : 1, columnAt: () => 0, setWidth: () => 1, setMaxTotal: () => {} }
 const toneEntry = /^(~?)(\d{1,5})(?:-(\d{1,5}))?$/

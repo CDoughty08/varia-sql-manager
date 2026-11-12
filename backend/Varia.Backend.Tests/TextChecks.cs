@@ -60,7 +60,7 @@ internal static class TextChecks
         return set;
     }
 
-    private static ResultSetBuffer Synthetic(ResultStore store, string shape, long rows, bool complete = true)
+    internal static ResultSetBuffer Synthetic(ResultStore store, string shape, long rows, bool complete = true)
     {
         var columns = SyntheticRows.Columns(shape);
         var set = store.Open(store.BeginQuery(Guid.NewGuid().ToString()), 0, 1, 1, "rows",
@@ -108,6 +108,7 @@ internal static class TextChecks
         using var fixture = JsonDocument.Parse(File.ReadAllText(Fixtures.Path("tests/fixtures/results-text/cases.json")));
         var failures = new List<string>();
         var count = 0;
+        var transposed = 0;
         var folder = Directory.CreateTempSubdirectory("varia-text-");
         try
         {
@@ -122,27 +123,39 @@ internal static class TextChecks
                 foreach (var copy in item.GetProperty("copy").EnumerateArray())
                 {
                     count++;
-                    var run = await Copy(jobs, new ResultsCopyArgs(set.ResultId, [.. copy.GetProperty("parts").EnumerateArray().Select(PartOf)], copy.GetProperty("headers").GetBoolean(), copy.GetProperty("eol").GetString()!, ResultJobs.MaxCopyBytes));
+                    var args = new ResultsCopyArgs(set.ResultId, [.. copy.GetProperty("parts").EnumerateArray().Select(PartOf)], copy.GetProperty("headers").GetBoolean(), copy.GetProperty("eol").GetString()!, ResultJobs.MaxCopyBytes,
+                        Transposed: Transposed(copy), HeaderColumn: HeaderColumn(copy));
+                    var run = await Copy(jobs, args);
                     var expected = copy.GetProperty("expected").GetString()!;
                     var actual = Encoding.UTF8.GetString(run.Text);
-                    if (actual != expected || run.Result.Rows != copy.GetProperty("rows").GetInt64() || run.Result.TruncatedCells != copy.GetProperty("truncatedCells").GetInt64() || run.Result.Bytes != run.Text.Length || run.Result.Partial)
-                        failures.Add(name + " / copy " + copy.GetProperty("name").GetString() + ": " + Show(actual) + " (" + run.Result + ")");
+                    if (Transposed(copy)) transposed++;
+                    // The estimate that refuses a copy too large is never under the text, transposed as well.
+                    var estimate = ResultJobs.EstimateCopy(set, args.Parts, args.Headers, args.Eol == "crlf", args.Transposed, args.HeaderColumn);
+                    if (actual != expected || run.Result.Rows != copy.GetProperty("rows").GetInt64() || run.Result.TruncatedCells != copy.GetProperty("truncatedCells").GetInt64() || run.Result.Bytes != run.Text.Length || run.Result.Partial
+                        || run.Result.Capped != Capped(copy) || estimate < run.Text.Length)
+                        failures.Add(name + " / copy " + copy.GetProperty("name").GetString() + ": " + Show(actual) + " (" + run.Result + ", estimate " + estimate + ")");
                 }
                 foreach (var save in item.GetProperty("save").EnumerateArray())
                 {
                     count++;
                     var path = Path.Combine(folder.FullName, "golden-" + count + ".out");
-                    var result = await jobs.ExportAsync(new ResultsExportArgs(set.ResultId, path, save.GetProperty("format").GetString()!, save.GetProperty("headers").GetBoolean(), save.GetProperty("nullText").GetString()!, Guid.NewGuid().ToString("N")), null);
+                    var result = await jobs.ExportAsync(new ResultsExportArgs(set.ResultId, path, save.GetProperty("format").GetString()!, save.GetProperty("headers").GetBoolean(), save.GetProperty("nullText").GetString()!, Guid.NewGuid().ToString("N"),
+                        Transposed: Transposed(save), HeaderColumn: HeaderColumn(save)), null);
                     var bytes = File.ReadAllBytes(path);
                     var expected = Encoding.UTF8.GetBytes(save.GetProperty("expected").GetString()!);
-                    if (!bytes.AsSpan().SequenceEqual(expected) || result.Rows != save.GetProperty("rows").GetInt64() || result.TruncatedCells != save.GetProperty("truncatedCells").GetInt64() || result.Bytes != bytes.Length)
+                    if (Transposed(save)) transposed++;
+                    if (!bytes.AsSpan().SequenceEqual(expected) || result.Rows != save.GetProperty("rows").GetInt64() || result.TruncatedCells != save.GetProperty("truncatedCells").GetInt64() || result.Bytes != bytes.Length || result.Capped != Capped(save))
                         failures.Add(name + " / save " + save.GetProperty("format").GetString() + ": " + Show(Encoding.UTF8.GetString(bytes)) + " (" + result + ")");
                 }
                 check(store.UsedBytes > 0 && set.Leases == 0, "jobs end their leases (" + name + ")");
             }
         }
         finally { folder.Delete(true); }
-        check(count >= 15 && failures.Count == 0, "Copy and Save write the golden text of every cases.json case (" + count + ")" + (failures.Count == 0 ? "" : ": " + string.Join(" | ", failures)));
+        check(count >= 15 && transposed >= 20 && failures.Count == 0, "Copy and Save write the golden text of every cases.json case (" + count + ", " + transposed + " transposed)" + (failures.Count == 0 ? "" : ": " + string.Join(" | ", failures)));
+
+        static bool Transposed(JsonElement item) => item.TryGetProperty("transposed", out var value) && value.GetBoolean();
+        static int? HeaderColumn(JsonElement item) => item.TryGetProperty("headerColumn", out var value) ? value.GetInt32() : null;
+        static long Capped(JsonElement item) => item.TryGetProperty("capped", out var value) ? value.GetInt64() : 0;
     }
 
     /// <summary>PageView reads what PageReader (written independently, with every validity check) reads.</summary>

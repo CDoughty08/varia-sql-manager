@@ -208,13 +208,18 @@ internal sealed record ResultsRowBytesResult(long FirstRow, long[] Bytes, long R
 internal sealed record CopyPartArgs(long[][] Rows, int[][] Columns);
 /// <summary>results.copy (main only): the parts' text streams as DATA; eol is "crlf" or "lf".</summary>
 /// ViewId copies through a view of the result (results.view): rows are view positions.
-internal sealed record ResultsCopyArgs(uint ResultId, CopyPartArgs[] Parts, bool Headers, string Eol, long MaxBytes, uint? ViewId = null);
+/// Transposed copies the parts as a transposed grid draws them: a line per column and a field per row, for the rows at the
+/// view's first 4,095 positions; HeaderColumn (with Transposed only) names the fields by that column's values.
+internal sealed record ResultsCopyArgs(uint ResultId, CopyPartArgs[] Parts, bool Headers, string Eol, long MaxBytes, uint? ViewId = null, bool Transposed = false, int? HeaderColumn = null);
 /// <summary>results.export (main only): Path comes from main's save dialog; Format is csv, tsv or json; NullText is
 /// "empty" or "NULL"; TemporaryId (32 hex digits) names the temporary file, .varia-{id}.tmp beside the target, which main
 /// removes if the backend dies while writing it.</summary>
 /// ViewId saves a view's rows, in its order.
-internal sealed record ResultsExportArgs(uint ResultId, string Path, string Format, bool Headers, string NullText, string TemporaryId, uint? ViewId = null);
-internal sealed record ResultsJobResult(long Rows, long Bytes, long TruncatedCells, bool Partial);
+/// Transposed and HeaderColumn are as results.copy's.
+internal sealed record ResultsExportArgs(uint ResultId, string Path, string Format, bool Headers, string NullText, string TemporaryId, uint? ViewId = null, bool Transposed = false, int? HeaderColumn = null);
+/// <summary>Rows are the source rows written; Capped those a transposed job left out for lying past the rows a transposed
+/// grid draws (0 otherwise).</summary>
+internal sealed record ResultsJobResult(long Rows, long Bytes, long TruncatedCells, bool Partial, long Capped = 0);
 /// <summary>debug.results.synthesize (VARIA_BACKEND_TEST_HOOKS=1 only).</summary>
 internal sealed record SynthesizeArgs(string Shape, int Rows);
 

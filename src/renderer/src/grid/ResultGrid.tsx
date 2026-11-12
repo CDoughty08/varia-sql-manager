@@ -11,7 +11,7 @@ import { pivotStrip } from '../results/pivot'
 import { transposeStrip } from '../results/TransposeService'
 import { formatBytes, formatCount } from '../results/status'
 import GridShell, { GridErrorBoundary, instanceKey, type GridFunnels, type GridShellApi, type GridSpec } from './GridShell'
-import { toneColumnOf, type GridView } from './GridView'
+import type { GridView } from './GridView'
 import { describeSelection } from './selection'
 
 export interface ResultGridProps {
@@ -72,10 +72,10 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, o
   const key = entry.key
   // The view's orientation is part of its grid state, so it follows the entry and outlives the grid. The transpose commands
   // set it (ResultsService.setOrientation, which publishes); a change builds the grid again, as a tab switch does. A
-  // comparison is never drawn transposed (its tone column marks rows). Read as a string, so the grid renders again only
+  // comparison is never drawn transposed (transposedView, the rule Copy and Save follow too). Read as a string, so the grid renders again only
   // when its own orientation changed.
   const oriented = useSyncExternalStore(results.subscribe, () => { const now = results.orientation(tabId, key); return now.transposed ? `t${now.headerColumn ?? ''}` : '' })
-  const turnedView = oriented !== '' && toneColumnOf(entry.descriptor) < 0, headerColumn = turnedView && oriented.length > 1 ? Number(oriented.slice(1)) : undefined
+  const turnedView = oriented !== '', headerColumn = turnedView && oriented.length > 1 ? Number(oriented.slice(1)) : undefined
   const latest = useRef({ count, onWide, sort, marks, showTypes, rowSize, turnedView, headerColumn })
   latest.current = { count, onWide, sort, marks, showTypes, rowSize, turnedView, headerColumn }
   /** The handle the view shows, and the keys it was sorted by. */
