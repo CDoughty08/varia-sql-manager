@@ -179,8 +179,9 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
       'data-result-grid': '', 'data-output-view': 'grid', 'data-tab-id': tabId, 'data-result-entry': key, 'data-result-generation': entry.descriptor.generation,
       'data-result-id': entry.descriptor.resultId, 'data-result-kind': entry.descriptor.kind, ...view ? { 'data-result-view': view } : {}, ...group === undefined ? {} : { 'data-result-group': group },
       ...bare ? { 'data-result-bare': '' } : {}, 'data-pane-focus': focused ? 'selected' : 'grid',
-      // The stack keeps the focused entry for its own drawing; the service hears of it so the toolbar and the menus' toggle follow.
-      onFocus: () => { onFocus(key); results.focusEntry(tabId, key) }
+      // The stack keeps the focused entry for its own drawing and tells the service (`focusEntry`), so the toolbar, the
+      // menus' toggle and the pivot builder follow.
+      onFocus: () => onFocus(key)
     }}
     sort={sort?.keys} onSort={(column, add) => results.cycleSort(tabId, key, column, add)} funnels={funnels}
     update={{ resultCount: count, showTypes, rowSize, ...turnedView ? { headerColumn: headerColumn ?? null } : {} }} gone={lost ? lostText : undefined}

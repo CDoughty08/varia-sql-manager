@@ -61,7 +61,9 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
       <span className="profile-facts" title={facts}>{facts}</span>
       <button type="button" className="icon-button" aria-label="Close Pivot" title="Close Pivot" onClick={() => pivot.close(tabId)}><Icon name="close" /></button>
     </div>
-    <div className="pivot-body">
+    {/* Without the group (a new run has yet to return it) there are no columns to edit a draft over: the group's kept
+        draft waits for them, and these controls take no input meanwhile. */}
+    <div className="pivot-body" inert={!entry}>
       {/* The group it belongs to; a result a new run has yet to return is still named. */}
       <div className="pivot-field" role="group" aria-label="Pivot source">
         <span>Source</span>

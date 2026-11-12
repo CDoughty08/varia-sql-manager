@@ -117,7 +117,8 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     return target?.tabId ?? args?.tabId ?? documents.getSnapshot().activeId
   }
   /** The view Close Result closes: the menu's grid, else the focused one, else (from the palette) the grid that last had
-   *  the focus in the named or active query tab; once the run has ended, and never a Peek grid. */
+   *  the focus in the named or active query tab, and nothing when none has had it; once the run has ended, and never a
+   *  Peek grid. */
   const closeEntry = (args?: CommandArgs) => {
     const named = outputOf(args), focused = named || args?.tabId || args?.target ? undefined : focusedOutput(menuTargets)
     if (args?.target && !named) return undefined
@@ -127,7 +128,8 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     if (target && (target.bare || !grid(target))) return undefined
     const tabId = target?.tabId ?? focused?.tabId ?? args?.tabId ?? documents.getSnapshot().activeId
     const tab = tabId ? results.getSnapshot()[tabId] : undefined
-    const key = target?.entry ?? (tabId ? results.focusedEntry(tabId)?.key : undefined)
+    // Never the run's first result for want of one: closing has no undo, so it takes a grid the user has used.
+    const key = target?.entry ?? tab?.focused
     return tabId && tab && key !== undefined && !tab.bare && tab.status !== 'running' && tab.status !== 'closed' ? { tabId, key } : undefined
   }
   /** F3 in a grid moves its active cell to the match as well; from the search box or the editor it only scrolls. */

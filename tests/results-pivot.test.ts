@@ -365,6 +365,40 @@ describe('PivotService', () => {
     expect(pivot.getSnapshot().info.size).toBe(0)
   })
 
+  it('leaves the focus where the user put it during a rebuild, and draws a rebuilt Pivot transposed when the old one was', async () => {
+    const { results, pivot, run } = fixture()
+    const [first] = run(2)
+    const one = keyAt(results, 't1', 0)
+    pivot.open('t1', one)
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
+    await pivot.run('t1')
+    const old = results.getSnapshot().t1.groups[0].pivot!.key
+    // The Pivot is drawn transposed and has the focus when it is built again.
+    expect(results.setOrientation('t1', old, { transposed: true })).toBe(true)
+    results.focusEntry('t1', old)
+    const building = deferred<Awaited<ReturnType<FakeHandle['pivot']>>>()
+    vi.mocked(first.pivot).mockImplementationOnce(() => building.promise)
+    const pivoting = pivot.run('t1')
+    expect(results.getSnapshot().t1.focused).toBe(one)
+    // The user clicks into the Table's grid while it builds: the focus was parked there already, so nothing published
+    // changes, and it is still theirs.
+    results.focusEntry('t1', one)
+    building.resolve({ descriptor: descriptor(811, { index: 0, kind: 'pivot', columns }), rows: 3, rowGroups: 2, columnGroups: 0, approximate: false })
+    await pivoting
+    await settle()
+    const rebuilt = results.getSnapshot().t1.groups[0].pivot!.key
+    expect(rebuilt).not.toBe(old)
+    expect(results.getSnapshot().t1.focused).toBe(one)
+    expect(results.getSnapshot().t1.groups[0].selected).toBe('table')
+    // The new Pivot is drawn as the old one was.
+    expect(results.orientation('t1', rebuilt).transposed).toBe(true)
+    // A Pivot that was not transposed is not turned by a rebuild.
+    results.setOrientation('t1', rebuilt, { transposed: false })
+    await pivot.run('t1')
+    await settle()
+    expect(results.orientation('t1', results.getSnapshot().t1.groups[0].pivot!.key).transposed).toBe(false)
+  })
+
   it('keeps a build and its failure with the group they are for when the builder moves to another', async () => {
     const { results, pivot, run } = fixture()
     const [first] = run(2)
@@ -395,6 +429,19 @@ describe('PivotService', () => {
     results.focusEntry('t1', one)
     expect(pivot.getSnapshot().tabs.t1.error).toBe('Not enough memory for Result 1.')
     pivot.setDraft('t1', { rows: [1], values: [{ aggregate: 'count' }] })
+    expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()
+    // A failure also outlives another group's build: Result 1 fails, Result 2 is built, Result 1 still says why.
+    vi.mocked(first.pivot).mockRejectedValueOnce(new ResultError('TOO_LARGE', 'Still not enough memory for Result 1.'))
+    await pivot.run('t1')
+    results.focusEntry('t1', two)
+    await pivot.run('t1')
+    await settle()
+    expect(results.getSnapshot().t1.groups[1].pivot).toBeDefined()
+    expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()
+    results.focusEntry('t1', one)
+    expect(pivot.getSnapshot().tabs.t1.error).toBe('Still not enough memory for Result 1.')
+    // Its own next build clears it.
+    await pivot.run('t1')
     expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()
   })
 

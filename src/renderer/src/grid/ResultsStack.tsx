@@ -1,4 +1,5 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FocusEvent, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react'
+import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { nextFrame } from '../core/frame'
 import { observeResize } from '../core/windows'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
@@ -24,12 +25,15 @@ export function scrollbarSize(): number {
 /**
  * Each set's height sized to its rows once it has them all (`contentHeight`), undefined while it streams. A horizontal scroll
  * bar is counted unless the set's grid said its columns fit (`narrow`): a grid not yet shown might need one. A set drawn
- * transposed (`turned`) is sized by the rows it draws, which are its columns.
+ * transposed (`turned`) is sized by the rows it draws, which are its columns, with the strip it shows past the cap.
  */
 export function settledContent(tab: Pick<TabResults, 'sets' | 'settled'>, narrow?: ReadonlySet<EntryKey>, turned?: ReadonlySet<EntryKey>): (number | undefined)[] {
   return tab.sets.map(entry => {
     const set = tab.settled.get(setKey(entry.descriptor))
-    return set ? contentHeight(turned?.has(entry.key) ? entry.descriptor.columns.length : set.rows, narrow?.has(entry.key) ? 0 : scrollbarSize(), set.strip) : undefined
+    if (!set) return undefined
+    const isTurned = !!turned?.has(entry.key)
+    // Past the cap a transposed grid shows a strip saying which rows it draws.
+    return contentHeight(isTurned ? entry.descriptor.columns.length : set.rows, narrow?.has(entry.key) ? 0 : scrollbarSize(), set.strip || (isTurned && set.rows > wire.transpose.maxRows))
   })
 }
 /** The entries drawn transposed, by the one rule the grid, Copy and Save follow (`transposedView`) over each grid's state. */
@@ -154,7 +158,14 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
   const [narrow, setNarrow] = useState<ReadonlySet<EntryKey>>(() => new Set())
   // The sets drawn transposed, which are sized by their columns. The orientation is in each grid's state and the service
   // publishes when it changes (`setOrientation`), so it is read again with every snapshot, mounted grid or not.
-  const turned = useMemo(() => turnedEntries(sets, view.grids), [tab, sets, view])
+  // The same set while the same entries are turned, so the layout is made again only when one is turned or turned back,
+  // not with every snapshot.
+  const lastTurned = useRef<ReadonlySet<EntryKey>>(new Set())
+  const turned = useMemo(() => {
+    const next = turnedEntries(sets, view.grids), last = lastTurned.current
+    if (next.size === last.size && [...next].every(key => last.has(key))) return last
+    return lastTurned.current = next
+  }, [tab, sets, view])
   const minHeight = useMemo(() => minGridHeight(scrollbarSize()), [])
   const settled = tab.settled
   const content = useMemo(() => settledContent({ sets, settled }, narrow, turned), [sets, settled, narrow, turned])
@@ -248,14 +259,18 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
   const focus = (key: EntryKey) => { results.focusEntry(tabId, key); setFocused(key) }
   // A bare run's one grid has a caption only while it has filters (or is collapsed). When the caption goes with the focus
   // in it (the last filter removed from its chip), the focus goes to the grid, not to the page: Peek's card keeps its
-  // keys only while the focus is inside it.
+  // keys only while the focus is inside it. Only then: a focus that was elsewhere, or nowhere, is left alone. (An element
+  // removed while it has the focus gets no blur, so the mark set when the caption took the focus is still set.)
   const captionless = !!tab.bare && count === 1 && !collapsed.has(0) && !tab.sorts.get(sets[0].key)?.filters.length
-  const hadCaption = useRef(!captionless)
+  const hadCaption = useRef(!captionless), captionFocus = useRef(false)
+  const trackFocus = (event: FocusEvent<HTMLDivElement>) => { captionFocus.current = !!(event.target as Element).closest?.('.rs-caption') }
+  const trackBlur = (event: FocusEvent<HTMLDivElement>) => { if (event.relatedTarget || !(event.target as Element).closest?.('.rs-caption')) captionFocus.current = false }
   useLayoutEffect(() => {
-    const went = hadCaption.current && captionless
+    const went = hadCaption.current && captionless, was = captionFocus.current
     hadCaption.current = !captionless
+    if (went) captionFocus.current = false
     const stack = stackRef.current, active = stack?.ownerDocument.activeElement
-    if (went && stack && (!active || active === stack.ownerDocument.body)) stack.querySelector<HTMLElement>('[data-pane-focus]')?.focus({ preventScroll: true })
+    if (went && was && stack && (!active || active === stack.ownerDocument.body)) stack.querySelector<HTMLElement>('[data-pane-focus]')?.focus({ preventScroll: true })
   }, [captionless])
   const wide = useCallback((key: EntryKey, isWide: boolean) => {
     setNarrow(current => {
@@ -357,7 +372,7 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
         onDoubleClick={() => setWeights(undefined)} onKeyDown={event => splitterKey(index, event)} />)
     }
   }
-  return <div ref={stackRef} className="rs-stack" onScroll={event => { view.stackScrollTop = event.currentTarget.scrollTop; setScrollTop(event.currentTarget.scrollTop) }}>
+  return <div ref={stackRef} className="rs-stack" onFocus={trackFocus} onBlur={trackBlur} onScroll={event => { view.stackScrollTop = event.currentTarget.scrollTop; setScrollTop(event.currentTarget.scrollTop) }}>
     <div className="rs-content" style={{ height: layout.total }}>{items}</div>
   </div>
 }

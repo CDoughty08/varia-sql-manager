@@ -816,6 +816,12 @@ describe('Query Output commands', () => {
   it('Close Result closes the view the grid shows: a Table with its group, a Pivot or a comparison alone, and nothing while the query runs', async () => {
     const { commands, results, resultClient, queries, pivot, compare, tab, on, key, element, startQuery } = await ran('win32', { ...queryOutput, resultSets: [descriptor(1), descriptor(2, { index: 1 })] })
     const names = () => results.getSnapshot()[tab.id].sets.map(set => set.label ?? set.number)
+    // Until a grid has been used, the palette and a key have none to close: never the first result for want of one.
+    expect(results.getSnapshot()[tab.id].focused).toBeUndefined()
+    expect(commands.isEnabled('output.closeResult', { tabId: tab.id })).toBe(false)
+    expect(await commands.execute('output.closeResult', { tabId: tab.id }, 'palette')).toBe(false)
+    expect(names()).toEqual([1, 2])
+    expect(commands.isEnabled('output.closeResult', on('grid'))).toBe(true)
     const build = async (place: number) => { pivot.open(tab.id, key(place)); pivot.setDraft(tab.id, { rows: [0], values: [{ aggregate: 'count' }] }); await pivot.run(tab.id) }
     await build(0)
     await build(2)
@@ -841,10 +847,10 @@ describe('Query Output commands', () => {
     expect(commands.isEnabled('output.closeResult')).toBe(true)
     // The Messages menu itself offers no Close Result.
     expect(commands.isEnabled('output.closeResult', on('messages'))).toBe(false)
-    active.mockReturnValue(null)
-    // A menu left open on a view that has gone closes nothing.
+    // A menu left open on a view that has gone closes nothing (checked below, once it has gone).
     const last = on('grid')
-    expect(await commands.execute('output.closeResult', last, 'menu')).toBe(true)
+    expect(await commands.execute('output.closeResult', undefined, 'keybinding')).toBe(true)
+    active.mockReturnValue(null)
     expect(results.getSnapshot()[tab.id]).toMatchObject({ sets: [], emptied: true })
     expect(commands.isEnabled('output.closeResult', last)).toBe(false)
     const releases = resultClient.release.mock.calls.length

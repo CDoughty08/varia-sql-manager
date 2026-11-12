@@ -28,7 +28,7 @@ export interface PivotSnapshot {
   readonly info: ReadonlyMap<string, PivotInfo>
 }
 
-type Results = Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'sortOf' | 'removeEntry' | 'focusEntry'>
+type Results = Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'sortOf' | 'removeEntry' | 'focusEntry' | 'focusStamp' | 'orientation' | 'setOrientation'>
 
 /** A set a pivot can read: a query's rows that have all loaded. Never a pivot, a transpose, a comparison or a plan set. */
 export const pivotable = (entry: ResultSetEntry | undefined): boolean =>
@@ -59,8 +59,9 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
   private readonly results: Results
   /** The pivot each tab builds, with the run and the Table it reads: a newer run, or that Table closed, gives it up. */
   private readonly running = new Map<string, { readonly abort: AbortController; readonly queryId: string; readonly source: EntryKey; readonly ordinal: number }>()
-  /** Why each tab's last build failed, with the group it was for: the builder shows it only while it is that group's. */
-  private readonly errors = new Map<string, { readonly ordinal: number; readonly text: string }>()
+  /** Why each group's last build failed, by tab and ordinal: the builder shows it only while it is that group's, until
+   *  that group's draft is edited or it is built again. */
+  private readonly errors = new Map<string, Map<number, string>>()
   /** Strips of pivots added whose sets the results have not shown yet (they publish them on the next frame), with the
    *  tab and run they were added to: a publish for another tab in between must not drop them. */
   private readonly fresh = new Map<string, { readonly tabId: string; readonly queryId: string }>()
@@ -107,7 +108,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     if (!drafts) this.drafts.set(tabId, drafts = new Map())
     drafts.set(ordinal, { draft: fitColumns(draft, columns), columns })
     // Editing the group's draft clears what its last build said.
-    if (this.errors.get(tabId)?.ordinal === ordinal) this.errors.delete(tabId)
+    this.errors.get(tabId)?.delete(ordinal)
     this.update(tabId, this.tabOf(tabId, tab, ordinal, current.open))
   }
 
@@ -134,11 +135,15 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     const abort = new AbortController()
     const item = { abort, queryId: tab.queryId, source: entry.key, ordinal: group.ordinal }
     this.running.set(tabId, item)
-    this.errors.delete(tabId)
+    this.errors.get(tabId)?.delete(group.ordinal)
     // A group has one Pivot: the one it has is released before the new one is built. When its grid had the focus, the
-    // focus waits on the Table (where closing a Pivot leaves it) and goes to the new Pivot's grid when it is shown.
+    // focus waits on the Table (where closing a Pivot leaves it) and goes to the new Pivot's grid when it is shown,
+    // unless a grid has taken the focus meanwhile (the Table's own included, which moves nothing). A Pivot drawn
+    // transposed is drawn transposed again; the rest of its grid's state went with the old result.
     const refocus = group.pivot !== undefined && tab.focused === group.pivot.key
+    const turned = group.pivot !== undefined && this.results.orientation(tabId, group.pivot.key).transposed
     if (group.pivot) this.results.removeEntry(tabId, group.pivot.key)
+    const stamp = this.results.focusStamp()
     this.refresh(tabId)
     let error: string | undefined
     try {
@@ -165,14 +170,18 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       const snapshot = this.getSnapshot()
       this.fresh.set(setKey(result.descriptor), { tabId, queryId: tab.queryId })
       this.publish({ tabs: snapshot.tabs, info: new Map([...this.shown(snapshot.info), [setKey(result.descriptor), info]]) })
-      // Unless the user has moved the focus on meanwhile.
-      if (refocus && this.results.getSnapshot()[tabId]?.focused === entry.key) this.results.focusEntry(tabId, added)
+      if (turned) this.results.setOrientation(tabId, added, { transposed: true })
+      if (refocus && this.results.focusStamp() === stamp) this.results.focusEntry(tabId, added)
     } catch (failure) {
       if (!abort.signal.aborted) error = failure instanceof Error ? failure.message : 'The results could not be pivoted.'
     } finally {
       if (this.running.get(tabId) === item) {
         this.running.delete(tabId)
-        if (error) this.errors.set(tabId, { ordinal: item.ordinal, text: error })
+        if (error) {
+          let errors = this.errors.get(tabId)
+          if (!errors) this.errors.set(tabId, errors = new Map())
+          errors.set(item.ordinal, error)
+        }
         this.refresh(tabId)
       }
     }
@@ -202,12 +211,12 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     if (ordinal === undefined) this.groups.delete(tabId)
     else this.groups.set(tabId, ordinal)
     const group = ordinal === undefined ? undefined : tab.groups.find(item => item.ordinal === ordinal)
-    const building = this.running.get(tabId), failed = this.errors.get(tabId)
+    const building = this.running.get(tabId), failed = ordinal === undefined ? undefined : this.errors.get(tabId)?.get(ordinal)
     const live = building?.queryId === tab.queryId ? building : undefined
     return {
       open, source: group?.table.key, ...ordinal === undefined ? {} : { sourceName: `Result ${ordinal}` }, ...group?.pivot ? { pivot: group.pivot.key } : {},
       draft: this.draftOf(tabId, ordinal, group?.table.entry.descriptor.columns), running: !!live && live.ordinal === ordinal,
-      ...live && live.ordinal !== ordinal ? { busy: `Result ${live.ordinal}` } : {}, ...failed && failed.ordinal === ordinal ? { error: failed.text } : {}
+      ...live && live.ordinal !== ordinal ? { busy: `Result ${live.ordinal}` } : {}, ...failed ? { error: failed } : {}
     }
   }
 

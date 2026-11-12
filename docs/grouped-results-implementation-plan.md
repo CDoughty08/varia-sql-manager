@@ -541,7 +541,8 @@ Outcome, accepted by the owner:
        key in this PR; the slot's `revision` counts them. PR 10 keeps the key.
      - A stored transpose is a slot of view `transpose` in the group of what it transposed (`ResultGroup.transposes`),
        drawn after the group's Pivot and closed with the group. A transpose of a transpose is one more of them, so
-       nothing in `contributions/transpose.ts` or `TransposeService` changed. PR 8 removes the field.
+       nothing in `contributions/transpose.ts` or `TransposeService` changed. Since PR 7 no command makes one, so the
+       slot is reached only through `addSet`; PR 8 removes the field.
      - Provenance is `ResultSlot.sources`: frozen references (entry key, set key, number, name) to a Pivot's Table and to
        a comparison's old and new inputs. The recipe, resolved filters and input rows are PR 10's.
      - The builder keeps one draft per group already (by ordinal, so a re-run's group takes it over), since a builder

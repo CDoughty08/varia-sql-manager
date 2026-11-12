@@ -338,6 +338,11 @@ describe('the stacked results', () => {
     const [table] = settledContent(tab, new Set(['e']))
     const [turned] = settledContent(tab, new Set(['e']), new Set(['e']))
     expect(table! - turned!).toBe((500 - wide.columns.length) * 20)
+    // Past 4,095 rows the turned grid shows a strip saying which rows it draws, which its height includes; a table of
+    // as many rows has none.
+    const long = { sets: [entry], settled: new Map([[setKey(wide), { rows: 5000, strip: false }]]) }
+    expect(settledContent(long, new Set(['e']), new Set(['e']))[0]! - turned!).toBe(25)
+    expect(settledContent({ sets: [entry], settled: new Map([[setKey(wide), { rows: 4095, strip: false }]]) }, new Set(['e']), new Set(['e']))[0]).toBe(turned)
     // Which entries are turned is read from each grid's state by the rule the grid follows: never a comparison (its tone
     // column marks rows), whatever its state says.
     const toned = { key: 'd', number: 2, descriptor: descriptor(2, { kind: 'diff', columns: [...wide.columns, { name: '', dataType: 'tinyint', wire: 'text', nullable: true, role: 'tone' }] as ResultColumn[] }) } as unknown as ResultSetEntry

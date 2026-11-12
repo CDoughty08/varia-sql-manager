@@ -387,6 +387,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private disposed = false
   private announcedCount = 0
   private minted = 0
+  private focusEvents = 0
 
   constructor(o: {
     client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary' | 'release' | 'onGeneration'>; api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'>; events: EventBus
@@ -591,11 +592,15 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const run = this.runs.get(tabId), record = run?.slots.get(key)
     if (!run || !record) return
     const view = this.viewState(tabId)
+    this.focusEvents++
     let changed = view.focused !== key
     view.focused = key
     if (this.select(run, key)) changed = true
     if (changed) this.publishNow(tabId)
   }
+  /** How many times a grid has taken the focus in this window: one that takes it again (a click into the grid that already
+   *  had it) changes nothing published, and this still counts it. */
+  focusStamp(): number { return this.focusEvents }
   /** The entry `key` has the focus: its group's selected view is the one it shows (a stored transpose changes none).
    *  Whether that changed. */
   private select(run: Run, key: EntryKey): boolean {
