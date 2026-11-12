@@ -2974,13 +2974,13 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | Grid: the same over 300 bit columns, p95 | ≤ 17.5 / 17.5 ms | ≤ 80 / 80 ms | 23.1 / 25.3 ms | 30.2 / 32.7 ms |
 | Grid: UI long tasks over 50 ms in those four wheel segments | 0 | ≤ 20 | 0 | 0 |
 | Grid: DOM elements, 8 / 300 / 300 bit columns | ≤ 1,500 / 4,000 / 4,000 | same | 535 / 931 / 1,811 | 535 / 931 / 1,811 |
-| Grid, transposed (4,096 long-text columns as rows by 4,095 rows as columns): `frame()` after a scroll bar jump / scrolling across / scrolling down, p95 | ≤ 8 / 6 / 6 ms | ≤ 16 / 12 / 12 ms | 1.0 / 0.5 / 0.5 ms (Windows, 24 CPUs) | not measured |
-| Grid, transposed: main-thread task time per scroll bar jump over the same / over 300 bit columns as rows, p95 | ≤ 50 / 50 ms | ≤ 170 / 260 ms | 49 / 41 ms (Windows, 24 CPUs) | not measured |
-| Grid, transposed: scroll bar jump → painted, p95 (each jump reads up to four tiles of 32 rows × 128 long values, eight pages each, so this is where a costlier page read shows) | ≤ 500 ms | reported only | 463 ms (Windows, 24 CPUs; median 280 ms) | not measured |
-| Grid, transposed: animation-frame interval during those scrolls, the worse p95 | ≤ 17.5 ms | ≤ 60 ms | 17.0 ms (Windows, 24 CPUs, 59 Hz) | not measured |
-| Grid, transposed: DOM elements, 4,096 long-text columns / 300 bit columns | ≤ 4,000 / 4,000 | same | 966 / 1,577 | not measured |
-| Grid, transposed: UI thread busy while 4,095 rows of 300 columns stream in at 1,000 a second | ≤ 10 % | ≤ 25 % | 6 % (Windows, 24 CPUs) | not measured |
-| Grid, transposed: the longest UI long task in its segments | ≤ 50 ms | ≤ 250 ms | none over 50 ms (Windows, 24 CPUs) | not measured |
+| Grid, transposed (4,096 long-text columns as rows by 4,095 rows as columns): `frame()` after a scroll bar jump / scrolling across / scrolling down, p95 | ≤ 8 / 6 / 6 ms | ≤ 16 / 12 / 12 ms | 1.1 / 0.6 / 0.6 ms (Windows, 24 CPUs) | 1.9 / 0.9 / 0.8 ms |
+| Grid, transposed: main-thread task time per scroll bar jump over the same / over 300 bit columns as rows, p95 | ≤ 50 / 50 ms | ≤ 170 / 260 ms | 46 – 79 / 37 – 76 ms, medians 58 / 42 ms over 11 runs on a busy desktop (Windows, 24 CPUs) | 90 / 74 ms |
+| Grid, transposed: scroll bar jump → painted, p95 (each jump reads up to four tiles of 32 rows × 128 long values, eight pages each, so this is where a costlier page read shows) | ≤ 500 ms | reported only | 463 – 614 ms (Windows, 24 CPUs) | 596 ms |
+| Grid, transposed: animation-frame interval during those scrolls, the worse p95 | ≤ 17.5 ms | ≤ 60 ms | 17.1 ms (Windows, 24 CPUs, 59 Hz) | 23.2 ms |
+| Grid, transposed: DOM elements, 4,096 long-text columns / 300 bit columns | ≤ 4,000 / 4,000 | same | 966 / 1,577 | 966 / 1,483 |
+| Grid, transposed: UI thread busy while 4,095 rows of 300 columns stream in at 1,000 a second | ≤ 10 % | ≤ 25 % | 6 % (Windows, 24 CPUs) | 8 % |
+| Grid, transposed: the longest UI long task in its segments | ≤ 50 ms | ≤ 250 ms | none over 50 ms (Windows, 24 CPUs) | none over 50 ms |
 | Grid: UI window cache after a sweep and 300 jumps, windows / text | ≤ 256 / 16 Mi units | same | 256 / 5.8 Mi | 256 / 5.8 Mi |
 | Grid: worker page cache after the same | ≤ 64 MiB | same | 64 MiB | 64 MiB |
 | Grid: worker page cache after 60 jumps over 5,000 rows of 300 columns, bytes charged beyond page bytes per cached column (the column-view charge; 0 if pages were charged their wire bytes alone) | ≥ 320 bytes | same | 320 bytes (33.8 MiB for 79 pages, Windows, 24 CPUs) | not measured |
