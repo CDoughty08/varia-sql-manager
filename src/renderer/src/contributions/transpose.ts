@@ -35,24 +35,6 @@ export function transposeContribution({ commands, results, documents, menuTarget
     const columns = target.set.descriptor.columns
     return column !== undefined && Number.isInteger(column) && column >= 0 && column < columns.length && columns[column].role !== 'tone' ? column : undefined
   }
-  /**
-   * Transpose Selected Rows turns the grid once its Keep Selected Rows filter shows: the view is built in the backend, and a
-   * grid turned before that would draw every row of the result (up to the cap) for a moment. A filter that fails says so
-   * and leaves the grid a table; a result closed, or filtered again, meanwhile is left alone.
-   */
-  const pending = new Map<string, () => void>()
-  const turnWhenKept = (tabId: string, key: string) => {
-    const settle = () => {
-      const sort = results.sortOf(tabId, key)
-      if (sort?.sorting) return false
-      if (sort?.view && sort.applied.some(item => item.filter.op === 'keepRows')) results.setOrientation(tabId, key, { transposed: true })
-      return true
-    }
-    pending.get(key)?.()
-    if (settle()) return
-    const stop = results.subscribe(() => { if (settle()) pending.get(key)?.() })
-    pending.set(key, () => { pending.delete(key); stop() })
-  }
   const registrations = [
     commands.register('output.transpose', {
       when: (args?: CommandArgs) => !!targetOf(args),
@@ -65,8 +47,14 @@ export function transposeContribution({ commands, results, documents, menuTarget
       when: (args?: CommandArgs) => { const target = targetOf(args); return !!target && results.canKeepSelectedRows(target.tabId, target.key) },
       run: (args?: CommandArgs) => {
         const target = targetOf(args)
-        // More rows than Keep Selected Rows takes says so and filters nothing: the grid then stays as it is drawn.
-        if (target && results.keepSelectedRows(target.tabId, target.key)) turnWhenKept(target.tabId, target.key)
+        if (!target) return
+        const { tabId, key } = target
+        // The grid turns once the view of the kept rows is built: turned at once, it would draw every row of the result (up
+        // to the cap) for a moment. Only this command's own view turns it: one that fails says so and changes nothing, and
+        // so does one another sort or filter replaced meanwhile. A grid already transposed stays as the user leaves it. More
+        // rows than Keep Selected Rows takes says so and filters nothing.
+        const turn = results.orientation(tabId, key).transposed ? undefined : () => { results.setOrientation(tabId, key, { transposed: true }) }
+        results.keepSelectedRows(tabId, key, turn)
       }
     }),
     commands.register('output.transposeWithHeaders', {
@@ -96,5 +84,5 @@ export function transposeContribution({ commands, results, documents, menuTarget
       }
     })
   ]
-  return { dispose: () => { for (const stop of [...pending.values()]) stop(); for (const registration of registrations) registration.dispose() } }
+  return { dispose: () => { for (const registration of registrations) registration.dispose() } }
 }

@@ -202,7 +202,7 @@ describe('Transpose Selected Rows', () => {
     expect(await commands.execute('output.transposeSelectedRows', on(), 'menu')).toBe(true)
     // The filter is Keep Selected Rows' own (its checks are tests/results-service.test.ts's). While the backend builds its
     // view the grid stays a table: turned now, it would draw every row of the result as a column first.
-    expect(keep.mock.calls).toEqual([[tab.id, key()]])
+    expect(keep.mock.calls.map(call => call.slice(0, 2))).toEqual([[tab.id, key()]])
     expect(keep.mock.results[0].value).toBe(true)
     expect(results.sortOf(tab.id, key())).toMatchObject({ sorting: true })
     expect(orientation()).toEqual({ transposed: false })
@@ -212,6 +212,43 @@ describe('Transpose Selected Rows', () => {
     // It turned once: turning it back is the user's, and a later publish does not turn it again.
     results.setOrientation(tab.id, key(), { transposed: false })
     results.notify(tab.id, 'something else')
+    expect(orientation()).toEqual({ transposed: false })
+  })
+
+  it('turns the grid only for its own view: not when it fails over an older filter, nor when another filter replaced it', async () => {
+    const { commands, results, resultSelection, tab, key, on, cells, orientation, handle } = await ran()
+    // A Keep Selected Rows filter is already applied, and the grid is a table.
+    const first = nextView(handle())
+    resultSelection.set(tab.id, cells(0, 2, 4))
+    await commands.execute('output.keepSelectedRows', on(), 'menu')
+    await first.answer()
+    expect(results.sortOf(tab.id, key())?.applied.map(item => item.filter.op)).toEqual(['keepRows'])
+    // Transpose Selected Rows of other rows fails: the old filter stays applied, and the grid stays a table.
+    const failing = nextView(handle())
+    resultSelection.set(tab.id, cells(0, 0, 1))
+    await commands.execute('output.transposeSelectedRows', on(), 'menu')
+    await failing.fail('The view could not be built.')
+    expect(results.sortOf(tab.id, key())?.applied.map(item => item.filter.op)).toEqual(['keepRows'])
+    expect(orientation()).toEqual({ transposed: false })
+    // Transpose Selected Rows, then a plain Keep Selected Rows before its view answers: the second is not the command's.
+    const replaced = nextView(handle()), plain = nextView(handle())
+    await commands.execute('output.transposeSelectedRows', on(), 'menu')
+    await commands.execute('output.keepSelectedRows', on(), 'menu')
+    await replaced.answer()
+    await plain.answer()
+    expect(results.sortOf(tab.id, key())).toMatchObject({ sorting: false })
+    expect(orientation()).toEqual({ transposed: false })
+  })
+
+  it('leaves a grid already transposed as the user turns it while the kept rows are built', async () => {
+    const { commands, results, resultSelection, tab, key, on, cells, orientation, handle } = await ran()
+    results.setOrientation(tab.id, key(), { transposed: true })
+    const view = nextView(handle())
+    resultSelection.set(tab.id, cells(0, 2, 4))
+    await commands.execute('output.transposeSelectedRows', on(0, { transposed: true }), 'menu')
+    expect(orientation()).toEqual({ transposed: true })
+    await commands.execute('output.transpose', on(0, { transposed: true }), 'menu')
+    await view.answer()
     expect(orientation()).toEqual({ transposed: false })
   })
 

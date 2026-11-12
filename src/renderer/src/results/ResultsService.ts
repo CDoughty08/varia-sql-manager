@@ -808,7 +808,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    * last when a duplicates filter follows that one. More rows or ranges than the filter takes says so in the toolbar and
    * applies nothing. False when nothing was applied.
    */
-  keepSelectedRows(tabId: string, key: EntryKey): boolean {
+  keepSelectedRows(tabId: string, key: EntryKey, kept?: () => void): boolean {
     const run = this.runs.get(tabId), set = this.entry(run, key), target = this.keepTarget(tabId, key)
     if (!run || !set || !target) return false
     const maxRows = wire.transpose.maxRows, maxRanges = wire.views.maxFilterRanges
@@ -824,7 +824,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const at = old < 0 || filters.slice(old + 1).some(item => item.filter.op === 'duplicates') ? others.length : old
     const filter: ViewFilter = { op: 'keepRows', cells: { ranges: target.ranges, ...target.viewId === undefined ? {} : { viewId: target.viewId } } }
     // The view answers the rows it kept (fewer than selected while rows still arrive): the chip then counts those.
-    return this.addFilter(tabId, run, set.key, others, { filter, label: keptLabel(target.rows) }, at)
+    // `kept` runs once, when the view this call asked for has been built (Transpose Selected Rows turns the grid then): never
+    // for a view that failed, or that another sort or filter took the place of first.
+    return this.addFilter(tabId, run, set.key, others, { filter, label: keptLabel(target.rows) }, at, kept)
   }
 
   /** Whether the grid has rows selected to keep (more than the filter takes still runs the command, which then says so). */
@@ -833,12 +835,12 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** Adds a filter after the grid's others, or at `at` among them (where the one it replaces stood, since filters apply in
    *  order and a duplicates filter after it counts only the rows it keeps); a grid that has as many as a view takes says
    *  so and keeps them. */
-  private addFilter(tabId: string, run: Run, index: EntryKey, others: readonly GridFilter[], item: GridFilter, at = others.length): boolean {
+  private addFilter(tabId: string, run: Run, index: EntryKey, others: readonly GridFilter[], item: GridFilter, at = others.length, built?: () => void): boolean {
     if (others.length >= wire.views.maxFilters) {
       this.notify(tabId, `Could not filter the results: a grid takes at most ${wire.views.maxFilters} filters. Remove one first.`)
       return false
     }
-    this.applyView(tabId, run, index, run.sorts.get(index)?.keys ?? [], [...others.slice(0, at), item, ...others.slice(at)], 'filter')
+    this.applyView(tabId, run, index, run.sorts.get(index)?.keys ?? [], [...others.slice(0, at), item, ...others.slice(at)], 'filter', built)
     return true
   }
 
@@ -1142,7 +1144,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
 
   /** Builds a grid's view from its keys and filters (see applySort); a filter's selected cells come back as base rows,
    *  whose values then name the filter. */
-  private applyView(tabId: string, run: Run, index: EntryKey, keys: readonly ViewSortKey[], filters: readonly GridFilter[], action: 'sort' | 'filter'): void {
+  private applyView(tabId: string, run: Run, index: EntryKey, keys: readonly ViewSortKey[], filters: readonly GridFilter[], action: 'sort' | 'filter', built?: () => void): void {
     const set = run.entries.get(index)
     if (!set || this.disposed) return
     run.sorting.get(index)?.abort()
@@ -1171,6 +1173,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       this.setSort(tabId, run, index, { keys: sort, filters: resolved, applied: resolved, view, sorting: false, approximate: view.approximate, stale: !view.complete })
       this.closeHeld(run, index)
       this.nameFilters(tabId, run, index, set)
+      built?.()
       // The set finished while this view was built (refreshSorts skipped it): build it from every row now.
       if (!view.complete && set.handle.getSnapshot().state === 'complete') this.applyView(tabId, run, index, sort, resolved, action)
     }, (error: unknown) => {
