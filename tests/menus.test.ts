@@ -382,7 +382,7 @@ describe('menu state', () => {
       // The Restore Database document's header verbs.
       'restoreDatabase.run', 'restoreDatabase.stop', 'restoreDatabase.refresh',
       // The Activity Monitor's header verbs and keys; only opening it is in the menu bar.
-      'activity.togglePause', 'activity.refresh', 'activity.setInterval', 'activity.setChartWindow', 'activity.toggleSplit', 'activity.nextPane', 'activity.previousPane', 'activity.close',
+      'activity.togglePause', 'activity.refresh', 'activity.setInterval', 'activity.setChartWindow', 'activity.toggleSplit', 'activity.nextPane', 'activity.previousPane', 'activity.sessionDetails', 'activity.killProcess', 'activity.close',
       // The SSISDB node's Active Operations and reports, and the Operations grid's menu and header; View has All Operations.
       'ssis.activeOperations', 'ssis.allExecutions', 'ssis.allValidations', 'ssis.stopOperation', 'ssis.refreshOperations', 'ssis.pauseOperations', 'ssis.copyOperations', 'ssis.copyOperationsWithHeaders',
       // Search Objects' header and status bar verbs; Search Objects… itself is in View.

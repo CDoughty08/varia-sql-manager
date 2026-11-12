@@ -1,7 +1,8 @@
 import { activityIntervalsSeconds, chartWindowsMinutes } from '../../../shared/activity/catalog'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
-import { explorerNodeOf } from '../menus/targets'
+import { explorerNodeOf, outputOf, type LiveRowAction, type LiveRowActions } from '../menus/targets'
+import { focusedOutput } from './output'
 import { serverItems } from './query'
 
 /** The monitor's focusable regions in F6 order: the tiles, the charts, then each pane slot. */
@@ -27,9 +28,10 @@ export function cyclePanel(root: ParentNode, active: Element | null, step: 1 | -
  * Object Explorer menu runs it, else the active document's server, else the server of the node selected in Object
  * Explorer, else the one live connection or the one picked from several; with none, the Connect dialog opens and the
  * monitor follows the new connection. The other commands act on the monitor whose header runs them (`tabId`), else the
- * active document.
+ * active document. Details and Kill Process act on a session row: the one Query Output's menu was opened on, else the
+ * focused grid's active row, else the active row of the monitor's session pane focused last.
  */
-export function activityContribution({ commands, activity, documents, connections, explorer, quickInput, events }: Pick<Workbench, 'commands' | 'activity' | 'documents' | 'connections' | 'explorer' | 'quickInput' | 'events'>): Disposable {
+export function activityContribution({ commands, activity, documents, connections, explorer, quickInput, events, menuTargets }: Pick<Workbench, 'commands' | 'activity' | 'documents' | 'connections' | 'explorer' | 'quickInput' | 'events' | 'menuTargets'>): Disposable {
   const live = (id: string | undefined) => id !== undefined && connections.isLive(id) ? id : undefined
   const target = (args?: CommandArgs): string | undefined => {
     const node = explorerNodeOf(args)
@@ -41,6 +43,15 @@ export function activityContribution({ commands, activity, documents, connection
   }
   const monitorOf = (args?: CommandArgs): string | undefined => { const id = args?.tabId ?? documents.getSnapshot().activeId; return activity.get(id) ? id : undefined }
   const on = (action: (id: string) => void) => ({ when: (args?: CommandArgs) => !!monitorOf(args), run: (args?: CommandArgs) => { const id = monitorOf(args); if (id) action(id) } })
+  const sessionRows = (args?: CommandArgs): LiveRowActions | undefined => {
+    const menu = outputOf(args)
+    if (menu || args?.target) return menu?.live?.rows?.kind === 'session' ? menu.live.rows : undefined
+    const focused = focusedOutput(menuTargets)?.live?.rows
+    if (focused?.kind === 'session') return focused
+    const id = monitorOf(args)
+    return id ? activity.activeSessionRows(id) : undefined
+  }
+  const rowAction = (action: LiveRowAction) => ({ when: (args?: CommandArgs) => !!sessionRows(args)?.can(action), run: (args?: CommandArgs) => sessionRows(args)?.run(action) })
   const root = (id: string) => typeof document === 'undefined' ? undefined : document.querySelector(`[data-activity-monitor="${CSS.escape(id)}"]`) ?? undefined
   const registrations = [
     commands.register('activity.open', {
@@ -75,6 +86,8 @@ export function activityContribution({ commands, activity, documents, connection
     commands.register('activity.toggleSplit', on(id => activity.toggleSplit(id))),
     commands.register('activity.nextPane', on(id => { const element = root(id); if (element) cyclePanel(element, document.activeElement, 1) })),
     commands.register('activity.previousPane', on(id => { const element = root(id); if (element) cyclePanel(element, document.activeElement, -1) })),
+    commands.register('activity.sessionDetails', rowAction('details')),
+    commands.register('activity.killProcess', rowAction('kill')),
     commands.register('activity.close', { when: args => !!monitorOf(args), run: async args => { await commands.execute('file.close', { tabId: monitorOf(args) }, 'toolbar') } })
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }
