@@ -25,11 +25,21 @@ export const restartPolicy: RestartPolicy = wire.restart
 /** Electron's powerMonitor: a sleeping laptop is not a silent backend. */
 export interface PowerMonitorLike { on(event: 'suspend' | 'resume', listener: () => void): unknown }
 
+/** The longest the first launch waits for `SupervisorDeps.before`: reading the settings takes milliseconds. */
+export const firstLaunchWaitMs = 3000
 export interface SupervisorDeps extends ConnectionDeps {
   policy?: Partial<RestartPolicy>
   /** Silence before the backend counts as unresponsive; smoke tests shorten it (VARIA_BACKEND_LIVENESS_MS). */
   unresponsiveMs?: number
   power?: PowerMonitorLike
+  /** What the first launch waits for (the settings its environment is read from), settled either way, and for no longer
+   *  than `firstLaunchWaitMs`: a profile folder that does not answer must not keep the backend from starting, which then
+   *  starts with what `environment` gives without them. Meanwhile the state is `starting`, a restart is the launch still
+   *  to come, and requests wait for the connection as they do for the next generation after a loss: unsent, so no
+   *  deadline runs, and bounded by the pending-request limit. */
+  before?: Promise<unknown>
+  /** Added to the spawn environment at every launch: what the user may have changed since the last one. */
+  environment?: () => Record<string, string>
 }
 export interface RequestOptions extends Pick<SendOptions, 'stream' | 'credit'> {
   /** Query events, validated and stamped with the generation; an invalid one fails the request (STREAM_PROTOCOL). */
@@ -103,6 +113,9 @@ export class BackendSupervisor {
   private expectedTick = 0
   private windowStart = 0
   private suspended = false
+  /** Started, with the first launch still waiting for `deps.before`. */
+  private awaitingFirst = false
+  private firstTimer: unknown
 
   constructor(spec: SpawnSpec, deps: SupervisorDeps = {}) {
     this.spec = spec
@@ -131,7 +144,18 @@ export class BackendSupervisor {
   start(): void {
     if (this.started || this.closing) return
     this.started = true
-    this.launch()
+    const before = this.deps.before
+    if (!before) return this.launch()
+    this.awaitingFirst = true
+    this.setState({ status: 'starting', generation: this.generation + 1 })
+    const first = (): void => {
+      if (!this.awaitingFirst) return
+      this.awaitingFirst = false
+      this.clock.clearTimeout(this.firstTimer)
+      if (!this.closing) this.launch()
+    }
+    this.firstTimer = this.clock.setTimeout(first, firstLaunchWaitMs)
+    void before.then(first, first)
   }
 
   /** The generation whose results can be read now: the current one while it is ready. */
@@ -197,6 +221,8 @@ export class BackendSupervisor {
   async restart(reason: 'reload' | 'manual'): Promise<void> {
     if (this.closing) return
     if (!this.started) return this.start()
+    // Nothing has launched yet: the launch to come is the restart, with the settings as they are when it is made.
+    if (this.awaitingFirst) return
     if (reason === 'reload' && this.snapshot.status === 'failed') return
     if (reason === 'manual') { this.attempts = 0; this.losses = [] }
     this.clock.clearTimeout(this.restartTimer)
@@ -221,6 +247,9 @@ export class BackendSupervisor {
     this.closing = true
     this.connection = undefined
     this.clock.clearTimeout(this.restartTimer)
+    // A stop while the first launch waits leaves nothing behind it: no timer to keep the process, no launch to come.
+    this.awaitingFirst = false
+    this.clock.clearTimeout(this.firstTimer)
     this.stopWatchdog()
     const error = new BackendError('BACKEND_UNAVAILABLE', sentences.closing)
     for (const waiter of this.waiting.splice(0)) waiter.reject(error)
@@ -302,7 +331,8 @@ export class BackendSupervisor {
       this.retired = { generation, reason: loss.reason, loss, uptimeMs: 0 }
       return this.fail('spawn', failureMessage(loss, this.spec.packaged)!)
     }
-    const connection = new BackendConnection(this.spec, generation, this.deps)
+    const added = this.deps.environment?.()
+    const connection = new BackendConnection(added && Object.keys(added).length > 0 ? { ...this.spec, env: { ...this.spec.env ?? process.env, ...added } } : this.spec, generation, this.deps)
     this.connection = connection
     this.readySince = undefined
     this.setState({ status: 'starting', generation })

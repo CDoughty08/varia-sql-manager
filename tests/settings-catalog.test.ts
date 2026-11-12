@@ -94,6 +94,11 @@ describe('settings catalogue', () => {
     if (timeout.type !== 'integer' || resultSets.type !== 'integer' || top.type !== 'integer') throw new Error('Expected integer settings.')
     expect([execute({ timeoutSeconds: timeout.min }), execute({ timeoutSeconds: timeout.max }), execute({ timeoutSeconds: timeout.max + 1 })]).toEqual([true, true, false])
     expect([resultSets.min, resultSets.max]).toEqual([limits.maxResultSets.min, limits.maxResultSets.max])
+    // The row limit Options sets is the one query.execute takes: none (0) to the most it accepts.
+    const rows = settingDef('queryResults.grid.maxRows')
+    if (rows.type !== 'integer') throw new Error('Expected an integer setting.')
+    expect([rows.min, rows.max, rows.default]).toEqual([0, limits.maxRows, 0])
+    expect([execute({ maxRows: rows.max }), execute({ maxRows: rows.max + 1 }), execute({ maxRows: -1 })]).toEqual([true, false, false])
     expect(execute({ maxResultSets: resultSets.max })).toBe(true)
     const source = { database: 'd', schema: 's', name: 'n', columns: [], truncated: false }
     expect(top.min).toBe(1)

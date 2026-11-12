@@ -122,14 +122,23 @@ internal static partial class ViewSorter
     internal static readonly WorkerGate Gate = new(() => Workers);
 
     /// <summary>The budget a build's keys take what they hold beyond their rows' fixed bytes from, and give it back to.</summary>
-    internal sealed class KeyMemory(Func<long, bool> reserve, Action<long> release)
+    /// <param name="reserve">Takes bytes; its second argument says this request takes the keys past another
+    /// <see cref="CheckEvery"/> held, where the taker may ask what it would of one request that large (the system's
+    /// memory load): the keys come a page, or a value, at a time.</param>
+    internal sealed class KeyMemory(Func<long, bool, bool> reserve, Action<long> release)
     {
+        internal const long CheckEvery = ResultStore.WorkCheckBytes;
         private long held;
+
+        public KeyMemory(Func<long, bool> reserve, Action<long> release) : this((bytes, _) => reserve(bytes), release) { }
+
         public bool TryReserve(long bytes)
         {
-            if (!reserve(bytes)) return false;
-            Interlocked.Add(ref held, bytes);
-            return true;
+            // Counted first, so of threads taking together exactly one sees each 64 MiB passed.
+            var after = Interlocked.Add(ref held, bytes);
+            if (reserve(bytes, after / CheckEvery != (after - bytes) / CheckEvery)) return true;
+            Interlocked.Add(ref held, -bytes);
+            return false;
         }
         public void Return(long bytes)
         {
