@@ -10,9 +10,10 @@ internal enum SortMode { Value, Chars, Bytes }
 
 internal sealed record ViewKey(int Column, bool Descending, SortMode Mode);
 
-/// <summary>How a view filter keeps rows: a column's value among some values (In) or not (NotIn), between two values, or
-/// rows whose values in some columns repeat (Duplicates).</summary>
-internal enum FilterOp { In, NotIn, Between, Duplicates }
+/// <summary>How a view filter keeps rows: a column's value among some values (In) or not (NotIn), between two values,
+/// rows whose values in some columns repeat (Duplicates), or the rows it names themselves (KeepRows), which compares no
+/// column.</summary>
+internal enum FilterOp { In, NotIn, Between, Duplicates, KeepRows }
 
 /// <summary>Cells a filter takes its values from: positions in a view's order (or the result's own when Order is null).</summary>
 internal sealed record ViewCells(int[]? Order, (long First, long Count)[] Ranges);
@@ -22,7 +23,8 @@ internal sealed record ViewCells(int[]? Order, (long First, long Count)[] Ranges
 /// resolves to rows; Nulls says NULL is among In's and NotIn's values. Duplicates compares Columns. Equality and order are
 /// the sort's (<see cref="ViewSorter"/>): a column's collation decides which texts are equal.
 /// A distinct snapshot's checklist (<see cref="Snapshot"/>) arrives already resolved: In or NotIn with its values' rows in
-/// value order, one a value, however many.</summary>
+/// value order, one a value, however many. KeepRows keeps exactly the base rows it names (Rows, ascending once resolved),
+/// or those at the positions a selection named (Cells): at most <see cref="ViewSorter.MaxKeepRows"/>, and no column.</summary>
 internal sealed record ViewFilter(FilterOp Op, int Column, int[]? Rows, bool Nulls, ViewCells? Cells, int[] Columns, uint? Snapshot = null);
 
 /// <summary>A view of one stored result: its rows in another order (and, later, only some of them), as base row numbers.
@@ -64,6 +66,8 @@ internal static partial class ViewSorter
     /// <summary>Filters one view takes, distinct values one In or NotIn filter holds, and cell ranges one selection names
     /// (src/shared/ipc/wire/protocol.ts limits.views).</summary>
     public const int MaxFilters = 16, MaxFilterValues = 4096, MaxFilterRanges = 256;
+    /// <summary>Rows one KeepRows filter names: those a transposed grid draws as columns (limits.transpose.maxRows).</summary>
+    public const int MaxKeepRows = ResultTransposer.MaxRows;
     /// <summary>Bytes a row one filter holds at most while it runs, besides its column's key: Duplicates' positions (4), group
     /// starts (up to 8, as their list grows) and the rows it keeps (4); Keep and Pick hold less.</summary>
     public const int FilterBytes = 16;
@@ -268,14 +272,14 @@ internal static partial class ViewSorter
     }
 
     /// <summary>Keys a view holds while it is built: one per column its filters compare and one per sort key, except that a
-    /// Value sort key on a filtered column is that filter's key.</summary>
+    /// Value sort key on a filtered column is that filter's key. KeepRows compares no column, so it has no key.</summary>
     public static int KeyCount(IReadOnlyList<ViewKey> keys, IReadOnlyList<ViewFilter> filters)
     {
         var columns = new HashSet<int>();
         foreach (var filter in filters)
         {
             if (filter.Op == FilterOp.Duplicates) columns.UnionWith(filter.Columns);
-            else columns.Add(filter.Column);
+            else if (filter.Op != FilterOp.KeepRows) columns.Add(filter.Column);
         }
         var count = columns.Count;
         foreach (var key in keys)
@@ -319,6 +323,15 @@ internal static partial class ViewSorter
                 for (var c = 0; c < columns.Length; c++) columns[c] = ValueKey(filter.Columns[c]);
                 order = Duplicates(order, columns, token);
                 resolved[f] = filter;
+                continue;
+            }
+            if (filter.Op == FilterOp.KeepRows)
+            {
+                var named = filter.Cells is { } selected ? Selected(selected, rows, token) : Named(filter.Rows!, rows);
+                // The first filter sees every row in base order: the rows it names are the rows it keeps, without a pass over
+                // the result's.
+                order = f == 0 ? (int[])named.Clone() : KeepRows(order, named, token);
+                resolved[f] = filter with { Rows = named, Cells = null };
                 continue;
             }
             var key = ValueKey(filter.Column);
@@ -381,6 +394,59 @@ internal static partial class ViewSorter
         Sort(sorted, 0, sorted.Length, comparer);
         for (var i = 0; i < sorted.Length; i++) sorted[i] = kept[sorted[i]];
         return (sorted, approximate, resolved);
+    }
+
+    /// <summary>The base rows at the positions a selection names, ascending: what KeepRows keeps. Ranges are merged first, so
+    /// a row is counted once however many name it; more than <see cref="MaxKeepRows"/> are refused before any is read.</summary>
+    private static int[] Selected(ViewCells cells, int rows, CancellationToken token)
+    {
+        var spans = Merge(cells.Ranges, cells.Order?.Length ?? rows);
+        long total = 0;
+        foreach (var (first, end) in spans) total += end - first;
+        if (total > MaxKeepRows) throw new RequestException("TOO_LARGE", "Select at most 4,095 rows to keep.");
+        var picked = new int[total];
+        var count = 0;
+        foreach (var (first, end) in spans)
+        {
+            token.ThrowIfCancellationRequested();
+            for (var position = first; position < end; position++)
+            {
+                var row = cells.Order is { } order ? order[position] : position;
+                if (row < rows) picked[count++] = row;
+            }
+        }
+        if (count == 0) throw new RequestException("INVALID_PARAMS", "Select at least one row to keep.");
+        Array.Resize(ref picked, count);
+        Array.Sort(picked);
+        return picked;
+    }
+
+    /// <summary>Rows a KeepRows filter named, checked, ascending and each once.</summary>
+    private static int[] Named(int[] named, int rows)
+    {
+        if (named.Length is 0 or > MaxKeepRows) throw new RequestException("INVALID_PARAMS", "A keepRows filter names 1 to 4,095 rows.");
+        var sorted = (int[])named.Clone();
+        Array.Sort(sorted);
+        if (sorted[0] < 0 || sorted[^1] >= rows) throw new RequestException("INVALID_PARAMS", "A filter's rows must be rows of the result.");
+        var unique = 0;
+        for (var i = 0; i < sorted.Length; i++)
+            if (unique == 0 || sorted[unique - 1] != sorted[i]) sorted[unique++] = sorted[i];
+        Array.Resize(ref sorted, unique);
+        return sorted;
+    }
+
+    /// <summary>The rows of <paramref name="order"/> among <paramref name="named"/> (ascending), in the order they have.</summary>
+    private static int[] KeepRows(int[] order, int[] named, CancellationToken token)
+    {
+        var kept = new int[Math.Min(order.Length, named.Length)];
+        var count = 0;
+        for (var i = 0; i < order.Length; i++)
+        {
+            if ((i & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+            if (Array.BinarySearch(named, order[i]) >= 0) kept[count++] = order[i];
+        }
+        Array.Resize(ref kept, count);
+        return kept;
     }
 
     /// <summary>The base rows the cells name, one per distinct non-NULL value in ascending order, and whether one is NULL.</summary>

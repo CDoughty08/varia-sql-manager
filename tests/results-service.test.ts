@@ -1247,9 +1247,207 @@ describe('results service filters', () => {
     expect(handle.sort.mock.lastCall?.[1]?.filters).toEqual([{ op: 'duplicates', columns: [0] }])
     expect(f.service.sortOf('t1', keyAt(f.service, 't1', 0))?.filters[0].label).toBe('Duplicate rows')
   })
+  describe('Keep Selected Rows', () => {
+    const wide = () => filtered(10_000, Array.from({ length: 17 }, (_, at): ResultColumn => ({ name: `c${at}`, dataType: 'int', wire: 'text', nullable: true })))
+    /** A backend that resolves each filter as asked: a keepRows filter's cells to one base row per position they cover. */
+    const resolving = (handle: FakeHandle) => {
+      let viewId = 0
+      handle.sort.mockImplementation(async (_keys, o) => resolvedView(handle, ++viewId, (o?.filters ?? []).map((filter): ResolvedViewFilter => {
+        if (filter.op === 'duplicates' || filter.op === 'groups') return filter as ResolvedViewFilter
+        if (filter.op === 'keepRows') return { op: 'keepRows', rows: 'rows' in filter ? filter.rows : filter.cells.ranges.flatMap(([first, count]) => Array.from({ length: count }, (_, at) => 100 + first + at)) }
+        return { op: filter.op, column: filter.column, rows: 'rows' in filter ? filter.rows : [0], nulls: 'nulls' in filter ? !!filter.nulls : false }
+      })))
+    }
+    const sent = (handle: FakeHandle) => handle.sort.mock.lastCall?.[1]?.filters
+
+    it('keeps the rows the selection covers as one filter, named by its rows, that marks no column', async () => {
+      const { service, handle, select, flush, tab } = wide()
+      const key = keyAt(service, 't1', 0)
+      expect(service.canKeepSelectedRows('t1', key)).toBe(false)
+      expect(service.keepSelectedRows('t1', key)).toBe(false)
+      // Blocks over any columns: their rows, overlapping and adjacent runs joined.
+      select([{ top: 2, bottom: 4, left: 0, right: 1 }, { top: 4, bottom: 6, left: 5, right: 5 }, { top: 20, bottom: 20, left: 0, right: 0 }])
+      expect(service.canKeepSelectedRows('t1', key)).toBe(true)
+      const rows = [2, 3, 4, 5, 6, 20]
+      const first = resolvedView(handle, 1, [{ op: 'keepRows', rows }], 6)
+      handle.sort.mockResolvedValueOnce(first)
+      expect(service.keepSelectedRows('t1', key)).toBe(true)
+      expect(handle.sort).toHaveBeenLastCalledWith([], { filters: [{ op: 'keepRows', cells: { ranges: [[2, 5], [20, 1]] } }], signal: expect.any(AbortSignal) })
+      expect(service.sortOf('t1', key)?.filters.map(item => item.label)).toEqual(['6 selected rows'])
+      await settle()
+      await settle()
+      flush()
+      expect(tab().sorts.get(key)).toMatchObject({ view: first, filters: [{ filter: { op: 'keepRows', rows }, label: '6 selected rows', named: true }] })
+      expect(filteredColumns(service.sortOf('t1', key))).toEqual(new Set())
+      // A sort re-sends it resolved, like any filter.
+      handle.sort.mockResolvedValueOnce(resolvedView(handle, 2, first.filters, 6))
+      service.sortBy('t1', key, 0, 'descending')
+      expect(handle.sort).toHaveBeenLastCalledWith([{ column: 0, descending: true, mode: 'value' }], { filters: [{ op: 'keepRows', rows }], signal: expect.any(AbortSignal) })
+    })
+
+    it('counts the rows the view resolved, which are fewer than selected while rows still arrive, and keeps them when the set completes', async () => {
+      const { service, handle, select } = wide()
+      const key = keyAt(service, 't1', 0)
+      select([{ top: 0, bottom: 11, left: 0, right: 0 }])
+      const pending = deferred<ResultView>()
+      handle.sort.mockReturnValueOnce(pending.promise)
+      service.keepSelectedRows('t1', key)
+      expect(service.sortOf('t1', key)?.filters[0].label).toBe('12 selected rows')
+      // Built from the rows sealed so far (one of the twelve was), and the set finished meanwhile: the view is built again
+      // with the row it resolved, not the selection.
+      const resolved: ResolvedViewFilter[] = [{ op: 'keepRows', rows: [0] }]
+      handle.sort.mockResolvedValueOnce(resolvedView(handle, 2, resolved, 1))
+      pending.resolve({ ...resolvedView(handle, 1, resolved, 1), complete: false })
+      await settle()
+      expect(handle.sort).toHaveBeenLastCalledWith([], { filters: resolved, signal: expect.any(AbortSignal) })
+      await settle()
+      await settle()
+      expect(service.sortOf('t1', key)).toMatchObject({ stale: false, filters: [{ filter: resolved[0], label: '1 selected row', named: true }] })
+    })
+
+    it('replaces the grid\'s one keepRows filter in its place among the filters, from the rows of the view shown', async () => {
+      const { service, handle, select } = wide()
+      const key = keyAt(service, 't1', 0)
+      resolving(handle)
+      select([{ top: 0, bottom: 0, left: 1, right: 1 }])
+      service.filterSelection('t1', key, 'in')
+      select([{ top: 0, bottom: 2, left: 0, right: 0 }])
+      service.keepSelectedRows('t1', key)
+      select([{ top: 0, bottom: 0, left: 2, right: 2 }])
+      service.filterSelection('t1', key, 'notIn')
+      await settle()
+      await settle()
+      expect(service.sortOf('t1', key)?.filters.map(item => item.filter.op)).toEqual(['in', 'keepRows', 'notIn'])
+      const shown = service.sortOf('t1', key)!.view!
+      service.viewShown('t1', key, shown)
+      select([{ top: 1, bottom: 1, left: 3, right: 4 }])
+      expect(service.keepSelectedRows('t1', key)).toBe(true)
+      // The new one stands where the old one stood, and names positions of the view the grid shows.
+      expect(sent(handle)).toEqual([{ op: 'in', column: 1, rows: [0], nulls: false }, { op: 'keepRows', cells: { ranges: [[1, 1]], viewId: shown.viewId } }, { op: 'notIn', column: 2, rows: [0], nulls: false }])
+      await settle()
+      await settle()
+      expect(service.sortOf('t1', key)?.filters.map(item => item.label)).toEqual(["c1 = 'v0'", '1 selected row', "c2 \u2260 'v0'"])
+      // Its chip comes off like any other.
+      service.removeFilter('t1', key, 1)
+      expect(sent(handle)?.map(filter => filter.op)).toEqual(['in', 'notIn'])
+    })
+
+    it('goes last instead when a duplicates filter follows the one it replaces, so the grid shows the rows selected', async () => {
+      const { service, handle, select } = wide()
+      const key = keyAt(service, 't1', 0)
+      resolving(handle)
+      const ops = () => sent(handle)?.map(filter => filter.op)
+      select([{ top: 0, bottom: 5, left: 0, right: 0 }])
+      service.keepSelectedRows('t1', key)
+      service.filterDuplicates('t1', key, true)
+      select([{ top: 0, bottom: 0, left: 1, right: 1 }])
+      service.filterSelection('t1', key, 'in')
+      await settle()
+      await settle()
+      expect(ops()).toEqual(['keepRows', 'duplicates', 'in'])
+      // In the old one's place, duplicates would count only the one row kept and show none.
+      select([{ top: 2, bottom: 2, left: 0, right: 0 }])
+      expect(service.keepSelectedRows('t1', key)).toBe(true)
+      expect(ops()).toEqual(['duplicates', 'in', 'keepRows'])
+      expect(sent(handle)?.at(-1)).toEqual({ op: 'keepRows', cells: { ranges: [[2, 1]] } })
+      await settle()
+      await settle()
+      // With the duplicates filter before it, the next one replaces in place again.
+      select([{ top: 3, bottom: 3, left: 0, right: 0 }])
+      service.filterSelection('t1', key, 'notNull')
+      select([{ top: 4, bottom: 4, left: 0, right: 0 }])
+      service.keepSelectedRows('t1', key)
+      expect(ops()).toEqual(['duplicates', 'in', 'keepRows', 'notIn'])
+    })
+
+    it('says so in the toolbar and applies nothing when more rows or ranges are selected than it takes', async () => {
+      const { service, handle, select, flush, tab } = wide()
+      const key = keyAt(service, 't1', 0)
+      resolving(handle)
+      select([{ top: 0, bottom: 4095, left: 0, right: 0 }])
+      expect(service.canKeepSelectedRows('t1', key)).toBe(true)
+      expect(service.keepSelectedRows('t1', key)).toBe(false)
+      flush()
+      expect(tab().jobNotice).toBe('Keep Selected Rows takes at most 4,095 rows in 256 ranges; 4,096 rows are selected. Nothing was applied.')
+      expect(handle.sort).not.toHaveBeenCalled()
+      expect(service.sortOf('t1', key)).toBeUndefined()
+      select(Array.from({ length: 257 }, (_, at) => ({ top: at * 2, bottom: at * 2, left: 0, right: 0 })))
+      expect(service.keepSelectedRows('t1', key)).toBe(false)
+      flush()
+      expect(tab().jobNotice).toBe('Keep Selected Rows takes at most 4,095 rows in 256 ranges; 257 ranges are selected. Nothing was applied.')
+      expect(handle.sort).not.toHaveBeenCalled()
+      // Exactly the limits apply; a refusal after that leaves the filter the grid has.
+      select([{ top: 0, bottom: 4094, left: 0, right: 0 }])
+      expect(service.keepSelectedRows('t1', key)).toBe(true)
+      await settle()
+      await settle()
+      expect(service.sortOf('t1', key)?.filters.map(item => item.label)).toEqual(['4,095 selected rows'])
+      select(Array.from({ length: 256 }, (_, at) => ({ top: at * 2, bottom: at * 2, left: 0, right: 0 })))
+      expect(service.keepSelectedRows('t1', key)).toBe(true)
+      await settle()
+      await settle()
+      expect(service.sortOf('t1', key)?.filters.map(item => item.label)).toEqual(['256 selected rows'])
+      const calls = handle.sort.mock.calls.length
+      select([{ top: 0, bottom: 9999, left: 0, right: 0 }])
+      expect(service.keepSelectedRows('t1', key)).toBe(false)
+      expect(handle.sort.mock.calls.length).toBe(calls)
+      expect(service.sortOf('t1', key)?.filters.map(item => item.label)).toEqual(['256 selected rows'])
+    })
+
+    it('takes every row of a grid selected whole when they fit, and refuses when they do not', async () => {
+      const small = filtered(100)
+      const key = keyAt(small.service, 't1', 0)
+      resolving(small.handle)
+      small.service.setSelection('t1', key, selectAll(key))
+      expect(small.service.keepSelectedRows('t1', key)).toBe(true)
+      expect(sent(small.handle)).toEqual([{ op: 'keepRows', cells: { ranges: [[0, 100]] } }])
+      const large = wide()
+      const largeKey = keyAt(large.service, 't1', 0)
+      large.service.setSelection('t1', largeKey, selectAll(largeKey))
+      expect(large.service.keepSelectedRows('t1', largeKey)).toBe(false)
+      large.flush()
+      expect(large.tab().jobNotice).toBe('Keep Selected Rows takes at most 4,095 rows in 256 ranges; 10,000 rows are selected. Nothing was applied.')
+      expect(large.handle.sort).not.toHaveBeenCalled()
+    })
+
+    it('is one of the grid\'s 16 filters', async () => {
+      const { service, handle, select, flush, tab } = wide()
+      const key = keyAt(service, 't1', 0)
+      resolving(handle)
+      const full = 'Could not filter the results: a grid takes at most 16 filters. Remove one first.'
+      select([{ top: 0, bottom: 1, left: 0, right: 0 }])
+      service.keepSelectedRows('t1', key)
+      for (let column = 0; column < 15; column++) {
+        select([{ top: 0, bottom: 0, left: column, right: column }])
+        expect(service.filterSelection('t1', key, 'in')).toBe(true)
+      }
+      expect(service.sortOf('t1', key)?.filters).toHaveLength(16)
+      // With it the grid is full: a seventeenth filter is refused, and a new keepRows still replaces the one it has.
+      select([{ top: 0, bottom: 0, left: 15, right: 15 }])
+      expect(service.filterSelection('t1', key, 'in')).toBe(false)
+      flush()
+      expect(tab().jobNotice).toBe(full)
+      select([{ top: 5, bottom: 7, left: 0, right: 0 }])
+      expect(service.keepSelectedRows('t1', key)).toBe(true)
+      expect(sent(handle)).toHaveLength(16)
+      expect(sent(handle)?.[0]).toEqual({ op: 'keepRows', cells: { ranges: [[5, 3]] } })
+      // Sixteen other filters leave it no room.
+      service.removeFilter('t1', key, 0)
+      select([{ top: 0, bottom: 0, left: 15, right: 15 }])
+      expect(service.filterSelection('t1', key, 'in')).toBe(true)
+      service.notify('t1', '')
+      select([{ top: 5, bottom: 7, left: 0, right: 0 }])
+      const calls = handle.sort.mock.calls.length
+      expect(service.keepSelectedRows('t1', key)).toBe(false)
+      expect(handle.sort.mock.calls.length).toBe(calls)
+      flush()
+      expect(tab().jobNotice).toBe(full)
+    })
+  })
+
   it('takes at most 16 filters, saying so, and filters only by selections whose runs of rows fit a request', async () => {
     const { service, handle, select, flush, tab } = filtered(1000, Array.from({ length: 17 }, (_, at): ResultColumn => ({ name: `c${at}`, dataType: 'int', wire: 'text', nullable: true })))
-    handle.sort.mockImplementation(async (_keys, o) => resolvedView(handle, 1, (o?.filters ?? []).map((filter): ResolvedViewFilter => filter.op === 'duplicates' || filter.op === 'groups' ? filter as ResolvedViewFilter : { op: filter.op, column: filter.column, rows: 'rows' in filter ? filter.rows : [0], nulls: 'nulls' in filter ? !!filter.nulls : false })))
+    handle.sort.mockImplementation(async (_keys, o) => resolvedView(handle, 1, (o?.filters ?? []).map((filter): ResolvedViewFilter => filter.op === 'duplicates' || filter.op === 'groups' || filter.op === 'keepRows' ? filter as ResolvedViewFilter : { op: filter.op, column: filter.column, rows: 'rows' in filter ? filter.rows : [0], nulls: 'nulls' in filter ? !!filter.nulls : false })))
     for (let column = 0; column < 16; column++) {
       select([{ top: 0, bottom: 0, left: column, right: column }])
       expect(service.filterSelection('t1', keyAt(service, 't1', 0), 'in')).toBe(true)
@@ -1353,6 +1551,10 @@ describe('results service filters', () => {
     expect(filterLabel({ op: 'between', column: 0, rows: [1, 2], nulls: false }, columns)).toBe('Id between 2 values')
     expect(filterLabel({ op: 'duplicates', columns: [0, 1] }, columns)).toBe('Duplicate rows')
     expect(filterLabel({ op: 'duplicates', columns: [1] }, columns)).toBe('Duplicates in Name')
+    // Keep Selected Rows names no column: its words are the rows it names.
+    expect(filterLabel({ op: 'keepRows', rows: Array.from({ length: 12 }, (_, row) => row) }, columns)).toBe('12 selected rows')
+    expect(filterLabel({ op: 'keepRows', rows: [7] }, columns)).toBe('1 selected row')
+    expect(filterLabel({ op: 'keepRows', rows: Array.from({ length: 4095 }, (_, row) => row) }, columns)).toBe('4,095 selected rows')
     // A checklist's filter names what it keeps or drops: the one value, a count, NULL, or nothing at all.
     const groups = { op: 'groups' as const, column: 1, snapshotId: 4 }
     expect(filterLabel({ ...groups, keep: true, values: 1, nulls: false, row: 3 }, columns, ["'x'"])).toBe("Name = 'x'")

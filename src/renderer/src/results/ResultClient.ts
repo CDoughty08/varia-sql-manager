@@ -567,7 +567,7 @@ export class ResultClient implements Disposable {
     // A groups filter goes as it was asked, without what the view said of it.
     const filters = o.filters?.length ? o.filters.map((item): ViewFilter => item.op === 'groups' ? { op: 'groups', column: item.column, snapshotId: item.snapshotId } : { ...item }) : undefined
     if (keys.length + (filters?.length ?? 0) === 0 || (filters?.length ?? 0) > wire.views.maxFilters
-      || filters?.some(item => item.op === 'duplicates' ? item.columns.length === 0 || new Set(item.columns).size !== item.columns.length || !item.columns.every(columnOf) : !columnOf(item.column)))
+      || filters?.some(item => item.op === 'duplicates' ? item.columns.length === 0 || new Set(item.columns).size !== item.columns.length || !item.columns.every(columnOf) : item.op !== 'keepRows' && !columnOf(item.column)))
       throw new ResultError('INVALID_PARAMS', 'A view needs a sort key or a filter, on columns of the result.')
     const replaces = o.replaces && o.replaces.base === base.handle && this.views.has(`${base.id}#${o.replaces.viewId}`) ? o.replaces.viewId : undefined
     const sort = keys.map(item => ({ column: item.column, descending: item.descending, mode: item.mode }))

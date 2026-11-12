@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { blocksToDrop, checklistCondition, columnFilterKind, conditionFilter, listWindow, maxListSpace, sameFilterFamily } from '../src/renderer/src/results/column-filter'
+import { blocksToDrop, checklistCondition, columnFilterKind, conditionFilter, isNotNullFilter, listWindow, maxListSpace, sameFilterFamily } from '../src/renderer/src/results/column-filter'
 import type { DistinctList } from '../src/renderer/src/results/ResultClient'
 
 describe('column filter', () => {
@@ -34,6 +34,11 @@ describe('column filter', () => {
     expect(columnFilterKind({ op: 'between', column: 2, rows: [1, 2] }, 2)).toBe('between')
     expect(columnFilterKind({ op: 'between', column: 2, rows: [1, 2] }, 1)).toBeUndefined()
     expect(columnFilterKind({ op: 'duplicates', columns: [2] }, 2)).toBeUndefined()
+    // Keep Selected Rows names no column: it is no column's filter, and never the not-NULL one.
+    for (const kept of [{ op: 'keepRows' as const, rows: [2] }, { op: 'keepRows' as const, cells: { ranges: [[2, 1]] as [number, number][] } }]) {
+      expect([0, 2].map(column => columnFilterKind(kept, column))).toEqual([undefined, undefined])
+      expect(isNotNullFilter(kept)).toBe(false)
+    }
   })
   it('gives each row its own pixels within the space a browser lays out, and maps the scroll bar past it so every row stays reachable', () => {
     const near = listWindow({ scrollTop: 2200, viewHeight: 220, rowHeight: 22, rows: 1_000_000, overscan: 8 })

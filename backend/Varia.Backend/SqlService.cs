@@ -1617,34 +1617,46 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 continue;
             }
             if (filter.SnapshotId is not null) throw new RequestException("INVALID_PARAMS", "Only a groups filter names a value list.");
+            if (filter.Op == "keepRows")
+            {
+                // Rows of the result themselves, not a column's values: resolved rows, or the cells a selection covers.
+                if (filter.Column is not null || filter.Nulls is not null || filter.Columns is not null || (filter.Rows is null) == (filter.Cells is null)
+                    || filter.Rows is { Length: 0 or > ViewSorter.MaxKeepRows })
+                    throw new RequestException("INVALID_PARAMS", "A keepRows filter needs either 1 to 4,095 rows or the selected cells, and no column.");
+                filters[i] = new ViewFilter(FilterOp.KeepRows, -1, filter.Rows, false, filter.Cells is { } kept ? SelectedCells(args.ResultId, kept) : null, []);
+                continue;
+            }
             var op = filter.Op switch
             {
                 "in" => FilterOp.In,
                 "notIn" => FilterOp.NotIn,
                 "between" => FilterOp.Between,
-                _ => throw new RequestException("INVALID_PARAMS", "A filter's op is in, notIn, between, duplicates or groups.")
+                _ => throw new RequestException("INVALID_PARAMS", "A filter's op is in, notIn, between, duplicates, groups or keepRows.")
             };
             if (filter.Column is not { } column || column < 0 || column >= columns || filter.Columns is not null
                 || (filter.Rows is null) == (filter.Cells is null) || (filter.Cells is not null && filter.Nulls is not null)
                 || filter.Rows is { Length: > ViewSorter.MaxFilterValues })
                 throw new RequestException("INVALID_PARAMS", "A filter needs a column of the result and either up to 4,096 rows or the selected cells.");
-            ViewCells? cells = null;
-            if (filter.Cells is { } named)
-            {
-                if (named.Ranges is not { Length: >= 1 and <= ViewSorter.MaxFilterRanges } || named.ViewId == 0
-                    || named.Ranges.Any(range => range is not [>= 0 and <= MaxSafeInteger, >= 1 and <= MaxSafeInteger]))
-                    throw new RequestException("INVALID_PARAMS", "Selected cells are 1 to 256 ranges of rows.");
-                var order = named.ViewId is { } viewId ? FindView(args.ResultId, viewId).Order : null;
-                cells = new ViewCells(order, [.. named.Ranges.Select(range => (range[0], range[1]))]);
-            }
-            filters[i] = new ViewFilter(op, column, filter.Rows, filter.Nulls ?? false, cells, []);
+            filters[i] = new ViewFilter(op, column, filter.Rows, filter.Nulls ?? false, filter.Cells is { } named ? SelectedCells(args.ResultId, named) : null, []);
         }
         return filters;
+    }
+
+    /// <summary>A filter's selected cells, checked: 1 to 256 [first, count] ranges of positions in a view of the result, or in
+    /// the result's own order.</summary>
+    private ViewCells SelectedCells(uint resultId, ViewCellsArgs named)
+    {
+        if (named.Ranges is not { Length: >= 1 and <= ViewSorter.MaxFilterRanges } || named.ViewId == 0
+            || named.Ranges.Any(range => range is not [>= 0 and <= MaxSafeInteger, >= 1 and <= MaxSafeInteger]))
+            throw new RequestException("INVALID_PARAMS", "Selected cells are 1 to 256 ranges of rows.");
+        var order = named.ViewId is { } viewId ? FindView(resultId, viewId).Order : null;
+        return new ViewCells(order, [.. named.Ranges.Select(range => (range[0], range[1]))]);
     }
 
     private static ViewFilterResult FilterResult(ViewFilter filter) => filter.Op switch
     {
         FilterOp.Duplicates => new ViewFilterResult("duplicates", Columns: filter.Columns),
+        FilterOp.KeepRows => new ViewFilterResult("keepRows", Rows: filter.Rows),
         _ when filter.Snapshot is { } snapshot => new ViewFilterResult("groups", filter.Column, Nulls: filter.Nulls, SnapshotId: snapshot, Keep: filter.Op == FilterOp.In,
             Values: filter.Rows!.Length, Row: filter.Rows.Length == 1 ? filter.Rows[0] : null),
         _ => new ViewFilterResult(filter.Op switch { FilterOp.In => "in", FilterOp.NotIn => "notIn", _ => "between" }, filter.Column, filter.Rows, filter.Nulls)

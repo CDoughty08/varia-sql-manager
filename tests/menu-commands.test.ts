@@ -584,6 +584,19 @@ describe('Query Output commands', () => {
     } })
     return { ...fixture, tab, doc, element, on, key, block }
   }
+  it('Keep Selected Rows filters the menu\'s grid to its selected rows, and needs a selection there', async () => {
+    const { commands, results, resultSelection, tab, on, block, key } = await ran()
+    expect(commands.isEnabled('output.keepSelectedRows', on('grid'))).toBe(false)
+    expect(commands.isEnabled('output.keepSelectedRows', on('messages'))).toBe(false)
+    resultSelection.set(tab.id, block())
+    expect(commands.isEnabled('output.keepSelectedRows', on('grid'))).toBe(true)
+    // Each grid keeps its own selection.
+    expect(commands.isEnabled('output.keepSelectedRows', on('grid', { place: 1 }))).toBe(false)
+    const keep = vi.spyOn(results, 'keepSelectedRows')
+    expect(await commands.execute('output.keepSelectedRows', on('grid'), 'menu')).toBe(true)
+    expect(keep.mock.calls).toEqual([[tab.id, key()]])
+    expect(keep.mock.results[0].value).toBe(true)
+  })
   it('copy the grid\'s selected cells through the backend, with or without headers', async () => {
     const { commands, api, resultSelection, tab, on, element, block, key } = await ran()
     const enabled = (args: CommandArgs) => (['output.copy', 'output.copyWithHeaders', 'output.selectAll'] as const).filter(id => commands.isEnabled(id, args))

@@ -23,11 +23,17 @@ const filterRow = z.number().int().min(0).max(2 ** 31 - 1)
 const filterRows = z.array(filterRow).max(limits.views.maxFilterValues)
 const filterOp = z.enum(['in', 'notIn', 'between'])
 const distinctColumns = z.array(column).min(1).max(limits.page.maxColumns).refine(columns => new Set(columns).size === columns.length, 'Columns must be distinct.')
+/** Selected cells: [first, count] ranges of positions in a view, or in the result. */
+const filterCells = z.object({ ranges: z.array(z.tuple([count, z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)])).min(1).max(limits.views.maxFilterRanges), viewId: u32.optional() }).strict()
+/** The base rows a keepRows filter keeps (ViewSorter.MaxKeepRows in C#). */
+const keptRows = z.array(filterRow).min(1).max(limits.transpose.maxRows)
 export const viewFilterSchema = z.union([
   z.object({ op: filterOp, column, rows: filterRows, nulls: z.boolean().optional() }).strict(),
-  z.object({ op: filterOp, column, cells: z.object({ ranges: z.array(z.tuple([count, z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)])).min(1).max(limits.views.maxFilterRanges), viewId: u32.optional() }).strict() }).strict(),
+  z.object({ op: filterOp, column, cells: filterCells }).strict(),
   z.object({ op: z.literal('duplicates'), columns: distinctColumns }).strict(),
-  z.object({ op: z.literal('groups'), column, snapshotId: u32 }).strict()
+  z.object({ op: z.literal('groups'), column, snapshotId: u32 }).strict(),
+  z.object({ op: z.literal('keepRows'), rows: keptRows }).strict(),
+  z.object({ op: z.literal('keepRows'), cells: filterCells }).strict()
 ])
 /** A group: a value's place in a snapshot's value order (below 2^31, as rows are). */
 const group = filterRow
@@ -35,7 +41,8 @@ const resolvedFilterSchema = z.union([
   z.object({ op: filterOp, column, rows: filterRows, nulls: z.boolean() }).strict(),
   z.object({ op: z.literal('duplicates'), columns: distinctColumns }).strict(),
   z.object({ op: z.literal('groups'), column, snapshotId: u32, keep: z.boolean(), values: group, nulls: z.boolean(), row: filterRow.optional() }).strict()
-    .refine(filter => filter.row === undefined || filter.values === 1, 'A row names the one value.')
+    .refine(filter => filter.row === undefined || filter.values === 1, 'A row names the one value.'),
+  z.object({ op: z.literal('keepRows'), rows: keptRows }).strict()
 ])
 
 /** One pivot value: an aggregate of a column; only count may leave the column out (it then counts rows). */

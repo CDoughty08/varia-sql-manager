@@ -403,6 +403,34 @@ describe('ResultsPortHost', () => {
     await settle()
     expect(backend.rowBytes).toHaveBeenLastCalledWith(1, { resultId: 7, firstRow: 0, count: 2, viewId: 4 })
   })
+  it('takes a keepRows filter as cells or as 1 to 4,095 rows, with no column, and relays it only resolved to rows', async () => {
+    const { host, port, views } = fixture()
+    host.own([descriptor(7)])
+    const cells = { op: 'keepRows', cells: { ranges: [[0, 2], [5, 1]], viewId: 4 } }
+    const rows = { op: 'keepRows', rows: Array.from({ length: 4095 }, (_, row) => row) }
+    const view = (rid: number, filter: unknown) => port().send({ t: 'view', rid, generation: 1, resultId: 7, sort: [], filters: [filter] })
+    view(1, cells)
+    view(2, rows)
+    view(3, { op: 'keepRows', rows: [] })
+    view(4, { op: 'keepRows', rows: Array.from({ length: 4096 }, (_, row) => row) })
+    view(5, { op: 'keepRows', column: 0, rows: [1] })
+    view(6, { op: 'keepRows', rows: [1], nulls: false })
+    view(7, { op: 'keepRows', cells: { ranges: Array.from({ length: 257 }, (_, row) => [row, 1]) } })
+    view(8, { op: 'keepRows' })
+    view(9, { op: 'keepRows', rows: [1], cells: { ranges: [[0, 1]] } })
+    view(10, { op: 'keepRows', rows: [-1] })
+    view(11, cells)
+    view(12, cells)
+    expect(views.map(item => item.params)).toEqual([cells, rows, cells, cells].map(filter => ({ resultId: 7, sort: [], filters: [filter] })))
+    const resolved = { viewId: 6, rows: 3, baseRows: 9, complete: true, approximate: false, filters: [{ op: 'keepRows', rows: [0, 1, 5] }] }
+    views[0].resolve(resolved)
+    views[1].resolve({ ...resolved, viewId: 7, filters: [rows] })
+    // An answer still naming cells, or keeping no rows, is not relayed.
+    views[2].resolve({ ...resolved, viewId: 8, filters: [cells] })
+    views[3].resolve({ ...resolved, viewId: 9, filters: [{ op: 'keepRows', rows: [] }] })
+    await settle()
+    expect(codes(port())).toEqual([...[3, 4, 5, 6, 7, 8, 9, 10].map(rid => [rid, 'INVALID_REQUEST']), [1, 'ok'], [2, 'ok'], [11, 'BACKEND_ERROR'], [12, 'BACKEND_ERROR']])
+  })
   it('filters within the schema bounds, copies only the filters\' members, and relays a view only with each filter resolved', async () => {
     const { host, port, views } = fixture()
     host.own([descriptor(7)])

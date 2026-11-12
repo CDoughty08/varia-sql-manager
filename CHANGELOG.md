@@ -11,6 +11,7 @@
 - **Activity Monitor Recent Expensive Queries:** see the statements that finished since the previous sample, grouped by query hash with per-second rates, and rank them by CPU, duration, reads, writes or executions. The plan cache is read only while the pane is shown, at its own interval (Settings › Activity Monitor › Query statistics interval, 30 seconds by default).
 - **Activity Monitor Resource Waits and Data File I/O:** see where the server waits, by wait category or by wait type, with a 1-minute average and benign waits hidden by default, and each database file's throughput, read and write latency, response time and size. Files over the I/O latency thresholds (Settings › Activity Monitor) are highlighted, and Over threshold, Rows and Log narrow the list. Both panes read one sample, every 5 seconds by default, only while either is shown.
 
+- **Keep Selected Rows:** filter a results grid to exactly the rows you selected, from the grid menu's Filter submenu. It works on sorted and filtered grids, pivots and comparisons, combines with other filters and sorting, and shows as one removable "12 selected rows" filter. Up to 4,095 rows.
 - **Close one result:** each result's caption has a close button that frees that result's memory and leaves the others as they are, with their names, numbers, sort and filters. Pivots, transposes and comparisons made from it stay. Closing the last one keeps the Results view, Messages and captured plans.
 
 ### Improved

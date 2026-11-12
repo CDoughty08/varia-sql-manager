@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (301)
+## Commands (302)
 
 ### File
 
@@ -165,6 +165,7 @@ keys it uses are listed below.
 | Exclude NULLs (not in the palette) | `output.excludeNulls` | — | — | — | Always | Query Output context menu › Filter › Exclude NULLs |
 | Filter for Duplicates in Selected Columns (not in the palette) | `output.filterDuplicates` | — | — | — | Always | Query Output context menu › Filter › Filter for Duplicates in Selected Columns |
 | Filter for Duplicate Rows (not in the palette) | `output.filterDuplicateRows` | — | — | — | Always | Query Output context menu › Filter › Filter for Duplicate Rows |
+| Keep Selected Rows (not in the palette) | `output.keepSelectedRows` | — | — | — | Always | Query Output context menu › Filter › Keep Selected Rows |
 | Clear Filters (not in the palette) | `output.clearFilters` | — | — | — | Always | Query Output context menu › Filter › Clear Filters |
 | Sort Text by Length in Characters | `output.sortTextByChars` | — | — | — | Always; checked when `resultsSortTextChars` | — |
 | Sort Text by Length in Bytes | `output.sortTextByBytes` | — | — | — | Always; checked when `resultsSortTextBytes` | — |
@@ -871,6 +872,7 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | `2_nulls` | Exclude **N**ULLs | `output.excludeNulls` | `outputView == 'grid'` |
 | `3_duplicates` | Filter for **D**uplicates in Selected Columns | `output.filterDuplicates` | `outputView == 'grid'` |
 | `3_duplicates` | Filter for Duplicate **R**ows | `output.filterDuplicateRows` | `outputView == 'grid'` |
+| `3_rows` | **K**eep Selected Rows | `output.keepSelectedRows` | `outputView == 'grid'` |
 | `4_clear` | **C**lear Filters | `output.clearFilters` | `outputView == 'grid' \|\| outputLiveFilterable` |
 
 #### Query Output context menu › Transpose
