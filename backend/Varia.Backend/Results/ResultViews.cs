@@ -326,7 +326,9 @@ internal static partial class ViewSorter
             if (filter.Op == FilterOp.KeepRows)
             {
                 var named = filter.Cells is { } selected ? Selected(selected, rows, token) : Named(filter.Rows!, rows);
-                order = KeepRows(order, named, token);
+                // The first filter sees every row in base order: the rows it names are the rows it keeps, without a pass over
+                // the result's.
+                order = f == 0 ? (int[])named.Clone() : KeepRows(order, named, token);
                 resolved[f] = filter with { Rows = named, Cells = null };
                 continue;
             }

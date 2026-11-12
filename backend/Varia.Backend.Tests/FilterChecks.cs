@@ -211,6 +211,12 @@ internal static class FilterChecks
             "a resolved keepRows builds the same view again");
         check(Show(Build(set, [], Dups(1), KeepNamed(1, 0, 5)).Order) == "0,5,1", "keepRows keeps the order the filters before it gave (duplicates' groups)");
         check(Show(Build(set, [], KeepNamed(0, 1, 5), Dups(1)).Order) == "0,5", "a filter after keepRows sees only the rows it kept, so the view may show fewer than it names");
+        // Names B, b and c pass the first filter (rows 1, 4, 6); the sort's Value key on that column is the filter's own key,
+        // read through the rows both filters kept.
+        var shared = Build(set, [new ViewKey(1, true, SortMode.Value), new ViewKey(0, false, SortMode.Value)], Named(FilterOp.NotIn, 1, [0], nulls: true), KeepNamed(6, 1, 0));
+        check(Show(shared.Order) == "6,1" && shared.Filters[1].Rows is [0, 1, 6], "keepRows after a value filter sorts by that filter's key over the rows both kept, and still names its rows");
+        check(Show(Build(set, [], KeepNamed(5, 0), KeepNamed(0, 1, 5)).Order) == "0,5" && Show(Build(set, [], Named(FilterOp.In, 1, [0]), KeepNamed(0, 1, 5)).Order) == "0,5",
+            "keepRows keeps the same rows as the first filter and after another");
         var twice = Build(set, [], KeepNamed(5, 5, 0));
         check(Show(twice.Order) == "0,5" && twice.Filters[0].Rows is [0, 5], "rows named twice are kept once");
         check(Throws(() => Build(set, [], KeepNamed(7))) == "INVALID_PARAMS" && Throws(() => Build(set, [], KeepNamed(-1))) == "INVALID_PARAMS", "a keepRows row outside the result is refused");

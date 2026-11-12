@@ -1365,6 +1365,22 @@ describe('results service filters', () => {
       expect(service.sortOf('t1', key)?.filters.map(item => item.label)).toEqual(['256 selected rows'])
     })
 
+    it('takes every row of a grid selected whole when they fit, and refuses when they do not', async () => {
+      const small = filtered(100)
+      const key = keyAt(small.service, 't1', 0)
+      resolving(small.handle)
+      small.service.setSelection('t1', key, selectAll(key))
+      expect(small.service.keepSelectedRows('t1', key)).toBe(true)
+      expect(sent(small.handle)).toEqual([{ op: 'keepRows', cells: { ranges: [[0, 100]] } }])
+      const large = wide()
+      const largeKey = keyAt(large.service, 't1', 0)
+      large.service.setSelection('t1', largeKey, selectAll(largeKey))
+      expect(large.service.keepSelectedRows('t1', largeKey)).toBe(false)
+      large.flush()
+      expect(large.tab().jobNotice).toBe('Keep Selected Rows takes at most 4,095 rows in 256 ranges; 10,000 rows are selected. Nothing was applied.')
+      expect(large.handle.sort).not.toHaveBeenCalled()
+    })
+
     it('is one of the grid\'s 16 filters', async () => {
       const { service, handle, select, flush, tab } = wide()
       const key = keyAt(service, 't1', 0)
