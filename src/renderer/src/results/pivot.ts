@@ -97,8 +97,8 @@ export function draftSpec(draft: PivotDraft): PivotSpec {
 
 /** What a pivot grid's strip says about it. */
 export interface PivotInfo {
-  /** The pivoted set's place in the run. */
-  readonly source: number
+  /** The pivoted entry's key (ResultsService). */
+  readonly source: string
   /** The pivoted set's name, as its caption shows it ("Result 2", "Pivot of Result 1"). */
   readonly sourceLabel: string
   /** The grid's sort or filters applied (the pivot read its view). */

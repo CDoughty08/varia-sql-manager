@@ -41,19 +41,19 @@ function source(rows: number, columns: number) {
   return { handle: handle as unknown as ResultHandle, reads }
 }
 const descriptor = (handle: ResultHandle): ResultDescriptor => ({ generation: 1, resultId: 1, index: 0, batchNumber: 1, iteration: 1, kind: 'rows', columns: [...handle.columns], rowsRead: 0, rowsStored: 0, rowsAvailable: 0, bytesStored: 0, truncatedCells: 0, state: 'complete', incomplete: false } as unknown as ResultDescriptor)
-const cells = (a: [number, number], b: [number, number] = a): GridSelection => ({ resultIndex: 0, active: { row: b[0], column: b[1] }, blocks: [{ kind: 'cells', anchor: { row: a[0], column: a[1] }, focus: { row: b[0], column: b[1] } }] })
+const cells = (a: [number, number], b: [number, number] = a): GridSelection => ({ entry: 'e1', active: { row: b[0], column: b[1] }, blocks: [{ kind: 'cells', anchor: { row: a[0], column: a[1] }, focus: { row: b[0], column: b[1] } }] })
 
 function mount(o: { rows: number; columns: number }) {
   const made = source(o.rows, o.columns)
   const root = document.createElement('div'), scroller = document.createElement('div')
-  for (const [name, value] of Object.entries({ 'data-output-view': 'grid', 'data-tab-id': 'query', 'data-result-index': '0', 'data-result-generation': '1', 'data-result-id': '1' })) root.setAttribute(name, value)
+  for (const [name, value] of Object.entries({ 'data-output-view': 'grid', 'data-tab-id': 'query', 'data-result-entry': 'e1', 'data-result-generation': '1', 'data-result-id': '1' })) root.setAttribute(name, value)
   root.append(scroller)
   document.body.append(root)
   for (const [name, value] of [['clientWidth', 900], ['offsetWidth', 900], ['clientHeight', 300]] as const) Object.defineProperty(scroller, name, { value })
   const state: GridViewState = { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: true }
   const onSelection = vi.fn(), onOpenValue = vi.fn(), onSort = vi.fn()
   const view = new GridView({
-    root, scroller, handle: made.handle, client: { windowsInFlight: 0 }, descriptor: descriptor(made.handle), state, resultIndex: 0, resultCount: 1, platform: 'win32',
+    root, scroller, handle: made.handle, client: { windowsInFlight: 0 }, descriptor: descriptor(made.handle), state, entry: 'e1', resultNumber: 1, resultCount: 1, platform: 'win32',
     onSelection, onCopy: () => {}, onEscape: () => false, onStatus: () => {}, onError: error => { throw error }, onOpenValue, onSort, onFilter: () => {}
   })
   /** The reads answered and the frame after them painted. */
@@ -101,7 +101,7 @@ describe('the grid\'s seams', () => {
     grid.view.selectAll()
     expect(grid.state.selection).toMatchObject({ active: { row: 2, column: 2 }, blocks: [{ kind: 'all' }] })
     // A selection that names another result is none of this grid's.
-    grid.state.selection = { ...cells([4, 4]), resultIndex: 3 }
+    grid.state.selection = { ...cells([4, 4]), entry: 'e2' }
     expect(grid.view.currentSelection()).toBeUndefined()
     grid.view.dispose()
   })

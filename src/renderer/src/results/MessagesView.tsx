@@ -61,7 +61,7 @@ export default function MessagesView({ id, tabId, tab, firstError }: { id?: stri
     }
     if (atBottom.current) element.scrollTop = element.scrollHeight
   }, [tab.messages, tail.length, firstError])
-  return <div ref={ref} id={id} className="messages" role="log" aria-label="Messages" tabIndex={0} data-output-view="messages" data-tab-id={tabId} data-result-index={0} data-pane-focus="messages"
+  return <div ref={ref} id={id} className="messages" role="log" aria-label="Messages" tabIndex={0} data-output-view="messages" data-tab-id={tabId} data-pane-focus="messages"
     onScroll={event => { const element = event.currentTarget; atBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight <= 4 }}>
     {tab.messages.map((entry, index) => <Message key={index} entry={entry} index={index} tabId={tabId} queryId={tab.queryId} commands={commands} gestures={gestures}
       canReveal={entry.kind === 'error' && queries.sourceLine(tabId, tab.queryId, entry.line) !== undefined} />)}

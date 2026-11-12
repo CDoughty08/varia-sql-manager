@@ -8,6 +8,7 @@ import { CompareService, compareText } from '../src/renderer/src/results/Compare
 import { ResultsService, setKey } from '../src/renderer/src/results/ResultsService'
 import { descriptor, fakeResultClient, summaryOf, type FakeHandle } from './fixtures/results'
 import { manualTimers } from './fixtures/workbench'
+import { keyAt } from './fixtures/entries'
 
 const settle = async () => { for (let i = 0; i < 10; i++) await Promise.resolve() }
 
@@ -37,22 +38,22 @@ describe('result diffs', () => {
   it('compares a set with the one before it, appends the diff as the run\'s last set, and says what was compared', async () => {
     const { results, compare, run } = fixture()
     const [first, second] = run(2)
-    expect(compare.canCompare('t1', 1)).toBe(true)
-    expect(compare.canCompare('t1', 0)).toBe(false)
-    await compare.compare('t1', 1)
+    expect(compare.canCompare('t1', keyAt(results, 't1', 1))).toBe(true)
+    expect(compare.canCompare('t1', keyAt(results, 't1', 0))).toBe(false)
+    await compare.compare('t1', keyAt(results, 't1', 1))
     await settle()
     expect(first.diff).toHaveBeenCalledWith(second, { exact: false, signal: expect.any(AbortSignal) })
     const sets = results.getSnapshot().t1.sets
     expect(sets).toHaveLength(3)
-    expect(sets[2]).toMatchObject({ index: 2, label: 'Differences: Result 1 → Result 2', descriptor: { kind: 'diff', resultId: 901 } })
+    expect(sets[2]).toMatchObject({ number: 3, label: 'Differences: Result 1 → Result 2', descriptor: { kind: 'diff', resultId: 901 } })
     expect(results.getSnapshot().t1.settled.get(setKey(sets[2].descriptor))).toEqual({ rows: 3, strip: true })
     const info = compare.getSnapshot().get(setKey(sets[2].descriptor))!
-    expect(info).toMatchObject({ left: 0, right: 1, key: 'Id', changed: 1, added: 1, removed: 0, same: 1 })
+    expect(info).toMatchObject({ left: sets[0].key, right: sets[1].key, leftNumber: 1, rightNumber: 2, key: 'Id', changed: 1, added: 1, removed: 0, same: 1 })
     expect(compareText(info)).toBe('Result 1 → Result 2, rows matched by Id: 1 changed row, 1 added row, 0 removed rows, 1 unchanged.')
     expect(compareText({ ...info, key: null, exact: true, soft: 2, leftOnly: ['Old'], rightOnly: ['New'] }))
       .toBe('Result 1 → Result 2, whole rows matched, text compared exactly: 1 changed row, 1 added row, 0 removed rows, 1 unchanged. 2 values differ only by collation (case or trailing spaces), underlined. Not compared: Old (Result 1), New (Result 2).')
     // A diff is not compared again, nor is a set whose previous one is the diff.
-    expect(compare.canCompare('t1', 2)).toBe(false)
+    expect(compare.canCompare('t1', keyAt(results, 't1', 2))).toBe(false)
   })
 
   it('names a comparison by its results\' numbers, not their places, once an entry before them has gone', async () => {
@@ -61,15 +62,15 @@ describe('result diffs', () => {
     const sets = () => results.getSnapshot().t1.sets
     results.removeEntry('t1', sets()[0].key)
     // Result 3 stands second and is compared with Result 2, which stands first.
-    expect(compare.previousOf('t1', 1)).toBe(0)
-    expect(compare.previousOf('t1', sets()[1].key)).toBe(0)
-    expect(compare.canCompare('t1', 0)).toBe(false)
-    await compare.compare('t1', 1)
+    const [two, three] = sets()
+    expect(compare.previousOf('t1', three.key)).toBe(two)
+    expect(compare.canCompare('t1', keyAt(results, 't1', 0))).toBe(false)
+    await compare.compare('t1', keyAt(results, 't1', 1))
     await settle()
     expect(second.diff).toHaveBeenCalledWith(third, { exact: false, signal: expect.any(AbortSignal) })
-    expect(sets()[2]).toMatchObject({ index: 2, number: 4, label: 'Differences: Result 2 → Result 3', descriptor: { kind: 'diff', resultId: 902 } })
+    expect(sets()[2]).toMatchObject({ number: 4, label: 'Differences: Result 2 → Result 3', descriptor: { kind: 'diff', resultId: 902 } })
     const info = compare.getSnapshot().get(setKey(sets()[2].descriptor))!
-    expect(info).toMatchObject({ left: 0, right: 1, leftNumber: 2, rightNumber: 3 })
+    expect(info).toMatchObject({ left: two.key, right: three.key, leftNumber: 2, rightNumber: 3 })
     expect(compareText(info)).toBe('Result 2 → Result 3, rows matched by Id: 1 changed row, 1 added row, 0 removed rows, 1 unchanged.')
     expect(compareText({ ...info, leftOnly: ['Old'], rightOnly: ['New'] })).toContain('Not compared: Old (Result 2), New (Result 3).')
   })
@@ -77,17 +78,17 @@ describe('result diffs', () => {
   it('compares nothing while the query runs, says why a comparison failed, and keeps only diffs a run still shows', async () => {
     const { results, compare, run } = fixture()
     run(2, { finish: false })
-    expect(compare.canCompare('t1', 1)).toBe(false)
+    expect(compare.canCompare('t1', keyAt(results, 't1', 1))).toBe(false)
     const [first] = run(2, { queryId: 'q2' })
     const notify = vi.spyOn(results, 'notify')
     vi.mocked(first.diff).mockRejectedValueOnce(new ResultError('TOO_LARGE', 'There is not enough result memory to compare these results. Close other results and try again.'))
-    await compare.compare('t1', 1)
+    await compare.compare('t1', keyAt(results, 't1', 1))
     expect(notify).toHaveBeenCalledWith('t1', 'There is not enough result memory to compare these results. Close other results and try again.')
     expect(results.getSnapshot().t1.sets).toHaveLength(2)
-    await compare.compare('t1', 1)
+    await compare.compare('t1', keyAt(results, 't1', 1))
     expect(compare.getSnapshot().size).toBe(1)
     run(2, { queryId: 'q3' })
-    await compare.compare('t1', 1)
+    await compare.compare('t1', keyAt(results, 't1', 1))
     expect(compare.getSnapshot().size).toBe(1)
   })
 
@@ -98,7 +99,7 @@ describe('result diffs', () => {
     let answer!: (value: Awaited<ReturnType<FakeHandle['diff']>>) => void
     let signal: AbortSignal | undefined
     vi.mocked(first.diff).mockImplementationOnce((_right, o) => { signal = o?.signal; return new Promise(resolve => { answer = resolve }) })
-    const comparing = compare.compare('t1', 1)
+    const comparing = compare.compare('t1', keyAt(results, 't1', 1))
     run(2, { queryId: 'q2', finish: false })
     expect(signal?.aborted).toBe(true)
     answer({ descriptor: descriptor(950, { index: 2, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
@@ -124,9 +125,9 @@ describe('result diffs', () => {
     for (const value of values) client.emit('q1', { type: 'resultSet.opened', descriptor: value })
     void results.finish('t1', 'q1', { summary: summaryOf(values) })
     // Id is binary in the second and text in the first: the backend could pair nothing, so the second is not offered.
-    expect(compare.previousOf('t1', 1)).toBeUndefined()
+    expect(compare.previousOf('t1', keyAt(results, 't1', 1))).toBeUndefined()
     // The third skips the second for the first, whose Id holds text like its own.
-    expect(compare.previousOf('t1', 2)).toBe(0)
+    expect(compare.previousOf('t1', keyAt(results, 't1', 2))?.key).toBe(keyAt(results, 't1', 0))
   })
 
   it('draws highlights and search matches over a diff\'s tones (styles.css order and selectors)', () => {
@@ -145,7 +146,7 @@ describe('result diffs', () => {
   })
 
   it('says when values were compared by their stored prefix', () => {
-    const info = { left: 0, right: 1, key: 'Id', exact: false, same: 1, changed: 0, added: 0, removed: 0, soft: 0, leftOnly: [], rightOnly: [], approximate: true }
+    const info = { left: 'e1', right: 'e2', leftNumber: 1, rightNumber: 2, key: 'Id', exact: false, same: 1, changed: 0, added: 0, removed: 0, soft: 0, leftOnly: [], rightOnly: [], approximate: true }
     expect(compareText(info)).toBe('Result 1 → Result 2, rows matched by Id: 0 changed rows, 0 added rows, 0 removed rows, 1 unchanged. Long values were compared by the part these results keep, so a difference past it does not show.')
   })
 
