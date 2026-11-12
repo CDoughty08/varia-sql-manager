@@ -36,6 +36,7 @@ internal static class ViewChecks
     public static void Run(Action<bool, string> check)
     {
         Ordering(check);
+        WholeKeys(check);
         Registry(check);
         HostReads(check);
         Jobs(check).GetAwaiter().GetResult();
@@ -95,6 +96,136 @@ internal static class ViewChecks
         try { await TextChecks.Copy(jobs, new ResultsCopyArgs(set.ResultId, [new([[0, 0]], [[0, 0]])], false, "crlf", 1 << 20, view.ViewId)); }
         catch (RequestException error) { code = error.Code; }
         check(code == "VIEW_NOT_FOUND", "a copy through a closed view is VIEW_NOT_FOUND (" + code + ")");
+    }
+
+    /// <summary>A key that only says how many of its comparisons would read their cells again.</summary>
+    private sealed class SlowKey(double share) : ViewSorter.Key(0)
+    {
+        public override double TieShare => share;
+        public override void Set(int row, ReadOnlySpan<byte> cell, ViewSorter.Scratch scratch) { }
+        public override int Compare(int a, int b) => 0;
+    }
+
+    /// <summary>A collated column's whole sort keys, the budget they come from, and the threads keys are built and rows sorted
+    /// on: whatever the memory and however many threads, the order is the one comparing the cells gives.</summary>
+    private static void WholeKeys(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        ResultColumn[] columns = [new("id", "int", "text"), new("name", "nvarchar", "text", Collation: CaseInsensitive), new("code", "nvarchar", "text", Collation: CaseInsensitive), new("path", "nvarchar", "text", Collation: CaseInsensitive)];
+        var set = store.Open(store.BeginQuery("whole"), 0, 1, 1, "rows", columns, [WireKind.Text, WireKind.Text, WireKind.Text, WireKind.Text]) ?? throw new InvalidOperationException("The result set was not kept.");
+        // Names share their first characters, repeat (each some thirty times, in either case) and are NULL now and then.
+        // Paths are each their own and start alike, but for a few rows: other text, less of the start, or none.
+        string[] others = ["", "/srv", "Zed", "/srv/data/customers", "/opt/data"];
+        const int rows = 150_000;
+        var names = new HashSet<uint>();
+        for (var i = 0; i < rows; i++)
+        {
+            var scrambled = (uint)i * 2654435761u % 5_000;
+            set.CountRow();
+            var builder = set.BeginRow()!;
+            builder.AppendText(i.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            if (i % 97 == 0) builder.AppendNull();
+            else
+            {
+                names.Add(scrambled);
+                builder.AppendText("Customer " + scrambled.ToString("D8", System.Globalization.CultureInfo.InvariantCulture) + (i % 2 == 0 ? " gmbh" : " GMBH"));
+            }
+            builder.AppendText(((uint)i * 2246822519u).ToString("X8", System.Globalization.CultureInfo.InvariantCulture));
+            if (i % 7919 == 5) builder.AppendText(others[i / 7919 % others.Length]);
+            else builder.AppendText("/srv/data/customers/" + ((uint)i * 2654435761u % 10_000_000).ToString("D7", System.Globalization.CultureInfo.InvariantCulture) + "/Invoice.pdf");
+            set.TryCommitRow();
+        }
+        set.Complete();
+        var pages = set.SealedSnapshot();
+        var none = CancellationToken.None;
+        long reserved = 0, returned = 0, asked = 0;
+        var counted = new ViewSorter.KeyMemory(bytes => { Interlocked.Add(ref reserved, bytes); return true; }, bytes => Interlocked.Add(ref returned, bytes));
+        var refusing = new ViewSorter.KeyMemory(_ => false, _ => { });
+        // Room for a few pages' keys, then none: the ones kept are let go.
+        var some = new ViewSorter.KeyMemory(bytes => Interlocked.Add(ref asked, bytes) <= 400_000, _ => { });
+        ViewKey[] byName = [new(1, false, SortMode.Value)];
+        var whole = ViewSorter.Build(set, pages, byName, [], none, counted).Order;
+        var cells = ViewSorter.Build(set, pages, byName, [], none, refusing).Order;
+        var partly = ViewSorter.Build(set, pages, byName, [], none, some).Order;
+        int[] alone;
+        var workers = ViewSorter.Workers;
+        try
+        {
+            ViewSorter.Workers = 1;
+            alone = ViewSorter.Build(set, pages, byName, [], none, refusing).Order;
+        }
+        finally { ViewSorter.Workers = workers; }
+        check(pages.Length > 8 && whole.AsSpan().SequenceEqual(cells) && whole.AsSpan().SequenceEqual(partly) && whole.AsSpan().SequenceEqual(alone)
+            && whole[0] == 0 && whole[1] == 97 && whole[rows / 97 + 1] % 97 != 0,
+            "a collated sort gives one order with its whole sort keys, without them, with only some pages' and on one thread: NULLs first in row order, then the values");
+        check(reserved > 0 && reserved == returned && asked > 400_000,
+            "a collated key reserves what it holds beyond its rows' fixed bytes as it grows and returns it with the build (" + reserved + " bytes reserved, " + returned + " returned)");
+
+        // Filters and a second key go through the same keys: duplicates of a name, by name descending then code.
+        ViewKey[] twoKeys = [new(1, true, SortMode.Value), new(2, false, SortMode.Value)];
+        ViewFilter[] duplicates = [new(FilterOp.Duplicates, 0, null, false, null, [1])];
+        var kept = ViewSorter.Build(set, pages, twoKeys, duplicates, none, counted).Order;
+        var keptCells = ViewSorter.Build(set, pages, twoKeys, duplicates, none, refusing).Order;
+        var listed = ViewSorter.DistinctValues(set, pages, null, 1, true, none, null, counted);
+        var listedCells = ViewSorter.DistinctValues(set, pages, null, 1, true, none, null, refusing);
+        check(kept.Length > rows / 2 && kept.AsSpan().SequenceEqual(keptCells) && listed.Distinct == names.Count && listedCells.Distinct == names.Count && reserved == returned,
+            "filtered rows sorted by two keys, and a column's distinct values, are the same with whole sort keys and without (" + kept.Length + " rows kept, " + listed.Distinct + " values)");
+
+        // Without its whole keys, a key says how many comparisons would read their cells again; a sort that would spend
+        // minutes there is refused rather than run.
+        var approximate = false;
+        var source = new ViewSorter.PageSource(pages, columns.Length);
+        var shared = ViewSorter.Build(set, source, byName[0], null, rows, none, ref approximate, refusing);
+        var held = ViewSorter.Build(set, source, byName[0], null, rows, none, ref approximate, counted);
+        static string? Refused(Action sort)
+        {
+            try { sort(); return null; }
+            catch (RequestException error) { return error.Code + ": " + error.Message; }
+        }
+        check(shared.TieShare > 0.2 && held.TieShare == 0 && held.Layout.StartsWith("ranked", StringComparison.Ordinal) && shared.Layout.StartsWith("prefix", StringComparison.Ordinal),
+            "repeated values are ranked; without room for that or for whole sort keys, the key counts the rows that share their 8 bytes (" + shared.TieShare + "): " + held.Layout + " / " + shared.Layout);
+        held.Drop();
+
+        // Values that start alike leave their sort keys' shared bytes out; the few that start otherwise are marked and
+        // compare by their whole keys, or by their cells without them.
+        ViewKey[] byPath = [new(3, false, SortMode.Value)];
+        var paths = ViewSorter.Build(set, source, byPath[0], null, rows, none, ref approximate, counted);
+        var layout = paths.Layout.Split(", ");
+        paths.Drop();
+        var pathOrder = ViewSorter.Build(set, pages, byPath, [], none, counted).Order;
+        var pathCells = ViewSorter.Build(set, pages, byPath, [], none, refusing).Order;
+        var pathPartly = ViewSorter.Build(set, pages, byPath, [], none, new ViewSorter.KeyMemory(bytes => Interlocked.Add(ref asked, bytes) <= 1_200_000, _ => { })).Order;
+        var codes = ViewSorter.Build(set, source, new ViewKey(2, false, SortMode.Value), null, rows, none, ref approximate, counted);
+        var codeLayout = codes.Layout;
+        codes.Drop();
+        check(layout is ["whole", var start, var marked] && int.Parse(start.Split(' ')[0]) >= 8 && int.Parse(marked.Split(' ')[0]) == rows / 7919 + 1
+            && pathOrder.AsSpan().SequenceEqual(pathCells) && pathOrder.AsSpan().SequenceEqual(pathPartly) && pathOrder[0] % 7919 == 5 && pathOrder[^1] % 7919 == 5
+            && codeLayout.StartsWith("whole, 0 shared", StringComparison.Ordinal) && reserved == returned,
+            "values that start alike drop their sort keys' shared bytes, the rows that start otherwise sort among them all the same, and values that share no start drop none: " + paths.Layout + " / " + codeLayout);
+        check(reserved == returned && Refused(() => ViewSorter.ThrowIfSlow([new SlowKey(1)], int.MaxValue)) == "TOO_LARGE: " + ViewSorter.TooSlow
+            && Refused(() => ViewSorter.ThrowIfSlow([new SlowKey(0), new SlowKey(1)], int.MaxValue)) is not null
+            && Refused(() => ViewSorter.ThrowIfSlow([new SlowKey(1)], 1 << 16)) is null && Refused(() => ViewSorter.ThrowIfSlow([new SlowKey(0)], int.MaxValue)) is null,
+            "a sort whose ties would read cells for minutes is refused as TOO_LARGE; a small one, or one whose keys settle their ties, is not");
+
+        // The parallel sort is the sort: any range, the same order as one thread's.
+        var values = new int[200_003];
+        var random = new Random(7);
+        for (var i = 0; i < values.Length; i++) values[i] = random.Next(5_000);
+        var comparer = Comparer<int>.Create((a, b) => values[a] != values[b] ? values[a].CompareTo(values[b]) : a.CompareTo(b));
+        var sorted = new int[values.Length];
+        var expected = new int[values.Length];
+        for (var i = 0; i < values.Length; i++) sorted[i] = expected[i] = values.Length - 1 - i;
+        Array.Sort(expected, 7, values.Length - 20, comparer);
+        ViewSorter.Sort(sorted, 7, values.Length - 20, comparer);
+        string? cancelled = null;
+        using (var stop = new CancellationTokenSource())
+        {
+            stop.Cancel();
+            try { ViewSorter.Build(set, pages, byName, [], stop.Token, counted); }
+            catch (OperationCanceledException) { cancelled = "cancelled"; }
+        }
+        check(sorted.AsSpan().SequenceEqual(expected) && cancelled == "cancelled" && reserved == returned,
+            "a sort on several threads orders a range as one thread does and leaves the rest alone; a cancelled build stops as a cancellation and returns its keys");
     }
 
     private static void Ordering(Action<bool, string> check)

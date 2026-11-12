@@ -67,37 +67,58 @@ internal static class ColumnProfiler
         var sizes = new LengthStats();
         var guessed = set.Lengths.Any(length => length.Estimated);
         var count = set.Wires.Count;
-        var scratch = new int[PageView.ScratchLength(count)];
-        foreach (var page in pages)
+        // Each column's figures are its own, so each column reads the pages on its own thread, in row order; the rows'
+        // sizes, from the pages' lengths alone, take one more.
+        void Sizes()
         {
-            token.ThrowIfCancellationRequested();
-            var first = page.FirstRow;
-            var measured = page.Lengths.Rows == page.Rows;
-            var estimated = new HashSet<int>();
-            if (measured) page.Lengths.EstimatedRows(0, page.Rows, row => estimated.Add(row));
-            // Row sizes come from the page's lengths: with no columns asked (the row-size bar), the body is never parsed.
-            var parsed = accumulators.Length > 0 ? PageView.Parse(page.Body, count, scratch) : default;
-            for (var r = 0; r < page.Rows; r++)
+            foreach (var page in pages)
             {
-                if (!Included(first + r)) continue;
-                if (measured) sizes.Add(page.Lengths.RowBytes(r), !guessed && !estimated.Contains(r));
-                else sizes.Add(0, false);
-                foreach (var accumulator in accumulators) accumulator.Add(parsed, page.Lengths, r);
+                token.ThrowIfCancellationRequested();
+                var first = page.FirstRow;
+                var measured = page.Lengths.Rows == page.Rows;
+                var estimated = new HashSet<int>();
+                if (measured) page.Lengths.EstimatedRows(0, page.Rows, row => estimated.Add(row));
+                for (var r = 0; r < page.Rows; r++)
+                {
+                    if (!Included(first + r)) continue;
+                    if (measured) sizes.Add(page.Lengths.RowBytes(r), !guessed && !estimated.Contains(r));
+                    else sizes.Add(0, false);
+                }
             }
         }
-        // The histograms' buckets span each column's range, known only now: a second pass fills them.
-        var binned = accumulators.Where(accumulator => accumulator.NeedsBins).ToArray();
-        if (binned.Length > 0)
+        void Column(Accumulator accumulator)
+        {
+            var scratch = new int[PageView.ScratchLength(count)];
             foreach (var page in pages)
             {
                 token.ThrowIfCancellationRequested();
                 var parsed = PageView.Parse(page.Body, count, scratch);
                 for (var r = 0; r < page.Rows; r++)
-                {
-                    if (!Included(page.FirstRow + r)) continue;
-                    foreach (var accumulator in binned) accumulator.Bin(parsed, page.Lengths, r);
-                }
+                    if (Included(page.FirstRow + r)) accumulator.Add(parsed, page.Lengths, r);
             }
+            // The histogram's buckets span the column's range, known only now: a second pass fills them.
+            if (!accumulator.NeedsBins) return;
+            foreach (var page in pages)
+            {
+                token.ThrowIfCancellationRequested();
+                var parsed = PageView.Parse(page.Body, count, scratch);
+                for (var r = 0; r < page.Rows; r++)
+                    if (Included(page.FirstRow + r)) accumulator.Bin(parsed, page.Lengths, r);
+            }
+        }
+        try
+        {
+            Parallel.For(0, accumulators.Length + 1, new ParallelOptions { MaxDegreeOfParallelism = ViewSorter.Workers }, index =>
+            {
+                if (index == accumulators.Length) Sizes();
+                else Column(accumulators[index]);
+            });
+        }
+        catch (AggregateException error) when (error.InnerExceptions.Count > 0)
+        {
+            // What the one thread would have thrown: a cancellation, or a refusal of the room a value needed.
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerExceptions[0]).Throw();
+        }
         return new ResultsProfileResult(rows, complete, sizes.Result(), [.. accumulators.Select(accumulator => accumulator.Result(rows))]);
     }
 

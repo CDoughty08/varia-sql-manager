@@ -193,7 +193,13 @@ internal static partial class ViewSorter
     /// <paramref name="kept"/>, another view of the result, ticked when a row of that view holds it (equal as above), so a
     /// checklist over one view starts as a filtered view shows it; NULL likewise.
     /// </summary>
-    public static DistinctSnapshot DistinctValues(ResultSetBuffer set, StoredPage[] pages, ResultView? view, int column, bool complete, CancellationToken token, ResultView? kept = null)
+    public static DistinctSnapshot DistinctValues(ResultSetBuffer set, StoredPage[] pages, ResultView? view, int column, bool complete, CancellationToken token, ResultView? kept = null, KeyMemory? memory = null)
+    {
+        try { return DistinctValues(set, pages, view, column, complete, kept, memory, token); }
+        finally { memory?.ReturnAll(); }
+    }
+
+    private static DistinctSnapshot DistinctValues(ResultSetBuffer set, StoredPage[] pages, ResultView? view, int column, bool complete, ResultView? kept, KeyMemory? memory, CancellationToken token)
     {
         long total = 0;
         foreach (var page in pages) total += page.Rows;
@@ -201,7 +207,7 @@ internal static partial class ViewSorter
         var rows = (int)total;
         var source = new PageSource(pages, set.Wires.Count);
         var approximate = false;
-        var key = Build(set, source, new ViewKey(column, false, SortMode.Value), null, rows, token, ref approximate);
+        var key = Build(set, source, new ViewKey(column, false, SortMode.Value), null, rows, token, ref approximate, memory);
         var looked = view?.Order.Length ?? rows;
         var values = new int[looked];
         var count = 0;
@@ -238,7 +244,8 @@ internal static partial class ViewSorter
             }
         }
         // Ties fall back to the base row, so each run of equal values starts with the lowest row holding it.
-        if (count > 1) Array.Sort(values, 0, count, new Comparer([key], null, token));
+        ThrowIfSlow([key], count);
+        Sort(values, 0, count, new Comparer([key], null, token));
         // Groups in value order, in place: the representative rows over the front of `values` (a group's slot is never past
         // its first row), their counts and ticks beside them.
         var counts = new int[count];
