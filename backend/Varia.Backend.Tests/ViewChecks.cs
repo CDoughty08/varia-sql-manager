@@ -40,9 +40,45 @@ internal static class ViewChecks
         Registry(check);
         HostReads(check);
         Jobs(check).GetAwaiter().GetResult();
+        Instants(check);
         check(ViewSorter.CompareNumericText("12345678901234567890123456789012.5"u8, "12345678901234567890123456789012.25"u8) > 0
             && ViewSorter.CompareNumericText("-0.00"u8, "0"u8) == 0 && ViewSorter.CompareNumericText("-10"u8, "-9.5"u8) < 0 && ViewSorter.CompareNumericText("0.10"u8, "0.1"u8) == 0,
             "exact numerics compare as numbers at any precision: digits past double's, a negative zero, and trailing zeros");
+    }
+
+    /// <summary>Date and time text read directly is what the general parser reads: the same ticks for the text the backend
+    /// writes, and nothing for any other text, which the general parser is then left to read.</summary>
+    private static void Instants(Action<bool, string> check)
+    {
+        var invariant = System.Globalization.CultureInfo.InvariantCulture;
+        string[] written =
+        [
+            "2024-01-01", "0001-01-01", "9999-12-31", "2024-02-29", "2024-01-01 10:20:30", "2024-01-01 10:20:30.5", "2024-01-01 10:20:30.123", "2024-01-01 23:59:59.9999999",
+            "1900-01-01 00:00:00.0000000", "10:20:30", "23:59:59.9999999", "00:00:00.0000001", "2024-01-01 10:00:00.0000000 +02:00", "2024-01-01 10:00:00.0000000 -05:30",
+            "0001-01-01 00:00:00.0000000 +00:00", "9999-12-31 23:59:59.9999999 -14:00", "2024-06-30 12:00:00 +14:00"
+        ];
+        string[] other =
+        [
+            "", "2024-1-1", "2023-02-29", "2024-13-01", "2024-01-32", "0000-01-01", "2024-01-01T10:20:30", "2024-01-01 24:00:00", "2024-01-01 10:60:00", "2024-01-01 10:20:60",
+            "2024-01-01 10:20:30.", "2024-01-01 10:20:30.12345678", "2024-01-01 10:20", "2024-01-01 ", "10:20", "1.10:20:30", "2024-01-01 10:00:00 +15:00", "2024-01-01 10:00:00 +14:30",
+            "2024-01-01 10:00:00 Z", "2024-01-01 10:00:00+02:00", " 2024-01-01", "2024-01-01 10:00:00 +02:0", "abcd-ef-gh", "2024-01-01 1a:00:00", "Jan 1 2024"
+        ];
+        var same = new List<string>();
+        var wrong = new List<string>();
+        foreach (var text in written)
+        {
+            var read = ViewSorter.TryInstant(Encoding.UTF8.GetBytes(text), out var ticks, out var offset, out var dated, out var zoned);
+            long? expected = zoned ? (DateTimeOffset.TryParse(text, invariant, System.Globalization.DateTimeStyles.None, out var instant) ? instant.UtcTicks : null)
+                : dated ? (DateTime.TryParse(text, invariant, System.Globalization.DateTimeStyles.None, out var date) ? date.Ticks : null)
+                : TimeSpan.TryParse(text, invariant, out var time) ? time.Ticks : null;
+            // The last instant of year 9999 at -14:00 is past the range once in UTC: read as written, and left to the general parser as an instant.
+            var utc = zoned ? ViewSorter.UtcTicks(Encoding.UTF8.GetBytes(text)) : ticks;
+            if (read && (zoned ? utc == expected : ticks == expected)) same.Add(text);
+            else wrong.Add(text);
+        }
+        foreach (var text in other)
+            if (ViewSorter.TryInstant(Encoding.UTF8.GetBytes(text), out _, out _, out _, out _)) wrong.Add(text);
+        check(wrong.Count == 0 && same.Count == written.Length, "date and time text read directly gives the general parser's ticks for the text the backend writes, and declines any other: " + string.Join(" | ", wrong));
     }
 
     private static ResultSetBuffer Fill(ResultStore store)

@@ -35,6 +35,7 @@ internal static class ProfileChecks
         Figures(check);
         Estimates(check);
         Pages(check);
+        Threads(check);
         Charged(check);
         Requests(check);
         Hashes(check);
@@ -145,6 +146,61 @@ internal static class ProfileChecks
     }
 
     /// <summary>Long values are charged as the profile keeps them, and a refusal ends it; the service returns every charge.</summary>
+    /// <summary>A profile read on several threads is the profile one thread gives: every figure merges, and a lowest or
+    /// highest value shows the first row that holds it.</summary>
+    private static void Threads(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        ResultColumn[] columns =
+        [
+            new("id", "int", "text"), new("amount", "decimal", "text", Precision: 10, Scale: 2), new("name", "nvarchar", "text", Collation: CaseInsensitive),
+            new("code", "varchar", "text", Collation: Bin2), new("blob", "varbinary", "binary"), new("at", "datetime2", "text"), new("key", "uniqueidentifier", "text"), new("rate", "float", "text")
+        ];
+        var set = store.Open(store.BeginQuery("threads"), 0, 1, 1, "rows", columns, [.. columns.Select(column => column.Wire == "binary" ? WireKind.Binary : WireKind.Text)])
+            ?? throw new InvalidOperationException("The result set was not kept.");
+        // Few names (so the lowest and highest are held by many rows, in either case and with trailing spaces), ids past
+        // the exact distinct cap, amounts equal by value under different text, NULLs here and there.
+        const int rows = 120_000;
+        var invariant = CultureInfo.InvariantCulture;
+        for (var i = 0; i < rows; i++)
+        {
+            var scrambled = (uint)i * 2654435761u;
+            set.CountRow();
+            var builder = set.BeginRow()!;
+            builder.AppendText(i.ToString(invariant));
+            if (i % 11 == 3) builder.AppendNull();
+            else builder.AppendText((scrambled % 500 / 4m).ToString(i % 2 == 0 ? "0.00" : "0.0#", invariant));
+            if (i % 13 == 5) builder.AppendNull();
+            else builder.AppendText((i % 2 == 0 ? "Name " : "NAME ") + (scrambled % 40).ToString("D2", invariant) + (i % 3 == 0 ? "  " : ""));
+            builder.AppendText("c" + (scrambled % 3000).ToString(invariant));
+            if (i % 7 == 0) builder.AppendNull();
+            else builder.AppendBinary(new byte[1 + (int)(scrambled % 9)]);
+            builder.AppendText(new DateTime(2024, 1, 1).AddSeconds(scrambled % 5_000_000).ToString("yyyy-MM-dd HH:mm:ss.fffffff", invariant));
+            builder.AppendText(new Guid((int)(scrambled % 20_000), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0).ToString());
+            builder.AppendText((scrambled % 1000 / 8.0).ToString("R", invariant));
+            set.TryCommitRow();
+        }
+        set.Complete();
+        var pages = set.SealedSnapshot();
+        int[] all = [.. Enumerable.Range(0, columns.Length)];
+        string Shown(ResultView? view, int workers) => JsonSerializer.Serialize(ColumnProfiler.Profile(set, pages, view, all, true, CancellationToken.None, null, workers), HostChecks.Json);
+        var one = Shown(null, 1);
+        // A view of half the rows, by name descending: rows from every page, in another order.
+        var order = ViewSorter.Build(set, pages, [new ViewKey(2, true, SortMode.Value)], [], CancellationToken.None).Order[..(rows / 2)];
+        var view = store.AddView(set, order, [], false, true, 4L * order.Length, null, rows);
+        var viewed = Shown(view, 1);
+        check(pages.Length > 16 && one == Shown(null, 2) && one == Shown(null, 7) && one == Shown(null, pages.Length + 5) && viewed != one && viewed == Shown(view, 5)
+            && ColumnProfiler.WorkersFor(rows, pages.Length) is > 0 and <= 3 && ColumnProfiler.WorkersFor(100, 1) == 1
+            && ColumnProfiler.WorkingBytes(rows, 2, 3) - ColumnProfiler.WorkingBytes(rows, 2) == 2 * (ColumnProfiler.WorkingBytes(rows, 2) - ColumnProfiler.WorkingBytes(rows, 0)),
+            "a profile read on several threads is the one a single thread gives, of every type, past the exact distinct cap and through a view; each thread's figures are reserved");
+        string? stopped = null;
+        try { ColumnProfiler.Profile(set, pages, null, all, true, new CancellationToken(true), null, 4); }
+        catch (OperationCanceledException) { stopped = "cancelled"; }
+        try { ColumnProfiler.Profile(set, pages, null, all, true, CancellationToken.None, new ColumnProfiler.Charges(_ => false), 4); stopped += ", ran"; }
+        catch (ColumnProfiler.ProfileTooLargeException) { stopped += ", too large"; }
+        check(stopped is "cancelled, too large" or "cancelled, ran", "a profile on several threads stops as a cancellation, and a refused charge as too large: " + stopped);
+    }
+
     private static void Charged(Action<bool, string> check)
     {
         var store = new ResultStore(1L << 30, 1L << 29);
