@@ -82,8 +82,9 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, o
     else state.headerColumn = request.headerColumn
     turned(value => value + 1)
   }), [gridStats, results, tabId, key])
-  const gridState = results.gridState(tabId, key)
-  const turnedView = gridState.orientation === 'transposed' && toneColumnOf(entry.descriptor) < 0, headerColumn = turnedView ? gridState.headerColumn : undefined
+  // Read only: the state is made where the grid is built (mount), as before.
+  const gridState = results.viewState(tabId).grids.get(key)
+  const turnedView = gridState?.orientation === 'transposed' && toneColumnOf(entry.descriptor) < 0, headerColumn = turnedView ? gridState.headerColumn : undefined
   const latest = useRef({ count, onWide, sort, marks, showTypes, rowSize, turnedView, headerColumn })
   latest.current = { count, onWide, sort, marks, showTypes, rowSize, turnedView, headerColumn }
   /** The handle the view shows, and the keys it was sorted by. */
@@ -136,7 +137,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, o
     if (!view) return
     view.setMarks(marks)
     if (resultsSearch.pendingReveal(tabId, key) && view.revealMark(revealSelect)) resultsSearch.revealed(tabId)
-  }, [marks, reveal, revealSelect, swaps, resultsSearch, tabId, key])
+  }, [marks, reveal, revealSelect, swaps, resultsSearch, tabId, key, turnedView])
   // A built view replaces what the grid shows: its first rows are read before the swap, so it paints whole rows at once,
   // unless what it shows is already gone (its result released or lost). While a first sort runs the grid keeps the rows in
   // their order; the views it showed close once it has swapped (ResultsService.viewShown).

@@ -4,7 +4,7 @@ import type { ResultDescriptor } from '../src/shared/contracts'
 import { gridTarget } from '../src/renderer/src/grid/anchor'
 import { gridLimits } from '../src/renderer/src/grid/constants'
 import { GridData } from '../src/renderer/src/grid/data'
-import { GridView, transposedLabel } from '../src/renderer/src/grid/GridView'
+import { GridView, transposedLabel, withinCap } from '../src/renderer/src/grid/GridView'
 import { ColumnLayout, frozenColumn, hitTest } from '../src/renderer/src/grid/layout'
 import { cellKey } from '../src/renderer/src/grid/marks'
 import { rotateSelection, type GridSelection } from '../src/renderer/src/grid/selection'
@@ -330,7 +330,26 @@ describe('a grid transposed', () => {
     expect(grid.onSelection).toHaveBeenLastCalledWith(grid.state.selection)
     // Blocks beyond the cap draw nothing.
     expect(grid.shown('[role="gridcell"][aria-selected="true"]')).toEqual([])
+    // Not even on the last drawn column, where a block clamped to the grid would land: only the active cell shows there.
+    grid.view.setMarks({ handle: grid.handle, cells: new Set([cellKey(4094, 0)]), current: { row: 4094, column: 0 } })
+    grid.view.revealMark()
+    await grid.frame()
+    expect(grid.shown('[role="gridcell"][aria-selected="true"]').map(cell => cell.textContent)).toEqual(['4094:3'])
+    expect(grid.headers().filter(header => header.classList.contains('sel')).map(header => header.textContent)).toEqual(['Row 4,095'])
+    // A right-press on another cell of that column selects the cell pressed: the menu is for it, not for rows out of sight.
+    const last = grid.headers().find(header => header.textContent === 'Row 4,095')!
+    grid.pointer('pointerdown', grid.scroller, Number.parseFloat(last.style.left) - grid.state.transposed!.scrollLeft + 5, 22 + 20 + 5, { button: 2 })
+    expect(grid.state.selection).toEqual(cells([4094, 1]))
     grid.view.dispose()
+  })
+  it('leaves out of the drawn selection only the blocks wholly past the cap', () => {
+    const block = (kind: 'cells' | 'rows' | 'columns' | 'all', from: number, to: number) => ({ kind, anchor: { row: 2, column: from }, focus: { row: 3, column: to } })
+    const drawn: GridSelection = { entry: 'e1', active: { row: 1, column: 4094 }, blocks: [block('cells', 5000, 5010), block('cells', 4000, 5000), block('columns', 4095, 4095), block('columns', 4094, 4094), block('rows', 5000, 5000), block('all', 5000, 5000)] }
+    expect(withinCap(drawn).blocks).toEqual([drawn.blocks[1], drawn.blocks[3], drawn.blocks[4], drawn.blocks[5]])
+    const inside: GridSelection = { ...drawn, blocks: [drawn.blocks[1]] }
+    expect(withinCap(inside)).toBe(inside)
+    // With nothing left, the active cell is the selection.
+    expect(withinCap({ ...drawn, blocks: [drawn.blocks[0]] }).blocks).toEqual([{ kind: 'cells', anchor: drawn.active, focus: drawn.active }])
   })
   it('grows its columns as rows arrive without being built again', async () => {
     const grid = mount({ rows: 2, columns: 6 })
@@ -372,6 +391,12 @@ describe('a grid transposed', () => {
     grid.view.update({ resultCount: 1, headerColumn: 0 })
     await grid.frame()
     expect(grid.headers().slice(0, 2).map(header => header.textContent)).toEqual(['0:0', '1:0'])
+    // A column the grid does not have, or no column at all, heads nothing.
+    for (const headerColumn of [1.5, 6, -1, Number.NaN]) {
+      grid.view.update({ resultCount: 1, headerColumn })
+      await grid.frame()
+      expect(grid.headers().slice(0, 2).map(header => header.textContent), String(headerColumn)).toEqual(['Row 1', 'Row 2'])
+    }
     grid.view.dispose()
   })
   it('answers a menu target in the result\'s rows and columns', async () => {
@@ -487,7 +512,19 @@ describe('a grid transposed', () => {
     again.pointer('dblclick', again.corner(), again.nameWidth() - 1, 10)
     await again.frame()
     expect([again.nameWidth(), again.state.transposed!.nameWidth]).toEqual([fitted, fitted])
+    // Escape during a drag of a width the user had set puts that width back, not a fitted one.
+    again.state.transposed!.nameWidth = 200
     again.view.dispose()
+    const sized = mount({ rows: 50, columns: 6, state: again.state })
+    await sized.frame()
+    sized.pointer('pointerdown', sized.corner(), 199, 10)
+    sized.pointer('pointermove', sized.corner(), 299, 10)
+    await sized.frame()
+    expect(sized.nameWidth()).toBe(300)
+    sized.key('Escape')
+    await sized.frame()
+    expect([sized.nameWidth(), sized.state.transposed!.nameWidth]).toEqual([200, 200])
+    sized.view.dispose()
   })
   it('widens the name column for the types when they show, unless the user sized it', async () => {
     const grid = mount({ rows: 50, columns: 6 })
@@ -556,6 +593,38 @@ describe('a grid transposed', () => {
     expect([kept.scrollLeft, kept.virtualTop, kept.overrides.size]).toEqual([0, top, 0])
     grid.view.dispose()
   })
+  it('puts the orientation not shown back at its start too when the order changes', async () => {
+    const state: GridViewState = { ...freshState() }
+    const table = mount({ rows: 500, columns: 80, state, transposed: false })
+    await table.frame()
+    table.key('End', { ctrlKey: true })
+    await table.frame()
+    expect(state.virtualTop).toBeGreaterThan(0)
+    table.view.dispose()
+    // Sorted while transposed: the table's kept place names other rows now.
+    const turned = mount({ rows: 500, columns: 80, state })
+    await turned.frame()
+    turned.view.fitRow(3)
+    turned.view.setMarks({ handle: turned.handle, cells: new Set([cellKey(300, 0)]), current: { row: 300, column: 0 } })
+    turned.view.revealMark()
+    await turned.frame()
+    turned.view.swap(turned.handle, descriptor(turned.handle), row => row, { top: 0 })
+    await turned.frame()
+    expect([state.virtualTop, state.topRow]).toEqual([0, 0])
+    turned.view.fitRow(3)
+    turned.view.revealMark()
+    await turned.frame()
+    expect([state.transposed!.scrollLeft > 0, state.transposed!.overrides.size]).toEqual([true, 1])
+    turned.view.dispose()
+    // Sorted as a table: the transposed view's kept place and widths go the same way.
+    const back = mount({ rows: 500, columns: 80, state, transposed: false })
+    await back.frame()
+    back.view.swap(back.handle, descriptor(back.handle), row => row)
+    expect([state.transposed!.scrollLeft > 0, state.transposed!.overrides.size]).toEqual([true, 1])
+    back.view.swap(back.handle, descriptor(back.handle), row => row, { top: 0 })
+    expect([state.transposed!.scrollLeft, state.transposed!.overrides.size]).toEqual([0, 0])
+    back.view.dispose()
+  })
   it('puts a highlighted row\'s colour and a row\'s size on its drawn column\'s header, and tints the column', async () => {
     const grid = mount({ rows: 50, columns: 6, rowSize: true })
     grid.view.setHighlights([{ handle: grid.handle, positions: Float64Array.of(1, 3), colors: Uint8Array.of(1, 3) }])
@@ -578,6 +647,14 @@ describe('a grid transposed', () => {
     grid.pointer('pointerover', headers[0], 200, 10)
     grid.pointer('pointerover', grid.cellAt(0, 0)!, 200, 30)
     expect(headers[0].title).toBe('Row 1: 10 bytes (the sum of DATALENGTH over its columns)')
+    // A header hovered before its size was read keeps the bar's tooltip when the pointer leaves it.
+    const late = mount({ rows: 50, columns: 6, rowSize: true })
+    late.pointer('pointerover', late.headers()[0], 200, 10)
+    expect(late.headers()[0].title).toBe('Row 1')
+    await late.frame()
+    late.pointer('pointerover', late.cellAt(0, 0)!, 200, 30)
+    expect(late.headers()[0].title).toBe('Row 1: 10 bytes (the sum of DATALENGTH over its columns)')
+    late.view.dispose()
     grid.view.setHighlights([])
     grid.view.update({ resultCount: 1, rowSize: false })
     await grid.frame()

@@ -219,6 +219,8 @@ export class GridView {
   private turnedFrom: GridSelection | undefined
   private turnedTo: GridSelection | undefined
   private nameWidth = 0
+  /** The state's saved name width when a drag of its border began, for Escape. */
+  private nameWidthBefore: number | undefined
   private readonly bandsEl: HTMLDivElement | undefined
   private bands: BandSlot[] = []
   private lastFirstColumn = 0
@@ -339,7 +341,7 @@ export class GridView {
     this.cap = this.capOverride ?? scrollCap(windowOf(o.root).devicePixelRatio)
     this.rotated = !!o.transposed
     this.tiles = this.rotated ? transposedTiles : tableTiles
-    this.headerColumn = this.rotated ? o.headerColumn : undefined
+    this.headerColumn = this.rotated ? this.validHeaderColumn(o.headerColumn) : undefined
     if (this.rotated) {
       // One width for every drawn column, from the widest type hint until the first rows are measured.
       const kept: NonNullable<GridViewState['transposed']> = o.state.transposed ??= { topRow: 0, virtualTop: 0, scrollLeft: 0, width: this.sharedWidth(Math.max(1, ...o.descriptor.columns.slice(0, this.columns).map(typeHintChars))), overrides: new Map(), sized: false }
@@ -448,9 +450,9 @@ export class GridView {
   }
   /** `headerColumn` (a transposed grid's): a column, or null for none; absent leaves it as it is. */
   update(o: { resultCount: number; showTypes?: boolean; whitespace?: WhitespaceMode; sort?: readonly HeaderSortKey[]; rowSize?: boolean; filtered?: ReadonlySet<number>; filterable?: ReadonlySet<number>; headerColumn?: number | null }): void {
-    if (this.rotated && o.headerColumn !== undefined && (o.headerColumn ?? undefined) !== this.headerColumn) {
+    if (this.rotated && o.headerColumn !== undefined && this.validHeaderColumn(o.headerColumn) !== this.headerColumn) {
       // Its tile is read with the rows from the next frame on, and each header shows its value once read.
-      this.headerColumn = this.data.also = o.headerColumn ?? undefined
+      this.headerColumn = this.data.also = this.validHeaderColumn(o.headerColumn)
       this.schedule()
     }
     if (o.filtered && !sameSet(o.filtered, this.filtered)) { this.filtered = o.filtered; this.schedule() }
@@ -580,6 +582,11 @@ export class GridView {
     // Transposed, the rows run across: a new order or other rows start at the first of them again, and the widths given to
     // positions that now hold other rows go. Which column was being read (the vertical offset) stays.
     else if (o.top !== undefined) { this.pendingLeft = 0; this.uniform!.clearOverrides() }
+    // The orientation not shown keeps its own place in the state, which a new order or other rows put back at the start too.
+    if (o.top !== undefined) {
+      if (this.rotated) { state.virtualTop = Math.max(0, o.top); state.topRow = topRowOf(state.virtualTop) }
+      else if (state.transposed) { state.transposed.scrollLeft = 0; state.transposed.overrides.clear() }
+    }
     if (this.hovered) { this.hovered.removeAttribute('title'); this.hovered = undefined }
     this.schedule()
   }
@@ -651,7 +658,7 @@ export class GridView {
   private selection(): GridSelection | undefined {
     const source = this.sourceSelection()
     if (!source || !this.rotated) return source
-    if (source !== this.turnedFrom) { this.turnedFrom = source; this.turnedTo = rotateSelection(source) }
+    if (source !== this.turnedFrom) { this.turnedFrom = source; this.turnedTo = withinCap(rotateSelection(source)) }
     return this.turnedTo
   }
   /** Takes a selection as drawn; the state and the owner get it in the result's rows and columns. */
@@ -971,7 +978,9 @@ export class GridView {
     if (this.rotated) {
       // The name column's width is the state's once dragged; a drawn column's own width is one of the layout's overrides.
       const kept = this.o.state.transposed!
-      this.resizing = column === frozenColumn ? { pointerId, column, x0: x, width0: this.nameWidth, wasUserSized: kept.nameWidth !== undefined, x, applied: x }
+      // The name column is dragged from the width it is drawn at, which a narrow pane may hold under the saved one.
+      this.nameWidthBefore = kept.nameWidth
+      this.resizing = column === frozenColumn ? { pointerId, column, x0: x, width0: this.rowHeader, wasUserSized: kept.nameWidth !== undefined, x, applied: x }
         : { pointerId, column, x0: x, width0: this.layout.width(column), wasUserSized: true, x, applied: x }
     } else {
       const userSized = this.o.state.userSized ??= new Set()
@@ -988,9 +997,12 @@ export class GridView {
     this.resizing = undefined
     this.root.classList.remove('rg-resizing')
     if (resize.column === frozenColumn) {
-      // Escape, or a press that moved nothing, leaves a name column that fitted its names fitting them.
-      if (restore) this.setNameWidth(resize.width0)
-      if (!resize.wasUserSized && this.nameWidth === resize.width0) delete this.o.state.transposed!.nameWidth
+      // Escape puts back what was saved before the drag: the user's width, or none, and the names are fitted again.
+      if (restore) {
+        const kept = this.o.state.transposed!
+        if (this.nameWidthBefore === undefined) { delete kept.nameWidth; this.nameWidth = this.fittedNameWidth(g.nameColumnMaxWidth) }
+        else { kept.nameWidth = this.nameWidthBefore; this.nameWidth = this.boundedNameWidth(this.nameWidthBefore) }
+      }
     } else {
       if (restore) this.layout.setWidth(resize.column, resize.width0)
       if (!this.rotated && !resize.wasUserSized && this.layout.width(resize.column) === resize.width0) this.o.state.userSized?.delete(resize.column)
@@ -1014,6 +1026,10 @@ export class GridView {
   private boundedNameWidth(width: number): number {
     const most = this.viewportWidth > 0 ? Math.max(g.nameColumnMinWidth, this.viewportWidth - g.columnMinWidth) : g.columnMaxWidth
     return Math.max(g.nameColumnMinWidth, Math.min(Math.round(Number.isFinite(width) ? width : g.nameColumnMinWidth), g.columnMaxWidth, most))
+  }
+  /** A header column the grid can read: one of its shown columns, or none. */
+  private validHeaderColumn(column: number | null | undefined): number | undefined {
+    return typeof column === 'number' && Number.isInteger(column) && column >= 0 && column < this.columns ? column : undefined
   }
   /** What the name column needs for its widest name (and type) and the two buttons, up to `most`. */
   private fittedNameWidth(most: number): number {
@@ -1684,6 +1700,8 @@ export class GridView {
     const key = size ? `${row}|${share}|${size.large ? 1 : 0}|${size.estimated ? 1 : 0}|${size.bytes}` : ''
     if (key === mark.size) return
     mark.size = key
+    // The tooltip is the bar's from here on (or gone with it): a hover that wrote one on this element no longer owns it.
+    if (this.hovered === mark.el) this.hovered = undefined
     const style = mark.el.style
     if (!size) {
       style.removeProperty('--rg-rs')
@@ -1966,6 +1984,18 @@ export function gridLabel(name: string, rows: number, columns: number, open: boo
 export function transposedLabel(name: string, rows: number, columns: number, drawn: number, open: boolean): string {
   const shown = drawn < rows ? `the first ${formatCount(drawn)} of ${formatCount(rows)} rows as columns` : `${formatCount(rows)} ${plural(rows, 'row')} as columns`
   return `${name}, transposed, ${formatCount(columns)} ${plural(columns, 'column')} as rows, ${shown}${open ? ', still loading' : ''}`
+}
+/**
+ * A turned selection without the blocks that lie wholly past the rows a transposed grid draws (they were made in the
+ * table). `blockRange` clamps a block to the grid, which would draw such a block on the last drawn column and let a
+ * right-press there keep it; left out, it draws nothing and no press or key extends it. With none left the active cell is
+ * the selection, as in a grid nothing was selected in. The state keeps every block until a new selection is made here.
+ */
+export function withinCap(drawn: GridSelection): GridSelection {
+  const cap = wire.transpose.maxRows
+  const blocks = drawn.blocks.filter(block => !((block.kind === 'cells' || block.kind === 'columns') && Math.min(block.anchor.column, block.focus.column) >= cap))
+  if (blocks.length === drawn.blocks.length) return drawn
+  return { ...drawn, blocks: blocks.length > 0 ? blocks : [{ kind: 'cells', anchor: drawn.active, focus: drawn.active }] }
 }
 /** A stand-in axis of one column, for the rows a transposed grid shows while it has no column to draw. */
 const oneColumn: ColumnAxis = { count: 1, total: 1, width: () => 1, xOf: column => column <= 0 ? 0 : 1, columnAt: () => 0, setWidth: () => 1, setMaxTotal: () => {} }
