@@ -37,7 +37,7 @@ const sameBlock = (a: SelectionBlock, b: SelectionBlock) => a.kind === b.kind &&
 /** Whether two selections select the same cells with the same active cell (a swap tells the grid's owner only of a change). */
 export function sameSelection(a: GridSelection | undefined, b: GridSelection | undefined): boolean {
   if (!a || !b) return a === b
-  return a.resultIndex === b.resultIndex && a.active.row === b.active.row && a.active.column === b.active.column && a.blocks.length === b.blocks.length && a.blocks.every((block, index) => sameBlock(block, b.blocks[index]))
+  return a.entry === b.entry && a.active.row === b.active.row && a.active.column === b.active.column && a.blocks.length === b.blocks.length && a.blocks.every((block, index) => sameBlock(block, b.blocks[index]))
 }
 
 /**
@@ -63,7 +63,7 @@ export function remapSelection(selection: GridSelection | undefined, mapRow: Row
     }
     if (!blocks.some(kept => sameBlock(kept, next))) blocks.push(next)
   }
-  return { resultIndex: selection.resultIndex, blocks: blocks.length > 0 ? blocks : [{ kind: 'cells', anchor: active, focus: active }], active }
+  return { entry: selection.entry, blocks: blocks.length > 0 ? blocks : [{ kind: 'cells', anchor: active, focus: active }], active }
 }
 
 /**

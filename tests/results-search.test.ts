@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { focusInRun } from '../src/renderer/src/grid/GridView'
 import { cellKey } from '../src/renderer/src/grid/marks'
 import { ResultError, type ResultHandle, type SearchOptions } from '../src/renderer/src/results/ResultClient'
-import { entryOf, type EntryRef, type GridSort, type ResultSetEntry, type TabResults } from '../src/renderer/src/results/ResultsService'
+import { entryOf, type EntryKey, type GridSort, type ResultSetEntry, type TabResults } from '../src/renderer/src/results/ResultsService'
 import { announceDelayMs, ResultsSearchService, searchAnnouncement, searchBoxKeyAction, searchCount, searchDelayMs, type TabSearch } from '../src/renderer/src/results/search'
 import type { ResultColumn, ResultDescriptor, ResultsSearchResult } from '../src/shared/contracts'
 import { manualTimers } from './fixtures/workbench'
@@ -45,13 +45,13 @@ function fixture(o: { maxMatches?: number } = {}) {
     } as unknown as ResultHandle
     const descriptor = { generation: 1, resultId: index + 1, index, columns: columns.map(column) } as unknown as ResultDescriptor
     // The entry's key and number are its result's, as ResultsService keeps them while the entry lives.
-    return { key: `e${index + 1}`, index, ordinal: index + 1, number: index + 1, descriptor, handle }
+    return { key: `e${index + 1}`, ordinal: index + 1, number: index + 1, descriptor, handle }
   }
   const results = {
     getSnapshot: () => (tab ? { t1: tab } : {}) as Readonly<Record<string, TabResults>>,
     subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener) },
     // `sorts` is by the place each set was made for (its result id less one), wherever the set stands now.
-    sortOf: (_tabId: string, ref: EntryRef) => { const entry = entryOf(tab?.sets, ref); return entry && sorts.get(entry.descriptor.resultId - 1) }
+    sortOf: (_tabId: string, key: EntryKey) => { const entry = entryOf(tab?.sets, key); return entry && sorts.get(entry.descriptor.resultId - 1) }
   }
   const service = new ResultsSearchService({ results, timers, maxMatches: o.maxMatches })
   const show = (sets: ResultSetEntry[], queryId = 'q1', settled = true) => {
@@ -77,15 +77,15 @@ describe('ResultsSearchService', () => {
     // One grid at a time: the second search waits for the first.
     expect(searches.map(entry => entry.index)).toEqual([0])
     await answerAll()
-    expect(search()).toMatchObject({ status: 'done', total: 3, current: 0, revealIndex: 0 })
-    expect(search().marks.get(0)).toMatchObject({ current: { row: 2, column: 1 } })
-    expect([...search().marks.get(0)!.cells!]).toEqual([cellKey(2, 1), cellKey(5, 0)])
-    expect(search().marks.get(1)?.current).toBeUndefined()
+    expect(search()).toMatchObject({ status: 'done', total: 3, current: 0, revealEntry: 'e1' })
+    expect(search().marks.get('e1')).toMatchObject({ current: { row: 2, column: 1 } })
+    expect([...search().marks.get('e1')!.cells!]).toEqual([cellKey(2, 1), cellKey(5, 0)])
+    expect(search().marks.get('e2')?.current).toBeUndefined()
     const reveal = search().reveal
     service.step('t1', 1)
     service.step('t1', 1)
-    expect(search()).toMatchObject({ current: 2, revealIndex: 1, reveal: reveal + 2 })
-    expect(search().marks.get(1)?.current).toEqual({ row: 0, column: 0 })
+    expect(search()).toMatchObject({ current: 2, revealEntry: 'e2', reveal: reveal + 2 })
+    expect(search().marks.get('e2')?.current).toEqual({ row: 0, column: 0 })
     service.step('t1', 1)
     expect(search().current).toBe(0)
     service.step('t1', -1)
@@ -100,29 +100,29 @@ describe('ResultsSearchService', () => {
     service.setText('t1', 'x', true)
     await answerAll()
     expect(search()).toMatchObject({ total: 5, current: 0 })
-    expect(search().marks.get(0)!.cells!.size).toBe(2)
+    expect(search().marks.get('e1')!.cells!.size).toBe(2)
     service.step('t1', 1)
     service.step('t1', 1)
     // The third match is past the run: the next run starts after its last row.
     expect(searches.at(-1)).toMatchObject({ fromRow: 4, o: { backward: false } })
     await answerAll()
-    expect(search().marks.get(0)!.current).toEqual({ row: 4, column: 0 })
+    expect(search().marks.get('e1')!.current).toEqual({ row: 4, column: 0 })
     service.step('t1', -1)
     expect(searches.at(-1)).toMatchObject({ fromRow: 4, o: { backward: true } })
     await answerAll()
-    expect(search().marks.get(0)!.current).toEqual({ row: 3, column: 0 })
+    expect(search().marks.get('e1')!.current).toEqual({ row: 3, column: 0 })
     service.step('t1', -1)
-    expect(search().marks.get(0)!.current).toEqual({ row: 1, column: 0 })
+    expect(search().marks.get('e1')!.current).toEqual({ row: 1, column: 0 })
     // Back from the first wraps to the last: the run before the end.
     service.step('t1', -1)
     expect(searches.at(-1)).toMatchObject({ fromRow: 10, o: { backward: true } })
     await answerAll()
     expect(search()).toMatchObject({ current: 4 })
-    expect(search().marks.get(0)!.current).toEqual({ row: 9, column: 0 })
+    expect(search().marks.get('e1')!.current).toEqual({ row: 9, column: 0 })
     service.step('t1', 1)
     expect(searches.at(-1)).toMatchObject({ fromRow: 0, o: { backward: false } })
     await answerAll()
-    expect(search().marks.get(0)!.current).toEqual({ row: 1, column: 0 })
+    expect(search().marks.get('e1')!.current).toEqual({ row: 1, column: 0 })
   })
 
   it('reads a run for a step while the other grids are still searched, without stopping their search', async () => {
@@ -142,7 +142,7 @@ describe('ResultsSearchService', () => {
     searches.splice(0)
     await settle()
     expect(search()).toMatchObject({ status: 'done', total: 3, current: 1 })
-    expect(search().marks.get(0)!.current).toEqual({ row: 6, column: 0 })
+    expect(search().marks.get('e1')!.current).toEqual({ row: 6, column: 0 })
   })
 
   it('matches column names here, ignoring case and accents, and steps through the matching columns', () => {
@@ -151,14 +151,14 @@ describe('ResultsSearchService', () => {
     service.setMode('t1', 'columns')
     service.setText('t1', 'ID', true)
     expect(searches).toHaveLength(0)
-    expect(search()).toMatchObject({ mode: 'columns', total: 2, columns: 5, current: 0, revealIndex: 0 })
-    expect([...search().marks.get(0)!.columns!]).toEqual([1, 0, 0])
-    expect(search().marks.get(0)!.currentColumn).toBe(0)
+    expect(search()).toMatchObject({ mode: 'columns', total: 2, columns: 5, current: 0, revealEntry: 'e1' })
+    expect([...search().marks.get('e1')!.columns!]).toEqual([1, 0, 0])
+    expect(search().marks.get('e1')!.currentColumn).toBe(0)
     service.step('t1', 1)
-    expect(search().marks.get(1)).toMatchObject({ currentColumn: 0 })
-    expect(search().revealIndex).toBe(1)
+    expect(search().marks.get('e2')).toMatchObject({ currentColumn: 0 })
+    expect(search().revealEntry).toBe('e2')
     service.setText('t1', 'cree', true)
-    expect([...search().marks.get(0)!.columns!]).toEqual([0, 1, 0])
+    expect([...search().marks.get('e1')!.columns!]).toEqual([0, 1, 0])
     expect(searchCount(search(), String)).toBe('1 of 5 columns')
   })
 
@@ -175,7 +175,7 @@ describe('ResultsSearchService', () => {
     sorts.set(0, { keys: [], filters: [], applied: [], view, sorting: false, approximate: false, stale: false })
     show(sets)
     expect(searches).toHaveLength(1)
-    expect(search().marks.get(0)?.cells?.size).toBe(3)
+    expect(search().marks.get('e1')?.cells?.size).toBe(3)
     await answerAll()
     expect(search()).toMatchObject({ current: 1, reveal })
     // A step while it searches again moves the active match; the end keeps that place and shows it in the new matches.
@@ -223,10 +223,10 @@ describe('ResultsSearchService', () => {
     show([set(0, ['a'], []), set(1, ['b'], [[4, 0]])])
     service.setText('t1', 'x', true)
     await answerAll()
-    expect(service.pendingReveal('t1', 0)).toBe(false)
-    expect(service.pendingReveal('t1', 1)).toBe(true)
+    expect(service.pendingReveal('t1', 'e1')).toBe(false)
+    expect(service.pendingReveal('t1', 'e2')).toBe(true)
     service.revealed('t1')
-    expect(service.pendingReveal('t1', 1)).toBe(false)
+    expect(service.pendingReveal('t1', 'e2')).toBe(false)
     const focus = search().focus
     expect(service.takeFocus('t1')).toBe(false)
     service.focus('t1')
@@ -253,7 +253,7 @@ describe('ResultsSearchService', () => {
     expect(search().status).toBe('done')
     await answerAll()
     expect(search()).toMatchObject({ status: 'done', current: 2 })
-    expect(search().marks.get(0)!.current).toEqual({ row: 9, column: 0 })
+    expect(search().marks.get('e1')!.current).toEqual({ row: 9, column: 0 })
   })
 
   it('searches again, keeping its place, when the rows a step reads were released, and says a failure if that read fails again', async () => {
@@ -355,7 +355,7 @@ describe('ResultsSearchService', () => {
     const reveal = search().reveal
     await answerAll()
     expect(search()).toMatchObject({ status: 'done', current: 1, revealSelect: true, reveal: reveal + 1 })
-    expect(search().marks.get(0)!.current).toEqual({ row: 5, column: 0 })
+    expect(search().marks.get('e1')!.current).toEqual({ row: 5, column: 0 })
   })
 
   it('selects for a waiting reveal only while the focus is still in one of the run\'s grids', () => {
@@ -392,32 +392,37 @@ describe('ResultsSearchService', () => {
     await answerAll()
     service.step('t1', 1)
     service.step('t1', 1)
-    expect(search()).toMatchObject({ total: 4, current: 2, revealIndex: 2 })
-    expect(search().marks.get(2)).toMatchObject({ handle: last.handle, current: { row: 3, column: 1 } })
-    expect(service.pendingReveal('t1', 2)).toBe(true)
-    // The middle entry goes and the last moves up a place, as ResultsService publishes it: the same entry, a new index.
-    const moved = { ...last, index: 1 }
-    show([first, moved])
-    // Before the search again answers, the last matches show where their entries stand now, and the gone entry's nowhere.
-    expect(search()).toMatchObject({ status: 'searching', revealIndex: 1 })
-    expect(search().marks.get(0)).toMatchObject({ handle: first.handle })
-    expect(search().marks.get(1)).toMatchObject({ handle: last.handle, current: { row: 3, column: 1 } })
-    expect(search().marks.has(2)).toBe(false)
-    expect(service.pendingReveal('t1', 1)).toBe(true)
-    expect(service.pendingReveal('t1', 0)).toBe(false)
-    expect(service.pendingReveal('t1', 2)).toBe(false)
+    expect(search()).toMatchObject({ total: 4, current: 2, revealEntry: last.key })
+    expect(search().marks.get(last.key)).toMatchObject({ handle: last.handle, current: { row: 3, column: 1 } })
+    expect(service.pendingReveal('t1', last.key)).toBe(true)
+    // The middle entry goes and the last moves up a place, as ResultsService publishes it: the same entry.
+    show([first, last])
+    // Before the search again answers, the last matches still show on their entries, and the gone entry's nowhere: the
+    // entry now second has its own marks, not those of the one that stood there.
+    expect(search()).toMatchObject({ status: 'searching', revealEntry: last.key })
+    expect([...search().marks.keys()]).toEqual([first.key, last.key])
+    expect(search().marks.get(first.key)).toMatchObject({ handle: first.handle })
+    expect(search().marks.get(last.key)).toMatchObject({ handle: last.handle, current: { row: 3, column: 1 } })
+    expect(service.pendingReveal('t1', last.key)).toBe(true)
+    expect(service.pendingReveal('t1', first.key)).toBe(false)
+    expect(service.pendingReveal('t1', middle.key)).toBe(false)
     await answerAll()
     expect(search()).toMatchObject({ status: 'done', total: 3 })
-    expect([...search().marks.get(1)!.cells!]).toEqual([cellKey(3, 1), cellKey(4, 0)])
-    expect(search().marks.has(2)).toBe(false)
+    expect([...search().marks.get(last.key)!.cells!]).toEqual([cellKey(3, 1), cellKey(4, 0)])
+    expect(search().marks.has(middle.key)).toBe(false)
     // Column names are kept by entry too.
     service.setMode('t1', 'columns')
-    expect([...search().marks.get(1)!.columns!]).toEqual([1, 1])
-    expect(search()).toMatchObject({ total: 2, current: 0, revealIndex: 1 })
-    show([{ ...moved, index: 0 }])
-    expect([...search().marks.get(0)!.columns!]).toEqual([1, 1])
-    expect(search()).toMatchObject({ total: 2, revealIndex: 0 })
-    expect(service.pendingReveal('t1', 0)).toBe(true)
+    expect([...search().marks.get(last.key)!.columns!]).toEqual([1, 1])
+    expect(search()).toMatchObject({ total: 2, current: 0, revealEntry: last.key })
+    show([last])
+    expect([...search().marks.get(last.key)!.columns!]).toEqual([1, 1])
+    expect(search()).toMatchObject({ total: 2, revealEntry: last.key })
+    expect(service.pendingReveal('t1', last.key)).toBe(true)
+    // The entry that held the active match going leaves no reveal for whatever stands there next.
+    service.setMode('t1', 'values')
+    show([first])
+    expect(search().revealEntry).toBeUndefined()
+    expect(service.pendingReveal('t1', first.key)).toBe(false)
   })
   it('never matches or counts a diff\'s or live table\'s hidden tone column in a column-name search', () => {
     const { service, set, show, search } = fixture()
@@ -427,7 +432,7 @@ describe('ResultsSearchService', () => {
     service.setMode('t1', 'columns')
     service.setText('t1', 'o', true)
     expect(search()).toMatchObject({ total: 1, columns: 2 })
-    expect([...search().marks.get(0)!.columns!]).toEqual([0, 1, 0])
+    expect([...search().marks.get('e1')!.columns!]).toEqual([0, 1, 0])
     service.setText('t1', 'tone', true)
     expect(searchCount(search(), String)).toBe('0 of 2 columns')
   })

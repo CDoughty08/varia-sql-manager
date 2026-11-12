@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import type { QueryResult } from '../../../shared/contracts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import type { ResultHandle } from '../results/ResultClient'
-import { filteredColumns, setKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
+import { filteredColumns, setKey, type EntryKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
 import { resultsFilterSource } from '../results/ColumnFilterPopover'
 import { compareText } from '../results/CompareService'
 import { highlightText } from '../results/HighlightsService'
@@ -16,16 +16,16 @@ import { describeSelection } from './selection'
 export interface ResultGridProps {
   readonly tabId: string
   readonly entry: ResultSetEntry
-  /** Result sets in the run, for the grid's name ("Result 2 of 3"). */
+  /** Result sets in the run, for the grid's name ("Result 2 of 3": the entry's number, of this many). */
   readonly count: number
   /** The grid F6 and the Query Output pane focus first: the one that last had focus. */
   readonly focused: boolean
   readonly budget?: QueryResult['budget']
   /** The grid's sort, while it has one: the grid shows its view once it is built. */
   readonly sort?: GridSort
-  onFocus(index: number): void
+  onFocus(key: EntryKey): void
   /** Whether the set's columns are wider than its grid (it needs a horizontal scroll bar), for sizing the stack to its rows. */
-  onWide?(index: number, wide: boolean): void
+  onWide?(key: EntryKey, wide: boolean): void
 }
 
 const lostText = 'These results are no longer available because the SQL backend restarted.'
@@ -54,7 +54,7 @@ const keysOf = (sort: GridSort | undefined) => (sort?.keys.map(key => `${key.col
  */
 function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, onWide }: ResultGridProps) {
   const { results, commands, gridStats, panes, settings, resultsSearch, highlights, compare, pivot, transpose } = useWorkbench()
-  const marked = useSyncExternalStore(highlights.subscribe, () => highlights.getSnapshot()[tabId]?.get(entry.index))
+  const marked = useSyncExternalStore(highlights.subscribe, () => highlights.getSnapshot()[tabId]?.get(entry.key))
   const compared = useSyncExternalStore(compare.subscribe, () => compare.getSnapshot().get(setKey(entry.descriptor)))
   const pivoted = useSyncExternalStore(pivot.subscribe, () => pivot.getSnapshot().info.get(setKey(entry.descriptor)))
   const transposed = useSyncExternalStore(transpose.subscribe, () => transpose.getSnapshot().get(setKey(entry.descriptor)))
@@ -64,11 +64,11 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, o
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
   // Search in results: this grid's marks, and the tab's reveal of the active match.
   const search = useServiceSnapshot(resultsSearch)[tabId]
-  const marks = search?.marks.get(entry.index)
+  const marks = search?.marks.get(entry.key)
   // Bumped by each swap, so a reveal waiting for the sorted rows runs once they show.
   const [swaps, setSwaps] = useState(0)
   const filtered = useMemo(() => filteredColumns(sort), [sort])
-  const index = entry.index
+  const key = entry.key
   const latest = useRef({ count, onWide, sort, marks, showTypes, rowSize })
   latest.current = { count, onWide, sort, marks, showTypes, rowSize }
   /** The handle the view shows, and the keys it was sorted by. */
@@ -78,10 +78,10 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, o
     // A grid mounted again (a tab switch) shows its sorted view from the start.
     const sorted = now.sort?.view
     shownRef.current = { handle: sorted ?? entry.handle, keys: sorted ? keysOf(now.sort) : '' }
-    results.viewShown(tabId, index, sorted)
+    results.viewShown(tabId, key, sorted)
     const view = create({
-      handle: shownRef.current.handle, descriptor: entry.descriptor, state: results.gridState(tabId, index),
-      resultIndex: index, resultCount: now.count, stats: gridStats, showTypes: now.showTypes, rowSize: now.rowSize,
+      handle: shownRef.current.handle, descriptor: entry.descriptor, state: results.gridState(tabId, key),
+      entry: key, resultNumber: entry.number, resultCount: now.count, stats: gridStats, showTypes: now.showTypes, rowSize: now.rowSize,
       onSelection: selection => {
         const current = entry.handle.getSnapshot()
         results.announceSelection(tabId, describeSelection(selection, current.rowsAvailable, entry.descriptor.columns.length))
@@ -89,12 +89,12 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, o
       // Edit › Copy's copy event; Ctrl+C and Ctrl+A are the catalogue's output.copy and output.selectAll.
       onCopy: () => { void commands.execute('output.copy', undefined, 'keybinding') },
       onEscape: () => results.cancelTabJob(tabId),
-      onWide: wide => latest.current.onWide?.(index, wide),
-      onOpenValue: (row, column) => { void commands.execute('output.openValue', { tabId, cell: { resultIndex: index, row, column } }, 'keybinding') }
+      onWide: wide => latest.current.onWide?.(key, wide),
+      onOpenValue: (row, column) => { void commands.execute('output.openValue', { tabId, cell: { entry: key, row, column } }, 'keybinding') }
     })
     viewRef.current = view
     view.setMarks(now.marks)
-    const registration = results.registerGrid(tabId, index, {
+    const registration = results.registerGrid(tabId, key, {
       selectAll: () => view.selectAll(), repaint: () => view.repaint(), fitColumn: column => view.fitColumn(column),
       filterColumn: column => apiRef.current?.openFunnel(column)
     })
@@ -110,7 +110,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, o
   }
   // The grid draws the highlighted rows of the handle it shows, and switches with its swaps.
   const highlightRows = marked?.rows
-  useLayoutEffect(() => { viewRef.current?.setHighlights(highlightRows ?? []) }, [highlightRows, tabId, index, entry])
+  useLayoutEffect(() => { viewRef.current?.setHighlights(highlightRows ?? []) }, [highlightRows, tabId, entry])
   // The active match scrolls into view once, in the grid that holds it: at once, or when this grid mounts (the stack
   // scrolled to it) or has swapped to the order the matches number.
   const reveal = search?.reveal ?? 0, revealSelect = search?.revealSelect ?? false
@@ -118,8 +118,8 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, o
     const view = viewRef.current
     if (!view) return
     view.setMarks(marks)
-    if (resultsSearch.pendingReveal(tabId, index) && view.revealMark(revealSelect)) resultsSearch.revealed(tabId)
-  }, [marks, reveal, revealSelect, swaps, resultsSearch, tabId, index])
+    if (resultsSearch.pendingReveal(tabId, key) && view.revealMark(revealSelect)) resultsSearch.revealed(tabId)
+  }, [marks, reveal, revealSelect, swaps, resultsSearch, tabId, key])
   // A built view replaces what the grid shows: its first rows are read before the swap, so it paints whole rows at once,
   // unless what it shows is already gone (its result released or lost). While a first sort runs the grid keeps the rows in
   // their order; the views it showed close once it has swapped (ResultsService.viewShown).
@@ -135,30 +135,32 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, o
       view.swap(target, entry.descriptor, row => row, top === undefined ? {} : { top })
       setSwaps(value => value + 1)
       // The views it showed before can close now.
-      results.viewShown(tabId, index, target === entry.handle ? undefined : target)
+      results.viewShown(tabId, key, target === entry.handle ? undefined : target)
     }
     const state = shown.handle.getSnapshot().state
     if (state === 'released' || state === 'lost') swap()
     else void view.prepare(target, 0, abort.signal).then(swap)
     return () => abort.abort()
   }, [target, entry])
-  const source = useMemo(() => resultsFilterSource(results, tabId, index), [results, tabId, index])
+  const source = useMemo(() => resultsFilterSource(results, tabId, key), [results, tabId, key])
   const funnels = useMemo<GridFunnels>(() => ({ source, filtered, columnName: column => entry.descriptor.columns[column]?.name }), [source, filtered, entry])
   const onApi = useCallback((api: GridShellApi | undefined) => { apiRef.current = api }, [])
   const lost = snapshot.state === 'lost'
   const truncation = truncationText({ truncated: snapshot.truncated, rowsStored: snapshot.rowsStored, rowsRead: snapshot.rowsRead, budget })
   const highlightNote = !lost && snapshot.state === 'complete' ? compared ? compareText(compared) : pivoted ? pivotStrip(pivoted, highlightText(marked)) : transposed ? transposeStrip(transposed, highlightText(marked)) : highlightText(marked) : undefined
   const note = lost ? undefined : snapshot.incomplete ? incompleteText : truncation ?? highlightNote
-  return <GridShell mountKey={`${tabId}|${index}|${instanceKey(entry)}`} mount={mount} onApi={onApi}
+  // The entry's key names the grid for commands and menus; the generation and result id say which stored result it showed
+  // when a target was read from it, so a target read before a re-run is told from the new one.
+  return <GridShell mountKey={`${tabId}|${key}|${instanceKey(entry)}`} mount={mount} onApi={onApi}
     rootProps={{
-      'data-result-grid': '', 'data-output-view': 'grid', 'data-tab-id': tabId, 'data-result-index': index, 'data-result-generation': entry.descriptor.generation,
-      'data-result-id': entry.descriptor.resultId, 'data-result-kind': entry.descriptor.kind, 'data-pane-focus': focused ? 'selected' : 'grid', onFocus: () => onFocus(index)
+      'data-result-grid': '', 'data-output-view': 'grid', 'data-tab-id': tabId, 'data-result-entry': key, 'data-result-generation': entry.descriptor.generation,
+      'data-result-id': entry.descriptor.resultId, 'data-result-kind': entry.descriptor.kind, 'data-pane-focus': focused ? 'selected' : 'grid', onFocus: () => onFocus(key)
     }}
-    sort={sort?.keys} onSort={(column, add) => results.cycleSort(tabId, index, column, add)} funnels={funnels}
+    sort={sort?.keys} onSort={(column, add) => results.cycleSort(tabId, key, column, add)} funnels={funnels}
     update={{ resultCount: count, showTypes, rowSize }} gone={lost ? lostText : undefined} strip={note ? { text: note } : undefined} />
 }
 
 /** A result set's grid: a throw while rendering it stays in its frame (GridErrorBoundary), whose Retry renders it again. */
 export default function ResultGrid(props: ResultGridProps) {
-  return <GridErrorBoundary frameProps={{ 'data-result-index': props.entry.index }}><ResultGridBody {...props} /></GridErrorBoundary>
+  return <GridErrorBoundary frameProps={{ 'data-result-entry': props.entry.key }}><ResultGridBody {...props} /></GridErrorBoundary>
 }

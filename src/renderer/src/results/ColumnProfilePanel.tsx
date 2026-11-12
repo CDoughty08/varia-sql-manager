@@ -5,7 +5,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { sqlTypeLabel } from '../grid/measure'
 import Icon from '../Icon'
 import type { ResultHandle } from './ResultClient'
-import type { TabResults } from './ResultsService'
+import { entryOf, type EntryKey, type ResultSetEntry, type TabResults } from './ResultsService'
 import { chunked, histogramCaptions, histogramHeights, profileLines, rowSizeText } from './profile-format'
 import { formatCount, plural } from './status'
 
@@ -47,11 +47,24 @@ function ProfileCard({ name, type, profile, rows }: { name: string; type: string
  * columns a request. It asks again when the grid shows another view or the set finishes loading; a newer request cancels
  * the older. It holds only aggregates, never rows.
  */
-export default function ColumnProfilePanel({ tabId, tab, index }: { tabId: string; tab: TabResults; index: number }) {
+/** The grid a profile follows: its entry, and for a query's own result its number in the run. */
+export interface ProfileTarget { readonly entry: EntryKey; readonly ordinal?: number }
+/** The target for the grid that took the focus. */
+export const profileTarget = (sets: readonly ResultSetEntry[], entry: EntryKey): ProfileTarget => {
+  const ordinal = entryOf(sets, entry)?.ordinal
+  return ordinal === undefined ? { entry } : { entry, ordinal }
+}
+/** The entry of a run a target names: the entry itself, else the run's result of that number, so a query run again is
+ *  profiled on the same result once it arrives (as its highlights follow it). A derived entry is found only by itself. */
+export const profiledEntry = (sets: readonly ResultSetEntry[], target: ProfileTarget | undefined): ResultSetEntry | undefined =>
+  target === undefined ? undefined : entryOf(sets, target.entry) ?? (target.ordinal === undefined ? undefined : sets.find(set => set.ordinal === target.ordinal))
+
+export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { tabId: string; tab: TabResults; shown?: EntryKey }) {
   const { results, commands } = useWorkbench()
   useServiceSnapshot(results)
-  const entry = tab.sets.find(set => set.index === index) ?? tab.sets[0]
-  const handle = entry ? results.sortOf(tabId, entry.index)?.view ?? entry.handle : undefined
+  // The grid the pane last saw take the focus, else the one the stack says had it (the first, before any did).
+  const entry = entryOf(tab.sets, shownEntry) ?? entryOf(tab.sets, results.focusedEntry(tabId)?.key)
+  const handle = entry ? results.sortOf(tabId, entry.key)?.view ?? entry.handle : undefined
   const snapshot = useSyncExternalStore(handle?.subscribe ?? noSubscribe, handle?.getSnapshot ?? noSnapshot)
   const [profiles, setProfiles] = useState<Profiles | undefined>(undefined)
   // The latest profiles, read when a new request starts: asking again for the same rows keeps the cards shown until each
@@ -89,7 +102,7 @@ export default function ColumnProfilePanel({ tabId, tab, index }: { tabId: strin
     return () => abort.abort()
   }, [handle, held, settled, columnKey])
   const shown = profiles?.handle === handle ? profiles : undefined
-  const name = entry ? `Result ${entry.index + 1}` : ''
+  const name = entry ? `Result ${entry.number}` : ''
   const facts = shown?.rows === undefined ? '' : `${formatCount(shown.rows)} ${plural(shown.rows, 'row')}${shown.complete ? '' : ' so far'}`
   const sizes = rowSizeText(shown?.rowBytes)
   return <aside className="profile-panel" aria-label="Column profile" aria-busy={shown?.loading || undefined}>

@@ -7,6 +7,7 @@ import { aggregateFits, columnGroupLimit, draftSpec, emptyDraft, fitDraft, isNum
 import { ResultsService, setKey } from '../src/renderer/src/results/ResultsService'
 import { descriptor, fakeResultClient, summaryOf, type FakeHandle } from './fixtures/results'
 import { manualTimers } from './fixtures/workbench'
+import { keyAt } from './fixtures/entries'
 
 const settle = async () => { for (let i = 0; i < 10; i++) await Promise.resolve() }
 const column = (name: string, dataType: string, patch: Partial<ResultColumn> = {}): ResultColumn => ({ name, dataType, wire: 'text', nullable: true, ...patch }) as ResultColumn
@@ -69,9 +70,9 @@ describe('pivot helpers', () => {
   })
 
   it('says what a pivot read, how many groups it has, and when long values were grouped by a prefix', () => {
-    const info = { source: 0, sourceLabel: 'Result 1', viewed: false, rows: 1200, rowGroups: 3, columnGroups: 4, approximate: false }
+    const info = { source: 'e1', sourceLabel: 'Result 1', viewed: false, rows: 1200, rowGroups: 3, columnGroups: 4, approximate: false }
     expect(pivotText(info)).toBe('Pivot of Result 1: 1,200 rows in 3 row groups × 4 column groups.')
-    expect(pivotText({ ...info, source: 1, sourceLabel: 'Result 2', viewed: true, rows: 1, rowGroups: 1, columnGroups: 0 })).toBe('Pivot of Result 2 (as sorted and filtered): 1 row in 1 row group.')
+    expect(pivotText({ ...info, source: 'e2', sourceLabel: 'Result 2', viewed: true, rows: 1, rowGroups: 1, columnGroups: 0 })).toBe('Pivot of Result 2 (as sorted and filtered): 1 row in 1 row group.')
     expect(pivotText({ ...info, sourceLabel: 'Pivot of Result 1', rows: 2 })).toBe('Pivot of Pivot of Result 1: 2 rows in 3 row groups × 4 column groups.')
     // The strip keeps what the grid's highlights say after it.
     expect(pivotStrip(info, 'Some rows here are identical, so a highlight covers each of them.'))
@@ -86,9 +87,9 @@ describe('PivotService', () => {
   it("opens on a grid's set, builds the pivot from the draft, appends it as the run's last set, and says what it pivoted", async () => {
     const { results, pivot, run } = fixture()
     const [, second] = run(2)
-    expect(pivot.canPivot('t1', 1)).toBe(true)
-    pivot.open('t1', 1)
-    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: true, source: 1, draft: emptyDraft, running: false })
+    expect(pivot.canPivot('t1', keyAt(results, 't1', 1))).toBe(true)
+    pivot.open('t1', keyAt(results, 't1', 1))
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: true, source: keyAt(results, 't1', 1), draft: emptyDraft, running: false })
     // A draft is fitted to the set: a text Sum becomes a Count of that column.
     pivot.setDraft('t1', { rows: [0], column: 1, values: [{ aggregate: 'sum', column: 2 }, { aggregate: 'sum', column: 0 }] })
     expect(pivot.getSnapshot().tabs.t1.draft).toEqual({ rows: [0], column: 1, values: [{ aggregate: 'sum', column: 2 }, { aggregate: 'count', column: 0 }] })
@@ -97,71 +98,75 @@ describe('PivotService', () => {
     expect(second.pivot).toHaveBeenCalledWith({ rows: [0], column: 1, values: [{ aggregate: 'sum', column: 2 }, { aggregate: 'count', column: 0 }] }, { signal: expect.any(AbortSignal) })
     const sets = results.getSnapshot().t1.sets
     expect(sets).toHaveLength(3)
-    expect(sets[2]).toMatchObject({ index: 2, label: 'Pivot of Result 2', descriptor: { kind: 'pivot', resultId: 802 } })
-    expect(pivot.getSnapshot().info.get(setKey(sets[2].descriptor))).toEqual({ source: 1, sourceLabel: 'Result 2', viewed: false, rows: 3, rowGroups: 2, columnGroups: 0, approximate: false })
+    expect(sets[2]).toMatchObject({ number: 3, label: 'Pivot of Result 2', descriptor: { kind: 'pivot', resultId: 802 } })
+    expect(pivot.getSnapshot().info.get(setKey(sets[2].descriptor))).toEqual({ source: keyAt(results, 't1', 1), sourceLabel: 'Result 2', viewed: false, rows: 3, rowGroups: 2, columnGroups: 0, approximate: false })
     expect(pivot.getSnapshot().tabs.t1.running).toBe(false)
     // A pivot can be pivoted again; closing the panel keeps its draft for the next open on the same set.
-    expect(pivot.canPivot('t1', 2)).toBe(true)
+    expect(pivot.canPivot('t1', keyAt(results, 't1', 2))).toBe(true)
     pivot.close('t1')
     expect(pivot.getSnapshot().tabs.t1.open).toBe(false)
-    pivot.open('t1', 1)
+    pivot.open('t1', keyAt(results, 't1', 1))
     expect(pivot.getSnapshot().tabs.t1.draft.rows).toEqual([0])
   })
 
   it('follows the entry it pivots and not its place: when a middle entry goes, and by its number into the next run', async () => {
-    const { results, pivot, run } = fixture()
+    const { client, results, pivot, run } = fixture()
     const [, , third] = run(3)
     const sets = () => results.getSnapshot().t1.sets
-    pivot.open('t1', 2)
+    pivot.open('t1', keyAt(results, 't1', 2))
     pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
     results.removeEntry('t1', sets()[1].key)
     // Result 3 moved up a place: the panel is still on it, with its draft.
-    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: true, source: 1, draft: { rows: [0] } })
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: true, source: keyAt(results, 't1', 1), draft: { rows: [0] } })
     await pivot.run('t1')
     await settle()
     expect(third.pivot).toHaveBeenCalledOnce()
     // The pivot is named after its source's number, and numbered after the run's highest, whatever places they have.
-    expect(sets()[2]).toMatchObject({ index: 2, number: 4, label: 'Pivot of Result 3', descriptor: { kind: 'pivot', resultId: 803 } })
-    expect(pivot.getSnapshot().info.get(setKey(sets()[2].descriptor))).toMatchObject({ source: 1, sourceLabel: 'Result 3' })
+    expect(sets()[2]).toMatchObject({ number: 4, label: 'Pivot of Result 3', descriptor: { kind: 'pivot', resultId: 803 } })
+    expect(pivot.getSnapshot().info.get(setKey(sets()[2].descriptor))).toMatchObject({ source: keyAt(results, 't1', 1), sourceLabel: 'Result 3' })
     // A derived entry is followed by its key.
-    pivot.setSource('t1', 2)
+    pivot.setSource('t1', keyAt(results, 't1', 2))
     results.removeEntry('t1', sets()[0].key)
-    expect(pivot.getSnapshot().tabs.t1.source).toBe(1)
+    expect(pivot.getSnapshot().tabs.t1.source).toBe(keyAt(results, 't1', 1))
     expect(sets()[1].label).toBe('Pivot of Result 3')
     // When the entry it pivots goes, the panel moves to the first set it can pivot, not to whatever took its place.
     run(3, { queryId: 'q0' })
-    pivot.setSource('t1', 1)
+    pivot.setSource('t1', keyAt(results, 't1', 1))
     results.removeEntry('t1', sets()[1].key)
-    expect(pivot.getSnapshot().tabs.t1.source).toBe(0)
+    expect(pivot.getSnapshot().tabs.t1.source).toBe(keyAt(results, 't1', 0))
     expect(sets()[0]).toMatchObject({ ordinal: 1 })
     results.removeEntry('t1', sets()[0].key)
     // An original result is followed by its number into the next run: Result 3, though it stood first when the run began.
-    pivot.setSource('t1', 0)
+    pivot.setSource('t1', keyAt(results, 't1', 0))
     expect(sets()[0]).toMatchObject({ ordinal: 3 })
+    // While the next run has returned only its first result, the panel waits for Result 3 and still names it.
+    results.begin('t1', 'q-streaming')
+    client.emit('q-streaming', { type: 'resultSet.opened', descriptor: descriptor(50, { index: 0, columns }) })
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: undefined, sourceName: 'Result 3', draft: { rows: [0] } })
     run(3, { queryId: 'q2' })
-    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: 2, draft: { rows: [0] } })
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: keyAt(results, 't1', 2), sourceName: 'Result 3', draft: { rows: [0] } })
     expect(sets()[2]).toMatchObject({ ordinal: 3 })
   })
 
   it("pivots nothing while the query runs, shows why a pivot failed, and keeps a new run's panel on its set", async () => {
     const { results, pivot, run } = fixture()
     run(2, { finish: false })
-    expect(pivot.canPivot('t1', 0)).toBe(false)
+    expect(pivot.canPivot('t1', keyAt(results, 't1', 0))).toBe(false)
     const [first] = run(2, { queryId: 'q2' })
-    pivot.open('t1', 0)
+    pivot.open('t1', keyAt(results, 't1', 0))
     vi.mocked(first.pivot).mockRejectedValueOnce(new ResultError('TOO_LARGE', 'There is not enough result memory to pivot these rows. Close other results and try again.'))
     await pivot.run('t1')
     expect(pivot.getSnapshot().tabs.t1).toMatchObject({ running: false, error: 'There is not enough result memory to pivot these rows. Close other results and try again.' })
     expect(results.getSnapshot().t1.sets).toHaveLength(2)
     // Editing the draft clears the failure; a new run keeps the draft and points the panel at its first set.
-    pivot.setSource('t1', 1)
+    pivot.setSource('t1', keyAt(results, 't1', 1))
     pivot.setDraft('t1', { rows: [1], values: [{ aggregate: 'count' }] })
     expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()
     run(2, { queryId: 'q3' })
-    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: true, source: 1, draft: { rows: [1] }, running: false })
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: true, source: keyAt(results, 't1', 1), draft: { rows: [1] }, running: false })
     // A run without that set starts the panel on its first set.
     run(1, { queryId: 'q4' })
-    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: 0, draft: { rows: [1] } })
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: keyAt(results, 't1', 0), draft: { rows: [1] } })
     // A closed tab forgets its panel.
     results.release('t1')
     expect(pivot.getSnapshot().tabs.t1).toBeUndefined()
@@ -170,7 +175,7 @@ describe('PivotService', () => {
   it("keeps a draft on its columns by name when a re-run moves them, and says why a pivot its run refused was not added", async () => {
     const { results, pivot, run } = fixture()
     run(1)
-    pivot.open('t1', 0)
+    pivot.open('t1', keyAt(results, 't1', 0))
     pivot.setDraft('t1', { rows: [0], column: 1, values: [{ aggregate: 'sum', column: 2 }] })
     // The query now returns Amount, Region and Year: the draft still groups by Region and Year and sums Amount.
     const [moved] = run(1, { queryId: 'q2', columns: [columns[2], columns[0], columns[1]] })
@@ -184,14 +189,14 @@ describe('PivotService', () => {
   it("waits for the grid's sort or filter to be built, and drops a closed pivot's strip", async () => {
     const { results, pivot, run } = fixture()
     const [first] = run(1)
-    pivot.open('t1', 0)
+    pivot.open('t1', keyAt(results, 't1', 0))
     const sortOf = vi.spyOn(results, 'sortOf')
     const view = { rows: 3 } as unknown as NonNullable<ReturnType<ResultsService['sortOf']>>['view']
     const sort = { keys: [], filters: [], applied: [], view, sorting: false, approximate: false, stale: false }
     // A filter still being built (or one built while rows streamed, or none yet) would pivot the rows the grid is leaving.
     for (const pending of [{ sorting: true }, { stale: true }, { view: undefined }]) {
       sortOf.mockReturnValue({ ...sort, ...pending })
-      expect(pivot.canPivot('t1', 0)).toBe(false)
+      expect(pivot.canPivot('t1', keyAt(results, 't1', 0))).toBe(false)
       await pivot.run('t1')
       expect(first.pivot).not.toHaveBeenCalled()
     }
@@ -204,9 +209,9 @@ describe('PivotService', () => {
   })
 
   it('gives up a pivot a new run replaces, releases its late answer, and keeps strips only for pivots a run still shows', async () => {
-    const { client, pivot, run } = fixture()
+    const { client, results, pivot, run } = fixture()
     const [first] = run(1)
-    pivot.open('t1', 0)
+    pivot.open('t1', keyAt(results, 't1', 0))
     await pivot.run('t1')
     expect(pivot.getSnapshot().info.size).toBe(1)
     let answer!: (value: Awaited<ReturnType<FakeHandle['pivot']>>) => void
@@ -215,7 +220,7 @@ describe('PivotService', () => {
     const pivoting = pivot.run('t1')
     expect(pivot.getSnapshot().tabs.t1.running).toBe(true)
     // Only one pivot runs per tab.
-    expect(pivot.canPivot('t1', 0)).toBe(false)
+    expect(pivot.canPivot('t1', keyAt(results, 't1', 0))).toBe(false)
     run(1, { queryId: 'q2', finish: false })
     expect(signal?.aborted).toBe(true)
     answer({ descriptor: descriptor(990, { index: 1, kind: 'pivot' }), rows: 1, rowGroups: 1, columnGroups: 0, approximate: false })
