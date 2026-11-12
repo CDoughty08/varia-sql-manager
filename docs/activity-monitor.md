@@ -476,7 +476,7 @@ Resource Waits has Hide benign waits (on by default), which leaves out benign wa
 Data File I/O tones a row warning when its read or write latency reaches 20 ms and error from 50 ms; the files filter carries the
 `activityMonitor.fileLatency*` settings in their place (1 to 10,000 ms). An error threshold below the warning one acts as the warning one.
 
-Recent Expensive Queries ranks by CPU, Duration, Logical Reads, Physical Reads, Writes, Executions, each sorting the next sample in memory (no extra SQL); until it arrives, the status line says the rows are still in the previous order.
+Recent Expensive Queries ranks by CPU, Duration, Logical Reads, Physical Reads, Writes, Executions, each a sort that reorders the last sample's rows at once and every later sample the same way, in memory (no extra SQL).
 
 ## Blocking
 

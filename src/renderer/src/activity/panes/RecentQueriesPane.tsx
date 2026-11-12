@@ -1,9 +1,8 @@
 // Recent Expensive Queries (docs/activity-monitor.md, Panes): the query statistics probe's one table in a live grid
 // (LiveGridPane, no React per row), with rank chips, the pane's own states and a status line. The probe reads the plan
 // cache only while this pane shows (ActivityMonitorService pauses it otherwise), at its own interval. A rank chip is the
-// table's sort key, sent as the probe's sort, which the header shows too: the backend sorts each sample in memory, so the
-// new order arrives with the next sample (up to the probe's interval away), and the status line says so until then.
-import { useState } from 'react'
+// table's sort key, sent as the probe's sort, which the header shows too: the backend re-sorts the last sample in memory at
+// once (no SQL) and sorts every later one the same way.
 import { rankChips, tableSpecs, type RankChip } from '../../../../shared/activity/catalog'
 import type { LiveSort } from '../../../../shared/live/schema'
 import { useWorkbench } from '../../core/WorkbenchContext'
@@ -31,14 +30,12 @@ export function pressedRank(sort: readonly LiveSort[] | undefined): RankChip | u
 /** The probe's sort for a chip: its column, most first, as this table's only key. */
 export const rankSort = (rank: RankChip): LiveSort[] => [{ column: rankChips[rank].column, descending: true, table }]
 
-/** The status line: the query groups listed, that only the costliest are kept, or why there is nothing to count; and,
- *  after a rank chip until the next sample, that the rows shown are still in the previous order. */
-export function recentQueriesStatus({ rows, truncated, live, waiting, refused }: TableFacts, reranking?: RankChip): string {
+/** The status line: the query groups listed, that only the costliest are kept, or why there is nothing to count. */
+export function recentQueriesStatus({ rows, truncated, live, waiting, refused }: TableFacts): string {
   if (rows === undefined) return refused ? 'Query statistics cannot be read on this server.' : paneWaitingText[waiting]
   if (rows === 0) return live ? 'No statement finished since the previous sample.' : 'No statements in the last sample.'
   const parts = [`${formatCount(rows)} ${rows === 1 ? 'query' : 'queries'} by query hash`]
   if (truncated) parts.push(truncated === 'rowLimit' ? `the ${formatCount(spec.rowCap)} that used the most CPU` : 'cut to stay inside the memory budget')
-  if (reranking) parts.push(`ranked by ${rankChips[reranking].title} from the next sample`)
   return parts.join(' · ')
 }
 
@@ -53,9 +50,7 @@ export default function RecentQueriesPane({ state, handle, snapshot }: {
   readonly snapshot: LiveSnapshot
 }) {
   const { activity } = useWorkbench()
-  // The sort lives in the probe's settings (the header's buttons set it too). A chip click draws its press at once, and
-  // remembers the result it was pressed over: until another arrives, the rows are in the order before it.
-  const [clicked, setClicked] = useState<{ readonly chip: RankChip; readonly resultId: number | undefined }>()
+  // The sort lives in the probe's settings (the header's buttons set it too); a chip click draws its press at once.
   const pressed = pressedRank(handle.probeOptions(probe)?.sort)
   const current = handle.table(probe, table)
   const problem = paneProblem(snapshot.probes[probe], table)
@@ -63,11 +58,9 @@ export default function RecentQueriesPane({ state, handle, snapshot }: {
     rows: current?.descriptor.rowsAvailable, truncated: current?.descriptor.truncated, waiting: paneWaiting(snapshot, probe), refused: problem?.kind === 'refused',
     live: snapshot.status === 'live' && snapshot.probes[probe]?.state === 'fresh'
   }
-  const reranking = clicked && current && clicked.resultId === current.descriptor.resultId && pressed === clicked.chip ? clicked.chip : undefined
   const rank = (chip: RankChip) => {
     if (pressed === chip) return
     handle.setProbe(probe, { sort: rankSort(chip) })
-    setClicked({ chip, resultId: current?.descriptor.resultId })
   }
   return <div className="activity-pane-content" data-activity-grid="recentQueries">
     <div className="activity-pane-tools one-row" role="toolbar" aria-label="Recent Expensive Queries ranking">
@@ -78,6 +71,6 @@ export default function RecentQueriesPane({ state, handle, snapshot }: {
     <PaneState problem={problem} hasRows={!!current} waiting={facts.waiting} empty={recentQueriesEmpty(facts, problem)}>
       <LiveGridPane live={handle} probe={probe} table={table} label="Recent Expensive Queries" state={activity.gridState(state.id, 'recentQueries')} />
     </PaneState>
-    <p className="activity-pane-status">{recentQueriesStatus(facts, reranking)}</p>
+    <p className="activity-pane-status">{recentQueriesStatus(facts)}</p>
   </div>
 }

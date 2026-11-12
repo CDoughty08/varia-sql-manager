@@ -9,7 +9,7 @@ namespace Varia.Backend.Tests;
 
 /// <summary>Offline checks of the live tables (Live/LiveTables.cs): live memory (the subscription limit, the live share,
 /// small pages, no forced collection), snapshot revisions (two alive, diff, tracking, departed rows, sort, filter, view, row
-/// cap, facets, cell text equal to a query's), append segments (settle window, late ids, dedupe bound, roll, restart, start,
+/// cap, facets, cell text equal to a query's, a new sort re-emitted from the held rows), append segments (settle window, late ids, dedupe bound, roll, restart, start,
 /// budget), the synthetic source's multi-table, state-built, append and wide probes through LiveService, and row tones
 /// (stored with their role, left out of Copy and Save, also of a revision retired while it is copied).</summary>
 internal static class LiveTableChecks
@@ -22,10 +22,12 @@ internal static class LiveTableChecks
         CatalogChecks(check);
         StoreChecks(check);
         SnapshotChecks(check);
+        ResortChecks(check);
         CellChecks(check);
         FacetChecks(check);
         AppendChecks(check);
         await SyntheticChecks(check);
+        await ResortServiceChecks(check);
         await LogChecks(check);
         await EndChecks(check);
         await ToneChecks(check);
@@ -661,6 +663,84 @@ internal static class LiveTableChecks
                 "a copy of the live revision a grid shows completes when later samples retire that revision while it runs");
         }
         finally { folder.Delete(true); }
+    }
+
+    /// <summary>A new sort writes the next revision from the rows the newest one was built from (no source rows, no SQL): the
+    /// cap picks the top rows by the new keys, departed rows stay, no change of order writes nothing, and rows that would not fit
+    /// the hold allowance are not kept.</summary>
+    private static void ResortChecks(Action<bool, string> check)
+    {
+        var store = Store();
+        var set = new LiveTableSet(store, Guid.NewGuid().ToString(), Limits);
+        var table = set.Snapshot(Probe(ItemsTable(rowCap: 2)), 0);
+        var source = new List<LiveRow> { Item(5, "a", 7), Item(3, "b", 7), Item(4, "c", 9), Item(6, "d", null) };
+        var first = table.Write(source, new(), more: 1).Sample!;
+        var firstIds = Ids(store, first.Descriptor);
+        var held = set.HeldBytes;
+        var resorted = table.Resort([new LiveSortArgs("amount", true)], new LiveTrackArgs("test.tables", 0, 2, ["4", "5"]));
+        var resortedIds = resorted?.Sample is { } written ? Ids(store, written.Descriptor) : [];
+        var same = table.Resort([new LiveSortArgs("amount", true)], null);
+        var back = table.Resort(null, null);
+        var third = table.Resort([new LiveSortArgs("amount", false, 1)], null);
+        check(firstIds.SequenceEqual(["5", "3"]) && held > 0
+            && resorted is { Budget: false, Sample: { Revision: 2, Retired: null, Diff: { Added: 1, Removed: 1, Changed: 0 }, Tracked: { Seq: 2, Rows: [0, -1] }, Facets: null } } r
+            && resortedIds.SequenceEqual(["4", "3"]) && r.Sample.Descriptor is { RowsRead: 5, Truncated: "rowLimit" } && same is null
+            && back is { Sample: { Revision: 3 } } b && b.Sample.Retired is [var gone] && gone == first.Descriptor.ResultId && Ids(store, b.Sample.Descriptor).SequenceEqual(["5", "3"])
+            && third is null && set.HeldBytes == held,
+            "a new sort re-emits the newest revision's rows in its order (the cap keeps the new top rows, the source's cut rows still counted), clearing it goes back to the source's order, and an unchanged order writes nothing");
+
+        // The next sample replaces what is held; departed rows stay through a re-sort, in its order.
+        var departing = new LiveTableSet(store, Guid.NewGuid().ToString(), Limits).Snapshot(Probe(ItemsTable(departed: true)), 0);
+        departing.Write(Items(1, 2, 3), new());
+        var track = new LiveTrackArgs("test.tables", 0, 1, ["1"]);
+        departing.Write(Items(2, 3), new(Track: track));
+        var byId = departing.Resort([new LiveSortArgs("id", true)], track)!.Value.Sample!;
+        check(Ids(store, byId.Descriptor).SequenceEqual(["3", "2", "1"]) && byId is { Departed: [2], Tracked.Rows: [2], Diff: { Added: 0, Removed: 0, Changed: 0 } },
+            "a re-sort keeps the newest revision's departed rows, now where the new order puts them, and changes no cells");
+
+        // Rows past the hold allowance (a quarter of the subscription's limit) go with their sample, and a new sort waits.
+        var small = new LiveTableSet(store, Guid.NewGuid().ToString(), Limits with { SubscriptionBytes = 64 * 1024 });
+        var big = small.Snapshot(Probe(ItemsTable(rowCap: 1000)), 0);
+        big.Write([.. Enumerable.Range(1, 1000).Select(id => Item(id, "G", id))], new());
+        var unheld = big.Resort([new LiveSortArgs("amount", true)], null);
+        var fits = small.Snapshot(Probe(ItemsTable()), 0);
+        fits.Write(Items(1, 2), new());
+        var heldSmall = small.HeldBytes;
+        small.Release();
+        check(unheld is null && heldSmall == LiveSnapshotTable.Estimate([.. Items(1, 2).Select((row, at) => (row, false, at))]) && heldSmall <= small.HoldLimit && small.HeldBytes == 0 && set.HeldBytes == held,
+            "rows that do not fit the hold allowance are not kept (the sort waits for the next sample); a table that fits counts its estimate, and releasing the tables returns it");
+        set.Release();
+        check(set.HeldBytes == 0, "releasing a subscription's tables drops the rows they held");
+    }
+
+    /// <summary>Through LiveService: a sort update reorders a probe at once, from its last sample, however far its next sample is
+    /// (a 60 s tick here), also while the view is paused, and the re-sorted sample says so and costs nothing.</summary>
+    private static async Task ResortServiceChecks(Action<bool, string> check)
+    {
+        var service = new SqlService(new ResultStore(1L << 30, 1L << 29), hooks: true);
+        var store = service.Results;
+        var view = Subscribe(service, [SyntheticSampler.TableProbe], new { tickMs = 60_000, rows = 6 }, id: 4);
+        // The baseline and its quick second sample; the next is a minute away.
+        await view.Recorder.WaitAsync(recorder => recorder.Ticks.Count >= 2);
+        var sampled = SampleOf(view.Recorder.Ticks[1], SyntheticSampler.TableProbe)!.Tables![0];
+        var sampledRows = Rows(store, sampled.Descriptor);
+        service.Live.Update(new LiveUpdateArgs(view.Id, SyntheticSampler.Source, Probes: [new LiveProbeArgs(SyntheticSampler.TableProbe, Sort: [new LiveSortArgs("value", true)])]), Json);
+        var arrived = await view.Recorder.WaitAsync(recorder => recorder.Ticks.Count >= 3, 5000);
+        var resorted = arrived ? SampleOf(view.Recorder.Ticks[2], SyntheticSampler.TableProbe) : null;
+        var resortedRows = resorted?.Tables is [{ } entry] ? Rows(store, entry.Descriptor) : [];
+        var values = resortedRows.Select(row => long.Parse(row[2]!, CultureInfo.InvariantCulture)).ToList();
+        check(resorted is { Resorted: true, CostMs: 0, Metrics: null, Gap: null, ElapsedMs: null, Tables: [{ Revision: 3 }] } && resorted.Tables[0].Retired is [var retired]
+            && store.Find(retired) is null && resortedRows.Select(row => row[0]).Order().SequenceEqual(sampledRows.Select(row => row[0]).Order()) && values.SequenceEqual(values.OrderDescending())
+            && !values.SequenceEqual(sampledRows.Select(row => long.Parse(row[2]!, CultureInfo.InvariantCulture))),
+            "a sort update re-emits the probe's last sample at once, in the new order (same rows, the oldest revision retired), marked resorted with no cost, metrics or gap");
+
+        service.Live.Update(new LiveUpdateArgs(view.Id, SyntheticSampler.Source, Paused: true), Json);
+        service.Live.Update(new LiveUpdateArgs(view.Id, SyntheticSampler.Source, Probes: [new LiveProbeArgs(SyntheticSampler.TableProbe, Clear: ["sort"])]), Json);
+        var cleared = await view.Recorder.WaitAsync(recorder => recorder.Ticks.Count >= 4, 5000);
+        var sourceOrder = cleared && SampleOf(view.Recorder.Ticks[3], SyntheticSampler.TableProbe) is { Resorted: true, Tables: [{ } back] } ? Ids(store, back.Descriptor) : [];
+        check(sourceOrder.Count == 6 && sourceOrder.SequenceEqual(sampledRows.Select(row => row[0])),
+            "clearing the sort while paused re-emits the rows in the source's order, without sampling");
+        await Stop(view);
     }
 
     private static async Task SyntheticChecks(Action<bool, string> check)

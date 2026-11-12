@@ -201,9 +201,8 @@ describe('Recent Expensive Queries pane', () => {
     expect(pressedRank([{ column: 'database', descending: true, table: 0 }])).toBeUndefined()
     expect(rankSort('duration')).toEqual([{ column: 'averageDurationMs', descending: true, table: 0 }])
   })
-  it('says what the table holds, what cut it, that a chip ranks from the next sample, and why there is nothing', () => {
+  it('says what the table holds, what cut it, and why there is nothing', () => {
     expect(recentQueriesStatus(facts({ rows: 1 }))).toBe('1 query by query hash')
-    expect(recentQueriesStatus(facts({ rows: 3 }), 'executions')).toBe('3 queries by query hash · ranked by Executions from the next sample')
     expect(recentQueriesStatus(facts({ rows: 200, truncated: 'rowLimit' }))).toBe(`200 queries by query hash · the ${tableSpecs.recentQueries.rowCap} that used the most CPU`)
     expect(recentQueriesStatus(facts({ rows: 9, truncated: 'globalBudget' }))).toBe('9 queries by query hash · cut to stay inside the memory budget')
     expect(recentQueriesStatus(facts({}))).toBe('No statement finished since the previous sample.')

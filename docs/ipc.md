@@ -1880,13 +1880,17 @@ samples: { probe, costMs, effectiveIntervalMs, elapsedMs? (absent for the first)
 skipped?, metrics?: (number | null)[], tables?: { table, descriptor, revision, retired?: u32[≤ 2], diff?: { added,
 removed, changed }, tracked?: { seq, rows: (row | −1)[≤ 64] }, departed?: row[1..64], facets?: { column, values: { text ≤ 128,
 count }[≤ 100], more?: true }[1..7] }[≤ 4], append?: { table, descriptor, segment, rolledFrom?, retired?: u32[1..8], restarted?: true
-}[≤ 4], status?: { id, value: integer | str ≤ 128 }[≤ 16] }[≤ 8], errors?: probe error[1..8] }`. A probe
+}[≤ 4], status?: { id, value: integer | str ≤ 128 }[≤ 16], resorted?: true }[≤ 8], errors?: probe error[1..8] }`. A probe
 error is a value, never an exception, so the other probes carry on: `{ probe, code, message ≤ 2,000 (a sentence, never SQL,
 names or values), number?, retryInMs, terminal, tables?, series? }` (the tables or series one failed statement of the
 probe's batch would have filled; a probe can report more than one error in a tick, such as `BUDGET` for one table and
 the failed statement of another, and `terminal` is true only when the probe stopped, never beside its sample), with `code` one of BLOCKED, TIMEOUT, PERMISSION_DENIED, NOT_SUPPORTED,
 DATABASE_UNAVAILABLE, CONNECTION_LOST, SQL_ERROR, AUTH_KERBEROS, AUTH_ENTRA, BUDGET, BUSY, CATALOG_MISSING, NOT_FOUND or
 LOGIN_FAILED.
+A `resorted` sample is not a sample: after an update changes a probe's sort, the next tick carries the probe's snapshot
+tables again from the rows their newest revisions were built from, in the new order, with `costMs` 0 and nothing else
+(no metrics, gap, elapsed time, status or append tables); the renderer keeps the probe's last sample time, cost and error
+(Tables, Re-sort, below). A probe that is due in that tick is sampled instead, in the new sort.
 Main checks every frame against `liveEventSchema` (each probe sampled once, metrics aligned with the catalogue's series,
 tables named by their catalogue index with the catalogue's column names in order, at most 8 tables in a tick, departed rows
 only for a table that keeps them, facets only for its facet columns and at most 32 KiB of facet text (UTF-8) in a tick, status
@@ -1921,6 +1925,15 @@ from its own state; the writers do the rest.
   most 128 characters (values that differ only past them count together), and only when they changed since the table's last
   facets; a tick's facet text is shared by its tables up to 32 KiB, counting only the facets a sample sends, and what does
   not fit is left out (`more`) for a later tick to send.
+- **Re-sort.** A snapshot table holds the rows its newest revision was built from (after the view, filter and departed
+  rows; before the sort and the row cap), while the subscription's held rows stay within a quarter of its memory limit
+  (16 MiB, estimated at each row's objects plus two bytes a character); past it the rows go with their sample. When an
+  update sets or clears a probe's sort, the next tick (once the previous one is acknowledged, paused or not) writes each of
+  its tables whose order would change as a new revision from those rows: the same retire rule, its own budget (`BUDGET`
+  when it does not fit, retried by the next sample), `diff` against the newest revision (only the keys the cap now keeps or
+  cuts), `tracked` for the latest track list, `departed` where the departed rows now are, and no facets. Such a sample is
+  marked `resorted`. No statement runs, so a 30 s probe reorders as soon as a 2 s one does; a table with nothing held waits
+  for its next sample.
 - **Row tones.** A table may end with a tone column (catalogue `role: 'tone'`, an nvarchar that is never a key or facet, and that no sort or filter names; a filter over every column leaves it out, so its text never matches):
   each cell is `error`, `warning`, `running`, `muted` or NULL. The stored result's column keeps the role
   (`ResultColumn.role` `tone`), so the grid hides it and colours the row instead (LiveGrid, below), and Copy and Save

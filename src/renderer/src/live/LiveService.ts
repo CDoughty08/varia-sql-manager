@@ -723,11 +723,14 @@ class Handle implements LiveHandle {
     for (const sample of tick.samples) {
       const runtime = this.runtime.get(sample.probe)
       if (!runtime) continue
-      runtime.lastSampleAt = tick.sampledAt
-      runtime.since = now
-      runtime.costMs = sample.costMs
-      runtime.effectiveIntervalMs = sample.effectiveIntervalMs
-      runtime.error = undefined
+      // A re-sort only reorders the newest rows: the probe was not sampled, so its time, cost and error stay.
+      if (!sample.resorted) {
+        runtime.lastSampleAt = tick.sampledAt
+        runtime.since = now
+        runtime.costMs = sample.costMs
+        runtime.effectiveIntervalMs = sample.effectiveIntervalMs
+        runtime.error = undefined
+      }
       const ring = this.rings.get(sample.probe)
       if (ring && sample.metrics) ring.push(tick.sampledAt, sample.metrics, sample.gap === 'reset' ? ringGap | ringReset : sample.gap ? ringGap : 0)
       for (const entry of [...sample.tables ?? [], ...sample.append ?? []]) {

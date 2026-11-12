@@ -1308,7 +1308,9 @@ function sessionTableResult(spec, prefix, rows) {
   const columns = spec.columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true, ...(column.role ? { role: column.role } : {}) }))
   return storeResult({ columns, rows: rows.map(row => spec.columns.map(column => row[id(column)] ?? null)) }, 0)
 }
-function activitySessionsSample(live, probe) {
+/** A table's next revision number: one more for every sample and every re-sort. */
+const revisionOf = probe => probe.samples + (probe.resorts ?? 0)
+function activitySessionsSample(live, probe, revision = revisionOf(probe)) {
   const filter = (live.args.filters ?? []).find(item => item.table === 'sessions') ?? {}
   const spec = liveProbes['activity.sessions'].tables[0]
   const shown = sessionsShown(filter)
@@ -1358,9 +1360,9 @@ function activitySessionsSample(live, probe) {
   }
   const chainRetired = keep(1, chain.resultId), activeRetired = keep(2, active.resultId)
   return { tables: [
-    { table: 0, descriptor: describe(result), revision: probe.samples, ...(retired ? { retired } : {}), ...(changed.length ? { facets: changed } : {}) },
-    { table: 1, descriptor: describe(chain), revision: probe.samples, ...(chainRetired ? { retired: chainRetired } : {}) },
-    { table: 2, descriptor: describe(active), revision: probe.samples, ...(activeRetired ? { retired: activeRetired } : {}) }
+    { table: 0, descriptor: describe(result), revision, ...(retired ? { retired } : {}), ...(changed.length ? { facets: changed } : {}) },
+    { table: 1, descriptor: describe(chain), revision, ...(chainRetired ? { retired: chainRetired } : {}) },
+    { table: 2, descriptor: describe(active), revision, ...(activeRetired ? { retired: activeRetired } : {}) }
   ], ...(status ? { status } : {}) }
 }
 // Resource Waits and Data File I/O on the fake server: lock waits behind the blocked session, some buffer and network I/O,
@@ -1430,7 +1432,7 @@ const fakeQueries = [
   { query: 'SELECT TOP (50) p.ProductId, p.Name FROM dbo.Products AS p ORDER BY p.Name', executionsPerMinute: '18.0', cpuRate: '1.2', avgCpuMs: '4.0', physicalReadsRate: '88.0', logicalReadsRate: '320.0', logicalWritesRate: '0.0', averageDurationMs: '96.0', maxDurationMs: '310.0', rowsPerExecution: '50.0', avgGrantKb: '1024.0', spills: '0', planCount: '1', database: 'CatalogDb', lastExecution: '2026-11-09 08:02:41.000', cachedSince: '2026-11-09 07:30:00.000', queryHash: '0x3C4D5E6F708192A3', totalCpu: 1 }
 ]
 const queryRates = ['executionsPerMinute', 'cpuRate', 'physicalReadsRate', 'logicalReadsRate', 'logicalWritesRate']
-function activityQueriesSample(live, probe) {
+function activityQueriesSample(live, probe, revision = revisionOf(probe)) {
   const first = probe.samples === 1
   const rows = fakeQueries.map(row => first ? { ...row, ...Object.fromEntries(queryRates.map(column => [column, null])) } : row)
   const sort = (probe.sort ?? []).filter(key => key.table === undefined || key.table === 0)
@@ -1443,7 +1445,19 @@ function activityQueriesSample(live, probe) {
   const retired = kept.length > 2 ? [kept.shift()] : undefined
   if (retired) stored.delete(retired[0])
   live.kept.set(probe.probe, kept)
-  return { tables: [{ table: 0, descriptor: describe(result), revision: probe.samples, ...(retired ? { retired } : {}) }] }
+  return { tables: [{ table: 0, descriptor: describe(result), revision, ...(retired ? { retired } : {}) }] }
+}
+/** A sort update's re-sort, as LiveService.cs sends it: the probe's last sample again in its new sort (the fake rows are the
+ *  same until the next sample), marked resorted, with only its tables; undefined for a probe without snapshot tables. */
+function resortSample(live, probe) {
+  if (probe.samples === 0) return undefined
+  const revision = revisionOf(probe) + 1
+  const tables = probe.probe === 'activity.sessions' ? activitySessionsSample(live, probe, revision).tables
+    : probe.probe === 'activity.queries' ? activityQueriesSample(live, probe, revision).tables
+      : live.source === 'debug.synthetic' && probe.probe === 'debug.synthetic.table' ? [liveTable(live, probe, probe.samples, revision)] : undefined
+  if (!tables) return undefined
+  probe.resorts = (probe.resorts ?? 0) + 1
+  return { probe: probe.probe, costMs: 0, effectiveIntervalMs: probe.intervalMs, resorted: true, tables }
 }
 /** An overview sample: every series of the catalogue, a rate's first sample (and the first after a pause) without a value. */
 function overviewMetrics(n, first) {
@@ -1466,13 +1480,22 @@ function wakeLive(live) {
   clearTimeout(live.timer)
   if (!lives.has(live.id)) return
   const active = live.paused ? [] : [...live.probes.values()].filter(probe => !probe.paused && !probe.unavailable)
-  if (active.length === 0) return
+  // A sort update re-sorts at once, paused or not, as it reads nothing.
+  const resorts = [...live.probes.values()].filter(probe => probe.resort)
+  if (active.length === 0 && resorts.length === 0) return
   const now = Date.now(), next = Math.min(...active.map(probe => probe.dueAt))
-  if (next > now) { live.timer = setTimeout(() => wakeLive(live), next - now); return }
+  if (next > now && resorts.length === 0) { live.timer = setTimeout(() => wakeLive(live), next - now); return }
   // Stop-and-wait: nothing is sampled while the previous frame is unacknowledged; its CREDIT wakes the source again.
   if (live.available < live.initial) return
   const samples = [], errors = []
-  for (const probe of active.filter(item => item.dueAt <= now)) {
+  const due = active.filter(item => item.dueAt <= now)
+  for (const probe of resorts) {
+    probe.resort = false
+    // A probe sampled in this tick is sorted by its sample.
+    const sample = due.includes(probe) ? undefined : resortSample(live, probe)
+    if (sample) samples.push(sample)
+  }
+  for (const probe of due) {
     const period = periodOf(live, probe), missed = Math.floor((now - probe.dueAt) / period)
     const sample = {
       probe: probe.probe, costMs: 0, effectiveIntervalMs: probe.intervalMs, ...(probe.last >= 0 ? { elapsedMs: now - probe.last } : {}),
@@ -1497,6 +1520,7 @@ function wakeLive(live) {
     else if (live.args.errorEvery && n % live.args.errorEvery === 0) errors.push({ probe: probe.probe, code: 'SQL_ERROR', message: 'The synthetic source failed this sample, as the test asked.', retryInMs: probe.intervalMs, terminal: false })
     else samples.push({ ...sample, tables: [liveTable(live, probe, n)] })
   }
+  if (samples.length === 0 && errors.length === 0) return wakeLive(live)
   live.sampledAt = Math.max(live.sampledAt + 1, Date.now())
   sendLive(live, { type: 'live.tick', seq: ++live.seq, sampledAt: live.sampledAt, samples, ...(errors.length ? { errors } : {}) })
   live.ticks++
@@ -1505,7 +1529,7 @@ function wakeLive(live) {
   wakeLive(live)
 }
 /** One snapshot revision: ids n … n + rows − 1, sorted as asked (the id breaks ties), stored as a result. */
-function liveTable(live, probe, n) {
+function liveTable(live, probe, n, revision = n + (probe.resorts ?? 0)) {
   let rows = Array.from({ length: live.args.rows ?? 3 }, (_, offset) => ({ id: n + offset, label: 'Row ' + (n + offset), value: (n + offset) * 37 % 100 + n % 7 }))
   if (probe.sort) rows = rows.sort((a, b) => { for (const key of probe.sort) { const left = a[key.column], right = b[key.column]; if (left !== right) return (left < right ? -1 : 1) * (key.descending ? -1 : 1) } return a.id - b.id })
   const columns = [['id', 'int'], ['label', 'nvarchar'], ['value', 'int']].map(([name, dataType]) => ({ name, dataType, wire: 'text', nullable: false }))
@@ -1518,7 +1542,7 @@ function liveTable(live, probe, n) {
   live.previous = current
   const track = probe.tracks.get(0)
   const tracked = track && { seq: track.seq, rows: track.keys.map(key => rows.findIndex(row => String(row.id) === key)) }
-  return { table: 0, descriptor: describe(result), revision: n, ...(retired ? { retired } : {}), diff, ...(tracked ? { tracked } : {}) }
+  return { table: 0, descriptor: describe(result), revision, ...(retired ? { retired } : {}), diff, ...(tracked ? { tracked } : {}) }
 }
 const ssisOperationsProbe = 'ssis.operations.list'
 /** Servers whose catalog a subscription cannot open, and how its first tick says so before the view ends (as the real source's terminal probe errors do). */
@@ -1600,6 +1624,7 @@ function liveUpdate(id, params) {
     if (patch.paused !== undefined) { if (probe.paused && !patch.paused) resume(probe); probe.paused = patch.paused }
     if (patch.sort !== undefined) probe.sort = patch.sort
     if (patch.clear?.includes('sort')) probe.sort = undefined
+    if (patch.sort !== undefined || patch.clear?.includes('sort')) probe.resort = true
   }
   for (const track of params.track ?? []) live.probes.get(track.probe)?.tracks.set(track.table, track)
   if (params.args) live.args = live.source === 'ssis.operations' ? { ...params.args } : { ...live.args, ...params.args }

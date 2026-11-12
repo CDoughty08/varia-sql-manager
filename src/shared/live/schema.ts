@@ -142,6 +142,9 @@ export interface LiveSample<D = BackendResultDescriptor> {
   tables?: LiveSnapshotSample<D>[]
   append?: LiveAppendSample<D>[]
   status?: { id: string; value: number | string }[]
+  /** The probe's newest snapshot revisions again in a new sort (a live.update's sort), from the rows the backend holds: no
+   *  statement ran, so it carries only tables, and it is not a sample (the probe's last sample time and cost stay). */
+  resorted?: true
 }
 export interface LiveOpenedEvent { type: 'live.opened'; seq: 0; source: LiveSourceId; band?: number; spid?: number; isolation?: 'readUncommitted' | 'readCommitted'; probes: LiveOpenedProbe[] }
 export interface LiveTickEvent<D = BackendResultDescriptor> { type: 'live.tick'; seq: number; sampledAt: number; spid?: number; resume?: string; samples: LiveSample<D>[]; errors?: LiveProbeError[] }
@@ -322,7 +325,8 @@ export function buildLiveSchemas(catalog: LiveCatalogShape, o: { test: boolean }
     tables: z.array(snapshotSample).min(1).max(L.tablesPerProbe).optional(),
     append: z.array(appendSample).min(1).max(L.appendPerProbe).optional(),
     status: z.array(status).min(1).max(L.statuses).optional(),
-    plan: livePlanFrameSchema.optional()
+    plan: livePlanFrameSchema.optional(),
+    resorted: z.literal(true).optional()
   }).strict()
 
   /** What every sample may hold according to its probe's catalogue entry. */
@@ -334,6 +338,8 @@ export function buildLiveSchemas(catalog: LiveCatalogShape, o: { test: boolean }
       const issue = (message: string) => ctx.addIssue({ code: 'custom', message, path: ['samples', index] })
       if (item.plan && item.probe !== 'query.plan.operators') issue('Only the query plan probe carries operator data.')
       if (item.metrics !== undefined && item.metrics.length !== (spec.series?.length ?? 0)) issue('Metrics follow the probe\'s series.')
+      if (item.resorted && (item.tables === undefined || item.metrics || item.append || item.status || item.plan || item.gap || item.elapsedMs !== undefined || item.skipped !== undefined))
+        issue('A re-sorted sample carries only its snapshot tables.')
       for (const [entries, mode] of [[item.tables ?? [], 'snapshot'], [item.append ?? [], 'append']] as const) {
         const indexes = entries.map(entry => entry.table)
         if (new Set(indexes).size !== indexes.length) issue('A table is sampled once per tick.')

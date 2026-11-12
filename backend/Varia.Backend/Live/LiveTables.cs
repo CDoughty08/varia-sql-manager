@@ -181,6 +181,7 @@ internal sealed class LiveTableSet(ResultStore store, string subscriptionId, Liv
     private readonly Dictionary<(string Probe, int Table), LiveSnapshotTable> snapshots = [];
     private readonly Dictionary<(string Probe, int Table), LiveAppendTable> appends = [];
     private int facetBytes = limits.FacetBytes;
+    private long heldBytes;
 
     public ResultStore Store => store;
     public LiveLimitsJson Limits => limits;
@@ -212,6 +213,44 @@ internal sealed class LiveTableSet(ResultStore store, string subscriptionId, Liv
         if (bytes > facetBytes) return false;
         facetBytes -= bytes;
         return true;
+    }
+
+    /// <summary>What the snapshot tables may hold of their newest revisions' rows, so a new sort re-emits them without SQL: a quarter
+    /// of the subscription's memory limit, estimated (<see cref="LiveSnapshotTable.Estimate"/>).</summary>
+    public long HoldLimit => limits.SubscriptionBytes / 4;
+    public long HeldBytes => heldBytes;
+
+    /// <summary>Exchanges a table's held estimate for a new one; false (holding nothing) when the new one does not fit.</summary>
+    internal bool Rehold(long before, long after)
+    {
+        heldBytes -= before;
+        if (after > HoldLimit - heldBytes) return false;
+        heldBytes += after;
+        return true;
+    }
+
+    /// <summary>Re-emits each due probe's snapshot tables from the rows their newest revisions held, in the probe's new sort: no
+    /// SQL, no facets (the rows did not change). A table that holds no rows (not written yet, out of the hold allowance, its last
+    /// revision not stored) or whose order would not change is left out; one the budget cut is a BUDGET error, as a sample's.</summary>
+    public LiveSampleBatch Resort(IReadOnlyList<LiveDue> due)
+    {
+        var samples = new List<LiveSample>();
+        var errors = new List<LiveProbeError>();
+        foreach (var item in due)
+        {
+            var spec = item.Probe.Spec;
+            var written = new List<LiveSnapshotSample>();
+            var full = new List<int>();
+            for (var index = 0; index < spec.Tables.Count; index++)
+            {
+                if (!snapshots.TryGetValue((spec.Id, index), out var table) || table.Resort(item.Sort, item.Tracks.GetValueOrDefault(index)) is not { } write) continue;
+                if (write.Sample is { } sample) written.Add(sample);
+                if (write.Budget) full.Add(index);
+            }
+            if (written.Count > 0) samples.Add(new LiveSample(spec.Id, 0, item.EffectiveIntervalMs, Tables: written, Resorted: true));
+            if (full.Count > 0) errors.Add(LiveErrors.Create(spec.Id, "BUDGET", LiveErrors.BudgetMessage) with { Tables = [.. full] });
+        }
+        return new(samples, errors);
     }
 
     /// <summary>Where every started append table goes on from (a resume token's cursors).</summary>
@@ -274,7 +313,9 @@ internal sealed class LiveTableSet(ResultStore store, string subscriptionId, Liv
 /// applied that one before the next is written), so writing revision k+1 first releases k−1 and names it retired. A write
 /// filters (the view, then the text filter), keeps a tracked row that left the source for one more revision (a table with
 /// departed rows), sorts (the user's keys, then the key, so equal values never trade places), cuts at the row cap, and
-/// reports the diff against the previous revision, where each tracked key went, and the facets when they changed.</summary>
+/// reports the diff against the previous revision, where each tracked key went, and the facets when they changed. It holds
+/// the rows the newest revision was built from (after the view, filter and departed rows, before the sort and the cap) while
+/// they fit the set's hold allowance, so a new sort writes the next revision from them at once (<see cref="Resort"/>).</summary>
 internal sealed class LiveSnapshotTable
 {
     private readonly LiveTableSet owner;
@@ -295,7 +336,14 @@ internal sealed class LiveSnapshotTable
     private List<LiveRow> previousList = [], currentList = [];
     private readonly HashSet<string> previousDeparted = new(StringComparer.Ordinal);
     private readonly HashSet<string> present = new(StringComparer.Ordinal);
-    private readonly List<(LiveRow Row, bool Departed, int At)> rows = [];
+    private List<(LiveRow Row, bool Departed, int At)> rows = [];
+    /// <summary>The newest revision's rows before its sort and cap (At: the source's order), the rows the source left out, and
+    /// the estimate the set's hold allowance counts; holding is false while there are none to re-sort.</summary>
+    private List<(LiveRow Row, bool Departed, int At)> held = [];
+    private long heldMore, heldBytes;
+    private bool holding;
+    /// <summary>The sort columns the newest revision was stored in: a re-sort that would not change them writes nothing.</summary>
+    private (int Index, bool Descending)[] sorted = [];
     private List<LiveFacet>? sentFacets;
     private long revision;
 
@@ -334,13 +382,37 @@ internal sealed class LiveSnapshotTable
             }
             for (var i = 0; i < rows.Count; i++) rows[i] = rows[i] with { At = i };
         }
-        // The sort keys for this table: a key naming another table, or a column this table lacks, leaves its order alone.
-        var columns = (settings.Sort ?? []).Where(item => item.Table is null || item.Table == index)
-            .Select(item => (Index: spec.Columns.FindIndex(column => column.Id == item.Column), item.Descending)).Where(item => item.Index >= 0).ToArray();
-        if (columns.Length > 0)
+        return Emit(Columns(settings.Sort), settings.Track, facets, more, resort: false);
+    }
+
+    /// <summary>The next revision from the rows the newest one held, in a new sort (the latest track list answered against it):
+    /// null when nothing is held or the order would not change. The rows and their departed marks are the newest revision's, so
+    /// its diff counts only the keys the row cap now keeps or cuts, and no facets go (they did not change).</summary>
+    public LiveTableWrite<LiveSnapshotSample>? Resort(LiveSortArgs[]? sort, LiveTrackArgs? track)
+    {
+        if (!holding) return null;
+        var columns = Columns(sort);
+        if (columns.AsSpan().SequenceEqual(sorted)) return null;
+        (rows, held) = (held, rows);
+        holding = false;
+        return Emit(columns, track, null, heldMore, resort: true);
+    }
+
+    /// <summary>The sort keys for this table: a key naming another table, or a column this table lacks, leaves its order alone.</summary>
+    private (int Index, bool Descending)[] Columns(LiveSortArgs[]? sort) => [.. (sort ?? []).Where(item => item.Table is null || item.Table == index)
+        .Select(item => (Index: spec.Columns.FindIndex(column => column.Id == item.Column), item.Descending)).Where(item => item.Index >= 0)];
+
+    /// <summary>Sorts the rows and stores them as the next revision, then holds them for a re-sort.</summary>
+    private LiveTableWrite<LiveSnapshotSample> Emit((int Index, bool Descending)[] columns, LiveTrackArgs? track, List<LiveFacet>? facets, long more, bool resort)
+    {
+        var keyed = key.Length > 0;
+        // A write's rows arrive in the source's order; a re-sort's in the newest revision's, so with no keys left it goes back
+        // to the source's order (At).
+        if (columns.Length > 0 || resort)
         {
             rows.Sort((a, b) =>
             {
+                if (columns.Length == 0) return a.At.CompareTo(b.At);
                 foreach (var (column, descending) in columns)
                 {
                     var order = LiveCell.Compare(a.Row.Cells[column], b.Row.Cells[column]);
@@ -363,7 +435,14 @@ internal sealed class LiveSnapshotTable
             revisions.RemoveAt(0);
         }
         var (columnsOf, wires) = LiveTableSet.Shape(spec);
-        if (owner.Store.Open(owner.NewBudget(), 0, 1, 1, "rows", columnsOf, wires) is not { } set) return new(null, true);
+        if (owner.Store.Open(owner.NewBudget(), 0, 1, 1, "rows", columnsOf, wires) is not { } set)
+        {
+            // Nothing newer was stored: a re-sort waits for the next sample, and these rows go now.
+            Unhold();
+            rows.Clear();
+            present.Clear();
+            return new(null, true);
+        }
         revisions.Add(set);
         var stored = 0;
         foreach (var item in rows)
@@ -411,7 +490,7 @@ internal sealed class LiveSnapshotTable
             foreach (var text in previousRows.Keys) if (!rowsByKey.ContainsKey(text)) removed++;
             diff = new(added, removed, changed);
         }
-        var trackedRows = keyed && settings.Track is { } list ? new LiveTracked(list.Seq, [.. list.Keys.Select(text => rowsByKey.TryGetValue(text, out var at) ? at.Index : -1)]) : null;
+        var trackedRows = keyed && track is { } list ? new LiveTracked(list.Seq, [.. list.Keys.Select(text => rowsByKey.TryGetValue(text, out var at) ? at.Index : -1)]) : null;
         List<LiveFacet>? changedFacets = null;
         if (facets is not null)
         {
@@ -434,13 +513,55 @@ internal sealed class LiveSnapshotTable
         (previousList, currentList) = (currentList, previousList);
         currentList.Clear();
         (previousRows, currentRows) = (rowsByKey, previousRows);
-        // The rows go with this sample: nothing here keeps the source's cells alive until the next one.
-        rows.Clear();
+        sorted = columns;
+        Hold(more);
         present.Clear();
         uint[]? retired = retiring.Count > 0 ? [.. retiring] : null;
         retiring.Clear();
         return new(new LiveSnapshotSample(index, set.Describe(), revision, retired, diff, trackedRows, departed.Count > 0 ? [.. departed] : null, changedFacets),
             LiveTableSet.OverBudget(set.Truncated));
+    }
+
+    /// <summary>Keeps this revision's rows for a re-sort while they fit the set's hold allowance; otherwise they go with the
+    /// sample (nothing keeps the source's cells alive until the next one), and a new sort waits for the next sample.</summary>
+    private void Hold(long more)
+    {
+        var bytes = Estimate(rows);
+        if (owner.Rehold(heldBytes, bytes))
+        {
+            (held, rows) = (rows, held);
+            heldBytes = bytes;
+            heldMore = more;
+            holding = true;
+        }
+        else
+        {
+            heldBytes = 0;
+            held.Clear();
+            holding = false;
+        }
+        rows.Clear();
+    }
+
+    private void Unhold()
+    {
+        owner.Rehold(heldBytes, 0);
+        heldBytes = 0;
+        held.Clear();
+        holding = false;
+    }
+
+    /// <summary>What held rows cost, estimated: each row's object and cell array, each cell's value and text, and two bytes a
+    /// character of text.</summary>
+    internal static long Estimate(List<(LiveRow Row, bool Departed, int At)> rows)
+    {
+        long bytes = 0;
+        foreach (var (row, _, _) in rows)
+        {
+            bytes += 64 + 48L * row.Cells.Length;
+            foreach (var cell in row.Cells) if (cell.Text is { } text) bytes += 2L * text.Length;
+        }
+        return bytes;
     }
 
     private Func<LiveRow, bool> Filter(LiveFilterArgs? filter)
@@ -517,6 +638,7 @@ internal sealed class LiveSnapshotTable
 
     internal void Keep(List<uint> first, List<uint> rest)
     {
+        Unhold();
         if (revisions.Count == 0) return;
         foreach (var older in revisions.Take(revisions.Count - 1)) owner.Store.Release(older.ResultId);
         first.Add(revisions[^1].ResultId);
@@ -525,6 +647,7 @@ internal sealed class LiveSnapshotTable
 
     internal uint[] Drain()
     {
+        Unhold();
         uint[] ids = [.. revisions.Select(set => set.ResultId)];
         revisions.Clear();
         return ids;

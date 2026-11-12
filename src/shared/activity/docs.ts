@@ -339,7 +339,7 @@ export function renderActivityMonitorDocs(): string {
     `Data File I/O tones a row warning when its read or write latency reaches ${fileLatencyDefaults.warning} ms and error from ${fileLatencyDefaults.error} ms; the files filter carries the`,
     `\`activityMonitor.fileLatency*\` settings in their place (1 to ${number(activityLimits.fileLatencyMs)} ms). An error threshold below the warning one acts as the warning one.`,
     '',
-    `Recent Expensive Queries ranks by ${Object.values(rankChips).map(chip => chip.title).join(', ')}, each sorting the next sample in memory (no extra SQL); until it arrives, the status line says the rows are still in the previous order.`,
+    `Recent Expensive Queries ranks by ${Object.values(rankChips).map(chip => chip.title).join(', ')}, each a sort that reorders the last sample's rows at once and every later sample the same way, in memory (no extra SQL).`,
     '',
     '## Blocking',
     '',

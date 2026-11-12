@@ -138,7 +138,8 @@ internal static class LiveChecks
             && tables[2].GetProperty("diff").GetProperty("added").GetInt32() == 1 && tables[2].GetProperty("diff").GetProperty("removed").GetInt32() == 1,
             "a snapshot keeps two revisions: the third retires the first, which the store releases, and its diff counts the row that left and the one that came");
 
-        // Sort and tracking: the next revision's rows by value descending, and where its first id went.
+        // Sort and tracking: the next revision's rows by id descending, and where its first id went. It is the last sample's rows
+        // re-sorted at once (marked resorted, no cost or metrics), or a new sample when the 200 ms tick came due first.
         host.Request(2, "live.update", new
         {
             subscriptionId = subscription, source = SyntheticSampler.Source,
@@ -150,10 +151,14 @@ internal static class LiveChecks
         var sortedTable = sorted?.GetProperty("samples").EnumerateArray().First(sample => sample.GetProperty("probe").GetString() == SyntheticSampler.TableProbe).GetProperty("tables")[0];
         var set = sortedTable is { } t ? Stored(store, t) : null;
         var page = set?.PagesFor(0, 10) is [{ } stored] ? PageReader.Read(stored.Body, set.Wires) : null;
+        var sortedSample = sorted?.GetProperty("samples").EnumerateArray().First(sample => sample.GetProperty("probe").GetString() == SyntheticSampler.TableProbe);
+        var resorted = sortedSample?.TryGetProperty("resorted", out var mark) == true && mark.GetBoolean();
         check(updated?.Header.Id == 2 && Result(updated).GetProperty("applied").GetBoolean() && sortedTable?.GetProperty("revision").GetInt64() == 4
-            && page?.Rows.Select(row => row[0].Text).SequenceEqual(["6", "5", "4"]) == true
-            && sortedTable?.GetProperty("tracked").GetProperty("seq").GetInt32() == 7 && sortedTable?.GetProperty("tracked").GetProperty("rows").EnumerateArray().Select(row => row.GetInt32()).SequenceEqual([2, -1]) == true,
-            "an update's sort orders the next revision, and its track list finds each key, the stored cell text, at its new row (−1 when gone)");
+            && page?.Rows.Select(row => row[0].Text).SequenceEqual(resorted ? ["5", "4", "3"] : ["6", "5", "4"]) == true
+            && (!resorted || sortedSample?.GetProperty("costMs").GetInt32() == 0 && !sortedSample.Value.TryGetProperty("metrics", out _) && sorted?.GetProperty("samples").GetArrayLength() == 1)
+            && sortedTable?.GetProperty("tracked").GetProperty("seq").GetInt32() == 7
+            && sortedTable?.GetProperty("tracked").GetProperty("rows").EnumerateArray().Select(row => row.GetInt32()).SequenceEqual(resorted ? [1, -1] : [2, -1]) == true,
+            "an update's sort orders the next revision (the last sample's rows at once), and its track list finds each key, the stored cell text, at its new row (−1 when gone)");
 
         // Clearing the sort returns the next revision to the source's own order.
         host.Request(20, "live.update", new { subscriptionId = subscription, source = SyntheticSampler.Source, probes = new[] { new { probe = SyntheticSampler.TableProbe, clear = new[] { "sort" } } } });
@@ -161,8 +166,10 @@ internal static class LiveChecks
         var unsorted = Next(host, 1, ref frame)?.GetProperty("samples").EnumerateArray().First(sample => sample.GetProperty("probe").GetString() == SyntheticSampler.TableProbe).GetProperty("tables")[0];
         var plainSet = unsorted is { } u ? Stored(store, u) : null;
         var plainPage = plainSet?.PagesFor(0, 10) is [{ } plainStored] ? PageReader.Read(plainStored.Body, plainSet.Wires) : null;
+        // The source's order is ascending ids, whether the revision re-sorts the last sample or is a new one.
+        var plainIds = plainPage?.Rows.Select(row => long.Parse(row[0].Text!, System.Globalization.CultureInfo.InvariantCulture)).ToList() ?? [];
         check(cleared?.Header.Id == 20 && Result(cleared).GetProperty("applied").GetBoolean() && unsorted?.GetProperty("revision").GetInt64() == 5
-            && plainPage?.Rows.Select(row => row[0].Text).SequenceEqual(["5", "6", "7"]) == true, "an update's clear drops the probe's sort: the next revision is in the source's order");
+            && plainIds.Count == 3 && plainIds.SequenceEqual(Enumerable.Range((int)plainIds[0], 3).Select(id => (long)id)), "an update's clear drops the probe's sort: the next revision is in the source's order");
 
         // Pause stops sampling; resuming marks the next samples resumed.
         host.Request(3, "live.update", new { subscriptionId = subscription, source = SyntheticSampler.Source, paused = true });
