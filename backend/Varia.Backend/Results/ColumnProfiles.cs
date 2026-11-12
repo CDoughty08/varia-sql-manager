@@ -29,16 +29,32 @@ internal static class ColumnProfiler
     private const int DisplayBytes = 4 * ValueChars;
 
     /// <summary>What a profile holds while it runs, charged to the result's budget: the view's row bitmap, and per column
-    /// and thread an exact distinct set at its cap (about 24 bytes an entry), the estimator's registers and its two kept values.</summary>
-    public static long WorkingBytes(long baseRows, int columns, int workers = 1) =>
-        baseRows / 8 + 1024 + (long)workers * columns * (24L * Math.Min(baseRows, ExactDistinct) + Registers + 4 * DisplayBytes + 4096);
+    /// and thread an exact distinct set (about 24 bytes an entry; at most its cap, and the rows a thread reads,
+    /// <paramref name="runRows"/>), the estimator's registers and its two kept values.</summary>
+    public static long WorkingBytes(long baseRows, int columns, int workers = 1, long runRows = long.MaxValue) =>
+        baseRows / 8 + 1024 + (long)workers * columns * (24L * Math.Min(Math.Min(baseRows, runRows), ExactDistinct) + Registers + 4 * DisplayBytes + 4096);
 
-    /// <summary>The fewest rows a thread of a profile reads (a page's): a result of several pages is read on several
-    /// threads however few its rows, as its columns' sort keys are what takes the time.</summary>
-    internal const int MinSlice = 1 << 12;
+    /// <summary>Threads a profile reads these pages on, each a run of pages of its own: a result of several pages is
+    /// read on several threads however few its rows (a page of long values holds few), as its columns' sort keys are
+    /// what takes the time.</summary>
+    public static int WorkersFor(int pages) => Math.Clamp(pages, 1, ViewSorter.Workers);
 
-    /// <summary>Threads a profile of these rows reads their pages on: each a run of pages of its own.</summary>
-    public static int WorkersFor(long baseRows, int pages) => (int)Math.Clamp(Math.Min(baseRows / MinSlice, pages), 1, ViewSorter.Workers);
+    /// <summary>The page a run starts at, of <paramref name="runs"/> runs of <paramref name="pages"/> pages.</summary>
+    internal static int RunStart(int pages, int run, int runs) => (int)((long)pages * run / runs);
+
+    /// <summary>The most rows one of <paramref name="runs"/> runs of these pages reads.</summary>
+    public static long RunRows(StoredPage[] pages, int runs)
+    {
+        runs = Math.Clamp(runs, 1, Math.Max(1, pages.Length));
+        long most = 0;
+        for (var run = 0; run < runs; run++)
+        {
+            long rows = 0;
+            for (int index = RunStart(pages.Length, run, runs), end = RunStart(pages.Length, run + 1, runs); index < end; index++) rows += pages[index].Rows;
+            most = Math.Max(most, rows);
+        }
+        return most;
+    }
 
     /// <summary>Memory a profile takes beyond <see cref="WorkingBytes"/> as it meets large values (a lowest or highest
     /// key, a sort key's buffers), reserved from the result's budget as it grows; the caller returns <see cref="Extra"/>.
@@ -78,12 +94,25 @@ internal static class ColumnProfiler
         var guessed = set.Lengths.Any(length => length.Estimated);
         var count = set.Wires.Count;
         // At most the threads asked for, and no more than the operations running leave free.
-        using var threads = (gate ?? ViewSorter.Gate).Take(workers ?? WorkersFor(baseRows, pages.Length));
+        using var threads = (gate ?? ViewSorter.Gate).Take(workers ?? WorkersFor(pages.Length));
         var runs = Math.Clamp(threads.Count, 1, Math.Max(1, pages.Length));
-        int From(int run) => (int)((long)pages.Length * run / runs);
+        int From(int run) => RunStart(pages.Length, run, runs);
+        // Once a run has failed (a refused charge, a cancellation) the others stop at their next page: nothing is merged.
+        var failed = 0;
         void Each(Action<int> read)
         {
-            try { Parallel.For(0, runs, new ParallelOptions { MaxDegreeOfParallelism = runs }, read); }
+            try
+            {
+                Parallel.For(0, runs, new ParallelOptions { MaxDegreeOfParallelism = runs }, run =>
+                {
+                    try { read(run); }
+                    catch
+                    {
+                        Volatile.Write(ref failed, 1);
+                        throw;
+                    }
+                });
+            }
             catch (AggregateException error) when (error.InnerExceptions.Count > 0)
             {
                 // What the one thread would have thrown: a cancellation, or a refusal of the room a value needed.
@@ -99,6 +128,7 @@ internal static class ColumnProfiler
             var scratch = new int[PageView.ScratchLength(count)];
             for (var index = From(run); index < From(run + 1); index++)
             {
+                if (Volatile.Read(ref failed) != 0) return;
                 token.ThrowIfCancellationRequested();
                 var page = pages[index];
                 var first = page.FirstRow;
@@ -134,6 +164,7 @@ internal static class ColumnProfiler
                 var scratch = new int[PageView.ScratchLength(count)];
                 for (var index = From(run); index < From(run + 1); index++)
                 {
+                    if (Volatile.Read(ref failed) != 0) return;
                     token.ThrowIfCancellationRequested();
                     var page = pages[index];
                     var parsed = PageView.Parse(page.Body, count, scratch);

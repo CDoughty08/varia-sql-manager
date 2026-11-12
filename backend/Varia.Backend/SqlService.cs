@@ -1686,11 +1686,15 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
         // Each thread reading the pages holds figures of its own. They are taken only with room to spare (a query still
-        // loading into this budget goes on storing rows); without it, one thread reads the pages.
+        // loading into this budget goes on storing rows): half the threads while there is none, down to one.
         const string tooLarge = "There is not enough result memory to profile these rows. Close other results and try again.";
-        var workers = ColumnProfiler.WorkersFor(rows, pages.Length);
-        var working = ColumnProfiler.WorkingBytes(rows, args.Columns.Length, workers);
-        if (workers > 1 && !store.TryReserveSpare(set.Budget, working)) workers = 1;
+        var workers = ColumnProfiler.WorkersFor(pages.Length);
+        long working = 0;
+        for (; workers > 1; workers /= 2)
+        {
+            working = ColumnProfiler.WorkingBytes(rows, args.Columns.Length, workers, ColumnProfiler.RunRows(pages, workers));
+            if (store.TryReserveSpare(set.Budget, working)) break;
+        }
         while (true)
         {
             if (workers == 1)
