@@ -8,8 +8,11 @@
 - **About Varia:** find the running version, platform and update status from Help or the command palette (also the app menu on macOS). Copy version details for support and open the project, issue form or release notes without needing a server connection.
 - **In-app release notes:** read curated release highlights and limits offline, browse bundled history and open notes for the exact version advertised by an update. Missing notes are reported clearly, with release downloads available separately.
 
+- **Close one result:** each result's caption has a close button that frees that result's memory and leaves the others as they are, with their names, numbers, sort and filters. Pivots, transposes and comparisons made from it stay. Closing the last one keeps the Results view, Messages and captured plans.
+
 ### Improved
 
+- **Results:** the run summary's row count is the rows the query returned; a pivot, transpose or comparison no longer adds its rows to it. A result added after you drag a splitter no longer resets the other results' heights. Search in results looks again only at the grids that changed.
 - **Results:** sorting, filtering for duplicates, listing a column's values and pivoting are several times faster on number columns with many repeated values (a status, a flag, a foreign key).
 
 ### Fixed

@@ -14,7 +14,7 @@ import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, anyResultGrid, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice,
   jobProgress, kindIcon, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
-  outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, resultGrid, resultSplitters, resultsToolbar, resultToggle, statusBar,
+  outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, resultClose, resultGrid, resultSplitters, resultsToolbar, resultToggle, statusBar,
   pivotPanel, profileCard, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, unsavedMark
 } from './fixtures/ui.mjs'
 
@@ -410,11 +410,13 @@ try {
   await page.emulateMedia({ forcedColors: null })
   await page.keyboard.press('Tab')
   await expect(splitter).toBeFocused()
-  // The next set's caption comes first: its Collapse button and Save Results As, then its grid.
+  // The next set's caption comes first: its Collapse button, Save Results As and Close, then its grid.
   await page.keyboard.press('Tab')
   await expect(resultToggle(page, 'Result 2')).toBeFocused()
   await page.keyboard.press('Tab')
   await expect(outputPane(page).getByRole('button', { name: 'Save Result 2 As…', exact: true })).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(resultClose(page, 'Result 2')).toBeFocused()
   await page.keyboard.press('Tab')
   await expect(grid('Result 2')).toBeFocused()
   await measured('a thousand stacked sets', async () => {
@@ -528,6 +530,40 @@ try {
   // A run without messages has no strip.
   await run('-- varia-fake: sets=N1*3')
   await expect(messagesStrip(page)).toHaveCount(0)
+  // A caption's close button closes its result alone: the others keep their names and numbers, the run its summary and
+  // row total, and the focus goes to the caption that took its place. Closing the last one leaves the Results view,
+  // saying the results were closed (not that the query returned none), with the Messages strip still under it.
+  await run('-- varia-fake: sets=N1*3,N1*4,N1*5 messages=2')
+  await expect(captions).toHaveCount(3)
+  await expect(outputTab(/^Results/)).toHaveAccessibleName('Results, 3 result sets')
+  await expect(status()).toHaveText(/^Completed · 12 rows · /)
+  await resultClose(page, 'Result 2').click()
+  await expect(captions).toHaveCount(2)
+  await expect(grid('Result 2')).toHaveCount(0)
+  await expect(resultToggle(page, 'Result 2')).toHaveCount(0)
+  await expect(grid('Result 3')).toHaveAccessibleName(/^Result 3 of 3, 5 rows/)
+  await expect(captions.nth(1)).toContainText('5 rows')
+  await expect(resultToggle(page, 'Result 3')).toBeFocused()
+  await expect(outputTab(/^Results/)).toHaveAccessibleName('Results, 2 result sets')
+  await expect(status()).toHaveText(/^Completed · 12 rows · /)
+  // By the keyboard: the last caption's close hands the focus to the caption before it.
+  await resultClose(page, 'Result 3').focus()
+  await page.keyboard.press('Enter')
+  await expect(captions).toHaveCount(1)
+  await expect(resultToggle(page, 'Result 1')).toBeFocused()
+  await resultClose(page, 'Result 1').click()
+  await expect(outputEmpty(page)).toHaveText('Results were closed. Execute the query again to see them.')
+  await expect(page.locator('[data-result-grid]')).toHaveCount(0)
+  await expect(outputTab(/^Results/)).toHaveAttribute('aria-selected', 'true')
+  await expect(outputTab(/^Results/)).toHaveAccessibleName('Results')
+  await expect(outputTab(/^Results/)).toBeFocused()
+  await expect(status()).toHaveText(/^Completed · 12 rows · /)
+  await expect(messagesStrip(page)).toHaveAccessibleName('Messages, 2 messages, no errors')
+  await expect(resultsToolbar(page)).toHaveCount(0)
+  // Running the query again brings its results back, with their close buttons.
+  await run('-- varia-fake: sets=N1*3')
+  await expect(captions).toHaveCount(1)
+  await expect(resultClose(page, 'Result 1')).toBeEnabled()
   // The Execution plan view: only for a run that returned plans, each opened as a .sqlplan document.
   await expect(outputTab(/^Execution plan/)).toHaveCount(0)
   const parsesBeforePlan = await planParseCalls()
@@ -633,7 +669,7 @@ try {
   await page.keyboard.press('Control+R')
   await expect(outputTab(/^Execution plan/)).toHaveAttribute('aria-selected', 'true')
   await page.screenshot({ path: resolve('artifacts', 'results-head.png') })
-  console.log('Results checks: one run summary, captions that collapse, small sets sized to their rows, header types, the Messages strip and the Execution plan view.')
+  console.log('Results checks: one run summary, captions that collapse and close their results, small sets sized to their rows, header types, the Messages strip and the Execution plan view.')
 
   // 4c. At the default split of a 1280x800 window the Messages strip yields to the results: an error does not open it over
   // the grids, its line shows the error's message, and a data row stays in view. Opened by hand, it shows the error.
