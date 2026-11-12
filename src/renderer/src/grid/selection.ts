@@ -19,7 +19,7 @@ export interface SelectionBlock { readonly kind: BlockKind; readonly anchor: Cel
  * A grid's selection: 1 to 64 blocks (Ctrl+click adds one; the last is the one Shift extends) and the active cell, which
  * keyboard moves start from and screen readers follow.
  */
-export interface GridSelection { readonly resultIndex: number; readonly blocks: readonly SelectionBlock[]; readonly active: Cell }
+export interface GridSelection { readonly entry: string; readonly blocks: readonly SelectionBlock[]; readonly active: Cell }
 /** Inclusive bounds; empty when `bottom < top` or `right < left`. */
 export interface CellRange { readonly top: number; readonly left: number; readonly bottom: number; readonly right: number }
 /** Where a press in the grid lands: a cell, a row's number, a column's header, or the corner above the row numbers. */
@@ -76,30 +76,30 @@ export function contains(selection: GridSelection, row: number, column: number, 
 /** A column header as shown; SQL Server names computed columns with nothing, and a header stays one line. */
 export const columnTitle = (name: string): string => name ? name.replace(/\r\n|[\r\n\t]/g, ' ') : noColumnName
 
-const single = (resultIndex: number, kind: BlockKind, cell: Cell): GridSelection => ({ resultIndex, blocks: [{ kind, anchor: cell, focus: cell }], active: cell })
+const single = (entry: string, kind: BlockKind, cell: Cell): GridSelection => ({ entry, blocks: [{ kind, anchor: cell, focus: cell }], active: cell })
 /** Everything, as one open-ended block; the active cell stays where it was. */
-export const selectAll = (resultIndex: number, active: Cell = origin): GridSelection => ({ resultIndex, blocks: [{ kind: 'all', anchor: active, focus: active }], active })
+export const selectAll = (entry: string, active: Cell = origin): GridSelection => ({ entry, blocks: [{ kind: 'all', anchor: active, focus: active }], active })
 const kindOf = (hit: GridHit): BlockKind => hit.kind === 'cell' ? 'cells' : hit.kind === 'row' ? 'rows' : hit.kind === 'column' ? 'columns' : 'all'
 // A row number makes its first cell active and a column header its top cell, as in SSMS.
 const cellOf = (hit: GridHit, from: Cell): Cell => ({ row: 'row' in hit ? hit.row : hit.kind === 'column' ? 0 : from.row, column: 'column' in hit ? hit.column : hit.kind === 'row' ? 0 : from.column })
-const validFor = (selection: GridSelection | undefined, resultIndex: number) => selection?.resultIndex === resultIndex && selection.blocks.length > 0 ? selection : undefined
+const validFor = (selection: GridSelection | undefined, entry: string) => selection?.entry === entry && selection.blocks.length > 0 ? selection : undefined
 
 /**
  * The selection after a left press on `hit`: the press selects that cell, row, column, or (the corner) everything;
  * `extend` (Shift) moves the last block's far corner there, taking the kind of what was pressed; `add` (Ctrl, ⌘)
  * adds a block, dropping the oldest past 64. A selection in another result set counts as none.
  */
-export function select(current: GridSelection | undefined, hit: GridHit, options: { readonly resultIndex: number; readonly extend: boolean; readonly add: boolean }): GridSelection {
-  const { resultIndex } = options
-  const valid = validFor(current, resultIndex)
-  if (hit.kind === 'corner') return selectAll(resultIndex, valid?.active)
+export function select(current: GridSelection | undefined, hit: GridHit, options: { readonly entry: string; readonly extend: boolean; readonly add: boolean }): GridSelection {
+  const { entry } = options
+  const valid = validFor(current, entry)
+  if (hit.kind === 'corner') return selectAll(entry, valid?.active)
   if (options.extend && valid) {
     const last = valid.blocks[valid.blocks.length - 1], focus = cellOf(hit, last.focus)
-    return { resultIndex, blocks: [...valid.blocks.slice(0, -1), { kind: kindOf(hit), anchor: last.anchor, focus }], active: focus }
+    return { entry, blocks: [...valid.blocks.slice(0, -1), { kind: kindOf(hit), anchor: last.anchor, focus }], active: focus }
   }
   const cell = cellOf(hit, origin)
-  if (options.add && valid) return { resultIndex, blocks: [...valid.blocks, { kind: kindOf(hit), anchor: cell, focus: cell }].slice(-gridLimits.selectionBlocks), active: cell }
-  return single(resultIndex, kindOf(hit), cell)
+  if (options.add && valid) return { entry, blocks: [...valid.blocks, { kind: kindOf(hit), anchor: cell, focus: cell }].slice(-gridLimits.selectionBlocks), active: cell }
+  return single(entry, kindOf(hit), cell)
 }
 
 /** Whether `hit` is already selected by some block: the cell, or the whole row, column, or grid. */
@@ -128,10 +128,10 @@ export function pressButton(event: { readonly button: number; readonly ctrlKey: 
  * block); a right press on something already selected keeps the selection (its menu acts on it), and elsewhere selects
  * like a plain left press.
  */
-export function pressSelection(current: GridSelection | undefined, hit: GridHit, options: { readonly resultIndex: number; readonly shift: boolean; readonly right: boolean; readonly add?: boolean; readonly rows: number; readonly columns: number }): GridSelection {
-  const valid = validFor(current, options.resultIndex)
+export function pressSelection(current: GridSelection | undefined, hit: GridHit, options: { readonly entry: string; readonly shift: boolean; readonly right: boolean; readonly add?: boolean; readonly rows: number; readonly columns: number }): GridSelection {
+  const valid = validFor(current, options.entry)
   if (options.right && valid && covers(valid, hit, options.rows, options.columns)) return valid
-  return select(current, hit, { resultIndex: options.resultIndex, extend: options.shift && !options.right, add: !!options.add && !options.right })
+  return select(current, hit, { entry: options.entry, extend: options.shift && !options.right, add: !!options.add && !options.right })
 }
 /** Dragging over `hit` moves the last block's far corner there, keeping what it selects (cells, rows, or columns). */
 export function dragSelection(selection: GridSelection, hit: GridHit): GridSelection {
@@ -170,11 +170,11 @@ const sameCell = (a: Cell, b: Cell) => a.row === b.row && a.column === b.column
 export function navigate(selection: GridSelection, action: GridAction, o: { readonly rows: number; readonly columns: number; readonly pageRows: number }): GridSelection {
   const { rows, columns } = o
   if (rows <= 0 || columns <= 0) return selection
-  const { resultIndex } = selection
+  const { entry } = selection
   const active: Cell = { row: clamp(selection.active.row, 0, rows - 1), column: clamp(selection.active.column, 0, columns - 1) }
   const last = selection.blocks.at(-1)
   switch (action.type) {
-    case 'selectAll': return selectAll(resultIndex, active)
+    case 'selectAll': return selectAll(entry, active)
     case 'selectRows': case 'selectColumns': {
       const block = last ?? { kind: 'cells', anchor: active, focus: active }
       const range = blockRange(block, rows, columns)
@@ -184,19 +184,19 @@ export function navigate(selection: GridSelection, action: GridAction, o: { read
       const allRows = block.kind === 'columns' || block.kind === 'all', allColumns = block.kind === 'rows' || block.kind === 'all'
       const anchor = rowsOnly ? { row: allRows ? range.top : clamp(block.anchor.row, 0, rows - 1), column: active.column } : { row: active.row, column: allColumns ? range.left : clamp(block.anchor.column, 0, columns - 1) }
       const focus = rowsOnly ? { row: allRows ? range.bottom : clamp(block.focus.row, 0, rows - 1), column: active.column } : { row: active.row, column: allColumns ? range.right : clamp(block.focus.column, 0, columns - 1) }
-      return { resultIndex, blocks: [...selection.blocks.slice(0, -1), { kind: rowsOnly ? 'rows' : 'columns', anchor, focus }], active }
+      return { entry, blocks: [...selection.blocks.slice(0, -1), { kind: rowsOnly ? 'rows' : 'columns', anchor, focus }], active }
     }
     case 'move': {
       if (!action.extend || !last) {
         const to = moved(active, action.move, o)
         const already = selection.blocks.length === 1 && last?.kind === 'cells' && sameCell(last.anchor, to) && sameCell(last.focus, to) && sameCell(selection.active, to)
-        return already ? selection : single(resultIndex, 'cells', to)
+        return already ? selection : single(entry, 'cells', to)
       }
       const block = last.kind === 'all' ? { kind: 'cells' as const, anchor: active, focus: active } : last
       const from = { row: clamp(block.focus.row, 0, rows - 1), column: clamp(block.focus.column, 0, columns - 1) }
       const to = moved(from, action.move, o)
       if (last.kind !== 'all' && sameCell(to, last.focus) && sameCell(selection.active, to)) return selection
-      return { resultIndex, blocks: [...selection.blocks.slice(0, -1), { ...block, focus: to }], active: to }
+      return { entry, blocks: [...selection.blocks.slice(0, -1), { ...block, focus: to }], active: to }
     }
     default: return selection
   }

@@ -14,7 +14,7 @@ export default function ResultPlans({ queryId, tabId, plans, order, live, visibl
   const { commands, documents, planPreparation } = useWorkbench()
   const navigating = useRef<AbortController | undefined>(undefined)
   useEffect(() => () => navigating.current?.abort(), [])
-  const key = plans.map(entry => `${entry.descriptor.generation}:${entry.descriptor.resultId}:${entry.index}:${entry.handle.getSnapshot().rowsAvailable}:${entry.handle.getSnapshot().state}`).join('|')
+  const key = plans.map(entry => `${entry.descriptor.generation}:${entry.descriptor.resultId}:${entry.key}:${entry.handle.getSnapshot().rowsAvailable}:${entry.handle.getSnapshot().state}`).join('|')
   const sources = useMemo(() => {
     const sources: (PlanSource & { entry: ResultSetEntry; row: number })[] = []
     for (const entry of orderPlanEntries(plans, order)) {
@@ -25,7 +25,7 @@ export default function ResultPlans({ queryId, tabId, plans, order, live, visibl
       for (let row = 0; row < snapshot.rowsAvailable && sources.length < maxXmlSources; row++) {
         sources.push({
           entry, row, result: { generation, resultId }, key: `${generation}:${resultId}:${row}`, batchLabel, batchNumber, iteration,
-          label: entry.capturedPlan ? `Plan ${entry.index + 1}${batchLabel ? ` · ${batchLabel}` : ''}` : `Result ${entry.index + 1}, plan ${row + 1}`,
+          label: entry.capturedPlan ? `Plan ${entry.number}${batchLabel ? ` · ${batchLabel}` : ''}` : `Result ${entry.number}, plan ${row + 1}`,
           read: async (signal: AbortSignal) => {
             const value = await entry.handle.getCell(row, 0, { signal })
             if (value.truncated) throw new Error('This plan was truncated while storing query results. Open its plan document to read the available XML.')
@@ -48,6 +48,6 @@ export default function ResultPlans({ queryId, tabId, plans, order, live, visibl
         const doc = documents.openText({ name: 'Execution Plan.sqlplan', text, kind: 'sqlplan' }); planPreparation.requestXml(doc.id, { ...target, revision: undefined }); documents.focusActive()
       }).catch(error => { if (!stop.signal.aborted) commands.reportError(error instanceof Error ? error.message : 'The plan XML is unavailable.') })
         .finally(() => { if (navigating.current === stop) navigating.current = undefined })
-    } else if (source) void commands.execute('output.openValue', { tabId, cell: { resultIndex: source.entry.index, row: source.row, column: 0, capturedPlan: source.entry.capturedPlan } }, 'toolbar')
+    } else if (source) void commands.execute('output.openValue', { tabId, cell: { entry: source.entry.key, row: source.row, column: 0, capturedPlan: source.entry.capturedPlan } }, 'toolbar')
   }} />
 }

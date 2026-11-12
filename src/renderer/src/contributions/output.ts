@@ -3,7 +3,7 @@ import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { resolveBlocks } from '../grid/selection'
 import { outputOf, type LiveOutput, type MenuTargetService, type OutputTarget } from '../menus/targets'
-import type { SelectionFilter } from '../results/ResultsService'
+import { entryOf, type SelectionFilter } from '../results/ResultsService'
 import { requestFrame, windows } from '../core/windows'
 import { focusHeld } from '../core/modal'
 
@@ -33,29 +33,31 @@ export function outputContribution({ commands, results, menuTargets, documents, 
   const showWhitespace = (mode: 'spaces' | 'all') =>
     settings.choose('queryResults.grid.whitespace', settings.getSnapshot().values['queryResults.grid.whitespace'] === mode ? 'none' : mode)
   const targetOf = (args?: CommandArgs) => outputOf(args) ?? (args?.target ? undefined : focusedOutput(menuTargets))
-  /** The grid's result set, while its results are still readable. */
+  /** The grid's result set (its tab and entry key with it), while its results are still readable and its entry still shows
+   *  the stored result the target was read from. */
   const grid = (target: OutputTarget | undefined) => {
     if (target?.view !== 'grid') return undefined
-    const set = results.getSnapshot()[target.tabId]?.sets[target.resultIndex]
+    const set = entryOf(results.getSnapshot()[target.tabId]?.sets, target.entry)
     const state = set?.handle.getSnapshot()
     const current = !target.result || (set?.descriptor.generation === target.result.generation && set.descriptor.resultId === target.result.resultId)
-    return set && current && state && state.state !== 'lost' && state.state !== 'released' ? { set, rows: state.rowsAvailable, columns: set.descriptor.columns.length } : undefined
+    return set && current && state && state.state !== 'lost' && state.state !== 'released' ? { tabId: target.tabId, key: set.key, set, rows: state.rowsAvailable, columns: set.descriptor.columns.length } : undefined
   }
   const valueCell = (args?: CommandArgs) => {
     let cell: (NonNullable<CommandArgs['cell']> & { tabId: string }) | undefined
     if (args?.cell && args.tabId) cell = { tabId: args.tabId, ...args.cell }
     else {
-      const target = targetOf(args), active = target?.view === 'grid' ? results.selection(target.tabId, target.resultIndex)?.active : undefined
-      if (target && active) cell = { tabId: target.tabId, resultIndex: target.resultIndex, row: active.row, column: active.column }
+      const target = targetOf(args), active = target?.view === 'grid' && target.entry !== undefined ? results.selection(target.tabId, target.entry)?.active : undefined
+      if (target?.entry !== undefined && active) cell = { tabId: target.tabId, entry: target.entry, row: active.row, column: active.column }
     }
     const tab = cell && results.getSnapshot()[cell.tabId]
-    const role = cell && (cell.capturedPlan ? tab?.planSets : tab?.sets)?.[cell.resultIndex]?.descriptor.columns[cell.column]?.role
+    const role = cell && entryOf(cell.capturedPlan ? tab?.planSets : tab?.sets, cell.entry)?.descriptor.columns[cell.column]?.role
     return role && valueRoles.has(role) ? cell : undefined
   }
+  /** The grid, when it has cells selected. */
   const selected = (target: OutputTarget | undefined) => {
     const shown = grid(target)
-    const selection = shown && results.selection(target!.tabId, target!.resultIndex)
-    return shown && selection && resolveBlocks(selection, shown.rows, shown.columns).length > 0 ? target : undefined
+    const selection = shown && results.selection(shown.tabId, shown.key)
+    return shown && selection && resolveBlocks(selection, shown.rows, shown.columns).length > 0 ? shown : undefined
   }
   /** The hasResults context key for a query (results not closed, nor lost with a stopped backend), which Find and Save
    *  check in their handlers: a live view's grid has rows without a query's results. */
@@ -74,28 +76,28 @@ export function outputContribution({ commands, results, menuTargets, documents, 
   /** The column captured by the menu, else the focused grid's active cell. */
   const sortTarget = (args?: CommandArgs) => {
     const target = targetOf(args), shown = grid(target)
-    const active = shown && results.selection(target!.tabId, target!.resultIndex)?.active
+    const active = shown && results.selection(shown.tabId, shown.key)?.active
     const column = target?.column ?? active?.column
     return shown && column !== undefined && Number.isInteger(column) && column >= 0 && column < shown.columns && shown.set.descriptor.columns[column].role !== 'tone'
-      ? { tabId: target!.tabId, index: target!.resultIndex, column } : undefined
+      ? { tabId: shown.tabId, key: shown.key, set: shown.set, column } : undefined
   }
   const liveSort = (args?: CommandArgs) => { const at = liveColumn(args); return at && at.live.sortable && at.live.canSort(at.column) ? at : undefined }
   const sortCommand = (direction: 'ascending' | 'descending', add: boolean) => ({
     when: (args?: CommandArgs) => !!sortTarget(args) || !!liveSort(args),
     run: (args?: CommandArgs) => {
       const at = sortTarget(args), live = liveSort(args)
-      if (at) results.sortBy(at.tabId, at.index, at.column, direction, add)
+      if (at) results.sortBy(at.tabId, at.key, at.column, direction, add)
       else if (live) live.live.sort(live.column, direction === 'descending', add)
     }
   })
   /** A filter by the grid's selection: the menu's grid, else the focused one. */
   const selectionFilter = (kind: SelectionFilter) => ({
-    when: (args?: CommandArgs) => { const target = targetOf(args); return !!grid(target) && results.canFilterSelection(target!.tabId, target!.resultIndex, kind) },
-    run: (args?: CommandArgs) => { const target = targetOf(args); if (target && grid(target)) results.filterSelection(target.tabId, target.resultIndex, kind) }
+    when: (args?: CommandArgs) => { const shown = grid(targetOf(args)); return !!shown && results.canFilterSelection(shown.tabId, shown.key, kind) },
+    run: (args?: CommandArgs) => { const shown = grid(targetOf(args)); if (shown) results.filterSelection(shown.tabId, shown.key, kind) }
   })
   const duplicatesFilter = (allColumns: boolean) => ({
-    when: (args?: CommandArgs) => { const target = targetOf(args); return !!grid(target) && results.canFilterDuplicates(target!.tabId, target!.resultIndex, allColumns) },
-    run: (args?: CommandArgs) => { const target = targetOf(args); if (target && grid(target)) results.filterDuplicates(target.tabId, target.resultIndex, allColumns) }
+    when: (args?: CommandArgs) => { const shown = grid(targetOf(args)); return !!shown && results.canFilterDuplicates(shown.tabId, shown.key, allColumns) },
+    run: (args?: CommandArgs) => { const shown = grid(targetOf(args)); if (shown) results.filterDuplicates(shown.tabId, shown.key, allColumns) }
   })
   /** The tab search in results acts on: the focused output's, else the active query's. */
   const searchTab = (args?: CommandArgs) => targetOf(args)?.tabId ?? documents.getSnapshot().activeId
@@ -129,12 +131,12 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     commands.register('output.thenSortAscending', sortCommand('ascending', true)),
     commands.register('output.thenSortDescending', sortCommand('descending', true)),
     commands.register('output.clearSort', {
-      when: args => { const target = targetOf(args), live = liveOf(args); return live ? live.sortable && live.sorted() : !!grid(target) && !!results.sortOf(target!.tabId, target!.resultIndex)?.keys.length },
-      run: args => { const target = targetOf(args), live = liveOf(args); if (live) { if (live.sortable) live.clearSort() } else if (target && grid(target)) results.clearSort(target.tabId, target.resultIndex) }
+      when: args => { const shown = grid(targetOf(args)), live = liveOf(args); return live ? live.sortable && live.sorted() : !!shown && !!results.sortOf(shown.tabId, shown.key)?.keys.length },
+      run: args => { const shown = grid(targetOf(args)), live = liveOf(args); if (live) { if (live.sortable) live.clearSort() } else if (shown) results.clearSort(shown.tabId, shown.key) }
     }),
     commands.register('output.filterColumnValues', {
-      when: args => { const at = sortTarget(args), live = liveColumn(args); return live ? live.live.canFilter(live.column) : !!at && results.canFilterColumn(at.tabId, at.index, at.column) },
-      run: args => { const at = sortTarget(args), live = liveColumn(args); if (live) { if (live.live.canFilter(live.column)) live.live.filterColumn(live.column) } else if (at) results.filterColumn(at.tabId, at.index, at.column) }
+      when: args => { const at = sortTarget(args), live = liveColumn(args); return live ? live.live.canFilter(live.column) : !!at && results.canFilterColumn(at.tabId, at.key, at.column) },
+      run: args => { const at = sortTarget(args), live = liveColumn(args); if (live) { if (live.live.canFilter(live.column)) live.live.filterColumn(live.column) } else if (at) results.filterColumn(at.tabId, at.key, at.column) }
     }),
     commands.register('output.filterSelection', selectionFilter('in')),
     commands.register('output.excludeSelection', selectionFilter('notIn')),
@@ -143,8 +145,8 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     commands.register('output.filterDuplicates', duplicatesFilter(false)),
     commands.register('output.filterDuplicateRows', duplicatesFilter(true)),
     commands.register('output.clearFilters', {
-      when: args => { const target = targetOf(args), live = liveOf(args); return live ? live.filtered() : !!grid(target) && !!results.sortOf(target!.tabId, target!.resultIndex)?.filters.length },
-      run: args => { const target = targetOf(args), live = liveOf(args); if (live) live.clearFilters(); else if (target && grid(target)) results.clearFilters(target.tabId, target.resultIndex) }
+      when: args => { const shown = grid(targetOf(args)), live = liveOf(args); return live ? live.filtered() : !!shown && !!results.sortOf(shown.tabId, shown.key)?.filters.length },
+      run: args => { const shown = grid(targetOf(args)), live = liveOf(args); if (live) live.clearFilters(); else if (shown) results.clearFilters(shown.tabId, shown.key) }
     }),
     commands.register('output.sortTextByChars', { run: () => showSortText('chars') }),
     commands.register('output.sortTextByBytes', { run: () => showSortText('bytes') }),
@@ -154,7 +156,7 @@ export function outputContribution({ commands, results, menuTargets, documents, 
         const target = targetOf(args), cells = selected(target), live = liveOf(args)
         if (live) { if (live.hasSelection()) live.copy(settings.get('queryResults.grid.includeColumnHeaders')); return }
         // Tools › Options › Query Results › Results to Grid decides the header row; Copy with Headers always has one.
-        if (cells) { const failure = await results.copy(cells.tabId, cells.resultIndex, settings.get('queryResults.grid.includeColumnHeaders')); if (failure) commands.reportError(failure) }
+        if (cells) { const failure = await results.copy(cells.tabId, cells.key, settings.get('queryResults.grid.includeColumnHeaders')); if (failure) commands.reportError(failure) }
         else if (target && target.view !== 'grid' && target.selectedText) unwrap(await api.writeClipboardText(target.selectedText))
       }
     }),
@@ -164,7 +166,7 @@ export function outputContribution({ commands, results, menuTargets, documents, 
         const live = liveOf(args)
         if (live) { if (live.hasSelection()) live.copy(true); return }
         const cells = selected(targetOf(args))
-        const failure = cells && await results.copy(cells.tabId, cells.resultIndex, true)
+        const failure = cells && await results.copy(cells.tabId, cells.key, true)
         if (failure) commands.reportError(failure)
       }
     }),
@@ -173,12 +175,12 @@ export function outputContribution({ commands, results, menuTargets, documents, 
       run: async args => {
         const at = sortTarget(args), live = liveColumn(args), name = live?.live.columnName(live.column)
         if (name !== undefined) unwrap(await api.writeClipboardText(name))
-        else if (at) unwrap(await api.writeClipboardText(results.getSnapshot()[at.tabId].sets[at.index].descriptor.columns[at.column].name))
+        else if (at) unwrap(await api.writeClipboardText(at.set.descriptor.columns[at.column].name))
       }
     }),
     commands.register('output.fitColumn', {
-      when: args => { const at = sortTarget(args), live = liveColumn(args); return live ? live.live.hasRows() : !!at && results.canFitColumn(at.tabId, at.index, at.column) },
-      run: args => { const at = sortTarget(args), live = liveColumn(args); if (live) live.live.fitColumn(live.column); else if (at) results.fitColumn(at.tabId, at.index, at.column) }
+      when: args => { const at = sortTarget(args), live = liveColumn(args); return live ? live.live.hasRows() : !!at && results.canFitColumn(at.tabId, at.key, at.column) },
+      run: args => { const at = sortTarget(args), live = liveColumn(args); if (live) live.live.fitColumn(live.column); else if (at) results.fitColumn(at.tabId, at.key, at.column) }
     }),
     commands.register('output.saveResultsAs', {
       unavailable: args => liveOf(args) ? undefined : noResults,
@@ -190,9 +192,11 @@ export function outputContribution({ commands, results, menuTargets, documents, 
         const target = targetOf(args), tabId = target?.tabId ?? documents.getSnapshot().activeId
         const tab = results.getSnapshot()[tabId]
         if (!tab?.sets.length) return
-        const index = target?.view === 'grid' ? target.resultIndex : Math.min(results.viewState(tabId).focusedIndex, tab.sets.length - 1)
+        // The grid the menu or the caption's button names, else the one that last had the focus.
+        const key = target?.view === 'grid' ? target.entry : results.focusedEntry(tabId)?.key
+        if (key === undefined) return
         const name = documents.getSnapshot().documents.find(document => document.id === tabId)?.name ?? ''
-        const failure = await results.saveAs(tabId, index, baseName(name))
+        const failure = await results.saveAs(tabId, key, baseName(name))
         if (failure) commands.reportError(failure)
       }
     }),
@@ -201,7 +205,7 @@ export function outputContribution({ commands, results, menuTargets, documents, 
       run: async args => {
         const cell = valueCell(args)
         if (!cell) return
-        const { opened, message } = await results.openValue(cell.tabId, cell.resultIndex, cell.row, cell.column, cell.capturedPlan)
+        const { opened, message } = await results.openValue(cell.tabId, cell.entry, cell.row, cell.column, cell.capturedPlan)
         if (message) commands.reportError(message)
         // The value's tab is active now; typing goes to it, as in SSMS.
         if (opened) documents.focusActive()
@@ -248,7 +252,7 @@ export function outputContribution({ commands, results, menuTargets, documents, 
       run: args => {
         const target = targetOf(args)
         if (target?.view === 'live') { if (target.live?.hasRows()) target.live.selectAll() }
-        else if (target?.view === 'grid') { if (grid(target)) results.selectAll(target.tabId, target.resultIndex) }
+        else if (target?.view === 'grid') { const shown = grid(target); if (shown) results.selectAll(shown.tabId, shown.key) }
         // Messages keep text selection; Chromium's Select All would select the whole window.
         else if (target) target.element.ownerDocument.getSelection()?.selectAllChildren(target.element)
       }
