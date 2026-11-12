@@ -36,6 +36,7 @@ internal static class ProfileChecks
         Estimates(check);
         Pages(check);
         Threads(check);
+        Retried(check);
         Charged(check);
         Requests(check);
         Hashes(check);
@@ -230,9 +231,16 @@ internal static class ProfileChecks
             && profile.Columns[11] is { Values: rows / 2, Distinct: 77, DistinctExact: true } && profile.Columns[14].Histogram is { } zeros && !double.IsNegative(zeros.Low),
             "a profile read on 2 to more threads than pages is the one a single thread gives, of every type, through views, with runs that hold no value of a column, counts that pass the exact cap "
             + "only together, and the first zero's sign: " + string.Join(", ", different));
-        check(ColumnProfiler.WorkersFor(100, 1) == 1 && ColumnProfiler.WorkersFor(60_000, 14) == Math.Min(14, ViewSorter.Workers) && ColumnProfiler.WorkersFor(1_000_000, 3) == Math.Min(3, ViewSorter.Workers)
-            && ColumnProfiler.WorkingBytes(rows, 2, 3) - ColumnProfiler.WorkingBytes(rows, 2) == 2 * (ColumnProfiler.WorkingBytes(rows, 2) - ColumnProfiler.WorkingBytes(rows, 0)),
-            "a profile reads a run of pages a thread, one for every 4,096 rows, and reserves each thread's figures");
+        // A run of pages a thread, whatever the rows; each thread's figures reserved for the rows its run reads at most.
+        var granted = ColumnProfiler.WorkersFor(14);
+        var perColumn = ColumnProfiler.WorkingBytes(rows, 1) - ColumnProfiler.WorkingBytes(rows, 0);
+        check(ColumnProfiler.WorkersFor(1) == 1 && ColumnProfiler.WorkersFor(0) == 1 && granted is >= 1 and <= 14
+            && ColumnProfiler.WorkingBytes(rows, 2, 3) - ColumnProfiler.WorkingBytes(rows, 2) == 4 * perColumn
+            && ColumnProfiler.RunRows(pages, 1) == rows && ColumnProfiler.RunRows(pages, 4) is >= rows / 4 and < rows / 4 + 4096 * 2 && ColumnProfiler.RunRows(pages, pages.Length + 9) <= 4096
+            && ColumnProfiler.RunRows([], 3) == 0
+            && perColumn - (ColumnProfiler.WorkingBytes(rows, 1, 1, 1000) - ColumnProfiler.WorkingBytes(rows, 0)) == 24L * (ColumnProfiler.ExactDistinct - 1000)
+            && ColumnProfiler.WorkingBytes(rows, 1, 1, 1_000_000) == ColumnProfiler.WorkingBytes(rows, 1),
+            "a profile reads a run of pages a thread and reserves each thread's figures: an exact set no larger than its cap or the rows its run reads");
         string? stopped = null;
         try { ColumnProfiler.Profile(set, pages, null, all, true, new CancellationToken(true), null, 4, gate); }
         catch (OperationCanceledException) { stopped = "cancelled"; }
@@ -257,6 +265,61 @@ internal static class ProfileChecks
         check(roomy == one && store.UsedBytes == used && cramped == one && snug.UsedBytes == before
             && !snug.TryReserveSpare(copy.Budget, ColumnProfiler.WorkingBytes(rows, all.Length, 2)),
             "results.profile answers the same profile with room for every thread's figures and with room for one thread's only, and returns what it took");
+    }
+
+    /// <summary>Each thread keeps the long values it meets, so several threads are charged more than one would be: a
+    /// profile refused that on several threads is read again on one, and answers what one thread answers.</summary>
+    private static void Retried(Action<bool, string> check)
+    {
+        ResultColumn[] columns = [new("doc", "nvarchar(max)", "text", Collation: CaseInsensitive)];
+        ResultSetBuffer Filled(ResultStore store)
+        {
+            var set = store.Open(store.BeginQuery("long"), 0, 1, 1, "rows", columns, [WireKind.Text]) ?? throw new InvalidOperationException("The result set was not kept.");
+            for (var i = 0; i < 48; i++)
+            {
+                set.CountRow();
+                set.BeginRow()!.AppendText(new string((char)('a' + i % 26), 60_000) + i.ToString(CultureInfo.InvariantCulture));
+                set.TryCommitRow();
+            }
+            set.Complete();
+            return set;
+        }
+        var roomy = new ResultStore(1L << 30, 1L << 29);
+        var set = Filled(roomy);
+        var pages = set.SealedSnapshot();
+        var gate = new ViewSorter.WorkerGate(() => 64);
+        (string Shown, long Charged) Profiled(int workers, long room)
+        {
+            long charged = 0;
+            var charges = new ColumnProfiler.Charges(bytes => Interlocked.Add(ref charged, bytes) <= room);
+            return (JsonSerializer.Serialize(ColumnProfiler.Profile(set, pages, null, [0], true, CancellationToken.None, charges, workers, gate), HostChecks.Json), charged);
+        }
+        var one = Profiled(1, long.MaxValue);
+        var four = Profiled(4, long.MaxValue);
+        var between = (one.Charged + four.Charged) / 2;
+        string? refused = null;
+        try { Profiled(4, between); }
+        catch (ColumnProfiler.ProfileTooLargeException) { refused = "too large"; }
+        // A budget with room for four threads' figures and for what one thread keeps of the values, not for what four keep.
+        var figures = ColumnProfiler.WorkingBytes(48, 1, 4, ColumnProfiler.RunRows(pages, 4));
+        var snug = new ResultStore(1L << 30, set.Budget.UsedBytes + figures + between);
+        var copy = Filled(snug);
+        using var service = new SqlService(snug);
+        var before = snug.UsedBytes;
+        var spare = snug.TryReserveSpare(copy.Budget, figures);
+        if (spare) snug.Return(copy.Budget, figures);
+        string answered;
+        var workers = ViewSorter.Workers;
+        try
+        {
+            ViewSorter.Workers = 4;
+            answered = JsonSerializer.Serialize(service.DispatchAsync("results.profile", JsonSerializer.SerializeToElement(new { resultId = copy.ResultId, columns = new[] { 0 } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(), HostChecks.Json);
+        }
+        finally { ViewSorter.Workers = workers; }
+        check(pages.Length >= 8 && four.Shown == one.Shown && four.Charged > one.Charged + 100_000 && refused == "too large" && Profiled(1, between).Shown == one.Shown
+            && spare && answered == one.Shown && snug.UsedBytes == before && gate.Busy == 0,
+            "four threads keep more of long values than one (" + four.Charged + " bytes against " + one.Charged + "); a profile refused them on several threads is read again on one, "
+            + "answers the same and returns what it took");
     }
 
     /// <summary>Long values are charged as the profile keeps them, and a refusal ends it; the service returns every charge.</summary>

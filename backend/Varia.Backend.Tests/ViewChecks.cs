@@ -101,7 +101,9 @@ internal static class ViewChecks
             var pages = set.SealedSnapshot();
             return (ViewSorter.Sort(set, pages, [new ViewKey(0, false, SortMode.Value)], CancellationToken.None).Order, ColumnProfiler.Profile(set, pages, null, [0], true, CancellationToken.None).Columns[0]);
         }
-        string[] zonedCells = ["2024-03-01 10:00:00.0000000 +02:00", "2024-03-01", "2024-03-01 07:59:59.0000000 +00:00", "2024-03-01 09:00:00", "not an instant", "2024-03-01 10:00:00.0000000 +02:00"];
+        // Cells without an offset are read in the zone of the machine that runs this: the others are at minutes no zone's
+        // offset puts a whole hour on, so they are five instants wherever that is.
+        string[] zonedCells = ["2024-03-01 10:07:13.0000000 +02:00", "2024-03-01", "2024-03-01 07:59:59.0000000 +00:00", "2024-03-01 09:00:00", "not an instant", "2024-03-01 10:07:13.0000000 +02:00"];
         long Utc(string text) => DateTimeOffset.TryParse(text, invariant, System.Globalization.DateTimeStyles.None, out var value) ? value.UtcTicks : long.MinValue;
         var expectedOrder = Enumerable.Range(0, zonedCells.Length).ToArray();
         Array.Sort(expectedOrder, (a, b) => Utc(zonedCells[a]) != Utc(zonedCells[b]) ? Utc(zonedCells[a]).CompareTo(Utc(zonedCells[b])) : a.CompareTo(b));
@@ -109,10 +111,10 @@ internal static class ViewChecks
         var parsed = zonedCells.Where(cell => Utc(cell) != long.MinValue).Select(cell => (double)Utc(cell)).ToArray();
         if (!zonedColumn.Order.SequenceEqual(expectedOrder) || zonedColumn.Profile.Histogram is not { } zonedBars || zonedBars.Low != parsed.Min() || zonedBars.High != parsed.Max() || zonedColumn.Profile.Distinct != 5)
             wrong.Add("a datetimeoffset column with cells without an offset: " + string.Join(",", zonedColumn.Order));
-        string[] datedCells = ["2024-03-01 10:00:00.0000000", "2024-03-02 10:00:00.0000000 +02:00", "2024-02-29", "10:20:30"];
+        string[] datedCells = ["2024-03-01 10:00:00.0000000", "2024-03-02 10:00:00.0000000 +02:00", "2024-02-29", "not a date"];
         var datedBars = Through("datetime2", datedCells).Profile.Histogram;
         var datedTicks = datedCells.Select(cell => DateTime.TryParse(cell, invariant, System.Globalization.DateTimeStyles.None, out var value) ? value.Ticks : (double?)null).Where(value => value is not null).Select(value => value!.Value).ToArray();
-        if (datedBars is null || datedBars.Low != datedTicks.Min() || datedBars.High != datedTicks.Max()) wrong.Add("a datetime2 column with a cell that has an offset, or only a time");
+        if (datedBars is null || datedBars.Low != datedTicks.Min() || datedBars.High != datedTicks.Max()) wrong.Add("a datetime2 column with a cell that has an offset, or no date");
         string[] timeCells = ["10:20:30.0000000", "1.10:20:30", "23:59:59.9999999", "2024-03-01 00:00:01"];
         var timeBars = Through("time", timeCells).Profile.Histogram;
         var timeTicks = timeCells.Select(cell => TimeSpan.TryParse(cell, invariant, out var value) ? value.Ticks : (double?)null).Where(value => value is not null).Select(value => value!.Value).ToArray();
