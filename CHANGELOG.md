@@ -9,8 +9,11 @@
 - **In-app release notes:** read curated release highlights and limits offline, browse bundled history and open notes for the exact version advertised by an update. Missing notes are reported clearly, with release downloads available separately.
 - **Activity Monitor Recent Expensive Queries:** see the statements that finished since the previous sample, grouped by query hash with per-second rates, and rank them by CPU, duration, reads, writes or executions. The plan cache is read only while the pane is shown, at its own interval (Settings › Activity Monitor › Query statistics interval, 30 seconds by default).
 
+- **Close one result:** each result's caption has a close button that frees that result's memory and leaves the others as they are, with their names, numbers, sort and filters. Pivots, transposes and comparisons made from it stay. Closing the last one keeps the Results view, Messages and captured plans.
+
 ### Improved
 
+- **Results:** the run summary's row count is the rows the query returned; a pivot, transpose or comparison no longer adds its rows to it. A result added after you drag a splitter no longer resets the other results' heights. Search in results looks again only at the grids that changed.
 - **Results:** sorting, filtering for duplicates, listing a column's values and pivoting are several times faster on number columns with many repeated values (a status, a flag, a foreign key).
 - **Results:** the same operations on text, date and binary columns are many times faster on large results, most of all when values repeat or share their first characters (names, paths, codes, the dates of a month), and now use several processor cores, shared between the operations running. When result memory is too full to do this in time, they say so instead of running to their time limit.
 - **Results:** column profiles of several columns are faster on large results: each column is read on its own processor core.

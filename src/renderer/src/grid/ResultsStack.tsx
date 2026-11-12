@@ -36,17 +36,21 @@ export function collapsedPlaces(sets: readonly ResultSetEntry[], collapsed: Read
   if (collapsed.size > 0) sets.forEach((entry, place) => { if (collapsed.has(entry.key)) places.add(place) })
   return places
 }
-/** Each entry's weight in the order drawn, or undefined (equal shares) unless every entry has one: a result added since
- *  the splitter was dragged has none. */
+/** Each entry's weight in the order drawn, or undefined (equal shares) when none has one. An entry without one (a result
+ *  added since the splitter was dragged) takes the mean of the others', so adding it keeps their proportions; a closed
+ *  entry's weight went with it, and the rest keep theirs. */
 export function weightsOf(sets: readonly ResultSetEntry[], weights: ReadonlyMap<EntryKey, number> | undefined): number[] | undefined {
   if (!weights) return undefined
-  const list: number[] = []
-  for (const entry of sets) { const weight = weights.get(entry.key); if (weight === undefined) return undefined; list.push(weight) }
-  return list
+  let sum = 0, known = 0
+  for (const entry of sets) { const weight = weights.get(entry.key); if (weight !== undefined) { sum += weight; known++ } }
+  if (known === 0) return undefined
+  const mean = sum / known
+  return sets.map(entry => weights.get(entry.key) ?? mean)
 }
 /** The room a run's stack needs before it scrolls: every set at its floor (what the Messages strip leaves it, at least). */
 export function stackNeed(tab: Pick<TabResults, 'sets' | 'settled'>, collapsed: ReadonlySet<EntryKey>): number {
   const minHeight = minGridHeight(scrollbarSize()), content = settledContent(tab), count = tab.sets.length, places = collapsedPlaces(tab.sets, collapsed)
+  if (count === 0) return 0
   return count === 1 ? places.has(0) ? g.captionHeight : Math.min(minHeight, content[0] ?? minHeight) : stackMinimum(count, minHeight, { content, collapsed: places })
 }
 
@@ -57,10 +61,13 @@ export function batchText(batchNumber: number, iteration: number, totalBatches: 
 }
 
 /**
- * A set's caption: Collapse, its name, rows (counting while they stream) and columns, the batch it came from, and Save
- * Results As for it. It renders for each set in view, so a set's facts show before its grid mounts.
+ * A set's caption: Collapse, its name, rows (counting while they stream) and columns, the batch it came from, Save
+ * Results As for it and, in a stack that closes results (`onClose`), its close button, which is disabled while the query
+ * runs (`running`). It renders for each set in view, so a set's facts show before its grid mounts.
  */
-const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, totalBatches, sort, onToggle }: { tabId: string; entry: ResultSetEntry; collapsed: boolean; totalBatches: number; sort?: GridSort; onToggle(key: EntryKey): void }) {
+const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, totalBatches, sort, running, onToggle, onClose }: {
+  tabId: string; entry: ResultSetEntry; collapsed: boolean; totalBatches: number; sort?: GridSort; running: boolean; onToggle(key: EntryKey): void; onClose?(key: EntryKey): void
+}) {
   const { commands, results } = useWorkbench()
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
   const { descriptor } = entry, columns = descriptor.columns.length, name = entryName(entry)
@@ -74,7 +81,7 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
   // A Remove or Clear button that goes with its filters hands focus to the caption, not the page.
   const toggleRef = useRef<HTMLButtonElement>(null)
   return <div className="rs-caption">
-    <button ref={toggleRef} type="button" className="rs-caption-toggle" aria-expanded={!collapsed} onClick={() => onToggle(entry.key)}>
+    <button ref={toggleRef} type="button" className="rs-caption-toggle" data-caption-entry={entry.key} aria-expanded={!collapsed} onClick={() => onToggle(entry.key)}>
       <Icon name={collapsed ? 'chevron-right' : 'chevron-down'} /><span className="rs-caption-name">{name}</span>
     </button>
     {/* Rows change while the set streams; the grid's own label announces its counts. */}
@@ -88,6 +95,9 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
     </span>}
     {batch && <span className="rs-caption-batch">{batch}</span>}
     {held && <button type="button" className="icon-button rs-caption-save" aria-label={`Save ${name} As…`} title={`Save ${name} As…`} onClick={save}><Icon name="save-as" /></button>}
+    {/* Closing releases only this result: one made from it (a pivot, a diff) stays. There is no undo. */}
+    {onClose && <button type="button" className="icon-button rs-caption-close" aria-label={`Close ${name}`} title={running ? `Close ${name} (unavailable while the query runs)` : `Close ${name}`}
+      disabled={running} onClick={() => onClose(entry.key)}><Icon name="close" /></button>}
   </div>
 })
 
@@ -98,9 +108,10 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
  * Only the sets within a view above and below are rendered, at most 12, mounting at most 2 grids a frame; a set waiting
  * for its grid shows its caption. One set in a pane too short for its minimum shows its grid without the caption, whose
  * facts the run summary already gives. Scroll position, weights, collapsed sets and the focused grid live in the tab's
- * view state, each by its entry's key.
+ * view state, each by its entry's key. With `closable` (query output; Peek's stack leaves it off) each caption has a close
+ * button for its result.
  */
-export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabResults }) {
+export default function ResultsStack({ tabId, tab, closable = false }: { tabId: string; tab: TabResults; closable?: boolean }) {
   const { results, resultsSearch } = useWorkbench()
   const view = results.viewState(tabId)
   const search = useServiceSnapshot(resultsSearch)[tabId]
@@ -165,6 +176,38 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
     return nextFrame(() => setMounted(mount))
   }, [first, last, mounted, sets])
   useEffect(() => () => drag.current?.frame?.(), [])
+  // A splitter drag holds places and heights of the entries as they were: when one goes, the drag ends where it was. (One
+  // that arrives while the query runs is added after them, and leaves the drag alone.)
+  const drawn = useRef(count)
+  useEffect(() => {
+    if (count < drawn.current) { drag.current?.frame?.(); drag.current = undefined }
+    drawn.current = count
+  }, [count])
+  // Closing a result (its caption's button): the focus goes to the caption after it, else the one before, else to the
+  // Results tab, which stays when the last result has gone (and takes it too when that caption is not drawn: one result
+  // left in a pane too short for a caption). Only when the focus was in what closes, or nowhere. It moves once, in the
+  // first layout without the closed result, and never later.
+  const pendingFocus = useRef<{ readonly closed: EntryKey; readonly next: EntryKey } | undefined>(undefined)
+  const close = useCallback((key: EntryKey) => {
+    const stack = stackRef.current, list = results.getSnapshot()[tabId]?.sets ?? []
+    const place = list.findIndex(entry => entry.key === key), next = list[place + 1] ?? list[place - 1]
+    const active = stack?.ownerDocument.activeElement
+    const own = !active || active === stack?.ownerDocument.body || !!active.closest('.rs-item')?.querySelector(`[data-caption-entry="${key}"]`)
+    if (own && !next) resultsTab()?.focus({ preventScroll: true })
+    if (results.removeEntry(tabId, key) && own && next) pendingFocus.current = { closed: key, next: next.key }
+  }, [results, tabId])
+  const resultsTab = () => stackRef.current?.closest('.output-panel')?.querySelector<HTMLElement>('[role="tab"][data-output-tab="results"]')
+  useLayoutEffect(() => {
+    const pending = pendingFocus.current
+    // Until the stack is drawn without the closed result, the focus is still in it.
+    if (!pending || sets.some(entry => entry.key === pending.closed)) return
+    pendingFocus.current = undefined
+    const stack = stackRef.current, active = stack?.ownerDocument.activeElement
+    // The user has moved on meanwhile: the focus is theirs.
+    if (active && active !== stack?.ownerDocument.body && !stack?.contains(active)) return
+    const target = stack?.querySelector<HTMLElement>(`[data-caption-entry="${pending.next}"]`) ?? resultsTab()
+    target?.focus({ preventScroll: true })
+  })
 
   const focus = (key: EntryKey) => { view.focused = key; setFocused(key) }
   const wide = useCallback((key: EntryKey, isWide: boolean) => {
@@ -247,8 +290,8 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
     if (!entry) continue
     const shut = collapsed.has(index)
     items.push(<div key={`item-${entry.key}`} className="rs-item" data-collapsed={shut || undefined} style={{ top: layout.offsets[index], height: layout.heights[index] }}>
-      {!bare && <ResultCaption tabId={tabId} entry={entry} collapsed={shut} totalBatches={tab.totalBatches} sort={tab.sorts.get(entry.key)} onToggle={toggle} />}
-      {!shut && mounted.has(entry.key) && <ResultGrid tabId={tabId} entry={entry} count={count} focused={entry.key === focused} budget={tab.summary?.budget} sort={tab.sorts.get(entry.key)} onFocus={focus} onWide={wide} />}
+      {!bare && <ResultCaption tabId={tabId} entry={entry} collapsed={shut} totalBatches={tab.totalBatches} sort={tab.sorts.get(entry.key)} running={tab.status === 'running'} onToggle={toggle} onClose={closable ? close : undefined} />}
+      {!shut && mounted.has(entry.key) && <ResultGrid tabId={tabId} entry={entry} count={tab.numbered} focused={entry.key === focused} budget={tab.summary?.budget} sort={tab.sorts.get(entry.key)} onFocus={focus} onWide={wide} />}
     </div>)
     if (index < count - 1) {
       const top = layout.offsets[index] + layout.heights[index]

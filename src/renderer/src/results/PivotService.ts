@@ -43,7 +43,8 @@ export const pivotable = (entry: ResultSetEntry | undefined): boolean =>
  */
 export class PivotService extends SnapshotStore<PivotSnapshot> implements Disposable {
   private readonly results: Results
-  private readonly running = new Map<string, { readonly abort: AbortController; readonly queryId: string }>()
+  /** The pivot each tab builds, with the run and the entry it reads: a newer run, or that entry closed, gives it up. */
+  private readonly running = new Map<string, { readonly abort: AbortController; readonly queryId: string; readonly source: EntryKey }>()
   /** The run each tab's panel was set up for: a new run starts the draft over. */
   private readonly runs = new Map<string, string>()
   /** The columns each tab's draft was last fitted to: a draft follows its columns by name when they move. */
@@ -107,7 +108,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     // The grid's view when it shows one: the pivot reads its rows as the grid shows them.
     const handle = sort?.view ?? entry.handle
     const abort = new AbortController()
-    const item = { abort, queryId: tab.queryId }
+    const item = { abort, queryId: tab.queryId, source: entry.key }
     this.running.set(tabId, item)
     this.update(tabId, { ...state, running: true, error: undefined })
     let error: string | undefined
@@ -119,7 +120,8 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       // why when its run is still the one it pivoted.
       if (this.results.addSet(tabId, result.descriptor, label, [setKey(entry.descriptor)]) === undefined) {
         const now = this.results.getSnapshot()[tabId]
-        if (now?.queryId === tab.queryId) {
+        // A source closed while it was built gave the pivot up: the panel has moved on and says nothing of it.
+        if (now?.queryId === tab.queryId && !abort.signal.aborted) {
           error = now.sets.length >= resultLimits.sets
             ? `These results already show ${resultLimits.sets.toLocaleString('en-US')} sets, so the pivot was not added. Close Results or run the query again.`
             : 'These results were closed, so the pivot was not added.'
@@ -180,10 +182,11 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     return new Map([...info].filter(([key]) => shown.has(key)))
   }
 
-  /** A new run (or a closed tab) gives up its tab's running pivot; the panel keeps its set while the run has it. */
+  /** A new run (or a closed tab) gives up its tab's running pivot, and so does closing the result it reads; the panel
+   *  keeps its set while the run has it. */
   private sync(): void {
     const snapshot = this.results.getSnapshot()
-    for (const [tabId, item] of this.running) if (snapshot[tabId]?.queryId !== item.queryId) item.abort.abort()
+    for (const [tabId, item] of this.running) if (snapshot[tabId]?.queryId !== item.queryId || !entryOf(snapshot[tabId].sets, item.source)) item.abort.abort()
     const current = this.getSnapshot()
     let tabs: Record<string, PivotTab> | undefined
     for (const [tabId, tab] of Object.entries(current.tabs)) {

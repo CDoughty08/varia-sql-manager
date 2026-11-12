@@ -50,7 +50,8 @@ export interface TabSearch {
 interface GridRun {
   readonly key: EntryKey
   readonly handle: ResultHandle
-  readonly signature: string
+  /** '' once its rows are known to have gone: the next search again searches it whatever its target says. */
+  signature: string
   total: number
   approximate: boolean
   complete: boolean
@@ -239,8 +240,8 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
     return results ? results.queryId + '|' + results.status + '|' + this.targets(tabId, results).map(target => target.signature).join(',') : ''
   }
 
-  /** The results changed: a tab whose grids now show other rows (a new run, a sort, a set that finished) searches again,
-   *  keeping its place; a tab whose results went is forgotten. */
+  /** The results changed: a tab whose grids now show other rows (a new run, a sort, a set that finished, a result closed)
+   *  searches again, keeping its place, and only the grids that changed (`run`); a tab whose results went is forgotten. */
   private resultsChanged(): void {
     if (this.disposed) return
     const all = this.results.getSnapshot()
@@ -263,6 +264,9 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
     const targets = this.targets(tabId, results)
     if (tab.mode === 'columns') {
       const query = fold(tab.text)
+      // The active column and the entries that stood before its entry, to find it again among the new matches.
+      const at = fresh ? undefined : this.locateColumn(tab), before = new Set<EntryKey>()
+      if (at) for (const key of tab.names.keys()) { if (key === at.key) break; before.add(key) }
       tab.names = new Map()
       tab.columnCount = 0
       for (const set of results?.sets ?? []) {
@@ -274,7 +278,8 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
       }
       tab.status = 'done'
       const total = this.total(tab)
-      tab.current = total === 0 ? -1 : fresh || tab.current < 0 ? 0 : Math.min(tab.current, total - 1)
+      tab.current = total === 0 ? -1 : fresh || tab.current < 0 ? 0 : !at ? Math.min(tab.current, total - 1)
+        : placeAmong([...tab.names].map(([key, hits]) => ({ key, total: hits.length })), at.key, before, () => Math.max(0, tab.names.get(at.key)!.indexOf(at.column)), total)
       if (fresh && total > 0) this.reveal(tab)
       this.publishTab(tabId, tab)
       return
@@ -282,7 +287,34 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
     // A search again keeps showing the last matches until the new ones are all in; a new one shows each grid's as it comes.
     // Steps taken while it runs move the active match among the last matches; it keeps that place, shown again at the end.
     const steps = tab.reveal
+    // A search again searches only the grids that changed: one whose entry shows the same rows keeps the matches it has.
+    const kept = new Map<EntryKey, GridRun>()
+    if (!fresh) for (const grid of tab.grids) kept.set(grid.key, grid)
+    const same = (target: { key: EntryKey; handle: ResultHandle; signature: string }) => {
+      const grid = kept.get(target.key)
+      // A grid searched while its rows were still arriving is searched again whenever anything changes (the run ending
+      // among them), as its signature cannot say how many rows it had.
+      return grid && grid.complete && grid.handle === target.handle && grid.signature === target.signature ? grid : undefined
+    }
     const grids: GridRun[] = []
+    const end = (failure: string | undefined) => {
+      tab.abort = undefined
+      if (!fresh) tab.current = this.placeIn(tab, grids)
+      tab.grids = grids
+      // Shown again as the step showed it: a step from a grid still moves its active cell.
+      if (!fresh && tab.reveal !== steps && tab.current >= 0) this.reveal(tab, tab.revealSelect)
+      tab.status = failure && grids.length === 0 ? 'failed' : 'done'
+      tab.error = failure && grids.length === 0 ? failure : undefined
+      this.publishTab(tabId, tab)
+      // A kept place may be outside the runs the searches returned.
+      if (tab.current >= 0) void this.ensureRun(tabId, tab)
+    }
+    // Nothing to search (a result was closed, or the run ended with every grid as it was): the others' matches stand.
+    if (!fresh && targets.every(same)) {
+      for (const target of targets) grids.push(same(target)!)
+      end(undefined)
+      return
+    }
     if (fresh) { tab.grids = grids; tab.current = -1 }
     tab.status = 'searching'
     const abort = tab.abort = new AbortController()
@@ -291,6 +323,8 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
       let failure: string | undefined
       for (const target of targets) {
         if (abort.signal.aborted) return
+        const unchanged = same(target)
+        if (unchanged) { grids.push(unchanged); continue }
         try {
           const found = await target.handle.search(tab.text, 0, { maxMatches: this.maxMatches, signal: abort.signal })
           if (abort.signal.aborted) return
@@ -306,20 +340,24 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
         this.publishTab(tabId, tab)
       }
       if (abort.signal.aborted) return
-      tab.abort = undefined
-      tab.grids = grids
-      const total = this.total(tab)
-      if (!fresh) {
-        tab.current = total === 0 ? -1 : Math.max(0, Math.min(tab.current, total - 1))
-        // Shown again as the step showed it: a step from a grid still moves its active cell.
-        if (tab.reveal !== steps && tab.current >= 0) this.reveal(tab, tab.revealSelect)
-      }
-      tab.status = failure && grids.length === 0 ? 'failed' : 'done'
-      tab.error = failure && grids.length === 0 ? failure : undefined
-      this.publishTab(tabId, tab)
-      // A kept place may be outside the runs the searches returned.
-      if (tab.current >= 0) void this.ensureRun(tabId, tab)
+      end(failure)
     })()
+  }
+
+  /**
+   * Where the active match stands among `grids`, the matches a search again brought: the same match of the same grid while
+   * that grid still has it (its last, when it has fewer now), else the first match after where that grid stood, else the
+   * last of all; -1 with no match (`placeAmong`).
+   */
+  private placeIn(tab: TabState, grids: readonly GridRun[]): number {
+    let total = 0
+    for (const grid of grids) total += grid.total
+    if (total === 0) return -1
+    const at = this.locate(tab)
+    if (!at) return tab.current < 0 ? 0 : Math.min(tab.current, total - 1)
+    const before = new Set<EntryKey>()
+    for (const grid of tab.grids) { if (grid === at.grid) break; before.add(grid.key) }
+    return placeAmong(grids, at.grid.key, before, count => Math.min(at.local, count - 1), total)
   }
 
   private gridRun(target: { key: EntryKey; handle: ResultHandle; signature: string }, found: ResultsSearchResult): GridRun {
@@ -384,6 +422,7 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
       // grids show now, keeping the place; once per signature, so a read that keeps failing says so instead of looping.
       if (error instanceof ResultError && error.code === 'RESULT_RELEASED' && tab.retried !== tab.signature) {
         tab.retried = tab.signature
+        grid.signature = ''
         this.run(tabId, tab, false)
         return
       }
@@ -460,6 +499,22 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
     for (const [tabId, tab] of this.tabs) if (tab.published) next[tabId] = tab.published
     this.publish(next)
   }
+}
+
+/**
+ * The place among all matches of the active one, which was in the entry `key`: after the matches of every entry now listed
+ * before that entry (one searched for the first time among them), at `local(its matches)` among its own. When the entry
+ * has gone or has no match now, the first match after the entries that stood before it (`before`), else the last of all.
+ */
+function placeAmong(entries: readonly { readonly key: EntryKey; readonly total: number }[], key: EntryKey, before: ReadonlySet<EntryKey>, local: (count: number) => number, total: number): number {
+  let offset = 0
+  for (const entry of entries) {
+    if (entry.key === key) return entry.total > 0 ? offset + local(entry.total) : Math.min(offset, total - 1)
+    offset += entry.total
+  }
+  offset = 0
+  for (const entry of entries) if (before.has(entry.key)) offset += entry.total
+  return Math.min(offset, total - 1)
 }
 
 /** What a key does in the search box: Enter and Shift+Enter step (never the Enter that commits an IME composition), Escape
