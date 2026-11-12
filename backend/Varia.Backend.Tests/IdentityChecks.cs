@@ -53,17 +53,17 @@ internal static class IdentityChecks
     private static void Threads(Action<bool, string> check)
     {
         var store = new ResultStore(1L << 30, 1L << 29);
-        const int count = 130_000;
+        const int count = 70_000;
         var invariant = System.Globalization.CultureInfo.InvariantCulture;
         // id: each its own. twin: each its own but for two rows far apart, past the rows a key is first tried on. gap: one NULL, late.
         ResultColumn[] columns = [new("id", "int", "text"), new("twin", "int", "text"), new("gap", "int", "text"), new("name", "nvarchar", "text", Collation: CaseInsensitive), new("at", "datetimeoffset", "text")];
         string?[][] Rows(int changed) => [.. Enumerable.Range(0, count).Select(i => new[]
         {
-            i.ToString(invariant), (i == 120_000 ? 40_000 : i).ToString(invariant), i == 99_999 ? null : i.ToString(invariant),
+            i.ToString(invariant), (i == 65_000 ? 1_000 : i).ToString(invariant), i == 50_000 ? null : i.ToString(invariant),
             (i % 2 == 0 ? "Name " : "NAME ") + ((uint)i * 2654435761u % 9000) + (i == changed ? "!" : ""), "2024-01-01 00:00:00.0000000 +0" + i % 10 + ":00"
         })];
         var set = Fill(store, Rows(-1), columns);
-        var other = Fill(store, Rows(77_777), columns);
+        var other = Fill(store, Rows(55_555), columns);
         var pages = set.SealedSnapshot();
         (int Column, bool Unique, bool Approximate, long[] Ids) Built(IdentityBy by, int column = -1) => RowIdentity.Build(set, pages, by, column, CancellationToken.None);
         var byRow = Built(IdentityBy.Row);

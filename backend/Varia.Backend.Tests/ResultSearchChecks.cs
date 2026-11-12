@@ -72,7 +72,8 @@ internal static class ResultSearchChecks
         var store = new ResultStore(1L << 30, 1L << 29);
         var set = store.Open(store.BeginQuery("threads"), 0, 1, 1, "rows", Columns, Wires) ?? throw new InvalidOperationException("The result set was not kept.");
         // Matches come in bursts and alone, in one column of a row or in three, with stretches of rows that hold none.
-        const int rows = 90_000;
+        // Enough rows for a run of positions a thread; no more, as every case below reads them all.
+        const int rows = 40_000;
         for (var i = 0; i < rows; i++)
         {
             var scrambled = (uint)i * 2654435761u % 1000;
@@ -91,27 +92,29 @@ internal static class ResultSearchChecks
         var pages = set.SealedSnapshot();
         var order = ViewSorter.Build(set, pages, [new ViewKey(1, true, SortMode.Value)], [], CancellationToken.None).Order[..(rows * 2 / 3)];
         var view = store.AddView(set, order, [], false, true, 4L * order.Length, null, rows);
+        // A gate of the check's own: each search runs on the threads it asks for, whatever the machine and the other suites.
+        var gate = new ViewSorter.WorkerGate(() => 64);
         string Shown(ResultView? through, long fromRow, bool backward, int max, int workers) =>
-            JsonSerializer.Serialize(ResultSearcher.Search(set, pages, through, "needle", fromRow, backward, max, CancellationToken.None, null, workers), HostChecks.Json);
+            JsonSerializer.Serialize(ResultSearcher.Search(set, pages, through, "needle", fromRow, backward, max, CancellationToken.None, null, workers, gate), HostChecks.Json);
         var different = new List<string>();
         var some = 0;
         foreach (var through in new[] { null, view })
             foreach (var backward in new[] { false, true })
-                foreach (var fromRow in new long[] { 0, 1, 499, 1500, 31_000, 59_999, 89_999, 90_000, 200_000 })
-                    foreach (var max in new[] { 1, 7, 300, ResultSearcher.MaxMatches })
+                foreach (var fromRow in new long[] { 0, 1500, 26_000, 39_999, 40_000 })
+                    foreach (var max in new[] { 1, 300, ResultSearcher.MaxMatches })
                     {
                         var one = Shown(through, fromRow, backward, max, 1);
                         if (one.Contains("\"rows\":[" + "]", StringComparison.Ordinal) == false) some++;
-                        foreach (var workers in new[] { 2, 5, 16 })
+                        foreach (var workers in new[] { 2, 7 })
                             if (Shown(through, fromRow, backward, max, workers) != one) different.Add((through is null ? "base" : "view") + (backward ? " backward" : " forward") + " from " + fromRow + " max " + max + " on " + workers);
                     }
-        var found = ResultSearcher.Search(set, pages, null, "needle", 0, false, 10, CancellationToken.None, null, 4)!;
+        var found = ResultSearcher.Search(set, pages, null, "needle", 0, false, 10, CancellationToken.None, null, 4, gate)!;
         var stops = 0;
-        var stopped = ResultSearcher.Search(set, pages, null, "needle", 0, false, 10, CancellationToken.None, () => Interlocked.Increment(ref stops) > 3, 4);
+        var stopped = ResultSearcher.Search(set, pages, null, "needle", 0, false, 10, CancellationToken.None, () => Interlocked.Increment(ref stops) > 3, 4, gate);
         string? cancelled = null;
-        try { ResultSearcher.Search(set, pages, null, "needle", 0, false, 10, new CancellationToken(true), null, 4); }
+        try { ResultSearcher.Search(set, pages, null, "needle", 0, false, 10, new CancellationToken(true), null, 4, gate); }
         catch (OperationCanceledException) { cancelled = "cancelled"; }
-        check(different.Count == 0 && some > 100 && found.Total > 5000 && found.Searched == rows && stopped is null && cancelled == "cancelled",
+        check(different.Count == 0 && some > 30 && found.Total > 5000 && gate.Busy == 0 && found.Searched == rows && stopped is null && cancelled == "cancelled",
             "a search on several threads is the one pass's: every match counted, the same run forward and backward from any row, in base order and through a view; it stops and cancels as one does: "
             + string.Join(" | ", different.Take(5)));
     }

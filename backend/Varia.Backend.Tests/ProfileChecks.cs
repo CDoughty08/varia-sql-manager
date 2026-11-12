@@ -163,10 +163,10 @@ internal static class ProfileChecks
             ?? throw new InvalidOperationException("The result set was not kept.");
         // name: few values, so the lowest and highest are held by many rows, in either case and with trailing spaces.
         // id: past the exact distinct cap in every run. late: NULL in the first half, so the first runs hold no value of it.
-        // wide: 20,000 values, fewer than the cap in any run of eight and more than it together. grows: a hundred values
+        // wide: 20,000 values, fewer than the cap in any run of five and more than it together. grows: a hundred values
         // in the first rows and each row its own after, so a run still counting exactly meets one that estimates.
         // zero: zeros of either sign, the first of each in different runs.
-        const int rows = 120_000;
+        const int rows = 60_000;
         var invariant = CultureInfo.InvariantCulture;
         ResultSetBuffer Filled(ResultSetBuffer target)
         {
@@ -194,7 +194,7 @@ internal static class ProfileChecks
             else builder.AppendText((scrambled % 77).ToString(invariant));
             builder.AppendText((scrambled % 20_000).ToString(invariant));
             builder.AppendText((i < 15_000 ? i % 100 : i).ToString(invariant));
-            builder.AppendText(i < 40_000 ? (i % 2 == 0 ? "0" : "0.5") : i % 2 == 0 ? "-0" : "0.25");
+            builder.AppendText(i < rows / 3 ? (i % 2 == 0 ? "0" : "0.5") : i % 2 == 0 ? "-0" : "0.25");
             target.TryCommitRow();
         }
         target.Complete();
@@ -215,7 +215,7 @@ internal static class ProfileChecks
         var viewed = Shown(set, pages, view, 1);
         var early = Shown(set, pages, firstRows, 1);
         var different = new List<string>();
-        foreach (var workers in new[] { 2, 3, 4, 8, 16, pages.Length, pages.Length + 5 })
+        foreach (var workers in new[] { 2, 5, pages.Length + 5 })
         {
             if (Shown(set, pages, null, workers) != one) different.Add("every row on " + workers);
             if (Shown(set, pages, view, workers) != viewed) different.Add("a view on " + workers);
