@@ -1354,18 +1354,28 @@ itself by view position.
   first row. Values are equal and ordered as the sort compares them, so a column's collation decides which texts match
   (case and trailing spaces under a CI collation) and `2` equals `2.0` in a float column; a truncated value compares by
   its stored prefix (`approximate`).
-- **Text and threads.** Keys are built a page at a time and rows sorted in slices, on several threads (three quarters of the
-  machine's, 16 at most), with the order one thread would give. A collated text key first samples 4,096 of its rows.
-  Where values repeat in the sample it ranks them: each distinct value is numbered once (65,536 at most, their sort keys
-  taken from the query budget) and a row keeps its value's rank, so comparisons are of integers. Otherwise it keeps each
-  row's whole collation sort key while it runs, less the bytes the sampled keys all start with, taken from the query
-  budget a page at a time, so two values that share their first characters compare bytes. When the budget has no room for
-  them the key keeps only 8 bytes of each sort key (after the shared ones), and equal ones read both cells again from
-  their pages; a sort, duplicates filter, distinct list or pivot that would spend minutes doing
-  that (most rows sharing those bytes, by a sample of 65,536) is refused with `TOO_LARGE` ("There is not enough result
-  memory to compare this much text...") rather than run. The same keys serve `results.distinct` and `results.pivot`. `results.profile`
-  reads its pages in runs on several threads as well (below).
-- **Memory.** A sort holds 8 to 16 bytes per row and key while it runs, 8 bytes a row for the positions it sorts and merges, and a collated key's whole sort keys while the budget has room (a filter, per column it compares, and 16 bytes a row
+- **Threads.** Keys are built a page at a time and rows sorted in slices that are merged, on several threads, with the
+  order one thread would give. All the operations running share those threads (three quarters of the machine's, 16 at
+  most): each takes what is free when it starts a step, and one at least, so several sorts at once leave the thread pool
+  that answers requests alone.
+- **Dates and times.** `date`, `time`, `datetime`, `datetime2` and `smalldatetime` cells are read as ticks from their
+  fixed-width text, so 8 bytes a row are the whole value, as a number's are; a column with a cell written any other way,
+  or of another width than the first, is ordered by its text's bytes instead (the same order).
+- **Text and bytes.** A key ordered by bytes (a collation's sort key for collated text; the value's own bytes for
+  `_BIN` and `_BIN2` text, binary values and any other type's text) first samples 4,096 of its rows.
+  Where values repeat in the sample it ranks them: each distinct value is numbered once (65,536 at most, or one in 32
+  rows; their bytes taken from the query budget) and a row keeps its value's rank, so comparisons are of integers.
+  Otherwise it keeps 8 bytes of each value after the bytes seven in eight of the sampled values start with (a shared
+  path, a code's prefix, a month of dates), and a row that starts otherwise is marked and compared whole. When the sample
+  says those 8 bytes tell nearly every row apart, that is all it keeps. When it says they do not, it keeps the rest of
+  each value too, taken from the query budget a page at a time, so equal 8 bytes compare bytes; that memory never takes
+  the last eighth of the query's room or of the store's (a query still loading goes on storing rows), and a refusal
+  returns what was taken at once. Without the values, equal 8 bytes read both cells again from their pages; a sort,
+  duplicates filter, distinct list or pivot expected to spend about a minute doing that (by a sample of 65,536 rows, with
+  a later key charged only the comparisons the keys before it leave to it) is refused with `TOO_LARGE` ("There is not
+  enough result memory to compare this much text...") rather than run to its deadline. The same keys serve
+  `results.distinct` and `results.pivot`. `results.profile` reads its pages in runs on several threads as well (below).
+- **Memory.** A sort holds 8 to 16 bytes per row and key while it runs, 8 bytes a row for the positions it sorts and merges, and what a text, date or binary key keeps beyond its 8 bytes while the budget has room (a filter, per column it compares, and 16 bytes a row
   for the rows it keeps, a selection's rows or duplicates' groups; a `value` sort key on a filtered column is that filter's
   key and is charged once, and other sort keys are built over only the rows the filters kept), and a view keeps 4 bytes a row it shows, all charged
   to the result's query budget (`TOO_LARGE` past it); what building needed is returned at once, the order when the view is closed,
@@ -1690,7 +1700,7 @@ receives at most 512 values a window, never rows.
   'groups', column, snapshotId, keep, values, nulls, row? }` (`row` when one value is named) for its label. A sort or
   another filter builds the view again from the same frozen snapshot.
 - **Work and memory.** Building takes one key per row for the column (as a filter builds it), the rows grouped in one
-  pass when the key's 8 bytes are its whole value (a number, a date and time, a text length, ranked text) and there are
+  pass when the key's 8 bytes are its whole value (a number, a date or time, a text length, ranked text or bytes) and there are
   at most 65,536 values, otherwise by a stable sort (a duplicates filter on one such column groups the same way), and the snapshot itself: `DistinctWorkingBytes` (about 57 bytes a row) is charged to the result's query
   budget while it builds (`TOO_LARGE` without room) and returned when it ends. The snapshot keeps
   `DistinctSnapshotBytes` (26 bytes a value and 4 KiB) charged until it is closed or its result goes. The worker's
@@ -2571,7 +2581,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Row sizes a request | `results.rowBytes`: 1 – 16,384 rows (`rowSizes.maxRows`) | zod and backend |
 | Row identities | `results.rowIds` 1 – 16,384 rows; `results.findRows` 1 – 10,000 ids, 100,000 matches (`limits.identity`); 8 bytes a row (and a set of the first 32,768 rows) while identifying, 8 kept, under the query budget | zod and backend |
 | Result diffs | context -1 – 100 rows, 64 one-sided column names each side (`limits.diff`); about 80 bytes a row of both results and 12 a differing cell while aligning, the diff's rows under the query budget, whole or refused | zod and backend |
-| Sorted views | 0 – 16 keys and 0 – 16 filters a view (one at least), 4,096 distinct values a filter, 256 cell ranges a selection, 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key or filtered column while building (and a collated key's whole sort keys while there is room), 4 bytes a row kept, under the query budget | zod and backend |
+| Sorted views | 0 – 16 keys and 0 – 16 filters a view (one at least), 4,096 distinct values a filter, 256 cell ranges a selection, 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key or filtered column while building (and a text, date or binary key's ranked or whole values while there is room), 4 bytes a row kept, under the query budget | zod and backend |
 | Transpose | 1 – 256 row ranges, at most 4,095 rows taken and 4,000,000 cells, the first rows taken past either with explicit truncation (`limits.transpose`); the stored set under the query budget, whole or refused | zod and backend |
 | Pivots | 0 – 8 row columns, 1 – 16 values, 100,000 row groups, 256 column groups, 4,000,000 figures, refused past any of them (`INVALID_PARAMS`), column-group names cut to 128 characters (`limits.pivot`); a sort key per grouped column and 12 bytes a row while grouping, and the figures, under the query budget | zod and backend |
 | Search in results | 1 – 1,024 characters of text, 1 – 10,000 matches an answer plus its last row's columns (`limits.search`); no budget held | zod and backend |

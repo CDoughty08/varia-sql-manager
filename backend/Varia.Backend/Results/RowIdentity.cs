@@ -85,7 +85,8 @@ internal static class RowIdentity
     /// each with a hasher of its own.</summary>
     internal static void EachPage(CellHasher hasher, StoredPage[] pages, long rows, CancellationToken token, PageRead read)
     {
-        var runs = (int)Math.Clamp(Math.Min(rows / MinSlice, pages.Length), 1, ViewSorter.Workers);
+        using var threads = ViewSorter.Gate.Take((int)Math.Clamp(Math.Min(rows / MinSlice, pages.Length), 1, ViewSorter.Workers));
+        var runs = threads.Count;
         void Run(int run)
         {
             var own = run == 0 ? hasher : hasher.Fork();
@@ -178,8 +179,9 @@ internal static class RowIdentity
     internal static bool Distinct(long[] ids, long[] spread, CancellationToken token)
     {
         if (ids.Length < 2) return true;
+        using var threads = ViewSorter.Gate.Take(Math.Max(1, Math.Min(ViewSorter.Workers, ids.Length / MinSlice)));
         var bits = 0;
-        while (2 << bits <= ViewSorter.Workers && ids.Length >> (bits + 1) >= MinSlice) bits++;
+        while (2 << bits <= threads.Count && ids.Length >> (bits + 1) >= MinSlice) bits++;
         var parts = 1 << bits;
         var shift = 53 - bits;
         var starts = new int[parts + 1];
@@ -368,9 +370,7 @@ internal sealed class CellHasher
             {
                 var (info, options) = cultures[column]!.Value;
                 var text = Decode(ViewSorter.TrimEnd(cell));
-                var length = info.GetSortKeyLength(text, options);
-                if (length > sortKey.Length) sortKey = new byte[Math.Max(length, 2 * sortKey.Length)];
-                var written = info.GetSortKey(text, sortKey, options);
+                var written = ViewSorter.SortKey(info, options, text, ref sortKey);
                 return Bytes(hash, sortKey.AsSpan(0, written));
             }
             case Kind.Trimmed: return Bytes(hash, ViewSorter.TrimEnd(cell));

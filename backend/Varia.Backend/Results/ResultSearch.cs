@@ -68,7 +68,9 @@ internal static class ResultSearcher
         long baseRows = 0;
         foreach (var page in pages) baseRows += page.Rows;
         long rows = view?.Rows ?? baseRows;
-        var runs = (int)Math.Clamp(workers ?? Math.Min(rows / MinSlice, ViewSorter.Workers), 1, Math.Max(1, Math.Min(rows, int.MaxValue)));
+        // At most the threads asked for, and no more than the operations running leave free.
+        using var threads = ViewSorter.Gate.Take((int)Math.Max(1, workers ?? Math.Min(rows / MinSlice, ViewSorter.Workers)));
+        var runs = (int)Math.Clamp(threads.Count, 1, Math.Max(1, Math.Min(rows, int.MaxValue)));
         var parts = new Part[runs];
         long From(int run) => rows * run / runs;
         var slots = view is null ? 1 : Math.Max(1, LayoutCacheBytes / (4 * PageView.ScratchLength(Math.Max(1, columns))) / runs);

@@ -249,7 +249,7 @@ internal static partial class ViewSorter
             return new DistinctSnapshot(set, column, source, grouped.Reps, grouped.Counts, ByCount(grouped.Counts), grouped.Ticks, looked, nulls, nullTicked, complete, approximate);
         }
         // Ties fall back to the base row, so each run of equal values starts with the lowest row holding it.
-        ThrowIfSlow([key], count);
+        ThrowIfSlow([key], values.AsSpan(0, count));
         Sort(values, 0, count, new Comparer([key], null, token));
         // Groups in value order, in place: the representative rows over the front of `values` (a group's slot is never past
         // its first row), their counts and ticks beside them.

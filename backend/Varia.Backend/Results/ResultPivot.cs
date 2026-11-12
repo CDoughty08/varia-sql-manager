@@ -248,7 +248,7 @@ internal static class ResultPivoter
         }
         positions.CopyTo(scratch, 0);
         var comparer = new ViewSorter.Comparer(keys, null, token);
-        ViewSorter.ThrowIfSlow(keys, scratch.Length);
+        ViewSorter.ThrowIfSlow(keys, scratch);
         ViewSorter.Sort(scratch, 0, scratch.Length, comparer);
         long count = 0;
         for (var i = 0; i < scratch.Length; i++)
