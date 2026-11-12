@@ -1765,16 +1765,38 @@ because every byte that needs attention is ASCII (and U+2028/U+2029, matched as 
 takes `headers` and `nullText` as parameters. `tests/fixtures/results-text/cases.json` holds the golden bytes, checked
 against the C# writer (`TextChecks.cs`) and the fake backend's JavaScript twin (`tests/results-text.test.ts`).
 
-- **`results.copy { resultId, parts, headers, eol: 'crlf' | 'lf', maxBytes: 1 … 67,108,864, viewId? }`** (stream). A part is 1 –
+**Transposed text.** A grid drawn transposed (an orientation of the grid; nothing is stored) copies and saves as it is
+drawn: `transposed: true` on either request turns the writer column-major, in every format above.
+
+| | Transposed |
+| --- | --- |
+| Lines | One per source column, in order, each with one field per source row. A JSON save is one object per source column. |
+| Rows written | Those a transposed grid draws: view positions 0 to 4,094 (`limits.transpose.maxRows`, `ResultTextWriter.MaxTransposedRows`). A part's rows past them are left out and counted in the answer's `capped`; a part wholly past them writes nothing. |
+| Headers on (Copy with Headers, a save with headers, JSON always) | A first line names the fields: `Column`, then one name per row written. Each line then starts with its column's name (blank → `(No column name)`, in JSON too). |
+| Field names | `Row N`, N being the row's place in the view from 1, without digit grouping. With `headerColumn`, that column's value for the row as the grid's header shows it: `NULL` (also a read error), `(blank)` for an empty value, binary as `0x` + uppercase hex, and at most the first 128 characters (a surrogate pair is not split). The names are then made distinct as JSON keys are: one already used, `Column` included, gets `_2`, `_3`…, in every format, so a repeated value's field differs from the grid's header by its suffix. The header column is still written as a line. |
+| Headers off (plain Copy, a save without headers) | Values only: no first line and no name field; `headerColumn` changes nothing. A part with no rows writes nothing. |
+| Values | As the table's: NULL, text, binary and truncation follow the format's column above. JSON writes every value as a string (a field holds a value of every column, so numbers and bits are not typed) and NULL as `null`. |
+| Parts (Copy) | Each part is its rows by its columns, in the result's coordinates as ever, written turned; with headers each part has its own first line. |
+
+Rows are read through per-row page lookups (`RowAccess`, as a stored transpose reads them): each row's page is found once,
+then every line reads its cell there, through the view's order when there is one, so no rows are copied and nothing is
+held but the stored pages. A line can be far longer than a chunk (4,095 values): the writer stops whenever a 1 MiB chunk
+is ready so the job can send or write it, and the token is checked every 1,024 cells. `TransposedTextChecks.cs` holds the
+cap, views, blocks, cancellation and the estimate; the golden bytes are `cases.json` entries with `transposed`.
+
+- **`results.copy { resultId, parts, headers, eol: 'crlf' | 'lf', maxBytes: 1 … 67,108,864, viewId?, transposed?, headerColumn? }`** (stream). A part is 1 –
   64 ascending, disjoint inclusive row ranges (a last row of 2⁵³ − 1 runs to the end) by 1 – 64 column ranges; up to 64
   parts, written in order. Open-ended rows end at the rows available when the copy starts, and `partial` says the set was
   still open. Before any work, `EstimateBytes` (O(pages × columns): the stored text spans, `2 × bytes + 2` per binary
   cell, 4 per NULL, separators and headers; replacements never lengthen text, so it is an upper bound) over `maxBytes`
   answers `TOO_LARGE` ("The selection is too large to copy ({n} MB; the limit is {m} MB). Use Save Results As
   instead.") with no DATA. Otherwise the text streams as DATA bodies of at most 1 MiB under the usual credit rules,
-  checked for cancellation per page, then the RESPONSE `{ rows, bytes, truncatedCells, partial }`.
-- **`results.export { resultId, path, format: 'csv' | 'tsv' | 'json', headers, nullText: 'empty' | 'NULL', temporaryId, viewId? }`**
-  (unary). The path must be fully qualified, without NUL and without a `\\.\` or `\\?\` prefix, and `temporaryId` 32
+  checked for cancellation per page, then the RESPONSE `{ rows, bytes, truncatedCells, partial, capped }`. `rows` is the
+  result's rows written and `capped` the rows a transposed copy left out (0 otherwise). `headerColumn` (0 to 4,095, a
+  shown column of the result) is taken only with `transposed: true` (`INVALID_PARAMS` otherwise). Transposed, the
+  estimate sums the same cells, each line's separators, and with headers the first line and each line's name.
+- **`results.export { resultId, path, format: 'csv' | 'tsv' | 'json', headers, nullText: 'empty' | 'NULL', temporaryId, viewId?, transposed?, headerColumn? }`**
+  (unary). `transposed` and `headerColumn` are as a copy's, and the answer has the same `capped`. The path must be fully qualified, without NUL and without a `\\.\` or `\\?\` prefix, and `temporaryId` 32
   hex digits that main chose (`INVALID_PARAMS`); the set must be complete (`RESULT_OPEN`). It writes
   `{folder}/.varia-{temporaryId}.tmp` (`CreateNew`, `FileShare.None`, 1 MiB chunks), checking cancellation per page,
   flushes it to disk and renames it over the target (a symlink there is replaced, not followed). A regular file it
@@ -1790,14 +1812,16 @@ against the C# writer (`TextChecks.cs`) and the fake backend's JavaScript twin (
   (`UnauthorizedAccessException`, HRESULT 0x80070005), `IN_USE` (0x80070020, 0x80070021, and
   0x80070497 when `File.Replace` cannot remove a file another program holds), `DISK_FULL` (0x80070070,
   0x80070027, errno 28), `NOT_FOUND` (a missing folder), `IS_DIRECTORY`, otherwise `IO`.
-- **Progress.** Both send droppable `{ type: 'job.progress', rowsDone, rowsTotal, bytes }` EVENTs at most every 250 ms;
+- **Progress.** Both send droppable `{ type: 'job.progress', rowsDone, rowsTotal, bytes }` EVENTs at most every 250 ms
+  (a transposed job counts its lines, the source columns, of their total, since no source row is finished before the last
+  line; the strip then reads "columns");
   main validates them (`jobProgressSchema`) and pushes `varia:results-job { jobId, kind, rowsDone, rowsTotal, bytes }`
   at most 4 times a second. A save's pushes also carry `fileName` (the chosen file's name, never its path), and main
   pushes one as soon as the dialog closes, so the renderer's strip ("Saving {fileName}…") starts from the export, not
   from the dialog.
-- **Main (`ResultsJobHost`).** `varia:results-copy { jobId, generation, resultId, headers, parts, viewId? }` and
-  `varia:results-save { jobId, generation, resultId, format?, suggestedName ≤ 128, viewId? }` are `trusted()`, strictly
-  validated, and checked against `ResultsPortHost.owns(generation, resultId)` and the ready generation
+- **Main (`ResultsJobHost`).** `varia:results-copy { jobId, generation, resultId, headers, parts, viewId?, transposed?, headerColumn? }` and
+  `varia:results-save { jobId, generation, resultId, format?, suggestedName ≤ 128, viewId?, transposed?, headerColumn? }` are `trusted()`, strictly
+  validated (`headerColumn` 0 to 4,095 and only with `transposed: true`; main passes both on only for a transposed request), and checked against `ResultsPortHost.owns(generation, resultId)` and the ready generation
   (`RESULT_UNAVAILABLE`). A copy decodes the chunks with a streaming `TextDecoder` (so a character split across chunks
   survives), regrants their credit, cancels with `TOO_LARGE` past 64 MiB + 1 MiB received, and writes the clipboard once,
   on the RESPONSE, unless the copy was cancelled (its chunks after the cancel are dropped, so a RESPONSE the backend sends
@@ -2612,6 +2636,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Result diffs | context -1 – 100 rows, 64 one-sided column names each side (`limits.diff`); about 80 bytes a row of both results and 12 a differing cell while aligning, the diff's rows under the query budget, whole or refused | zod and backend |
 | Sorted views | 0 – 16 keys and 0 – 16 filters a view (one at least), 4,096 distinct values a filter, 256 cell ranges a selection, 4,095 rows a `keepRows` filter (`limits.transpose.maxRows`), 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key or filtered column while building (and a text, date or binary key's ranked or whole values while there is room), 4 bytes a row kept, under the query budget | zod and backend |
 | Transpose | 1 – 256 row ranges, at most 4,095 rows taken and 4,000,000 cells, the first rows taken past either with explicit truncation (`limits.transpose`); the stored set under the query budget, whole or refused | zod and backend |
+| Transposed Copy and Save | `transposed` a boolean, `headerColumn` 0 – 4,095 and a shown column of the result, taken only with `transposed`; at most 4,095 source rows written a part (`limits.transpose.maxRows`), the rest counted in `capped`; a copy still under `maxBytes` and 64 parts of 64 ranges | zod and backend |
 | Pivots | 0 – 8 row columns, 1 – 16 values, 100,000 row groups, 256 column groups, 4,000,000 figures, refused past any of them (`INVALID_PARAMS`), column-group names cut to 128 characters (`limits.pivot`); a sort key per grouped column and 12 bytes a row while grouping, and the figures, under the query budget | zod and backend |
 | Search in results | 1 – 1,024 characters of text, 1 – 10,000 matches an answer plus its last row's columns (`limits.search`); no budget held | zod and backend |
 | Column profiles | 0 – 32 columns a request (`limits.profile`), 20 buckets, distinct exact to 16,384, values cut to 256 characters; working memory under the query budget | zod and backend |
@@ -2857,8 +2882,8 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
   script whose first line is `-- varia-fake: sets=W1*200000@50000,N1*100,X1*5000,L1*3 messages=40 errors=2 memory=0.92
   hold` streams synthetic sets (`tests/fixtures/backend/shapes.mjs`; `@rate` is rows a second, `M1*n` is n one-row sets)
   with progress, message entries and a memory event, pages encoded per block on first read; `results.copy` and
-  `results.export` use `text-writer.mjs`, and `hold/results.export` pauses an export after each page so a test can
-  cancel it mid-save.
+  `results.export` use `text-writer.mjs` (transposed too: `turnPlan`, `writeColumns`), and `hold/results.export` pauses
+  an export after each page, or each line of a transposed one, so a test can cancel it mid-save.
 - **Copy and Save goldens.** `tests/fixtures/results-text/cases.json` holds small result sets (every edge the formats
   treat specially) with the exact Copy, CSV, TSV and JSON bytes; the C# writer and the JavaScript twin are both checked
   against them, through the real copy and export jobs on the C# side.

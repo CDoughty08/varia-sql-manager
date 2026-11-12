@@ -14,7 +14,7 @@ const jobId = () => crypto.randomUUID()
 const part = { rows: [[0, Number.MAX_SAFE_INTEGER]], columns: [[0, 1]] }
 const copyRequest = (patch: object = {}) => ({ jobId: jobId(), generation: 1, resultId: 7, headers: false, parts: [part], ...patch })
 const saveRequest = (patch: object = {}) => ({ jobId: jobId(), generation: 1, resultId: 7, suggestedName: 'Query1-Result1', ...patch })
-const done: ResultsJobResult = { rows: 2, bytes: 10, truncatedCells: 0, partial: false }
+const done: ResultsJobResult = { rows: 2, bytes: 10, truncatedCells: 0, partial: false, capped: 0 }
 const failure = async (promise: Promise<unknown>): Promise<BackendError> => {
   try { await promise } catch (error) { if (error instanceof BackendError) return error; throw error }
   throw new Error('The job succeeded.')
@@ -110,7 +110,7 @@ describe('ResultsJobHost copy', () => {
     expect(cancels).toEqual([[1, cancelReasons.user]])
     // Its credit already covered the rest, so the backend sends it and answers as if the copy had run.
     calls[0].sink!.data(2, encode('row2\nrow3'))
-    calls[0].resolve({ rows: 4, bytes: 19, truncatedCells: 0, partial: false })
+    calls[0].resolve({ rows: 4, bytes: 19, truncatedCells: 0, partial: false, capped: 0 })
     expect(await failure(copying)).toMatchObject({ code: 'CANCELLED', message: jobSentences.copyCancelled })
     expect(clipboard).toEqual([])
   })
@@ -256,6 +256,32 @@ describe('ResultsJobHost save', () => {
     expect(calls[2].params).not.toHaveProperty('viewId')
     calls[2].resolve(done)
     await plain
+  })
+  it('passes a transposed grid\'s orientation and header column to the backend, and what it left out back', async () => {
+    const { jobs, calls } = host()
+    const copying = jobs.copy(copyRequest({ transposed: true, headerColumn: 2, viewId: 3 }))
+    await settle()
+    expect(calls[0].params).toMatchObject({ resultId: 7, viewId: 3, transposed: true, headerColumn: 2 })
+    calls[0].resolve({ ...done, rows: 4095, capped: 905 })
+    expect(await copying).toMatchObject({ rows: 4095, capped: 905 })
+    const saving = jobs.save(saveRequest({ transposed: true }))
+    await settle()
+    expect(calls[1]).toMatchObject({ method: 'export', params: { resultId: 7, transposed: true } })
+    expect(calls[1].params).not.toHaveProperty('headerColumn')
+    calls[1].resolve({ ...done, capped: 12 })
+    expect(await saving).toMatchObject({ capped: 12, fileName: expect.any(String) })
+    // A table's requests carry neither, also when the renderer says "not transposed"; a header column alone is refused.
+    for (const request of [copyRequest(), copyRequest({ transposed: false })]) {
+      const plain = jobs.copy(request)
+      await settle()
+      expect(calls.at(-1)!.params).not.toHaveProperty('transposed')
+      expect(calls.at(-1)!.params).not.toHaveProperty('headerColumn')
+      calls.at(-1)!.resolve(done)
+      await plain
+    }
+    expect(await failure(jobs.copy(copyRequest({ headerColumn: 2 })))).toMatchObject({ code: 'INVALID_REQUEST' })
+    expect(await failure(jobs.save(saveRequest({ headerColumn: 2 })))).toMatchObject({ code: 'INVALID_REQUEST' })
+    expect(calls).toHaveLength(4)
   })
   it('saves a live table\'s newest revision when the samples retired the one shown while the dialog was open', async () => {
     // Revision 7 was shown at the click; two samples later 7 is retired and 9 is the table's newest.

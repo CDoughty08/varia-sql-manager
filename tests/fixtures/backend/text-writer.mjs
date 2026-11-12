@@ -4,6 +4,10 @@
 
 export const MAX_SAFE = Number.MAX_SAFE_INTEGER
 export const NO_COLUMN_NAME = '(No column name)'
+/** Source rows a transposed copy or save writes: those a transposed grid draws (limits.transpose.maxRows). */
+export const MAX_TRANSPOSED_ROWS = 4095
+const NAME_FIELD = 'Column'
+const FIELD_NAME_CHARS = 128
 const encoder = new TextEncoder()
 const bytes = text => encoder.encode(text)
 const numberTypes = new Set(['tinyint', 'smallint', 'int', 'bigint', 'decimal', 'numeric', 'money', 'smallmoney', 'real', 'float'])
@@ -54,21 +58,51 @@ function kind(column) {
   return type === 'bit' ? 'bit' : numberTypes.has(type) ? 'number' : 'text'
 }
 
+/** `name`, or with _2, _3 and so on when it is already used. */
+function unique(used, name) {
+  let key = name
+  for (let n = 2; used.has(key); n++) key = `${name}_${n}`
+  used.add(key)
+  return key
+}
+function jsonKey(key) {
+  const out = new ChunkedBytes(64 * 1024)
+  jsonString(out, bytes(key))
+  return out.bytes()
+}
 /** JSON keys: a blank name becomes Column{ordinal}; a repeated one gets _2, _3 and so on. */
 function jsonKeys(columns) {
   const used = new Set()
-  return columns.map((column, index) => {
-    const name = column.name === '' ? `Column${index + 1}` : column.name
-    let key = name
-    for (let n = 2; used.has(key); n++) key = `${name}_${n}`
-    used.add(key)
-    const out = new ChunkedBytes(64 * 1024)
-    jsonString(out, bytes(key))
-    return out.bytes()
-  })
+  return columns.map((column, index) => jsonKey(unique(used, column.name === '' ? `Column${index + 1}` : column.name)))
 }
 
 function bit(bitmap, row) { return bitmap !== undefined && (bitmap[row >>> 3] & (1 << (row & 7))) !== 0 }
+
+const fieldDecoder = new TextDecoder('utf-8', { ignoreBOM: true })
+/** A source row's field name from a header column's value, as a transposed grid's header shows it: NULL, (blank), binary
+ *  as 0x hex, and at most 128 characters. */
+export function fieldName(page, row, column) {
+  const chunk = page.columns[column]
+  if (chunk.validity !== undefined && !bit(chunk.validity, row)) return 'NULL'
+  const value = chunk.data.subarray(chunk.offsets[row], chunk.offsets[row + 1])
+  if (chunk.wire === 'binary') {
+    const out = new ChunkedBytes(1024)
+    hex(out, value.subarray(0, (FIELD_NAME_CHARS - 2) / 2))
+    return '0x' + fieldDecoder.decode(out.bytes())
+  }
+  if (value.length === 0) return '(blank)'
+  let take = Math.min(value.length, 4 * (FIELD_NAME_CHARS + 1))
+  while (take < value.length && take > 0 && (value[take] & 0xc0) === 0x80) take--
+  const text = fieldDecoder.decode(value.subarray(0, take))
+  if (text.length <= FIELD_NAME_CHARS) return text
+  const high = text.charCodeAt(FIELD_NAME_CHARS - 1)
+  return text.slice(0, high >= 0xd800 && high <= 0xdbff ? FIELD_NAME_CHARS - 1 : FIELD_NAME_CHARS)
+}
+/** Transposed text's field names after "Column", made distinct as JSON keys are, in every format. */
+export function uniqueFields(names) {
+  const used = new Set([NAME_FIELD])
+  return names.map(name => unique(used, name))
+}
 
 /** CRLF, CR, LF and TAB (and NUL on the clipboard, which Windows ends at the first one) each become one space. */
 function tsvText(out, text, clipboard) {
@@ -138,6 +172,11 @@ export class TextWriter {
     this.keys = options.format === 'json' ? jsonKeys(columns) : undefined
     this.lines = 0
     this.rows = 0
+    this.records = 0
+    this.field = 0
+    /** Transposed: the source columns written (its lines), and the rows left out past those a transposed grid draws. */
+    this.columnsWritten = 0
+    this.capped = 0
     this.truncatedCells = 0
     this.eol = bytes(options.crlf ? '\r\n' : '\n')
     this.separator = bytes(options.format === 'csv' ? ',' : '\t')
@@ -161,7 +200,7 @@ export class TextWriter {
   /** One row of a decoded page (wire/pages.ts PageView). */
   row(page, row, selected) {
     if (this.options.format === 'json') {
-      this.out.write(bytes(this.rows === 0 ? '\n{' : ',\n{'))
+      this.out.write(bytes(this.records === 0 ? '\n{' : ',\n{'))
       selected.forEach((column, i) => {
         if (i > 0) this.out.write(bytes(','))
         this.out.write(this.keys[column])
@@ -169,6 +208,7 @@ export class TextWriter {
         this.cell(page, row, column)
       })
       this.out.write(bytes('}'))
+      this.records++
     } else {
       this.beginLine()
       selected.forEach((column, i) => {
@@ -179,10 +219,51 @@ export class TextWriter {
     }
     this.rows++
   }
-  end() { if (this.options.format === 'json') this.out.write(bytes(this.rows === 0 ? ']\n' : '\n]\n')) }
+  /** Transposed text: names the fields (the rows written); a first line with headers, every object's keys for JSON. */
+  transposedHeader(names) {
+    if (this.options.format === 'json') { this.fieldKeys = [NAME_FIELD, ...names].map(jsonKey); return }
+    if (!this.options.headers) return
+    this.beginLine()
+    this.text(bytes(NAME_FIELD))
+    for (const name of names) { this.out.write(this.separator); this.text(bytes(name)) }
+    this.endLine()
+  }
+  /** Starts a source column's line (or JSON object), with its name first when headers are on (always for JSON). */
+  beginColumn(column) {
+    this.field = 0
+    const name = bytes(this.columns[column].name === '' ? NO_COLUMN_NAME : this.columns[column].name)
+    if (this.options.format === 'json') {
+      this.out.write(bytes(this.records === 0 ? '\n{' : ',\n{'))
+      this.out.write(this.fieldKeys[0])
+      this.out.write(bytes(':'))
+      jsonString(this.out, name)
+      return
+    }
+    this.beginLine()
+    if (this.options.headers) this.text(name)
+  }
+  /** The line's next field: the column's value for one source row; JSON writes every value as text, NULL as null. */
+  columnCell(page, row, column) {
+    if (this.options.format === 'json') {
+      this.out.write(bytes(','))
+      this.out.write(this.fieldKeys[this.field + 1])
+      this.out.write(bytes(':'))
+    } else if (this.field > 0 || this.options.headers) this.out.write(this.separator)
+    this.field++
+    this.cell(page, row, column, false)
+  }
+  endColumn() {
+    if (this.options.format === 'json') { this.out.write(bytes('}')); this.records++ } else this.endLine()
+    this.columnsWritten++
+  }
+  text(name) {
+    if (this.options.format === 'csv') csvField(this.out, name)
+    else tsvText(this.out, name, this.options.clipboard)
+  }
+  end() { if (this.options.format === 'json') this.out.write(bytes(this.records === 0 ? ']\n' : '\n]\n')) }
   beginLine() { if (!this.options.trailingEol && this.lines > 0) this.out.write(this.eol) }
   endLine() { if (this.options.trailingEol) this.out.write(this.eol); this.lines++ }
-  cell(page, row, column) {
+  cell(page, row, column, typed = true) {
     const chunk = page.columns[column]
     if (chunk.validity !== undefined && !bit(chunk.validity, row)) {
       if (this.options.format === 'json') this.out.write(bytes('null'))
@@ -192,7 +273,7 @@ export class TextWriter {
     if (bit(chunk.truncated, row)) this.truncatedCells++
     const value = chunk.data.subarray(chunk.offsets[row], chunk.offsets[row + 1])
     const json = this.options.format === 'json'
-    switch (this.kinds[column]) {
+    switch (this.kinds[column] === 'binary' || typed ? this.kinds[column] : 'text') {
       case 'binary':
         if (json) this.out.write(bytes('"'))
         this.out.write(bytes('0x'))
@@ -237,27 +318,84 @@ export async function writeRows(writer, pageAt, selected, first, last, afterPage
   }
 }
 
-/** Copy's text for parts of a result (all of it at once; the fake backend checks its size against the limit). */
-export async function copyText({ columns, pageAt, available, parts, headers, crlf }) {
+/**
+ * A resolved part as a transposed grid draws it: the rows written (those at positions under MAX_TRANSPOSED_ROWS), their
+ * fields' names ("Row N", or `headerColumn`'s values, made distinct), and the rows left out past them.
+ */
+export function turnPlan(plan, pageAt, headerColumn) {
+  const positions = []
+  let capped = 0
+  for (const [first, last] of plan.rows) {
+    for (let position = first; position <= Math.min(last, MAX_TRANSPOSED_ROWS - 1); position++) positions.push(position)
+    capped += Math.max(0, last - Math.max(first, MAX_TRANSPOSED_ROWS) + 1)
+  }
+  const names = positions.map(position => {
+    if (headerColumn === undefined) return `Row ${position + 1}`
+    const page = pageAt(position)
+    return fieldName(page, position - page.firstRow, headerColumn)
+  })
+  return { positions, names: uniqueFields(names), columns: plan.columns, capped }
+}
+
+/** Writes a transposed part: the line that names its fields, then a line per column; `afterLine` runs after each. */
+export async function writeColumns(writer, pageAt, turned, afterLine = async () => {}) {
+  writer.transposedHeader(turned.names)
+  for (const column of turned.columns) {
+    writer.beginColumn(column)
+    for (const position of turned.positions) {
+      const page = pageAt(position)
+      writer.columnCell(page, position - page.firstRow, column)
+    }
+    writer.endColumn()
+    await afterLine()
+  }
+}
+
+/** A header column names a transposed job's fields, so only such a job has one, and it is a column of the result. */
+export function validTurn(transposed, headerColumn, columnCount) {
+  if (transposed !== undefined && typeof transposed !== 'boolean') return false
+  return headerColumn === undefined || (transposed === true && Number.isInteger(headerColumn) && headerColumn >= 0 && headerColumn < columnCount)
+}
+
+/** Copy's text for parts of a result (all of it at once; the fake backend checks its size against the limit).
+ *  `transposed` writes each part as a transposed grid draws it. */
+export async function copyText({ columns, pageAt, available, parts, headers, crlf, transposed = false, headerColumn }) {
   const plans = parts.map(part => resolvePart(part, columns.length, available))
-  if (plans.some(plan => plan === undefined)) throw new RangeError('The copy request is invalid.')
+  if (plans.some(plan => plan === undefined) || !validTurn(transposed, headerColumn, columns.length)) throw new RangeError('The copy request is invalid.')
   const writer = new TextWriter(copyOptions(headers, crlf), columns)
+  let rows = 0
   writer.begin()
   for (const plan of plans) {
+    if (transposed) {
+      const turned = turnPlan(plan, pageAt, headerColumn)
+      writer.capped += turned.capped
+      rows += turned.positions.length
+      if (turned.columns.length > 0 && (headers || turned.positions.length > 0)) await writeColumns(writer, pageAt, turned)
+      continue
+    }
     if (headers) writer.header(plan.columns)
     for (const [first, last] of plan.rows) await writeRows(writer, pageAt, plan.columns, first, last)
   }
   writer.end()
-  return { text: writer.out.bytes(), rows: writer.rows, bytes: writer.bytes, truncatedCells: writer.truncatedCells }
+  return { text: writer.out.bytes(), rows: transposed ? rows : writer.rows, bytes: writer.bytes, truncatedCells: writer.truncatedCells, capped: writer.capped, lines: transposed ? writer.columnsWritten : writer.rows }
 }
 
-/** A whole result as Save Results As writes it. */
-export async function exportText({ columns, pageAt, rows, format, headers, nullText }, afterPage) {
+/** A whole result as Save Results As writes it; `transposed`, as a transposed grid draws it (the writer's `rows` are then
+ *  the source rows written and its `capped` those left out). */
+export async function exportText({ columns, pageAt, rows, format, headers, nullText, transposed = false, headerColumn }, afterPage) {
   const writer = new TextWriter(exportOptions(format, headers, nullText), columns)
   const all = columns.map((_, i) => i)
+  const after = afterPage && (() => afterPage(writer))
   writer.begin()
-  writer.header(all)
-  if (rows > 0) await writeRows(writer, pageAt, all, 0, rows - 1, afterPage && (() => afterPage(writer)))
+  if (transposed) {
+    const turned = turnPlan({ rows: rows > 0 ? [[0, rows - 1]] : [], columns: all }, pageAt, headerColumn)
+    if (all.length > 0 && (headers || format === 'json' || turned.positions.length > 0)) await writeColumns(writer, pageAt, turned, after)
+    writer.rows = turned.positions.length
+    writer.capped = turned.capped
+  } else {
+    writer.header(all)
+    if (rows > 0) await writeRows(writer, pageAt, all, 0, rows - 1, after)
+  }
   writer.end()
   return writer
 }

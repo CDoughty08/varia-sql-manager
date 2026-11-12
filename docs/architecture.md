@@ -101,8 +101,13 @@ being true.
   past the cap is reported (`onBeyondCap`) and never scrolled to. The orientation, the header column and the transposed
   view's own offsets and widths are per view in `GridViewState` (`orientation`, `headerColumn`, `transposed`); the option is
   fixed for a view's life, so a change builds the grid again. Until the transpose commands set it, only test mode's
-  `__variaGrid.setOrientation` does. A result with a tone column (a comparison, a live table) is never transposed.
+  `__variaGrid.setOrientation` does. A result with a tone column (a comparison, a live table) is never transposed
+  (`transposedView` in `ResultsService.ts` is the one rule, for the grid and for its Copy and Save).
   `tests/grid-orientation.test.ts` holds this.
+  A grid drawn transposed copies and saves as drawn, still with nothing stored: the request says `transposed` (and the
+  header column), its parts stay in the result's rows and columns for the blocks that grid shows selected
+  (`transposedCopyPlan`), and `ResultTextWriter`'s column-major mode writes a line per column and a field per row for the
+  rows drawn, counting the rest in `capped`, which the toolbar says (docs/ipc.md, Copy and Save Results As).
   Live tables show through `LiveGrid` (`src/renderer/src/live/`), which swaps each revision into its `GridView`; a table's row
   tone column (catalogue `role: 'tone'`, its last) is hidden by the grid and left out of Copy and Save (`ResultJobs`).
 - Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never
