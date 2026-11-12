@@ -41,7 +41,8 @@ const wide = (top, groups) => `SELECT TOP (${top}) CASE WHEN n % 7 = 0 THEN NULL
   CONCAT(N'Note ', n, N': Lorem ipsum dolor sit amet, consectetur adipiscing elit') AS note, CONCAT(N'Region ', n % 12) AS region ${numbers};`
 
 const textbox = () => page.locator('.monaco-editor [role="textbox"]')
-const grid = index => page.locator(`[data-result-grid][data-result-index="${index}"]`)
+// Grids in stack order: a pivot is appended, so the one a build adds is the last.
+const grid = index => page.locator('[data-result-grid]').nth(index)
 const show = name => resultsToolbar(page).getByRole('group', { name: 'Show', exact: true }).getByRole('button', { name, exact: true })
 const percentile = (values, p) => [...values].sort((a, b) => a - b)[Math.min(values.length - 1, Math.max(0, Math.ceil(p / 100 * values.length) - 1))]
 const taskSeconds = async () => (await client.send('Performance.getMetrics')).metrics.find(item => item.name === 'TaskDuration').value
@@ -69,7 +70,7 @@ const arm = index => page.evaluate(({ index, stackPart }) => {
       if (marks.clicked === undefined) return
       if (marks.answered === undefined && marks.busy && !panel.hasAttribute('aria-busy')) marks.answered = now - marks.clicked
       if (panel.hasAttribute('aria-busy')) marks.busy = true
-      const root = document.querySelector(`[data-result-grid][data-result-index="${index}"]`)
+      const root = document.querySelectorAll('[data-result-grid]')[index]
       if (root && marks.mounted === undefined) {
         marks.mounted = now - marks.clicked
         // A pivot is appended to the stack, so it can arrive below the fold, where it draws nothing: bring it into view.
