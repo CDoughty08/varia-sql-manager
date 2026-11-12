@@ -267,7 +267,7 @@ What that changes here:
   the Table's result, not those its filters keep. The findings first gave 100,000 and, re-measured on 2026-11-12 after
   the sort work, say the same reasoning now reaches 500,000 (the slowest recipe found takes 189 ms there on a 24-core
   machine). The time condition is what covers machines with few cores, long decimals and Distinct Count, so it is not
-  optional. The row figure is this plan's pick from those measurements, not the owner's decision; it does not rise with
+  optional. The owner accepted the row figure on 2026-11-12; it does not rise with
   a larger budget, and it is measured again if compressed pages land before PR 17.
 - **The reported slow Pivot was not reproduced.** At the reported shape (about 20,000 rows of one `int` column) a build
   takes 110 to 180 ms from the click to the painted pivot, before and after the sort fixes. If it is seen again it needs
