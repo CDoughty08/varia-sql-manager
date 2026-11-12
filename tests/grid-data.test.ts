@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { GridData } from '../src/renderer/src/grid/data'
-import { planTiles, tileColumnOf, tileKey, tileRowOf } from '../src/renderer/src/grid/tiles'
+import { planTiles, tileColumnOf, tileKey, tileRowOf, type TileShape } from '../src/renderer/src/grid/tiles'
 import type { RowWindow, WindowOptions, WindowShape } from '../src/renderer/src/results/ResultClient'
 import { ResultError } from '../src/renderer/src/results/ResultClient'
 import { manualTimers } from './fixtures/workbench'
@@ -8,7 +8,7 @@ import { manualTimers } from './fixtures/workbench'
 interface Read { first: number; count: number; o: WindowOptions; resolve(rows?: number): void; reject(error: unknown): void; aborted: () => boolean }
 
 /** A handle whose reads the test answers: a window lands in `cache` (as ResultClient's window cache) when answered. */
-function fixture(columns = 40, inflight = { value: 0 }) {
+function fixture(columns = 40, inflight = { value: 0 }, extra: { shape?: TileShape; also?: number; tone?: number } = {}) {
   const cache = new Map<string, RowWindow>(), reads: Read[] = []
   const keyOf = (first: number, count: number, o: WindowShape) => `${first}:${count}:${o.colStart}:${o.colEnd}:${o.maxCellChars}:${o.display}`
   const handle = {
@@ -31,7 +31,7 @@ function fixture(columns = 40, inflight = { value: 0 }) {
   const timers = manualTimers()
   let now = 0
   const changed = vi.fn()
-  const data = new GridData({ handle, columns, clientInflight: () => inflight.value + data.reading, changed, timers: timers.timers, now: () => now })
+  const data = new GridData({ handle, columns, ...extra, clientInflight: () => inflight.value + data.reading, changed, timers: timers.timers, now: () => now })
   const settle = () => new Promise(resolve => setTimeout(resolve, 0))
   return { data, reads, cache, changed, timers, settle, advance: (ms: number) => { now += ms; timers.advance(ms) }, handle }
 }
@@ -126,6 +126,38 @@ describe('grid data', () => {
     expect(changed).toHaveBeenCalledOnce()
     data.ensure(range(0, 30), 10_000, 0, 30)
     expect(reads).toHaveLength(2)
+  })
+  it('reads and looks up tiles of the shape it is given', async () => {
+    const { data, reads, settle } = fixture(4096, { value: 0 }, { shape: { rows: 32, columns: 128 } })
+    // Rows 40–70 over columns 200–260: row tiles 1–2 of 32 rows, column tiles 1–2 of 128 columns.
+    data.ensure(range(40, 70, 200, 260), 5000, 0, 30)
+    expect(reads.map(read => [read.first, read.count, read.o.colStart, read.o.colEnd]).sort()).toEqual([[32, 32, 128, 256], [32, 32, 256, 384], [64, 32, 128, 256], [64, 32, 256, 384]])
+    expect(data.peek(tileKey(1, 1))).toBeUndefined()
+    reads.find(read => read.first === 32 && read.o.colStart === 128)!.resolve()
+    await settle()
+    expect(data.peek(tileKey(1, 1))).toMatchObject({ first: 32, count: 32, colStart: 128, colEnd: 256 })
+    // The active cell's tile and the prepared reads follow the shape too.
+    const active = fixture(4096, { value: 0 }, { shape: { rows: 32, columns: 128 } })
+    active.data.ensure(range(0, 10, 0, 9), 5000, 0, 30, { row: 100, column: 300 })
+    expect(active.reads.map(read => [read.first, read.count, read.o.colStart, read.o.colEnd])).toEqual([[0, 32, 0, 128], [96, 32, 256, 384]])
+    void active.data.fetch(tileKey(4, 3))
+    expect(active.reads.at(-1)).toMatchObject({ first: 128, count: 32, o: { colStart: 384, colEnd: 512 } })
+  })
+  it('reads one more column with every row tile of the frame, wherever the view\'s columns are', () => {
+    // Column 5 is in column tile 0; the view is over column tile 2, in row tiles 0 and 1.
+    const { data, reads } = fixture(100, { value: 0 }, { also: 5 })
+    data.ensure(range(100, 200, 70, 80), 10_000, 0, 30)
+    expect(reads.map(read => [read.first, read.o.colStart])).toEqual([[128, 64], [0, 64], [128, 0], [0, 0]])
+    expect(data.plan(range(100, 200, 70, 80), 10_000)).toEqual([tileKey(1, 2), tileKey(0, 2), tileKey(1, 0), tileKey(0, 0)])
+    // A column already in the view's tiles adds nothing, nor does one the result does not have; it can change later.
+    const inView = fixture(100, { value: 0 }, { also: 70 })
+    expect(inView.data.plan(range(100, 200, 70, 80), 10_000)).toEqual([tileKey(1, 2), tileKey(0, 2)])
+    const past = fixture(100, { value: 0 }, { also: 100 })
+    expect(past.data.plan(range(0, 30, 70, 80), 10_000)).toEqual([tileKey(0, 2)])
+    past.data.also = 40
+    expect(past.data.plan(range(0, 30, 70, 80), 10_000)).toEqual([tileKey(0, 2), tileKey(0, 1)])
+    past.data.also = undefined
+    expect(past.data.plan(range(0, 30, 70, 80), 10_000)).toEqual([tileKey(0, 2)])
   })
   it('reads the active cell\'s tile when the cell is out of view, after the view\'s own', () => {
     const { data, reads } = fixture()

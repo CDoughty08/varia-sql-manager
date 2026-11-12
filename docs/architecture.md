@@ -85,11 +85,23 @@ being true.
 - The grid renders cells only through `GridView` pools, and text only through `nodeValue` (`tests/grid-lint.test.ts`
   forbids HTML sinks under `grid/`, `results/`, `designer/` and `live/`); no React per row or cell, and frames stay
   O(visible cells).
+  `GridView` works in drawn rows and columns for geometry, pools and scrolling, and meets the result's own rows and columns
+  at named seams (its `selection`/`select`, `sourceRange`, a cell's lookup in `paintCell`, `targetOf`), each the identity
+  today; its saved state, marks and callbacks are always in the result's. Columns are placed through `ColumnAxis`
+  (`grid/layout.ts`) and tiles have a `TileShape` (`grid/tiles.ts`). A menu's row and column come from the grid
+  (`gridTarget`, `grid/anchor.ts`); an ARIA index is read only where no `GridView` is registered. `tests/grid-view.test.ts` holds the seams.
   Live tables show through `LiveGrid` (`src/renderer/src/live/`), which swaps each revision into its `GridView`; a table's row
   tone column (catalogue `role: 'tone'`, its last) is hidden by the grid and left out of Copy and Save (`ResultJobs`).
 - Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never
   leave main except to the backend.
 - Results are released on re-execute, tab close, Close Results and backend loss; jobs lease them.
+- In the renderer a result is an entry of its run, named everywhere by the opaque key `ResultsService` mints for it
+  (`EntryKey`, the grid's `data-result-entry`), never by its place in the list: sorts, held views, grid state, the
+  stack's weights, collapse and focus, search marks, highlights, panels, commands and menu targets all follow the key, so
+  they stay with the entry when one before it goes. A grid's menu target also carries the generation and result id it
+  was read from, which the grid commands of `contributions/output.ts` check before acting. Names come from the entry's
+  number (`entryName`), not its position. Nothing identifies an entry by its place; the list's order is read only where
+  order is the meaning: the stack's layout, Compare with Previous Result, and the order search steps through matches.
 - Periodic data (Activity Monitor, SSIS monitoring, Object Explorer status) flows only through the results port's
   `live.subscribe` and `live.update`: the backend schedules, the renderer never polls with timers, and at most one live
   EVENT per subscription is unacknowledged (`creditedEvents`; main counts it against the stream's credit). The results
