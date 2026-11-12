@@ -66,11 +66,11 @@ export const activityMonitorSettings = [
   {
     key: 'activityMonitor.fileLatencyWarningMs', page: 'activityMonitor', group: 'Thresholds', label: 'I/O latency warning', type: 'integer', min: 1, max: activityLimits.fileLatencyMs, unit: 'ms', varia: true,
     default: threshold('activityMonitor.fileLatencyWarningMs', 'warning'), keywords: ['activity', 'monitor', 'latency', 'disk', 'io', 'threshold', 'warning'],
-    description: 'The Database I/O tile is outlined as a warning when reads or writes take this long on average over the interval.'
+    description: 'The Database I/O tile is outlined as a warning, and Data File I/O tones a file as a warning, when reads or writes take this long on average over the interval.'
   },
   {
     key: 'activityMonitor.fileLatencyErrorMs', page: 'activityMonitor', group: 'Thresholds', label: 'I/O latency error', type: 'integer', min: 1, max: activityLimits.fileLatencyMs, unit: 'ms', varia: true,
     default: threshold('activityMonitor.fileLatencyErrorMs', 'error'), keywords: ['activity', 'monitor', 'latency', 'disk', 'io', 'threshold', 'error'],
-    description: 'The Database I/O tile is outlined as an error when reads or writes take this long on average over the interval.'
+    description: 'The Database I/O tile is outlined as an error, and Data File I/O tones a file as an error, when reads or writes take this long on average over the interval. Below the warning threshold it acts as the warning one.'
   }
 ] as const satisfies readonly SettingDef[]
