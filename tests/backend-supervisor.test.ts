@@ -7,7 +7,7 @@ import { dirname, join, resolve } from 'node:path'
 import type { BackendState, QueryEvent } from '../src/shared/contracts'
 import { FrameKind, encodeFrame } from '../src/shared/ipc/wire/frames'
 import { encodeControl } from '../src/shared/ipc/wire/msgpack'
-import { BackendSupervisor, type SupervisorDeps } from '../src/main/backend/supervisor'
+import { BackendSupervisor, type SupervisorDeps, firstLaunchWaitMs } from '../src/main/backend/supervisor'
 import { BackendError, sentences } from '../src/main/backend/errors'
 import type { LiveEvent } from '../src/shared/live/schema'
 import { backendSpawnSpec, resultMemoryEnvironment } from '../src/main/backend/spawn-spec'
@@ -453,6 +453,8 @@ describe('smoke-test backends', () => {
     expect(environments).toEqual([{ PATH: '/bin', VARIA_RESULT_MEMORY_MIB: '8192' }])
     expect(processes.backends).toHaveLength(1)
     expect(value.state).toMatchObject({ generation: 1 })
+    // What was asked during the wait is answered by that first generation.
+    expect(await asked).toMatchObject({ generation: 1 })
     // Once launched, a restart is a restart: the next generation, with the limit as it is then.
     limit = 2
     await value.restart('manual')
@@ -479,6 +481,25 @@ describe('smoke-test backends', () => {
     plain.start()
     expect(environments.at(-1)).toEqual({ PATH: '/bin' })
     expect(environments).toHaveLength(3)
+
+    // Settings that never arrive do not keep the backend from starting: after the bound it starts without them, once,
+    // and a read that settles later launches nothing more.
+    const { clock, advance } = manualClock()
+    let never!: () => void
+    const patient = new BackendSupervisor({ command: 'backend', args: [], cwd: '.', env: { PATH: '/bin' }, packaged: true }, {
+      spawn: spying, clock, before: new Promise<void>(resolve => { never = resolve }), environment: () => resultMemoryEnvironment(0)
+    })
+    supervisors.push(patient)
+    patient.start()
+    const waiting = patient.request('system.health', {})
+    await advance(firstLaunchWaitMs - 1)
+    expect(environments).toHaveLength(3)
+    await advance(1)
+    expect(environments).toHaveLength(4)
+    expect(await waiting).toMatchObject({ generation: 1 })
+    never()
+    await settle()
+    expect(environments).toHaveLength(4)
   })
   it('passes the OS locale to the real backend, which dates script headers in it', () => {
     const base = { packaged: false, root: resolve('app'), resourcesPath: resolve('resources'), platform: process.platform, smokeTest: false, env: { PATH: '/bin', VARIA_BACKEND_TEST_HOOKS: '1' } }

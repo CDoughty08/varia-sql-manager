@@ -55,9 +55,26 @@ internal static class StoreChecks
         var work = machine.BeginQuery("work");
         var calm = machine.TryReserveWork(work, ResultStore.WorkCheckBytes) && machine.TryReserveSpare(work, MiB) && machine.TryReserveWork(work, MiB);
         pressed = true;
-        check(calm && !machine.TryReserveWork(work, ResultStore.WorkCheckBytes) && !machine.TryReserveSpare(work, MiB) && machine.TryReserveWork(work, ResultStore.WorkCheckBytes - 1)
-            && work.UsedBytes == 2 * ResultStore.WorkCheckBytes + 2 * MiB - 1 && work.Stopped == TruncationReason.None,
-            "under high memory load working memory of 64 MiB or more, and spare memory of any size, is refused, smaller working memory is not, and none of it stops the query");
+        check(calm && !machine.TryReserveWork(work, ResultStore.WorkCheckBytes) && !machine.TryReserveSpare(work, ResultStore.WorkCheckBytes) && !machine.TryReserveSpare(work, MiB, true)
+            && machine.TryReserveSpare(work, MiB) && machine.TryReserveSpare(work, ResultStore.WorkCheckBytes, false) && machine.TryReserveWork(work, ResultStore.WorkCheckBytes - 1)
+            && work.UsedBytes == 3 * ResultStore.WorkCheckBytes + 3 * MiB - 1 && work.Stopped == TruncationReason.None,
+            "under high memory load working and spare memory of 64 MiB or more is refused, and spare memory asked to be checked; smaller amounts are not, and none of it stops the query");
+        // A sort key takes its memory a page or a value at a time: it asks for the check once for every 64 MiB it holds.
+        var asked = new List<bool>();
+        var keys = new ViewSorter.KeyMemory((_, large) => { asked.Add(large); return true; }, _ => { });
+        foreach (var step in new[] { 40, 40, 40, 40, 1, 200 }) keys.TryReserve(step * MiB);
+        check(asked.SequenceEqual([false, true, false, true, false, true]), "a key's memory asks to be checked each time it passes another 64 MiB held: " + string.Join(",", asked));
+        // The load is the runtime's reading at its last collection: one older than a second is taken again.
+        var collections = GC.CollectionCount(0);
+        var (load, threshold) = ResultStore.OperatingSystemMemory(Environment.TickCount64 + ResultStore.LoadReadingMs);
+        check(load > 0 && threshold > 0 && GC.CollectionCount(0) > collections, "a stale reading of the memory load is refreshed by a collection of the youngest generation (" + load / MiB + " of " + threshold / MiB + " MiB)");
+        check(ResultStore.MayCompact(1 * GiB, 2 * GiB) && ResultStore.MayCompact(0, 0) && !ResultStore.MayCompact(1 * GiB, 512 * MiB) && !ResultStore.MayCompact(3 * GiB, 8 * GiB)
+            && ResultStore.MayCompact(2 * GiB, 8 * GiB),
+            "a forced collection compacts only what is no more than was released, and no more than 2 GiB: more would stop every thread for seconds");
+        check(ResultStore.LimitFromEnvironment("300") == 300 * MiB && ResultStore.LimitFromEnvironment("1048576") == 1024 * GiB && ResultStore.LimitFromEnvironment("1") == MiB
+            && new[] { "1048577", "0", "-5", "+5", " 5", "5 ", "5.0", "0x10", "", "lots", "99999999999999999999" }.All(text => ResultStore.LimitFromEnvironment(text) is null)
+            && ResultStore.LimitFromEnvironment(null) is null,
+            "the limit main gives is digits alone, 1 MiB to 1 TiB; anything else is no limit");
 
         var low = false;
         var store = new ResultStore(1000, 600, () => (low ? 100 : 0, 50));

@@ -25,14 +25,18 @@ export const restartPolicy: RestartPolicy = wire.restart
 /** Electron's powerMonitor: a sleeping laptop is not a silent backend. */
 export interface PowerMonitorLike { on(event: 'suspend' | 'resume', listener: () => void): unknown }
 
+/** The longest the first launch waits for `SupervisorDeps.before`: reading the settings takes milliseconds. */
+export const firstLaunchWaitMs = 3000
 export interface SupervisorDeps extends ConnectionDeps {
   policy?: Partial<RestartPolicy>
   /** Silence before the backend counts as unresponsive; smoke tests shorten it (VARIA_BACKEND_LIVENESS_MS). */
   unresponsiveMs?: number
   power?: PowerMonitorLike
-  /** What the first launch waits for (the settings its environment is read from), settled either way. Meanwhile the
-   *  state is `starting`, a restart is the launch still to come, and requests wait for the connection as they do for
-   *  the next generation after a loss: unsent, so no deadline runs, and bounded by the pending-request limit. */
+  /** What the first launch waits for (the settings its environment is read from), settled either way, and for no longer
+   *  than `firstLaunchWaitMs`: a profile folder that does not answer must not keep the backend from starting, which then
+   *  starts with what `environment` gives without them. Meanwhile the state is `starting`, a restart is the launch still
+   *  to come, and requests wait for the connection as they do for the next generation after a loss: unsent, so no
+   *  deadline runs, and bounded by the pending-request limit. */
   before?: Promise<unknown>
   /** Added to the spawn environment at every launch: what the user may have changed since the last one. */
   environment?: () => Record<string, string>
@@ -143,11 +147,14 @@ export class BackendSupervisor {
     if (!before) return this.launch()
     this.awaitingFirst = true
     this.setState({ status: 'starting', generation: this.generation + 1 })
-    void before.then(() => {}, () => {}).then(() => {
+    const first = (): void => {
       if (!this.awaitingFirst) return
       this.awaitingFirst = false
+      this.clock.clearTimeout(waited)
       if (!this.closing) this.launch()
-    })
+    }
+    const waited = this.clock.setTimeout(first, firstLaunchWaitMs)
+    void before.then(first, first)
   }
 
   /** The generation whose results can be read now: the current one while it is ready. */

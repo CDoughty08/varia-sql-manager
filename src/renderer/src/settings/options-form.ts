@@ -124,7 +124,7 @@ export function patchFrom(stored: SettingsValues, draft: SettingsValues): Settin
 }
 /** The description pane's notes for a row: when a change applies, and whether SSMS has the option. */
 export function rowNotes(def: SettingDef): string[] {
-  return [def.applies === 'nextExecution' ? 'Applies to the next execution.' : def.applies === 'newConnections' ? 'Applies to new connections.' : def.applies === 'restart' ? 'Applies when the SQL backend next starts: restart Varia, or use Restart SQL Backend.' : '', def.varia ? 'Not in SSMS.' : ''].filter(Boolean)
+  return [def.applies === 'nextExecution' ? 'Applies to the next execution.' : def.applies === 'newConnections' ? 'Applies to new connections.' : def.applies === 'restart' ? 'Applies when the SQL backend next starts, as when Varia restarts or with Restart SQL Backend.' : '', def.varia ? 'Not in SSMS.' : ''].filter(Boolean)
 }
 export const draftFrom = (values: SettingsValues): OptionsDraft => ({ ...defaultSettings, ...values })
 
