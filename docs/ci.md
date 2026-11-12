@@ -6,7 +6,7 @@ with `node scripts/ci-timings.mjs` (add `--steps` for per-step times) before and
 ## Layout
 
 - CI (`.github/workflows/ci.yml`) runs on every PR, drafts included (any base branch, so stacked PRs are tested), every
-  push to main and manual runs (a newer PR push cancels that PR's older run; main pushes and manual runs always finish); the
+  push to main and manual runs (newer PR/main pushes cancel their earlier runs; manual runs always finish); the
   repository is public, so its minutes cost nothing, but GitHub runs only 20 of its jobs
   at once (5 on macOS). A scope job classifies the complete change before the 13 full-validation jobs start together;
   a final `CI result` job checks their outcomes. Each validation job builds
@@ -20,7 +20,7 @@ with `node scripts/ci-timings.mjs` (add `--steps` for per-step times) before and
   this layout.
   The Windows suite weights already totaled 719 seconds across two shards against a 360-second budget each. The new
   language-service UI suite adds a third Windows shard, keeping the budget rather than reducing existing estimates.
-  Release builds (`release.yml`, through `package.yml`) package main pushes except documentation-only changes, tags and manual runs, and a pull request only when
+  Release builds (`release.yml`, through `package.yml`) package every main push, tags and manual runs, and a pull request only when
   it changes what packaging reads (its `paths`); Intel macOS packages only for tags, manual runs and a weekly scheduled run on
   main (Intel alone), and installers upload only for tags and manual runs (`tests/release-workflow.test.ts`). A pull request
   over 3,000 changed files may skip Release builds (GitHub reads only its first 3,000 for `paths`): run them by hand then. Every workflow a pull request triggers cancels its superseded runs.
@@ -63,26 +63,29 @@ with `node scripts/ci-timings.mjs` (add `--steps` for per-step times) before and
 
 ## Documentation-only changes
 
-`scripts/ci-scope.mjs` sends changes limited to `README.md`, `CHANGELOG.md`, `AGENTS.md`, `CLAUDE.md` and Markdown files
+`scripts/ci-scope.mjs` sends PR changes limited to `README.md`, `CHANGELOG.md`, `AGENTS.md`, `CLAUDE.md` and Markdown files
 under `docs/` through a Linux documentation lane. It installs npm dependencies with lifecycle scripts disabled (no Electron
 download) and runs source-only vitest, preserving generated-document, README and published-changelog assertions. It skips
 .NET builds/tests, typechecking, production builds, SQL services, smoke shards and benchmarks. Other paths, including
 `release-notes/*.json`, schema JSON, scripts, workflow files, build resources, tests and dependencies, still run full CI.
-Release builds use the same Git classifier in a short Linux job on main pushes and skip packaging for docs; their PR packaging-input filter is unchanged, and tags, manual
+Release builds retain their existing PR packaging-input filter and package every main push. Tags, manual
 runs and the weekly Intel package are unaffected. There is no app behavior change, so no README or changelog entry is needed.
 
-The scope job fetches full Git history but checks out only its classifier, then reads an untruncated, NUL-delimited diff: PR merge-base to head (including stacked
-PRs and earlier commits), or push before to after. Renames include both old and new paths. Unknown/empty changes or missing
+For PRs, the scope job fetches full Git history but checks out only its classifier, then reads an untruncated, NUL-delimited
+diff from PR merge-base to head (including stacked PRs and earlier commits). Other events need only a shallow checkout.
+Renames include both old and new paths. Unknown/empty changes or missing
 history fall back to full CI. Manual runs execute the selected suite: `regression-suite=docs` exercises the exact documentation
 lane on any branch, `none` runs full CI, and the other choices run focused Electron regressions. Scope and result jobs use
 the Ubuntu runner's bundled Node for their dependency-free scripts; application test jobs still select Node 24 explicitly.
-The result job checks out only its script.
+The result job checks out only its script. Every manual run reports `Manual CI result`, even when it selects full CI;
+only automatic PR/main runs report the required `CI result`. Manual docs or regression success therefore cannot supply
+the required check name while the automatic matrix is still running. Do not require `Manual CI result` in the ruleset.
 
-Only PR updates cancel superseded CI and packaging runs. Every main push has its own concurrency group, so a docs-only
-push cannot cancel a code push's installers, packaged smoke or main-only 1024x768 repeats. Unique groups also preserve
-pending main runs: a shared group with `cancel-in-progress: false` could still discard an older pending code run.
-Tag publication explicitly overrides the implicit ancestor-success condition and requires both packaging jobs to succeed,
-so the intentionally skipped packaging-scope job cannot suppress publication or permit publishing failed packages.
+**Main-run tradeoff:** automatic docs-only skipping applies to PRs. Every main push runs full CI and packaging, including
+docs-only merges. This retains cancellation of superseded main runs and its measured runner savings: whichever main run
+remains includes installers, packaged smoke and the main-only 1024x768 repeats for all preceding code changes. A docs push
+can replace a code push only because it repeats that complete workload. Tags and manual runs are never superseded.
+The packaging classifier is removed; tag publication still explicitly requires both packaging jobs to succeed.
 
 **Required-check rollout:** after this PR's full checks pass, replace the main ruleset's 13 individual matrix check
 requirements with the single GitHub Actions check `CI result`. Keep strict/up-to-date checking enabled. The result job
@@ -93,16 +96,16 @@ changed by this PR. Workflow-level `paths-ignore` is deliberately absent from CI
 [GitHub's required-check guidance](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks).
 The existing release PR filter still has GitHub's
 [3,000-file limit](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#git-diff-comparisons);
-CI and main-push packaging classification use Git directly to avoid that limit.
+PR CI classification uses Git directly to avoid that limit. Main validation and packaging have no file filter.
 
 Before this change, the three latest successful main runs measured with
 `node scripts/ci-timings.mjs --runs 3 --workflow ci.yml --workflow release.yml --branch main` on 2026-11-11 had median CI
 wall time **10.8 min**, with **47 Linux + 26 Windows + 5 macOS runner-minutes**. Packaging added **14.1 min** wall time and
-**3 Linux + 14 Windows + 4 macOS runner-minutes**. Documentation-only CI now schedules three Linux jobs (scope, docs,
-result), plus one packaging-scope job on its main push with no installers built. The source-only lane passed all
+**3 Linux + 14 Windows + 4 macOS runner-minutes**. Documentation-only PR CI schedules three Linux jobs (scope, docs,
+result). Main pushes retain full CI and packaging; no main-push packaging savings are claimed. The source-only lane passed all
 296 test files locally without Electron installed in **35.0 s** (Windows; not a GitHub measurement). Code changes add the two short routing/result jobs to the existing 13;
 measure their overhead and the documentation lane on GitHub after deployment rather than treating these baseline savings
-as measured results. Main pushes also add the short packaging-scope job.
+as measured results.
 PR #431's original scope job took 8 seconds on GitHub (including a 4-second checkout). The follow-up removes setup-node
 from the routing jobs and checks out only their scripts. The manual Linux documentation run and updated timings are
 recorded in [PR #431](https://github.com/CDoughty08/varia-sql-manager/pull/431).
@@ -163,7 +166,7 @@ the previous one, about 64 s of the 75.6 s. The waits:
 | `VARIA_TEST_SLOW_MS=<ms>` prints each offline or live .NET check reached later than that after the previous one (offline suites then run in one lane) | A tool for finding waits |
 | Smoke `suiteSeconds` refreshed from PR #166's run, after the idle timers went | Declared weights matched reality again: shards 338/336 s (Linux) and 342/340 s (Windows) against the 360 s budget, where the old weights had drifted 12 to 21% low. Main then added the 64 s Live Plan suite and a third Linux shard (about 250 s each) |
 | The Windows and macOS benchmarks run daily and by hand (`bench-desktop.yml`), not on every main push | 2 jobs (1 macOS) and about 5.7 runner-min off each of 9 to 20 main pushes a day, for one daily run |
-| At PR #166, a newer main push cancelled the older main run. Superseded by documentation routing: main pushes now have unique groups so a docs push cannot discard code validation or packaging. | The original estimate was up to 74 runner-min per superseded push, but it depended on every subsequent main run repeating the complete work. |
+| A newer main push cancels the older main run, as pull requests already did. Every main push still runs full CI and packaging, even after a docs-only merge. | Up to 74 runner-min per superseded push in the original estimate; retaining the complete replacement workload preserves this saving. |
 
 After these changes, a PR push that does not touch packaging runs 11 jobs (12 since main's third Linux smoke shard), an estimated 55 to 60 runner-min, and 1 macOS job (from 15
 jobs, 89 runner-min, 3 macOS). That is about a quarter fewer jobs and 30% fewer runner-minutes. Since queueing dominates,
@@ -250,7 +253,7 @@ and session prompts pressing F5 during a connection change.
 
 Savings are corrected figures from an adversarial review of each proposal against CI logs. "Owner" marks changes that
 contradict a rule written in CLAUDE.md, so the owner decides them (the owner chose to move the desktop benchmarks and
-cancel superseded main runs at that time; documentation routing now preserves main runs as described above).
+cancel superseded main runs, both retained).
 
 1. **Settle vitest tests with `setImmediate`, not `setTimeout(0)` loops** (S). Windows rounds each timer to about 15.6 ms.
    ssis-tree-probe takes 16.7 s on Windows against 2.2 s on Linux (425 timer hops, about 34 ms each). 45 files use the
@@ -323,9 +326,9 @@ Considered and rejected (do not re-propose without new numbers):
   so upgrade or override the package (and add its floor to `tests/dependency-floors.test.ts`). Moderate and low ones only
   report: minimatch's GHSA-g3hv-75wg-m249 (a glob-pattern DoS) has no fix below 11.0.1, a major version under
   electron-builder's own dependencies, and its patterns come only from Varia's build configuration.
-- **Cancel superseded PR runs.** Every workflow a pull request triggers has a concurrency group keyed by `github.ref` with
-  `cancel-in-progress`. CI and Release builds use unique groups for main pushes, tags and manual runs so partial docs
-  validation cannot discard a preceding code push's running or pending work.
+- **Cancel superseded PR and main runs.** Every workflow a pull request triggers has a concurrency group keyed by `github.ref`
+  with `cancel-in-progress`. CI and Release builds also cancel superseded main runs because every replacement performs
+  the complete workload. Tags and manual runs retain unique groups.
 - **Don't starve small runners.** CI's runners have 3 or 4 vCPUs. Running every check lane at once there made tsc 13 times
   slower and failed 1 to 3 s polls. Add work as a lane in a chain (`scripts/check.mjs`), and give waits that return as soon
   as their condition holds generous bounds.

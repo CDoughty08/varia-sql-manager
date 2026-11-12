@@ -8,7 +8,7 @@ import { shardBudgetSeconds, shardSuites, smokeSuites, suiteSeconds } from '../s
 // YAML in a fixed layout, so its jobs and steps are read by indentation.
 
 interface Step { name: string; id?: string; if?: string; run: string; timeout?: number }
-interface Job { if?: string; needs?: string; runsOn?: string; timeout?: number; matrix: Map<string, string>; steps: Step[] }
+interface Job { name?: string; if?: string; needs?: string; runsOn?: string; timeout?: number; matrix: Map<string, string>; steps: Step[] }
 function jobs(path: string): Map<string, Job> {
   const lines = readFileSync(path, 'utf8').split('\n'), found = new Map<string, Job>()
   let inJobs = false, job: Job | undefined, step: Step | undefined, block: 'run' | undefined
@@ -18,10 +18,11 @@ function jobs(path: string): Map<string, Job> {
     const jobName = /^ {2}([\w-]+):\s*$/.exec(line)
     if (jobName) { job = { matrix: new Map(), steps: [] }; found.set(jobName[1], job); step = undefined; block = undefined; continue }
     if (!job) continue
-    const own = /^ {4}(if|needs|runs-on|timeout-minutes): (.*)$/.exec(line)
+    const own = /^ {4}(name|if|needs|runs-on|timeout-minutes): (.*)$/.exec(line)
     if (own) {
       const [, key, value] = own
-      if (key === 'if') job.if = value
+      if (key === 'name') job.name = value
+      else if (key === 'if') job.if = value
       else if (key === 'needs') job.needs = value
       else if (key === 'runs-on') job.runsOn = value
       else job.timeout = Number(value)
@@ -73,7 +74,7 @@ describe('CI workflow', () => {
     const yaml = readFileSync('.github/workflows/ci.yml', 'utf8')
     expect(yaml.slice(0, yaml.indexOf('\nconcurrency:'))).not.toMatch(/paths:|paths-ignore:/)
     const scope = workflow.get('scope')!, docs = workflow.get('docs')!, result = workflow.get('result')!
-    expect(yaml).toContain('fetch-depth: 0')
+    expect(yaml).toContain("fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}")
     expect(scope.steps.some(step => step.run === 'node scripts/ci-scope.mjs')).toBe(true)
     for (const name of ['scope', 'result']) {
       const job = yaml.slice(yaml.indexOf(`\n  ${name}:`)).split(/\n {2}[\w-]+:/)[1]
@@ -89,6 +90,11 @@ describe('CI workflow', () => {
     expect(result.steps.some(step => step.run === 'node scripts/ci-result.mjs')).toBe(true)
     expect(workflow.get('regressions')!.if).toBe("needs.scope.outputs.mode == 'regressions'")
     expect(workflow.get('regressions')!.needs).toBe('scope')
+  })
+  it('gives every manual run a separate result name, independent of the selected suite', () => {
+    expect(workflow.get('result')!.name).toBe("${{ github.event_name == 'workflow_dispatch' && 'Manual CI result' || 'CI result' }}")
+    // Skipping a same-named job can still satisfy a required check: run the aggregator under a distinct name instead.
+    expect(workflow.get('result')!.if).toBe('always()')
   })
   it('runs every smoke suite in exactly one shard, and later Linux suites after a shard failure too', () => {
     for (const name of ['smoke-linux', 'smoke-windows']) {
@@ -137,9 +143,9 @@ describe('CI workflow', () => {
     // Linux repeats at 1024x768 only on main: the Windows shards run those suites at that size on every pull request.
     for (const step of workflow.get('smoke-linux')!.steps.filter(step => /1024x768x24/.test(step.run))) expect(step.if, step.name).toMatch(/github\.event_name == 'push'/)
   })
-  it('cancels superseded PR runs but preserves every running and pending main push, and keeps desktop benchmarks daily', () => {
+  it('cancels superseded PR and full main runs, preserves manual runs, and keeps desktop benchmarks daily', () => {
     const yaml = readFileSync('.github/workflows/ci.yml', 'utf8')
-    expect(yaml).toContain("group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}")
+    expect(yaml).toContain("group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' || github.event_name == 'push') && github.ref || github.run_id }}")
     expect(yaml).toMatch(/\n {2}cancel-in-progress: true\n/)
     const desktop = readFileSync('.github/workflows/bench-desktop.yml', 'utf8'), on = desktop.slice(desktop.indexOf('\non:'), desktop.indexOf('\nconcurrency:'))
     expect(on).toMatch(/\n {2}schedule:\n {4}- cron: '[^']+'\n {2}workflow_dispatch:\n?$/)

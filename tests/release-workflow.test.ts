@@ -30,7 +30,7 @@ describe('Release builds', () => {
       expect(yaml, name).toMatch(/\n {2}cancel-in-progress: true\n/)
     }
   })
-  it('packages non-documentation main pushes, every tag and manual run, and a pull request only when it changes what packaging reads', () => {
+  it('packages every main push, tag and manual run, and a pull request only when it changes what packaging reads', () => {
     expect(triggers(release)).toMatch(/\n {2}push:\n {4}branches: \[main\]\n {4}tags: \['v\*'\]\n {2}schedule:\n {4}- cron: '[^']+'\n {2}workflow_dispatch:/)
     // Everything electron-builder, the fuses and the packaged smoke tests read, and nothing every pull request touches:
     // the smoke selectors (scripts/fixtures/ui.mjs) and main's index changed in a third of recent pull requests.
@@ -39,19 +39,13 @@ describe('Release builds', () => {
     expect(releasePaths).toContain('scripts/prepare-electron.mjs')
     for (const path of releasePaths) expect(path, path).not.toMatch(/^(src\/\*\*|src\/main\/index\.ts|scripts\/fixtures|package\.json|tests\/)/)
   })
-  it('uses the complete Git diff only on main pushes and fails closed if classification fails', () => {
+  it('keeps complete packaging on every main push so cancellation cannot discard unfinished code validation', () => {
     expect(triggers(release)).not.toContain('paths-ignore:')
-    const scope = release.slice(release.indexOf('  scope:\n'), release.indexOf('  build:\n'))
-    expect(scope).toContain("if: github.event_name == 'push' && github.ref == 'refs/heads/main'")
-    expect(scope).toContain('fetch-depth: 0')
-    expect(scope).toContain('run: node scripts/ci-scope.mjs')
-    expect(scope).toContain('mode: ${{ steps.scope.outputs.mode }}')
-    expect(scope).not.toContain('actions/setup-node')
-    expect(scope).toContain('sparse-checkout: scripts/ci-scope.mjs')
-    // Unique non-PR groups protect both in-progress and pending packaging from later docs-only main pushes.
-    expect(release).toContain("group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}")
+    expect(release).not.toContain('  scope:')
+    expect(release).not.toContain('needs.scope')
+    expect(release).toContain("group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && github.ref || github.run_id }}")
   })
-  it('publishes tags after a skipped scope ancestor only when both packaging jobs succeeded', () => {
+  it('publishes tags only when both packaging jobs succeeded', () => {
     const publish = release.slice(release.indexOf('  release:\n'))
     expect(publish).toContain("if: ${{ !cancelled() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && needs.build.result == 'success' && needs.build-intel.result == 'success' }}")
     expect(publish).toContain('needs: [build, build-intel]')
@@ -67,8 +61,7 @@ describe('Release builds', () => {
     // Weekly, so an x64-only break (an Electron or runner image change) shows before the tag it would block; the other
     // packages, which every main push builds, skip that run.
     expect(intel).toMatch(/\n {4}if: startsWith\(github\.ref, 'refs\/tags\/'\) \|\| github\.event_name == 'workflow_dispatch' \|\| github\.event_name == 'schedule'\n/)
-    expect(matrix).toContain('needs: scope')
-    expect(matrix).toContain("if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.scope.result == 'skipped' || (needs.scope.result == 'success' && needs.scope.outputs.mode == 'full')) }}")
+    expect(matrix).toMatch(/\n {4}if: github\.event_name != 'schedule'\n/)
     expect(release).toMatch(/needs: \[build, build-intel\]/)
   })
   it('keeps the packaged checks, and leaves out the work CI already did or nobody uses', () => {

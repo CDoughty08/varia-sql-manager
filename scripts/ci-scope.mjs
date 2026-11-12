@@ -16,12 +16,13 @@ export function changeRange(eventName, event) {
     // Compare the whole PR to its merge base, including code from earlier commits and stacked PR bases.
     if (sha(base) && sha(head)) return `${base}...${head}`
   }
-  if (eventName === 'push' && sha(event.before) && sha(event.after)) return `${event.before}..${event.after}`
   return undefined
 }
 
 export function detectScope(eventName, event, { regressionSuite = 'none', diff = range => execFileSync('git', ['diff', '--name-only', '--no-renames', '-z', range, '--'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }), warn = console.warn } = {}) {
   if (eventName === 'workflow_dispatch') return regressionSuite === 'docs' ? 'docs' : regressionSuite && regressionSuite !== 'none' ? 'regressions' : 'full'
+  // Main runs supersede one another, so even a docs-only push must replace the complete work it may cancel.
+  if (eventName !== 'pull_request') return 'full'
   const range = changeRange(eventName, event)
   if (!range) return 'full'
   try {

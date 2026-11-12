@@ -3,7 +3,7 @@ name: Release builds
 # Packaging (installers, the packaged and portable smoke tests, Electron fuses and asar integrity read back) is the slowest
 # and most macOS-heavy work in CI: about 21 runner-minutes, 13 of them on the 5 macOS slots, for each push. It used to run on
 # every pull request push, where it caught nothing CI did not, and its jobs queued every run behind the 20-job limit
-# (docs/ci.md). It runs on main pushes except documentation-only changes, on tags and by hand, and
+# (docs/ci.md). It runs on every main push, on tags and by hand, and
 # on pull requests only when they change what packaging reads. Intel macOS, twice as slow as arm64 on a scarcer runner,
 # packages for tags and manual runs, and once a week on main alone, so an x64-only break shows before a tag it would block.
 # GitHub matches a pull request's paths against its first 3,000 changed files only, so a larger pull request (a big stacked
@@ -41,38 +41,18 @@ on:
   workflow_dispatch:
 
 concurrency:
-  # Only PR updates supersede earlier packaging. Every main push keeps its own running and pending work.
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  # Every main push packages, so newer main or PR pushes supersede earlier runs. Tags and manual runs always finish.
+  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && github.ref || github.run_id }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  scope:
-    name: Packaging scope
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      mode: ${{ steps.scope.outputs.mode }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-          sparse-checkout: scripts/ci-scope.mjs
-          sparse-checkout-cone-mode: false
-      - name: Classify the complete main push
-        id: scope
-        timeout-minutes: 1
-        run: node scripts/ci-scope.mjs
-
   build:
     name: Package ${{ matrix.rid }}
-    # PRs, tags and manual runs skip scope; only main pushes can omit packaging for docs.
-    needs: scope
-    if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.scope.result == 'skipped' || (needs.scope.result == 'success' && needs.scope.outputs.mode == 'full')) }}
+    # Every main push packages these; the weekly run is for Intel alone.
+    if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
       matrix:
@@ -118,7 +98,7 @@ jobs:
         dist/*.zip
 
   release:
-    # scope is skipped on tags: override the implicit success() across ancestors, then require both package jobs.
+    # Publish only after both package jobs succeed; cancellation or skipped packages must never publish partial assets.
     if: ${{ !cancelled() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && needs.build.result == 'success' && needs.build-intel.result == 'success' }}
     needs: [build, build-intel]
     runs-on: ubuntu-24.04

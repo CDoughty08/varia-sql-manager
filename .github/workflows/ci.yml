@@ -15,9 +15,9 @@ on:
         default: none
 
 concurrency:
-  # Only PR updates supersede earlier runs. A docs-only main push must not cancel a code push's main-only checks.
-  # Unique groups also preserve pending main runs; cancel-in-progress: false in a shared group would still replace them.
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  # Every main push runs full CI, so a newer push can safely replace the earlier run, even after a docs-only merge.
+  # PR updates also supersede their earlier runs; manual runs have unique groups.
+  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' || github.event_name == 'push') && github.ref || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -47,7 +47,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-          fetch-depth: 0
+          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
           sparse-checkout: scripts/ci-scope.mjs
           sparse-checkout-cone-mode: false
       - name: Classify the complete change
@@ -408,7 +408,8 @@ jobs:
       suite: ${{ inputs.regression-suite }}
 
   result:
-    name: CI result
+    # Manual partial suites must never share the required PR check's name.
+    name: ${{ github.event_name == 'workflow_dispatch' && 'Manual CI result' || 'CI result' }}
     if: always()
     needs: [scope, docs, check, live, smoke-linux, smoke-windows, bench-linux, regressions]
     runs-on: ubuntu-24.04

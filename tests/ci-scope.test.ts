@@ -15,25 +15,31 @@ describe('CI scope', () => {
     expect(scopeForPaths([])).toBe('full')
     expect(scopeForPaths([...Array.from({ length: 3500 }, (_, i) => `docs/${i}.md`), 'src/main/index.ts'])).toBe('full')
   })
-  it('compares the whole PR against its base and the whole push against its previous head', () => {
+  it('compares the whole PR against its base', () => {
     const pr = { pull_request: { base: { sha: base }, head: { sha: head } } }
     expect(changeRange('pull_request', pr)).toBe(`${base}...${head}`)
-    expect(changeRange('push', { before: base, after: head })).toBe(`${base}..${head}`)
+    expect(changeRange('push', { before: base, after: head })).toBeUndefined()
     expect(changeRange('push', { before: '0'.repeat(40), after: head })).toBeUndefined()
     expect(changeRange('pull_request', { pull_request: { base: { sha: '--output=bad' }, head: { sha: head } } })).toBeUndefined()
     expect(detectScope('pull_request', pr, { diff: (range: string) => { expect(range).toBe(`${base}...${head}`); return 'README.md\0src/main/index.ts\0' } })).toBe('full')
-    expect(detectScope('push', { before: base, after: head }, { diff: () => 'docs/a file with spaces.md\0README.md\0' })).toBe('docs')
+    expect(detectScope('pull_request', pr, { diff: () => 'docs/a file with spaces.md\0README.md\0' })).toBe('docs')
   })
   it('runs full CI for missing history, unknown events and empty comparisons, and honors manual runs', () => {
-    const event = { before: base, after: head }
-    expect(detectScope('push', event, { diff: () => { throw new Error('missing commit') }, warn: () => {} })).toBe('full')
-    expect(detectScope('push', event, { diff: () => '' })).toBe('full')
+    const event = { pull_request: { base: { sha: base }, head: { sha: head } } }
+    expect(detectScope('pull_request', event, { diff: () => { throw new Error('missing commit') }, warn: () => {} })).toBe('full')
+    expect(detectScope('pull_request', event, { diff: () => '' })).toBe('full')
     expect(detectScope('push', {})).toBe('full')
     expect(detectScope('unknown', {})).toBe('full')
     expect(detectScope('workflow_dispatch', {}, { regressionSuite: 'none' })).toBe('full')
     expect(detectScope('workflow_dispatch', {}, { regressionSuite: 'docs' })).toBe('docs')
     expect(detectScope('workflow_dispatch', {}, { regressionSuite: 'dialogs' })).toBe('regressions')
-    expect(detectScope('push', event, { regressionSuite: 'docs', diff: () => 'src/main/index.ts\0' })).toBe('full')
+  })
+  it('always replaces the full main workload, even when the newest push changes only docs', () => {
+    let compared = false
+    for (const regressionSuite of ['none', 'docs', 'dialogs']) {
+      expect(detectScope('push', { before: base, after: head }, { regressionSuite, diff: () => { compared = true; return 'README.md\0' } })).toBe('full')
+    }
+    expect(compared).toBe(false)
   })
 
   let directory: string | undefined
@@ -69,6 +75,7 @@ describe('CI scope', () => {
     git('add', 'README.md'); git('commit', '--quiet', '-m', 'Docs only')
     const docsHead = git('rev-parse', 'HEAD')
     expect(classify({ pull_request: { base: { sha: initial }, head: { sha: docsHead } } })).toBe('mode=docs\n')
+    expect(classify({ before: initial, after: docsHead }, 'push')).toBe('mode=full\n')
     // Moving code into a documentation path must still detect its deleted source path.
     mkdirSync(join(directory, 'docs'))
     renameSync(join(directory, 'code.ts'), join(directory, 'docs/code.md'))
