@@ -8,7 +8,6 @@ import { GridView, transposedLabel, withinCap } from '../src/renderer/src/grid/G
 import { ColumnLayout, frozenColumn, hitTest } from '../src/renderer/src/grid/layout'
 import { cellKey } from '../src/renderer/src/grid/marks'
 import { rotateSelection, type GridSelection } from '../src/renderer/src/grid/selection'
-import { GridStats } from '../src/renderer/src/grid/stats'
 import { planTiles, tileRequest, transposedTiles } from '../src/renderer/src/grid/tiles'
 import { maxWidthOverrides, UniformLayout } from '../src/renderer/src/grid/uniform-layout'
 import { outputTarget } from '../src/renderer/src/menus/targets'
@@ -151,17 +150,6 @@ describe('the name column\'s border', () => {
     // Below the header row the border resizes nothing, and a table's corner has none.
     expect(hitTest(118, 40, { ...o, frozenResize: true })).toEqual({ kind: 'row', row: 0 })
     expect(hitTest(118, 10, o)).toEqual({ kind: 'corner' })
-  })
-})
-
-describe('test mode\'s orientation switch', () => {
-  it('tells every listening grid, until it stops listening', () => {
-    const stats = new GridStats(), heard: unknown[] = []
-    const stop = stats.onOrientation(request => heard.push(request))
-    stats.setOrientation({ transposed: true, headerColumn: 2, entry: 'e1' })
-    stop()
-    stats.setOrientation({ transposed: false })
-    expect(heard).toEqual([{ transposed: true, headerColumn: 2, entry: 'e1' }])
   })
 })
 

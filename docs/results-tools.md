@@ -30,6 +30,30 @@ keep their proportions.
 The column commands are available to keyboard users through the grid's context menu and can be assigned shortcuts in
 Tools > Options > Environment > Shortcuts.
 
+## Transposed
+
+Transposed is a way a grid is drawn, not a result: its columns as rows, named in a frozen first column, and its rows as
+columns. The view keeps it with its scroll position, widths and selection, so it survives tab switches and collapsing.
+Nothing is stored, so it follows the grid's sort and filters and is available while rows arrive.
+
+| Command | What it does |
+| --- | --- |
+| Transpose Results (`output.transpose`) | Turns the grid transposed, or back. The toolbar's Transposed button and the grid menu's Transpose › Transposed show which it is. |
+| Transpose Selected Rows (`output.transposeSelectedRows`) | Applies Keep Selected Rows, then turns the grid once the kept rows show. If that filter refuses the selection (more than 4,095 rows or 256 ranges), fails, or is replaced by another sort or filter first, the grid stays as it is. The filter stays until removed from the caption. |
+| Transpose Using Column as Headers (`output.transposeWithHeaders`) | Heads each drawn column with a column's value for its row, and turns the grid. From a menu it is the column under the pointer; otherwise the active cell's. |
+| Choose Headers for Transposed Results… (`output.transposeChooseHeaders`) | Lists Row number and every column, starting on the current choice. The toolbar's Headers button opens it below itself. |
+
+They act on the menu's grid, else the focused one, else the grid that last had the focus in the query. A query's result
+and a pivot can be transposed; a comparison and a plan set cannot. A Peek card's grid can, from its menu.
+
+- A header value is written as a pivot names a column group: `NULL`, `(blank)`, cut at 128 characters. Until its rows
+  are read a header reads "Row N". The header column is still drawn as a row, and is remembered while the grid is a table.
+- The first 4,095 rows are drawn as columns. With more, the strip under the grid says "Showing the first 4,095 of N rows
+  as columns" and suggests filtering. Find Next onto a match in a later row says so in the toolbar and does not move.
+- Sort, Filter, Copy Column Name and Open Value on a transposed cell or name act on the result's own column and row.
+  Fit Column fits the drawn column under the pointer (one row of the result); on a name it fits the name column.
+- Copy and Save Results As write the grid as drawn (below).
+
 ## Copying and saving a transposed view
 
 A results grid drawn transposed (its columns as rows) copies and saves what it shows; nothing is stored for it.

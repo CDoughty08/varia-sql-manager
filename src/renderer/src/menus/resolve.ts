@@ -94,7 +94,7 @@ export function resolveMenu(menu: MenuId, options: ResolveOptions): readonly Res
   const command = (id: CommandId, title: string, extra: { mnemonic?: string | null; key: string; toggle?: boolean; args?: CommandArgs; enabled?: boolean; checked?: boolean; radio?: true; icon?: null }): Draft => {
     const itemArgs = extra.args ?? args, icon = extra.toggle || extra.radio || extra.icon === null ? undefined : commandDescriptor(id).icon
     const keybinding = guarded(() => keybindings.lookup(id), undefined)
-    const checked = extra.toggle ? guarded(() => commands.isToggled(id), false) : extra.checked
+    const checked = extra.toggle ? guarded(() => commands.isToggled(id, itemArgs), false) : extra.checked
     return {
       kind: 'command', key: extra.key, id, title, ...(itemArgs ? { args: itemArgs } : {}), ...(extra.mnemonic !== undefined ? { mnemonic: extra.mnemonic } : {}),
       ...(icon ? { icon } : {}), ...(keybinding ? { keybinding } : {}), enabled: extra.enabled !== false && guarded(() => commands.isEnabled(id, itemArgs), false),

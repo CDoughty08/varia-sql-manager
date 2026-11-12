@@ -2,7 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import type { QueryResult } from '../../../shared/contracts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import type { ResultHandle } from '../results/ResultClient'
-import { filteredColumns, setKey, transposedView, type EntryKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
+import { capStripText, filteredColumns, setKey, type EntryKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
+import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { resultsFilterSource } from '../results/ColumnFilterPopover'
 import { compareText } from '../results/CompareService'
 import { highlightText } from '../results/HighlightsService'
@@ -69,23 +70,12 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, o
   const [swaps, setSwaps] = useState(0)
   const filtered = useMemo(() => filteredColumns(sort), [sort])
   const key = entry.key
-  // The view's orientation is part of its grid state, so it follows the entry and outlives the grid. Nothing sets it yet but
-  // test mode (GridStats.setOrientation), which the transpose commands will replace; a change builds the grid again, as a
-  // tab switch does. A comparison is never drawn transposed (its tone column marks rows).
-  const [, turned] = useState(0)
-  useEffect(() => gridStats?.onOrientation(request => {
-    if ((request.tabId !== undefined && request.tabId !== tabId) || (request.entry !== undefined && request.entry !== key)) return
-    const state = results.gridState(tabId, key)
-    if (request.transposed) state.orientation = 'transposed'
-    else delete state.orientation
-    if (request.headerColumn === undefined) delete state.headerColumn
-    else state.headerColumn = request.headerColumn
-    turned(value => value + 1)
-  }), [gridStats, results, tabId, key])
-  // Read only: the state is made where the grid is built (mount), as before.
-  const gridState = results.viewState(tabId).grids.get(key)
-  // The one rule Copy and Save follow too (ResultsService), so what they write is what is drawn here.
-  const drawnTurned = transposedView(gridState, entry.descriptor), turnedView = !!drawnTurned, headerColumn = drawnTurned?.headerColumn
+  // The view's orientation is part of its grid state, so it follows the entry and outlives the grid. The transpose commands
+  // set it (ResultsService.setOrientation, which publishes); a change builds the grid again, as a tab switch does. A
+  // comparison is never drawn transposed (transposedView, the rule Copy and Save follow too). Read as a string, so the grid renders again only
+  // when its own orientation changed.
+  const oriented = useSyncExternalStore(results.subscribe, () => { const now = results.orientation(tabId, key); return now.transposed ? `t${now.headerColumn ?? ''}` : '' })
+  const turnedView = oriented !== '', headerColumn = turnedView && oriented.length > 1 ? Number(oriented.slice(1)) : undefined
   const latest = useRef({ count, onWide, sort, marks, showTypes, rowSize, turnedView, headerColumn })
   latest.current = { count, onWide, sort, marks, showTypes, rowSize, turnedView, headerColumn }
   /** The handle the view shows, and the keys it was sorted by. */
@@ -108,12 +98,15 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, o
       onCopy: () => { void commands.execute('output.copy', undefined, 'keybinding') },
       onEscape: () => results.cancelTabJob(tabId),
       onWide: wide => latest.current.onWide?.(key, wide),
-      onOpenValue: (row, column) => { void commands.execute('output.openValue', { tabId, cell: { entry: key, row, column } }, 'keybinding') }
+      onOpenValue: (row, column) => { void commands.execute('output.openValue', { tabId, cell: { entry: key, row, column } }, 'keybinding') },
+      // Find Next onto a match in a row the transposed grid does not draw: the toolbar says so.
+      onBeyondCap: row => results.beyondCap(tabId, row)
     })
     viewRef.current = view
     view.setMarks(now.marks)
     const registration = results.registerGrid(tabId, key, {
       selectAll: () => view.selectAll(), repaint: () => view.repaint(), fitColumn: column => view.fitColumn(column),
+      fitDrawn: row => { if (row === undefined) view.fitNames(); else view.fitRow(row) },
       filterColumn: column => apiRef.current?.openFunnel(column)
     })
     // Closing and opening the pane within one frame moves the grid without resizing it, and the move drops the scroller's
@@ -167,16 +160,24 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, o
   const lost = snapshot.state === 'lost'
   const truncation = truncationText({ truncated: snapshot.truncated, rowsStored: snapshot.rowsStored, rowsRead: snapshot.rowsRead, budget })
   const highlightNote = !lost && snapshot.state === 'complete' ? compared ? compareText(compared) : pivoted ? pivotStrip(pivoted, highlightText(marked)) : transposed ? transposeStrip(transposed, highlightText(marked)) : highlightText(marked) : undefined
-  const note = lost ? undefined : snapshot.incomplete ? incompleteText : truncation ?? highlightNote
+  // Transposed, the first rows of the view (the sorted and filtered one, when the grid shows one) are drawn as columns:
+  // past them the strip says so first, since no scrolling reaches the rest.
+  const shownRows = useSyncExternalStore((target ?? entry.handle).subscribe, () => (target ?? entry.handle).getSnapshot().rowsAvailable)
+  const cap = turnedView && !lost && shownRows > wire.transpose.maxRows ? capStripText(shownRows, entry.descriptor.kind === 'pivot') : undefined
+  const other = lost ? undefined : snapshot.incomplete ? incompleteText : truncation ?? highlightNote
+  const note = cap && other ? `${cap} ${other}` : cap ?? other
   // The entry's key names the grid for commands and menus; the generation and result id say which stored result it showed
   // when a target was read from it, so a target read before a re-run is told from the new one.
   return <GridShell mountKey={`${tabId}|${key}|${instanceKey(entry)}${turnedView ? '|transposed' : ''}`} mount={mount} onApi={onApi}
     rootProps={{
       'data-result-grid': '', 'data-output-view': 'grid', 'data-tab-id': tabId, 'data-result-entry': key, 'data-result-generation': entry.descriptor.generation,
-      'data-result-id': entry.descriptor.resultId, 'data-result-kind': entry.descriptor.kind, 'data-pane-focus': focused ? 'selected' : 'grid', onFocus: () => onFocus(key)
+      'data-result-id': entry.descriptor.resultId, 'data-result-kind': entry.descriptor.kind, 'data-pane-focus': focused ? 'selected' : 'grid',
+      // The stack keeps the focused entry for its own drawing; the service hears of it so the toolbar and the menus' toggle follow.
+      onFocus: () => { onFocus(key); results.focusEntry(tabId, key) }
     }}
     sort={sort?.keys} onSort={(column, add) => results.cycleSort(tabId, key, column, add)} funnels={funnels}
-    update={{ resultCount: count, showTypes, rowSize, ...turnedView ? { headerColumn: headerColumn ?? null } : {} }} gone={lost ? lostText : undefined} strip={note ? { text: note } : undefined} />
+    update={{ resultCount: count, showTypes, rowSize, ...turnedView ? { headerColumn: headerColumn ?? null } : {} }} gone={lost ? lostText : undefined}
+    strip={note ? { text: note } : undefined} />
 }
 
 /** A result set's grid: a throw while rendering it stays in its frame (GridErrorBoundary), whose Retry renders it again. */

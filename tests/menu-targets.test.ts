@@ -227,10 +227,18 @@ describe('menu target service', () => {
     expect(clicked).toMatchObject({ column: 1 })
     active.setAttribute('aria-colindex', '1')
     expect(service.targetFor(dom(grid))!.target).not.toHaveProperty('column')
-    // Its result kind offers Transpose for rows, pivots and transposes, never a diff (or an unmarked grid).
+    // Its result kind offers Transpose for a query's rows and a pivot, never a comparison, a plan set or a stored
+    // transpose (or an unmarked grid).
     expect(targetKeys(service.targetFor(dom(grid))!.target).outputGridTransposable).toBe(false)
     const transposable = (kind: string) => { grid.setAttribute('data-result-kind', kind); return targetKeys(service.targetFor(dom(grid))!.target).outputGridTransposable }
-    expect(['rows', 'pivot', 'transpose', 'diff'].map(transposable)).toEqual([true, true, true, false])
+    expect(['rows', 'pivot', 'transpose', 'diff', 'executionPlan'].map(transposable)).toEqual([true, true, false, false, false])
+    // A grid drawn transposed says so, and its menu's commands read that grid's own orientation as the toggle's state.
+    grid.setAttribute('data-result-kind', 'rows')
+    expect(service.targetFor(dom(grid))!.target).not.toHaveProperty('transposed')
+    expect(argsFor(service.targetFor(dom(grid))!.target).state).toEqual({ resultsGridTransposed: false })
+    grid.setAttribute('data-orientation', 'transposed')
+    expect(service.targetFor(dom(grid))!.target).toMatchObject({ transposed: true })
+    expect(argsFor(service.targetFor(dom(grid))!.target).state).toEqual({ resultsGridTransposed: true })
   })
   it('resolves a live view\'s grid as Query Output\'s view `live`, with its commands and the clicked or active column', () => {
     const doc = fakeDocument(), make = (tag: string, init?: ConstructorParameters<typeof FakeElement>[2]) => new FakeElement(doc, tag, init)
