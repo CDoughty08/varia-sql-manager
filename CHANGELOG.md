@@ -4,6 +4,7 @@
 
 ### Added
 
+- **Getting Started:** read offline connection, query and results guides with live shortcuts, option values and mouse gestures, plus interactive fictional examples. Open it from Help or the command palette. Navigation stays available if a guide cannot load.
 - **About Varia:** find the running version, platform and update status from Help or the command palette (also the app menu on macOS). Copy version details for support and open the project, issue form or release notes without needing a server connection.
 - **In-app release notes:** read curated release highlights and limits offline, browse bundled history and open notes for the exact version advertised by an update. Missing notes are reported clearly, with release downloads available separately.
 
