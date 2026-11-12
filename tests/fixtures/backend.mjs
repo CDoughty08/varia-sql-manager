@@ -52,6 +52,10 @@
 // BLOCKED, as a probe that waited out its lock timeout does), a probe the catalogue lists in pendingProbes opens unavailable
 // as the real one does (none today), and on server 'no-permission' the overview opens unavailable (PERMISSION_DENIED);
 // a connection to that server reports its login, as the server profile does, so the monitor offers Copy GRANT statement.
+// Its session actions (activity.details, activity.kill) answer from the same fake sessions: Details reads a session whose
+// id and login time match (ended or changed otherwise; locks only when asked), and Kill ends a user session (it leaves
+// Sessions), refuses Varia's pool session (varia) and, with the control file activity-no-kill (which also makes every
+// sessions sample say canKill 0), answers denied.
 // The SSIS tree's ssis.catalog source samples every 200 ms whatever its interval, its fingerprints counting the extra/ssis*
 // rows.
 // live.subscribe for ssis.operations shows each connection's fake SSIS catalog (`ssisCatalogOf`): eight operations, and a
@@ -1232,15 +1236,59 @@ function explorerSample(live, probe) {
 // backend's ActivityFilter does, in memory, and the facets count the rows the view chip and toggles leave.
 const fakeSessions = [
   { sessionId: 12, status: 'background', login: 'sa', database: 'master', command: 'LAZY WRITER', application: null, hostName: null, system: true },
-  { sessionId: 57, status: 'sleeping · 1 open tran', login: 'app_orders', database: 'SalesDb', command: null, application: 'Orders.Api', hostName: 'APP-01', headBlocker: '1', blocking: '1', openTransactions: '1', loginTime: '2026-11-09 08:00:00.000', hostProcessId: '4100' },
+  { sessionId: 57, status: 'sleeping · 1 open tran', login: 'app_orders', database: 'SalesDb', command: null, application: 'Orders.Api', hostName: 'APP-01', headBlocker: '1', blocking: '1', openTransactions: '1', loginTime: '2026-11-09 08:00:00.000', hostProcessId: '4100', lastBatch: 'BEGIN TRAN; UPDATE dbo.Orders SET Status = 2 WHERE OrderId = 1' },
   { sessionId: 61, status: 'suspended', login: 'svc_reporting', database: 'SalesDb', command: 'SELECT', application: 'Power BI', hostName: 'BI-01', waitType: 'LCK_M_S', waitTimeMs: '41200', blockedBy: '57', openTransactions: '0', loginTime: '2026-11-09 08:01:00.000', hostProcessId: '5200' },
   { sessionId: 66, status: 'running', login: 'app_billing', database: 'BillingDb', command: 'SELECT', application: 'Billing.Worker', hostName: 'APP-07', cpuRate: '812.5', openTransactions: '0', loginTime: '2026-11-09 08:02:00.000', hostProcessId: '6300' },
   { sessionId: 95, status: 'sleeping', login: 'tester', database: 'master', command: null, application: 'Varia SQL Manager - Object Explorer', hostName: 'WS-01', varia: 'Varia Object Explorer', pool: true, openTransactions: '0', loginTime: '2026-11-09 08:03:00.000', hostProcessId: '7400' }
 ]
+/** Sessions the fake Kill Process ended: they leave Sessions. */
+const killedSessions = new Set()
+const fakeSessionOf = id => fakeSessions.find(row => row.sessionId === id && !killedSessions.has(id))
+const sameLoginTime = (row, loginTime) => !!row.loginTime && row.loginTime.replace(' ', 'T') === String(loginTime).replace(/(\.\d{3})\d*$/, '$1')
+function activityDetails(params) {
+  const row = fakeSessionOf(params.sessionId)
+  if (!row) return { sessionId: params.sessionId, state: 'ended', elapsedMs: 3 }
+  if (!sameLoginTime(row, params.loginTime)) return { sessionId: params.sessionId, state: 'changed', elapsedMs: 3 }
+  const running = row.command !== null
+  const statement = fakeActive.find(item => item.sessionId === String(row.sessionId))?.query
+  const text = value => ({ text: value, chars: value.length, truncated: false })
+  return {
+    sessionId: row.sessionId, state: 'present', elapsedMs: 4, readAt: '2026-11-09T08:05:00.000+00:00',
+    session: {
+      sessionId: row.sessionId, loginTime: row.loginTime.replace(' ', 'T'), isUserProcess: !row.system, login: row.login, hostName: row.hostName ?? undefined, hostProcessId: Number(row.hostProcessId),
+      application: row.application ?? undefined, interface: '.Net SqlClient Data Provider', netAddress: '10.0.0.7', transport: 'TCP', encrypted: true, authScheme: 'SQL',
+      isolationLevel: 'ReadCommitted', database: row.database, status: row.status, ...running ? { command: row.command, requestId: 0 } : {}, requestCount: running ? 1 : 0,
+      ...row.waitType ? { waitType: row.waitType, waitTimeMs: Number(row.waitTimeMs), waitResource: 'KEY: 7:72057594043695104 (8194443284a0)', blockedBy: Number(row.blockedBy) } : {},
+      cpuMs: 120, logicalReads: 512, reads: 4, writes: 1, memoryKb: 64, openTransactions: Number(row.openTransactions ?? 0)
+    },
+    ...statement ? { statement: text(statement), batch: text(statement) } : {},
+    inputBuffer: { eventType: 'Language Event', parameters: 0, text: text(row.lastBatch ?? statement ?? 'SELECT 1') },
+    waits: [{ waitType: 'LCK_M_S', waitingTasks: 1, waitTimeMs: 41200, maxWaitTimeMs: 41200, signalWaitTimeMs: 0 }],
+    transactions: Number(row.openTransactions ?? 0) > 0 ? [{ transactionId: 90211, name: 'user_transaction', beginTime: '2026-11-09T08:00:05.000', type: 'readWrite', state: 'active', userTransaction: true, database: row.database, logBytesUsed: 2048, logBytesReserved: 8192 }] : [],
+    // tempdb's DMV needs VIEW SERVER STATE on the fake server: the section says why while the others show.
+    sectionErrors: [{ section: 'tempdb', code: 'PERMISSION_DENIED', message: 'tempdb usage needs VIEW SERVER STATE.' }],
+    ...params.locks ? { locks: [{ resourceType: 'KEY', database: row.database, mode: 'X', status: 'GRANT', count: 1 }] } : {}
+  }
+}
+function activityKill(params) {
+  const denied = !!controlDirectory && existsSync(join(controlDirectory, 'activity-no-kill'))
+  const results = params.sessions.map(session => {
+    const row = fakeSessionOf(session.sessionId)
+    if (denied) return { sessionId: session.sessionId, outcome: 'denied' }
+    if (!row) return { sessionId: session.sessionId, outcome: 'ended' }
+    // In the real batch's order (ActivitySql Kill): ended, system, changed, then Varia's own.
+    if (row.system) return { sessionId: session.sessionId, outcome: 'system' }
+    if (!sameLoginTime(row, session.loginTime) || String(session.hostProcessId ?? '') !== String(row.hostProcessId ?? '')) return { sessionId: session.sessionId, outcome: 'changed' }
+    if (row.pool) return { sessionId: session.sessionId, outcome: 'varia' }
+    killedSessions.add(row.sessionId)
+    return { sessionId: session.sessionId, outcome: 'killed' }
+  })
+  return { results, elapsedMs: 6 }
+}
 const sessionTextColumns = ['login', 'database', 'application', 'hostName', 'command', 'waitType', 'status']
 function sessionsShown(filter) {
   const view = filter.view ?? 'all'
-  return fakeSessions.filter(row => (filter.showSystem || !row.system) && (filter.showVaria || !row.pool) && (view === 'all'
+  return fakeSessions.filter(row => !killedSessions.has(row.sessionId) && (filter.showSystem || !row.system) && (filter.showVaria || !row.pool) && (view === 'all'
     || (view === 'active' && row.command !== null) || (view === 'blocked' && row.blockedBy) || (view === 'blocking' && row.blocking)
     || (view === 'idleOpenTransaction' && row.command === null && row.openTransactions > 0) || (view === 'rollingBack' && false)))
 }
@@ -1248,12 +1296,12 @@ function sessionsShown(filter) {
 // activity-blocked does (as the overview's Blocked Sessions tile reads it), so a test sees both the empty pane and the
 // chain; 61 and 66 are running. Cells are keyed by the catalogue's column id without the table's prefix.
 const fakeChain = [
-  { session: '57', sessionId: '57', depth: '0', status: 'sleeping', blockedSessions: '1', login: 'app_orders', hostName: 'APP-01', application: 'Orders.Api', database: 'SalesDb', openTransactions: '1', cycle: '0', lastBatch: 'BEGIN TRAN; UPDATE dbo.Orders SET Status = 2 WHERE OrderId = 1', tone: 'warning' },
-  { session: '└─ 61', sessionId: '61', depth: '1', status: 'suspended', blockedSessions: '0', waitType: 'LCK_M_S', waitTimeMs: '41200', waitResource: 'KEY: 7:72057594043695104 (8194443284a0)', login: 'svc_reporting', hostName: 'BI-01', application: 'Power BI', database: 'SalesDb', openTransactions: '0', cycle: '0', tone: 'error' }
+  { session: '57', sessionId: '57', depth: '0', status: 'sleeping', blockedSessions: '1', login: 'app_orders', hostName: 'APP-01', application: 'Orders.Api', database: 'SalesDb', openTransactions: '1', cycle: '0', lastBatch: 'BEGIN TRAN; UPDATE dbo.Orders SET Status = 2 WHERE OrderId = 1', loginTime: '2026-11-09 08:00:00.000', hostProcessId: '4100', tone: 'warning' },
+  { session: '└─ 61', sessionId: '61', depth: '1', status: 'suspended', blockedSessions: '0', waitType: 'LCK_M_S', waitTimeMs: '41200', waitResource: 'KEY: 7:72057594043695104 (8194443284a0)', login: 'svc_reporting', hostName: 'BI-01', application: 'Power BI', database: 'SalesDb', openTransactions: '0', cycle: '0', loginTime: '2026-11-09 08:01:00.000', hostProcessId: '5200', tone: 'error' }
 ]
 const fakeActive = [
-  { query: 'SELECT o.OrderId, o.Total FROM dbo.Orders AS o WHERE o.Status = 2', sessionId: '61', requestId: '0', startTime: '2026-11-09 08:01:10.000', status: 'suspended', database: 'SalesDb', cpuMs: '120', elapsedMs: '41300', logicalReads: '512', waitType: 'LCK_M_S', blockedBy: '57', dop: '1', tone: 'error' },
-  { query: 'SELECT b.InvoiceId FROM dbo.Invoices AS b ORDER BY b.Due', sessionId: '66', requestId: '0', startTime: '2026-11-09 08:02:30.000', status: 'running', database: 'BillingDb', cpuMs: '8125', cpuRate: '812.5', elapsedMs: '9800', logicalReads: '981204', dop: '4', grantedMemoryKb: '10240', usedMemoryKb: '8192' }
+  { query: 'SELECT o.OrderId, o.Total FROM dbo.Orders AS o WHERE o.Status = 2', sessionId: '61', requestId: '0', startTime: '2026-11-09 08:01:10.000', status: 'suspended', database: 'SalesDb', cpuMs: '120', elapsedMs: '41300', logicalReads: '512', waitType: 'LCK_M_S', blockedBy: '57', dop: '1', login: 'svc_reporting', hostName: 'BI-01', openTransactions: '0', loginTime: '2026-11-09 08:01:00.000', hostProcessId: '5200', tone: 'error' },
+  { query: 'SELECT b.InvoiceId FROM dbo.Invoices AS b ORDER BY b.Due', sessionId: '66', requestId: '0', startTime: '2026-11-09 08:02:30.000', status: 'running', database: 'BillingDb', cpuMs: '8125', cpuRate: '812.5', elapsedMs: '9800', logicalReads: '981204', dop: '4', grantedMemoryKb: '10240', usedMemoryKb: '8192', login: 'app_billing', hostName: 'APP-07', openTransactions: '0', loginTime: '2026-11-09 08:02:00.000', hostProcessId: '6300' }
 ]
 function sessionTableResult(spec, prefix, rows) {
   const id = column => column.id.slice(prefix.length, prefix.length + 1).toLowerCase() + column.id.slice(prefix.length + 1)
@@ -1290,7 +1338,9 @@ function activitySessionsSample(live, probe) {
   live.sentFacets = sentFacets
   const changed = facets.filter(facet => JSON.stringify(facet) !== sentFacets.get(facet.column))
   for (const facet of changed) sentFacets.set(facet.column, JSON.stringify(facet))
-  const status = probe.samples === 1 ? [{ id: 'serverState', value: 1 }, { id: 'canKill', value: 1 }] : undefined
+  const canKill = controlDirectory && existsSync(join(controlDirectory, 'activity-no-kill')) ? 0 : 1
+  // As the real backend: every sessions sample carries the status values.
+  const status = [{ id: 'serverState', value: 1 }, { id: 'canKill', value: canKill }]
   const blocked = !!controlDirectory && existsSync(join(controlDirectory, 'activity-blocked'))
   const [, chainSpec, activeSpec] = liveProbes['activity.sessions'].tables
   const chain = sessionTableResult(chainSpec, 'chain', blocked ? fakeChain : [])
@@ -1852,6 +1902,8 @@ async function workbench(id, method, params, credit) {
     }
     case 'explorer.search': return respond(id, searchFixture(params))
     case 'ssis.describe': return ssisDescribe(id, params)
+    case 'activity.details': return respond(id, activityDetails(params))
+    case 'activity.kill': return respond(id, activityKill(params))
     case 'ssis.execute': return respond(id, ssisExecute(params))
     case 'query.execute': {
       // As the real backend's crash handler does: a best-effort GOAWAY, then exit 70.

@@ -388,7 +388,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     copy: text => { void api.writeClipboardText(text).then(result => { if (!result.ok) commands.reportWarning(result.error) }, onUnexpectedError) }
   })
   const activity = new ActivityMonitorService({
-    documents, connections, live, owner: id => documentOwner(id, documents, panes, editorGroups), settings: () => settings.getSnapshot().values,
+    api, documents, connections, live, owner: id => documentOwner(id, documents, panes, editorGroups), settings: () => settings.getSnapshot().values,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-activity-monitor="${CSS.escape(id)}"] [data-activity-focus]`)?.focus())
   })
   const operations = new SsisOperationsService({
