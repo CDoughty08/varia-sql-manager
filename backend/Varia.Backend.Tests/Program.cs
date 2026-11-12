@@ -26,6 +26,12 @@ if (args is [SearchBench.Argument])
     SearchBench.Run();
     return;
 }
+// The pivot benchmark, run by hand (docs/pivot-performance-findings.md): measures only, no checks.
+if (args is [PivotBench.Argument, ..])
+{
+    PivotBench.Run(args);
+    return;
+}
 
 var passed = 0;
 var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
