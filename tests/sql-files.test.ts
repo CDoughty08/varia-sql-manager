@@ -869,17 +869,19 @@ describe('changes made outside', () => {
   })
   it('hashes a saved value larger than a query may be in full, so touching it is no change', async () => {
     const store = new SqlFileStore()
+    // This checks content hashing, not the interactive poll budget; shared runners can take seconds to read 6 MB.
+    const limits = { ...fileCheckLimits, timeoutMs: 10_000 }
     const path = join(directory, 'large.xml')
     // 6 MB of UTF-8: more than a query file, less than a value document.
     const saved = await store.save('<a>' + 'é'.repeat(3_000_000) + '</a>', undefined, path, 'xml')
     expect((await stat(path)).size).toBeGreaterThan(5_000_000)
     await utimes(path, later(10), later(10))
-    expect(await store.check()).toEqual([])
+    expect(await store.check(limits)).toEqual([])
     expect(await store.changedOnDisk(saved.id)).toBe(false)
     await writeFile(path, '<a>' + 'è'.repeat(3_000_000) + '</a>')
     await utimes(path, later(20), later(20))
-    expect(await store.check()).toEqual([{ fileId: saved.id, change: 'modified' }])
-  })
+    expect(await store.check(limits)).toEqual([{ fileId: saved.id, change: 'modified' }])
+  }, 30_000)
   it('keeps what an open file was read as when it is opened again after another program rewrote it', async () => {
     const store = new SqlFileStore({ legacyLabel: () => 'windows-1252' })
     const path = join(directory, 'wide.sql')
