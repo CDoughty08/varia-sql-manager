@@ -120,6 +120,14 @@ export interface GridViewState {
   /** A follow-tail grid (a live log): whether its last frame showed the last row. A grid built over a state with false
    *  opens where it was rather than at the tail. */
   following?: boolean
+  /** How the view is drawn: as a table (absent), or transposed, its columns as rows. Nothing sets it yet but test mode. */
+  orientation?: 'transposed'
+  /** Transposed: the column whose value heads each drawn column in place of "Row N" (Using Column as Headers). */
+  headerColumn?: number
+  /** What the transposed view keeps apart from the table's: its scroll offsets, the width its drawn columns share and the
+   *  columns sized apart from it (grid/uniform-layout.ts), whether the first rows have set that width, and the name column's
+   *  width once the user has sized it. The selection is the one above, in the result's rows and columns, in both. */
+  transposed?: { topRow: number; virtualTop: number; scrollLeft: number; width: number; overrides: Map<number, number>; sized: boolean; nameWidth?: number }
 }
 /**
  * A tab's stack, all of it by entry key: `weights` are the shares a splitter drag left (used while every entry of the run

@@ -16,16 +16,17 @@ import { gridLimits as g } from './constants'
 import { GridData, portBusy } from './data'
 import { gridKeyAction, pageStep } from './keyboard'
 import { cellKey, type GridMarks } from './marks'
-import { ColumnLayout, hitTest, rowHeaderWidth, visibleRange, type ColumnAxis, type VisibleRange } from './layout'
+import { ColumnLayout, frozenColumn, hitTest, rowHeaderWidth, visibleRange, type ColumnAxis, type VisibleRange } from './layout'
+import { UniformLayout } from './uniform-layout'
 import { fitWidth, initialWidth, measureCharWidth, sqlTypeLabel, typeHintChars } from './measure'
 import { freshRing, ringStep, rotation, slotOf, type RowRing } from './ring'
 import { RowSizes } from './row-sizes'
 import { applyWheel, ensureVisible, normalizeWheel, offsetsDropped, onNativeScroll, rebaseRow, remap, rowsContainerY, rowTop, scrollCap, scrollModel, topRowOf, type ScrollModel } from './scroll'
-import { columnTitle, covered, dragSelection, navigate, pressButton, pressSelection, selectAll, windowRanges, type CellRange, type GridHit, type GridSelection } from './selection'
+import { columnTitle, covered, dragSelection, navigate, pressButton, pressSelection, rotateSelection, selectAll, windowRanges, type CellRange, type GridHit, type GridSelection } from './selection'
 import type { GridStats } from './stats'
 import { remapSelection, remapTop, sameSelection, type RowMap } from './swap'
 import { colorAt, highlightColors, type RowHighlights } from './highlights'
-import { tableTiles, tileKey, type TileShape } from './tiles'
+import { tableTiles, tileKey, transposedTiles, type TileShape } from './tiles'
 import { whitespaceRuns, type WhitespaceMode } from './whitespace'
 import { displayText } from '../../../shared/ipc/wire/cells'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
@@ -63,7 +64,7 @@ interface CellSlot { readonly el: HTMLDivElement; readonly text: Text; column: n
  */
 interface RowSlot {
   /** `size` is what the mark's row-size bar shows ('' for none), so it is written only when it changes. */
-  readonly el: HTMLDivElement; readonly header: HTMLDivElement; readonly number: Text; readonly mark?: SizeMark & { readonly text: Text }
+  readonly el: HTMLDivElement; readonly header: HTMLDivElement; readonly number: Text; readonly mark?: SizeMark & { readonly text: Text } & NameParts
   readonly cells: CellSlot[]; readonly pin: CellSlot
   row: number; top: number; width: number; odd: boolean; headerSel: boolean; shown: boolean
   /** 0 for none, else 1 + the tone's index in rowTones. */
@@ -80,6 +81,12 @@ interface RowSlot {
 /** What shows a row-size bar (a row's number). `size` is what the bar shows now. */
 interface SizeMark { readonly el: HTMLElement; size: string }
 interface SortButton { readonly el: HTMLSpanElement; readonly glyph: HTMLSpanElement; readonly order: Text; state: string }
+interface FunnelButton { readonly el: HTMLSpanElement; readonly glyph: HTMLSpanElement; on: boolean }
+/** A transposed grid's row mark is a name cell: it holds a column's name where a row number goes, with the type, sort
+ *  button and funnel a header has. `look` is the class string it shows now (selected, unnamed, filterable, its search mark). */
+interface NameParts { readonly type?: Text; readonly sort?: SortButton; readonly funnel?: FunnelButton; look?: string }
+/** A highlighted row drawn as a column (transposed): one pooled band over its cells, since a cell's class has no bit left. */
+interface BandSlot { readonly el: HTMLDivElement; color: number; left: number; width: number; height: number; shown: boolean }
 /** A pooled column header: the name, then the SQL type (`type`, in muted small text and hidden from screen readers, which read it in the tooltip). Each is
  *  in its own bidi isolate (.rg-cn, .rg-ct), so a name with an unterminated override cannot reorder the type after it. */
 interface HeaderSlot {
@@ -87,7 +94,10 @@ interface HeaderSlot {
   /** The sort button (grids with `onSort`): its glyph, its place among several keys, and what it shows now ('' unsorted). */
   readonly sort?: SortButton
   /** The funnel button (grids with `onFilter`), filled while its column has a filter. */
-  readonly funnel?: { readonly el: HTMLSpanElement; readonly glyph: HTMLSpanElement; on: boolean }
+  readonly funnel?: FunnelButton
+  /** Transposed, where a header stands for a row: the text it shows ("Row 3", or the header column's value once read),
+   *  the row's highlight (as RowSlot's) and its row-size bar. */
+  label: string; highlight: number; size: string
 }
 /** A sorted column as its header shows it: its place among the sort's keys and its direction. */
 export interface HeaderSortKey { readonly column: number; readonly descending: boolean }
@@ -156,6 +166,18 @@ export interface GridViewOptions {
   onFilter?(column: number, anchor: DOMRect): void
   /** The columns whose headers have a funnel, when not every column's: a live source filters only some (its facets). */
   readonly filterable?: ReadonlySet<number>
+  /**
+   * Draws the result transposed: its columns as rows, named in a frozen first column, and its first
+   * `limits.transpose.maxRows` rows as columns. Only what is drawn turns: the selection in the state, the marks, the
+   * highlights and every callback stay in the result's own rows and columns. Fixed for the view's life (the shell builds
+   * another to change it); the transposed view's scroll offsets and widths are kept apart, in the state's `transposed`.
+   * Not for a result with a tone column (a comparison, a live table).
+   */
+  readonly transposed?: boolean
+  /** Transposed: the column whose value heads each drawn column, in place of "Row N" (Using Column as Headers). */
+  readonly headerColumn?: number
+  /** Transposed: a search match to reveal is in a row past those drawn, so nothing moved. */
+  onBeyondCap?(row: number): void
 }
 
 /**
@@ -184,10 +206,22 @@ export class GridView {
   private descriptor: ResultDescriptor
   private stopHandle: () => void = () => {}
   private readonly layout: ColumnAxis
+  /** Transposed (the option): what is drawn is turned, and `layout` is `uniform`. */
+  private readonly rotated: boolean
+  private readonly uniform: UniformLayout | undefined
   /** The size of the tiles the grid reads and looks cells up in. */
-  private readonly tiles: TileShape = tableTiles
-  /** Where the view's scroll offsets are kept: the grid's saved state. */
+  private readonly tiles: TileShape
+  /** Where the view's scroll offsets are kept: the grid's saved state, or its `transposed` part. */
   private readonly offsets: { topRow: number; virtualTop: number; scrollLeft: number }
+  /** Transposed: the column that heads the drawn columns, the state's selection and the same as drawn (turned once per
+   *  change), the frozen name column's width, the highlight bands and the first drawn column of the last frame. */
+  private headerColumn: number | undefined
+  private turnedFrom: GridSelection | undefined
+  private turnedTo: GridSelection | undefined
+  private nameWidth = 0
+  private readonly bandsEl: HTMLDivElement | undefined
+  private bands: BandSlot[] = []
+  private lastFirstColumn = 0
   /** The columns shown: all but a live table's hidden tone column (its last, at `tone`; -1 when it has none). */
   private readonly columns: number
   private readonly tone: number
@@ -303,13 +337,26 @@ export class GridView {
     if (o.rowSize) this.sizes = this.sizesFor(o.handle)
     this.capOverride = o.stats?.scrollCap
     this.cap = this.capOverride ?? scrollCap(windowOf(o.root).devicePixelRatio)
-    // Widths belong to the grid's saved state; they are allocated on first mount, from the declared types.
-    if (!o.state.widths || o.state.widths.length !== this.columns) {
-      o.state.widths = Float64Array.from(o.descriptor.columns.slice(0, this.columns), (column, index) => initialWidth(this.headerTextWidth(index), typeHintChars(column), this.charWidth))
-      o.state.sized = false
+    this.rotated = !!o.transposed
+    this.tiles = this.rotated ? transposedTiles : tableTiles
+    this.headerColumn = this.rotated ? o.headerColumn : undefined
+    if (this.rotated) {
+      // One width for every drawn column, from the widest type hint until the first rows are measured.
+      const kept: NonNullable<GridViewState['transposed']> = o.state.transposed ??= { topRow: 0, virtualTop: 0, scrollLeft: 0, width: this.sharedWidth(Math.max(1, ...o.descriptor.columns.slice(0, this.columns).map(typeHintChars))), overrides: new Map(), sized: false }
+      this.nameWidth = kept.nameWidth === undefined ? this.fittedNameWidth(g.nameColumnMaxWidth) : this.boundedNameWidth(kept.nameWidth)
+      this.offsets = kept
+      this.layout = this.uniform = new UniformLayout(kept, this.cap - this.nameWidth)
+      this.uniform.setCount(this.drawnColumns())
+      this.root.dataset.orientation = 'transposed'
+    } else {
+      // Widths belong to the grid's saved state; they are allocated on first mount, from the declared types.
+      if (!o.state.widths || o.state.widths.length !== this.columns) {
+        o.state.widths = Float64Array.from(o.descriptor.columns.slice(0, this.columns), (column, index) => initialWidth(this.headerTextWidth(index), typeHintChars(column), this.charWidth))
+        o.state.sized = false
+      }
+      this.offsets = o.state
+      this.layout = new ColumnLayout(o.state.widths, this.cap - rowHeaderWidth(0, this.charWidth))
     }
-    this.offsets = o.state
-    this.layout = new ColumnLayout(o.state.widths, this.cap - rowHeaderWidth(0, this.charWidth))
     const doc = this.scroller.ownerDocument
     const div = (className: string, role?: string) => { const element = doc.createElement('div'); element.className = className; if (role) element.setAttribute('role', role); return element }
     this.spacer = div('rg-spacer')
@@ -327,13 +374,19 @@ export class GridView {
     this.marksRows = div('rg-rhs-rows')
     this.marks.append(this.marksRows)
     this.spacer.append(this.marks, this.head, this.rowsEl)
+    if (this.rotated) {
+      this.bandsEl = div('rg-bands')
+      this.bandsEl.setAttribute('aria-hidden', 'true')
+      this.spacer.append(this.bandsEl)
+    }
     this.pinSlot = this.createRow(false)
     this.scroller.replaceChildren(this.spacer)
-    this.root.setAttribute('aria-colcount', String(this.columns + 1))
+    this.root.setAttribute('aria-colcount', String(this.drawnColumns() + 1))
     this.data = this.dataFor(o.handle)
     this.listen()
     this.stopHandle = o.handle.subscribe(() => this.schedule())
     this.cleanup.push(() => this.stopHandle(), registerGridAnchor(this.root, () => this.menuAnchor()), registerGridTarget(this.root, element => this.targetOf(element)))
+    if (this.rotated) this.cleanup.push(() => { delete this.root.dataset.orientation })
     if (o.stats) this.cleanup.push(o.stats.add({ counters: () => this.data.counters, nodes: () => this.root.getElementsByTagName('*').length + 1, setScrollCap: px => { this.capOverride = px; this.updateCap() } }))
     this.viewportWidth = this.scroller.clientWidth
     this.outerWidth = this.scroller.offsetWidth
@@ -360,15 +413,17 @@ export class GridView {
           // A held Enter opens one tab, not one per repeat.
           if (event.repeat) return true
           const active = this.o.state.selection?.active
-          if (!active || !this.links[active.column] || active.row >= this.rows()) return false
+          if (!active || !this.links[active.column] || active.row >= (this.rotated ? this.drawnColumns() : this.rows())) return false
           this.o.onOpenValue?.(active.row, active.column)
           return true
         }
         default: {
-          const rows = this.rows()
-          if (rows <= 0 || this.columns <= 0) return true
+          // The keys move over what is drawn: in a transposed grid Right is the result's next row, and Ctrl+End the last
+          // column's value in the last row drawn.
+          const rows = this.drawnRows(), columns = this.drawnColumns()
+          if (rows <= 0 || columns <= 0) return true
           const current = this.selection() ?? firstCell(this.o.entry)
-          const next = navigate(current, action, { rows, columns: this.columns, pageRows: pageStep(this.viewportHeight - g.headerHeight) })
+          const next = navigate(current, action, { rows, columns, pageRows: pageStep(this.viewportHeight - g.headerHeight) })
           this.select(next)
           this.reveal(next.active.row, next.active.column)
           return true
@@ -391,11 +446,17 @@ export class GridView {
     this.setStatus({})
     this.schedule()
   }
-  update(o: { resultCount: number; showTypes?: boolean; whitespace?: WhitespaceMode; sort?: readonly HeaderSortKey[]; rowSize?: boolean; filtered?: ReadonlySet<number>; filterable?: ReadonlySet<number> }): void {
+  /** `headerColumn` (a transposed grid's): a column, or null for none; absent leaves it as it is. */
+  update(o: { resultCount: number; showTypes?: boolean; whitespace?: WhitespaceMode; sort?: readonly HeaderSortKey[]; rowSize?: boolean; filtered?: ReadonlySet<number>; filterable?: ReadonlySet<number>; headerColumn?: number | null }): void {
+    if (this.rotated && o.headerColumn !== undefined && (o.headerColumn ?? undefined) !== this.headerColumn) {
+      // Its tile is read with the rows from the next frame on, and each header shows its value once read.
+      this.headerColumn = this.data.also = o.headerColumn ?? undefined
+      this.schedule()
+    }
     if (o.filtered && !sameSet(o.filtered, this.filtered)) { this.filtered = o.filtered; this.schedule() }
     if (o.filterable && (!this.filterable || !sameSet(o.filterable, this.filterable))) {
       this.filterable = o.filterable
-      // Each header shows or hides its funnel again.
+      // Each header shows or hides its funnel again (a transposed grid's name cells do each frame).
       for (const header of this.headerSlots) header.column = -1
       this.schedule()
     }
@@ -417,6 +478,11 @@ export class GridView {
       // Widths stay as they are; every header writes its type again.
       this.showTypes = showTypes
       for (const header of this.headerSlots) header.column = -1
+      // A transposed grid shows the types after the names, down its name column, which fits them unless it was sized by hand.
+      if (this.rotated) {
+        for (const slot of this.rowSlots) slot.row = -1
+        if (this.o.state.transposed!.nameWidth === undefined) this.nameWidth = this.fittedNameWidth(g.nameColumnMaxWidth)
+      }
     }
     this.schedule()
   }
@@ -437,10 +503,20 @@ export class GridView {
     const marks = this.searchMarks
     select &&= this.focusInRun()
     if (marks?.current && marks.handle === this.handle) {
+      // Transposed, a match in a row past those drawn has no cell to show: the owner is told, and nothing moves.
+      if (this.rotated && marks.current.row >= wire.transpose.maxRows) { this.o.onBeyondCap?.(marks.current.row); return true }
+      const at = this.rotated ? { row: marks.current.column, column: marks.current.row } : marks.current
       // A hidden column (a diff's or live table's tone) is never the active cell.
-      if (select && marks.current.column < this.columns) this.selectCell(marks.current.row, marks.current.column)
-      this.reveal(marks.current.row, marks.current.column)
-      this.outerReveal = { row: marks.current.row, column: marks.current.column, frames: 10 }
+      if (select && marks.current.column < this.columns) this.selectCell(at.row, at.column)
+      this.reveal(at.row, at.column)
+      this.outerReveal = { row: at.row, column: at.column, frames: 10 }
+      return true
+    }
+    if (this.rotated && marks?.currentColumn !== undefined && marks.currentColumn < this.columns) {
+      // A matched column is a drawn row: it scrolls into view vertically, at the drawn columns in view.
+      const columns = this.drawnColumns()
+      if (select && columns > 0) this.selectCell(marks.currentColumn, Math.min(columns - 1, this.firstColumnInView()))
+      this.reveal(marks.currentColumn, -1)
       return true
     }
     if (marks?.currentColumn !== undefined && marks.currentColumn < this.columns) {
@@ -453,6 +529,9 @@ export class GridView {
     return false
   }
   private focusInRun(): boolean { return focusInRun(this.root, this.root.ownerDocument.activeElement) }
+  /** The first drawn column in the body now (not the overscan before it). */
+  private firstColumnInView(): number { return Math.max(0, Math.min(this.layout.count - 1, this.layout.columnAt(this.offsets.scrollLeft))) }
+  /** Makes a cell, named as drawn, the selection and the active cell. */
   private selectCell(row: number, column: number): void {
     this.select(cellSelection(this.o.entry, row, column))
     this.root.focus({ preventScroll: true })
@@ -497,7 +576,10 @@ export class GridView {
       // The owner hears of a moved selection as of any other (a details pane, Kill, the active row's key).
       if (state.selection && !sameSelection(selection, state.selection)) this.o.onSelection(state.selection)
     }
-    this.pendingTop = o.top ?? remapTop(this.pendingTop ?? this.offsets.virtualTop, mapRow)
+    if (!this.rotated) this.pendingTop = o.top ?? remapTop(this.pendingTop ?? this.offsets.virtualTop, mapRow)
+    // Transposed, the rows run across: a new order or other rows start at the first of them again, and the widths given to
+    // positions that now hold other rows go. Which column was being read (the vertical offset) stays.
+    else if (o.top !== undefined) { this.pendingLeft = 0; this.uniform!.clearOverrides() }
     if (this.hovered) { this.hovered.removeAttribute('title'); this.hovered = undefined }
     this.schedule()
   }
@@ -545,38 +627,55 @@ export class GridView {
   }
 
   private rows(): number { return this.handle.getSnapshot().rowsAvailable }
+  /** The rows and columns drawn: the result's own, or turned, with at most `limits.transpose.maxRows` rows as columns. */
+  private drawnRows(rows = this.rows()): number { return this.rotated ? this.columns : rows }
+  private drawnColumns(rows = this.rows()): number { return this.rotated ? Math.min(rows, wire.transpose.maxRows) : this.columns }
   private sizesFor(handle: ResultHandle): RowSizes { return new RowSizes(handle, () => this.schedule()) }
   private dataFor(handle: ResultHandle): GridData {
-    return new GridData({ handle, columns: this.columns, tone: this.tone, shape: this.tiles, clientInflight: () => this.o.client.windowsInFlight, changed: () => this.schedule() })
+    return new GridData({ handle, columns: this.columns, tone: this.tone, shape: this.tiles, also: this.headerColumn, clientInflight: () => this.o.client.windowsInFlight, changed: () => this.schedule() })
   }
   private linksOf(descriptor: ResultDescriptor): Uint8Array {
     return Uint8Array.from(descriptor.columns, column => this.o.onOpenValue && (column.role === 'xml' || column.role === 'json' || column.role === 'plan') ? 1 : 0)
   }
   // The seams between what the grid draws and the result's own rows and columns. Geometry, pools, scrolling, presses, drags
-  // and keys work in drawn rows and columns; the state, the marks and every callback are in the result's. Today the two are
-  // the same, so each seam is the identity: the selection read (`selection`) and written (`select`), the range the reads
-  // are asked for (`sourceRange`), a cell's lookup (`paintCell`), and what is reported out (`targetOf`, `buttonColumn`).
+  // and keys work in drawn rows and columns; the state, the marks and every callback are in the result's. In a table the two
+  // are the same and each seam is the identity; transposed, each swaps rows with columns: the selection read (`selection`)
+  // and written (`select`), the range the reads are asked for (`sourceRange`), a cell's lookup (`paintCell`), and what is
+  // reported out (`targetOf`, `buttonColumn`, Open Value, Fit).
   /** The grid's selection as its state keeps it: in the result's rows and columns. */
   private sourceSelection(): GridSelection | undefined {
     const selection = this.o.state.selection
     return selection?.entry === this.o.entry && selection.blocks.length > 0 ? selection : undefined
   }
-  /** The selection as drawn, which presses, drags, keys and the frame work in. */
-  private selection(): GridSelection | undefined { return this.sourceSelection() }
+  /** The selection as drawn, which presses, drags, keys and the frame work in: the state's, turned when transposed. */
+  private selection(): GridSelection | undefined {
+    const source = this.sourceSelection()
+    if (!source || !this.rotated) return source
+    if (source !== this.turnedFrom) { this.turnedFrom = source; this.turnedTo = rotateSelection(source) }
+    return this.turnedTo
+  }
   /** Takes a selection as drawn; the state and the owner get it in the result's rows and columns. */
   private select(selection: GridSelection): void {
-    if (selection === this.o.state.selection) return
-    this.o.state.selection = selection
-    this.o.onSelection(selection)
+    if (!this.rotated) {
+      if (selection === this.o.state.selection) return
+      this.o.state.selection = selection
+    } else {
+      if (selection === this.selection()) return
+      this.turnedTo = selection
+      this.o.state.selection = this.turnedFrom = rotateSelection(selection)
+    }
+    this.o.onSelection(this.o.state.selection)
     this.schedule()
   }
   /** A frame's range in the result's rows and columns, as the reads are asked for. */
-  private sourceRange(range: VisibleRange): VisibleRange { return range }
+  private sourceRange(range: VisibleRange): VisibleRange {
+    return this.rotated ? { firstRow: range.firstColumn, lastRow: range.lastColumn, firstColumn: range.firstRow, lastColumn: range.lastRow } : range
+  }
   /** Scrolls a cell into view on the next frame ('nearest', never smooth). */
   private reveal(row: number, column: number): void {
     const target = ensureVisible({
       virtualTop: this.pendingTop ?? this.offsets.virtualTop, scrollLeft: this.pendingLeft ?? this.offsets.scrollLeft, viewportWidth: this.viewportWidth,
-      viewportHeight: this.viewportHeight, rowHeader: this.rowHeader, layout: this.layout, rows: this.rows()
+      viewportHeight: this.viewportHeight, rowHeader: this.rowHeader, layout: this.layout, rows: this.drawnRows()
     }, row, column)
     this.pendingTop = target.virtualTop
     this.pendingLeft = target.scrollLeft
@@ -745,7 +844,7 @@ export class GridView {
       || (scroller.offsetHeight === scroller.clientHeight && scroller.scrollWidth > scroller.clientWidth && y >= this.viewportHeight - g.overlayScrollBar)
   }
   private hitAt(x: number, y: number, clamp = false) {
-    return hitTest(x, y, { viewport: { top: this.offsets.virtualTop, left: this.offsets.scrollLeft, width: this.viewportWidth, height: this.viewportHeight }, rows: this.rows(), layout: this.layout, rowHeader: this.rowHeader, clamp })
+    return hitTest(x, y, { viewport: { top: this.offsets.virtualTop, left: this.offsets.scrollLeft, width: this.viewportWidth, height: this.viewportHeight }, rows: this.drawnRows(), layout: this.layout, rowHeader: this.rowHeader, clamp, frozenResize: this.rotated })
   }
 
   /** Native scrolling (including a cell's scrollIntoView) can precede its scroll event and our next frame. A press must
@@ -801,11 +900,11 @@ export class GridView {
     if (!hit) return
     if (hit.kind === 'resize') {
       if (press === 'primary') { this.startResize(event.pointerId, point.x, hit.column); return }
-      // A right-press on a border is a press on its column, which the menu then acts on.
-      hit = { kind: 'column', column: hit.column }
+      // A right-press on a border is a press on its column, which the menu then acts on (on the corner, for the name column's).
+      hit = hit.column === frozenColumn ? { kind: 'corner' } : { kind: 'column', column: hit.column }
     }
     const add = press === 'primary' && this.gestures.matches('grid.addToSelection', event), shift = this.gestures.matches('grid.extendSelection', event)
-    this.select(pressSelection(this.selection(), hit, { entry: this.o.entry, shift, right: press === 'secondary', add, rows: this.rows(), columns: this.columns }))
+    this.select(pressSelection(this.selection(), hit, { entry: this.o.entry, shift, right: press === 'secondary', add, rows: this.drawnRows(), columns: this.drawnColumns() }))
     if (press !== 'primary' || hit.kind === 'corner') return
     this.drag = { pointerId: event.pointerId, x0: point.x, y0: point.y, x: point.x, y: point.y, dragging: false, hit, modifiers: shift || add }
     try { this.root.setPointerCapture(event.pointerId) } catch { /* A synthetic pointer has nothing to capture. */ }
@@ -835,7 +934,9 @@ export class GridView {
     if (!drag || event.pointerId !== drag.pointerId) return
     this.endDrag()
     // A link opens on a single click: the second press of a double-click lands before the first one's tab has opened.
-    if (!drag.dragging && !drag.modifiers && drag.hit.kind === 'cell' && this.links[drag.hit.column] && this.clicks <= 1) this.o.onOpenValue?.(drag.hit.row, drag.hit.column)
+    if (drag.dragging || drag.modifiers || drag.hit.kind !== 'cell' || this.clicks > 1) return
+    const row = this.rotated ? drag.hit.column : drag.hit.row, column = this.rotated ? drag.hit.row : drag.hit.column
+    if (this.links[column]) this.o.onOpenValue?.(row, column)
   }
 
   private endDrag(): void {
@@ -856,16 +957,27 @@ export class GridView {
     this.root.classList.toggle('rg-border-hover', over)
   }
 
-  /** The column a pressed sort button or funnel is for: that of the header it is in. */
-  private buttonColumn(button: Element): number { return this.slots.get(button.parentElement!)?.header?.column ?? -1 }
+  /** The column a pressed sort button or funnel is for: that of the header it is in, or in a transposed grid the one its
+   *  name cell names. */
+  private buttonColumn(button: Element): number {
+    const slot = this.slots.get(button.parentElement!)
+    return this.rotated ? slot?.row?.row ?? -1 : slot?.header?.column ?? -1
+  }
 
   /** A press on a header's right border: the column follows the pointer (a new resize stops a running fit). */
   private startResize(pointerId: number, x: number, column: number): void {
     this.fitting?.abort()
     this.fitting = undefined
-    const userSized = this.o.state.userSized ??= new Set()
-    this.resizing = { pointerId, column, x0: x, width0: this.layout.width(column), wasUserSized: userSized.has(column), x, applied: x }
-    userSized.add(column)
+    if (this.rotated) {
+      // The name column's width is the state's once dragged; a drawn column's own width is one of the layout's overrides.
+      const kept = this.o.state.transposed!
+      this.resizing = column === frozenColumn ? { pointerId, column, x0: x, width0: this.nameWidth, wasUserSized: kept.nameWidth !== undefined, x, applied: x }
+        : { pointerId, column, x0: x, width0: this.layout.width(column), wasUserSized: true, x, applied: x }
+    } else {
+      const userSized = this.o.state.userSized ??= new Set()
+      this.resizing = { pointerId, column, x0: x, width0: this.layout.width(column), wasUserSized: userSized.has(column), x, applied: x }
+      userSized.add(column)
+    }
     this.root.classList.add('rg-resizing')
     try { this.root.setPointerCapture(pointerId) } catch { /* A synthetic pointer has nothing to capture. */ }
   }
@@ -875,8 +987,14 @@ export class GridView {
     if (!resize) return
     this.resizing = undefined
     this.root.classList.remove('rg-resizing')
-    if (restore) this.layout.setWidth(resize.column, resize.width0)
-    if (!resize.wasUserSized && this.layout.width(resize.column) === resize.width0) this.o.state.userSized?.delete(resize.column)
+    if (resize.column === frozenColumn) {
+      // Escape, or a press that moved nothing, leaves a name column that fitted its names fitting them.
+      if (restore) this.setNameWidth(resize.width0)
+      if (!resize.wasUserSized && this.nameWidth === resize.width0) delete this.o.state.transposed!.nameWidth
+    } else {
+      if (restore) this.layout.setWidth(resize.column, resize.width0)
+      if (!this.rotated && !resize.wasUserSized && this.layout.width(resize.column) === resize.width0) this.o.state.userSized?.delete(resize.column)
+    }
     if (this.root.hasPointerCapture?.(resize.pointerId)) { try { this.root.releasePointerCapture(resize.pointerId) } catch { /* Already released. */ } }
     this.schedule()
   }
@@ -885,7 +1003,24 @@ export class GridView {
     const resize = this.resizing
     if (!resize || resize.x === resize.applied) return
     resize.applied = resize.x
-    this.layout.setWidth(resize.column, resize.width0 + resize.x - resize.x0)
+    if (resize.column === frozenColumn) this.setNameWidth(resize.width0 + resize.x - resize.x0)
+    else this.layout.setWidth(resize.column, resize.width0 + resize.x - resize.x0)
+  }
+  /** A transposed grid's name column takes a width of the user's (a drag, a fit), kept in the state; the frame lays it out. */
+  private setNameWidth(width: number): void {
+    this.nameWidth = this.o.state.transposed!.nameWidth = this.boundedNameWidth(width)
+  }
+  /** A width for the name column: at least its minimum, and never so wide that no drawn column shows beside it. */
+  private boundedNameWidth(width: number): number {
+    const most = this.viewportWidth > 0 ? Math.max(g.nameColumnMinWidth, this.viewportWidth - g.columnMinWidth) : g.columnMaxWidth
+    return Math.max(g.nameColumnMinWidth, Math.min(Math.round(Number.isFinite(width) ? width : g.nameColumnMinWidth), g.columnMaxWidth, most))
+  }
+  /** What the name column needs for its widest name (and type) and the two buttons, up to `most`. */
+  private fittedNameWidth(most: number): number {
+    let widest = 0
+    for (let column = 0; column < this.columns; column++) widest = Math.max(widest, this.headerTextWidth(column))
+    const buttons = (this.o.onSort ? g.sortButtonWidth : 0) + (this.o.onFilter ? g.funnelWidth : 0)
+    return Math.min(most, Math.max(g.nameColumnMinWidth, Math.ceil(widest) + g.cellChrome + buttons))
   }
 
   /** A double-click on a header's border fits its column. */
@@ -894,14 +1029,19 @@ export class GridView {
     const point = this.point(event)
     if (!point.inside || point.y >= g.headerHeight) return
     const hit = this.hitAt(point.x, point.y)
-    if (hit?.kind === 'resize' && this.gestures.matches('grid.fitColumn', event)) this.fitColumn(hit.column)
+    if (hit?.kind !== 'resize' || !this.gestures.matches('grid.fitColumn', event)) return
+    // Transposed, the corner's border fits the name column to its names, and a header's its drawn column, which is a row.
+    if (hit.column === frozenColumn) { this.setNameWidth(this.fittedNameWidth(g.columnMaxWidth)); this.schedule() }
+    else if (this.rotated) this.fitRow(hit.column)
+    else this.fitColumn(hit.column)
   }
   /**
    * Fits a column to its header and the widest display text of its first 4,096 rows and the rows in view, measured by
    * the worker; a resize or another fit started meanwhile wins.
    */
   fitColumn(column: number): void {
-    if (this.disposed || !Number.isInteger(column) || column < 0 || column >= this.columns) return
+    // Transposed, a column is a drawn row, and rows have one height: Fit there is of a drawn column (fitRow).
+    if (this.rotated || this.disposed || !Number.isInteger(column) || column < 0 || column >= this.columns) return
     this.fitting?.abort()
     const abort = this.fitting = new AbortController()
     const rows = this.rows(), top = Math.min(g.measureFitRows, rows), range = this.lastRange
@@ -925,6 +1065,29 @@ export class GridView {
       done()
       // A full results port has room again shortly; a released or lost result is shown as such by its shell.
       if (portBusy(error)) setTimeout(() => { if (!this.disposed && !abort.signal.aborted && !this.fitting) this.fitColumn(column) }, g.busyRetryMs)
+    })
+  }
+
+  /**
+   * Transposed: fits the drawn column that shows `row` to its header and that row's widest value, with one measure of a
+   * single row across the columns. It becomes one of the layout's own widths. Nothing in a table, whose rows have one height.
+   */
+  fitRow(row: number): void {
+    if (!this.rotated || this.disposed || !Number.isInteger(row) || row < 0 || row >= this.drawnColumns()) return
+    this.fitting?.abort()
+    const abort = this.fitting = new AbortController()
+    const done = () => { if (this.fitting === abort) this.fitting = undefined }
+    this.handle.measure(row, 1, 0, this.columns, abort.signal).then(({ widths }) => {
+      if (abort.signal.aborted || this.disposed) return
+      done()
+      let chars = 0
+      for (let index = 0; index < widths.length; index++) chars = Math.max(chars, widths[index])
+      this.layout.setWidth(row, fitWidth(this.headerWidth(this.headerLabel(row, undefined)), chars, this.charWidth))
+      this.schedule()
+    }, error => {
+      if (abort.signal.aborted || this.disposed) return
+      done()
+      if (portBusy(error)) setTimeout(() => { if (!this.disposed && !abort.signal.aborted && !this.fitting) this.fitRow(row) }, g.busyRetryMs)
     })
   }
 
@@ -953,25 +1116,36 @@ export class GridView {
     if (scrolled) this.schedule()
   }
 
-  /** Tooltips only on the hovered header, or a hovered truncated, failed or link cell (B8). */
+  /** Tooltips only on the hovered header, or a hovered truncated, failed or link cell (B8); transposed, on the hovered name
+   *  cell (what a header says of its column) and on a drawn column's header (its row), unless that shows its row-size bar,
+   *  whose own tooltip stays. */
   private hover(target: EventTarget | null): void {
-    const element = (target as Element | null)?.closest?.('.rg-ch, .rg-c') as HTMLElement | null
+    let element = (target as Element | null)?.closest?.(this.rotated ? '.rg-ch, .rg-c, .rg-rn' : '.rg-ch, .rg-c') as HTMLElement | null
+    let slot = element ? this.slots.get(element) : undefined
+    if (this.rotated && slot?.header?.size) { element = null; slot = undefined }
     if (element === this.hovered) return
     if (this.hovered) this.hovered.removeAttribute('title')
     this.hovered = element ?? undefined
     if (!element) return
-    const slot = this.slots.get(element)
     let title = ''
-    if (slot?.header && slot.header.column >= 0) {
-      const column = this.descriptor.columns[slot.header.column]
-      title = `${columnTitle(column.name)} (${this.types[slot.header.column]}, ${column.nullable ? 'null' : 'not null'})`
-    } else if (slot?.cell) {
+    if (slot?.header && slot.header.column >= 0) title = this.rotated ? this.rowTitle(slot.header.column, slot.header.label) : this.headerTitle(slot.header.column)
+    else if (slot?.cell) {
       const bits = slot.cell.bits
       if (bits & ERR) title = 'This value could not be read and is shown as NULL.'
-      else if (bits & TRUNC) title = `This value was truncated at ${this.truncationLimit(slot.cell.column)}.`
+      else if (bits & TRUNC) title = `This value was truncated at ${this.truncationLimit(this.rotated ? Math.max(0, slot.row?.row ?? 0) : slot.cell.column)}.`
       else if (bits & LINK) title = 'Open in a new tab (Enter)'
-    }
+    } else if (this.rotated && slot?.row && slot.row.row >= 0) title = this.headerTitle(slot.row.row)
     if (title) element.title = title
+  }
+  /** A column's tooltip: its whole name, its type and whether it takes NULL. */
+  private headerTitle(column: number): string {
+    const info = this.descriptor.columns[column]
+    return `${columnTitle(info.name)} (${this.types[column]}, ${info.nullable ? 'null' : 'not null'})`
+  }
+  /** A transposed header's tooltip: the row it stands for, and the header column's value when that is what it shows. */
+  private rowTitle(row: number, label: string): string {
+    const name = 'Row ' + formatCount(row + 1)
+    return label && label !== name ? `${name}: ${label}` : name
   }
   private truncationLimit(column: number): string {
     const info = this.descriptor.columns[column]
@@ -991,20 +1165,59 @@ export class GridView {
     el.append(header)
     let mark: RowSlot['mark']
     if (withCells) {
-      mark = { el: doc.createElement('div'), text: doc.createTextNode(''), size: '' }
+      mark = this.rotated ? this.nameMark() : { el: doc.createElement('div'), text: doc.createTextNode(''), size: '' }
       mark.el.className = 'rg-rn'
       mark.el.style.display = 'none'
-      mark.el.append(mark.text)
+      if (!this.rotated) mark.el.append(mark.text)
       this.marksRows.append(mark.el)
     }
     const slot: RowSlot = { el, header, number, ...mark ? { mark } : {}, cells: [], pin: this.createCell(el), row: -1, top: Number.NaN, width: -1, odd: false, headerSel: false, shown: false, tone: 0, highlight: 0, toneText: '', toneOf: 0, cellMarks: undefined }
     this.slots.set(el, { row: slot })
-    // The active cell's spare slot and the row's number name their row too, for menu targets.
+    // The active cell's spare slot and the row's number (a transposed grid's name cell) name their row too, for menu
+    // targets and a name cell's buttons.
     this.slots.set(slot.pin.el, { cell: slot.pin, row: slot })
     if (mark) this.slots.set(mark.el, { row: slot })
     this.rowsEl.append(el)
     if (withCells) for (let index = 0; index < this.cellsPerRow; index++) slot.cells.push(this.createCell(el, slot))
     return slot
+  }
+  /** A transposed row's mark: its column's name and type, with the sort button and funnel a column header has. */
+  private nameMark(): NonNullable<RowSlot['mark']> {
+    const doc = this.scroller.ownerDocument
+    const el = doc.createElement('div'), nameEl = doc.createElement('span'), text = doc.createTextNode(''), typeEl = doc.createElement('span'), type = doc.createTextNode('')
+    nameEl.className = 'rg-cn'
+    nameEl.append(text)
+    typeEl.className = 'rg-ct'
+    typeEl.append(type)
+    el.append(nameEl, typeEl)
+    const sort = this.o.onSort ? this.sortButton(el) : undefined, funnel = this.o.onFilter ? this.funnelButton(el) : undefined
+    return { el, text, size: '', type, ...sort ? { sort } : {}, ...funnel ? { funnel } : {}, look: '' }
+  }
+  /** A sort button at the end of `parent` (a header, a name cell). Hidden from screen readers: aria-sort says how the
+   *  column is sorted, and the menu's Sort commands sort it. */
+  private sortButton(parent: HTMLElement): SortButton {
+    const doc = parent.ownerDocument, button = doc.createElement('span'), glyph = doc.createElement('span'), orderEl = doc.createElement('span'), order = doc.createTextNode('')
+    button.className = 'rg-cs'
+    button.setAttribute('aria-hidden', 'true')
+    glyph.className = codiconClass('arrow-up')
+    orderEl.className = 'rg-co'
+    orderEl.append(order)
+    button.append(glyph, orderEl)
+    button.title = 'Sort ascending'
+    parent.append(button)
+    return { el: button, glyph, order, state: '' }
+  }
+  /** A funnel at the end of `parent`. Hidden from screen readers like the sort button: Filter Column Values (Alt+Down)
+   *  opens the same popover. */
+  private funnelButton(parent: HTMLElement): FunnelButton {
+    const doc = parent.ownerDocument, button = doc.createElement('span'), glyph = doc.createElement('span')
+    button.className = 'rg-cf'
+    button.setAttribute('aria-hidden', 'true')
+    button.title = 'Filter column values'
+    glyph.className = codiconClass('filter')
+    button.append(glyph)
+    parent.append(button)
+    return { el: button, glyph, on: false }
   }
   private createCell(parent: HTMLElement, row?: RowSlot): CellSlot {
     const el = parent.ownerDocument.createElement('div'), text = parent.ownerDocument.createTextNode('')
@@ -1055,35 +1268,13 @@ export class GridView {
         typeEl.setAttribute('aria-hidden', 'true')
         typeEl.append(type)
         el.append(nameEl, typeEl)
-        let sort: HeaderSlot['sort']
-        if (this.o.onSort) {
-          // Hidden from screen readers: the header's aria-sort says how it is sorted, and the menu's Sort commands sort it.
-          const button = doc.createElement('span'), glyph = doc.createElement('span'), orderEl = doc.createElement('span'), order = doc.createTextNode('')
-          button.className = 'rg-cs'
-          button.setAttribute('aria-hidden', 'true')
-          glyph.className = codiconClass('arrow-up')
-          orderEl.className = 'rg-co'
-          orderEl.append(order)
-          button.append(glyph, orderEl)
-          el.append(button)
-          sort = { el: button, glyph, order, state: '' }
-          button.title = 'Sort ascending'
-        }
-        let funnel: HeaderSlot['funnel']
-        if (this.o.onFilter) {
-          // Hidden from screen readers like the sort button: Filter Column Values (Alt+Down) opens the same popover.
-          const button = doc.createElement('span'), glyph = doc.createElement('span')
-          button.className = 'rg-cf'
-          button.setAttribute('aria-hidden', 'true')
-          button.title = 'Filter column values'
-          glyph.className = codiconClass('filter')
-          button.append(glyph)
-          el.append(button)
-          el.classList.add('fb')
-          funnel = { el: button, glyph, on: false }
-        }
+        // A transposed grid's headers stand for rows, and there is nothing to sort or filter a row by: the buttons are in
+        // its name cells.
+        const sort = this.o.onSort && !this.rotated ? this.sortButton(el) : undefined
+        const funnel = this.o.onFilter && !this.rotated ? this.funnelButton(el) : undefined
+        if (funnel) el.classList.add('fb')
         this.head.append(el)
-        const header: HeaderSlot = { el, text, type, column: -1, sel: false, mark: 0, shown: false, left: Number.NaN, width: -1, ...sort ? { sort } : {}, ...funnel ? { funnel } : {} }
+        const header: HeaderSlot = { el, text, type, column: -1, sel: false, mark: 0, shown: false, left: Number.NaN, width: -1, label: '', highlight: 0, size: '', ...sort ? { sort } : {}, ...funnel ? { funnel } : {} }
         this.slots.set(el, { header })
         this.headerSlots.push(header)
       }
@@ -1097,6 +1288,7 @@ export class GridView {
   /** The first frame after rows arrive sizes the columns the user has not sized from their first 128 rows. */
   private measureColumns(rows: number): void {
     const state = this.o.state
+    if (this.rotated) { this.measureShared(rows); return }
     if (state.sized || this.measuring || rows <= 0 || this.columns === 0 || performance.now() < this.measureAfter) return
     this.measuring = true
     this.handle.measure(0, Math.min(g.measureInitialRows, rows), 0, this.columns).then(({ widths }) => {
@@ -1119,19 +1311,57 @@ export class GridView {
     })
   }
 
-  /** What a menu opened on `element` is for, in the result's rows and columns (anchor.ts): a cell's row and column, a
-   *  header's column, a row number's row; undefined on the corner and on a slot that shows nothing. A pending frame is
-   *  painted first: until it runs, a slot marked to be written again (an update sets a shown header's column to -1) would
-   *  read as showing nothing. */
+  /** Transposed: the first frame after rows arrive sets the shared width from the widest value of their first 128 rows. */
+  private measureShared(rows: number): void {
+    const kept = this.o.state.transposed!
+    if (kept.sized || this.measuring || rows <= 0 || this.columns === 0 || performance.now() < this.measureAfter) return
+    this.measuring = true
+    this.handle.measure(0, Math.min(g.measureInitialRows, rows), 0, this.columns).then(({ widths }) => {
+      this.measuring = false
+      if (this.disposed || kept.sized) return
+      let chars = 0
+      for (let index = 0; index < widths.length; index++) chars = Math.max(chars, widths[index])
+      this.uniform!.setShared(this.sharedWidth(chars))
+      kept.sized = true
+      this.schedule()
+    }, error => {
+      this.measuring = false
+      if (this.disposed) return
+      if (portBusy(error)) { this.measureAfter = performance.now() + g.busyRetryMs; setTimeout(() => this.schedule(), g.busyRetryMs); return }
+      kept.sized = true
+      if ((error as Error)?.name !== 'AbortError') this.schedule()
+    })
+  }
+  /** The shared width for values of `chars` characters: a header's ("Row 4,095") at least, and no wider than 240 px, since
+   *  a drawn column holds a value of every column and the widest would size them all. */
+  private sharedWidth(chars: number): number { return Math.min(g.transposedMaxWidth, initialWidth(this.headerWidth('Row ' + formatCount(wire.transpose.maxRows)), chars, this.charWidth)) }
+  /** A transposed column's header: "Row N", or with a header column that column's value for the row, as a pivot names a
+   *  column group (NULL, (blank), cut at 128 characters), once the tile that holds it has been read. `tile` is the frame's
+   *  lookup; without it the cache is asked. */
+  private headerLabel(row: number, tile: ((row: number, column: number) => RowWindow | null) | undefined): string {
+    const fallback = 'Row ' + formatCount(row + 1), at = this.headerColumn
+    if (at === undefined || at < 0 || at >= this.columns) return fallback
+    const window = tile ? tile(row, at) : this.data.peek(tileKey(Math.floor(row / this.tiles.rows), Math.floor(at / this.tiles.columns)))
+    if (!window || row - window.first >= window.count) return fallback
+    const index = (row - window.first) * (window.colEnd - window.colStart) + at - window.colStart
+    if (window.flags[index] & (FLAG_NULL | FLAG_ERROR)) return 'NULL'
+    const text = displayText(window.text[index])
+    return text === '' ? '(blank)' : text.length > g.headerValueChars ? text.slice(0, g.headerValueChars) : text
+  }
+
+  /** What a menu opened on `element` is for, in the result's rows and columns whatever the orientation (anchor.ts): a
+   *  cell's row and column, a header's column, a row number's row (transposed: a header's row, a name cell's column);
+   *  undefined on the corner and on a slot that shows nothing. A pending frame is painted first: until it runs, a slot
+   *  marked to be written again (an update sets a shown header's column to -1) would read as showing nothing. */
   private targetOf(element: Element): GridTarget | undefined {
     this.flushFrame()
     for (let at: Element | null = element; at && at !== this.root; at = at.parentElement) {
       const slot = this.slots.get(at)
       if (!slot) continue
-      if (slot.header) return slot.header.column < 0 ? undefined : { column: slot.header.column }
+      if (slot.header) return slot.header.column < 0 ? undefined : this.rotated ? { row: slot.header.column } : { column: slot.header.column }
       const row = slot.row && slot.row.row >= 0 ? slot.row.row : undefined
-      if (slot.cell) return row === undefined || slot.cell.column < 0 ? undefined : { row, column: slot.cell.column }
-      return row === undefined ? undefined : { row }
+      if (slot.cell) return row === undefined || slot.cell.column < 0 ? undefined : this.rotated ? { row: slot.cell.column, column: row } : { row, column: slot.cell.column }
+      return row === undefined ? undefined : this.rotated ? { column: row } : { row }
     }
     return undefined
   }
@@ -1147,6 +1377,9 @@ export class GridView {
     if (width <= 0 || height <= 0) return
     const state = this.o.state, snapshot = this.handle.getSnapshot()
     const rows = snapshot.rowsAvailable
+    // What is drawn: the rows and columns themselves, or turned. A transposed grid's columns grow as rows arrive.
+    const drawnRows = this.drawnRows(rows), drawnColumns = this.drawnColumns(rows)
+    if (this.uniform && this.uniform.count !== drawnColumns) this.uniform.setCount(drawnColumns)
     // Reads first: the scroller's offsets.
     const scrollTop = this.scroller.scrollTop, scrollLeft = this.scroller.scrollLeft
     const previous = this.model
@@ -1154,7 +1387,7 @@ export class GridView {
     const restore = !previous || offsetsDropped({ scrolled: this.scrolled, scrollTop, scrollLeft, lastTop: this.lastTop, lastLeft: this.lastLeft })
     this.scrolled = false
     this.moved = false
-    const model = scrollModel(rows, height, this.cap)
+    const model = scrollModel(drawnRows, height, this.cap)
     let virtualTop: number
     if (this.pendingTop !== undefined) virtualTop = this.pendingTop
     // Follow tail: a log opens at its newest rows, and a view at the end as rows arrive stays at the end.
@@ -1168,7 +1401,8 @@ export class GridView {
 
     // Then writes: sizes, scroll offsets, the row container.
     this.resizeStep()
-    const rowHeader = rowHeaderWidth(rows, this.charWidth)
+    // A name column sized in a wider pane still leaves a drawn column in view in this one; the saved width is kept.
+    const rowHeader = this.rotated ? Math.min(this.nameWidth, Math.max(g.nameColumnMinWidth, width - g.columnMinWidth)) : rowHeaderWidth(rows, this.charWidth)
     let columnsMoved = false
     if (rowHeader !== this.rowHeader) {
       this.rowHeader = rowHeader
@@ -1218,37 +1452,54 @@ export class GridView {
     }
     // SSMS's current cell: once rows arrive, the first cell is selected until another is chosen, so Copy, Shift+click
     // and the keys start from it and screen readers hear it. It is not announced as a selection change.
-    if (rows > 0 && this.columns > 0 && !this.sourceSelection()) state.selection = firstCell(this.o.entry)
+    if (drawnRows > 0 && drawnColumns > 0 && !this.sourceSelection()) state.selection = firstCell(this.o.entry)
+    if (this.rotated) this.keepActiveDrawn()
 
     this.dragStep()
     const viewport = { top: virtualTop, left, width, height }
     const bodyRows = Math.ceil(Math.max(0, height - g.headerHeight) / g.rowHeight)
     let overscan: { rows: number; columns: number } = { rows: g.overscanRows, columns: g.overscanColumns }
-    let range = visibleRange(viewport, rows, this.layout, rowHeader, overscan)
+    let range = visibleRange(viewport, drawnRows, this.layout, rowHeader, overscan)
     // A very large view of narrow columns (a 4K screen) keeps less in reserve: every pooled cell costs style, layout and
     // paint when a jump rewrites them all.
     if ((bodyRows + 1 + 2 * overscan.rows) * (range.lastColumn - range.firstColumn + 1) > g.poolCells) {
       overscan = { rows: g.reducedOverscanRows, columns: g.reducedOverscanColumns }
-      range = visibleRange(viewport, rows, this.layout, rowHeader, overscan)
+      range = visibleRange(viewport, drawnRows, this.layout, rowHeader, overscan)
     }
+    // A transposed result with no rows has no column to draw, and still names its columns down the frozen one.
+    if (this.rotated && drawnColumns === 0) range = { ...visibleRange(viewport, drawnRows, oneColumn, rowHeader, overscan), firstColumn: 0, lastColumn: -1 }
     this.lastRange = range
     // An empty result still shows its column headers.
-    const headerRange = rows > 0 ? range : visibleRange({ top: 0, left, width, height }, 1, this.layout, rowHeader, overscan)
+    const headerRange = drawnRows > 0 ? range : visibleRange({ top: 0, left, width, height }, 1, this.layout, rowHeader, overscan)
     if (snapshot.state !== 'lost' && snapshot.state !== 'released') {
-      // The reads are asked for in the result's rows and columns.
+      // The reads are asked for in the result's rows and columns. Transposed, the rows run across, so a scroll too fast to
+      // read is one across them.
       const view = this.sourceRange(range)
-      const again = this.data.ensure(view, rows, offsets.topRow - this.lastTopRow, Math.max(1, bodyRows), state.selection?.active)
+      const moved = this.rotated ? range.firstColumn - this.lastFirstColumn : offsets.topRow - this.lastTopRow
+      const again = this.data.ensure(view, rows, moved, Math.max(1, this.rotated ? range.lastColumn - range.firstColumn + 1 : bodyRows), state.selection?.active)
       if (again) this.schedule()
-      this.sizes?.ensure(view.firstRow, view.lastRow)
+      if (!this.rotated || view.lastRow >= view.firstRow) this.sizes?.ensure(view.firstRow, view.lastRow)
     }
     this.lastTopRow = offsets.topRow
+    this.lastFirstColumn = range.firstColumn
     const tileError = this.data.error
     if (tileError !== this.status.tileError) this.setStatus({ ...this.status, tileError })
     const visibleColumns = headerRange.lastColumn - headerRange.firstColumn + 1
     if (this.pools(bodyRows + 1 + 2 * overscan.rows, Math.max(1, visibleColumns))) columnsMoved = true
-    this.paint(range, headerRange, rows, rebased, columnsMoved)
+    this.paint(range, headerRange, drawnRows, drawnColumns, rebased, columnsMoved)
+    if (this.rotated) this.paintBands(headerRange, Math.max(0, Math.min(height - g.headerHeight, drawnRows * g.rowHeight - virtualTop)))
     this.aria(snapshot.state, rows)
-    this.report(model, virtualTop, rows, height)
+    this.report(model, virtualTop, drawnRows, height)
+  }
+
+  /** Transposed: an active cell in a row past those drawn (the selection was made in the table, or a swap moved it) moves
+   *  to the same column in the last row drawn, and the owner hears of it as of a swap's move. The blocks stay: they select
+   *  what they did, and show again when a filter or the table brings their rows back. */
+  private keepActiveDrawn(): void {
+    const selection = this.sourceSelection(), last = wire.transpose.maxRows - 1
+    if (!selection || selection.active.row <= last) return
+    this.o.state.selection = { ...selection, active: { row: last, column: selection.active.column } }
+    this.o.onSelection(this.o.state.selection)
   }
 
   /** Tells the shell what the frame showed, when that changed. */
@@ -1263,13 +1514,13 @@ export class GridView {
     this.o.onViewport?.(this.viewport)
   }
 
-  /** `rows`, the ranges, the selection and the active cell here are as drawn; `tile` and the marks take the result's own
-   *  rows and columns (paintCell is where a cell's place becomes the result's). */
-  private paint(range: VisibleRange, headerRange: VisibleRange, rows: number, rebased: boolean, columnsMoved: boolean): void {
+  /** `rows` and `columns`, the ranges, the selection and the active cell here are as drawn; `tile` and the marks take the
+   *  result's own rows and columns (paintCell is where a cell's place becomes the result's). */
+  private paint(range: VisibleRange, headerRange: VisibleRange, rows: number, columns: number, rebased: boolean, columnsMoved: boolean): void {
     const selection = this.selection()
     const window: CellRange = { top: range.firstRow, bottom: range.lastRow, left: range.firstColumn, right: range.lastColumn }
-    const ranges = selection ? windowRanges(selection, rows, this.columns, window) : []
-    const active = selection && rows > 0 && this.columns > 0 ? { row: Math.min(selection.active.row, rows - 1), column: Math.min(selection.active.column, this.columns - 1) } : undefined
+    const ranges = selection ? windowRanges(selection, rows, columns, window) : []
+    const active = selection && rows > 0 && columns > 0 ? { row: Math.min(selection.active.row, rows - 1), column: Math.min(selection.active.column, columns - 1) } : undefined
     const tiles = new Map<number, RowWindow | null>()
     const shape = this.tiles
     const tile = (row: number, column: number): RowWindow | null => {
@@ -1304,7 +1555,7 @@ export class GridView {
       const cell = this.paintRow(this.pinSlot, active.row, { ...range, firstColumn: active.column, lastColumn: active.column - 1 }, ranges, active, tile, rebased, columnsMoved)
       if (cell) activeCell = cell
     } else this.hideRow(this.pinSlot)
-    this.paintHeaders(headerRange, ranges, columnsMoved)
+    this.paintHeaders(headerRange, ranges, columnsMoved, tile)
     const activeEl = activeCell?.el
     if (activeEl !== this.activeEl) {
       if (this.activeEl) { this.activeEl.removeAttribute('id'); this.activeEl.removeAttribute('aria-label') }
@@ -1323,7 +1574,7 @@ export class GridView {
       const bits = activeCell.bits
       // A cell whose rows are still being read says so: an empty name reads as "blank", and the value that follows is a
       // name change some screen readers do not read for the active cell.
-      const toned = active ? this.activeTone(active.row) : undefined
+      const toned = active && !this.rotated ? this.activeTone(active.row) : undefined
       const diff = bits & CHG ? ', changed' : bits & SOFT ? ', differs only by collation' : ''
       const label = bits & LOAD ? 'Loading' : displayText(activeCell.value) + (bits & ERR ? ', could not be read' : bits & NULL ? ', null value' : '') + (bits & TRUNC ? ', truncated' : '') + (bits & LINK ? ', link, press Enter to open' : '') + (bits & HIT ? ', search match' : '') + diff + (toned ? ', ' + toned : '')
       if (label !== activeCell.label) { activeCell.label = label; activeCell.el.setAttribute('aria-label', label) }
@@ -1366,8 +1617,14 @@ export class GridView {
     if (slot.row !== row || rebased || !slot.shown) {
       if (slot.row !== row) {
         slot.row = row
-        slot.number.nodeValue = String(row + 1)
-        if (slot.mark) slot.mark.text.nodeValue = String(row + 1)
+        // A transposed row is a column: its header and its mark show the name where a row has its number.
+        const name = this.rotated ? columnTitle(this.descriptor.columns[row].name) : String(row + 1)
+        slot.number.nodeValue = name
+        if (slot.mark) {
+          slot.mark.text.nodeValue = name
+          if (slot.mark.type) slot.mark.type.nodeValue = this.showTypes ? this.types[row] : ''
+          if (this.rotated && this.hovered === slot.mark.el) { this.hovered.removeAttribute('title'); this.hovered = undefined }
+        }
         slot.el.setAttribute('aria-rowindex', String(row + 2))
         for (const cell of slot.cells) cell.column = -1
         slot.pin.column = -1
@@ -1377,14 +1634,15 @@ export class GridView {
       if (!slot.shown) { slot.shown = true; slot.el.style.display = ''; if (slot.mark) slot.mark.el.style.display = '' }
     }
     // A row's tone text is parsed only when it differs from the one the slot last painted (scrolling repaints rows).
-    const toneText = this.toneOf(row, tile)
+    const toneText = this.rotated ? '' : this.toneOf(row, tile)
     if (toneText !== slot.toneText) {
       const space = toneText.indexOf(' ')
       slot.toneText = toneText
       slot.toneOf = toneIndex.get(space < 0 ? toneText : toneText.slice(0, space)) ?? 0
       slot.cellMarks = space < 0 ? undefined : cellMarksOf(toneText.slice(space + 1))
     }
-    const odd = row % 2 === 1, tone = slot.toneOf, highlight = colorAt(this.highlights, row)
+    // A transposed row is a column, which no highlight names: a highlighted row tints its drawn column (paintBands).
+    const odd = row % 2 === 1, tone = slot.toneOf, highlight = this.rotated ? 0 : colorAt(this.highlights, row)
     if (odd !== slot.odd || tone !== slot.tone || highlight !== slot.highlight) {
       slot.odd = odd
       slot.el.className = rowClasses[odd ? 1 : 0][tone][highlight]
@@ -1396,8 +1654,8 @@ export class GridView {
     if (slot.width !== this.width) { slot.width = this.width; slot.el.style.width = this.width + 'px' }
     let headerSel = false
     for (const item of ranges) if (row >= item.top && row <= item.bottom) { headerSel = true; break }
-    if (headerSel !== slot.headerSel || tone !== slot.tone || highlight !== slot.highlight) { slot.headerSel = headerSel; if (slot.mark) slot.mark.el.className = markClasses[headerSel ? 1 : 0][tone][highlight] }
-    if (slot.mark) this.paintSize(slot.mark, row)
+    if (headerSel !== slot.headerSel || tone !== slot.tone || highlight !== slot.highlight) { slot.headerSel = headerSel; if (slot.mark && !this.rotated) slot.mark.el.className = markClasses[headerSel ? 1 : 0][tone][highlight] }
+    if (slot.mark) { if (this.rotated) this.paintName(slot.mark, slot.header, row, headerSel); else this.paintSize(slot.mark, row) }
     slot.tone = tone
     slot.highlight = highlight
     let activeCell: CellSlot | undefined
@@ -1441,6 +1699,43 @@ export class GridView {
     mark.el.title = `Row ${formatCount(row + 1)}: ${size.estimated ? 'about ' : ''}${formatCount(size.bytes)} ${plural(size.bytes, 'byte')} (the sum of DATALENGTH over its columns)`
   }
 
+  /** A transposed row's name cell: its column's sort button (with aria-sort on `header`, the row's own header) and funnel,
+   *  and its look: selected, unnamed, whether it has a funnel, and a column-name search's mark (matched, active, left out). */
+  private paintName(mark: NonNullable<RowSlot['mark']>, header: HTMLElement, column: number, selected: boolean): void {
+    if (mark.sort) this.paintSort(header, mark.sort, column)
+    if (mark.funnel) this.paintFunnel(mark.funnel, column)
+    const columns = this.searchMarks?.columns, search = !columns ? 0 : !columns[column] ? 3 : this.searchMarks!.currentColumn === column ? 2 : 1
+    const look = 'rg-rn' + (selected ? ' sel' : '') + (this.descriptor.columns[column].name ? '' : ' unnamed') + (mark.funnel && this.canFilter(column) ? ' fb' : '') + (search ? ' ' + headerMarks[search] : '')
+    if (look !== mark.look) { mark.look = look; mark.el.className = look }
+  }
+  /** Transposed: a highlighted row is a drawn column, tinted by one pooled band over its cells in view (a frame costs one
+   *  element per highlighted column in view); its header takes the colour as a row's number does (paintHeaders). The bands
+   *  stay under the header row as the rows scroll, `height` tall: the rows in view. */
+  private paintBands(range: VisibleRange, height: number): void {
+    const marks = this.highlights, pool = this.bands
+    let used = 0
+    if (marks && this.bandsEl && height > 0) {
+      for (let column = range.firstColumn; column <= range.lastColumn; column++) {
+        const color = colorAt(marks, column)
+        if (!color) continue
+        let band = pool[used]
+        if (!band) {
+          const el = this.bandsEl.ownerDocument.createElement('div')
+          this.bandsEl.append(el)
+          pool.push(band = { el, color: 0, left: Number.NaN, width: -1, height: -1, shown: true })
+        }
+        used++
+        if (color !== band.color) { band.color = color; band.el.className = 'rg-band hl-' + highlightColors[color - 1] }
+        const left = this.rowHeader + this.layout.xOf(column), width = this.layout.width(column)
+        if (left !== band.left) { band.left = left; band.el.style.left = left + 'px' }
+        if (width !== band.width) { band.width = width; band.el.style.width = width + 'px' }
+        if (height !== band.height) { band.height = height; band.el.style.height = height + 'px' }
+        if (!band.shown) { band.shown = true; band.el.style.display = '' }
+      }
+    }
+    for (let index = used; index < pool.length; index++) if (pool[index].shown) { pool[index].shown = false; pool[index].el.style.display = 'none' }
+  }
+
   /** A row's tone text: muted when the revision lists it departed, else its tone column's ('' for none). A diff's tone may
    *  list the row's differing cells after its name. */
   private toneOf(row: number, tile: (row: number, column: number) => RowWindow | null): string {
@@ -1463,7 +1758,7 @@ export class GridView {
     if (!cell.shown) { cell.shown = true; cell.el.style.display = '' }
     let bits = 0, value = ''
     // The cell's place in the result: its text, link and marks are read there; the selection and the active cell are as drawn.
-    const sourceRow = row, sourceColumn = column
+    const sourceRow = this.rotated ? column : row, sourceColumn = this.rotated ? row : column
     const window = tile(sourceRow, sourceColumn)
     if (!window || sourceRow - window.first >= window.count) bits = LOAD
     else {
@@ -1534,7 +1829,7 @@ export class GridView {
     cell.el.removeAttribute('aria-colindex')
   }
 
-  private paintHeaders(range: VisibleRange, ranges: readonly CellRange[], columnsMoved: boolean): void {
+  private paintHeaders(range: VisibleRange, ranges: readonly CellRange[], columnsMoved: boolean, tile: (row: number, column: number) => RowWindow | null): void {
     const count = this.headerSlots.length
     if (count === 0) return
     const used = new Set<HeaderSlot>()
@@ -1544,11 +1839,15 @@ export class GridView {
       if (header.column !== column || columnsMoved) {
         if (header.column !== column) {
           header.column = column
-          const name = this.descriptor.columns[column].name
-          header.text.nodeValue = columnTitle(name)
-          header.type.nodeValue = this.showTypes ? this.types[column] : ''
+          // A transposed header stands for a row: its text is written below, each frame.
+          if (this.rotated) header.label = ''
+          else {
+            const name = this.descriptor.columns[column].name
+            header.text.nodeValue = columnTitle(name)
+            header.type.nodeValue = this.showTypes ? this.types[column] : ''
+            header.el.classList.toggle('unnamed', !name)
+          }
           header.el.setAttribute('aria-colindex', String(column + 2))
-          header.el.classList.toggle('unnamed', !name)
           if (header.funnel) header.el.classList.toggle('fb', this.canFilter(column))
           if (this.hovered === header.el) { this.hovered.removeAttribute('title'); this.hovered = undefined }
         }
@@ -1561,32 +1860,56 @@ export class GridView {
         }
       }
       if (!header.shown) { header.shown = true; header.el.style.display = '' }
+      if (this.rotated) {
+        // Each frame: the header column's value may have been read since, and the row's highlight or size may have changed.
+        const label = this.headerLabel(column, tile)
+        if (label !== header.label) { header.label = label; header.text.nodeValue = label }
+        const highlight = colorAt(this.highlights, column)
+        if (highlight !== header.highlight) {
+          if (header.highlight) header.el.classList.remove('hl', 'hl-' + highlightColors[header.highlight - 1])
+          if (highlight) { header.el.classList.add('hl', 'hl-' + highlightColors[highlight - 1]); header.el.setAttribute('aria-description', highlightLabel(highlight)) }
+          else header.el.removeAttribute('aria-description')
+          header.highlight = highlight
+        }
+        if (this.sizes || header.size) this.paintSize(header, column)
+      }
       let sel = false
       for (const item of ranges) if (column >= item.left && column <= item.right) { sel = true; break }
       if (sel !== header.sel) { header.sel = sel; header.el.classList.toggle('sel', sel) }
-      const columns = this.searchMarks?.columns, mark = !columns ? 0 : !columns[column] ? 3 : this.searchMarks!.currentColumn === column ? 2 : 1
+      // A transposed grid marks a matched name in its name cell (paintName).
+      const columns = this.rotated ? undefined : this.searchMarks?.columns, mark = !columns ? 0 : !columns[column] ? 3 : this.searchMarks!.currentColumn === column ? 2 : 1
       if (mark !== header.mark) {
         if (header.mark) header.el.classList.remove(headerMarks[header.mark])
         if (mark) header.el.classList.add(headerMarks[mark])
         header.mark = mark
       }
       if (header.sort) this.paintSort(header.el, header.sort, column)
-      if (header.funnel && header.funnel.on !== this.filtered.has(column)) {
-        const on = header.funnel.on = this.filtered.has(column)
-        header.funnel.el.classList.toggle('on', on)
-        header.funnel.glyph.className = codiconClass(on ? 'filter-filled' : 'filter')
-        header.funnel.el.title = on ? 'Filter column values (filtered)' : 'Filter column values'
-      }
+      if (header.funnel) this.paintFunnel(header.funnel, column)
     }
     for (const header of this.headerSlots) if (!used.has(header) && header.shown) { header.shown = false; header.column = -1; header.el.style.display = 'none'; header.el.removeAttribute('aria-colindex') }
+  }
+
+  /** A column's funnel, filled while the column has a filter. */
+  private paintFunnel(funnel: FunnelButton, column: number): void {
+    const on = this.filtered.has(column)
+    if (on === funnel.on) return
+    funnel.on = on
+    funnel.el.classList.toggle('on', on)
+    funnel.glyph.className = codiconClass(on ? 'filter-filled' : 'filter')
+    funnel.el.title = on ? 'Filter column values (filtered)' : 'Filter column values'
   }
 
   /** Whether a column's header has a funnel. */
   canFilter(column: number): boolean { return !!this.o.onFilter && column >= 0 && column < this.columns && (!this.filterable || this.filterable.has(column)) }
 
-  /** Where a column's funnel popover opens: under its header's right end, clamped to the grid (Alt+Down in a grid). */
+  /** Where a column's funnel popover opens: under its header's right end, clamped to the grid (Alt+Down in a grid);
+   *  transposed, under its name cell's right end, kept inside the rows in view. */
   filterAnchor(column: number): DOMRect {
     const box = this.scroller.getBoundingClientRect()
+    if (this.rotated) {
+      const first = box.top + g.headerHeight, top = first + column * g.rowHeight - this.offsets.virtualTop
+      return new DOMRect(box.left + this.rowHeader - g.funnelWidth, Math.min(Math.max(first, box.bottom - g.rowHeight), Math.max(first, top)), g.funnelWidth, g.rowHeight)
+    }
     const right = Math.min(box.right, Math.max(box.left + this.rowHeader, box.left + this.rowHeader + this.layout.xOf(column) + this.layout.width(column) - this.offsets.scrollLeft))
     return new DOMRect(right - 18, box.top, 18, g.headerHeight)
   }
@@ -1616,7 +1939,8 @@ export class GridView {
   /** The grid's own ARIA: counts change at most once a second while rows stream in. */
   private aria(state: string, rows: number): void {
     const open = state === 'open'
-    const label = gridLabel(this.o.label ?? `Result ${this.o.resultNumber} of ${this.resultCount}`, rows, this.columns, open)
+    const name = this.o.label ?? `Result ${this.o.resultNumber} of ${this.resultCount}`, drawnColumns = this.drawnColumns(rows)
+    const label = this.rotated ? transposedLabel(name, rows, this.columns, drawnColumns, open) : gridLabel(name, rows, this.columns, open)
     if (label === this.ariaLabel) return
     const now = performance.now()
     if (open && rows !== this.ariaRows && now - this.ariaAt < g.ariaRowCountMs) {
@@ -1626,7 +1950,9 @@ export class GridView {
     this.ariaAt = now
     this.ariaRows = rows
     this.ariaLabel = label
-    this.root.setAttribute('aria-rowcount', String(rows + 1))
+    // The counts describe what is drawn, which is what a screen reader walks.
+    this.root.setAttribute('aria-rowcount', String(this.drawnRows(rows) + 1))
+    if (this.rotated) this.root.setAttribute('aria-colcount', String(drawnColumns + 1))
     this.root.setAttribute('aria-busy', String(open))
     this.root.setAttribute('aria-label', label)
   }
@@ -1636,6 +1962,13 @@ export class GridView {
 export function gridLabel(name: string, rows: number, columns: number, open: boolean): string {
   return `${name}, ${formatCount(rows)} ${plural(rows, 'row')}, ${formatCount(columns)} ${plural(columns, 'column')}${open ? ', still loading' : ''}`
 }
+/** A transposed grid's label: what is drawn, and how many of the result's rows that is when the cap leaves some out. */
+export function transposedLabel(name: string, rows: number, columns: number, drawn: number, open: boolean): string {
+  const shown = drawn < rows ? `the first ${formatCount(drawn)} of ${formatCount(rows)} rows as columns` : `${formatCount(rows)} ${plural(rows, 'row')} as columns`
+  return `${name}, transposed, ${formatCount(columns)} ${plural(columns, 'column')} as rows, ${shown}${open ? ', still loading' : ''}`
+}
+/** A stand-in axis of one column, for the rows a transposed grid shows while it has no column to draw. */
+const oneColumn: ColumnAxis = { count: 1, total: 1, width: () => 1, xOf: column => column <= 0 ? 0 : 1, columnAt: () => 0, setWidth: () => 1, setMaxTotal: () => {} }
 const toneEntry = /^(~?)(\d{1,5})(?:-(\d{1,5}))?$/
 /** A diff row's differing cells from its tone text's tail ("4 ~6-8": column 4 changed, columns 6 to 8 equal only by
  *  collation). Runs are ranges (UnifiedDiff.Tone); anything else, such as the "…" a cut tone ends with, is skipped, and no

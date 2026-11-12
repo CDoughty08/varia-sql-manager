@@ -138,7 +138,9 @@ export const contrastPairs: readonly ContrastPair[] = [
   // A highlighted row's colour replaces the stripe; its row number is tinted with it over the header.
   ...(['Yellow', 'Green', 'Blue', 'Purple', 'Red'] as const).flatMap(color => [
     ...text(['resultsGrid.foreground', 'resultsGrid.nullForeground'], ['resultsGrid.background', `resultsGrid.highlight${color}Background`]),
-    ...text(['resultsGrid.highlightRowNumberForeground'], ['resultsGrid.headerBackground', `resultsGrid.highlight${color}Background`])
+    ...text(['resultsGrid.highlightRowNumberForeground'], ['resultsGrid.headerBackground', `resultsGrid.highlight${color}Background`]),
+    // Transposed, the highlighted row is a column: its tint lies over each cell, on the grid and on a striped row.
+    ...text(['resultsGrid.foreground', 'resultsGrid.nullForeground'], ['resultsGrid.background', `resultsGrid.highlight${color}ColumnBackground`], [...striped, `resultsGrid.highlight${color}ColumnBackground`])
   ]),
   // A diff's added and removed rows have their own background instead of the stripe, and a changed value a stronger one,
   // where even a NULL shows in the cells' own colour.

@@ -6,7 +6,7 @@ import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { within } from './fixtures/smoke.mjs'
-import { backendReady, documentTabs, gridCell, gridCellSelector, gridPart, jobNotice, outputPane, outputStatus, part, resultGrid, resultGridSelector, statusBar, toolbarButton } from './fixtures/ui.mjs'
+import { backendReady, documentTabs, gridCell, gridCellSelector, gridPart, jobNotice, matching, outputPane, outputStatus, part, resultGrid, resultGridSelector, statusBar, toolbarButton, transposedCell, transposedGridSelector, transposedName } from './fixtures/ui.mjs'
 
 // End-to-end results grid benchmarks (npm run bench:grid): the built app in test mode at 1600 × 1000 (or the screen, if
 // smaller), its grids fed by the fake backend's synthetic sets (tests/fixtures/backend.mjs, `-- varia-fake:` scripts).
@@ -94,7 +94,8 @@ async function launch(env) {
       for (const row of root.querySelectorAll(gridPart.row)) {
         if (row.style.display === 'none' || !inside(row.getBoundingClientRect())) continue
         rows++
-        firstRow = Math.min(firstRow, Number(row.querySelector(gridPart.rowHeader).textContent))
+        // The row's place, from 1: what a table's row header reads, and a transposed grid's (a column's name) does not.
+        firstRow = Math.min(firstRow, Number(row.getAttribute('aria-rowindex')) - 1)
         for (const item of row.querySelectorAll(gridPart.loadingCell)) if (item.style.display !== 'none' && inside(item.getBoundingClientRect())) loading++
       }
       for (const header of root.querySelectorAll(gridPart.columnHeader)) {
@@ -301,17 +302,17 @@ try {
       const label = attempt === 1 ? name : `${name} (again)`
       await segment(label)
       await resetStats()
-      const tops = fractions(count, 0.05), lefts = fractions(count, 0.05), tasks = []
+      const tops = fractions(count, 0.05), lefts = fractions(count, 0.05), tasks = [], paints = []
       for (let index = 0; index < count; index++) {
         const before = await taskSeconds()
-        await jump(tops[index], lefts[index])
+        paints.push(await jump(tops[index], lefts[index]))
         tasks.push((await taskSeconds() - before) * 1000)
       }
       const long = await page.evaluate(value => {
         const start = window.__benchSegments.findLast(item => item.name === value).at
         return window.__benchLongTasks.filter(task => task.at >= start && task.ms > 50).map(task => task.ms)
       }, label)
-      if (long.length === 0 || attempt === 2) return { stats: await stats(), tasks, long, attempt }
+      if (long.length === 0 || attempt === 2) return { stats: await stats(), tasks, paints, long, attempt }
     }
   }
   /**
@@ -396,6 +397,116 @@ try {
   record('grid.wide.wheelLongTasks', wheelLongTasks.length, 'tasks', `over 50 ms in those four wheel segments: ${wheelLongTasks.length ? wheelLongTasks.join(', ') + ' ms' : 'none'}`)
   record('grid.jump.longTasks', jumpLongTasks.length, 'tasks', `over 50 ms in the 300-column and bit-column jump segments (a segment with one runs once more): ${jumpLongTasks.length ? jumpLongTasks.join(', ') + ' ms' : 'none'}; attempts ${wide.attempt} and ${narrow.attempt}`)
 
+  /**
+   * The transposed orientation (GridView's `transposed`, turned on by test mode's `__variaGrid.setOrientation`): a grid
+   * draws its result's columns as rows and its first 4,095 rows as columns, reading tiles of 32 rows by 128 columns and
+   * storing nothing. Every segment's name starts with "transposed", and its long tasks are its own (grid.transposed.*),
+   * so the entries above and grid.longTasks stay comparable with runs before the orientation existed. A page store that
+   * costs more to read (compressed pages, say) shows here first: a jump across T1 reads up to four tiles of 4,096 long
+   * values, each from 8 pages of 16,384 cells.
+   */
+  const transposedLong = []
+  const longIn = label => page.evaluate(value => {
+    const start = window.__benchSegments.findLast(item => item.name === value).at
+    return window.__benchLongTasks.filter(task => task.at >= start && task.ms > 50).map(task => task.ms)
+  }, label)
+  const orient = transposed => page.evaluate(value => window.__variaGrid.setOrientation(value), transposed)
+  const painted = () => expect.poll(() => page.evaluate(() => { const now = window.__benchView(); return now.rows > 0 && now.loading === 0 }), { timeout: 60000 }).toBe(true)
+  /** 3 s of scrolling grid 0 by `dx` and `dy` px every animation frame: the frame intervals, and where it got to. */
+  const scrollBy = (dx, dy) => page.evaluate(async ({ dx, dy, scrollerPart }) => {
+    const frame = () => new Promise(done => requestAnimationFrame(done))
+    const scroller = document.querySelector(scrollerPart)
+    scroller.scrollTop = 0
+    scroller.scrollLeft = 0
+    for (let index = 0; index < 5; index++) await frame()
+    const intervals = [], started = performance.now()
+    let last = started
+    while (performance.now() - started < 3000) {
+      scroller.scrollLeft += dx
+      scroller.scrollTop += dy
+      await frame()
+      const now = performance.now()
+      intervals.push(now - last)
+      last = now
+    }
+    return { intervals, top: scroller.scrollTop, left: scroller.scrollLeft }
+  }, { dx, dy, scrollerPart: `${resultGridSelector()} ${gridPart.scroller}` })
+
+  // The widest result there is, 4,096 columns of long text, over 5,000 rows: 4,096 drawn rows by 4,095 drawn columns.
+  await segment('transposed: 4,096 columns')
+  await run('-- varia-fake: sets=T1*5000', 120000)
+  await expect(cell(0, 0)).toHaveText(shapes.T1.row(0)[0])
+  await cell(0, 0).click()
+  await orient(true)
+  await expect(matching(grid(), transposedGridSelector)).toHaveCount(1)
+  await expect(grid()).toHaveAttribute('aria-label', 'Result 1 of 1, transposed, 4,096 columns as rows, the first 4,095 of 5,000 rows as columns')
+  // Cells are named by the result's row and column whatever the orientation: each shows the value the table showed.
+  for (const [row, column] of [[0, 0], [3, 2], [1, 7]]) await expect(transposedCell(grid(), row, column)).toHaveText(shapes.T1.row(row)[column])
+  await expect(transposedName(grid(), 2)).toHaveText(shapes.T1.columns[2].name)
+  await expect(grid().locator(gridPart.nameCell).filter({ visible: true }).first()).toContainText(shapes.T1.columns[0].name)
+  await expect(grid().getByRole('columnheader', { name: 'Row 1', exact: true })).toBeVisible()
+  // The selection is the table's own: the cell clicked there is still the active one.
+  expect(await activeText()).toBe(shapes.T1.row(0)[0])
+  await painted()
+  const turned = await jumpSegment('transposed: jumps', 40)
+  transposedLong.push(...turned.long)
+  record('grid.transposed.jumpFrameP95Ms', percentile(turned.stats.frames, 95), 'ms', `${turned.stats.frames.length} frames over 40 jumps, max ${Math.max(...turned.stats.frames).toFixed(1)} ms; attempt ${turned.attempt}`)
+  record('grid.transposed.jumpTaskP95Ms', percentile(turned.tasks, 95), 'ms', `main-thread task time per jump over 40 jumps, median ${percentile(turned.tasks, 50).toFixed(1)} ms, max ${Math.max(...turned.tasks).toFixed(1)} ms`)
+  record('grid.transposed.jumpPaintP95Ms', percentile(turned.paints, 95), 'ms', `jump → painted over 40 jumps, median ${percentile(turned.paints, 50).toFixed(0)} ms, max ${Math.max(...turned.paints).toFixed(0)} ms`)
+  record('grid.transposed.elements', turned.stats.nodes, 'elements', `1 grid of 4,096 drawn rows by 4,095 drawn columns, ${view.width} × ${view.height} window`)
+  const scrolls = {}
+  for (const [name, dx, dy] of [['horizontal', 400, 0], ['vertical', 0, 400]]) {
+    const label = `transposed: ${name} scroll`
+    await jump(0, 0).catch(() => {})
+    await segment(label)
+    await resetStats()
+    const scrolled = await scrollBy(dx, dy)
+    const frames = (await stats()).frames
+    if (!(Math.max(scrolled.top, scrolled.left) > 10_000)) throw new Error(`${label}: the grid scrolled to ${scrolled.left}, ${scrolled.top} only.`)
+    transposedLong.push(...await longIn(label))
+    scrolls[name] = { frames, intervals: scrolled.intervals }
+  }
+  const scrollDetail = name => `${scrolls[name].frames.length} frames in 3 s at 400 px a frame, max ${Math.max(...scrolls[name].frames).toFixed(1)} ms; animation-frame interval p95 ${percentile(scrolls[name].intervals, 95).toFixed(1)} ms, longest ${Math.max(...scrolls[name].intervals).toFixed(1)} ms`
+  record('grid.transposed.horizontalFrameP95Ms', percentile(scrolls.horizontal.frames, 95), 'ms', scrollDetail('horizontal'))
+  record('grid.transposed.verticalFrameP95Ms', percentile(scrolls.vertical.frames, 95), 'ms', scrollDetail('vertical'))
+  record('grid.transposed.scrollIntervalP95Ms', Math.max(percentile(scrolls.horizontal.intervals, 95), percentile(scrolls.vertical.intervals, 95)), 'ms', `the worse of the two: across ${percentile(scrolls.horizontal.intervals, 95).toFixed(1)} ms, down ${percentile(scrolls.vertical.intervals, 95).toFixed(1)} ms`)
+  await jump(0, 0).catch(() => {})
+
+  // The most cells in view: 300 bit columns, whose drawn columns are the narrowest there are.
+  await segment('transposed: narrow columns')
+  await run('-- varia-fake: sets=X2*5000')
+  await expect(cell(0, 0)).toHaveText(shapes.X2.row(0)[0])
+  await cell(0, 0).click()
+  await orient(true)
+  await expect(matching(grid(), transposedGridSelector)).toHaveCount(1)
+  await expect(transposedCell(grid(), 2, 1)).toHaveText(shapes.X2.row(2)[1])
+  await painted()
+  const turnedNarrow = await jumpSegment('transposed: narrow jumps', 40)
+  transposedLong.push(...turnedNarrow.long)
+  record('grid.transposed.narrow.jumpTaskP95Ms', percentile(turnedNarrow.tasks, 95), 'ms', `main-thread task time per jump over 40 jumps, median ${percentile(turnedNarrow.tasks, 50).toFixed(1)} ms, max ${Math.max(...turnedNarrow.tasks).toFixed(1)} ms; frame() p95 ${percentile(turnedNarrow.stats.frames, 95).toFixed(1)} ms; attempt ${turnedNarrow.attempt}`)
+  record('grid.transposed.narrow.elements', turnedNarrow.stats.nodes, 'elements', `1 grid of 300 drawn rows by 4,095 drawn columns, ${view.width} × ${view.height} window`)
+  await jump(0, 0).catch(() => {})
+
+  // Rows streaming into a transposed grid: 4,095 rows of 300 columns at 1,000 a second, in pages of 64, so it gains 64
+  // drawn columns at a time without being built again.
+  await segment('transposed: streaming')
+  await textbox().focus()
+  await page.keyboard.press('Control+A')
+  await page.keyboard.insertText('-- varia-fake: sets=X1*4095@1000')
+  await page.evaluate(() => { for (const element of document.querySelectorAll('[data-result-grid]')) element.dataset.stale = '' })
+  await page.keyboard.press('F5')
+  // The orientation is the view's own state, so the new run's grid is turned once it is there.
+  await expect(page.locator(`${resultGridSelector()}:not([data-stale])`)).toHaveCount(1)
+  await orient(true)
+  await expect(matching(grid(), transposedGridSelector)).toHaveCount(1)
+  const turnedStart = { task: await taskSeconds(), wall: performance.now() }
+  await expect(status()).toContainText(/^Completed · /, { timeout: 60000 })
+  const turnedSeconds = (performance.now() - turnedStart.wall) / 1000, turnedBusy = await taskSeconds() - turnedStart.task
+  await expect(grid()).toHaveAttribute('aria-label', 'Result 1 of 1, transposed, 300 columns as rows, 4,095 rows as columns')
+  transposedLong.push(...await longIn('transposed: streaming'))
+  record('grid.transposed.stream.busyPercent', turnedBusy / turnedSeconds * 100, '%', `main-thread task time ${turnedBusy.toFixed(2)} s of ${turnedSeconds.toFixed(1)} s while rows of 300 columns streamed in at 1,000 a second, to 4,095`)
+  record('grid.transposed.longTaskMaxMs', Math.max(0, ...transposedLong), 'ms', `the longest of ${transposedLong.length} long tasks over 50 ms in the transposed segments: ${transposedLong.length ? transposedLong.join(', ') + ' ms' : 'none'}; jump attempts ${turned.attempt} and ${turnedNarrow.attempt}`)
+
   await segment('stacked sets')
   await run('-- varia-fake: sets=M1*1000')
   const lastGrid = page.getByRole('grid', { name: 'Result 1000 of 1000, 1 row, 1 column', exact: true })
@@ -418,8 +529,11 @@ try {
 
   // Each long task, by the segment it started in. results-smoke holds every segment to 50 ms (with one retry); here the
   // count is reported and only the longest has a floor, which a freeze would break.
-  const { tasks, segments } = await page.evaluate(() => ({ tasks: window.__benchLongTasks, segments: window.__benchSegments }))
-  const by = tasks.map(task => `${segments.findLast(item => item.at <= task.at)?.name ?? 'start'} ${task.ms} ms`)
+  // The transposed segments report their own (grid.transposed.longTaskMaxMs), so these two stay comparable with earlier runs.
+  const all = await page.evaluate(() => ({ tasks: window.__benchLongTasks, segments: window.__benchSegments }))
+  const segments = all.segments, segmentOf = task => segments.findLast(item => item.at <= task.at)?.name ?? 'start'
+  const tasks = all.tasks.filter(task => !segmentOf(task).startsWith('transposed'))
+  const by = tasks.map(task => `${segmentOf(task)} ${task.ms} ms`)
   record('grid.longTasks', tasks.filter(task => task.ms > 50).length, 'tasks', `from the first paint to the 2 MB value: ${by.length ? by.join(', ') : 'none'}`)
   record('grid.longTaskMaxMs', Math.max(0, ...tasks.map(task => task.ms)), 'ms', `the longest of ${tasks.length} long tasks`)
   await close()

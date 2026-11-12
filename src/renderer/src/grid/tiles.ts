@@ -10,6 +10,8 @@ const columnTiles = 4096 / g.tileColumns
  *  `tileColumns` wide: a wider tile only has fewer column tiles. */
 export interface TileShape { readonly rows: number; readonly columns: number }
 export const tableTiles: TileShape = { rows: g.tileRows, columns: g.tileColumns }
+/** A transposed grid's tiles: its drawn columns are the result's rows, so a view spans few rows and many columns. */
+export const transposedTiles: TileShape = { rows: g.tileColumns, columns: g.tileRows }
 export const tileKey = (rowTile: number, columnTile: number): number => rowTile * columnTiles + columnTile
 export const tileRowOf = (key: number): number => Math.floor(key / columnTiles)
 export const tileColumnOf = (key: number): number => key % columnTiles

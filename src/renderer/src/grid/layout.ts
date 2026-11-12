@@ -99,21 +99,26 @@ export function visibleRange(viewport: Viewport, rows: number, layout: ColumnAxi
   }
 }
 
-/** A press on a column header's right border: dragging it resizes that column. */
+/** A press on a column header's right border: dragging it resizes that column; `frozenColumn` for the corner's own border
+ *  (a transposed grid's name column). */
 export interface ResizeHit { readonly kind: 'resize'; readonly column: number }
+export const frozenColumn = -1
 export type LayoutHit = GridHit | ResizeHit
 
 /**
  * What lies under (x, y), relative to the scroller's client box: the corner, a column header (or the resize zone at
  * its right border, which wins), a row header, or a cell; undefined past the data. With `clamp` a point outside the
- * data lands on the nearest cell, row, or column, as a drag that leaves the body needs.
+ * data lands on the nearest cell, row, or column, as a drag that leaves the body needs. With `frozenResize` the corner's
+ * right border is a resize zone too, for `frozenColumn`.
  */
-export function hitTest(x: number, y: number, o: { readonly viewport: Viewport; readonly rows: number; readonly layout: ColumnAxis; readonly rowHeader: number; readonly clamp?: boolean }): LayoutHit | undefined {
+export function hitTest(x: number, y: number, o: { readonly viewport: Viewport; readonly rows: number; readonly layout: ColumnAxis; readonly rowHeader: number; readonly clamp?: boolean; readonly frozenResize?: boolean }): LayoutHit | undefined {
   const { viewport, rows, layout, rowHeader } = o
   const inHeader = y < g.headerHeight && !o.clamp, inRowHeader = x < rowHeader && !o.clamp
   const dataX = x - rowHeader + Math.max(0, viewport.left), dataY = y - g.headerHeight + Math.max(0, viewport.top)
   let column = layout.columnAt(dataX)
   if (inHeader) {
+    // The frozen column's border is over whatever has scrolled under it, so it wins.
+    if (o.frozenResize && x >= rowHeader - g.resizeZoneLeft && x < rowHeader + g.resizeZoneRight) return { kind: 'resize', column: frozenColumn }
     if (inRowHeader) return { kind: 'corner' }
     if (layout.count === 0) return undefined
     const edge = (c: number) => layout.xOf(c + 1)

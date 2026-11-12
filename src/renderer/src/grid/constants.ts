@@ -11,6 +11,13 @@ export const gridLimits = {
   cellChrome: 13,
   rowHeaderMinWidth: 40, rowHeaderMinRows: 9999,
   columnMinWidth: 32, columnMaxWidth: 3000, initialMinWidth: 40, initialMaxWidth: 400,
+  /** A transposed grid: the most its drawn columns share before the user sizes one (a drawn column holds a value of every
+   *  column, and the widest would size them all), and its frozen name column, which fits its names within these until dragged. */
+  transposedMaxWidth: 240, nameColumnMinWidth: 64, nameColumnMaxWidth: 320,
+  /** The most of a header column's value a transposed grid's header shows, as a pivot cuts a column group's name. */
+  headerValueChars: 128,
+  /** The room a name cell keeps for its sort button and for its funnel (.rg-cs, .rg-cf). */
+  sortButtonWidth: 20, funnelWidth: 18,
   overscanRows: 8, overscanColumns: 2,
   /** Past this many pooled cells (a 4K view of narrow columns) the overscan shrinks to the reduced one. */
   poolCells: 4000, reducedOverscanRows: 2, reducedOverscanColumns: 1,

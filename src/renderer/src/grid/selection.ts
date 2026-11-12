@@ -257,3 +257,14 @@ export function describeSelection(selection: GridSelection, rows: number, column
   if (ranges.length <= 1) return describeRange(ranges[0] ?? emptyRange)
   return `${ranges.length} ranges selected, ${formatCount(unionCells(ranges))} cells`
 }
+
+const turned = (cell: Cell): Cell => ({ row: cell.column, column: cell.row })
+const turnedKind: Readonly<Record<BlockKind, BlockKind>> = { cells: 'cells', rows: 'columns', columns: 'rows', all: 'all' }
+/**
+ * A selection as a transposed grid draws it, and back (it is its own inverse): rows and columns change places, so whole
+ * rows become whole columns. The grid's state keeps the result's rows and columns; a transposed GridView turns the
+ * selection as it reads and writes it, and selects, drags and moves over what is drawn with the functions above unchanged.
+ */
+export function rotateSelection(selection: GridSelection): GridSelection {
+  return { entry: selection.entry, active: turned(selection.active), blocks: selection.blocks.map(block => ({ kind: turnedKind[block.kind], anchor: turned(block.anchor), focus: turned(block.focus) })) }
+}
