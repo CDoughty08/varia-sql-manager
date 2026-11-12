@@ -33,6 +33,8 @@ export interface MonitorState {
   /** The server it was opened on: a reconnect moves it only to a connection to that server. */
   readonly server: string
   readonly intervalSeconds: number
+  /** Query statistics' own interval (activityMonitor.queriesIntervalSeconds): the plan cache costs more to read. */
+  readonly queriesIntervalSeconds: number
   readonly windowMinutes: ChartWindowMinutes
   /** Pause: no SQL until Resume (SSMS's meaning); the charts keep their history and show a gap. */
   readonly paused: boolean
@@ -109,6 +111,7 @@ export interface ActivityMonitorServiceOptions {
 /** The settings' choices for a new monitor, each kept to what the catalogue offers. */
 export function initialMonitor(id: string, server: string, values: SettingsValues): MonitorState {
   const interval = Number(values['activityMonitor.refreshIntervalSeconds']), window = Number(values['activityMonitor.chartWindowMinutes'])
+  const queries = Number(values['activityMonitor.queriesIntervalSeconds']), bounds = activityIntervalDefaults.queriesIntervalSeconds
   const pane = (value: string): ActivityPane | undefined => (activityPanes as readonly string[]).includes(value) ? value as ActivityPane : undefined
   const primary = pane(values['activityMonitor.primaryPane']) ?? defaultPanes.primary
   const second = values['activityMonitor.secondaryPane']
@@ -117,6 +120,7 @@ export function initialMonitor(id: string, server: string, values: SettingsValue
   return {
     id, server, primary, secondary: secondary === primary ? activityPanes.find(item => item !== primary)! : secondary, split: second !== 'none' && secondary !== primary,
     intervalSeconds: (activityIntervalsSeconds as readonly number[]).includes(interval) ? interval : activityIntervalDefaults.refreshIntervalSeconds,
+    queriesIntervalSeconds: Number.isInteger(queries) && queries >= bounds.min && queries <= bounds.max ? queries : bounds.default,
     windowMinutes: (chartWindowsMinutes as readonly number[]).includes(window) ? window as ChartWindowMinutes : defaultChartWindowMinutes,
     processes: defaultProcessesFilter, paused: false, splitRatio: splitLimits.default, expanded: tileSpecs.flatMap((tile, index) => tile.defaultExpanded ? [index] : []), generation: 0
   }
@@ -127,7 +131,7 @@ export const shownPanes = (state: Pick<MonitorState, 'primary' | 'secondary' | '
 /** Every live probe of the source, with the monitor's interval and paused unless a shown pane reads it. */
 export function probeSettings(state: MonitorState): { probe: LiveProbeId; intervalMs: number; paused: boolean }[] {
   const running = new Set<ActivityProbe>(paneProbes(shownPanes(state)))
-  return activityLiveProbes.map(probe => ({ probe, intervalMs: probeIntervalMs(probe, state.intervalSeconds), paused: !running.has(probe) }))
+  return activityLiveProbes.map(probe => ({ probe, intervalMs: probeIntervalMs(probe, state.intervalSeconds, state.queriesIntervalSeconds), paused: !running.has(probe) }))
 }
 
 export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapshot> implements CustomDocumentProvider, Disposable {

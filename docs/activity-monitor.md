@@ -61,7 +61,7 @@ probe stays paused: no SQL runs for a pane nobody can read.
 | Blocking | A live grid of the blocking chains, lead blockers first (below). |
 | Resource Waits | Resource Waits is not shown yet; it arrives in a later version of Varia. |
 | Data File I/O | Data File I/O is not shown yet; it arrives in a later version of Varia. |
-| Recent Expensive Queries | Recent Expensive Queries is not shown yet; it arrives in a later version of Varia. |
+| Recent Expensive Queries | A live grid of the statements that ran since the previous sample, grouped by query hash, with rank chips (below). |
 | Active Expensive Queries | A live grid of the running requests, the most CPU first (below). |
 
 Blocking and Active Expensive Queries show the sessions probe's other two tables, so showing them runs no extra SQL.
@@ -465,7 +465,7 @@ Resource Waits has Hide benign waits (on by default), which leaves out benign wa
 Data File I/O tones a row warning when its read or write latency reaches 20 ms and error from 50 ms; the files filter carries the
 `activityMonitor.fileLatency*` settings in their place (1 to 10,000 ms). An error threshold below the warning one acts as the warning one.
 
-Recent Expensive Queries ranks by CPU, Duration, Logical Reads, Physical Reads, Writes, Executions, re-sorted from the last sample without new SQL.
+Recent Expensive Queries ranks by CPU, Duration, Logical Reads, Physical Reads, Writes, Executions, each sorting the next sample in memory (no extra SQL); until it arrives, the status line says the rows are still in the previous order.
 
 ## Blocking
 
