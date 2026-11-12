@@ -3,10 +3,9 @@ import { nextFrame } from '../core/frame'
 import { observeResize } from '../core/windows'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
-import { entryName, setKey, type EntryKey, type GridSort, type ResultSetEntry, type TabResults } from '../results/ResultsService'
+import { entryName, setKey, transposedView, type EntryKey, type GridSort, type ResultSetEntry, type TabResults } from '../results/ResultsService'
 import { formatCount, plural, rowsFact } from '../results/status'
 import { gridLimits as g } from './constants'
-import { toneColumnOf } from './GridView'
 import ResultGrid from './ResultGrid'
 import { contentHeight, dragSplitter, minGridHeight, mountedRange, revealScrollTop, setFloors, splitterMoves, stackLayout, stackMinimum } from './stack'
 
@@ -145,7 +144,7 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
   // The sets whose grids said their columns fit, so their content height leaves out the horizontal scroll bar.
   const [narrow, setNarrow] = useState<ReadonlySet<EntryKey>>(() => new Set())
   // The sets drawn transposed, which are sized by their columns: from each grid's saved state, then as grids say.
-  const [turned, setTurned] = useState<ReadonlySet<EntryKey>>(() => new Set(sets.filter(entry => view.grids.get(entry.key)?.orientation === 'transposed' && toneColumnOf(entry.descriptor) < 0).map(entry => entry.key)))
+  const [turned, setTurned] = useState<ReadonlySet<EntryKey>>(() => new Set(sets.filter(entry => !!transposedView(view.grids.get(entry.key), entry.descriptor)).map(entry => entry.key)))
   const minHeight = useMemo(() => minGridHeight(scrollbarSize()), [])
   const settled = tab.settled
   const content = useMemo(() => settledContent({ sets, settled }, narrow, turned), [sets, settled, narrow, turned])

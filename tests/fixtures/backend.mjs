@@ -77,7 +77,7 @@ import { dirname, isAbsolute, join } from 'node:path'
 import { FrameKind, FrameParser, encodeFrame } from '../../src/shared/ipc/wire/frames.ts'
 import { decodeControl, encodeControl } from '../../src/shared/ipc/wire/msgpack.ts'
 import { decodePage, encodePage } from '../../src/shared/ipc/wire/pages.ts'
-import { copyText, exportText } from './backend/text-writer.mjs'
+import { copyText, exportText, validTurn } from './backend/text-writer.mjs'
 import { parseDirective, shapes } from './backend/shapes.mjs'
 import { backendMethods } from '../../src/shared/ipc/methods.ts'
 import { gunzipSync } from 'node:zlib'
@@ -1017,25 +1017,26 @@ function readResults(id, credit, { resultId, firstRow, maxRows, viewId }) {
   streamBodies(id, credit, pages.map(page => page.body), () => ({ nextRow: next, rowsAvailable: available(result), complete: result.complete && next >= result.read, pages: pages.length, rows: pages.reduce((sum, page) => sum + page.rows, 0) }))
 }
 /** results.copy: the text_writer.mjs text in DATA chunks of 1 MiB within credit; TOO_LARGE before any DATA. */
-async function copyResults(id, credit, { resultId, parts, headers, eol, maxBytes, viewId }) {
+async function copyResults(id, credit, { resultId, parts, headers, eol, maxBytes, viewId, transposed, headerColumn }) {
   const result = sourceOf(id, resultId, viewId)
   if (!result) return
   let copied
-  try { copied = await copyText({ columns: result.columns, pageAt: decodedPageAt(result), available: available(result), parts, headers, crlf: eol === 'crlf' }) }
+  try { copied = await copyText({ columns: result.columns, pageAt: decodedPageAt(result), available: available(result), parts, headers, crlf: eol === 'crlf', transposed, headerColumn }) }
   catch { return fail(id, 'INVALID_PARAMS', 'The copy request is invalid.') }
   if (copied.bytes > maxBytes) return fail(id, 'TOO_LARGE', `The selection is too large to copy (${Math.ceil(copied.bytes / 1048576)} MB; the limit is ${Math.floor(maxBytes / 1048576)} MB). Use Save Results As instead.`)
   const chunks = []
   for (let at = 0; at < copied.text.length; at += 1024 * 1024) chunks.push(copied.text.subarray(at, at + 1024 * 1024))
-  write(FrameKind.EVENT, id, 0, { type: 'job.progress', rowsDone: copied.rows, rowsTotal: copied.rows, bytes: copied.bytes })
-  streamBodies(id, credit, chunks, () => ({ rows: copied.rows, bytes: copied.bytes, truncatedCells: copied.truncatedCells, partial: !(result.sealed ?? result.complete) }))
+  write(FrameKind.EVENT, id, 0, { type: 'job.progress', rowsDone: copied.lines, rowsTotal: copied.lines, bytes: copied.bytes })
+  streamBodies(id, credit, chunks, () => ({ rows: copied.rows, bytes: copied.bytes, truncatedCells: copied.truncatedCells, partial: !(result.sealed ?? result.complete), capped: copied.capped }))
 }
 /** results.export: a temporary file renamed over the target; hold/results.export pauses it after each page, and a
  *  CANCEL frame stops it (the temporary file is removed). */
-async function exportResults(id, { resultId, path, format, headers, nullText, temporaryId, viewId }) {
+async function exportResults(id, { resultId, path, format, headers, nullText, temporaryId, viewId, transposed, headerColumn }) {
   if (typeof path !== 'string' || !isAbsolute(path) || path.includes('\0') || !['csv', 'tsv', 'json'].includes(format) || !['empty', 'NULL'].includes(nullText)
     || typeof temporaryId !== 'string' || !/^[0-9a-f]{32}$/.test(temporaryId)) return fail(id, 'INVALID_PARAMS', 'The export request is invalid.')
   const result = sourceOf(id, resultId, viewId)
   if (!result) return
+  if (!validTurn(transposed, headerColumn, result.columns.length)) return fail(id, 'INVALID_PARAMS', 'The export request is invalid.')
   if (!(result.sealed ?? result.complete)) return fail(id, 'RESULT_OPEN', result.sealed === false ? 'Save the results after they are sorted again.' : 'Save the results after this result set finishes loading.')
   if (!await access(dirname(path)).then(() => true, () => false)) return fail(id, 'EXPORT_FAILED', 'NOT_FOUND')
   if (await stat(path).then(entry => entry.isDirectory(), () => false)) return fail(id, 'EXPORT_FAILED', 'IS_DIRECTORY')
@@ -1043,9 +1044,10 @@ async function exportResults(id, { resultId, path, format, headers, nullText, te
   const file = await open(temporary, 'wx')
   let last = Date.now()
   try {
-    const writer = await exportText({ columns: result.columns, pageAt: decodedPageAt(result), rows: result.read, format, headers, nullText }, async writer => {
+    const writer = await exportText({ columns: result.columns, pageAt: decodedPageAt(result), rows: result.read, format, headers, nullText, transposed, headerColumn }, async writer => {
       for (const chunk of writer.out.take()) await file.write(chunk)
-      if (Date.now() - last >= 250) { last = Date.now(); write(FrameKind.EVENT, id, 0, { type: 'job.progress', rowsDone: writer.rows, rowsTotal: result.read, bytes: writer.bytes }) }
+      // Transposed, progress counts lines (source columns) of their total.
+      if (Date.now() - last >= 250) { last = Date.now(); write(FrameKind.EVENT, id, 0, { type: 'job.progress', rowsDone: transposed ? writer.columnsWritten : writer.rows, rowsTotal: transposed ? result.columns.length : result.read, bytes: writer.bytes }) }
       while (!cancelled.has(id) && await controlled(join('hold', 'results.export'))) await sleep(25)
       if (cancelled.has(id)) throw new Error('cancelled')
     })
@@ -1054,7 +1056,7 @@ async function exportResults(id, { resultId, path, format, headers, nullText, te
     await file.sync()
     await file.close()
     await rename(temporary, path)
-    respond(id, { rows: writer.rows, bytes: writer.bytes, truncatedCells: writer.truncatedCells, partial: false })
+    respond(id, { rows: writer.rows, bytes: writer.bytes, truncatedCells: writer.truncatedCells, partial: false, capped: writer.capped })
   } catch {
     fail(id, cancelled.has(id) ? 'CANCELLED' : 'EXPORT_FAILED', cancelled.has(id) ? 'The operation was cancelled.' : 'IO')
   } finally {

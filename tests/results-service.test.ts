@@ -3,7 +3,8 @@ import type { ApiResult, ResolvedViewFilter, ResultColumn, ResultsJobProgress, R
 import type { ResultHandle, ResultView } from '../src/renderer/src/results/ResultClient'
 import type { DocumentService } from '../src/renderer/src/services/documents'
 import { EventBus } from '../src/renderer/src/core/events'
-import { filterLabel, filteredColumns, ResultsService, resultLimits, suggestedName } from '../src/renderer/src/results/ResultsService'
+import { filterLabel, filteredColumns, ResultsService, resultLimits, suggestedName, transposedView } from '../src/renderer/src/results/ResultsService'
+import { limits } from '../src/shared/ipc/wire/protocol'
 import { selectAll } from '../src/renderer/src/grid/selection'
 import { openEnd } from '../src/renderer/src/grid/constants'
 import { deferred } from './fixtures/documents'
@@ -17,8 +18,8 @@ function fixture(o: { sortText?: () => ViewSortMode; onSortTextChange?: (listene
   const progress = new Set<(value: ResultsJobProgress) => void>()
   let ids = 0
   const api = {
-    copyResults: vi.fn<VariaApi['copyResults']>(async () => ({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false } })),
-    saveResults: vi.fn<VariaApi['saveResults']>(async () => ({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, fileName: 'SQLQuery1-Result1.csv', format: 'csv' as const } })),
+    copyResults: vi.fn<VariaApi['copyResults']>(async () => ({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, capped: 0 } })),
+    saveResults: vi.fn<VariaApi['saveResults']>(async () => ({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, capped: 0, fileName: 'SQLQuery1-Result1.csv', format: 'csv' as const } })),
     cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(async () => ({ ok: true, value: { cancelled: true } })),
     onResultsJob: vi.fn<VariaApi['onResultsJob']>(listener => { progress.add(listener); return () => { progress.delete(listener) } })
   }
@@ -322,7 +323,7 @@ describe('results service', () => {
     for (const listener of progress) listener({ jobId: 'job-1', kind: 'copy', rowsDone: 1, rowsTotal: 2, bytes: 5 })
     flush()
     expect(tab().jobs[0]).toMatchObject({ rowsDone: 1, rowsTotal: 2 })
-    pending.resolve({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: true } })
+    pending.resolve({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: true, capped: 0 } })
     expect(await copying).toBeUndefined()
     flush()
     expect(tab().jobs).toEqual([])
@@ -333,7 +334,7 @@ describe('results service', () => {
     timers.advance(300)
     expect(tab().announcement).toBe('Copied 2 rows.')
     // Values stored cut are copied cut: the toolbar and the live region say how many.
-    api.copyResults.mockResolvedValueOnce({ ok: true, value: { rows: 3, bytes: 10, truncatedCells: 1, partial: false } })
+    api.copyResults.mockResolvedValueOnce({ ok: true, value: { rows: 3, bytes: 10, truncatedCells: 1, partial: false, capped: 0 } })
     await service.copy('t1', keyAt(service, 't1', 0), false)
     flush()
     expect(tab().jobNotice).toBe('Copied 3 rows. 1 value was truncated.')
@@ -403,7 +404,7 @@ describe('results service', () => {
     report(3, 5)
     flush()
     expect(tab().jobs[0]).toMatchObject({ visible: true, rowsDone: 3, rowsTotal: 5 })
-    pending.resolve({ ok: true, value: { rows: 5, bytes: 50, truncatedCells: 1, partial: false, fileName: 'out.csv', format: 'csv' } })
+    pending.resolve({ ok: true, value: { rows: 5, bytes: 50, truncatedCells: 1, partial: false, capped: 0, fileName: 'out.csv', format: 'csv' } })
     expect(await saving).toBeUndefined()
     flush()
     expect(tab()).toMatchObject({ jobs: [], jobNotice: 'Saved 5 rows to out.csv. 1 value was truncated.' })
@@ -468,7 +469,7 @@ describe('results service', () => {
     expect(api.cancelResultsJob).toHaveBeenCalledTimes(2)
     service.release('t1')
     expect(api.cancelResultsJob).toHaveBeenCalledTimes(2)
-    pending.resolve({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, fileName: 'out.csv', format: 'csv' } })
+    pending.resolve({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, capped: 0, fileName: 'out.csv', format: 'csv' } })
     expect(await saving).toBeUndefined()
     // Disposal (the window reloading) cancels a save still running.
     service.begin('t1', 'q3')
@@ -795,7 +796,7 @@ describe('results service entry keys', () => {
     expect(service.sortOf('t1', keys[2])).toBe(tab().sorts.get(keys[2]))
     expect(service.sortOf('t1', keys[3])).toBeUndefined()
     service.viewShown('t1', keys[2], sorted)
-    copying.resolve({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false } })
+    copying.resolve({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, capped: 0 } })
     await copied
     // Names follow the entry: Result 3 and the pivot save under the numbers they had.
     await service.saveAs('t1', keys[2], 'SQLQuery1')
@@ -1098,6 +1099,81 @@ describe('results service sorting', () => {
     service.clearSort('t1', keyAt(service, 't1', 0))
     await service.copy('t1', keyAt(service, 't1', 0), false)
     expect(api.copyResults.mock.lastCall![0]).not.toHaveProperty('viewId')
+  })
+  it('copies and saves a grid drawn transposed as drawn: its orientation, header column and the selection it shows', async () => {
+    const { service, handle, api, tab, flush, timers } = sorted()
+    const key = keyAt(service, 't1', 0), state = service.gridState('t1', key), cap = limits.transpose.maxRows
+    const cells = (anchor: [number, number], focus: [number, number]) => ({ kind: 'cells' as const, anchor: { row: anchor[0], column: anchor[1] }, focus: { row: focus[0], column: focus[1] } })
+    // A table's requests say nothing of orientation, whatever header column its state keeps.
+    state.headerColumn = 1
+    service.setSelection('t1', key, { entry: key, active: { row: 1, column: 0 }, blocks: [cells([1, 0], [2, 1])] })
+    await service.copy('t1', key, true)
+    await service.saveAs('t1', key, 'SQLQuery1')
+    for (const request of [api.copyResults.mock.lastCall![0], api.saveResults.mock.lastCall![0]]) { expect(request).not.toHaveProperty('transposed'); expect(request).not.toHaveProperty('headerColumn') }
+    // Transposed: the parts stay in the result's rows and columns (the backend turns them), with the header column.
+    state.orientation = 'transposed'
+    await service.copy('t1', key, true)
+    expect(api.copyResults).toHaveBeenLastCalledWith({ jobId: expect.any(String), generation: 1, resultId: 1, headers: true, parts: [{ rows: [[1, 2]], columns: [[0, 1]] }], transposed: true, headerColumn: 1 })
+    await service.saveAs('t1', key, 'SQLQuery1')
+    expect(api.saveResults).toHaveBeenLastCalledWith({ jobId: expect.any(String), generation: 1, resultId: 1, suggestedName: 'SQLQuery1-Result1', transposed: true, headerColumn: 1 })
+    // Through the grid's sorted view, and without a header column once it is not one of the result's.
+    handle.sort.mockResolvedValueOnce(fakeView(handle, 7, [{ column: 0, descending: true, mode: 'value' }]))
+    service.sortBy('t1', key, 0, 'descending')
+    await settle()
+    state.headerColumn = 2
+    await service.copy('t1', key, false)
+    expect(api.copyResults.mock.lastCall![0]).toEqual({ jobId: expect.any(String), generation: 1, resultId: 1, headers: false, parts: [{ rows: [[1, 2]], columns: [[0, 1]] }], viewId: 7, transposed: true })
+    await service.saveAs('t1', key, 'SQLQuery1')
+    expect(api.saveResults.mock.lastCall![0]).toMatchObject({ viewId: 7, transposed: true })
+    expect(api.saveResults.mock.lastCall![0]).not.toHaveProperty('headerColumn')
+    delete state.headerColumn
+    // Only what the transposed grid shows selected is copied: a block wholly past the rows it draws is left out, and with
+    // none left the active cell is the selection, as the grid draws it.
+    service.setSelection('t1', key, { entry: key, active: { row: 3, column: 1 }, blocks: [cells([cap, 0], [cap + 5, 1]), cells([cap - 1, 0], [cap + 5, 0])] })
+    await service.copy('t1', key, false)
+    expect(api.copyResults.mock.lastCall![0].parts).toEqual([{ rows: [[cap - 1, cap + 5]], columns: [[0, 0]] }])
+    service.setSelection('t1', key, { entry: key, active: { row: 3, column: 1 }, blocks: [cells([cap, 0], [cap + 5, 1])] })
+    await service.copy('t1', key, false)
+    expect(api.copyResults.mock.lastCall![0].parts).toEqual([{ rows: [[3, 3]], columns: [[1, 1]] }])
+    // An active cell past the rows drawn too (a state the grid has not drawn yet) leaves nothing to copy: no request is
+    // made, so the clipboard keeps its text.
+    const before = api.copyResults.mock.calls.length
+    service.setSelection('t1', key, { entry: key, active: { row: cap + 2, column: 1 }, blocks: [cells([cap, 0], [cap + 5, 1])] })
+    expect(await service.copy('t1', key, true)).toBeUndefined()
+    expect(api.copyResults.mock.calls).toHaveLength(before)
+    // Whole columns (a drawn row) and Select All run to the end of the result: the backend writes the rows drawn and
+    // counts the rest, which the toolbar then says.
+    service.setSelection('t1', key, selectAll(key))
+    api.copyResults.mockResolvedValueOnce({ ok: true, value: { rows: cap, bytes: 10, truncatedCells: 0, partial: false, capped: 905 } })
+    await service.copy('t1', key, false)
+    expect(api.copyResults.mock.lastCall![0].parts).toEqual([{ rows: [[0, openEnd]], columns: [[0, 1]] }])
+    flush()
+    expect(tab().jobNotice).toBe('Copied 4,095 rows as columns. 905 rows past the first 4,095 were left out; filter the results to copy or save others.')
+    api.copyResults.mockResolvedValueOnce({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, capped: 0 } })
+    await service.copy('t1', key, false)
+    timers.advance(300)
+    expect(tab().announcement).toBe('Copied 2 rows as columns.')
+    api.saveResults.mockResolvedValueOnce({ ok: true, value: { rows: cap, bytes: 10, truncatedCells: 0, partial: false, capped: 1, fileName: 'out.csv', format: 'csv' } })
+    await service.saveAs('t1', key, 'SQLQuery1')
+    flush()
+    expect(tab().jobNotice).toBe('Saved 4,095 rows as columns to out.csv. 1 row past the first 4,095 was left out; filter the results to copy or save others.')
+    // The job's strip counts the result's columns (its lines) while a transposed job runs.
+    const pending = deferred<ApiResult<ResultsJobResult>>()
+    api.copyResults.mockReturnValueOnce(pending.promise)
+    const copying = service.copy('t1', key, false)
+    flush()
+    expect(tab().jobs).toEqual([expect.objectContaining({ kind: 'copy', columns: true })])
+    pending.resolve({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, capped: 0 } })
+    await copying
+  })
+  it('draws a view transposed by one rule, which a tone column (a comparison) turns off', () => {
+    const columns = (roles: (string | undefined)[]) => ({ columns: roles.map((role, index) => ({ name: `c${index}`, dataType: 'int', wire: 'text', nullable: true, ...role ? { role } : {} }) as ResultColumn) })
+    expect(transposedView(undefined, columns([undefined]))).toBeUndefined()
+    expect(transposedView({ headerColumn: 0 }, columns([undefined]))).toBeUndefined()
+    expect(transposedView({ orientation: 'transposed' }, columns([undefined, undefined]))).toEqual({})
+    expect(transposedView({ orientation: 'transposed', headerColumn: 1 }, columns([undefined, undefined]))).toEqual({ headerColumn: 1 })
+    for (const headerColumn of [2, -1, 0.5]) expect(transposedView({ orientation: 'transposed', headerColumn }, columns([undefined, undefined]))).toEqual({})
+    expect(transposedView({ orientation: 'transposed', headerColumn: 0 }, columns([undefined, 'tone']))).toBeUndefined()
   })
   it('opens a sorted grid\'s value from its view\'s row', async () => {
     const f = fixture()

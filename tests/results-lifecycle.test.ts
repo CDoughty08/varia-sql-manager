@@ -27,8 +27,8 @@ function fixture(o: { retainedPlans?: RetainedPlansService } = {}) {
   const progress = new Set<(value: ResultsJobProgress) => void>()
   let ids = 0
   const api = {
-    copyResults: vi.fn<VariaApi['copyResults']>(async () => ({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false } })),
-    saveResults: vi.fn<VariaApi['saveResults']>(async () => ({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, fileName: 'out.csv', format: 'csv' as const } })),
+    copyResults: vi.fn<VariaApi['copyResults']>(async () => ({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, capped: 0 } })),
+    saveResults: vi.fn<VariaApi['saveResults']>(async () => ({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, capped: 0, fileName: 'out.csv', format: 'csv' as const } })),
     cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(async () => ({ ok: true, value: { cancelled: true } })),
     onResultsJob: vi.fn<VariaApi['onResultsJob']>(listener => { progress.add(listener); return () => { progress.delete(listener) } })
   }
@@ -261,7 +261,7 @@ describe('closing one result', () => {
     copying.resolve({ ok: false, error: 'Cancelled', code: 'CANCELLED' })
     expect(await copied).toBeUndefined()
     // The save ends and says so, though its result and every other are gone.
-    saving.resolve({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, fileName: 'out.csv', format: 'csv' } })
+    saving.resolve({ ok: true, value: { rows: 2, bytes: 10, truncatedCells: 0, partial: false, capped: 0, fileName: 'out.csv', format: 'csv' } })
     expect(await saved).toBeUndefined()
     expect(tab()).toMatchObject({ jobs: [], jobNotice: 'Saved 2 rows to out.csv.', emptied: true })
   })

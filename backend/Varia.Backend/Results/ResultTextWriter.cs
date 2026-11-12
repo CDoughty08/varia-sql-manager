@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Globalization;
 using System.Text;
 
 namespace Varia.Backend.Results;
@@ -28,6 +29,13 @@ internal sealed record TextOptions(TextFormat Format, bool Headers, bool NullAsE
 internal sealed class ResultTextWriter
 {
     public const string NoColumnName = "(No column name)";
+    /// <summary>Source rows a transposed copy or save writes (they are its fields): those a transposed grid draws, a page's
+    /// columns less the one that names the source columns (limits.transpose.maxRows).</summary>
+    public const int MaxTransposedRows = PageBuilder.MaxColumns - 1;
+    /// <summary>Transposed text's first field, which holds the source columns' names.</summary>
+    public const string NameField = "Column";
+    /// <summary>The most of a header column's value that names a transposed field, as a transposed grid's header shows it.</summary>
+    public const int FieldNameChars = 128;
     private static readonly SearchValues<byte> TsvSpecial = SearchValues.Create("\t\n\r"u8);
     private static readonly SearchValues<byte> ClipboardSpecial = SearchValues.Create("\t\n\r\0"u8);
     private static readonly SearchValues<byte> CsvSpecial = SearchValues.Create(",\"\n\r"u8);
@@ -41,7 +49,12 @@ internal sealed class ResultTextWriter
     private readonly IReadOnlyList<ResultColumn> columns;
     private readonly ValueKind[] kinds;
     private readonly byte[][]? keys;
+    /// <summary>Transposed JSON: the fields' keys (the name field's, then one per source row written).</summary>
+    private byte[][]? fieldKeys;
     private long lines;
+    /// <summary>JSON objects written, which the separators and the closing bracket follow.</summary>
+    private long records;
+    private int field;
 
     public ResultTextWriter(IBufferWriter<byte> output, TextOptions options, IReadOnlyList<ResultColumn> columns)
     {
@@ -54,6 +67,8 @@ internal sealed class ResultTextWriter
 
     public long Bytes { get; private set; }
     public long Rows { get; private set; }
+    /// <summary>Transposed text: the source columns written so far, each a line (or a JSON object).</summary>
+    public long Columns { get; private set; }
     public long TruncatedCells { get; private set; }
     private ReadOnlySpan<byte> Eol => options.Crlf ? "\r\n"u8 : "\n"u8;
 
@@ -72,17 +87,66 @@ internal sealed class ResultTextWriter
     private static byte[][] JsonKeys(IReadOnlyList<ResultColumn> columns)
     {
         var used = new HashSet<string>(StringComparer.Ordinal);
+        var next = new Dictionary<string, int>(StringComparer.Ordinal);
         var keys = new byte[columns.Count][];
         for (var i = 0; i < columns.Count; i++)
-        {
-            var name = string.IsNullOrEmpty(columns[i].Name) ? "Column" + (i + 1) : columns[i].Name;
-            var key = name;
-            for (var n = 2; !used.Add(key); n++) key = name + "_" + n;
-            var buffer = new ArrayBufferWriter<byte>();
-            new ResultTextWriter(buffer, new TextOptions(TextFormat.Json, false, false, false, false, false), []).JsonString(Encoding.UTF8.GetBytes(key));
-            keys[i] = buffer.WrittenSpan.ToArray();
-        }
+            keys[i] = JsonKey(Unique(used, next, string.IsNullOrEmpty(columns[i].Name) ? "Column" + (i + 1) : columns[i].Name));
         return keys;
+    }
+
+    /// <summary><paramref name="name"/>, or with _2, _3 and so on when it is already used. <paramref name="next"/> keeps the
+    /// suffix each repeated name goes on from: a header column of few values repeats one thousands of times, and trying
+    /// every suffix from _2 each time would be quadratic.</summary>
+    private static string Unique(HashSet<string> used, Dictionary<string, int> next, string name)
+    {
+        if (used.Add(name)) return name;
+        var n = next.GetValueOrDefault(name, 2);
+        string key;
+        do key = name + "_" + n++.ToString(CultureInfo.InvariantCulture);
+        while (!used.Add(key));
+        next[name] = n;
+        return key;
+    }
+
+    private static byte[] JsonKey(string key)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        new ResultTextWriter(buffer, new TextOptions(TextFormat.Json, false, false, false, false, false), []).JsonString(Encoding.UTF8.GetBytes(key));
+        return buffer.WrittenSpan.ToArray();
+    }
+
+    /// <summary>The name a source row's field has in transposed text when a header column names the fields: that column's
+    /// value for the row as a transposed grid's header shows it. NULL (and a cell that could not be read) is "NULL", an
+    /// empty value "(blank)", binary 0x hex, and a longer value its first <see cref="FieldNameChars"/> characters. A line
+    /// break, TAB or NUL in it is a space, as tab-separated text writes one, in every format: names made distinct here
+    /// then stay distinct once written.</summary>
+    public static string FieldName(in PageView page, int row, int column)
+    {
+        if (page.IsNull(column, row)) return "NULL";
+        var span = page.Span(column, row);
+        if (page.Wire(column) == WireKind.Binary) return "0x" + Convert.ToHexString(span[..Math.Min(span.Length, (FieldNameChars - 2) / 2)]);
+        if (span.IsEmpty) return "(blank)";
+        // Only the first characters are kept: decode a prefix that holds more than them (four bytes a character at most),
+        // cut at a character boundary, not a value of megabytes.
+        var take = Math.Min(span.Length, 4 * (FieldNameChars + 1));
+        while (take < span.Length && take > 0 && (span[take] & 0xc0) == 0x80) take--;
+        var text = Encoding.UTF8.GetString(span[..take]);
+        if (text.AsSpan().ContainsAny('\t', '\n', '\r') || text.Contains('\0')) text = text.Replace("\r\n", " ").Replace('\t', ' ').Replace('\n', ' ').Replace('\r', ' ').Replace('\0', ' ');
+        return CellFormat.Prefix(text, FieldNameChars, out _).ToString();
+    }
+
+    /// <summary>"Row N", a source row's field when no header column names the fields: N is its place in the view, from 1.</summary>
+    public static string RowName(long position) => "Row " + (position + 1).ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>Transposed text's field names after <see cref="NameField"/>, made distinct as JSON keys are: a name already
+    /// used (<see cref="NameField"/> included) gets _2, _3 and so on, in every format.</summary>
+    public static string[] UniqueFields(IReadOnlyList<string> names)
+    {
+        var used = new HashSet<string>(StringComparer.Ordinal) { NameField };
+        var next = new Dictionary<string, int>(StringComparer.Ordinal);
+        var unique = new string[names.Count];
+        for (var i = 0; i < unique.Length; i++) unique[i] = Unique(used, next, names[i]);
+        return unique;
     }
 
     /// <summary>The BOM and, for JSON, the opening bracket.</summary>
@@ -112,7 +176,7 @@ internal sealed class ResultTextWriter
     {
         if (options.Format == TextFormat.Json)
         {
-            Write(Rows == 0 ? "\n{"u8 : ",\n{"u8);
+            Write(records == 0 ? "\n{"u8 : ",\n{"u8);
             for (var i = 0; i < selected.Length; i++)
             {
                 if (i > 0) Write(","u8);
@@ -121,6 +185,7 @@ internal sealed class ResultTextWriter
                 Cell(page, row, selected[i]);
             }
             Write("}"u8);
+            records++;
         }
         else
         {
@@ -135,10 +200,86 @@ internal sealed class ResultTextWriter
         Rows++;
     }
 
+    /// <summary>Transposed text (a grid drawn transposed, copied or saved as drawn): each line is a source column and each
+    /// field a source row. This names the fields, <paramref name="names"/> being the rows' (<see cref="UniqueFields"/>):
+    /// with headers a first line of <see cref="NameField"/> and the names; for JSON they are every object's keys. It is
+    /// called once before a block's <see cref="BeginColumn"/> calls, with as many names as each line then has cells.</summary>
+    public void TransposedHeader(IReadOnlyList<string> names)
+    {
+        if (options.Format == TextFormat.Json)
+        {
+            fieldKeys = new byte[names.Count + 1][];
+            fieldKeys[0] = JsonKey(NameField);
+            for (var i = 0; i < names.Count; i++) fieldKeys[i + 1] = JsonKey(names[i]);
+            return;
+        }
+        if (!options.Headers) return;
+        BeginLine();
+        Text(Encoding.UTF8.GetBytes(NameField));
+        foreach (var name in names)
+        {
+            Separator();
+            Text(Encoding.UTF8.GetBytes(name));
+        }
+        EndLine();
+    }
+
+    /// <summary>Starts a source column's line (or JSON object): with headers, and always for JSON, its name comes first.</summary>
+    public void BeginColumn(int column)
+    {
+        field = 0;
+        var name = Encoding.UTF8.GetBytes(string.IsNullOrEmpty(columns[column].Name) ? NoColumnName : columns[column].Name);
+        if (options.Format == TextFormat.Json)
+        {
+            Write(records == 0 ? "\n{"u8 : ",\n{"u8);
+            Write(fieldKeys![0]);
+            Write(":"u8);
+            JsonString(name);
+            return;
+        }
+        BeginLine();
+        if (options.Headers) Text(name);
+    }
+
+    /// <summary>The line's next field: the column's value for one source row. JSON writes every value as text (a field
+    /// holds a value of every column, so it has no one type), and NULL as null.</summary>
+    public void ColumnCell(in PageView page, int row, int column)
+    {
+        if (options.Format == TextFormat.Json)
+        {
+            Write(","u8);
+            Write(fieldKeys![field + 1]);
+            Write(":"u8);
+        }
+        else if (field > 0 || options.Headers) Separator();
+        field++;
+        Cell(page, row, column, typed: false);
+    }
+
+    public void EndColumn()
+    {
+        if (options.Format == TextFormat.Json)
+        {
+            Write("}"u8);
+            records++;
+        }
+        else EndLine();
+        Columns++;
+    }
+
     /// <summary>JSON's closing bracket; an empty result is "[]".</summary>
     public void End()
     {
-        if (options.Format == TextFormat.Json) Write(Rows == 0 ? "]\n"u8 : "\n]\n"u8);
+        if (options.Format == TextFormat.Json) Write(records == 0 ? "]\n"u8 : "\n]\n"u8);
+    }
+
+    private void Separator() => Write(options.Format == TextFormat.Csv ? ","u8 : "\t"u8);
+
+    /// <summary>A name as a CSV or TSV field.</summary>
+    private void Text(ReadOnlySpan<byte> text)
+    {
+        if (options.Format == TextFormat.Csv) CsvField(text);
+        else TsvText(text);
     }
 
     private void BeginLine()
@@ -152,7 +293,8 @@ internal sealed class ResultTextWriter
         lines++;
     }
 
-    private void Cell(in PageView page, int row, int column)
+    /// <param name="typed">JSON writes a number or a bit as one (a table's rows); otherwise as text.</param>
+    private void Cell(in PageView page, int row, int column, bool typed = true)
     {
         // A cell that could not be read is stored as NULL with an error flag, and written as NULL.
         if (page.IsNull(column, row))
@@ -171,10 +313,10 @@ internal sealed class ResultTextWriter
                 HexBytes(value);
                 if (options.Format == TextFormat.Json) Write("\""u8);
                 return;
-            case ValueKind.Number when options.Format == TextFormat.Json && IsJsonNumber(value):
+            case ValueKind.Number when typed && options.Format == TextFormat.Json && IsJsonNumber(value):
                 Write(value);
                 return;
-            case ValueKind.Bit when options.Format == TextFormat.Json && value.Length == 1 && value[0] is (byte)'0' or (byte)'1':
+            case ValueKind.Bit when typed && options.Format == TextFormat.Json && value.Length == 1 && value[0] is (byte)'0' or (byte)'1':
                 Write(value[0] == '1' ? "true"u8 : "false"u8);
                 return;
         }
@@ -332,10 +474,14 @@ internal sealed class ResultTextWriter
 
     /// <summary>An upper bound on Copy's bytes for rows [first, last] of a page: the stored text (replacements never
     /// lengthen it), 2 bytes per binary byte plus "0x", 4 per NULL, and the separators and ends of line.</summary>
-    public static long EstimateCopyRows(in PageView page, int first, int last, ReadOnlySpan<int> selected, int eolBytes)
+    public static long EstimateCopyRows(in PageView page, int first, int last, ReadOnlySpan<int> selected, int eolBytes) =>
+        (long)(last - first + 1) * (selected.Length - 1 + eolBytes) + EstimateCopyCells(page, first, last, selected);
+
+    /// <summary>An upper bound on the bytes of the cells alone, without separators or ends of line.</summary>
+    public static long EstimateCopyCells(in PageView page, int first, int last, ReadOnlySpan<int> selected)
     {
         var rows = last - first + 1;
-        var bytes = (long)rows * (selected.Length - 1 + eolBytes);
+        long bytes = 0;
         foreach (var column in selected)
         {
             var nulls = page.NullCount(column, first, last);
@@ -351,6 +497,19 @@ internal sealed class ResultTextWriter
         long bytes = selected.Length - 1 + eolBytes;
         foreach (var column in selected)
             bytes += string.IsNullOrEmpty(columns[column].Name) ? NoColumnName.Length : Encoding.UTF8.GetByteCount(columns[column].Name);
+        return bytes;
+    }
+
+    /// <summary>An upper bound on what transposed Copy text has besides its cells, for <paramref name="rows"/> source rows:
+    /// each line's separators and end, and with headers the first line (<paramref name="names"/>) and each line's name.</summary>
+    public static long EstimateTransposed(IReadOnlyList<ResultColumn> columns, ReadOnlySpan<int> selected, int rows, IReadOnlyList<string> names, bool headers, int eolBytes)
+    {
+        var bytes = (long)selected.Length * (Math.Max(rows - 1, 0) + eolBytes);
+        if (!headers) return bytes;
+        bytes += NameField.Length + eolBytes;
+        foreach (var name in names) bytes += 1 + Encoding.UTF8.GetByteCount(name);
+        foreach (var column in selected)
+            bytes += 1 + (string.IsNullOrEmpty(columns[column].Name) ? NoColumnName.Length : Encoding.UTF8.GetByteCount(columns[column].Name));
         return bytes;
     }
 }
