@@ -415,6 +415,36 @@ try {
   await firstTabs.getByRole('tab', { name: 'Sessions', exact: true }).click()
   console.log('Blocking and active passed: the chain shows with its lead blocker and goes when blocking ends, running requests list, and neither starts a probe.')
 
+  step = 'recent queries'
+  // Recent Expensive Queries reads the query statistics probe: it resumes only while the pane shows, at its own interval.
+  const queriesUpdates = (await calls('live.update')).length
+  const queriesPatches = async () => (await calls('live.update')).slice(queriesUpdates).flatMap(call => call.params.probes ?? []).filter(probe => probe.probe === 'activity.queries')
+  await firstTabs.getByRole('tab', { name: 'Recent Expensive Queries', exact: true }).click()
+  await expect.poll(async () => (await queriesPatches()).some(probe => probe.paused === false)).toBe(true)
+  const recent = monitor().getByRole('grid', { name: /^Recent Expensive Queries/ })
+  await expect(recent).toBeVisible()
+  await expect(monitor().getByText('3 queries by query hash', { exact: true })).toBeVisible()
+  // The first sample has no window: its rows go by total CPU. Query is the first column, in view at any width.
+  const queryAt = row => recent.locator(gridCellSelector(row, 0))
+  await expect(queryAt(0)).toHaveText(/^SELECT c\.CustomerId/)
+  const rankBy = monitor().getByRole('group', { name: 'Rank by', exact: true })
+  await expect(rankBy.getByRole('button', { name: 'CPU', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  // A rank chip is the table's sort, sent to the probe; the status line says the rows keep their order until the next sample.
+  await rankBy.getByRole('button', { name: 'Executions', exact: true }).click()
+  await expect(rankBy.getByRole('button', { name: 'Executions', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(rankBy.getByRole('button', { name: 'CPU', exact: true })).toHaveAttribute('aria-pressed', 'false')
+  await expect(monitor().getByText('3 queries by query hash · ranked by Executions from the next sample', { exact: true })).toBeVisible()
+  await expect.poll(async () => (await queriesPatches()).map(probe => probe.sort).filter(Boolean).at(-1)).toEqual([{ column: 'executionsPerMinute', descending: true, table: 0 }])
+  // Refresh Now brings the next sample, in the chip's order (most executions first), and the note goes.
+  await rankBy.getByRole('button', { name: 'Executions', exact: true }).focus()
+  await page.keyboard.press('F5')
+  await expect(queryAt(0)).toHaveText(/^UPDATE dbo\.Invoices/)
+  await expect(monitor().getByText('3 queries by query hash', { exact: true })).toBeVisible()
+  // Leaving the pane pauses the probe again: the plan cache is read only for a pane someone can see.
+  await firstTabs.getByRole('tab', { name: 'Sessions', exact: true }).click()
+  await expect.poll(async () => (await queriesPatches()).at(-1)?.paused).toBe(true)
+  console.log('Recent queries passed: the probe runs only while the pane shows, rows arrive by CPU, a rank chip sorts the next sample and says so until it comes.')
+
   step = 'panes'
   const first = monitor().getByRole('tablist', { name: 'First pane', exact: true })
   await expect(first.getByRole('tab', { name: 'Sessions', exact: true })).toHaveAttribute('aria-selected', 'true')
@@ -438,8 +468,9 @@ try {
   await expect(monitor().getByRole('tablist', { name: 'Second pane', exact: true })).toHaveCount(0)
   await split.click()
   await expect(monitor().getByRole('separator', { name: 'Resize the panes', exact: true })).toBeVisible()
-  // Showing pending panes starts no SQL: their probes stay paused (Sessions' probe ran from the start).
-  expect((await calls('live.update')).flatMap(call => call.params.probes ?? []).filter(probe => probe.probe !== 'activity.overview' && probe.probe !== 'activity.sessions' && probe.paused === false)).toEqual([])
+  // Showing pending panes starts no SQL: their probes stay paused (Sessions' probe ran from the start; query statistics
+  // only while Recent Expensive Queries showed, above).
+  expect((await calls('live.update')).flatMap(call => call.params.probes ?? []).filter(probe => probe.probe === 'activity.resources' && probe.paused === false)).toEqual([])
   // The resources probe samples now, but its panes are still pending: the view holds it paused, so it runs no SQL.
   expect((await viewOf(id)).probes['activity.resources']).toMatchObject({ state: 'paused' })
   console.log('Panes passed: tabs with arrow keys, F6 and Shift+F6 between regions, Split View, and no probe started for a pending pane.')
