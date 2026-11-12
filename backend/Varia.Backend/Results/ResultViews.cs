@@ -209,13 +209,43 @@ internal static partial class ViewSorter
         return Math.Min(rows, (double)taken * taken / (2.0 * Math.Max(1, taken - distinct)));
     }
 
+    /// <summary>Up to <paramref name="samples"/> places among <paramref name="count"/>, ascending, each once: all of them
+    /// when there are no more, otherwise scattered as if at random (the same ones every time). Evenly spaced places would
+    /// read one row of each run of equal values in rows sorted by a column, and one of each value where values repeat at
+    /// a period, and find a column of repeated values to hold none.</summary>
+    internal static int[] Places(int count, int samples)
+    {
+        if (count <= samples)
+        {
+            var all = new int[Math.Max(0, count)];
+            for (var i = 0; i < all.Length; i++) all[i] = i;
+            return all;
+        }
+        var places = new int[samples];
+        var state = 0x9E3779B97F4A7C15UL;
+        for (var i = 0; i < samples; i++)
+        {
+            // SplitMix64.
+            var z = state += 0x9E3779B97F4A7C15UL;
+            z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9UL;
+            z = (z ^ (z >> 27)) * 0x94D049BB133111EBUL;
+            places[i] = (int)((z ^ (z >> 31)) % (ulong)count);
+        }
+        Array.Sort(places);
+        var kept = 0;
+        for (var i = 0; i < samples; i++)
+            if (i == 0 || places[i] != places[i - 1]) places[kept++] = places[i];
+        Array.Resize(ref places, kept);
+        return places;
+    }
+
     /// <summary>About how many of the rows hold each value of a key (NULL as a value), from a sample of them.</summary>
     internal static double GroupSize(Key key, ReadOnlySpan<int> rows)
     {
-        var taken = Math.Min(rows.Length, Sampled);
+        var sample = Places(rows.Length, Sampled);
+        var taken = sample.Length;
         if (taken == 0) return 1;
-        var sample = new int[taken];
-        for (var i = 0; i < taken; i++) sample[i] = rows[(int)((long)rows.Length * i / taken)];
+        for (var i = 0; i < taken; i++) sample[i] = rows[sample[i]];
         int Compare(int a, int b)
         {
             bool nullA = key.IsNull(a), nullB = key.IsNull(b);
@@ -1114,10 +1144,9 @@ internal static partial class ViewSorter
             var count = prefixes.Length;
             var scratch = new Scratch();
             var values = new List<byte[]>();
-            var samples = Math.Min(count, Sampled);
-            for (var i = 0; i < samples; i++)
+            foreach (var place in Places(count, Sampled))
             {
-                var view = Source.ViewOf(Row((int)((long)count * i / samples)), out var local);
+                var view = Source.ViewOf(Row(place), out var local);
                 if (!view.IsNull(Column, local)) values.Add(Bytes(view.Span(Column, local), scratch).ToArray());
             }
             values.Sort(ByteComparer.Instance);
@@ -1274,9 +1303,8 @@ internal static partial class ViewSorter
             if (count < sample) return false;
             var seen = new HashSet<ulong>();
             int taken = 0, slow = 0;
-            for (var i = 0; i < sample; i++)
+            foreach (var row in Places(count, sample))
             {
-                var row = (int)((long)count * i / sample);
                 if (IsNull(row)) continue;
                 taken++;
                 if (IsOdd(row) || !seen.Add(prefixes[row])) slow++;

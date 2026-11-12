@@ -328,6 +328,38 @@ internal static class ViewChecks
             "a start most rows share is left out, the rows that start otherwise marked (" + path + "); values alike past it are kept whole (" + folder + ", " + instants
             + "), and values 8 bytes tell apart are not (" + tags + ")");
 
+        // Values that repeat are seen to whatever order the rows are in: 30,000 values each in a run of five rows (rows
+        // sorted by the column), and the same number coming round every 30,000 rows. Rows read at even steps would meet
+        // each value once and take both columns for ones that never repeat.
+        var ordered = store.Open(store.BeginQuery("ordered"), 0, 1, 1, "rows", [new("runs", "nvarchar", "text", Collation: CaseInsensitive), new("rounds", "nvarchar", "text", Collation: CaseInsensitive)], [WireKind.Text, WireKind.Text])
+            ?? throw new InvalidOperationException("The result set was not kept.");
+        for (var i = 0; i < rows; i++)
+        {
+            ordered.CountRow();
+            var builder = ordered.BeginRow()!;
+            builder.AppendText("Item " + (i / 5).ToString("D6", invariant));
+            builder.AppendText("Item " + (i % 30_000).ToString("D6", invariant));
+            ordered.TryCommitRow();
+        }
+        ordered.Complete();
+        var orderedPages = ordered.SealedSnapshot();
+        var orderedSource = new ViewSorter.PageSource(orderedPages, 2);
+        string Held(int column)
+        {
+            var key = ViewSorter.Build(ordered, orderedSource, new ViewKey(column, false, SortMode.Value), null, rows, none, ref approximate, counted);
+            var layout = key.Layout;
+            key.Drop();
+            return layout;
+        }
+        int[] Ordered(int column, ViewSorter.KeyMemory? memory) => ViewSorter.Build(ordered, orderedPages, [new ViewKey(column, true, SortMode.Value)], [], none, memory).Order;
+        var places = ViewSorter.Places(1_000_000, 4096);
+        check(Held(0).StartsWith("ranked", StringComparison.Ordinal) && Held(1).StartsWith("ranked", StringComparison.Ordinal)
+            && Ordered(0, counted).AsSpan().SequenceEqual(Ordered(0, refusing)) && Ordered(1, counted).AsSpan().SequenceEqual(Ordered(1, refusing))
+            && places.Length is > 4000 and <= 4096 && places[0] >= 0 && places[^1] < 1_000_000 && places.Zip(places.Skip(1)).All(pair => pair.First < pair.Second)
+            && places.Zip(places.Skip(1)).Select(pair => pair.Second - pair.First).Distinct().Count() > 500
+            && ViewSorter.Places(1_000_000, 4096).AsSpan().SequenceEqual(places) && ViewSorter.Places(5, 4096).AsSpan().SequenceEqual([0, 1, 2, 3, 4]) && ViewSorter.Places(0, 4096).Length == 0,
+            "repeated values are ranked whether their rows lie in runs or come round at a period: the rows sampled are scattered, each once, ascending, the same every time (" + Held(0) + " / " + Held(1) + ")");
+
         // Filters and a second key go through the same keys: duplicates of a name, by name descending then code.
         ViewKey[] twoKeys = [new(1, true, SortMode.Value), new(2, false, SortMode.Value)];
         ViewFilter[] duplicates = [new(FilterOp.Duplicates, 0, null, false, null, [1])];
