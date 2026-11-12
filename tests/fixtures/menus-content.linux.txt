@@ -147,6 +147,8 @@ Window
   Lo&ad Window Layout…  ++++
   &Reset Window Layout  ++++
 Help
+  &Getting Started  ++++
+  ---
   Clear &Entra ID Token Cache  ++++
   ---
   Check for &Updates  ++++

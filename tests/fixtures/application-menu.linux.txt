@@ -152,6 +152,8 @@
   {"id":"layout.load@window","label":"Load Window Layout…","registerAccelerator":false,"type":"normal","click":[["command","layout.load"]]}
   {"id":"layout.reset@window","label":"Reset Window Layout","registerAccelerator":false,"type":"normal","click":[["command","layout.reset"]]}
 {"id":"menu.help","label":"Help"}
+  {"id":"help.gettingStarted","label":"Getting Started","registerAccelerator":false,"type":"normal","click":[["command","help.gettingStarted"]]}
+  {"type":"separator"}
   {"id":"help.clearEntraTokenCache","label":"Clear Entra ID Token Cache","registerAccelerator":false,"type":"normal","click":[["command","help.clearEntraTokenCache"]]}
   {"type":"separator"}
   {"id":"help.checkForUpdates","label":"Check for Updates","registerAccelerator":false,"type":"normal","click":[["command","help.checkForUpdates"]]}

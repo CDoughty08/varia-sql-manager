@@ -126,7 +126,7 @@ internal sealed class QueryEventSink : IDisposable
         dirty = false;
         Interlocked.Exchange(ref lastProgress, Environment.TickCount64);
         var results = open.Skip(Math.Max(0, open.Count - MaxProgressResults)).Select(set => set.Progress())
-            .Select(item => new { item.ResultId, item.RowsRead, item.RowsStored, item.RowsAvailable, item.BytesStored }).ToArray();
+            .Select(item => new { item.ResultId, item.RowsRead, item.RowsStored, item.RowsAvailable, item.BytesStored, item.Truncated }).ToArray();
         Emit(new { Type = "progress", CompletedBatches = completedBatches, TotalBatches = totalBatches, BatchNumber = batchNumber, Iteration = iteration, Results = results }, true);
     }
 
