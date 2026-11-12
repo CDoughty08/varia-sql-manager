@@ -295,6 +295,10 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     runRole: vi.fn<VariaApi['runRole']>(async () => ({ ok: true, value: undefined })),
     clearEntraTokenCache: vi.fn<VariaApi['clearEntraTokenCache']>(async () => ({ ok: true, value: true })),
     writeClipboardText: vi.fn<VariaApi['writeClipboardText']>(async () => ({ ok: true, value: undefined })),
+    // The Activity Monitor's session actions: an ended session and an untried kill unless a test says otherwise.
+    activityDetails: vi.fn<VariaApi['activityDetails']>(async params => ({ ok: true, value: { sessionId: params.sessionId, state: 'ended', elapsedMs: 1 } })),
+    activityKill: vi.fn<VariaApi['activityKill']>(async () => ({ ok: true, value: { results: [], elapsedMs: 1 } })),
+    cancelActivity: vi.fn<VariaApi['cancelActivity']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
     revealSqlFile: vi.fn<VariaApi['revealSqlFile']>(async () => ({ ok: true, value: undefined })),
     tableColumns: vi.fn<VariaApi['tableColumns']>(async () => ({ ok: true, value: { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false } })),
     explorerChildren: vi.fn<VariaApi['explorerChildren']>(async params => ({ ok: true, value: explorerAnswer(params) })),
@@ -385,7 +389,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const restore = new RestoreService({ api, documents, files, connections, longRuns, progress: actionProgress, explorer, transactions: queries, focusEditor, now: () => new Date(2026, 9, 30, 12, 0, 0), ...(options.timers ? { timers: options.timers } : {}) })
   // Activity Monitors subscribe through a stand-in for LiveService that records each view.
   const liveViews = fakeLiveViews()
-  const activity = new ActivityMonitorService({ documents, connections, live: liveViews, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values })
+  const activity = new ActivityMonitorService({ api, documents, connections, live: liveViews, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values })
   const live = fakeLive()
   const operations = new SsisOperationsService({ api, documents, panes, live, connections, settings })
   const objectSearch = new ObjectSearchService({ api, documents, connections, settings })

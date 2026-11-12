@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (300)
+## Commands (302)
 
 ### File
 
@@ -350,6 +350,8 @@ keys it uses are listed below.
 | Split View | `activity.toggleSplit` | — | — | — | `activeDocumentIsActivityMonitor`; checked when `activitySplit` | — |
 | Next Panel (not in the palette) | `activity.nextPane` | F6 (`activityMonitorFocus`) | F6 (`activityMonitorFocus`) | F6 (`activityMonitorFocus`) | `activeDocumentIsActivityMonitor` | — |
 | Previous Panel (not in the palette) | `activity.previousPane` | Shift+F6 (`activityMonitorFocus`) | Shift+F6 (`activityMonitorFocus`) | ⇧F6 (`activityMonitorFocus`) | `activeDocumentIsActivityMonitor` | — |
+| Session Details… | `activity.sessionDetails` | — | — | — | `activeDocumentIsActivityMonitor` | Query Output context menu › Details… |
+| Kill Process… | `activity.killProcess` | — | — | — | `activeDocumentIsActivityMonitor` | Query Output context menu › Kill Process… |
 | Close Activity Monitor | `activity.close` | Shift+Escape (`activityMonitorFocus`) | Shift+Escape (`activityMonitorFocus`) | ⇧⎋ (`activityMonitorFocus`) | `activeDocumentIsActivityMonitor && !documentBusy` | — |
 
 ### Preferences
@@ -823,6 +825,8 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
+| `0_session` | Detai**l**s… | `activity.sessionDetails` | `outputView == 'live' && outputLiveRows == 'session'` |
+| `0_session` | **K**ill Process… | `activity.killProcess` | `outputView == 'live' && outputLiveRows == 'session'` |
 | `1_copy` | **C**opy | `output.copy` | Always |
 | `1_copy` | Copy with **H**eaders | `output.copyWithHeaders` | `outputView == 'grid' \|\| outputView == 'live'` |
 | `1_copy` | Copy Column **N**ame | `output.copyColumnName` | `outputView == 'grid' \|\| outputView == 'live'` |
@@ -948,7 +952,7 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
 | `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
 
-## Context keys (150)
+## Context keys (151)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1101,6 +1105,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `outputView` | `'grid'`, `'messages'`, `'live'`, `''` | target | The Query Output view the menu is for: a results grid, the messages, or a live view's grid (an Activity Monitor pane). |
 | `outputGridTransposable` | boolean | target | The menu is for a results grid Transpose can read: a query's rows, a pivot or a transpose, not a diff. |
 | `outputLiveFilterable` | boolean | target | The live view's grid the menu is for filters some columns by value at its source (its headers have funnels). |
+| `outputLiveRows` | `'session'`, `''` | target | What the rows of the live view's grid the menu is for are: 'session' for an Activity Monitor pane of sessions (Details and Kill Process act on its active row), else ''. |
 | `outputLiveSortable` | boolean | target | The live view's grid the menu is for sorts (its table is a snapshot, not a log that keeps arrival order). |
 | `pane` | `'explorer'`, `'editor'`, `'results'`, `'messages'`, `'plan'`, `'statistics'`, `''` | target | The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, Results, Messages, Execution plan, or Client Statistics. |
 | `paneFloating` | boolean | target | The panel the menu is for is floating. |

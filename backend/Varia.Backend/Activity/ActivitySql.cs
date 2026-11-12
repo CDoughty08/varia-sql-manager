@@ -176,6 +176,9 @@ internal static partial class ActivitySql
             + "       r.row_count, r.dop, r.wait_type, r.blocking_session_id, r.percent_complete, r.database_id, d.name AS database_name,\n"
             + "       mg.requested_memory_kb, mg.granted_memory_kb, mg.required_memory_kb, mg.used_memory_kb, mg.max_used_memory_kb, mg.wait_time_ms AS grant_wait_ms,\n"
             + "       r.query_hash, r.plan_handle, r.statement_start_offset, r.statement_end_offset,\n"
+            // The session's identity from this statement, not the sessions one: a session id reused between the two must not
+            // give a request another session's login time, which Kill Process would then act on.
+            + "       s.login_time, s.host_process_id, s.login_name, s.host_name, s.open_transaction_count,\n"
             + "       LEFT(SUBSTRING(t.text, r.statement_start_offset / 2 + 1,\n"
             + $"            CASE WHEN r.statement_end_offset = -1 THEN 2147483647 ELSE (r.statement_end_offset - r.statement_start_offset) / 2 + 1 END), {Limit("statementChars")}) AS statement_text\n"
             + "FROM sys.dm_exec_requests AS r\n"
@@ -187,7 +190,8 @@ internal static partial class ActivitySql
             + "ORDER BY r.cpu_time DESC, r.session_id, r.request_id;",
             ["session_id", "request_id", "start_time", "status", "command", "total_elapsed_time", "cpu_time", "logical_reads", "reads", "writes", "row_count", "dop", "wait_type",
                 "blocking_session_id", "percent_complete", "database_id", "database_name", "requested_memory_kb", "granted_memory_kb", "required_memory_kb", "used_memory_kb",
-                "max_used_memory_kb", "grant_wait_ms", "query_hash", "plan_handle", "statement_start_offset", "statement_end_offset", "statement_text"],
+                "max_used_memory_kb", "grant_wait_ms", "query_hash", "plan_handle", "statement_start_offset", "statement_end_offset", "login_time", "host_process_id",
+                "login_name", "host_name", "open_transaction_count", "statement_text"],
             [Int("@take")], ["activeQueries"], NoLiterals)
     ];
 

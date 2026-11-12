@@ -457,6 +457,23 @@ Outcome, accepted by the owner:
    and its `OutputPane` consumers (output view choice, tab list, badge, toolbar, strip, empty state) land here, because
    this is the PR that first lets the last entry be closed. Checks: a source closed under pending work; late answers;
    save and copy leases; the retained-plan lease; re-execution; backend loss; the last entry closed.
+   - **What PR 3 settled or left** (`tests/results-lifecycle.test.ts` holds its checks):
+     - The M of a grid's "Result N of M" is the run's highest number so far, which a close does not lower, so no grid
+       reads "Result 3 of 2". It is not a count of the results now open.
+     - The close button calls `ResultsService.removeEntry` directly; there is no command or grid-menu item for closing one
+       result yet. "The close actions address the active view or the exact context-menu target" is left to PR 9, when
+       closing a Table closes its group.
+     - The Results badge still counts every open entry, derived ones included, and hides at zero. Counting original
+       groups only is left to PR 9.
+     - An emptied run hides the results toolbar, as a closed one does, so Close Results is then reached from the palette
+       or a Messages menu while captured plans remain.
+     - Weights are shares of the pane, not heights: a closed entry's share is removed and the rest keep their
+       proportions, so they grow into the room it leaves.
+     - Per-result cancellation is by source: a pivot, transpose or comparison is given up when an entry it reads is
+       closed. Each still runs one per tab until PR 10 and PR 16.
+     - Open Value drops a value read for an entry closed meanwhile. A Save Results As whose file is not yet chosen when
+       its result is closed fails with the backend's sentence; one already writing finishes.
+     - No backend change was needed.
 4. **Keep Selected Rows.** Filter, command, chip, limits.
 5. **Orientation in the grid**, as two PRs, from the spike's prototype (its adapter and its global test switch do not
    land).

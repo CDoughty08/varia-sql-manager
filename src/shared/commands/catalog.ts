@@ -729,6 +729,19 @@ export const commandCatalog = {
     title: 'Previous Panel', category: 'Activity Monitor', palette: false, precondition: 'activeDocumentIsActivityMonitor', unavailableHint: openMonitor,
     keybindings: [{ key: 'shift+f6', when: 'activityMonitorFocus' }]
   },
+  // SSMS's Details and Kill Process on a session's row (Sessions, Blocking, Active Expensive Queries): the row Query Output's
+  // menu was opened on, else the focused grid's active row, else the active row of the session pane last focused. SSMS
+  // binds no key to either (Alt+Enter, a Properties key, stays reserved on Windows and Linux); Kill Process always asks first.
+  'activity.sessionDetails': {
+    title: 'Session Details…', category: 'Activity Monitor', icon: 'info', keywords: ['details', 'session', 'process', 'spid', 'inputbuffer', 'statement', 'locks'],
+    precondition: 'activeDocumentIsActivityMonitor', unavailableHint: 'Select a session in Sessions, Blocking or Active Expensive Queries first.',
+    menus: [{ menu: 'output.context', group: '0_session', order: 1, title: 'Details…', mnemonic: 'l', when: "outputView == 'live' && outputLiveRows == 'session'" }]
+  },
+  'activity.killProcess': {
+    title: 'Kill Process…', category: 'Activity Monitor', icon: 'debug-stop', keywords: ['kill', 'end', 'terminate', 'session', 'process', 'spid', 'rollback'],
+    precondition: 'activeDocumentIsActivityMonitor', unavailableHint: 'Select a session you may end in Sessions, Blocking or Active Expensive Queries first.',
+    menus: [{ menu: 'output.context', group: '0_session', order: 2, mnemonic: 'k', when: "outputView == 'live' && outputLiveRows == 'session'" }]
+  },
   // SSMS's Shift+Esc.
   'activity.close': {
     title: 'Close Activity Monitor', category: 'Activity Monitor', icon: 'close', precondition: 'activeDocumentIsActivityMonitor && !documentBusy', unavailableHint: openMonitor,
