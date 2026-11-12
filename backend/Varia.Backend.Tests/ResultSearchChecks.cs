@@ -34,6 +34,7 @@ internal static class ResultSearchChecks
 
     public static void Run(Action<bool, string> check)
     {
+        Threads(check);
         Matching(check);
         Runs(check);
         Dispatch(check);
@@ -62,6 +63,57 @@ internal static class ResultSearchChecks
         }
         set.Complete();
         return set;
+    }
+
+    /// <summary>A search read on several threads is the search one pass gives: the count of every match, the run of whole
+    /// rows forward or backward from any row, and the matches before it, in base order and through a view.</summary>
+    private static void Threads(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        var set = store.Open(store.BeginQuery("threads"), 0, 1, 1, "rows", Columns, Wires) ?? throw new InvalidOperationException("The result set was not kept.");
+        // Matches come in bursts and alone, in one column of a row or in three, with stretches of rows that hold none.
+        const int rows = 90_000;
+        for (var i = 0; i < rows; i++)
+        {
+            var scrambled = (uint)i * 2654435761u % 1000;
+            var hit = scrambled < 40 || i / 500 % 7 == 3;
+            set.CountRow();
+            var builder = set.BeginRow()!;
+            builder.AppendText(i.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            if (i % 17 == 0) builder.AppendNull();
+            else builder.AppendText(hit ? "the Needle " + scrambled : "hay " + scrambled);
+            builder.AppendText(hit && i % 3 == 0 ? "needle" : "abc");
+            builder.AppendBinary([(byte)i]);
+            builder.AppendText(hit && i % 5 == 0 ? "a needle" : "note");
+            set.TryCommitRow();
+        }
+        set.Complete();
+        var pages = set.SealedSnapshot();
+        var order = ViewSorter.Build(set, pages, [new ViewKey(1, true, SortMode.Value)], [], CancellationToken.None).Order[..(rows * 2 / 3)];
+        var view = store.AddView(set, order, [], false, true, 4L * order.Length, null, rows);
+        string Shown(ResultView? through, long fromRow, bool backward, int max, int workers) =>
+            JsonSerializer.Serialize(ResultSearcher.Search(set, pages, through, "needle", fromRow, backward, max, CancellationToken.None, null, workers), HostChecks.Json);
+        var different = new List<string>();
+        var some = 0;
+        foreach (var through in new[] { null, view })
+            foreach (var backward in new[] { false, true })
+                foreach (var fromRow in new long[] { 0, 1, 499, 1500, 31_000, 59_999, 89_999, 90_000, 200_000 })
+                    foreach (var max in new[] { 1, 7, 300, ResultSearcher.MaxMatches })
+                    {
+                        var one = Shown(through, fromRow, backward, max, 1);
+                        if (one.Contains("\"rows\":[" + "]", StringComparison.Ordinal) == false) some++;
+                        foreach (var workers in new[] { 2, 5, 16 })
+                            if (Shown(through, fromRow, backward, max, workers) != one) different.Add((through is null ? "base" : "view") + (backward ? " backward" : " forward") + " from " + fromRow + " max " + max + " on " + workers);
+                    }
+        var found = ResultSearcher.Search(set, pages, null, "needle", 0, false, 10, CancellationToken.None, null, 4)!;
+        var stops = 0;
+        var stopped = ResultSearcher.Search(set, pages, null, "needle", 0, false, 10, CancellationToken.None, () => Interlocked.Increment(ref stops) > 3, 4);
+        string? cancelled = null;
+        try { ResultSearcher.Search(set, pages, null, "needle", 0, false, 10, new CancellationToken(true), null, 4); }
+        catch (OperationCanceledException) { cancelled = "cancelled"; }
+        check(different.Count == 0 && some > 100 && found.Total > 5000 && found.Searched == rows && stopped is null && cancelled == "cancelled",
+            "a search on several threads is the one pass's: every match counted, the same run forward and backward from any row, in base order and through a view; it stops and cancels as one does: "
+            + string.Join(" | ", different.Take(5)));
     }
 
     private static SearchOutcome Find(ResultSetBuffer set, string text, long fromRow = 0, bool backward = false, int max = ResultSearcher.MaxMatches, ResultView? view = null) =>

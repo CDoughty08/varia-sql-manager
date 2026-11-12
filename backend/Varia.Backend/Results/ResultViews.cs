@@ -82,6 +82,8 @@ internal static partial class ViewSorter
     /// left to run for minutes: a collated column whose whole sort keys the budget had no room for, and whose rows mostly
     /// share their keys' first bytes. About 0.4 microseconds each, so about half a minute.</summary>
     internal const long MaxSlowCompares = 75_000_000;
+    /// <summary>The most values rows are grouped by without sorting them (<see cref="Key.Coded"/>); more are sorted.</summary>
+    internal const int MaxGroups = 1 << 16;
     internal const string TooSlow = "There is not enough result memory to compare this much text. Close other results and try again.";
 
     /// <summary>The budget a build's collated keys take their whole sort keys from, and give them back to.</summary>
@@ -379,6 +381,7 @@ internal static partial class ViewSorter
     /// group together in the order of its first row and its rows in their order.</summary>
     private static int[] Duplicates(int[] order, Key[] columns, CancellationToken token)
     {
+        if (columns is [{ Coded: true } only] && Duplicates(order, only, token) is { } grouped) return grouped;
         var positions = new int[order.Length];
         for (var i = 0; i < positions.Length; i++) positions[i] = i;
         var equal = new Comparer(columns, null, token);
@@ -407,6 +410,56 @@ internal static partial class ViewSorter
             var first = positions[start];
             for (var i = start; i < positions.Length && (i == start || Same(first, positions[i]) == 0); i++) kept[count++] = order[positions[i]];
         }
+        return kept;
+    }
+
+    /// <summary>Duplicates by one key whose codes are its values: rows are numbered by value as they are met (so the groups
+    /// are already in the order of their first rows) and then put together, in one pass each. Null past
+    /// <see cref="MaxGroups"/> values, which a sort then groups.</summary>
+    private static int[]? Duplicates(int[] order, Key key, CancellationToken token)
+    {
+        var groups = new Dictionary<ulong, int>();
+        var counts = new List<int>();
+        var groupOf = new int[order.Length];
+        var nulls = -1;
+        for (var i = 0; i < order.Length; i++)
+        {
+            if ((i & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+            var row = order[i];
+            int group;
+            if (key.IsNull(row))
+            {
+                if (nulls < 0)
+                {
+                    nulls = counts.Count;
+                    counts.Add(0);
+                }
+                group = nulls;
+            }
+            else
+            {
+                ref var slot = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(groups, key.Code(row), out var known);
+                if (!known)
+                {
+                    if (counts.Count >= MaxGroups) return null;
+                    slot = counts.Count;
+                    counts.Add(0);
+                }
+                group = slot;
+            }
+            counts[group]++;
+            groupOf[i] = group;
+        }
+        var places = new int[counts.Count];
+        var total = 0;
+        for (var group = 0; group < places.Length; group++)
+        {
+            places[group] = counts[group] > 1 ? total : -1;
+            if (counts[group] > 1) total += counts[group];
+        }
+        var kept = new int[total];
+        for (var i = 0; i < order.Length; i++)
+            if (places[groupOf[i]] >= 0) kept[places[groupOf[i]]++] = order[i];
         return kept;
     }
 
@@ -748,6 +801,10 @@ internal static partial class ViewSorter
         public virtual bool Finish() => false;
         /// <summary>How the key holds its rows, for the checks.</summary>
         public virtual string Layout => "";
+        /// <summary>Whether 8 bytes a row are the whole value: two rows that are not NULL compare equal exactly when their
+        /// <see cref="Code"/>s are equal, so rows can be grouped by them without a sort.</summary>
+        public virtual bool Coded => false;
+        public virtual ulong Code(int row) => 0;
         /// <summary>The share of comparisons expected to read both cells again from their pages (<see cref="ThrowIfSlow"/>).</summary>
         public virtual double TieShare => 0;
         /// <summary>Gives back what the key holds beyond its rows' fixed bytes; it compares no more.</summary>
@@ -761,6 +818,8 @@ internal static partial class ViewSorter
         public readonly long[] Values = new long[rows];
         public override void Set(int row, ReadOnlySpan<byte> cell, Scratch scratch) { }
         public override int Compare(int a, int b) => Values[a].CompareTo(Values[b]);
+        public override bool Coded => true;
+        public override ulong Code(int row) => (ulong)Values[row];
     }
 
     /// <summary>A number's double; for exact numerics, equal doubles (rounding is monotonic, so unequal ones already order
@@ -786,6 +845,13 @@ internal static partial class ViewSorter
             if (compared != 0 || !exact || !textTies) return compared;
             return CompareNumericText(source.Cell(Row(a), column), source.Cell(Row(b), column));
         }
+        public override bool Coded => !exact || !textTies;
+        /// <summary>The double's bits, with the two zeros as one and every NaN as one, as they compare.</summary>
+        public override ulong Code(int row)
+        {
+            var value = values[row];
+            return BitConverter.DoubleToUInt64Bits(value == 0 ? 0 : double.IsNaN(value) ? double.NaN : value);
+        }
     }
 
     private sealed class TicksKey(int rows) : Key(rows)
@@ -799,6 +865,8 @@ internal static partial class ViewSorter
             values[row] = DateTimeOffset.TryParse(chars[..length], CultureInfo.InvariantCulture, DateTimeStyles.None, out var value) ? value.UtcTicks : long.MinValue;
         }
         public override int Compare(int a, int b) => values[a].CompareTo(values[b]);
+        public override bool Coded => true;
+        public override ulong Code(int row) => (ulong)values[row];
     }
 
     private sealed class GuidKey(int rows) : Key(rows)
@@ -1064,6 +1132,8 @@ internal static partial class ViewSorter
         }
 
         public override double TieShare => tieShare;
+        public override bool Coded => ranked;
+        public override ulong Code(int row) => prefixes[row];
 
         public override void Drop()
         {
@@ -1135,6 +1205,8 @@ internal static partial class ViewSorter
         public override int Compare(int a, int b) => inner.Compare(map[a], map[b]);
         public override double TieShare => inner.TieShare;
         public override void Drop() => inner.Drop();
+        public override bool Coded => inner.Coded;
+        public override ulong Code(int row) => inner.Code(map[row]);
     }
 
     /// <summary>The keys in order, each descending where <paramref name="descending"/> says (null: all ascending), NULL

@@ -13,6 +13,7 @@
 - **Results:** sorting, filtering for duplicates, listing a column's values and pivoting are several times faster on number columns with many repeated values (a status, a flag, a foreign key).
 - **Results:** the same operations on text columns are many times faster on large results, most of all when values share their first characters (names, paths, codes), and now use several processor cores. When result memory is too full to do this quickly, they say so instead of running for minutes.
 - **Results:** column profiles are several times faster on large results: they now use several processor cores.
+- **Results:** search in results, highlights' row matching and Compare Results use several processor cores too, and filtering for duplicates or listing a column's values no longer sorts every row when the column holds few different values.
 
 ### Fixed
 

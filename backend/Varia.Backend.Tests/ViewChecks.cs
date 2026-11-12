@@ -204,6 +204,14 @@ internal static class ViewChecks
         var keptCells = ViewSorter.Build(set, pages, twoKeys, duplicates, none, refusing).Order;
         var listed = ViewSorter.DistinctValues(set, pages, null, 1, true, none, null, counted);
         var listedCells = ViewSorter.DistinctValues(set, pages, null, 1, true, none, null, refusing);
+        // Ranked values are grouped by their ranks in one pass; without the ranks, by a sort. The same groups either way.
+        var grouped = ViewSorter.Build(set, pages, [], duplicates, none, counted).Order;
+        var groupedCells = ViewSorter.Build(set, pages, [], duplicates, none, refusing).Order;
+        string Listed(DistinctSnapshot snapshot) => JsonSerializer.Serialize(new { byValue = snapshot.Read(DistinctOrder.Value, 0, ViewSorter.MaxDistinctWindow, null, none), byCount = snapshot.Read(DistinctOrder.Count, 0, ViewSorter.MaxDistinctWindow, null, none), frozen = snapshot.Freeze().Rows, snapshot.Nulls, snapshot.Rows }, HostChecks.Json);
+        var ids = ViewSorter.DistinctValues(set, pages, null, 0, true, none, null, counted);
+        check(grouped.Length == kept.Length && grouped.AsSpan().SequenceEqual(groupedCells) && grouped[0] == 0 && grouped[1] == 97 && Listed(listed) == Listed(listedCells)
+            && ids.Distinct == rows && ViewSorter.Build(set, pages, [], [new ViewFilter(FilterOp.Duplicates, 0, null, false, null, [0])], none, counted).Order.Length == 0,
+            "duplicates and distinct values grouped by rank in one pass are the ones a sort groups, in the same order; more values than are grouped that way (" + ids.Distinct + ") are sorted");
         check(kept.Length > rows / 2 && kept.AsSpan().SequenceEqual(keptCells) && listed.Distinct == names.Count && listedCells.Distinct == names.Count && reserved == returned,
             "filtered rows sorted by two keys, and a column's distinct values, are the same with whole sort keys and without (" + kept.Length + " rows kept, " + listed.Distinct + " values)");
 

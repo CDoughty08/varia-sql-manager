@@ -24,6 +24,7 @@ internal static class IdentityChecks
     public static void Run(Action<bool, string> check)
     {
         Hashing(check);
+        Threads(check);
         Picking(check);
         Memory(check);
         Host(check);
@@ -45,6 +46,54 @@ internal static class IdentityChecks
         }
         set.Complete();
         return set;
+    }
+
+    /// <summary>Rows hashed on several threads have the identities one thread gives them, a repeat or a NULL is found
+    /// wherever it is, and two results compare the same.</summary>
+    private static void Threads(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        const int count = 130_000;
+        var invariant = System.Globalization.CultureInfo.InvariantCulture;
+        // id: each its own. twin: each its own but for two rows far apart, past the rows a key is first tried on. gap: one NULL, late.
+        ResultColumn[] columns = [new("id", "int", "text"), new("twin", "int", "text"), new("gap", "int", "text"), new("name", "nvarchar", "text", Collation: CaseInsensitive), new("at", "datetimeoffset", "text")];
+        string?[][] Rows(int changed) => [.. Enumerable.Range(0, count).Select(i => new[]
+        {
+            i.ToString(invariant), (i == 120_000 ? 40_000 : i).ToString(invariant), i == 99_999 ? null : i.ToString(invariant),
+            (i % 2 == 0 ? "Name " : "NAME ") + ((uint)i * 2654435761u % 9000) + (i == changed ? "!" : ""), "2024-01-01 00:00:00.0000000 +0" + i % 10 + ":00"
+        })];
+        var set = Fill(store, Rows(-1), columns);
+        var other = Fill(store, Rows(77_777), columns);
+        var pages = set.SealedSnapshot();
+        (int Column, bool Unique, bool Approximate, long[] Ids) Built(IdentityBy by, int column = -1) => RowIdentity.Build(set, pages, by, column, CancellationToken.None);
+        var byRow = Built(IdentityBy.Row);
+        var byId = Built(IdentityBy.Column, 0);
+        var byTwin = Built(IdentityBy.Column, 1);
+        var byGap = Built(IdentityBy.Column, 2);
+        var auto = Built(IdentityBy.Auto);
+        var diff = ResultDiffer.Compare(set, pages, other, other.SealedSnapshot(), false, CancellationToken.None);
+        (int Column, bool Unique, bool Approximate, long[] Ids) rowAlone, twinAlone;
+        DiffModel diffAlone;
+        var workers = ViewSorter.Workers;
+        try
+        {
+            ViewSorter.Workers = 1;
+            rowAlone = Built(IdentityBy.Row);
+            twinAlone = Built(IdentityBy.Column, 1);
+            diffAlone = ResultDiffer.Compare(set, pages, other, other.SealedSnapshot(), false, CancellationToken.None);
+        }
+        finally { ViewSorter.Workers = workers; }
+        check(pages.Length > 8 && byRow.Ids.AsSpan().SequenceEqual(rowAlone.Ids) && byRow.Unique && rowAlone.Unique && byTwin.Ids.AsSpan().SequenceEqual(twinAlone.Ids)
+            && byId.Unique && !byTwin.Unique && !twinAlone.Unique && !byGap.Unique && auto is { Column: 0, Unique: true },
+            "rows hashed on several threads have one thread's identities; a repeat or a NULL past the first rows tried still makes a column no key, and Auto takes the first that is one");
+        check(diff.Entries.AsSpan().SequenceEqual(diffAlone.Entries) && diff.Cells.AsSpan().SequenceEqual(diffAlone.Cells) && diff.KeyPair == diffAlone.KeyPair
+            && diff.Entries.Count(entry => entry.Kind != DiffKind.Same) == 1,
+            "two results compare the same on several threads as on one: the one changed row, by the same key (" + diff.Entries.Count(entry => entry.Kind != DiffKind.Same) + " rows differ)");
+        long[] spread = new long[6];
+        check(RowIdentity.Distinct([5, 1, 9, 1L << 52, 3, 7], spread, CancellationToken.None) && !RowIdentity.Distinct([5, 1, 9, 5, 3, 7], spread, CancellationToken.None)
+            && RowIdentity.Distinct([], [], CancellationToken.None) && RowIdentity.Distinct([4], new long[1], CancellationToken.None)
+            && RowIdentity.WorkingBytes(1000) == 8000 + 24_000 && RowIdentity.WorkingBytes(1_000_000) == 8_000_000 + 24L * RowIdentity.Probe,
+            "identities are told apart by sorting them in parts: any two equal ones are found; the check holds 8 bytes a row and a set of the first rows");
     }
 
     private static long[] Ids(ResultSetBuffer set, IdentityBy by, int column = -1) => RowIdentity.Build(set, set.SealedSnapshot(), by, column, CancellationToken.None).Ids;
