@@ -184,23 +184,29 @@ export default function ResultsStack({ tabId, tab, closable = false }: { tabId: 
     drawn.current = count
   }, [count])
   // Closing a result (its caption's button): the focus goes to the caption after it, else the one before, else to the
-  // Results tab, which stays when the last result has gone. Only when the focus was in what closes, or nowhere.
-  const pendingFocus = useRef<EntryKey | undefined>(undefined)
+  // Results tab, which stays when the last result has gone (and takes it too when that caption is not drawn: one result
+  // left in a pane too short for a caption). Only when the focus was in what closes, or nowhere. It moves once, in the
+  // first layout without the closed result, and never later.
+  const pendingFocus = useRef<{ readonly closed: EntryKey; readonly next: EntryKey } | undefined>(undefined)
   const close = useCallback((key: EntryKey) => {
     const stack = stackRef.current, list = results.getSnapshot()[tabId]?.sets ?? []
     const place = list.findIndex(entry => entry.key === key), next = list[place + 1] ?? list[place - 1]
     const active = stack?.ownerDocument.activeElement
     const own = !active || active === stack?.ownerDocument.body || !!active.closest('.rs-item')?.querySelector(`[data-caption-entry="${key}"]`)
-    if (own && !next) stack?.closest('.output-panel')?.querySelector<HTMLElement>('[role="tab"][data-output-tab="results"]')?.focus({ preventScroll: true })
-    if (results.removeEntry(tabId, key) && own && next) pendingFocus.current = next.key
+    if (own && !next) resultsTab()?.focus({ preventScroll: true })
+    if (results.removeEntry(tabId, key) && own && next) pendingFocus.current = { closed: key, next: next.key }
   }, [results, tabId])
+  const resultsTab = () => stackRef.current?.closest('.output-panel')?.querySelector<HTMLElement>('[role="tab"][data-output-tab="results"]')
   useLayoutEffect(() => {
-    const key = pendingFocus.current
-    if (key === undefined) return
-    const target = stackRef.current?.querySelector<HTMLElement>(`[data-caption-entry="${key}"]`)
-    // Its caption is drawn once the stack has laid the remaining entries out; an entry that went too has none.
-    if (target) { pendingFocus.current = undefined; target.focus({ preventScroll: true }) }
-    else if (!sets.some(entry => entry.key === key)) pendingFocus.current = undefined
+    const pending = pendingFocus.current
+    // Until the stack is drawn without the closed result, the focus is still in it.
+    if (!pending || sets.some(entry => entry.key === pending.closed)) return
+    pendingFocus.current = undefined
+    const stack = stackRef.current, active = stack?.ownerDocument.activeElement
+    // The user has moved on meanwhile: the focus is theirs.
+    if (active && active !== stack?.ownerDocument.body && !stack?.contains(active)) return
+    const target = stack?.querySelector<HTMLElement>(`[data-caption-entry="${pending.next}"]`) ?? resultsTab()
+    target?.focus({ preventScroll: true })
   })
 
   const focus = (key: EntryKey) => { view.focused = key; setFocused(key) }

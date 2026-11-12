@@ -35,11 +35,12 @@ vi.mock('../src/renderer/src/grid/ResultGrid', async () => {
   }
 })
 
-const paneHeight = 2000
+let paneHeight = 2000
 let root: Root | undefined, container: HTMLElement | undefined
 let clientHeight: PropertyDescriptor | undefined
 
 beforeEach(() => {
+  paneHeight = 2000
   // The stack lays out only in a pane with a height, which no layout engine gives it here.
   clientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
   Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get(this: HTMLElement) { return this.classList.contains('rs-stack') ? paneHeight : 0 } })
@@ -258,6 +259,34 @@ describe('the stacked results', () => {
     expect((document.activeElement as HTMLElement).dataset.outputTab).toBe('results')
     expect(client.released()).toEqual([3, 803, 2, 1])
     expect(three).toBeDefined()
+  })
+
+  it('move the focus once after a close, to the Results tab when the next caption is not drawn, and never steal it later', () => {
+    // A pane too short for a caption, a header and four rows: one result left shows its grid without its caption.
+    paneHeight = 60
+    const { results, keys, draw, names } = fixture()
+    const [one, two, three, pivot] = keys
+    results.removeEntry('t1', three)
+    results.removeEntry('t1', pivot)
+    draw(true)
+    const closers = () => [...container!.querySelectorAll<HTMLButtonElement>('.rs-caption-close')]
+    // Only the first of the two is in view, so the caption after it is not drawn.
+    expect(names()).toEqual(['Result 1'])
+    closers()[0].focus()
+    act(() => { closers()[0].click() })
+    draw(true)
+    expect(container!.querySelectorAll('.rs-caption')).toHaveLength(0)
+    expect((document.activeElement as HTMLElement).dataset.outputTab).toBe('results')
+    // The user moves on; a result added later draws captions again, and the focus stays where they put it.
+    const elsewhere = document.createElement('input')
+    document.body.append(elsewhere)
+    elsewhere.focus()
+    results.addSet('t1', descriptor(802, { index: 1, kind: 'pivot' }), 'Pivot of Result 2', ['1:2'])
+    draw(true)
+    expect(names()).toContain('Result 2')
+    expect(document.activeElement).toBe(elsewhere)
+    elsewhere.remove()
+    expect([one, two]).toHaveLength(2)
   })
 
   it('disable the close buttons while the query runs', () => {

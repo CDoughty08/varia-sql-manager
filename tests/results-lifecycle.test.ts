@@ -136,6 +136,35 @@ describe('closing one result', () => {
     expect(client.open).toHaveBeenCalledTimes(3)
   })
 
+  it('releases a pivot, a transpose and a comparison the backend had already answered when their source closed', async () => {
+    const { results, pivot, transpose, compare, run, tab, handle, releases } = fixture()
+    const keys = run(3)
+    // The answers are on their way: these resolve whatever the signal says, as an answer that beat the abort does.
+    const built = deferred<Awaited<ReturnType<FakeHandle['pivot']>>>(), turned = deferred<Awaited<ReturnType<FakeHandle['transpose']>>>(), diffed = deferred<Awaited<ReturnType<FakeHandle['diff']>>>()
+    const answers = { pivot: await handle(2).pivot({ rows: [0], values: [{ aggregate: 'count' }] }), transpose: await handle(2).transpose(), diff: await handle(1).diff(handle(2)) }
+    vi.mocked(handle(2).pivot).mockReturnValueOnce(built.promise)
+    vi.mocked(handle(2).transpose).mockReturnValueOnce(turned.promise)
+    vi.mocked(handle(1).diff).mockReturnValueOnce(diffed.promise)
+    pivot.open('t1', keys[1])
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
+    const working = [pivot.run('t1'), transpose.transpose('t1', keys[1]), compare.compare('t1', keys[1])]
+    results.removeEntry('t1', keys[1])
+    built.resolve(answers.pivot)
+    turned.resolve(answers.transpose)
+    diffed.resolve(answers.diff)
+    await Promise.all(working)
+    await settle()
+    // Each is released once and shown nowhere; the panel, which moved to Result 1, says nothing of the pivot given up.
+    expect(tab().sets.map(set => set.number)).toEqual([1, 3])
+    expect(releases()).toEqual({ 2: 1, 802: 1, 702: 1, 901: 1 })
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ running: false, source: keys[0] })
+    expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()
+    expect(pivot.getSnapshot().info.size).toBe(0)
+    expect(transpose.getSnapshot().size).toBe(0)
+    expect(compare.getSnapshot().size).toBe(0)
+    expect(tab().jobNotice).toBe('')
+  })
+
   it('leaves work on another result alone when one is closed, and a derived result outlives its source under its name', async () => {
     const { results, pivot, compare, run, tab, handle, releases } = fixture()
     const keys = run(3)

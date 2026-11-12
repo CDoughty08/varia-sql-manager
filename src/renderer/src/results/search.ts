@@ -264,6 +264,9 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
     const targets = this.targets(tabId, results)
     if (tab.mode === 'columns') {
       const query = fold(tab.text)
+      // The active column and the entries that stood before its entry, to find it again among the new matches.
+      const at = fresh ? undefined : this.locateColumn(tab), before = new Set<EntryKey>()
+      if (at) for (const key of tab.names.keys()) { if (key === at.key) break; before.add(key) }
       tab.names = new Map()
       tab.columnCount = 0
       for (const set of results?.sets ?? []) {
@@ -275,7 +278,8 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
       }
       tab.status = 'done'
       const total = this.total(tab)
-      tab.current = total === 0 ? -1 : fresh || tab.current < 0 ? 0 : Math.min(tab.current, total - 1)
+      tab.current = total === 0 ? -1 : fresh || tab.current < 0 ? 0 : !at ? Math.min(tab.current, total - 1)
+        : placeAmong([...tab.names].map(([key, hits]) => ({ key, total: hits.length })), at.key, before, () => Math.max(0, tab.names.get(at.key)!.indexOf(at.column)), total)
       if (fresh && total > 0) this.reveal(tab)
       this.publishTab(tabId, tab)
       return
@@ -288,7 +292,9 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
     if (!fresh) for (const grid of tab.grids) kept.set(grid.key, grid)
     const same = (target: { key: EntryKey; handle: ResultHandle; signature: string }) => {
       const grid = kept.get(target.key)
-      return grid && grid.handle === target.handle && grid.signature === target.signature ? grid : undefined
+      // A grid searched while its rows were still arriving is searched again whenever anything changes (the run ending
+      // among them), as its signature cannot say how many rows it had.
+      return grid && grid.complete && grid.handle === target.handle && grid.signature === target.signature ? grid : undefined
     }
     const grids: GridRun[] = []
     const end = (failure: string | undefined) => {
@@ -341,8 +347,7 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
   /**
    * Where the active match stands among `grids`, the matches a search again brought: the same match of the same grid while
    * that grid still has it (its last, when it has fewer now), else the first match after where that grid stood, else the
-   * last of all; -1 with no match. Grids keep their order, so the matches before it are those of the grids that stood
-   * before its grid.
+   * last of all; -1 with no match (`placeAmong`).
    */
   private placeIn(tab: TabState, grids: readonly GridRun[]): number {
     let total = 0
@@ -352,12 +357,7 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
     if (!at) return tab.current < 0 ? 0 : Math.min(tab.current, total - 1)
     const before = new Set<EntryKey>()
     for (const grid of tab.grids) { if (grid === at.grid) break; before.add(grid.key) }
-    let offset = 0
-    for (const grid of grids) {
-      if (grid.key === at.grid.key) return grid.total > 0 ? offset + Math.min(at.local, grid.total - 1) : Math.min(offset, total - 1)
-      if (before.has(grid.key)) offset += grid.total
-    }
-    return Math.min(offset, total - 1)
+    return placeAmong(grids, at.grid.key, before, count => Math.min(at.local, count - 1), total)
   }
 
   private gridRun(target: { key: EntryKey; handle: ResultHandle; signature: string }, found: ResultsSearchResult): GridRun {
@@ -499,6 +499,22 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
     for (const [tabId, tab] of this.tabs) if (tab.published) next[tabId] = tab.published
     this.publish(next)
   }
+}
+
+/**
+ * The place among all matches of the active one, which was in the entry `key`: after the matches of every entry now listed
+ * before that entry (one searched for the first time among them), at `local(its matches)` among its own. When the entry
+ * has gone or has no match now, the first match after the entries that stood before it (`before`), else the last of all.
+ */
+function placeAmong(entries: readonly { readonly key: EntryKey; readonly total: number }[], key: EntryKey, before: ReadonlySet<EntryKey>, local: (count: number) => number, total: number): number {
+  let offset = 0
+  for (const entry of entries) {
+    if (entry.key === key) return entry.total > 0 ? offset + local(entry.total) : Math.min(offset, total - 1)
+    offset += entry.total
+  }
+  offset = 0
+  for (const entry of entries) if (before.has(entry.key)) offset += entry.total
+  return Math.min(offset, total - 1)
 }
 
 /** What a key does in the search box: Enter and Shift+Enter step (never the Enter that commits an IME composition), Escape
