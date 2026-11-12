@@ -253,20 +253,14 @@ internal static class ResultDiffer
     /// <summary>Each row's identity over the given columns.</summary>
     private static bool Rows(CellHasher hasher, StoredPage[] pages, int[] columns, long[] ids, CancellationToken token)
     {
-        var approximate = false;
-        var scratch = new int[PageView.ScratchLength(hasher.Count)];
-        var counter = 0;
-        foreach (var page in pages)
+        var cut = 0;
+        RowIdentity.EachPage(hasher, pages, ids.Length, token, (own, page, view) =>
         {
-            token.ThrowIfCancellationRequested();
-            var view = PageView.Parse(page.Body, hasher.Count, scratch);
-            for (var r = 0; r < page.Rows; r++)
-            {
-                if (++counter == CancelEvery) { counter = 0; token.ThrowIfCancellationRequested(); }
-                ids[page.FirstRow + r] = hasher.Row(view, r, columns, ref approximate) & RowIdentity.Mask;
-            }
-        }
-        return approximate;
+            var inexact = false;
+            for (var r = 0; r < page.Rows; r++) ids[page.FirstRow + r] = own.Row(view, r, columns, ref inexact) & RowIdentity.Mask;
+            if (inexact) Volatile.Write(ref cut, 1);
+        });
+        return cut != 0;
     }
 
     /// <summary>Appends the pairs whose values differ (~pair for a soft difference); whether a truncated value was compared.</summary>

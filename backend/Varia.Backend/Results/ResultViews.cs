@@ -86,6 +86,8 @@ internal static partial class ViewSorter
     /// column whose rows mostly share the 8 bytes kept of each, when the budget had no room for more. About 0.4
     /// microseconds each, so about a minute; the requests that sort have two.</summary>
     internal const long MaxSlowCompares = 150_000_000;
+    /// <summary>The most values rows are grouped by without sorting them (<see cref="Key.Coded"/>); more are sorted.</summary>
+    internal const int MaxGroups = 1 << 16;
     internal const string TooSlow = "There is not enough result memory to compare this much text. Close other results and try again.";
 
     /// <summary>The threads operations share. Each takes what is free of <see cref="Workers"/> when it starts a parallel
@@ -487,6 +489,7 @@ internal static partial class ViewSorter
     /// group together in the order of its first row and its rows in their order.</summary>
     private static int[] Duplicates(int[] order, Key[] columns, CancellationToken token)
     {
+        if (columns is [{ Coded: true } only] && Duplicates(order, only, token) is { } grouped) return grouped;
         var positions = new int[order.Length];
         for (var i = 0; i < positions.Length; i++) positions[i] = i;
         var equal = new Comparer(columns, null, token);
@@ -518,6 +521,56 @@ internal static partial class ViewSorter
         return kept;
     }
 
+    /// <summary>Duplicates by one key whose codes are its values: rows are numbered by value as they are met (so the groups
+    /// are already in the order of their first rows) and then put together, in one pass each. Null past
+    /// <see cref="MaxGroups"/> values, which a sort then groups.</summary>
+    private static int[]? Duplicates(int[] order, Key key, CancellationToken token)
+    {
+        var groups = new Dictionary<ulong, int>();
+        var counts = new List<int>();
+        var groupOf = new int[order.Length];
+        var nulls = -1;
+        for (var i = 0; i < order.Length; i++)
+        {
+            if ((i & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+            var row = order[i];
+            int group;
+            if (key.IsNull(row))
+            {
+                if (nulls < 0)
+                {
+                    nulls = counts.Count;
+                    counts.Add(0);
+                }
+                group = nulls;
+            }
+            else
+            {
+                ref var slot = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(groups, key.Code(row), out var known);
+                if (!known)
+                {
+                    if (counts.Count >= MaxGroups) return null;
+                    slot = counts.Count;
+                    counts.Add(0);
+                }
+                group = slot;
+            }
+            counts[group]++;
+            groupOf[i] = group;
+        }
+        var places = new int[counts.Count];
+        var total = 0;
+        for (var group = 0; group < places.Length; group++)
+        {
+            places[group] = counts[group] > 1 ? total : -1;
+            if (counts[group] > 1) total += counts[group];
+        }
+        var kept = new int[total];
+        for (var i = 0; i < order.Length; i++)
+            if (places[groupOf[i]] >= 0) kept[places[groupOf[i]]++] = order[i];
+        return kept;
+    }
+
     /// <summary>A key over every row (indexed by base row), or over only <paramref name="kept"/>'s rows, in ascending base
     /// row order (indexed by their place in it). Its direction is the comparer's: keys compare ascending.</summary>
     internal static Key Build(ResultSetBuffer set, PageSource source, ViewKey sort, int[]? kept, int rows, CancellationToken token, ref bool approximate, KeyMemory? memory = null)
@@ -539,6 +592,10 @@ internal static partial class ViewSorter
             Kind.Collated when Culture(meta.Collation) is { } culture => new CollatedKey(capacity, kept, source, column, culture.Info, culture.Options, memory),
             _ => new OrdinalKey(capacity, kept, source, column, memory, trim: meta.Collation is not null)
         };
+        // The date and time types' text is fixed-width, so its byte order is its instants': read as ticks, 8 bytes are the
+        // whole value. A cell written any other way (or of another width than the first) gives the key back to its bytes.
+        if (kind == Kind.Ordinal && wire == WireKind.Text && TypeName(meta) is "date" or "datetime" or "datetime2" or "smalldatetime" or "time")
+            key = new InstantKey(capacity, TypeName(meta) == "time");
         var lengths = set.Lengths[column];
         // Each page's rows in the key: its own, or the kept rows that fall in it (kept is in base row order).
         int[]? starts = null;
@@ -558,6 +615,10 @@ internal static partial class ViewSorter
         // values asks for the pages again.
         var inexact = 0;
         using var threads = Gate.Take(Math.Min(Workers, source.Count));
+        bool again;
+        do
+        {
+        again = false;
         key.Begin();
         do
         try
@@ -606,6 +667,12 @@ internal static partial class ViewSorter
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerExceptions[0]).Throw();
         }
         while (key.Finish());
+        if (key is InstantKey { Declined: true })
+        {
+            key = new OrdinalKey(capacity, kept, source, column, memory, trim: meta.Collation is not null);
+            again = true;
+        }
+        } while (again);
         if (inexact != 0) approximate = true;
         return key;
     }
@@ -857,6 +924,10 @@ internal static partial class ViewSorter
         public virtual bool Finish() => false;
         /// <summary>How the key holds its rows, for the checks.</summary>
         public virtual string Layout => "";
+        /// <summary>Whether 8 bytes a row are the whole value: two rows that are not NULL compare equal exactly when their
+        /// <see cref="Code"/>s are equal, so rows can be grouped by them without a sort.</summary>
+        public virtual bool Coded => false;
+        public virtual ulong Code(int row) => 0;
         /// <summary>The share of comparisons expected to read both cells again from their pages (<see cref="ThrowIfSlow"/>).</summary>
         public virtual double TieShare => 0;
         /// <summary>Gives back what the key holds beyond its rows' fixed bytes; it compares no more.</summary>
@@ -870,6 +941,8 @@ internal static partial class ViewSorter
         public readonly long[] Values = new long[rows];
         public override void Set(int row, ReadOnlySpan<byte> cell, Scratch scratch) { }
         public override int Compare(int a, int b) => Values[a].CompareTo(Values[b]);
+        public override bool Coded => true;
+        public override ulong Code(int row) => (ulong)Values[row];
     }
 
     /// <summary>A number's double; for exact numerics, equal doubles (rounding is monotonic, so unequal ones already order
@@ -895,6 +968,13 @@ internal static partial class ViewSorter
             if (compared != 0 || !exact || !textTies) return compared;
             return CompareNumericText(source.Cell(Row(a), column), source.Cell(Row(b), column));
         }
+        public override bool Coded => !exact || !textTies;
+        /// <summary>The double's bits, with the two zeros as one and every NaN as one, as they compare.</summary>
+        public override ulong Code(int row)
+        {
+            var value = values[row];
+            return BitConverter.DoubleToUInt64Bits(value == 0 ? 0 : double.IsNaN(value) ? double.NaN : value);
+        }
     }
 
     private sealed class TicksKey(int rows) : Key(rows)
@@ -908,6 +988,32 @@ internal static partial class ViewSorter
             values[row] = DateTimeOffset.TryParse(chars[..length], CultureInfo.InvariantCulture, DateTimeStyles.None, out var value) ? value.UtcTicks : long.MinValue;
         }
         public override int Compare(int a, int b) => values[a].CompareTo(values[b]);
+        public override bool Coded => true;
+        public override ulong Code(int row) => (ulong)values[row];
+    }
+
+    /// <summary>A date or time by its ticks, read from its fixed-width text (<see cref="TryInstant"/>): the order its bytes
+    /// give, in 8 bytes that are the whole value. <see cref="Declined"/> once a cell is written another way, or is not as
+    /// long as the first: its bytes order it then.</summary>
+    private sealed class InstantKey(int rows, bool timeOnly) : Key(rows)
+    {
+        private readonly long[] values = new long[rows];
+        private int width, declined;
+        public bool Declined => declined != 0;
+        public override string Layout => "ticks";
+        public override void Set(int row, ReadOnlySpan<byte> cell, Scratch scratch)
+        {
+            var first = Interlocked.CompareExchange(ref width, cell.Length, 0);
+            if ((first != 0 && first != cell.Length) || !TryInstant(cell, out var ticks, out _, out var dated, out var zoned) || zoned || dated == timeOnly)
+            {
+                Volatile.Write(ref declined, 1);
+                return;
+            }
+            values[row] = ticks;
+        }
+        public override int Compare(int a, int b) => values[a].CompareTo(values[b]);
+        public override bool Coded => true;
+        public override ulong Code(int row) => (ulong)values[row];
     }
 
     private sealed class GuidKey(int rows) : Key(rows)
@@ -1180,6 +1286,8 @@ internal static partial class ViewSorter
         }
 
         public override double TieShare => tieShare;
+        public override bool Coded => ranked;
+        public override ulong Code(int row) => prefixes[row];
 
         public override void Drop()
         {
@@ -1286,6 +1394,8 @@ internal static partial class ViewSorter
         public override int Compare(int a, int b) => inner.Compare(map[a], map[b]);
         public override double TieShare => inner.TieShare;
         public override void Drop() => inner.Drop();
+        public override bool Coded => inner.Coded;
+        public override ulong Code(int row) => inner.Code(map[row]);
     }
 
     /// <summary>The keys in order, each descending where <paramref name="descending"/> says (null: all ascending), NULL

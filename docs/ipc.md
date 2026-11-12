@@ -1358,8 +1358,11 @@ itself by view position.
   order one thread would give. All the operations running share those threads (three quarters of the machine's, 16 at
   most): each takes what is free when it starts a step, and one at least, so several sorts at once leave the thread pool
   that answers requests alone.
-- **Text, dates and bytes.** A key ordered by bytes (a collation's sort key for collated text; the value's own bytes for
-  `_BIN` and `_BIN2` text, binary values and the date and time types' fixed-width text) first samples 4,096 of its rows.
+- **Dates and times.** `date`, `time`, `datetime`, `datetime2` and `smalldatetime` cells are read as ticks from their
+  fixed-width text, so 8 bytes a row are the whole value, as a number's are; a column with a cell written any other way,
+  or of another width than the first, is ordered by its text's bytes instead (the same order).
+- **Text and bytes.** A key ordered by bytes (a collation's sort key for collated text; the value's own bytes for
+  `_BIN` and `_BIN2` text, binary values and any other type's text) first samples 4,096 of its rows.
   Where values repeat in the sample it ranks them: each distinct value is numbered once (65,536 at most, or one in 32
   rows; their bytes taken from the query budget) and a row keeps its value's rank, so comparisons are of integers.
   Otherwise it keeps 8 bytes of each value after the bytes seven in eight of the sampled values start with (a shared
@@ -1411,9 +1414,10 @@ the rows it holds (`Results/RowIdentity.cs`); the renderer never compares rows.
   row. An identity is a 53-bit hash of each cell's normalized value: character columns by their collation's sort key with
   trailing spaces trimmed (code points for _BIN and _BIN2), exact numerics by their canonical digits, uniqueidentifier by its
   bytes, datetimeoffset by its UTC instant, others by their stored bytes; so it matches rows equal under the collation.
-  `approximate` says a hashed value was a truncated prefix. A second identify replaces the first. It holds 24 bytes a row
-  while it runs (one set, reused by every candidate `auto` tries and by the whole-row fallback, which all fill one array)
-  and keeps 8, charged to the query budget (`TOO_LARGE`) and freed with the result.
+  `approximate` says a hashed value was a truncated prefix. A second identify replaces the first. Rows are hashed
+  in runs of pages on several threads; a candidate `auto` tries is first tried on its first 32,768 rows on one. It holds
+  8 bytes a row and a set of those first rows while it runs (the identities again, spread into parts that are each sorted
+  to find any two equal; reused by every candidate and by the whole-row fallback, which all fill one array) and keeps 8, charged to the query budget (`TOO_LARGE`) and freed with the result.
 - **`results.rowIds { resultId, firstRow, count: 1 – 16,384, viewId? }`** answers `{ firstRow, ids, rows }`, an id per row
   (by view position with `viewId`), -1 past the identified rows. Without an identify first: `IDENTITY_NOT_FOUND`.
 - **`results.findRows { resultId, ids: 1 – 10,000 in 0 – 2⁵³ − 1, viewId? }`** answers `{ positions, marks, truncated, rows }`:
@@ -1589,7 +1593,7 @@ The results toolbar's search box searches every grid of a run in the backend, ov
 
 - **`results.search { resultId, text: 1 – 1,024 characters, fromRow, maxMatches: 1 – 10,000, backward?, viewId? }`**
   answers `{ rows, total, first, matchRows, matchColumns, complete, approximate }`. It searches the rows sealed now, or a
-  view's positions with `viewId` (`VIEW_NOT_FOUND` when it is gone). One pass counts every match (`total`) and keeps a
+  view's positions with `viewId` (`VIEW_NOT_FOUND` when it is gone). The positions are read in runs on several threads (one per 32,768, up to the sort's threads) and joined in order, as one pass that counts every match (`total`) and keeps a
   run of whole rows: from `fromRow` on until it holds `maxMatches`, or with `backward` the last rows before `fromRow` that
   hold `maxMatches`, so a run passes `maxMatches` by at most its last row's columns. `matchRows[k]`, `matchColumns[k]`
   are the run's cells in row then column order; `first` counts the matches before the run's first (when the run is
@@ -1696,8 +1700,9 @@ receives at most 512 values a window, never rows.
   `notIn` of the cleared ones, so values in rows still arriving stay shown. The view answers it resolved as `{ op:
   'groups', column, snapshotId, keep, values, nulls, row? }` (`row` when one value is named) for its label. A sort or
   another filter builds the view again from the same frozen snapshot.
-- **Work and memory.** Building takes one key per row for the column (as a filter builds it), the rows grouped by a
-  stable sort, and the snapshot itself: `DistinctWorkingBytes` (about 57 bytes a row) is charged to the result's query
+- **Work and memory.** Building takes one key per row for the column (as a filter builds it), the rows grouped in one
+  pass when the key's 8 bytes are its whole value (a number, a date or time, a text length, ranked text or bytes) and there are
+  at most 65,536 values, otherwise by a stable sort (a duplicates filter on one such column groups the same way), and the snapshot itself: `DistinctWorkingBytes` (about 57 bytes a row) is charged to the result's query
   budget while it builds (`TOO_LARGE` without room) and returned when it ends. The snapshot keeps
   `DistinctSnapshotBytes` (26 bytes a value and 4 KiB) charged until it is closed or its result goes. The worker's
   `cancel` stops a build or a read (`CANCELLED`). Main checks each answer before forwarding it: rows below 2³¹,
@@ -2575,7 +2580,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Descriptors per summary | 8 MiB (bounded per set by names, types and 96 bytes per column) | backend |
 | FOR XML / FOR JSON value | 2,097,152 characters, the rest marks it truncated | backend |
 | Row sizes a request | `results.rowBytes`: 1 – 16,384 rows (`rowSizes.maxRows`) | zod and backend |
-| Row identities | `results.rowIds` 1 – 16,384 rows; `results.findRows` 1 – 10,000 ids, 100,000 matches (`limits.identity`); 24 bytes a row while identifying, 8 kept, under the query budget | zod and backend |
+| Row identities | `results.rowIds` 1 – 16,384 rows; `results.findRows` 1 – 10,000 ids, 100,000 matches (`limits.identity`); 8 bytes a row (and a set of the first 32,768 rows) while identifying, 8 kept, under the query budget | zod and backend |
 | Result diffs | context -1 – 100 rows, 64 one-sided column names each side (`limits.diff`); about 80 bytes a row of both results and 12 a differing cell while aligning, the diff's rows under the query budget, whole or refused | zod and backend |
 | Sorted views | 0 – 16 keys and 0 – 16 filters a view (one at least), 4,096 distinct values a filter, 256 cell ranges a selection, 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key or filtered column while building (and a text, date or binary key's ranked or whole values while there is room), 4 bytes a row kept, under the query budget | zod and backend |
 | Transpose | 1 – 256 row ranges, at most 4,095 rows taken and 4,000,000 cells, the first rows taken past either with explicit truncation (`limits.transpose`); the stored set under the query budget, whole or refused | zod and backend |

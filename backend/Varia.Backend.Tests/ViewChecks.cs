@@ -121,6 +121,28 @@ internal static class ViewChecks
         if (timeBars is null || timeBars.Low != timeTicks.Min() || timeBars.High != timeTicks.Max()) wrong.Add("a time column with a cell of more than a day, or with a date");
         foreach (var text in other)
             if (ViewSorter.TryInstant(Encoding.UTF8.GetBytes(text), out _, out _, out _, out _)) wrong.Add(text);
+        // A date column is held by its ticks while every cell is written as the backend writes it, all of one width; one
+        // that is not gives the column back to its text's bytes, which order it the same.
+        string[] Held(params string[] cells)
+        {
+            var held = new ResultStore(1L << 30, 1L << 29);
+            var set = held.Open(held.BeginQuery("dates" + Guid.NewGuid()), 0, 1, 1, "rows", [new("at", "datetime2", "text")], [WireKind.Text]) ?? throw new InvalidOperationException("The result set was not kept.");
+            foreach (var cell in cells)
+            {
+                set.CountRow();
+                set.BeginRow()!.AppendText(cell);
+                set.TryCommitRow();
+            }
+            set.Complete();
+            var approximate = false;
+            var key = ViewSorter.Build(set, new ViewSorter.PageSource(set.SealedSnapshot(), 1), new ViewKey(0, false, SortMode.Value), null, cells.Length, CancellationToken.None, ref approximate);
+            return [key.Layout, string.Join(",", ViewSorter.Sort(set, set.SealedSnapshot(), [new ViewKey(0, false, SortMode.Value)], CancellationToken.None).Order)];
+        }
+        var byTicks = Held("2024-03-01 10:00:00.0000000", "2023-12-31 23:59:59.9999999", "2024-03-01 10:00:00.0000000", "2024-01-15 00:00:00.0000001");
+        var mixed = Held("2024-03-01 10:00:00.0000000", "2023-12-31 23:59:59.9999999", "not a date", "2024-01-15 00:00:00.0000001");
+        var widths = Held("2024-03-01 10:00:00.0000000", "2023-12-31 23:59:59.99", "2024-01-15 00:00:00.0000001");
+        check(byTicks is ["ticks", "1,3,0,2"] && mixed[0] != "ticks" && mixed[1] == "1,3,0,2" && widths[0] != "ticks" && widths[1] == "1,2,0",
+            "a date column sorts by its ticks while its cells are all written one way, and by its text's bytes once one is not: " + string.Join(" / ", byTicks.Concat(mixed).Concat(widths)));
         check(wrong.Count == 0 && same.Count == written.Length, "date and time text read directly gives the general parser's ticks for the text the backend writes, and declines any other; columns holding cells of another kind sort and profile as that parser has them: " + string.Join(" | ", wrong));
     }
 
@@ -297,11 +319,11 @@ internal static class ViewChecks
         string instants = Layout(5, counted), days = Layout(6, counted), blobs = Layout(7, counted), tags = Layout(8, counted);
         int Shared(string layout) => int.Parse(layout.Split(", ")[1].Split(' ')[0], invariant);
         int Odd(string layout) => int.Parse(layout.Split(", ")[2].Split(' ')[0], invariant);
-        check(name.StartsWith("ranked", StringComparison.Ordinal) && days.StartsWith("ranked", StringComparison.Ordinal) && blobs.StartsWith("ranked", StringComparison.Ordinal)
+        check(name.StartsWith("ranked", StringComparison.Ordinal) && days == "ticks" && instants == "ticks" && blobs.StartsWith("ranked", StringComparison.Ordinal)
             && nameBare.StartsWith("prefix", StringComparison.Ordinal),
-            "repeated values are ranked, text, dates and bytes alike, and held by their 8 bytes without room for the values: " + name + " / " + days + " / " + blobs + " / " + nameBare);
+            "repeated text and bytes are ranked, dates and times are held by their ticks, and text by its 8 bytes without room for the values: " + name + " / " + days + " / " + blobs + " / " + nameBare);
         check(Shared(path) >= 8 && Odd(path) == rows / 7919 + 1 + rows / 100 && folder.StartsWith("whole", StringComparison.Ordinal) && Shared(folder) >= 8 && Odd(folder) == 0
-            && folderBare.StartsWith("prefix", StringComparison.Ordinal) && instants.StartsWith("whole, 8 shared", StringComparison.Ordinal)
+            && folderBare.StartsWith("prefix", StringComparison.Ordinal)
             && tags.StartsWith("prefix, 0 shared", StringComparison.Ordinal) && reserved == returned,
             "a start most rows share is left out, the rows that start otherwise marked (" + path + "); values alike past it are kept whole (" + folder + ", " + instants
             + "), and values 8 bytes tell apart are not (" + tags + ")");
@@ -313,6 +335,14 @@ internal static class ViewChecks
         var keptCells = ViewSorter.Build(set, pages, twoKeys, duplicates, none, refusing).Order;
         var listed = ViewSorter.DistinctValues(set, pages, null, 1, true, none, null, counted);
         var listedCells = ViewSorter.DistinctValues(set, pages, null, 1, true, none, null, refusing);
+        // Ranked values are grouped by their ranks in one pass; without the ranks, by a sort. The same groups either way.
+        var grouped = ViewSorter.Build(set, pages, [], duplicates, none, counted).Order;
+        var groupedCells = ViewSorter.Build(set, pages, [], duplicates, none, refusing).Order;
+        string Listed(DistinctSnapshot snapshot) => JsonSerializer.Serialize(new { byValue = snapshot.Read(DistinctOrder.Value, 0, ViewSorter.MaxDistinctWindow, null, none), byCount = snapshot.Read(DistinctOrder.Count, 0, ViewSorter.MaxDistinctWindow, null, none), frozen = snapshot.Freeze().Rows, snapshot.Nulls, snapshot.Rows }, HostChecks.Json);
+        var ids = ViewSorter.DistinctValues(set, pages, null, 0, true, none, null, counted);
+        check(grouped.Length == kept.Length && grouped.AsSpan().SequenceEqual(groupedCells) && grouped[0] == 0 && grouped[1] == 97 && Listed(listed) == Listed(listedCells)
+            && ids.Distinct == rows && ViewSorter.Build(set, pages, [], [new ViewFilter(FilterOp.Duplicates, 0, null, false, null, [0])], none, counted).Order.Length == 0,
+            "duplicates and distinct values grouped by rank in one pass are the ones a sort groups, in the same order; more values than are grouped that way (" + ids.Distinct + ") are sorted");
         check(kept.Length > rows / 2 && kept.AsSpan().SequenceEqual(keptCells) && listed.Distinct == names.Count && listedCells.Distinct == names.Count && reserved == returned,
             "filtered rows sorted by two keys, and a column's distinct values, are the same with key memory and without (" + kept.Length + " rows kept, " + listed.Distinct + " values)");
 
