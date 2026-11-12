@@ -56,7 +56,7 @@ export interface OutputTarget {
   readonly resultIndex: number
   /** The header or cell column captured when the menu opened (zero-based, without the row-number column). */
   readonly column?: number
-  /** The cell's or row number's row captured with it (zero-based, in the rows the grid shows). */
+  /** The cell's or row number's row captured with it (zero-based, a row of the result as the grid shows it now). */
   readonly row?: number
   /** Refuses commands after this grid was replaced by another execution at the same result index. */
   readonly result?: { readonly generation: number; readonly resultId: number }

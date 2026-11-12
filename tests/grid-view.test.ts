@@ -169,4 +169,20 @@ describe('the grid\'s seams', () => {
     expect(headers().some(header => header.hasAttribute('aria-sort'))).toBe(false)
     grid.view.dispose()
   })
+  it('answers for a header an update has marked to be written again, before the frame that writes it', async () => {
+    const grid = mount({ rows: 500, columns: 40 })
+    await grid.frame()
+    grid.key('ArrowDown')
+    await grid.frame()
+    const header = grid.shown('.rg-ch')[3], service = new MenuTargetService()
+    // Each of these resets every header slot and schedules a frame; a menu opened before it runs is still for column 3,
+    // not for the active cell's column.
+    for (const update of [{ filterable: new Set([1, 2]) }, { showTypes: false }]) {
+      grid.view.update({ resultCount: 1, ...update })
+      expect(gridTarget(grid.root, header).target, Object.keys(update)[0]).toEqual({ column: 3 })
+      grid.view.update({ resultCount: 1, filterable: new Set([1, 2, 3]), showTypes: true })
+      expect(service.targetFor(header)!.target, Object.keys(update)[0]).toMatchObject({ column: 3 })
+    }
+    grid.view.dispose()
+  })
 })

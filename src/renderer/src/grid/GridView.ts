@@ -620,16 +620,20 @@ export class GridView {
     this.o.stats?.frame(performance.now() - started)
   }
 
+  /** Paints a frame that is still pending now, so the slots say what the next paint would show. */
+  private flushFrame(): void {
+    if (!this.cancelFrame) return
+    this.cancelFrame()
+    this.cancelFrame = undefined
+    this.runFrame()
+  }
+
   /**
    * What a keyboard-opened menu opens below: the active cell, else the first cell in view, else the header row. A frame
    * still pending (a click or key just moved the active cell) is painted first.
    */
   private menuAnchor(): Element {
-    if (this.cancelFrame) {
-      this.cancelFrame()
-      this.cancelFrame = undefined
-      this.runFrame()
-    }
+    this.flushFrame()
     if (this.activeEl) return this.activeEl
     const range = this.lastRange
     if (range && this.rowSlots.length > 0 && this.ring) {
@@ -1112,8 +1116,11 @@ export class GridView {
   }
 
   /** What a menu opened on `element` is for, in the result's rows and columns (anchor.ts): a cell's row and column, a
-   *  header's column, a row number's row; undefined on the corner and on a slot that shows nothing. */
+   *  header's column, a row number's row; undefined on the corner and on a slot that shows nothing. A pending frame is
+   *  painted first: until it runs, a slot marked to be written again (an update sets a shown header's column to -1) would
+   *  read as showing nothing. */
   private targetOf(element: Element): GridTarget | undefined {
+    this.flushFrame()
     for (let at: Element | null = element; at && at !== this.root; at = at.parentElement) {
       const slot = this.slots.get(at)
       if (!slot) continue

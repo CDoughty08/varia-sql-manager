@@ -89,7 +89,7 @@ being true.
   at named seams (its `selection`/`select`, `sourceRange`, a cell's lookup in `paintCell`, `targetOf`), each the identity
   today; its saved state, marks and callbacks are always in the result's. Columns are placed through `ColumnAxis`
   (`grid/layout.ts`) and tiles have a `TileShape` (`grid/tiles.ts`). A menu's row and column come from the grid
-  (`gridTarget`, `grid/anchor.ts`), never from an ARIA index. `tests/grid-view.test.ts` holds the seams.
+  (`gridTarget`, `grid/anchor.ts`); an ARIA index is read only where no `GridView` is registered. `tests/grid-view.test.ts` holds the seams.
   Live tables show through `LiveGrid` (`src/renderer/src/live/`), which swaps each revision into its `GridView`; a table's row
   tone column (catalogue `role: 'tone'`, its last) is hidden by the grid and left out of Copy and Save (`ResultJobs`).
 - Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never
