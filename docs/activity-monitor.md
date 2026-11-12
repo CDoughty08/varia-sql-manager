@@ -92,6 +92,8 @@ A chosen value the facets no longer list stays in its funnel, ticked, with a cou
 | Split View | `activity.toggleSplit` | — | — |
 | Next Panel | `activity.nextPane` | F6 | F6 |
 | Previous Panel | `activity.previousPane` | Shift+F6 | ⇧F6 |
+| Session Details… | `activity.sessionDetails` | — | — |
+| Kill Process… | `activity.killProcess` | — | — |
 | Close Activity Monitor | `activity.close` | Shift+Escape | ⇧⎋ |
 
 SSMS opens Activity Monitor with Ctrl+Alt+A. On Windows and Linux, Ctrl+Alt+letter is AltGr, which types characters on
@@ -307,6 +309,9 @@ Probe `activity.sessions`; key `sessionId`; at most 2,000 rows. Order: lead bloc
 | Open Transactions | `openTransactions` | int | count | Yes | New | The session's open transactions. |
 | Cycle | `cycle` | bool | — | Yes | New | Part of a cycle (a deadlock SQL Server has not resolved yet); the chain is cut at its lowest session id. |
 | Last Batch | `lastBatch` | text | — | Yes | New | Lead blockers only: the start of the last batch it sent (sys.dm_exec_input_buffer). |
+| Login Time | `loginTime` | datetime | — |  | New | The session's login_time; with the session id it identifies the session for Details and Kill Process. |
+| Host PID | `hostProcessId` | int | id |  | New | The session's host_process_id, which Kill Process checks. |
+| Varia | `varia` | text | — |  | New | What a Varia session is, as in Sessions; Kill Process is not offered for Varia's own pools. |
 
 ### Active Expensive Queries (`activeQueries`)
 
@@ -338,6 +343,12 @@ Probe `activity.sessions`; key `sessionId`, `requestId` (with `startTime` for ra
 | Blocked By | `blockedBy` | int | id | Yes | New | The session it waits on. |
 | % Complete | `percentComplete` | decimal | % |  | New | For commands that report progress (BACKUP, RESTORE, DBCC, rollback). |
 | Query Hash | `queryHash` | text | — |  | New | query_hash. |
+| Login | `login` | text | — |  | New | The session's login_name, which Kill Process names. |
+| Host Name | `hostName` | text | — |  | New | The session's host_name, which Kill Process names. |
+| Open Transactions | `openTransactions` | int | count |  | New | The session's open transactions, which Kill Process warns about. |
+| Login Time | `loginTime` | datetime | — |  | New | The session's login_time; with the session id it identifies the session for Details and Kill Process. |
+| Host PID | `hostProcessId` | int | id |  | New | The session's host_process_id, which Kill Process checks. |
+| Varia | `varia` | text | — |  | New | What a Varia session is, as in Sessions; Kill Process is not offered for Varia's own pools. |
 
 ### Wait categories (`waitCategories`)
 
@@ -637,7 +648,24 @@ session it checks (below).
 
 Details and Kill Process act on a row of Sessions, Blocking or Active Expensive Queries. Both name the session by its id
 and its login time (`2026-10-22T06:50:12.347`: server local time, as `sys.dm_exec_sessions` has it, within `datetime`'s
-range), because SQL Server reuses session ids.
+range), because SQL Server reuses session ids. Blocking and Active Expensive Queries carry the session's login time, host
+process id and Varia label (and Active Expensive Queries its login, host and open transactions) as hidden columns for them.
+
+Right-click a row: **Details…** and **Kill Process…** head Query Output's menu in those three panes, and the palette has
+**Session Details…** and **Kill Process…**, which act on the row the menu was opened on, else the focused grid's active
+row, else the active row of the session pane focused last. SSMS binds no key to either, and neither does Varia.
+
+The Details flyout is a nonmodal panel beside the monitor, which keeps sampling: the session's identity and state, its
+current statement, batch and last batch, its waits, transactions and tempdb usage, and its locks on Load locks. Refresh
+reads it again, Copy copies every section as text, and Close (or Escape) cancels a read still running. A section that
+could not be read says why while the others show; a session that ended, or whose id now belongs to another session,
+says so in place of its sections.
+
+Kill Process asks first. The confirm names the session, its login, host and open transactions, and warns that an open
+transaction rolls back, which can take as long as the work it undoes; Cancel has focus, so Enter never ends a session.
+Kill is disabled, with the reason, when the sessions probe says the login lacks ALTER ANY CONNECTION (`canKill` 0), and
+Kill Process is never offered for one of Varia's own pool sessions. What the backend answers shows above the tiles,
+one sentence per outcome (below), until dismissed; after a kill the monitor samples again at once.
 
 **Details** (`activity.details`) reads the session on the monitor's pool (" - Activity Monitor", READ UNCOMMITTED,
 LOCK_TIMEOUT 1000) under the live gates, within 10 s in all: a lock wait answers BLOCKED and the budget TIMEOUT, as

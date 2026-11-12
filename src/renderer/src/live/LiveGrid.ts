@@ -276,6 +276,33 @@ export class LiveGrid extends SnapshotStore<LiveGridSnapshot> implements Disposa
     this.changed()
   }
 
+  /**
+   * The active row's stored texts (NULL as null) for these catalogue column ids, read from the revision the grid shows:
+   * what an owner's row actions (the Activity Monitor's Details and Kill Process) act on. Undefined without a row, when a
+   * cell could not be read whole, or when the row at the active index is not the row whose key the grid follows (a swap
+   * the backend has not placed yet), so an action never names a row the user did not choose.
+   */
+  async activeRow(columns: readonly string[]): Promise<Readonly<Record<string, string | null>> | undefined> {
+    const table = this.table, selection = this.selection ?? this.view?.currentSelection()
+    if (!table || !selection || this.disposed) return undefined
+    const row = selection.active.row, key = this.keyAt(row)
+    const indexes = columns.map(id => this.spec.columns.findIndex(column => column.id === id))
+    if (row < 0 || row >= table.descriptor.rowsAvailable || indexes.some(index => index < 0)) return undefined
+    const wanted = [...new Set([...indexes, ...this.keyColumns])]
+    const colStart = Math.min(...wanted), colEnd = Math.max(...wanted) + 1
+    let window: RowWindow
+    try { window = await table.handle.getWindow(row, 1, { colStart, colEnd, display: false, maxCellChars: limits.live.keyCharacters + 1 }) } catch { return undefined }
+    if (window.count < 1 || this.table !== table) return undefined
+    if (this.keyColumns.length && key !== undefined && keyOfRow(window, row, this.keyColumns) !== key) return undefined
+    const width = window.colEnd - window.colStart, values: Record<string, string | null> = {}
+    for (const [at, id] of columns.entries()) {
+      const flags = window.flags[indexes[at] - window.colStart]
+      if (flags & (FLAG_ERROR | FLAG_CAPPED)) return undefined
+      values[id] = flags & FLAG_NULL ? null : window.text[indexes[at] - window.colStart]
+    }
+    return width > 0 ? values : undefined
+  }
+
   /** Copy: the grid's selection of the revision it shows, as Copy in a results grid (the tone column is never copied). */
   async copy(headers: boolean): Promise<ApiResult<ResultsJobResult> | undefined> {
     const table = this.table, selection = this.view?.currentSelection()

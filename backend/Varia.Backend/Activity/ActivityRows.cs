@@ -287,7 +287,16 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
         requestRates.Clear();
     }
 
-    private sealed record SessionInfo(string? Status, string? Login, string? Host, string? Application, string? Database, int? OpenTransactions);
+    private sealed record SessionInfo(string? Status, string? Login, string? Host, string? Application, string? Database, int? OpenTransactions, DateTime? LoginTime, long? HostProcessId, string? Varia);
+
+    /// <summary>The session's identity (login time, host process id) and Varia label on a Blocking or Active Expensive
+    /// Queries row, from its Sessions row, so Details and Kill Process can name it from either pane.</summary>
+    private static void SetIdentity(ActivityRowWriter writer, LiveCell[] cells, SessionInfo? info)
+    {
+        writer.Set(cells, "loginTime", ActivityRowWriter.Time(info?.LoginTime));
+        writer.Set(cells, "hostProcessId", LiveCell.Of(info?.HostProcessId));
+        writer.Set(cells, "varia", LiveCell.Of(info?.Varia));
+    }
 
     /// <param name="at">This sample's time in milliseconds on the probe's sample clock (the server's own between samples that
     /// read it), which per-row rates measure their span with.</param>
@@ -395,7 +404,7 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
             built.Add(live);
             facts[live] = new(System: !rows.Flag(row, "is_user_process"), VariaPool: pool, Active: hasRequest, Blocked: node?.BlockedBy > 0, Blocking: node?.Downstream > 0,
                 IdleOpenTransaction: !hasRequest && openTransactions > 0, RollingBack: rollingBack);
-            infos[id] = new(status, rows.Text(row, "login_name"), rows.Text(row, "host_name"), rows.Text(row, "program_name"), database, openTransactions);
+            infos[id] = new(status, rows.Text(row, "login_name"), rows.Text(row, "host_name"), rows.Text(row, "program_name"), database, openTransactions, loginTime, rows.Long(row, "host_process_id"), label);
         }
         sessionRates.EndSample();
 
@@ -424,11 +433,12 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
             blocking.Set(cells, "openTransactions", LiveCell.Of(info?.OpenTransactions));
             blocking.Set(cells, "cycle", LiveCell.Bit(node.Cycle));
             blocking.Set(cells, "lastBatch", LiveCell.Of(depth == 0 ? ActivityRowWriter.OneLine(batches.GetValueOrDefault(node.SessionId), catalog.Limit("lastBatchChars")) : null));
+            SetIdentity(blocking, cells, info);
             blocking.Tone(cells, ChainTone(depth), catalog);
             chain.Add(new LiveRow(cells));
         }
 
-        var (activeRows, activeMore) = Active(results.GetValueOrDefault("activeQueries"), at);
+        var (activeRows, activeMore) = Active(results.GetValueOrDefault("activeQueries"), at, infos);
         return new(built, Math.Max(0, grouped.Count - sessionsCap), facts, chain, graph.Truncated ? 1 : 0, activeRows, activeMore,
             focusCpu, focusReads, graph.BlockedSessions);
     }
@@ -443,7 +453,7 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
     /// <summary>A running request's tone: blocked, else rolling back.</summary>
     public static string? ActiveTone(bool blocked, bool rollingBack) => blocked ? "blocked" : rollingBack ? "rollback" : null;
 
-    private (List<LiveRow>? Rows, long More) Active(ActivityResult? requests, long at)
+    private (List<LiveRow>? Rows, long More) Active(ActivityResult? requests, long at, Dictionary<int, SessionInfo> infos)
     {
         if (requests is null)
         {
@@ -485,6 +495,11 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
             active.Set(cells, "blockedBy", blockedBy is { } by ? LiveCell.Of(by) : LiveCell.Null);
             active.Set(cells, "percentComplete", requests.Double(row, "percent_complete") is { } percent and > 0 ? ActivityRowWriter.Decimal(percent, 1) : LiveCell.Null);
             active.Set(cells, "queryHash", LiveCell.Of(ActivityRowWriter.Hex(requests.Bytes(row, "query_hash"))));
+            var info = infos.GetValueOrDefault(session);
+            active.Set(cells, "login", LiveCell.Of(info?.Login));
+            active.Set(cells, "hostName", LiveCell.Of(info?.Host));
+            active.Set(cells, "openTransactions", LiveCell.Of(info?.OpenTransactions));
+            SetIdentity(active, cells, info);
             if (ActiveTone(blockedBy is not null, requests.Text(row, "command") == "KILLED/ROLLBACK") is { } tone) active.Tone(cells, tone, catalog);
             rows.Add(new LiveRow(cells));
         }

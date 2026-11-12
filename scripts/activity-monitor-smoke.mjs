@@ -415,6 +415,75 @@ try {
   await firstTabs.getByRole('tab', { name: 'Sessions', exact: true }).click()
   console.log('Blocking and active passed: the chain shows with its lead blocker and goes when blocking ends, running requests list, and neither starts a probe.')
 
+  step = 'session actions'
+  // Details… and Kill Process… head Query Output's menu on a session row (Sessions, Blocking, Active Expensive Queries).
+  const sessionMenu = async (grid, cell) => {
+    // A click selects the row first, so the menu's enablement reads that row's session.
+    await grid.getByRole('gridcell', { name: cell, exact: true }).click()
+    await grid.getByRole('gridcell', { name: cell, exact: true }).click({ button: 'right' })
+    await expect(gridMenu).toBeVisible()
+    return gridMenu
+  }
+  await (await sessionMenu(sessionsGrid, 'app_orders')).getByRole('menuitem', { name: /^Details…/ }).click()
+  const details = monitor().getByRole('dialog', { name: /^Session 57/ })
+  await expect(details).toBeVisible()
+  await expect(details).toBeFocused()
+  await expect(details.getByRole('heading', { name: 'Identity and Now', exact: true })).toBeVisible()
+  await expect(details.getByText('BEGIN TRAN; UPDATE dbo.Orders SET Status = 2 WHERE OrderId = 1', { exact: true })).toBeVisible()
+  // A section a permission kept out says why; the others show.
+  await expect(details.getByText('tempdb usage needs VIEW SERVER STATE.', { exact: true })).toBeVisible()
+  await expect.poll(async () => (await calls('activity.details')).at(-1)?.params).toMatchObject({ sessionId: 57, loginTime: '2026-11-09T08:00:00.000' })
+  await details.getByRole('button', { name: 'Load locks', exact: true }).click()
+  await expect(details.getByRole('rowheader', { name: 'KEY', exact: true })).toBeVisible()
+  expect((await calls('activity.details')).at(-1).params.locks).toBe(true)
+  // The monitor keeps sampling beside it (nonmodal), and Escape closes it.
+  await expect(monitor().getByText(/^3 sessions/)).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(details).toHaveCount(0)
+  // From Active Expensive Queries: the hidden identity columns name the session.
+  await firstTabs.getByRole('tab', { name: 'Active Expensive Queries', exact: true }).click()
+  await (await sessionMenu(active, 'BillingDb')).getByRole('menuitem', { name: /^Details…/ }).click()
+  const billing = monitor().getByRole('dialog', { name: /^Session 66/ })
+  await expect(billing.getByText('app_billing', { exact: true }).first()).toBeVisible()
+  await billing.getByRole('button', { name: 'Close details', exact: true }).click()
+  await expect(billing).toHaveCount(0)
+  await firstTabs.getByRole('tab', { name: 'Sessions', exact: true }).click()
+  // Kill Process asks first, naming the session, and Cancel (which has focus) kills nothing.
+  await (await sessionMenu(sessionsGrid, 'app_billing')).getByRole('menuitem', { name: /^Kill Process…/ }).click()
+  const kill = page.getByRole('dialog', { name: 'Kill Process', exact: true })
+  await expect(kill.getByText('Kill session 66?', { exact: true })).toBeVisible()
+  await expect(kill.getByText('APP-07', { exact: true })).toBeVisible()
+  await expect(kill.getByText(/rolls back, which can take as long as the work it undoes/)).toBeVisible()
+  await expect(kill.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(kill).toHaveCount(0)
+  expect(await calls('activity.kill')).toEqual([])
+  // Without ALTER ANY CONNECTION (canKill 0 in the next sample) the confirm refuses, with the reason.
+  await writeFile(join(control, 'activity-no-kill'), '')
+  await (await sessionMenu(sessionsGrid, 'app_billing')).getByRole('menuitem', { name: /^Kill Process…/ }).click()
+  await expect(kill.getByRole('alert')).toHaveText(/needs ALTER ANY CONNECTION/)
+  await expect(kill.getByRole('button', { name: 'Kill Process', exact: true })).toBeDisabled()
+  await kill.getByRole('button', { name: 'Cancel', exact: true }).click()
+  expect(await calls('activity.kill')).toEqual([])
+  await rm(join(control, 'activity-no-kill'))
+  // Confirmed: the backend gets the row's identity, the outcome is reported, and the session leaves Sessions.
+  await (await sessionMenu(sessionsGrid, 'app_billing')).getByRole('menuitem', { name: /^Kill Process…/ }).click()
+  await expect(kill.getByRole('button', { name: 'Kill Process', exact: true })).toBeEnabled()
+  await kill.getByRole('button', { name: 'Kill Process', exact: true }).click()
+  await expect(kill).toHaveCount(0)
+  await expect(monitor().getByRole('status').filter({ hasText: 'Session 66 was killed.' })).toBeVisible()
+  expect((await calls('activity.kill')).map(call => call.params.sessions)).toEqual([[{ sessionId: 66, loginTime: '2026-11-09T08:02:00.000', hostProcessId: 6300 }]])
+  await expect(monitor().getByText(/^2 sessions/)).toBeVisible()
+  await monitor().getByRole('button', { name: 'Dismiss', exact: true }).click()
+  // Varia's own pool sessions are never offered to Kill.
+  await showVaria.click()
+  await expect(async () => {
+    await sessionMenu(sessionsGrid, 'Varia SQL Manager - Object Explorer')
+    try { await expect(gridMenu.getByRole('menuitem', { name: /^Kill Process…/ })).toBeDisabled({ timeout: 500 }) } finally { await page.keyboard.press('Escape') }
+  }).toPass()
+  await showVaria.click()
+  console.log('Session actions passed: Details opens from Sessions and Active Expensive Queries with its sections and locks; Kill asks, cancels, refuses without permission or for Varia\'s own, and reports a kill.')
+
   step = 'panes'
   const first = monitor().getByRole('tablist', { name: 'First pane', exact: true })
   await expect(first.getByRole('tab', { name: 'Sessions', exact: true })).toHaveAttribute('aria-selected', 'true')

@@ -94,6 +94,16 @@ export interface LiveOutput {
   /** Find in Results: the owner's filter box, when it has one. */
   canFind(): boolean
   find(): void
+  /** What the grid's rows are to their owner, with its actions on the active row (an Activity Monitor pane's sessions:
+   *  Details and Kill Process); none for a grid whose rows have no actions. */
+  readonly rows?: LiveRowActions
+}
+export type LiveRowAction = 'details' | 'kill'
+/** An owner's actions on a live grid's active row; `can` reads what the owner knows now, so the menu and keys agree. */
+export interface LiveRowActions {
+  readonly kind: 'session'
+  can(action: LiveRowAction): boolean
+  run(action: LiveRowAction): void
 }
 const liveOutputs = new WeakMap<Element, LiveOutput>()
 /** A live grid's element (marked `data-output-view="live"`) and its commands, until the returned function runs. */
@@ -148,6 +158,7 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
     outputGridTransposable: target?.kind === 'output' && target.view === 'grid' && transposableKinds.has(target.resultKind ?? ''),
     outputLiveSortable: target?.kind === 'output' && !!target.live?.sortable,
     outputLiveFilterable: target?.kind === 'output' && !!target.live?.filterable,
+    outputLiveRows: target?.kind === 'output' ? target.live?.rows?.kind ?? '' : '',
     pane: target?.kind === 'dockTab' ? target.pane : '',
     paneFloating: target?.kind === 'dockTab' && target.floating,
     panePopout: target?.kind === 'dockTab' && target.popout,

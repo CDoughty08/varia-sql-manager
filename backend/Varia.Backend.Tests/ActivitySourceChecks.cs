@@ -337,6 +337,11 @@ internal static class ActivitySourceChecks
         check(sample.Active is [{ } query] && Cell(active, query, "query") == "SELECT * FROM dbo.t" && Cell(active, query, "blockedBy") == "60" && Cell(active, query, "queryHash") == "0x0102"
             && Cell(active, query, "percentComplete") is null,
             "Active Expensive Queries show the statement on one line and the session the request waits on");
+        var request = sample.Active![0];
+        check(Cell(chain, rows[0], "loginTime") is { Length: > 0 } lead && lead == P(60, "loginTime") && Cell(chain, rows[0], "hostProcessId") == "4242" && Cell(chain, rows[0], "varia") is null
+            && Cell(active, request, "loginTime") == P(69, "loginTime") && Cell(active, request, "hostProcessId") == "4242" && Cell(active, request, "login") == "app_user"
+            && Cell(active, request, "hostName") == P(69, "hostName") && Cell(active, request, "openTransactions") == "0" && Cell(active, request, "varia") is null,
+            "Blocking and Active Expensive Queries carry each session's login time, host process id and Varia label (and a request's login, host and open transactions) from its Sessions row, for Details and Kill Process");
     }
 
     private static void Varia(Action<bool, string> check)
