@@ -9,15 +9,14 @@ on:
   workflow_dispatch:
     inputs:
       regression-suite:
-        description: Focused regressions (none runs full CI; all runs Electron suites)
+        description: Suite (none runs full CI; docs runs documentation; all runs Electron suites)
         type: choice
-        options: [none, dialogs, results, tail, all, activity]
+        options: [none, docs, dialogs, results, tail, all, activity]
         default: none
 
 concurrency:
-  # A new push supersedes the earlier run of its pull request, or of main: each pull request already tested its merge with main,
-  # and main pushes often come minutes apart (30 of 73 within 20 minutes), so a superseded main run mostly repeats that work.
-  # The newest main commit always gets a complete run. Manual runs are never cancelled.
+  # Every main push runs full CI, so a newer push can safely replace the earlier run, even after a docs-only merge.
+  # PR updates also supersede their earlier runs; manual runs have unique groups.
   group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' || github.event_name == 'push') && github.ref || github.run_id }}
   cancel-in-progress: true
 
@@ -28,18 +27,61 @@ env:
   DOTNET_CLI_TELEMETRY_OPTOUT: '1'
   DOTNET_NOLOGO: '1'
 
-# Every job starts at once and builds what it needs itself: the checks, the live SQL Server checks, the smoke shards and
+# After the scope check, every validation job starts at once and builds what it needs itself: the checks, the live SQL Server checks, the smoke shards and
 # the benchmarks run side by side, so a failure in one hides nothing in the others and the run takes as long as its
-# longest job. Every pull request runs every platform, drafts included: the repository is public, so runners cost nothing.
-# What a public repository does pay in is concurrency (20 jobs at once across the account, 5 of them macOS), so a pull request
-# runs 13 jobs: a third Windows smoke shard keeps language-service coverage within the per-shard time budget; no job repeats
+# longest job. Every code-changing pull request runs every platform, drafts included: the repository is public, so runners cost nothing.
+# What a public repository does pay in is concurrency (20 jobs at once across the account, 5 of them macOS). A code-changing PR
+# runs 15 jobs: 13 validation jobs plus scope and result. A third Windows smoke shard keeps language-service coverage within the per-shard time budget; no job repeats
 # another's work. Report-only work stays off pull requests: Linux's 1024x768 repeats of suites the
 # Windows shards already run at that size run on main only, and the desktop benchmarks run daily (bench-desktop.yml).
+# Scope detection and the final required result add two short Linux jobs.
 # docs/ci.md measures all of this and holds the rules.
 jobs:
+  scope:
+    name: CI scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.scope.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
+          sparse-checkout: scripts/ci-scope.mjs
+          sparse-checkout-cone-mode: false
+      - name: Classify the complete change
+        id: scope
+        timeout-minutes: 1
+        env:
+          REGRESSION_SUITE: ${{ inputs.regression-suite }}
+        run: node scripts/ci-scope.mjs
+
+  docs:
+    name: Documentation checks
+    needs: scope
+    if: needs.scope.outputs.mode == 'docs'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      # Keep all source-only tests, including generated docs, README and published changelog validation.
+      # These need neither Electron's binary nor a .NET build or SQL Server.
+      - name: Validate documentation and source contracts
+        timeout-minutes: 5
+        run: npx vitest run --exclude tests/backend-sidecar.test.ts --exclude 'tests/*-live.test.ts'
+
   check:
     name: Check (${{ matrix.os }})
-    if: github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'
+    needs: scope
+    if: needs.scope.outputs.mode == 'full'
     strategy:
       fail-fast: false
       matrix:
@@ -71,7 +113,8 @@ jobs:
 
   live:
     name: Live SQL Server checks (Linux ${{ matrix.group }}/3)
-    if: github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'
+    needs: scope
+    if: needs.scope.outputs.mode == 'full'
     strategy:
       fail-fast: false
       matrix:
@@ -156,7 +199,8 @@ jobs:
 
   smoke-linux:
     name: Smoke (Linux ${{ matrix.shard }}/3)
-    if: github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'
+    needs: scope
+    if: needs.scope.outputs.mode == 'full'
     strategy:
       fail-fast: false
       matrix:
@@ -245,7 +289,8 @@ jobs:
     name: Smoke (Windows ${{ matrix.shard }}/3)
     # The smoke suites assert Windows/Linux window chrome (controls overlay, hidden menu bar, Ctrl shortcuts), so on macOS
     # they fail at the first check; they run there once its native menu bar and Cmd shortcuts are covered.
-    if: github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'
+    needs: scope
+    if: needs.scope.outputs.mode == 'full'
     strategy:
       fail-fast: false
       matrix:
@@ -285,7 +330,8 @@ jobs:
 
   bench-linux:
     name: Benchmarks (Linux)
-    if: github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'
+    needs: scope
+    if: needs.scope.outputs.mode == 'full'
     runs-on: ubuntu-24.04
     # Room for every timed step below (tests/ci-workflow.test.ts) plus the setup before them.
     timeout-minutes: 40
@@ -355,7 +401,27 @@ jobs:
           retention-days: 30
 
   regressions:
-    if: github.event_name == 'workflow_dispatch' && inputs.regression-suite != 'none'
+    needs: scope
+    if: needs.scope.outputs.mode == 'regressions'
     uses: ./.github/workflows/ci-regressions.yml
     with:
       suite: ${{ inputs.regression-suite }}
+
+  result:
+    # Manual partial suites must never share the required PR check's name.
+    name: ${{ github.event_name == 'workflow_dispatch' && 'Manual CI result' || 'CI result' }}
+    if: always()
+    needs: [scope, docs, check, live, smoke-linux, smoke-windows, bench-linux, regressions]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/ci-result.mjs
+          sparse-checkout-cone-mode: false
+      - name: Require every selected job to pass
+        timeout-minutes: 1
+        env:
+          CI_NEEDS: ${{ toJSON(needs) }}
+        run: node scripts/ci-result.mjs

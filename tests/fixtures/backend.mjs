@@ -1344,6 +1344,30 @@ function activitySessionsSample(live, probe) {
     { table: 2, descriptor: describe(active), revision: probe.samples, ...(activeRetired ? { retired: activeRetired } : {}) }
   ], ...(status ? { status } : {}) }
 }
+// Recent Expensive Queries on the fake server: three query groups, keyed by query hash. A first sample has no window, so its
+// rate cells are blank and its rows go by total CPU (as ActivityQueryRows); later samples carry the rates. The probe's
+// sort for the table (a rank chip, a header's sort button) orders them, numbers as numbers, the query hash breaking ties.
+const fakeQueries = [
+  { query: 'SELECT c.CustomerId, SUM(o.Total) FROM dbo.Customers AS c JOIN dbo.Orders AS o ON o.CustomerId = c.CustomerId GROUP BY c.CustomerId', executionsPerMinute: '4.0', cpuRate: '96.5', avgCpuMs: '723.8', physicalReadsRate: '12.0', logicalReadsRate: '48210.0', logicalWritesRate: '0.0', averageDurationMs: '1910.2', maxDurationMs: '2402.0', rowsPerExecution: '1520.0', avgGrantKb: '4096.0', spills: '0', planCount: '1', database: 'SalesDb', lastExecution: '2026-11-09 08:02:40.000', cachedSince: '2026-11-09 06:00:00.000', queryHash: '0x1A2B3C4D5E6F7081', totalCpu: 9 },
+  { query: 'UPDATE dbo.Invoices SET Paid = 1 WHERE InvoiceId = @id', executionsPerMinute: '310.0', cpuRate: '12.4', avgCpuMs: '2.4', physicalReadsRate: '0.5', logicalReadsRate: '1550.0', logicalWritesRate: '25.8', averageDurationMs: '3.1', maxDurationMs: '40.0', rowsPerExecution: '1.0', avgGrantKb: '0.0', spills: '0', planCount: '2', database: 'BillingDb', lastExecution: '2026-11-09 08:02:44.000', cachedSince: '2026-11-08 22:15:00.000', queryHash: '0x2B3C4D5E6F708192', totalCpu: 3 },
+  { query: 'SELECT TOP (50) p.ProductId, p.Name FROM dbo.Products AS p ORDER BY p.Name', executionsPerMinute: '18.0', cpuRate: '1.2', avgCpuMs: '4.0', physicalReadsRate: '88.0', logicalReadsRate: '320.0', logicalWritesRate: '0.0', averageDurationMs: '96.0', maxDurationMs: '310.0', rowsPerExecution: '50.0', avgGrantKb: '1024.0', spills: '0', planCount: '1', database: 'CatalogDb', lastExecution: '2026-11-09 08:02:41.000', cachedSince: '2026-11-09 07:30:00.000', queryHash: '0x3C4D5E6F708192A3', totalCpu: 1 }
+]
+const queryRates = ['executionsPerMinute', 'cpuRate', 'physicalReadsRate', 'logicalReadsRate', 'logicalWritesRate']
+function activityQueriesSample(live, probe) {
+  const first = probe.samples === 1
+  const rows = fakeQueries.map(row => first ? { ...row, ...Object.fromEntries(queryRates.map(column => [column, null])) } : row)
+  const sort = (probe.sort ?? []).filter(key => key.table === undefined || key.table === 0)
+  const value = (row, column) => { const cell = row[column]; return cell === null || cell === undefined ? -Infinity : /^-?[\d.]+$/.test(cell) ? Number(cell) : cell }
+  if (sort.length) rows.sort((a, b) => { for (const key of sort) { const left = value(a, key.column), right = value(b, key.column); if (left !== right) return (left < right ? -1 : 1) * (key.descending ? -1 : 1) } return a.queryHash < b.queryHash ? -1 : 1 })
+  else rows.sort((a, b) => first ? b.totalCpu - a.totalCpu : Number(b.cpuRate) - Number(a.cpuRate))
+  const result = sessionTableResult(liveProbes['activity.queries'].tables[0], '', rows)
+  const kept = live.kept.get(probe.probe) ?? []
+  kept.push(result.resultId)
+  const retired = kept.length > 2 ? [kept.shift()] : undefined
+  if (retired) stored.delete(retired[0])
+  live.kept.set(probe.probe, kept)
+  return { tables: [{ table: 0, descriptor: describe(result), revision: probe.samples, ...(retired ? { retired } : {}) }] }
+}
 /** An overview sample: every series of the catalogue, a rate's first sample (and the first after a pause) without a value. */
 function overviewMetrics(n, first) {
   const blocked = !!controlDirectory && existsSync(join(controlDirectory, 'activity-blocked'))
@@ -1385,6 +1409,7 @@ function wakeLive(live) {
     else if (probe.probe === 'activity.overview' && controlDirectory && existsSync(join(controlDirectory, 'activity-failing'))) errors.push({ probe: probe.probe, code: 'BLOCKED', message: 'The overview waited too long for a lock and will try again.', retryInMs: probe.intervalMs, terminal: false })
     else if (probe.probe === 'activity.overview') samples.push({ ...sample, metrics: overviewMetrics(n, sample.gap === 'baseline' || sample.gap === 'resumed') })
     else if (probe.probe === 'activity.sessions') samples.push({ ...sample, ...activitySessionsSample(live, probe) })
+    else if (probe.probe === 'activity.queries') samples.push({ ...sample, ...activityQueriesSample(live, probe) })
     else if (live.source === 'activity') samples.push(sample)
     else if (probe.probe === 'debug.synthetic.metrics') samples.push({ ...sample, metrics: [n, 50 + 50 * Math.sin(n / 4), sample.elapsedMs === undefined || sample.gap === 'resumed' ? null : (50 + 50 * Math.sin(n / 4)) * 1000 / Math.max(1, sample.elapsedMs)] })
     else if (probe.probe === ssisOperationsProbe && live.missing) errors.push({ probe: probe.probe, ...live.missing, retryInMs: 0, terminal: true })

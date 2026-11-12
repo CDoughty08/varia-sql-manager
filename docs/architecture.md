@@ -85,6 +85,11 @@ being true.
 - The grid renders cells only through `GridView` pools, and text only through `nodeValue` (`tests/grid-lint.test.ts`
   forbids HTML sinks under `grid/`, `results/`, `designer/` and `live/`); no React per row or cell, and frames stay
   O(visible cells).
+  `GridView` works in drawn rows and columns for geometry, pools and scrolling, and meets the result's own rows and columns
+  at named seams (its `selection`/`select`, `sourceRange`, a cell's lookup in `paintCell`, `targetOf`), each the identity
+  today; its saved state, marks and callbacks are always in the result's. Columns are placed through `ColumnAxis`
+  (`grid/layout.ts`) and tiles have a `TileShape` (`grid/tiles.ts`). A menu's row and column come from the grid
+  (`gridTarget`, `grid/anchor.ts`); an ARIA index is read only where no `GridView` is registered. `tests/grid-view.test.ts` holds the seams.
   Live tables show through `LiveGrid` (`src/renderer/src/live/`), which swaps each revision into its `GridView`; a table's row
   tone column (catalogue `role: 'tone'`, its last) is hidden by the grid and left out of Copy and Save (`ResultJobs`).
 - Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never

@@ -1,8 +1,48 @@
 import { describe, expect, it } from 'vitest'
 import { gridLimits } from '../src/renderer/src/grid/constants'
-import { ColumnLayout, hitTest, rowHeaderWidth, visibleRange, type Viewport } from '../src/renderer/src/grid/layout'
+import { ColumnLayout, hitTest, rowHeaderWidth, visibleRange, type ColumnAxis, type Viewport } from '../src/renderer/src/grid/layout'
+import { ensureVisible } from '../src/renderer/src/grid/scroll'
 
 const layoutOf = (widths: readonly number[], maxTotal = 15_000_000) => new ColumnLayout(Float64Array.from(widths), maxTotal)
+
+/** A column axis that is not ColumnLayout: every column the same width, and a count that can grow. */
+function uniformAxis(width: number, columns: number): ColumnAxis & { count: number } {
+  return {
+    count: columns,
+    get total() { return this.count * width },
+    width: () => width,
+    xOf(column) { return Math.min(Math.max(column, 0), this.count) * width },
+    columnAt(x) { return x < 0 || this.count === 0 ? -1 : Math.min(this.count, Math.floor(x / width)) },
+    setWidth: () => width,
+    setMaxTotal: () => {}
+  }
+}
+
+describe('the column axis', () => {
+  const viewport: Viewport = { top: 0, left: 1000, width: 440, height: 200 }
+  it('is what ColumnLayout is, and all a frame, a hit test and a reveal ask of the columns', () => {
+    const widths = Array.from({ length: 50 }, () => 100), layout: ColumnAxis = layoutOf(widths), axis = uniformAxis(100, 50)
+    const overscan = { rows: 0, columns: 0 }
+    expect(visibleRange(viewport, 1000, axis, 40, overscan)).toEqual(visibleRange(viewport, 1000, layout, 40, overscan))
+    expect(visibleRange(viewport, 1000, axis, 40, overscan)).toMatchObject({ firstColumn: 10, lastColumn: 13 })
+    for (const [x, y] of [[45, 5], [139, 5], [141, 5], [250, 60], [5, 60], [5, 5]]) {
+      expect(hitTest(x, y, { viewport, rows: 1000, layout: axis, rowHeader: 40 }), `${x},${y}`).toEqual(hitTest(x, y, { viewport, rows: 1000, layout, rowHeader: 40 }))
+    }
+    const reveal = { virtualTop: 0, scrollLeft: 1000, viewportWidth: 440, viewportHeight: 200, rowHeader: 40, rows: 1000 }
+    for (const column of [0, 10, 13, 14, 49]) expect(ensureVisible({ ...reveal, layout: axis }, 3, column), String(column)).toEqual(ensureVisible({ ...reveal, layout }, 3, column))
+    expect(ensureVisible({ ...reveal, layout: axis }, 3, 49).scrollLeft).toBe(5000 - 400)
+  })
+  it('may grow between frames: the next range and hit test see the new columns', () => {
+    const axis = uniformAxis(100, 2)
+    expect(visibleRange({ ...viewport, left: 0 }, 10, axis, 40, { rows: 0, columns: 0 })).toMatchObject({ firstColumn: 0, lastColumn: 1 })
+    expect(hitTest(300, 60, { viewport: { ...viewport, left: 0 }, rows: 10, layout: axis, rowHeader: 40 })).toBeUndefined()
+    axis.count = 4095
+    expect(axis.total).toBe(409_500)
+    expect(visibleRange({ ...viewport, left: 0 }, 10, axis, 40, { rows: 0, columns: 0 })).toMatchObject({ firstColumn: 0, lastColumn: 3 })
+    expect(hitTest(300, 60, { viewport: { ...viewport, left: 0 }, rows: 10, layout: axis, rowHeader: 40 })).toMatchObject({ kind: 'cell', column: 2 })
+    expect(visibleRange({ ...viewport, left: 409_100 }, 10, axis, 40, { rows: 0, columns: 0 })).toMatchObject({ firstColumn: 4091, lastColumn: 4094 })
+  })
+})
 
 describe('column layout', () => {
   it('keeps running offsets and finds the column at a position at every boundary of 4,096 columns', () => {

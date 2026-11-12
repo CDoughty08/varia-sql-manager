@@ -3,13 +3,26 @@ import type { GridHit } from './selection'
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
 
+/** What a frame, a hit test and a reveal read of the columns, and a resize writes: ColumnLayout's width per column, or any
+ *  other way of placing them (a transposed grid's columns will share one width). `count` and `total` may change between
+ *  frames. */
+export interface ColumnAxis {
+  readonly count: number
+  readonly total: number
+  width(column: number): number
+  xOf(column: number): number
+  columnAt(x: number): number
+  setWidth(column: number, width: number): number
+  setMaxTotal(maxTotal: number): void
+}
+
 /**
  * Column widths and their running offsets. The widths array belongs to the grid's saved state (it outlives the view);
  * offsets are kept as prefix sums, so finding a column's position is O(1) and the column at a position O(log columns).
  * The sum of all widths never exceeds `maxTotal` (the scroll cap less the row header), so the spacer stays under
  * Chromium's layout limit; a resize can always shrink a column but cannot grow one past that sum.
  */
-export class ColumnLayout {
+export class ColumnLayout implements ColumnAxis {
   readonly count: number
   private readonly starts: Float64Array
   private maxTotal: number
@@ -74,7 +87,7 @@ export interface VisibleRange { readonly firstRow: number; readonly lastRow: num
  * The rows and columns a frame renders: those under the body (below the sticky header row and right of the sticky row
  * header), widened by the overscan and clamped to the result.
  */
-export function visibleRange(viewport: Viewport, rows: number, layout: ColumnLayout, rowHeader: number, overscan: { readonly rows: number; readonly columns: number } = { rows: g.overscanRows, columns: g.overscanColumns }): VisibleRange {
+export function visibleRange(viewport: Viewport, rows: number, layout: ColumnAxis, rowHeader: number, overscan: { readonly rows: number; readonly columns: number } = { rows: g.overscanRows, columns: g.overscanColumns }): VisibleRange {
   const bodyHeight = viewport.height - g.headerHeight, bodyWidth = viewport.width - rowHeader
   if (rows <= 0 || layout.count === 0 || bodyHeight <= 0 || bodyWidth <= 0) return { firstRow: 0, lastRow: -1, firstColumn: 0, lastColumn: -1 }
   const top = Math.max(0, viewport.top), left = Math.max(0, viewport.left)
@@ -95,7 +108,7 @@ export type LayoutHit = GridHit | ResizeHit
  * its right border, which wins), a row header, or a cell; undefined past the data. With `clamp` a point outside the
  * data lands on the nearest cell, row, or column, as a drag that leaves the body needs.
  */
-export function hitTest(x: number, y: number, o: { readonly viewport: Viewport; readonly rows: number; readonly layout: ColumnLayout; readonly rowHeader: number; readonly clamp?: boolean }): LayoutHit | undefined {
+export function hitTest(x: number, y: number, o: { readonly viewport: Viewport; readonly rows: number; readonly layout: ColumnAxis; readonly rowHeader: number; readonly clamp?: boolean }): LayoutHit | undefined {
   const { viewport, rows, layout, rowHeader } = o
   const inHeader = y < g.headerHeight && !o.clamp, inRowHeader = x < rowHeader && !o.clamp
   const dataX = x - rowHeader + Math.max(0, viewport.left), dataY = y - g.headerHeight + Math.max(0, viewport.top)
