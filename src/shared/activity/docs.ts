@@ -17,6 +17,8 @@ export const copyKeys = {
 const shownPaneNotes: { readonly [P in (typeof activityPanes)[number]]?: string } = {
   processes: 'A live grid of sessions with view chips, Show chips, header funnels and a filter box (below); SSMS calls it Processes.',
   blocking: 'A live grid of the blocking chains, lead blockers first (below).',
+  waits: 'A live grid of the wait categories, or By type of the wait types, the most wait time first, with Hide benign waits (below).',
+  fileIo: 'A live grid of the database files, the busiest first, toned by read and write latency, with view chips (below).',
   activeQueries: 'A live grid of the running requests, the most CPU first (below).',
   recentQueries: 'A live grid of the statements that ran since the previous sample, grouped by query hash, with rank chips (below).'
 }
@@ -178,8 +180,8 @@ export function renderActivityMonitorDocs(): string {
     'below that, each then at least 200 px tall, with a splitter (arrow keys, Home and End). The tiles keep their height and',
     'the expanded charts give way down to a floor, so the panes keep theirs; only a document too short for all of them',
     'scrolls. Each slot has a tab per pane; choosing in one slot the pane the',
-    'other shows swaps them. The Blocking tab counts blocked sessions. A pane whose grid has not arrived says so, and its',
-    'probe stays paused: no SQL runs for a pane nobody can read.',
+    'other shows swaps them. The Blocking tab counts blocked sessions. A probe that only panes read runs only while one of',
+    'them is shown: no SQL runs for a pane nobody can read.',
     '',
     table(['Pane', 'Now'], activityPanes.map(pane => [paneSpecs[pane].title, pendingPanes.includes(pane) ? pendingPaneNote(pane) : shownPaneNotes[pane] ?? 'Shown.'])),
     '',

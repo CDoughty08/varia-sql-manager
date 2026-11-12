@@ -64,7 +64,8 @@ internal static class RankChecks
         var approximate = false;
         ViewSorter.Key Key(int column, int[]? kept = null) => ViewSorter.Build(set, source, new ViewKey(column, false, SortMode.Value), kept, RowCount, CancellationToken.None, ref approximate);
         static string Trim(string value) => value.TrimEnd(' ');
-        static bool Ranked(ViewSorter.Key key) => key.Layout.StartsWith("ranked", StringComparison.Ordinal);
+        // A date and time is held by its ticks, which compare as ranks do: without its cells.
+        static bool Ranked(ViewSorter.Key key) => key.Layout.StartsWith("ranked", StringComparison.Ordinal) || key.Layout == "ticks";
         var culture = CultureInfo.GetCultureInfo(1033).CompareInfo;
         const CompareOptions insensitive = CompareOptions.IgnoreCase | CompareOptions.IgnoreKanaType | CompareOptions.IgnoreWidth;
         // What each column's comparison is, from the values themselves (never from a key).

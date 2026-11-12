@@ -52,15 +52,15 @@ The panes sit in one slot, or two with Split View: side by side when the documen
 below that, each then at least 200 px tall, with a splitter (arrow keys, Home and End). The tiles keep their height and
 the expanded charts give way down to a floor, so the panes keep theirs; only a document too short for all of them
 scrolls. Each slot has a tab per pane; choosing in one slot the pane the
-other shows swaps them. The Blocking tab counts blocked sessions. A pane whose grid has not arrived says so, and its
-probe stays paused: no SQL runs for a pane nobody can read.
+other shows swaps them. The Blocking tab counts blocked sessions. A probe that only panes read runs only while one of
+them is shown: no SQL runs for a pane nobody can read.
 
 | Pane | Now |
 | --- | --- |
 | Sessions | A live grid of sessions with view chips, Show chips, header funnels and a filter box (below); SSMS calls it Processes. |
 | Blocking | A live grid of the blocking chains, lead blockers first (below). |
-| Resource Waits | Resource Waits is not shown yet; it arrives in a later version of Varia. |
-| Data File I/O | Data File I/O is not shown yet; it arrives in a later version of Varia. |
+| Resource Waits | A live grid of the wait categories, or By type of the wait types, the most wait time first, with Hide benign waits (below). |
+| Data File I/O | A live grid of the database files, the busiest first, toned by read and write latency, with view chips (below). |
 | Recent Expensive Queries | A live grid of the statements that ran since the previous sample, grouped by query hash, with rank chips (below). |
 | Active Expensive Queries | A live grid of the running requests, the most CPU first (below). |
 

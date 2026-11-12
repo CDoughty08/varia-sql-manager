@@ -1,7 +1,7 @@
 // The Activity Monitor document in the real app on the fake backend's activity source (tests/fixtures/backend.mjs,
 // workbench mode): with no server connected it opens the Connect dialog and then the monitor; it opens from Object
 // Explorer's server menu, the View menu, the palette and the toolbar, one tab per connection;
-// its tiles fill after two samples and two charts are open (all eight may be); Sessions shows the sessions probe's rows in the results grid and its filters, funnels and sort reach the backend; Blocking and Active Expensive Queries show its other tables; and a failed sample keeps them and says why; Pause stops sampling and Resume starts it again; the
+// its tiles fill after two samples and two charts are open (all eight may be); Sessions shows the sessions probe's rows in the results grid and its filters, funnels and sort reach the backend; Blocking and Active Expensive Queries show its other tables; Resource Waits and Data File I/O show the resources probe's tables and their chips reach the backend; and a failed sample keeps them and says why; Pause stops sampling and Resume starts it again; the
 // interval and the chart window reach the live layer; a tab switch pauses it while hidden and keeps its choices; the
 // panes, Split View and F6 work; the header, tiles and panes fit common window sizes; a login without server state gets
 // the permission message and its GRANT statement; a lost backend reports it and
@@ -163,8 +163,13 @@ try {
   await expect.poll(async () => (await handles()).length).toBe(1)
   const [{ id }] = await handles()
   const subscribed = await calls('live.subscribe')
-  expect(subscribed.at(-1).params).toMatchObject({ source: 'activity', args: { filters: [{ table: 'sessions', view: 'all', showSystem: false, showVaria: false }] }, probes: [{ probe: 'activity.overview', intervalMs: 2000 }, { probe: 'activity.sessions', intervalMs: 2000 }, { probe: 'activity.resources', intervalMs: 5000, paused: true }, { probe: 'activity.queries', intervalMs: 30000, paused: true }] })
-  expect(subscribed.at(-1).params.probes.slice(0, 2).map(probe => probe.paused)).toEqual([undefined, undefined])
+  expect(subscribed.at(-1).params).toMatchObject({
+    source: 'activity',
+    args: { filters: [{ table: 'sessions', view: 'all', showSystem: false, showVaria: false }, { table: 'waitCategories', hideBenign: true }, { table: 'waitTypes', hideBenign: true }, { table: 'files', fileView: 'all', latencyWarningMs: 20, latencyErrorMs: 50 }] },
+    probes: [{ probe: 'activity.overview', intervalMs: 2000 }, { probe: 'activity.sessions', intervalMs: 2000 }, { probe: 'activity.resources', intervalMs: 5000 }, { probe: 'activity.queries', intervalMs: 30000, paused: true }]
+  })
+  // Sessions and Resource Waits show on first open, so their probes run from the start.
+  expect(subscribed.at(-1).params.probes.slice(0, 3).map(probe => probe.paused)).toEqual([undefined, undefined, undefined])
   // The View menu and the palette open the same monitor: one per connection.
   await queryTabs().filter({ hasText: 'SQLQuery1' }).click()
   await expect(queryTabs().filter({ hasText: 'SQLQuery1' })).toHaveAttribute('aria-selected', 'true')
@@ -408,12 +413,81 @@ try {
   await expect(monitor().getByText('2 running requests', { exact: true })).toBeVisible()
   await expect(active.getByRole('gridcell', { name: 'BillingDb', exact: true })).toBeVisible()
   await expect(active.locator(gridPart.sortButton).first()).toBeAttached()
-  // A pane change sends its probe states at once if they change; give it a sample's time, then none may have resumed.
-  await expect(monitor().getByText('2 running requests', { exact: true })).toBeVisible()
-  await expect.poll(async () => (await viewOf(id)).probes['activity.resources']?.state).toBe('paused')
+  // A pane change sends its probe states after the live service's short debounce; two ticks later it has gone, and no
+  // probe may have resumed.
+  const ticksAfterPanes = (await frames(id)).ticks
+  await expect.poll(async () => (await frames(id)).ticks).toBeGreaterThan(ticksAfterPanes + 1)
   expect((await calls('live.update')).slice(updatesBefore).flatMap(call => call.params.probes ?? []).filter(probe => probe.paused === false)).toEqual([])
   await firstTabs.getByRole('tab', { name: 'Sessions', exact: true }).click()
   console.log('Blocking and active passed: the chain shows with its lead blocker and goes when blocking ends, running requests list, and neither starts a probe.')
+
+  step = 'resource waits and file io'
+  // Resource Waits shows in the second pane from the start, by category with benign waits hidden. Wait Category and Wait
+  // Type are the first columns, in view at any width.
+  // A filter change shows with the resources probe's next sample, up to its interval (5 s) away, so those waits are longer.
+  const nextSample = { timeout: 15_000 }
+  const secondTabs = monitor().getByRole('tablist', { name: 'Second pane', exact: true })
+  await expect(secondTabs.getByRole('tab', { name: 'Resource Waits', exact: true })).toHaveAttribute('aria-selected', 'true')
+  const waitTools = monitor().getByRole('toolbar', { name: 'Resource Waits filters', exact: true })
+  const categories = monitor().getByRole('grid', { name: /^Wait categories/ })
+  await expect(categories.getByRole('gridcell', { name: 'Lock', exact: true })).toBeVisible()
+  await expect(monitor().getByText('4 wait categories · benign waits hidden', { exact: true })).toBeVisible()
+  await expect(categories.getByRole('gridcell', { name: 'Idle', exact: true })).toHaveCount(0)
+  // Hide benign waits off: the backend filters the next sample, and Idle shows.
+  await waitTools.getByRole('button', { name: 'Hide benign waits', exact: true }).click()
+  await expect(monitor().getByText('5 wait categories', { exact: true })).toBeVisible(nextSample)
+  await expect(categories.getByRole('gridcell', { name: 'Idle', exact: true })).toBeVisible(nextSample)
+  await expect.poll(async () => (await calls('live.update')).some(call => JSON.stringify(call.params.args ?? {}).includes('{"table":"waitTypes","hideBenign":false}'))).toBe(true)
+  // By type shows the other table of the same sample: no args change, so nothing is sent.
+  const argsBefore = (await calls('live.update')).filter(call => call.params.args).length
+  await waitTools.getByRole('button', { name: 'By type', exact: true }).click()
+  const types = monitor().getByRole('grid', { name: /^Wait types/ })
+  await expect(types.getByRole('gridcell', { name: 'LCK_M_S', exact: true })).toBeVisible()
+  await expect(monitor().getByText('5 wait types', { exact: true })).toBeVisible()
+  expect((await calls('live.update')).filter(call => call.params.args).length).toBe(argsBefore)
+  await waitTools.getByRole('button', { name: 'Hide benign waits', exact: true }).click()
+  await expect(monitor().getByText('4 wait types · benign waits hidden', { exact: true })).toBeVisible(nextSample)
+  await expect(types.getByRole('gridcell', { name: 'SLEEP_TASK', exact: true })).toHaveCount(0, nextSample)
+  await waitTools.getByRole('button', { name: 'By category', exact: true }).click()
+  await expect(monitor().getByText('4 wait categories · benign waits hidden', { exact: true })).toBeVisible()
+  // Data File I/O reads the same probe, so showing it beside Resource Waits starts nothing new.
+  const fileUpdates = (await calls('live.update')).length
+  await firstTabs.getByRole('tab', { name: 'Data File I/O', exact: true }).click()
+  const fileGrid = monitor().getByRole('grid', { name: /^Data File I\/O/ })
+  await expect(fileGrid.getByRole('gridcell', { name: 'SalesDb', exact: true }).first()).toBeVisible()
+  await expect(monitor().getByText('5 files · warning at 20 ms, error at 50 ms', { exact: true })).toBeVisible()
+  expect((await calls('live.update')).slice(fileUpdates).flatMap(call => call.params.probes ?? []).filter(probe => probe.paused === false)).toEqual([])
+  // Over threshold keeps the files the backend toned (SalesDb's log at 61.5 ms and data at 34 ms); Log keeps the logs.
+  const fileTools = monitor().getByRole('toolbar', { name: 'Data File I/O filters', exact: true })
+  await fileTools.getByRole('button', { name: 'Over threshold', exact: true }).click()
+  await expect(monitor().getByText('2 files · Over threshold only · warning at 20 ms, error at 50 ms', { exact: true })).toBeVisible(nextSample)
+  await expect(fileGrid.getByRole('gridcell', { name: 'master', exact: true })).toHaveCount(0, nextSample)
+  await expect.poll(async () => (await calls('live.update')).some(call => JSON.stringify(call.params.args ?? {}).includes('"fileView":"overThreshold"'))).toBe(true)
+  await fileTools.getByRole('button', { name: 'Over threshold', exact: true }).click()
+  await expect(monitor().getByText('5 files · warning at 20 ms, error at 50 ms', { exact: true })).toBeVisible(nextSample)
+  // Paused, a chip or a threshold setting changes the args at once, but the rows wait for a sample, so the status line
+  // counts them and says the view and thresholds apply from the next one. The settings reach an open monitor.
+  const pause = monitor().getByRole('button', { name: 'Pause', exact: true })
+  await pause.click()
+  await expect(livePill(monitor())).toHaveText('Paused')
+  await fileTools.getByRole('button', { name: 'Log', exact: true }).click()
+  await expect(monitor().getByText('5 files · Log only · warning at 20 ms, error at 50 ms from the next sample', { exact: true })).toBeVisible()
+  await expect.poll(async () => (await calls('live.update')).some(call => JSON.stringify(call.params.args ?? {}).includes('"fileView":"log"'))).toBe(true)
+  expect(await page.evaluate(() => window.varia.updateSettings({ 'activityMonitor.fileLatencyWarningMs': 70 }))).toMatchObject({ ok: true })
+  await expect(monitor().getByText('5 files · Log only · warning at 70 ms, error at 70 ms from the next sample', { exact: true })).toBeVisible()
+  await expect.poll(async () => (await calls('live.update')).some(call => JSON.stringify(call.params.args ?? {}).includes('"latencyWarningMs":70,"latencyErrorMs":50'))).toBe(true)
+  // Resumed, the first sample has no interval: Log's rows without latencies or tones, and the line says when they come.
+  await pause.click()
+  await expect(monitor().getByText('2 files · Log only · warning at 70 ms, error at 70 ms · latencies and tones from the next sample', { exact: true })).toBeVisible(nextSample)
+  await expect(fileGrid.getByRole('gridcell', { name: '/var/opt/mssql/data/SalesDb.mdf', exact: true })).toHaveCount(0)
+  await expect(monitor().getByText('2 files · Log only · warning at 70 ms, error at 70 ms', { exact: true })).toBeVisible(nextSample)
+  expect(await page.evaluate(() => window.varia.updateSettings({ 'activityMonitor.fileLatencyWarningMs': null }))).toMatchObject({ ok: true })
+  await expect(monitor().getByText('2 files · Log only · warning at 20 ms, error at 50 ms', { exact: true })).toBeVisible(nextSample)
+  await fileTools.getByRole('button', { name: 'Log', exact: true }).click()
+  await expect(monitor().getByText('5 files · warning at 20 ms, error at 50 ms', { exact: true })).toBeVisible(nextSample)
+  await page.screenshot({ path: join('artifacts', 'activity-monitor-resources.png') })
+  await firstTabs.getByRole('tab', { name: 'Sessions', exact: true }).click()
+  console.log('Resource waits and file I/O passed: categories and types from one sample, Hide benign waits, the file chips and the latency settings reach the backend and say so until the next sample, a sample without rates says so, and Data File I/O starts no probe beside Resource Waits.')
 
   step = 'session actions'
   // Details… and Kill Process… head Query Output's menu on a session row (Sessions, Blocking, Active Expensive Queries).
@@ -494,6 +568,7 @@ try {
   }).toPass()
   await showVaria.click()
   console.log('Session actions passed: Details opens from Sessions and Active Expensive Queries with its sections and locks; Kill asks, cancels, refuses without permission or for Varia\'s own, and reports a kill.')
+
   step = 'recent queries'
   // Recent Expensive Queries reads the query statistics probe: it resumes only while the pane shows, at its own interval.
   const queriesUpdates = (await calls('live.update')).length
@@ -532,7 +607,7 @@ try {
   const first = monitor().getByRole('tablist', { name: 'First pane', exact: true })
   await expect(first.getByRole('tab', { name: 'Sessions', exact: true })).toHaveAttribute('aria-selected', 'true')
   await expect(monitor().getByRole('tablist', { name: 'Second pane', exact: true }).getByRole('tab', { name: 'Resource Waits', exact: true })).toHaveAttribute('aria-selected', 'true')
-  await expect(monitor().getByText('Resource Waits is not shown yet; it arrives in a later version of Varia.')).toBeVisible()
+  await expect(monitor().getByRole('grid', { name: /^Wait categories/ })).toBeVisible()
   await first.getByRole('tab', { name: 'Sessions', exact: true }).focus()
   await page.keyboard.press('ArrowRight')
   await expect(first.getByRole('tab', { name: /^Blocking/ })).toHaveAttribute('aria-selected', 'true')
@@ -546,17 +621,17 @@ try {
   await expect(monitor().getByRole('tablist', { name: 'Second pane', exact: true }).getByRole('tab', { name: 'Resource Waits', exact: true })).toBeFocused()
   const split = monitor().getByRole('button', { name: 'Split View', exact: true })
   await expect(split).toHaveAttribute('aria-pressed', 'true')
+  const splitUpdates = (await calls('live.update')).length
   await split.click()
   await expect(split).toHaveAttribute('aria-pressed', 'false')
   await expect(monitor().getByRole('tablist', { name: 'Second pane', exact: true })).toHaveCount(0)
+  // With Resource Waits gone (Blocking reads the sessions probe), the resources probe pauses.
+  await expect.poll(async () => (await calls('live.update')).slice(splitUpdates).flatMap(call => call.params.probes ?? []).some(probe => probe.probe === 'activity.resources' && probe.paused === true)).toBe(true)
   await split.click()
   await expect(monitor().getByRole('separator', { name: 'Resize the panes', exact: true })).toBeVisible()
-  // Showing pending panes starts no SQL: their probes stay paused (Sessions' probe ran from the start; query statistics
-  // only while Recent Expensive Queries showed, above).
-  expect((await calls('live.update')).flatMap(call => call.params.probes ?? []).filter(probe => probe.probe === 'activity.resources' && probe.paused === false)).toEqual([])
-  // The resources probe samples now, but its panes are still pending: the view holds it paused, so it runs no SQL.
-  expect((await viewOf(id)).probes['activity.resources']).toMatchObject({ state: 'paused' })
-  console.log('Panes passed: tabs with arrow keys, F6 and Shift+F6 between regions, Split View, and no probe started for a pending pane.')
+  // Resource Waits' probe runs again with the second pane.
+  await expect.poll(async () => (await viewOf(id)).probes['activity.resources']?.state).toBe('fresh')
+  console.log('Panes passed: tabs with arrow keys, F6 and Shift+F6 between regions, and Split View, the resources probe pausing without the second pane and sampling again with it.')
 
   step = 'layout'
   // The header keeps its title whole, and its state never reaches into its controls, at 1280 x 800 and in the smallest
