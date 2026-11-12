@@ -1132,6 +1132,12 @@ describe('results service sorting', () => {
     service.setSelection('t1', key, { entry: key, active: { row: 3, column: 1 }, blocks: [cells([cap, 0], [cap + 5, 1])] })
     await service.copy('t1', key, false)
     expect(api.copyResults.mock.lastCall![0].parts).toEqual([{ rows: [[3, 3]], columns: [[1, 1]] }])
+    // An active cell past the rows drawn too (a state the grid has not drawn yet) leaves nothing to copy: no request is
+    // made, so the clipboard keeps its text.
+    const before = api.copyResults.mock.calls.length
+    service.setSelection('t1', key, { entry: key, active: { row: cap + 2, column: 1 }, blocks: [cells([cap, 0], [cap + 5, 1])] })
+    expect(await service.copy('t1', key, true)).toBeUndefined()
+    expect(api.copyResults.mock.calls).toHaveLength(before)
     // Whole columns (a drawn row) and Select All run to the end of the result: the backend writes the rows drawn and
     // counts the rest, which the toolbar then says.
     service.setSelection('t1', key, selectAll(key))

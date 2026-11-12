@@ -87,17 +87,24 @@ internal sealed class ResultTextWriter
     private static byte[][] JsonKeys(IReadOnlyList<ResultColumn> columns)
     {
         var used = new HashSet<string>(StringComparer.Ordinal);
+        var next = new Dictionary<string, int>(StringComparer.Ordinal);
         var keys = new byte[columns.Count][];
         for (var i = 0; i < columns.Count; i++)
-            keys[i] = JsonKey(Unique(used, string.IsNullOrEmpty(columns[i].Name) ? "Column" + (i + 1) : columns[i].Name));
+            keys[i] = JsonKey(Unique(used, next, string.IsNullOrEmpty(columns[i].Name) ? "Column" + (i + 1) : columns[i].Name));
         return keys;
     }
 
-    /// <summary><paramref name="name"/>, or with _2, _3 and so on when it is already used.</summary>
-    private static string Unique(HashSet<string> used, string name)
+    /// <summary><paramref name="name"/>, or with _2, _3 and so on when it is already used. <paramref name="next"/> keeps the
+    /// suffix each repeated name goes on from: a header column of few values repeats one thousands of times, and trying
+    /// every suffix from _2 each time would be quadratic.</summary>
+    private static string Unique(HashSet<string> used, Dictionary<string, int> next, string name)
     {
-        var key = name;
-        for (var n = 2; !used.Add(key); n++) key = name + "_" + n.ToString(CultureInfo.InvariantCulture);
+        if (used.Add(name)) return name;
+        var n = next.GetValueOrDefault(name, 2);
+        string key;
+        do key = name + "_" + n++.ToString(CultureInfo.InvariantCulture);
+        while (!used.Add(key));
+        next[name] = n;
         return key;
     }
 
@@ -110,7 +117,9 @@ internal sealed class ResultTextWriter
 
     /// <summary>The name a source row's field has in transposed text when a header column names the fields: that column's
     /// value for the row as a transposed grid's header shows it. NULL (and a cell that could not be read) is "NULL", an
-    /// empty value "(blank)", binary 0x hex, and a longer value its first <see cref="FieldNameChars"/> characters.</summary>
+    /// empty value "(blank)", binary 0x hex, and a longer value its first <see cref="FieldNameChars"/> characters. A line
+    /// break, TAB or NUL in it is a space, as tab-separated text writes one, in every format: names made distinct here
+    /// then stay distinct once written.</summary>
     public static string FieldName(in PageView page, int row, int column)
     {
         if (page.IsNull(column, row)) return "NULL";
@@ -121,7 +130,9 @@ internal sealed class ResultTextWriter
         // cut at a character boundary, not a value of megabytes.
         var take = Math.Min(span.Length, 4 * (FieldNameChars + 1));
         while (take < span.Length && take > 0 && (span[take] & 0xc0) == 0x80) take--;
-        return CellFormat.Prefix(Encoding.UTF8.GetString(span[..take]), FieldNameChars, out _).ToString();
+        var text = Encoding.UTF8.GetString(span[..take]);
+        if (text.AsSpan().ContainsAny('\t', '\n', '\r') || text.Contains('\0')) text = text.Replace("\r\n", " ").Replace('\t', ' ').Replace('\n', ' ').Replace('\r', ' ').Replace('\0', ' ');
+        return CellFormat.Prefix(text, FieldNameChars, out _).ToString();
     }
 
     /// <summary>"Row N", a source row's field when no header column names the fields: N is its place in the view, from 1.</summary>
@@ -132,8 +143,9 @@ internal sealed class ResultTextWriter
     public static string[] UniqueFields(IReadOnlyList<string> names)
     {
         var used = new HashSet<string>(StringComparer.Ordinal) { NameField };
+        var next = new Dictionary<string, int>(StringComparer.Ordinal);
         var unique = new string[names.Count];
-        for (var i = 0; i < unique.Length; i++) unique[i] = Unique(used, names[i]);
+        for (var i = 0; i < unique.Length; i++) unique[i] = Unique(used, next, names[i]);
         return unique;
     }
 

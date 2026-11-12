@@ -24,6 +24,7 @@ internal static class TransposedTextChecks
             await ViewAsync(check, folder.FullName);
             await StreamAsync(check, folder.FullName);
             await EstimatesAsync(check);
+            Names(check);
             await RequestsAsync(check, folder.FullName);
         }
         finally { folder.Delete(true); }
@@ -61,10 +62,13 @@ internal static class TransposedTextChecks
 
         var all = await TextChecks.Copy(jobs, Turned(set, [Part(0, End, 0, 7)]));
         var copied = Text(all.Text).Split('\n');
-        check(all.Result is { Rows: Cap, Capped: 5000 - Cap } && copied.Length == 8 && copied.All(line => line.Split('\t').Length == Cap) && copied[0].EndsWith("\t4094", StringComparison.Ordinal),
+        var allEstimate = ResultJobs.EstimateCopy(set, [Part(0, End, 0, 7)], headers: false, crlf: false, transposed: true);
+        check(all.Result is { Rows: Cap, Capped: 5000 - Cap } && copied.Length == 8 && copied.All(line => line.Split('\t').Length == Cap) && copied[0].EndsWith("\t4094", StringComparison.Ordinal)
+            && allEstimate >= all.Text.Length && allEstimate < all.Text.Length * 2L,
             "a transposed copy of everything writes the rows drawn and says how many it left out (" + all.Result + ")");
 
-        // A block that straddles the cap keeps its drawn rows; one wholly past it writes nothing, with headers or without.
+        // A block that straddles the cap keeps its drawn rows; one wholly past it writes no values: nothing at all without
+        // headers, and with them the names alone.
         var straddling = await TextChecks.Copy(jobs, Turned(set, [Part(Cap - 2, Cap + 3, 0, 0), Part(Cap + 10, Cap + 19, 0, 1)]));
         var past = await TextChecks.Copy(jobs, Turned(set, [Part(Cap, End, 0, 1)], headers: true));
         check(Text(straddling.Text) == "4093\t4094" && straddling.Result is { Rows: 2, Capped: 14 } && Text(past.Text) == "Column\nid\nname" && past.Result is { Rows: 0, Capped: 5000 - Cap },
@@ -97,6 +101,12 @@ internal static class TransposedTextChecks
             "a transposed copy through a view writes its rows in its order, filtered (" + JsonSerializer.Serialize(Text(copied.Text)) + ")");
         // Row 9's score is NULL (every fifth from 4): the header column names fields from the view's rows, not the result's.
         check(Text(named.Text) == "Column\t465\t372\tNULL\nid\t15\t12\t9", "a header column names the fields by the view's rows (" + JsonSerializer.Serialize(Text(named.Text)) + ")");
+        // The estimate reads the same rows through the view's order, where neighbours are not neighbours in a page.
+        var stored = store.FindView(set.ResultId, view.ViewId)!;
+        var whole = ResultJobs.EstimateCopy(set, [Part(0, End, 0, 0), Part(1, 2, 6, 7)], headers: true, crlf: false, transposed: true, view: stored);
+        var headed = ResultJobs.EstimateCopy(set, [Part(1, 3, 0, 0)], headers: true, crlf: false, transposed: true, headerColumn: 7, view: stored);
+        check(whole >= copied.Text.Length && whole <= copied.Text.Length + 8 && headed >= named.Text.Length && headed <= named.Text.Length + 8,
+            "the transposed estimate through a view bounds the text closely (" + whole + " for " + copied.Text.Length + ", " + headed + " for " + named.Text.Length + ")");
 
         var path = Path.Combine(folder, "view.json");
         var saved = await jobs.ExportAsync(Saved(set, path, "json", viewId: view.ViewId, headerColumn: 0), null);
@@ -125,8 +135,19 @@ internal static class TransposedTextChecks
         check(run.Chunks.Count > 16 && run.Chunks.SkipLast(1).All(chunk => chunk.Length == ChunkedBuffer.DefaultSize) && lines.Length == 3 && lines[1].Split('\t').Length == Cap + 1
             && lines[1].StartsWith("first\t0000000000", StringComparison.Ordinal) && run.Result is { Rows: Cap, Capped: 5000 - Cap } && run.Result.Bytes == run.Text.Length,
             "a transposed line longer than a chunk streams in 1 MiB chunks (" + run.Chunks.Count + " chunks, " + lines.Length + " lines)");
-        check(run.Events.All(item => item.GetProperty("type").GetString() == "job.progress" && item.GetProperty("rowsTotal").GetInt64() == 2 && item.GetProperty("rowsDone").GetInt64() <= 2),
-            "a transposed job's progress counts its lines (" + run.Events.Count + " events)");
+        // Every report, not only those 250 ms apart: the total is the lines, and the count ends at them, never at rows.
+        var reporting = new ResultJobs(store) { ProgressInterval = TimeSpan.Zero };
+        var reported = await TextChecks.Copy(reporting, args);
+        check(reported.Events.Count > 16 && reported.Events.All(item => item.GetProperty("type").GetString() == "job.progress" && item.GetProperty("rowsTotal").GetInt64() == 2 && item.GetProperty("rowsDone").GetInt64() <= 2)
+            && reported.Events[0].GetProperty("rowsDone").GetInt64() == 0 && reported.Events[^1].GetProperty("rowsDone").GetInt64() == 2,
+            "a transposed copy's progress counts its lines (" + reported.Events.Count + " events)");
+        var saveEvents = new List<JsonElement>();
+        using (var context = new RequestContext(3, "results.export", RequestLane.Results, 0, sendEvent: (_, value, _) => { lock (saveEvents) saveEvents.Add(JsonSerializer.SerializeToElement(value, HostChecks.Json)); }))
+        {
+            var progressed = await reporting.ExportAsync(Saved(TextChecks.Synthetic(store, "W1", 50), Path.Combine(folder, "progress.csv"), "csv"), context);
+            check(progressed.Rows == 50 && saveEvents.Count >= 8 && saveEvents.All(item => item.GetProperty("rowsTotal").GetInt64() == 8) && saveEvents[^1].GetProperty("rowsDone").GetInt64() == 8,
+                "a transposed save's progress counts its lines (" + saveEvents.Count + " events)");
+        }
         check(await Code(() => TextChecks.Copy(jobs, args with { MaxBytes = 1024 * 1024 })) == "TOO_LARGE", "a transposed copy whose estimate is over the limit is refused");
 
         // Without credit the copy waits inside the first line, where a cancel stops it.
@@ -205,6 +226,32 @@ internal static class TransposedTextChecks
             if (run.Text.Length > 0) tightest = Math.Min(tightest, estimate * 100 / run.Text.Length);
         }
         check(below.Count == 0, "the transposed copy estimate is at least the text written for 300 random part sets (tightest " + tightest + " %)" + (below.Count == 0 ? "" : ": " + string.Join(", ", below.Take(5))));
+    }
+
+    /// <summary>A header column of one value names 4,095 fields without trying every suffix for each, and distinct names
+    /// stay distinct once tab-separated text has turned their tabs and line breaks into spaces.</summary>
+    private static void Names(Action<bool, string> check)
+    {
+        var names = ResultTextWriter.UniqueFields([.. Enumerable.Repeat("NULL", Cap), "NULL_3", "Column", "NULL"]);
+        check(names[0] == "NULL" && names[1] == "NULL_2" && names[Cap - 1] == "NULL_" + Cap && names[Cap] == "NULL_3_2" && names[Cap + 1] == "Column_2" && names[Cap + 2] == "NULL_" + (Cap + 1)
+            && names.Distinct(StringComparer.Ordinal).Count() == names.Length, "repeated field names are numbered in order, past the names already used");
+        // Quadratic, this is 800 million tries; linear, a few hundred thousand. The limit is far above either machine's noise.
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var many = ResultTextWriter.UniqueFields([.. Enumerable.Repeat(new string('x', 128), 40_000)]);
+        check(many[^1] == new string('x', 128) + "_40000" && watch.Elapsed < TimeSpan.FromSeconds(20), "numbering a repeated name does not start over for each repeat (" + watch.ElapsedMilliseconds + " ms for 40,000)");
+
+        var builder = new PageBuilder(1, [WireKind.Text], 0);
+        foreach (var value in new[] { "a\tb", "a b", "x\r\ny", "x\ny\0", "x y " })
+        {
+            builder.BeginRow();
+            builder.AppendText(value);
+            builder.CommitRow();
+        }
+        var page = PageView.Parse(builder.Seal(), 1);
+        var read = new string[5];
+        for (var row = 0; row < read.Length; row++) read[row] = ResultTextWriter.FieldName(page, row, 0);
+        var fields = ResultTextWriter.UniqueFields(read);
+        check(string.Join("|", fields) == "a b|a b_2|x y|x y |x y _2", "a tab, line break or NUL in a field name is a space before the names are made distinct (" + string.Join("|", fields) + ")");
     }
 
     /// <summary>A header column comes only with Transposed and is a shown column of the result; a hidden column is no line.</summary>

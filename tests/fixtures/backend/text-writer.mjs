@@ -59,10 +59,14 @@ function kind(column) {
 }
 
 /** `name`, or with _2, _3 and so on when it is already used. */
-function unique(used, name) {
-  let key = name
-  for (let n = 2; used.has(key); n++) key = `${name}_${n}`
+function unique(used, name, next = new Map()) {
+  if (!used.has(name)) { used.add(name); return name }
+  // Each repeated name goes on from its last suffix: a header column of few values repeats one thousands of times.
+  let n = next.get(name) ?? 2, key
+  do key = `${name}_${n++}`
+  while (used.has(key))
   used.add(key)
+  next.set(name, n)
   return key
 }
 function jsonKey(key) {
@@ -72,8 +76,8 @@ function jsonKey(key) {
 }
 /** JSON keys: a blank name becomes Column{ordinal}; a repeated one gets _2, _3 and so on. */
 function jsonKeys(columns) {
-  const used = new Set()
-  return columns.map((column, index) => jsonKey(unique(used, column.name === '' ? `Column${index + 1}` : column.name)))
+  const used = new Set(), next = new Map()
+  return columns.map((column, index) => jsonKey(unique(used, column.name === '' ? `Column${index + 1}` : column.name, next)))
 }
 
 function bit(bitmap, row) { return bitmap !== undefined && (bitmap[row >>> 3] & (1 << (row & 7))) !== 0 }
@@ -93,15 +97,16 @@ export function fieldName(page, row, column) {
   if (value.length === 0) return '(blank)'
   let take = Math.min(value.length, 4 * (FIELD_NAME_CHARS + 1))
   while (take < value.length && take > 0 && (value[take] & 0xc0) === 0x80) take--
-  const text = fieldDecoder.decode(value.subarray(0, take))
+  // A line break, TAB or NUL is a space, as tab-separated text writes one, so distinct names stay distinct once written.
+  const text = fieldDecoder.decode(value.subarray(0, take)).replace(/\r\n|[\t\n\r\0]/g, ' ')
   if (text.length <= FIELD_NAME_CHARS) return text
   const high = text.charCodeAt(FIELD_NAME_CHARS - 1)
   return text.slice(0, high >= 0xd800 && high <= 0xdbff ? FIELD_NAME_CHARS - 1 : FIELD_NAME_CHARS)
 }
 /** Transposed text's field names after "Column", made distinct as JSON keys are, in every format. */
 export function uniqueFields(names) {
-  const used = new Set([NAME_FIELD])
-  return names.map(name => unique(used, name))
+  const used = new Set([NAME_FIELD]), next = new Map()
+  return names.map(name => unique(used, name, next))
 }
 
 /** CRLF, CR, LF and TAB (and NUL on the clipboard, which Windows ends at the first one) each become one space. */
@@ -322,14 +327,14 @@ export async function writeRows(writer, pageAt, selected, first, last, afterPage
  * A resolved part as a transposed grid draws it: the rows written (those at positions under MAX_TRANSPOSED_ROWS), their
  * fields' names ("Row N", or `headerColumn`'s values, made distinct), and the rows left out past them.
  */
-export function turnPlan(plan, pageAt, headerColumn) {
+export function turnPlan(plan, pageAt, headerColumn, named = true) {
   const positions = []
   let capped = 0
   for (const [first, last] of plan.rows) {
     for (let position = first; position <= Math.min(last, MAX_TRANSPOSED_ROWS - 1); position++) positions.push(position)
     capped += Math.max(0, last - Math.max(first, MAX_TRANSPOSED_ROWS) + 1)
   }
-  const names = positions.map(position => {
+  const names = !named ? [] : positions.map(position => {
     if (headerColumn === undefined) return `Row ${position + 1}`
     const page = pageAt(position)
     return fieldName(page, position - page.firstRow, headerColumn)
@@ -367,7 +372,7 @@ export async function copyText({ columns, pageAt, available, parts, headers, crl
   writer.begin()
   for (const plan of plans) {
     if (transposed) {
-      const turned = turnPlan(plan, pageAt, headerColumn)
+      const turned = turnPlan(plan, pageAt, headerColumn, headers)
       writer.capped += turned.capped
       rows += turned.positions.length
       if (turned.columns.length > 0 && (headers || turned.positions.length > 0)) await writeColumns(writer, pageAt, turned)
@@ -388,7 +393,7 @@ export async function exportText({ columns, pageAt, rows, format, headers, nullT
   const after = afterPage && (() => afterPage(writer))
   writer.begin()
   if (transposed) {
-    const turned = turnPlan({ rows: rows > 0 ? [[0, rows - 1]] : [], columns: all }, pageAt, headerColumn)
+    const turned = turnPlan({ rows: rows > 0 ? [[0, rows - 1]] : [], columns: all }, pageAt, headerColumn, headers || format === 'json')
     if (all.length > 0 && (headers || format === 'json' || turned.positions.length > 0)) await writeColumns(writer, pageAt, turned, after)
     writer.rows = turned.positions.length
     writer.capped = turned.capped

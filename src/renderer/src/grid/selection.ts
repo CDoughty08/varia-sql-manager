@@ -284,8 +284,11 @@ export function withinCap(drawn: GridSelection): GridSelection {
 /**
  * What a copy of a transposed grid's selection asks for: the blocks that grid shows selected (`withinCap`), as parts in
  * the result's rows and columns like any copy's. The request says the grid is transposed, and the backend writes each
- * part turned: a line per column, a field per row.
+ * part turned: a line per column, a field per row. With no block and no active cell among the rows drawn there is nothing
+ * to copy (the grid moves the active cell among them once it draws, so only a state it has not drawn yet is so).
  */
 export function transposedCopyPlan(selection: GridSelection, columns: number): CopyPart[] {
-  return copyPlan(rotateSelection(withinCap(rotateSelection(selection))), columns)
+  const drawn = withinCap(rotateSelection(selection)), cap = wire.transpose.maxRows
+  if (drawn.blocks.every(block => (block.kind === 'cells' || block.kind === 'columns') && Math.min(block.anchor.column, block.focus.column) >= cap)) return []
+  return copyPlan(rotateSelection(drawn), columns)
 }

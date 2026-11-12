@@ -70,7 +70,8 @@ internal sealed class ResultJobs(ResultStore store)
     private const UnixFileMode PermissionBits = (UnixFileMode)0b111_111_111;
     /// <summary>Read and write for owner, group and others: the most a new file gets before the umask.</summary>
     private const UnixFileMode NewFileBits = (UnixFileMode)0b110_110_110;
-    private static readonly TimeSpan ProgressInterval = TimeSpan.FromMilliseconds(250);
+    /// <summary>How often a job reports its progress at most; the checks shorten it to see every report.</summary>
+    internal TimeSpan ProgressInterval { get; init; } = TimeSpan.FromMilliseconds(250);
 
     /// <summary>Called after each page is written: the checks release or cancel mid-job through it.</summary>
     internal Action? AfterPage { get; init; }
@@ -90,7 +91,8 @@ internal sealed class ResultJobs(ResultStore store)
 
     /// <summary>Reads a source column by column: each row's page is found once, then every line reads it there, so no rows
     /// are copied and nothing is held but the stored pages themselves.</summary>
-    private sealed class Turner(Source source, int? headerColumn)
+    /// <param name="named">The fields' names are written (headers, or JSON): otherwise none are read or made.</param>
+    private sealed class Turner(Source source, int? headerColumn, bool named)
     {
         /// <summary>Cells written between looks at the token and the output.</summary>
         private const int Step = 1 << 10;
@@ -107,11 +109,11 @@ internal sealed class ResultJobs(ResultStore store)
             }
             var pageOf = new int[positions.Count];
             var indexOf = new int[positions.Count];
-            var names = new string[positions.Count];
+            var names = new string[named ? positions.Count : 0];
             for (var i = 0; i < pageOf.Length; i++)
             {
                 pageOf[i] = access.PageOf(source.View is { } view ? view.Order[positions[i]] : positions[i], out indexOf[i]);
-                names[i] = headerColumn is { } header ? ResultTextWriter.FieldName(access.Page(pageOf[i], out _), indexOf[i], header) : ResultTextWriter.RowName(positions[i]);
+                if (named) names[i] = headerColumn is { } header ? ResultTextWriter.FieldName(access.Page(pageOf[i], out _), indexOf[i], header) : ResultTextWriter.RowName(positions[i]);
             }
             return new TurnedPlan([.. positions], pageOf, indexOf, ResultTextWriter.UniqueFields(names), plan.Columns, capped);
         }
@@ -159,7 +161,7 @@ internal sealed class ResultJobs(ResultStore store)
             var partial = source.View is { } view ? !view.Complete : set.IsOpen;
             var plans = args.Parts.Select(part => Resolve(part, set.Columns, available)).ToList();
             var eolBytes = args.Eol == "crlf" ? 2 : 1;
-            var turner = args.Transposed ? new Turner(source, args.HeaderColumn) : null;
+            var turner = args.Transposed ? new Turner(source, args.HeaderColumn, args.Headers) : null;
             var turned = turner is null ? [] : plans.Select(turner.Plan).ToList();
             var estimate = turner is null ? Estimate(source, plans, args.Headers, eolBytes) : turned.Sum(plan => turner.Estimate(plan, args.Headers, eolBytes));
             if (estimate > args.MaxBytes)
@@ -168,7 +170,7 @@ internal sealed class ResultJobs(ResultStore store)
             var writer = new ResultTextWriter(output, TextOptions.Copy(args.Headers, args.Eol == "crlf"), set.Columns);
             // Transposed, progress counts lines (source columns): no source row is finished before the last line.
             var total = turner is null ? plans.Sum(plan => plan.Rows.Sum(range => range.Last - range.First + 1)) : turned.Sum(plan => (long)plan.Columns.Length);
-            var progress = new Progress(context, total);
+            var progress = new Progress(context, total, ProgressInterval);
             async Task Drain()
             {
                 while (output.TryTake(out var chunk)) await context.SendDataAsync(chunk);
@@ -216,9 +218,11 @@ internal sealed class ResultJobs(ResultStore store)
             var output = new ChunkedBuffer();
             var writer = new ResultTextWriter(output, TextOptions.Export(format.Value, args.Headers, args.NullText), set.Columns);
             int[] all = [.. Enumerable.Range(0, set.Columns.Count).Where(column => !ResultTextWriter.Hidden(set.Columns[column]))];
-            var turner = args.Transposed ? new Turner(source, args.HeaderColumn) : null;
+            // A JSON object always names its column and its fields; a line without headers has only its rows' values.
+            var named = args.Headers || format == TextFormat.Json;
+            var turner = args.Transposed ? new Turner(source, args.HeaderColumn, named) : null;
             var turned = turner?.Plan(new Plan(source.Available > 0 ? [(0, source.Available - 1)] : [], all));
-            var progress = new Progress(context, turned is null ? source.Available : all.Length);
+            var progress = new Progress(context, turned is null ? source.Available : all.Length, ProgressInterval);
             // A file the user chose to replace keeps its permissions: a private (0600) results file must not come back
             // readable by others. A symbolic link there is replaced, not followed; the file it points to may only narrow
             // the new file's default permissions.
@@ -249,8 +253,7 @@ internal sealed class ResultJobs(ResultStore store)
                 writer.Begin();
                 if (turned is not null)
                 {
-                    // A JSON object always names its column; a line without headers has only its rows' values.
-                    if (Turner.Written(turned, args.Headers || format == TextFormat.Json)) await WriteColumnsAsync(turner!, writer, turned, output, Drain, token);
+                    if (Turner.Written(turned, named)) await WriteColumnsAsync(turner!, writer, turned, output, Drain, token);
                 }
                 else
                 {
@@ -387,13 +390,13 @@ internal sealed class ResultJobs(ResultStore store)
     }
 
     /// <summary>Copy's size estimate for parts of a set (the checks compare it with the text written).</summary>
-    internal static long EstimateCopy(ResultSetBuffer set, CopyPartArgs[] parts, bool headers, bool crlf, bool transposed = false, int? headerColumn = null)
+    internal static long EstimateCopy(ResultSetBuffer set, CopyPartArgs[] parts, bool headers, bool crlf, bool transposed = false, int? headerColumn = null, ResultView? view = null)
     {
-        var available = set.RowsAvailable;
-        var source = new Source(set, null);
+        var source = new Source(set, view);
+        var available = source.Available;
         var plans = parts.Select(part => Resolve(part, set.Columns, available)).ToList();
         if (!transposed) return Estimate(source, plans, headers, crlf ? 2 : 1);
-        var turner = new Turner(source, headerColumn);
+        var turner = new Turner(source, headerColumn, headers);
         return plans.Sum(plan => turner.Estimate(turner.Plan(plan), headers, crlf ? 2 : 1));
     }
 
@@ -490,13 +493,13 @@ internal sealed class ResultJobs(ResultStore store)
         : bytes.ToString("N0", CultureInfo.InvariantCulture) + " bytes";
 
     /// <summary>job.progress EVENTs, droppable, at most every 250 ms.</summary>
-    private sealed class Progress(RequestContext? context, long total)
+    private sealed class Progress(RequestContext? context, long total, TimeSpan interval)
     {
         private readonly Stopwatch since = Stopwatch.StartNew();
 
         public void Report(long rows, long bytes)
         {
-            if (context is null || since.Elapsed < ProgressInterval) return;
+            if (context is null || since.Elapsed < interval) return;
             since.Restart();
             context.SendEvent(new { Type = "job.progress", RowsDone = rows, RowsTotal = total, Bytes = bytes }, true);
         }
