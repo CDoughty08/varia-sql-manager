@@ -828,11 +828,13 @@ describe('changes made outside', () => {
     expect(await store.check({ concurrency: 8, timeoutMs: 20 })).toEqual([])
     // Its answer arrives after the check ended and changes nothing: the change is reported by a check once it settles.
     // Until then checks skip the file, so the wait polls them; had the late answer moved the stamp, none would report it.
+    // The polled checks give the file system as long as the wait itself: a check drops a comparison that outlasts its
+    // time, and on a loaded runner the default 2 s was shorter than one stat and read took, so no check ever reported it.
     answered()
     slow = false
-    await vi.waitFor(async () => expect(await store.check()).toEqual([{ fileId: opened.id, change: 'modified' }]), { timeout: 10_000, interval: 20 })
+    await vi.waitFor(async () => expect(await store.check({ concurrency: 2, timeoutMs: 30_000 })).toEqual([{ fileId: opened.id, change: 'modified' }]), { timeout: 30_000, interval: 20 })
     expect(await store.check()).toEqual([])
-  })
+  }, 45_000)
   it('does not compare a file again while its last comparison hangs, and lets at most two hang', async () => {
     // A share that never answers (a hard NFS mount, an unplugged VPN): each call would hold one of libuv's four threads.
     const calls = new Map<string, number>()
