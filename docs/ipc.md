@@ -1354,6 +1354,11 @@ itself by view position.
   first row. Values are equal and ordered as the sort compares them, so a column's collation decides which texts match
   (case and trailing spaces under a CI collation) and `2` equals `2.0` in a float column; a truncated value compares by
   its stored prefix (`approximate`).
+- **Ties.** A key keeps 8 bytes of each value (a number, or the first bytes of its collation sort key), so two rows whose
+  prefixes are equal are compared by their stored cells. A column of text, dates, times or bytes with few distinct values
+  would do that for most comparisons, so its key also numbers each distinct value in order (`ViewSorter.ValueRanks`) and
+  compares rows by that number alone, while the distinct values fit in 4 bytes a row of the key's 16 and none is longer
+  than 1,024 bytes; a column with more distinct values than that compares by prefix and cell. Number keys do not rank.
 - **Memory.** A sort holds 8 to 16 bytes per row and key while it runs (a filter, per column it compares, and 16 bytes a row
   for the rows it keeps, a selection's rows or duplicates' groups; a `value` sort key on a filtered column is that filter's
   key and is charged once, and other sort keys are built over only the rows the filters kept), and a view keeps 4 bytes a row it shows, all charged

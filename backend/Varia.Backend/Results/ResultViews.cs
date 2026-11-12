@@ -54,7 +54,8 @@ internal sealed class ResultView(uint viewId, ResultSetBuffer set, int[] order, 
 /// binary values byte by byte; character columns by their collation (its locale and Ignore flags, or code-point order for
 /// _BIN and _BIN2), ignoring trailing spaces as SQL Server does; every other type by its display text's code points.
 /// Each row keeps 8 to 16 bytes per key while sorting (a number, or a prefix of its collation sort key), so most
-/// comparisons never touch the stored cell; ties read it again from its page.</summary>
+/// comparisons never touch the stored cell. A text, date or binary column of few distinct values keeps a rank for each
+/// instead (<see cref="ValueRanks"/>), so its ties need no cell either; other ties read the cell again from its page.</summary>
 internal static partial class ViewSorter
 {
     public const int MaxKeys = 16;
@@ -377,6 +378,7 @@ internal static partial class ViewSorter
                 key.Set(row, span);
             }
         }
+        key.Seal();
         return key;
     }
 
@@ -555,8 +557,88 @@ internal static partial class ViewSorter
         /// <summary>The base row at an index, where a comparison reads the stored cell again.</summary>
         protected int Row(int index) => map is null ? index : map[index];
         public abstract void Set(int row, ReadOnlySpan<byte> cell);
+        /// <summary>Every row has been set: no comparison comes before it.</summary>
+        public virtual void Seal() { }
+        /// <summary>Whether its values compare by rank (<see cref="ValueRanks"/>), without their cells being read again.</summary>
+        internal virtual bool Ranked => false;
         /// <summary>Two non-NULL rows, ascending.</summary>
         public abstract int Compare(int a, int b);
+    }
+
+    /// <summary>A key's distinct values numbered in their order, so that two rows compare by number without their cells
+    /// being read again. A prefix alone cannot do that: equal prefixes need the values themselves, twice a comparison, and
+    /// in a column of a few repeated names, codes or dates most comparisons are of equal prefixes, which made grouping
+    /// such a column (a pivot, a duplicates filter, a distinct list) and sorting by it many times slower than a column of
+    /// numbers. The values are kept only while they fit in the bytes the key's reservation leaves unused
+    /// (<see cref="WorkingBytes"/> reserves 16 a row and key; a prefix takes 8 and a row's number here 4, which leaves 4 a
+    /// row for the values), and no value is longer than <see cref="MaxValueBytes"/>. Past either the key compares by
+    /// prefix and cell as before: a column with that many distinct values has fewer ties to pay for.</summary>
+    internal sealed class ValueRanks(int rows)
+    {
+        public const int MaxValueBytes = 1024;
+        /// <summary>What a distinct value holds besides its bytes: its array, and its entry and bucket in a table that
+        /// doubles as it grows.</summary>
+        internal const int EntryBytes = 96;
+        private Dictionary<byte[], int>? ids = new(ByteKeys.Instance);
+        /// <summary>By row: its value's number in the order seen, then (sealed) in ascending order.</summary>
+        private int[]? ranks = new int[rows];
+        private long room = 4L * rows;
+
+        /// <summary>The ranks are final: every row's value was kept and <see cref="Seal"/> has ordered them.</summary>
+        public bool Ready { get; private set; }
+
+        /// <summary>A row's value as the bytes whose order is the key's (a sort key, or the value's own bytes).</summary>
+        public void Add(int row, ReadOnlySpan<byte> value)
+        {
+            if (ids is null) return;
+            var lookup = ids.GetAlternateLookup<ReadOnlySpan<byte>>();
+            if (!lookup.TryGetValue(value, out var id))
+            {
+                room -= value.Length + EntryBytes;
+                if (room < 0 || value.Length > MaxValueBytes)
+                {
+                    ids = null;
+                    ranks = null;
+                    return;
+                }
+                id = ids.Count;
+                lookup[value] = id;
+            }
+            ranks![row] = id;
+        }
+
+        /// <summary>Orders the values seen, byte by byte, and gives each row its value's place.</summary>
+        public void Seal()
+        {
+            if (ids is null || ranks is null) return;
+            var values = new byte[ids.Count][];
+            var order = new int[values.Length];
+            foreach (var (value, id) in ids) (values[id], order[id]) = (value, id);
+            Array.Sort(values, order, ByteKeys.Instance);
+            var places = new int[order.Length];
+            for (var i = 0; i < order.Length; i++) places[order[i]] = i;
+            for (var row = 0; row < ranks.Length; row++) ranks[row] = places.Length == 0 ? 0 : places[ranks[row]];
+            ids = null;
+            Ready = true;
+        }
+
+        public int Compare(int a, int b) => ranks![a].CompareTo(ranks[b]);
+
+        private sealed class ByteKeys : IEqualityComparer<byte[]>, IAlternateEqualityComparer<ReadOnlySpan<byte>, byte[]>, IComparer<byte[]>
+        {
+            public static readonly ByteKeys Instance = new();
+            public bool Equals(byte[]? x, byte[]? y) => x.AsSpan().SequenceEqual(y);
+            public int GetHashCode(byte[] value) => GetHashCode(value.AsSpan());
+            public bool Equals(ReadOnlySpan<byte> alternate, byte[] other) => alternate.SequenceEqual(other);
+            public int GetHashCode(ReadOnlySpan<byte> alternate)
+            {
+                var hash = new HashCode();
+                hash.AddBytes(alternate);
+                return hash.ToHashCode();
+            }
+            public byte[] Create(ReadOnlySpan<byte> alternate) => alternate.ToArray();
+            public int Compare(byte[]? x, byte[]? y) => x.AsSpan().SequenceCompareTo(y);
+        }
     }
 
     private sealed class LengthKey(int rows) : Key(rows)
@@ -615,9 +697,18 @@ internal static partial class ViewSorter
     private sealed class OrdinalKey(int rows, int[]? map, PageSource source, int column, bool trim) : Key(rows, map)
     {
         private readonly ulong[] prefixes = new ulong[rows];
-        public override void Set(int row, ReadOnlySpan<byte> cell) => prefixes[row] = Prefix(trim ? TrimEnd(cell) : cell);
+        private readonly ValueRanks ranks = new(rows);
+        public override void Set(int row, ReadOnlySpan<byte> cell)
+        {
+            var value = trim ? TrimEnd(cell) : cell;
+            prefixes[row] = Prefix(value);
+            ranks.Add(row, value);
+        }
+        public override void Seal() => ranks.Seal();
+        internal override bool Ranked => ranks.Ready;
         public override int Compare(int a, int b)
         {
+            if (ranks.Ready) return ranks.Compare(a, b);
             var compared = prefixes[a].CompareTo(prefixes[b]);
             if (compared != 0) return compared;
             var left = source.Cell(Row(a), column);
@@ -631,6 +722,7 @@ internal static partial class ViewSorter
     private sealed class CollatedKey(int rows, int[]? map, PageSource source, int column, CompareInfo info, CompareOptions options) : Key(rows, map)
     {
         private readonly ulong[] prefixes = new ulong[rows];
+        private readonly ValueRanks ranks = new(rows);
         private char[] left = new char[256], right = new char[256];
         private byte[] sortKey = new byte[512];
 
@@ -641,10 +733,16 @@ internal static partial class ViewSorter
             if (length > sortKey.Length) sortKey = new byte[Math.Max(length, 2 * sortKey.Length)];
             var written = info.GetSortKey(text, sortKey, options);
             prefixes[row] = Prefix(sortKey.AsSpan(0, written));
+            // The whole sort key orders two values as the comparison below does, and equal keys are equal values.
+            ranks.Add(row, sortKey.AsSpan(0, written));
         }
+
+        public override void Seal() => ranks.Seal();
+        internal override bool Ranked => ranks.Ready;
 
         public override int Compare(int a, int b)
         {
+            if (ranks.Ready) return ranks.Compare(a, b);
             var compared = prefixes[a].CompareTo(prefixes[b]);
             if (compared != 0) return compared;
             var x = Decode(TrimEnd(source.Cell(Row(a), column)), ref left);
@@ -664,6 +762,7 @@ internal static partial class ViewSorter
     private sealed class MappedKey(Key inner, int[] map) : Key(0)
     {
         public override bool IsNull(int row) => inner.IsNull(map[row]);
+        internal override bool Ranked => inner.Ranked;
         public override void Set(int row, ReadOnlySpan<byte> cell) => throw new InvalidOperationException("A mapped key is built by its own.");
         public override int Compare(int a, int b) => inner.Compare(map[a], map[b]);
     }

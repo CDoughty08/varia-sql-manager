@@ -39,6 +39,7 @@ internal static class ViewChecks
         Registry(check);
         HostReads(check);
         Jobs(check).GetAwaiter().GetResult();
+        RankChecks.Run(check);
         check(ViewSorter.CompareNumericText("12345678901234567890123456789012.5"u8, "12345678901234567890123456789012.25"u8) > 0
             && ViewSorter.CompareNumericText("-0.00"u8, "0"u8) == 0 && ViewSorter.CompareNumericText("-10"u8, "-9.5"u8) < 0 && ViewSorter.CompareNumericText("0.10"u8, "0.1"u8) == 0,
             "exact numerics compare as numbers at any precision: digits past double's, a negative zero, and trailing zeros");

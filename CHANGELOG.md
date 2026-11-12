@@ -7,6 +7,10 @@
 - **About Varia:** find the running version, platform and update status from Help or the command palette (also the app menu on macOS). Copy version details for support and open the project, issue form or release notes without needing a server connection.
 - **In-app release notes:** read curated release highlights and limits offline, browse bundled history and open notes for the exact version advertised by an update. Missing notes are reported clearly, with release downloads available separately.
 
+### Improved
+
+- **Results:** pivoting, sorting, filtering for duplicates and listing a column's values are several times faster on text, date and binary columns with few distinct values (a category, a status name, a day).
+
 ### Fixed
 
 - **No leftover language service on Linux and macOS:** a SQL backend that crashed or was restarted while a query's language service was closing could leave that process suspended in the background. It now always ends.
