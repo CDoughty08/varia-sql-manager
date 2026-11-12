@@ -52,8 +52,8 @@ The panes sit in one slot, or two with Split View: side by side when the documen
 below that, each then at least 200 px tall, with a splitter (arrow keys, Home and End). The tiles keep their height and
 the expanded charts give way down to a floor, so the panes keep theirs; only a document too short for all of them
 scrolls. Each slot has a tab per pane; choosing in one slot the pane the
-other shows swaps them. The Blocking tab counts blocked sessions. A pane whose grid has not arrived says so, and its
-probe stays paused: no SQL runs for a pane nobody can read.
+other shows swaps them. The Blocking tab counts blocked sessions. A probe that only panes read runs only while one of
+them is shown: no SQL runs for a pane nobody can read.
 
 | Pane | Now |
 | --- | --- |

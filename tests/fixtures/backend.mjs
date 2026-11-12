@@ -1324,7 +1324,10 @@ function activityResourcesSample(live, probe, first) {
   const filterOf = table => (live.args.filters ?? []).find(item => item.table === table) ?? {}
   const hide = table => filterOf(table).hideBenign !== false
   const files = filterOf('files'), warning = files.latencyWarningMs ?? 20, error = Math.max(warning, files.latencyErrorMs ?? 50)
+  // A first sample has no interval, so no rate, latency or tone (ActivityResourceRows): only names, types and sizes.
+  const unrated = row => Object.fromEntries(Object.entries(row).filter(([key]) => !/Rate$|Ms$/.test(key)))
   const toned = fakeFiles.map(row => {
+    if (first) return { ...unrated(row), tone: null }
     const worst = Math.max(Number(row.readLatencyMs ?? 0), Number(row.writeLatencyMs ?? 0))
     return { ...row, tone: worst >= error ? 'error' : worst >= warning ? 'warning' : null }
   })
@@ -1332,8 +1335,8 @@ function activityResourcesSample(live, probe, first) {
   const shownFiles = toned.filter(row => view === 'all' || (view === 'rows' && row.type === 'Rows') || (view === 'log' && row.type === 'Log') || (view === 'overThreshold' && row.tone))
   const [categorySpec, typeSpec, fileSpec] = liveProbes['activity.resources'].tables
   const results = [
-    sessionTableResult(categorySpec, '', fakeWaitCategories.filter(row => !(hide('waitCategories') && row.benign))),
-    sessionTableResult(typeSpec, 'type', fakeWaitTypes.filter(row => !(hide('waitTypes') && row.benign === '1'))),
+    sessionTableResult(categorySpec, '', fakeWaitCategories.filter(row => !(hide('waitCategories') && row.benign)).map(row => first ? unrated(row) : row)),
+    sessionTableResult(typeSpec, 'type', fakeWaitTypes.filter(row => !(hide('waitTypes') && row.benign === '1')).map(row => first ? unrated(row) : row)),
     sessionTableResult(fileSpec, 'io', shownFiles)
   ]
   const kept = live.keptResources ?? (live.keptResources = new Map())
