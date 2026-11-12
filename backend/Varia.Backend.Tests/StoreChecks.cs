@@ -48,6 +48,17 @@ internal static class StoreChecks
             && automatic.GlobalBytes is >= 256 * MiB and <= 16 * GiB && automatic.QueryBytes == automatic.GlobalBytes / 2 && ResultStore.FromSystem(4L << 20, 300 * MiB).GlobalBytes == 4L << 20,
             "a store with the user's limit still gives a query half and still stops under low memory; the test hooks' budget wins over it");
 
+        // Working memory: a large request, and any that only makes an operation faster, is refused under high memory load
+        // as a page of rows is; a small one is not, so a busy machine still sorts a small result.
+        var pressed = false;
+        var machine = new ResultStore(4 * GiB, 2 * GiB, () => (pressed ? 100 : 0, 50));
+        var work = machine.BeginQuery("work");
+        var calm = machine.TryReserveWork(work, ResultStore.WorkCheckBytes) && machine.TryReserveSpare(work, MiB) && machine.TryReserveWork(work, MiB);
+        pressed = true;
+        check(calm && !machine.TryReserveWork(work, ResultStore.WorkCheckBytes) && !machine.TryReserveSpare(work, MiB) && machine.TryReserveWork(work, ResultStore.WorkCheckBytes - 1)
+            && work.UsedBytes == 2 * ResultStore.WorkCheckBytes + 2 * MiB - 1 && work.Stopped == TruncationReason.None,
+            "under high memory load working memory of 64 MiB or more, and spare memory of any size, is refused, smaller working memory is not, and none of it stops the query");
+
         var low = false;
         var store = new ResultStore(1000, 600, () => (low ? 100 : 0, 50));
         var a = store.BeginQuery("s1");

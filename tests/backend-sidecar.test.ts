@@ -509,7 +509,7 @@ describe('real .NET sidecar results (test hooks)', () => {
     expect((await backend({ VARIA_RESULT_MEMORY_MIB: '300' }).ready).resultBudget).toEqual({ globalBytes: 300 * MiB, queryBytes: 150 * MiB })
     expect((await backend({ VARIA_RESULT_MEMORY_MIB: '64' }).ready).resultBudget).toEqual({ globalBytes: 256 * MiB, queryBytes: 128 * MiB })
     // Automatic: a quarter of the memory, between 256 MiB and 16 GiB. A value that is no number is ignored.
-    const automatic = (await backend().ready).resultBudget!
+    const automatic = (await backend({ VARIA_RESULT_MEMORY_MIB: '' }).ready).resultBudget!
     expect(automatic.globalBytes).toBeGreaterThanOrEqual(256 * MiB)
     expect(automatic.globalBytes).toBeLessThanOrEqual(16 * 1024 * MiB)
     expect((await backend({ VARIA_RESULT_MEMORY_MIB: 'lots' }).ready).resultBudget).toEqual(automatic)

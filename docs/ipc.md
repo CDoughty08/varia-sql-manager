@@ -1168,8 +1168,10 @@ Results stay in backend memory, never on disk (`ResultStore`).
   within 256 MiB – 16 GiB, or the limit of Tools › Options (`queryResults.grid.memoryLimitGiB`, 0 for automatic), used as it
   is up to three quarters of that memory. Main reads the setting and gives it to the backend in its environment
   (`VARIA_RESULT_MEMORY_MIB`) at each launch; the backend sizes its store once, as it starts, so a change applies after a
-  restart. The automatic figure is a quarter because a sort, pivot or profile of a result that fills its half holds
-  nearly as much again beside it while it runs. One query may use half of it. Nothing more is stored while the operating system reports high
+  restart (of Varia, or Restart SQL Backend). The budget holds the rows and the working memory of the operations on
+  them alike (a sort's keys, a profile's figures), so a quarter of memory is all the backend commits to results; a
+  result that fills its query's half leaves no room to sort it. Working memory of 64 MiB or more, and any memory that
+  only makes an operation faster, is refused under high system memory load as rows are. One query may use half of it. Nothing more is stored while the operating system reports high
   memory load (checked at every page seal). `VARIA_RESULT_BUDGET_BYTES` replaces the global figure only with the test
   hooks, and turns the memory-load check off so tests see their budget's truncation reasons on a busy machine (the offline
   checks' stores never check it unless given a probe).
@@ -1178,8 +1180,8 @@ Results stay in backend memory, never on disk (`ResultStore`).
   returned when the set ends. A failed reservation rolls back the current row, so pages never hold partial rows; later
   rows are still read and counted in `rowsRead` but not stored, later result sets of the query are not kept (they count
   in `discardedResultSets`), and execution always continues.
-- **Rows per query.** `maxRows` 0 – 2,147,483,647 counted across result sets (0 means the budget only; the PR6 table
-  sends 1,000). **Result sets kept** `maxResultSets` 1 – 1,000 (default 10); later sets are counted, not stored. The
+- **Rows per query.** `maxRows` 0 – 2,147,483,647 counted across result sets (0 means the budget only; the renderer
+  sends `queryResults.grid.maxRows`, 0 by default). A row of an execution plan returned with the rows is kept past it. **Result sets kept** `maxResultSets` 1 – 1,000 (default 10); later sets are counted, not stored. The
   summary must fit the 16 MiB response: kept sets' descriptors may take 8 MiB, each bounded by `512 + Σ(UTF-8 name +
   UTF-8 type + 96)` bytes (messages and the error text take the rest, with room to spare), so once a set's column list
   would pass that, it and later sets are counted as discarded.

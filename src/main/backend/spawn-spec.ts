@@ -9,8 +9,9 @@ import { sqlToolsEnvironment } from './sqltools-runtime'
  *  VARIA_LOCALE: scripts date their headers in it, as SSMS does, and macOS GUI launches have no LANG to read. */
 export function backendSpawnSpec(options: { packaged: boolean; root: string; resourcesPath: string; platform: NodeJS.Platform; smokeTest: boolean; env?: NodeJS.ProcessEnv; locale?: string }): SpawnSpec {
   // The result memory limit is the setting's alone (resultMemoryEnvironment, at each launch), never the shell's.
+  // Whatever its case: Windows, and .NET on it, read environment names without regard to it.
   const runtimeEnv = { ...sqlToolsEnvironment(options) }
-  delete runtimeEnv[resultMemoryVariable]
+  for (const name of Object.keys(runtimeEnv)) if (name.toUpperCase() === resultMemoryVariable) delete runtimeEnv[name]
   const o = { ...options, env: options.locale ? { ...runtimeEnv, VARIA_LOCALE: options.locale } : runtimeEnv }
   if (o.packaged) return { command: join(o.resourcesPath, 'backend', o.platform === 'win32' ? 'Varia.Backend.exe' : 'Varia.Backend'), args: [], cwd: o.resourcesPath, env: withoutTestHooks(o.env), packaged: true }
   const fake = o.smokeTest ? o.env?.VARIA_TEST_BACKEND : undefined

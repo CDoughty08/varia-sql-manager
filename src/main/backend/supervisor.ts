@@ -30,8 +30,9 @@ export interface SupervisorDeps extends ConnectionDeps {
   /** Silence before the backend counts as unresponsive; smoke tests shorten it (VARIA_BACKEND_LIVENESS_MS). */
   unresponsiveMs?: number
   power?: PowerMonitorLike
-  /** What the first launch waits for (the settings its environment is read from), settled either way. Requests made
-   *  meanwhile wait for the connection, as they do while one starts. */
+  /** What the first launch waits for (the settings its environment is read from), settled either way. Meanwhile the
+   *  state is `starting`, a restart is the launch still to come, and requests wait for the connection as they do for
+   *  the next generation after a loss: unsent, so no deadline runs, and bounded by the pending-request limit. */
   before?: Promise<unknown>
   /** Added to the spawn environment at every launch: what the user may have changed since the last one. */
   environment?: () => Record<string, string>
@@ -108,6 +109,8 @@ export class BackendSupervisor {
   private expectedTick = 0
   private windowStart = 0
   private suspended = false
+  /** Started, with the first launch still waiting for `deps.before`. */
+  private awaitingFirst = false
 
   constructor(spec: SpawnSpec, deps: SupervisorDeps = {}) {
     this.spec = spec
@@ -138,7 +141,13 @@ export class BackendSupervisor {
     this.started = true
     const before = this.deps.before
     if (!before) return this.launch()
-    void before.then(() => {}, () => {}).then(() => { if (!this.closing) this.launch() })
+    this.awaitingFirst = true
+    this.setState({ status: 'starting', generation: this.generation + 1 })
+    void before.then(() => {}, () => {}).then(() => {
+      if (!this.awaitingFirst) return
+      this.awaitingFirst = false
+      if (!this.closing) this.launch()
+    })
   }
 
   /** The generation whose results can be read now: the current one while it is ready. */
@@ -204,6 +213,8 @@ export class BackendSupervisor {
   async restart(reason: 'reload' | 'manual'): Promise<void> {
     if (this.closing) return
     if (!this.started) return this.start()
+    // Nothing has launched yet: the launch to come is the restart, with the settings as they are when it is made.
+    if (this.awaitingFirst) return
     if (reason === 'reload' && this.snapshot.status === 'failed') return
     if (reason === 'manual') { this.attempts = 0; this.losses = [] }
     this.clock.clearTimeout(this.restartTimer)

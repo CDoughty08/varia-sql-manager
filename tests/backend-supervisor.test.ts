@@ -417,6 +417,8 @@ describe('smoke-test backends', () => {
     const base = { packaged: false, root: resolve('app'), resourcesPath: resolve('resources'), platform: process.platform, smokeTest: false }
     expect(backendSpawnSpec({ ...base, env: { PATH: '/bin', VARIA_RESULT_MEMORY_MIB: '64' } }).env).not.toHaveProperty('VARIA_RESULT_MEMORY_MIB')
     expect(backendSpawnSpec({ ...base, packaged: true, env: { PATH: '/bin', VARIA_RESULT_MEMORY_MIB: '64' } }).env).not.toHaveProperty('VARIA_RESULT_MEMORY_MIB')
+    // Windows reads environment names without regard to case, and so does .NET there.
+    expect(backendSpawnSpec({ ...base, env: { PATH: '/bin', varia_result_memory_mib: '64', Varia_Result_Memory_MiB: '64' } }).env).toEqual(backendSpawnSpec({ ...base, env: { PATH: '/bin' } }).env)
 
     const processes = fakeSpawn()
     const environments: (NodeJS.ProcessEnv | undefined)[] = []
@@ -438,10 +440,37 @@ describe('smoke-test backends', () => {
     asked.catch(() => {})
     await settle()
     expect(environments).toEqual([])
+    // Meanwhile it is starting, not stopped, and a restart or another start is the launch still to come: not a second one.
+    expect(value.state).toMatchObject({ status: 'starting', generation: 1 })
+    await value.restart('manual')
+    await value.restart('reload')
+    value.start()
+    await settle()
+    expect(environments).toEqual([])
     limit = 8
     settled()
     await settle()
     expect(environments).toEqual([{ PATH: '/bin', VARIA_RESULT_MEMORY_MIB: '8192' }])
+    expect(processes.backends).toHaveLength(1)
+    expect(value.state).toMatchObject({ generation: 1 })
+    // Once launched, a restart is a restart: the next generation, with the limit as it is then.
+    limit = 2
+    await value.restart('manual')
+    await settle()
+    expect(environments).toHaveLength(2)
+    expect(environments[1]).toEqual({ PATH: '/bin', VARIA_RESULT_MEMORY_MIB: '2048' })
+    expect(value.state).toMatchObject({ generation: 2 })
+
+    // Stopped while it waits: nothing is ever launched, and what was asked is refused.
+    let late!: () => void
+    const stopped = new BackendSupervisor({ command: 'backend', args: [], cwd: '.', env: { PATH: '/bin' }, packaged: true }, { spawn: spying, before: new Promise<void>(resolve => { late = resolve }) })
+    stopped.start()
+    const refused = failure(stopped.request('system.health', {}))
+    await stopped.stop()
+    late()
+    await settle()
+    expect(environments).toHaveLength(2)
+    expect(await refused).toBeDefined()
     // Automatic adds nothing, and a launch that waits for nothing starts at once.
     const plain = new BackendSupervisor({ command: 'backend', args: [], cwd: '.', env: { PATH: '/bin' }, packaged: true }, {
       spawn: spying, environment: () => resultMemoryEnvironment(0)
@@ -449,7 +478,7 @@ describe('smoke-test backends', () => {
     supervisors.push(plain)
     plain.start()
     expect(environments.at(-1)).toEqual({ PATH: '/bin' })
-    expect(environments).toHaveLength(2)
+    expect(environments).toHaveLength(3)
   })
   it('passes the OS locale to the real backend, which dates script headers in it', () => {
     const base = { packaged: false, root: resolve('app'), resourcesPath: resolve('resources'), platform: process.platform, smokeTest: false, env: { PATH: '/bin', VARIA_BACKEND_TEST_HOOKS: '1' } }

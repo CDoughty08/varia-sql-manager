@@ -1209,7 +1209,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                                         if (currentSet is null) continue;
                                         currentSet.CountRow();
                                         events.RowsChanged();
-                                        if (args.MaxRows > 0 && storedRows >= args.MaxRows) { currentSet.Skip(TruncationReason.RowLimit); continue; }
+                                        // The limit is on the rows a query returns: a plan asked for with them is kept whatever came before.
+                                        if (args.MaxRows > 0 && storedRows >= args.MaxRows && plan?.IsPlan != true) { currentSet.Skip(TruncationReason.RowLimit); continue; }
                                         var builder = currentSet.BeginRow();
                                         if (builder is null) continue;
                                         skipped = false;
@@ -1569,7 +1570,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         // running filter needs (FilterBytes a row at most).
         var working = ViewSorter.WorkingBytes(rows, ViewSorter.KeyCount(keys, filters)) + (filters.Length > 0 ? ViewSorter.FilterBytes * rows : 0);
         var kept = 4 * rows + ResultStore.ViewOverhead;
-        if (!store.TryReserve(set.Budget, working + kept, false, out _))
+        if (!store.TryReserveWork(set.Budget, working + kept))
             throw new RequestException("TOO_LARGE", filters.Length > 0
                 ? "There is not enough result memory to filter these rows. Close other results and try again."
                 : "There is not enough result memory to sort these rows. Close other results and try again.");
@@ -1714,10 +1715,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             if (workers == 1)
             {
                 working = ColumnProfiler.WorkingBytes(rows, args.Columns.Length);
-                if (!store.TryReserve(set.Budget, working, false, out _)) throw new RequestException("TOO_LARGE", tooLarge);
+                if (!store.TryReserveWork(set.Budget, working)) throw new RequestException("TOO_LARGE", tooLarge);
             }
             // Large values (a long lowest or highest key, a long sort key) are charged as the profile meets them.
-            var charges = new ColumnProfiler.Charges(bytes => store.TryReserve(set.Budget, bytes, false, out _));
+            var charges = new ColumnProfiler.Charges(bytes => store.TryReserveWork(set.Budget, bytes));
             try
             {
                 var threads = workers;
@@ -1756,7 +1757,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
         var working = ViewSorter.DistinctWorkingBytes(rows);
-        if (!store.TryReserve(set.Budget, working, false, out _))
+        if (!store.TryReserveWork(set.Budget, working))
             throw new RequestException("TOO_LARGE", "There is not enough result memory to list this column's values. Close other results and try again.");
         DistinctSnapshot snapshot;
         try
@@ -1847,7 +1848,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         foreach (var page in pages) rows += page.Rows;
         var working = RowIdentity.WorkingBytes(rows);
         var kept = 8 * rows + ResultStore.ViewOverhead;
-        if (!store.TryReserve(set.Budget, working + kept, false, out _))
+        if (!store.TryReserveWork(set.Budget, working + kept))
             throw new RequestException("TOO_LARGE", "There is not enough result memory to tell these rows apart. Close other results and try again.");
         (int Column, bool Unique, bool Approximate, long[] Ids) built;
         try { built = await Task.Run(() => RowIdentity.Build(set, pages, by.Value, args.Column ?? -1, token), token); }
@@ -1953,12 +1954,12 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         foreach (var page in leftPages) leftRows += page.Rows;
         foreach (var page in rightPages) rightRows += page.Rows;
         var working = ResultDiffer.WorkingBytes(leftRows, rightRows);
-        if (!store.TryReserve(left.Budget, working, false, out _))
+        if (!store.TryReserveWork(left.Budget, working))
             throw new RequestException("TOO_LARGE", "There is not enough result memory to compare these results. Close other results and try again.");
         long cellBytes = 0;
         bool ReserveCells(long bytes)
         {
-            if (!store.TryReserve(left.Budget, bytes, false, out _)) return false;
+            if (!store.TryReserveWork(left.Budget, bytes)) return false;
             cellBytes += bytes;
             return true;
         }
@@ -2024,11 +2025,11 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         foreach (var page in pages) rows += page.Rows;
         var working = ResultPivoter.WorkingBytes(rows, ResultPivoter.KeyColumns(spec));
         const string tooLarge = "There is not enough result memory to pivot these rows. Close other results and try again.";
-        if (!store.TryReserve(set.Budget, working, false, out _)) throw new RequestException("TOO_LARGE", tooLarge);
+        if (!store.TryReserveWork(set.Budget, working)) throw new RequestException("TOO_LARGE", tooLarge);
         long figures = 0;
         bool Reserve(long bytes)
         {
-            if (!store.TryReserve(set.Budget, bytes, false, out _)) return false;
+            if (!store.TryReserveWork(set.Budget, bytes)) return false;
             figures += bytes;
             return true;
         }

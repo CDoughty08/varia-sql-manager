@@ -82,8 +82,8 @@ internal sealed class ResultStore
 
     /// <summary>The global budget on a machine of this much memory: a quarter of it within <see cref="MinBytes"/> and
     /// <see cref="MaxAutomaticBytes"/>, or the limit the user set (Tools › Options), as it is up to three quarters of the
-    /// memory. Sorting, pivoting or profiling a result that fills its half holds as much again beside it for a moment,
-    /// which is why the automatic figure is a quarter.</summary>
+    /// memory. The budget holds the rows and the working memory of the sorts, pivots and profiles of them alike, so a
+    /// quarter of memory is all the backend commits to results; the rest is the machine's.</summary>
     public static long GlobalBytesFor(long memoryBytes, long? limitBytes = null) =>
         limitBytes is > 0 ? Math.Clamp(limitBytes.Value, MinBytes, Math.Max(MinBytes, memoryBytes / 4 * 3)) : Math.Clamp(memoryBytes / 4, MinBytes, MaxAutomaticBytes);
 
@@ -213,8 +213,17 @@ internal sealed class ResultStore
     {
         var limit = Math.Min(QueryBytes, query.MaxBytes);
         if (query.UsedBytes + bytes > limit - limit / 8 || UsedBytes + bytes > GlobalBytes - GlobalBytes / 8) return false;
-        return TryReserve(query, bytes, false, out _);
+        return TryReserve(query, bytes, true, out _);
     }
+
+    /// <summary>Working memory at this size or more is refused while the operating system reports high memory load, as a
+    /// page of rows is: the budget is a share of the machine's memory, not of what is free, and a sort of a large result
+    /// would otherwise take gigabytes from a machine with none to spare. Smaller requests are not asked: a busy machine
+    /// still sorts a small result.</summary>
+    public const long WorkCheckBytes = 64L << 20;
+
+    /// <summary>Takes the working memory of an operation on a result (a sort's keys, a profile's figures).</summary>
+    public bool TryReserveWork(QueryBudget query, long bytes) => TryReserve(query, bytes, bytes >= WorkCheckBytes, out _);
 
     /// <summary>Charges bytes whatever the budget: the few bytes by which a sealed page exceeds its rows' estimate.</summary>
     internal void Force(QueryBudget query, long bytes)

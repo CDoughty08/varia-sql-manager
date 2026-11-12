@@ -799,6 +799,12 @@ try
         Check(result.Status == "timedOut" && result.CompletedBatches == 1, "one deadline covers the entire script");
         result = await Run("SELECT TOP (10) object_id FROM sys.all_objects;\nGO 2\nPRINT 'after display cap';", maxRows: 2);
         Check(result.Status == "completed" && result.ResultSets.Sum(set => RowsOf(set).Count) == 2 && Texts(result).Contains("after display cap"), "display limits do not skip later SQL");
+        // The limit is on the rows a query returns: the plan SET STATISTICS XML returns after them is kept past it.
+        result = await Run("SET STATISTICS XML ON;\nSELECT TOP (10) object_id FROM sys.all_objects;\nSET STATISTICS XML OFF;", maxRows: 2);
+        var planned = result.ResultSets.Where(set => set.Kind == "executionPlan").ToList();
+        Check(result.Status == "completed" && result.ResultSets.Where(set => set.Kind == "rows").Sum(set => set.RowsStored) == 2
+            && result.ResultSets.Any(set => set.Kind == "rows" && set.Truncated == "rowLimit") && planned.Count == 1 && planned[0] is { RowsStored: 1, Truncated: null },
+            "a row limit cuts the rows and keeps the execution plan returned after them");
         await Call<object>("query.session.close", new SessionArgs(sessionId));
         result = await Run("SELECT * FROM #VariaBatchTest;");
         Check(result.Status == "completedWithErrors" && result.Error?.Message.Contains("Msg 208") == true, "closing a tab removes temporary objects and session state");
