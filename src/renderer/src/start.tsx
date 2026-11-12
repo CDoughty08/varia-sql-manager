@@ -60,7 +60,10 @@ export async function start(root: Root): Promise<void> {
       __variaGrid: {
         stats: async () => ({ ...stats?.snapshot(), client: await workbench.resultClient.stats() }),
         reset: () => stats?.reset(),
-        setScrollCap: (px?: number) => stats?.setScrollCap(px)
+        setScrollCap: (px?: number) => stats?.setScrollCap(px),
+        // Draws results grids transposed or as tables again (every grid, or one tab's or entry's), with an optional header
+        // column: the only thing that sets a view's orientation until the transpose commands do.
+        setOrientation: (transposed: boolean, o: { headerColumn?: number; tabId?: string; entry?: string } = {}) => stats?.setOrientation({ ...o, transposed })
       },
       // AutoRecover's save now, rather than in five minutes (files-smoke.mjs).
       __variaRecovery: { flush: () => workbench.recovery.flush() },

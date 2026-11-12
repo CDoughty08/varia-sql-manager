@@ -86,10 +86,23 @@ being true.
   forbids HTML sinks under `grid/`, `results/`, `designer/` and `live/`); no React per row or cell, and frames stay
   O(visible cells).
   `GridView` works in drawn rows and columns for geometry, pools and scrolling, and meets the result's own rows and columns
-  at named seams (its `selection`/`select`, `sourceRange`, a cell's lookup in `paintCell`, `targetOf`), each the identity
-  today; its saved state, marks and callbacks are always in the result's. Columns are placed through `ColumnAxis`
-  (`grid/layout.ts`) and tiles have a `TileShape` (`grid/tiles.ts`). A menu's row and column come from the grid
-  (`gridTarget`, `grid/anchor.ts`); an ARIA index is read only where no `GridView` is registered. `tests/grid-view.test.ts` holds the seams.
+  at named seams (its `selection`/`select`, `sourceRange`, a cell's lookup in `paintCell`, `targetOf`, `buttonColumn`, Open
+  Value and Fit), each the identity in a table; its saved state, marks and callbacks are always in the result's. Columns
+  are placed through `ColumnAxis` (`grid/layout.ts`) and tiles have a `TileShape` (`grid/tiles.ts`). A menu's row and column
+  come from the grid (`gridTarget`, `grid/anchor.ts`); an ARIA index is read only where no `GridView` is registered.
+  `tests/grid-view.test.ts` holds the seams.
+  Transposed is an orientation of that grid, not a stored result: `GridView`'s `transposed` option swaps rows with columns
+  at every seam and nowhere else (`rotateSelection`, its own inverse; tiles of 32 rows by 128 columns), so nothing outside
+  the grid converts coordinates and no code may turn them a second time. It draws the first `limits.transpose.maxRows`
+  rows as columns, placed by `UniformLayout` (`grid/uniform-layout.ts`: one shared width of at most 240 px and at most 256
+  widths of their own, which a new sort or filter clears, so growth while rows stream rebuilds nothing), and the columns as
+  rows named in the frozen first column, whose name cells hold the sort buttons and funnels. A highlighted row tints its
+  drawn column through pooled bands and colours that column's header, which also carries the row-size bar; a search match
+  past the cap is reported (`onBeyondCap`) and never scrolled to. The orientation, the header column and the transposed
+  view's own offsets and widths are per view in `GridViewState` (`orientation`, `headerColumn`, `transposed`); the option is
+  fixed for a view's life, so a change builds the grid again. Until the transpose commands set it, only test mode's
+  `__variaGrid.setOrientation` does. A result with a tone column (a comparison, a live table) is never transposed.
+  `tests/grid-orientation.test.ts` holds this.
   Live tables show through `LiveGrid` (`src/renderer/src/live/`), which swaps each revision into its `GridView`; a table's row
   tone column (catalogue `role: 'tone'`, its last) is hidden by the grid and left out of Copy and Save (`ResultJobs`).
 - Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never

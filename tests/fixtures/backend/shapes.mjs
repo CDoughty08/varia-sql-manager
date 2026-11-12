@@ -7,6 +7,7 @@
 //   X1  300 columns cycling int, nvarchar(30) and datetime2
 //   X2  300 bit columns: the narrowest columns, so the most cells in view (fake backend only)
 //   L1  well-formed xml, json and plan documents of about 1 KB, 64 KB and 2 MB in turn
+//   T1  4,096 nvarchar(60) columns of long text: the widest result there can be, as a transposed grid draws it (fake backend only)
 //   M1  one int column (M1*n is n one-row sets)
 
 const column = (name, dataType, wire = 'text', role) => ({ name, dataType, wire, ...role ? { role } : {}, nullable: true })
@@ -80,6 +81,12 @@ export const shapes = {
     columns: [column('id', 'int'), column('doc', 'xml', 'text', 'xml'), column('data', 'json', 'text', 'json'), column('plan', 'nvarchar(max)', 'text', 'plan')],
     pageRows: 1,
     row: r => [String(r), ...documentsFor(r % documentSizes.length)]
+  },
+  T1: {
+    columns: Array.from({ length: 4096 }, (_, i) => column('t' + pad(i, 4), 'nvarchar(60)')),
+    // A page of 4 rows is 16,384 cells, about 0.75 MB of text: wide rows seal a page every few rows in the real store too.
+    pageRows: 4,
+    row: r => Array.from({ length: 4096 }, (_, c) => `r${r} c${c} ` + lorem.slice((r + c) % 40, (r + c) % 40 + 36))
   },
   M1: { columns: [column('value', 'int')], pageRows: 64, row: r => [String(r)] }
 }

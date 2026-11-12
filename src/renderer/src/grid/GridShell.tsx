@@ -55,7 +55,7 @@ export interface GridShellProps {
   /** Header funnels and their popover; without them headers have none. Read when the view is built. */
   readonly funnels?: GridFunnels
   /** What changes on a built view besides sort and funnels. */
-  readonly update?: { readonly resultCount: number; readonly showTypes?: boolean; readonly rowSize?: boolean }
+  readonly update?: { readonly resultCount: number; readonly showTypes?: boolean; readonly rowSize?: boolean; readonly headerColumn?: number | null }
   /** The rows are gone (a released or lost result, a stopped live view): an overlay says why, over the strips. */
   readonly gone?: string
   /** A note under the rows when nothing failed (a truncation, a highlight, a failed copy). */
@@ -117,11 +117,11 @@ export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mo
       setStatus({})
     }
   }, [mountKey, resultClient, platform])
-  const resultCount = update?.resultCount ?? 1, showTypes = update?.showTypes, rowSize = update?.rowSize
+  const resultCount = update?.resultCount ?? 1, showTypes = update?.showTypes, rowSize = update?.rowSize, headerColumn = update?.headerColumn
   const filtered = funnels?.filtered, filterable = funnels?.filterable
   useEffect(() => {
-    viewRef.current?.update({ resultCount, whitespace, sort, ...showTypes !== undefined ? { showTypes } : {}, ...rowSize !== undefined ? { rowSize } : {}, ...filtered ? { filtered } : {}, ...filterable ? { filterable } : {} })
-  }, [resultCount, showTypes, whitespace, sort, rowSize, filtered, filterable, mountKey, gone])
+    viewRef.current?.update({ resultCount, whitespace, sort, ...showTypes !== undefined ? { showTypes } : {}, ...rowSize !== undefined ? { rowSize } : {}, ...filtered ? { filtered } : {}, ...filterable ? { filterable } : {}, ...headerColumn !== undefined ? { headerColumn } : {} })
+  }, [resultCount, showTypes, whitespace, sort, rowSize, filtered, filterable, headerColumn, mountKey, gone])
   // Closing the popover gives the focus back to the grid, as a menu does, unless a press elsewhere took it.
   const closeFunnel = useCallback((refocus = true) => {
     setFunnel(undefined)

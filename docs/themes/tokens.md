@@ -79,7 +79,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `shadow` | Shadows. | `#00000085` | `#10182824` |
 | `backdrop` | Modal scrim. | `#0a0c10b3` | `#1c1f2652` |
 
-## Color keys (280)
+## Color keys (285)
 
 ### Base
 
@@ -295,7 +295,12 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `resultsGrid.highlightBlueBackground` | Varia | `$blue/14` | `#6ea4ea24` | `#2563a824` | Rows highlighted blue: the results grid menu, Highlight › Blue. |
 | `resultsGrid.highlightPurpleBackground` | Varia | `$purple/14` | `#ab95ea24` | `#7a4bbf24` | Rows highlighted purple: the results grid menu, Highlight › Purple. |
 | `resultsGrid.highlightRedBackground` | Varia | `$red/14` | `#e6676724` | `#c42b3c24` | Rows highlighted red: the results grid menu, Highlight › Red. |
-| `resultsGrid.highlightRowNumberForeground` | Varia | `$textStrong` | `#f5f6f8` | `#0a0c10` | Row numbers of highlighted rows, over their highlight colour. |
+| `resultsGrid.highlightRowNumberForeground` | Varia | `$textStrong` | `#f5f6f8` | `#0a0c10` | Row numbers of highlighted rows, and in a transposed grid the headers of their columns, over their highlight colour. |
+| `resultsGrid.highlightYellowColumnBackground` | Varia | `$yellow/12` | `#d8bf5e1f` | `#8f6b001f` | Tint over the column a row highlighted yellow is drawn as in a transposed grid. It lies over the cells and the row stripe, so it is translucent and a little weaker than a highlighted row. |
+| `resultsGrid.highlightGreenColumnBackground` | Varia | `$green/12` | `#6fbf8a1f` | `#2e7d4f1f` | Tint over the column a row highlighted green is drawn as in a transposed grid. It lies over the cells and the row stripe, so it is translucent and a little weaker than a highlighted row. |
+| `resultsGrid.highlightBlueColumnBackground` | Varia | `$blue/12` | `#6ea4ea1f` | `#2563a81f` | Tint over the column a row highlighted blue is drawn as in a transposed grid. It lies over the cells and the row stripe, so it is translucent and a little weaker than a highlighted row. |
+| `resultsGrid.highlightPurpleColumnBackground` | Varia | `$purple/12` | `#ab95ea1f` | `#7a4bbf1f` | Tint over the column a row highlighted purple is drawn as in a transposed grid. It lies over the cells and the row stripe, so it is translucent and a little weaker than a highlighted row. |
+| `resultsGrid.highlightRedColumnBackground` | Varia | `$red/12` | `#e667671f` | `#c42b3c1f` | Tint over the column a row highlighted red is drawn as in a transposed grid. It lies over the cells and the row stripe, so it is translucent and a little weaker than a highlighted row. |
 | `resultsGrid.diffAddedBackground` | Varia | `$green/12` | `#6fbf8a1f` | `#2e7d4f1f` | Rows a result diff adds (+): Compare with Previous Result, and the new row of a changed one. |
 | `resultsGrid.diffRemovedBackground` | Varia | `$red/12` | `#e667671f` | `#c42b3c1f` | Rows a result diff removes (−): Compare with Previous Result, and the old row of a changed one. |
 | `resultsGrid.diffChangedAddedBackground` | Varia | `$green/18` | `#6fbf8a2e` | `#2e7d4f2e` | A changed value in its new row of a result diff, over the added row colour. |

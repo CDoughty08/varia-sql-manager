@@ -10,7 +10,7 @@ import { pivotStrip } from '../results/pivot'
 import { transposeStrip } from '../results/TransposeService'
 import { formatBytes, formatCount } from '../results/status'
 import GridShell, { GridErrorBoundary, instanceKey, type GridFunnels, type GridShellApi, type GridSpec } from './GridShell'
-import type { GridView } from './GridView'
+import { toneColumnOf, type GridView } from './GridView'
 import { describeSelection } from './selection'
 
 export interface ResultGridProps {
@@ -69,8 +69,24 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, o
   const [swaps, setSwaps] = useState(0)
   const filtered = useMemo(() => filteredColumns(sort), [sort])
   const key = entry.key
-  const latest = useRef({ count, onWide, sort, marks, showTypes, rowSize })
-  latest.current = { count, onWide, sort, marks, showTypes, rowSize }
+  // The view's orientation is part of its grid state, so it follows the entry and outlives the grid. Nothing sets it yet but
+  // test mode (GridStats.setOrientation), which the transpose commands will replace; a change builds the grid again, as a
+  // tab switch does. A comparison is never drawn transposed (its tone column marks rows).
+  const [, turned] = useState(0)
+  useEffect(() => gridStats?.onOrientation(request => {
+    if ((request.tabId !== undefined && request.tabId !== tabId) || (request.entry !== undefined && request.entry !== key)) return
+    const state = results.gridState(tabId, key)
+    if (request.transposed) state.orientation = 'transposed'
+    else delete state.orientation
+    if (request.headerColumn === undefined) delete state.headerColumn
+    else state.headerColumn = request.headerColumn
+    turned(value => value + 1)
+  }), [gridStats, results, tabId, key])
+  // Read only: the state is made where the grid is built (mount), as before.
+  const gridState = results.viewState(tabId).grids.get(key)
+  const turnedView = gridState?.orientation === 'transposed' && toneColumnOf(entry.descriptor) < 0, headerColumn = turnedView ? gridState.headerColumn : undefined
+  const latest = useRef({ count, onWide, sort, marks, showTypes, rowSize, turnedView, headerColumn })
+  latest.current = { count, onWide, sort, marks, showTypes, rowSize, turnedView, headerColumn }
   /** The handle the view shows, and the keys it was sorted by. */
   const shownRef = useRef<{ handle: ResultHandle; keys: string }>({ handle: entry.handle, keys: '' })
   const mount = (create: (spec: GridSpec) => GridView) => {
@@ -82,6 +98,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, o
     const view = create({
       handle: shownRef.current.handle, descriptor: entry.descriptor, state: results.gridState(tabId, key),
       entry: key, resultNumber: entry.number, resultCount: now.count, stats: gridStats, showTypes: now.showTypes, rowSize: now.rowSize,
+      ...now.turnedView ? { transposed: true, ...now.headerColumn === undefined ? {} : { headerColumn: now.headerColumn } } : {},
       onSelection: selection => {
         const current = entry.handle.getSnapshot()
         results.announceSelection(tabId, describeSelection(selection, current.rowsAvailable, entry.descriptor.columns.length))
@@ -110,7 +127,8 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, o
   }
   // The grid draws the highlighted rows of the handle it shows, and switches with its swaps.
   const highlightRows = marked?.rows
-  useLayoutEffect(() => { viewRef.current?.setHighlights(highlightRows ?? []) }, [highlightRows, tabId, entry])
+  // A grid built again for another orientation takes them again: this runs after the shell has built it.
+  useLayoutEffect(() => { viewRef.current?.setHighlights(highlightRows ?? []) }, [highlightRows, tabId, entry, turnedView])
   // The active match scrolls into view once, in the grid that holds it: at once, or when this grid mounts (the stack
   // scrolled to it) or has swapped to the order the matches number.
   const reveal = search?.reveal ?? 0, revealSelect = search?.revealSelect ?? false
@@ -119,7 +137,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, o
     if (!view) return
     view.setMarks(marks)
     if (resultsSearch.pendingReveal(tabId, key) && view.revealMark(revealSelect)) resultsSearch.revealed(tabId)
-  }, [marks, reveal, revealSelect, swaps, resultsSearch, tabId, key])
+  }, [marks, reveal, revealSelect, swaps, resultsSearch, tabId, key, turnedView])
   // A built view replaces what the grid shows: its first rows are read before the swap, so it paints whole rows at once,
   // unless what it shows is already gone (its result released or lost). While a first sort runs the grid keeps the rows in
   // their order; the views it showed close once it has swapped (ResultsService.viewShown).
@@ -151,13 +169,13 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, o
   const note = lost ? undefined : snapshot.incomplete ? incompleteText : truncation ?? highlightNote
   // The entry's key names the grid for commands and menus; the generation and result id say which stored result it showed
   // when a target was read from it, so a target read before a re-run is told from the new one.
-  return <GridShell mountKey={`${tabId}|${key}|${instanceKey(entry)}`} mount={mount} onApi={onApi}
+  return <GridShell mountKey={`${tabId}|${key}|${instanceKey(entry)}${turnedView ? '|transposed' : ''}`} mount={mount} onApi={onApi}
     rootProps={{
       'data-result-grid': '', 'data-output-view': 'grid', 'data-tab-id': tabId, 'data-result-entry': key, 'data-result-generation': entry.descriptor.generation,
       'data-result-id': entry.descriptor.resultId, 'data-result-kind': entry.descriptor.kind, 'data-pane-focus': focused ? 'selected' : 'grid', onFocus: () => onFocus(key)
     }}
     sort={sort?.keys} onSort={(column, add) => results.cycleSort(tabId, key, column, add)} funnels={funnels}
-    update={{ resultCount: count, showTypes, rowSize }} gone={lost ? lostText : undefined} strip={note ? { text: note } : undefined} />
+    update={{ resultCount: count, showTypes, rowSize, ...turnedView ? { headerColumn: headerColumn ?? null } : {} }} gone={lost ? lostText : undefined} strip={note ? { text: note } : undefined} />
 }
 
 /** A result set's grid: a throw while rendering it stays in its frame (GridErrorBoundary), whose Retry renders it again. */

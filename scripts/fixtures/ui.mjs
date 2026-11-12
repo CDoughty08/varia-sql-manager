@@ -311,6 +311,12 @@ export const gridPart = {
   borderHover: '.rg-border-hover',
   /** A highlighted row (Highlight Rows), drawn in its colour; its row header's aria-description names the colour. */
   highlightedRow: '[role="rowgroup"] > [role="row"][aria-rowindex].hl',
+  /** A transposed grid (transposedGrid): the frozen name cell of each drawn row, which names a column of the result where a
+   *  table has a row number (screen readers read the row's own header), a name cell a column-name search marks, and the
+   *  tint over a highlighted row's drawn column, whose column header's aria-description names the colour. */
+  nameCell: '.rg-rn',
+  searchName: '.rg-rn.hit, .rg-rn.cur',
+  highlightBand: '.rg-band',
   /** A result diff's rows (Compare with Previous Result): added (+) and removed (−), and its differing cells: a changed
    *  value, and one equal to the other only by collation. */
   addedRow: '[role="rowgroup"] > [role="row"][aria-rowindex].tone-added',
@@ -327,6 +333,12 @@ export const gridPart = {
 export const gridTones = { error: gridPart.toneError, warning: gridPart.toneWarning, running: gridPart.toneRunning, muted: gridPart.toneMuted }
 /** The data cell at a row and column, both from 0, inside a results grid. */
 export const gridCellSelector = (row, column) => `[role="rowgroup"] > [role="row"][aria-rowindex="${row + 2}"] > [role="gridcell"][aria-colindex="${column + 2}"]`
+/**
+ * The same cell of the result (its row and column, both from 0) inside a grid drawn transposed, where the result's columns
+ * are the drawn rows and its rows the drawn columns: suites keep naming the result's rows and columns whatever the
+ * orientation. ARIA indices number what is drawn.
+ */
+export const transposedCellSelector = (row, column) => gridCellSelector(column, row)
 
 const named = (name, exact = true) => typeof name === 'string' ? { name, exact } : { name }
 
@@ -591,6 +603,15 @@ export const resultGrid = (scope, name = 'Result 1') => {
 }
 export const anyResultGrid = page => page.locator(gridPart.root)
 export const gridCell = (grid, row, column) => grid.locator(gridCellSelector(row, column))
+/** A results grid drawn transposed (its columns as rows): `matching(resultGrid(page), transposedGridSelector)` says whether one is. */
+export const transposedGridSelector = `${gridPart.root}[data-orientation="transposed"]`
+/** The results grids drawn transposed, in a page or a locator. */
+export const transposedGrid = scope => scope.locator(transposedGridSelector)
+/** The cell of a transposed grid that shows the result's `row` and `column`, both from 0. */
+export const transposedCell = (grid, row, column) => grid.locator(transposedCellSelector(row, column))
+/** The row header a screen reader reads for the result's `column` (from 0) in a transposed grid: the column's name. The
+ *  name drawn in the frozen first column is `gridPart.nameCell`, found by its text. */
+export const transposedName = (grid, column) => grid.locator(`${gridPart.row}[aria-rowindex="${column + 2}"] > ${gridPart.rowHeader}`)
 /** Whether a locator's element also matches a part's selector, for the drawn states (`gridPart.linkCell`). */
 export const matching = (locator, selector) => locator.and(locator.page().locator(selector))
 /** A set's caption Collapse button, named by the set ("Result 2", "Pivot of Result 1"). */

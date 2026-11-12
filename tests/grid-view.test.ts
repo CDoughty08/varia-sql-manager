@@ -9,8 +9,9 @@ import type { ResultHandle, RowWindow, WindowOptions, WindowShape } from '../src
 import type { GridViewState } from '../src/renderer/src/results/ResultsService'
 
 // GridView itself over a stand-in result, in a scroller that reports a size (happy-dom lays nothing out): the seams
-// between what it draws and the result's rows and columns. Each is the identity today; these checks hold them in place
-// for the transposed orientation that will turn them (docs/architecture.md, the grid bullet).
+// between what it draws and the result's rows and columns. Each is the identity in a table; these checks hold them in
+// place there, and tests/grid-orientation.test.ts where the transposed orientation turns them (docs/architecture.md, the
+// grid bullet).
 
 const column = (name: string, role?: 'xml') => ({ name, dataType: 'nvarchar', wire: 'text' as const, nullable: true, ...role ? { role } : {} })
 /** A result of `rows` × `columns` whose cell (r, c) reads "r:c", answered from a cache keyed as ResultClient keys its windows. */
