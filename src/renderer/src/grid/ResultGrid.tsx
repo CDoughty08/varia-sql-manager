@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import type { QueryResult } from '../../../shared/contracts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import type { ResultHandle } from '../results/ResultClient'
-import { filteredColumns, setKey, type EntryKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
+import { filteredColumns, setKey, transposedView, type EntryKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
 import { resultsFilterSource } from '../results/ColumnFilterPopover'
 import { compareText } from '../results/CompareService'
 import { highlightText } from '../results/HighlightsService'
@@ -10,7 +10,7 @@ import { pivotStrip } from '../results/pivot'
 import { transposeStrip } from '../results/TransposeService'
 import { formatBytes, formatCount } from '../results/status'
 import GridShell, { GridErrorBoundary, instanceKey, type GridFunnels, type GridShellApi, type GridSpec } from './GridShell'
-import { toneColumnOf, type GridView } from './GridView'
+import type { GridView } from './GridView'
 import { describeSelection } from './selection'
 
 export interface ResultGridProps {
@@ -84,7 +84,8 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, o
   }), [gridStats, results, tabId, key])
   // Read only: the state is made where the grid is built (mount), as before.
   const gridState = results.viewState(tabId).grids.get(key)
-  const turnedView = gridState?.orientation === 'transposed' && toneColumnOf(entry.descriptor) < 0, headerColumn = turnedView ? gridState.headerColumn : undefined
+  // The one rule Copy and Save follow too (ResultsService), so what they write is what is drawn here.
+  const drawnTurned = transposedView(gridState, entry.descriptor), turnedView = !!drawnTurned, headerColumn = drawnTurned?.headerColumn
   const latest = useRef({ count, onWide, sort, marks, showTypes, rowSize, turnedView, headerColumn })
   latest.current = { count, onWide, sort, marks, showTypes, rowSize, turnedView, headerColumn }
   /** The handle the view shows, and the keys it was sorted by. */

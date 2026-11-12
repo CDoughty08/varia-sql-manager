@@ -390,20 +390,25 @@ export type ResultsFormat = 'csv' | 'tsv' | 'json'
 /** Copy a grid selection: main runs results.copy and writes the text to the clipboard. `jobId` names the job for
  *  cancellation and progress. */
 /** `viewId` copies through a sorted view (results.view): rows are then view positions. */
-export interface ResultsCopyRequest { jobId: string; generation: number; resultId: number; headers: boolean; parts: readonly CopyPart[]; viewId?: number }
-/** Save Results As: main shows the save dialog (the renderer never supplies a path) and runs results.export. */
-export interface ResultsSaveRequest { jobId: string; generation: number; resultId: number; format?: ResultsFormat; suggestedName: string; viewId?: number }
-/** `partial`: the set was still open, so open-ended selections ended at the rows stored then. */
-export interface ResultsJobResult { rows: number; bytes: number; truncatedCells: number; partial: boolean }
+/** `transposed` copies a grid drawn transposed as it is drawn: the parts still name the result's rows and columns, and each
+ *  is written with a line per column and a field per row, for the rows such a grid draws (view positions under
+ *  `limits.transpose.maxRows`). `headerColumn` (with `transposed` only) is the column whose values name the fields. */
+export interface ResultsCopyRequest { jobId: string; generation: number; resultId: number; headers: boolean; parts: readonly CopyPart[]; viewId?: number; transposed?: boolean; headerColumn?: number }
+/** Save Results As: main shows the save dialog (the renderer never supplies a path) and runs results.export.
+ *  `transposed` and `headerColumn` are as a copy's. */
+export interface ResultsSaveRequest { jobId: string; generation: number; resultId: number; format?: ResultsFormat; suggestedName: string; viewId?: number; transposed?: boolean; headerColumn?: number }
+/** `rows`: the result's rows written. `partial`: the set was still open, so open-ended selections ended at the rows stored
+ *  then. `capped`: the rows a transposed copy or save left out, for lying past the rows a transposed grid draws (0 otherwise). */
+export interface ResultsJobResult { rows: number; bytes: number; truncatedCells: number; partial: boolean; capped: number }
 /** Only the file's name returns to the renderer, never its path. */
 export interface SavedResults extends ResultsJobResult { fileName: string; format: ResultsFormat }
 /** Pushed on `varia:results-job` at most 4 times a second per job. A save reports once as soon as its file is chosen;
  *  its reports carry the file's name (never its path). */
 export interface ResultsJobProgress { jobId: string; kind: 'copy' | 'save'; rowsDone: number; rowsTotal: number; bytes: number; fileName?: string }
-export interface ResultsCopyParams { resultId: number; parts: readonly CopyPart[]; headers: boolean; eol: 'crlf' | 'lf'; maxBytes: number; viewId?: number }
+export interface ResultsCopyParams { resultId: number; parts: readonly CopyPart[]; headers: boolean; eol: 'crlf' | 'lf'; maxBytes: number; viewId?: number; transposed?: boolean; headerColumn?: number }
 /** `temporaryId` (32 hex digits) names the file written beside the target, `.varia-{temporaryId}.tmp`, which main removes
  *  if the backend dies before it does. */
-export interface ResultsExportParams { resultId: number; path: string; format: ResultsFormat; headers: boolean; nullText: 'empty' | 'NULL'; temporaryId: string; viewId?: number }
+export interface ResultsExportParams { resultId: number; path: string; format: ResultsFormat; headers: boolean; nullText: 'empty' | 'NULL'; temporaryId: string; viewId?: number; transposed?: boolean; headerColumn?: number }
 /** One Object Explorer node. Labels are SSMS's text (≤ 300), sublabels the "(…)" part (≤ 200), detail tooltip-only facts
  *  (≤ 512); `created` is server local time, `yyyy-MM-ddTHH:mm:ss`; `database`, a database node's runtime state as listed;
  *  `connectDenied`, a login denied CONNECT SQL (its status says `disabled` when it is disabled too). */

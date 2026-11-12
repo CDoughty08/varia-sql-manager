@@ -88,6 +88,10 @@ export interface JobHostDeps {
   removeLeftovers?: (target: string, temporaryId: string) => Promise<void>
 }
 
+/** What a request of a grid drawn transposed adds to the backend's parameters. */
+const turnedParams = (request: { transposed?: boolean; headerColumn?: number }): { transposed?: true; headerColumn?: number } =>
+  request.transposed ? { transposed: true, ...request.headerColumn === undefined ? {} : { headerColumn: request.headerColumn } } : {}
+
 /** One running copy or save: CANCEL reaches it once its request is written. */
 class Job {
   private id = 0
@@ -162,7 +166,7 @@ export class ResultsJobHost {
       }
     }
     try {
-      const result = await this.deps.backend.copy(request.generation, { resultId: request.resultId, parts: request.parts, headers: request.headers, eol: this.deps.platform === 'win32' ? 'crlf' : 'lf', maxBytes, ...(request.viewId === undefined ? {} : { viewId: request.viewId }) },
+      const result = await this.deps.backend.copy(request.generation, { resultId: request.resultId, parts: request.parts, headers: request.headers, eol: this.deps.platform === 'win32' ? 'crlf' : 'lf', maxBytes, ...(request.viewId === undefined ? {} : { viewId: request.viewId }), ...turnedParams(request) },
         { sink, credit: wire.jobs.copyCredit, onProgress: event => job.progress(event), onSent: id => job.sent(id) })
       if (overflow) throw new BackendError('TOO_LARGE', jobSentences.copyTooLarge)
       // The backend may finish a copy cancelled late (its credit covered the rest), but the chunks after the cancel were
@@ -211,7 +215,7 @@ export class ResultsJobHost {
       this.check(request.generation, resultId, jobSentences.closedBeforeSave)
       const job = this.saving = new Job(request.jobId, 'save', request.generation, this.deps, fileName)
       writing = { path, temporaryId: randomUUID().replaceAll('-', '') }
-      const result = await this.deps.backend.export(request.generation, { resultId, path, format, headers, nullText: exportDefaults.nullText[format], temporaryId: writing.temporaryId, ...(request.viewId === undefined ? {} : { viewId: request.viewId }) },
+      const result = await this.deps.backend.export(request.generation, { resultId, path, format, headers, nullText: exportDefaults.nullText[format], temporaryId: writing.temporaryId, ...(request.viewId === undefined ? {} : { viewId: request.viewId }), ...turnedParams(request) },
         { onProgress: event => job.progress(event), onSent: id => job.sent(id) })
       this.lastDir = dirname(path)
       this.lastFormat = format

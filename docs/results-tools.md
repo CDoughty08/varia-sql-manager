@@ -30,6 +30,20 @@ keep their proportions.
 The column commands are available to keyboard users through the grid's context menu and can be assigned shortcuts in
 Tools > Options > Environment > Shortcuts.
 
+## Copying and saving a transposed view
+
+A results grid drawn transposed (its columns as rows) copies and saves what it shows; nothing is stored for it.
+
+- Each line is one of the result's columns and each value on it one row, in the grid's current sort and filters. A block
+  selected in the transposed grid copies as that block.
+- With headers (**Copy with Headers**, or a save with the header option on) the first line reads `Column`, `Row 1`,
+  `Row 2`… and each line starts with its column's name. When a column is used as headers, its values name the rows
+  instead, as the grid's headers show them (`NULL`, `(blank)`, binary as hex, at most 128 characters); a repeated value
+  gets `_2`, `_3`… so every field has its own name. That column is still written as a line.
+- A JSON save is one object per column, with every value as text and NULL as `null`.
+- The first 4,095 rows of the view are written, the ones the transposed grid draws. When rows are left out, the toolbar
+  says how many; filter the results to copy or save others.
+
 ## Error source navigation
 
 SQL errors with a location in the submitted query have a **Go to line** button in Messages. Activate it from the keyboard,
