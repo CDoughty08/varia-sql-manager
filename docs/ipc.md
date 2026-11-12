@@ -1727,7 +1727,8 @@ receives at most 512 values a window, never rows.
   Between replaces the column's range filter; Clear filter takes all of the column's filters off. Keep Selected Rows
   (`ResultsService.keepSelectedRows`, `output.keepSelectedRows`) is no column's filter: funnels do not mark it, a
   column's Clear filter leaves it, and a column's value list is built over the rows it keeps. A grid has one, which a new
-  one replaces where it stood; it counts among the 16; and more than 4,095 rows or 256 ranges selected says so in the
+  one replaces where it stood, or goes last when a duplicates filter follows the old one (in its place that filter would
+  count only the new rows and drop each whose pair was not selected; last, the grid shows the rows selected); it counts among the 16; and more than 4,095 rows or 256 ranges selected says so in the
   toolbar without asking the backend. The popover opens in
   the grid's own window (a popped-out Results panel's), and a second press on the open funnel closes it. There is no
   contains or starts-with condition: the filters compare whole values by rows, and a text filter op would need its own

@@ -139,7 +139,9 @@ A filter of its own (`keepRows`), not one of the value filters: those resolve to
   resolves them to a list of base rows, which the renderer keeps and re-sends like any resolved filter (the list fits the
   existing 4,096-row bound).
 - More ranges or more rows than that: the command says so in the toolbar and applies nothing.
-- A grid has at most one; a new one replaces it, in the same place among the filters. It counts as one of the 16.
+- A grid has at most one; a new one replaces it, in the same place among the filters, or last when a duplicates filter
+  follows the old one: the selected rows passed every filter, but a duplicates filter counting only them would drop each
+  whose pair was not selected, and last the grid shows exactly the rows selected. It counts as one of the 16.
 - Its chip reads "12 selected rows": the rows it names, though a later filter (duplicates, say) may show fewer.
 - It works wherever the other selection filters do: Tables, Pivots and comparisons.
 - It names no column, so header funnels do not mark any. Code that tells filters apart by their `rows` or `column` must

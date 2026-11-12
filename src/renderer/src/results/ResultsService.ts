@@ -730,8 +730,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
 
   /**
    * Keep Selected Rows: filters a grid to the rows its selection covers, whatever their values (a `keepRows` filter, which
-   * the view resolves to base rows). A grid has one: a new one takes the place of the one it has among the filters. More
-   * rows or ranges than the filter takes says so in the toolbar and applies nothing. False when nothing was applied.
+   * the view resolves to base rows). A grid has one: a new one takes the place of the one it has among the filters, or goes
+   * last when a duplicates filter follows that one. More rows or ranges than the filter takes says so in the toolbar and
+   * applies nothing. False when nothing was applied.
    */
   keepSelectedRows(tabId: string, key: EntryKey): boolean {
     const run = this.runs.get(tabId), set = this.entry(run, key), target = this.keepTarget(tabId, key)
@@ -743,10 +744,13 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       return false
     }
     const filters = run.sorts.get(set.key)?.filters ?? [], others = filters.filter(item => item.filter.op !== 'keepRows')
-    const at = filters.findIndex(item => item.filter.op === 'keepRows')
+    const old = filters.findIndex(item => item.filter.op === 'keepRows')
+    // The selected rows passed every filter. In the old one's place a duplicates filter after it would count only them, and
+    // drop each whose pair was not selected; last, the grid shows exactly the rows selected.
+    const at = old < 0 || filters.slice(old + 1).some(item => item.filter.op === 'duplicates') ? others.length : old
     const filter: ViewFilter = { op: 'keepRows', cells: { ranges: target.ranges, ...target.viewId === undefined ? {} : { viewId: target.viewId } } }
     // The view answers the rows it kept (fewer than selected while rows still arrive): the chip then counts those.
-    return this.addFilter(tabId, run, set.key, others, { filter, label: keptLabel(target.rows) }, at < 0 ? others.length : at)
+    return this.addFilter(tabId, run, set.key, others, { filter, label: keptLabel(target.rows) }, at)
   }
 
   /** Whether the grid has rows selected to keep (more than the filter takes still runs the command, which then says so). */
