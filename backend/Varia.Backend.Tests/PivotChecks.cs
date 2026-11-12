@@ -382,8 +382,8 @@ internal static class PivotChecks
         var used = store.UsedBytes;
         low = true;
         var pressed = Message(Grouped(set));
-        check(pressed == "TOO_LARGE: There is not enough result memory to pivot these rows. Close other results and try again." && set.Budget.Stopped == TruncationReason.None && store.UsedBytes == used,
-            $"a pivot cut short by low system memory is refused whole and leaves its query's budget open: {pressed} {set.Budget.Stopped} {store.UsedBytes - used}");
+        check(pressed == "TOO_LARGE: " + SqlService.LowMemory && set.Budget.Stopped == TruncationReason.None && store.UsedBytes == used,
+            $"a pivot cut short by low system memory is refused whole, saying the computer is low on memory, and leaves its query's budget open: {pressed} {set.Budget.Stopped} {store.UsedBytes - used}");
         var whole = Call<ResultsPivotResult>(Total(set));
         check(whole.Descriptor is { RowsStored: 1, Truncated: null, State: "complete" } && set.Budget.Stopped == TruncationReason.None,
             $"a pivot whose last page is sealed under low system memory is kept whole and not marked truncated: {whole.Descriptor.RowsStored} {whole.Descriptor.Truncated} {set.Budget.Stopped}");

@@ -277,6 +277,14 @@ describe('query orchestration', () => {
     await queries.execute()
     expect(queryApi.execute.mock.calls[0][0]).toMatchObject({ stopOnError: true, maxResultSets: 5, maxRows: 0 })
   })
+  it('sends the limit on rows kept that Options sets, and none by default', async () => {
+    const limited = fixture(undefined, undefined, { 'queryResults.grid.maxRows': 250_000 })
+    await limited.queries.execute()
+    expect(limited.queryApi.execute.mock.calls[0][0]).toMatchObject({ maxRows: 250_000 })
+    const plain = fixture()
+    await plain.queries.execute()
+    expect(plain.queryApi.execute.mock.calls[0][0]).toMatchObject({ maxRows: 0 })
+  })
   it('delivers events to later listeners when an earlier one throws', () => {
     const bus = new EventBus(), received: string[] = []
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})

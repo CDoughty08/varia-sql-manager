@@ -193,7 +193,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     {
         var hooks = Environment.GetEnvironmentVariable("VARIA_BACKEND_TEST_HOOKS") == "1";
         long? budget = hooks && long.TryParse(Environment.GetEnvironmentVariable("VARIA_RESULT_BUDGET_BYTES"), NumberStyles.None, CultureInfo.InvariantCulture, out var bytes) && bytes > 0 ? bytes : null;
-        return new SqlService(ResultStore.FromSystem(budget), hooks, publish);
+        // The user's limit, in MiB, as main read it from the settings when it started this process.
+        var limit = ResultStore.LimitFromEnvironment(Environment.GetEnvironmentVariable("VARIA_RESULT_MEMORY_MIB"));
+        return new SqlService(ResultStore.FromSystem(budget, limit), hooks, publish);
     }
 
     public IReadOnlyList<string> Methods { get; }
@@ -1206,7 +1208,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                                         if (currentSet is null) continue;
                                         currentSet.CountRow();
                                         events.RowsChanged();
-                                        if (args.MaxRows > 0 && storedRows >= args.MaxRows) { currentSet.Skip(TruncationReason.RowLimit); continue; }
+                                        // The limit is on the rows a query returns: a plan asked for with them is kept whatever came before.
+                                        // A plan is told by its first row, and is that row: a set of more rows under a plan's column name is rows.
+                                        var planRow = plan?.IsPlan == true && currentSet.RowsRead == 1;
+                                        if (args.MaxRows > 0 && storedRows >= args.MaxRows && !planRow) { currentSet.Skip(TruncationReason.RowLimit); continue; }
                                         var builder = currentSet.BeginRow();
                                         if (builder is null) continue;
                                         skipped = false;
@@ -1214,7 +1219,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                                         try { truncatedCells = plan!.ReadRow(reader, builder, warn, token); }
                                         catch { currentSet.AbortRow(); throw; }
                                         var sealedBefore = currentSet.SealedPages;
-                                        if (currentSet.TryCommitRow(truncatedCells)) storedRows++;
+                                        // A plan's row is not one of the limit's.
+                                        if (currentSet.TryCommitRow(truncatedCells) && !planRow) storedRows++;
                                         if (currentSet.SealedPages != sealedBefore) events.Sealed(currentSet);
                                     }
                                     if (currentSet is not null)
@@ -1566,13 +1572,13 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         // running filter needs (FilterBytes a row at most).
         var working = ViewSorter.WorkingBytes(rows, ViewSorter.KeyCount(keys, filters)) + (filters.Length > 0 ? ViewSorter.FilterBytes * rows : 0);
         var kept = 4 * rows + ResultStore.ViewOverhead;
-        if (!store.TryReserve(set.Budget, working + kept, false, out _))
-            throw new RequestException("TOO_LARGE", filters.Length > 0
+        if (!store.TryReserveWork(set.Budget, working + kept))
+            throw TooLarge(filters.Length > 0
                 ? "There is not enough result memory to filter these rows. Close other results and try again."
                 : "There is not enough result memory to sort these rows. Close other results and try again.");
         (int[] Order, bool Approximate, ViewFilter[] Filters) built;
         // A collated column's whole sort keys come out of the budget as they are built, and go back with the build.
-        var keyMemory = new ViewSorter.KeyMemory(bytes => store.TryReserveSpare(set.Budget, bytes), bytes => store.Return(set.Budget, bytes));
+        var keyMemory = new ViewSorter.KeyMemory((bytes, large) => store.TryReserveSpare(set.Budget, bytes, large), bytes => store.Return(set.Budget, bytes));
         try { built = await Task.Run(() => ViewSorter.Build(set, pages, keys, filters, token, keyMemory), token); }
         catch
         {
@@ -1711,10 +1717,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             if (workers == 1)
             {
                 working = ColumnProfiler.WorkingBytes(rows, args.Columns.Length);
-                if (!store.TryReserve(set.Budget, working, false, out _)) throw new RequestException("TOO_LARGE", tooLarge);
+                if (!store.TryReserveWork(set.Budget, working)) throw TooLarge(tooLarge);
             }
             // Large values (a long lowest or highest key, a long sort key) are charged as the profile meets them.
-            var charges = new ColumnProfiler.Charges(bytes => store.TryReserve(set.Budget, bytes, false, out _));
+            var charges = new ColumnProfiler.Charges(bytes => store.TryReserveWork(set.Budget, bytes));
             try
             {
                 var threads = workers;
@@ -1753,12 +1759,12 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
         var working = ViewSorter.DistinctWorkingBytes(rows);
-        if (!store.TryReserve(set.Budget, working, false, out _))
-            throw new RequestException("TOO_LARGE", "There is not enough result memory to list this column's values. Close other results and try again.");
+        if (!store.TryReserveWork(set.Budget, working))
+            throw TooLarge("There is not enough result memory to list this column's values. Close other results and try again.");
         DistinctSnapshot snapshot;
         try
         {
-            var keyMemory = new ViewSorter.KeyMemory(bytes => store.TryReserveSpare(set.Budget, bytes), bytes => store.Return(set.Budget, bytes));
+            var keyMemory = new ViewSorter.KeyMemory((bytes, large) => store.TryReserveSpare(set.Budget, bytes, large), bytes => store.Return(set.Budget, bytes));
             snapshot = await Task.Run(() => ViewSorter.DistinctValues(set, pages, view, args.Column, complete, token, keptView, keyMemory), token);
             if (set.IsReleased) throw Unavailable(args.ResultId);
             if ((view is not null && !store.HasView(view)) || (keptView is not null && !store.HasView(keptView))) throw ViewClosed();
@@ -1844,8 +1850,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         foreach (var page in pages) rows += page.Rows;
         var working = RowIdentity.WorkingBytes(rows);
         var kept = 8 * rows + ResultStore.ViewOverhead;
-        if (!store.TryReserve(set.Budget, working + kept, false, out _))
-            throw new RequestException("TOO_LARGE", "There is not enough result memory to tell these rows apart. Close other results and try again.");
+        if (!store.TryReserveWork(set.Budget, working + kept))
+            throw TooLarge("There is not enough result memory to tell these rows apart. Close other results and try again.");
         (int Column, bool Unique, bool Approximate, long[] Ids) built;
         try { built = await Task.Run(() => RowIdentity.Build(set, pages, by.Value, args.Column ?? -1, token), token); }
         catch
@@ -1919,15 +1925,26 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     /// <summary>Why a pivot or diff was refused memory or not stored whole. Its sources are complete, but their
     /// query may still be reading later sets and its tab may run again, so a source released or a query stopped while it
-    /// was built is the reason, not the memory left: only otherwise is it <paramref name="tooLarge"/>.</summary>
-    private RequestException NotStored(QueryBudget budget, string tooLarge, params (ResultSetBuffer Set, uint Id)[] sources)
+    /// was built is the reason, not the memory left: only otherwise is it <paramref name="tooLarge"/>, or (a refusal at
+    /// a page's seal or of working memory being as likely the machine's as the budget's) that the computer is low on memory.</summary>
+    private RequestException NotStored(QueryBudget budget, string tooLarge, params (ResultSetBuffer Set, uint Id)[] sources) =>
+        NotStored(budget, TooLarge(tooLarge), sources);
+
+    /// <summary>As above, for a refusal that has its own reason (too many rows to compare), which low memory does not replace.</summary>
+    private RequestException NotStored(QueryBudget budget, RequestException refusal, params (ResultSetBuffer Set, uint Id)[] sources)
     {
         foreach (var (set, id) in sources) if (set.IsReleased) return Unavailable(id);
-        return BudgetStopped(budget) ?? new RequestException("TOO_LARGE", tooLarge);
+        return BudgetStopped(budget) ?? refusal;
     }
 
     internal const string BudgetStoppedFull = "This query's results filled its result memory, so it can store nothing more. Run the query again returning fewer rows.";
     internal const string BudgetStoppedGlobal = "The result memory filled while this query ran, so it can store nothing more. Close other results, then run the query again.";
+    /// <summary>Working memory was refused: by the budget, with the request's own sentence, or (the budget having room)
+    /// because the machine is short of memory, which closing results here may not cure.</summary>
+    private RequestException TooLarge(string budget) => new("TOO_LARGE", store.IsSystemMemoryLow() ? LowMemory : budget);
+
+    internal const string LowMemory = "The computer is low on memory, so there is no room to do this now. Close other programs or other results and try again.";
+
     internal const string BudgetStoppedLowMemory = "The computer was low on memory while this query ran, so it can store nothing more. Run the query again.";
 
     /// <summary>results.diff: aligns two complete results of one query off the frame loop (ResultDiffer), charging its working
@@ -1950,12 +1967,12 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         foreach (var page in leftPages) leftRows += page.Rows;
         foreach (var page in rightPages) rightRows += page.Rows;
         var working = ResultDiffer.WorkingBytes(leftRows, rightRows);
-        if (!store.TryReserve(left.Budget, working, false, out _))
-            throw new RequestException("TOO_LARGE", "There is not enough result memory to compare these results. Close other results and try again.");
+        if (!store.TryReserveWork(left.Budget, working))
+            throw TooLarge("There is not enough result memory to compare these results. Close other results and try again.");
         long cellBytes = 0;
         bool ReserveCells(long bytes)
         {
-            if (!store.TryReserve(left.Budget, bytes, false, out _)) return false;
+            if (!store.TryReserveWork(left.Budget, bytes)) return false;
             cellBytes += bytes;
             return true;
         }
@@ -1963,7 +1980,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         {
             DiffModel model;
             try { model = await Task.Run(() => ResultDiffer.Compare(left, leftPages, right, rightPages, args.Exact, token, ReserveCells), token); }
-            catch (RequestException error) when (error.Code == "TOO_LARGE") { throw NotStored(left.Budget, error.Message, (left, args.Left), (right, args.Right)); }
+            catch (RequestException error) when (error.Code == "TOO_LARGE") { throw NotStored(left.Budget, error, (left, args.Left), (right, args.Right)); }
             if (left.IsReleased) throw Unavailable(args.Left);
             if (right.IsReleased) throw Unavailable(args.Right);
             const string tooLarge = "There is not enough result memory to show the differences. Close other results and try again.";
@@ -2021,18 +2038,18 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         foreach (var page in pages) rows += page.Rows;
         var working = ResultPivoter.WorkingBytes(rows, ResultPivoter.KeyColumns(spec));
         const string tooLarge = "There is not enough result memory to pivot these rows. Close other results and try again.";
-        if (!store.TryReserve(set.Budget, working, false, out _)) throw new RequestException("TOO_LARGE", tooLarge);
+        if (!store.TryReserveWork(set.Budget, working)) throw TooLarge(tooLarge);
         long figures = 0;
         bool Reserve(long bytes)
         {
-            if (!store.TryReserve(set.Budget, bytes, false, out _)) return false;
+            if (!store.TryReserveWork(set.Budget, bytes)) return false;
             figures += bytes;
             return true;
         }
         try
         {
             PivotModel model;
-            var keyMemory = new ViewSorter.KeyMemory(bytes => store.TryReserveSpare(set.Budget, bytes), bytes => store.Return(set.Budget, bytes));
+            var keyMemory = new ViewSorter.KeyMemory((bytes, large) => store.TryReserveSpare(set.Budget, bytes, large), bytes => store.Return(set.Budget, bytes));
             try { model = await Task.Run(() => ResultPivoter.Build(set, pages, view?.Order, spec, token, Reserve, keyMemory), token); }
             catch (PivotTooLargeException) { throw NotStored(set.Budget, tooLarge, (set, args.ResultId)); }
             if (set.IsReleased) throw Unavailable(args.ResultId);

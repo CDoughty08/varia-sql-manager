@@ -32,6 +32,64 @@ internal static class StoreChecks
 
     public static void Run(Action<bool, string> check)
     {
+        // The budget's size: a quarter of the machine's memory between 256 MiB and 16 GiB, or the user's limit as it is,
+        // up to three quarters of the memory and never under 256 MiB. A query has half.
+        const long MiB = 1L << 20, GiB = 1L << 30;
+        check(ResultStore.GlobalBytesFor(8 * GiB) == 2 * GiB && ResultStore.GlobalBytesFor(32 * GiB) == 8 * GiB && ResultStore.GlobalBytesFor(64 * GiB) == 16 * GiB
+            && ResultStore.GlobalBytesFor(256 * GiB) == 16 * GiB && ResultStore.GlobalBytesFor(512 * MiB) == 256 * MiB && ResultStore.GlobalBytesFor(0) == 256 * MiB,
+            "the automatic result budget is a quarter of the memory, at least 256 MiB and at most 16 GiB");
+        check(ResultStore.GlobalBytesFor(8 * GiB, 4 * GiB) == 4 * GiB && ResultStore.GlobalBytesFor(8 * GiB, 32 * GiB) == 6 * GiB && ResultStore.GlobalBytesFor(256 * GiB, 64 * GiB) == 64 * GiB
+            && ResultStore.GlobalBytesFor(8 * GiB, 100 * MiB) == 256 * MiB && ResultStore.GlobalBytesFor(128 * MiB, 8 * GiB) == 256 * MiB
+            && ResultStore.GlobalBytesFor(8 * GiB, 0) == 2 * GiB && ResultStore.GlobalBytesFor(8 * GiB, -5) == 2 * GiB,
+            "a result memory limit is used as it is, past the automatic 16 GiB too, up to three quarters of the memory and never under 256 MiB; none or a bad one is automatic");
+        var limited = ResultStore.FromSystem(null, 300 * MiB);
+        var automatic = ResultStore.FromSystem();
+        check(limited.GlobalBytes is >= 256 * MiB and <= 300 * MiB && limited.QueryBytes == limited.GlobalBytes / 2 && limited.ChecksSystemMemory
+            && automatic.GlobalBytes is >= 256 * MiB and <= 16 * GiB && automatic.QueryBytes == automatic.GlobalBytes / 2 && ResultStore.FromSystem(4L << 20, 300 * MiB).GlobalBytes == 4L << 20,
+            "a store with the user's limit still gives a query half and still stops under low memory; the test hooks' budget wins over it");
+
+        // Working memory: a large request, and any that only makes an operation faster, is refused under high memory load
+        // as a page of rows is; a small one is not, so a busy machine still sorts a small result.
+        var pressed = false;
+        var machine = new ResultStore(4 * GiB, 2 * GiB, () => (pressed ? 100 : 0, 50));
+        var work = machine.BeginQuery("work");
+        var calm = machine.TryReserveWork(work, ResultStore.WorkCheckBytes) && machine.TryReserveSpare(work, MiB) && machine.TryReserveWork(work, MiB);
+        pressed = true;
+        check(calm && !machine.TryReserveWork(work, ResultStore.WorkCheckBytes) && !machine.TryReserveSpare(work, ResultStore.WorkCheckBytes) && !machine.TryReserveSpare(work, MiB, true)
+            && machine.TryReserveSpare(work, MiB) && machine.TryReserveSpare(work, ResultStore.WorkCheckBytes, false) && machine.TryReserveWork(work, ResultStore.WorkCheckBytes - 1)
+            && work.UsedBytes == 3 * ResultStore.WorkCheckBytes + 3 * MiB - 1 && work.Stopped == TruncationReason.None,
+            "under high memory load working and spare memory of 64 MiB or more is refused, and spare memory asked to be checked; smaller amounts are not, and none of it stops the query");
+        // A sort key takes its memory a page or a value at a time: it asks for the check once for every 64 MiB it holds.
+        var asked = new List<bool>();
+        var keys = new ViewSorter.KeyMemory((_, large) => { asked.Add(large); return true; }, _ => { });
+        foreach (var step in new[] { 40, 40, 40, 40, 1, 200 }) keys.TryReserve(step * MiB);
+        check(asked.SequenceEqual([false, true, false, true, false, true]), "a key's memory asks to be checked each time it passes another 64 MiB held: " + string.Join(",", asked));
+        // The load is the runtime's reading at its last collection: one older than a second is taken again.
+        var collections = GC.CollectionCount(0);
+        var (load, threshold) = ResultStore.OperatingSystemMemory(Environment.TickCount64 + ResultStore.LoadReadingMs);
+        check(load > 0 && threshold > 0 && GC.CollectionCount(0) > collections, "a stale reading of the memory load is refreshed by a collection of the youngest generation (" + load / MiB + " of " + threshold / MiB + " MiB)");
+        check(ResultStore.MayCompact(1 * GiB, 2 * GiB, false) && ResultStore.MayCompact(0, 0, false) && !ResultStore.MayCompact(1 * GiB, 512 * MiB, false) && !ResultStore.MayCompact(1 * GiB, 512 * MiB, true)
+            && ResultStore.MayCompact(7 * GiB, 7 * GiB, false) && ResultStore.MayCompact(8 * GiB, 8 * GiB, false) && !ResultStore.MayCompact(9 * GiB, 12 * GiB, false) && ResultStore.MayCompact(9 * GiB, 12 * GiB, true),
+            "a forced collection compacts only what is no more than was released, and more than 8 GiB only when the machine is low on memory: nothing else returns what was released");
+        // Readings follow one another whatever the clock a check gave: one from a later time does not hold the next back.
+        var again = GC.CollectionCount(0);
+        ResultStore.OperatingSystemMemory(Environment.TickCount64);
+        check(GC.CollectionCount(0) > again, "a reading stamped later than now is taken again");
+        // Threads taking a key's memory together see each 64 MiB passed exactly once between them.
+        var crossings = 0;
+        var shared = new ViewSorter.KeyMemory((_, large) => { if (large) Interlocked.Increment(ref crossings); return true; }, _ => { });
+        Parallel.For(0, 8, _ => { for (var step = 0; step < 4096; step++) shared.TryReserve(MiB / 4); });
+        var refusing = new ViewSorter.KeyMemory((_, _) => false, _ => { });
+        long returned = 0;
+        var counted = new ViewSorter.KeyMemory((_, _) => false, bytes => returned += bytes);
+        counted.TryReserve(MiB);
+        counted.ReturnAll();
+        check(crossings == 8 * 4096 / 4 / 64 && !refusing.TryReserve(MiB) && returned == 0, $"a key's memory taken by many threads asks once for each 64 MiB, and a refusal holds nothing: {crossings} {returned}");
+        check(ResultStore.LimitFromEnvironment("300") == 300 * MiB && ResultStore.LimitFromEnvironment("1048576") == 1024 * GiB && ResultStore.LimitFromEnvironment("1") == MiB
+            && new[] { "1048577", "0", "-5", "+5", " 5", "5 ", "5.0", "0x10", "", "lots", "99999999999999999999" }.All(text => ResultStore.LimitFromEnvironment(text) is null)
+            && ResultStore.LimitFromEnvironment(null) is null,
+            "the limit main gives is digits alone, 1 MiB to 1 TiB; anything else is no limit");
+
         var low = false;
         var store = new ResultStore(1000, 600, () => (low ? 100 : 0, 50));
         var a = store.BeginQuery("s1");
