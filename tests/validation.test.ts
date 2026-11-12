@@ -289,6 +289,16 @@ describe('IPC validation', () => {
       { viewId: 0 }, { viewId: 2 ** 32 }, { viewId: 1.5 }, { viewId: '3' }
     ]) expect(resultsCopyRequestSchema.safeParse({ ...copy, ...patch }).success, JSON.stringify(patch).slice(0, 80)).toBe(false)
     expect(resultsCopyRequestSchema.parse({ ...copy, viewId: 3 })).toEqual({ ...copy, viewId: 3 })
+    // A grid drawn transposed says so, and may name the column whose values head its fields: a column index, with it only.
+    for (const turned of [{ transposed: true }, { transposed: false }, { transposed: true, headerColumn: 0 }, { transposed: true, headerColumn: limits.page.maxColumns - 1 }]) {
+      expect(resultsCopyRequestSchema.parse({ ...copy, ...turned })).toEqual({ ...copy, ...turned })
+      expect(resultsSaveRequestSchema.parse({ jobId: copy.jobId, generation: 1, resultId: 7, suggestedName: 'Query1-Result1', ...turned })).toMatchObject(turned)
+    }
+    for (const patch of [{ headerColumn: 0 }, { transposed: false, headerColumn: 0 }, { transposed: 'yes' }, { transposed: 1 }, { transposed: true, headerColumn: -1 }, { transposed: true, headerColumn: limits.page.maxColumns },
+      { transposed: true, headerColumn: 1.5 }, { transposed: true, headerColumn: '1' }, { transposed: true, headerColumn: null }]) {
+      expect(resultsCopyRequestSchema.safeParse({ ...copy, ...patch }).success, JSON.stringify(patch)).toBe(false)
+      expect(resultsSaveRequestSchema.safeParse({ jobId: copy.jobId, generation: 1, resultId: 7, suggestedName: 'Query1-Result1', ...patch }).success, JSON.stringify(patch)).toBe(false)
+    }
     const save = { jobId: crypto.randomUUID(), generation: 1, resultId: 7, format: 'csv', suggestedName: 'Query1-Result1' }
     expect(resultsSaveRequestSchema.parse(save)).toEqual(save)
     expect(resultsSaveRequestSchema.safeParse({ ...save, format: undefined }).success).toBe(true)

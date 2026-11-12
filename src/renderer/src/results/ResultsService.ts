@@ -7,7 +7,7 @@ import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable, ExternalStore } from '../core/types'
 import { requestFrame } from '../core/windows'
 import { gridLimits as g } from '../grid/constants'
-import { copyPlan, noColumnName, resolveBlocks, selectAll, type GridSelection } from '../grid/selection'
+import { copyPlan, noColumnName, resolveBlocks, selectAll, transposedCopyPlan, type GridSelection } from '../grid/selection'
 import { kindInfo } from '../documents'
 import type { DocumentService, TextDocument } from '../services/documents'
 import type { DistinctList, ResultClient, ResultHandle, ResultView } from './ResultClient'
@@ -85,6 +85,8 @@ export interface ResultJob {
   /** The entry it copies or saves. */
   readonly entry: EntryKey
   readonly rowsDone: number; readonly rowsTotal: number; readonly startedAt: number; readonly visible: boolean; readonly fileName?: string
+  /** The job writes a grid drawn transposed: its progress counts the result's columns (its lines), not rows. */
+  readonly columns?: boolean
 }
 /** What the output pane shows for one query tab. */
 export interface TabResults {
@@ -217,6 +219,20 @@ const sameMessages = (a: readonly MessageEntry[], b: readonly MessageEntry[]) =>
 const runStatus = (summary: QueryResult): RunStatus => summary.status
 /** " 3 values were truncated." after a copy or save that wrote values the backend stored cut; '' otherwise. */
 const truncatedClause = (cells: number): string => cells > 0 ? ` ${formatCount(cells)} ${cells === 1 ? 'value was' : 'values were'} truncated.` : ''
+/** What a transposed copy or save left out: the rows past those a transposed grid draws. */
+const cappedClause = (rows: number): string => rows > 0 ? ` ${formatCount(rows)} ${rows === 1 ? 'row' : 'rows'} past the first ${formatCount(wire.transpose.maxRows)} ${rows === 1 ? 'was' : 'were'} left out; filter the results to copy or save others.` : ''
+/** The last column when it is a row tone (a comparison's, a live table's): never shown as a column, and -1 without one. */
+const toneColumn = (descriptor: Pick<ResultDescriptor, 'columns'>): number => { const last = descriptor.columns.length - 1; return last >= 1 && descriptor.columns[last].role === 'tone' ? last : -1 }
+/**
+ * How a view is drawn transposed, and so how its Copy and Save are written: undefined for a table, else the column whose
+ * values head the drawn columns (when it is one of the result's shown columns). A result with a tone column (a comparison)
+ * is never drawn transposed.
+ */
+export function transposedView(state: Pick<GridViewState, 'orientation' | 'headerColumn'> | undefined, descriptor: Pick<ResultDescriptor, 'columns'>): { headerColumn?: number } | undefined {
+  if (state?.orientation !== 'transposed' || toneColumn(descriptor) >= 0) return undefined
+  const header = state.headerColumn
+  return header !== undefined && Number.isInteger(header) && header >= 0 && header < descriptor.columns.length ? { headerColumn: header } : {}
+}
 const held = (set: ResultSetEntry): boolean => { const state = set.handle.getSnapshot().state; return state !== 'lost' && state !== 'released' }
 /** The document a link cell opens in: its kind, and the name its tabs count from (SSMS: XML_F52E2B61-…1.xml, ExecutionPlan1.sqlplan). */
 const valueKinds: Readonly<Record<string, { kind: TextDocument['kind']; base?: string; extension: string }>> = {
@@ -556,24 +572,26 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (!run || !set || !selection) return undefined
     const state = set.handle.getSnapshot().state
     if (state === 'lost' || state === 'released') return state === 'lost' ? unavailable : closedResults
-    const parts = copyPlan(selection, set.descriptor.columns.length)
+    // A grid drawn transposed copies as drawn: the selection it shows, written turned.
+    const turned = transposedView(this.views.get(tabId)?.grids.get(set.key), set.descriptor)
+    const parts = (turned ? transposedCopyPlan : copyPlan)(selection, set.descriptor.columns.length)
     if (parts.length === 0) return undefined
     this.cancelRunning(this.copying)
     const jobId = this.newId()
-    const running: RunningJob = { tabId, job: { jobId, kind: 'copy', entry: set.key, label: `Result ${set.number}`, rowsDone: 0, rowsTotal: 0, startedAt: this.now(), visible: false } }
+    const running: RunningJob = { tabId, job: { jobId, kind: 'copy', entry: set.key, label: `Result ${set.number}`, rowsDone: 0, rowsTotal: 0, startedAt: this.now(), visible: false, ...turned ? { columns: true } : {} } }
     this.copying = running
     run.jobs = [...run.jobs, running.job]
     this.schedule(tabId)
     running.timer = this.timers.setTimeout(() => { running.timer = undefined; this.updateJob(running, { visible: true }) }, g.copyStripDelayMs)
     let result
     const view = run.sorts.get(set.key)?.view
-    try { result = await this.api.copyResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, headers, parts, ...view ? { viewId: view.viewId } : {} }) }
+    try { result = await this.api.copyResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, headers, parts, ...view ? { viewId: view.viewId } : {}, ...turned ? { transposed: true, ...turned } : {} }) }
     finally { this.endJob(running) }
     if (result.ok) {
-      const { rows, partial, truncatedCells } = result.value
-      const sentence = `Copied ${formatCount(rows)} ${plural(rows, 'row')}${partial ? '; the query is still running.' : '.'}${truncatedClause(truncatedCells)}`
-      // Values cut where they were stored are copied cut: that is shown, not only read out.
-      if (truncatedCells > 0) this.notify(tabId, sentence)
+      const { rows, partial, truncatedCells, capped } = result.value
+      const sentence = `Copied ${formatCount(rows)} ${plural(rows, 'row')}${turned ? ' as columns' : ''}${partial ? '; the query is still running.' : '.'}${truncatedClause(truncatedCells)}${cappedClause(capped)}`
+      // Values cut where they were stored are copied cut, and rows past those drawn are left out: that is shown, not only read out.
+      if (truncatedCells > 0 || capped > 0) this.notify(tabId, sentence)
       else this.announce(tabId, sentence)
       return undefined
     }
@@ -597,19 +615,21 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     // The file follows the grid's order, which a running or pending sort is about to change.
     if (sort && (sort.sorting || sort.stale || !sort.view)) return stillSorting
     const jobId = this.newId()
-    const running: RunningJob = { tabId, job: { jobId, kind: 'save', entry: set.key, label: `Result ${set.number}`, rowsDone: 0, rowsTotal: snapshot.rowsAvailable, startedAt: this.now(), visible: false } }
+    // A grid drawn transposed saves as drawn: a line per column, which its progress then counts.
+    const turned = transposedView(this.views.get(tabId)?.grids.get(set.key), set.descriptor)
+    const running: RunningJob = { tabId, job: { jobId, kind: 'save', entry: set.key, label: `Result ${set.number}`, rowsDone: 0, rowsTotal: turned ? set.descriptor.columns.length : snapshot.rowsAvailable, startedAt: this.now(), visible: false, ...turned ? { columns: true } : {} } }
     this.saves.set(jobId, running)
     this.clearJobNotice(tabId)
     run.jobs = [...run.jobs, running.job]
     this.schedule(tabId)
     let result
-    try { result = await this.api.saveResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, suggestedName: suggestedName(baseName, set.number), ...sort?.view ? { viewId: sort.view.viewId } : {} }) }
+    try { result = await this.api.saveResults({ jobId, generation: set.handle.key.generation, resultId: set.handle.key.resultId, suggestedName: suggestedName(baseName, set.number), ...sort?.view ? { viewId: sort.view.viewId } : {}, ...turned ? { transposed: true, ...turned } : {} }) }
     finally { this.endJob(running) }
     if (this.disposed) return undefined
     if (result.ok) {
       if (!result.value) return undefined
-      const { rows, truncatedCells, fileName } = result.value
-      const text = `Saved ${formatCount(rows)} ${plural(rows, 'row')} to ${fileName}.${truncatedClause(truncatedCells)}`
+      const { rows, truncatedCells, fileName, capped } = result.value
+      const text = `Saved ${formatCount(rows)} ${plural(rows, 'row')}${turned ? ' as columns' : ''} to ${fileName}.${truncatedClause(truncatedCells)}${cappedClause(capped)}`
       this.notify(running.tabId, text)
       // Also when the tab has closed meanwhile (the save outlives it), which leaves no toolbar to say so.
       this.events.emit({ type: 'results.saved', tabId: running.tabId, text })

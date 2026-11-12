@@ -21,7 +21,7 @@ internal sealed record TransposePlan(int[] Positions, int[] Numbers, long Availa
 /// output's columns are text (nvarchar), since one column now holds every source column's type.</summary>
 internal static class ResultTransposer
 {
-    public const int MaxRows = PageBuilder.MaxColumns - 1, MaxRanges = 256, MaxCells = 4_000_000;
+    public const int MaxRows = ResultTextWriter.MaxTransposedRows, MaxRanges = 256, MaxCells = 4_000_000;
     /// <summary>The first column's name: it holds the source columns' names.</summary>
     public const string FirstColumn = "Column";
     private const int CancelEvery = 1 << 12;

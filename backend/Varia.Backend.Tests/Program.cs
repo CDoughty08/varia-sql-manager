@@ -352,6 +352,7 @@ if (liveGroup is null)
         ("Distinct", Sync(() => DistinctChecks.Run(Check))),
         ("CellLength", Sync(() => CellLengthChecks.Run(Check))),
         ("Text", () => TextChecks.RunAsync(Check)),
+        ("TransposedText", () => TransposedTextChecks.RunAsync(Check)),
         ("Explorer", () => ExplorerChecks.RunAsync(Check)),
         ("Peek", () => PeekChecks.RunAsync(Check)),
         ("Search", Sync(() => SearchChecks.Run(Check))),

@@ -2,6 +2,7 @@ import type { Platform } from '../../../shared/commands/keybindings'
 import { gesturesFor } from '../core/gestures'
 import type { ColumnRange, CopyPart, RowRange } from '../../../shared/contracts'
 import { formatCount, plural } from '../results/status'
+import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { gridLimits, openEnd } from './constants'
 import type { GridAction, GridMove } from './keyboard'
 
@@ -267,4 +268,27 @@ const turnedKind: Readonly<Record<BlockKind, BlockKind>> = { cells: 'cells', row
  */
 export function rotateSelection(selection: GridSelection): GridSelection {
   return { entry: selection.entry, active: turned(selection.active), blocks: selection.blocks.map(block => ({ kind: turnedKind[block.kind], anchor: turned(block.anchor), focus: turned(block.focus) })) }
+}
+/**
+ * A turned selection without the blocks that lie wholly past the rows a transposed grid draws (they were made in the
+ * table). `blockRange` clamps a block to the grid, which would draw such a block on the last drawn column and let a
+ * right-press there keep it; left out, it draws nothing and no press or key extends it. With none left the active cell is
+ * the selection, as in a grid nothing was selected in. The state keeps every block until a new selection is made here.
+ */
+export function withinCap(drawn: GridSelection): GridSelection {
+  const cap = wire.transpose.maxRows
+  const blocks = drawn.blocks.filter(block => !((block.kind === 'cells' || block.kind === 'columns') && Math.min(block.anchor.column, block.focus.column) >= cap))
+  if (blocks.length === drawn.blocks.length) return drawn
+  return { ...drawn, blocks: blocks.length > 0 ? blocks : [{ kind: 'cells', anchor: drawn.active, focus: drawn.active }] }
+}
+/**
+ * What a copy of a transposed grid's selection asks for: the blocks that grid shows selected (`withinCap`), as parts in
+ * the result's rows and columns like any copy's. The request says the grid is transposed, and the backend writes each
+ * part turned: a line per column, a field per row. With no block and no active cell among the rows drawn there is nothing
+ * to copy (the grid moves the active cell among them once it draws, so only a state it has not drawn yet is so).
+ */
+export function transposedCopyPlan(selection: GridSelection, columns: number): CopyPart[] {
+  const drawn = withinCap(rotateSelection(selection)), cap = wire.transpose.maxRows
+  if (drawn.blocks.every(block => (block.kind === 'cells' || block.kind === 'columns') && Math.min(block.anchor.column, block.focus.column) >= cap)) return []
+  return copyPlan(rotateSelection(drawn), columns)
 }
