@@ -463,14 +463,24 @@ describe('smoke-test backends', () => {
     expect(environments[1]).toEqual({ PATH: '/bin', VARIA_RESULT_MEMORY_MIB: '2048' })
     expect(value.state).toMatchObject({ generation: 2 })
 
-    // Stopped while it waits: nothing is ever launched, and what was asked is refused.
+    // Stopped while it waits: nothing is ever launched, what was asked is refused, and no timer is left running.
     let late!: () => void
-    const stopped = new BackendSupervisor({ command: 'backend', args: [], cwd: '.', env: { PATH: '/bin' }, packaged: true }, { spawn: spying, before: new Promise<void>(resolve => { late = resolve }) })
+    const timing = manualClock()
+    const timers = new Set<unknown>()
+    const counting = {
+      ...timing.clock,
+      setTimeout: (run: () => void, ms: number) => { const timer = timing.clock.setTimeout(run, ms); timers.add(timer); return timer },
+      clearTimeout: (timer: unknown) => { timers.delete(timer); timing.clock.clearTimeout(timer as never) }
+    }
+    const stopped = new BackendSupervisor({ command: 'backend', args: [], cwd: '.', env: { PATH: '/bin' }, packaged: true }, { spawn: spying, clock: counting as never, before: new Promise<void>(resolve => { late = resolve }) })
     stopped.start()
     const refused = failure(stopped.request('system.health', {}))
-    await stopped.stop()
-    late()
     await settle()
+    expect(timers.size).toBe(1)
+    await stopped.stop()
+    expect(timers.size).toBe(0)
+    late()
+    await timing.advance(firstLaunchWaitMs)
     expect(environments).toHaveLength(2)
     expect(await refused).toBeDefined()
     // Automatic adds nothing, and a launch that waits for nothing starts at once.

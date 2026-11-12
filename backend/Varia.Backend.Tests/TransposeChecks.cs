@@ -336,8 +336,8 @@ internal static class TransposeChecks
         var used = store.UsedBytes;
         low = true;
         var pressed = Message(wide);
-        check(pressed?.StartsWith("TOO_LARGE: There is not enough result memory to transpose", StringComparison.Ordinal) == true && wide.Budget.Stopped == TruncationReason.None && store.UsedBytes == used,
-            $"a transpose cut short by low system memory is refused whole and leaves its query's budget open: {pressed} {wide.Budget.Stopped} {store.UsedBytes - used}");
+        check(pressed == "TOO_LARGE: " + SqlService.LowMemory && wide.Budget.Stopped == TruncationReason.None && store.UsedBytes == used,
+            $"a transpose cut short by low system memory is refused whole, saying the computer is low on memory, and leaves its query's budget open: {pressed} {wide.Budget.Stopped} {store.UsedBytes - used}");
         var whole = Message(narrow);
         check(whole is null && stored!.Descriptor is { RowsStored: 3, Truncated: null, State: "complete" } && narrow.Budget.Stopped == TruncationReason.None,
             $"a transpose whose last page is sealed under low system memory is kept whole and not marked truncated: {whole} {stored?.Descriptor.RowsStored} {stored?.Descriptor.Truncated}");

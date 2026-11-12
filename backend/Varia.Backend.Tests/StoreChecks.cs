@@ -68,9 +68,23 @@ internal static class StoreChecks
         var collections = GC.CollectionCount(0);
         var (load, threshold) = ResultStore.OperatingSystemMemory(Environment.TickCount64 + ResultStore.LoadReadingMs);
         check(load > 0 && threshold > 0 && GC.CollectionCount(0) > collections, "a stale reading of the memory load is refreshed by a collection of the youngest generation (" + load / MiB + " of " + threshold / MiB + " MiB)");
-        check(ResultStore.MayCompact(1 * GiB, 2 * GiB) && ResultStore.MayCompact(0, 0) && !ResultStore.MayCompact(1 * GiB, 512 * MiB) && !ResultStore.MayCompact(3 * GiB, 8 * GiB)
-            && ResultStore.MayCompact(2 * GiB, 8 * GiB),
-            "a forced collection compacts only what is no more than was released, and no more than 2 GiB: more would stop every thread for seconds");
+        check(ResultStore.MayCompact(1 * GiB, 2 * GiB, false) && ResultStore.MayCompact(0, 0, false) && !ResultStore.MayCompact(1 * GiB, 512 * MiB, false) && !ResultStore.MayCompact(1 * GiB, 512 * MiB, true)
+            && ResultStore.MayCompact(7 * GiB, 7 * GiB, false) && ResultStore.MayCompact(8 * GiB, 8 * GiB, false) && !ResultStore.MayCompact(9 * GiB, 12 * GiB, false) && ResultStore.MayCompact(9 * GiB, 12 * GiB, true),
+            "a forced collection compacts only what is no more than was released, and more than 8 GiB only when the machine is low on memory: nothing else returns what was released");
+        // Readings follow one another whatever the clock a check gave: one from a later time does not hold the next back.
+        var again = GC.CollectionCount(0);
+        ResultStore.OperatingSystemMemory(Environment.TickCount64);
+        check(GC.CollectionCount(0) > again, "a reading stamped later than now is taken again");
+        // Threads taking a key's memory together see each 64 MiB passed exactly once between them.
+        var crossings = 0;
+        var shared = new ViewSorter.KeyMemory((_, large) => { if (large) Interlocked.Increment(ref crossings); return true; }, _ => { });
+        Parallel.For(0, 8, _ => { for (var step = 0; step < 4096; step++) shared.TryReserve(MiB / 4); });
+        var refusing = new ViewSorter.KeyMemory((_, _) => false, _ => { });
+        long returned = 0;
+        var counted = new ViewSorter.KeyMemory((_, _) => false, bytes => returned += bytes);
+        counted.TryReserve(MiB);
+        counted.ReturnAll();
+        check(crossings == 8 * 4096 / 4 / 64 && !refusing.TryReserve(MiB) && returned == 0, $"a key's memory taken by many threads asks once for each 64 MiB, and a refusal holds nothing: {crossings} {returned}");
         check(ResultStore.LimitFromEnvironment("300") == 300 * MiB && ResultStore.LimitFromEnvironment("1048576") == 1024 * GiB && ResultStore.LimitFromEnvironment("1") == MiB
             && new[] { "1048577", "0", "-5", "+5", " 5", "5 ", "5.0", "0x10", "", "lots", "99999999999999999999" }.All(text => ResultStore.LimitFromEnvironment(text) is null)
             && ResultStore.LimitFromEnvironment(null) is null,

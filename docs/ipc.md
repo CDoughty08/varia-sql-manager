@@ -1172,10 +1172,13 @@ Results stay in backend memory, never on disk (`ResultStore`).
   them alike (a sort's keys, a profile's figures), so the budget is all the backend commits to results (a quarter of memory unless the user set more); a
   result that fills its query's half leaves no room to sort it. Working memory of 64 MiB or more, and any memory that
   only makes an operation faster once 64 MiB of it is held, is refused under high system memory load as rows are
-  (`TOO_LARGE`, saying the computer is low on memory). One query may use half of it. Nothing more is stored while the operating system reports high
+  (`TOO_LARGE`, saying the computer is low on memory, as does a pivot, diff or transpose refused while the load is
+  high). One query may use half of it. Nothing more is stored while the operating system reports high
   memory load (checked at every page seal; the load is the runtime's reading at its last garbage collection, taken
   again by a collection of the youngest generation when it is more than a second old). A release's forced collection
-  compacts only when no more than 2 GiB remains, as compacting stops every thread while it copies. `VARIA_RESULT_BUDGET_BYTES` replaces the global figure only with the test
+  compacts, which alone returns the memory to the operating system, only when what remains is no more than was
+  released and no more than 8 GiB (compacting stops every thread for 0.1 to 0.2 s per GiB it copies); under high
+  memory load the 8 GiB does not apply. `VARIA_RESULT_BUDGET_BYTES` replaces the global figure only with the test
   hooks, and turns the memory-load check off so tests see their budget's truncation reasons on a busy machine (the offline
   checks' stores never check it unless given a probe).
 - **Charges.** Each sealed page costs its length plus 96 bytes plus its cell lengths ([Cell lengths and row sizes](#cell-lengths-and-row-sizes)); a result set's metadata 512 bytes plus 2 per name

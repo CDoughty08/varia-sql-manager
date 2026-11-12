@@ -1926,11 +1926,16 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     /// <summary>Why a pivot, diff or transpose was refused memory or not stored whole. Its sources are complete, but their
     /// query may still be reading later sets and its tab may run again, so a source released or a query stopped while it
-    /// was built is the reason, not the memory left: only otherwise is it <paramref name="tooLarge"/>.</summary>
-    private RequestException NotStored(QueryBudget budget, string tooLarge, params (ResultSetBuffer Set, uint Id)[] sources)
+    /// was built is the reason, not the memory left: only otherwise is it <paramref name="tooLarge"/>, or (a refusal at
+    /// a page's seal or of working memory being as likely the machine's as the budget's) that the computer is low on memory.</summary>
+    private RequestException NotStored(QueryBudget budget, string tooLarge, params (ResultSetBuffer Set, uint Id)[] sources) =>
+        NotStored(budget, TooLarge(tooLarge), sources);
+
+    /// <summary>As above, for a refusal that has its own reason (too many rows to compare), which low memory does not replace.</summary>
+    private RequestException NotStored(QueryBudget budget, RequestException refusal, params (ResultSetBuffer Set, uint Id)[] sources)
     {
         foreach (var (set, id) in sources) if (set.IsReleased) return Unavailable(id);
-        return BudgetStopped(budget) ?? new RequestException("TOO_LARGE", tooLarge);
+        return BudgetStopped(budget) ?? refusal;
     }
 
     internal const string BudgetStoppedFull = "This query's results filled its result memory, so it can store nothing more. Run the query again returning fewer rows.";
@@ -1976,7 +1981,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         {
             DiffModel model;
             try { model = await Task.Run(() => ResultDiffer.Compare(left, leftPages, right, rightPages, args.Exact, token, ReserveCells), token); }
-            catch (RequestException error) when (error.Code == "TOO_LARGE") { throw NotStored(left.Budget, error.Message, (left, args.Left), (right, args.Right)); }
+            catch (RequestException error) when (error.Code == "TOO_LARGE") { throw NotStored(left.Budget, error, (left, args.Left), (right, args.Right)); }
             if (left.IsReleased) throw Unavailable(args.Left);
             if (right.IsReleased) throw Unavailable(args.Right);
             const string tooLarge = "There is not enough result memory to show the differences. Close other results and try again.";

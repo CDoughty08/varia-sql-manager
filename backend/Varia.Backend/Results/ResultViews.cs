@@ -134,10 +134,11 @@ internal static partial class ViewSorter
 
         public bool TryReserve(long bytes)
         {
-            var now = Interlocked.Read(ref held);
-            if (!reserve(bytes, (now + bytes) / CheckEvery != now / CheckEvery)) return false;
-            Interlocked.Add(ref held, bytes);
-            return true;
+            // Counted first, so of threads taking together exactly one sees each 64 MiB passed.
+            var after = Interlocked.Add(ref held, bytes);
+            if (reserve(bytes, after / CheckEvery != (after - bytes) / CheckEvery)) return true;
+            Interlocked.Add(ref held, -bytes);
+            return false;
         }
         public void Return(long bytes)
         {

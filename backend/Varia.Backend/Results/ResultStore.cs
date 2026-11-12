@@ -115,7 +115,7 @@ internal sealed class ResultStore
     internal static (long Load, long Threshold) OperatingSystemMemory(long now)
     {
         var last = Interlocked.Read(ref loadReadAt);
-        if (now - last >= LoadReadingMs && Interlocked.CompareExchange(ref loadReadAt, now, last) == last)
+        if ((now - last >= LoadReadingMs || now < last) && Interlocked.CompareExchange(ref loadReadAt, now, last) == last)
             GC.Collect(0, GCCollectionMode.Forced, blocking: true);
         var info = GC.GetGCMemoryInfo();
         return (info.MemoryLoadBytes, info.HighMemoryLoadThresholdBytes);
@@ -506,14 +506,7 @@ internal sealed class ResultStore
     /// caller's thread.
     /// Only an aggressive (compacting) collection returns the freed memory to the operating system. It copies what remains,
     /// so it runs only when that is no more than what was released since the last one; otherwise a non-compacting one
-    /// keeps the pause short. Nor when what remains is more than <see cref="CompactAtMostBytes"/>: every thread of the
-    /// backend stops while it is copied, and gigabytes take seconds.</summary>
-    internal const long CompactAtMostBytes = 2L << 30;
-
-    /// <summary>Whether a collection now may compact: what remains is no more than was released since the last one that
-    /// did, nor than <see cref="CompactAtMostBytes"/>.</summary>
-    internal static bool MayCompact(long usedBytes, long freedSinceCompact) => usedBytes <= Math.Min(freedSinceCompact, CompactAtMostBytes);
-
+    /// keeps the pause short.</summary>
     private void Collect()
     {
         if (Interlocked.Exchange(ref collecting, 1) == 1) return;
@@ -524,10 +517,23 @@ internal sealed class ResultStore
         }, TaskScheduler.Default);
     }
 
+    /// <summary>The most a compacting collection copies while the machine has memory to spare. Every thread of the backend
+    /// stops while it copies: measured, 0.1 to 0.2 s for each GiB that remains, so a second or two here. It is the most
+    /// the automatic budget can leave after a release that large; a limit the user set higher can leave more.</summary>
+    internal const long CompactAtMostBytes = 8L << 30;
+
+    /// <summary>Whether a collection now may compact: what remains is no more than was released since the last one that
+    /// did, and no more than <see cref="CompactAtMostBytes"/> unless the machine is short of memory. Nothing else gives
+    /// the released memory back (a non-compacting collection, however often it runs, keeps it committed), so a machine
+    /// short of memory takes the longer pause: what is kept would go on refusing rows and sorts.</summary>
+    internal static bool MayCompact(long usedBytes, long freedSinceCompact, bool memoryLow) =>
+        usedBytes <= freedSinceCompact && (usedBytes <= CompactAtMostBytes || memoryLow);
+
     private void CollectNow()
     {
         Interlocked.Exchange(ref freedSinceCollect, 0);
-        if (MayCompact(UsedBytes, Interlocked.Read(ref freedSinceCompact)))
+        var used = UsedBytes;
+        if (MayCompact(used, Interlocked.Read(ref freedSinceCompact), used > CompactAtMostBytes && IsSystemMemoryLow()))
         {
             Interlocked.Exchange(ref freedSinceCompact, 0);
             GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);

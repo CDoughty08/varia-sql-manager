@@ -115,6 +115,7 @@ export class BackendSupervisor {
   private suspended = false
   /** Started, with the first launch still waiting for `deps.before`. */
   private awaitingFirst = false
+  private firstTimer: unknown
 
   constructor(spec: SpawnSpec, deps: SupervisorDeps = {}) {
     this.spec = spec
@@ -150,10 +151,10 @@ export class BackendSupervisor {
     const first = (): void => {
       if (!this.awaitingFirst) return
       this.awaitingFirst = false
-      this.clock.clearTimeout(waited)
+      this.clock.clearTimeout(this.firstTimer)
       if (!this.closing) this.launch()
     }
-    const waited = this.clock.setTimeout(first, firstLaunchWaitMs)
+    this.firstTimer = this.clock.setTimeout(first, firstLaunchWaitMs)
     void before.then(first, first)
   }
 
@@ -246,6 +247,9 @@ export class BackendSupervisor {
     this.closing = true
     this.connection = undefined
     this.clock.clearTimeout(this.restartTimer)
+    // A stop while the first launch waits leaves nothing behind it: no timer to keep the process, no launch to come.
+    this.awaitingFirst = false
+    this.clock.clearTimeout(this.firstTimer)
     this.stopWatchdog()
     const error = new BackendError('BACKEND_UNAVAILABLE', sentences.closing)
     for (const waiter of this.waiting.splice(0)) waiter.reject(error)
