@@ -63,6 +63,8 @@ export interface OutputTarget {
   readonly result?: { readonly generation: number; readonly resultId: number }
   /** The grid's result kind ('rows', 'diff', 'pivot', 'transpose'…), for the commands only some kinds offer. */
   readonly resultKind?: string
+  /** The grid is drawn bare (Peek's rows): Pivot, Compare and the close commands are off for it. */
+  readonly bare?: true
   readonly selectedText: string
   readonly element: HTMLElement
   /** A live grid's own commands (view `live`): its table is not a result set in ResultsService. */
@@ -159,6 +161,7 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
     explorerServerLinux: target?.kind === 'explorer' && !!target.node?.linux,
     outputView: target?.kind === 'output' ? target.view : '',
     outputGridTransposable: target?.kind === 'output' && target.view === 'grid' && transposableKinds.has(target.resultKind ?? ''),
+    outputGridBare: target?.kind === 'output' && target.view === 'grid' && !!target.bare,
     outputLiveSortable: target?.kind === 'output' && !!target.live?.sortable,
     outputLiveFilterable: target?.kind === 'output' && !!target.live?.filterable,
     outputLiveRows: target?.kind === 'output' ? target.live?.rows?.kind ?? '' : '',
@@ -282,8 +285,9 @@ export function outputTarget(element: Element): OutputTarget | undefined {
   const generation = Number(view.getAttribute('data-result-generation')), resultId = Number(view.getAttribute('data-result-id'))
   const result = kind === 'grid' && Number.isSafeInteger(generation) && generation > 0 && Number.isSafeInteger(resultId) && resultId > 0 ? { generation, resultId } : undefined
   const resultKind = kind === 'grid' ? view.getAttribute('data-result-kind') ?? undefined : undefined
+  const bare = kind === 'grid' && view.hasAttribute('data-result-bare')
   return { kind: 'output', tabId, view: kind as OutputView, ...(kind === 'grid' ? { entry } : {}), selectedText: kind === 'grid' ? '' : selectedTextIn(view), element: view,
-    ...(column !== undefined ? { column } : {}), ...(row !== undefined ? { row } : {}), ...(result ? { result } : {}), ...(resultKind ? { resultKind } : {}) }
+    ...(column !== undefined ? { column } : {}), ...(row !== undefined ? { row } : {}), ...(result ? { result } : {}), ...(resultKind ? { resultKind } : {}), ...(bare ? { bare: true as const } : {}) }
 }
 
 /**

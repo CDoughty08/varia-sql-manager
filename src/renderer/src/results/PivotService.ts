@@ -2,16 +2,18 @@ import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import type { ResultColumn } from '../../../shared/contracts'
 import { draftSpec, emptyDraft, fitDraft as fitColumns, remapDraft, type PivotDraft, type PivotInfo } from './pivot'
-import type { EntryKey, ResultSetEntry, ResultsService, TabResults } from './ResultsService'
-import { entryName, entryOf, resultLimits, setKey } from './ResultsService'
+import type { EntryKey, ResultGroup, ResultSetEntry, ResultsService, TabResults } from './ResultsService'
+import { entryName, groupOf, resultLimits, setKey, slotOf } from './ResultsService'
 
-/** One tab's pivot panel: whether it shows, the set it pivots (`source`: the key of the run's entry the service follows,
- *  undefined while the run does not have it), the draft, and the pivot running or the last failure. */
+/** One tab's pivot builder: whether it shows, the group it belongs to (`source`: the key of that group's Table in the run
+ *  shown, undefined while the run does not have it), the group's draft, and the pivot running or the last failure. */
 export interface PivotTab {
   readonly open: boolean
   readonly source: EntryKey | undefined
-  /** The name of the entry the panel follows ("Result 2"), which the source picker shows while a new run does not have it. */
+  /** The name of the result the builder follows ("Result 2"), which it shows while a new run does not have it. */
   readonly sourceName?: string
+  /** The group's Pivot now, which building again replaces. */
+  readonly pivot?: EntryKey
   readonly draft: PivotDraft
   readonly running: boolean
   readonly error?: string
@@ -22,35 +24,46 @@ export interface PivotSnapshot {
   readonly info: ReadonlyMap<string, PivotInfo>
 }
 
-type Results = Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'sortOf'>
-/** The entry a panel pivots: an original result by its number in the run, which the next run's result of that number takes
- *  over, or a derived entry (another pivot) by its key. */
-type Source = { readonly ordinal: number } | { readonly key: EntryKey }
-const sourceOf = (entry: ResultSetEntry): Source => entry.ordinal === undefined ? { key: entry.key } : { ordinal: entry.ordinal }
-/** The entry of a run a panel follows, if the run has it. */
-const followed = (sets: readonly ResultSetEntry[], source: Source | undefined): ResultSetEntry | undefined =>
-  source === undefined ? undefined : 'key' in source ? entryOf(sets, source.key) : sets.find(entry => entry.ordinal === source.ordinal)
+type Results = Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'sortOf' | 'removeEntry'>
 
-/** A set a pivot can read: rows (a query's, or another pivot's) that have all loaded. */
+/** A set a pivot can read: a query's rows that have all loaded. Never a pivot, a transpose, a comparison or a plan set. */
 export const pivotable = (entry: ResultSetEntry | undefined): boolean =>
-  entry !== undefined && (entry.descriptor.kind === 'rows' || entry.descriptor.kind === 'pivot') && entry.handle.getSnapshot().state === 'complete'
+  entry !== undefined && entry.descriptor.kind === 'rows' && entry.handle.getSnapshot().state === 'complete'
+/** A group a builder can belong to: one whose Table holds a query's rows (not a SQL-returned plan set). */
+const buildable = (group: ResultGroup | undefined): group is ResultGroup => !!group && !group.planSet && group.table.entry.descriptor.kind === 'rows'
+/**
+ * The group Pivot acts on for the grid of entry `key`: the group whose Table or Pivot it shows. A comparison, a plan set,
+ * a stored transpose and any grid of a bare run (Peek) have none, so Pivot is not offered there.
+ */
+export function pivotGroup(tab: TabResults | undefined, key: EntryKey | undefined): ResultGroup | undefined {
+  if (!tab || tab.bare) return undefined
+  const view = slotOf(tab, key)?.view, group = groupOf(tab, key)
+  return (view === 'table' || view === 'pivot') && buildable(group) ? group : undefined
+}
 
 /**
- * Pivot (results PR 7): a grid's rows, as its sort and filters show them, grouped by row columns and a column group and
- * aggregated in the backend (results.pivot). The pivot is a new result of the run, appended as its last set and released
- * with the run's others, so its grid sorts, filters, copies and saves as any other. The panel's draft is kept per tab
- * until the run changes; a newer run (or none) gives up a pivot that is still running.
+ * Pivot: a group's Table, as its grid's filters show it, grouped by row columns and a column group and aggregated in the
+ * backend (results.pivot). The pivot is the group's Pivot: a result of the run drawn directly under the Table and released
+ * with the group, whose grid sorts, filters, copies and saves as any other. A group has one, and it is always read from
+ * the Table, so building again replaces it: the old one is released first and the new one shown when it is built (not yet
+ * atomically: a build that fails or is cancelled leaves the group without a Pivot). The builder belongs to one group: the
+ * one whose grid last had the focus, or the first that can be pivoted when that grid is a comparison or a plan set. Each
+ * group keeps a draft of its own, which a new run's group of the same number takes over, fitted to its columns by name. A
+ * newer run (or none) gives up a pivot that is still running.
  */
 export class PivotService extends SnapshotStore<PivotSnapshot> implements Disposable {
   private readonly results: Results
-  /** The pivot each tab builds, with the run and the entry it reads: a newer run, or that entry closed, gives it up. */
+  /** The pivot each tab builds, with the run and the Table it reads: a newer run, or that Table closed, gives it up. */
   private readonly running = new Map<string, { readonly abort: AbortController; readonly queryId: string; readonly source: EntryKey }>()
-  /** The run each tab's panel was set up for: a new run starts the draft over. */
+  /** The run each tab's builder was set up for. */
   private readonly runs = new Map<string, string>()
-  /** The columns each tab's draft was last fitted to: a draft follows its columns by name when they move. */
-  private readonly fitted = new Map<string, readonly ResultColumn[]>()
-  /** The entry each tab's panel pivots; the snapshot's `source` is its key in the run shown. */
-  private readonly sources = new Map<string, Source>()
+  /** The group each tab's builder belongs to, by ordinal: the next run's result of that number takes it over. */
+  private readonly groups = new Map<string, number>()
+  /** Each group's draft, by tab and ordinal, with the columns it was last fitted to: a draft follows its columns by name
+   *  when they move. */
+  private readonly drafts = new Map<string, Map<number, { readonly draft: PivotDraft; readonly columns?: readonly ResultColumn[] }>>()
+  /** The focused entry each tab's builder last followed: it moves only when the focus does. */
+  private readonly focus = new Map<string, EntryKey | undefined>()
   private readonly unsubscribe: () => void
 
   constructor(results: Results) {
@@ -59,17 +72,16 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     this.unsubscribe = results.subscribe(() => this.sync())
   }
 
-  /** Opens the panel on a grid's set (the one the command named or that has the focus). */
-  open(tabId: string, key: EntryKey): void {
+  /** Opens the builder on the group of a grid (the one the command named or that has the focus): on the group whose Table
+   *  or Pivot it shows, else on the group the builder had, else on the first that can be pivoted. */
+  open(tabId: string, key?: EntryKey): void {
     const tab = this.results.getSnapshot()[tabId]
-    if (!tab) return
+    if (!tab || tab.bare) return
     const current = this.getSnapshot().tabs[tabId]
-    const entry = entryOf(tab.sets, key)
-    // A grid that cannot be pivoted (a diff, one still loading) leaves the panel on the set it had.
-    const source = entry && pivotable(entry) ? entry.key : current?.source ?? entry?.key
-    const draft = current && current.source === source ? current.draft : emptyDraft
+    const ordinal = pivotGroup(tab, key)?.ordinal ?? this.kept(tab, this.groups.get(tabId)) ?? tab.groups.find(buildable)?.ordinal
     this.runs.set(tabId, tab.queryId)
-    this.update(tabId, { open: true, ...this.follow(tabId, tab, source), draft: this.fit(tabId, source, draft), running: this.running.has(tabId), error: undefined })
+    this.focus.set(tabId, tab.focused)
+    this.update(tabId, this.tabOf(tabId, tab, ordinal, { open: true, running: this.running.has(tabId) || !!current?.running }))
   }
 
   close(tabId: string): void {
@@ -77,50 +89,55 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     if (current?.open) this.update(tabId, { ...current, open: false })
   }
 
-  /** Points the panel at another set of the run; the draft is kept as far as the set's columns allow. */
-  setSource(tabId: string, key: EntryKey): void {
-    const current = this.getSnapshot().tabs[tabId], tab = this.results.getSnapshot()[tabId]
-    if (!current || !tab || current.source === key || !entryOf(tab.sets, key)) return
-    this.update(tabId, { open: current.open, ...this.follow(tabId, tab, key), draft: this.fit(tabId, key, current.draft), running: current.running })
-  }
-
   setDraft(tabId: string, draft: PivotDraft): void {
-    const current = this.getSnapshot().tabs[tabId]
-    if (current) this.update(tabId, { ...current, draft: this.fit(tabId, current.source, draft), error: undefined })
+    const current = this.getSnapshot().tabs[tabId], ordinal = this.groups.get(tabId), tab = this.results.getSnapshot()[tabId]
+    if (!current || ordinal === undefined) return
+    const columns = tab?.groups.find(group => group.ordinal === ordinal)?.table.entry.descriptor.columns
+    let drafts = this.drafts.get(tabId)
+    if (!drafts) this.drafts.set(tabId, drafts = new Map())
+    const fitted = columns ? fitColumns(draft, columns) : draft
+    drafts.set(ordinal, { draft: fitted, ...columns ? { columns } : {} })
+    const { error: _error, ...rest } = current
+    this.update(tabId, { ...rest, draft: fitted })
   }
 
-  /** Whether a grid's set can be pivoted now: its run has ended, its rows have all loaded, its grid's sort or filter is built
-   *  (as Save Results As waits for it: the pivot reads the rows the grid shows), and no pivot runs in its tab. */
+  /** Whether the group of a grid can be pivoted now: the grid shows the group's Table or Pivot, the run has ended, the
+   *  Table's rows have all loaded, its sort or filter is built (as Save Results As waits for it: the pivot reads the rows
+   *  the Table's grid shows), and no pivot runs in its tab. */
   canPivot(tabId: string, key: EntryKey | undefined): boolean {
-    const tab = this.results.getSnapshot()[tabId], entry = entryOf(tab?.sets, key)
+    const tab = this.results.getSnapshot()[tabId], entry = pivotGroup(tab, key)?.table.entry
     const sort = entry && this.results.sortOf(tabId, entry.key)
     return !!tab && tab.status !== 'running' && tab.status !== 'closed' && !this.running.has(tabId) && pivotable(entry)
       && !(sort && (sort.sorting || sort.stale || !sort.view))
   }
 
-  /** Pivots the panel's set by its draft and appends the pivot to the run; a failure shows in the panel. */
+  /** Pivots the builder's group by its draft and shows the pivot as the group's Pivot, in place of the one it had; a
+   *  failure shows in the builder. */
   async run(tabId: string): Promise<void> {
     const state = this.getSnapshot().tabs[tabId]
     const tab = this.results.getSnapshot()[tabId]
-    const entry = entryOf(tab?.sets, state?.source)
-    if (!state || !tab || !entry || !this.canPivot(tabId, entry.key)) return
+    const group = tab?.groups.find(item => item.ordinal === this.groups.get(tabId)), entry = group?.table.entry
+    if (!state || !tab || !group || !entry || !this.canPivot(tabId, entry.key)) return
     const sort = this.results.sortOf(tabId, entry.key)
-    // The grid's view when it shows one: the pivot reads its rows as the grid shows them.
+    // The Table's view when its grid shows one: the pivot reads its rows as the grid shows them.
     const handle = sort?.view ?? entry.handle
     const abort = new AbortController()
     const item = { abort, queryId: tab.queryId, source: entry.key }
     this.running.set(tabId, item)
-    this.update(tabId, { ...state, running: true, error: undefined })
+    // A group has one Pivot: the one it has is released before the new one is built.
+    if (group.pivot) this.results.removeEntry(tabId, group.pivot.key)
+    const { error: _error, ...rest } = this.getSnapshot().tabs[tabId] ?? state
+    this.update(tabId, { ...rest, running: true })
     let error: string | undefined
     try {
-      const result = await handle.pivot(draftSpec(this.fit(tabId, state.source, state.draft)), { signal: abort.signal })
+      const result = await handle.pivot(draftSpec(state.draft), { signal: abort.signal })
       const sourceLabel = entryName(entry)
       const label = `Pivot of ${sourceLabel}`
-      // Only the run that holds the set takes the pivot; otherwise (a re-run, a closed tab) it is released, and the panel says
-      // why when its run is still the one it pivoted.
+      // Only the run that holds the Table takes the pivot; otherwise (a re-run, a closed tab) it is released, and the
+      // builder says why when its run is still the one it pivoted.
       if (this.results.addSet(tabId, result.descriptor, label, [setKey(entry.descriptor)]) === undefined) {
         const now = this.results.getSnapshot()[tabId]
-        // A source closed while it was built gave the pivot up: the panel has moved on and says nothing of it.
+        // A Table closed while its pivot was built gave the pivot up: the builder has moved on and says nothing of it.
         if (now?.queryId === tab.queryId && !abort.signal.aborted) {
           error = now.sets.length >= resultLimits.sets
             ? `These results already show ${resultLimits.sets.toLocaleString('en-US')} sets, so the pivot was not added. Close Results or run the query again.`
@@ -155,20 +172,32 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     this.clearListeners()
   }
 
-  /** The panel follows the entry `key` from now on; what the snapshot says of it. */
-  private follow(tabId: string, tab: TabResults, key: EntryKey | undefined): Pick<PivotTab, 'source' | 'sourceName'> {
-    const entry = entryOf(tab.sets, key)
-    if (!entry) { this.sources.delete(tabId); return { source: undefined } }
-    this.sources.set(tabId, sourceOf(entry))
-    return { source: entry.key, sourceName: entryName(entry) }
+  /** The ordinal, while the run has a group of it that can be pivoted, or may yet return one. */
+  private kept(tab: TabResults, ordinal: number | undefined): number | undefined {
+    if (ordinal === undefined) return undefined
+    const group = tab.groups.find(item => item.ordinal === ordinal)
+    return buildable(group) || (!group && tab.status === 'running') ? ordinal : undefined
   }
 
-  private fit(tabId: string, source: EntryKey | undefined, draft: PivotDraft): PivotDraft {
-    const columns = entryOf(this.results.getSnapshot()[tabId]?.sets, source)?.descriptor.columns
-    if (!columns) return draft
-    const previous = this.fitted.get(tabId)
-    this.fitted.set(tabId, columns)
-    return fitColumns(previous && previous !== columns ? remapDraft(draft, previous, columns) : draft, columns)
+  /** The builder's state on the group `ordinal` of a run, which it belongs to from now on. */
+  private tabOf(tabId: string, tab: TabResults, ordinal: number | undefined, rest: Pick<PivotTab, 'open' | 'running' | 'error'>): PivotTab {
+    if (ordinal === undefined) this.groups.delete(tabId)
+    else this.groups.set(tabId, ordinal)
+    const group = ordinal === undefined ? undefined : tab.groups.find(item => item.ordinal === ordinal)
+    return {
+      open: rest.open, source: group?.table.key, ...ordinal === undefined ? {} : { sourceName: `Result ${ordinal}` }, ...group?.pivot ? { pivot: group.pivot.key } : {},
+      draft: this.draftOf(tabId, ordinal, group?.table.entry.descriptor.columns), running: rest.running, ...rest.error ? { error: rest.error } : {}
+    }
+  }
+
+  /** A group's draft, fitted to its Table's columns: by name when they are not the ones it was last fitted to (a re-run). */
+  private draftOf(tabId: string, ordinal: number | undefined, columns: readonly ResultColumn[] | undefined): PivotDraft {
+    const drafts = ordinal === undefined ? undefined : this.drafts.get(tabId), kept = drafts?.get(ordinal!)
+    if (!drafts || !kept) return emptyDraft
+    if (!columns || kept.columns === columns) return kept.draft
+    const draft = fitColumns(kept.columns ? remapDraft(kept.draft, kept.columns, columns) : kept.draft, columns)
+    drafts.set(ordinal!, { draft, columns })
+    return draft
   }
 
   private update(tabId: string, tab: PivotTab): void {
@@ -182,39 +211,42 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     return new Map([...info].filter(([key]) => shown.has(key)))
   }
 
-  /** A new run (or a closed tab) gives up its tab's running pivot, and so does closing the result it reads; the panel
-   *  keeps its set while the run has it. */
+  /** A new run (or a closed tab) gives up its tab's running pivot, and so does closing the Table it reads. The builder
+   *  follows the focus: when another grid takes it, the builder moves to that grid's group, or to the first group that can
+   *  be pivoted when the grid is a comparison or a plan set. It keeps its group by ordinal across runs, and moves to the
+   *  first that can be pivoted once a run has ended without it. */
   private sync(): void {
     const snapshot = this.results.getSnapshot()
-    for (const [tabId, item] of this.running) if (snapshot[tabId]?.queryId !== item.queryId || !entryOf(snapshot[tabId].sets, item.source)) item.abort.abort()
+    for (const [tabId, item] of this.running) if (snapshot[tabId]?.queryId !== item.queryId || !snapshot[tabId].sets.some(entry => entry.key === item.source)) item.abort.abort()
     const current = this.getSnapshot()
     let tabs: Record<string, PivotTab> | undefined
     for (const [tabId, tab] of Object.entries(current.tabs)) {
       const run = snapshot[tabId]
-      if (!run) { tabs ??= { ...current.tabs }; delete tabs[tabId]; this.runs.delete(tabId); this.fitted.delete(tabId); this.sources.delete(tabId); continue }
-      let next = tab
-      // A new run keeps the draft (a re-run of the same query pivots the same way) and the set it pivots; the draft is fitted
-      // to the set when it runs.
-      if (this.runs.get(tabId) !== run.queryId) {
-        this.runs.set(tabId, run.queryId)
-        next = { open: tab.open, source: tab.source, ...tab.sourceName === undefined ? {} : { sourceName: tab.sourceName }, draft: tab.draft, running: false }
+      if (!run) {
+        tabs ??= { ...current.tabs }
+        delete tabs[tabId]
+        this.runs.delete(tabId); this.groups.delete(tabId); this.drafts.delete(tabId); this.focus.delete(tabId)
+        continue
       }
-      // The set it pivots is an entry, not a place: an original result is found again by its number in a new run, a derived
-      // one only by its key, in the run that made it.
-      let entry = followed(run.sets, this.sources.get(tabId))
-      // Once the run has ended without that set (or it is a diff), the panel moves to the first set it can pivot. While the
-      // run goes on, a result it has yet to return keeps the panel.
-      if (run.status !== 'running' && (!entry || entry.descriptor.kind === 'diff')) {
-        const first = run.sets.find(item => item.descriptor.kind === 'rows' || item.descriptor.kind === 'pivot')
-        if (first) { entry = first; next = { open: next.open, ...this.follow(tabId, run, first.key), draft: next.draft, running: next.running, ...next.error ? { error: next.error } : {} } }
+      let { running, error } = tab
+      // A new run keeps each group's draft (a re-run of the same query pivots the same way) and the group the builder
+      // belongs to; what the last run's build said goes.
+      if (this.runs.get(tabId) !== run.queryId) { this.runs.set(tabId, run.queryId); running = false; error = undefined }
+      let ordinal = this.groups.get(tabId)
+      if (run.focused !== this.focus.get(tabId)) {
+        this.focus.set(tabId, run.focused)
+        if (run.focused !== undefined) ordinal = pivotGroup(run, run.focused)?.ordinal ?? run.groups.find(buildable)?.ordinal ?? ordinal
       }
-      if (next.source !== entry?.key) next = { ...next, source: entry?.key }
-      // Once the set's columns are known the draft follows them by name, so a re-run that moves them keeps what it grouped.
-      const columns = entry?.descriptor.columns
-      if (columns && this.fitted.get(tabId) !== columns) next = { ...next, draft: this.fit(tabId, next.source, next.draft) }
-      if (next !== tab) { tabs ??= { ...current.tabs }; tabs[tabId] = next }
+      // Once the run has ended without that group (or it is a plan set), the builder moves to the first it can pivot.
+      // While the run goes on, a result it has yet to return keeps the builder.
+      ordinal = this.kept(run, ordinal) ?? (run.status === 'running' ? ordinal : run.groups.find(buildable)?.ordinal ?? ordinal)
+      const next = this.tabOf(tabId, run, ordinal, { open: tab.open, running, error })
+      if (next.source !== tab.source || next.sourceName !== tab.sourceName || next.pivot !== tab.pivot || next.draft !== tab.draft || next.running !== tab.running || next.error !== tab.error) {
+        tabs ??= { ...current.tabs }
+        tabs[tabId] = next
+      }
     }
-    // Strips of pivots no run shows any more go, whether or not a panel changed (Close Results changes none).
+    // Strips of pivots no run shows any more go, whether or not a builder changed (Close Results changes none).
     const info = current.info.size ? this.shown(current.info) : current.info
     if (tabs || info.size !== current.info.size) this.publish({ tabs: tabs ?? current.tabs, info })
   }

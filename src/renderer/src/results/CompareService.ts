@@ -61,11 +61,12 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     })
   }
 
-  /** The set a grid's set is compared with: the nearest set before it of rows, with every row and a column name in common. */
+  /** The set a grid's set is compared with: the nearest group's Table before it that holds rows, with every row and a
+   *  column name in common. Pivots, comparisons and plan sets are passed over, and a bare run (Peek) compares nothing. */
   previousOf(tabId: string, key: EntryKey): ResultSetEntry | undefined {
     const tab = this.results.getSnapshot()[tabId]
     const right = entryOf(tab?.sets, key)
-    if (!tab || tab.status === 'running' || !comparable(right)) return undefined
+    if (!tab || tab.bare || tab.status === 'running' || !comparable(right)) return undefined
     const columns = names(right)
     // Back from where it is listed, to the first that fits.
     for (let place = tab.sets.indexOf(right) - 1; place >= 0; place--) {

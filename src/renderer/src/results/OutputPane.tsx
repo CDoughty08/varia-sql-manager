@@ -172,8 +172,9 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
   const plans = plansOf(tab)
   const planCount = estimated ? estimated.result?.plans.length ?? 0 : plans.length
   const errors = !!tab?.messages.some(entry => entry.kind === 'error')
-  // Closed results keep the tab, without a count of sets that are gone.
-  const sets = tab && tab.status !== 'closed' ? tab.sets.length : 0, messages = tab?.messages.length ?? 0
+  // Closed results keep the tab, without a count of sets that are gone. The count is of the query's own results (groups):
+  // a Pivot or a comparison is a view of them, not one more, so with only comparisons left the badge hides.
+  const sets = tab && tab.status !== 'closed' ? tab.groups.length : 0, messages = tab?.messages.length ?? 0
   const jobs = tab?.jobs.filter(job => job.visible) ?? []
   const id = useId(), panelId = id + 'panel', tabIds: Record<OutputPaneId, string> = { results: id + 'results', messages: id + 'messages', plan: id + 'plan', statistics: id + 'statistics' }
   const [viewRef, viewHeight] = useHeight()
@@ -255,7 +256,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
             const entry = grid?.getAttribute('data-result-entry')
             if (entry) setProfiled({ tabId, target: profileTarget(tab.sets, entry) })
           }}>
-            {shown ? <ResultsStack key={'stack:' + tab.queryId} tabId={tabId} tab={tab} closable />
+            {shown ? <ResultsStack key={'stack:' + tab.queryId} tabId={tabId} tab={tab} />
               : <EmptyState className="output-empty" {...hasSets ? {} : { icon: 'table' as const }} detail={emptyResultsText(tab)} />}
             {profileOpen && shown && <ColumnProfilePanel key={'profile:' + tab.queryId} tabId={tabId} tab={tab}
               shown={profiled?.tabId === tabId ? profiledEntry(tab.sets, profiled.target)?.key : undefined} />}

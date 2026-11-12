@@ -12,10 +12,11 @@ import { formatCount } from './status'
 const nameOf = (column: ResultColumn | undefined) => column?.name || '(No column name)'
 
 /**
- * The pivot panel, beside the stacked grids (as the column profile is): which set to pivot, its row groups (in order), its
- * column group and its values, then Build Pivot, which appends the pivot as the run's last set. It reads the set's rows as
- * its grid shows them, sorted and filtered. Only aggregates that suit a column are offered for it: Sum and Average need
- * numbers.
+ * The pivot builder, beside the stacked grids (as the column profile is). It belongs to one group and names that group's
+ * Table as its source (there is nothing to pick: it follows the grid that last had the focus, PivotService), then the row
+ * groups (in order), the column group and the values, then Build Pivot, which shows the pivot under the Table, in place of
+ * the Pivot the group had. It reads the Table's rows as its grid shows them, sorted and filtered. Only aggregates that
+ * suit a column are offered for it: Sum and Average need numbers.
  */
 export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResults }) {
   const { pivot, results } = useWorkbench()
@@ -23,7 +24,6 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
   useServiceSnapshot(results)
   const ids = useId()
   if (!state) return null
-  const sources = tab.sets.filter(pivotable)
   const entry = entryOf(tab.sets, state.source)
   const columns = entry?.descriptor.columns ?? []
   const draft = entry ? fitDraft(state.draft, columns) : emptyDraft
@@ -62,14 +62,11 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
       <button type="button" className="icon-button" aria-label="Close Pivot" title="Close Pivot" onClick={() => pivot.close(tabId)}><Icon name="close" /></button>
     </div>
     <div className="pivot-body">
-      <label className="pivot-field">
+      {/* The group it belongs to; a result a new run has yet to return is still named. */}
+      <div className="pivot-field" role="group" aria-label="Pivot source">
         <span>Source</span>
-        <select aria-label="Pivot source" value={state.source ?? ''} onChange={event => pivot.setSource(tabId, event.target.value)}>
-          {/* A set that cannot be pivoted now, or one a new run has yet to return, is still named. */}
-          {!sources.includes(entry!) && <option value={state.source ?? ''}>{entry ? entryName(entry) : state.sourceName ?? ''}</option>}
-          {sources.map(item => <option key={item.key} value={item.key}>{entryName(item)}</option>)}
-        </select>
-      </label>
+        <span className="pivot-source">{entry ? entryName(entry) : state.sourceName ?? ''}</span>
+      </div>
       <section className="pivot-section" aria-labelledby={ids + 'rows'}>
         <h3 id={ids + 'rows'}>Rows</h3>
         {draft.rows.length === 0 && <div className="pivot-hint">No row groups: the pivot is one row.</div>}
@@ -115,10 +112,11 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
     </div>
     <div className="pivot-foot">
       {state.error && <div className="profile-note error" role="status">{state.error}</div>}
-      {!entry ? <div className="profile-note">Choose a result to pivot.</div>
+      {!entry ? <div className="profile-note">{state.sourceName ? `${state.sourceName} is not among these results.` : 'None of these results can be pivoted.'}</div>
         : !pivotable(entry) && !state.running ? <div className="profile-note">{entry.handle.getSnapshot().state === 'complete' ? 'This result cannot be pivoted.' : 'Pivot this result after it finishes loading.'}</div> : null}
       {entry && pivotable(entry) && sorting && !state.running && <div className="profile-note">Pivot after the grid finishes sorting and filtering.</div>}
       {viewed && <div className="profile-note">The pivot reads the rows as the grid shows them, sorted and filtered.</div>}
+      {entry && state.pivot !== undefined && !state.running && <div className="profile-note">Building again replaces Pivot of {entryName(entry)}.</div>}
       {state.running
         ? <button type="button" onClick={() => pivot.cancel(tabId)}>Cancel</button>
         : <button type="button" className="primary" disabled={!can} onClick={() => void pivot.run(tabId)}>Build Pivot</button>}

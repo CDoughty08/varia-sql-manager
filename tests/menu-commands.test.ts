@@ -755,6 +755,96 @@ describe('Query Output commands', () => {
     const stale: CommandArgs = { ...third, target: { ...third.target as OutputTarget, result: { generation: 1, resultId: 2 } } }
     expect(commands.isEnabled('output.copy', stale)).toBe(false)
   })
+  it('Pivot acts on a group from the menu, the palette and a key and never makes a pivot of a Pivot, and is off for comparisons, plan sets and Peek grids', async () => {
+    const { commands, results, resultClient, pivot, compare, tab, on, key, element } = await ran('win32', { ...queryOutput, resultSets: [descriptor(1), descriptor(2, { index: 1 }), descriptor(3, { index: 2, kind: 'executionPlan' })] })
+    const builder = () => pivot.getSnapshot().tabs[tab.id]
+    const build = async () => { pivot.setDraft(tab.id, { rows: [0], values: [{ aggregate: 'count' }] }); await pivot.run(tab.id) }
+    const pivots = () => results.getSnapshot()[tab.id].sets.filter(set => set.descriptor.kind === 'pivot')
+    // The menu of Result 2's grid: the builder is Result 2's.
+    expect(commands.isEnabled('output.pivot', on('grid', { place: 1 }))).toBe(true)
+    expect(await commands.execute('output.pivot', on('grid', { place: 1 }), 'menu')).toBe(true)
+    expect(builder()).toMatchObject({ open: true, source: key(1), sourceName: 'Result 2' })
+    expect(results.getSnapshot()[tab.id].focused).toBe(key(1))
+    await build()
+    expect(results.getSnapshot()[tab.id].sets.map(set => set.label ?? set.number)).toEqual([1, 2, 'Pivot of Result 2', 3])
+    const made = key(2)
+    // The menu of the Pivot's own grid edits the group's Pivot: the source is still the Table, and building replaces.
+    expect(commands.isEnabled('output.pivot', on('grid', { place: 2 }))).toBe(true)
+    expect(await commands.execute('output.pivot', on('grid', { place: 2 }), 'menu')).toBe(true)
+    expect(builder()).toMatchObject({ source: key(1), pivot: made })
+    await build()
+    expect(pivots().map(set => set.label)).toEqual(['Pivot of Result 2'])
+    expect(key(2)).not.toBe(made)
+    expect(resultClient.handle(2)!.pivot).toHaveBeenCalledTimes(2)
+    expect(resultClient.handle(802)!.pivot).not.toHaveBeenCalled()
+    // A key, with the focus in the Pivot's grid: the same. (The focused view is read only where there is a document.)
+    vi.stubGlobal('document', { activeElement: null })
+    cleanups.push(() => vi.unstubAllGlobals())
+    const active = vi.spyOn(windowTools.windows, 'activeElement').mockReturnValue(element('grid', 2).dom)
+    cleanups.push(() => active.mockRestore())
+    expect(commands.isEnabled('output.pivot')).toBe(true)
+    expect(await commands.execute('output.pivot', undefined, 'keybinding')).toBe(true)
+    expect(builder()).toMatchObject({ source: key(1), pivot: key(2) })
+    await build()
+    expect(pivots()).toHaveLength(1)
+    expect(resultClient.handle(2)!.pivot).toHaveBeenCalledTimes(3)
+    // The palette and the toolbar name no grid: the builder opens on the group it follows.
+    active.mockReturnValue(null)
+    pivot.close(tab.id)
+    expect(await commands.execute('output.pivot', { tabId: tab.id }, 'palette')).toBe(true)
+    expect(builder()).toMatchObject({ open: true, source: key(1) })
+    await build()
+    expect(pivots()).toHaveLength(1)
+    // A comparison and a plan set offer no Pivot, from a menu or a key; nor does Compare take a Pivot or a plan set.
+    await compare.compare(tab.id, key(1))
+    const sets = results.getSnapshot()[tab.id].sets
+    expect(sets.map(set => set.label ?? set.number)).toEqual([1, 2, 'Pivot of Result 2', 3, 'Differences: Result 1 → Result 2'])
+    for (const place of [3, 4]) {
+      expect(commands.isEnabled('output.pivot', on('grid', { place })), String(place)).toBe(false)
+      expect(await commands.execute('output.pivot', on('grid', { place }), 'menu')).toBe(false)
+      active.mockReturnValue(element('grid', place).dom)
+      expect(commands.isEnabled('output.pivot'), String(place)).toBe(false)
+      active.mockReturnValue(null)
+    }
+    expect(builder().source).toBe(key(1))
+    expect([0, 1, 2, 3, 4].map(place => commands.isEnabled('output.compareWithPrevious', on('grid', { place })))).toEqual([false, true, false, false, false])
+    // A Peek grid says it is bare: Pivot, Compare, Close Result and Close Results are off for it, though its run is like any other.
+    const bare = (place: number): CommandArgs => { const args = on('grid', { place }); return { ...args, target: { ...args.target as OutputTarget, bare: true } } }
+    for (const id of ['output.pivot', 'output.compareWithPrevious', 'output.compareWithPreviousExact', 'output.closeResult', 'output.closeResults'] as const) expect(commands.isEnabled(id, bare(1)), id).toBe(false)
+    expect(commands.isEnabled('output.copy', bare(1))).toBe(commands.isEnabled('output.copy', on('grid', { place: 1 })))
+  })
+  it('Close Result closes the view the grid shows: a Table with its group, a Pivot or a comparison alone, and nothing while the query runs', async () => {
+    const { commands, results, resultClient, queries, pivot, compare, tab, on, key, startQuery } = await ran('win32', { ...queryOutput, resultSets: [descriptor(1), descriptor(2, { index: 1 })] })
+    const names = () => results.getSnapshot()[tab.id].sets.map(set => set.label ?? set.number)
+    const build = async (place: number) => { pivot.open(tab.id, key(place)); pivot.setDraft(tab.id, { rows: [0], values: [{ aggregate: 'count' }] }); await pivot.run(tab.id) }
+    await build(0)
+    await build(2)
+    await compare.compare(tab.id, key(2))
+    expect(names()).toEqual([1, 'Pivot of Result 1', 2, 'Pivot of Result 2', 'Differences: Result 1 → Result 2'])
+    expect(commands.isEnabled('output.closeResult', on('messages'))).toBe(false)
+    // The Pivot's menu closes the Pivot alone.
+    expect(await commands.execute('output.closeResult', on('grid', { place: 3 }), 'menu')).toBe(true)
+    expect(names()).toEqual([1, 'Pivot of Result 1', 2, 'Differences: Result 1 → Result 2'])
+    // The Table's closes its group, and the comparison made from it stays.
+    expect(await commands.execute('output.closeResult', on('grid', { place: 0 }), 'menu')).toBe(true)
+    expect(names()).toEqual([2, 'Differences: Result 1 → Result 2'])
+    expect(resultClient.released()).toEqual([802, 1, 801])
+    // The palette closes the view that last had the focus.
+    results.focusEntry(tab.id, key(1))
+    expect(await commands.execute('output.closeResult', { tabId: tab.id }, 'palette')).toBe(true)
+    expect(names()).toEqual([2])
+    // A menu left open on a view that has gone closes nothing.
+    const last = on('grid')
+    expect(await commands.execute('output.closeResult', last, 'menu')).toBe(true)
+    expect(results.getSnapshot()[tab.id]).toMatchObject({ sets: [], emptied: true })
+    expect(commands.isEnabled('output.closeResult', last)).toBe(false)
+    expect(commands.isEnabled('output.closeResult')).toBe(false)
+    // While a query runs nothing closes one at a time.
+    const running = startQuery()
+    resultClient.emit(queries.getSnapshot()[tab.id].running!.queryId, { type: 'resultSet.opened', descriptor: descriptor(7, { index: 0 }) })
+    expect(commands.isEnabled('output.closeResult', { tabId: tab.id })).toBe(false)
+    await running.finish()
+  })
   it('closes the contextual or toolbar query\'s results without requiring that query to be active', async () => {
     const { commands, documents, results, tab, on } = await ran()
     const other = documents.create('Other.sql', 'SELECT 2', 'master', 'server-a')

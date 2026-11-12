@@ -863,7 +863,14 @@ export const commandCatalog = {
   'output.closeResults': {
     title: 'Close Results', category: 'Query', icon: 'close', keywords: ['free', 'memory', 'release', 'clear'], precondition: '!documentBusy',
     unavailableHint: 'There are no results to close, or the query is still running.',
-    menus: [{ menu: 'output.context', group: 'z_close', order: 1, mnemonic: 'l', when: "outputView != 'live'" }]
+    menus: [{ menu: 'output.context', group: 'z_close', order: 2, mnemonic: 'l', when: "outputView != 'live' && !outputGridBare" }]
+  },
+  // Closes the view the grid shows (ResultsService.removeEntry): a Table closes its group, its Pivot with it; a Pivot or a
+  // comparison closes alone.
+  'output.closeResult': {
+    title: 'Close Result', category: 'Query', icon: 'close', keywords: ['close', 'result', 'pivot', 'comparison', 'group', 'free', 'memory', 'release'], precondition: '!documentBusy',
+    unavailableHint: 'There is no result to close, or the query is still running.',
+    menus: [{ menu: 'output.context', group: 'z_close', order: 1, title: 'Close Just This Result', mnemonic: 'j', when: "outputView == 'grid' && !outputGridBare" }]
   },
   // The results toolbar's White space choices; each turns the grid's marks off when it is already on (queryResults.grid.whitespace).
   'output.showSpaces': {
@@ -1008,12 +1015,13 @@ export const commandCatalog = {
   // Compares the grid's result with the run's result before it (results.diff) and adds their unified diff as a result.
   'output.compareWithPrevious': {
     title: 'Compare with Previous Result', category: 'Query', icon: 'git-compare', keywords: ['diff', 'compare', 'difference', 'changes', 'grid', 'result'],
-    menus: [{ menu: 'output.context', group: '2_sort', order: 8, mnemonic: 'm', when: "outputView == 'grid'" }]
+    menus: [{ menu: 'output.context', group: '2_sort', order: 8, mnemonic: 'm', when: "outputView == 'grid' && !outputGridBare" }]
   },
-  // Opens the pivot panel on the grid's result (PivotService); Build Pivot there adds the pivot (results.pivot) as a result.
+  // Opens the pivot builder on the grid's group (PivotService); Build Pivot there shows the pivot (results.pivot) under
+  // the group's Table, in place of the Pivot it had. Offered for a Table or its Pivot, never for a Peek grid.
   'output.pivot': {
     title: 'Pivot Results…', category: 'Query', icon: 'pivot', keywords: ['pivot', 'group', 'aggregate', 'summarize', 'crosstab', 'count', 'sum', 'average', 'grid', 'result'],
-    menus: [{ menu: 'output.context', group: '2_sort', order: 9, when: "outputView == 'grid'" }]
+    menus: [{ menu: 'output.context', group: '2_sort', order: 9, when: "outputView == 'grid' && !outputGridBare" }]
   },
   // Transposes the grid's rows as it shows them (results.transpose): its columns become rows, its rows columns, added as a
   // result (TransposeService). Selected Rows takes only the selected rows (a record view); Using Column as Headers names the

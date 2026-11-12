@@ -556,8 +556,11 @@ export const outputStatus = page => outputPane(page).locator(part.outputStatus)
 /** The column profile panel beside a run's grids, and one column's card in it. */
 export const columnProfile = page => page.getByRole('complementary', { name: 'Column profile', exact: true })
 export const profileCard = (page, column) => columnProfile(page).getByRole('region', { name: column, exact: true })
-/** The pivot panel beside the grids (PivotPanel): its source, row groups, column group and values, then Build Pivot. */
+/** The pivot builder beside the grids (PivotPanel): its source, row groups, column group and values, then Build Pivot. */
 export const pivotPanel = page => page.getByRole('complementary', { name: 'Pivot', exact: true })
+/** The builder's source: the name of the result whose group it belongs to ("Result 2"). It follows the focused grid;
+ *  there is nothing to pick. */
+export const pivotSource = page => pivotPanel(page).getByRole('group', { name: 'Pivot source', exact: true }).locator('.pivot-source')
 /** A profile card's figures, label to value ("NULLs" → "20 (20%)"). */
 export const profileFigures = card => card.locator('dl > div').evaluateAll(items => Object.fromEntries(items.map(item => [item.querySelector('dt').textContent, item.querySelector('dd').textContent])))
 export const jobProgress = page => outputPane(page).locator(part.jobProgress)
@@ -583,19 +586,30 @@ export const errorMessages = page => messages(page).locator(part.errorMessage)
  * ("Result 2 of 3, 5 rows, …"). For code that runs in the page and cannot hold a locator; a result Varia made (a pivot, a
  * diff) is numbered like the others by its grid's name, after the query's own.
  */
-export const resultGridSelector = (name = 'Result 1') => {
+export const resultGridSelector = (name = 'Result 1', view) => {
   if (!/^Result \d+$/.test(name)) throw new Error(`"${name}" is not a result's number; find its grid with resultGrid.`)
-  return `${gridPart.root}[aria-label^="${name} of "]`
+  if (view === undefined) return `${gridPart.root}[aria-label^="${name} of "]`
+  if (!resultViews.includes(view)) throw new Error(`"${view}" is not a view of a result; use one of ${resultViews.join(', ')}.`)
+  return `${gridPart.root}[data-result-group="${name.slice('Result '.length)}"][data-result-view="${view}"]`
 }
+/** The views a group can show: its Table (`plan` when the result is a SQL-returned plan set) and its Pivot. */
+const resultViews = ['table', 'pivot', 'plan']
+/** Every comparison's grid, in the order drawn (after the groups). */
+export const comparisonGrids = scope => scope.locator(`${gridPart.root}[data-result-view="comparison"]`)
 /**
  * A results grid by its entry's name, as the user reads it: "Result 2" is the grid whose accessible name starts with it;
  * any other name ("Pivot of Result 1") is the grid under the caption that carries it. A grid has no place to be found
  * by: results come and go around it, and their ids come from one backend counter no script can predict. `scope` is a
  * page or a locator. Two results under one caption name (two transposes of Result 1) match two grids, which a strict
  * locator refuses: name those by their number.
+ *
+ * With `view`, the name is a group's ("Result 2", an original result) and the grid is that group's view: 'table' (its
+ * Table), 'pivot' (its Pivot, wherever it was numbered) or 'plan' (a plan set's grid). Without it, "Result N" is whichever
+ * grid carries that number, which for an original result is its Table.
  */
-export const resultGrid = (scope, name = 'Result 1') => {
+export const resultGrid = (scope, name = 'Result 1', view) => {
   if (typeof name !== 'string') throw new Error(`resultGrid takes a result's name ("Result 2"), not ${JSON.stringify(name)}.`)
+  if (view !== undefined) return scope.locator(resultGridSelector(name, view))
   if (/^Result \d+$/.test(name)) return scope.locator(resultGridSelector(name))
   // The caption is looked for inside each stack item, so its locator starts at the page, not at `scope`.
   const page = typeof scope.page === 'function' ? scope.page() : scope
@@ -616,7 +630,8 @@ export const transposedName = (grid, column) => grid.locator(`${gridPart.row}[ar
 export const matching = (locator, selector) => locator.and(locator.page().locator(selector))
 /** A set's caption Collapse button, named by the set ("Result 2", "Pivot of Result 1"). */
 export const resultToggle = (page, name = 'Result 1') => outputPane(page).getByRole('button', { name, exact: true })
-/** A set's caption close button, named by the set ("Close Result 2", "Close Pivot of Result 1"): it closes that result alone. */
+/** A view's caption close button, named by the view ("Close Result 2", "Close Pivot of Result 1"): a Table's closes its
+ *  group (its Pivot too), a Pivot's or a comparison's that view alone. */
 export const resultClose = (page, name = 'Result 1') => outputPane(page).getByRole('button', { name: 'Close ' + name, exact: true })
 /** The Messages strip's line under the results, drawn "Messages · 2 · no errors" and named "Messages, 2 messages, no errors",
  *  a button that opens and closes it. */

@@ -386,6 +386,7 @@ output.context, for a results grid with selected cells
   Column Pro&file [ ]  ++++
   Show Row Si&ze [x]  ++++
   ---
+  Close &Just This Result  +++-
   C&lose Results  +++-
 output.context, for a results grid without
   &Copy  Ctrl+C  ----
@@ -440,6 +441,7 @@ output.context, for a results grid without
   Column Pro&file [ ]  ++++
   Show Row Si&ze [x]  ++++
   ---
+  Close &Just This Result  +++-
   C&lose Results  +++-
 output.context, for Messages with selected text
   &Copy  Ctrl+C  ++++

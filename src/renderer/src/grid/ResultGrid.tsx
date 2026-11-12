@@ -21,6 +21,14 @@ export interface ResultGridProps {
   /** The grid F6 and the Query Output pane focus first: the one that last had focus. */
   readonly focused: boolean
   readonly budget?: QueryResult['budget']
+  /** What the grid shows of its group, for menus and scripts (`data-result-view`): a Table, a Pivot, a comparison, a plan
+   *  set or a stored transpose; and the group's ordinal (`data-result-group`), which a comparison lacks. */
+  readonly view?: 'table' | 'pivot' | 'comparison' | 'plan' | 'transpose'
+  readonly group?: number
+  /** A bare stack's grid (Peek): Pivot, Compare and close are off for it (`data-result-bare`). */
+  readonly bare?: boolean
+  /** The grid came to be drawn transposed, or as a table again: the stack sizes it by the rows it draws. */
+  readonly onTurned?: (key: EntryKey, turned: boolean) => void
   /** The grid's sort, while it has one: the grid shows its view once it is built. */
   readonly sort?: GridSort
   onFocus(key: EntryKey): void
@@ -52,7 +60,7 @@ const keysOf = (sort: GridSort | undefined) => (sort?.keys.map(key => `${key.col
  * filters for the header, and the strips (truncation, highlights, compare, pivot, transpose). A live view mounts the same
  * shell with its own source (LiveGridPane).
  */
-function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, onWide }: ResultGridProps) {
+function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, group, bare, onFocus, onWide, onTurned }: ResultGridProps) {
   const { results, commands, gridStats, panes, settings, resultsSearch, highlights, compare, pivot, transpose } = useWorkbench()
   const marked = useSyncExternalStore(highlights.subscribe, () => highlights.getSnapshot()[tabId]?.get(entry.key))
   const compared = useSyncExternalStore(compare.subscribe, () => compare.getSnapshot().get(setKey(entry.descriptor)))
@@ -85,6 +93,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, o
   // Read only: the state is made where the grid is built (mount), as before.
   const gridState = results.viewState(tabId).grids.get(key)
   const turnedView = gridState?.orientation === 'transposed' && toneColumnOf(entry.descriptor) < 0, headerColumn = turnedView ? gridState.headerColumn : undefined
+  useEffect(() => { onTurned?.(key, turnedView) }, [key, turnedView])
   const latest = useRef({ count, onWide, sort, marks, showTypes, rowSize, turnedView, headerColumn })
   latest.current = { count, onWide, sort, marks, showTypes, rowSize, turnedView, headerColumn }
   /** The handle the view shows, and the keys it was sorted by. */
@@ -172,7 +181,8 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, o
   return <GridShell mountKey={`${tabId}|${key}|${instanceKey(entry)}${turnedView ? '|transposed' : ''}`} mount={mount} onApi={onApi}
     rootProps={{
       'data-result-grid': '', 'data-output-view': 'grid', 'data-tab-id': tabId, 'data-result-entry': key, 'data-result-generation': entry.descriptor.generation,
-      'data-result-id': entry.descriptor.resultId, 'data-result-kind': entry.descriptor.kind, 'data-pane-focus': focused ? 'selected' : 'grid', onFocus: () => onFocus(key)
+      'data-result-id': entry.descriptor.resultId, 'data-result-kind': entry.descriptor.kind, ...view ? { 'data-result-view': view } : {}, ...group === undefined ? {} : { 'data-result-group': group },
+      ...bare ? { 'data-result-bare': '' } : {}, 'data-pane-focus': focused ? 'selected' : 'grid', onFocus: () => onFocus(key)
     }}
     sort={sort?.keys} onSort={(column, add) => results.cycleSort(tabId, key, column, add)} funnels={funnels}
     update={{ resultCount: count, showTypes, rowSize, ...turnedView ? { headerColumn: headerColumn ?? null } : {} }} gone={lost ? lostText : undefined} strip={note ? { text: note } : undefined} />

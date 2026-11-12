@@ -613,6 +613,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     resultsSearch,
     resultClient,
     pivot,
+    compare,
     transpose,
     settings,
     scripting,
