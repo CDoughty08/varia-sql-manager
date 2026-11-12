@@ -10,8 +10,8 @@ import { entryName, entryOf, resultLimits, setKey } from './ResultsService'
 export interface PivotTab {
   readonly open: boolean
   readonly source: EntryKey | undefined
-  /** The number of the original result the panel follows, which names it while a new run has yet to return it. */
-  readonly sourceNumber?: number
+  /** The name of the entry the panel follows ("Result 2"), which the source picker shows while a new run does not have it. */
+  readonly sourceName?: string
   readonly draft: PivotDraft
   readonly running: boolean
   readonly error?: string
@@ -154,11 +154,11 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
   }
 
   /** The panel follows the entry `key` from now on; what the snapshot says of it. */
-  private follow(tabId: string, tab: TabResults, key: EntryKey | undefined): Pick<PivotTab, 'source' | 'sourceNumber'> {
+  private follow(tabId: string, tab: TabResults, key: EntryKey | undefined): Pick<PivotTab, 'source' | 'sourceName'> {
     const entry = entryOf(tab.sets, key)
     if (!entry) { this.sources.delete(tabId); return { source: undefined } }
     this.sources.set(tabId, sourceOf(entry))
-    return { source: entry.key, ...entry.ordinal === undefined ? {} : { sourceNumber: entry.ordinal } }
+    return { source: entry.key, sourceName: entryName(entry) }
   }
 
   private fit(tabId: string, source: EntryKey | undefined, draft: PivotDraft): PivotDraft {
@@ -194,7 +194,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       // to the set when it runs.
       if (this.runs.get(tabId) !== run.queryId) {
         this.runs.set(tabId, run.queryId)
-        next = { open: tab.open, source: tab.source, ...tab.sourceNumber === undefined ? {} : { sourceNumber: tab.sourceNumber }, draft: tab.draft, running: false }
+        next = { open: tab.open, source: tab.source, ...tab.sourceName === undefined ? {} : { sourceName: tab.sourceName }, draft: tab.draft, running: false }
       }
       // The set it pivots is an entry, not a place: an original result is found again by its number in a new run, a derived
       // one only by its key, in the run that made it.

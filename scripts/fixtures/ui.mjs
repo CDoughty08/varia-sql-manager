@@ -579,10 +579,16 @@ export const resultGridSelector = (name = 'Result 1') => {
  * A results grid by its entry's name, as the user reads it: "Result 2" is the grid whose accessible name starts with it;
  * any other name ("Pivot of Result 1") is the grid under the caption that carries it. A grid has no place to be found
  * by: results come and go around it, and their ids come from one backend counter no script can predict. `scope` is a
- * page or a locator.
+ * page or a locator. Two results under one caption name (two transposes of Result 1) match two grids, which a strict
+ * locator refuses: name those by their number.
  */
-export const resultGrid = (scope, name = 'Result 1') => /^Result \d+$/.test(name) ? scope.locator(resultGridSelector(name))
-  : scope.locator(part.resultItem).filter({ has: scope.getByRole('button', { name, exact: true }) }).locator(gridPart.root)
+export const resultGrid = (scope, name = 'Result 1') => {
+  if (typeof name !== 'string') throw new Error(`resultGrid takes a result's name ("Result 2"), not ${JSON.stringify(name)}.`)
+  if (/^Result \d+$/.test(name)) return scope.locator(resultGridSelector(name))
+  // The caption is looked for inside each stack item, so its locator starts at the page, not at `scope`.
+  const page = typeof scope.page === 'function' ? scope.page() : scope
+  return scope.locator(part.resultItem).filter({ has: page.getByRole('button', { name, exact: true }) }).locator(gridPart.root)
+}
 export const anyResultGrid = page => page.locator(gridPart.root)
 export const gridCell = (grid, row, column) => grid.locator(gridCellSelector(row, column))
 /** Whether a locator's element also matches a part's selector, for the drawn states (`gridPart.linkCell`). */

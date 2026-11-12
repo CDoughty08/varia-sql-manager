@@ -7,14 +7,14 @@ import { createRoot } from 'react-dom/client'
 import type { ColumnProfile, ResultsProfileResult } from '../src/shared/contracts'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
-import ColumnProfilePanel from '../src/renderer/src/results/ColumnProfilePanel'
-import type { TabResults } from '../src/renderer/src/results/ResultsService'
+import ColumnProfilePanel, { profiledEntry, profileTarget } from '../src/renderer/src/results/ColumnProfilePanel'
+import type { ResultSetEntry, TabResults } from '../src/renderer/src/results/ResultsService'
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 interface Asked { columns: number[]; signal?: AbortSignal; resolve(result: ResultsProfileResult): void; reject(error: unknown): void }
 
-function fixture(columns = 40) {
+function fixture(columns = 40, shown: string | null = 'e1') {
   const listeners = new Set<() => void>()
   let snapshot = { state: 'open', rowsAvailable: 1000 }
   const asked: Asked[] = []
@@ -24,13 +24,15 @@ function fixture(columns = 40) {
     profile: vi.fn((cols: number[], signal?: AbortSignal) => new Promise<ResultsProfileResult>((resolve, reject) => { asked.push({ columns: cols, signal, resolve, reject }) }))
   }
   const descriptor = { columns: Array.from({ length: columns }, (_, index) => ({ name: 'c' + index, dataType: 'int' })) }
-  const tab = { sets: [{ key: 'e1', number: 1, descriptor, handle }, { key: 'e2', number: 2, descriptor: { columns: [] }, handle }] } as unknown as TabResults
-  // The panel is told which grid took the focus; the one the stack names (the second) is not asked for.
+  // Result 1, and a result numbered 5 that stands second (the ones between have gone) and has two columns of its own.
+  const other = { columns: [{ name: 'x0', dataType: 'int' }, { name: 'x1', dataType: 'int' }] }
+  const tab = { sets: [{ key: 'e1', number: 1, descriptor, handle }, { key: 'e5', number: 5, descriptor: other, handle }] } as unknown as TabResults
+  // The panel is told which grid took the focus; without one it asks the stack, which names the second.
   const results = { subscribe: () => () => {}, getSnapshot: () => 0, sortOf: () => undefined, focusedEntry: () => tab.sets[1] }
   const workbench = { results, commands: { execute: vi.fn(async () => true) } } as unknown as Workbench
   const container = document.createElement('div')
   const root = createRoot(container)
-  act(() => { root.render(createElement(WorkbenchProvider, { workbench, children: createElement(ColumnProfilePanel, { tabId: 't', tab, shown: 'e1' }) })) })
+  act(() => { root.render(createElement(WorkbenchProvider, { workbench, children: createElement(ColumnProfilePanel, { tabId: 't', tab, ...shown === null ? {} : { shown } }) })) })
   const answer = async (at: number, rows: number, nulls: number) => {
     const request = asked[at]
     await act(async () => { request.resolve({ rows, complete: snapshot.state === 'complete', columns: request.columns.map(column => profileOf(column, rows, nulls)) }) })
@@ -38,7 +40,8 @@ function fixture(columns = 40) {
   const setSnapshot = (next: typeof snapshot) => act(() => { snapshot = next; for (const listener of listeners) listener() })
   const card = (name: string) => container.querySelector(`section[aria-label="${name}"]`)
   const nulls = (name: string) => [...card(name)?.querySelectorAll('dl > div') ?? []].find(item => item.querySelector('dt')?.textContent === 'NULLs')?.querySelector('dd')?.textContent
-  return { asked, answer, setSnapshot, card, nulls, unmount: () => act(() => { root.unmount() }) }
+  const facts = () => container.querySelector('.profile-facts')?.textContent
+  return { asked, answer, setSnapshot, card, nulls, facts, unmount: () => act(() => { root.unmount() }) }
 }
 const profileOf = (column: number, rows: number, nulls: number): ColumnProfile => ({ column, values: rows - nulls, nulls, distinct: rows - nulls, distinctExact: true, approximate: false })
 
@@ -70,5 +73,37 @@ describe('column profile panel', () => {
     expect(view.asked[3]?.signal?.aborted ?? view.asked[2].signal?.aborted).toBe(true)
     expect(view.card('c0')).toBeNull()
     view.unmount()
+  })
+
+  it('profiles the entry it is given, else the one the stack says had the focus, and names it by its number', () => {
+    const given = fixture(40, 'e1')
+    expect(given.asked.map(request => request.columns.length)).toEqual([32])
+    expect(given.facts()).toContain('Result 1')
+    given.unmount()
+    // No grid has taken the focus in this pane, or the one that had is gone: the stack's choice, which stands second
+    // and is Result 5.
+    for (const shown of [null, 'gone']) {
+      const fallback = fixture(40, shown)
+      expect(fallback.asked.map(request => request.columns)).toEqual([[0, 1]])
+      expect(fallback.card('x1')).not.toBeNull()
+      expect(fallback.facts()).toContain('Result 5')
+      fallback.unmount()
+    }
+  })
+
+  it('follows a query\'s own result by its number into the next run, and a derived result only as itself', () => {
+    const entry = (key: string, ordinal?: number) => ({ key, ...ordinal === undefined ? {} : { ordinal } }) as ResultSetEntry
+    const first = [entry('e1', 1), entry('e2', 2), entry('e3')]
+    expect(profileTarget(first, 'e2')).toEqual({ entry: 'e2', ordinal: 2 })
+    expect(profileTarget(first, 'e3')).toEqual({ entry: 'e3' })
+    expect(profiledEntry(first, profileTarget(first, 'e2'))).toBe(first[1])
+    // The entry before it went: still the same entry, though it stands first now.
+    expect(profiledEntry([first[1], first[2]], profileTarget(first, 'e2'))).toBe(first[1])
+    // The query ran again: other keys. Result 2 is profiled again once it arrives, and not whatever stands second.
+    const next = [entry('e7', 1), entry('e9', 3), entry('e8', 2)]
+    expect(profiledEntry(next.slice(0, 2), profileTarget(first, 'e2'))).toBeUndefined()
+    expect(profiledEntry(next, profileTarget(first, 'e2'))).toBe(next[2])
+    expect(profiledEntry(next, profileTarget(first, 'e3'))).toBeUndefined()
+    expect(profiledEntry(next, undefined)).toBeUndefined()
   })
 })

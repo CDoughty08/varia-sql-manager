@@ -5,7 +5,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { sqlTypeLabel } from '../grid/measure'
 import Icon from '../Icon'
 import type { ResultHandle } from './ResultClient'
-import { entryOf, type EntryKey, type TabResults } from './ResultsService'
+import { entryOf, type EntryKey, type ResultSetEntry, type TabResults } from './ResultsService'
 import { chunked, histogramCaptions, histogramHeights, profileLines, rowSizeText } from './profile-format'
 import { formatCount, plural } from './status'
 
@@ -47,6 +47,18 @@ function ProfileCard({ name, type, profile, rows }: { name: string; type: string
  * columns a request. It asks again when the grid shows another view or the set finishes loading; a newer request cancels
  * the older. It holds only aggregates, never rows.
  */
+/** The grid a profile follows: its entry, and for a query's own result its number in the run. */
+export interface ProfileTarget { readonly entry: EntryKey; readonly ordinal?: number }
+/** The target for the grid that took the focus. */
+export const profileTarget = (sets: readonly ResultSetEntry[], entry: EntryKey): ProfileTarget => {
+  const ordinal = entryOf(sets, entry)?.ordinal
+  return ordinal === undefined ? { entry } : { entry, ordinal }
+}
+/** The entry of a run a target names: the entry itself, else the run's result of that number, so a query run again is
+ *  profiled on the same result once it arrives (as its highlights follow it). A derived entry is found only by itself. */
+export const profiledEntry = (sets: readonly ResultSetEntry[], target: ProfileTarget | undefined): ResultSetEntry | undefined =>
+  target === undefined ? undefined : entryOf(sets, target.entry) ?? (target.ordinal === undefined ? undefined : sets.find(set => set.ordinal === target.ordinal))
+
 export default function ColumnProfilePanel({ tabId, tab, shown: shownEntry }: { tabId: string; tab: TabResults; shown?: EntryKey }) {
   const { results, commands } = useWorkbench()
   useServiceSnapshot(results)

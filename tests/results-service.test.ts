@@ -9,7 +9,7 @@ import { openEnd } from '../src/renderer/src/grid/constants'
 import { deferred } from './fixtures/documents'
 import { descriptor, fakeResultClient, summaryOf, type FakeHandle } from './fixtures/results'
 import { manualTimers } from './fixtures/workbench'
-import { keyAt } from './fixtures/entries'
+import { keyAt, noEntry } from './fixtures/entries'
 
 function fixture(o: { sortText?: () => ViewSortMode; onSortTextChange?: (listener: () => void) => () => void } = {}) {
   const client = fakeResultClient(), events = new EventBus(), timers = manualTimers()
@@ -445,7 +445,7 @@ describe('results service', () => {
     service.finish('t1', 'q2', { summary: summaryOf([descriptor(3)]) })
     client.lose()
     expect(await service.saveAs('t1', keyAt(service, 't1', 0), 'q')).toBe('These results are no longer available because the SQL backend restarted.')
-    expect(await service.saveAs('t1', keyAt(service, 't1', 5), 'q')).toBeUndefined()
+    expect(await service.saveAs('t1', noEntry, 'q')).toBeUndefined()
     expect(api.saveResults).not.toHaveBeenCalled()
   })
   it('keeps a save running when the tab runs again or closes, and cancels it from its strip, Escape, or disposal', async () => {
@@ -562,8 +562,8 @@ describe('results service', () => {
       expect(service.canFitColumn('t1', keyAt(service, 't1', 0), column)).toBe(false)
       service.fitColumn('t1', keyAt(service, 't1', 0), column)
     }
-    service.fitColumn('other', keyAt(service, 'other', 0), 0)
-    service.fitColumn('t1', keyAt(service, 't1', 1), 0)
+    service.fitColumn('other', keyAt(service, 't1', 0), 0)
+    service.fitColumn('t1', noEntry, 0)
     expect(controller.fitColumn).toHaveBeenCalledOnce()
     registration.dispose()
     expect(service.canFitColumn('t1', keyAt(service, 't1', 0), 0)).toBe(false)
@@ -609,7 +609,7 @@ describe('results service', () => {
     expect(await service.openValue('t1', keyAt(service, 't1', 0), 0, 0)).toEqual({ opened: false, message: 'Could not open the value: The results worker stopped. Try again.' })
     client.lose()
     expect(await service.openValue('t1', keyAt(service, 't1', 0), 0, 0)).toEqual({ opened: false, message: 'These results are no longer available because the SQL backend restarted.' })
-    expect(await service.openValue('t9', keyAt(service, 't9', 0), 0, 0)).toEqual({ opened: false })
+    expect(await service.openValue('t9', noEntry, 0, 0)).toEqual({ opened: false })
   })
   it('opens a value once while it is opening, and names its tab without bidirectional controls', async () => {
     const { client, service, documents } = fixture()
@@ -683,6 +683,36 @@ describe('results service', () => {
 })
 
 describe('results service entry keys', () => {
+  it('opens a captured plan\'s value by the plan set\'s key, which names no result of the stack, and a result\'s by its own', async () => {
+    const { service, client, documents, tab } = fixture()
+    const plan = { name: 'Plan', dataType: 'xml', wire: 'text', nullable: true, role: 'plan' } as ResultColumn
+    service.begin('t1', 'q1')
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { columns: [plan] })], { planSets: [descriptor(7, { index: 0, columns: [plan] }), descriptor(8, { index: 1, columns: [plan] })] }) })
+    const [first, second] = tab().planSets, [result] = tab().sets
+    // The first plan set and the first result stand at the same place of their lists and have keys of their own.
+    expect(new Set([first.key, second.key, result.key]).size).toBe(3)
+    for (const id of [1, 7, 8]) client.handle(id)!.getCell.mockResolvedValue({ text: '<ShowPlanXML/>', isNull: false, truncated: false, error: false, formatted: true })
+    expect(await service.openValue('t1', second.key, 0, 0, true)).toEqual({ opened: true })
+    expect(client.handle(8)!.getCell).toHaveBeenCalledOnce()
+    expect(client.handle(7)!.getCell).not.toHaveBeenCalled()
+    // A plan set's key opens nothing as a result's, and a result's nothing as a plan set's.
+    expect(await service.openValue('t1', second.key, 0, 0)).toEqual({ opened: false })
+    expect(await service.openValue('t1', result.key, 0, 0, true)).toEqual({ opened: false })
+    expect(await service.openValue('t1', result.key, 0, 0)).toEqual({ opened: true })
+    expect(client.handle(1)!.getCell).toHaveBeenCalledOnce()
+    expect(documents.openText).toHaveBeenCalledTimes(2)
+  })
+  it('keeps a grid\'s state only for an entry the run has', () => {
+    const { service, tab } = fixture()
+    service.begin('t1', 'q1')
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1)]) })
+    const key = tab().sets[0].key
+    expect(service.gridState('t1', key)).toBe(service.gridState('t1', key))
+    // A key that names no entry gets a state to draw with, and nothing is kept for it.
+    service.gridState('t1', noEntry).scrollLeft = 9
+    expect(service.gridState('t1', noEntry).scrollLeft).toBe(0)
+    expect([...service.viewState('t1').grids.keys()]).toEqual([key])
+  })
   /** Results 1 to 3 and a pivot of Result 3 appended after them. */
   const four = () => {
     const f = fixture()
@@ -828,8 +858,7 @@ describe('results service entry keys', () => {
     service.viewShown('t1', keys[2], first)
     const sorts = tab().sorts
     expect(sorts.get(keys[2])).toMatchObject({ view: first })
-    // A change that is not a sort publishes the map it had: an entry going elsewhere in the list is none either, since
-    // the sorts are by entry.
+    // A change that is not a sort publishes the map it had.
     service.setStrip('t1', true)
     expect(tab().sorts).toBe(sorts)
     service.removeEntry('t1', keys[1])
@@ -934,7 +963,7 @@ describe('results service sorting', () => {
     service.clearSort('t1', keyAt(service, 't1', 0))
     // Out-of-range columns and grids sort nothing.
     service.sortBy('t1', keyAt(service, 't1', 0), 2, 'ascending')
-    service.sortBy('t1', keyAt(service, 't1', 3), 0, 'ascending')
+    service.sortBy('t1', noEntry, 0, 'ascending')
     expect(handle.sort).toHaveBeenCalledTimes(4)
   })
   it('cycles a header from ascending to descending to unsorted, and changes an added key in place', async () => {
@@ -1083,11 +1112,12 @@ describe('results service sorting', () => {
   it('stops a running sort when the results close', () => {
     const { service, handle } = sorted()
     handle.sort.mockReturnValueOnce(new Promise(() => {}))
-    service.sortBy('t1', keyAt(service, 't1', 0), 0, 'ascending')
+    const sortedEntry = keyAt(service, 't1', 0)
+    service.sortBy('t1', sortedEntry, 0, 'ascending')
     const signal = handle.sort.mock.lastCall![1]!.signal!
     service.closeResults('t1')
     expect(signal.aborted).toBe(true)
-    expect(service.sortOf('t1', keyAt(service, 't1', 0))).toBeUndefined()
+    expect(service.sortOf('t1', sortedEntry)).toBeUndefined()
   })
 })
 

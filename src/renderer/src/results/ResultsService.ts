@@ -492,7 +492,11 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   gridState(tabId: string, key: EntryKey): GridViewState {
     const grids = this.viewState(tabId).grids
     let state = grids.get(key)
-    if (!state) grids.set(key, state = { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: false })
+    if (state) return state
+    state = { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: false }
+    // Kept only for an entry the run has: a key that names none (a grid drawn from a snapshot the run has left behind)
+    // gets a state of its own that nothing holds on to.
+    if (this.runs.get(tabId)?.entries.has(key)) grids.set(key, state)
     return state
   }
 

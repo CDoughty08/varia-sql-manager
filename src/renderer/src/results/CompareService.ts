@@ -63,13 +63,12 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     const right = entryOf(tab?.sets, key)
     if (!tab || tab.status === 'running' || !comparable(right)) return undefined
     const columns = names(right)
-    // The last that fits among the sets listed before it.
-    let previous: ResultSetEntry | undefined
-    for (const entry of tab.sets) {
-      if (entry === right) break
-      if (comparable(entry) && [...names(entry)].some(name => columns.has(name))) previous = entry
+    // Back from where it is listed, to the first that fits.
+    for (let place = tab.sets.indexOf(right) - 1; place >= 0; place--) {
+      const entry = tab.sets[place]
+      if (comparable(entry) && [...names(entry)].some(name => columns.has(name))) return entry
     }
-    return previous
+    return undefined
   }
 
   /** Whether a grid's set can be compared now: it has a previous set, and no comparison runs in its tab. */

@@ -19,11 +19,21 @@ import { descriptor, fakeResultClient, summaryOf } from './fixtures/results'
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 // The grid's stand-in says which entry it was given and what the stack told it; a click is the grid taking the focus.
-vi.mock('../src/renderer/src/grid/ResultGrid', () => ({
-  default: (props: ResultGridProps) => createElement('div', {
-    'data-grid': props.entry.key, 'data-focused': String(props.focused), 'data-count': props.count, 'data-sorted': String(!!props.sort), onClick: () => props.onFocus(props.entry.key)
-  })
-}))
+// Each mounted one has a number of its own, so a grid React handed to another entry, or built again, shows.
+vi.mock('../src/renderer/src/grid/ResultGrid', async () => {
+  const { createElement, useRef } = await import('react')
+  let made = 0
+  return {
+    default: (props: ResultGridProps) => {
+      const instance = useRef(0)
+      if (instance.current === 0) instance.current = ++made
+      return createElement('div', {
+        'data-grid': props.entry.key, 'data-instance': instance.current, 'data-focused': String(props.focused), 'data-count': props.count, 'data-sorted': String(!!props.sort),
+        onClick: () => props.onFocus(props.entry.key)
+      })
+    }
+  }
+})
 
 const paneHeight = 2000
 let root: Root | undefined, container: HTMLElement | undefined
@@ -122,7 +132,7 @@ describe('the stacked results', () => {
     const view = { viewId: 9, keys: [{ column: 0, descending: false, mode: 'value' }], filters: [], complete: true, approximate: false, close: vi.fn(async () => {}) } as unknown as ResultView
     client.handle(3)!.sort.mockResolvedValueOnce(view)
     results.sortBy('t1', three, 0, 'ascending')
-    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    await act(async () => { for (let turn = 0; turn < 10; turn++) await Promise.resolve() })
     toggle(3)
     for (let press = 0; press < 5; press++) key('ArrowDown', 0)
     draw()
@@ -130,16 +140,20 @@ describe('the stacked results', () => {
     expect(grids()).toEqual([one, two, three])
     const before = heights()
     expect(before[0]).toBeGreaterThan(before[2])
-    expect(before[0] - before[1]).toBe(200)
+    expect(before[0] - before[1]).toBeCloseTo(200)
     expect([...results.viewState('t1').weights!.keys()]).toEqual(keys)
     expect(grid(three)!.dataset.sorted).toBe('true')
     expect([one, two].map(entry => grid(entry)!.dataset.sorted)).toEqual(['false', 'false'])
+    const instances = [one, three].map(entry => grid(entry)!.dataset.instance)
+    expect(new Set([...instances, grid(two)!.dataset.instance]).size).toBe(3)
 
     expect(results.removeEntry('t1', two)).toBe(true)
     draw()
     // The entries after it moved up a place and kept their names; Result 3's grid is the one it had, still focused and sorted.
     expect(names()).toEqual(['Result 1', 'Result 3', 'Pivot of Result 3'])
     expect(grids()).toEqual([one, three])
+    // Not Result 2's grid given Result 3's entry, nor a grid built again: the very ones that were mounted.
+    expect([one, three].map(entry => grid(entry)!.dataset.instance)).toEqual(instances)
     expect(focused()).toEqual([three])
     expect(grid(three)!.dataset.sorted).toBe('true')
     expect(grid(one)!.dataset.sorted).toBe('false')
@@ -154,8 +168,17 @@ describe('the stacked results', () => {
     // A caption's button names its own entry to the command.
     const save = [...container!.querySelectorAll<HTMLButtonElement>('.rs-caption-save')]
     expect(save.map(button => button.getAttribute('aria-label'))).toEqual(['Save Result 1 As…', 'Save Result 3 As…', 'Save Pivot of Result 3 As…'])
-    act(() => { save[1].click() })
-    expect(commands.execute).toHaveBeenLastCalledWith('output.saveResultsAs', { target: expect.objectContaining({ kind: 'output', tabId: 't1', view: 'grid', entry: three }) }, 'toolbar')
+    for (const [place, entry] of [one, three, pivot].entries()) {
+      act(() => { save[place].click() })
+      expect(commands.execute).toHaveBeenLastCalledWith('output.saveResultsAs', { target: expect.objectContaining({ kind: 'output', tabId: 't1', view: 'grid', entry }) }, 'toolbar')
+    }
+    // A splitter moved now moves the two entries beside it and writes each share to its own entry.
+    key('ArrowDown', 0)
+    draw()
+    const moved = heights()
+    expect([moved[0] - after[0], moved[1] - after[1]]).toEqual([20, -20])
+    expect([...results.viewState('t1').weights!.keys()]).toEqual([one, three, pivot])
+    expect(results.viewState('t1').weights!.get(one)! - results.viewState('t1').weights!.get(three)!).toBeCloseTo(moved[0] - moved[1])
     // Search's active match in the pivot opens the pivot, by its entry, and no other.
     reveal(pivot)
     draw()

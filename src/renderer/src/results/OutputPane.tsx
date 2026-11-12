@@ -13,7 +13,7 @@ import RetainedPlans from '../plans/RetainedPlans'
 import type { EstimatedPlanState } from '../services/queries'
 import ClientStatisticsPane from '../statistics/ClientStatisticsPane'
 import EmptyState from '../kit/EmptyState'
-import ColumnProfilePanel from './ColumnProfilePanel'
+import ColumnProfilePanel, { profiledEntry, profileTarget, type ProfileTarget } from './ColumnProfilePanel'
 import PivotPanel from './PivotPanel'
 import MessagesView from './MessagesView'
 import ResultsToolbar from './ResultsToolbar'
@@ -144,7 +144,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
   const profileOpen = useServiceSnapshot(settings).values['queryResults.grid.columnProfile']
   const pivotOpen = !!useServiceSnapshot(pivot).tabs[tabId]?.open
   // The set the profile describes: the grid that last had focus in this tab.
-  const [profiled, setProfiled] = useState<{ tabId: string; entry: string } | undefined>(undefined)
+  const [profiled, setProfiled] = useState<{ tabId: string; target: ProfileTarget } | undefined>(undefined)
   const history = useServiceSnapshot(retainedPlans)
   const [historyOpen, setHistoryOpen] = useState(false)
   const livePlan = useServiceSnapshot(queryPlans)[tabId]
@@ -241,13 +241,13 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
           <div className="results-main" onFocus={(event: FocusEvent<HTMLDivElement>) => {
             const grid = (event.target as Element).closest('[data-result-grid]')
             const entry = grid?.getAttribute('data-result-entry')
-            if (entry) setProfiled({ tabId, entry })
+            if (entry) setProfiled({ tabId, target: profileTarget(tab.sets, entry) })
           }}>
             {tab.status === 'closed' ? <EmptyState className="output-empty" detail="Results were closed to free memory. Execute the query again to see them." />
               : hasSets ? <ResultsStack key={'stack:' + tab.queryId} tabId={tabId} tab={tab} />
               : <EmptyState className="output-empty" icon="table" detail={tab.status === 'running' ? 'Result sets appear here as the query returns them.' : 'The query returned no result sets.'} />}
             {profileOpen && hasSets && tab.status !== 'closed' && <ColumnProfilePanel key={'profile:' + tab.queryId} tabId={tabId} tab={tab}
-              shown={profiled?.tabId === tabId ? profiled.entry : undefined} />}
+              shown={profiled?.tabId === tabId ? profiledEntry(tab.sets, profiled.target)?.key : undefined} />}
             {pivotOpen && hasSets && tab.status !== 'closed' && <PivotPanel key={'pivot:' + tab.queryId} tabId={tabId} tab={tab} />}
           </div>
           {showStrip && <MessagesStrip tabId={tabId} tab={tab} fits={stripFits} maxHeight={stripMax} />}

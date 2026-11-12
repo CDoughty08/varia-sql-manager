@@ -110,7 +110,7 @@ describe('PivotService', () => {
   })
 
   it('follows the entry it pivots and not its place: when a middle entry goes, and by its number into the next run', async () => {
-    const { results, pivot, run } = fixture()
+    const { client, results, pivot, run } = fixture()
     const [, , third] = run(3)
     const sets = () => results.getSnapshot().t1.sets
     pivot.open('t1', keyAt(results, 't1', 2))
@@ -139,8 +139,12 @@ describe('PivotService', () => {
     // An original result is followed by its number into the next run: Result 3, though it stood first when the run began.
     pivot.setSource('t1', keyAt(results, 't1', 0))
     expect(sets()[0]).toMatchObject({ ordinal: 3 })
+    // While the next run has returned only its first result, the panel waits for Result 3 and still names it.
+    results.begin('t1', 'q-streaming')
+    client.emit('q-streaming', { type: 'resultSet.opened', descriptor: descriptor(50, { index: 0, columns }) })
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: undefined, sourceName: 'Result 3', draft: { rows: [0] } })
     run(3, { queryId: 'q2' })
-    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: keyAt(results, 't1', 2), draft: { rows: [0] } })
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: keyAt(results, 't1', 2), sourceName: 'Result 3', draft: { rows: [0] } })
     expect(sets()[2]).toMatchObject({ ordinal: 3 })
   })
 

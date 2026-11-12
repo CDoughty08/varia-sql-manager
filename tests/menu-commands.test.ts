@@ -715,6 +715,33 @@ describe('Query Output commands', () => {
     results.closeResults(tab.id)
     expect(commands.isEnabled('output.copyColumnName', args)).toBe(false)
   })
+  it('act on the result a target was opened on after a result before it has gone, and on nothing for the one that went', async () => {
+    const { commands, api, results, resultSelection, tab, on, key, block } = await ran('win32', { ...queryOutput, resultSets: [descriptor(1), descriptor(2, { index: 1 }), descriptor(3, { index: 2 })] })
+    // Menus opened on Result 2 and Result 3, with cells selected in Result 3, before Result 2 goes.
+    const second = on('grid', { place: 1 }), third = on('grid', { place: 2 }), gone = key(1), kept = key(2)
+    resultSelection.set(tab.id, block(2))
+    expect(results.removeEntry(tab.id, gone)).toBe(true)
+    // Result 3 stands second now. Its target still names it: its selection, its name, its stored result.
+    expect(key(1)).toBe(kept)
+    expect(commands.isEnabled('output.copy', third)).toBe(true)
+    expect(await commands.execute('output.copy', third, 'menu')).toBe(true)
+    expect(await commands.execute('output.saveResultsAs', third, 'menu')).toBe(true)
+    expect(api.copyResults.mock.calls.map(([request]) => request.resultId)).toEqual([3])
+    expect(api.saveResults.mock.calls.map(([request]) => [request.resultId, request.suggestedName])).toEqual([[3, 'SQLQuery1-Result3']])
+    // The menu left open on Result 2 does nothing to the result that took its place.
+    for (const id of ['output.copy', 'output.selectAll', 'output.clearSort', 'output.transpose', 'output.highlightRows'] as const) expect(commands.isEnabled(id, second), id).toBe(false)
+    await commands.execute('output.saveResultsAs', second, 'menu')
+    await commands.execute('output.selectAll', second, 'menu')
+    expect(api.saveResults).toHaveBeenCalledOnce()
+    expect(resultSelection.get(tab.id, kept)).toEqual(block(1))
+    expect(resultSelection.get(tab.id, key(0))).toBeUndefined()
+    // Select All from Result 3's own menu selects Result 3.
+    expect(await commands.execute('output.selectAll', third, 'menu')).toBe(true)
+    expect(resultSelection.get(tab.id, kept)).toEqual(selectAll(kept, block(1).active))
+    // A grid that reports another stored result than the one the menu opened on is stale, as before.
+    const stale: CommandArgs = { ...third, target: { ...third.target as OutputTarget, result: { generation: 1, resultId: 2 } } }
+    expect(commands.isEnabled('output.copy', stale)).toBe(false)
+  })
   it('closes the contextual or toolbar query\'s results without requiring that query to be active', async () => {
     const { commands, documents, results, tab, on } = await ran()
     const other = documents.create('Other.sql', 'SELECT 2', 'master', 'server-a')

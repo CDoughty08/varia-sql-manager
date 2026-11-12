@@ -66,7 +66,7 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
         <span>Source</span>
         <select aria-label="Pivot source" value={state.source ?? ''} onChange={event => pivot.setSource(tabId, event.target.value)}>
           {/* A set that cannot be pivoted now, or one a new run has yet to return, is still named. */}
-          {!sources.includes(entry!) && <option value={state.source ?? ''}>{entry ? entryName(entry) : state.sourceNumber === undefined ? '' : `Result ${state.sourceNumber}`}</option>}
+          {!sources.includes(entry!) && <option value={state.source ?? ''}>{entry ? entryName(entry) : state.sourceName ?? ''}</option>}
           {sources.map(item => <option key={item.key} value={item.key}>{entryName(item)}</option>)}
         </select>
       </label>
