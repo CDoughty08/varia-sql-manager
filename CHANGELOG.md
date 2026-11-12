@@ -7,7 +7,7 @@
 - **Getting Started:** read offline connection, query and results guides with live shortcuts, option values and mouse gestures, plus interactive fictional examples. Open it from Help or the command palette. Navigation stays available if a guide cannot load.
 - **About Varia:** find the running version, platform and update status from Help or the command palette (also the app menu on macOS). Copy version details for support and open the project, issue form or release notes without needing a server connection.
 - **In-app release notes:** read curated release highlights and limits offline, browse bundled history and open notes for the exact version advertised by an update. Missing notes are reported clearly, with release downloads available separately.
-- **Activity Monitor Recent Expensive Queries:** see the statements that finished since the previous sample, grouped by query hash with per-second rates, and rank them by CPU, duration, reads, writes or executions. The plan cache is read only while the pane is shown, at its own interval (Settings › Activity Monitor › Query statistics interval, 30 seconds by default).
+- **Activity Monitor Recent Expensive Queries:** see the statements that finished since the previous sample, grouped by query hash with per-second rates, and rank them by CPU, duration, reads, writes or executions. The plan cache is read only while the pane is shown, at its own interval (Settings › Activity Monitor › Query statistics interval, 30 seconds by default). A rank chip or column sort reorders the rows at once, without waiting for the next sample or reading the server again; so does a column sort in any live grid.
 
 ### Improved
 

@@ -429,21 +429,25 @@ try {
   await expect(queryAt(0)).toHaveText(/^SELECT c\.CustomerId/)
   const rankBy = monitor().getByRole('group', { name: 'Rank by', exact: true })
   await expect(rankBy.getByRole('button', { name: 'CPU', exact: true })).toHaveAttribute('aria-pressed', 'true')
-  // A rank chip is the table's sort, sent to the probe; the status line says the rows keep their order until the next sample.
+  // Refresh Now brings a sample with rates (the first has none, so every rate ties), still by CPU.
+  await rankBy.getByRole('button', { name: 'CPU', exact: true }).focus()
+  await page.keyboard.press('F5')
+  await expect(recent.getByRole('gridcell', { name: '310.0', exact: true })).toBeVisible()
+  await expect(queryAt(0)).toHaveText(/^SELECT c\.CustomerId/)
+  const rankUpdates = (await calls('live.update')).length
+  // A rank chip is the table's sort, sent to the probe, which re-sorts its last sample at once: most executions first, well
+  // before the 30 s probe samples again, and with no refresh.
   await rankBy.getByRole('button', { name: 'Executions', exact: true }).click()
   await expect(rankBy.getByRole('button', { name: 'Executions', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect(rankBy.getByRole('button', { name: 'CPU', exact: true })).toHaveAttribute('aria-pressed', 'false')
-  await expect(monitor().getByText('3 queries by query hash · ranked by Executions from the next sample', { exact: true })).toBeVisible()
   await expect.poll(async () => (await queriesPatches()).map(probe => probe.sort).filter(Boolean).at(-1)).toEqual([{ column: 'executionsPerMinute', descending: true, table: 0 }])
-  // Refresh Now brings the next sample, in the chip's order (most executions first), and the note goes.
-  await rankBy.getByRole('button', { name: 'Executions', exact: true }).focus()
-  await page.keyboard.press('F5')
   await expect(queryAt(0)).toHaveText(/^UPDATE dbo\.Invoices/)
   await expect(monitor().getByText('3 queries by query hash', { exact: true })).toBeVisible()
+  expect((await calls('live.update')).slice(rankUpdates).some(call => call.params.refresh)).toBe(false)
   // Leaving the pane pauses the probe again: the plan cache is read only for a pane someone can see.
   await firstTabs.getByRole('tab', { name: 'Sessions', exact: true }).click()
   await expect.poll(async () => (await queriesPatches()).at(-1)?.paused).toBe(true)
-  console.log('Recent queries passed: the probe runs only while the pane shows, rows arrive by CPU, a rank chip sorts the next sample and says so until it comes.')
+  console.log('Recent queries passed: the probe runs only while the pane shows, rows arrive by CPU, a rank chip reorders the rows at once.')
 
   step = 'panes'
   const first = monitor().getByRole('tablist', { name: 'First pane', exact: true })

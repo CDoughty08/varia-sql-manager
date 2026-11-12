@@ -276,6 +276,7 @@ internal sealed class SyntheticSampler : ILiveSampler
         return rows;
     }
 
+    public LiveSampleBatch Resort(IReadOnlyList<LiveDue> probes) => tables.Resort(probes);
     public uint[] Keep() => tables.Keep(limits.Kept);
 
     /// <summary>Releases only this subscription's own tables, never anything else stored under its session name.</summary>

@@ -614,6 +614,7 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
     public void Idle() => Drop(healthy: true);
 
     public void Apply(object args) => sourceReader?.Apply(args);
+    public LiveSampleBatch Resort(IReadOnlyList<LiveDue> probes) => tables.Resort(probes);
     public uint[] Keep() => tables.Keep(limits.Kept);
     public void Release() => tables.Release();
     public void Dispose() => Drop(healthy: true);

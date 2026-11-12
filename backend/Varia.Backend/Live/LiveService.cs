@@ -54,6 +54,9 @@ internal sealed class LiveProbeState(LiveProbeJson spec, int intervalMs)
     public int EffectiveIntervalMs { get; set; } = intervalMs;
     public bool Paused { get; set; }
     public LiveSortArgs[]? Sort { get; set; }
+    /// <summary>An update changed the sort since the probe's tables were last written: the next tick re-emits them re-sorted
+    /// from the rows they hold (no SQL), unless the probe is sampled in it anyway.</summary>
+    public bool Resort { get; set; }
     public string? View { get; set; }
     public LiveFilterArgs? Filter { get; set; }
     /// <summary>Track lists by table index: the latest one for each keyed snapshot table.</summary>
@@ -103,6 +106,9 @@ internal interface ILiveSampler : IDisposable
     /// <param name="resume">Where append tables go on from (a resume token's cursors); empty for a fresh start.</param>
     Task<LiveOpening> OpenAsync(IReadOnlyList<LiveProbeState> probes, IReadOnlyList<LiveCursor> resume, CancellationToken token);
     Task<LiveSampleBatch> SampleAsync(IReadOnlyList<LiveDue> due, CancellationToken token);
+    /// <summary>A new sort for probes not due: their snapshot tables again, re-sorted from the rows their newest revisions hold
+    /// (samples marked resorted), never a statement. A source without snapshot tables has nothing to re-sort.</summary>
+    LiveSampleBatch Resort(IReadOnlyList<LiveDue> probes) => new([], []);
     /// <summary>New args from live.update, already validated for the source.</summary>
     void Apply(object args);
     /// <summary>The source has ended (after the tick just sent): the subscription answers sourceEnded.</summary>
@@ -282,11 +288,12 @@ internal sealed class LiveSubscription : IDisposable
         }
     }
 
-    /// <summary>How long until a probe is due: 0 when one is, −1 when none will be until an update.</summary>
+    /// <summary>How long until a probe is due: 0 when one is or a re-sort waits, −1 when none will be until an update.</summary>
     public int WaitMs(long now)
     {
         lock (gate)
         {
+            if (Probes.Exists(probe => probe.Resort)) return 0;
             long next = long.MaxValue;
             foreach (var probe in Probes) if (!Paused && !probe.Paused && probe.Stopped is null) next = Math.Min(next, probe.DueAt);
             return next == long.MaxValue ? -1 : (int)Math.Clamp(next - now, 0, int.MaxValue);
@@ -313,8 +320,44 @@ internal sealed class LiveSubscription : IDisposable
                 probe.DueAt += (long)(missed + 1) * period;
                 probe.LastSampleAt = now;
                 probe.Resumed = false;
+                // The sample is written in the sort it took above.
+                probe.Resort = false;
             }
             return due;
+        }
+    }
+
+    /// <summary>The probes whose sort changed and that are not due now, each with its sort and track lists as they are now: the
+    /// tick re-emits their tables from the rows they hold. Paused and stopped probes too, as it runs no SQL.</summary>
+    public List<LiveDue> TakeResorts()
+    {
+        lock (gate)
+        {
+            var resorts = new List<LiveDue>();
+            foreach (var probe in Probes)
+            {
+                if (!probe.Resort) continue;
+                probe.Resort = false;
+                resorts.Add(new LiveDue(probe, null, null, null, probe.Sort, new Dictionary<int, LiveTrackArgs>(probe.Tracks), probe.BudgetMs, probe.EffectiveIntervalMs, View: probe.View, Filter: probe.Filter));
+            }
+            return resorts;
+        }
+    }
+
+    /// <summary>A re-sort's batch as the tick sends it: its samples with the interval in force, and a BUDGET error retrying when
+    /// the probe is next due (the re-sort is not retried: the next sample is sorted anyway).</summary>
+    public LiveSampleBatch Resorted(LiveSampleBatch batch, long now)
+    {
+        lock (gate)
+        {
+            var samples = new List<LiveSample>();
+            foreach (var sample in batch.Samples)
+                if (Probes.Find(probe => probe.Spec.Id == sample.Probe) is { } probe) samples.Add(sample with { EffectiveIntervalMs = probe.EffectiveIntervalMs, Resorted = true });
+            var errors = new List<LiveProbeError>();
+            foreach (var error in batch.Errors)
+                if (Probes.Find(probe => probe.Spec.Id == error.Probe) is { } probe)
+                    errors.Add(error with { RetryInMs = (int)Math.Clamp(probe.DueAt - now, 0, limits.IntervalMs.Max), Terminal = false });
+            return new(samples, errors);
         }
     }
 
@@ -563,6 +606,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
                     if (state.Paused && !paused) subscription.ResumeProbe(state, now);
                     state.Paused = paused;
                 }
+                if (patch.Sort is not null || patch.Clear?.Contains("sort", StringComparer.Ordinal) == true) state.Resort = true;
                 if (patch.Sort is not null) state.Sort = patch.Sort;
                 if (patch.View is not null) state.View = patch.View;
                 if (patch.Filter is not null) state.Filter = patch.Filter;
@@ -655,8 +699,16 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
                 // Never sample while the renderer has not applied the previous frame.
                 await context.WaitForAckAsync(token).ConfigureAwait(false);
                 var due = subscription.TakeDue(Now);
-                if (due.Count == 0) continue;
-                var batch = subscription.Complete(due, await subscription.Sampler.SampleAsync(due, token).ConfigureAwait(false), Now);
+                // Taken with the due probes, so a probe is never both sampled and re-sorted in one tick (a sort that arrives while
+                // this tick samples is re-emitted by the next one).
+                var resorts = subscription.TakeResorts();
+                if (due.Count == 0 && resorts.Count == 0) continue;
+                var batch = due.Count == 0 ? new LiveSampleBatch([], []) : subscription.Complete(due, await subscription.Sampler.SampleAsync(due, token).ConfigureAwait(false), Now);
+                if (resorts.Count > 0)
+                {
+                    var resorted = subscription.Resorted(subscription.Sampler.Resort(resorts), Now);
+                    batch = batch with { Samples = [.. batch.Samples, .. resorted.Samples], Errors = [.. batch.Errors, .. resorted.Errors.Take(Math.Max(0, Limits.Errors - batch.Errors.Count))] };
+                }
                 if (batch.Samples.Count == 0 && batch.Errors.Count == 0) continue;
                 sampledAt = Math.Max(sampledAt + 1, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
                 // A token only when an append table's cursor moved and it fits: the renderer keeps the last one it saw.
