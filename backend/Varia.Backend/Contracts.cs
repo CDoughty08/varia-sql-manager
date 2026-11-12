@@ -91,14 +91,16 @@ internal sealed record ViewSortArgs(int Column, bool Descending, string Mode);
 /// result that it supersedes (closed once this one exists).</summary>
 internal sealed record ResultsViewArgs(uint ResultId, ViewSortArgs[] Sort, uint? Replaces = null, ViewFilterArgs[]? Filters = null);
 /// <summary>One results.view filter (ViewFilter): Op "in", "notIn" or "between" on Column, with its values as base Rows
-/// (and Nulls) or as the selected Cells; Op "duplicates" on Columns; or Op "groups" on Column: the values a distinct
-/// snapshot of that column (SnapshotId) ticks.</summary>
+/// (and Nulls) or as the selected Cells; Op "duplicates" on Columns; Op "groups" on Column: the values a distinct
+/// snapshot of that column (SnapshotId) ticks; or Op "keepRows", which names no column: the base Rows to keep (1 to 4,095),
+/// or the rows the selected Cells cover.</summary>
 internal sealed record ViewFilterArgs(string Op, int? Column = null, int[]? Rows = null, bool? Nulls = null, ViewCellsArgs? Cells = null, int[]? Columns = null, uint? SnapshotId = null);
 /// <summary>Selected cells: 1 to 256 [first, count] ranges of positions in ViewId's order, or in the result's own.</summary>
 internal sealed record ViewCellsArgs(long[][] Ranges, uint? ViewId = null);
 /// <summary>A filter as the view applied it, its cells resolved to one base row per distinct value (Between: the lowest
 /// and highest). A "groups" filter comes back as it was asked, with whether it keeps (else drops) the Values it names, NULL
-/// among them (Nulls), and the one value's representative Row when it names exactly one besides NULL.</summary>
+/// among them (Nulls), and the one value's representative Row when it names exactly one besides NULL. A "keepRows" filter
+/// comes back as the base Rows it keeps, ascending.</summary>
 internal sealed record ViewFilterResult(string Op, int? Column = null, int[]? Rows = null, bool? Nulls = null, int[]? Columns = null, uint? SnapshotId = null, bool? Keep = null, int? Values = null, int? Row = null);
 /// <summary>Rows is the view's row count; BaseRows the result's rows it was built from (those sealed then, Rows when it has
 /// no filter); Complete says those were all the result's rows; Approximate says a key compared a truncated value's prefix

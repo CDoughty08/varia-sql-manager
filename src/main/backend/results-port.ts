@@ -1,4 +1,4 @@
-import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsDiffParams, ResultsDiffResult, ResultsDistinctCloseParams, ResultsDistinctCloseResult, ResultsDistinctParams, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsParams, ResultsFindRowsResult, ResultsIdentifyParams, ResultsIdentifyResult, ResultsPivotParams, ResultsPivotResult, ResultsTransposeParams, ResultsTransposeResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsRowIdsParams, ResultsRowIdsResult, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult, ViewFilter } from '../../shared/contracts'
+import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsDiffParams, ResultsDiffResult, ResultsDistinctCloseParams, ResultsDistinctCloseResult, ResultsDistinctParams, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsParams, ResultsFindRowsResult, ResultsIdentifyParams, ResultsIdentifyResult, ResultsPivotParams, ResultsPivotResult, ResultsTransposeParams, ResultsTransposeResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsRowIdsParams, ResultsRowIdsResult, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult, ViewCells, ViewFilter } from '../../shared/contracts'
 import { diffResultSchema, distinctCloseResultSchema, distinctReadResultSchema, distinctResultSchema, distinctTickResultSchema, findRowsResultSchema, identifyResultSchema, type MemoryFeature, type MemoryReport, pivotResultSchema, type PortEndResult, type PortMessage, type PortRequest, portRequestSchema, profileResultSchema, rowBytesResultSchema, rowIdsResultSchema, searchResultSchema, testPortRequestSchema, transposeResultSchema, viewCloseResultSchema, viewResultSchema } from '../../shared/ipc/port-messages'
 import { liveDescriptors, liveRetired, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../../shared/live/schema'
 import { cancelReasons, limits as wire, type CancelReason, type ErrorCode } from '../../shared/ipc/wire/protocol'
@@ -968,10 +968,13 @@ function storedResultId(answer: unknown): number | undefined {
   return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 && id <= 0xffff_ffff ? id : undefined
 }
 
+const copyCells = (cells: ViewCells): ViewCells => ({ ranges: cells.ranges.map(([first, count]) => [first, count]), ...(cells.viewId === undefined ? {} : { viewId: cells.viewId }) })
+
 /** A validated filter copied member by member, so nothing but its schema's members reaches the backend. */
 function copyFilter(filter: ViewFilter): ViewFilter {
   if (filter.op === 'duplicates') return { op: 'duplicates', columns: [...filter.columns] }
   if (filter.op === 'groups') return { op: 'groups', column: filter.column, snapshotId: filter.snapshotId }
-  if ('cells' in filter) return { op: filter.op, column: filter.column, cells: { ranges: filter.cells.ranges.map(([first, count]) => [first, count]), ...(filter.cells.viewId === undefined ? {} : { viewId: filter.cells.viewId }) } }
+  if (filter.op === 'keepRows') return 'cells' in filter ? { op: 'keepRows', cells: copyCells(filter.cells) } : { op: 'keepRows', rows: [...filter.rows] }
+  if ('cells' in filter) return { op: filter.op, column: filter.column, cells: copyCells(filter.cells) }
   return { op: filter.op, column: filter.column, rows: [...filter.rows], ...(filter.nulls === undefined ? {} : { nulls: filter.nulls }) }
 }

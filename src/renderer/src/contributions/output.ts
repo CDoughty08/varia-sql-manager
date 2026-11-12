@@ -144,6 +144,10 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     commands.register('output.excludeNulls', selectionFilter('notNull')),
     commands.register('output.filterDuplicates', duplicatesFilter(false)),
     commands.register('output.filterDuplicateRows', duplicatesFilter(true)),
+    commands.register('output.keepSelectedRows', {
+      when: args => { const shown = grid(targetOf(args)); return !!shown && results.canKeepSelectedRows(shown.tabId, shown.key) },
+      run: args => { const shown = grid(targetOf(args)); if (shown) results.keepSelectedRows(shown.tabId, shown.key) }
+    }),
     commands.register('output.clearFilters', {
       when: args => { const shown = grid(targetOf(args)), live = liveOf(args); return live ? live.filtered() : !!shown && !!results.sortOf(shown.tabId, shown.key)?.filters.length },
       run: args => { const shown = grid(targetOf(args)), live = liveOf(args); if (live) live.clearFilters(); else if (shown) results.clearFilters(shown.tabId, shown.key) }

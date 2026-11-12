@@ -1354,6 +1354,15 @@ itself by view position.
   first row. Values are equal and ordered as the sort compares them, so a column's collation decides which texts match
   (case and trailing spaces under a CI collation) and `2` equals `2.0` in a float column; a truncated value compares by
   its stored prefix (`approximate`).
+- **Keep Selected Rows.** `{ op: 'keepRows', cells: { ranges: 1 – 256 [first, count], viewId? } }` keeps the rows at those
+  positions of a view (or the result) themselves, whatever their values: it names no column, compares none and is not one
+  of a view's keys. The backend merges the ranges, clips them to the rows the view has, refuses more than 4,095 rows
+  (`limits.transpose.maxRows`; `TOO_LARGE`, before reading any) or none (`INVALID_PARAMS`), and answers
+  `{ op: 'keepRows', rows }`: the base rows, ascending, each once. That resolved form, `rows: 1 – 4,095 base rows`, is
+  what the renderer sends from then on; a row outside the rows sealed is `INVALID_PARAMS`. It keeps the order the
+  filters before it gave, and a filter after it sees only its rows. Made while rows stream, it resolves to rows already
+  sealed, so the view rebuilt once the result completes keeps those and none that arrived later. A `column`, `nulls`,
+  `columns` or `snapshotId` on it, or both or neither of `rows` and `cells`, is `INVALID_PARAMS`.
 - **Memory.** A sort holds 8 to 16 bytes per row and key while it runs (a filter, per column it compares, and 16 bytes a row
   for the rows it keeps, a selection's rows or duplicates' groups; a `value` sort key on a filtered column is that filter's
   key and is charged once, and other sort keys are built over only the rows the filters kept), and a view keeps 4 bytes a row it shows, all charged
@@ -1696,7 +1705,11 @@ receives at most 512 values a window, never rows.
   filter names it and closes it once the view it shows no longer does; a popover closed without OK closes its own. OK
   puts the new filter where the one it replaces stood, since filters apply in order (a duplicates filter counts only the
   rows before it kept). With a range on the column, Equals and Between choose only within it, and the popover says so.
-  Between replaces the column's range filter; Clear filter takes all of the column's filters off. The popover opens in
+  Between replaces the column's range filter; Clear filter takes all of the column's filters off. Keep Selected Rows
+  (`ResultsService.keepSelectedRows`, `output.keepSelectedRows`) is no column's filter: funnels do not mark it, a
+  column's Clear filter leaves it, and a column's value list is built over the rows it keeps. A grid has one, which a new
+  one replaces where it stood; it counts among the 16; and more than 4,095 rows or 256 ranges selected says so in the
+  toolbar without asking the backend. The popover opens in
   the grid's own window (a popped-out Results panel's), and a second press on the open funnel closes it. There is no
   contains or starts-with condition: the filters compare whole values by rows, and a text filter op would need its own
   backend filter.
@@ -2556,7 +2569,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Row sizes a request | `results.rowBytes`: 1 – 16,384 rows (`rowSizes.maxRows`) | zod and backend |
 | Row identities | `results.rowIds` 1 – 16,384 rows; `results.findRows` 1 – 10,000 ids, 100,000 matches (`limits.identity`); 24 bytes a row while identifying, 8 kept, under the query budget | zod and backend |
 | Result diffs | context -1 – 100 rows, 64 one-sided column names each side (`limits.diff`); about 80 bytes a row of both results and 12 a differing cell while aligning, the diff's rows under the query budget, whole or refused | zod and backend |
-| Sorted views | 0 – 16 keys and 0 – 16 filters a view (one at least), 4,096 distinct values a filter, 256 cell ranges a selection, 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key or filtered column while building, 4 bytes a row kept, under the query budget | zod and backend |
+| Sorted views | 0 – 16 keys and 0 – 16 filters a view (one at least), 4,096 distinct values a filter, 256 cell ranges a selection, 4,095 rows a `keepRows` filter (`limits.transpose.maxRows`), 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key or filtered column while building, 4 bytes a row kept, under the query budget | zod and backend |
 | Transpose | 1 – 256 row ranges, at most 4,095 rows taken and 4,000,000 cells, the first rows taken past either with explicit truncation (`limits.transpose`); the stored set under the query budget, whole or refused | zod and backend |
 | Pivots | 0 – 8 row columns, 1 – 16 values, 100,000 row groups, 256 column groups, 4,000,000 figures, refused past any of them (`INVALID_PARAMS`), column-group names cut to 128 characters (`limits.pivot`); a sort key per grouped column and 12 bytes a row while grouping, and the figures, under the query budget | zod and backend |
 | Search in results | 1 – 1,024 characters of text, 1 – 10,000 matches an answer plus its last row's columns (`limits.search`); no budget held | zod and backend |

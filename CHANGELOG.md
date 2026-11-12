@@ -8,6 +8,8 @@
 - **About Varia:** find the running version, platform and update status from Help or the command palette (also the app menu on macOS). Copy version details for support and open the project, issue form or release notes without needing a server connection.
 - **In-app release notes:** read curated release highlights and limits offline, browse bundled history and open notes for the exact version advertised by an update. Missing notes are reported clearly, with release downloads available separately.
 
+- **Keep Selected Rows:** filter a results grid to exactly the rows you selected, from the grid menu's Filter submenu. It works on sorted and filtered grids, pivots and comparisons, combines with other filters and sorting, and shows as one removable "12 selected rows" filter. Up to 4,095 rows.
+
 ### Improved
 
 - **Results:** sorting, filtering for duplicates, listing a column's values and pivoting are several times faster on number columns with many repeated values (a status, a flag, a foreign key).

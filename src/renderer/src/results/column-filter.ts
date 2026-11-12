@@ -21,9 +21,10 @@ export type ColumnFilterKind = 'values' | 'between' | 'notNull'
 /** A notIn of no rows with NULL: Exclude NULLs. */
 export const isNotNullFilter = (filter: ViewFilter | ResolvedViewFilter) => filter.op === 'notIn' && 'rows' in filter && filter.rows.length === 0 && !!filter.nulls
 
-/** The kind of a grid filter on `column`, or undefined when it is not one of that column's (duplicates span columns). */
+/** The kind of a grid filter on `column`, or undefined when it is not one of that column's (duplicates span columns, and
+ *  Keep Selected Rows names none). */
 export function columnFilterKind(filter: ViewFilter | ResolvedViewFilter, column: number): ColumnFilterKind | undefined {
-  if (filter.op === 'duplicates' || filter.column !== column) return undefined
+  if (filter.op === 'duplicates' || filter.op === 'keepRows' || filter.column !== column) return undefined
   if (filter.op === 'between') return 'between'
   return isNotNullFilter(filter) ? 'notNull' : 'values'
 }

@@ -728,6 +728,30 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     return this.addFilter(tabId, run, index, filters, { filter: { op: 'duplicates', columns }, label, named: true })
   }
 
+  /**
+   * Keep Selected Rows: filters a grid to the rows its selection covers, whatever their values (a `keepRows` filter, which
+   * the view resolves to base rows). A grid has one: a new one takes the place of the one it has among the filters. More
+   * rows or ranges than the filter takes says so in the toolbar and applies nothing. False when nothing was applied.
+   */
+  keepSelectedRows(tabId: string, key: EntryKey): boolean {
+    const run = this.runs.get(tabId), set = this.entry(run, key), target = this.keepTarget(tabId, key)
+    if (!run || !set || !target) return false
+    const maxRows = wire.transpose.maxRows, maxRanges = wire.views.maxFilterRanges
+    if (target.rows > maxRows || target.ranges.length > maxRanges) {
+      const selected = target.rows > maxRows ? `${formatCount(target.rows)} rows` : `${formatCount(target.ranges.length)} ranges`
+      this.notify(tabId, `Keep Selected Rows takes at most ${formatCount(maxRows)} rows in ${maxRanges} ranges; ${selected} are selected. Nothing was applied.`)
+      return false
+    }
+    const filters = run.sorts.get(set.key)?.filters ?? [], others = filters.filter(item => item.filter.op !== 'keepRows')
+    const at = filters.findIndex(item => item.filter.op === 'keepRows')
+    const filter: ViewFilter = { op: 'keepRows', cells: { ranges: target.ranges, ...target.viewId === undefined ? {} : { viewId: target.viewId } } }
+    // The view answers the rows it kept (fewer than selected while rows still arrive): the chip then counts those.
+    return this.addFilter(tabId, run, set.key, others, { filter, label: keptLabel(target.rows) }, at < 0 ? others.length : at)
+  }
+
+  /** Whether the grid has rows selected to keep (more than the filter takes still runs the command, which then says so). */
+  canKeepSelectedRows(tabId: string, key: EntryKey): boolean { return !!this.keepTarget(tabId, key) }
+
   /** Adds a filter after the grid's others, or at `at` among them (where the one it replaces stood, since filters apply in
    *  order and a duplicates filter after it counts only the rows it keeps); a grid that has as many as a view takes says
    *  so and keeps them. */
@@ -1098,6 +1122,17 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     return { column, ranges, ...shown ? { viewId: shown.viewId } : {} }
   }
 
+  /** The rows a grid's selection covers, as merged ranges of positions in the view the grid shows, and how many they are. */
+  private keepTarget(tabId: string, key: EntryKey): { ranges: [number, number][]; rows: number; viewId?: number } | undefined {
+    const run = this.runs.get(tabId), set = this.entry(run, key), selection = set && this.selection(tabId, set.key)
+    if (!run || !set || !selection || !this.filterable(set)) return undefined
+    const shown = run.held.get(set.key)?.shown as ResultView | undefined
+    const blocks = resolveBlocks(selection, (shown ?? set.handle).getSnapshot().rowsAvailable, set.descriptor.columns.length)
+    const ranges = mergeRanges(blocks.map((block): [number, number] => [block.top, block.bottom - block.top + 1]))
+    const rows = ranges.reduce((sum, [, count]) => sum + count, 0)
+    return rows > 0 ? { ranges, rows, ...shown ? { viewId: shown.viewId } : {} } : undefined
+  }
+
   private duplicateColumns(tabId: string, key: EntryKey, allColumns: boolean): number[] | undefined {
     const run = this.runs.get(tabId), set = this.entry(run, key)
     if (!run || !set || !this.filterable(set)) return undefined
@@ -1127,6 +1162,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const named = sort.filters.map(async (item): Promise<GridFilter> => {
       const filter = item.filter
       if (item.named || filter.op === 'duplicates') return item
+      // Its words are its rows' count, known once the view resolved its cells.
+      if (filter.op === 'keepRows') return 'rows' in filter ? { ...item, label: filterLabel(filter, columns), named: true } : item
       if (filter.op === 'groups') {
         if (!('keep' in filter)) return item
         const resolved = filter as ResolvedGroupsFilter
@@ -1275,6 +1312,8 @@ function lengthSortable(column: ResultColumn): boolean {
 
 const columnName = (columns: readonly ResultColumn[], column: number) => columns[column]?.name || noColumnName
 const isNotNull = (filter: ViewFilter) => filter.op === 'notIn' && 'rows' in filter && filter.rows.length === 0 && !!filter.nulls
+/** A Keep Selected Rows filter's words: the rows it names, though a later filter may show fewer. */
+const keptLabel = (rows: number) => `${formatCount(rows)} selected ${plural(rows, 'row')}`
 const sameColumns = (a: readonly number[], b: readonly number[]) => a.length === b.length && a.every((column, at) => column === b[at])
 
 /** [first, count] ranges sorted, with overlapping and adjacent ones joined. */
@@ -1302,6 +1341,7 @@ async function valueText(handle: ResultHandle, row: number, column: number): Pro
 /** A resolved filter's words, with the texts of its rows' values where it names them (one value, or Between's two). */
 export function filterLabel(filter: ResolvedViewFilter, columns: readonly ResultColumn[], texts: readonly (string | undefined)[] = []): string {
   if (filter.op === 'duplicates') return filter.columns.length === columns.filter(column => column.role !== 'tone').length ? 'Duplicate rows' : `Duplicates in ${filter.columns.map(column => columnName(columns, column)).join(' + ')}`
+  if (filter.op === 'keepRows') return keptLabel(filter.rows.length)
   const name = columnName(columns, filter.column)
   if (filter.op === 'between') return texts[0] && texts[1] ? `${name} between ${texts[0]} and ${texts[1]}` : `${name} between 2 values`
   const values = (filter.op === 'groups' ? filter.values : filter.rows.length) + (filter.nulls ? 1 : 0), not = filter.op === 'notIn' || (filter.op === 'groups' && !filter.keep)
@@ -1312,9 +1352,10 @@ export function filterLabel(filter: ResolvedViewFilter, columns: readonly Result
   return `${name} ${not ? 'not in' : 'in'} (${formatCount(values)} ${plural(values, 'value')})`
 }
 
-/** The columns a grid's filters name one by one (a value list, a range or not NULL): their header funnels show it. */
+/** The columns a grid's filters name one by one (a value list, a range or not NULL): their header funnels show it.
+ *  Duplicates span columns and Keep Selected Rows names none, so neither marks a funnel. */
 export function filteredColumns(sort: GridSort | undefined): ReadonlySet<number> {
   const columns = new Set<number>()
-  for (const item of sort?.filters ?? []) if (item.filter.op !== 'duplicates') columns.add(item.filter.column)
+  for (const item of sort?.filters ?? []) if (item.filter.op !== 'duplicates' && item.filter.op !== 'keepRows') columns.add(item.filter.column)
   return columns
 }

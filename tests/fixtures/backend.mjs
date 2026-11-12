@@ -556,6 +556,24 @@ function buildView(result, sort, filters = []) {
       resolved.push({ op: 'groups', column: filter.column, snapshotId: filter.snapshotId, keep: frozen.keep, values: frozen.groups.length, nulls: frozen.nulls, ...frozen.groups.length === 1 ? { row: snapshot.groups[frozen.groups[0]].row } : {} })
       continue
     }
+    if (filter.op === 'keepRows') {
+      // Keep Selected Rows: the base rows at the positions a selection covers (each once), or the rows it resolved to.
+      let kept = filter.rows
+      if (filter.cells) {
+        const source = filter.cells.viewId === undefined ? undefined : result.views?.get(filter.cells.viewId)
+        if (filter.cells.viewId !== undefined && !source) throw Object.assign(new Error('This sorted view was closed. Sort the results again.'), { code: 'VIEW_NOT_FOUND' })
+        const positions = new Set(filter.cells.ranges.flatMap(([first, count]) => Array.from({ length: Math.max(0, Math.min(count, (source?.order.length ?? rows) - first)) }, (_, at) => first + at)))
+        if (positions.size > 4095) throw Object.assign(new Error('Select at most 4,095 rows to keep.'), { code: 'TOO_LARGE' })
+        kept = [...positions].map(position => source ? source.order[position] : position)
+        if (!kept.length) throw Object.assign(new Error('Select at least one row to keep.'), { code: 'INVALID_PARAMS' })
+      }
+      if (!kept?.length || kept.length > 4095) throw Object.assign(new Error('A keepRows filter names 1 to 4,095 rows.'), { code: 'INVALID_PARAMS' })
+      if (kept.some(row => row < 0 || row >= rows)) throw Object.assign(new Error("A filter's rows must be rows of the result."), { code: 'INVALID_PARAMS' })
+      const named = new Set(kept)
+      order = order.filter(row => named.has(row))
+      resolved.push({ op: 'keepRows', rows: [...named].sort((a, b) => a - b) })
+      continue
+    }
     let picked = filter.rows ?? []
     if (filter.cells) {
       const source = filter.cells.viewId === undefined ? undefined : result.views?.get(filter.cells.viewId)

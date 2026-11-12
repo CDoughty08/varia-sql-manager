@@ -443,6 +443,15 @@ describe('ResultClient', () => {
     expect([filteredView.rows, filteredView.filters]).toEqual([2, [{ op: 'between', column: 0, rows: [0, 2], nulls: false }]])
     expect(view.filters).toEqual([])
     void filteredView.close()
+    // Keep Selected Rows names no column for the result to have: it goes as asked and comes back as rows.
+    const keeping = handle.sort([], { filters: [{ op: 'keepRows', cells: { ranges: [[0, 2]] } }] })
+    await settle()
+    const kept = worker().fromWorker.findLast(item => item.t === 'view')!
+    expect(kept).toMatchObject({ sort: [], filters: [{ op: 'keepRows', cells: { ranges: [[0, 2]] } }] })
+    worker().toWorker({ t: 'end', rid: kept.rid, ok: true, result: { viewId: 9, rows: 2, baseRows: 2, complete: true, approximate: false, filters: [{ op: 'keepRows', rows: [0, 1] }] } })
+    const keptView = await keeping
+    expect([keptView.rows, keptView.filters]).toEqual([2, [{ op: 'keepRows', rows: [0, 1] }]])
+    void keptView.close()
     // Views go with their result: released with it, or lost with its backend.
     const third = handle.sort([{ column: 0, descending: false, mode: 'bytes' }])
     await answerView(6)

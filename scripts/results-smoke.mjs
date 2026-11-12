@@ -1656,6 +1656,29 @@ try {
   await expect(cell(1, 0)).toHaveText('1')
   console.log('Results checks: the Filter submenu filters by selected values, NULL, a range and duplicates; the caption counts the rows and removes and clears filters.')
 
+  // 13c2. Keep Selected Rows: the rows the selection covers, whatever their values, as one filter whose chip counts them.
+  // A sort keeps them, and keeping a selection of the kept rows replaces the filter instead of adding another.
+  await idInView()
+  await cell(1, 0).click()
+  await cell(3, 0).click({ modifiers: ['Shift'] })
+  await filterMenu(3, 0, 'Keep Selected Rows')
+  await expect(filterList).toContainText('3 selected rows')
+  await expect(caption).toContainText('3 of 100 rows')
+  await expect(cell(0, 0)).toHaveText('1')
+  await expect(cell(2, 0)).toHaveText('3')
+  await cell(1, 0).click()
+  await filterMenu(1, 0, 'Keep Selected Rows')
+  await expect(filterList).toContainText('1 selected row')
+  await expect(filterList).not.toContainText('3 selected rows')
+  await expect(caption).toContainText('1 of 100 rows')
+  await expect(cell(0, 0)).toHaveText('2')
+  await page.screenshot({ path: resolve('artifacts', 'results-keep-rows.png') })
+  await filterList.getByRole('button', { name: 'Remove filter 1 selected row', exact: true }).click()
+  await expect(filterList).toHaveCount(0)
+  await expect(caption).toContainText('100 rows')
+  await expect(caption).not.toContainText(' of ')
+  console.log('Results checks: Keep Selected Rows filters a grid to its selected rows, counts them in its chip, and a new one replaces it.')
+
   // 13d. The header funnel (results.distinct): its popover lists a column's distinct values with their counts as a
   // checklist; OK filters by the values ticked, the funnel stays filled while its column is filtered, Alt+Down opens it
   // for the active cell's column, NULL is an entry, a search narrows the list, a custom condition filters between two

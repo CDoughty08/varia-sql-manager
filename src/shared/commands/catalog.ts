@@ -940,6 +940,12 @@ export const commandCatalog = {
     title: 'Filter for Duplicate Rows', category: 'Query', keywords: ['filter', 'duplicates', 'repeated', 'rows', 'distinct', 'grid'], palette: false,
     menus: [{ menu: 'output.filter', group: '3_duplicates', order: 2, mnemonic: 'r', when: "outputView == 'grid'" }]
   },
+  // Keep Selected Rows (grouped results PR 4): a filter of the rows the selection covers, whatever their values, at most
+  // limits.transpose.maxRows of them. A grid has one; a new one replaces it.
+  'output.keepSelectedRows': {
+    title: 'Keep Selected Rows', category: 'Query', icon: 'filter', keywords: ['filter', 'keep', 'selected', 'rows', 'only', 'subset', 'grid'], palette: false,
+    menus: [{ menu: 'output.filter', group: '3_rows', order: 1, mnemonic: 'k', when: "outputView == 'grid'" }]
+  },
   'output.clearFilters': {
     title: 'Clear Filters', category: 'Query', icon: 'clear-all', keywords: ['filter', 'unfilter', 'all', 'reset', 'grid'], palette: false,
     menus: [{ menu: 'output.filter', group: '4_clear', order: 1, mnemonic: 'c', when: "outputView == 'grid' || outputLiveFilterable" }]

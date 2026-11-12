@@ -241,12 +241,16 @@ export interface ViewCells { ranges: [number, number][]; viewId?: number }
  *  with those of base `rows` (one per distinct value; `between`'s lowest and highest) and, for `in` and `notIn`, NULL when
  *  `nulls` is set; or with the selected `cells`, which the view resolves to rows. `duplicates` keeps the rows whose values
  *  in `columns` repeat (NULL equal to NULL), each group together. `groups` keeps the rows of the values a distinct
- *  snapshot of `column` ticks (results.distinct), however many; the first view it builds freezes the snapshot. */
+ *  snapshot of `column` ticks (results.distinct), however many; the first view it builds freezes the snapshot. `keepRows`
+ *  (Keep Selected Rows) names no column: it keeps the rows the selected `cells` cover, which the view resolves to base
+ *  `rows` (1 to `limits.transpose.maxRows`), whatever their values. */
 export type ViewFilter =
   | { op: 'in' | 'notIn' | 'between'; column: number; rows: number[]; nulls?: boolean }
   | { op: 'in' | 'notIn' | 'between'; column: number; cells: ViewCells }
   | { op: 'duplicates'; columns: number[] }
   | { op: 'groups'; column: number; snapshotId: number }
+  | { op: 'keepRows'; rows: number[] }
+  | { op: 'keepRows'; cells: ViewCells }
 /** A `groups` filter as a view applied it: whether it keeps (else drops) the `values` it names and NULL (`nulls`), and the
  *  one value's representative `row` when it names exactly one besides NULL. */
 export interface ResolvedGroupsFilter { op: 'groups'; column: number; snapshotId: number; keep: boolean; values: number; nulls: boolean; row?: number }
@@ -255,6 +259,7 @@ export type ResolvedViewFilter =
   | { op: 'in' | 'notIn' | 'between'; column: number; rows: number[]; nulls: boolean }
   | { op: 'duplicates'; columns: number[] }
   | ResolvedGroupsFilter
+  | { op: 'keepRows'; rows: number[] }
 /** results.view: up to `limits.views.maxKeys` keys on distinct columns and up to `limits.views.maxFilters` filters (at least
  *  one of either), the filters first; `replaces` names a view of the same result that this one supersedes. */
 export interface ResultsViewParams { resultId: number; sort: ViewSortKey[]; filters?: ViewFilter[]; replaces?: number }

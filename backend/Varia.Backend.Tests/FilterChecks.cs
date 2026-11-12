@@ -7,7 +7,9 @@ namespace Varia.Backend.Tests;
 
 /// <summary>Filtered views (results.view's filters): In, NotIn and Between from selected cells or base rows, equal by the
 /// column's collation; NULL among the values; duplicates on one column, several and every column; filters before the sort;
-/// resolved filters rebuilding the same view; the distinct value limit; and the request's checks and budget through the host.</summary>
+/// resolved filters rebuilding the same view; the distinct value limit; Keep Selected Rows (keepRows: the rows of a
+/// selection themselves, over sorted and filtered views, its limits, and while rows stream); and the request's checks and
+/// budget through the host.</summary>
 internal static class FilterChecks
 {
     // Latin1_General_CI_AS and Latin1_General_BIN2.
@@ -37,6 +39,7 @@ internal static class FilterChecks
         Filtering(check);
         Duplicates(check);
         SharedKeys(check);
+        KeepRows(check);
         Limits(check);
         HostRequests(check);
         Streaming(check);
@@ -74,6 +77,10 @@ internal static class FilterChecks
     private static ViewFilter Named(FilterOp op, int column, int[] rows, bool nulls = false) => new(op, column, rows, nulls, null, []);
 
     private static ViewFilter Dups(params int[] columns) => new(FilterOp.Duplicates, -1, null, false, null, columns);
+
+    private static ViewFilter Keep(int[]? order, params (long, long)[] ranges) => new(FilterOp.KeepRows, -1, null, false, new ViewCells(order, ranges), []);
+
+    private static ViewFilter KeepNamed(params int[] rows) => new(FilterOp.KeepRows, -1, rows, false, null, []);
 
     private static string Show(int[] order) => string.Join(",", order);
 
@@ -180,6 +187,50 @@ internal static class FilterChecks
             "a view's keys count a Value sort key on a filtered column once, and a Chars key on one again");
     }
 
+    /// <summary>Keep Selected Rows: the rows a selection covers in the view it was made on, resolved to base rows, whatever
+    /// their values (rows 0, 2 and 5 hold equal names; keeping row 0 keeps only it).</summary>
+    private static void KeepRows(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        var set = Fill(store, Rows);
+        var (plain, plainResolved) = Build(set, [], Keep(null, (5, 1), (0, 2)));
+        check(Show(plain) == "0,1,5" && plainResolved[0] is { Op: FilterOp.KeepRows, Cells: null, Column: -1, Nulls: false, Rows: [0, 1, 5] },
+            "keepRows over the result's own order keeps the selected rows and resolves to them as base rows, ascending");
+        check(Show(Build(set, [], Keep(null, (0, 1))).Order) == "0", "keepRows keeps the row, not the rows that share its values");
+        // A view sorted by score descending is ids 3,1,6,0,2,5,4: its positions 1 and 2 are base rows 1 and 6.
+        var sorted = Build(set, [new ViewKey(3, true, SortMode.Value)]).Order;
+        var (fromSorted, sortedResolved) = Build(set, [new ViewKey(0, true, SortMode.Value)], Keep(sorted, (1, 2)));
+        check(Show(fromSorted) == "6,1" && sortedResolved[0].Rows is [1, 6], "keepRows over a sorted view names that view's rows, and the new view's sort orders them");
+        // Sorted by id descending and filtered to the name a (rows 5,2,0): positions 0 and 1 are base rows 5 and 2.
+        var named = Named(FilterOp.In, 1, [0]);
+        var filtered = Build(set, [new ViewKey(0, true, SortMode.Value)], named).Order;
+        var (kept, keptResolved) = Build(set, [new ViewKey(0, true, SortMode.Value)], named, Keep(filtered, (0, 2)));
+        check(Show(filtered) == "5,2,0" && Show(kept) == "5,2" && keptResolved[1].Rows is [2, 5] && keptResolved[0].Rows is [0],
+            "keepRows over a sorted and filtered view resolves its positions to base rows, after the filters before it");
+        check(Show(Build(set, [new ViewKey(0, true, SortMode.Value)], keptResolved).Order) == "5,2" && Show(Build(set, [], plainResolved).Order) == "0,1,5",
+            "a resolved keepRows builds the same view again");
+        check(Show(Build(set, [], Dups(1), KeepNamed(1, 0, 5)).Order) == "0,5,1", "keepRows keeps the order the filters before it gave (duplicates' groups)");
+        check(Show(Build(set, [], KeepNamed(0, 1, 5), Dups(1)).Order) == "0,5", "a filter after keepRows sees only the rows it kept, so the view may show fewer than it names");
+        var twice = Build(set, [], KeepNamed(5, 5, 0));
+        check(Show(twice.Order) == "0,5" && twice.Filters[0].Rows is [0, 5], "rows named twice are kept once");
+        check(Throws(() => Build(set, [], KeepNamed(7))) == "INVALID_PARAMS" && Throws(() => Build(set, [], KeepNamed(-1))) == "INVALID_PARAMS", "a keepRows row outside the result is refused");
+        check(Throws(() => Build(set, [], KeepNamed())) == "INVALID_PARAMS", "a keepRows filter of no rows is refused");
+        check(Throws(() => Build(set, [], Keep(null, (7, 3)))) == "INVALID_PARAMS" && Throws(() => Build(set, [], Keep(filtered, (3, 1)))) == "INVALID_PARAMS",
+            "a selection past the view's rows keeps nothing and is refused");
+        check(ViewSorter.KeyCount([new ViewKey(1, false, SortMode.Value)], [KeepNamed(0)]) == 1 && ViewSorter.KeyCount([], [KeepNamed(0), Keep(null, (0, 1))]) == 0
+            && ViewSorter.KeyCount([], [Named(FilterOp.In, 1, [0]), KeepNamed(0)]) == 1,
+            "keepRows compares no column: it is not one of a view's keys");
+        var limit = ViewSorter.MaxKeepRows;
+        var many = Fill(store, [.. Enumerable.Range(0, limit + 2).Select(i => new string?[] { i.ToString(System.Globalization.CultureInfo.InvariantCulture), "x", "x", "1" })]);
+        check(limit == 4095 && Build(many, [], Keep(null, (1, limit))).Order.Length == limit, "keepRows takes 4,095 rows");
+        check(Throws(() => Build(many, [], Keep(null, (0, limit + 1)))) == "TOO_LARGE", "keepRows over more than 4,095 rows answers TOO_LARGE");
+        check(Throws(() => Build(many, [], Keep(null, (0, limit), (limit, 1)))) == "TOO_LARGE", "the row limit counts every range's rows");
+        check(Build(many, [], Keep(null, [.. Enumerable.Repeat((0L, (long)limit), ViewSorter.MaxFilterRanges)])).Order.Length == limit,
+            "256 overlapping ranges count each row once");
+        check(Build(many, [], KeepNamed([.. Enumerable.Range(2, limit)])).Order.Length == limit && Throws(() => Build(many, [], KeepNamed([.. Enumerable.Range(0, limit + 1)]))) == "INVALID_PARAMS",
+            "resolved keepRows rows are at most 4,095");
+    }
+
     private static void Limits(Action<bool, string> check)
     {
         var store = new ResultStore(1L << 30, 1L << 29);
@@ -218,6 +269,39 @@ internal static class FilterChecks
         set.Complete();
         var whole = (ResultsViewResult)service.DispatchAsync("results.view", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, sort = Array.Empty<object>(), filters = new object[] { new { op = "in", column = 3, rows = new[] { 0 } } } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult()!;
         check(whole.BaseRows == 2 * Rows.Length && whole.Rows == 6 && whole.Complete, "once the set completes a view is built from all its rows");
+        KeepWhileStreaming(check, store, service);
+    }
+
+    /// <summary>keepRows made while rows stream keeps the rows it resolved: re-sent once the set completes, it keeps those and
+    /// none of the rows that arrived since.</summary>
+    private static void KeepWhileStreaming(Action<bool, string> check, ResultStore store, SqlService service)
+    {
+        var set = store.Open(store.BeginQuery("filters" + Interlocked.Increment(ref fills)), 0, 1, 1, "rows", Columns, Wires) ?? throw new InvalidOperationException("The result set was not kept.");
+        void Add(string?[] row)
+        {
+            set.CountRow();
+            var builder = set.BeginRow()!;
+            foreach (var cell in row)
+            {
+                if (cell is null) builder.AppendNull();
+                else builder.AppendText(cell);
+            }
+            set.TryCommitRow();
+        }
+        ResultsViewResult View(object filter) => (ResultsViewResult)service.DispatchAsync("results.view", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, sort = Array.Empty<object>(), filters = new[] { filter } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult()!;
+        foreach (var row in Rows) Add(row);
+        set.Seal();
+        foreach (var row in Rows) Add(row);
+        // The selection reaches past the rows sealed: only those are there to keep.
+        var streaming = View(new { op = "keepRows", cells = new { ranges = new[] { new long[] { 2, 100 } } } });
+        var resolved = streaming.Filters![0].Rows!;
+        check(streaming is { Rows: 5, BaseRows: 7, Complete: false } && resolved.SequenceEqual([2, 3, 4, 5, 6]) && streaming.Filters[0] is { Op: "keepRows", Column: null, Nulls: null },
+            "keepRows on a streaming set resolves to the sealed rows the selection covers");
+        check(Throws(() => View(new { op = "keepRows", rows = new[] { Rows.Length } })) == "INVALID_PARAMS", "a row not yet sealed cannot be named");
+        set.Complete();
+        var whole = View(new { op = "keepRows", rows = resolved });
+        check(whole is { Rows: 5, BaseRows: 14, Complete: true } && whole.Filters![0].Rows!.SequenceEqual(resolved),
+            "re-sent once the set completes, keepRows keeps the rows it resolved and none that arrived later");
     }
 
     private static string? Throws(Action action)
@@ -278,5 +362,28 @@ internal static class FilterChecks
         store.Return(set.Budget, filler);
         check(Code(Ask(12, new { resultId = id, sort = Array.Empty<object>(), filters = new object[] { new { op = "in", column = 0, rows = new[] { 1 }, extra = true } } })) is not null,
             "a filter with an unknown member is refused");
+        // Keep Selected Rows: positions 2 to 4 of the descending view are ids 997, 996 and 995.
+        object[] KeepOf(object filter) => [filter];
+        var keep = Ask(50, new { resultId = id, sort = new[] { new { column = 0, descending = false, mode = "value" } }, filters = KeepOf(new { op = "keepRows", cells = new { viewId = sortedId, ranges = new[] { new long[] { 2, 3 } } } }) }).GetProperty("result");
+        var keepEcho = keep.GetProperty("filters")[0];
+        check(keep.GetProperty("rows").GetInt64() == 3 && keepEcho.GetProperty("op").GetString() == "keepRows" && keepEcho.GetProperty("rows").EnumerateArray().Select(row => row.GetInt32()).SequenceEqual([995, 996, 997])
+            && !keepEcho.TryGetProperty("column", out _) && !keepEcho.TryGetProperty("nulls", out _) && !keepEcho.TryGetProperty("cells", out _),
+            "results.view keeps the rows a selection of another view covers and answers them as base rows, with no column");
+        var kept = Ask(51, new { resultId = id, sort = Array.Empty<object>(), filters = new object[] { new { op = "between", column = 0, rows = new[] { 996, 999 } }, new { op = "keepRows", rows = new[] { 997, 995, 996 } } } }).GetProperty("result");
+        check(kept.GetProperty("rows").GetInt64() == 2 && kept.GetProperty("filters")[1].GetProperty("rows").GetArrayLength() == 3, "a resolved keepRows applies with the other filters, and still names its rows");
+        string? KeepCode(uint request, object filter) => Code(Ask(request, new { resultId = id, sort = Array.Empty<object>(), filters = KeepOf(filter) }));
+        check(KeepCode(52, new { op = "keepRows", column = 0, rows = new[] { 1 } }) == "INVALID_PARAMS" && KeepCode(53, new { op = "keepRows", rows = new[] { 1 }, nulls = false }) == "INVALID_PARAMS"
+            && KeepCode(54, new { op = "keepRows", rows = new[] { 1 }, columns = new[] { 0 } }) == "INVALID_PARAMS" && KeepCode(55, new { op = "keepRows", rows = new[] { 1 }, snapshotId = 1 }) == "INVALID_PARAMS",
+            "a keepRows filter naming a column, NULL, columns or a value list is refused");
+        check(KeepCode(56, new { op = "keepRows" }) == "INVALID_PARAMS" && KeepCode(57, new { op = "keepRows", rows = new[] { 1 }, cells = new { ranges = new[] { new long[] { 0, 1 } } } }) == "INVALID_PARAMS",
+            "a keepRows filter needs rows or cells, not both");
+        check(KeepCode(58, new { op = "keepRows", rows = Array.Empty<int>() }) == "INVALID_PARAMS" && KeepCode(59, new { op = "keepRows", rows = Enumerable.Range(0, ViewSorter.MaxKeepRows + 1).ToArray() }) == "INVALID_PARAMS",
+            "a keepRows filter names 1 to 4,095 rows");
+        check(KeepCode(60, new { op = "keepRows", cells = new { ranges = Enumerable.Repeat(new long[] { 0, 1 }, ViewSorter.MaxFilterRanges + 1).ToArray() } }) == "INVALID_PARAMS",
+            "a keepRows selection of more than 256 ranges is refused");
+        var all = Ask(61, new { resultId = id, sort = Array.Empty<object>(), filters = KeepOf(new { op = "keepRows", cells = new { ranges = new[] { new long[] { 0, 5000 } } } }) });
+        check(Code(all) is null && all.GetProperty("result").GetProperty("rows").GetInt64() == 1000, "a keepRows selection is clipped to the rows there are before its rows are counted");
+        check(KeepCode(62, new { op = "keepRows", cells = new { viewId = 999_999u, ranges = new[] { new long[] { 0, 1 } } } }) == "VIEW_NOT_FOUND", "a keepRows selection of a closed view answers VIEW_NOT_FOUND");
+        check(KeepCode(63, new { op = "keepRows", rows = new[] { 1000 } }) == "INVALID_PARAMS", "a keepRows row beyond the result is refused through the host");
     }
 }
