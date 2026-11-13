@@ -25,7 +25,8 @@ internal sealed class EntraAuthenticationProvider(EntraService service) : SqlAut
         else
         {
             var request = new EntraRequest(host, tenant, EntraEndpoints.Scope(parameters.Resource), string.IsNullOrWhiteSpace(parameters.UserId) ? null : parameters.UserId);
-            using var limit = new CancellationTokenSource(parameters.ConnectionTimeout > 0 ? TimeSpan.FromSeconds(Math.Min(parameters.ConnectionTimeout, 3600)) : UnboundedLimit);
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(EntraConnectScope.Token);
+            limit.CancelAfter(parameters.ConnectionTimeout > 0 ? TimeSpan.FromSeconds(Math.Min(parameters.ConnectionTimeout, 3600)) : UnboundedLimit);
             try
             {
                 var token = await AcquireAsync(service.Source, method, request, parameters.Password ?? "", limit.Token).ConfigureAwait(false);

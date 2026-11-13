@@ -50,7 +50,7 @@ internal sealed class EntraService
     /// dialog's details; anything else is left to the caller.</summary>
     /// <param name="idOf">The opened connection's ClientConnectionId, under which the provider recorded the account.</param>
     /// <returns>The open result and the connection string to keep.</returns>
-    internal async Task<(T Opened, string ConnectionString)> OpenForUserAsync<T>(string connectionString, string server, Func<string, CancellationToken, Task<T>> open, Func<T, Guid> idOf, CancellationToken token)
+    internal async Task<(T Opened, string ConnectionString)> OpenForUserAsync<T>(string connectionString, string server, Func<string, CancellationToken, Task<T>> open, Func<T, Guid> idOf, CancellationToken token, bool allowInteractive = true)
     {
         async Task<(T, string)> Attempt(string text)
         {
@@ -61,7 +61,7 @@ internal sealed class EntraService
         try { return await Attempt(connectionString).ConfigureAwait(false); }
         catch (SqlException error) when (!token.IsCancellationRequested && Failure(error, connectionString) is { } attempt)
         {
-            if (attempt is not InteractionRequired required) throw EntraFailures.Describe(attempt, error, server, details: true);
+            if (attempt is not InteractionRequired required || !allowInteractive) throw EntraFailures.Describe(attempt, error, server, details: true);
             var generation = Volatile.Read(ref this.generation);
             var signedIn = await SignInAsync(required.Request, server, token).ConfigureAwait(false);
             var builder = new SqlConnectionStringBuilder(connectionString);

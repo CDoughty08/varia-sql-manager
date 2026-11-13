@@ -5,6 +5,7 @@ import type { Platform } from '../commands/keybindings'
 import type { ScriptingOptions } from '../scripting/options.ts'
 import { scriptingOptionKeys } from '../scripting/options.ts'
 import { activityMonitorSettings } from './activity-monitor'
+import { connectionSettings } from './connections'
 import { documentSettings } from './documents'
 import { environmentSettings } from './environment'
 import { integrationServicesSettings } from './integration-services'
@@ -23,6 +24,7 @@ export type { SettingDef, SettingPage } from './types'
 /** One import and one entry a line: each area belongs to the PR that owns it. */
 const settingAreas = [
   environmentSettings,
+  connectionSettings,
   documentSettings,
   textEditorSettings,
   statusBarSettings,

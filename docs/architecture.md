@@ -64,8 +64,15 @@ being true.
   credentials and trusted resolved-account evidence; neither the saved-profile key nor server-name equality proves
   equivalence. The target registry (`src/renderer/src/services/connection-targets.ts`) returns stale successful
   handles for the backend owner to close. It keeps intentional disconnect separate from unexpected loss and Explorer
-  membership separate from document references. These additive contracts are not yet wired into the workbench;
-  `docs/connections-explorer-implementation-plan.md` defines the owning integration tracks.
+  membership separate from document references. Session v2 stores the strict workspace and exact query association,
+  database and attachment intent; v1 server names remain display hints and never establish identity. Reload capture
+  shares hot-exit's eligibility and pin validation. `docs/connections-persistence-integration.md` records the workbench
+  hooks that Explorer owns; `docs/connections-explorer-implementation-plan.md` defines the parallel integration tracks.
+- Background connect is explicitly noninteractive and preserves credential policy independently of the ordinary
+  dialog's Remember Password flag. Main requires a pinned prior principal and exact opaque credential revision for
+  password authentication. Backend and provider cancellation enforce a bounded attempt even with unlimited stored
+  connect timeout; an interaction-required response never escalates to browser sign-in. Only actual saved-secret
+  rejection invalidates that revision; unavailable keyring, network, certificate and database errors retain ciphertext.
 - Query rows stay in backend memory (never on disk) under the result budget. Main forwards DATA pages undecoded, as
   exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). Peek's Top rows are no
   exception: Select Top Rows' script with N = 10 through `query.execute`, in a session and results entry of the Peek's own

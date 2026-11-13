@@ -72,11 +72,24 @@ Renderer (sandboxed)                          Main                              
 
 - **Unary methods** stay on `ipcRenderer.invoke('varia:request')`: `trusted()`, strict zod (`requestSchemas`), and
   `ApiResult` results, now with an error `code`. `connections.connect` and `.databases` take an optional fourth
-  argument, a strict `ConnectContext` (`{ profileId?, remember?, requestId? }`: the history entry whose remembered
-  password main may fill in, whether to remember the password once connected, and the uuid the dialog's Stop cancels the
-  request by); any other method with one fails with `Invalid request.`. A failure after main filled in a remembered
-  password that was rejected (SQL Server's 18456 under SQL Server Authentication, AADSTS50126 or 7000215 under Microsoft
-  Entra Password or Service Principal) carries `passwordForgotten: true`.
+  argument, a strict `ConnectContext`: the history `profileId`, `remember` choice, `requestId` for Stop, optional durable
+  `targetId`, `setsEnvironment`, and the target's `expectedPrincipal` and exact opaque `credential` revision. Its
+  `credentialIntent` is `preserve` or the explicit `update-credentials`; `credentialPolicy` is `preserve`, `remember` or
+  `forget`. Existing dialog callers can keep using `remember`. Background `mode: 'background'` requires the prior
+  principal, exact revisions for password authentication, and preservation; it cannot carry a Remember choice or typed
+  password. Main injects backend-only `nonInteractive`, with a 15-second wire and provider budget, and never starts a
+  browser sign-in. Main returns `ConnectionInfo.authentication` only from the actual server login, validates the expected
+  account before saving anything, and disposes a mismatched handle. Any other method with a context fails with
+  `Invalid request.`. An injected saved-binding login refusal carries `credentialRejected: true`, and successful forgetting
+  also carries `passwordForgotten: true`. SQL 18456 states 2, 5 and 8 establish credential rejection; ambiguous state 1
+  suppresses queued replays while keeping ciphertext. Grant failures and unavailable databases neither suppress other
+  database targets nor erase secrets. Entra rejection uses AADSTS50126 or 7000215 only.
+  Main's bounded `ConnectionAuthenticationGuard` retains nonsecret authentication pins independently of checkpoint
+  acknowledgement. Disk restore seeds those pins; renderer hot-exit/reload snapshots project their options, principal
+  and credential references from the pins, so a forged snapshot cannot redirect an established target on restart.
+  The reuse owner calls `forget(targetId)` only after pruning a target without documents, transports or attempts.
+  Main bounds connection preparation and transport together before the first await, including keyring/gate waits;
+  target and credential-binding leases remain held through authentication, history and credential revision receipts.
 - **One MessagePort per renderer load** carries query events, the memory push, and the `results.read` / `results.close`
   streams between main and the results worker. The preload never decodes MessagePack and exposes no port.
 - **Rows stay in the backend.** `query.execute` returns a summary with a descriptor per result set; the results worker
@@ -2839,8 +2852,12 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
 - **Secrets.** Passwords exist only inside REQUEST bodies on the private pipe: never in arguments, environment,
   `BackendState`, the fake backend's call log, traces or stderr. Lost connections keep their options without the
   password. A remembered password (Remember password) is Electron `safeStorage` ciphertext in `saved-passwords.json`,
-  bound to its server, login and TLS settings by a SHA-256 hash beside it and a check over them and the password inside
-  it (so a ciphertext moved between entries, or a rewritten hash, is refused); main decrypts it (async API only) and
+  bound to its server, login and TLS settings by a SHA-256 hash beside it and a check over them, its opaque revision and
+  the password inside it (so a ciphertext moved between bindings, a rewritten hash or revision is refused). An unchanged
+  secret retains its revision; replacement rotates it. Legacy ciphertext without a revision remains picker-only.
+  Main serializes secret operations and gates saved-binding attempts through completion, so a rejected revision cannot
+  be tried again by queued reconnects, even if removing its ciphertext fails. Temporary keyring/network/TLS failures keep
+  the encrypted entry. Main decrypts it (async API only) and
   puts it into a `connections.connect` or `.databases` request whose options have that binding and an empty password,
   after `validateRequest`, and the frame is zeroed as before. The renderer only learns which history entries have one.
 - **Test seams** are honoured only when `VARIA_SMOKE_TEST=1` and the app is not packaged: `VARIA_TEST_BACKEND` (with an

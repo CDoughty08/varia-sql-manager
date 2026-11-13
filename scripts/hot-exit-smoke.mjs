@@ -311,7 +311,7 @@ try {
     await reload()
     await expect(page.getByRole('alert').filter({ hasText: 'Wait for the current document operation to finish before reloading.' })).toBeVisible()
     expect(await page.evaluate(() => window.varia.runRole('reload'))).toMatchObject({
-      ok: false, error: 'Wait for the pinned tabs to reopen before reloading.'
+      ok: false, error: 'Wait for the saved tabs to reopen before reloading.'
     })
   } finally {
     await application.evaluate(() => {

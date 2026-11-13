@@ -47,6 +47,7 @@ const api: VariaApi = {
     return () => { ipcRenderer.removeListener('varia:context-menu-command', listener) }
   },
   health: () => request('system.health', {}),
+  // Background callers use an exact credential reference and preserve policy; main validates both.
   connect: (options, context) => connectRequest('connections.connect', options, context),
   discoverDatabases: (options, context) => connectRequest('connections.databases', options, context),
   cancelConnectionRequests: requestIds => ipcRenderer.invoke('varia:connections-cancel', { requestIds }),

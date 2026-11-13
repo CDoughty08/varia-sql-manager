@@ -9,6 +9,10 @@ export interface QueryDocument {
   readonly pinned?: boolean
   readonly savedVersionId: number | null
   readonly connectionId?: string
+  /** Durable identity; a backend connectionId belongs only to its current process generation. */
+  readonly targetId?: string
+  /** False after query-only Disconnect; reconnecting the target must then leave this query disconnected. */
+  readonly attachWanted?: boolean
   readonly database: string
   readonly includeActualPlan?: boolean
   readonly includeLivePlan?: boolean
@@ -20,8 +24,7 @@ export interface QueryDocument {
   /** Set while the user has renamed the tab (Rename Tab): the name it would show otherwise, its file's name once saved.
    *  `name` is then the user's name, which every prompt and Save As's suggested file name use. */
   readonly baseName?: string
-  /** The server a query reopened by hot exit was connected to: shown in its tooltip, and its database is kept when it
-   *  connects to that server again. Cleared by its first connection. */
+  /** A legacy server hint only. It never establishes identity or authorizes reassociation. */
   readonly lastServer?: string
   /** Absent for a query; an XML, JSON or plan value opened from the results has no connection and never executes; a table
    *  designer, Database Properties, an SSIS Catalog object's properties and an Activity Monitor have no text at all. */

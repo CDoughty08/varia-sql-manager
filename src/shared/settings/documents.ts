@@ -28,7 +28,7 @@ export const documentSettings = [
   {
     key: 'environment.documents.hotExit', page: 'environment.documents', label: 'Restore open queries on startup', type: 'boolean', default: true,
     keywords: ['hot exit', 'restore', 'reopen', 'session', 'tabs', 'unsaved', 'quit', 'exit', 'startup'],
-    description: 'Closing Varia SQL Manager keeps open queries, including unsaved text, tab names and tab order, in your profile folder. The next start reopens them disconnected. While it is False, only pinned tabs reopen, and closing asks about unsaved changes in unpinned queries. Results, connections and passwords are never kept.'
+    description: 'Closing Varia SQL Manager keeps open queries, including unsaved text, tab names, tab order, exact connection targets and each query\'s database, in your profile folder. The next start reopens them disconnected before eligible targets reconnect. While it is False, only pinned tabs reopen, and closing asks about unsaved changes in unpinned queries. Results, live SQL sessions and unremembered passwords are never kept.'
   },
   {
     key: 'environment.documents.detectExternalChanges', page: 'environment.documents', label: 'Detect when file is changed outside the environment', type: 'boolean', default: true,

@@ -1,12 +1,18 @@
-import type { ApiResult, RestoredSession, SessionDocumentWrite, SessionWrite, SqlFile, VariaApi } from '../../../shared/contracts'
+import type { ApiResult, ReloadPins, RestoredSession, SessionDocumentWrite, SessionWrite, SqlFile, VariaApi } from '../../../shared/contracts'
 import { sessionLimits } from '../../../shared/files/session'
 import { isCustomKind, type QueryDocument } from '../documents'
 import type { DocumentService } from './documents'
 import type { FileService } from './files'
 import type { EditorGroupService } from './editor-groups'
+import type { ConnectionTargetService } from './connection-targets'
 
 /** What hot exit keeps of the open tabs, and the tabs it keeps: a tab left out is asked about as without hot exit. */
-export interface KeptSession { readonly session: SessionWrite; readonly kept: ReadonlySet<string> }
+export interface KeptSession {
+  readonly session: SessionWrite
+  readonly kept: ReadonlySet<string>
+  /** Revalidate after main writes: a background connect or changed target details must not leave an older checkpoint. */
+  readonly checkpointCurrent: () => boolean
+}
 export function requireKeptPins(documents: readonly QueryDocument[], kept: ReadonlySet<string>): void {
   const missing = documents.find(tab => tab.pinned && !kept.has(tab.id))
   if (missing) throw new Error(`Pinned tab “${missing.name}” could not fit in the session restore limits. Unpin or close some tabs, or save large queries, and try again.`)
@@ -14,6 +20,9 @@ export function requireKeptPins(documents: readonly QueryDocument[], kept: Reado
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 const encoder = new TextEncoder()
 const bytes = (value: unknown) => encoder.encode(JSON.stringify(value)).length
+const associations = (documents: readonly QueryDocument[]) => JSON.stringify(documents.map(document => [
+  document.id, document.targetId, document.database, document.attachWanted, document.connectionId
+]))
 
 /**
  * The open text tabs as hot exit keeps them, in strip order, within its caps: 64 tabs and 64 MB as main writes them (the
@@ -23,20 +32,27 @@ const bytes = (value: unknown) => encoder.encode(JSON.stringify(value)).length
  * With editor groups, the documents are in group order, and the groups they are in are kept by each one's place.
  */
 export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'getModel' | 'isFilling'>, server: (connectionId: string) => string | undefined,
-  { budget = sessionLimits.totalBytes - sessionLimits.slackBytes, pinnedOnly = false, groups }: { budget?: number; pinnedOnly?: boolean; groups?: Pick<EditorGroupService, 'capture'> } = {}): KeptSession {
+  { budget = sessionLimits.totalBytes - sessionLimits.slackBytes, pinnedOnly = false, groups, connectionTargets }: {
+    budget?: number; pinnedOnly?: boolean; groups?: Pick<EditorGroupService, 'capture'>; connectionTargets?: Pick<ConnectionTargetService, 'exportWorkspace'>
+  } = {}): KeptSession {
   const { documents: tabs, activeId } = documents.getSnapshot(), written: SessionDocumentWrite[] = [], kept = new Set<string>()
-  let used = 0, activeIndex = -1
+  const workspace = connectionTargets?.exportWorkspace(), targetIds = new Set(workspace?.targets.map(target => target.id))
+  const capturedAssociations = associations(tabs), capturedWorkspace = JSON.stringify(workspace)
+  let used = workspace ? bytes(workspace) : 0, activeIndex = -1
   for (const document of tabs) {
     const model = documents.getModel(document.id)
     if (written.length >= sessionLimits.documents) break
     if ((pinnedOnly && !document.pinned) || !model || isCustomKind(document.kind) || documents.isFilling(document.id)) continue
     const kind = document.kind && !isCustomKind(document.kind) ? document.kind : 'sql', connected = document.connectionId ? server(document.connectionId) : document.lastServer
     const at = kind === 'sql' && connected ? connected.slice(0, sessionLimits.serverChars) : undefined
+    const targetId = kind === 'sql' && document.targetId && targetIds.has(document.targetId) ? document.targetId : undefined
+    if (kind === 'sql' && document.targetId && !targetId) throw new Error('A query connection target could not be kept. Try again after the connection workspace is ready.')
     const entry: SessionDocumentWrite = {
       name: document.name.slice(0, sessionLimits.nameChars), ...document.baseName ? { baseName: document.baseName.slice(0, sessionLimits.nameChars) } : {}, kind,
       eol: model.getEOL() === '\r\n' ? 'crlf' : 'lf', dirty: document.dirty, ...document.file ? { fileId: document.file.id } : {},
       ...document.pinned ? { pinned: true } : {},
-      ...at ? { server: at } : {}, ...at && document.database ? { database: document.database.slice(0, sessionLimits.databaseChars) } : {},
+      ...at ? { server: at } : {}, ...(targetId || at) && document.database !== undefined ? { database: document.database.slice(0, sessionLimits.databaseChars) } : {},
+      ...targetId ? { targetId, attachWanted: document.attachWanted ?? !!document.connectionId } : {},
       ...!document.file || document.dirty ? { text: model.getValue() } : {}
     }
     const size = bytes(entry) + (document.file ? bytes(document.file.path) : 0) + 2
@@ -48,7 +64,24 @@ export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'ge
   }
   const places = new Map([...kept].map((id, index) => [id, index]))
   const layout = groups?.capture(id => places.get(id))
-  return { session: { documents: written, activeIndex, ...layout ? { groups: layout } : {} }, kept }
+  const checkpointCurrent = () => {
+    try { return associations(documents.getSnapshot().documents) === capturedAssociations && JSON.stringify(connectionTargets?.exportWorkspace()) === capturedWorkspace }
+    catch { return false }
+  }
+  return { session: { documents: written, activeIndex, ...layout ? { groups: layout } : {}, ...workspace ? { workspace } : {} }, kept, checkpointCurrent }
+}
+
+/** Reload uses the same eligibility as hot exit and takes its last checkpoint as the old page unloads. */
+export function reloadSession(documents: Pick<DocumentService, 'getSnapshot' | 'getModel' | 'isFilling'>, server: (connectionId: string) => string | undefined,
+  { restoreQueries, recoveryId, ...options }: Parameters<typeof keptSession>[2] & {
+    restoreQueries: boolean; recoveryId: (tabId: string) => string | undefined
+  }): ReloadPins | undefined {
+  const { documents: tabs, busy } = documents.getSnapshot()
+  if (busy) throw new Error('Wait for the current document operation to finish before reloading.')
+  const kept = keptSession(documents, server, { ...options, pinnedOnly: !restoreQueries })
+  requireKeptPins(tabs, kept.kept)
+  if (!kept.session.documents.length && !kept.session.workspace?.targets.length) return
+  return { session: kept.session, recoveryIds: [...kept.kept].map(id => recoveryId(id) ?? null) }
 }
 
 export interface SessionRestoreOptions {
@@ -57,6 +90,7 @@ export interface SessionRestoreOptions {
   readonly files: Pick<FileService, 'later' | 'release' | 'reportError'>
   /** Where the reopened tabs go back into their editor groups. */
   readonly groups?: Pick<EditorGroupService, 'restore'>
+  readonly connectionTargets?: Pick<ConnectionTargetService, 'restore'>
   readonly resumeRecovery?: (tabId: string, recoveryId: string) => void
   /** Runs inside the restore's own file task when it reopened nothing (also when it failed): the welcome query, which
    *  must come before a file the command line hands over meanwhile, since that open waits for this task. */
@@ -67,7 +101,7 @@ export interface SessionRestoreOptions {
  * a tab (one a second instance handed over first) is not opened twice. Resolves with how many tabs it opened; a failure
  * goes to the file banner, and files that are gone are named there as a warning.
  */
-export async function restoreSession({ api, documents, files, groups, resumeRecovery, otherwise }: SessionRestoreOptions): Promise<number> {
+export async function restoreSession({ api, documents, files, groups, connectionTargets, resumeRecovery, otherwise }: SessionRestoreOptions): Promise<number> {
   if (!api.hotExit) return 0
   let opened = 0
   await files.later(async () => {
@@ -80,6 +114,7 @@ export async function restoreSession({ api, documents, files, groups, resumeReco
     const registered: SqlFile[] = [], ids: string[] = []
     let active: string | undefined
     try {
+      if (restored.workspace && connectionTargets && !connectionTargets.restore(restored.workspace)) throw new Error('The connection workspace cannot be restored while a connection is active.')
       for (const [index, document] of restored.documents.entries()) {
         if (document.file) registered.push(document.file)
         const open = document.file ? documents.getSnapshot().documents.find(tab => tab.file?.id === document.file?.id) : undefined

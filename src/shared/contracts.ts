@@ -1,6 +1,7 @@
 import type { LayoutLoad, LayoutState, WorkspaceLayout } from './layouts'
 import type { EstimatedPlanRequest, EstimatedPlanResult } from './estimated-plans'
 import type { ConnectContext, ConnectionEnvironmentInput, ConnectionLibraryView, ConnectionProfileInput, SecretStorageState } from './connections'
+import type { ConnectionAuthentication } from './connection-targets'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
 import type { CommandId, RendererRole } from './commands/catalog'
 import type { ContextMenuCommand, ContextMenuRequest, MenuState } from './commands/menus'
@@ -85,6 +86,10 @@ export interface ConnectionOptions {
  * server profile probed at connect, and are absent when the probe failed.
  */
 export interface ConnectionInfo {
+  /** Main validates the actual server principal and the exact remembered credential revision. */
+  authentication?: ConnectionAuthentication
+  /** Main's authoritative reuse coordinator selects this durable target; the backend never supplies it. */
+  targetId?: string
   /** Older SQL Server connections omit this. Language features default those connections to sqlserver. */
   providerId?: DatabaseProviderId
   id: string; server: string; database: string; serverVersion: string; displayName?: string; color?: string; commandTimeout?: number; historyWarning?: string; generation: number
@@ -543,7 +548,10 @@ export interface DebugMethods {
 /** Every method main sends to the backend. */
 /** Main compresses plan input before the existing 4 MiB request boundary. Renderers can supply only raw XML. */
 export interface PlanMethods { 'plans.parse': { params: { xml: string; encoding: 'gzip' }; result: PlanDocument } }
-export interface BackendMethods extends Omit<RpcMethods, 'plans.parse'>, PlanMethods, PortMethods, JobMethods, AuthMethods, DebugMethods {}
+export interface BackendMethods extends Omit<RpcMethods, 'plans.parse' | 'connections.connect' | 'connections.databases'>, PlanMethods, PortMethods, JobMethods, AuthMethods, DebugMethods {
+  'connections.connect': { params: ConnectionOptions & { nonInteractive?: boolean }; result: ConnectionInfo }
+  'connections.databases': { params: ConnectionOptions & { nonInteractive?: boolean }; result: DatabaseInfo[] }
+}
 export type BackendMethod = keyof BackendMethods
 /** Facts about a failed connection for the Connect dialog: SQL Server's error number, state and class (level), the
  *  server that answered (at most 256 characters), and `reason` 'certificate' when the server's TLS certificate was not
@@ -552,7 +560,7 @@ export type BackendMethod = keyof BackendMethods
 export interface ErrorDetails { number?: number; state?: number; class?: number; server?: string; reason?: ErrorReason; exception?: string }
 /** Backend failures carry a code (docs/ipc.md); the message is always a complete sentence to show as is.
  *  `passwordForgotten`: SQL Server rejected the remembered password main filled in, so main forgot it. */
-export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string; code?: ErrorCode; details?: ErrorDetails; passwordForgotten?: true }
+export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string; code?: ErrorCode; details?: ErrorDetails; passwordForgotten?: true; credentialRejected?: true }
 
 /** Why a backend generation ended: it exited, crashed, broke the protocol, never said HELLO, or main ended it. */
 export type LossReason = 'exit' | 'protocol' | 'helloTimeout' | 'crash' | 'reload' | 'manual'
