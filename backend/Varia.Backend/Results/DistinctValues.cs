@@ -163,6 +163,14 @@ internal sealed class DistinctSnapshot
     }
 }
 
+/// <summary>Where one distinct list's time went, for the result-work benchmark (--result-work-bench): Stopwatch ticks spent
+/// building the column's key, picking the rows (and the kept view's marks), grouping without sorting (tried first while the
+/// key's codes are its values), sorting, finding the runs of equal values and ranking them by count. Times only.</summary>
+internal sealed class DistinctStages
+{
+    public long Key, Rows, Grouping, Sorting, Runs, Ranking;
+}
+
 internal static partial class ViewSorter
 {
     /// <summary>Values one results.distinctRead answers and groups one results.distinctTick names (limits.distinct.maxWindow).</summary>
@@ -193,14 +201,22 @@ internal static partial class ViewSorter
     /// <paramref name="kept"/>, another view of the result, ticked when a row of that view holds it (equal as above), so a
     /// checklist over one view starts as a filtered view shows it; NULL likewise.
     /// </summary>
-    public static DistinctSnapshot DistinctValues(ResultSetBuffer set, StoredPage[] pages, ResultView? view, int column, bool complete, CancellationToken token, ResultView? kept = null, KeyMemory? memory = null)
+    public static DistinctSnapshot DistinctValues(ResultSetBuffer set, StoredPage[] pages, ResultView? view, int column, bool complete, CancellationToken token, ResultView? kept = null, KeyMemory? memory = null, DistinctStages? stages = null)
     {
-        try { return DistinctValues(set, pages, view, column, complete, kept, memory, token); }
+        try { return DistinctValues(set, pages, view, column, complete, kept, memory, stages, token); }
         finally { memory?.ReturnAll(); }
     }
 
-    private static DistinctSnapshot DistinctValues(ResultSetBuffer set, StoredPage[] pages, ResultView? view, int column, bool complete, ResultView? kept, KeyMemory? memory, CancellationToken token)
+    private static DistinctSnapshot DistinctValues(ResultSetBuffer set, StoredPage[] pages, ResultView? view, int column, bool complete, ResultView? kept, KeyMemory? memory, DistinctStages? stages, CancellationToken token)
     {
+        var lap = System.Diagnostics.Stopwatch.GetTimestamp();
+        long Lap()
+        {
+            var now = System.Diagnostics.Stopwatch.GetTimestamp();
+            var ticks = now - lap;
+            lap = now;
+            return ticks;
+        }
         long total = 0;
         foreach (var page in pages) total += page.Rows;
         if (total > Array.MaxLength) throw new RequestException("TOO_LARGE", "This result has too many rows to list its values.");
@@ -208,6 +224,7 @@ internal static partial class ViewSorter
         var source = new PageSource(pages, set.Wires.Count);
         var approximate = false;
         var key = Build(set, source, new ViewKey(column, false, SortMode.Value), null, rows, token, ref approximate, memory);
+        if (stages is not null) stages.Key += Lap();
         var looked = view?.Order.Length ?? rows;
         var values = new int[looked];
         var count = 0;
@@ -243,51 +260,92 @@ internal static partial class ViewSorter
                 if (key.IsNull(row)) nullTicked = true;
             }
         }
+        if (stages is not null) stages.Rows += Lap();
         if (key.Coded && Grouped(key, values, count, marks, token) is { } grouped)
         {
             token.ThrowIfCancellationRequested();
-            return new DistinctSnapshot(set, column, source, grouped.Reps, grouped.Counts, ByCount(grouped.Counts), grouped.Ticks, looked, nulls, nullTicked, complete, approximate);
+            if (stages is not null) stages.Grouping += Lap();
+            var codedRanks = ByCount(grouped.Counts);
+            if (stages is not null) stages.Ranking += Lap();
+            return new DistinctSnapshot(set, column, source, grouped.Reps, grouped.Counts, codedRanks, grouped.Ticks, looked, nulls, nullTicked, complete, approximate);
         }
+        if (stages is not null) stages.Grouping += Lap();
         // Ties fall back to the base row, so each run of equal values starts with the lowest row holding it.
         ThrowIfSlow([key], values.AsSpan(0, count));
         Sort(values, 0, count, new Comparer([key], null, token));
-        // Groups in value order, in place: the representative rows over the front of `values` (a group's slot is never past
-        // its first row), their counts and ticks beside them.
-        var counts = new int[count];
-        var ticks = new bool[count];
-        var groups = 0;
-        for (int start = 0, steps = 0; start < count; steps++)
-        {
-            if ((steps & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
-            var first = values[start];
-            var end = start + 1;
-            var any = marks is null || marks[first];
-            for (; end < count && key.Compare(first, values[end]) == 0; end++)
-            {
-                // One value can hold most rows, and comparing long texts under a collation is slow.
-                if ((end & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
-                any |= marks is not null && marks[values[end]];
-            }
-            values[groups] = first;
-            counts[groups] = end - start;
-            ticks[groups] = any;
-            groups++;
-            start = end;
-        }
-        Array.Resize(ref values, groups);
-        Array.Resize(ref counts, groups);
-        Array.Resize(ref ticks, groups);
+        if (stages is not null) stages.Sorting += Lap();
+        var (reps, counts, ticks) = Runs(key, values, count, marks, token);
         token.ThrowIfCancellationRequested();
-        return new DistinctSnapshot(set, column, source, values, counts, ByCount(counts), ticks, looked, nulls, nullTicked, complete, approximate);
+        if (stages is not null) stages.Runs += Lap();
+        var ranks = ByCount(counts);
+        if (stages is not null) stages.Ranking += Lap();
+        return new DistinctSnapshot(set, column, source, reps, counts, ranks, ticks, looked, nulls, nullTicked, complete, approximate);
     }
 
-    /// <summary>The groups, most frequent first: a group's place in value order breaks count ties, so equal counts stay in it.</summary>
+    /// <summary>The groups, most frequent first: a group's place in value order breaks count ties, so equal counts stay in it.
+    /// Sorted on the threads the gate has free (that order is total, so it is the one a single sort gives).</summary>
     private static int[] ByCount(int[] counts)
     {
         var ranked = new int[counts.Length];
         for (var i = 0; i < ranked.Length; i++) ranked[i] = i;
-        Array.Sort(ranked, (a, b) => counts[a] != counts[b] ? counts[b].CompareTo(counts[a]) : a.CompareTo(b));
+        Sort(ranked, 0, ranked.Length, new CountOrder(counts));
         return ranked;
+    }
+
+    private sealed class CountOrder(int[] counts) : IComparer<int>
+    {
+        public int Compare(int a, int b) => counts[a] != counts[b] ? counts[b].CompareTo(counts[a]) : a.CompareTo(b);
+    }
+
+    /// <summary>The runs of equal values in sorted rows, in value order: each run's first row (the lowest holding it, since
+    /// ties fall back to the base row), its length, and whether a kept row is among it. Even runs of the rows are read on
+    /// the threads the gate has free: first each marks where a value starts (comparing a row with the one before it, so a
+    /// value that spans runs starts in one only), then, with the groups each run starts numbered, each fills its groups,
+    /// reading a group's rows past its own run's end when the value goes on.</summary>
+    private static (int[] Reps, int[] Counts, bool[] Ticks) Runs(Key key, int[] values, int count, bool[]? marks, CancellationToken token)
+    {
+        var starts = new bool[count];
+        using var threads = Gate.Take(Math.Clamp(count / MinSlice, 1, Workers));
+        var runs = threads.Count;
+        var found = new int[runs + 1];
+        Each(runs, runs, run =>
+        {
+            var at = 0;
+            for (int i = RunStart(count, run, runs), end = RunStart(count, run + 1, runs); i < end; i++)
+            {
+                // Comparing long texts under a collation is slow.
+                if ((i & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+                if (i == 0 || key.Compare(values[i - 1], values[i]) != 0) { starts[i] = true; at++; }
+            }
+            found[run + 1] = at;
+        });
+        for (var run = 0; run < runs; run++) found[run + 1] += found[run];
+        var groups = found[runs];
+        var reps = new int[groups];
+        var counts = new int[groups];
+        var ticks = new bool[groups];
+        Each(runs, runs, run =>
+        {
+            var group = found[run];
+            for (int i = RunStart(count, run, runs), end = RunStart(count, run + 1, runs); i < end; i++)
+            {
+                if ((i & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+                if (!starts[i]) continue;
+                var any = marks is null || marks[values[i]];
+                var last = i + 1;
+                for (; last < count && !starts[last]; last++)
+                {
+                    // One value can hold most rows.
+                    if ((last & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+                    any |= marks is not null && marks[values[last]];
+                }
+                reps[group] = values[i];
+                counts[group] = last - i;
+                ticks[group] = any;
+                group++;
+            }
+        });
+        return (reps, counts, ticks);
     }
 
     /// <summary>The rows' values by a key whose codes are its values, counted in one pass without sorting the rows: each

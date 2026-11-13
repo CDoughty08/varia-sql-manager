@@ -290,7 +290,7 @@ internal static class DiffChecks
         try { ResultDiffer.Compare(left, left.SealedSnapshot(), right, right.SealedSnapshot(), false, CancellationToken.None, _ => ++calls < 2); }
         catch (RequestException error) { code = error.Code; }
         check(code == "TOO_LARGE" && calls == 2, "a diff whose differing cells the budget refuses fails with TOO_LARGE");
-        check(ResultDiffer.WorkingBytes(10, 10) == 40 * 10 + 12 * 10 + 2 * 20 * 20, "a diff reserves its identities, match tables and entries, held twice while the model is built");
+        check(ResultDiffer.WorkingBytes(10, 10) == 40 * 10 + 12 * 10 + 20 * 20, "a diff reserves its identities, match tables and entries, written straight into the model");
     }
 
     private static void Host(Action<bool, string> check)

@@ -202,6 +202,25 @@ internal static partial class ViewSorter
         }
     }
 
+    /// <summary>Runs <paramref name="body"/> for each run on up to <paramref name="threads"/> threads (the caller's lease
+    /// from <see cref="Gate"/>), rethrowing what the first run to fail threw as itself; one thread runs them in order.</summary>
+    internal static void Each(int runs, int threads, Action<int> body)
+    {
+        if (runs <= 1 || threads <= 1)
+        {
+            for (var run = 0; run < runs; run++) body(run);
+            return;
+        }
+        try { Parallel.For(0, runs, new ParallelOptions { MaxDegreeOfParallelism = threads }, body); }
+        catch (AggregateException error) when (error.InnerExceptions.Count > 0)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerExceptions[0]).Throw();
+        }
+    }
+
+    /// <summary>The start of run <paramref name="run"/> of <paramref name="runs"/> even runs over <paramref name="count"/> items.</summary>
+    internal static int RunStart(int count, int run, int runs) => (int)((long)count * run / runs);
+
     /// <summary>A sort's comparisons as the time one thread would take to make that many one after another: the slices
     /// are sorted side by side, but each round of merges runs on half the threads of the one before, the last on one.</summary>
     internal static double SortCost(int count)

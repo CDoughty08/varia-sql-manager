@@ -238,12 +238,16 @@ internal static class ResultPivoter
             }
         }
         if (stages is not null) stages.Aggregation += Stopwatch.GetTimestamp() - aggregating;
+        // Distinct counts place each cell's rows together first, which takes a bound per cell: without room for them, one
+        // sort by cell and value does.
+        int[]? bounds = null;
+        if (figures.Any(item => item.Value.Aggregate == PivotAggregate.CountDistinct) && reserve(DistinctBoundsBytes(cells))) bounds = new int[cells + 1];
         foreach (var item in figures)
         {
             if (item.Value.Aggregate != PivotAggregate.CountDistinct) continue;
             var distinctKey = KeyOf(item.Value.Column);
             var counting = Stopwatch.GetTimestamp();
-            Distinct(item, distinctKey, positions, scratch, CellOf, token);
+            Distinct(item, distinctKey, positions, scratch, CellOf, bounds, token);
             if (stages is not null) stages.Distinct += Stopwatch.GetTimestamp() - counting;
         }
 
@@ -362,34 +366,143 @@ internal static class ResultPivoter
 
     private delegate int CellFinder(int row, out int total);
 
-    /// <summary>COUNT(DISTINCT): the non-NULL rows sorted by cell then value, counting each run of equal values once, then
-    /// again by row group alone for the totals.</summary>
-    private static void Distinct(PivotFigures figures, ViewSorter.Key key, int[] positions, int[] scratch, CellFinder cellOf, CancellationToken token)
+    /// <summary>Bytes the distinct counts' cell bounds take: one int a cell and one more.</summary>
+    internal static long DistinctBoundsBytes(int cells) => 4L * (cells + 1);
+
+    /// <summary>COUNT(DISTINCT): each cell's non-NULL rows counted once per run of equal values, then again by row group alone
+    /// for the totals. With <paramref name="bounds"/> the rows are placed by cell (a counting sort, in one pass) and the cells
+    /// shared among the threads the gate has free, each sorting and counting its own; a cell of many rows is sorted on
+    /// several threads and its runs counted in parts. Without, one sort by cell then value (on several threads) and one pass.
+    /// Either way a cell's count is its number of distinct values, whatever order its rows were met in.</summary>
+    private static void Distinct(PivotFigures figures, ViewSorter.Key key, int[] positions, int[] scratch, CellFinder cellOf, int[]? bounds, CancellationToken token)
     {
+        var comparer = new ViewSorter.Comparer([key], null, token);
         foreach (var totals in new[] { false, true })
         {
-            var count = 0;
-            foreach (var row in positions)
-            {
-                if (key.IsNull(row)) continue;
-                var cell = cellOf(row, out var total);
-                if ((totals ? total : cell) >= 0) scratch[count++] = row;
-            }
             int Cell(int row)
             {
                 var cell = cellOf(row, out var total);
                 return totals ? total : cell;
             }
-            var calls = 0;
-            int Compare(int a, int b)
+            if (bounds is null)
             {
-                if (++calls == CancelEvery) { calls = 0; token.ThrowIfCancellationRequested(); }
-                var compared = Cell(a).CompareTo(Cell(b));
-                return compared != 0 ? compared : key.Compare(a, b);
+                Sorted(figures, key, positions, scratch, Cell, comparer, token);
+                continue;
             }
-            if (count > 1) Array.Sort(scratch, 0, count, Comparer<int>.Create((a, b) => Compare(a, b) is var c && c != 0 ? c : a.CompareTo(b)));
-            for (var i = 0; i < count; i++)
-                if (i == 0 || Compare(scratch[i - 1], scratch[i]) != 0) figures.Counts[Cell(scratch[i])]++;
+            // Counts by cell, shifted one up, become each cell's start; placing a row moves its cell's start on, so after
+            // placing, bounds[c] is where cell c ends (and cell c + 1 starts).
+            Array.Clear(bounds);
+            var count = 0;
+            for (var i = 0; i < positions.Length; i++)
+            {
+                if ((i & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+                var row = positions[i];
+                if (key.IsNull(row)) continue;
+                var cell = Cell(row);
+                if (cell < 0) continue;
+                bounds[cell + 1]++;
+                count++;
+            }
+            var cells = bounds.Length - 1;
+            for (var cell = 0; cell < cells; cell++) bounds[cell + 1] += bounds[cell];
+            for (var i = 0; i < positions.Length; i++)
+            {
+                if ((i & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+                var row = positions[i];
+                if (key.IsNull(row)) continue;
+                var cell = Cell(row);
+                if (cell >= 0) scratch[bounds[cell]++] = row;
+            }
+            int Start(int cell) => cell == 0 ? 0 : bounds[cell - 1];
+            // A cell of many rows is sorted by the parallel sort, its runs counted in parts on the threads the gate has free.
+            for (var cell = 0; cell < cells; cell++)
+            {
+                var (start, end) = (Start(cell), bounds[cell]);
+                if (end - start < 2 * ViewSorter.MinSlice) continue;
+                ViewSorter.Sort(scratch, start, end - start, comparer);
+                using var threads = ViewSorter.Gate.Take(Math.Min(ViewSorter.Workers, (end - start) / ViewSorter.MinSlice));
+                var parts = threads.Count;
+                var found = new long[parts];
+                ViewSorter.Each(parts, parts, part =>
+                {
+                    long runs = 0;
+                    for (int i = start + ViewSorter.RunStart(end - start, part, parts), stop = start + ViewSorter.RunStart(end - start, part + 1, parts); i < stop; i++)
+                        if (i == start || comparer.Values(scratch[i - 1], scratch[i]) != 0) runs++;
+                    found[part] = runs;
+                });
+                figures.Counts[cell] = found.Sum();
+            }
+            // The other cells in even runs of rows, each cell in the run its first row is in.
+            {
+                using var threads = ViewSorter.Gate.Take(Math.Clamp(count / ViewSorter.MinSlice, 1, ViewSorter.Workers));
+                // More runs than threads, so a run of slow cells does not keep the rest waiting.
+                var runs = threads.Count == 1 ? 1 : 8 * threads.Count;
+                ViewSorter.Each(runs, threads.Count, run =>
+                {
+                    var stop = ViewSorter.RunStart(count, run + 1, runs);
+                    for (var cell = FirstCell(bounds, ViewSorter.RunStart(count, run, runs)); cell < cells && Start(cell) < stop; cell++)
+                    {
+                        var (start, end) = (Start(cell), bounds[cell]);
+                        if (end == start || end - start >= 2 * ViewSorter.MinSlice) continue;
+                        token.ThrowIfCancellationRequested();
+                        if (end - start > 1) Array.Sort(scratch, start, end - start, comparer);
+                        long distinct = 1;
+                        for (var i = start + 1; i < end; i++)
+                            if (comparer.Values(scratch[i - 1], scratch[i]) != 0) distinct++;
+                        figures.Counts[cell] = distinct;
+                    }
+                });
+            }
+        }
+    }
+
+    /// <summary>The first cell starting at or after <paramref name="row"/>, given each cell's end.</summary>
+    private static int FirstCell(int[] ends, int row)
+    {
+        if (row <= 0) return 0;
+        // The first cell ending at or after the row; the next one starts there.
+        int low = 0, high = ends.Length - 1;
+        while (low < high)
+        {
+            var middle = (low + high) / 2;
+            if (ends[middle] >= row) high = middle;
+            else low = middle + 1;
+        }
+        return low + 1;
+    }
+
+    /// <summary>COUNT(DISTINCT) without cell bounds: the non-NULL rows sorted by cell then value (on several threads),
+    /// counting each run of equal values once.</summary>
+    private static void Sorted(PivotFigures figures, ViewSorter.Key key, int[] positions, int[] scratch, Func<int, int> cellOf, ViewSorter.Comparer comparer, CancellationToken token)
+    {
+        var count = 0;
+        for (var i = 0; i < positions.Length; i++)
+        {
+            if ((i & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+            var row = positions[i];
+            if (!key.IsNull(row) && cellOf(row) >= 0) scratch[count++] = row;
+        }
+        var byCell = new CellOrder(cellOf, comparer);
+        ViewSorter.Sort(scratch, 0, count, byCell);
+        for (var i = 0; i < count; i++)
+        {
+            if ((i & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+            if (i == 0 || byCell.Values(scratch[i - 1], scratch[i]) != 0) figures.Counts[cellOf(scratch[i])]++;
+        }
+    }
+
+    /// <summary>Rows by cell, then value, then row: a total order, as the parallel sort needs.</summary>
+    private sealed class CellOrder(Func<int, int> cellOf, ViewSorter.Comparer values) : IComparer<int>
+    {
+        public int Values(int a, int b)
+        {
+            var compared = cellOf(a).CompareTo(cellOf(b));
+            return compared != 0 ? compared : values.Values(a, b);
+        }
+        public int Compare(int a, int b)
+        {
+            var compared = Values(a, b);
+            return compared != 0 ? compared : a.CompareTo(b);
         }
     }
 }

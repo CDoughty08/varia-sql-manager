@@ -28,6 +28,9 @@ the rules that keep it lean.
   backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --pivot-bench` (backend, stage by
   stage) and `node scripts/pivot-bench.mjs` (the built app against `VARIA_TEST_SQL_SERVER`).
   docs/pivot-performance-findings.md has their options and what they measured.
+- `-- --result-work-bench [--rows N] [--runs N] [--only name,name]` on the same project times, stage by stage, a pivot's
+  Distinct Count, Compare Results and a column's distinct values past the coded limit on synthetic results (4,000,000 rows
+  by default); set `DOTNET_PROCESSOR_COUNT` to simulate fewer cores. Measures only, run by hand.
 
 ## Environment
 
