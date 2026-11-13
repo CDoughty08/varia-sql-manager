@@ -42,7 +42,7 @@ Installed, portable and AppImage builds check GitHub for new releases, download 
 
 To run from source:
 
-Prerequisites: Node.js 24 or newer and the .NET 10 SDK. The SDK version is configured in `global.json`.
+Prerequisites: Node.js 24 or newer and the .NET 11 SDK. The SDK version is configured in `global.json`.
 
 ```sh
 npm ci

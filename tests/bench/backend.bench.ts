@@ -13,7 +13,7 @@ import { mbPerSecond, median, percentile, record } from './harness'
 
 // Main's real pipeline against the Release backend with its test hooks: BackendSupervisor and BackendConnection over
 // stdio, ResultsPortHost, a MessageChannel, and ResultsWorkerCore in its own thread (tests/bench/results-thread.mjs).
-const dll = resolve('backend/Varia.Backend/bin/Release/net10.0/Varia.Backend.dll')
+const dll = resolve('backend/Varia.Backend/bin/Release/net11.0/Varia.Backend.dll')
 const MiB = 1024 * 1024
 let supervisor: BackendSupervisor
 let host: ResultsPortHost
