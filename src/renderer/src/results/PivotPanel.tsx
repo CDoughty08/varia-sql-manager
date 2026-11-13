@@ -15,7 +15,7 @@ const nameOf = (column: ResultColumn | undefined) => column?.name || '(No column
  * The pivot builder, beside the stacked grids (as the column profile is). It belongs to one group and names that group's
  * Table as its source (there is nothing to pick: it follows the grid that last had the focus, PivotService), then the row
  * groups (in order), the column group and the values, then Build Pivot, which shows the pivot under the Table, in place of
- * the Pivot the group had. It reads the Table's rows as its grid shows them, sorted and filtered. Only aggregates that
+ * the Pivot the group had once the new one is built. It reads the Table's rows as its grid shows them, sorted and filtered. Only aggregates that
  * suit a column are offered for it: Sum and Average need numbers.
  */
 export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResults }) {
@@ -117,9 +117,9 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
       {!entry ? <div className="profile-note">{state.sourceName ? `${state.sourceName} is not among these results.` : 'None of these results can be pivoted.'}</div>
         : !pivotable(entry) && !state.running ? <div className="profile-note">{entry.handle.getSnapshot().state === 'complete' ? 'This result cannot be pivoted.' : 'Pivot this result after it finishes loading.'}</div> : null}
       {entry && pivotable(entry) && sorting && !state.running && <div className="profile-note">Pivot after the grid finishes sorting and filtering.</div>}
-      {state.busy && <div className="profile-note">Pivot of {state.busy} is being built. Build this one when it has finished.</div>}
+      {state.queued && <div className="profile-note" role="status">Waiting for other pivots to finish: four build at once.</div>}
       {viewed && <div className="profile-note">The pivot reads the rows as the grid shows them, sorted and filtered.</div>}
-      {entry && state.pivot !== undefined && !state.running && <div className="profile-note">Building again replaces Pivot of {entryName(entry)}.</div>}
+      {entry && state.pivot !== undefined && <div className="profile-note">{state.running ? `Pivot of ${entryName(entry)} stays as it is until the new one is built.` : `Building again replaces Pivot of ${entryName(entry)} once the new one is built.`}</div>}
       {state.running
         ? <button type="button" onClick={() => pivot.cancel(tabId)}>Cancel</button>
         : <button type="button" className="primary" disabled={!can} onClick={() => void pivot.run(tabId)}>Build Pivot</button>}

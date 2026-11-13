@@ -124,7 +124,9 @@ being true.
   the one flat list, in the order drawn: a group's Table, its Pivot directly under it, the next group, comparisons last.
   `ResultsService.addSet` is the only way a derived result joins a run and keeps the rules that make every list
   representable: a pivot is taken only from a group's Table of rows (never from a Pivot, a comparison or a
-  SQL-returned plan set) and replaces the group's Pivot, releasing the old one first; a bare run (Peek's, `begin`'s
+  SQL-returned plan set; the backend's `results.pivot` refuses anything but `rows` too) and replaces the group's Pivot in
+  place (`replaceSet`: same entry key, next `revision`, new provenance in `ResultSlot.pivot`, then the old result is
+  released; the old one is never released early to make room); a bare run (Peek's, `begin`'s
   `bare`) takes neither a pivot nor a diff. A slot's identity is its entry key, where its grid state, sort and filters
   already live; do not add a second key for a view. Transposed is not a view either: it is how a Table or a Pivot is
   drawn (its grid state's orientation). The pivot builder belongs to one group and follows the focused grid

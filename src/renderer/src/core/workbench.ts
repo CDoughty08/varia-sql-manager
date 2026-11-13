@@ -25,6 +25,7 @@ import { ResultsService } from '../results/ResultsService'
 import { HighlightsService } from '../results/HighlightsService'
 import { CompareService } from '../results/CompareService'
 import { PivotService } from '../results/PivotService'
+import { DerivedJobs } from '../results/derived-jobs'
 import { ResultsSearchService } from '../results/search'
 import { MemoryUsageService } from '../results/memory'
 import { documentOwner, documentPage, eitherHidden, LiveService, mainWindowPage } from '../live/LiveService'
@@ -144,6 +145,8 @@ export interface Workbench extends Disposable {
   /** Rows highlighted in each query tab's grids, found again by identity after sorts and re-runs. */
   readonly highlights: HighlightsService
   readonly compare: CompareService
+  /** The window's places for pivot builds and comparisons: four run at once, and a busy backend is asked again. */
+  readonly derivedJobs: DerivedJobs
   readonly pivot: PivotService
   /** Search in results: each tab's search box, its matches (found in the backend) and column-name matches. */
   readonly resultsSearch: ResultsSearchService
@@ -292,7 +295,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     onSortTextChange: listener => settings.subscribe(listener) })
   const highlights = new HighlightsService(results)
   const compare = new CompareService(results)
-  const pivot = new PivotService(results)
+  const derivedJobs = new DerivedJobs()
+  const pivot = new PivotService(results, { jobs: derivedJobs })
   const resultsSearch = new ResultsSearchService({ results })
   const resultMemory = new MemoryUsageService(resultClient, 'results', events)
   const indexMemory = new MemoryUsageService(resultClient, 'index')
@@ -503,6 +507,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     results,
     highlights,
     compare,
+    derivedJobs,
     pivot,
     resultsSearch,
     resultMemory,

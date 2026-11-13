@@ -2065,8 +2065,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (args.ResultId == 0 || args.ViewId == 0 || args.Rows is not { Length: <= ResultPivoter.MaxRowFields } || args.Values is not { Length: >= 1 and <= ResultPivoter.MaxValues })
             throw new RequestException("INVALID_PARAMS", "A pivot takes up to 8 row columns and 1 to 16 values.");
         var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
-        // Only a query's rows or another pivot: a diff's or a live table's columns are not data to summarise.
-        if (set.Kind is not ("rows" or "pivot")) throw new RequestException("INVALID_PARAMS", "Only a query's results or another pivot can be pivoted.");
+        // Only a query's own rows (a group's Table): a pivot's figures, a diff's or a live table's columns are not data to
+        // summarise, and a pivot is never made of a pivot.
+        if (set.Kind is not "rows") throw new RequestException("INVALID_PARAMS", "Only a query's results can be pivoted.");
         var spec = PivotSpecOf(args, set);
         if (!set.IsComplete) throw new RequestException("RESULT_OPEN", "Pivot the results after they finish loading.");
         ThrowIfStopped(set.Budget);

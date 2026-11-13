@@ -1834,6 +1834,8 @@ async function workbench(id, method, params, credit) {
       const source = sourceOf(id, params.resultId, params.viewId)
       if (!source) return
       const result = stored.get(params.resultId)
+      // Only a query's own rows, as SqlService.PivotAsync: never a pivot, a diff or a plan set.
+      if ((result.kind ?? 'rows') !== 'rows') return fail(id, 'INVALID_PARAMS', "Only a query's results can be pivoted.")
       if (!result.complete) return fail(id, 'RESULT_OPEN', 'Pivot this result after it finishes loading.')
       // Before the pivot is built, as in SqlService: its one refusal here (too many column groups) comes from the build.
       if (await budgetStopped(id)) return

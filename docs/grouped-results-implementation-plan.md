@@ -588,6 +588,69 @@ Outcome, accepted by the owner:
 10. **Atomic Pivot replacement.** Stored recipe and per-group draft, provenance, replacement that keeps the old Pivot
     until the new one publishes, `results.pivot` from Tables only in the backend, parallel builds with their cap and
     retry, the 1,000 rule. Checks: replacement success, cancellation, failure, late answer, memory overlap.
+    - **What PR 10 settled or left** (`tests/results-pivot.test.ts`, `tests/results-derived-jobs.test.ts` and
+      `PivotChecks.cs` hold its checks):
+      - A rebuilt Pivot keeps its slot's entry key, number, name and place; `ResultsService.addSet` swaps the new result
+        into the slot (`replaceSet`), raises `revision`, records the new provenance, publishes at once (not on the next
+        frame, so no snapshot points a grid at a released handle), and only then releases the old result. The grid is built again over the new result (the stack keys `ResultGrid` by set key under the
+        stable item), so nothing outside the service sees a new key. `run.pivots` is gone.
+      - What a rebuild keeps, as the lifecycle says: the focus and the group's selected view, collapse and splitter
+        share, the orientation, and the sort keys, user-set widths and header column of each column whose name is unique
+        in both results (`uniqueNames`, `carriedState`; GridView measures a carried state's NaN widths as new columns).
+        It drops the filters (the toolbar says "Pivot of Result N was built again, so its filters were removed."), the
+        selection, the scroll and the transposed layout's per-row widths (its shared width and name column stay). A copy of the old result in progress is
+        cancelled. Highlights rebind to the new result by identity, as they do after a sort; that is not a rule the plan
+        named.
+      - Provenance is `ResultSlot.pivot` (`PivotProvenance`): the recipe, the resolved filters of the view the build
+        read (none for stored rows), input rows, and whether the Table was truncated, incomplete or approximate. The
+        strip adds "Result N holds only part of its query's rows, so the pivot counts those." for the first two. PR 11
+        compares `filters`.
+      - The stored recipe and the draft: drafts stay per group by ordinal (PR 9); opening the builder on the Pivot's grid
+        (Pivot Results… there, or the toolbar while it has the focus) resets the draft to the Pivot's recipe. Opening it
+        on the Table keeps the draft as it is, so an edit not yet built survives there.
+      - Failure, cancellation and refusal keep the old Pivot. The builder says why: the backend's sentence; for
+        `TOO_LARGE` on a replacement it adds ", or close Pivot of Result N and build it again."; a user's cancel of a
+        replacement says "Building was cancelled, so Pivot of Result N still shows its last build." (a first build's
+        cancel says nothing, as before). The old Pivot is never released early.
+      - Late answers: a build is given up when its run changes, its Table closes or the Pivot it would replace closes
+        (closing the Pivot does not let a rebuild come back as a slot the user closed), or a newer build of its group
+        starts. An answer that arrives anyway is released through `ResultsService.discard`.
+      - `results.pivot` takes only `rows` in `SqlService.PivotAsync` and the fake backend (`INVALID_PARAMS`, "Only a query's
+        results can be pivoted.", before anything is reserved). The renderer already refused it in `addSet` and
+        `pivotGroup`; `ResultClient` does not check the kind (its handle state has no kind).
+      - Parallel builds: `DerivedJobs` (`results/derived-jobs.ts`, one per window as `workbench.derivedJobs`) gives four
+        places for pivot builds. Comparisons do not take them yet: PR 16 is to route `CompareService` through the same
+        instance, which the plan's "at most four builds and comparisons" needs. A free place is taken in the same task, so
+        a build starts as before; the rest wait in order and the builder says "Waiting for other pivots or comparisons to
+        finish". `BUSY` and `TOO_MANY_REQUESTS` are asked again after 1, 4 and 16 s, giving the place up while waiting;
+        never `TIMEOUT`. Builds of different groups no longer block each other (`PivotTab.busy` is gone, `queued` is
+        new); a newer build of the same group cancels the older.
+      - The view a build reads is held through `ResultsService.holdView` until the build ends, so a grid re-sorted
+        meanwhile does not close it. On `VIEW_NOT_FOUND` (the backend evicted it) the build runs once more: over the
+        grid's current view when the grid has built another since, else over the same order and filters built again for
+        the build alone and closed after it. The grid's own evicted view is not rebuilt here. A second failure says the
+        backend's sentence and keeps the old Pivot.
+      - The 1,000 rule: a group's first Pivot is refused before the backend is asked when the run's sets plus other
+        groups' first Pivots in flight in that tab reach 1,000; a refused build leaves the group's build in flight alone.
+        A replacement is never refused by it. The count reads the published snapshot, which may be a frame behind, and
+        does not count comparisons in flight; `addSet` still refuses past 1,000 whoever asks, so the worst case is a
+        build released unused.
+      - A Save Results As of the old Pivot in progress during a rebuild finishes under its backend lease, as for a close;
+        its strip then sits on the rebuilt Pivot's slot until it ends.
+      - Not done, as the plan chose: holding a build back by its budget estimate (the findings' `rows × (16 × keys + 16)`
+        suggestion). Two large builds of one query can still refuse each other with `TOO_LARGE`, and for a replacement
+        the old Pivot's own memory counts against the new one.
+      - **The cap of four stands**, measured again now that a build sorts on several threads (`--pivot-bench --only
+        parallel`, same 24-core machine, other sessions running on it; each figure is one cold build, as the bench
+        runs it). Five million rows at 1 GiB a query: one build 1.29 to 1.32 s; two at once 2.6 to 3.1 s each (no faster
+        than one after the other); four at once 2.3 to 4.0 s each, all four done in 2.5 to 4.1 s against 5.2 s one after
+        another; eight refuse three by the budget. Twenty million rows at 8 GiB a query: one 5.3 s, two 17.4 s each, four
+        14.4 to 19.4 s, eight 14.9 to 19.4 s with none refused. At 1 GiB a query a 20-million-row build is now refused
+        alone (725 MB of keys beside a 347 MB source), in under 0.1 s. So a build no longer runs on one thread while others
+        wait: builds at once share the cores, each takes about twice as long, and four together still finish well before
+        four in turn. Nothing starves, which is what the cap is for; two at once gain nothing over one after the other, so
+        a lower cap would cost little either, but the plan's four is kept. [Pivot performance findings](pivot-performance-findings.md#measured-again-for-pr-10)
+        has the table.
 11. **Out of date and Update.**
 12. **`hasResultSets`** and its consumers (after PRs 7 and 9, which edit the same contributions). Until then an
     emptied run with captured plans still has `hasResults`, so Find and Save Results As are enabled and do nothing.

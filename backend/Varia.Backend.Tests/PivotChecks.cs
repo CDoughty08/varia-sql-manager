@@ -357,10 +357,17 @@ internal static class PivotChecks
         check(store.Find(viewed.Descriptor.ResultId) is null, "results.close releases a pivot");
         store.BeginQuery(set.Budget.SessionId);
         check(store.Find(pivot.Descriptor.ResultId) is null && store.UsedBytes <= before, "a pivot is released with its query's other results, and with it all it charged");
-        // Only a query's rows or another pivot: a diff is refused.
+        // Only a query's own rows: a diff, a pivot and a plan set are refused before anything is reserved.
         var diff = store.Open(set.Budget, 1, 1, 1, "diff", Sales, [.. Sales.Select(_ => WireKind.Text)])!;
         diff.Complete();
-        check(Code(new { resultId = diff.ResultId, rows = new[] { 0 }, values = new object[] { new { aggregate = "count" } } }) == "INVALID_PARAMS", "a diff cannot be pivoted");
+        var plan = store.Open(set.Budget, 2, 1, 1, "executionPlan", Sales, [.. Sales.Select(_ => WireKind.Text)])!;
+        plan.Complete();
+        var source = Source(store);
+        var again = Call<ResultsPivotResult>("results.pivot", new { resultId = source.ResultId, rows = new[] { 0 }, values = new object[] { new { aggregate = "count" } } });
+        var reserved = store.UsedBytes;
+        var refused = new[] { diff.ResultId, again.Descriptor.ResultId, plan.ResultId }.Select(id => Code(new { resultId = id, rows = new[] { 0 }, values = new object[] { new { aggregate = "count" } } })).ToArray();
+        check(string.Join(",", refused) == "INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS" && store.UsedBytes == reserved,
+            "results.pivot takes only a query's rows: a diff, a pivot and a plan set are refused and charge nothing: " + string.Join(",", refused));
         Partial(check);
         Pressure(check);
     }

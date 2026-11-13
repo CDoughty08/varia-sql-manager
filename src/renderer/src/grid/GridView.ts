@@ -355,6 +355,9 @@ export class GridView {
       if (!o.state.widths || o.state.widths.length !== this.columns) {
         o.state.widths = Float64Array.from(o.descriptor.columns.slice(0, this.columns), (column, index) => initialWidth(this.headerTextWidth(index), typeHintChars(column), this.charWidth))
         o.state.sized = false
+      } else if (o.state.widths.some(Number.isNaN)) {
+        // A rebuilt Pivot keeps the widths of the columns it shares with the old one by name; the rest start as new.
+        o.state.widths = o.state.widths.map((width, index) => Number.isNaN(width) ? initialWidth(this.headerTextWidth(index), typeHintChars(o.descriptor.columns[index]), this.charWidth) : width)
       }
       this.offsets = o.state
       this.layout = new ColumnLayout(o.state.widths, this.cap - rowHeaderWidth(0, this.charWidth))
