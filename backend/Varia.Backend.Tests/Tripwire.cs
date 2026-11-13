@@ -5,7 +5,7 @@ using Varia.Backend;
 namespace Varia.Backend.Tests;
 
 /// <summary>A result's columns that run an action once, the first time they are read after it is set: what happens to a
-/// query while one of its results is compared, pivoted or transposed. With <see cref="Within"/>, only a read made from
+/// query while one of its results is compared or pivoted. With <see cref="Within"/>, only a read made from
 /// that type's code counts, so the action lands inside the work and not in the request's checks before it.</summary>
 internal sealed class Tripwire(ResultColumn[] columns) : IReadOnlyList<ResultColumn>
 {

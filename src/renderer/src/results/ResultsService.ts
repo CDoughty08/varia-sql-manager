@@ -27,7 +27,7 @@ export type EntryKey = string
 /**
  * One result set of the run, named everywhere by its `key` (the grid's `data-result-entry`), never by its place in the
  * list. `ordinal` is an original result's number in its run (`descriptor.index + 1`); a result Varia made (a pivot, a
- * transpose, a diff) has none. `number` is what the entry is numbered by where it has no name of its own ("Result 4" in
+ * diff) has none. `number` is what the entry is numbered by where it has no name of its own ("Result 4" in
  * its caption, on a job's strip, in a save's suggested name): the ordinal, or for a derived entry the next number after
  * the run's highest when it was appended, fixed for its life. That is the place it was appended at, and stays unique when
  * an entry before it has gone.
@@ -41,6 +41,53 @@ export const entryName = (entry: Pick<ResultSetEntry, 'label' | 'number'>): stri
 /** The entry of `sets` with the key, for a consumer that holds a published list (the service looks its own up in a map). */
 export const entryOf = (sets: readonly ResultSetEntry[] | undefined, key: EntryKey | undefined): ResultSetEntry | undefined =>
   key === undefined ? undefined : sets?.find(entry => entry.key === key)
+/** How a slot shows its result: a group's Table (the original result) or its Pivot, or a comparison. Transposed is not a
+ *  view kind: it is how a Table or a Pivot is drawn (its grid state's orientation). */
+export type ViewKind = 'table' | 'pivot' | 'comparison'
+/**
+ * What a derived slot was made from, frozen when it was made and kept apart from the source's handle: the source's entry
+ * key and set key (for telling whether it is still that exact result), and the number and name it had. A closed or
+ * replaced source leaves the reference as it was.
+ */
+export interface SourceRef { readonly key: EntryKey; readonly set: string; readonly number: number; readonly name: string; readonly ordinal?: number }
+/**
+ * A presentation slot: one view the stack draws. Its identity is `key`, the key of the entry it shows, which is also where
+ * its grid state lives (`ResultsService.gridState(tabId, key)`: scroll, widths, selection, orientation) and its sort and
+ * filters (`TabResults.sorts`). `entry` is the stored result it shows now and `revision` counts the results the slot has
+ * shown (a group's second Pivot is revision 2). `sources` is its provenance: none for a Table, the Table for a Pivot, and
+ * the old and the new input, in that order, for a comparison.
+ */
+export interface ResultSlot {
+  readonly key: EntryKey; readonly view: ViewKind; readonly entry: ResultSetEntry; readonly revision: number
+  /** The ordinal of the group it belongs to; a comparison belongs to none. */
+  readonly group?: number
+  readonly sources: readonly SourceRef[]
+}
+/**
+ * An original result and what was made of it: named by its `ordinal` ("Result 3"), with the batch it came from, its Table,
+ * at most one Pivot, and the view of the two that last had the focus (`selected`). A SQL-returned plan set is a group too
+ * (`planSet`), with Pivot, Compare and Transposed off.
+ */
+export interface ResultGroup {
+  readonly ordinal: number; readonly batchNumber: number; readonly iteration: number; readonly planSet: boolean
+  readonly table: ResultSlot; readonly pivot?: ResultSlot
+  readonly selected: 'table' | 'pivot'
+}
+type Shape = Pick<TabResults, 'groups' | 'comparisons'>
+/** The slot that shows the entry `key`, in a published run. */
+export function slotOf(tab: Shape | undefined, key: EntryKey | undefined): ResultSlot | undefined {
+  if (!tab || key === undefined) return undefined
+  for (const group of tab.groups) {
+    if (group.table.key === key) return group.table
+    if (group.pivot?.key === key) return group.pivot
+  }
+  return tab.comparisons.find(slot => slot.key === key)
+}
+/** The group the entry `key` belongs to (as its Table or its Pivot); a comparison has none. */
+export function groupOf(tab: Pick<TabResults, 'groups'> | undefined, key: EntryKey | undefined): ResultGroup | undefined {
+  if (!tab || key === undefined) return undefined
+  return tab.groups.find(group => group.table.key === key || group.pivot?.key === key)
+}
 /**
  * A grid's sort and filters (results.view): its keys in order, with the text mode each was sorted by, its filters, and the
  * view the grid shows. While a view is built (`sorting`) the grid keeps showing what it showed; a failed one keeps the last
@@ -90,7 +137,18 @@ export interface ResultJob {
 }
 /** What the output pane shows for one query tab. */
 export interface TabResults {
-  readonly queryId: string; readonly startedAt: number; readonly status: RunStatus; readonly sets: readonly ResultSetEntry[]
+  readonly queryId: string; readonly startedAt: number; readonly status: RunStatus
+  /** Every entry the stack draws, in the order drawn: each group's Table, its Pivot under it, then the next group;
+   *  comparisons last. `groups` and `comparisons` say what each is. */
+  readonly sets: readonly ResultSetEntry[]
+  /** The run's original results, by ordinal, each with its views. */
+  readonly groups: readonly ResultGroup[]
+  /** The comparisons, in the order made: each a slot of its own, after the groups. */
+  readonly comparisons: readonly ResultSlot[]
+  /** The entry whose grid last had the focus; undefined until one has. */
+  readonly focused?: EntryKey
+  /** A run drawn bare (Peek's rows): the grid alone, and no Pivot, Compare or close. */
+  readonly bare?: true
   readonly planSets: readonly ResultSetEntry[]
   readonly messages: readonly MessageEntry[]; readonly messagesTruncated: boolean; readonly rowsRead: number
   /** How many of `messages`, first, are Varia's own notices (a new session) rather than SQL Server's. */
@@ -147,7 +205,7 @@ export interface TabViewState { stackScrollTop: number; weights?: ReadonlyMap<En
  *  drawn columns (Using Column as Headers). */
 export interface ViewOrientation { readonly transposed: boolean; readonly headerColumn?: number }
 /** The entry kinds a view can be drawn transposed for: a query's rows and a pivot. Never a comparison (its tone column
- *  marks rows), a plan set, or a stored transpose. */
+ *  marks rows) or a plan set. */
 export const turnableKinds: ReadonlySet<string> = new Set(['rows', 'pivot'])
 /** A mounted grid, for the commands that act on it. */
 export interface GridController {
@@ -162,8 +220,22 @@ export interface RunEnd { summary?: QueryResult; error?: string; code?: ErrorCod
 /** Open Value in New Tab's outcome: whether a document opened, and what the banner says (a failure, or that it opened unformatted). */
 export interface OpenedValue { readonly opened: boolean; readonly message?: string }
 
+/** What the service keeps of a slot beside its entry. */
+interface SlotRecord { readonly view: ViewKind; readonly group?: number; readonly revision: number; readonly sources: readonly SourceRef[] }
 interface Run {
+  readonly tabId: string
   readonly queryId: string
+  readonly bare: boolean
+  /** Each entry's slot, by entry key. */
+  readonly slots: Map<EntryKey, SlotRecord>
+  /** The groups whose Pivot last had the focus, by ordinal; the others' Table is selected. */
+  readonly selected: Set<number>
+  /** How many Pivots each group has shown, by ordinal. */
+  readonly pivots: Map<number, number>
+  /** The published groups and comparisons, built when asked for after the entries changed. */
+  shape?: Shape
+  /** The ordinal of the group that had the focus in the tab's previous run: its Table takes the focus when it opens. */
+  refocus?: number
   readonly startedAt: number
   status: RunStatus
   sets: ResultSetEntry[]
@@ -311,6 +383,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private disposed = false
   private announcedCount = 0
   private minted = 0
+  /** How many times a grid has taken the focus, by tab. */
+  private readonly focusEvents = new Map<string, number>()
 
   constructor(o: {
     client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary' | 'release' | 'onGeneration'>; api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'>; events: EventBus
@@ -341,13 +415,19 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** A run starts: the tab's previous results are released, its copy cancelled and its selections cleared, and the
    *  run's events are followed from now on (before the script is sent). A running save goes on (the backend leases its
    *  result), so its strip moves to the new run. */
-  begin(tabId: string, queryId: string, onSession?: (session: Extract<QueryEvent, { type: 'session.opened' }>) => void): void {
+  begin(tabId: string, queryId: string, onSession?: (session: Extract<QueryEvent, { type: 'session.opened' }>) => void, o: { bare?: boolean } = {}): void {
     if (this.disposed) return
+    // The focus follows a group by its ordinal into the next run, as names and highlights do; nothing derived is rebuilt,
+    // so a focused Pivot leaves the focus on its group's Table, and a focused comparison leaves none.
+    // A run that ended before it returned that group passes the wish on.
+    const was = this.views.get(tabId)?.focused, previous = this.runs.get(tabId)
+    const refocus = was === undefined ? previous?.refocus : previous?.slots.get(was)?.group
     this.disposeRun(tabId)
     this.clearJobNotice(tabId)
     this.selectionAnnounced.delete(tabId)
     this.views.set(tabId, emptyView())
     const run: Run = {
+      tabId, bare: o.bare === true, slots: new Map(), selected: new Set(), pivots: new Map(), ...refocus === undefined ? {} : { refocus },
       queryId, startedAt: this.now(), status: 'running', sets: [], planSets: [], setKeys: new Set(), entries: new Map(), numbered: 0, setsPublished: false, rowsRead: new Map(), messages: [], notices: [], messagesTruncated: false,
       completedBatches: 0, totalBatches: 0, view: 'messages', manualView: false, strip: this.stripChoices.get(tabId) === true, stripManual: false,
       settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: '', sorts: new Map(), sorting: new Map(), held: new Map(), emptied: false
@@ -447,6 +527,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.clearJobNotice(tabId)
     this.disposeRun(tabId)
     this.views.delete(tabId)
+    this.focusEvents.delete(tabId)
     this.stripChoices.delete(tabId)
     this.selectionAnnounced.delete(tabId)
     const timer = this.announcements.get(tabId)
@@ -458,10 +539,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.publish(next)
   }
 
-  /** Close Results: the memory is freed now; Messages stay. */
+  /** Close Results: the memory is freed now; Messages stay. Not for a bare run (Peek's rows go with their card or tab). */
   closeResults(tabId: string): void {
     const run = this.runs.get(tabId)
-    if (!run || run.status === 'running' || run.status === 'closed') return
+    if (!run || run.bare || run.status === 'running' || run.status === 'closed') return
     this.drop(tabId, run, run.sets, run.planSets)
     run.closedFrom = run.status
     run.status = 'closed'
@@ -472,18 +553,60 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   }
 
   /**
-   * Closes one entry of a run that has ended (a caption's close button): it leaves the run and its result is released
-   * (`drop`); the entries after it move up a place and keep their keys, numbers, names and state. A result made from it (a
-   * pivot, a transpose, a diff) is a stored result of its own and stays, under its name. The run's status, summary and row
-   * total do not change; closing its last entry marks it `emptied`. Unavailable while the query runs. False when there is
-   * no such entry.
+   * Closes one view of a run that has ended (a caption's close button, Close Result): a Table closes its group, so its
+   * Pivot goes with it; a Pivot or a comparison closes alone. What
+   * closes leaves the run and its results are released (`drop`); the entries after move up and keep their keys, numbers,
+   * names and state. A comparison copied its cells, so it outlives its inputs, under its name. When what closed had the
+   * focus, the next surviving entry takes it, else the one before. The run's status, summary and row total do not change;
+   * closing its last entry marks it `emptied`. Unavailable while the query runs and in a bare run (Peek). False when there
+   * is no such entry.
    */
   removeEntry(tabId: string, key: EntryKey): boolean {
     const run = this.runs.get(tabId), entry = run?.entries.get(key)
-    if (!run || !entry || run.status === 'running' || run.status === 'closed') return false
-    this.drop(tabId, run, [entry])
+    if (!run || !entry || run.bare || run.status === 'running' || run.status === 'closed') return false
+    const gone = this.owned(run, entry), keys = new Set(gone.map(item => item.key))
+    const view = this.views.get(tabId)
+    let next: ResultSetEntry | undefined
+    if (view?.focused !== undefined && keys.has(view.focused)) {
+      // A Pivot leaves the focus in its group, on the Table.
+      const slot = run.slots.get(key), last = run.sets.indexOf(gone[gone.length - 1])
+      next = (slot?.view !== 'table' && slot?.group !== undefined ? run.sets.find(item => item.ordinal === slot.group) : undefined)
+        ?? run.sets[last + 1] ?? run.sets[run.sets.indexOf(gone[0]) - 1]
+    }
+    this.drop(tabId, run, gone)
+    if (view && next) { view.focused = next.key; this.select(run, next.key) }
     if (run.sets.length === 0) run.emptied = true
     this.publishNow(tabId)
+    return true
+  }
+  /** The entries closing `key` would close, in the order drawn: a Table's whole group, any other view alone. */
+  closing(tabId: string, key: EntryKey): readonly ResultSetEntry[] {
+    const run = this.runs.get(tabId), entry = run?.entries.get(key)
+    return run && entry ? this.owned(run, entry) : []
+  }
+  /** A grid took the focus: commands that name no grid act on it (the toolbar's and the menus' Transposed toggle read its
+   *  orientation, through the publish), its group's selected view is the one it shows, and the pivot builder follows its group. */
+  focusEntry(tabId: string, key: EntryKey): void {
+    const run = this.runs.get(tabId), record = run?.slots.get(key)
+    if (!run || !record) return
+    const view = this.viewState(tabId)
+    this.focusEvents.set(tabId, (this.focusEvents.get(tabId) ?? 0) + 1)
+    let changed = view.focused !== key
+    view.focused = key
+    if (this.select(run, key)) changed = true
+    if (changed) this.publishNow(tabId)
+  }
+  /** How many times a grid of the tab has taken the focus: one that takes it again (a click into the grid that already
+   *  had it) changes nothing published, and this still counts it. Another tab's grids do not. */
+  focusStamp(tabId: string): number { return this.focusEvents.get(tabId) ?? 0 }
+  /** The entry `key` has the focus: its group's selected view is the one it shows (a comparison has no group).
+   *  Whether that changed. */
+  private select(run: Run, key: EntryKey): boolean {
+    const record = run.slots.get(key)
+    if (!record || record.group === undefined || run.selected.has(record.group) === (record.view === 'pivot')) return false
+    if (record.view === 'pivot') run.selected.add(record.group)
+    else run.selected.delete(record.group)
+    run.shape = undefined
     return true
   }
 
@@ -510,13 +633,6 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     return state
   }
 
-  /** A grid took the focus: its entry is the one commands act on when they name none. */
-  focusEntry(tabId: string, key: EntryKey): void {
-    const run = this.runs.get(tabId)
-    if (!run?.entries.has(key)) return
-    this.viewState(tabId).focused = key
-    this.updateTurned()
-  }
   /** Whether an entry's view can be drawn transposed: a query's rows or a pivot (never a comparison or a plan set), while its
    *  results are open and readable. It can while rows still arrive: the drawn columns grow with them. */
   canTranspose(tabId: string, key: EntryKey): boolean {
@@ -1026,6 +1142,13 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     run.numbered = Math.max(run.numbered, entry.number)
     run.sets.splice(at, 0, entry)
     run.entries.set(entry.key, entry)
+    run.slots.set(entry.key, { view: 'table', group: entry.ordinal, revision: 1, sources: [] })
+    run.shape = undefined
+    if (run.refocus === entry.ordinal) {
+      run.refocus = undefined
+      const view = this.viewState(run.tabId)
+      view.focused ??= entry.key
+    }
   }
 
   /** Records a set that has all its rows (once): the stack sizes it to them from then on. */
@@ -1067,24 +1190,53 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
 
   /** A save's outcome: announced, and shown in the toolbar until the next run or save, or for a few seconds. */
   /** Shows `text` in the tab's results toolbar for a few seconds and reads it out. */
-  /** Adds a result Varia made from the run's own (a diff, results.diff) after the run ended, as its last set, named
-   *  `label`; it is released with the run's others, and its rows are not counted among those the query read. `sources` are the set keys it was made from: a run without them (a
-   *  newer one) does not take it. Returns its entry's key, or undefined when the run is gone, still running, lacks a source,
-   *  or has its most sets; the result is then released, since nothing else would close it. */
+  /** Adds a result Varia made from the run's own after the run ended, named `label`, into the slot its kind takes: a pivot
+   *  (results.pivot) as its source group's Pivot, directly under the Table, in place of the Pivot the group had; a diff
+   *  (results.diff) as a comparison, after the groups. It is released with
+   *  the run's others, and its rows are not counted among those the query read. `sources` are the set keys it was made
+   *  from (a pivot's Table; a diff's old side, then its new one): a run without them (a newer one) does not take it.
+   *  Returns its entry's key, or undefined when the run is gone, still running, lacks a source, has its most sets, is
+   *  drawn bare, or the result is a pivot of anything but a group's Table of rows; the result is then released, since
+   *  nothing else would close it. */
   addSet(tabId: string, descriptor: ResultDescriptor, label: string, sources: readonly string[] = []): EntryKey | undefined {
     const run = this.runs.get(tabId)
     const key = setKey(descriptor)
     if (run?.setKeys.has(key)) return undefined
-    if (!run || run.status === 'running' || run.status === 'closed' || run.sets.length >= resultLimits.sets || sources.some(source => !run.setKeys.has(source))) {
-      void this.client.release([{ generation: descriptor.generation, resultId: descriptor.resultId }]).catch(() => {})
-      return undefined
+    const refuse = () => { void this.client.release([{ generation: descriptor.generation, resultId: descriptor.resultId }]).catch(() => {}); return undefined }
+    if (!run || run.status === 'running' || run.status === 'closed' || sources.some(source => !run.setKeys.has(source))) return refuse()
+    const from = sources.map(source => run.sets.find(entry => setKey(entry.descriptor) === source)!)
+    const view: ViewKind = descriptor.kind === 'pivot' ? 'pivot' : 'comparison'
+    const origin = from.length ? run.slots.get(from[0].key) : undefined
+    // A bare run (Peek) shows its rows alone: no Pivot and no comparison.
+    if (run.bare) return refuse()
+    // The rules that keep every list a list of groups: a Pivot is made only from a group's Table of rows (never from a
+    // Pivot, a comparison or a plan set), and a group has one, so the one it had is released first.
+    const group = view === 'comparison' ? undefined : origin?.group
+    let replaced: ResultSetEntry | undefined
+    if (view === 'pivot') {
+      if (group === undefined || origin?.view !== 'table' || from[0].descriptor.kind !== 'rows') return refuse()
+      replaced = run.sets.find(entry => { const slot = run.slots.get(entry.key); return slot?.view === 'pivot' && slot.group === group })
     }
+    if (run.sets.length - (replaced ? 1 : 0) >= resultLimits.sets) return refuse()
+    const refocus = replaced !== undefined && this.views.get(tabId)?.focused === replaced.key
+    if (replaced) this.drop(tabId, run, [replaced])
     run.setKeys.add(key)
     if (run.setsPublished) { run.sets = run.sets.slice(); run.setsPublished = false }
     // Numbered once, for its life: an entry that goes before it does not renumber it, nor give its number to the next.
     const entry: ResultSetEntry = { key: this.mint(), number: ++run.numbered, descriptor, handle: this.client.open(descriptor), label }
-    run.sets.push(entry)
+    // A group's Pivot stands directly under its Table; a comparison goes last, after the groups.
+    const at = group === undefined ? run.sets.length : run.sets.findIndex(item => item.ordinal === group) + 1
+    run.sets.splice(at, 0, entry)
     run.entries.set(entry.key, entry)
+    let revision = 1
+    if (view === 'pivot') { revision = (run.pivots.get(group!) ?? 0) + 1; run.pivots.set(group!, revision) }
+    run.slots.set(entry.key, {
+      view, ...group === undefined ? {} : { group }, revision,
+      sources: from.map(source => ({ key: source.key, set: setKey(source.descriptor), number: source.number, name: entryName(source), ...source.ordinal === undefined ? {} : { ordinal: source.ordinal } }))
+    })
+    run.shape = undefined
+    // The Pivot it replaces had the focus: the new one has it.
+    if (refocus) { this.viewState(tabId).focused = entry.key; this.select(run, entry.key) }
     if (run.settledPublished) { run.settled = new Map(run.settled); run.settledPublished = false }
     // Its grid always shows a strip: what was compared.
     run.settled.set(key, { rows: descriptor.rowsStored, strip: true })
@@ -1328,6 +1480,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       }
       this.controllers.delete(key)
       run.entries.delete(key)
+      const slot = run.slots.get(key)
+      run.slots.delete(key)
+      if (slot?.group !== undefined) run.selected.delete(slot.group)
+      run.shape = undefined
       run.setKeys.delete(setKey(entry.descriptor))
       if (run.settled.has(setKey(entry.descriptor))) {
         if (run.settledPublished) { run.settled = new Map(run.settled); run.settledPublished = false }
@@ -1357,6 +1513,32 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   }
 
   /** Whether a run still shows an entry (or captured plan set): work that answers for one it does not is dropped. */
+  /** What closing an entry closes: a Table's group (its Pivot with it), any other view alone. */
+  private owned(run: Run, entry: ResultSetEntry): ResultSetEntry[] {
+    const slot = run.slots.get(entry.key)
+    return slot?.view === 'table' ? run.sets.filter(item => run.slots.get(item.key)?.group === slot.group) : [entry]
+  }
+
+  /** The run's groups and comparisons, from its entries in the order drawn (a group's Table comes before its other views). */
+  private shapeOf(run: Run): Shape {
+    if (run.shape) return run.shape
+    const groups: ResultGroup[] = [], comparisons: ResultSlot[] = []
+    let open: { -readonly [K in keyof ResultGroup]: ResultGroup[K] } | undefined
+    for (const entry of run.sets) {
+      const record = run.slots.get(entry.key)
+      if (!record) continue
+      const slot: ResultSlot = { key: entry.key, entry, ...record }
+      if (record.view === 'table') {
+        const { descriptor } = entry
+        groups.push(open = { ordinal: record.group!, batchNumber: descriptor.batchNumber, iteration: descriptor.iteration, planSet: descriptor.kind === 'executionPlan', table: slot, selected: 'table' })
+      } else if (open && record.group === open.ordinal && record.view === 'pivot') {
+        open.pivot = slot
+        if (run.selected.has(open.ordinal)) open.selected = 'pivot'
+      } else comparisons.push(slot)
+    }
+    return run.shape = { groups, comparisons }
+  }
+
   private has(tabId: string, run: Run | undefined, entry: ResultSetEntry): boolean {
     return !!run && this.runs.get(tabId) === run && (entry.capturedPlan ? run.planSets.includes(entry) : run.entries.get(entry.key) === entry)
   }
@@ -1428,7 +1610,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private snapshotOf(run: Run): TabResults {
     run.setsPublished = true
     run.settledPublished = true
+    const focused = this.views.get(run.tabId)?.focused
     return {
+      ...this.shapeOf(run), ...focused !== undefined && run.entries.has(focused) ? { focused } : {}, ...run.bare ? { bare: true as const } : {},
       queryId: run.queryId, startedAt: run.startedAt, status: run.status, sets: run.sets, planSets: run.planSets,
       messages: run.notices.length ? [...run.notices, ...run.messages] : run.messages, notices: run.notices.length,
       messagesTruncated: run.messagesTruncated, rowsRead: this.totalRows(run), completedBatches: run.completedBatches, totalBatches: run.totalBatches,

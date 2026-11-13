@@ -67,7 +67,7 @@ internal static partial class ViewSorter
     /// (src/shared/ipc/wire/protocol.ts limits.views).</summary>
     public const int MaxFilters = 16, MaxFilterValues = 4096, MaxFilterRanges = 256;
     /// <summary>Rows one KeepRows filter names: those a transposed grid draws as columns (limits.transpose.maxRows).</summary>
-    public const int MaxKeepRows = ResultTransposer.MaxRows;
+    public const int MaxKeepRows = ResultTextWriter.MaxTransposedRows;
     /// <summary>Bytes a row one filter holds at most while it runs, besides its column's key: Duplicates' positions (4), group
     /// starts (up to 8, as their list grows) and the rows it keeps (4); Keep and Pick hold less.</summary>
     public const int FilterBytes = 16;

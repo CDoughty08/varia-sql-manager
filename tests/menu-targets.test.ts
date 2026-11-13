@@ -18,7 +18,7 @@ describe('menu targets', () => {
       { kind: 'searchHit', searchId: 's', index: 0, hit: { object: hitObject, folder: 'tables', label: 'dbo.Orders' }, pane: false, node: { lost: false, kind: 'table', connectionId: 'c', label: 'dbo.Orders', ref: { type: 'object', object: hitObject } }, state: { explorerScriptTitle: 'table' } }
     ]
     expect(targets.map(target => menuForTarget[target.kind])).toEqual(contextMenuIds)
-    const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, explorerFolder: '', explorerFolderInsertable: false, explorerNodePeekable: false, explorerNodeStatus: '', explorerServerEngine: '', explorerServerLinux: false, outputView: '', outputGridTransposable: false, outputLiveFilterable: false, outputLiveRows: '', outputLiveSortable: false, pane: '', paneFloating: false, panePopout: false, documentTabFloating: false, searchHitSchema: false }
+    const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, explorerFolder: '', explorerFolderInsertable: false, explorerNodePeekable: false, explorerNodeStatus: '', explorerServerEngine: '', explorerServerLinux: false, outputView: '', outputGridTransposable: false, outputGridBare: false, outputLiveFilterable: false, outputLiveRows: '', outputLiveSortable: false, pane: '', paneFloating: false, panePopout: false, documentTabFloating: false, searchHitSchema: false }
     expect(targets.map(targetKeys)).toEqual([none, { ...none, explorerNode: 'table', explorerNodePeekable: true }, none, none, { ...none, outputView: 'messages' }, { ...none, pane: 'results', paneFloating: true }, none, none, { ...none, searchHitSchema: true }])
     expect(targetKeys(undefined)).toEqual(none)
     // The empty area below the servers, and a server lost with its backend generation.
@@ -227,8 +227,8 @@ describe('menu target service', () => {
     expect(clicked).toMatchObject({ column: 1 })
     active.setAttribute('aria-colindex', '1')
     expect(service.targetFor(dom(grid))!.target).not.toHaveProperty('column')
-    // Its result kind offers Transpose for a query's rows and a pivot, never a comparison, a plan set or a stored
-    // transpose (or an unmarked grid).
+    // Its result kind offers Transpose for a query's rows and a pivot, never a comparison, a plan set or a kind
+    // it does not know, as the stored transpose's was (or an unmarked grid).
     expect(targetKeys(service.targetFor(dom(grid))!.target).outputGridTransposable).toBe(false)
     const transposable = (kind: string) => { grid.setAttribute('data-result-kind', kind); return targetKeys(service.targetFor(dom(grid))!.target).outputGridTransposable }
     expect(['rows', 'pivot', 'transpose', 'diff', 'executionPlan'].map(transposable)).toEqual([true, true, false, false, false])
@@ -239,6 +239,12 @@ describe('menu target service', () => {
     grid.setAttribute('data-orientation', 'transposed')
     expect(service.targetFor(dom(grid))!.target).toMatchObject({ transposed: true })
     expect(argsFor(service.targetFor(dom(grid))!.target).state).toEqual({ resultsGridTransposed: true })
+    // A grid drawn bare (Peek's rows) says so, which takes Pivot, Compare and the close commands out of its menu.
+    expect(service.targetFor(dom(grid))!.target).not.toHaveProperty('bare')
+    expect(targetKeys(service.targetFor(dom(grid))!.target).outputGridBare).toBe(false)
+    grid.setAttribute('data-result-bare', '')
+    expect(service.targetFor(dom(grid))!.target).toMatchObject({ bare: true })
+    expect(targetKeys(service.targetFor(dom(grid))!.target).outputGridBare).toBe(true)
   })
   it('resolves a live view\'s grid as Query Output\'s view `live`, with its commands and the clicked or active column', () => {
     const doc = fakeDocument(), make = (tag: string, init?: ConstructorParameters<typeof FakeElement>[2]) => new FakeElement(doc, tag, init)

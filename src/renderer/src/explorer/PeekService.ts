@@ -587,7 +587,8 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
     this.rowsRun = run
     update({ status: 'loading' })
     // The run's events are followed before the script is sent, as a query tab's are.
-    results.begin(run.key, run.queryId)
+    // Bare: the grid alone, with no Pivot, comparison or close.
+    results.begin(run.key, run.queryId, undefined, { bare: true })
     void (async () => {
       const columns = await settle(api.tableColumns(connectionId, database, schema, name))
       // Released while the columns were read: no session was opened, and releasing dropped the entry.

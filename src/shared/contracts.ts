@@ -158,9 +158,8 @@ export interface ResultDescriptor {
   index: number
   batchNumber: number
   iteration: number
-  /** `diff`: a unified diff of two other results of the query (results.diff); `pivot`: a pivot of one (results.pivot);
-   *  `transpose`: one with its columns as rows (results.transpose). */
-  kind: 'rows' | 'executionPlan' | 'diff' | 'pivot' | 'transpose'
+  /** `diff`: a unified diff of two other results of the query (results.diff); `pivot`: a pivot of one (results.pivot). */
+  kind: 'rows' | 'executionPlan' | 'diff' | 'pivot'
   columns: ResultColumn[]
   rowsRead: number
   rowsStored: number
@@ -311,14 +310,6 @@ export interface ResultsPivotParams { resultId: number; rows: number[]; column?:
  *  rows it read, how many row groups and column groups it has (every one shown: a pivot past `limits.pivot` is refused), and
  *  whether a truncated value's stored prefix was grouped or compared. */
 export interface ResultsPivotResult { descriptor: ResultDescriptor; rows: number; rowGroups: number; columnGroups: number; approximate: boolean }
-/** results.transpose: a complete result's columns as rows and its rows as columns (through `viewId`'s order and filters when
- *  given; only the `rows` [first, count] position ranges when given, merged), the columns named by `headerColumn`'s values
- *  or "Row N". A query's result, a pivot or a transpose; never a diff or a plan. */
-export interface ResultsTransposeParams { resultId: number; viewId?: number; rows?: [number, number][]; headerColumn?: number }
-/** results.transpose's answer: the transpose stored as a new result of the source's query (`descriptor`, kind 'transpose':
- *  a "Column" column, then one per row taken, all text), the source rows it could take (`rows`), the first of them it took
- *  (`transposed`: at most `limits.transpose.maxRows`, fewer for a wide result) and the source columns it holds as rows. */
-export interface ResultsTransposeResult { descriptor: ResultDescriptor; rows: number; transposed: number; columns: number }
 /** results.search: the cells whose grid text contains `text` (1 to `limits.search.maxText` characters), through `viewId`'s
  *  order when given (rows are then view positions). Up to `maxMatches` of them come back in whole rows: from `fromRow` on,
  *  or with `backward` the last ones before `fromRow`. Text columns compare by their collation; others ignore case. */
@@ -523,8 +514,6 @@ export interface PortMethods {
   'results.profile': { params: ResultsProfileParams; result: ResultsProfileResult }
   /** A pivot of a result's rows or a view's, grouped by collation, stored as a new result. */
   'results.pivot': { params: ResultsPivotParams; result: ResultsPivotResult }
-  /** A result's columns as rows and its rows (a view's, or the selected ones) as columns, stored as a new result. */
-  'results.transpose': { params: ResultsTransposeParams; result: ResultsTransposeResult }
   /** A column's distinct values and their counts over a result's rows or a view's, for the header funnel's checklist. */
   'results.distinct': { params: ResultsDistinctParams; result: ResultsDistinctResult }
   /** A window of a distinct snapshot's values, narrowed to a search's matches when one is given. */

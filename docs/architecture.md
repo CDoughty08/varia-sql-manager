@@ -70,11 +70,8 @@ being true.
   hidden tone column. Pivots (`Results/ResultPivot.cs`, `results.pivot`) group and aggregate a result's or a view's rows in
   the backend too and store a derived set (`ResultStore.Open(derived: true)`): its working memory comes out of the query's
   budget, a pivot past its bounds is refused rather than shown in part,
-  and main owns it only once it has the answer (one not sent is released at once). Transposes (`Results/ResultTranspose.cs`,
-  `results.transpose`) copy a result's or a view's cells, columns as rows, into a derived set the same way; they take at
-  most 4,095 rows (never more columns than a page holds) and at most 4,000,000 cells (fewer rows for a wide result), the
-  first ones with explicit truncation. A derived set (a diff, a pivot, a transpose) is stored whole or not at all, and
-  its own refusals never stop its query's budget: a row the budget refuses, or a page sealed under low system memory with
+  and main owns it only once it has the answer (one not sent is released at once). A derived set (a diff, a pivot) is stored
+  whole or not at all, and its own refusals never stop its query's budget: a row the budget refuses, or a page sealed under low system memory with
   rows still to store, fails only that set (`TOO_LARGE`), so a smaller one can still fit. Only a query's own sets stop its
   budget (the query or global budget full, or low system memory at a page seal; a row limit never does); while a query is
   still reading, what a derived build holds counts against that budget like anything else. A derived set asked of a
@@ -105,8 +102,8 @@ being true.
   `ResultGrid` reads `orientation()`. Its `turned` store (the focused grid of each tab, when transposed) feeds the
   `resultsGridTransposed` key and the toolbar; a grid's own menu reads that grid's orientation from its target
   (`argsFor`'s stand-in state), so a Peek card's grid toggles too. Fit Column on a transposed grid fits the target's row
-  (`fitDrawn`), or the name column for a name. The stored transpose (`results.transpose`, `TransposeService`) is no longer
-  reached by any command and is removed separately. A result with a tone column (a comparison, a live table) is never
+  (`fitDrawn`), or the name column for a name. There is no stored transpose: `results.transpose`, its `transpose` result kind and `TransposeService`
+  are gone, the backend answers the method `METHOD_NOT_FOUND`, and `tests/results-transpose.test.ts` pins that none returns. A result with a tone column (a comparison, a live table) is never
   transposed (`transposedView` in `ResultsService.ts` is the one rule, for the grid, `orientation()` and Copy and Save).
   `tests/grid-orientation.test.ts`, `tests/results-orientation.test.ts` and `tests/results-toolbar-transpose.test.ts` hold this.
   A grid drawn transposed copies and saves as drawn, still with nothing stored: the request says `transposed` (and the
@@ -118,15 +115,28 @@ being true.
 - Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never
   leave main except to the backend.
 - Results are released on re-execute, tab close, Close Results, closing one result and backend loss; jobs lease them.
-- Every way a result leaves its run goes through one cleanup, `ResultsService.drop`: closing one entry (`removeEntry`, a
-  stack caption's close button, on an ended run only), Close Results, a new run and the tab closing. It aborts the entry's
+- A run's results are groups (`TabResults.groups`): each original result owns its Table slot and at most one Pivot slot,
+  and a comparison is a slot of its own with frozen references to its two inputs (`TabResults.comparisons`). `sets` stays
+  the one flat list, in the order drawn: a group's Table, its Pivot directly under it, the next group, comparisons last.
+  `ResultsService.addSet` is the only way a derived result joins a run and keeps the rules that make every list
+  representable: a pivot is taken only from a group's Table of rows (never from a Pivot, a comparison or a
+  SQL-returned plan set) and replaces the group's Pivot, releasing the old one first; a bare run (Peek's, `begin`'s
+  `bare`) takes neither a pivot nor a diff. A slot's identity is its entry key, where its grid state, sort and filters
+  already live; do not add a second key for a view. Transposed is not a view either: it is how a Table or a Pivot is
+  drawn (its grid state's orientation). The pivot builder belongs to one group and follows the focused grid
+  (`ResultsService.focusEntry`, `PivotService`); there is no source picker. Commands tell what a grid is by
+  `pivotGroup`, `slotOf` and `groupOf`, and a Peek grid by its target's `bare` (the `outputGridBare` key).
+- Every way a result leaves its run goes through one cleanup, `ResultsService.drop`: closing one view (`removeEntry`, a
+  stack caption's close button or Close Result, on an ended run only; a Table closes its group, so its Pivot
+  goes in the same release), Close Results, a new run and the tab closing. It aborts the entry's
   sort or filter being built, forgets its held views, sort, distinct snapshots, grid controller and state and its part of
   the stack's state, cancels a copy of it (a save the backend accepted finishes under its lease), and releases the stored
   results in one request, after a retained-plan copy in progress has read them. Add a new piece of per-entry state there,
   not in a caller. Services that follow the results give up their own work on an entry that has gone when the snapshot
-  loses it (`PivotService`, `TransposeService` and `CompareService` abort a build whose source closed; search re-searches
+  loses it (`PivotService` and `CompareService` abort a build whose source closed; search re-searches
   only the grids whose target changed; highlights unbind), and `addSet` releases a derived result whose source the run no
-  longer has, so a late answer is released once and never shown. A derived result outlives a closed source. Closing does
+  longer has, so a late answer is released once and never shown. A comparison outlives a closed input (it copied its
+  cells); a group's Pivot does not outlive its Table. Closing does
   not change the run's status, summary or row total (which counts the query's own rows, never a derived result's);
   closing the last entry sets `TabResults.emptied`, which keeps the Results view (`hasResultsView`, `OutputPane.tsx`).
 - In the renderer a result is an entry of its run, named everywhere by the opaque key `ResultsService` mints for it

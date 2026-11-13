@@ -11,7 +11,6 @@ import { HighlightsService } from '../src/renderer/src/results/HighlightsService
 import { emptyResultsText, hasResultsView, outputViewOf } from '../src/renderer/src/results/OutputPane'
 import { PivotService } from '../src/renderer/src/results/PivotService'
 import { ResultsService } from '../src/renderer/src/results/ResultsService'
-import { TransposeService } from '../src/renderer/src/results/TransposeService'
 import type { RetainedPlansService } from '../src/renderer/src/plans/RetainedPlansService'
 import type { DocumentService } from '../src/renderer/src/services/documents'
 import { selectAll } from '../src/renderer/src/grid/selection'
@@ -35,7 +34,7 @@ function fixture(o: { retainedPlans?: RetainedPlansService } = {}) {
   const documents = { openText: vi.fn<DocumentService['openText']>(value => ({ id: 'doc', name: value.name, kind: value.kind, database: '', dirty: false, savedVersionId: 1 })) }
   // Publishes at once, so the services that follow the results hear a close when it happens.
   const results = new ResultsService({ client, api, events, documents, frame: callback => callback(), timers: timers.timers, newId: () => `job-${++ids}`, ...o })
-  const pivot = new PivotService(results), transpose = new TransposeService(results), compare = new CompareService(results), highlights = new HighlightsService(results, { timers: timers.timers })
+  const pivot = new PivotService(results), compare = new CompareService(results), highlights = new HighlightsService(results, { timers: timers.timers })
   /** Runs a query of `count` complete sets, results `first` onwards. */
   const run = (count: number, queryId = 'q1', first = 1, patch: Parameters<typeof descriptor>[1] = {}) => {
     results.begin('t1', queryId)
@@ -47,7 +46,7 @@ function fixture(o: { retainedPlans?: RetainedPlansService } = {}) {
   const handle = (id: number) => client.handle(id) as FakeHandle
   /** How often each result was released. */
   const releases = () => { const counts = new Map<number, number>(); for (const id of client.released()) counts.set(id, (counts.get(id) ?? 0) + 1); return Object.fromEntries(counts) }
-  return { client, api, events, timers, documents, progress, results, pivot, transpose, compare, highlights, run, tab, handle, releases }
+  return { client, api, events, timers, documents, progress, results, pivot, compare, highlights, run, tab, handle, releases }
 }
 
 /** A handle method that answers when the test says, and records the signal it was given. */
@@ -96,8 +95,8 @@ describe('closing one result', () => {
     expect(tab().numbered).toBe(4)
   })
 
-  it('gives up a pivot, a transpose and a comparison whose source is closed, and releases an answer that comes anyway', async () => {
-    const { results, pivot, transpose, compare, run, tab, handle, client, releases } = fixture()
+  it('gives up a pivot and a comparison whose source is closed, and releases an answer that comes anyway', async () => {
+    const { results, pivot, compare, run, tab, handle, client, releases } = fixture()
     const keys = run(3)
     // A pivot of Result 2 is being built when Result 2 is closed.
     const building = held<Awaited<ReturnType<FakeHandle['pivot']>>>()
@@ -106,24 +105,19 @@ describe('closing one result', () => {
     pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
     const pivoting = pivot.run('t1')
     expect(pivot.getSnapshot().tabs.t1.running).toBe(true)
-    // So is a transpose of it, and a comparison of it with Result 1.
-    const turning = held<Awaited<ReturnType<FakeHandle['transpose']>>>()
-    vi.mocked(handle(2).transpose).mockImplementationOnce((_spec, o) => turning.take(o?.signal))
-    const transposing = transpose.transpose('t1', keys[1])
+    // So is a comparison of it with Result 1.
     const diffing = held<Awaited<ReturnType<FakeHandle['diff']>>>()
     vi.mocked(handle(1).diff).mockImplementationOnce((_right, o) => diffing.take(o?.signal))
     const comparing = compare.compare('t1', keys[1])
-    expect(transpose.isRunning('t1')).toBe(true)
 
     expect(results.removeEntry('t1', keys[1])).toBe(true)
-    expect([building.state.signal?.aborted, turning.state.signal?.aborted, diffing.state.signal?.aborted]).toEqual([true, true, true])
-    await Promise.all([pivoting, transposing, comparing])
+    expect([building.state.signal?.aborted, diffing.state.signal?.aborted]).toEqual([true, true])
+    await Promise.all([pivoting, comparing])
     await settle()
     // Nothing was added, nothing is running, and the panel moved to a result it can pivot without an error of the old one.
     expect(tab().sets.map(set => set.number)).toEqual([1, 3])
     expect(pivot.getSnapshot().tabs.t1).toMatchObject({ running: false, source: keys[0] })
     expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()
-    expect(transpose.isRunning('t1')).toBe(false)
     expect(tab().jobNotice).toBe('')
     expect(compare.canCompare('t1', keys[2])).toBe(true)
 
@@ -136,36 +130,33 @@ describe('closing one result', () => {
     expect(client.open).toHaveBeenCalledTimes(3)
   })
 
-  it('releases a pivot, a transpose and a comparison the backend had already answered when their source closed', async () => {
-    const { results, pivot, transpose, compare, run, tab, handle, releases } = fixture()
+  it('releases a pivot and a comparison the backend had already answered when their source closed', async () => {
+    const { results, pivot, compare, run, tab, handle, releases } = fixture()
     const keys = run(3)
     // The answers are on their way: these resolve whatever the signal says, as an answer that beat the abort does.
-    const built = deferred<Awaited<ReturnType<FakeHandle['pivot']>>>(), turned = deferred<Awaited<ReturnType<FakeHandle['transpose']>>>(), diffed = deferred<Awaited<ReturnType<FakeHandle['diff']>>>()
-    const answers = { pivot: await handle(2).pivot({ rows: [0], values: [{ aggregate: 'count' }] }), transpose: await handle(2).transpose(), diff: await handle(1).diff(handle(2)) }
+    const built = deferred<Awaited<ReturnType<FakeHandle['pivot']>>>(), diffed = deferred<Awaited<ReturnType<FakeHandle['diff']>>>()
+    const answers = { pivot: await handle(2).pivot({ rows: [0], values: [{ aggregate: 'count' }] }), diff: await handle(1).diff(handle(2)) }
     vi.mocked(handle(2).pivot).mockReturnValueOnce(built.promise)
-    vi.mocked(handle(2).transpose).mockReturnValueOnce(turned.promise)
     vi.mocked(handle(1).diff).mockReturnValueOnce(diffed.promise)
     pivot.open('t1', keys[1])
     pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
-    const working = [pivot.run('t1'), transpose.transpose('t1', keys[1]), compare.compare('t1', keys[1])]
+    const working = [pivot.run('t1'), compare.compare('t1', keys[1])]
     results.removeEntry('t1', keys[1])
     built.resolve(answers.pivot)
-    turned.resolve(answers.transpose)
     diffed.resolve(answers.diff)
     await Promise.all(working)
     await settle()
     // Each is released once and shown nowhere; the panel, which moved to Result 1, says nothing of the pivot given up.
     expect(tab().sets.map(set => set.number)).toEqual([1, 3])
-    expect(releases()).toEqual({ 2: 1, 802: 1, 702: 1, 901: 1 })
+    expect(releases()).toEqual({ 2: 1, 802: 1, 901: 1 })
     expect(pivot.getSnapshot().tabs.t1).toMatchObject({ running: false, source: keys[0] })
     expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()
     expect(pivot.getSnapshot().info.size).toBe(0)
-    expect(transpose.getSnapshot().size).toBe(0)
     expect(compare.getSnapshot().size).toBe(0)
     expect(tab().jobNotice).toBe('')
   })
 
-  it('leaves work on another result alone when one is closed, and a derived result outlives its source under its name', async () => {
+  it('leaves work on another result alone when one is closed, and a comparison outlives its source under its name', async () => {
     const { results, pivot, compare, run, tab, handle, releases } = fixture()
     const keys = run(3)
     await compare.compare('t1', keys[1])
@@ -182,10 +173,11 @@ describe('closing one result', () => {
     building.answer.resolve(answer)
     await pivoting
     await settle()
-    expect(tab().sets.map(set => [set.number, set.label])).toEqual([[2, undefined], [3, undefined], [4, 'Differences: Result 1 → Result 2'], [5, 'Pivot of Result 3']])
+    // The Pivot stands under its Table, the comparison after the groups.
+    expect(tab().sets.map(set => [set.number, set.label])).toEqual([[2, undefined], [3, undefined], [5, 'Pivot of Result 3'], [4, 'Differences: Result 1 → Result 2']])
     expect(releases()).toEqual({ 1: 1 })
     // The comparison's own close releases only the comparison.
-    results.removeEntry('t1', tab().sets[2].key)
+    results.removeEntry('t1', tab().sets[3].key)
     expect(releases()).toEqual({ 1: 1, 901: 1 })
     expect(tab().sets.map(set => set.number)).toEqual([2, 3, 5])
   })
