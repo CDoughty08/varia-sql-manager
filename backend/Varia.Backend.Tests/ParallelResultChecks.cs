@@ -55,7 +55,8 @@ internal static class ParallelResultChecks
     {
         var store = new ResultStore(2L << 30, 1L << 30);
         // An int of 100,000 values (past the 65,536 grouped without sorting), one of them on a third of the rows so its run
-        // crosses every thread's, and NULL every seventh row; and text of 90,000 values each in two cases.
+        // spans several threads' runs (one holding no value's start), and NULL every seventh row; and text of 90,000 values
+        // each in two cases.
         var set = Fill(store, store.BeginQuery("parallel-distinct"), 0, Rows, [new("n", "int", "text"), new("t", "nvarchar(20)", "text", Collation: CaseInsensitive)], row =>
         [
             row % 7 == 0 ? null : (row % 3 == 0 ? 42 : row % 100_000).ToString(CultureInfo.InvariantCulture),
@@ -96,13 +97,15 @@ internal static class ParallelResultChecks
         var store = new ResultStore(2L << 30, 1L << 30);
         var budget = store.BeginQuery("parallel-pivot");
         // 300 row groups (one NULL) by 7 column groups; the counted int repeats within and across cells, NULL every
-        // thirteenth row; the counted text is equal by its collation in two cases.
-        var set = Fill(store, budget, 0, Rows, [new("g", "int", "text"), new("c", "int", "text"), new("v", "int", "text"), new("t", "nvarchar(20)", "text", Collation: CaseInsensitive)], row =>
+        // thirteenth row; the counted text is equal by its collation in two cases. A second column group, h, has three
+        // values of about 100,000 rows each (cells past a thread's slice, two of them not at the start) and three of 300.
+        var set = Fill(store, budget, 0, Rows, [new("g", "int", "text"), new("c", "int", "text"), new("v", "int", "text"), new("t", "nvarchar(20)", "text", Collation: CaseInsensitive), new("h", "int", "text")], row =>
         [
             row % 301 == 0 ? null : (row % 300).ToString(CultureInfo.InvariantCulture),
             (row % 7).ToString(CultureInfo.InvariantCulture),
             row % 13 == 0 ? null : (row / 3 % 5_000).ToString(CultureInfo.InvariantCulture),
-            row % 17 == 0 ? null : Text(row / 2 % 4_000, row)
+            row % 17 == 0 ? null : Text(row / 2 % 4_000, row),
+            (row % 1_000 < 3 ? 3 + row % 1_000 : row % 3).ToString(CultureInfo.InvariantCulture)
         ]);
         var pages = set.SealedSnapshot();
         PivotSpec Spec(int[] rows, int column) => new(rows, column, [new PivotValue(PivotAggregate.CountDistinct, 2), new PivotValue(PivotAggregate.CountDistinct, 3)]);
@@ -115,7 +118,8 @@ internal static class ParallelResultChecks
             return _ => ++calls == 1;
         }
         bool Same(long[][] a, long[][] b) => a.Length == b.Length && a.Zip(b).All(pair => pair.First.AsSpan().SequenceEqual(pair.Second));
-        foreach (var (spec, name) in new[] { (Spec([0], 1), "by row and column groups"), (Spec([], -1), "of all rows, one cell of more rows than a thread's slice") })
+        foreach (var (spec, name) in new[] { (Spec([0], 1), "by row and column groups"), (Spec([], -1), "of all rows, one cell of more rows than a thread's slice"),
+            (Spec([], 4), "by a column group of three large cells and three small ones") })
         {
             var (parallel, alone) = Both(() => Counts(spec, _ => true));
             var (sorted, sortedAlone) = Both(() => Counts(spec, NoBounds()));
@@ -144,21 +148,25 @@ internal static class ParallelResultChecks
         foreach (var (cell, _) in seen[1]) textExpected[cell]++;
         check(figures[0].AsSpan().SequenceEqual(expected) && figures[1].AsSpan().SequenceEqual(textExpected),
             "Distinct Count on eight threads counts each cell's and each row group's distinct values, NULL not among them and text equal by its collation as one");
-        // A cancellation once the rows are placed, as the cells are sorted and counted on several threads (the next check of
-        // the token is a worker's), stops the build as itself: with the cell bounds, small cells and one large cell, and
-        // without them.
-        foreach (var (spec, reserve, name) in new[] { (Spec([0], 1), (Func<Func<long, bool>>)(() => _ => true), "small cells"), (Spec([], -1), () => _ => true, "one large cell"), (Spec([0], 1), NoBounds, "no cell bounds") })
+        // A cancellation once a pass has placed its rows, as its cells are sorted and counted on several threads, stops the
+        // build as itself: with the cell bounds, small cells, large cells (sorted by the parallel sort) and without the bounds.
+        // Each pass places its rows (the cells, then the row groups' totals) for each value; a pivot without column groups
+        // has rows only in its totals, the second placing.
+        foreach (var (spec, reserve, at, name) in new[]
+        {
+            (Spec([0], 1), (Func<Func<long, bool>>)(() => _ => true), 1, "small cells"), (Spec([], -1), () => _ => true, 2, "one large cell"),
+            (Spec([], 4), () => _ => true, 1, "large cells after the first"), (Spec([0], 1), NoBounds, 1, "no cell bounds")
+        })
         {
             using var eight = ViewSorter.WorkersHere(8);
             using var cancel = new CancellationTokenSource();
-            var stages = new PivotStages { Placed = cancel.Cancel };
+            var placed = 0;
+            var stages = new PivotStages { Placed = () => { if (++placed == at) cancel.Cancel(); } };
             string stopped;
             try { ResultPivoter.Build(set, pages, null, spec, cancel.Token, reserve(), null, stages); stopped = "finished"; }
             catch (OperationCanceledException) { stopped = "cancelled"; }
-            // Array.Sort wraps what its comparer throws; the host answers a cancelled request at once, whatever follows.
-            catch (InvalidOperationException error) when (error.InnerException is OperationCanceledException) { stopped = "cancelled"; }
             catch (Exception error) { stopped = error.GetType().Name; }
-            check(stopped == "cancelled", $"a pivot cancelled while its distinct values are counted on several threads ({name}) stops with the cancellation ({stopped})");
+            check(stopped == "cancelled", $"a pivot cancelled while its distinct values are counted on several threads ({name}) stops with the cancellation, as itself ({stopped})");
         }
     }
 

@@ -181,21 +181,21 @@ internal static partial class ViewSorter
     {
         if (count < 2 * MinSlice)
         {
-            if (count > 1) Array.Sort(items, start, count, comparer);
+            if (count > 1) SortRange(items, start, count, comparer);
             return;
         }
         using var threads = Gate.Take(Math.Min(Workers, count / MinSlice));
         var slices = Slices(count, threads.Count);
         if (slices == 1)
         {
-            Array.Sort(items, start, count, comparer);
+            SortRange(items, start, count, comparer);
             return;
         }
         int At(int slice, int of) => start + (int)((long)count * slice / of);
         var options = new ParallelOptions { MaxDegreeOfParallelism = threads.Count };
         try
         {
-            Parallel.For(0, slices, options, slice => Array.Sort(items, At(slice, slices), At(slice + 1, slices) - At(slice, slices), comparer));
+            Parallel.For(0, slices, options, slice => SortRange(items, At(slice, slices), At(slice + 1, slices) - At(slice, slices), comparer));
             // The merges go through a buffer of the items sorted, not of the whole array: a caller sorting many ranges of one
             // array (a pivot's cells) holds one range's buffer at a time. Positions are from start; the buffer's are from 0.
             int[] from = items, to = new int[count];
@@ -217,8 +217,19 @@ internal static partial class ViewSorter
         }
         catch (AggregateException error) when (error.InnerExceptions.Count > 0)
         {
-            // What one thread's sort would have thrown (a cancellation, or the sort's wrapping of one).
+            // What one thread's sort would have thrown (a cancellation, as itself).
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerExceptions[0]).Throw();
+        }
+    }
+
+    /// <summary>Array.Sort over a range, a cancellation its comparer throws rethrown as itself: Array.Sort wraps whatever a
+    /// comparer throws in an InvalidOperationException.</summary>
+    internal static void SortRange(int[] items, int start, int count, IComparer<int> comparer)
+    {
+        try { Array.Sort(items, start, count, comparer); }
+        catch (InvalidOperationException error) when (error.InnerException is OperationCanceledException cancelled)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(cancelled).Throw();
         }
     }
 

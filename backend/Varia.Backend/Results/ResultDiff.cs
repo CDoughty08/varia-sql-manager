@@ -121,11 +121,11 @@ internal static class ResultDiffer
     private const int CancelEvery = 1 << 12;
 
     /// <summary>Bytes the alignment holds per row while it runs: a left row's identity, match, chain, place in its part and
-    /// lookup entry with its bucket (8 + 4 + 4 + 4 + 24 + 4, and 4 for the lookups' sizes rounding up to a prime: the parts'
-    /// lookups together hold one entry a left row), a right row's identity, match and place in its part (8 + 4 + 4), and up
-    /// to one entry a row of both results (20), written straight into the model's array. Differing cells are charged as
-    /// they are found (<see cref="CellBytes"/>).</summary>
-    public static long WorkingBytes(long leftRows, long rightRows) => 52 * leftRows + 16 * rightRows + EntryBytes * (leftRows + rightRows);
+    /// lookup entry with its bucket (8 + 4 + 4 + 4 + 24 + 4, and 6 for the lookups' sizes rounding up to a prime, up to a
+    /// fifth more: the parts' lookups together hold one entry a left row), a right row's identity, match and place in its
+    /// part (8 + 4 + 4), and up to one entry a row of both results (20), written straight into the model's array. Differing
+    /// cells are charged as they are found (<see cref="CellBytes"/>).</summary>
+    public static long WorkingBytes(long leftRows, long rightRows) => 54 * leftRows + 16 * rightRows + EntryBytes * (leftRows + rightRows);
 
     private const long EntryBytes = 20;
 
@@ -348,11 +348,12 @@ internal static class ResultDiffer
         var cut = 0;
         var refused = 0;
         var charging = new object();
+        long differing = 0, charged = 0;
         threads.For(runs, run =>
         {
             var (ownLeft, ownRight) = run == 0 ? (leftHasher, rightHasher) : (leftHasher.Fork(), rightHasher.Fork());
             var cells = found[run] = [];
-            long charged = 0;
+            var counted = 0;
             var at = (int)places[run];
             var inexact = false;
             for (int j = Start(run), end = Start(run + 1); j < end; j++)
@@ -367,16 +368,22 @@ internal static class ResultDiffer
                 if (i < 0) { entries[at++] = new DiffEntry(DiffKind.Added, -1, j); continue; }
                 var before = cells.Count;
                 inexact |= CompareCells(ownLeft, leftAccess, i, ownRight, rightAccess, j, pairs, exact, cells, out var hard);
-                while (cells.Count > charged)
+                if (cells.Count > counted)
                 {
-                    bool granted;
-                    lock (charging) granted = reserve is null || reserve(CellChunk * CellBytes);
-                    if (!granted)
-                    {
-                        Volatile.Write(ref refused, 1);
-                        throw new RequestException("TOO_LARGE", "These results differ in too many values to compare in the result memory left. Close other results and try again.");
-                    }
-                    charged += CellChunk;
+                    // The runs' cells together, charged a chunk at a time as one pass charges them, however many runs find them.
+                    var all = Interlocked.Add(ref differing, cells.Count - counted);
+                    counted = cells.Count;
+                    if (all > Volatile.Read(ref charged))
+                        lock (charging)
+                            while (all > charged)
+                            {
+                                if (reserve is not null && !reserve(CellChunk * CellBytes))
+                                {
+                                    Volatile.Write(ref refused, 1);
+                                    throw new RequestException("TOO_LARGE", "These results differ in too many values to compare in the result memory left. Close other results and try again.");
+                                }
+                                Volatile.Write(ref charged, charged + CellChunk);
+                            }
                 }
                 entries[at++] = new DiffEntry(hard ? DiffKind.Changed : DiffKind.Same, i, j, before, cells.Count - before);
                 for (var k = i + 1; k < leftTotal && matchedLeft[k] < 0; k++) entries[at++] = new DiffEntry(DiffKind.Removed, k, -1);

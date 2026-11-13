@@ -1496,7 +1496,7 @@ receives a new result to read like any other, never rows to compare.
   released with the query's other results, and released at once when its answer is not delivered: a CANCEL or the
   deadline answered first (the backend), its answer failed validation or its port went (main), or the page gave it up
   (the worker). A source released while the results were compared ends it (`RESULT_RELEASED`).
-  While it is built the alignment holds about 54 bytes a row of both results (`ResultDiffer.WorkingBytes`) and 12 bytes
+  While it is built the alignment holds about 55 bytes a row of both results (`ResultDiffer.WorkingBytes`) and 12 bytes
   a differing cell, charged to the budget too as they grow (`TOO_LARGE` without room).
 - **Threads.** Identities are hashed in runs of pages on several threads. Matching splits them by their hashes' high bits
   into one part per thread it asks for; each part's rows are first gathered in row order (a stable counting sort, on

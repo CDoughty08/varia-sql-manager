@@ -449,7 +449,7 @@ internal static class ResultPivoter
                         var (start, end) = (Start(cell), bounds[cell]);
                         if (end == start || end - start >= 2 * ViewSorter.MinSlice) continue;
                         token.ThrowIfCancellationRequested();
-                        if (end - start > 1) Array.Sort(scratch, start, end - start, comparer);
+                        if (end - start > 1) ViewSorter.SortRange(scratch, start, end - start, comparer);
                         long distinct = 1;
                         for (var i = start + 1; i < end; i++)
                             if (comparer.Values(scratch[i - 1], scratch[i]) != 0) distinct++;
