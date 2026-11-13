@@ -26,6 +26,8 @@ internal static class WorkerGateChecks
     {
         Shares(check);
         Unstarted(check);
+        QueuedFirst(check);
+        Refused(check);
         Crowded(check);
         Loops(check);
     }
@@ -99,6 +101,59 @@ internal static class WorkerGateChecks
         lease.Dispose();
         check(open == (4, 4, 3) && closed == (1, 1, 0) && late == (false, 1, 1) && gate.Busy == 0,
             "a step's owner never waits for workers the thread pool has not run: closing gives their threads back, and they do nothing when they run: " + open + " " + closed + " " + late);
+    }
+
+    private static void QueuedFirst(Action<bool, string> check)
+    {
+        // Over its share, a lease hands back a worker the thread pool has not run before one that is running: the running
+        // one goes on to its next item.
+        var queued = new List<IThreadPoolWorkItem>();
+        var gate = new Gate(() => 4, queued.Add);
+        var a = gate.Take(4);
+        var first = new Probe(a);
+        a.Open(first, 4);
+        var b = gate.Take(4);
+        b.Open(new Probe(b), 4);
+        queued[0].Execute();
+        var kept = (a.Keep(), a.Keep(), a.Keep());
+        var after = (a.Count, b.Count, first.Pending, first.Queued, gate.Busy);
+        a.Exit();
+        a.Close();
+        b.Close();
+        a.Dispose();
+        b.Dispose();
+        check(first.Began && kept == (true, true, true) && after == (2, 2, 1, 0, 4) && gate.Busy == 0,
+            "a lease over its share hands back the workers still queued before one that is running: " + kept + " " + after);
+    }
+
+    private static void Refused(Action<bool, string> check)
+    {
+        // A thread pool that refuses a worker (a callback that throws) leaves the step to its owner and the others: every
+        // item still runs once, nothing is counted twice, and no exception reaches a worker or the owner.
+        var calls = 0;
+        var gate = new Gate(() => 4, item =>
+        {
+            if (Interlocked.Increment(ref calls) % 2 == 0) throw new InvalidOperationException("refused");
+            ThreadPool.UnsafeQueueUserWorkItem(item, preferLocal: false);
+        });
+        var runs = new int[2000];
+        string? failed = null;
+        try
+        {
+            for (var round = 0; round < 20; round++)
+                using (var lease = gate.Take(4)) lease.For(100, index => Interlocked.Increment(ref runs[round * 100 + index]));
+        }
+        catch (Exception error) { failed = error.Message; }
+        var refusing = new Gate(() => 4, _ => throw new InvalidOperationException("refused"));
+        var alone = 0;
+        int held;
+        using (var lease = refusing.Take(4))
+        {
+            lease.For(50, _ => alone++);
+            held = lease.Count;
+        }
+        check(failed is null && runs.All(count => count == 1) && calls > 1 && gate.Busy == 0 && alone == 50 && held == 1 && refusing.Busy == 0,
+            "a worker the thread pool refuses is taken back: the items still run once each on the threads there are, and every thread is given back (" + failed + ")");
     }
 
     private static void Crowded(Action<bool, string> check)

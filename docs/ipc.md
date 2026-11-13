@@ -1379,18 +1379,26 @@ itself by view position.
   order one thread would give. All the operations running (sorts, filters, distinct lists, pivots, profiles, searches,
   row identities and diffs) share those threads (three quarters of the machine's, 16 at most) in fair shares
   (`ViewSorter.WorkerGate`, `Results/WorkerGate.cs`):
-  - Each operation keeps its own thread (the request's) and runs a parallel step's items (pages, runs of pages, sort
-    slices, merges) on it and on workers the gate starts for it. Shares are filled from the smallest demand up: a step
+  - Each operation keeps its own thread (the request's) and runs a parallel step's items (pages, sort slices, merges,
+    identity parts, runs of pages) on it and on workers the gate starts for it. Shares are filled from the smallest demand up: a step
     of two items takes two threads, and the operations with more to do split the rest evenly.
   - Workers start only while fewer than the limit are busy, so the threads busy are at most the limit and, past it, one
     for each further operation (its own); no operation ever has none.
   - Between two items, a worker of an operation holding more than its share hands its thread back, and it goes to the
     operation furthest below its share; one whose step runs out of items hands its threads back as its workers find
     none. So an operation alone has every thread, and a second started beside it has half of them after the first's
-    next items rather than the leftovers when it ends. A profile's, search's or identity's items are its runs (one per
-    thread asked for), so those three hand threads back only between runs.
+    next items rather than the leftovers when it ends. Steps are cut into more items than threads where that costs
+    nothing: key builds and row identities take a page an item, a sort up to four slices a thread (its two extra rounds
+    of merges cost about the comparisons the smaller slices save), and the identity check up to four parts a thread.
+    A profile and a search are not: their items are runs, one per thread asked for, whose figures and matches are merged
+    in order and held per run (a profile's working memory is reserved per run), so each hands a thread back only when
+    one of its runs ends, which for a profile that started first is about when it ends.
   - A failure or cancellation stops the step's workers at their next item and is rethrown, as itself, once they have
-    all stopped; every thread is back when the step returns.
+    all stopped; every thread is back when the step returns. Workers still queued to the thread pool when a step closes
+    are given back at once (the owner never waits for a starved pool to run them), a lease over its share hands back a
+    queued worker before a running one, and a worker the thread pool refuses is taken back as if never granted.
+  - The limit is read at each gate event (a lease taken or given back, a step opened or closed, a worker leaving):
+    lowering it takes effect at the workers' next items, raising it at the next such event.
   - Measured (`--fairness-bench`, 2,000,000 W1 rows, 24 cores and 16 workers, then `DOTNET_PROCESSOR_COUNT=4`, 3
     workers): see the table under [Worker threads measured](#worker-threads-measured).
 - **Dates and times.** `date`, `time`, `datetime`, `datetime2` and `smalldatetime` cells are read as ticks from their
@@ -1478,6 +1486,10 @@ also using; the ranges are the three rounds. "Faster" and "slower" are the two o
   measures the gate's sharing, not a four-core machine's speed.
 - A profile's items are its runs (one per thread asked for), so a profile started first hands threads back only as runs
   end: "profile, then sort" gains least.
+- These rounds cut a sort into one slice a thread. Then cut into up to four (three rounds each, same machine, a sort by
+  the `uniqueidentifier` column, whose sort outweighs its key build): alone 75 – 78 ms before, 61 – 62 ms after (smaller
+  slices even out this CPU's fast and slow cores); two at once, the slower 116 – 169 ms before, 84 – 112 ms after; the
+  other cases unchanged within their ranges.
 - `--pivot-bench --only parallel` (5,000,000 rows, 1 GiB a query; three rounds each): builds at once took 1.3 – 2.0 s
   each before and 0.76 – 1.1 s after; one build alone 0.84 – 1.15 s before and 0.92 – 1.26 s after (the same, within
   this machine's spread that day).

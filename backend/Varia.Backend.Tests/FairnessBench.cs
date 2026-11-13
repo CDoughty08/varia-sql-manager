@@ -7,9 +7,9 @@ namespace Varia.Backend.Tests;
 
 /// <summary>How result operations share the worker threads, run by hand (docs/ipc.md, "Worker threads"):
 /// <c>dotnet run --project backend/Varia.Backend.Tests --configuration Release -- --fairness-bench [--rows N] [--runs N]</c>,
-/// with <c>DOTNET_PROCESSOR_COUNT=n</c> for a smaller machine. Fills one synthetic W1 result, then times a text sort, a pivot
+/// with <c>DOTNET_PROCESSOR_COUNT=n</c> for a smaller machine. Fills one synthetic W1 result, then times a text sort, a uniqueidentifier sort, a pivot
 /// and a profile of every column each alone, and each pair of them started together (two pivots, two sorts, a sort and a
-/// profile, a sort and a pivot, a pivot and a profile). Prints one JSON line per case with each operation's median time and
+/// profile, a sort and a pivot, a pivot and a profile, two uniqueidentifier sorts, one beside a pivot). Prints one JSON line per case with each operation's median time and
 /// the faster and slower of each pair (medians) and its wall time; measures only, no checks, and is not part of <c>npm run check</c>.</summary>
 internal static class FairnessBench
 {
@@ -40,6 +40,7 @@ internal static class FairnessBench
         {
             ["sort"] = () => ViewSorter.Build(set, pages, [new ViewKey(1, false, SortMode.Value)], [], none),
             ["pivot"] = () => ResultPivoter.Build(set, pages, null, new PivotSpec([6], -1, [new(PivotAggregate.Count, -1), new(PivotAggregate.Sum, 3), new(PivotAggregate.Max, 7)]), none, _ => true),
+            ["sortGuid"] = () => ViewSorter.Build(set, pages, [new ViewKey(4, false, SortMode.Value)], [], none),
             ["profile"] = () => ColumnProfiler.Profile(set, pages, null, [.. Enumerable.Range(0, columns.Length)], true, none),
         };
         var label = rows.ToString("N0", CultureInfo.InvariantCulture) + " rows, " + Environment.ProcessorCount + " processors, " + ViewSorter.Workers + " workers";
@@ -59,7 +60,7 @@ internal static class FairnessBench
             }
             Print(new { id = "fairness.alone." + name, ms = Math.Round(Median(times), 1), detail = label });
         }
-        foreach (var (first, second) in new[] { ("pivot", "pivot"), ("sort", "sort"), ("sort", "profile"), ("profile", "sort"), ("sort", "pivot"), ("pivot", "profile") })
+        foreach (var (first, second) in new[] { ("pivot", "pivot"), ("sort", "sort"), ("sort", "profile"), ("profile", "sort"), ("sort", "pivot"), ("pivot", "profile"), ("sortGuid", "sortGuid"), ("sortGuid", "pivot") })
         {
             List<double> a = [], b = [], faster = [], slower = [], wall = [];
             for (var run = 0; run < runs; run++)

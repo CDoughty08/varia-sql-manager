@@ -143,15 +143,18 @@ internal static partial class ViewSorter
             return;
         }
         using var threads = Gate.Take(Math.Min(Workers, count / MinSlice));
-        var slices = Slices(count, threads.Wanted);
+        // Up to four slices a thread: a sort holding more than its share hands threads back between slices too, and one
+        // given fewer threads than it asked for still spreads its slices evenly over them. The two extra rounds of merges
+        // cost about the comparisons the smaller slices save.
+        var slices = Slices(count, threads.Wanted == 1 ? 1 : 4 * threads.Wanted);
         if (slices == 1)
         {
             Array.Sort(items, start, count, comparer);
             return;
         }
         int At(int slice, int of) => start + (int)((long)count * slice / of);
-        // Each slice and each merge is an item: a sort holding more than its share hands threads back between them. The
-        // comparer throws a cancellation, which For rethrows once the other threads have stopped.
+        // Each slice and each merge is an item. The comparer throws a cancellation, which For rethrows once the other threads
+        // have stopped.
         threads.For(slices, slice => Array.Sort(items, At(slice, slices), At(slice + 1, slices) - At(slice, slices), comparer));
         int[] from = items, to = new int[items.Length];
         for (var width = slices; width > 1; width /= 2)

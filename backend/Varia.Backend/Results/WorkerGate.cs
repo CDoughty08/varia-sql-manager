@@ -86,10 +86,26 @@ internal static partial class ViewSorter
             }
         }
 
+        /// <summary>Queues the workers granted. One the thread pool refuses (it throws only when out of memory, or a check's
+        /// own callback) is taken back as if it had never been granted, so nothing a step counts drifts and no caller
+        /// (a worker between items, or one leaving on a thread pool thread) sees the exception: the step's owner runs the
+        /// items itself.</summary>
         private void Start(List<Loop>? started)
         {
             if (started is null) return;
-            foreach (var loop in started) start(loop);
+            foreach (var loop in started)
+            {
+                try { start(loop); }
+                catch (Exception)
+                {
+                    lock (sync)
+                        if (loop.Queued > 0)
+                        {
+                            loop.Queued--;
+                            loop.Owner!.Leave();
+                        }
+                }
+            }
         }
 
         /// <summary>A step's workers: the gate counts those started and not yet gone (<see cref="Pending"/>), of them those
@@ -99,6 +115,7 @@ internal static partial class ViewSorter
         {
             internal bool Open;
             internal int Pending, Queued;
+            internal Lease? Owner;
             internal ManualResetEventSlim? Done;
             public abstract void Execute();
         }
@@ -124,6 +141,7 @@ internal static partial class ViewSorter
                 lock (gate.sync)
                 {
                     loop = step;
+                    step.Owner = this;
                     step.Open = true;
                     demand = Math.Max(1, threads);
                     gate.Share();
@@ -149,19 +167,23 @@ internal static partial class ViewSorter
             }
 
             /// <summary>Asked by a started worker between two items: false when the lease holds more than its share, and
-            /// the worker's thread has been handed back.</summary>
+            /// the worker's thread has been handed back. A worker still queued is handed back first: it has started no
+            /// item, so this one goes on.</summary>
             internal bool Keep()
             {
                 if (Volatile.Read(ref held) <= Volatile.Read(ref target)) return true;
                 List<Loop>? started = null;
+                bool keep;
                 lock (gate.sync)
                 {
                     if (held <= target) return true;
+                    keep = loop!.Queued > 0;
+                    if (keep) loop.Queued--;
                     Leave();
                     gate.Grant(started = []);
                 }
                 gate.Start(started);
-                return false;
+                return keep;
             }
 
             /// <summary>A started worker that found no item left (or a failure): its thread is handed back, and the step
@@ -182,7 +204,7 @@ internal static partial class ViewSorter
                 gate.Start(started);
             }
 
-            private void Leave()
+            internal void Leave()
             {
                 gate.Free(this, 1);
                 if (--loop!.Pending == 0 && !loop.Open) loop.Done?.Set();

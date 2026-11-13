@@ -94,7 +94,8 @@ internal static class ColumnProfiler
         var guessed = set.Lengths.Any(length => length.Estimated);
         var count = set.Wires.Count;
         // A run for each thread asked for (the working memory is reserved for that many), read on the share of the
-        // threads the gate gives: a run is an item, so threads move between the profile and other operations between runs.
+        // threads the gate gives. A run is one item, so a profile holding more than its share gives a thread back only
+        // as one of its runs ends; more, smaller runs would each need figures (and memory) of their own.
         using var threads = (gate ?? ViewSorter.Gate).Take(workers ?? WorkersFor(pages.Length));
         var runs = Math.Clamp(threads.Wanted, 1, Math.Max(1, pages.Length));
         int From(int run) => RunStart(pages.Length, run, runs);
