@@ -454,6 +454,7 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
   /** Legacy server-name reassociation is refused; reconnect callers must supply durable identity. */
   follows(_id: string, _server: string): boolean { return false }
   canFollowTarget(id: string, targetId: string): boolean { return this.targetBindings.canFollowTarget(id, targetId) }
+  coalesceTarget(id: string, fromTargetId: string, toTargetId: string): boolean { return this.targetBindings.coalesceTarget(id, fromTargetId, toTargetId) }
   /** The grid's cell editor registers here while it is mounted. */
   registerEditor(id: string, commit: () => void): Disposable {
     this.editors.set(id, commit)

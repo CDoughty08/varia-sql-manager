@@ -1,5 +1,10 @@
 # Disconnect orchestration integration
 
+The central hooks, prompt and exact-target custom-provider adapters described below are now integrated. This document
+preserves the parallel track's handoff checklist; linked patches are historical and must not be applied again.
+Current user behavior is described in [connection roots](connections-explorer.md), with ownership rules in the
+[architecture invariants](architecture.md). App uses one coordinator for Explorer, command and popout disconnects.
+
 The disconnect track is committed independently of Explorer and persistence. `services/disconnect.ts` implements the
 typed `DisconnectCoordinator.disconnect(targetId, mode)` seam; modes are `disconnect` and `remove-from-explorer`.
 It returns a typed outcome, including cancellation, stale backend state, blockers and uncertainty. It never owns a
@@ -74,9 +79,6 @@ durable binding remain unavailable after a handle replacement and may be explici
 
 ## Documentation impact
 
-The new orchestrator and dialog remain additive until these central hooks are integrated. README and Unreleased
-describe the active identity-safety correction; the implementation plan defines the final Keep/Close/Cancel UX.
-Persistence owns the hot-exit connection wording and Explorer owns final Object Explorer/command guidance. The
-Getting Started Connect and Run Query guides and fictional samples do not currently teach custom-document
-reassociation or server-disconnect choices; no guide/sample change is required for this isolated track. Update their
-connection lifecycle guidance with the integrated feature.
+README, Unreleased, the connection roots page and hot-exit guidance describe the integrated lifecycle. The Getting
+Started Connect and Run Query guides include remembered-target restoration. Fictional samples remain inert and make
+no connections or SQL requests. Existing published release records are unchanged.

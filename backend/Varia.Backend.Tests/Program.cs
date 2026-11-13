@@ -80,6 +80,21 @@ if (args is ["--sql-completion-checks"])
     Console.WriteLine("Passed " + passed + " SQL completion checks.");
     return;
 }
+if (args is ["--connection-principal-checks"])
+{
+    await ConnectionPrincipalChecks.RunAsync(Check);
+    await EntraChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " connection principal and Entra checks.");
+    return;
+}
+if (args is ["--authentication-catalog-checks"])
+{
+    await ScriptingChecks.RunAsync(Check);
+    await ActionChecks.RunAsync(Check);
+    await SsisChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " scripting, action and SSIS authentication catalog checks.");
+    return;
+}
 var liveGroup = LiveGroups.Parse(args);
 // Focused SQL Server lanes: their scratch and permission checks are required, never an offline-only or skipped success.
 if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--server-files-live" or "--seams-live" or "--new-database-live" or "--action-progress-live" or "--attach-live" or "--restore-live" or "--logins-live" or "--login-listing-live" or "--database-state-live" or "--delete-live" or "--detach-live" or "--rename-database-live" or "--login-actions-live" or "--login-delete-live" or "--login-properties-live" or "--securables-live" or "--login-kinds-live")])
@@ -340,6 +355,7 @@ if (liveGroup is null)
         ("EstimatedPlan", Sync(() => EstimatedPlanChecks.Run(Check))),
         ("ClientStatistics", Sync(() => ClientStatisticsChecks.Run(Check))),
         ("Entra", () => EntraChecks.RunAsync(Check)),
+        ("ConnectionPrincipal", () => ConnectionPrincipalChecks.RunAsync(Check)),
         ("Store", Sync(() => StoreChecks.Run(Check))),
         ("View", Sync(() => ViewChecks.Run(Check))),
         ("Filter", Sync(() => FilterChecks.Run(Check))),

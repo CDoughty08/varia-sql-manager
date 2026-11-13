@@ -3,6 +3,7 @@ import { planParseSchema, planDocumentSchema } from '../shared/plans'
 import { estimatedPlanRequestSchema, estimatedPlanResultSchema } from '../shared/estimated-plans'
 import type { RpcMethod } from '../shared/contracts'
 import { connectionOptionsSchema } from '../shared/connections'
+import { connectionPrincipalIdSchema } from './connection-principal'
 import { limits } from '../shared/ipc/wire/protocol'
 import { explorerChildrenParamsSchema, peekDefinitionParamsSchema, peekDependenciesParamsSchema, peekParamsSchema } from '../shared/explorer/schema.ts'
 import { objectIndexParamsSchema, objectSearchParamsSchema } from '../shared/explorer/search.ts'
@@ -69,7 +70,8 @@ export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
   'connections.connect': z.object({
     id: z.uuid(), server: z.string().max(256), database: z.string().max(128), serverVersion: z.string().max(256), generation: z.number().int().min(0),
     displayName: z.string().max(128).optional(), color: z.string().regex(/^#[\da-f]{6}$/i).optional(), commandTimeout: z.number().int().min(0).max(86400).optional(),
-    productVersion: z.string().max(32).optional(), login: principal.optional(), engineEdition: z.number().int().optional(), linux: z.boolean().optional(), providerId: z.literal('sqlserver').optional()
+    productVersion: z.string().max(32).optional(), login: principal.optional(), engineEdition: z.number().int().optional(), linux: z.boolean().optional(), providerId: z.literal('sqlserver').optional(),
+    principalId: connectionPrincipalIdSchema.optional()
   }).strict(),
   'language.status': languageStatusSchema,
   'language.complete': languageCompletionsSchema,
@@ -101,6 +103,9 @@ export function validateRequest(method: string, params: unknown): unknown {
 
 /** varia:connections-cancel: the Connect dialog's Stop, by the ids its connect and Load databases carried. */
 export const connectionCancelSchema = z.object({ requestIds: z.array(z.uuid()).min(1).max(16) }).strict()
+/** varia:connections-accept acknowledges one delivered authenticated receipt; it never opens or authenticates. */
+export const connectionAcceptSchema = z.object({ requestId: z.uuid() }).strict()
+export const connectionPruneSchema = z.object({ targetIds: z.array(z.uuid()).min(1).max(200) }).strict()
 
 const u31 = z.number().int().min(1).max(2 ** 31 - 1)
 const u32 = z.number().int().min(1).max(0xffffffff)

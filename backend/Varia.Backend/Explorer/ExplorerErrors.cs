@@ -63,7 +63,7 @@ internal static class ExplorerErrors
 
     /// <summary>A pool connection that could not sign in with Kerberos (ConnectionFailures.OpenAsync): what to fix, such as kinit,
     /// after which Retry works.</summary>
-    public static ExplorerError SignIn(RequestException error) => new(error.Code, Clip(error.Message, MaxMessage), true);
+    public static ExplorerError SignIn(RequestException error) => new(error.Code, Clip(error.Message, MaxMessage), error.Code != "AUTH_IDENTITY");
 
     private static string Clip(string text, int max) => text.Length <= max ? text : text[..(max - 1)] + "…";
 }

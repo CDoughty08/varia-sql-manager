@@ -8,34 +8,25 @@ export interface OpenedConnection {
   readonly targetId?: string
   readonly generation: number
   readonly previousId?: string
+  readonly sourceTargetId?: string
   readonly reused: boolean
   readonly current: ConnectionDetails
   readonly selected: ConnectionDetails
 }
 
 /** A successful main receipt is the sole equivalence evidence. Never compare profile keys or submitted settings here. */
-export function adoptConnection(connections: ConnectionService, info: TargetConnectionInfo, options: ConnectionOptions, selected = detailsOf(options), attempt?: ConnectionAttempt, legacyReconnect?: string, rejected?: (completion: ConnectionCompletion) => void): OpenedConnection | undefined {
-  const authoritativeTarget = info.authentication ? info.targetId ?? connections.get(info.id)?.targetId ?? attempt?.operation.targetId : info.targetId
-  const previous = connections.get(authoritativeTarget ?? info.id) ?? (legacyReconnect ? connections.get(legacyReconnect) : undefined)
+export function adoptConnection(connections: ConnectionService, info: TargetConnectionInfo, options: ConnectionOptions, selected = detailsOf(options), attempt?: ConnectionAttempt, rejected?: (completion: ConnectionCompletion) => void): OpenedConnection | undefined {
+  if (!info.targetId || !info.authentication) return undefined
+  const authoritativeTarget = info.targetId
+  const previous = connections.get(authoritativeTarget)
   const current = previous ? connections.details(previous.id)! : selected
-  if (authoritativeTarget && info.authentication) {
-    const result = connections.accept(info, options, authoritativeTarget, info.authentication, attempt)
-    if (result.status !== 'accepted' && result.status !== 'already-current') { if (attempt) connections.failAttempt(attempt); rejected?.(result); return undefined }
-  } else {
-    if (info.targetId) return undefined
-    if (attempt && connections.connectionTargets.operation(attempt.operation.targetId) !== attempt.operation) return undefined
-    if (attempt) connections.cancelAttempt(attempt)
-    // Compatibility with the old IPC response. It can reuse the exact live handle, never infer a matching account.
-    if (previous && !legacyReconnect && (previous.id !== info.id || previous.generation !== info.generation || previous.lost)) return undefined
-    // Preserve the pre-migration explicit reconnect flow until the main request owner supplies target receipts.
-    if (legacyReconnect && connections.get(legacyReconnect)?.lost) connections.replace(legacyReconnect, { ...info, displayName: current.displayName, color: current.color }, { ...options, displayName: current.displayName, color: current.color, environment: current.environment })
-    else if (!previous) connections.add(info, options)
-  }
-  const connection = connections.get(authoritativeTarget ?? info.id)
+  const result = connections.accept(info, options, authoritativeTarget, info.authentication, attempt)
+  if (result.status !== 'accepted' && result.status !== 'already-current') { if (attempt) connections.failAttempt(attempt); rejected?.(result); return undefined }
+  const connection = connections.get(authoritativeTarget)
   if (!connection || connection.lost) return undefined
-  const reused = (!!previous && !(attempt?.created && previous.targetId === attempt.operation.targetId)) || !!legacyReconnect
+  const reused = !!previous && !(attempt?.created && previous.targetId === attempt.operation.targetId)
   if (!reused) connections.setDetails(connection.id, selected)
-  return { id: connection.id, targetId: connection.targetId, generation: connection.generation, previousId: reused ? previous?.id ?? legacyReconnect : undefined, reused, current, selected }
+  return { id: connection.id, targetId: connection.targetId, generation: connection.generation, previousId: reused ? previous?.id : undefined, sourceTargetId: attempt?.operation.targetId, reused, current, selected }
 }
 
 export function needsDetailsConfirmation(opened: OpenedConnection): boolean {

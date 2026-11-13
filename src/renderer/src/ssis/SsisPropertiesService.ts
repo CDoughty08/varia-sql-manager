@@ -148,6 +148,7 @@ export class SsisPropertiesService extends SnapshotStore<SsisPropertiesSnapshot>
   }
 
   canFollowTarget(id: string, targetId: string): boolean { return this.targetBindings.canFollowTarget(id, targetId) }
+  coalesceTarget(id: string, fromTargetId: string, toTargetId: string): boolean { return this.targetBindings.coalesceTarget(id, fromTargetId, toTargetId) }
 
   private provider(kind: SsisDocumentKind): CustomDocumentProvider & { canFollowTarget(id: string, targetId: string): boolean } {
     return {
@@ -160,7 +161,8 @@ export class SsisPropertiesService extends SnapshotStore<SsisPropertiesSnapshot>
       focus: id => this.options.focus?.(id),
       closed: id => this.closed(id),
       follows: () => false,
-      canFollowTarget: (id, targetId) => this.canFollowTarget(id, targetId)
+      canFollowTarget: (id, targetId) => this.canFollowTarget(id, targetId),
+      coalesceTarget: (id, fromTargetId, toTargetId) => this.coalesceTarget(id, fromTargetId, toTargetId)
     }
   }
   private closed(id: string): void {

@@ -16,9 +16,10 @@ internal sealed record AdvancedConnectionOptions(
     string ApplicationIntent = "ReadWrite", string CurrentLanguage = "", bool Replication = false, string IpAddressPreference = "IPv4First",
     string ServerCertificate = "", string AttachDbFilename = "", string FailoverPartner = "", string FailoverPartnerSpn = "",
     bool MultiSubnetFailover = false, string ServerSpn = "", bool UserInstance = false);
-/// <summary>ProductVersion, Login, EngineEdition and Linux come from the server profile probed at connect; they are absent when the probe failed.</summary>
+/// <summary>ProductVersion, Login, EngineEdition and Linux come from the server profile probed at connect. PrincipalId is
+/// nonsecret authenticated-account evidence (SQL/Windows SID or Entra tenant/object GUIDs), at most 256 characters.</summary>
 internal sealed record ConnectionInfo(string Id, string Server, string Database, string ServerVersion, string? DisplayName = null, string? Color = null, int CommandTimeout = 0,
-    string? ProductVersion = null, string? Login = null, int? EngineEdition = null, bool? Linux = null);
+    string? ProductVersion = null, string? Login = null, int? EngineEdition = null, bool? Linux = null, string? PrincipalId = null);
 /// <summary>connections.identity: the Kerberos principal integrated authentication would use off Windows, when the default
 /// credential cache holds a ticket (at most 256 characters). Windows, and Linux or macOS without a ticket, answer none.</summary>
 internal sealed record IntegratedIdentity(string? Principal);

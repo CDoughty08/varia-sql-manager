@@ -118,7 +118,7 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
             catch (SqlException) { Drop(); }
             catch (InvalidOperationException) { Drop(); }
             catch (TimeoutException) { Drop(); }
-            catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA") { Drop(); }
+            catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA" or "AUTH_IDENTITY") { Drop(); }
         }
         opened = true;
         var states = new List<LiveOpenedProbe>();
@@ -315,7 +315,7 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
                 Drop(baseline: true);
                 failure = LiveErrors.Create(id, "CONNECTION_LOST", LiveErrors.LostMessage);
             }
-            catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA")
+            catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA" or "AUTH_IDENTITY")
             {
                 Drop();
                 failure = LiveErrors.SignIn(id, error);
@@ -369,7 +369,7 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
             throw new OperationCanceledException(token);
         }
         catch (Exception error) when (error is SqlException or InvalidOperationException or OperationCanceledException
-            || error is RequestException { Code: "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA" })
+            || error is RequestException { Code: "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA" or "AUTH_IDENTITY" })
         {
             return null;
         }

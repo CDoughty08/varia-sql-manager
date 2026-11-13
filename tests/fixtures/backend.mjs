@@ -72,6 +72,7 @@
 // while such an option is ON, SESSION_BUSY while a script waits in it, SESSION_CLOSED for none), and query.session.close
 // commits or rolls back what is open.
 import { appendFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { access, appendFile, open, rename, rm, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
 import { FrameKind, FrameParser, encodeFrame } from '../../src/shared/ipc/wire/frames.ts'
@@ -1740,8 +1741,12 @@ async function workbench(id, method, params, credit) {
       }
       if (params.server === 'password-check' && (params.password !== 'correct-horse-marker' || await controlled('reject-passwords'))) return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 8, class: 14, server: params.server } } })
       // The name and colour come back as the backend echoes them; the environment stays in the renderer's options.
-      const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.0.fake', commandTimeout: params.advanced?.commandTimeout ?? 0, ...params.displayName ? { displayName: params.displayName } : {}, ...params.color ? { color: params.color } : {},
-        ...params.server === 'no-permission' && params.username ? { login: params.username } : {} }
+      const login = ['windows', 'entraIntegrated'].includes(params.authentication) ? 'fake-login' : params.username || 'fake-login'
+      const account = createHash('sha256').update(JSON.stringify([params.server, params.authentication, login])).digest('hex')
+      const principalId = params.authentication?.startsWith('entra')
+        ? `entra:00000000-0000-4000-8000-000000000001:${account.slice(0, 8)}-${account.slice(8, 12)}-4${account.slice(13, 16)}-8${account.slice(17, 20)}-${account.slice(20, 32)}`
+        : `sid:${account}`
+      const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.0.fake', commandTimeout: params.advanced?.commandTimeout ?? 0, login, principalId, ...params.displayName ? { displayName: params.displayName } : {}, ...params.color ? { color: params.color } : {} }
       workbenchConnections.set(info.id, info)
       return respond(id, info)
     }

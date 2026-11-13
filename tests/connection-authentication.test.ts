@@ -16,6 +16,12 @@ function fixture() {
 }
 
 describe('main-owned target authentication evidence', () => {
+  it('compares effective defaults consistently without normalizing meaningful routing or explicit timeout intent', () => {
+    const { guard, id } = fixture()
+    expect(guard.prepare({ ...options, encrypt: 'mandatory', advanced: { packetSize: 8000, connectRetryCount: 1 } }, { targetId: id })).toMatchObject({ expectedPrincipal: principal })
+    expect(() => guard.prepare({ ...options, advanced: { commandTimeout: 0 } }, { targetId: id })).toThrow('identity changed')
+    expect(() => guard.prepare({ ...options, server: 'SERVER' }, { targetId: id })).toThrow('identity changed')
+  })
   it('uses its prior account and credential when a renderer omits them, and rejects substituted evidence or destination', () => {
     const { guard, id, credential } = fixture()
     expect(guard.prepare(options, { targetId: id, mode: 'background' })).toMatchObject({ expectedPrincipal: principal, credential })

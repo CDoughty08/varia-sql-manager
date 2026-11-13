@@ -1,5 +1,11 @@
 # Persistence integration hooks
 
+The hooks described below are now assembled in `core/workbench.ts`, `App.tsx`, `connection-startup.ts` and
+`connection-pruning.ts`. This document preserves the parallel track's handoff checklist. Its patches are historical
+references and must not be applied again. Current behavior is described in [connection roots](connections-explorer.md)
+and the [architecture invariants](architecture.md). Main now uses acknowledged receipts through `connection-open.ts`;
+each accepted caller's explicit Remember/Forget intent is separate from transport/history settlement.
+
 This track builds on foundation `5e1a258e`. Explorer owns `App.tsx`, `core/workbench.ts`, its fixture and the main reuse
 coordinator. Disconnect owns the close coordinator and `services/files.ts`. The hooks below are required when the
 tracks are assembled; this branch does not start a second connection orchestrator. The three foundation surfaces

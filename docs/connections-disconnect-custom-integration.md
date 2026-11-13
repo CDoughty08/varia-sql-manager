@@ -1,5 +1,9 @@
 # Custom document target integration
 
+These provider hooks are now wired through the workbench and `TargetService`. The implementation checklist below is
+retained as a design reference. Background startup reconnect attaches wanted queries only; explicit manual reconnect
+may rebind exact-target custom documents. It never executes query buffers, and retained drafts remain intact.
+
 The disconnect track's custom providers preserve drafts and retain their original target while a backend handle is
 replaced. Their shared `CustomDocumentTargets` helper keeps a target binding captured when the document opens. It is a
 consistency check; authentication and credential equivalence remain main-owned.

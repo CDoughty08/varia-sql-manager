@@ -82,6 +82,8 @@ export class SavedPasswordStore {
     return next
   }
   private async available(): Promise<boolean> { return (await this.cipher.state()).available }
+  /** An explicit Forget must report unavailable storage rather than claim ciphertext was removed. Main only. */
+  async storageAvailable(): Promise<boolean> { return this.available() }
   /** The ids of the entries with a remembered password. Never decrypts. */
   async load(): Promise<{ ids: string[]; warning?: string }> {
     if (!await this.available()) return { ids: [] }

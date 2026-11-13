@@ -161,7 +161,7 @@ internal sealed partial class SessionActions
         try
         {
             try { await host.OpenAsync(connection, token).ConfigureAwait(false); }
-            catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA")
+            catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA" or "AUTH_IDENTITY")
             {
                 return new(args.SessionId, "unknown", watch.ElapsedMilliseconds, Error: ActivityErrors.SignIn(error));
             }
@@ -371,7 +371,7 @@ internal sealed partial class SessionActions
             var pools = PoolList();
             await using var connection = host.KillConnection(args.ConnectionId);
             try { await host.OpenAsync(connection, budget.Token).ConfigureAwait(false); }
-            catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA") { return new(results, watch.ElapsedMilliseconds, ActivityErrors.SignIn(error)); }
+            catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA" or "AUTH_IDENTITY") { return new(results, watch.ElapsedMilliseconds, ActivityErrors.SignIn(error)); }
             catch (SqlException error) when (!budget.IsCancellationRequested) { return new(results, watch.ElapsedMilliseconds, ActivityErrors.From(error, null, connecting: true)); }
             foreach (var session in sessions)
             {
@@ -511,7 +511,7 @@ internal static class ActivityErrors
     public static ActivityError Create(string code, string message) => new(code, message.Length <= 2000 ? message : message[..1999] + "…", Retryable(code));
 
     public static ActivityError SignIn(RequestException error) =>
-        Create(error.Code == "AUTH_ENTRA" ? "AUTH_ENTRA" : "AUTH_KERBEROS", error.Message.Length > 0 ? error.Message : "Signing in to the server failed.");
+        Create(error.Code is "AUTH_ENTRA" or "AUTH_IDENTITY" ? error.Code : "AUTH_KERBEROS", error.Message.Length > 0 ? error.Message : "Signing in to the server failed.");
 
     /// <summary>A SQL Server error by LiveErrors' classification. <paramref name="permission"/> names what server state needs
     /// on this server; <paramref name="connecting"/> words a failure to open as such.</summary>

@@ -15,13 +15,14 @@ import type { ConnectionInfo, ConnectionOptions } from '../src/shared/contracts'
 import { connectionTargetOptions, type ConnectionCredentialReference } from '../src/shared/connection-targets'
 
 const marker = 'correct-horse-marker'
+const stablePrincipal = 'sid:01020304'
 const options: ConnectionOptions = { server: 'password-check', database: 'master', authentication: 'sql', username: 'reader', password: marker, trustServerCertificate: false, encrypt: 'mandatory' }
 const empty: ConnectionOptions = { ...options, password: '' }
-const info = (): ConnectionInfo => ({ id: randomUUID(), server: options.server, database: 'master', serverVersion: '17.0', generation: 1 })
+const info = (): ConnectionInfo => ({ id: randomUUID(), server: options.server, database: 'master', serverVersion: '17.0', generation: 1, principalId: stablePrincipal })
 const loginFailed = () => new BackendError('SQL_ERROR', "Login failed for user 'reader'.", { number: 18456, state: 8, class: 14, server: 'password-check' })
 const directories: string[] = []
 function backgroundTarget(deps: ConnectionRequestDeps, credential: ConnectionCredentialReference) {
-  const targetId = randomUUID(), expectedPrincipal = { provider: 'sqlServer', authentication: 'sql', id: 'reader' } as const
+  const targetId = randomUUID(), expectedPrincipal = { provider: 'sqlServer', authentication: 'sql', id: stablePrincipal } as const
   deps.authentication.restore({ version: 1, targets: [{ id: targetId, options: connectionTargetOptions(empty), details: { autoReconnect: 'inherit' }, inExplorer: true, resumeWanted: true, expectedPrincipal, credential }] })
   return { mode: 'background', targetId, expectedPrincipal, credential, credentialPolicy: 'preserve' } as const
 }
@@ -62,7 +63,7 @@ describe('remembered password requests', () => {
     const { request, remembered, savedPasswords, deps, directory } = await setup()
     const id = await remembered()
     const credential = await savedPasswords.reference(id, empty)
-    const principal = { provider: 'sqlServer', authentication: 'sql', id: 'reader' } as const
+    const principal = { provider: 'sqlServer', authentication: 'sql', id: stablePrincipal } as const
     const context = backgroundTarget(deps, credential!)
     const before = await readFile(join(directory, 'saved-passwords.json'), 'utf8')
     const connected = await request('connections.connect', empty, context, sent => {
@@ -74,7 +75,7 @@ describe('remembered password requests', () => {
     let disposed = ''
     const prepared = await prepare('connections.connect', empty, context, deps)
     const changed = info()
-    const rejected = await settle(prepared, { ok: true, value: { ...changed, login: 'other' } }, { ...deps, disconnect: async value => { disposed = value } })
+    const rejected = await settle(prepared, { ok: true, value: { ...changed, login: 'reader', principalId: 'sid:05060708' } }, { ...deps, disconnect: async value => { disposed = value } })
     expect(rejected.ok).toBe(false)
     expect(disposed).toBe(changed.id)
     expect(await savedPasswords.get(id, empty)).toBe(marker)
@@ -108,11 +109,27 @@ describe('remembered password requests', () => {
     const credential = await savedPasswords.reference(id, empty)
     await request('connections.connect', empty, { profileId: id, remember: true }, () => ({ ok: true, value: { ...info(), login: 'reader' } }))
     expect(await savedPasswords.reference(id, empty)).toEqual(credential)
-    const expectedPrincipal = { provider: 'sqlServer', authentication: 'sql', id: 'reader' }
+    const expectedPrincipal = { provider: 'sqlServer', authentication: 'sql', id: stablePrincipal }
     const replaced = await request('connections.connect', { ...options, password: 'replacement' }, { credential, expectedPrincipal, credentialIntent: 'update-credentials', credentialPolicy: 'remember' }, () => ({ ok: true, value: { ...info(), login: 'reader' } }))
     expect(replaced.settled).toMatchObject({ ok: true, value: { authentication: { principal: expectedPrincipal, credential: { profileId: id } } } })
     const revision = replaced.settled.ok && (replaced.settled.value as ConnectionInfo).authentication?.credential?.revision
     expect(revision).not.toBe(credential!.revision)
+  })
+  it('keeps inaccessible ciphertext but never claims it represents a newly typed password', async () => {
+    const cipher = testCipher()
+    let available = true
+    const { request, savedPasswords, deps, directory } = await setup({ ...cipher, state: async () => ({ available }) })
+    const initial = await request('connections.connect', options, { credentialPolicy: 'remember' }, () => ({ ok: true, value: info() }))
+    if (!initial.settled.ok) throw initial.settled.error
+    const connected = initial.settled.value as ConnectionInfo, credential = connected.authentication!.credential!
+    const before = await readFile(join(directory, 'saved-passwords.json'), 'utf8')
+    available = false
+    const updated = await request('connections.connect', { ...options, password: 'replacement' }, { targetId: connected.targetId, credential, expectedPrincipal: connected.authentication!.principal, credentialIntent: 'update-credentials', credentialPolicy: 'preserve' }, () => ({ ok: true, value: info() }))
+    expect(updated.settled).toMatchObject({ ok: true, value: { authentication: { credential: null } } })
+    expect(deps.authentication.resolve(connected.targetId!)?.credential).toBeUndefined()
+    expect(await readFile(join(directory, 'saved-passwords.json'), 'utf8')).toBe(before)
+    available = true
+    expect(await savedPasswords.getReferenced(credential, empty)).toBe(marker)
   })
   it('finishes the first remembered credential binding under the same owned authentication operation', async () => {
     const { request, deps } = await setup()

@@ -8,6 +8,7 @@ import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable } from '../core/types'
 import type { ConnectionService, LiveConnection } from '../services/connections'
+import { CustomDocumentTargets, type CustomDocumentTargetOptions } from '../services/custom-document-targets'
 import type { RevealPath, SeekOutcome } from '../explorer/ExplorerService'
 import type { CustomDocumentProvider, DocumentService } from '../services/documents'
 import { clampPaneBand } from './pane-band'
@@ -90,9 +91,9 @@ export interface RevealHost {
   seek(connectionId: string, paths: readonly RevealPath[]): Promise<SeekOutcome>
   readonly groupBySchema?: boolean
 }
-export interface ObjectSearchOptions {
+export interface ObjectSearchOptions extends CustomDocumentTargetOptions {
   readonly api: Pick<VariaApi, 'explorerIndex' | 'explorerSearch' | 'explorerCancel' | 'onExplorerIndexProgress'>
-  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'activate' | 'getSnapshot'>
+  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'activate' | 'getSnapshot'> & Partial<Pick<DocumentService, 'update' | 'subscribe'>>
   readonly connections: Pick<ConnectionService, 'getSnapshot' | 'subscribe' | 'get'>
   readonly settings: { get<K extends SettingKey>(key: K): SettingValue<K> }
   readonly focus?: (id: string) => void
@@ -255,17 +256,21 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   private focusedList: string | undefined
   private readonly registrations: Disposable[] = []
   private known = new Set<string>()
+  private readonly targetBindings: CustomDocumentTargets
   private disposed = false
   private paneFocusTaken = 0
 
   constructor(private readonly o: ObjectSearchOptions) {
     super({ indexes: {}, documents: {}, paneFocus: 0 })
+    this.targetBindings = new CustomDocumentTargets(o)
     this.timers = o.timers ?? browserTimers
     this.newId = o.newId ?? (() => crypto.randomUUID())
     this.registrations.push(o.documents.registerProvider(this))
     const unsubscribe = o.connections.subscribe(() => this.sync())
     const unlisten = o.api.onExplorerIndexProgress(progress => this.progress(progress))
     this.registrations.push({ dispose: unsubscribe }, { dispose: unlisten })
+    const unlistenDocuments = o.documents.subscribe?.(() => this.syncDocuments())
+    if (unlistenDocuments) this.registrations.push({ dispose: unlistenDocuments })
     this.sync()
   }
 
@@ -305,6 +310,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const connection = connectionId ? this.o.connections.get(connectionId) : this.o.connections.getSnapshot().find(live)
     if (!live(connection)) throw new Error('Connect to a server to search its objects.')
     const document = this.o.documents.openCustom('objectSearch', searchTitle, allServers ? undefined : connection.id, 'master')
+    if (!allServers) this.targetBindings.bind(document.id, connection.id)
     this.putDocument({ id: document.id, connectionId: connection.id, ...emptyQuery, ...fuzzy ? { fuzzy } : {}, ...text ? { text } : {}, ...allServers ? { allServers: true } : database !== undefined ? { database } : {} })
     for (const id of allServers ? this.liveIds() : [connection.id]) this.ensureIndex(id)
     if (text) void this.search(document.id)
@@ -384,6 +390,10 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     this.cancelSearch(document)
     const { database: _database, ...query } = this.query(document)
     this.putDocument({ id, connectionId, ...query })
+    if (this.o.documents.get(id)) {
+      this.targetBindings.bind(id, connectionId)
+      this.o.documents.update?.(id, { connectionId, targetId: this.o.targetIdOf?.(connectionId) })
+    }
     this.ensureIndex(connectionId)
     void this.search(id)
   }
@@ -395,6 +405,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     this.cancelSearch(document)
     const { database: _database, ...query } = this.query(document)
     this.putDocument({ id, connectionId: document.connectionId, ...query, allServers: true })
+    this.targetBindings.forget(id)
+    if (this.o.documents.get(id)) this.o.documents.update?.(id, { connectionId: undefined, targetId: undefined })
     for (const connectionId of this.liveIds()) this.ensureIndex(connectionId)
     void this.search(id)
   }
@@ -424,12 +436,12 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const kept = { id, connectionId: document.connectionId, ...document.allServers ? { allServers: true as const, ...document.collapsed ? { collapsed: document.collapsed } : {} } : {} }
     if (!asked.text.trim()) { this.putDocument({ ...this.query(document), ...kept }); return Promise.resolve() }
     if (document.allServers) return this.searchAll(document, asked)
-    if (!live(this.o.connections.get(document.connectionId))) { this.putDocument({ ...document, requestId: undefined, error: 'The server is not connected.' }); return Promise.resolve() }
+    if (!this.searchable(document)) { this.putDocument({ ...document, requestId: undefined, error: 'The server is not connected.' }); return Promise.resolve() }
     const requestId = this.newId()
     this.putDocument({ ...document, requestId, error: undefined })
     return this.ask(document.connectionId, requestId, asked).then(result => {
       const current = this.getSnapshot().documents[id]
-      if (this.disposed || current?.requestId !== requestId || current.connectionId !== document.connectionId || !live(this.o.connections.get(document.connectionId))) return
+      if (this.disposed || current?.requestId !== requestId || current.connectionId !== document.connectionId || !this.searchable(current)) return
       const { requestId: _done, ...rest } = current
       if (result.ok) { const next = { ...rest, result: result.value, asked, error: undefined }; this.putDocument({ ...next, current: keptHit(current, asked, next) }) }
       else if (result.code !== 'CANCELLED') this.putDocument({ ...rest, error: result.error })
@@ -503,9 +515,12 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   revision(): number { return 0 }
   focus(id: string): void { this.o.focus?.(id) }
   follows(): boolean { return false }
+  canFollowTarget(id: string, targetId: string): boolean { return this.targetBindings.canFollowTarget(id, targetId) }
+  coalesceTarget(id: string, fromTargetId: string, toTargetId: string): boolean { return this.targetBindings.coalesceTarget(id, fromTargetId, toTargetId) }
   closed(id: string): void {
     const document = this.getSnapshot().documents[id]
     if (!document) return
+    this.targetBindings.forget(id)
     this.cancelSearch(document)
     const pending = this.typing.get(id)
     if (pending !== undefined) this.timers.clearTimeout(pending)
@@ -517,6 +532,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.targetBindings.clear()
     for (const pending of this.typing.values()) this.timers.clearTimeout(pending)
     this.typing.clear()
     for (const fanout of this.fanouts.values()) fanout.settle()
@@ -672,9 +688,39 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     }
   }
 
-  /** A new connection gets a build (when Options says so); a disconnected or lost one's entry goes, as its index went. */
+  private searchable(search: SearchDocumentState): boolean {
+    if (!live(this.o.connections.get(search.connectionId))) return false
+    const document = this.o.documents.get(search.id)
+    return !document || document.connectionId === search.connectionId && this.targetBindings.matchesConnection(search.id, document.connectionId)
+  }
+
+  /** A custom search follows only its exact target; background reconnect leaves its runtime association detached. */
+  private syncDocuments(): void {
+    if (this.disposed) return
+    for (const search of Object.values(this.getSnapshot().documents)) {
+      if (search.allServers) continue
+      const document = this.o.documents.get(search.id)
+      if (!document) continue
+      const connectionId = document.connectionId
+      if (!this.targetBindings.matchesConnection(search.id, connectionId) || !connectionId || !live(this.o.connections.get(connectionId))) {
+        const pending = this.typing.get(search.id)
+        if (pending !== undefined) this.timers.clearTimeout(pending)
+        this.typing.delete(search.id)
+        if (search.requestId) this.cancelSearch(search)
+        if (search.requestId || search.error !== 'The server is not connected.')
+          this.putDocument({ ...search, requestId: undefined, error: 'The server is not connected.' })
+      } else if (connectionId !== search.connectionId) {
+        this.cancelSearch(search)
+        this.putDocument({ ...search, connectionId, requestId: undefined, error: undefined })
+        this.ensureIndex(connectionId)
+        if (search.text.trim()) void this.search(search.id)
+      }
+    }
+  }
+
   private sync(): void {
     if (this.disposed) return
+    this.syncDocuments()
     const connections = this.o.connections.getSnapshot()
     const ids = new Set(connections.filter(live).map(connection => connection.id))
     const { indexes } = this.getSnapshot()

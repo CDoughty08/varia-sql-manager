@@ -106,6 +106,7 @@ export const errorCodes = [
   'AUTH_KERBEROS',
   // Backend: a Microsoft Entra sign-in failed or must be repeated; the message says what to do.
   'AUTH_ENTRA',
+  'AUTH_IDENTITY',
   // Backend, new in v2.
   'TIMEOUT', 'TOO_LARGE', 'RESPONSE_TOO_LARGE', 'RESULT_NOT_FOUND', 'RESULT_RELEASED',
   // Backend: a view of a result (results.view) that was closed, replaced, or never existed for that result.

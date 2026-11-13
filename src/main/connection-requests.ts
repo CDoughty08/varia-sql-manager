@@ -1,17 +1,18 @@
-import { canRememberPassword, connectContextSchema, credentialBinding, type ConnectContext, type ConnectionLibrary } from '../shared/connections'
-import { connectionAuthenticationSchema, type ConnectionCredentialReference } from '../shared/connection-targets'
+import { canRememberPassword, connectionKey, connectContextSchema, credentialBinding, type ConnectContext, type ConnectionLibrary } from '../shared/connections'
+import { connectionAuthenticationSchema, type ConnectionCredentialReference, type ConnectionFailureReason } from '../shared/connection-targets'
 import type { ConnectionInfo, ConnectionOptions } from '../shared/contracts'
 import { BackendError } from './backend/errors'
 import type { ConnectionStore } from './connection-store'
 import type { SavedPasswordStore } from './saved-passwords'
 import type { ConnectionAuthenticationGuard } from './connection-authentication'
+import { verifiedConnectionAuthentication } from './connection-principal'
 
 /** The requests that may use a remembered password: they open a connection with the dialog's options. */
 const connectMethods = new Set(['connections.connect', 'connections.databases'])
 const maxPassword = 1024
 export interface ConnectionRequestDeps {
   authentication: ConnectionAuthenticationGuard
-  savedPasswords: Pick<SavedPasswordStore, 'get' | 'set' | 'forget' | 'forgetCredentials' | 'reconcile' | 'reference' | 'getReferenced' | 'forgetRejected'>
+  savedPasswords: Pick<SavedPasswordStore, 'get' | 'set' | 'forget' | 'forgetCredentials' | 'reconcile' | 'reference' | 'getReferenced' | 'forgetRejected' | 'storageAvailable'>
   connections: Pick<ConnectionStore, 'rememberEntry' | 'load'>
   disconnect?: (connectionId: string) => Promise<unknown>
 }
@@ -20,7 +21,10 @@ export interface ConnectionRequestDeps {
  * password when main injected one. `validated` never holds that password, so nothing that stores or echoes it can.
  */
 export interface PreparedRequest { method: string; validated: unknown; params: unknown; context?: ConnectContext; injected: boolean; injectedCredential?: ConnectionCredentialReference; release?: () => void }
-export type Settled = { ok: true; value: unknown } | { ok: false; error: unknown; passwordForgotten?: true; credentialRejected?: true }
+export type Settled = { ok: true; value: unknown } | { ok: false; error: unknown; passwordForgotten?: true; credentialRejected?: true; connectionFailure?: ConnectionFailureReason }
+export class ConnectionPreparationError extends Error {
+  constructor(readonly reason: ConnectionFailureReason, message: string) { super(message) }
+}
 
 const gates = new WeakMap<object, Map<string, Promise<void>>>()
 const rejected = new WeakMap<object, Set<string>>()
@@ -68,13 +72,17 @@ export function secretRejected(options: ConnectionOptions, error: unknown): bool
  * the credentials it was saved with. A typed password always wins. Call it after validateRequest.
  */
 export async function prepare(method: string, validated: unknown, value: unknown, deps: Pick<ConnectionRequestDeps, 'savedPasswords' | 'authentication'>): Promise<PreparedRequest> {
-  let context = connectMethods.has(method) ? deps.authentication.prepare(validated as ConnectionOptions, connectContext(method, value)) : connectContext(method, value)
+  let context = connectContext(method, value)
+  if (connectMethods.has(method)) {
+    try { context = deps.authentication.prepare(validated as ConnectionOptions, context) }
+    catch (error) { throw new ConnectionPreparationError('identity-changed', error instanceof Error ? error.message : 'The connection identity changed.') }
+  }
   const prepared: PreparedRequest = { method, validated, params: validated, ...(context ? { context } : {}), injected: false }
   if (!connectMethods.has(method)) return prepared
   const options = validated as ConnectionOptions, background = context?.mode === 'background'
-  if (context?.expectedPrincipal && context.expectedPrincipal.authentication !== options.authentication) throw new Error('The expected account uses another authentication mode.')
-  if (background && (!context?.expectedPrincipal || options.password)) throw new Error('Reconnect requires the previous account and matching saved credentials.')
-  if (context?.credential && options.password && context.credentialIntent !== 'update-credentials') throw new Error('Use Update Credentials to replace the remembered credential.')
+  if (context?.expectedPrincipal && context.expectedPrincipal.authentication !== options.authentication) throw new ConnectionPreparationError('identity-changed', 'The expected account uses another authentication mode.')
+  if (background && (!context?.expectedPrincipal || options.password)) throw new ConnectionPreparationError('credentials-required', 'Reconnect requires the previous account and matching saved credentials.')
+  if (context?.credential && options.password && context.credentialIntent !== 'update-credentials') throw new ConnectionPreparationError('credentials-required', 'Use Update Credentials to replace the remembered credential.')
   if (background) prepared.params = { ...options, nonInteractive: true }
   const count = attempts.get(deps.savedPasswords) ?? 0
   if (count >= 8) throw new BackendError('TOO_MANY_REQUESTS', 'Too many pending connection attempts.')
@@ -94,20 +102,23 @@ export async function prepare(method: string, validated: unknown, value: unknown
     context = deps.authentication.prepare(options, context)
     prepared.context = context
     const reference = context?.credential
-    if (reference && rejected.get(deps.savedPasswords)?.has(reference.revision)) throw new Error('The saved credential was rejected. Update credentials to reconnect.')
+    if (reference && rejected.get(deps.savedPasswords)?.has(reference.revision)) throw new ConnectionPreparationError('credentials-required', 'The saved credential was rejected. Update credentials to reconnect.')
     const profileId = reference?.profileId ?? context?.profileId
     if (!profileId || options.password) {
-      if (background && canRememberPassword(options.authentication)) throw new Error('Enter credentials to reconnect this target.')
+      if (background && canRememberPassword(options.authentication)) throw new ConnectionPreparationError('credentials-required', 'Enter credentials to reconnect this target.')
       return prepared
     }
-    const password = reference ? await deps.savedPasswords.getReferenced(reference, options) : background ? undefined : await deps.savedPasswords.get(profileId, options)
+    if (canRememberPassword(options.authentication) && !await deps.savedPasswords.storageAvailable()) throw new ConnectionPreparationError('secret-storage-unavailable', 'Secret storage is unavailable. Enter credentials to reconnect.')
+    let password: string | undefined
+    try { password = reference ? await deps.savedPasswords.getReferenced(reference, options) : background ? undefined : await deps.savedPasswords.get(profileId, options) }
+    catch { throw new ConnectionPreparationError('secret-storage-unavailable', 'The saved password could not be read. Enter the password.') }
     if (password === undefined) {
-      if (reference || background && canRememberPassword(options.authentication)) throw new Error('The saved credential revision is unavailable. Enter credentials to reconnect.')
+      if (reference || background && canRememberPassword(options.authentication)) throw new ConnectionPreparationError('credentials-required', 'The saved credential revision is unavailable. Enter credentials to reconnect.')
       return prepared
     }
-    if (!password.length || password.length > maxPassword) throw new Error('The saved password could not be read. Enter the password.')
+    if (!password.length || password.length > maxPassword) throw new ConnectionPreparationError('secret-storage-unavailable', 'The saved password could not be read. Enter the password.')
     const injectedCredential = reference ?? await deps.savedPasswords.reference(profileId, options)
-    if (injectedCredential && rejected.get(deps.savedPasswords)?.has(injectedCredential.revision)) throw new Error('The saved credential was rejected. Update credentials to reconnect.')
+    if (injectedCredential && rejected.get(deps.savedPasswords)?.has(injectedCredential.revision)) throw new ConnectionPreparationError('credentials-required', 'The saved credential was rejected. Update credentials to reconnect.')
     return { ...prepared, params: { ...prepared.params as ConnectionOptions, password }, injected: true, injectedCredential }
   } catch (error) { prepared.release?.(); throw error }
 }
@@ -155,10 +166,10 @@ async function settleRequest(prepared: PreparedRequest, outcome: Settled, deps: 
   const validated = prepared.validated as ConnectionOptions
   try { context = deps.authentication.prepare(validated, context) }
   catch (error) { await deps.disconnect?.(info.id).catch(() => {}); return { ok: false, error } }
-  // Login comes from the authenticated server's metadata probe, never the submitted user name.
-  const verified = connectionAuthenticationSchema.safeParse({ principal: { provider: 'sqlServer', authentication: validated.authentication, id: info.login } })
-  if (verified.success) info.authentication = verified.data
-  if (context?.expectedPrincipal && (!verified.success || JSON.stringify(verified.data.principal) !== JSON.stringify(context.expectedPrincipal))) {
+  // Stable proof comes from the authenticated backend, never a display login, requested name or renderer.
+  const verified = verifiedConnectionAuthentication(info, validated.authentication)
+  if (verified) info.authentication = verified
+  if (context?.expectedPrincipal && (!verified || JSON.stringify(verified.principal) !== JSON.stringify(context.expectedPrincipal))) {
     await deps.disconnect?.(info.id).catch(() => {})
     return { ok: false, error: new Error('The connected account differs from the remembered account. Choose a connection explicitly.') }
   }
@@ -182,28 +193,30 @@ async function settleRequest(prepared: PreparedRequest, outcome: Settled, deps: 
     id = entry.id
     if (entry.environment && !validated.environment) info.environment = entry.environment
   } catch { info.historyWarning = 'Connected successfully, but recent connections could not be saved.'; return outcome }
-  const policy = context?.credential && context.credentialIntent !== 'update-credentials' ? 'preserve' : context?.credentialPolicy ?? (context?.remember ? 'remember' : 'forget')
+  const policy = context?.credentialPolicy ?? (context?.remember ? 'remember' : 'forget')
+  let passwordSaved = false
   if (policy === 'remember' && canRememberPassword(params.authentication) && params.password) {
     // set() gives every other entry with these credentials (the one used among them) this password, so none keeps an
     // older one to replay.
-    try { await deps.savedPasswords.set(id, params) } catch { info.historyWarning = 'Connected successfully, but the password could not be saved.' }
+    try { await deps.savedPasswords.set(id, params); passwordSaved = true } catch { info.historyWarning = 'Connected successfully, but the password could not be saved.' }
   } else if (policy === 'forget') {
     // Any entry with these credentials would offer its password again, so unchecking forgets them all.
     try {
+      if (!await deps.savedPasswords.storageAvailable()) throw new Error('Secret storage is unavailable.')
       await deps.savedPasswords.forget(id, ...context?.profileId ? [context.profileId] : [])
       await deps.savedPasswords.forgetCredentials(params)
     } catch { info.historyWarning = 'Connected successfully, but the saved password could not be removed.' }
   }
   await deps.savedPasswords.reconcile(() => libraryOf(deps)).catch(() => {})
   if (info.authentication) {
-    const reference = policy === 'preserve' ? prepared.injectedCredential : policy === 'remember' ? await deps.savedPasswords.reference(id, params).catch(() => undefined) : undefined
+    const reference = policy === 'preserve' ? prepared.injectedCredential : policy === 'remember' && passwordSaved ? await deps.savedPasswords.reference(id, params).catch(() => undefined) : undefined
     // Established targets accept revision changes only as an explicit credential update.
-    const credential = context?.credential && context.credentialIntent !== 'update-credentials' ? context.credential : reference
+    const credential = policy === 'forget' ? null : context?.credential && context.credentialIntent !== 'update-credentials' ? context.credential : reference
     if (credential) info.authentication = connectionAuthenticationSchema.parse({ ...info.authentication, credential })
-    else if (context?.credentialIntent === 'update-credentials' && policy === 'forget') info.authentication = connectionAuthenticationSchema.parse({ ...info.authentication, credential: null })
+    else if (policy === 'forget' || context?.credentialIntent === 'update-credentials' && !prepared.injected && !!params.password) info.authentication = connectionAuthenticationSchema.parse({ ...info.authentication, credential: null })
     if (context?.targetId) {
       // This operation established the first account and may finish binding its first remembered credential.
-      deps.authentication.remember(context.targetId, validated, info.authentication, established ? 'update-credentials' : context.credentialIntent)
+      deps.authentication.remember(context.targetId, validated, info.authentication, established || policy === 'forget' ? 'update-credentials' : context.credentialIntent)
       info.targetId = context.targetId
     }
   }
@@ -212,4 +225,47 @@ async function settleRequest(prepared: PreparedRequest, outcome: Settled, deps: 
 const libraryOf = async (deps: Pick<ConnectionRequestDeps, 'connections'>): Promise<ConnectionLibrary | null> => {
   const read = await deps.connections.load()
   return read.trusted === false ? null : read.library
+}
+
+/** Main calls this only after the reuse coordinator proved identical live credentials/settings. No new history/open. */
+export async function settleReused(prepared: PreparedRequest, connected: ConnectionInfo, deps: ConnectionRequestDeps): Promise<Settled> {
+  try {
+    if (!connected.targetId) throw new Error('The live connection has no authenticated target.')
+    const pin = deps.authentication.resolve(connected.targetId)
+    if (!pin?.expectedPrincipal || !connected.authentication) throw new Error('The live connection identity is unavailable.')
+    const { password: _password, ...options } = prepared.validated as ConnectionOptions
+    deps.authentication.prepare(options, { targetId: connected.targetId, expectedPrincipal: connected.authentication.principal })
+    const { credentialUpdated: _credentialUpdated, ...base } = connected
+    const info: ConnectionInfo = { ...base, authentication: connectionAuthenticationSchema.parse({ principal: pin.expectedPrincipal, ...(pin.credential ? { credential: pin.credential } : {}) }) }
+    const context = prepared.context, params = prepared.params as ConnectionOptions
+    const policy = context?.mode === 'background' ? 'preserve' : context?.credentialPolicy ?? (context?.remember === undefined ? 'preserve' : context.remember ? 'remember' : 'forget')
+    if (policy === 'preserve' || !canRememberPassword(params.authentication)) return { ok: true, value: info }
+    if (!await deps.savedPasswords.storageAvailable()) {
+      info.historyWarning = policy === 'forget' ? 'Connected successfully, but saved credentials could not be removed while secret storage is unavailable.' : 'Connected successfully, but the password could not be saved.'
+      return { ok: true, value: info }
+    }
+    try {
+      if (policy === 'forget') {
+        await deps.savedPasswords.forgetCredentials(params)
+        info.authentication = connectionAuthenticationSchema.parse({ principal: pin.expectedPrincipal, credential: null })
+      } else {
+        if (!params.password) throw new Error('Enter a password to remember it.')
+        const read = await deps.connections.load()
+        if (read.trusted === false) throw new Error('The saved connection library is unavailable.')
+        const matching = read.library.profiles.find(profile => profile.id === context?.profileId && credentialBinding(profile.options) === credentialBinding(options))
+          ?? read.library.profiles.find(profile => connectionKey(profile.options) === connectionKey(options))
+        const profileId = matching?.id ?? (await deps.connections.rememberEntry(options, !context?.setsEnvironment)).id
+        await deps.savedPasswords.set(profileId, params)
+        const reference = await deps.savedPasswords.reference(profileId, params)
+        if (!reference) throw new Error('The saved credential revision is unavailable.')
+        info.authentication = connectionAuthenticationSchema.parse({ principal: pin.expectedPrincipal, credential: reference })
+      }
+      deps.authentication.remember(connected.targetId, options, info.authentication, 'update-credentials')
+      info.credentialUpdated = true
+    } catch {
+      info.historyWarning = policy === 'forget' ? 'Connected successfully, but the saved password could not be removed.' : 'Connected successfully, but the password could not be saved.'
+    }
+    return { ok: true, value: info }
+  } catch (error) { return { ok: false, error } }
+  finally { prepared.release?.() }
 }

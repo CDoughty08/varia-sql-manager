@@ -108,7 +108,7 @@ internal sealed class LivePlanSampler(ILiveHost host, LiveGates gates, string co
         }
         catch (SqlException error) { return new([], [LiveErrors.From(Probe, error)]); }
         catch (OperationCanceledException) when (!token.IsCancellationRequested) { return Error("TIMEOUT", LiveErrors.TimeoutMessage); }
-        catch (RequestException error) when (error.Code is "AUTH_ENTRA" or "AUTH_KERBEROS") { return new([], [LiveErrors.SignIn(Probe, error)]); }
+        catch (RequestException error) when (error.Code is "AUTH_ENTRA" or "AUTH_KERBEROS" or "AUTH_IDENTITY") { return new([], [LiveErrors.SignIn(Probe, error)]); }
         catch (RequestException error) when (error.Code == "NOT_CONNECTED") { throw; }
         catch (RequestException error) { return Error(error.Code == "BUSY" ? "BUSY" : "NOT_SUPPORTED", error.Code == "BUSY" ? LiveErrors.BusyMessage : "The server could not provide a live plan within the sampling limits."); }
         catch (InvalidOperationException) { return Error("CONNECTION_LOST", LiveErrors.LostMessage); }

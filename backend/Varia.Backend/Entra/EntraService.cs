@@ -44,19 +44,22 @@ internal sealed class EntraService
 
     /// <summary>Opens a connection the user is choosing (connect and Load databases). When MFA has no cached token, signs in
     /// through the browser under the request's token (Stop cancels it), then opens once more with a new connection, which
-    /// now finds the token. MFA without a user name opens unpooled (SqlClient reuses a pool's token without asking the
-    /// provider), so the provider says which account it used, and the connection string returned names that account: later
+    /// now finds the token. Every Entra user open is unpooled (SqlClient otherwise reuses a pool's token without asking the
+    /// provider), so the provider proves which account it used. For anonymous MFA, the string returned names that account: later
     /// opens then find that account's token even when several are signed in. Other Entra failures answer AUTH_ENTRA with the
     /// dialog's details; anything else is left to the caller.</summary>
     /// <param name="idOf">The opened connection's ClientConnectionId, under which the provider recorded the account.</param>
-    /// <returns>The open result and the connection string to keep.</returns>
-    internal async Task<(T Opened, string ConnectionString)> OpenForUserAsync<T>(string connectionString, string server, Func<string, CancellationToken, Task<T>> open, Func<T, Guid> idOf, CancellationToken token, bool allowInteractive = true)
+    /// <returns>The open result, the connection string to keep (with its original pooling preference), and the exact
+    /// successful open's provider evidence. The caller must reject missing evidence before registering an Entra target.</returns>
+    internal async Task<(T Opened, string ConnectionString, string? PrincipalId)> OpenForUserAsync<T>(string connectionString, string server, Func<string, CancellationToken, Task<T>> open, Func<T, Guid> idOf, CancellationToken token, bool allowInteractive = true)
     {
-        async Task<(T, string)> Attempt(string text)
+        async Task<(T, string, string?)> Attempt(string text)
         {
-            if (!AnonymousMfa(text)) return (await open(text, token).ConfigureAwait(false), text);
+            if (!UsesEntra(text)) return (await open(text, token).ConfigureAwait(false), text, null);
             var opened = await open(new SqlConnectionStringBuilder(text) { Pooling = false }.ConnectionString, token).ConfigureAwait(false);
-            return (opened, Attempts.Take(idOf(opened)) is Served served ? new SqlConnectionStringBuilder(text) { UserID = served.Account }.ConnectionString : text);
+            var served = Attempts.Take(idOf(opened)) as Served;
+            var kept = AnonymousMfa(text) && served?.Account is { } account ? new SqlConnectionStringBuilder(text) { UserID = account }.ConnectionString : text;
+            return (opened, kept, served?.PrincipalId);
         }
         try { return await Attempt(connectionString).ConfigureAwait(false); }
         catch (SqlException error) when (!token.IsCancellationRequested && Failure(error, connectionString) is { } attempt)
@@ -84,7 +87,12 @@ internal sealed class EntraService
     /// failure, answers AUTH_ENTRA, as an expired Kerberos ticket answers AUTH_KERBEROS.</summary>
     internal async Task OpenPooledAsync(SqlConnection connection, CancellationToken token, Func<SqlConnection, CancellationToken, Task> open)
     {
-        try { await open(connection, token).ConfigureAwait(false); }
+        try
+        {
+            await open(connection, token).ConfigureAwait(false);
+            // A later open uses its guarded target scope, not a second retained identity cache.
+            Attempts.Take(connection.ClientConnectionId);
+        }
         catch (SqlException error) when (!token.IsCancellationRequested && Failure(error, connection.ConnectionString) is { } attempt)
         {
             throw EntraFailures.Describe(attempt, error, connection.DataSource, details: false);

@@ -364,5 +364,7 @@ Considered and rejected (do not re-propose without new numbers):
   for smoke. A check that is more than 10 s slower on Windows usually runs out a timeout.
 - **Keep the tables current.** After adding or changing a smoke suite or live suite, copy its CI seconds into
   `suiteSeconds` or `LiveGroups.Suites`. Both budget checks trust those tables.
+  The connections integration adds an actual-main lifecycle phase to the existing suite (8 s locally on Windows).
+  Its shard weight includes that increment on both platforms provisionally; replace it with the next CI measurements.
 - **Write down the numbers.** A CI change records before and after numbers from `scripts/ci-timings.mjs` (runner-minutes,
   job count, queue) in its PR and here.

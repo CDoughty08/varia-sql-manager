@@ -25,7 +25,7 @@ Varia is a cross-platform desktop workbench for Microsoft SQL Server. It combine
 - Profile a result's columns: the results toolbar's **Profile** (or **Column Profile** on the grid's menu) opens a panel with each column's NULLs, distinct values (exact up to 16,384, then estimated; equal under the column's collation), lowest and highest values, lengths in characters and bytes, and a histogram, computed in the backend over the rows the grid shows. **Row size** draws a bar behind each row number for the row's size (the sum of DATALENGTH over its columns); hover it for the bytes.
 - Use the Table Designer, Activity Monitor, live data views, and Integration Services Catalog tools.
 - Split query tabs into editor groups side by side or floating, as in VS Code, and keep them across restarts with hot exit.
-- Remember each query's exact connection target and database across hot exit and reload. Disconnected queries keep their server and environment labels; reconnecting opens fresh SQL sessions and never runs their buffers. See [connection restoration](docs/hot-exit.md#connections) and the [integration contract](docs/connections-persistence-integration.md).
+- Remember each query's exact connection target and database across hot exit and reload. Disconnected queries keep their server and environment labels; reconnecting opens fresh SQL sessions and never runs their buffers. See [connection restoration](docs/hot-exit.md#connections).
 - Query tabs show the filename above their environment and live session ID, leaving short names readable without widening the tab.
 - Customize themes and workspace layouts, and access commands through the command palette.
 
@@ -79,7 +79,8 @@ Object Explorer retains disconnected servers as collapsed roots. Use **Reconnect
 Explorer** for an offline root, or **Disconnect and Remove from Explorer** for a connected one. Removing a root does
 not delete saved profiles or query text. Equivalent connections select the existing root; differing
 name, color, environment or startup reconnect details receive an explicit Current/Selected confirmation.
-See [connection roots in Object Explorer](docs/connections-explorer.md) for the lifecycle and integration details.
+Disconnect with attached queries offers Keep Tabs, Close Query Tabs and Cancel, with save and transaction choices
+resolved before tabs close. See [connection roots in Object Explorer](docs/connections-explorer.md).
 
 Database Properties, Table Designer, SSIS and other dependent documents retain their drafts when disconnected.
 They do not follow another login or connection settings merely because the server name matches. A legacy document

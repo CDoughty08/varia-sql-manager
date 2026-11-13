@@ -92,6 +92,10 @@ the rules that keep it lean.
 
 ## Testing expectations
 
+- The existing connections Electron suite includes `scripts/fixtures/connection-lifecycle.mjs`, which uses the actual
+  main request/credential owners with an isolated fake backend and test-only cipher. It covers reuse and distinct
+  credentials, all details-dialog choices, dirty-close cancellation, retained results, selective close and mixed
+  startup reconnect outcomes without automatic query execution. Its sample secrets are never real credentials.
 - vitest: `tests/*.test.ts`, fixtures in `tests/fixtures/`.
 - .NET: `backend/Varia.Backend.Tests/Program.cs`, a console program of `Check(condition, name)` calls. Offline checks come
   first, their suites in concurrent lanes (`OfflineSuites.cs`: six by default, `VARIA_TEST_OFFLINE_LANES=<n>`; one when

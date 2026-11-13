@@ -41,6 +41,9 @@ export interface CustomDocumentProvider {
   closed(id: string): void
   /** Whether the document moves with a reconnect to a connection on `server`. */
   follows(id: string, server: string): boolean
+  canFollowTarget?(id: string, targetId: string): boolean
+  /** Main proved these target identities equivalent; migrate only this provider's existing binding. */
+  coalesceTarget?(id: string, fromTargetId: string, toTargetId: string): boolean
 }
 /** A model's indentation, from Tools › Options › Text Editor › Transact-SQL › Tabs. */
 export interface ModelOptions { readonly tabSize: number; readonly indentSize: number; readonly insertSpaces: boolean }
@@ -154,6 +157,8 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   revision(id: string): number { return this.entries.get(id)?.model.getVersionId() ?? this.provider(id)?.revision(id) ?? 0 }
   /** Whether a custom document moves to a reconnected connection on `server` (a designer only to its own server). */
   follows(id: string, server: string): boolean { return this.provider(id)?.follows(id, server) ?? false }
+  canFollowTarget(id: string, targetId: string): boolean { return this.provider(id)?.canFollowTarget?.(id, targetId) ?? false }
+  coalesceTarget(id: string, fromTargetId: string, toTargetId: string): boolean { return this.provider(id)?.coalesceTarget?.(id, fromTargetId, toTargetId) ?? false }
   /** Whether File › Save All saves the document: every text document, and the custom ones whose provider says so. */
   inSaveAll(id: string): boolean { return this.provider(id)?.inSaveAll ?? true }
   /** Whether File › Save means anything for the document: every text document does, a custom one unless its provider says not. */
@@ -538,6 +543,16 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     if (isQueryDocument(this.get(id))) await this.endSession(id, transaction)
     if (this.disposed || this.entries.get(id) !== entry) return
     if (version !== entry.model.getVersionId()) throw new Error('The query changed while closing. Close it again to review the latest changes.')
+    this.closeText(id, entry)
+  }
+  /** Sessions and the transport have ended. Validate the complete reviewed query set before the first local close. */
+  closeDisconnectedQueries(approved: readonly { readonly id: string; readonly revision: number }[]): void {
+    if (this.disposed || !this.getSnapshot().busy || new Set(approved.map(item => item.id)).size !== approved.length || approved.some(({ id, revision }) =>
+      !isQueryDocument(this.get(id)) || !this.entries.has(id) || this.revision(id) !== revision))
+      throw new Error('The approved queries changed before local close. All tabs stayed open.')
+    for (const { id } of approved) this.closeText(id, this.entries.get(id)!)
+  }
+  private closeText(id: string, entry: DocumentEntry): void {
     this.keepClosed(id, entry)
     const current = this.getSnapshot(), next = this.closing(id)
     this.unshow(id, current.activeId === id ? next.activeId : undefined)

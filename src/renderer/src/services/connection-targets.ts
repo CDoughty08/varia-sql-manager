@@ -31,8 +31,7 @@ const entry = (target: PersistedConnectionTarget, lifecycle: ConnectionLifecycle
 
 /**
  * Target metadata and lifecycle only. Main owns credential-sensitive equivalence and all backend calls. A stale
- * successful completion returns its handle for that owner to close; dropping the reply alone would leak a connection.
- * The legacy ConnectionService remains in use until the Explorer track adopts this registry.
+ * successful completion returns its handle for that owner to release; dropping the reply alone would leak a connection.
  */
 export class ConnectionTargetService extends SnapshotStore<readonly ConnectionTarget[]> {
   private generation = 0
@@ -67,6 +66,33 @@ export class ConnectionTargetService extends SnapshotStore<readonly ConnectionTa
     const parsed = connectionDetailsSchema.parse(details), target = this.get(id)
     if (!target) return false
     this.replace(id, { ...persisted(target), details: parsed }, target.lifecycle)
+    return true
+  }
+
+  /** Main explicitly changed remembered credentials for this same authenticated, already-live transport. */
+  reconcileAuthentication(handle: BackendConnectionHandle, authentication: ConnectionAuthentication): boolean {
+    const parsedHandle = backendConnectionHandleSchema.safeParse(handle), proof = connectionAuthenticationSchema.safeParse(authentication)
+    if (!parsedHandle.success || !proof.success) return false
+    const target = this.getSnapshot().find(value => value.lifecycle.state === 'connected' && value.lifecycle.handle.id === parsedHandle.data.id && value.lifecycle.handle.generation === parsedHandle.data.generation)
+    const expected = target?.expectedPrincipal, actual = proof.data.principal
+    if (!target || !expected || expected.provider !== actual.provider || expected.authentication !== actual.authentication || expected.id !== actual.id) return false
+    if (proof.data.credential === undefined) return true
+    const { credential: _credential, ...rest } = persisted(target)
+    const replacement = persistedConnectionTargetSchema.safeParse({ ...rest, ...proof.data.credential ? { credential: proof.data.credential } : {} })
+    if (!replacement.success) return false
+    this.replace(target.id, replacement.data, target.lifecycle)
+    return true
+  }
+
+  /** Only authoritative loss of this exact transport may invalidate its binding; unrelated targets stay live. */
+  markHandleLost(handle: BackendConnectionHandle, reason: ConnectionFailureReason = 'network'): boolean {
+    const parsed = backendConnectionHandleSchema.safeParse(handle)
+    if (!parsed.success) return false
+    const lifecycle = connectionLifecycleSchema.parse({ state: 'lost', reason })
+    const target = this.getSnapshot().find(value => (value.lifecycle.state === 'connected' || value.lifecycle.state === 'disconnecting') && value.lifecycle.handle.id === parsed.data.id && value.lifecycle.handle.generation === parsed.data.generation)
+    if (!target) return false
+    this.operations.delete(target.id)
+    this.replace(target.id, persisted(target), lifecycle)
     return true
   }
 

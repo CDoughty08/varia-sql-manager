@@ -104,7 +104,8 @@ export class DisconnectCoordinator {
         }
         const refusal = host.refusal(targetId, handle)
         if (refusal) { result = { status: 'blocked', error: refusal }; return }
-        const queries = approved.filter(document => document.query)
+        // A query-only Disconnect retains target context but is not attached to this transport.
+        const queries = approved.filter(document => document.query && document.connectionId === handle.id)
         const choice = queries.length ? await host.confirm({ targetId, name: target.details.displayName ?? target.options.server, tabs: queries.map(({ id, name, dirty, running }) => ({ id, name, dirty, running })) }) : 'keep-tabs'
         if (choice === 'cancel') { result = { status: 'cancelled' }; return }
         validate()
@@ -112,9 +113,10 @@ export class DisconnectCoordinator {
         if (choice === 'close-query-tabs') {
           close = await host.prepareClose(queries.map(document => document.id))
           if (!close) { result = { status: 'cancelled' }; return }
-          // Saving may change names/files/dirty state. The file service validated each approved version; custom drafts may not change.
+          // Only queries in the close plan may change through Save. Other drafts and remembered refs stay as reviewed.
           const now = attached()
-          if (!sameDocuments(approved.filter(document => !document.query), now.filter(document => !document.query))) throw new Error('A dependent document changed while confirming disconnect. Review the latest state before trying again.')
+          const closing = new Set(queries.map(document => document.id))
+          if (!sameDocuments(approved.filter(document => !closing.has(document.id)), now.filter(document => !closing.has(document.id)))) throw new Error('A dependent document changed while confirming disconnect. Review the latest state before trying again.')
           const expected = new Set(approved.map(document => document.id))
           if (now.length !== approved.length || now.some(document => !expected.has(document.id))) throw new Error('The affected documents changed. Review the disconnect again.')
           approved = now

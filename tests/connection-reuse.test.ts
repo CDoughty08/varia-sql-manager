@@ -190,6 +190,29 @@ describe('authoritative main connection reuse', () => {
     expect(dispose).not.toHaveBeenCalled()
   })
 
+  it('fences equivalent picker proposals while a static or unresolved dynamic connection disconnects', async () => {
+    const { coordinator, dispose } = fixture(), open = vi.fn(async () => answer(51))
+    await coordinator.connect(request(), async () => answer())
+    coordinator.beginDisconnect(answer().connection)
+    expect(await coordinator.connect(request(2), open)).toEqual({ status: 'busy' })
+    expect(open).not.toHaveBeenCalled()
+    const dynamic = { ...options, authentication: 'entraMfa' as const, username: undefined, password: undefined }
+    await coordinator.connect(request(3, { options: dynamic }), async () => answer(52, 1, 'entraMfa'))
+    coordinator.beginDisconnect(answer(52).connection)
+    expect(await coordinator.connect(request(4, { options: dynamic }), async () => answer(53, 1, 'entraMfa'))).toEqual({ status: 'busy' })
+    expect(dispose).toHaveBeenCalledExactlyOnceWith(answer(53).connection)
+  })
+
+  it('retires obsolete offline credential affinities when that target acquires a new live key', async () => {
+    const { coordinator } = fixture()
+    await coordinator.connect(request(), async () => answer())
+    coordinator.beginDisconnect(answer().connection)
+    coordinator.finishDisconnect(answer().connection, true)
+    const changed = { ...options, password: 'updated-secret' }
+    expect(await coordinator.connect(request(1, { options: changed, credentialIntent: 'update-credentials' }), async () => answer(51))).toMatchObject({ status: 'connected', targetId: id(1) })
+    expect(await coordinator.connect(request(2), async () => answer(52))).toMatchObject({ status: 'connected', targetId: id(2) })
+  })
+
   it('revalidates equivalent ownership when cleanup overlaps disconnect', async () => {
     const cleaning = deferred<void>(), dispose = vi.fn(() => cleaning.promise)
     const coordinator = new ConnectionReuseCoordinator<BackendConnectionHandle>({ dispose })

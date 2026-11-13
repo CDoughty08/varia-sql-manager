@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { connectionCancelSchema, requestSchemas, resultsCopyRequestSchema, resultsSaveRequestSchema, validateRequest, validateResult } from '../src/main/validation'
+import { connectionAcceptSchema, connectionCancelSchema, connectionPruneSchema, requestSchemas, resultsCopyRequestSchema, resultsSaveRequestSchema, validateRequest, validateResult } from '../src/main/validation'
 import { connectContext } from '../src/main/connection-requests'
 import { jobProgressSchema, portRequestSchema, queryEventSchema, queryResultSchema } from '../src/shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../src/shared/explorer/schema'
@@ -351,6 +351,14 @@ describe('IPC validation', () => {
     expect(connectionCancelSchema.safeParse({ requestIds: ids(1) }).success).toBe(true)
     expect(connectionCancelSchema.safeParse({ requestIds: ids(16) }).success).toBe(true)
     for (const value of [{ requestIds: [] }, { requestIds: ids(17) }, { requestIds: ['stop'] }, { requestIds: ids(1), all: true }, ids(1)]) expect(connectionCancelSchema.safeParse(value).success, JSON.stringify(value).slice(0, 40)).toBe(false)
+  })
+  it('bounds and strictly validates connection receipt acknowledgement and target pruning', () => {
+    const id = crypto.randomUUID()
+    expect(connectionAcceptSchema.parse({ requestId: id })).toEqual({ requestId: id })
+    for (const value of [{ requestId: 'server' }, { requestId: id, retained: true }, id]) expect(connectionAcceptSchema.safeParse(value).success).toBe(false)
+    expect(connectionPruneSchema.safeParse({ targetIds: [id] }).success).toBe(true)
+    expect(connectionPruneSchema.safeParse({ targetIds: Array.from({ length: 200 }, () => crypto.randomUUID()) }).success).toBe(true)
+    for (const value of [{ targetIds: [] }, { targetIds: ['server'] }, { targetIds: [id], force: true }, { targetIds: Array.from({ length: 201 }, () => id) }]) expect(connectionPruneSchema.safeParse(value).success).toBe(false)
   })
   it('rejects an oversized array at its bound without one issue per element (GHSA-mrhx-c7xc-m3w5)', () => {
     const oversized = connectionCancelSchema.safeParse({ requestIds: Array.from({ length: 2000 }, () => null) })

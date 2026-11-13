@@ -11,10 +11,16 @@ import { DocumentService, settingsDocumentOptions } from '../services/documents'
 import { QueryService } from '../services/queries'
 import { ConnectionService } from '../services/connections'
 import { ConnectionTargetService } from '../services/connection-targets'
+import { bindStartupReconnect } from '../services/connection-startup'
+import { bindConnectionPruning } from '../services/connection-pruning'
+import type { StartupReconnectService } from '../services/startup-reconnect'
+import { createDisconnectCoordinator } from '../services/disconnect-workbench'
+import type { DisconnectCoordinator } from '../services/disconnect'
+import { DisconnectPromptService } from '../disconnect/DisconnectPromptService'
 import { FileService } from '../services/files'
 import { RecentFilesService } from '../services/recent-files'
 import { RecoveryService } from '../services/recovery'
-import { keptSession, requireKeptPins, restoreSession } from '../services/session'
+import { keptSession, reloadSession, restoreSession } from '../services/session'
 import { TabRenameService } from '../services/tab-rename'
 import { EditorOptionsService } from '../services/editor-options'
 import { ShellOptionsService } from '../services/shell-options'
@@ -138,8 +144,10 @@ export interface Workbench extends Disposable {
   readonly queries: QueryService
   readonly connections: ConnectionService
   readonly connectionTargets: ConnectionTargetService
-  /** Installed by the disconnect track; App uses this before its pre-migration compatibility flow. */
-  readonly disconnectCoordinator?: { disconnect(targetId: string, mode: 'disconnect' | 'remove-from-explorer'): Promise<{ readonly status: string; readonly error?: string; readonly warning?: string }> }
+  readonly connectionReady: Promise<void>
+  readonly startupReconnect: StartupReconnectService
+  readonly disconnectCoordinator: DisconnectCoordinator
+  readonly disconnectPrompts: DisconnectPromptService
   readonly backend: BackendStateService
   /** Stored query results, read through the results worker. */
   readonly resultClient: ResultClient
@@ -272,6 +280,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // Normally loaded before the workbench (start.tsx), so the first key already follows the user's shortcuts.
   const userShortcuts = shortcuts ?? new ShortcutsService({ api: api.shortcuts, platform })
   const connectionTargets = new ConnectionTargetService()
+  let connectionRestored!: () => void
+  const connectionReady = new Promise<void>(resolve => { connectionRestored = resolve })
   const events = new EventBus(), connections = new ConnectionService(connectionTargets), editorOptions = new EditorOptionsService(settings), shellOptions = new ShellOptionsService(settings), panes = new PaneService()
   // Group by Schema follows its setting (the toolbar button and the palette flip it).
   const groupBySchema = { get: () => settings.get('objectExplorer.groupBySchema'), subscribe: settings.subscribe }
@@ -280,7 +290,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const notifications = new NotificationService()
   const updates = new UpdateService(api)
   const documents = new DocumentService((text, uri, language) => monaco.editor.createModel(text, language, monaco.Uri.parse(uri)), api, events, callback => { frame(callback) },
-    { ...settingsDocumentOptions(() => settings.getSnapshot().values), newLineEnding: platformLineEnding(platform), server: id => connections.get(id)?.server })
+    { ...settingsDocumentOptions(() => settings.getSnapshot().values), newLineEnding: platformLineEnding(platform), server: id => connections.get(id)?.server, target: id => targets.targetForConnection(id) })
   const editorStatus = new EditorStatusService(callback => { frame(callback) }), inputMode = new InputModeService()
   const sqlLanguage = new SqlLanguageService(monaco, api, documents, connections, backend)
   const sqlDiagnostics = new SqlDiagnosticsService(monaco, sqlLanguage, documents, connections,
@@ -319,12 +329,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   })
   const files = new FileService(documents, queries, api, {
     autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'],
-    // Hot exit keeps a query's server name (never a login or connection string), so it keeps its database when it connects there again.
+    // The strict workspace keeps target identity and intent, never passwords or runtime transport/session handles.
     hotExit: () => {
       if (!api.hotExit) return
       const pinnedOnly = !settings.getSnapshot().values['environment.documents.hotExit']
-      if (!pinnedOnly || documents.getSnapshot().documents.some(tab => tab.pinned))
-        return keptSession(documents, id => connections.get(id)?.server, { pinnedOnly, groups: editorGroups })
+      if (!pinnedOnly || documents.getSnapshot().documents.some(tab => tab.pinned) || connectionTargets.getSnapshot().length)
+        return keptSession(documents, id => connections.get(id)?.server, { pinnedOnly, groups: editorGroups, connectionTargets })
     }
   })
   const recentFiles = new RecentFilesService(api)
@@ -333,7 +343,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     server: id => { const connection = connections.get(id); return connection ? connection.displayName || connection.server : undefined }
   })
   const resultSelection = new ResultSelectionService(results)
-  const targets = new TargetService(documents, queries, connections, files)
+  const targets = new TargetService(documents, queries, connections, files, connectionTargets)
+  const targetIdOf = (connectionId: string) => targets.targetForConnection(connectionId)
   const focus = domFocusAdapter(documents)
   const quickInput = new QuickInputService(focus)
   // Every Script As request carries the Scripting page's options.
@@ -344,6 +355,14 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const peek = new PeekService({ api, connections, scriptingOptions, platform, results })
   const serverFiles = new ServerFilePickerService({ api, connections })
   const longRuns = new LongRunService({ api })
+  const disconnectPrompts = new DisconnectPromptService()
+  const disconnectCoordinator = createDisconnectCoordinator({
+    connectionTargets, documents, queries, files, longRuns, api, prompts: disconnectPrompts,
+    detached: (targetId, handle) => targets.detached(targetId, handle),
+    closeQueries: plan => files.closeDisconnectedQueries(plan, approved => documents.closeDisconnectedQueries(approved))
+  })
+  const startup = bindStartupReconnect({ api, connections, documents, targets, backend, settings, ready: connectionReady })
+  const connectionPruning = bindConnectionPruning({ registry: connectionTargets, documents, api, ready: connectionReady })
   const dialogs = new ObjectDialogService({
     api, connections, explorer, documents, files, serverFiles, longRuns, focusEditor: () => focusLater(() => documents.focusActive()),
     // Database Properties documents of a database a dialog took offline or brought online follow it.
@@ -353,7 +372,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   })
   const ssisCatalog = new CreateCatalogService({ api, connections, explorer, longRuns })
   const designers = new TableDesignerService({
-    api, documents, files, connections, explorer,
+    api, documents, files, connections, explorer, targetIdOf,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-designer="${CSS.escape(id)}"] [data-designer-focus]`)?.focus())
   })
   // Focus goes to the document's current section in its list, else to its first button (Refresh), once its first read
@@ -362,14 +381,14 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     root: id => document.querySelector<HTMLElement>(`[data-ssis-document="${CSS.escape(id)}"]`), activeElement: () => document.activeElement, body: () => document.body,
     focusHeld, frame
   })
-  const ssisProperties = new SsisPropertiesService({ api, documents, connections, focus: id => ssisFocus.focus(id) })
+  const ssisProperties = new SsisPropertiesService({ api, documents, connections, targetIdOf, focus: id => ssisFocus.focus(id) })
   const properties = new DatabasePropertiesService({
-    api, documents, files, connections, explorer, focusEditor: () => focusLater(() => documents.focusActive()), close: id => { void files.close(id) },
+    api, documents, files, connections, explorer, targetIdOf, focusEditor: () => focusLater(() => documents.focusActive()), close: id => { void files.close(id) },
     // The current section's item in the list: one tab stop, from which the keys move through the sections.
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-properties="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus())
   })
   const newDatabase = new NewDatabaseService({
-    api, documents, files, connections, explorer, longRuns, serverFiles, focusEditor: () => focusLater(() => documents.focusActive()),
+    api, documents, files, connections, explorer, longRuns, serverFiles, targetIdOf, focusEditor: () => focusLater(() => documents.focusActive()),
     // The database name, once the first read has drawn it; until then the document's first section in its list.
     focus: id => focusLater(() => {
       const root = document.querySelector<HTMLElement>(`[data-new-database="${CSS.escape(id)}"]`)
@@ -380,7 +399,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // Before Restore Database, whose runs track their STATS progress in it.
   const actionProgress = new ActionProgressService(api)
   const restore = new RestoreService({
-    api, documents, files, connections, longRuns, progress: actionProgress, explorer, transactions: queries, focusEditor: () => focusLater(() => documents.focusActive()),
+    api, documents, files, connections, longRuns, progress: actionProgress, explorer, transactions: queries, targetIdOf, focusEditor: () => focusLater(() => documents.focusActive()),
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-restore="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus())
   })
   // A database Delete or Detach removed: its Properties documents turn orphan and a toast counts the query windows left on it
@@ -390,19 +409,19 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     copy: text => { void api.writeClipboardText(text).then(result => { if (!result.ok) commands.reportWarning(result.error) }, onUnexpectedError) }
   })
   const activity = new ActivityMonitorService({
-    api, documents, connections, live, owner: id => documentOwner(id, documents, panes, editorGroups), settings: () => settings.getSnapshot().values,
+    api, documents, connections, live, targetIdOf, owner: id => documentOwner(id, documents, panes, editorGroups), settings: () => settings.getSnapshot().values,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-activity-monitor="${CSS.escape(id)}"] [data-activity-focus]`)?.focus())
   })
   const operations = new SsisOperationsService({
-    api, documents, panes, groups: editorGroups, live, connections, settings,
+    api, documents, panes, groups: editorGroups, live, connections, settings, targetIdOf,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-ssis-operations="${CSS.escape(id)}"] [role="grid"]`)?.focus())
   })
   const objectSearch = new ObjectSearchService({
-    api, documents, connections, settings,
+    api, documents, connections, settings, targetIdOf,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-object-search="${CSS.escape(id)}"] [data-object-search-focus]`)?.focus())
   })
   const peekTabs = new PeekTabService({
-    peek, documents, connections,
+    peek, documents, connections, targetIdOf,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-peek-tab="${CSS.escape(id)}"] [role="tab"][aria-selected="true"]`)?.focus())
   })
   const releaseNotes = new ReleaseNotesService(documents, () => updates.getSnapshot().currentVersion,
@@ -477,13 +496,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const cleanup = events.subscribe(event => { if (event.type === 'documents.closed') queries.forget(event.tabId) })
   let disposed = false
   const reloadPins = (): ReloadPins | undefined => {
-    const { documents: tabs, busy } = documents.getSnapshot()
     if (!api.hotExit) return
-    if (busy) throw new Error('Wait for the current document operation to finish before reloading.')
-    if (!tabs.some(tab => tab.pinned)) return
-    const kept = keptSession(documents, id => connections.get(id)?.server, { pinnedOnly: true, groups: editorGroups })
-    requireKeptPins(tabs, kept.kept)
-    return { session: kept.session, recoveryIds: [...kept.kept].map(id => recovery.copyId(id) ?? null) }
+    return reloadSession(documents, id => connections.get(id)?.server, {
+      restoreQueries: settings.get('environment.documents.hotExit'), recoveryId: id => recovery.copyId(id), groups: editorGroups, connectionTargets
+    })
   }
   const workbench: Workbench = {
     reloadPins,
@@ -506,6 +522,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     backend,
     resultClient,
     connectionTargets,
+    connectionReady,
+    startupReconnect: startup.scheduler,
+    disconnectPrompts,
+    disconnectCoordinator,
     results,
     highlights,
     compare,
@@ -568,6 +588,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     dispose: () => {
       if (disposed) return
       disposed = true
+      startup.dispose()
+      connectionPruning.dispose()
+      disconnectPrompts.dispose()
       // Before the documents close: a page that unloads leaves its AutoRecover copies to be offered.
       recovery.dispose()
       // Hiding the quick input first aborts its loads and ends any theme preview before the services they use go away.
@@ -695,8 +718,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // The tabs the last close kept (hot exit), else the welcome query; what an earlier run or page left unsaved is offered
   // once the workbench is up.
   const welcome = () => { if (!disposed) documents.create('SQLQuery1.sql', '-- Connect this query to a server and press F5 to execute.\n\nSELECT\n    @@SERVERNAME AS server_name,\n    DB_NAME() AS database_name,\n    SYSDATETIME() AS server_time;\n', 'master') }
-  if (api.hotExit) void restoreSession({ api, documents, files, groups: editorGroups, resumeRecovery: (tabId, id) => recovery.resume(tabId, id), otherwise: welcome })
-    .catch(() => {}).then(() => { if (!disposed) void recovery.start() })
-  else { welcome(); void recovery.start() }
+  if (api.hotExit) void restoreSession({ api, documents, files, groups: editorGroups, connectionTargets, resumeRecovery: (tabId, id) => recovery.resume(tabId, id), otherwise: welcome })
+    .catch(() => {}).then(() => { connectionRestored(); if (!disposed) void recovery.start() })
+  else { welcome(); connectionRestored(); void recovery.start() }
   return workbench
 }

@@ -66,17 +66,31 @@ being true.
   handles for the backend owner to close. It keeps intentional disconnect separate from unexpected loss and Explorer
   membership separate from document references. Session v2 stores the strict workspace and exact query association,
   database and attachment intent; v1 server names remain display hints and never establish identity. Reload capture
-  shares hot-exit's eligibility and pin validation. `docs/connections-persistence-integration.md` records the workbench
-  hooks that Explorer owns; `docs/connections-explorer-implementation-plan.md` defines the parallel integration tracks.
-  Workbench exposes it as `connectionTargets`; ConnectionService projects authenticated targets for legacy
-  runtime-handle consumers. Its isolated legacy receipt lane remains until the main request owner supplies verified
-  target receipts. `src/main/connection-reuse.ts` owns live/pending equivalence and single-owner cleanup; its
-  integration requirements are in `docs/connections-explorer-main-seam.md`.
+  shares hot-exit's eligibility and pin validation. Workbench exposes one `connectionTargets` registry;
+  ConnectionService projects its authenticated targets for runtime-handle consumers. `connection-open.ts` in main
+  owns validation, credential resolution, live/pending reuse and receipt acceptance. Cancellation releases only that
+  request's ownership; it cannot close a transport another accepted caller uses. The renderer adopts only verified
+  receipts and acknowledges them through the bounded main-only IPC. `docs/connections-persistence-integration.md`
+  records the assembled workbench hooks; `docs/connections-explorer-main-seam.md` describes main ownership.
+- Account identity is evidence from successful authentication, never a display name or group mapping. SQL and Windows
+  targets pin the login's SID; Entra targets pin the token's tenant/object GUIDs. Backend-owned native connections
+  validate that pinned principal before caller SQL. Entra uses target-private pools, and identity-bound connections
+  disable idle connection recovery so a newly selected account cannot silently replace the pinned one. Failed identity
+  checks close the physical connection and invalidate language context. SQL Tools Service remains a separate process
+  with its existing SQL/Windows credential contract and unsupported Entra modes; it does not provide the native
+  connection owner's cross-open identity proof. No token, raw password or secret-derived comparison key enters a
+  workspace snapshot or renderer receipt.
 - Background connect is explicitly noninteractive and preserves credential policy independently of the ordinary
   dialog's Remember Password flag. Main requires a pinned prior principal and exact opaque credential revision for
   password authentication. Backend and provider cancellation enforce a bounded attempt even with unlimited stored
   connect timeout; an interaction-required response never escalates to browser sign-in. Only actual saved-secret
   rejection invalidates that revision; unavailable keyring, network, certificate and database errors retain ciphertext.
+  The initial startup/reload pass starts only after session restoration, successfully loaded settings and backend
+  readiness; it runs at most two attempts concurrently with no timer retries. An unexpected backend restart in the
+  same window does not start another pass. Explicit disconnect, Stop and removal clear resume intent. Background
+  attachment follows only exact query targets with attachment intent; it never resumes custom-document sampling.
+  Every capture/checkpoint includes the target workspace, including target-only sessions, and revalidates it after
+  asynchronous writes before allowing final close/reload.
 - Disconnect orchestration lives in `services/disconnect.ts`, behind `DisconnectHost`; `disconnect-workbench.ts` adapts
   existing services without owning connection state. Save and transaction choices finish before cancellation,
   session completion or backend teardown. Revalidate document revisions/associations, management blockers and target
@@ -84,8 +98,8 @@ being true.
   tab; completed session changes are reported, not described as undone. Close Query Tabs uses a synchronous local
   close only after successful teardown, through normal close events for result/file release. Keep Tabs retains output
   and immutable `QueryState.provenance` from its original execution, independently of the current SQL session.
-  This coordinator/dialog remains additive until the central hooks in `docs/connections-disconnect-integration.md`
-  are applied. Custom providers bind through `CustomDocumentTargets`, accept only explicit `canFollowTarget` identity,
+  App mounts one prompt service and coordinator; Explorer, palette and popout commands use the same path. Custom
+  providers bind through `CustomDocumentTargets`, accept only explicit `canFollowTarget` identity,
   reject replies from replaced handles, and retain drafts with dependent operations disabled while disconnected.
 - Query rows stay in backend memory (never on disk) under the result budget. Main forwards DATA pages undecoded, as
   exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). Peek's Top rows are no

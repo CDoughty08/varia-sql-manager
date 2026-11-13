@@ -13,6 +13,7 @@ import type { GestureEvent } from '../core/gestures'
 import ExplorerIcon, { type BadgeName } from './ExplorerIcon'
 import type { RowStatus } from './ExplorerStatusService'
 import { RowKind, type TreeAction, type TreeNode } from './tree-model'
+import { serverConnectionStatus } from './connection-state'
 
 const numbers = new Intl.NumberFormat('en-US')
 
@@ -86,7 +87,6 @@ const statusSentences = {
 } as const
 /** A row's static chips, from its listing rather than a probe: a login's Disabled and Connect denied (D4a). */
 const listedChips = (node: Pick<TreeNode, 'kind' | 'status' | 'connectDenied'>): StatusChip[] => node.kind === 'login' ? loginChips(node.status, node.connectDenied) : []
-const lostSentence = 'This server is disconnected. Reconnect to browse fresh metadata, or remove it from Object Explorer.'
 /** A database whose live state is not the one Databases listed it with (its chevron and folders are the list's). */
 export const changedSentence = 'Its state changed since Databases loaded. Refresh Databases to update it.'
 const clip = (text: string) => text.length > explorerLimits.detail ? text.slice(0, explorerLimits.detail - 1) + '…' : text
@@ -101,9 +101,9 @@ export function itemCount(node: Pick<TreeNode, 'kind' | 'folder' | 'total' | 'st
 }
 const items = (value: number) => `${numbers.format(value)} item${value === 1 ? '' : 's'}`
 /** A server's connection, as the dot at the end of its row shows it. */
-export type ConnectionState = 'online' | 'error' | 'lost'
-export const connectionState = (node: Pick<TreeNode, 'lost' | 'connectionError'>): ConnectionState => node.lost ? 'lost' : node.connectionError ? 'error' : 'online'
-const connectionWords: Readonly<Record<ConnectionState, string>> = { online: 'Connected', error: 'Connection failed', lost: 'Disconnected' }
+export type ConnectionState = 'online' | 'error' | 'lost' | 'connecting' | 'disconnecting'
+export const connectionState = (node: Pick<TreeNode, 'lost' | 'connectionError' | 'connectionLifecycle'>): ConnectionState => node.connectionLifecycle?.state === 'connecting' ? 'connecting' : node.connectionLifecycle?.state === 'disconnecting' ? 'disconnecting' : node.lost ? 'lost' : node.connectionError ? 'error' : 'online'
+const connectionWords: Readonly<Record<ConnectionState, string>> = { online: 'Connected', error: 'Connection failed', lost: 'Disconnected', connecting: 'Connecting', disconnecting: 'Disconnecting' }
 
 /**
  * What the tooltip says after the name: kind and creation date, facts, item count, status, and any error.
@@ -112,14 +112,14 @@ function tooltipFacts(node: TreeNode, note?: string): string[] {
   const kind = node.kind === 'folder' ? undefined : [kindSpecs[node.kind].title, node.created && `Created ${node.created.replace('T', ' ')}`].filter(Boolean).join(' · ')
   const error = node.error ?? node.connectionError, count = itemCount(node)
   const listed = listedChips(node)
-  const status = node.lost ? lostSentence : listed.length ? listed.map(chip => chip.title).join('\n') : node.status && statusSentences[node.status]
+  const status = serverConnectionStatus(node)?.sentence ?? (listed.length ? listed.map(chip => chip.title).join('\n') : node.status && statusSentences[node.status])
   return [kind, node.lost && node.sublabel && displayText(node.sublabel), node.detail && displayText(node.detail), count !== undefined && items(count), status, note,
     error && `Could not load: ${displayText(error.message)}`, node.note && displayText(node.note.sentence)].filter((line): line is string => !!line)
 }
 /** The row's tooltip: name, kind and creation date, facts, status, `note` (such as a live state), any error, and another
  *  service's note on the node. */
 export function rowTooltip(node: TreeNode, note?: string): string {
-  const name = [node.label, node.lost ? '(Disconnected)' : node.sublabel, !node.lost && node.note?.label].filter(Boolean).join(' ')
+  const name = [node.label, serverConnectionStatus(node) ? shownSublabel(node) : node.sublabel, !node.lost && node.note?.label].filter(Boolean).join(' ')
   return clip([displayText(name), ...tooltipFacts(node, note)].join('\n'))
 }
 /**
@@ -148,7 +148,7 @@ function StatusChips({ chips }: { chips: readonly StatusChip[] }) {
 }
 /** The row's accessible name: the label and sublabel as shown, then its state (a static chip's words, as a server's chips say theirs). */
 export function rowName(node: TreeNode): string {
-  const sublabel = node.lost ? '(Disconnected)' : node.sublabel
+  const sublabel = serverConnectionStatus(node) ? shownSublabel(node) : node.sublabel
   const listed = listedChips(node)
   const state = node.load === 'error' || node.more === 'error' || node.connectionError ? ', could not load'
     : listed.length ? listed.map(chip => ', ' + chip.words).join('') : node.status ? statusWords[node.status] : ''
@@ -156,6 +156,7 @@ export function rowName(node: TreeNode): string {
   return `${displayText(node.label)}${node.filtered ? ' (filtered)' : ''}${sublabel ? ' ' + displayText(sublabel) : ''}${note}${state}`
 }
 function badgeOf(node: TreeNode): BadgeName | undefined {
+  if (serverConnectionStatus(node)?.busy) return 'loading'
   if (node.lost) return 'lost'
   if (node.load === 'error' || node.more === 'error' || node.connectionError) return 'error'
   if (node.showLoading) return 'loading'
@@ -164,11 +165,12 @@ function badgeOf(node: TreeNode): BadgeName | undefined {
 
 /** A lost server's Reconnect… and Remove buttons; the tree keeps its one tab stop, so they are not tabbable (Enter and the menu are). */
 function LostActions({ rowId, label, actions }: { rowId: number; label: string; actions: RowActions }) {
-  const node = useWorkbench().explorer.menuNode(rowId), args = node ? { target: { kind: 'explorer' as const, node } } : undefined
+  const explorer = useWorkbench().explorer, node = explorer.menuNode(rowId), args = node ? { target: { kind: 'explorer' as const, node } } : undefined
   const canReconnect = useCommandEnabled('connection.reconnect', args), canRemove = useCommandEnabled('connection.removeFromExplorer', args)
+  const status = explorer.node(rowId), action = status ? serverConnectionStatus(status)?.action ?? 'Reconnect' : 'Reconnect'
   const stop = (event: MouseEvent) => event.stopPropagation()
   return <span className="oe-actions">
-    <button tabIndex={-1} disabled={!canReconnect} aria-label={'Reconnect ' + label} title="Reconnect…" onMouseDown={stop} onClick={() => actions.reconnect(rowId)}><Icon name="plug" /></button>
+    <button tabIndex={-1} disabled={!canReconnect} aria-label={action === 'Reconnect' ? 'Reconnect ' + label : `${action} for ${label}`} title={action + '…'} onMouseDown={stop} onClick={() => actions.reconnect(rowId)}><Icon name="plug" /></button>
     <button tabIndex={-1} disabled={!canRemove} aria-label={'Remove ' + label + ' from Explorer'} title="Remove from Explorer" onMouseDown={stop} onClick={() => actions.remove(rowId)}><Icon name="close" /></button>
   </span>
 }
@@ -214,7 +216,10 @@ export function Label({ text }: { text: string }) {
 }
 
 /** The text after a node's label: a server's version and login in brief (its name keeps SSMS's full text), or a lost one's state. */
-export const shownSublabel = (node: Pick<TreeNode, 'lost' | 'brief' | 'sublabel'>): string | undefined => node.lost ? '(Disconnected)' : node.brief ?? node.sublabel
+export const shownSublabel = (node: Pick<TreeNode, 'lost' | 'brief' | 'sublabel' | 'connectionLifecycle'>): string | undefined => {
+  const status = serverConnectionStatus(node)
+  return status ? `(${status.label})` : node.brief ?? node.sublabel
+}
 
 /**
  * The row's end, right-aligned: first the indicators (`children`: E3's state chips, then E2's environment tag), then the
@@ -291,7 +296,7 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
   return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId}
     className={`explorer-row${folder ? ' folder' : ''}${root ? ' server' : ''}${node.lost ? ' lost' : ''}${active ? ' active-connection' : ''}${dimmed ? ' dimmed' : ''}${staticChips?.length ? ' static-chips' : ''}`}
     aria-level={level} aria-setsize={setsize || undefined} aria-posinset={posinset || undefined} aria-expanded={expandable ? node.expanded : undefined} aria-selected={selected}
-    aria-busy={node.load === 'loading' || undefined} aria-label={name} aria-description={rowDescription(node, note)} title={clip(tooltip)} style={style} draggable={(draggable && !renaming) || undefined}
+    aria-busy={node.load === 'loading' || serverConnectionStatus(node)?.busy || undefined} aria-label={name} aria-description={rowDescription(node, note)} title={clip(tooltip)} style={style} draggable={(draggable && !renaming) || undefined}
     onMouseDown={select} onDoubleClick={() => { if (expandable) actions.toggle(rowId); else actions.activate(rowId) }}
     onClick={(event: MouseEvent) => rowClick(actions, rowId, event)}
     onMouseMove={(event: MouseEvent) => actions.peekHover(rowId, event)} onMouseLeave={() => actions.peekHover(rowId)}

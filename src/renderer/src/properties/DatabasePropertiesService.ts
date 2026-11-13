@@ -500,6 +500,7 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
   /** Legacy server-name reassociation is refused; reconnect callers must supply durable identity. */
   follows(_id: string, _server: string): boolean { return false }
   canFollowTarget(id: string, targetId: string): boolean { return this.targetBindings.canFollowTarget(id, targetId) }
+  coalesceTarget(id: string, fromTargetId: string, toTargetId: string): boolean { return this.targetBindings.coalesceTarget(id, fromTargetId, toTargetId) }
   closed(id: string): void {
     this.targetBindings.forget(id)
     const request = this.requests.get(id), preview = this.previews.get(id), timer = this.previewTimers.get(id)

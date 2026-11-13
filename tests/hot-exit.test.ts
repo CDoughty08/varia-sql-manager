@@ -15,7 +15,7 @@ const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 const file = (name: string, id = name): SqlFile => ({ id, name, path: `C:/q/${name}`, encoding: 'utf8', readOnly: false })
 
-function fixture(options: { hotExit?: boolean; budget?: number } = {}) {
+function fixture(options: { hotExit?: boolean; budget?: number; connectionTargets?: ConnectionTargetService } = {}) {
   const doc = documentFixture()
   const kept: SessionWrite[] = []
   const api = {
@@ -31,7 +31,7 @@ function fixture(options: { hotExit?: boolean; budget?: number } = {}) {
   const servers: Record<string, string> = { 'server-a': 'sql01' }
   const state = { hotExit: options.hotExit ?? true }
   const files = new FileService(doc.documents, queries, api, { hotExit: () => state.hotExit || doc.documents.getSnapshot().documents.some(tab => tab.pinned)
-    ? keptSession(doc.documents, id => servers[id], { budget: options.budget, pinnedOnly: !state.hotExit }) : undefined })
+    ? keptSession(doc.documents, id => servers[id], { budget: options.budget, pinnedOnly: !state.hotExit, connectionTargets: options.connectionTargets }) : undefined })
   cleanups.push(() => { files.dispose(); doc.documents.dispose() })
   return { ...doc, api, files, kept, state, queries }
 }
@@ -80,6 +80,22 @@ describe('Rename Tab', () => {
 })
 
 describe('hot exit', () => {
+  it('keeps the window open if connection intent changes while the checkpoint write is pending', async () => {
+    const connectionTargets = new ConnectionTargetService(), targetId = crypto.randomUUID()
+    connectionTargets.add({ id: targetId, options: { ...connectionDefaults('win32'), server: 'sql01' }, details: { autoReconnect: 'inherit' }, inExplorer: true, resumeWanted: true })
+    const f = fixture({ connectionTargets })
+    f.documents.create('Draft.sql', 'SELECT 1', 'Sales')
+    f.api.keepSession.mockImplementationOnce(async session => {
+      f.kept.push(session)
+      connectionTargets.removeFromExplorer(targetId)
+      return { ok: true, value: undefined }
+    })
+    await f.files.closeWindow(async () => {})
+    expect(f.files.getSnapshot().error).toContain('A connection target changed while closing the window')
+    expect(f.api.closeWindow).not.toHaveBeenCalled()
+    expect(f.api.closeWindowCancelled).toHaveBeenCalled()
+    expect(f.documents.getSnapshot().documents).toHaveLength(1)
+  })
   it('revalidates captured query associations and target details by value after a checkpoint write', () => {
     const { documents } = fixture(), connectionTargets = new ConnectionTargetService(), targetId = crypto.randomUUID()
     const details = { displayName: 'Production', autoReconnect: 'inherit' as const }

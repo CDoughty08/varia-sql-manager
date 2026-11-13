@@ -33,11 +33,17 @@ internal sealed class EntraAuthenticationProvider(EntraService service) : SqlAut
                 if (token is not null)
                 {
                     // MFA without a user name took the only account signed in to the tenant: the Connect dialog pins it.
-                    if (method == SqlAuthenticationMethod.ActiveDirectoryInteractive && request.User is null && token.Account is { Length: > 0 and <= 128 } account)
-                        service.Attempts.Record(parameters.ConnectionId, new Served(account));
-                    return new SqlAuthenticationToken(token.AccessToken, token.ExpiresOn);
+                    var account = method == SqlAuthenticationMethod.ActiveDirectoryInteractive && request.User is null && token.Account is { Length: > 0 and <= 128 } hint ? hint : null;
+                    var principal = ConnectionPrincipal.FromEntraToken(token.AccessToken);
+                    if (EntraConnectScope.ExpectedPrincipal is { } expected && principal != expected)
+                        attempt = new EntraFailure("AUTH_IDENTITY", ConnectionPrincipal.ChangedMessage);
+                    else
+                    {
+                        service.Attempts.Record(parameters.ConnectionId, new Served(account, principal));
+                        return new SqlAuthenticationToken(token.AccessToken, token.ExpiresOn);
+                    }
                 }
-                attempt = new InteractionRequired(request);
+                else attempt = new InteractionRequired(request);
             }
             catch (OperationCanceledException) when (limit.IsCancellationRequested) { attempt = new EntraFailure("AUTH_ENTRA", EntraFailures.Messages.TokenTimedOut); }
             catch (Exception error) when (error is not OutOfMemoryException) { attempt = EntraFailures.Map(error, method); }

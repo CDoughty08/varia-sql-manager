@@ -77,16 +77,14 @@ describe('successful connection adoption', () => {
     expect(connections.get(uuid(1))).toMatchObject({ id: uuid(101), lost: true })
   })
 
-  it('does not infer legacy equivalence from submitted options or accept an obsolete legacy handle', () => {
+  it('rejects receipts without authoritative target and account evidence', () => {
     const { connections } = fixture()
     const { targetId: _targetId, authentication: _authentication, ...first } = receipt()
-    expect(adoptConnection(connections, first, options)?.reused).toBe(false)
-    expect(adoptConnection(connections, first, options)?.reused).toBe(true)
-    expect(adoptConnection(connections, { ...first, id: uuid(102) }, options)?.reused).toBe(false)
-    expect(connections.getSnapshot()).toHaveLength(2)
-    connections.markLostBefore(2)
     expect(adoptConnection(connections, first, options)).toBeUndefined()
-    expect(connections.getSnapshot()).toHaveLength(2)
+    expect(adoptConnection(connections, { ...first, targetId: uuid(1) }, options)).toBeUndefined()
+    expect(adoptConnection(connections, { ...first, authentication }, options)).toBeUndefined()
+    expect(adoptConnection(connections, first, options)).toBeUndefined()
+    expect(connections.getSnapshot()).toEqual([])
   })
 })
 
@@ -152,7 +150,7 @@ describe('registry connection attempt ownership', () => {
     const attempt = connections.beginConnect(options, 1, uuid(2), selected)!
     connections.cancelAttempt(attempt)
     const before = targets.getSnapshot(), completions: ConnectionCompletion[] = []
-    expect(adoptConnection(connections, receipt(), options, selected, attempt, undefined, completion => completions.push(completion))).toBeUndefined()
+    expect(adoptConnection(connections, receipt(), options, selected, attempt, completion => completions.push(completion))).toBeUndefined()
     expect(completions).toEqual([{ status: 'in-use', targetId: uuid(1) }])
     expect(targets.getSnapshot()).toBe(before)
     expect(connections.get(uuid(1))).toMatchObject({ id: uuid(101), lifecycle: { state: 'connected' } })
@@ -186,7 +184,7 @@ describe('registry connection attempt ownership', () => {
       connections.disconnected(uuid(104))
     }
     const before = targets.get(uuid(1)), completions: ConnectionCompletion[] = []
-    expect(adoptConnection(connections, receipt(1, 103), options, selected, attempt, undefined, completion => completions.push(completion))).toBeUndefined()
+    expect(adoptConnection(connections, receipt(1, 103), options, selected, attempt, completion => completions.push(completion))).toBeUndefined()
     expect(completions).toEqual([{ status: 'stale', dispose: { id: uuid(103), generation: 1 } }])
     expect(targets.get(uuid(1))).toEqual(before)
     expect(targets.get(uuid(3))).toBeUndefined()
@@ -232,7 +230,7 @@ describe('registry connection attempt ownership', () => {
   it('shadows a legacy entry when its stable target is provisionally registered, leaving exactly one Explorer root', () => {
     const { connections, targets } = fixture()
     const { targetId: _targetId, authentication: _authentication, ...legacy } = receipt()
-    adoptConnection(connections, legacy, options)
+    connections.add(legacy, options)
     const legacyTarget = connections.get(legacy.id)!.targetId!
     connections.disconnected(legacy.id)
     const attempt = connections.beginConnect(options, 1, legacyTarget, current)!

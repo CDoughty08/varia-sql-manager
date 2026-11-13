@@ -209,7 +209,7 @@ internal sealed class SsisActionService : IDisposable
                     // Create Catalog runs in master, where SSMS runs it: its catalog does not exist yet.
                     await using var connection = host.SsisActionConnection(args.ConnectionId, spec.Server ? "master" : name);
                     try { await host.OpenAsync(connection, token); }
-                    catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA") { return Failed(Error(error.Code, error.Message)); }
+                    catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA" or "AUTH_IDENTITY") { return Failed(Error(error.Code, error.Message)); }
                     // Nothing ran yet, so the outcome is known: the action did not start.
                     catch (SqlException error) when (!token.IsCancellationRequested && SsisErrors.CodeOf(error, null) is "NO_DB_ACCESS" or "DATABASE_UNAVAILABLE")
                     {

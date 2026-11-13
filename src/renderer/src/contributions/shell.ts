@@ -185,7 +185,8 @@ export function shellContribution({ commands, documents, files, quickInput, conn
       run: args => {
         const node = lostNode(args)
         if (node) return host.reconnect(node.connectionId)
-        const active = documents.active?.connectionId ? connections.get(documents.active.connectionId) : undefined
+        const association = documents.active?.targetId ?? documents.active?.connectionId
+        const active = association ? connections.get(association) : undefined
         if (offline(active) && active) return host.reconnect(active.id)
         quickInput.show({
           ariaLabel: 'Reconnect', placeholder: 'Select a disconnected server to reconnect', noun: 'servers',

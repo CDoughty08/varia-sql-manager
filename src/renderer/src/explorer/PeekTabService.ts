@@ -87,6 +87,7 @@ export class PeekTabService extends SnapshotStore<PeekTabSnapshot> implements Cu
   /** Server names cannot prove account or settings identity. */
   follows(_id: string, _server: string): boolean { return false }
   canFollowTarget(id: string, targetId: string): boolean { return this.targetBindings.canFollowTarget(id, targetId) }
+  coalesceTarget(id: string, fromTargetId: string, toTargetId: string): boolean { return this.targetBindings.coalesceTarget(id, fromTargetId, toTargetId) }
   closed(id: string): void {
     const view = this.view(id)
     if (!view) return

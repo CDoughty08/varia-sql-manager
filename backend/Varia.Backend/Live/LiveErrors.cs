@@ -63,7 +63,7 @@ internal static class LiveErrors
 
     /// <summary>A missing SSISDB catalog (CATALOG_MISSING) or a missing object the view follows (NOT_FOUND, such as an execution
     /// that was cleaned up) will not come back by retrying either.</summary>
-    public static bool IsTerminal(string code) => code is "PERMISSION_DENIED" or "NOT_SUPPORTED" or "LOGIN_FAILED" or "CATALOG_MISSING" or "NOT_FOUND";
+    public static bool IsTerminal(string code) => code is "PERMISSION_DENIED" or "NOT_SUPPORTED" or "LOGIN_FAILED" or "CATALOG_MISSING" or "NOT_FOUND" or "AUTH_IDENTITY";
 
     /// <summary>The connection cannot be used again: it is dropped (and never returned to the pool).</summary>
     public static bool Breaks(string code) => code is "CONNECTION_LOST" or "TIMEOUT";
@@ -93,7 +93,7 @@ internal static class LiveErrors
     /// <summary>A sign-in that failed while the view reconnected (Kerberos or Entra): the sign-in's own message, which says
     /// what to fix; it retries with back-off.</summary>
     public static LiveProbeError SignIn(string probe, RequestException error, int maxCharacters = 2000) =>
-        Create(probe, error.Code == "AUTH_ENTRA" ? "AUTH_ENTRA" : "AUTH_KERBEROS", error.Message.Length > 0 ? error.Message : "Signing in to the server failed. It tries again.", null, maxCharacters);
+        Create(probe, error.Code is "AUTH_ENTRA" or "AUTH_IDENTITY" ? error.Code : "AUTH_KERBEROS", error.Message.Length > 0 ? error.Message : "Signing in to the server failed. It tries again.", null, maxCharacters);
 
     private static string Clip(string text, int max) => text.Length <= max ? text : text[..(max - 1)] + "…";
 }

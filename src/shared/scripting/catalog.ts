@@ -341,7 +341,8 @@ export const scriptErrorRetryable = {
   AUTH_KERBEROS: true, AUTH_UNSUPPORTED: true,
   // A pool connection that could not get a Microsoft Entra token: a sign-in that expired (connect again) or a failure that
   // may pass.
-  AUTH_ENTRA: true
+  AUTH_ENTRA: true,
+  AUTH_IDENTITY: false
 } as const satisfies Record<string, boolean>
 export type ScriptErrorCode = keyof typeof scriptErrorRetryable
 export const scriptErrorCodes = Object.keys(scriptErrorRetryable) as ScriptErrorCode[]

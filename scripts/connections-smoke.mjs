@@ -8,6 +8,7 @@ import {
   documentTab, editorGroups, editorTextbox, environmentPill, explorerLabel, part, queryBar, queryServer, queryStatus, savedConnections, selectOpenDocument, statusBar, toolbarButton
 } from './fixtures/ui.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
+import { connectionLifecycle } from './fixtures/connection-lifecycle.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -329,6 +330,9 @@ try {
     // A Microsoft Entra MFA connect to 'entra-wait' waits for the browser until the dialog's Stop names its request id.
     globalThis.entraPending = new Map()
     globalThis.entraStops = []
+    // This phase deliberately stubs the request owner. The lifecycle phase below uses the real receipt handlers.
+    ipcMain.removeHandler('varia:connections-accept')
+    ipcMain.handle('varia:connections-accept', () => ({ ok: true, value: { accepted: true, retained: true } }))
     ipcMain.removeHandler('varia:connections-cancel')
     ipcMain.handle('varia:connections-cancel', (_event, value) => {
       globalThis.entraStops.push(...value.requestIds)
@@ -361,7 +365,10 @@ try {
         if (params.server === 'cert-error' && (!params.trustServerCertificate || params.encrypt === 'strict')) return { ok: false, error: 'The certificate chain was issued by an authority that is not trusted.', code: 'SQL_ERROR', details: { number: -2146893019, state: 0, class: 20, server: 'cert-error', reason: 'certificate' } }
         if (params.server === 'cert-error') return { ok: false, error: 'Login failed after trusting the certificate.', code: 'SQL_ERROR', details: { number: 18456, state: 1, class: 14, server: 'cert-error' } }
         if (params.server === 'backend-error') return { ok: false, error: 'The backend operation failed. Verify the connection and object permissions.', code: 'BACKEND_ERROR', details: { exception: 'System.InvalidOperationException (0x80131509) > System.DllNotFoundException (0x80131524)' } }
-        return { ok: true, value: { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '17.0.fixture', color: params.color, displayName: params.displayName, commandTimeout: params.advanced?.commandTimeout ?? 0 } }
+        const principalId = 'sid:' + Buffer.from(params.username || 'fixture-account').toString('hex')
+        return { ok: true, value: { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '17.0.fixture', color: params.color, displayName: params.displayName, commandTimeout: params.advanced?.commandTimeout ?? 0,
+          generation: 1, targetId: context?.targetId ?? crypto.randomUUID(), principalId,
+          authentication: { principal: { provider: 'sqlServer', authentication: params.authentication, id: principalId } } } }
       }
       // alice@CONTOSO.COM, unless the suite holds the answer back (identityPending) to look at the dialog while it waits.
       if (method === 'connections.identity') return globalThis.identityPending ? new Promise(resolve => { globalThis.identityResolve = resolve }) : { ok: true, value: { principal: 'alice@CONTOSO.COM' } }
@@ -590,6 +597,7 @@ try {
   expect(failures).toEqual([])
   await environmentLabels()
   expect(failures).toEqual([])
+  await connectionLifecycle()
   console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, connection and database discovery failure details, the integrated identity, colors in the query and Object Explorer, timeout routing, compact sizing, keyboard focus, the eight authentication types with their fields, Stop (button and Escape) while a Microsoft Entra sign-in waits, Help › Clear Entra ID Token Cache, and Remember password (saved only as ciphertext after a connect, filled in by main for the same credentials only, kept across restarts, forgotten when rejected, unchecked or removed, and disabled without a keyring or for Windows Authentication), the two-pane layout (one bounded size, Up and Down through the lists, Password only for the types that have one, Advanced and Custom Properties collapsed with their summaries, the error at Connect without moving it, one scroll when stacked or zoomed), and environment labels (chosen in the dialog and from the server menu, saved with the entry, shown on the server, its tabs, the query bar and the status bar, dropped with another server, kept when the server is typed, cut short when long, and bounded in main).')
 } finally {
   clearTimeout(watchdog)

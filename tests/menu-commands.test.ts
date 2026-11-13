@@ -540,7 +540,7 @@ describe('Object Explorer commands', () => {
     expect(quickInput.getSnapshot()).toMatchObject({ visible: true, ariaLabel: 'Remove from Explorer', rows: [{ item: { id: 'server-l' } }] })
   })
   it('reject stale offline menus during a connection attempt and after Explorer removal', async () => {
-    const { commands, connectionTargets, quickInput, host } = connected()
+    const { commands, connectionTargets, host } = connected()
     const targetId = crypto.randomUUID()
     connectionTargets.add({ id: targetId, options: connectionTargetOptions(connectionOptions), details: { autoReconnect: 'inherit' }, inExplorer: true, resumeWanted: false })
     const offline = on({ kind: 'server' }, targetId, true)
@@ -549,11 +549,12 @@ describe('Object Explorer commands', () => {
     for (const id of ['connection.reconnect', 'connection.removeFromExplorer'] as const) expect(commands.isEnabled(id, offline)).toBe(false)
     connectionTargets.cancelConnect(targetId)
     connectionTargets.removeFromExplorer(targetId)
+    // The workspace collector forgets an Explorer-removed target with no document references.
+    await Promise.resolve()
+    expect(connectionTargets.get(targetId)).toBeUndefined()
     for (const id of ['connection.reconnect', 'connection.removeFromExplorer'] as const) {
       expect(commands.isEnabled(id, offline)).toBe(false)
-      expect(await commands.execute(id, undefined, 'palette')).toBe(true)
-      expect(quickInput.getSnapshot().rows).toEqual([])
-      quickInput.hide('cancel')
+      expect(await commands.execute(id, undefined, 'palette')).toBe(false)
     }
     expect(host.reconnect).not.toHaveBeenCalled()
     expect(host.removeConnection).not.toHaveBeenCalled()

@@ -5,6 +5,12 @@ connections are replaced. An equivalent connection reuses one Explorer entry. Di
 settings remain separate. This plan records the decisions agreed on 2026-11-12 and defines the foundation and the
 three implementation tracks that build on it.
 
+The three tracks are now assembled on `codex/connections-integration`, including main-owned receipt acceptance,
+startup scheduling, exact document attachment and the shared disconnect coordinator. The sections below retain the
+agreed design and original work split; the track handoff patches are historical references. See
+[connection roots](connections-explorer.md) for the running behavior and [architecture](architecture.md) for current
+ownership rules.
+
 ## Agreed behavior
 
 ### Connection matching and details

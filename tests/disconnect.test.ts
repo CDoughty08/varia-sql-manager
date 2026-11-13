@@ -50,6 +50,26 @@ describe('server disconnect coordinator', () => {
     expect(f.host.closeQueries).not.toHaveBeenCalled()
     expect(f.state.docs).toEqual(before.map(doc => ({ ...doc, connectionId: undefined })))
   })
+  it('does not prompt for or close a remembered query that was already disconnected on purpose', async () => {
+    const f = fixture()
+    f.state.docs = [...f.state.docs, { ...f.state.docs[0], id: 'remembered-only', connectionId: undefined }]
+    f.host.closeQueries.mockImplementation(() => { f.state.docs = f.state.docs.filter(document => !['query-1', 'query-2'].includes(document.id)) })
+    await f.coordinator.disconnect(id(1))
+    expect(f.host.confirm.mock.calls[0][0].tabs.map(tab => tab.id)).toEqual(['query-1', 'query-2'])
+    expect(f.host.prepareClose).toHaveBeenCalledWith(['query-1', 'query-2'])
+    expect(f.state.docs.some(document => document.id === 'remembered-only')).toBe(true)
+  })
+  it('still revalidates remembered query references while save choices change only the actual close plan', async () => {
+    const f = fixture()
+    f.state.docs = [...f.state.docs, { ...f.state.docs[0], id: 'remembered-only', connectionId: undefined }]
+    f.host.prepareClose.mockImplementationOnce(async () => {
+      f.state.docs = f.state.docs.map(document => document.id === 'remembered-only' ? { ...document, revision: document.revision + 1 } : document)
+      return { documents: [] }
+    })
+    expect(await f.coordinator.disconnect(id(1))).toMatchObject({ status: 'failed', error: expect.stringContaining('dependent document changed') })
+    expect(f.host.disconnect).not.toHaveBeenCalled()
+    expect(f.host.closeQueries).not.toHaveBeenCalled()
+  })
   it.each(['choice', 'save', 'session'] as const)('cancellation at %s leaves connection and every tab present', async stage => {
     const f = fixture(), before = f.state.docs
     if (stage === 'choice') f.host.confirm.mockResolvedValue('cancel')

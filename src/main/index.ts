@@ -3,6 +3,7 @@ import { basename, dirname, isAbsolute, join } from 'node:path'
 import { stat, writeFile } from 'node:fs/promises'
 import { z } from 'zod'
 import { fileURLToPath } from 'node:url'
+import { randomUUID } from 'node:crypto'
 import { BackendSupervisor } from './backend/supervisor'
 import { BackendError } from './backend/errors'
 import { backendSpawnSpec, resultMemoryEnvironment } from './backend/spawn-spec'
@@ -22,7 +23,7 @@ import { ActivityRequests } from './backend/activity-requests'
 import { cancellableRequests, connectionRequestLimits, RendererRequests } from './backend/renderer-requests'
 import { dialogQueue } from './dialog-queue'
 import { saveDefaultPath } from './file-names'
-import { connectionCancelSchema, validateRequest, validateResult } from './validation'
+import { connectionAcceptSchema, connectionCancelSchema, connectionPruneSchema, validateRequest, validateResult } from './validation'
 import { SqlFileStore, fileKinds, reloadPromptSchema, saveDocument, saveFileSchema, type TargetCache } from './sql-files'
 import { openRecentEntry, RecentFilesStore, systemRecentDocuments } from './recent-files-store'
 import { deliverLaunchFiles as deliverWaiting, droppedPathsSchema, fileArguments, LaunchQueue, maxLaunchFiles, secondInstanceSchema, type SecondInstanceData } from './launch-files'
@@ -32,6 +33,7 @@ import { LayoutStore } from './layout-store'
 import { ConnectionStore } from './connection-store'
 import { SavedPasswordStore } from './saved-passwords'
 import { ConnectionAuthenticationGuard } from './connection-authentication'
+import { ConnectionOpenService, validateOpenedConnection } from './connection-open'
 import { lockedCipher, safeStorageCipher, testCipher } from './secret-cipher'
 import { prepare as prepareConnection, settle as settleConnection, type Settled } from './connection-requests'
 import { connectionLibrary } from './connection-library'
@@ -66,7 +68,7 @@ import { sessionPrompt, sessionPromptRequestSchema } from '../shared/sessions'
 import { confirmOpenConnectionsSchema, openConnectionsAnswer, openConnectionsBox } from './open-connections'
 import { actionMessageBox, actionPromptAnswer, confirmActionBox, noLongRuns, parseLongRuns, reloadDetail, restartDetail } from './action-prompts'
 import type { LongRunState } from '../shared/long-runs.ts'
-import { maxClipboardText, type ApiResult, type OpenedFiles, type OpenSqlFile, type QueryResult, type RecoveredDocument, type ReloadAnswer, type RpcMethod, type RpcMethods } from '../shared/contracts'
+import { maxClipboardText, type ApiResult, type ConnectionOptions, type OpenedFiles, type OpenSqlFile, type QueryResult, type RecoveredDocument, type ReloadAnswer, type RpcMethod, type RpcMethods } from '../shared/contracts'
 import { preparePlan } from './plan-request'
 import { memoryEventSchema } from '../shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../shared/explorer/schema.ts'
@@ -127,6 +129,7 @@ type SessionCheckpoint = { generation: number } & (
 )
 let sessionCheckpoint: SessionCheckpoint | undefined
 const connectionAuthentication = new ConnectionAuthenticationGuard()
+let connectionOpen: ConnectionOpenService | undefined
 const reloadRequest = z.object({
   role: z.literal('reload'), session: sessionWriteSchema,
   recoveryIds: z.array(recoveryTakeSchema.shape.id.nullable()).max(sessionLimits.documents)
@@ -288,6 +291,7 @@ function resetRendererState({ relaunch = true, replacePage = false } = {}): void
   endPreview()
   resultsPort?.reset()
   resultsJobs?.reset()
+  connectionOpen?.reset()
   void (relaunch ? backend?.restart('reload') : backend?.stop())
   // Reads still finishing for the old page can only register files in its own store.
   files = new SqlFileStore(fileStoreOptions)
@@ -814,6 +818,7 @@ app.whenReady().then(async () => {
   // The Connect dialog's connect and Load databases, which its Stop cancels (a Microsoft Entra sign-in waits for the browser).
   const connectionRequests = new RendererRequests(backend, connectionRequestLimits, 'connection')
   backend.onState(state => {
+    connectionOpen?.backendState(state)
     results.backendState(state)
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:backend-state', state)
   })
@@ -824,6 +829,20 @@ app.whenReady().then(async () => {
   // Remember password: OS-protected ciphertext beside connections.json, read and decrypted only here (saved-passwords.ts).
   const secretCipher = smokeProfile ? lockedCipher() : testSeams && process.env.VARIA_TEST_SAFE_STORAGE === 'test' ? testCipher() : safeStorageCipher(safeStorage, process.platform)
   const savedPasswords = new SavedPasswordStore(join(app.getPath('userData'), 'saved-passwords.json'), secretCipher)
+  connectionOpen = new ConnectionOpenService({
+    authentication: connectionAuthentication, savedPasswords, connections: connectionStore,
+    generation: () => backend.current?.generation,
+    open: async (params, generation, signal) => {
+      const requestId = randomUUID(), load = connectionRequests.begin(requestId)
+      const cancel = () => { connectionRequests.cancel([requestId]) }
+      signal.addEventListener('abort', cancel, { once: true })
+      if (signal.aborted) cancel()
+      try { return await validateOpenedConnection(await backend.request('connections.connect', params as ConnectionOptions, { generation, onSent: load.sent }), generation, handle => backend.request('connections.disconnect', { connectionId: handle.id }, { generation: handle.generation })) }
+      finally { signal.removeEventListener('abort', cancel); load.end() }
+    },
+    close: handle => backend.request('connections.disconnect', { connectionId: handle.id }, { generation: handle.generation })
+  })
+  connectionOpen.backendState(backend.state)
   const library = connectionLibrary({ connections: connectionStore, savedPasswords })
   // The window's first paint uses the chosen theme; initialize() gives up waiting after 1.5 s and applies late results live.
   appearance = new AppearanceService({ userData: app.getPath('userData'), nativeTheme })
@@ -966,6 +985,16 @@ app.whenReady().then(async () => {
     }
     try {
       const validated = validateRequest(method, params)
+      if (method === 'connections.connect') {
+        if (!connectionOpen) throw new Error('The connection owner is unavailable.')
+        const outcome = await connectionOpen.connect(validated as ConnectionOptions, context)
+        if (!outcome.ok) return { ...failure(outcome.error, 'Connection failed.'), ...(outcome.passwordForgotten ? { passwordForgotten: true as const } : {}), ...(outcome.credentialRejected ? { credentialRejected: true as const } : {}), ...(outcome.connectionFailure ? { connectionFailure: outcome.connectionFailure } : {}) }
+        return { ok: true, value: outcome.value }
+      }
+      if (method === 'connections.disconnect') {
+        if (!connectionOpen) throw new Error('The connection owner is unavailable.')
+        return { ok: true, value: await connectionOpen.disconnect((validated as { connectionId: string }).connectionId) }
+      }
       const prepared = await prepareConnection(method, validated, context, { savedPasswords, authentication: connectionAuthentication })
       try {
       // Only main creates the compressed wire form; the renderer cannot supply compressed data or an encoding.
@@ -1016,7 +1045,18 @@ app.whenReady().then(async () => {
   // Closing an Activity Monitor session's Details: its read stops in SQL Server (an attention) and answers CANCELLED.
   handle('varia:activity-cancel', value => ({ cancelled: activityRequests.cancel(activityCancelSchema.parse(value).requestIds) }))
   // The Connect dialog's Stop: a connect waiting for SQL Server or for a Microsoft Entra sign-in in the browser ends at once.
-  handle('varia:connections-cancel', value => ({ cancelled: connectionRequests.cancel(connectionCancelSchema.parse(value).requestIds) }))
+  handle('varia:connections-cancel', value => {
+    const ids = connectionCancelSchema.parse(value).requestIds
+    return { cancelled: (connectionOpen?.cancel(ids) ?? 0) + connectionRequests.cancel(ids) }
+  })
+  handle('varia:connections-accept', value => {
+    if (!connectionOpen) throw new Error('The connection owner is unavailable.')
+    return connectionOpen.accept(connectionAcceptSchema.parse(value).requestId)
+  })
+  handle('varia:connections-prune', value => {
+    if (!connectionOpen) throw new Error('The connection owner is unavailable.')
+    return { pruned: connectionOpen.pruneTargets(connectionPruneSchema.parse(value).targetIds) }
+  })
   handle('varia:entra-cache-clear', () => clearEntraTokenCache({
     confirm: async () => (await pageDialog((window, signal) => dialog.showMessageBox(window, { ...clearEntraPrompt, buttons: [...clearEntraPrompt.buttons], signal }), { response: 1, checkboxChecked: false }, true)).response === 0,
     clear: () => backend.request('entra.cache.clear', {})

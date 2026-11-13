@@ -52,6 +52,12 @@ default. While it is off, pinned tabs still reopen, and a close asks about unsav
 
 ## Storage
 
+Kept query text and nonsecret connection metadata (including server, database and account identifiers) are local JSON,
+protected by the operating system's file access controls rather than whole-file encryption. Remembered passwords use
+the separate OS-protected credential store; session files contain only opaque revision references. Unremembered
+passwords and Entra tokens are never kept. Disabling query restoration does not remove the remembered connection
+workspace; disconnect/remove actions and reconnect preferences control its lifecycle.
+
 `<userData>/Session/session.json` (`src/main/session-store.ts`): 0700 folder and 0600 file on POSIX, atomic writes,
 strict zod schemas on both the request and the file, invalid files quarantined. Each start deletes quarantined files
 older than Keep AutoRecover information for, as AutoRecover's own purge does, and every interrupted write's temporary

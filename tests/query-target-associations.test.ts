@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { connectionTargetOptions, type ConnectionAuthentication } from '../src/shared/connection-targets'
-import { ConnectionTargetService } from '../src/renderer/src/services/connection-targets'
 import { TargetService } from '../src/renderer/src/services/targets'
 import { queryConnectionPresentation } from '../src/renderer/src/query-connection'
 import { queryContextModel } from '../src/renderer/src/query-context'
@@ -14,13 +13,12 @@ const proof: ConnectionAuthentication = { principal: { provider: 'sqlServer', au
 const cleanups: (() => void)[] = []
 afterEach(() => cleanups.splice(0).forEach(cleanup => cleanup()))
 function fixture() {
-  const workbench = workbenchFixture(), registry = new ConnectionTargetService()
+  const workbench = workbenchFixture(), registry = workbench.connectionTargets
   cleanups.push(workbench.dispose)
   registry.markLostBefore(1)
   for (const value of [1, 2]) registry.add({ id: id(value), options: connectionTargetOptions(connectionOptions), details: { displayName: 'Reporting', environment: 'Production', color: '#123456', autoReconnect: 'inherit' }, inExplorer: true, resumeWanted: true })
-  const handle = id(10), operation = registry.beginConnect(id(1), 1, id(20))!
-  registry.completeConnect(operation, { id: handle, generation: 1 }, proof)
-  workbench.connections.add({ ...connectionInfo(handle), generation: 1 }, connectionOptions)
+  const handle = id(10), attempt = workbench.connections.beginConnect(connectionOptions, 1, id(1))!
+  workbench.connections.accept({ ...connectionInfo(handle), generation: 1 }, connectionOptions, id(1), proof, attempt)
   const targets = new TargetService(workbench.documents, workbench.queries, workbench.connections, workbench.files, registry)
   return { ...workbench, registry, targets, handle }
 }
@@ -41,16 +39,20 @@ describe('exact query target associations', () => {
     expect(documents.get(queries[2].id)?.connectionId).toBeUndefined()
   })
   it('keeps the target and database through server disconnect, and query-only disconnect prevents attachment', async () => {
-    const { documents, targets, handle } = fixture()
+    const { documents, targets, handle, registry, connections } = fixture()
     const query = documents.create('query.sql', '', 'Orders', handle)
     targets.rememberConnection(handle, id(1))
-    targets.disconnectTarget(id(1), handle)
+    const disconnect = registry.beginDisconnect(id(1), id(21))!
+    registry.completeDisconnect(disconnect)
+    targets.detached(id(1), { id: handle, generation: 1 })
     expect(documents.get(query.id)).toMatchObject({ targetId: id(1), attachWanted: true, database: 'Orders', connectionId: undefined })
     await targets.changeConnection(query.id, undefined)
-    targets.attachTarget(id(1), handle)
+    const next = id(11), attempt = connections.beginConnect(connectionOptions, 1, id(1))!
+    connections.accept(connectionInfo(next), connectionOptions, id(1), proof, attempt)
+    targets.attachTarget(id(1), next)
     expect(documents.get(query.id)).toMatchObject({ targetId: id(1), attachWanted: false, database: 'Orders', connectionId: undefined })
-    await targets.changeConnection(query.id, handle)
-    expect(documents.get(query.id)).toMatchObject({ targetId: id(1), attachWanted: true, database: 'Orders', connectionId: handle })
+    await targets.changeConnection(query.id, next)
+    expect(documents.get(query.id)).toMatchObject({ targetId: id(1), attachWanted: true, database: 'Orders', connectionId: next })
   })
   it('never infers an association or remembered database from a matching legacy server name', async () => {
     const { documents, targets, connections, handle } = fixture()
@@ -105,7 +107,7 @@ describe('exact query target associations', () => {
     const { documents, targets, connections, handle } = fixture()
     const query = documents.create('query.sql', '', 'Orders')
     documents.update(query.id, { targetId: id(1), attachWanted: true })
-    connections.replace(handle, { ...connectionInfo(handle), generation: 2 }, connectionOptions)
+    vi.spyOn(connections, 'get').mockReturnValue({ ...connectionInfo(handle), generation: 2, targetId: id(1), options: connectionOptions })
     expect(targets.targetForConnection(handle)).toBeUndefined()
     targets.attachTarget(id(1), handle)
     expect(documents.get(query.id)).toMatchObject({ database: 'Orders', targetId: id(1), attachWanted: true })
@@ -115,7 +117,7 @@ describe('exact query target associations', () => {
     const { registry, connections, handle } = fixture()
     const operation = registry.beginDisconnect(id(1), id(21))!
     registry.completeDisconnect(operation)
-    const connection = connections.get(handle)!, target = registry.get(id(1))!
+    const connection = { ...connections.get(handle)!, lost: undefined }, target = registry.get(id(1))!
     expect(connection.lost).toBeUndefined()
     expect(queryConnectionPresentation({ targetId: id(1) }, connection, target).disconnected).toBe(true)
     const context = queryContextModel({ connectionId: handle, targetId: id(1), target, database: 'Orders', connections: [connection], databases: [], query: true, running: false, busy: false })

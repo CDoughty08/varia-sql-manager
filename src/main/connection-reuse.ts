@@ -69,6 +69,8 @@ export class ConnectionReuseCoordinator<T extends BackendConnectionHandle> {
   readonly #live = new Map<string, Live<T>>()
   readonly #pending = new Set<Pending<T>>()
   readonly #joins = new Map<string, Pending<T>>()
+  /** Ephemeral credential-sensitive affinity, never a transport owner or a persisted password verifier. */
+  readonly #offline = new Map<ConnectionIdentityKey, { targetId: string; principal: ConnectionPrincipalEvidence }>()
   #generation = 0
   #disposed = false
 
@@ -86,6 +88,7 @@ export class ConnectionReuseCoordinator<T extends BackendConnectionHandle> {
       ...(request.principal ? { principal: { ...request.principal } } : {}),
       ...(request.expectedPrincipal ? { expectedPrincipal: { ...request.expectedPrincipal } } : {}) }
     const key = this.#key(candidate.options, candidate.principal)
+    if (key && [...this.#live.values()].some(value => value.key === key && value.disconnecting)) return Promise.resolve({ status: 'busy' })
     const live = key ? this.#matchingLive(key) : undefined
     if (live) {
       if ((candidate.expectedPrincipal && !samePrincipal(candidate.expectedPrincipal, live.principal))
@@ -129,7 +132,11 @@ export class ConnectionReuseCoordinator<T extends BackendConnectionHandle> {
   finishDisconnect(connection: BackendConnectionHandle, succeeded: boolean): boolean {
     const key = handleKey(connection), live = this.#live.get(key)
     if (!live?.disconnecting) return false
-    if (succeeded) this.#live.delete(key)
+    if (succeeded) {
+      this.#live.delete(key)
+      this.#offline.set(live.key, { targetId: live.targetId, principal: live.principal })
+      if (this.#offline.size > connectionTargetLimits.targets) this.#offline.delete(this.#offline.keys().next().value!)
+    }
     else live.disconnecting = false
     return true
   }
@@ -137,12 +144,19 @@ export class ConnectionReuseCoordinator<T extends BackendConnectionHandle> {
   /** Removal of an offline target. A live target must complete its disconnect first. */
   removeTarget(targetId: string): boolean {
     this.cancelTarget(targetId)
-    return ![...this.#live.values()].some(value => value.targetId === targetId)
+    if ([...this.#live.values()].some(value => value.targetId === targetId)) return false
+    for (const [key, affinity] of this.#offline) if (affinity.targetId === targetId) this.#offline.delete(key)
+    return true
+  }
+
+  hasTarget(targetId: string): boolean {
+    return [...this.#live.values()].some(value => value.targetId === targetId) || [...this.#pending].some(value => !value.cancelled && (value.request.targetId === targetId || [...value.waiters].some(waiter => waiter.targetId === targetId)))
   }
 
   markLostBefore(generation: number): void {
     if (!Number.isSafeInteger(generation) || generation <= this.#generation) return
     this.#generation = generation
+    this.#offline.clear()
     for (const pending of this.#pending) if (pending.request.generation < generation) this.#cancel(pending)
     for (const [key, live] of this.#live) if (live.connection.generation < generation) this.#live.delete(key)
   }
@@ -153,6 +167,7 @@ export class ConnectionReuseCoordinator<T extends BackendConnectionHandle> {
     this.#disposed = true
     for (const pending of this.#pending) this.#cancel(pending)
     this.#live.clear()
+    this.#offline.clear()
     this.#identity.dispose()
   }
 
@@ -228,14 +243,19 @@ export class ConnectionReuseCoordinator<T extends BackendConnectionHandle> {
           // Cleanup crosses an await: a disconnect or generation change may have taken that handle in the meantime.
           outcome = !pending.cancelled && !this.#disposed && this.#live.get(handleKey(equivalent.connection)) === equivalent
             && !equivalent.disconnecting && request.generation === this.#generation ? this.#outcome(equivalent, 'reused') : { status: 'cancelled' }
-        } else if (!key || occupied || [...this.#live.values()].some(value => value.targetId === request.targetId)) {
+        } else if (!key || occupied || [...this.#live.values()].some(value => value.targetId === request.targetId || value.key === key && value.disconnecting)) {
           await this.#cleanup(answer.connection)
-          outcome = { status: occupied ? 'busy' : 'identity-changed' }
+          outcome = { status: key ? 'busy' : 'identity-changed' }
         } else if (this.#live.size >= connectionTargetLimits.targets) {
           await this.#cleanup(answer.connection)
           outcome = { status: 'busy' }
         } else {
-          const live: Live<T> = { targetId: request.targetId, key, connection: Object.freeze({ ...answer.connection }), principal: Object.freeze({ ...answer.principal }), disconnecting: false }
+          const affinity = this.#offline.get(key)
+          const targetId = affinity && samePrincipal(affinity.principal, answer.principal) && ![...this.#live.values()].some(value => value.targetId === affinity.targetId) ? affinity.targetId : request.targetId
+          const live: Live<T> = { targetId, key, connection: Object.freeze({ ...answer.connection }), principal: Object.freeze({ ...answer.principal }), disconnecting: false }
+          // Only the latest binding of a target can supply offline affinity. An old credential must not attach a
+          // second handle to that target after an explicit credential update opened a different live key.
+          for (const [offlineKey, value] of this.#offline) if (offlineKey === key || value.targetId === targetId) this.#offline.delete(offlineKey)
           this.#live.set(handleKey(live.connection), live)
           outcome = this.#outcome(live, 'connected')
         }

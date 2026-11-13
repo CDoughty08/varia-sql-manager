@@ -433,6 +433,7 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
   /** Legacy server-name reassociation is refused; reconnect callers must supply durable identity. */
   follows(_id: string, _server: string): boolean { return false }
   canFollowTarget(id: string, targetId: string): boolean { return this.targetBindings.canFollowTarget(id, targetId) }
+  coalesceTarget(id: string, fromTargetId: string, toTargetId: string): boolean { return this.targetBindings.coalesceTarget(id, fromTargetId, toTargetId) }
   /** A Stop Operation the user confirmed still goes through when its document closes: only its answer is dropped. */
   closed(id: string): void {
     this.targetBindings.forget(id)

@@ -11,6 +11,7 @@ import { stylesheetRules } from './fixtures/css-rules'
 import { selectorParts } from './fixtures/css-cascade'
 import { colorKeys, cssVariable } from '../src/shared/theme/registry'
 import { contrastPairs } from '../src/shared/theme/contrast-pairs'
+import { serverConnectionStatus } from '../src/renderer/src/explorer/connection-state'
 
 // A server row draws its connection colour through the theme, which server rendering has no store for.
 vi.mock('../src/renderer/src/core/WorkbenchContext', async original => ({ ...await original<object>(), useConnectionAccent: () => undefined }))
@@ -87,6 +88,20 @@ describe('Object Explorer rows', () => {
       .toBe('Database\nThe database is not available. Bring it online, then refresh Databases.')
     expect(rowDescription(node({ kind: 'folder', folder: 'tables', label: 'Tables' }))).toBeUndefined()
     expect(rowDescription(node({ detail: 'x'.repeat(2000) }))).toHaveLength(512)
+  })
+  it('shows automatic reconnect progress and actionable failure reasons from the target lifecycle', () => {
+    const pending = node({ kind: 'server', label: 'Reporting', lost: true, connectionLifecycle: { state: 'connecting', attemptId: '00000000-0000-4000-8000-000000000001' } })
+    expect(rowName(pending)).toBe('Reporting (Connecting…)')
+    expect(connectionState(pending)).toBe('connecting')
+    expect(rowDescription(pending)).toContain('A connection attempt is in progress.')
+    const missing = { ...pending, connectionLifecycle: { state: 'disconnected' as const, reason: 'credentials-required' as const } }
+    expect(shownSublabel(missing)).toBe('(Disconnected · Credentials required)')
+    expect(rowTooltip(missing)).toContain('Choose Reconnect to enter credentials')
+    expect(serverConnectionStatus(missing)?.action).toBe('Enter credentials')
+    const signin = { ...missing, connectionLifecycle: { state: 'disconnected' as const, reason: 'sign-in-required' as const } }
+    expect(rowName(signin)).toContain('Sign-in required')
+    expect(serverConnectionStatus(signin)?.action).toBe('Sign in')
+    expect(serverConnectionStatus({ ...pending, lost: false, connectionLifecycle: { state: 'disconnecting', attemptId: '00000000-0000-4000-8000-000000000002', handle: { id: '00000000-0000-4000-8000-000000000003', generation: 1 } } })?.label).toBe('Disconnecting…')
   })
   it('show a note another service keeps on a node after its sublabel, and its sentence in the tooltip and description', () => {
     const noted = node({ kind: 'ssisCatalog', label: 'SSISDB', note: { label: '(not updating)', sentence: 'Live updates stopped. This login cannot read the SSIS Catalog.' } })

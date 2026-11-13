@@ -322,6 +322,17 @@ describe('command execution', () => {
 const snapshot = (patch: Partial<DocumentSnapshot> = {}): DocumentSnapshot => ({ documents: [], activeId: '', busy: false, ...patch })
 const doc = (id: string, connectionId?: string) => ({ id, name: `${id}.sql`, database: 'master', connectionId, dirty: false, savedVersionId: 1 })
 describe('context keys', () => {
+  it('uses target lifecycle for progress and restored-query recovery without attaching a deliberately detached query', () => {
+    const base = { platform: 'win32' as const, queries: {}, quickInputVisible: false, wordWrap: false, backendStatus: 'ready' as const }
+    const targetId = crypto.randomUUID(), handle = { id: crypto.randomUUID(), generation: 1 }
+    const attached = snapshot({ documents: [{ ...doc('a', handle.id), targetId }], activeId: 'a' })
+    const connection = { ...handle, targetId, lifecycle: { state: 'disconnecting' as const, handle, attemptId: crypto.randomUUID() } }
+    expect(computeContextKeys({ ...base, documents: attached, connections: [connection] })).toMatchObject({ hasConnection: false, hasLostConnection: false, activeDocumentConnected: false, anyDocumentConnected: false })
+    const restored = snapshot({ documents: [{ ...doc('a'), targetId, attachWanted: false }], activeId: 'a' })
+    expect(computeContextKeys({ ...base, documents: restored, connections: [{ ...connection, lost: true, lifecycle: { state: 'disconnected' } }] })).toMatchObject({ hasConnection: false, hasLostConnection: true, activeDocumentConnected: false, activeConnectionLost: true })
+    expect(computeContextKeys({ ...base, documents: restored, connections: [{ ...connection, lifecycle: { state: 'connected', handle } }] })).toMatchObject({ hasConnection: true, activeDocumentConnected: false, activeConnectionLost: false })
+    expect(computeContextKeys({ ...base, documents: restored, connections: [{ ...connection, lost: true, lifecycle: { state: 'connecting', attemptId: crypto.randomUUID() } }] })).toMatchObject({ hasLostConnection: false, activeConnectionLost: false })
+  })
   it('derive state keys from service snapshots', () => {
     const base = { platform: 'win32' as const, queries: {}, connections: [], quickInputVisible: false, wordWrap: false, backendStatus: 'starting' as const }
     expect(computeContextKeys({ ...base, documents: snapshot() })).toMatchObject({ isWindows: true, hasActiveDocument: false, multipleDocuments: false, documentBusy: false, hasConnection: false, activeDocumentConnected: false, queryRunning: false, editorFocus: false, activePanel: '' })

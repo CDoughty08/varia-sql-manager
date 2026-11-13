@@ -4,7 +4,7 @@ import type { DocumentService } from './documents'
 import { unfinished, type FileService } from './files'
 import type { QueryService } from './queries'
 import type { ConnectionTargetService } from './connection-targets'
-import type { ConnectionTarget } from '../../../shared/connection-targets'
+import type { BackendConnectionHandle, ConnectionTarget } from '../../../shared/connection-targets'
 
 export type TargetPatch = Partial<Pick<QueryDocument, 'connectionId' | 'database' | 'targetId' | 'attachWanted'>>
 const noTargets: readonly ConnectionTarget[] = Object.freeze([])
@@ -14,7 +14,7 @@ const errorText = (error: unknown): string => error instanceof Error ? error.mes
 export class TargetService {
   constructor(
     private readonly documents: DocumentService,
-    private readonly queries: Pick<QueryService, 'isRunning' | 'mayHaveTransaction' | 'confirmSessions'>,
+    private readonly queries: Pick<QueryService, 'isRunning' | 'mayHaveTransaction' | 'confirmSessions'> & Partial<Pick<QueryService, 'sessionEnded'>>,
     private readonly connections: Pick<ConnectionService, 'get'>,
     private readonly files: Pick<FileService, 'clearError' | 'reportError'>,
     private readonly registry?: Pick<ConnectionTargetService, 'get' | 'getSnapshot' | 'subscribe'>
@@ -79,32 +79,52 @@ export class TargetService {
       this.documents.update(document.id, { targetId, ...isQueryDocument(document) ? { attachWanted: true } : {} })
   }
   /** Reconnect opens fresh sessions for queries that still want this exact target, preserving their own databases. */
-  attachTarget(targetId: string, connectionId: string): void {
+  attachTarget(targetId: string, connectionId: string, includeCustom = false): void {
     if (this.targetForConnection(connectionId) !== targetId) return
     for (const document of this.documents.getSnapshot().documents) {
-      if (!isQueryDocument(document) || document.targetId !== targetId || !document.attachWanted || document.connectionId === connectionId) continue
-      this.documents.update(document.id, { connectionId, sessionNotice: 'restarted' })
+      if (document.targetId !== targetId || document.connectionId === connectionId) continue
+      if (isQueryDocument(document)) {
+        if (document.attachWanted) this.documents.update(document.id, { connectionId, sessionNotice: 'restarted' })
+      } else if (includeCustom && this.documents.isCustom(document.id) && this.documents.canFollowTarget(document.id, targetId))
+        this.documents.update(document.id, { connectionId })
     }
   }
-  /** The coordinator has ended sessions already. Keep intent, individual databases and retained result provenance. */
-  disconnectTarget(targetId: string, connectionId: string): void {
+  /** Main authenticated an equivalent offline target. This never migrates a live session or infers identity from names. */
+  coalesceTarget(fromTargetId: string, toTargetId: string, connectionId: string, includeCustom = false): void {
+    if (fromTargetId === toTargetId || this.targetForConnection(connectionId) !== toTargetId) return
+    const source = this.registry?.get(fromTargetId)
+    if (!source || source.lifecycle.state === 'connected' || source.lifecycle.state === 'disconnecting') return
     for (const document of this.documents.getSnapshot().documents) {
-      if (!isQueryDocument(document) || document.targetId !== targetId || document.connectionId !== connectionId) continue
-      this.documents.update(document.id, { connectionId: undefined, sessionNotice: 'restarted' })
+      if (document.targetId !== fromTargetId) continue
+      if (isQueryDocument(document)) {
+        this.documents.update(document.id, { targetId: toTargetId, connectionId: document.attachWanted ? connectionId : undefined,
+          lastServer: undefined, ...document.attachWanted ? { sessionNotice: 'restarted' } : {} })
+      } else if (this.documents.isCustom(document.id) && this.documents.coalesceTarget(document.id, fromTargetId, toTargetId)) {
+        this.documents.update(document.id, { targetId: toTargetId, connectionId: includeCustom ? connectionId : undefined })
+      }
+    }
+  }
+  /** Complete server teardown cleared the current handle; preserve exact associations and retained output. */
+  detached(targetId: string, handle: BackendConnectionHandle): void {
+    const target = this.registry?.get(targetId), connection = this.connections.get(handle.id)
+    if (!target || target.lifecycle.state !== 'disconnected' || !connection || connection.targetId !== targetId || connection.generation !== handle.generation) return
+    for (const document of this.documents.getSnapshot().documents) {
+      if (document.connectionId !== handle.id || document.targetId !== undefined && document.targetId !== targetId) continue
+      if (isQueryDocument(document)) {
+        this.documents.update(document.id, { connectionId: undefined, sessionNotice: 'restarted' })
+        this.queries.sessionEnded?.(document.id)
+      } else if (this.documents.isCustom(document.id)) this.documents.update(document.id, { connectionId: undefined })
     }
   }
   /** Compatibility for an explicit Reconnect of an exact prior handle. Registry-backed custom documents follow only
    *  the same target; their providers own draft state. Restored queries attach through attachTarget instead. */
   retarget(oldId: string, newId: string): void {
     const targetId = this.targetForConnection(newId)
-    const server = this.connections.get(newId)?.server
     for (const document of this.documents.getSnapshot().documents) {
       if (document.connectionId !== oldId) continue
       if (document.targetId && document.targetId !== targetId) continue
       if (isQueryDocument(document)) this.documents.update(document.id, { connectionId: newId, ...targetId ? { targetId, attachWanted: document.attachWanted ?? true } : {}, sessionNotice: 'restarted' })
-      else if (targetId && document.targetId === targetId && this.documents.isCustom(document.id)) this.documents.update(document.id, { connectionId: newId })
-      // The legacy adapter is retained only until the workbench supplies the registry and the document owners migrate.
-      else if (!this.registry && server !== undefined && this.documents.isCustom(document.id) && this.documents.follows(document.id, server)) this.documents.update(document.id, { connectionId: newId })
+      else if (targetId && document.targetId === targetId && this.documents.isCustom(document.id) && this.documents.canFollowTarget(document.id, targetId)) this.documents.update(document.id, { connectionId: newId })
     }
   }
   /** Disconnects every query that is not running, ending its session (open transactions are asked about once, first);

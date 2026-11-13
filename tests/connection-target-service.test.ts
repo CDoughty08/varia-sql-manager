@@ -208,4 +208,37 @@ describe('durable connection targets', () => {
     expect(service.completeConnect(retry, handle(), { ...authentication, accessToken: 'never-keep' } as ConnectionAuthentication)).toEqual({ status: 'rejected', reason: 'unknown', dispose: handle() })
     expect(service.get(id(1))?.expectedPrincipal).toEqual(authentication.principal)
   })
+
+  it('marks only an authoritatively lost exact handle and preserves its existing resume intent', () => {
+    const service = connected()
+    service.add(record(2))
+    const other = service.beginConnect(id(2), 1, id(20))!
+    service.completeConnect(other, handle(51), authentication)
+    expect(service.markHandleLost(handle(50, 2))).toBe(false)
+    expect(service.get(id(1))?.lifecycle.state).toBe('connected')
+    expect(service.markHandleLost(handle(), 'network')).toBe(true)
+    expect(service.get(id(1))).toMatchObject({ resumeWanted: true, lifecycle: { state: 'lost', reason: 'network' } })
+    expect(service.get(id(2))?.lifecycle.state).toBe('connected')
+    const disconnect = service.beginDisconnect(id(2), id(21))!
+    expect(service.markHandleLost(handle(51))).toBe(true)
+    expect(service.get(id(2))?.resumeWanted).toBe(false)
+    expect(service.completeDisconnect(disconnect)).toBe(false)
+  })
+
+  it('reconciles only a main-proven credential reference for the same live handle and established principal', () => {
+    const service = connected(), reference = { profileId: id(200), revision: id(201) }
+    const before = service.getSnapshot()
+    expect(service.reconcileAuthentication(handle(50, 2), { ...authentication, credential: reference })).toBe(false)
+    expect(service.reconcileAuthentication(handle(), { principal: { ...authentication.principal, id: 'other' }, credential: reference })).toBe(false)
+    expect(service.getSnapshot()).toBe(before)
+    expect(service.reconcileAuthentication(handle(), { ...authentication, credential: reference })).toBe(true)
+    expect(service.get(id(1))?.credential).toEqual(reference)
+    expect(before[0].credential).toBeUndefined()
+    expect(service.reconcileAuthentication(handle(), authentication)).toBe(true)
+    expect(service.get(id(1))?.credential).toEqual(reference)
+    expect(service.reconcileAuthentication(handle(), { ...authentication, credential: null })).toBe(true)
+    expect(service.get(id(1))?.credential).toBeUndefined()
+    service.beginDisconnect(id(1), id(20))
+    expect(service.reconcileAuthentication(handle(), { ...authentication, credential: reference })).toBe(false)
+  })
 })

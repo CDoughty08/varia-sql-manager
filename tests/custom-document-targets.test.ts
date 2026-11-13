@@ -34,6 +34,19 @@ describe('custom document exact target binding', () => {
     expect(bindings.matchesConnection('document', 'old')).toBe(false)
   })
 
+  it('migrates only the existing exact binding after main proves canonical target equivalence', () => {
+    const targetIds: Record<string, string> = { old: 'provisional', current: 'canonical' }
+    const bindings = new CustomDocumentTargets({ targetIdOf: id => targetIds[id] })
+    bindings.bind('document', 'old')
+    expect(bindings.coalesceTarget('document', 'unrelated', 'canonical')).toBe(false)
+    expect(bindings.canFollowTarget('document', 'provisional')).toBe(true)
+    expect(bindings.coalesceTarget('document', 'provisional', 'canonical')).toBe(true)
+    expect(bindings.canFollowTarget('document', 'provisional')).toBe(false)
+    expect(bindings.matchesConnection('document', 'current')).toBe(true)
+    bindings.bind('legacy', 'unknown')
+    expect(bindings.coalesceTarget('legacy', 'provisional', 'canonical')).toBe(false)
+  })
+
   it('preserves a designer draft, enables only its exact reconnected target, and refuses name-only reassociation', async () => {
     const { documents } = documentFixture()
     const connections = new ConnectionService()

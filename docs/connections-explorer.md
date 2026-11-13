@@ -21,10 +21,24 @@ the target's labels and future reconnect preference. **Keep Current Details** se
 details. **Cancel** returns to Connect. Neither reuse choice replaces an existing SQL session. If the connection or
 details change while the dialog is open, choose again using its latest state.
 
-The Connect Getting Started guide covers reconnect and removal through live command references. The Run Query guide
-and fictional samples need no content change: query execution remains explicit and samples never connect or run SQL.
+When queries are attached, Disconnect asks whether to keep their tabs, close query tabs or cancel. Closing asks about
+every unsaved query and transaction before disconnecting or removing any tab. Explicit file saves remain saved if a
+later choice is cancelled. Running queries require an explicit cancellation choice; completed statements may already
+have taken effect. An active restore or document Apply operation must finish or be stopped before disconnecting.
 
-This implementation track exposes the renderer adoption and disconnect hooks plus main's live/pending reuse owner.
-The request/authentication, durable query associations, reconnect scheduler and disconnect preflight tracks must be
-integrated before the complete planned lifecycle is shipped. Exact integration requirements are in
-[the main and renderer seam](connections-explorer-main-seam.md).
+Keep Tabs retains query text, dirty state, database, remembered target and available completed results. Close Query
+Tabs leaves custom-document drafts open. A query deliberately disconnected through its own command keeps its target
+label but is not automatically reattached by a later server reconnect. Query Change Connection remains the explicit
+way to choose another target or clear it.
+
+Tools > Options > Environment > Connections controls automatic startup/reload reconnect. Each connection's Custom
+Properties can inherit that default or choose On/Off. Only servers left connected attempt resume; an intentional
+Disconnect stays respected. Startup restores labels immediately, attempts eligible targets in the background, and
+leaves failures available for explicit Reconnect. Missing credentials, unavailable OS secret storage, sign-in, network,
+certificate and database errors do not block unrelated targets. Browser sign-in remains explicit. OS keychain access
+may still request unlock. Query buffers are never executed automatically.
+
+Saved credentials use the existing OS-protected vault. Connection snapshots contain nonsecret settings and opaque
+credential revision references. Server, database and account metadata remain readable in local session JSON under the
+user's file permissions; the complete workspace is not encrypted. Account/destination changes cannot silently redirect existing query tabs or custom
+drafts. See [hot exit and query tabs](hot-exit.md#connections) for restoration and local storage details.

@@ -1,7 +1,7 @@
 import type { ConnectionInfo, ConnectionOptions } from '../../../shared/contracts'
-import { connectionDetailsSchema, connectionTargetOptions, type ConnectionAuthentication, type ConnectionDetails, type ConnectionLifecycle, type ConnectionFailureReason } from '../../../shared/connection-targets'
+import { connectionAuthenticationSchema, connectionDetailsSchema, connectionTargetOptions, type ConnectionAuthentication, type ConnectionDetails, type ConnectionLifecycle, type ConnectionFailureReason } from '../../../shared/connection-targets'
 import { SnapshotStore } from '../core/store'
-import { ConnectionTargetService, type ConnectionCompletion, type ConnectionOperation } from './connection-targets'
+import { ConnectionTargetService, type ConnectionCompletion, type ConnectionCredentialIntent, type ConnectionOperation } from './connection-targets'
 
 /** Connection settings without the password, which the renderer never keeps: a reconnect asks for it again, unless main
  *  remembers one for the same credentials (Remember password) and fills it in itself. */
@@ -49,11 +49,11 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
     this.legacy = [...this.legacy, { ...this.entry(info, options), targetId: crypto.randomUUID(), inExplorer: true }]
     this.refresh()
   }
-  beginConnect(options: ConnectionOptions, generation: number, targetId: string = crypto.randomUUID(), details = detailsOf(options)): ConnectionAttempt | undefined {
+  beginConnect(options: ConnectionOptions, generation: number, targetId: string = crypto.randomUUID(), details = detailsOf(options), credentialIntent: ConnectionCredentialIntent = 'preserve'): ConnectionAttempt | undefined {
     this.markLostBefore(generation)
     const registry = this.connectionTargets, created = !registry.get(targetId)
     if (created && !registry.add({ id: targetId, options: connectionTargetOptions(options), details, inExplorer: true, resumeWanted: true })) return undefined
-    const operation = registry.beginConnect(targetId, generation, crypto.randomUUID())
+    const operation = registry.beginConnect(targetId, generation, crypto.randomUUID(), credentialIntent)
     if (!operation && created) { registry.removeFromExplorer(targetId); registry.pruneUnreferenced(new Set(registry.getSnapshot().filter(target => target.id !== targetId).map(target => target.id))) }
     return operation ? { operation, created, targetEpochs: new Map(this.targetEpochs) } : undefined
   }
@@ -75,6 +75,11 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
     this.markLostBefore(info.generation)
     const registry = this.connectionTargets
     const current = registry.get(targetId)
+    const proof = connectionAuthenticationSchema.safeParse(authentication)
+    if (!proof.success) {
+      const owner = this.getSnapshot().find(value => this.isLive(value.id) && value.id === info.id && value.generation === info.generation)
+      return owner?.targetId ? { status: 'in-use', targetId: owner.targetId } : { status: 'rejected', reason: 'unknown', dispose: { id: info.id, generation: info.generation } }
+    }
     let operation = attempt?.operation
     const validAttempt = operation && registry.operation(operation.targetId) === operation && operation.generation === info.generation
     const lifecycle = current?.lifecycle
@@ -94,8 +99,11 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
       operation = registry.beginConnect(targetId, info.generation, crypto.randomUUID())
       if (!operation) return { status: 'stale', dispose: { id: info.id, generation: info.generation } }
     }
-    const result = registry.completeConnect(operation, { id: info.id, generation: info.generation }, authentication)
+    // Main's explicit vault intent can update only the credential reference after the account/handle is accepted.
+    // Omitting it from the first completion preserves the old reference until same-principal reconciliation succeeds.
+    const result = registry.completeConnect(operation, { id: info.id, generation: info.generation }, info.credentialUpdated ? { principal: proof.data.principal } : proof.data)
     if (result.status === 'accepted' || result.status === 'already-current') {
+      if (info.credentialUpdated) registry.reconcileAuthentication({ id: info.id, generation: info.generation }, proof.data)
       this.metadata.set(targetId, info)
       this.legacyDetails.delete(targetId)
       this.legacy = this.legacy.filter(connection => connection.targetId !== targetId && (connection.id !== info.id || connection.generation !== info.generation))
@@ -190,7 +198,7 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
         ...info, id: live ? lifecycle.handle.id : info?.id ?? target.id, generation: live ? lifecycle.handle.generation : info?.generation ?? this.liveGeneration,
         server: info?.server ?? target.options.server, database: info?.database ?? target.options.database, serverVersion: info?.serverVersion ?? '',
         displayName: target.details.displayName, color: target.details.color, environment: target.details.environment,
-        login: target.expectedPrincipal?.id ?? info?.login, options: { ...target.options, ...presentation }, targetId: target.id, inExplorer: target.inExplorer, lifecycle,
+        login: info?.login ?? target.options.username, options: { ...target.options, ...presentation }, targetId: target.id, inExplorer: target.inExplorer, lifecycle,
         ...live ? {} : { lost: true as const }
       }
     })

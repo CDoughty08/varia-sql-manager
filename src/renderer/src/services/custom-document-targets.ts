@@ -15,6 +15,13 @@ export class CustomDocumentTargets {
     const binding = this.bindings.get(id)
     return binding?.targetId !== undefined && binding.targetId === targetId
   }
+  /** Invoked only after main authenticated equivalence; labels and settings alone never authorize migration. */
+  coalesceTarget(id: string, fromTargetId: string, toTargetId: string): boolean {
+    const binding = this.bindings.get(id)
+    if (!binding?.targetId || binding.targetId !== fromTargetId) return false
+    this.bindings.set(id, { ...binding, targetId: toTargetId })
+    return true
+  }
   matchesConnection(id: string, connectionId: string | undefined): boolean {
     const binding = this.bindings.get(id)
     if (!binding || connectionId === undefined) return false

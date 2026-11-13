@@ -183,6 +183,7 @@ const targetOf = (node: TreeNode, connection: Pick<LiveConnection, 'engineEditio
 export function serverSublabel(connection: Pick<LiveConnection, 'serverVersion' | 'productVersion' | 'login'>): string {
   return connection.productVersion ? `(SQL Server ${connection.productVersion}${connection.login ? ' - ' + connection.login : ''})` : `(SQL Server ${connection.serverVersion})`
 }
+const connectionAvailable = (connection: LiveConnection): boolean => !connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'connected')
 /**
  * What the server row shows instead: the major and minor version, then the login ("16.0 · sa"). A Windows login loses its
  * domain or machine ("CONTOSO\dba" shows as "dba"), which would otherwise fill the narrow pane and look the same on every
@@ -481,7 +482,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const connection = this.connectionOf(connectionId)
     return {
       connectionId, ref: { type: 'object', object }, kind: object.kind, label, ...(subtype ? { subtype } : {}),
-      engine: serverEngineOf(connection?.engineEdition), linux: !!connection?.linux, lost: !connection || !!connection.lost
+      engine: serverEngineOf(connection?.engineEdition), linux: !!connection?.linux, lost: !connection || !connectionAvailable(connection)
     }
   }
   private connectionOf(connectionId: string): LiveConnection | undefined {
@@ -490,7 +491,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   /** The server and database a new query for the row should use (the database is the node's, if it has one). */
   queryTarget(id: number | undefined = this.selected): { connectionId: string; database?: string } | undefined {
     const node = id === undefined ? undefined : this.nodes.get(rowOwner(id))
-    if (!node || !this.connections.getSnapshot().some(connection => connection.id === node.connectionId && !connection.lost)) return undefined
+    if (!node || !this.connections.getSnapshot().some(connection => connection.id === node.connectionId && connectionAvailable(connection))) return undefined
     const object = objectOf(node.ref), database = object.kind === 'database' ? object.name : object.database
     return database === undefined ? { connectionId: node.connectionId } : { connectionId: node.connectionId, database }
   }
@@ -548,7 +549,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   beginRename(nodeId: number): boolean {
     const node = this.nodes.get(nodeId)
     if (!node || node.kind === 'folder' || node.lost || !this.attached(node) || actionMenuState({ kind: node.kind, subtype: node.subtype }).rename !== 'enabled') return false
-    if (!this.connections.getSnapshot().some(connection => connection.id === node.connectionId && !connection.lost)) return false
+    if (!this.connections.getSnapshot().some(connection => connection.id === node.connectionId && connectionAvailable(connection))) return false
     this.select(nodeId, { reveal: true })
     this.renameStore.set(nodeId)
     return true
@@ -725,11 +726,12 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     }
     const roots: number[] = [], added: number[] = []
     for (const connection of list) {
+      const available = connectionAvailable(connection)
       const existing = this.rootByConnection.get(connection.id) ?? (connection.targetId ? retained.get(connection.targetId) : undefined)
       if (existing === undefined) {
         const id = this.addRoot(connection)
         roots.push(id)
-        if (!connection.lost) added.push(id)
+        if (available) added.push(id)
         continue
       }
       const root = this.nodes.get(existing)!
@@ -742,8 +744,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
         root.connectionId = connection.id
         this.rootByConnection.set(connection.id, root.id)
       }
-      if (connection.lost && !root.lost) this.markLost(root)
-      else if (!connection.lost && root.lost) {
+      if (!available && !root.lost) this.markLost(root)
+      else if (available && root.lost) {
         root.lost = false
         root.hasChildren = true
         root.generation++
@@ -764,14 +766,15 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const node = this.createNode(0, connection.id, serverRef, 'server', undefined, 0, connection.displayName || connection.server, 'server')
     node.targetId = connection.targetId
     this.updateRoot(node, connection)
-    node.hasChildren = !connection.lost
-    node.lost = !!connection.lost
+    node.hasChildren = connectionAvailable(connection)
+    node.lost = !connectionAvailable(connection)
     node.lastUsed = ++this.clock
     this.rootByConnection.set(connection.id, node.id)
     return node.id
   }
   private updateRoot(node: TreeNode, connection: LiveConnection): void {
     node.targetId = connection.targetId ?? node.targetId
+    node.connectionLifecycle = connection.lifecycle
     const label = connection.displayName || connection.server
     node.label = label
     node.lower = label.toLocaleLowerCase()
