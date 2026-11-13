@@ -14,6 +14,11 @@ export const queryResultsSettings = [
     description: 'Copy and Save Results As (CSV and tab-delimited text) start with a row of column names. JSON always names its keys, and Copy with Headers always includes them.'
   },
   {
+    key: 'queryResults.grid.discardResults', page: 'queryResults.sqlServer.grid', label: 'Discard results after execution', type: 'boolean', default: false,
+    applies: 'nextExecution', keywords: ['discard', 'no results', 'rows', 'timing', 'profile', 'memory', 'large', 'million'],
+    description: 'Every query, in every query tab, runs and has its rows read from the server, but none is kept or shown: the Messages tab says how many result sets and rows were read. Execution plans and client statistics are still collected. For timing a large query without spending memory on its rows; turn it off again to see results.'
+  },
+  {
     key: 'queryResults.grid.maxResultSets', page: 'queryResults.sqlServer.grid', label: 'Maximum result sets kept per execution', type: 'integer', min: 1, max: 1000, default: 1000,
     varia: true, applies: 'nextExecution', keywords: ['result sets', 'limit'],
     description: 'Result sets after this many still run and are counted, but their rows are not kept; the Messages tab says so.'
@@ -25,8 +30,8 @@ export const queryResultsSettings = [
   },
   {
     key: 'queryResults.grid.memoryLimitGiB', page: 'queryResults.sqlServer.grid', label: 'Result memory limit in GiB (0: automatic)', type: 'integer', min: 0, max: 1024, default: 0,
-    varia: true, applies: 'restart', keywords: ['memory', 'budget', 'limit', 'rows', 'truncated', 'large', 'million'],
-    description: 'How much memory all query results may hold together; one query may use half of it. Automatic is a quarter of the computer\'s memory, at least 256 MiB and at most 16 GiB. A limit set here is used as it is, up to three quarters of the computer\'s memory. Rows past the limit are still read and counted, but not kept. Sorting, filtering, pivoting or profiling a result takes its working memory from the same limit, so a result that fills its share leaves no room for them.'
+    varia: true, applies: 'immediately', keywords: ['memory', 'budget', 'limit', 'rows', 'truncated', 'large', 'million'],
+    description: 'How much memory all query results may hold together; one query may use half of it. Automatic is a quarter of the computer\'s memory, at least 256 MiB and at most 16 GiB. A limit set here is used as it is, up to three quarters of the computer\'s memory. Rows past the limit are still read and counted, but not kept. A change applies at once: lowering the limit below what results hold keeps them, and stores nothing more until enough are closed. Sorting, filtering, pivoting or profiling a result takes its working memory from the same limit, so a result that fills its share leaves no room for them.'
   },
   {
     key: 'queryResults.grid.showColumnTypes', page: 'queryResults.sqlServer.grid', label: 'Show column data types in the column headers', type: 'boolean', default: true,

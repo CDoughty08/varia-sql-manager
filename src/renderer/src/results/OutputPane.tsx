@@ -172,8 +172,9 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
   const plans = plansOf(tab)
   const planCount = estimated ? estimated.result?.plans.length ?? 0 : plans.length
   const errors = !!tab?.messages.some(entry => entry.kind === 'error')
-  // Closed results keep the tab, without a count of sets that are gone.
-  const sets = tab && tab.status !== 'closed' ? tab.sets.length : 0, messages = tab?.messages.length ?? 0
+  // Closed results keep the tab, without a count of sets that are gone. The count is of the query's own results (groups):
+  // a Pivot or a comparison is a view of them, not one more, so with only comparisons left the badge hides.
+  const sets = tab && tab.status !== 'closed' ? tab.groups.length : 0, messages = tab?.messages.length ?? 0
   const jobs = tab?.jobs.filter(job => job.visible) ?? []
   const id = useId(), panelId = id + 'panel', tabIds: Record<OutputPaneId, string> = { results: id + 'results', messages: id + 'messages', plan: id + 'plan', statistics: id + 'statistics' }
   const [viewRef, viewHeight] = useHeight()
@@ -184,7 +185,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
   // only when the stack keeps room for its sets at their floors.
   const stripSummary = tab ? messagesSummary(tab.messages) : undefined
   const showStrip = !!tab && pane === 'results' && hasSets && messages > 0 && (stripSummary!.readable || tab.strip)
-  const need = tab && showStrip && shown ? stackNeed(tab, results.viewState(tabId).collapsed) : 0
+  const need = tab && showStrip && shown ? stackNeed(tab, results.viewState(tabId).collapsed, results.viewState(tabId).grids) : 0
   const stripFits = viewHeight > 0 && viewHeight >= need + g.messagesStripOpen
   const stripMax = viewHeight > 0 ? Math.max(g.messagesStripOpen, Math.min(Math.floor(viewHeight * 0.4), viewHeight - need)) : undefined
   // The results tools sit in the head beside the views, taking no rows from the grids: results panes are often short.
@@ -255,7 +256,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
             const entry = grid?.getAttribute('data-result-entry')
             if (entry) setProfiled({ tabId, target: profileTarget(tab.sets, entry) })
           }}>
-            {shown ? <ResultsStack key={'stack:' + tab.queryId} tabId={tabId} tab={tab} closable />
+            {shown ? <ResultsStack key={'stack:' + tab.queryId} tabId={tabId} tab={tab} />
               : <EmptyState className="output-empty" {...hasSets ? {} : { icon: 'table' as const }} detail={emptyResultsText(tab)} />}
             {profileOpen && shown && <ColumnProfilePanel key={'profile:' + tab.queryId} tabId={tabId} tab={tab}
               shown={profiled?.tabId === tabId ? profiledEntry(tab.sets, profiled.target)?.key : undefined} />}

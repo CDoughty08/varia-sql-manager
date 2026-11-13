@@ -39,6 +39,13 @@ if (args is [FairnessBench.Argument, ..])
     return;
 }
 
+// The result-work benchmark (pivot Distinct Count, Compare Results, distinct value lists), run by hand: measures only.
+if (args is [ResultWorkBench.Argument, ..])
+{
+    ResultWorkBench.Run(args);
+    return;
+}
+
 var passed = 0;
 var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
 // VARIA_TEST_SLOW_MS=<ms> prints each check reached more than that long after the previous one (to stderr), to find the
@@ -356,6 +363,7 @@ if (liveGroup is null)
         ("Profile", Sync(() => ProfileChecks.Run(Check))),
         ("Pivot", Sync(() => PivotChecks.Run(Check))),
         ("Distinct", Sync(() => DistinctChecks.Run(Check))),
+        ("ParallelResult", Sync(() => ParallelResultChecks.Run(Check))),
         ("CellLength", Sync(() => CellLengthChecks.Run(Check))),
         ("Text", () => TextChecks.RunAsync(Check)),
         ("TransposedText", () => TransposedTextChecks.RunAsync(Check)),
@@ -551,8 +559,8 @@ using var service = new SqlService();
 async Task<T> Call<T>(string method, object args) => (T)await service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, json), json);
 var info = await Call<ConnectionInfo>("connections.connect", Live("master"));
 var sessionId = Guid.NewGuid().ToString();
-Task<QueryResult> Run(string sql, string? session = null, int timeout = 15, string? query = null, int startLine = 1, int maxRows = 1000, string database = "master", bool stopOnError = false) =>
-    Call<QueryResult>("query.execute", new QueryArgs(info.Id, session ?? sessionId, database, sql, query ?? Guid.NewGuid().ToString(), maxRows, timeout, startLine, StopOnError: stopOnError));
+Task<QueryResult> Run(string sql, string? session = null, int timeout = 15, string? query = null, int startLine = 1, int maxRows = 1000, string database = "master", bool stopOnError = false, bool discard = false) =>
+    Call<QueryResult>("query.execute", new QueryArgs(info.Id, session ?? sessionId, database, sql, query ?? Guid.NewGuid().ToString(), maxRows, timeout, startLine, StopOnError: stopOnError, DiscardResults: discard));
 // Rows stay in the backend's result store; read them back as the results worker would, from the stored pages.
 List<string?[]> RowsOf(ResultDescriptor set) => LiveResultChecks.RowsOf(service.Results, set);
 List<string> Texts(QueryResult value) => LiveResultChecks.Texts(value);
@@ -818,6 +826,27 @@ try
         Check(result.Status == "completed" && result.ResultSets.Where(set => set.Kind == "rows").Select(set => set.RowsStored).SequenceEqual([1L, 4L])
             && planned.Count == 2 && planned.All(set => set is { RowsStored: 1, Truncated: null }),
             "a plan's row is not counted against the row limit");
+        // Discard results after execution: every row is read and none kept, the statements all run and say what they
+        // did, and a plan asked for with the rows is kept. A set under a plan's column name is looked at, and is rows.
+        result = await Run("SELECT TOP (10) object_id FROM sys.all_objects;\nSELECT CAST(N'<a/>' AS nvarchar(max)) AS [Microsoft SQL Server 2005 XML Showplan];\nSELECT name, CAST(N'<a/>' AS xml) AS x FROM (VALUES (N'a'), (N'b')) AS v(name);\nGO\nPRINT 'after discarded';", discard: true);
+        Check(result.Status == "completed" && result.ResultSets.Count == 0 && result.DiscardedResultSets == 3 && Texts(result).Contains("after discarded")
+            && Texts(result).Contains("(10 rows affected)") && Texts(result).Contains("Discard results after execution is on: 3 result sets (13 rows) were read and not kept."),
+            "discarding results reads every row, keeps none and says how many: " + string.Join(" | ", Texts(result)));
+        result = await Run("SET STATISTICS XML ON;\nSELECT TOP (10) object_id FROM sys.all_objects;\nSET STATISTICS XML OFF;", discard: true);
+        Check(result.Status == "completed" && result.ResultSets.Count == 1 && result.ResultSets[0] is { Kind: "executionPlan", RowsStored: 1, Truncated: null } && result.DiscardedResultSets == 1
+            && Texts(result).Contains("Discard results after execution is on: 1 result set (10 rows) was read and not kept."),
+            "discarding results keeps the execution plan returned with them: " + string.Join(" | ", Texts(result)));
+        // A run that is cut short says how many rows it had read, whichever way they were read past (long values go
+        // another way), and leaves the session as any timed-out run does.
+        foreach (var column in new[] { "a.object_id", "CAST(a.name AS nvarchar(max))" })
+        {
+            result = await Run("SELECT " + column + " FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b CROSS JOIN sys.all_objects AS c;", timeout: 1, discard: true);
+            var note = Texts(result).FirstOrDefault(text => text.StartsWith("Discard results after execution is on: 1 result set (", StringComparison.Ordinal)) ?? "";
+            Check(result.Status == "timedOut" && result.ResultSets.Count == 0 && note.EndsWith(" rows) was read and not kept.", StringComparison.Ordinal) && !note.Contains("(0 rows)"),
+                "a discarded read that times out says how many rows it read (" + column + "): " + note);
+        }
+        result = await Run("SELECT 1 AS after_discard;", discard: true);
+        Check(result.Status == "completed" && Texts(result).Contains("Discard results after execution is on: 1 result set (1 row) was read and not kept."), "the session runs on after a discarded read that timed out");
         await Call<object>("query.session.close", new SessionArgs(sessionId));
         result = await Run("SELECT * FROM #VariaBatchTest;");
         Check(result.Status == "completedWithErrors" && result.Error?.Message.Contains("Msg 208") == true, "closing a tab removes temporary objects and session state");

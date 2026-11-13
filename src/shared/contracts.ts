@@ -121,6 +121,8 @@ export interface QueryOptions {
   includeActualPlan?: boolean
   includeLivePlan?: boolean
   includeClientStatistics?: boolean
+  /** Read every row and keep none (SSMS's Discard results after execution): sets count in `discardedResultSets` (with those past a limit or the budget), plans are kept. */
+  discardResults?: boolean
 }
 /** `text` cells carry their SSMS display text; `binary` cells are shown as 0x plus hexadecimal. */
 export type WireKind = 'text' | 'binary'
@@ -534,6 +536,12 @@ export interface JobMethods {
 export interface AuthMethods {
   'entra.cache.clear': { params: Record<string, never>; result: { cleared: boolean } }
 }
+/** Result memory methods only main sends: no renderer schema accepts them. `results.setMemoryLimit` applies Tools ›
+ *  Options' `queryResults.grid.memoryLimitGiB` (0 automatic, 1 to 1024 GiB) to the running backend; `applied` is false
+ *  only for the test hooks' fixed budget. */
+export interface ResultMemoryMethods {
+  'results.setMemoryLimit': { params: { limitGiB: number }; result: { applied: boolean; globalBytes: number; queryBytes: number } }
+}
 /** Synthetic result shapes (backend SyntheticRows, the fake backend's shapes.mjs). */
 export type SyntheticShape = 'W1' | 'B1' | 'N1' | 'X1' | 'L1' | 'M1'
 /** Test-only methods: the backend offers them with VARIA_BACKEND_TEST_HOOKS=1, and no renderer schema accepts them. */
@@ -543,7 +551,7 @@ export interface DebugMethods {
 /** Every method main sends to the backend. */
 /** Main compresses plan input before the existing 4 MiB request boundary. Renderers can supply only raw XML. */
 export interface PlanMethods { 'plans.parse': { params: { xml: string; encoding: 'gzip' }; result: PlanDocument } }
-export interface BackendMethods extends Omit<RpcMethods, 'plans.parse'>, PlanMethods, PortMethods, JobMethods, AuthMethods, DebugMethods {}
+export interface BackendMethods extends Omit<RpcMethods, 'plans.parse'>, PlanMethods, PortMethods, JobMethods, AuthMethods, ResultMemoryMethods, DebugMethods {}
 export type BackendMethod = keyof BackendMethods
 /** Facts about a failed connection for the Connect dialog: SQL Server's error number, state and class (level), the
  *  server that answered (at most 256 characters), and `reason` 'certificate' when the server's TLS certificate was not

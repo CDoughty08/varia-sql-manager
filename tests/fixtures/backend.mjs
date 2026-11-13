@@ -486,8 +486,8 @@ const column = (name, dataType) => ({ name, dataType, wire: 'text', nullable: tr
 const available = result => result.complete ? result.read : Math.floor(result.read / result.pageRows) * result.pageRows
 const describe = result => ({
   resultId: result.resultId, index: result.index, batchNumber: result.batchNumber, iteration: result.iteration, kind: result.kind, columns: result.columns,
-  rowsRead: result.read, rowsStored: result.read, rowsAvailable: available(result), bytesStored: available(result) * 100, truncatedCells: 0,
-  state: result.complete ? 'complete' : 'open', incomplete: result.incomplete ?? false
+  rowsRead: result.truncated ? result.read * 2 : result.read, rowsStored: result.read, rowsAvailable: available(result), bytesStored: available(result) * 100, truncatedCells: 0,
+  state: result.complete ? 'complete' : 'open', incomplete: result.incomplete ?? false, ...result.truncated ? { truncated: result.truncated } : {}
 })
 function storeResult(set, index) {
   const result = {
@@ -1046,6 +1046,8 @@ async function runDirective(id, params, directive) {
       const shape = shapes[set.shape]
       if (index >= maxSets) { discarded.push(set); continue }
       const result = storeResult({ columns: shape.columns, rowAt: shape.row, pageRows: shape.pageRows, read: set.rate === undefined ? set.rows : 0, complete: false }, index)
+      // A directive's `truncated=`: the set stopped keeping rows (the budget filled, or the row limit) while the script read on.
+      if (directive.truncated) result.truncated = directive.truncated
       results.push(result)
       if (share > 0) {
         heldBytes.set(result.resultId, Math.floor(share / kept) + (index === 0 ? share % kept : 0))
@@ -1056,7 +1058,7 @@ async function runDirective(id, params, directive) {
         if (cancelledQueries.has(queryId)) { status = 'cancelled'; result.incomplete = true; break }
         await sleep(100)
         result.read = Math.min(set.rows, result.read + Math.max(1, Math.round(set.rate / 10)))
-        write(FrameKind.EVENT, id, 0, { type: 'progress', completedBatches: 0, totalBatches: 1, batchNumber: 1, iteration: 1, results: [{ resultId: result.resultId, rowsRead: result.read, rowsStored: result.read, rowsAvailable: available(result), bytesStored: available(result) * 100 }] })
+        write(FrameKind.EVENT, id, 0, { type: 'progress', completedBatches: 0, totalBatches: 1, batchNumber: 1, iteration: 1, results: [{ resultId: result.resultId, rowsRead: result.truncated ? result.read * 2 : result.read, rowsStored: result.read, rowsAvailable: available(result), bytesStored: available(result) * 100, ...result.truncated ? { truncated: result.truncated } : {} }] })
       }
       result.complete = true
       write(FrameKind.EVENT, id, 0, { type: 'resultSet.closed', descriptor: describe(result) })
@@ -1749,6 +1751,7 @@ async function workbench(id, method, params, credit) {
       return respond(id, await databaseRows())
     case 'connections.discover': return respond(id, { servers: [] })
     case 'entra.cache.clear': return respond(id, { cleared: true })
+    case 'results.setMemoryLimit': return respond(id, { applied: false, globalBytes: 256 * 1024 * 1024, queryBytes: 128 * 1024 * 1024 })
     case 'live.subscribe': return liveSubscribe(id, credit, params)
     case 'live.update': return liveUpdate(id, params)
     case 'connections.preview': return respond(id, { connectionString: 'Data Source=' + params.server })

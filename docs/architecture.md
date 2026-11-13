@@ -62,6 +62,10 @@ being true.
   exception: Select Top Rows' script with N = 10 through `query.execute`, in a session and results entry of the Peek's own
   (`PeekService`), released when its card or tab closes, moves on or refreshes, and on backend loss. Results-port
   messages from the renderer are validated with `portRequestSchema`, ownership, and the current generation.
+- The result budget's figures change while the backend runs only through `ResultStore.Resize` (`results.setMemoryLimit`,
+  sent by main alone when Tools › Options' limit changes and as each generation becomes ready). They are replaced whole and
+  each reservation reads them once; a change never drops stored results or undoes a query's stop (docs/ipc.md, Result
+  store and memory budget).
 - Rows are compared only in the backend: row identities for highlights (`Results/RowIdentity.cs`, `results.identify`,
   `results.findRows`) hash collation-normalized values there, and the renderer only receives positions and ids, never rows
   to compare. `GridView` draws highlights from sorted positions by binary search per painted row, with theme colours only.
@@ -115,15 +119,28 @@ being true.
 - Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never
   leave main except to the backend.
 - Results are released on re-execute, tab close, Close Results, closing one result and backend loss; jobs lease them.
-- Every way a result leaves its run goes through one cleanup, `ResultsService.drop`: closing one entry (`removeEntry`, a
-  stack caption's close button, on an ended run only), Close Results, a new run and the tab closing. It aborts the entry's
+- A run's results are groups (`TabResults.groups`): each original result owns its Table slot and at most one Pivot slot,
+  and a comparison is a slot of its own with frozen references to its two inputs (`TabResults.comparisons`). `sets` stays
+  the one flat list, in the order drawn: a group's Table, its Pivot directly under it, the next group, comparisons last.
+  `ResultsService.addSet` is the only way a derived result joins a run and keeps the rules that make every list
+  representable: a pivot is taken only from a group's Table of rows (never from a Pivot, a comparison or a
+  SQL-returned plan set) and replaces the group's Pivot, releasing the old one first; a bare run (Peek's, `begin`'s
+  `bare`) takes neither a pivot nor a diff. A slot's identity is its entry key, where its grid state, sort and filters
+  already live; do not add a second key for a view. Transposed is not a view either: it is how a Table or a Pivot is
+  drawn (its grid state's orientation). The pivot builder belongs to one group and follows the focused grid
+  (`ResultsService.focusEntry`, `PivotService`); there is no source picker. Commands tell what a grid is by
+  `pivotGroup`, `slotOf` and `groupOf`, and a Peek grid by its target's `bare` (the `outputGridBare` key).
+- Every way a result leaves its run goes through one cleanup, `ResultsService.drop`: closing one view (`removeEntry`, a
+  stack caption's close button or Close Result, on an ended run only; a Table closes its group, so its Pivot
+  goes in the same release), Close Results, a new run and the tab closing. It aborts the entry's
   sort or filter being built, forgets its held views, sort, distinct snapshots, grid controller and state and its part of
   the stack's state, cancels a copy of it (a save the backend accepted finishes under its lease), and releases the stored
   results in one request, after a retained-plan copy in progress has read them. Add a new piece of per-entry state there,
   not in a caller. Services that follow the results give up their own work on an entry that has gone when the snapshot
   loses it (`PivotService` and `CompareService` abort a build whose source closed; search re-searches
   only the grids whose target changed; highlights unbind), and `addSet` releases a derived result whose source the run no
-  longer has, so a late answer is released once and never shown. A derived result outlives a closed source. Closing does
+  longer has, so a late answer is released once and never shown. A comparison outlives a closed input (it copied its
+  cells); a group's Pivot does not outlive its Table. Closing does
   not change the run's status, summary or row total (which counts the query's own rows, never a derived result's);
   closing the last entry sets `TabResults.emptied`, which keeps the Results view (`hasResultsView`, `OutputPane.tsx`).
 - In the renderer a result is an entry of its run, named everywhere by the opaque key `ResultsService` mints for it

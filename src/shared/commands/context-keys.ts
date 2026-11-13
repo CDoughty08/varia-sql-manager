@@ -185,6 +185,7 @@ export const contextKeys = {
   explorerServerLinux: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for a node on SQL Server on Linux.' },
   outputView: { type: 'enum', scope: 'target', menu: 'output.context', values: ['grid', 'messages', 'live', ''], description: "The Query Output view the menu is for: a results grid, the messages, or a live view's grid (an Activity Monitor pane)." },
   outputGridTransposable: { type: 'boolean', scope: 'target', menu: 'output.context', description: "The menu is for a results grid that can be drawn transposed: a query's rows or a pivot, not a comparison or a plan set." },
+  outputGridBare: { type: 'boolean', scope: 'target', menu: 'output.context', description: "The menu is for a results grid drawn bare (Peek's rows): Pivot, Compare and the close commands are not offered for it." },
   outputLiveFilterable: { type: 'boolean', scope: 'target', menu: 'output.context', description: "The live view's grid the menu is for filters some columns by value at its source (its headers have funnels)." },
   outputLiveRows: { type: 'enum', scope: 'target', menu: 'output.context', values: ['session', ''], description: "What the rows of the live view's grid the menu is for are: 'session' for an Activity Monitor pane of sessions (Details and Kill Process act on its active row), else ''." },
   outputLiveSortable: { type: 'boolean', scope: 'target', menu: 'output.context', description: "The live view's grid the menu is for sorts (its table is a snapshot, not a log that keeps arrival order)." },

@@ -47,7 +47,7 @@ interface ReadResult { status: QueryResult['status']; resultSets: { columns: { n
  * and the results worker), connected to the live SQL Server the .NET checks use.
  */
 async function connect() {
-  const supervisor = new BackendSupervisor({ command: 'dotnet', args: [resolve('backend/Varia.Backend/bin/Release/net10.0/Varia.Backend.dll')], cwd: process.cwd(), packaged: false })
+  const supervisor = new BackendSupervisor({ command: 'dotnet', args: [resolve('backend/Varia.Backend/bin/Release/net11.0/Varia.Backend.dll')], cwd: process.cwd(), packaged: false })
   const host = new ResultsPortHost({ backend: supervisorResults(supervisor), createChannel: () => { const { port1, port2 } = new MessageChannel(); return { port1: portMain(port1), port2 } } })
   supervisor.onState(state => host.backendState(state))
   const ready = new Promise<void>((done, fail) => supervisor.onState(state => { if (state.status === 'ready') done(); else if (state.status === 'failed') fail(new Error(state.message)) }))

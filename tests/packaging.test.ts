@@ -104,7 +104,7 @@ describe('Packaging (issue #163)', () => {
     expect(rids).toEqual(['linux-x64', 'osx-arm64', 'osx-x64', 'win-x64'])
     expect(/<RuntimeIdentifiers>([^<]+)<\/RuntimeIdentifiers>/.exec(project)?.[1].split(';').sort()).toEqual(rids)
     const lock = JSON.parse(await readFile('backend/Varia.Backend/packages.lock.json', 'utf8'))
-    for (const rid of rids) expect(Object.keys(lock.dependencies), rid).toContain(`net10.0/${rid}`)
+    for (const rid of rids) expect(Object.keys(lock.dependencies), rid).toContain(`net11.0/${rid}`)
     // Without locked mode, the RID's restore re-resolves packages silently instead of using the lock file.
     expect(pack).toMatch(/dotnet publish backend\/Varia\.Backend\/Varia\.Backend\.csproj -c Release -r \$\{\{ inputs\.rid \}\} --self-contained true -p:RestoreLockedMode=true -o artifacts\/release-backend\n/)
     expect(readyToRunAssemblies).toContain('Varia.Backend.dll')
@@ -125,7 +125,7 @@ describe('Packaging (issue #163)', () => {
     const shared = join(folder, version)
     expect(isReadyToRun(join(shared, 'System.Text.Json.dll'))).toBe(true)
     const refs = join(dirname(dirname(folder)), 'packs', 'Microsoft.NETCore.App.Ref')
-    const ref = join(refs, readdirSync(refs).filter(name => name.startsWith('10.')).sort().at(-1)!, 'ref', 'net10.0', 'System.Text.Json.dll')
+    const ref = join(refs, readdirSync(refs).filter(name => name.startsWith('11.')).sort().at(-1)!, 'ref', 'net11.0', 'System.Text.Json.dll')
     expect(isReadyToRun(ref)).toBe(false)
     expect(isReadyToRun(join(shared, 'Microsoft.NETCore.App.deps.json'))).toBe(false)
   })

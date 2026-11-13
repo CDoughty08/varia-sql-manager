@@ -34,9 +34,10 @@ internal sealed record DiscoveryResult(List<DiscoveredServer> Servers, string? W
 internal sealed record ConnectionArgs(string ConnectionId);
 internal sealed record TableArgs(string ConnectionId, string Database, string Schema, string Name);
 /// <summary>query.execute. StopOnError keeps the remaining batches from running after one that raised an error (for SQLCMD's
-/// :on error exit); by default execution continues with the next batch, as SSMS does.</summary>
+/// :on error exit); by default execution continues with the next batch, as SSMS does. DiscardResults reads every row
+/// and keeps none (SSMS's Discard results after execution): result sets are counted, execution plans are kept.</summary>
 internal sealed record QueryArgs(string ConnectionId, string SessionId, string Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10,
-    bool StopOnError = false, bool IncludeActualPlan = false, bool IncludeClientStatistics = false, bool IncludeLivePlan = false);
+    bool StopOnError = false, bool IncludeActualPlan = false, bool IncludeClientStatistics = false, bool IncludeLivePlan = false, bool DiscardResults = false);
 /// <summary>query.session.close: Transaction "commit" commits the session's open transaction first; "rollback" is a plain close,
 /// since SQL Server rolls back what a closed session left open.</summary>
 internal sealed record SessionArgs(string SessionId, string? Transaction = null);
@@ -83,6 +84,10 @@ internal sealed record ResultsReadArgs(uint ResultId, long FirstRow, int MaxRows
 internal sealed record ResultsReadResult(long NextRow, long RowsAvailable, bool Complete, int Pages, int Rows);
 internal sealed record ResultsCloseArgs(uint[] ResultIds);
 internal sealed record ResultsCloseResult(int Closed, long UsedBytes);
+/// <summary>results.setMemoryLimit (main only): Tools › Options' limit in GiB, 0 for automatic, 0 to 1024.</summary>
+internal sealed record ResultsMemoryLimitArgs(int? LimitGiB);
+/// <summary>results.setMemoryLimit: whether the limit applied (false with the test hooks' fixed budget) and the figures now.</summary>
+internal sealed record ResultsMemoryLimitResult(bool Applied, long GlobalBytes, long QueryBytes);
 internal sealed record ResultsRowBytesArgs(uint ResultId, long FirstRow, int Count, uint? ViewId = null);
 /// <summary>One results.view sort key: a column, its direction, and Mode "value" (by SQL type and collation), "chars" or
 /// "bytes" (each cell's length; text and binary columns only, others sort by value).</summary>

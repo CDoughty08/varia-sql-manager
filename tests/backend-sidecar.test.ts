@@ -20,7 +20,7 @@ import { liveEndSchema, liveEventSchema, liveUpdateResultSchema, type BackendLiv
 import { languageStatusSchema } from '../src/shared/language-service'
 
 // The Release build, as CI checks it: npm run check builds it before vitest runs.
-const dll = resolve('backend/Varia.Backend/bin/Release/net10.0/Varia.Backend.dll')
+const dll = resolve('backend/Varia.Backend/bin/Release/net11.0/Varia.Backend.dll')
 const connections: BackendConnection[] = []
 const processes: ChildProcessWithoutNullStreams[] = []
 
@@ -114,7 +114,7 @@ describe('real .NET sidecar over protocol v2', () => {
   it('announces itself in HELLO with every method main may call', async () => {
     const hello = await backend().ready
     expect(hello).toMatchObject({ version: 2, generation: 1, maxFrameBytes: 4 * 1024 * 1024, sqlClientVersion: expect.stringMatching(/^\d+\./) })
-    expect(hello.runtime).toMatch(/\.NET 10\./)
+    expect(hello.runtime).toMatch(/\.NET 11\./)
     expect(hello.methods).toEqual(expect.arrayContaining([...backendMethods]))
     expect(hello.resultBudget!.globalBytes).toBeGreaterThanOrEqual(256 * 1024 * 1024)
     expect(hello.resultBudget!.queryBytes).toBe(hello.resultBudget!.globalBytes / 2)
@@ -141,7 +141,7 @@ describe('real .NET sidecar over protocol v2', () => {
   it('loads the runtime, SMO, and SqlClient without a SQL Server', async () => {
     const health = await call(backend(), 'system.health', {})
     expect(health.protocolVersion).toBe(2)
-    expect(health.runtime).toMatch(/\.NET 10\./)
+    expect(health.runtime).toMatch(/\.NET 11\./)
     expect(health.smoVersion).toMatch(/^\d+\./)
     expect(health.sqlClientVersion).toMatch(/^\d+\./)
   })
@@ -513,6 +513,24 @@ describe('real .NET sidecar results (test hooks)', () => {
     expect(automatic.globalBytes).toBeGreaterThanOrEqual(256 * MiB)
     expect(automatic.globalBytes).toBeLessThanOrEqual(16 * 1024 * MiB)
     expect((await backend({ VARIA_RESULT_MEMORY_MIB: 'lots' }).ready).resultBudget).toEqual(automatic)
+  }, 60_000)
+
+  it('applies a result memory limit main sends while it runs (results.setMemoryLimit), and the status bar figure follows', async () => {
+    const MiB = 1024 * 1024
+    const globals: number[] = []
+    const connection = new BackendConnection({ command: 'dotnet', args: [dll], cwd: process.cwd(), env: { ...process.env, VARIA_RESULT_MEMORY_MIB: '300' }, packaged: false }, 1, {
+      onGlobalEvent: event => { if ((event as { type?: string }).type === 'results.memory') globals.push((event as { globalBytes: number }).globalBytes) }
+    })
+    connections.push(connection)
+    expect((await connection.ready).resultBudget).toEqual({ globalBytes: 300 * MiB, queryBytes: 150 * MiB })
+    // 1 GiB is under three quarters of any machine that runs these checks, so it is used as it is.
+    await expect(call(connection, 'results.setMemoryLimit', { limitGiB: 1 })).resolves.toEqual({ applied: true, globalBytes: 1024 * MiB, queryBytes: 512 * MiB })
+    expect(globals.at(-1)).toBe(1024 * MiB)
+    const automatic = await call(connection, 'results.setMemoryLimit', { limitGiB: 0 })
+    expect(automatic.globalBytes).toBeGreaterThanOrEqual(256 * MiB)
+    expect(automatic.globalBytes).toBeLessThanOrEqual(16 * 1024 * MiB)
+    expect(automatic.queryBytes).toBe(Math.floor(automatic.globalBytes / 2))
+    await expect(call(connection, 'results.setMemoryLimit', { limitGiB: 1025 })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
   }, 60_000)
 
   it('truncates at the result budget (VARIA_RESULT_BUDGET_BYTES) and frees it on close', async () => {

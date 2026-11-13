@@ -94,7 +94,8 @@ export const shapes = {
 /**
  * The directive on a script's first line: `-- varia-fake: sets=W1*200000@50000,N1*100 messages=40 errors=2 memory=0.92 hold`.
  * `@rate` streams that many rows a second; `M1*n` is n one-row sets; `hold` keeps the script running while the control
- * file hold/query.execute exists. Returns undefined when the script has no directive.
+ * file hold/query.execute exists; `truncated=queryBudget` (or another TruncationReason) reports each set as having stopped
+ * keeping rows for that reason, having read twice the rows it kept. Returns undefined when the script has no directive.
  */
 export function parseDirective(sql) {
   const match = /^--\s*varia-fake:(.*)$/m.exec(sql.split('\n', 1)[0])
@@ -105,6 +106,10 @@ export function parseDirective(sql) {
     if (key === 'hold') directive.hold = true
     else if (key === 'messages' || key === 'errors') directive[key] = Number(value)
     else if (key === 'memory') directive.memory = Number(value)
+    else if (key === 'truncated') {
+      if (!['rowLimit', 'queryBudget', 'globalBudget', 'systemMemory'].includes(value)) throw new RangeError('Unknown truncation reason: ' + value)
+      directive.truncated = value
+    }
     else if (key === 'sets') {
       for (const item of value.split(',')) {
         const set = /^([A-Z]\d)\*(\d+)(?:@(\d+))?$/.exec(item)

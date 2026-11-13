@@ -32,10 +32,13 @@ the rules that keep it lean.
   --fairness-bench [--rows N] [--runs N]` (by hand, enforces nothing) times a sort, a pivot and a profile alone and in
   pairs started together, to see how they share the worker threads; docs/ipc.md's "Worker threads measured" holds what
   it measured. Prefix `DOTNET_PROCESSOR_COUNT=n` for the workers a smaller machine would have.
+- `-- --result-work-bench [--rows N] [--runs N] [--only name,name]` on the same project times, stage by stage, a pivot's
+  Distinct Count, Compare Results and a column's distinct values past the coded limit on synthetic results (4,000,000 rows
+  by default); set `DOTNET_PROCESSOR_COUNT` to simulate fewer cores. Measures only, run by hand.
 
 ## Environment
 
-- Node.js 24+ and the .NET 10 SDK (`global.json`, latest feature band). In cloud sessions `.claude/hooks/session-start.sh`
+- Node.js 24+ and the .NET 11 SDK (`global.json`, latest feature band). In cloud sessions `.claude/hooks/session-start.sh`
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
