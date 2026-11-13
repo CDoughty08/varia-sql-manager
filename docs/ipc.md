@@ -3041,8 +3041,8 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | Grid: UI long tasks over 50 ms in those four wheel segments | 0 | ≤ 20 | 0 | 0 |
 | Grid: DOM elements, 8 / 300 / 300 bit columns | ≤ 1,500 / 4,000 / 4,000 | same | 535 / 931 / 1,811 | 535 / 931 / 1,811 |
 | Grid, transposed (4,096 long-text columns as rows by 4,095 rows as columns): `frame()` after a scroll bar jump / scrolling across / scrolling down, p95 | ≤ 8 / 6 / 6 ms | ≤ 16 / 12 / 12 ms | 1.1 / 0.6 / 0.6 ms (Windows, 24 CPUs) | 1.9 / 0.9 / 0.8 ms |
-| Grid, transposed: main-thread task time per scroll bar jump over the same / over 300 bit columns as rows, p95 | ≤ 50 / 50 ms | ≤ 170 / 260 ms | 46 – 79 / 37 – 76 ms, medians 58 / 42 ms over 11 runs on a busy desktop (Windows, 24 CPUs) | 90 / 74 ms |
-| Grid, transposed: scroll bar jump → painted, p95 (each jump reads up to four tiles of 32 rows × 128 long values, eight pages each, so this is where a costlier page read shows) | ≤ 500 ms | reported only | 463 – 614 ms (Windows, 24 CPUs) | 596 ms |
+| Grid, transposed: main-thread task time per scroll bar jump over the same / over 300 bit columns as rows, p95 | ≤ 50 / 50 ms | ≤ 170 / 260 ms | 32 – 47 ms, median 37 ms over 10 runs / 41 – 66 ms over 3 (Windows, 24 CPUs, a fifth to a half of them busy with other work; 46 – 102 ms, median 62 ms, while the wait looked every frame) | 67 – 198 / 47 – 102 ms over 24 runs while the wait looked every frame |
+| Grid, transposed: scroll bar jump → painted, p95 (each jump reads up to four tiles of 32 rows × 128 long values, eight pages each, so this is where a costlier page read shows) | ≤ 500 ms | ≤ 2,500 ms | 378 – 700 ms over 6 runs (Windows, 24 CPUs) | 448 – 922 ms over 24 runs of Linux CI, by runner CPU |
 | Grid, transposed: animation-frame interval during those scrolls, the worse p95 | ≤ 17.5 ms | ≤ 60 ms | 17.1 ms (Windows, 24 CPUs, 59 Hz) | 23.2 ms |
 | Grid, transposed: DOM elements, 4,096 long-text columns / 300 bit columns | ≤ 4,000 / 4,000 | same | 966 / 1,577 | 966 / 1,483 |
 | Grid, transposed: UI thread busy while 4,095 rows of 300 columns stream in at 1,000 a second | ≤ 10 % | ≤ 25 % | 6 % (Windows, 24 CPUs) | 8 % |
@@ -3065,6 +3065,25 @@ announced at once; the live first window needs 100 rows, from the second page, w
 of them comes once with each read (it is decoded once); that is the extra page bytes sent. The budget charge is the
 pages, their bookkeeping and the column metadata, against the distinct page bytes main forwarded. The end-to-end W1 rate
 includes copying each page from main into the renderer and cloning every window's text to the UI thread.
+
+A jump's task time is measured around the benchmark's wait for its paint, so the wait itself must cost the main thread
+nothing: `grid-bench.mjs` looks at the view only when the grid writes to its DOM (a `MutationObserver`), and
+`tests/bench-floors.test.ts` holds it to that. Until November 2026 it looked every animation frame (about 70 box reads,
+and a frame the page would not otherwise have drawn), which cost about as much as the jump for as long as its tiles took
+to read. A 300-column jump paints in three or four frames, so little was added; a transposed jump over 4,096 long-text
+columns waits a median of 280 ms for its tiles (500 ms on CI), some 22 looks. With that wait the transposed figure read
+56 to 65 ms on a 24-CPU Windows desktop at each of four commits from the orientation's merge on, and 67 to 198 ms over 24
+runs of Linux CI: 1.5 to 2.7 times the 300-column figure of the same run, and set by the runner's CPU model (67 to 80 ms
+on an EPYC 9V45, 90 to 172 ms on a 9V74, 148 to 198 ms on a 7763), since a slower CPU both waits for more frames and
+takes longer over each look. It crossed its 170 ms floor twice with no change in the grid. A trace of the main thread
+showed the grid's own share of a transposed jump to be no more than the table's (style 4.6 ms, script 4.3 ms of which
+`frame()` is 2.8 ms, paint 3.1 ms, layout 3.9 ms, against 4.7, 4.6, 3.6 and 4.5 ms for 300 columns), over more frames (3.7
+a jump against 2.5, as up to four tiles arrive). With the wait that costs nothing the same four commits read 33 to
+38 ms, as the 300-column jump does (31 to 32 ms), with a mean of 24.5 to 25.0 ms a jump at every one: no merge changed
+it. (The wait then takes one animation frame to time the paint, about 1 ms a jump.) The floor stays at 170 ms, the 300-column jump's, which is now the same measurement of the same work. The time to
+paint has a floor of 2,500 ms, 2.7 times the slowest of those 24 runs: most of it is the fake backend encoding pages of
+16,384 long values, but the rest is the worker's decoding and the tile reads, and a read path three times slower should
+fail a pull request rather than be found in a release.
 
 A single scroll bar jump reads its tiles at once; the grid waits for scrolling to settle (50 ms) only while it stays
 faster than three views a frame. The grid's cache and element rows are bounds rather than speeds, so their floors are

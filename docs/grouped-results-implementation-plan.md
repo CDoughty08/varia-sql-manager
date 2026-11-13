@@ -515,11 +515,18 @@ Outcome, accepted by the owner:
        revealed once it is drawn.
      - A transposed grid in the stack keeps its table's height until PR 9 sizes it by drawn rows.
      - The transposed jump task read a median of 58 ms (46 to 79) on the owner's machine while other sessions were
-       running on it, against the spike's 47 ms and the 50 ms target; Linux CI read 90 ms against a floor of 170. Load
-       was not separated from a cost of the port. PR 7 measures it again on a quiet machine and looks for the cost if
-       it is still over 50 ms.
-     - `grid.transposed.jumpPaintP95Ms` (596 ms on Linux CI) is reported without a floor; it is mostly the fake backend
-       encoding and the worker decoding 0.75 MB pages.
+       running on it, against the spike's 47 ms and the 50 ms target; Linux CI read 90 ms against a floor of 170, and
+       172 ms on `main` after PR 8 merged. It was measured again after PR 8 merged, and it was neither a cost of the port nor a
+       regression: the benchmark's wait for a jump's paint looked at the view every animation frame, and those looks
+       were counted as the jump's task time for as long as its tiles took to read (a median of 280 ms here, 500 ms on
+       CI). Alternating runs of the 5b merge, the PR 6 merge, the PR 7 merge and `main` at `ce9d1659` on the owner's
+       machine (20 to 40 % of its CPUs busy with other sessions throughout; it was never quiet) read medians of 56, 65,
+       58 and 64 ms with that wait, spreads overlapping, and 33, 35, 34 and 38 ms with a wait that costs nothing, with
+       the same mean of 24.5 to 25.0 ms a jump at each: under the 50 ms target, and equal to the 300-column table's
+       (31 to 32 ms). The benchmark now waits on the grid's writes; the floor stays at 170 ms. `docs/ipc.md`
+       (Benchmarks) has the trace and the CI runners' spread.
+     - `grid.transposed.jumpPaintP95Ms` (448 to 922 ms over 24 runs of Linux CI) has a floor of 2,500 ms since then; it
+       is mostly the fake backend encoding and the worker decoding 0.75 MB pages.
      - Highlights after an orientation change were lost and are fixed, with no automated check until PR 7's smoke
        steps.
      - Not done: changing the shared width by hand, and a pass with a screen reader; see Follow-ups.

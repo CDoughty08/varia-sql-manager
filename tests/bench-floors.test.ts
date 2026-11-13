@@ -27,6 +27,22 @@ describe('benchmark floors', () => {
     }
   })
 
+  // A jump's main-thread task time is measured around the wait for its paint. A wait that looked at the view every
+  // animation frame made that time follow how long the tiles took to read: the transposed jump read 1.5 to 2.7 times the
+  // 300-column one on CI with less work in the grid, and crossed its floor on a slow runner.
+  it('wait for a jump to paint on the grid\'s own writes, never every animation frame or on a timer loop', () => {
+    const bench = readFileSync('scripts/grid-bench.mjs', 'utf8')
+    const jump = /\nconst jump = [\s\S]*?\n(?=\/\*\*|const |function |async function )/.exec(bench)?.[0] ?? ''
+    expect(jump).toContain('new MutationObserver(')
+    expect(jump).not.toMatch(/setInterval|for \(|while \(|await /)
+    // One animation frame, after the view is complete, to time its paint: never one per look.
+    expect(jump.match(/requestAnimationFrame\(/g)).toHaveLength(1)
+    expect(jump).toMatch(/finish\(\(\) => requestAnimationFrame\(/)
+    // The one timer is the failure's: it rejects, and is cleared when the jump paints.
+    expect(jump.match(/setTimeout\(/g)).toHaveLength(1)
+    expect(jump).toMatch(/clearTimeout\(timer\)/)
+  })
+
   it('pass values at or past their floor and fail values worse than it, in either direction', async () => {
     const { compare, failed } = await checker()
     const specs: Floors = { metrics: {

@@ -114,19 +114,28 @@ async function close() {
   app = undefined
 }
 
-/** Moves grid 0's scroll bars to fractions of their range and resolves, in ms, once the rows there are painted. */
-const jump = (top, left) => page.evaluate(async ({ top, left, part }) => {
+/**
+ * Moves grid 0's scroll bars to fractions of their range and resolves, in ms, once the rows there are painted. It looks
+ * at the view only when the grid has written to its DOM, never on a timer or every animation frame: a jump's main-thread
+ * task time is measured around this, and a look every frame (some 70 forced box reads, and a frame the page would not
+ * have drawn) cost as much as the jump itself for as long as the tiles took to read, so the figure followed the read's
+ * latency and the runner's speed twice over (docs/ipc.md, Benchmarks). The time is taken at the next animation frame
+ * after the write that completed the view, which is when that write has been drawn.
+ */
+const jump = (top, left) => page.evaluate(({ top, left, part, root }) => new Promise((resolve, reject) => {
   const scroller = document.querySelector(part)
   const before = window.__benchView().signature, started = performance.now()
+  const finish = settle => { observer.disconnect(); clearTimeout(timer); settle() }
+  const observer = new MutationObserver(() => {
+    const now = window.__benchView()
+    if (now.signature !== before && now.rows > 0 && now.loading === 0) finish(() => requestAnimationFrame(() => resolve(performance.now() - started)))
+  })
+  // Fires only when the jump failed: the wait itself is the observer's.
+  const timer = setTimeout(() => finish(() => reject(new Error(`Grid 0 did not paint after a jump to ${top}, ${left}: ${JSON.stringify(window.__benchView())}.`))), 15000)
+  observer.observe(document.querySelector(root), { subtree: true, childList: true, attributes: true, characterData: true })
   scroller.scrollTop = top * (scroller.scrollHeight - scroller.clientHeight)
   if (left !== null) scroller.scrollLeft = left * (scroller.scrollWidth - scroller.clientWidth)
-  for (;;) {
-    await new Promise(done => requestAnimationFrame(done))
-    const now = window.__benchView()
-    if (now.signature !== before && now.rows > 0 && now.loading === 0) return performance.now() - started
-    if (performance.now() - started > 15000) throw new Error(`Grid 0 did not paint after a jump to ${top}, ${left}: ${JSON.stringify(now)}.`)
-  }
-}, { top, left: left ?? null, part: `${resultGridSelector()} ${gridPart.scroller}` })
+}), { top, left: left ?? null, part: `${resultGridSelector()} ${gridPart.scroller}`, root: resultGridSelector() })
 /** Fractions at least `gap` from the previous one, so every jump moves the rows in view. */
 function fractions(count, gap) {
   const list = []
