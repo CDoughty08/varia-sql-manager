@@ -27,13 +27,15 @@ export function scrollbarSize(): number {
  * bar is counted unless the set's grid said its columns fit (`narrow`): a grid not yet shown might need one. A set drawn
  * transposed (`turned`) is sized by the rows it draws, which are its columns, with the strip it shows past the cap.
  */
-export function settledContent(tab: Pick<TabResults, 'sets' | 'settled'>, narrow?: ReadonlySet<EntryKey>, turned?: ReadonlySet<EntryKey>): (number | undefined)[] {
+export function settledContent(tab: Pick<TabResults, 'sets' | 'settled'> & Partial<Pick<TabResults, 'sorts'>>, narrow?: ReadonlySet<EntryKey>, turned?: ReadonlySet<EntryKey>): (number | undefined)[] {
   return tab.sets.map(entry => {
     const set = tab.settled.get(setKey(entry.descriptor))
     if (!set) return undefined
     const isTurned = !!turned?.has(entry.key)
-    // Past the cap a transposed grid shows a strip saying which rows it draws.
-    return contentHeight(isTurned ? entry.descriptor.columns.length : set.rows, narrow?.has(entry.key) ? 0 : scrollbarSize(), set.strip || (isTurned && set.rows > wire.transpose.maxRows))
+    // Past the cap a transposed grid shows a strip saying which rows it draws: the rows of the view it shows, so a
+    // filter that leaves fewer (Transpose Selected Rows always does) leaves no strip.
+    const capped = isTurned && (tab.sorts?.get(entry.key)?.view?.rows ?? set.rows) > wire.transpose.maxRows
+    return contentHeight(isTurned ? entry.descriptor.columns.length : set.rows, narrow?.has(entry.key) ? 0 : scrollbarSize(), set.strip || capped)
   })
 }
 /** The entries drawn transposed, by the one rule the grid, Copy and Save follow (`transposedView`) over each grid's state. */
@@ -62,7 +64,7 @@ export function weightsOf(sets: readonly ResultSetEntry[], weights: ReadonlyMap<
   return sets.map(entry => weights.get(entry.key) ?? mean)
 }
 /** The room a run's stack needs before it scrolls: every set at its floor (what the Messages strip leaves it, at least). */
-export function stackNeed(tab: Pick<TabResults, 'sets' | 'settled'>, collapsed: ReadonlySet<EntryKey>, grids?: ReadonlyMap<EntryKey, GridViewState>): number {
+export function stackNeed(tab: Pick<TabResults, 'sets' | 'settled'> & Partial<Pick<TabResults, 'sorts'>>, collapsed: ReadonlySet<EntryKey>, grids?: ReadonlyMap<EntryKey, GridViewState>): number {
   const minHeight = minGridHeight(scrollbarSize()), content = settledContent(tab, undefined, grids && turnedEntries(tab.sets, grids)), count = tab.sets.length, places = collapsedPlaces(tab.sets, collapsed)
   if (count === 0) return 0
   return count === 1 ? places.has(0) ? g.captionHeight : Math.min(minHeight, content[0] ?? minHeight) : stackMinimum(count, minHeight, { content, collapsed: places })
@@ -165,7 +167,8 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
   }, [tab, sets, view])
   const minHeight = useMemo(() => minGridHeight(scrollbarSize()), [])
   const settled = tab.settled
-  const content = useMemo(() => settledContent({ sets, settled }, narrow, turned), [sets, settled, narrow, turned])
+  const sorts = tab.sorts
+  const content = useMemo(() => settledContent({ sets, settled, sorts }, narrow, turned), [sets, settled, sorts, narrow, turned])
   // By place, for the layout: what the stack keeps by entry key, over the entries as they are drawn.
   const weights = useMemo(() => weightsOf(sets, entryWeights), [sets, entryWeights])
   const collapsed = useMemo(() => collapsedPlaces(sets, collapsedEntries), [sets, collapsedEntries])

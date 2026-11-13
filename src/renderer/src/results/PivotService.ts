@@ -138,12 +138,15 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     this.errors.get(tabId)?.delete(group.ordinal)
     // A group has one Pivot: the one it has is released before the new one is built. When its grid had the focus, the
     // focus waits on the Table (where closing a Pivot leaves it) and goes to the new Pivot's grid when it is shown,
-    // unless a grid has taken the focus meanwhile (the Table's own included, which moves nothing). A Pivot drawn
-    // transposed is drawn transposed again; the rest of its grid's state went with the old result.
+    // unless a grid of this tab has taken the focus meanwhile (the Table's own included, which moves nothing). A Pivot
+    // drawn transposed is drawn transposed again, under the same header column when the new Pivot has a column of that
+    // name and neither has two; the rest of its grid's state went with the old result.
     const refocus = group.pivot !== undefined && tab.focused === group.pivot.key
-    const turned = group.pivot !== undefined && this.results.orientation(tabId, group.pivot.key).transposed
+    const was = group.pivot && this.results.orientation(tabId, group.pivot.key)
+    const header = was?.transposed && was.headerColumn !== undefined ? group.pivot!.entry.descriptor.columns[was.headerColumn]?.name : undefined
+    const headerUnique = header !== undefined && group.pivot!.entry.descriptor.columns.filter(column => column.name === header).length === 1
     if (group.pivot) this.results.removeEntry(tabId, group.pivot.key)
-    const stamp = this.results.focusStamp()
+    const stamp = this.results.focusStamp(tabId)
     this.refresh(tabId)
     let error: string | undefined
     try {
@@ -170,8 +173,11 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       const snapshot = this.getSnapshot()
       this.fresh.set(setKey(result.descriptor), { tabId, queryId: tab.queryId })
       this.publish({ tabs: snapshot.tabs, info: new Map([...this.shown(snapshot.info), [setKey(result.descriptor), info]]) })
-      if (turned) this.results.setOrientation(tabId, added, { transposed: true })
-      if (refocus && this.results.focusStamp() === stamp) this.results.focusEntry(tabId, added)
+      if (was?.transposed) {
+        const columns = result.descriptor.columns, named = headerUnique ? columns.flatMap((column, at) => column.name === header ? [at] : []) : []
+        this.results.setOrientation(tabId, added, { transposed: true, ...named.length === 1 ? { headerColumn: named[0] } : {} })
+      }
+      if (refocus && this.results.focusStamp(tabId) === stamp) this.results.focusEntry(tabId, added)
     } catch (failure) {
       if (!abort.signal.aborted) error = failure instanceof Error ? failure.message : 'The results could not be pivoted.'
     } finally {

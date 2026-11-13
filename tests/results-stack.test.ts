@@ -343,6 +343,9 @@ describe('the stacked results', () => {
     const long = { sets: [entry], settled: new Map([[setKey(wide), { rows: 5000, strip: false }]]) }
     expect(settledContent(long, new Set(['e']), new Set(['e']))[0]! - turned!).toBe(25)
     expect(settledContent({ sets: [entry], settled: new Map([[setKey(wide), { rows: 4095, strip: false }]]) }, new Set(['e']), new Set(['e']))[0]).toBe(turned)
+    // The strip is the view's: a filter that leaves fewer rows than the cap (Transpose Selected Rows) leaves none.
+    const filtered = { keys: [], filters: [], applied: [], view: { rows: 2 }, sorting: false, approximate: false, stale: false } as unknown as GridSort
+    expect(settledContent({ ...long, sorts: new Map([['e', filtered]]) }, new Set(['e']), new Set(['e']))[0]).toBe(turned)
     // Which entries are turned is read from each grid's state by the rule the grid follows: never a comparison (its tone
     // column marks rows), whatever its state says.
     const toned = { key: 'd', number: 2, descriptor: descriptor(2, { kind: 'diff', columns: [...wide.columns, { name: '', dataType: 'tinyint', wire: 'text', nullable: true, role: 'tone' }] as ResultColumn[] }) } as unknown as ResultSetEntry

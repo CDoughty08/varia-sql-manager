@@ -374,8 +374,9 @@ describe('PivotService', () => {
     pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
     await pivot.run('t1')
     const old = results.getSnapshot().t1.groups[0].pivot!.key
-    // The Pivot is drawn transposed and has the focus when it is built again.
-    expect(results.setOrientation('t1', old, { transposed: true })).toBe(true)
+    // The Pivot is drawn transposed, headed by its Region column, and has the focus when it is built again.
+    expect(results.setOrientation('t1', old, { transposed: true, headerColumn: 0 })).toBe(true)
+    expect(results.orientation('t1', old)).toEqual({ transposed: true, headerColumn: 0 })
     results.focusEntry('t1', old)
     const building = deferred<Awaited<ReturnType<FakeHandle['pivot']>>>()
     vi.mocked(first.pivot).mockImplementationOnce(() => building.promise)
@@ -391,10 +392,31 @@ describe('PivotService', () => {
     expect(rebuilt).not.toBe(old)
     expect(results.getSnapshot().t1.focused).toBe(one)
     expect(results.getSnapshot().t1.groups[0].selected).toBe('table')
-    // The new Pivot is drawn as the old one was.
-    expect(results.orientation('t1', rebuilt).transposed).toBe(true)
+    // The new Pivot is drawn as the old one was: transposed, and headed by Region, which is its second column now.
+    expect(results.getSnapshot().t1.groups[0].pivot!.entry.descriptor.columns.map(column => column.name).indexOf('Region')).toBe(0)
+    expect(results.orientation('t1', rebuilt)).toEqual({ transposed: true, headerColumn: 0 })
+    // A header column the new Pivot does not have heads nothing: it is transposed under "Row N".
+    vi.mocked(first.pivot).mockResolvedValueOnce({ descriptor: descriptor(813, { index: 0, kind: 'pivot', columns: [columns[1], columns[2]] }), rows: 3, rowGroups: 2, columnGroups: 0, approximate: false })
+    await pivot.run('t1')
+    await settle()
+    const renamed = results.getSnapshot().t1.groups[0].pivot!.key
+    expect(results.orientation('t1', renamed)).toEqual({ transposed: true })
+    // A grid of another tab taking the focus during a rebuild is not this tab's user moving on: the rebuilt Pivot still
+    // takes the focus its predecessor had.
+    results.begin('t2', 'q-other')
+    const elsewhere = descriptor(77, { index: 0, columns })
+    void results.finish('t2', 'q-other', { summary: summaryOf([elsewhere]) })
+    results.focusEntry('t1', renamed)
+    const again = deferred<Awaited<ReturnType<FakeHandle['pivot']>>>()
+    vi.mocked(first.pivot).mockImplementationOnce(() => again.promise)
+    const second = pivot.run('t1')
+    results.focusEntry('t2', results.getSnapshot().t2.sets[0].key)
+    again.resolve({ descriptor: descriptor(812, { index: 0, kind: 'pivot', columns }), rows: 3, rowGroups: 2, columnGroups: 0, approximate: false })
+    await second
+    await settle()
+    expect(results.getSnapshot().t1.focused).toBe(results.getSnapshot().t1.groups[0].pivot!.key)
     // A Pivot that was not transposed is not turned by a rebuild.
-    results.setOrientation('t1', rebuilt, { transposed: false })
+    results.setOrientation('t1', results.getSnapshot().t1.groups[0].pivot!.key, { transposed: false })
     await pivot.run('t1')
     await settle()
     expect(results.orientation('t1', results.getSnapshot().t1.groups[0].pivot!.key).transposed).toBe(false)

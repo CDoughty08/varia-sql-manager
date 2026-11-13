@@ -600,7 +600,7 @@ export const comparisonGrids = scope => scope.locator(`${gridPart.root}[data-res
  * A results grid by its entry's name, as the user reads it: "Result 2" is the grid whose accessible name starts with it;
  * any other name ("Pivot of Result 1") is the grid under the caption that carries it. A grid has no place to be found
  * by: results come and go around it, and their ids come from one backend counter no script can predict. `scope` is a
- * page or a locator. Two results under one caption name (two pivots of Result 1) match two grids, which a strict
+ * page or a locator. Two results under one caption name (two comparisons of the same pair) match two grids, which a strict
  * locator refuses: name those by their number.
  *
  * With `view`, the name is a group's ("Result 2", an original result) and the grid is that group's view: 'table' (its

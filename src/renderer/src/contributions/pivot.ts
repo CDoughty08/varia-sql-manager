@@ -8,8 +8,8 @@ import { focusedOutput } from './output'
  * Pivot… (PivotService): opens the pivot builder on the group of the menu's grid, else the focused one, else (from the
  * results toolbar or the palette) on the group the builder follows in the named or active query tab. It is offered once
  * the run has ended: for a grid, when it shows a group's Table or its Pivot (which edits that Pivot: it is always read from
- * the Table); from the toolbar or the palette, while some group can be pivoted. Never for a comparison, a plan set, a stored
- * transpose or a Peek grid, so no pivot is made of anything but a Table.
+ * the Table); from the toolbar or the palette, while some group can be pivoted. Never for a comparison, a plan set or a
+ * Peek grid, so no pivot is made of anything but a Table.
  */
 export function pivotContribution({ commands, pivot, results, documents, menuTargets }: Pick<Workbench, 'commands' | 'pivot' | 'results' | 'documents' | 'menuTargets'>): Disposable {
   /** The tab, and the grid when the command names one (`key`). Undefined when it names something Pivot does not act on. */

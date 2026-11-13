@@ -119,7 +119,7 @@ being true.
   and a comparison is a slot of its own with frozen references to its two inputs (`TabResults.comparisons`). `sets` stays
   the one flat list, in the order drawn: a group's Table, its Pivot directly under it, the next group, comparisons last.
   `ResultsService.addSet` is the only way a derived result joins a run and keeps the rules that make every list
-  representable: a pivot is taken only from a group's Table of rows (never from a Pivot, a transpose, a comparison or a
+  representable: a pivot is taken only from a group's Table of rows (never from a Pivot, a comparison or a
   SQL-returned plan set) and replaces the group's Pivot, releasing the old one first; a bare run (Peek's, `begin`'s
   `bare`) takes neither a pivot nor a diff. A slot's identity is its entry key, where its grid state, sort and filters
   already live; do not add a second key for a view. Transposed is not a view either: it is how a Table or a Pivot is
@@ -127,8 +127,8 @@ being true.
   (`ResultsService.focusEntry`, `PivotService`); there is no source picker. Commands tell what a grid is by
   `pivotGroup`, `slotOf` and `groupOf`, and a Peek grid by its target's `bare` (the `outputGridBare` key).
 - Every way a result leaves its run goes through one cleanup, `ResultsService.drop`: closing one view (`removeEntry`, a
-  stack caption's close button or Close Result, on an ended run only; a Table closes its group, so its Pivot and stored
-  transposes go in the same release), Close Results, a new run and the tab closing. It aborts the entry's
+  stack caption's close button or Close Result, on an ended run only; a Table closes its group, so its Pivot
+  goes in the same release), Close Results, a new run and the tab closing. It aborts the entry's
   sort or filter being built, forgets its held views, sort, distinct snapshots, grid controller and state and its part of
   the stack's state, cancels a copy of it (a save the backend accepted finishes under its lease), and releases the stored
   results in one request, after a retained-plan copy in progress has read them. Add a new piece of per-entry state there,

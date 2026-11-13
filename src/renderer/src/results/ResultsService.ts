@@ -383,7 +383,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private disposed = false
   private announcedCount = 0
   private minted = 0
-  private focusEvents = 0
+  /** How many times a grid has taken the focus, by tab. */
+  private readonly focusEvents = new Map<string, number>()
 
   constructor(o: {
     client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary' | 'release' | 'onGeneration'>; api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'>; events: EventBus
@@ -526,6 +527,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.clearJobNotice(tabId)
     this.disposeRun(tabId)
     this.views.delete(tabId)
+    this.focusEvents.delete(tabId)
     this.stripChoices.delete(tabId)
     this.selectionAnnounced.delete(tabId)
     const timer = this.announcements.get(tabId)
@@ -588,15 +590,15 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const run = this.runs.get(tabId), record = run?.slots.get(key)
     if (!run || !record) return
     const view = this.viewState(tabId)
-    this.focusEvents++
+    this.focusEvents.set(tabId, (this.focusEvents.get(tabId) ?? 0) + 1)
     let changed = view.focused !== key
     view.focused = key
     if (this.select(run, key)) changed = true
     if (changed) this.publishNow(tabId)
   }
-  /** How many times a grid has taken the focus in this window: one that takes it again (a click into the grid that already
-   *  had it) changes nothing published, and this still counts it. */
-  focusStamp(): number { return this.focusEvents }
+  /** How many times a grid of the tab has taken the focus: one that takes it again (a click into the grid that already
+   *  had it) changes nothing published, and this still counts it. Another tab's grids do not. */
+  focusStamp(tabId: string): number { return this.focusEvents.get(tabId) ?? 0 }
   /** The entry `key` has the focus: its group's selected view is the one it shows (a comparison has no group).
    *  Whether that changed. */
   private select(run: Run, key: EntryKey): boolean {

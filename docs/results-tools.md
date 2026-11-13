@@ -44,8 +44,8 @@ used: that grid's result, or, when the grid is a comparison or a plan set, the f
 result keeps its own draft, which a re-run's result of the same number takes over. **Pivot Results…** on a Pivot's grid
 opens the builder for that Pivot's result. **Build Pivot** on a result that has a Pivot replaces it: the old Pivot is
 released first and the new one shown when it is built, so a build that fails or is cancelled leaves the result without
-one. A Pivot shown transposed is shown transposed again after a rebuild; its own sort, filters, column widths and
-selection start over. While one result's Pivot is being built the builder says so on the others, and a failed build's
+one. A Pivot shown transposed is shown transposed again after a rebuild, under the same header column when the
+new Pivot still has a column of that name; its own sort, filters, column widths and selection start over. While one result's Pivot is being built the builder says so on the others, and a failed build's
 message stays with the result it was for until that result's draft is edited or it is built again.
 
 **Compare with Previous Result** compares a result's own grid with the nearest earlier result's own grid; Pivots,
