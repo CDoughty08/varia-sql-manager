@@ -68,7 +68,8 @@ internal static class ResultSearcher
         long baseRows = 0;
         foreach (var page in pages) baseRows += page.Rows;
         long rows = view?.Rows ?? baseRows;
-        // A run for each thread asked for, read on the share of the threads the gate gives.
+        // A run for each thread asked for, read on the share of the threads the gate gives. A run is one item, so a search
+        // holding more than its share gives a thread back only as one of its runs ends (each keeps matches of its own).
         using var threads = (gate ?? ViewSorter.Gate).Take((int)Math.Max(1, workers ?? Math.Min(rows / MinSlice, ViewSorter.Workers)));
         var runs = (int)Math.Clamp(threads.Wanted, 1, Math.Max(1, Math.Min(rows, int.MaxValue)));
         var parts = new Part[runs];

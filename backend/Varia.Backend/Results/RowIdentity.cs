@@ -164,9 +164,9 @@ internal static class RowIdentity
     internal static bool Distinct(long[] ids, long[] spread, CancellationToken token)
     {
         if (ids.Length < 2) return true;
-        using var threads = ViewSorter.Gate.Take(Math.Max(1, Math.Min(ViewSorter.Workers, ids.Length / MinSlice)));
+        var wanted = Math.Max(1, Math.Min(ViewSorter.Workers, ids.Length / MinSlice));
         var bits = 0;
-        while (2 << bits <= 4 * threads.Wanted && ids.Length >> (bits + 1) >= MinSlice) bits++;
+        while (2 << bits <= 4 * wanted && ids.Length >> (bits + 1) >= MinSlice) bits++;
         var parts = 1 << bits;
         var shift = 53 - bits;
         var starts = new int[parts + 1];
@@ -185,7 +185,8 @@ internal static class RowIdentity
             for (var i = 1; i < span.Length; i++)
                 if (span[i] == span[i - 1]) { Volatile.Write(ref repeated, 1); return; }
         }
-        threads.For(parts, Part);
+        // Taken only now: the passes above run on this thread alone, and threads held through them would sit idle.
+        using (var threads = ViewSorter.Gate.Take(wanted)) threads.For(parts, Part);
         return repeated == 0;
     }
 

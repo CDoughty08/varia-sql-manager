@@ -19,6 +19,7 @@ internal static partial class ViewSorter
         private readonly List<Lease> leases = [];
         private readonly Action<IThreadPoolWorkItem> start = start ?? (item => ThreadPool.UnsafeQueueUserWorkItem(item, preferLocal: false));
         private int busy, peak;
+        private long taken;
 
         /// <summary>Threads the leases hold: each one's own and the workers started for it.</summary>
         public int Busy => Volatile.Read(ref busy);
@@ -34,6 +35,7 @@ internal static partial class ViewSorter
             lease.demand = lease.Wanted;
             lock (sync)
             {
+                lease.order = ++taken;
                 leases.Add(lease);
                 Share();
                 Hold(lease, Math.Max(1, Math.Min(lease.target, Limit - busy)));
@@ -55,10 +57,11 @@ internal static partial class ViewSorter
         }
 
         /// <summary>Each lease's share of the threads: filled from the smallest demand up, each the lesser of its demand
-        /// and an even split of what is left, and one at least.</summary>
+        /// and an even split of what is left, and one at least. Equal demands are filled oldest first, so the thread left
+        /// over by an uneven split stays with the same lease instead of moving at every step.</summary>
         private void Share()
         {
-            leases.Sort(static (a, b) => a.demand.CompareTo(b.demand));
+            leases.Sort(static (a, b) => a.demand != b.demand ? a.demand.CompareTo(b.demand) : a.order.CompareTo(b.order));
             var left = Limit;
             for (var i = 0; i < leases.Count; i++)
             {
@@ -123,6 +126,7 @@ internal static partial class ViewSorter
         internal sealed class Lease(WorkerGate gate, int wanted) : IDisposable
         {
             internal int held, target, demand = int.MaxValue;
+            internal long order;
             internal Loop? loop;
             private bool disposed;
 
@@ -172,7 +176,7 @@ internal static partial class ViewSorter
             internal bool Keep()
             {
                 if (Volatile.Read(ref held) <= Volatile.Read(ref target)) return true;
-                List<Loop>? started = null;
+                var started = new List<Loop>();
                 bool keep;
                 lock (gate.sync)
                 {
@@ -180,7 +184,7 @@ internal static partial class ViewSorter
                     keep = loop!.Queued > 0;
                     if (keep) loop.Queued--;
                     Leave();
-                    gate.Grant(started = []);
+                    gate.Grant(started);
                 }
                 gate.Start(started);
                 return keep;
@@ -244,7 +248,8 @@ internal static partial class ViewSorter
                 if (items <= 0) return;
                 if (Math.Min(wanted, items) <= 1)
                 {
-                    if (Count > 1) Settle();
+                    // Threads held past its own, or a demand still at what it asked for, go back: the others' shares grow.
+                    if (Count > 1 || Volatile.Read(ref demand) > 1) Settle();
                     var own = state();
                     for (var index = 0; index < items; index++)
                     {
@@ -253,7 +258,9 @@ internal static partial class ViewSorter
                     }
                     return;
                 }
-                using var done = new ManualResetEventSlim(false);
+                // Not disposed: the last worker may still be returning from Set as the owner wakes, and an event that never
+                // made a kernel handle holds nothing to release.
+                var done = new ManualResetEventSlim(false);
                 var step = new Step<TState>(this, items, state, body, token) { Done = done };
                 Open(step, Math.Min(wanted, items));
                 step.Work(owner: true);

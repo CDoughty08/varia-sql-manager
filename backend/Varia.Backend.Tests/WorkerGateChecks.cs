@@ -207,6 +207,37 @@ internal static class WorkerGateChecks
             }
             catch (OperationCanceledException) { canceled = "canceled"; }
         }
+        // No body is still running once For has rethrown, and a state factory's failure is rethrown like a body's.
+        var straggling = 0;
+        for (var round = 0; round < 200 && straggling == 0; round++)
+        {
+            var running = 0;
+            using var lease = gate.Take(4);
+            try
+            {
+                lease.For(64, index =>
+                {
+                    Interlocked.Increment(ref running);
+                    var spin = 0;
+                    for (var i = 0; i < 2000; i++) spin += i;
+                    Interlocked.Decrement(ref running);
+                    if (index == 8 + spin % 2) throw new InvalidOperationException("item");
+                });
+            }
+            catch (InvalidOperationException) { }
+            straggling = Volatile.Read(ref running);
+        }
+        var made = 0;
+        string? stateFailed = null;
+        using (var lease = gate.Take(4))
+        {
+            try
+            {
+                lease.For(64, () => Interlocked.Increment(ref made) == 2 ? throw new ArgumentException("state") : 0, (_, _) => { for (var i = 0; i < 2000; i++) { } }, CancellationToken.None);
+            }
+            catch (ArgumentException error) { stateFailed = error.Message; }
+            catch (Exception) { stateFailed = "other"; }
+        }
         // Two operations at once, each through its own step: both finish, and the threads stay within the limit and the
         // second's own thread.
         var both = new int[2];
@@ -217,6 +248,7 @@ internal static class WorkerGateChecks
         });
         var states = 0;
         using (var lease = gate.Take(4)) lease.For(64, () => Interlocked.Increment(ref states), (_, _) => { }, CancellationToken.None);
+        check(straggling == 0 && (stateFailed == "state" || made < 2), "no body runs after For has rethrown a failure, and a failing state factory is rethrown as itself (" + straggling + ", " + stateFailed + ")");
         check(runs.All(count => count == 1) && failed == "item" && heldAfterFailure == 1 && canceled == "canceled" && ran < 5000 && both is [1280, 1280]
             && states is >= 1 and <= 4 && gate.Busy == 0 && gate.Peak <= 5,
             "a step's items each run once on the gate's threads; a failure or cancellation is rethrown after its workers stop, and every thread is given back (peak " + gate.Peak + ", ran " + ran + ", states " + states + ")");

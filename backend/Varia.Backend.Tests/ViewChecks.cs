@@ -446,6 +446,16 @@ internal static class ViewChecks
         for (var i = 0; i < values.Length; i++) sorted[i] = expected[i] = values.Length - 1 - i;
         Array.Sort(expected, 7, values.Length - 20, comparer);
         ViewSorter.Sort(sorted, 7, values.Length - 20, comparer);
+        // With every thread held by another operation the sort runs its slices and merges on its own thread alone, and
+        // orders the same.
+        var crowded = new int[values.Length];
+        for (var i = 0; i < values.Length; i++) crowded[i] = values.Length - 1 - i;
+        int crowdedThreads;
+        using (var holder = ViewSorter.Gate.Take(ViewSorter.Workers))
+        {
+            ViewSorter.Sort(crowded, 7, values.Length - 20, comparer);
+            crowdedThreads = holder.Count;
+        }
         string? cancelled = null;
         using (var stop = new CancellationTokenSource())
         {
@@ -453,8 +463,8 @@ internal static class ViewChecks
             try { ViewSorter.Build(set, pages, [new ViewKey(4, false, SortMode.Value)], [], stop.Token, counted); }
             catch (OperationCanceledException) { cancelled = "cancelled"; }
         }
-        check(sorted.AsSpan().SequenceEqual(expected) && cancelled == "cancelled" && reserved == returned && ViewSorter.Gate.Busy >= 0,
-            "a sort on several threads orders a range as one thread does and leaves the rest alone; a cancelled build stops as a cancellation and returns its keys");
+        check(sorted.AsSpan().SequenceEqual(expected) && crowded.AsSpan().SequenceEqual(expected) && crowdedThreads >= 1 && cancelled == "cancelled" && reserved == returned,
+            "a sort on several threads, or on the one left when another operation holds the rest, orders a range as one thread does and leaves the rest alone; a cancelled build stops as a cancellation and returns its keys");
     }
 
     private static void Ordering(Action<bool, string> check)
