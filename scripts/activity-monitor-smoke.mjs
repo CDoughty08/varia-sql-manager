@@ -4,8 +4,8 @@
 // its tiles fill after two samples and two charts are open (all eight may be); Sessions shows the sessions probe's rows in the results grid and its filters, funnels and sort reach the backend; Blocking and Active Expensive Queries show its other tables; Resource Waits and Data File I/O show the resources probe's tables and their chips reach the backend; and a failed sample keeps them and says why; Pause stops sampling and Resume starts it again; the
 // interval and the chart window reach the live layer; a tab switch pauses it while hidden and keeps its choices; the
 // panes, Split View and F6 work; the header, tiles and panes fit common window sizes; a login without server state gets
-// the permission message and its GRANT statement; a lost backend reports it and
-// Reconnect brings it back; Shift+Esc and closing the tab end its subscription. Screenshots in Dark and Light. With
+// the permission message and its GRANT statement; a lost backend reports it and reconnecting with another account
+// leaves the original monitor stopped; an explicitly opened monitor uses the new account; Shift+Esc and closing the tab end its subscription. Screenshots in Dark and Light. With
 // VARIA_TEST_SQL_SERVER set, a second run on the Release backend opens the monitor on that server: the real overview
 // probe fills the tiles, and Pause stops it.
 import { electron, expect, within } from './fixtures/smoke.mjs'
@@ -708,12 +708,26 @@ try {
   await monitor().getByRole('button', { name: 'Reconnect…', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
   await expect(dialog.getByLabel('Server Name', { exact: true })).toHaveValue('activity-server')
+  await dialog.getByLabel('Login', { exact: true }).fill('another-reader')
   await dialog.getByLabel('Password', { exact: true }).fill('activity-smoke-password')
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog).toHaveCount(0)
-  await expect.poll(async () => (await viewOf(id)).status, { timeout: 15000 }).toBe('live')
+  // A server-name match cannot move a monitor onto another account.
+  await expect.poll(async () => (await viewOf(id)).status).toBe('lost')
+  await expect(livePill(monitor())).toHaveText('Stopped · backend unavailable')
+  await queryTabs().filter({ hasText: 'activity-server - Activity Monitor' }).click()
+  await page.keyboard.press(mod + '+W')
+  await expect(queryTabs().filter({ hasText: 'Activity Monitor' })).toHaveCount(0)
+  await expect.poll(async () => (await handles()).length).toBe(0)
+  // Only the newly connected account is live after backend loss; explicitly open its own monitor.
+  await menu('activity.open')
+  await expect(queryTabs().filter({ hasText: 'activity-server - Activity Monitor' })).toHaveCount(1)
+  await expect.poll(async () => (await handles()).length).toBe(1)
+  const [freshMonitor] = await handles()
+  expect(freshMonitor.id).not.toBe(id)
+  await expect.poll(async () => (await viewOf(freshMonitor.id)).status, { timeout: 15000 }).toBe('live')
   await expect(tile('% Processor Time')).toHaveAccessibleName(/^% Processor Time: \d/, { timeout: 10000 })
-  console.log('Backend loss passed: the monitor said so, and Reconnect moved it to the new connection, sampling again.')
+  console.log('Backend loss passed: reconnecting as another account kept the original monitor stopped; explicitly opening a fresh monitor sampled the new account.')
 
   step = 'light'
   const background = () => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--varia-editor-background').trim())

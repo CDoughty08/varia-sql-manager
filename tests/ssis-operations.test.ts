@@ -330,27 +330,21 @@ describe('Integration Services Operations documents', () => {
     expect(commands.isEnabled('ssis.allOperations')).toBe(false)
     expect(service.stoppable(documents.getSnapshot().activeId)).toBe(false)
   })
-  it('follows a Reconnect to its own server, so Stop Operation acts on the new connection', async () => {
-    const fixture = operations()
-    const { operations: service, connections, targets, api } = fixture
+  it('refuses server-name-only reconnect and leaves Stop Operation disabled', async () => {
+    const { operations: service, connections, targets, api } = operations()
     const id = service.open('c1', 'active')
     const grid = new FakeGrid({ newRows: 0, following: true, lost: false })
     service.attachGrid(id, grid as unknown as LiveGrid)
     grid.select('42', ['42', 'Create and start execution', 'Running', 'Finance', 'Loads', 'Daily.dtsx', ''])
     await settled()
     expect(service.stoppable(id)).toBe(true)
-    // The connection is lost: Stop Operation waits for a Reconnect.
     connections.markLostBefore(2)
-    expect(service.stoppable(id)).toBe(false)
-    // Reconnected to the same server (any case): the document moves to the new connection, and Stop Operation goes there.
-    connections.replace('c1', { ...connectionInfo('c2', 2), server: 'C1.EXAMPLE' }, connectionOptions)
+    connections.replace('c1', { ...connectionInfo('c2', 2), server: 'C1.EXAMPLE', login: 'another-account' }, connectionOptions)
     targets.retarget('c1', 'c2')
-    expect(service.get(id)?.connectionId).toBe('c2')
-    expect(service.stoppable(id)).toBe(true)
+    expect(service.get(id)?.connectionId).toBe('c1')
+    expect(service.stoppable(id)).toBe(false)
     await service.requestStop(id)
-    service.answerStop(id, true)
-    await settled()
-    expect(api.executeSsis).toHaveBeenCalledWith(expect.objectContaining({ connectionId: 'c2', action: { verb: 'stopOperation', operationId: 42 } }))
+    expect(api.executeSsis).not.toHaveBeenCalled()
   })
   it('applies a new Show at most to open documents at once', async () => {
     const { operations: service, handle, settings } = operations()

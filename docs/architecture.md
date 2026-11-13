@@ -66,6 +66,16 @@ being true.
   handles for the backend owner to close. It keeps intentional disconnect separate from unexpected loss and Explorer
   membership separate from document references. These additive contracts are not yet wired into the workbench;
   `docs/connections-explorer-implementation-plan.md` defines the owning integration tracks.
+- Disconnect orchestration lives in `services/disconnect.ts`, behind `DisconnectHost`; `disconnect-workbench.ts` adapts
+  existing services without owning connection state. Save and transaction choices finish before cancellation,
+  session completion or backend teardown. Revalidate document revisions/associations, management blockers and target
+  operation/backend generation at mutation boundaries. A failed save, cancellation, commit or disconnect closes no
+  tab; completed session changes are reported, not described as undone. Close Query Tabs uses a synchronous local
+  close only after successful teardown, through normal close events for result/file release. Keep Tabs retains output
+  and immutable `QueryState.provenance` from its original execution, independently of the current SQL session.
+  This coordinator/dialog remains additive until the central hooks in `docs/connections-disconnect-integration.md`
+  are applied. Custom providers bind through `CustomDocumentTargets`, accept only explicit `canFollowTarget` identity,
+  reject replies from replaced handles, and retain drafts with dependent operations disabled while disconnected.
 - Query rows stay in backend memory (never on disk) under the result budget. Main forwards DATA pages undecoded, as
   exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). Peek's Top rows are no
   exception: Select Top Rows' script with N = 10 through `query.execute`, in a session and results entry of the Peek's own

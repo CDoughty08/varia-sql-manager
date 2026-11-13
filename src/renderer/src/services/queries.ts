@@ -18,8 +18,10 @@ export interface EstimatedPlanState { readonly requestId: string; readonly mode?
  *  shows them). It belongs to the connection it ran on, so a query moved elsewhere (or a connection lost) no longer has
  *  it. Its open transaction is not kept here: it is read from the session only when the session is about to end. */
 export interface QuerySession { readonly connectionId: string; readonly spid?: number; readonly login?: string }
+/** Retained output belongs to the execution's original transport, even when its tab later reconnects elsewhere. */
+export interface QueryProvenance { readonly queryId: string; readonly connectionId: string; readonly generation: number; readonly database: string; readonly targetId?: string }
 /** A tab's last run: its summary (the rows stay in the backend; ResultsService shows them) or main's failure. */
-export interface QueryState { readonly running?: RunningQuery; readonly summary?: QueryResult; readonly error?: string; readonly session?: QuerySession; readonly estimated?: EstimatedPlanState; readonly livePlan?: { queryId: string; connectionId: string } }
+export interface QueryState { readonly running?: RunningQuery; readonly summary?: QueryResult; readonly error?: string; readonly session?: QuerySession; readonly provenance?: QueryProvenance; readonly estimated?: EstimatedPlanState; readonly livePlan?: { queryId: string; connectionId: string } }
 export type QueryApi = Pick<VariaApi, 'execute' | 'cancel' | 'confirmSessions' | 'querySessionState'> & Partial<Pick<VariaApi, 'estimatePlan'>>
 export type QuerySnapshot = Readonly<Record<string, QueryState>>
 /** The last reported session only belongs to a tab while it is still on that live connection. */
@@ -31,6 +33,12 @@ export function liveQuerySession(query: QueryState | undefined, connection: { re
 /** How each tab's session ends after the user answered: its open transaction committed or rolled back first. Tabs it does
  *  not name have nothing to end. */
 export type SessionPlan = ReadonlyMap<string, SessionEnd>
+/** Approved choices without cancellation or session completion. The coordinator revalidates before applying them. */
+export interface PreparedSessions {
+  readonly plan: SessionPlan
+  readonly stopping: readonly { readonly id: string; readonly queryId: string }[]
+  readonly current: () => boolean
+}
 /** An idle session's open transaction as read just before it ends; `unchecked` means it may hold one. */
 export interface TransactionState { readonly transactions: number; readonly unchecked?: true }
 const errorText = (error: unknown): string => error instanceof Error ? error.message : 'The operation failed.'
@@ -38,7 +46,7 @@ export const newSessionMessage = 'This query opened a new SQL session. The previ
 export const lostSessionMessage = 'This query opened a new SQL session. The previous session was lost (SQL Server ended it, or its connection broke), so SQL Server rolled back its open transaction, and its SET options and temporary tables no longer exist.'
 const noticeMessages: Readonly<Record<SessionNotice, string>> = { restarted: newSessionMessage, lost: lostSessionMessage }
 /** A live connection: its Advanced properties' command timeout, when the profile set one, wins over Tools › Options. */
-type QueryConnection = ConnectionInfo & { readonly lost?: true; readonly options?: { readonly advanced?: { readonly commandTimeout?: number } } }
+type QueryConnection = ConnectionInfo & { readonly lost?: true; readonly targetId?: string; readonly options?: { readonly advanced?: { readonly commandTimeout?: number } } }
 /** Failures after which the tab has no session, so no open transaction. */
 const sessionGone: ReadonlySet<ErrorCode | undefined> = new Set<ErrorCode | undefined>(['SESSION_LOST', 'SESSION_CLOSED', 'NOT_CONNECTED', 'CONNECTION_LOST', 'BACKEND_LOST'])
 /** How long ending sessions waits for the queries it cancelled to stop; their sessions close (and roll back) either way. */
@@ -57,6 +65,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   private disposed = false
   /** Each running execution, so closing its tab can wait for the cancel to land. */
   private readonly runs = new Map<string, Promise<void>>()
+  private readonly executionVersions = new Map<string, number>()
   /** Source versions, without SQL text, so an old error never points into a query edited or re-executed since. */
   private readonly sources = new Map<string, { readonly queryId: string; readonly revision: number }>()
   private readonly subscription: Disposable
@@ -66,7 +75,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     super({})
     this.subscription = events.subscribe(event => {
       if (event.type === 'session.ended') this.sessionEnded(event.tabId)
-      if (event.type === 'documents.closed') { this.statistics.reset(event.tabId); this.sources.delete(event.tabId) }
+      if (event.type === 'documents.closed') { this.statistics.reset(event.tabId); this.sources.delete(event.tabId); this.executionVersions.delete(event.tabId) }
       if (event.type === 'query.outputSelected') {
         const state = this.getSnapshot()[event.tabId]
         if (state?.estimated && state.estimated.view !== event.view)
@@ -148,6 +157,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   private update(id: string, state: QueryState): void { this.publish({ ...this.getSnapshot(), [id]: state }) }
   forget(id: string): void {
     this.sources.delete(id)
+    this.executionVersions.delete(id)
     if (!this.getSnapshot()[id]) return
     const next = { ...this.getSnapshot() }; delete next[id]; this.publish(next)
   }
@@ -178,6 +188,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   /** Runs the active query, or the query `tabId` names. */
   execute(tabId = this.documents.getSnapshot().activeId): Promise<void> {
     if (!this.canExecute(tabId)) return Promise.resolve()
+    this.executionVersions.set(tabId, (this.executionVersions.get(tabId) ?? 0) + 1)
     const run = this.run(tabId)
     this.runs.set(tabId, run)
     return run.finally(() => { if (this.runs.get(tabId) === run) this.runs.delete(tabId) })
@@ -185,6 +196,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   /** Shares only the tab's busy/cancel lifecycle. Estimates neither begin result streaming nor replace stored grids. */
   estimate(tabId = this.documents.getSnapshot().activeId, mode: EstimatedPlanMode = 'isolated'): Promise<void> {
     if (!this.canExecute(tabId) || !isQueryDocument(this.documents.get(tabId))) return Promise.resolve()
+    this.executionVersions.set(tabId, (this.executionVersions.get(tabId) ?? 0) + 1)
     const run = this.runEstimate(tabId, mode)
     this.runs.set(tabId, run)
     return run.finally(() => { if (this.runs.get(tabId) === run) this.runs.delete(tabId) })
@@ -237,11 +249,12 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const { sql, startLine } = this.documents.getExecuteText(tabId)
     if (!sql.trim()) return
     const queryId = crypto.randomUUID(), previous = this.getSnapshot()[tabId]?.session
+    const provenance: QueryProvenance = Object.freeze({ queryId, connectionId: connection.id, generation: connection.generation, database: document.database, ...connection.targetId ? { targetId: connection.targetId } : {} })
     this.sources.set(tabId, { queryId, revision: this.documents.revision(tabId) })
     const planContext = this.retainedPlans ? this.planContext(tabId, queryId, sql, startLine, this.now()) : undefined
     // Reserve before the first await so repeated commands cannot start a second script.
     const livePlan = document.includeLivePlan ? { queryId, connectionId: connection.id } : undefined
-    this.update(tabId, { running: { queryId, connectionId: connection.id, startedAt: this.now() }, session: previous, ...livePlan ? { livePlan } : {} })
+    this.update(tabId, { running: { queryId, connectionId: connection.id, startedAt: this.now() }, session: previous, provenance, ...livePlan ? { livePlan } : {} })
     if (document.includeClientStatistics) this.statistics.begin(tabId, queryId, connection.id, document.database, !!(document.includeActualPlan || document.includeLivePlan), connection.server, !!document.includeLivePlan)
     let summary: QueryResult | undefined, error: string | undefined, code: ErrorCode | undefined
     try {
@@ -281,7 +294,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     if (this.disposed || !this.documents.get(tabId) || this.getSnapshot()[tabId]?.running?.queryId !== queryId) return
     // Backend/connection loss can arrive while XML is copied; never restore that execution's now-dead session.
     const liveSession = this.documents.get(tabId)?.connectionId === connection.id && this.connected(tabId) ? session : undefined
-    this.update(tabId, { summary, error, session: liveSession, ...livePlan ? { livePlan } : {} })
+    this.update(tabId, { summary, error, session: liveSession, provenance, ...livePlan ? { livePlan } : {} })
     this.events.emit({ type: 'query.finished', tabId, queryId, summary, error })
   }
   /** Cancels the active query, or the one running in `tabId`. */
@@ -306,12 +319,22 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
    * plan. An executing query is never committed: the prompt says that what it left open is rolled back.
    */
   async confirmSessions(action: SessionAction, tabIds: readonly string[]): Promise<SessionPlan | undefined> {
+    const prepared = await this.prepareSessions(action, tabIds)
+    if (!prepared) return undefined
+    await this.cancelPreparedSessions(prepared, false)
+    return prepared.plan
+  }
+  /** Read and ask only: a later cancelled save or prompt cannot have already cancelled another tab's execution. */
+  async prepareSessions(action: SessionAction, tabIds: readonly string[]): Promise<PreparedSessions | undefined> {
     const candidates = tabIds.flatMap(id => {
       const document = this.documents.get(id), operation = this.getSnapshot()[id]?.running
       const estimating = operation?.kind === 'estimate' && operation.estimateMode !== 'session', running = !!operation && !estimating
       // A session not read in time may hold a transaction; a query with no live connection has none to read.
       // An isolated estimate leaves the ordinary session idle: ask about its transaction before cancelling the estimate.
-      return document ? [{ id, name: document.name.slice(0, sessionPromptLimits.name), running, estimating, state: !running && this.connected(id) ? mayBeOpen : nothingOpen }] : []
+      const connection = document?.connectionId ? this.getConnection(document.connectionId) : undefined
+      return document ? [{ id, name: document.name.slice(0, sessionPromptLimits.name), running, estimating, operation,
+        connectionId: document.connectionId, generation: connection?.generation, version: this.executionVersions.get(id),
+        state: !running && this.connected(id) ? mayBeOpen : nothingOpen }] : []
     })
     const reads = candidates.filter(tab => tab.state !== nothingOpen)
     if (reads.length) {
@@ -324,9 +347,9 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       expired = true
       if (this.disposed) return undefined
     }
-    const tabs = candidates.filter(tab => tab.running || tab.state.transactions > 0 || tab.state.unchecked).slice(0, sessionPromptLimits.tabs)
+    const tabs = candidates.filter(tab => tab.running || tab.state.transactions > 0 || tab.state.unchecked)
+    if (tabs.length > sessionPromptLimits.tabs) throw new Error('Too many query sessions to review together. Disconnect fewer queries at a time.')
     const estimates = candidates.filter(tab => tab.estimating)
-    if (!tabs.length && !estimates.length) return new Map()
     const running = tabs.filter(tab => tab.running), open = tabs.filter(tab => !tab.running)
     const ask = async (asked: typeof tabs) => {
       const response = await this.api.confirmSessions({
@@ -339,10 +362,34 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const answer = open.length ? await ask(open) : 'rollback'
     if (answer === 'cancel') return undefined
     const stopping = [...running, ...estimates]
-    for (let next = 0; next < stopping.length; next += sessionRequests) await Promise.all(stopping.slice(next, next + sessionRequests).map(tab => this.cancel(tab.id)))
-    const stopped = Promise.all(stopping.map(tab => this.runs.get(tab.id)?.catch(() => {})))
-    await Promise.race([stopped, this.wait(cancelSettleMs)])
-    return new Map(tabs.map(tab => [tab.id, !tab.running && answer === 'commit' ? 'commit' : 'rollback']))
+    return {
+      plan: new Map(tabs.map(tab => [tab.id, !tab.running && answer === 'commit' ? 'commit' : 'rollback'])),
+      stopping: stopping.map(tab => ({ id: tab.id, queryId: tab.operation!.queryId })),
+      current: () => !this.disposed && candidates.every(tab => {
+        const document = this.documents.get(tab.id), connection = tab.connectionId ? this.getConnection(tab.connectionId) : undefined
+        return !!document && document.connectionId === tab.connectionId && this.executionVersions.get(tab.id) === tab.version &&
+          connection?.generation === tab.generation && !connection?.lost
+      })
+    }
   }
-  dispose(): void { this.disposed = true; this.subscription.dispose(); this.statistics.dispose(); this.sources.clear(); this.clearListeners(); this.publish({}) }
+  /** Strict disconnects stop on a failed cancellation or unknown outcome, retaining every tab and the live root. */
+  async cancelPreparedSessions(prepared: PreparedSessions, strict = true): Promise<void> {
+    if (strict && !prepared.current()) throw new Error('A query session changed while confirming disconnect. Review the disconnect again.')
+    if (!prepared.stopping.length) return
+    for (let next = 0; next < prepared.stopping.length; next += sessionRequests) {
+      await Promise.all(prepared.stopping.slice(next, next + sessionRequests).map(async tab => {
+        if (this.getSnapshot()[tab.id]?.running?.queryId !== tab.queryId) return
+        if (!strict) { await this.cancel(tab.id); return }
+        try {
+          const response = await this.api.cancel(tab.queryId)
+          if (!response.ok) throw new Error(response.error)
+        } catch (error) { throw new Error(`Query cancellation failed: ${errorText(error)} The execution outcome may be unknown; no tabs were closed.`) }
+      }))
+    }
+    const stopped = Promise.all(prepared.stopping.map(tab => this.runs.get(tab.id)?.catch(() => {})))
+    await Promise.race([stopped, this.wait(cancelSettleMs)])
+    if (strict && prepared.stopping.some(tab => this.getSnapshot()[tab.id]?.running?.queryId === tab.queryId))
+      throw new Error('A cancelled query has not reported completion. Its outcome may be unknown; no tabs were closed. Review its state before trying again.')
+  }
+  dispose(): void { this.disposed = true; this.subscription.dispose(); this.statistics.dispose(); this.sources.clear(); this.executionVersions.clear(); this.clearListeners(); this.publish({}) }
 }

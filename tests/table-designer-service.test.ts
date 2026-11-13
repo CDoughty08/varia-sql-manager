@@ -303,32 +303,22 @@ describe('table designer', () => {
     designers.dispose()
     expect(await saving).toBe(false)
   })
-  it('is never written to AutoRecover, and follows a reconnect only to the server it was opened on', async () => {
+  it('keeps a disconnected draft and refuses server-name-only reassociation', async () => {
     const fixture = designer(), { designers, id, api, recovery, targets, documents, connections, state, requests } = fixture
     await settled()
     designers.setCell(id, 0, 'name', 'Id')
     await recovery.flush()
     expect(api.writeRecovery).not.toHaveBeenCalled()
-    // A designer has a connection but no SQL session: closing the window never reads one for it.
     expect(await fixture.queries.confirmSessions('exit', [id])).toEqual(new Map())
-    expect(api.querySessionState).not.toHaveBeenCalledWith(id)
-    // c1 is lost, and the Reconnect dialog's server is changed to another server: the designer stays on c1, disconnected.
     connections.markLostBefore(2)
-    connections.replace('c1', { ...connectionInfo('c2', 2), server: 'production.example' }, connectionOptions)
-    targets.retarget('c1', 'c2')
+    connections.replace('c1', { ...connectionInfo('c3', 2), server: 'C1.EXAMPLE', login: 'another-account' }, connectionOptions)
+    targets.retarget('c1', 'c3')
     expect(documents.get(id)?.connectionId).toBe('c1')
-    expect(documents.get(id)?.name).toBe('c1.example.AppData - dbo.Table_1')
+    expect(documents.get(id)?.dirty).toBe(true)
+    expect(state().rows[0].name).toBe('Id')
     expect(await designers.save(id)).toBe(false)
     expect(state().error).toBe(designerStrings.disconnected)
     expect(requests()).toEqual([])
-    // Reconnected to its own server (named in any case), it follows and saves there.
-    connections.replace('c2', { ...connectionInfo('c3', 2), server: 'C1.EXAMPLE' }, connectionOptions)
-    targets.retarget('c1', 'c3')
-    expect(documents.get(id)?.connectionId).toBe('c3')
-    const saving = designers.save(id)
-    designers.answerName(id, 'Orders')
-    expect(await saving).toBe(true)
-    expect(requests().map(request => request.connectionId)).toEqual(['c3'])
   })
   it('commits a cell being edited before Save or Generate Change Script reads the design', async () => {
     const { designers, id, state, api, requests } = designer()

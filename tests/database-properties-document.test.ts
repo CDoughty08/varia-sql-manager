@@ -280,45 +280,31 @@ describe('Database Properties as a document', () => {
     expect(commands.isEnabled('databaseProperties.apply', { tabId: id })).toBe(false)
     expect(commands.isEnabled('databaseProperties.discard', { tabId: id })).toBe(true)
   })
-  it('can Refresh again once Reconnect moves it from a lost connection to the new one', async () => {
+  it('keeps Refresh disabled after a name-only reconnect without durable target evidence', async () => {
     const { id, commands, connections, targets, documents } = opened()
     await settled()
-    // The backend moved on: the connection is lost, and only Reconnect replaces it (App.connect: replace, then retarget).
     connections.markLostBefore(2)
-    expect(commands.isEnabled('databaseProperties.refresh', { tabId: id })).toBe(false)
     connections.replace('c1', { ...connectionInfo('c2', 2), server: 'c1.example' }, connectionOptions)
     targets.retarget('c1', 'c2')
-    expect(documents.get(id)?.connectionId).toBe('c2')
-    expect(commands.isEnabled('databaseProperties.refresh', { tabId: id })).toBe(true)
-  })
-  it('comes back on the new connection when Properties is chosen again after Disconnect and Connect, and reads the database again', async () => {
-    const { id, properties, commands, connections, targets, documents, api, state } = opened()
-    await settled()
-    // What App.disconnect does: the connection goes, and its documents are told they have none (a custom one keeps its id).
-    connections.remove('c1')
-    targets.update(id, { connectionId: undefined })
-    expect(state().error?.message).toBeUndefined()
-    expect(commands.isEnabled('databaseProperties.refresh', { tabId: id })).toBe(false)
-    // Connecting again makes a new connection: nothing moves the document until Properties on that database is chosen.
-    connectionsAdd(connections, 'c2', 'c1.example')
     expect(documents.get(id)?.connectionId).toBe('c1')
-    // Another server's Properties is another document.
-    connectionsAdd(connections, 'c3', 'c3.example')
-    const other = properties.open(node(appData, 'c3', 20))
-    expect(other).not.toBe(id)
-    const describes = api.describeObject.mock.calls.length
-    expect(properties.open(node(appData, 'c2', 21))).toBe(id)
-    expect(documents.get(id)?.connectionId).toBe('c2')
-    expect(documents.getSnapshot().activeId).toBe(id)
-    expect(documents.getSnapshot().documents.filter(document => document.kind === 'databaseProperties')).toHaveLength(2)
-    // Clean, so it reads the database again on the new connection, and Refresh and Apply work there.
-    expect(api.describeObject.mock.calls.slice(describes)).toEqual([[expect.objectContaining({ connectionId: 'c2', target: appData })]])
-    await settled()
-    expect(state()).toMatchObject({ phase: 'ready', stale: false })
-    expect(commands.isEnabled('databaseProperties.refresh', { tabId: id })).toBe(true)
+    expect(commands.isEnabled('databaseProperties.refresh', { tabId: id })).toBe(false)
   })
-  it('keeps its changes and an unknown outcome when it comes back on a new connection, and says how to get there', async () => {
-    const { id, properties, connections, targets, documents, api, state, edit, commands } = opened()
+  it('keeps a dirty properties draft separate from a new connection with the same server name', async () => {
+    const { id, properties, connections, documents, state, edit } = opened()
+    await settled()
+    edit('autoClose', 'true')
+    const draft = state().draft
+    connections.remove('c1')
+    connectionsAdd(connections, 'c2', 'c1.example')
+    const other = properties.open(node(appData, 'c2', 21))
+    expect(other).not.toBe(id)
+    expect(documents.get(id)?.connectionId).toBe('c1')
+    expect(documents.get(id)?.dirty).toBe(true)
+    expect(state().draft).toEqual(draft)
+    expect(properties.canApply(id)).toBe(false)
+  })
+  it('preserves an unknown Apply outcome and its draft when another same-name connection opens', async () => {
+    const { id, properties, connections, documents, api, state, edit } = opened()
     await settled()
     edit('autoClose', 'true')
     const execute = deferred<ApiResult<ActionExecuteResult>>()
@@ -326,21 +312,14 @@ describe('Database Properties as a document', () => {
     const applied = properties.apply(id)
     await vi.waitFor(() => expect(state().phase).toBe('applying'))
     connections.remove('c1')
-    targets.update(id, { connectionId: undefined })
     execute.resolve(done)
     expect(await applied).toBe(false)
-    expect(state()).toMatchObject({ stale: true, changed: true, error: { message: propertiesMessages.connectionLost } })
-    expect(propertiesMessages.connectionLost).toMatch(/connect to it again and choose Properties on this database/)
-    expect(propertiesMessages.disconnected).toMatch(/connect to it again and choose Properties on this database/)
+    const draft = state().draft
     connectionsAdd(connections, 'c2', 'c1.example')
-    const describes = api.describeObject.mock.calls.length
-    expect(properties.open(node(appData, 'c2', 22))).toBe(id)
-    // The draft and the unknown outcome stay: Discard Changes, then Refresh, now on the new connection.
-    expect(api.describeObject.mock.calls.length).toBe(describes)
+    expect(properties.open(node(appData, 'c2', 22))).not.toBe(id)
     expect(state()).toMatchObject({ stale: true, changed: true, error: { message: propertiesMessages.connectionLost } })
-    expect(documents.get(id)?.connectionId).toBe('c2')
-    await commands.execute('databaseProperties.discard', { tabId: id }, 'toolbar')
-    expect(commands.isEnabled('databaseProperties.refresh', { tabId: id })).toBe(true)
+    expect(state().draft).toEqual(draft)
+    expect(documents.get(id)?.connectionId).toBe('c1')
   })
   it('applies only to the database it read, and keeps the way to read it again when another has taken its name', async () => {
     const { properties, id, state, edit, api, executes, scripts, commands } = opened(databaseModel({ general: { ...databaseModel().general, id: 7 } }))
@@ -583,11 +562,10 @@ describe('Database Properties as a document', () => {
     properties.databaseStateChanged('c1', 'Sales', false)
     properties.databaseStateChanged('c2', 'AppData', false)
     expect(state().offline).toBe(true)
-    // Bring Online through another connection to the same server clears it.
+    // A server-name match without exact target identity cannot change this draft.
     connectionsAdd(connections, 'c3', 'c1.example')
     properties.databaseStateChanged('c3', 'AppData', false)
-    expect(state()).toMatchObject({ changed: true })
-    expect(state().offline).toBeUndefined()
+    expect(state()).toMatchObject({ changed: true, offline: true })
     expect(properties.canApply(id)).toBe(true)
     // Discard Changes reads nothing by itself; a Refresh then clears the mark too.
     properties.databaseStateChanged('c1', 'AppData', true)

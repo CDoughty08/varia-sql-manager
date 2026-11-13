@@ -74,6 +74,11 @@ In Connect, single-click or Space selects a saved connection for editing; Enter 
 Explorer's recovery rows offer **Retry**, **Continue loading**, and **Filter** actions. Search Objects opened from a
 database starts with that database's visible, removable scope.
 
+Database Properties, Table Designer, SSIS and other dependent documents retain their drafts when disconnected.
+They do not follow another login or connection settings merely because the server name matches. A legacy document
+without an exact target binding stays unavailable after its connection is replaced; reopen it explicitly and keep
+the old draft for reference.
+
 The [result grid tools](docs/results-tools.md) include **Copy Column Name**, keyboard-accessible **Fit Column**, and
 **Close Results** beside the results; each result's caption has a button that closes that result alone. Located SQL errors offer **Go to line** while the source text is unchanged.
 

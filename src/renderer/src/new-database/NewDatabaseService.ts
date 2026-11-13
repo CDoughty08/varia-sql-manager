@@ -1,3 +1,4 @@
+import { CustomDocumentTargets, type CustomDocumentTargetOptions } from '../services/custom-document-targets'
 import { actionLimits, dialogSpecs } from '../../../shared/actions/catalog.ts'
 import type { Growth } from '../../../shared/actions/database.ts'
 import type { ServerPathSeparator } from '../../../shared/actions/files.ts'
@@ -75,7 +76,7 @@ export interface NewDatabaseState {
 }
 export interface NewDatabaseSnapshot { readonly documents: Readonly<Record<string, NewDatabaseState>> }
 
-export interface NewDatabaseServiceOptions {
+export interface NewDatabaseServiceOptions extends CustomDocumentTargetOptions {
   readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText'>
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'activate' | 'getSnapshot' | 'close'> & DeliverScriptDeps['documents']
   readonly files: DeliverScriptDeps['files']
@@ -188,15 +189,17 @@ export class NewDatabaseService extends SnapshotStore<NewDatabaseSnapshot> imple
   private readonly unsubscribe: () => void
   private readonly contextStore = new (class extends SnapshotStore<NewDatabaseContextState> { set(value: NewDatabaseContextState) { this.publish(value) } clear() { this.clearListeners() } })({ byDocument: {} })
   /** Each document's describe or create in flight, so Stop, a close and a disconnect can cancel it. */
-  private readonly requests = new Map<string, { readonly id: string; readonly kind: 'describe' | 'create'; dropped: boolean }>()
+  private readonly requests = new Map<string, { readonly id: string; readonly kind: 'describe' | 'create'; readonly connectionId?: string; dropped: boolean }>()
   private readonly previews = new Map<string, string>()
   private readonly previewTimers = new Map<string, unknown>()
   private readonly creates = new Map<string, Promise<boolean>>()
   private keys = 0
+  private readonly targetBindings: CustomDocumentTargets
   private disposed = false
 
   constructor(private readonly options: NewDatabaseServiceOptions) {
     super({ documents: {} })
+    this.targetBindings = new CustomDocumentTargets(options)
     this.newId = options.newId ?? (() => crypto.randomUUID())
     this.timers = options.timers ?? browserTimers
     this.registration = options.documents.registerProvider(this)
@@ -219,6 +222,7 @@ export class NewDatabaseService extends SnapshotStore<NewDatabaseSnapshot> imple
     let title: string = newDatabaseMessages.title
     for (let n = 2; titles.has(title); n++) title = `${newDatabaseMessages.title} (${n})`
     const document = this.options.documents.openCustom('newDatabase', title, connection.id, 'master')
+    this.targetBindings.bind(document.id, connection.id)
     // A database under System Databases or Database Snapshots is listed there, but a new database appears in Databases.
     const folderNodeId = folder ? node.id : this.options.explorer.databasesFolderOf(node.id)
     this.put({
@@ -414,6 +418,10 @@ export class NewDatabaseService extends SnapshotStore<NewDatabaseSnapshot> imple
     this.publishContext()
     // A disconnect while it ran has already said that the outcome is unknown.
     if (this.disposed || !this.get(id) || request?.dropped) return false
+    if (this.connectionOf(id) !== connectionId || !this.live(id)) {
+      this.patch(id, { phase: 'ready', error: error('CONNECTION_LOST', newDatabaseMessages.connectionLost) })
+      return false
+    }
     const value: ActionExecuteResult | undefined = result.ok ? result.value : undefined
     const created = !!value?.steps.some(step => step.status === 'done')
     // The Databases folder shows what is there now: the new database, or one a later step failed after.
@@ -488,7 +496,7 @@ export class NewDatabaseService extends SnapshotStore<NewDatabaseSnapshot> imple
     const result = await this.call(() => this.options.api.scriptObjectAction({ action: 'createDatabase', connectionId, requestId, target: { kind: 'database', name: state.name }, design: newDatabaseDesign(state) }))
     if (this.previews.get(id) !== requestId) return this.currentScript(id)
     this.previews.delete(id)
-    if (this.disposed || !this.get(id)) return undefined
+    if (this.disposed || !this.get(id) || this.connectionOf(id) !== connectionId || !this.live(id)) return undefined
     const failure = !result.ok ? { message: result.error, ...result.code ? { code: result.code } : {} } : result.value.error ? { message: result.value.error.message, code: result.value.error.code } : undefined
     const text = result.ok ? result.value.text : undefined
     if (failure || text === undefined) { this.patch(id, { script: { state: 'failed', error: failure ?? { message: 'No script was produced.' } }, scriptRevision: revision }); return undefined }
@@ -508,8 +516,11 @@ export class NewDatabaseService extends SnapshotStore<NewDatabaseSnapshot> imple
   revision(): number { return 0 }
   focus(id: string): void { this.options.focus?.(id) }
   /** A document stays with its server: a reconnect moves it only to a connection to that server. */
-  follows(id: string, server: string): boolean { const state = this.get(id); return !!state && state.server.trim().toLowerCase() === server.trim().toLowerCase() }
+  /** Legacy server-name reassociation is refused; reconnect callers must supply durable identity. */
+  follows(_id: string, _server: string): boolean { return false }
+  canFollowTarget(id: string, targetId: string): boolean { return this.targetBindings.canFollowTarget(id, targetId) }
   closed(id: string): void {
+    this.targetBindings.forget(id)
     const request = this.requests.get(id), preview = this.previews.get(id)
     this.cancel([request?.id, preview].filter((value): value is string => !!value))
     this.requests.delete(id)
@@ -521,6 +532,7 @@ export class NewDatabaseService extends SnapshotStore<NewDatabaseSnapshot> imple
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.targetBindings.clear()
     this.cancel([...this.requests.values()].map(request => request.id).concat([...this.previews.values()]))
     for (const timer of this.previewTimers.values()) this.timers.clearTimeout(timer)
     this.requests.clear()
@@ -567,17 +579,17 @@ export class NewDatabaseService extends SnapshotStore<NewDatabaseSnapshot> imple
   private connectionOf(id: string): string | undefined { return this.options.documents.get(id)?.connectionId }
   private live(id: string): boolean {
     const connectionId = this.connectionOf(id)
-    return !!connectionId && this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost)
+    return this.targetBindings.matchesConnection(id, connectionId) && this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost)
   }
   private begin(id: string, kind: 'describe' | 'create'): string {
     const requestId = this.newId()
-    this.requests.set(id, { id: requestId, kind, dropped: false })
+    this.requests.set(id, { id: requestId, kind, connectionId: this.connectionOf(id), dropped: false })
     return requestId
   }
   private end(id: string, requestId: string): boolean {
     const request = this.requests.get(id)
     if (request?.id === requestId) this.requests.delete(id)
-    return !this.disposed && !!this.get(id) && request?.id === requestId && !request.dropped
+    return !this.disposed && !!this.get(id) && request?.id === requestId && !request.dropped && request.connectionId === this.connectionOf(id) && this.live(id)
   }
   private async call<T>(send: () => Promise<ApiResult<T>>): Promise<ApiResult<T>> {
     try { return await send() } catch (failure) { return { ok: false, error: failure instanceof Error ? failure.message : 'The request failed.' } }

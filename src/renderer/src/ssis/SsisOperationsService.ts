@@ -1,3 +1,4 @@
+import { CustomDocumentTargets, type CustomDocumentTargetOptions } from '../services/custom-document-targets'
 // Integration Services Operations (D-ssis 6.2): one document per connection that shows the SSIS Catalog's operations live,
 // replacing SSMS's Active Operations dialog and its All Executions, All Validations and All Operations reports. The backend
 // keeps the window (the ssis.operations live source); this service owns each document's filters, its live view, its grid's
@@ -66,7 +67,7 @@ export interface SsisOperationsEnd { readonly code?: string; readonly message: s
 export interface SsisOperationsSnapshot { readonly documents: Readonly<Record<string, SsisOperationsState>> }
 export type { SsisOperationsContextState, SsisOperationsKeys }
 
-export interface SsisOperationsServiceOptions {
+export interface SsisOperationsServiceOptions extends CustomDocumentTargetOptions {
   readonly api: Pick<VariaApi, 'executeSsis' | 'cancelSsis'>
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'activate' | 'getSnapshot' | 'subscribe'>
   readonly panes: Pick<PaneService, 'getSnapshot' | 'subscribe'>
@@ -176,10 +177,12 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
   private readonly contextStore = new (class extends SnapshotStore<SsisOperationsContextState> { set(value: SsisOperationsContextState) { this.publish(value) } clear() { this.clearListeners() } })({ byDocument: {} })
   private refreshSeconds: number
   private limit: number
+  private readonly targetBindings: CustomDocumentTargets
   private disposed = false
 
   constructor(private readonly options: SsisOperationsServiceOptions) {
     super({ documents: {} })
+    this.targetBindings = new CustomDocumentTargets(options)
     this.newId = options.newId ?? (() => crypto.randomUUID())
     this.registration = options.documents.registerProvider(this)
     this.refreshSeconds = this.values['integrationServices.operationsRefreshSeconds']
@@ -233,6 +236,7 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
     }
     const label = connection.displayName || connection.server
     const document = this.options.documents.openCustom('ssisOperations', operationsTabName(label), connection.id, 'SSISDB')
+    this.targetBindings.bind(document.id, connection.id)
     const state: SsisOperationsState = { id: document.id, connectionId: connection.id, server: connection.server, label, preset, filters: this.presetFilters(preset), stopping: [] }
     this.put(state)
     this.subscribeLive(state)
@@ -248,9 +252,10 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
   }
 
   private subscribeLive(state: SsisOperationsState): void {
+    const owner = documentOwner(state.id, this.options.documents, this.options.panes, this.options.groups)
     const handle = this.options.live.open({
       connectionId: state.connectionId!, source: operationsSource, args: operationsArgs(state.filters), probes: [{ probe: operationsProbe, intervalMs: this.intervalMs }]
-    }, documentOwner(state.id, this.options.documents, this.options.panes, this.options.groups))
+    }, { ...owner, connectionId: () => this.live(state.id) ? this.options.documents.get(state.id)?.connectionId : undefined })
     this.handles.set(state.id, handle)
     // The view's status decides the Pause, Refresh and Stop Operation keys (an ended view says why in place of its rows);
     // each sample's metrics are the tiles' counts.
@@ -415,7 +420,7 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
 
   private live(id: string): boolean {
     const connectionId = this.get(id)?.connectionId
-    return !!connectionId && this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost)
+    return this.targetBindings.matchesConnection(id, connectionId) && this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost)
   }
 
   // --- CustomDocumentProvider ------------------------------------------------------------------------------------------
@@ -425,10 +430,12 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
   canClose(): string | undefined { return undefined }
   revision(): number { return 0 }
   focus(id: string): void { this.options.focus?.(id) }
-  /** It follows a reconnect to the same server, as a query tab does (the view subscribes again there). */
-  follows(id: string, server: string): boolean { const state = this.get(id); return !!state && state.server.trim().toLowerCase() === server.trim().toLowerCase() }
+  /** Legacy server-name reassociation is refused; reconnect callers must supply durable identity. */
+  follows(_id: string, _server: string): boolean { return false }
+  canFollowTarget(id: string, targetId: string): boolean { return this.targetBindings.canFollowTarget(id, targetId) }
   /** A Stop Operation the user confirmed still goes through when its document closes: only its answer is dropped. */
   closed(id: string): void {
+    this.targetBindings.forget(id)
     this.stopRequests.delete(id)
     this.attachGrid(id, undefined)
     this.watches.get(id)?.()
@@ -447,6 +454,7 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
     if (requests.length) void this.options.api.cancelSsis(requests).catch(onUnexpectedError)
     for (const id of Object.keys(this.getSnapshot().documents)) this.closed(id)
     this.disposed = true
+    this.targetBindings.clear()
     this.registration.dispose()
     this.stopSettings()
     this.stopFollowing()

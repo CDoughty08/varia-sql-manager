@@ -429,7 +429,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     this.putDocument({ ...document, requestId, error: undefined })
     return this.ask(document.connectionId, requestId, asked).then(result => {
       const current = this.getSnapshot().documents[id]
-      if (this.disposed || current?.requestId !== requestId) return
+      if (this.disposed || current?.requestId !== requestId || current.connectionId !== document.connectionId || !live(this.o.connections.get(document.connectionId))) return
       const { requestId: _done, ...rest } = current
       if (result.ok) { const next = { ...rest, result: result.value, asked, error: undefined }; this.putDocument({ ...next, current: keptHit(current, asked, next) }) }
       else if (result.code !== 'CANCELLED') this.putDocument({ ...rest, error: result.error })
@@ -683,6 +683,16 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
       const kept = { ...indexes }
       for (const id of gone) delete kept[id]
       this.publish({ ...this.getSnapshot(), indexes: kept })
+    }
+    // A retained single-server tab keeps its filter and completed hits, but no old-handle reply may repopulate it.
+    for (const document of Object.values(this.getSnapshot().documents)) {
+      if (document.allServers || ids.has(document.connectionId)) continue
+      const pending = this.typing.get(document.id)
+      if (pending !== undefined) this.timers.clearTimeout(pending)
+      this.typing.delete(document.id)
+      if (document.requestId) this.cancelSearch(document)
+      if (document.requestId || document.error !== 'The server is not connected.')
+        this.putDocument({ ...document, requestId: undefined, error: 'The server is not connected.' })
     }
     for (const id of ids) if (!this.known.has(id) && this.o.settings.get('objectExplorer.search.indexOnConnect')) this.build(id)
     const joined = [...ids].filter(id => !this.known.has(id)), departed = [...this.known].some(id => !ids.has(id))

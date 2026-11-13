@@ -27,6 +27,9 @@
 
 ### Fixed
 
+- **Connection safety:** Database Properties, Table Designer, SSIS, Activity Monitor and other dependent documents no longer follow a replacement connection by server name alone. Drafts stay open, and operations require their original connection target. Legacy documents without that identity must be reopened explicitly after a connection is replaced.
+- **Disconnect prompts:** cancelling a running query names the server disconnect action and explains that cancellation cannot undo committed work and may have an unknown outcome. Server transaction prompts default to Cancel.
+
 - **Results:** when a running query fills its result memory budget (or reaches a row limit, or the computer runs low on memory), the grid now says so at once, with the rows read still counting, instead of only after the query ends.
 - **No leftover language service on Linux and macOS:** a SQL backend that crashed or was restarted while a query's language service was closing could leave that process suspended in the background. It now always ends.
 
