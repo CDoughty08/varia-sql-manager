@@ -10,8 +10,10 @@ import { serverItems } from './query'
 
 /** What the shell commands need from the React app: the dock workspace, the Connect dialog, and Object Explorer. */
 export interface ShellHost {
-  /** Ends a server connection and moves its queries to Disconnected, as Object Explorer's Disconnect button does. */
-  disconnect(connectionId: string): Promise<void>
+  /** Runs the server-disconnect preflight; successful disconnect may also remove its Explorer membership. */
+  disconnect(connectionId: string, removeFromExplorer?: boolean): Promise<void>
+  /** Removes an offline root, preserving target associations and saved profiles. */
+  removeConnection(connectionId: string): void | Promise<void>
   /**
    * Shows a pane; `focus` also moves keyboard focus into it, as SSMS's F8 does for Object Explorer. `raise` brings the popout
    * window that holds it to the front; `raiseInactive` brings that window to the top (restored) through main without activating
@@ -29,7 +31,7 @@ export interface ShellHost {
   /** The close `flushLayout` prepared for did not happen. */
   layoutCloseCancelled(): void
   showConnect(): void
-  /** Opens the Connect dialog filled in from a lost connection; connecting replaces it and retargets its queries. */
+  /** Opens the Connect dialog filled in from an offline target. */
   reconnect(connectionId: string): void
   /** Opens the Connection Environment dialog for a connected server. */
   editEnvironment(connectionId: string): void
@@ -72,7 +74,6 @@ function edit(documents: Workbench['documents'], command: 'undo' | 'redo', args?
   documents.boundEditor?.trigger('menu', command, null)
 }
 
-const runningOnServer = 'A query is running on this server.'
 const paneOf = (args?: CommandArgs): PaneId | undefined => args?.target?.kind === 'dockTab' ? args.target.pane : undefined
 const onPane = (action: (pane: PaneId) => void) => (args?: CommandArgs) => { const pane = paneOf(args); if (pane) action(pane) }
 
@@ -81,23 +82,48 @@ const onPane = (action: (pane: PaneId) => void) => (args?: CommandArgs) => { con
  * main's exit flow (which waits for that subscription) always finds a `window.close` handler. The panel commands act on
  * the panel whose tab menu runs them.
  */
-export function shellContribution({ commands, documents, files, quickInput, connections, queries, shellOptions, longRuns }: Pick<Workbench, 'commands' | 'documents' | 'files' | 'quickInput' | 'connections' | 'queries' | 'panes' | 'shellOptions' | 'longRuns'>, host: ShellHost): Disposable {
+export function shellContribution({ commands, documents, files, quickInput, connections, shellOptions, longRuns }: Pick<Workbench, 'commands' | 'documents' | 'files' | 'quickInput' | 'connections' | 'queries' | 'panes' | 'shellOptions' | 'longRuns'>, host: ShellHost): Disposable {
   const located = (args: CommandArgs | undefined, location: PaneLocation) => { const pane = paneOf(args); return !!pane && host.paneLocation(pane) === location }
   const open = (args: CommandArgs | undefined) => { const pane = paneOf(args); return !!pane && host.paneLocation(pane) !== 'closed' }
   const dockAt = (side: DockSide) => ({ when: open, run: onPane(pane => host.dockPaneAt(pane, side)) })
   // Beside another open panel in the main window, never itself.
   const tabWith = (other: PaneId) => ({ when: (args?: CommandArgs) => open(args) && paneOf(args) !== other && host.paneLocation(other) !== 'closed' && host.paneLocation(other) !== 'window', run: onPane(pane => host.tabPaneWith(pane, other)) })
+  const offline = (connection: ReturnType<typeof connections.get>) => !!connection?.lost && (!connection.lifecycle || connection.lifecycle.state === 'disconnected' || connection.lifecycle.state === 'lost')
+  const connected = (connection: ReturnType<typeof connections.get>) => !!connection && !connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'connected')
   /** The lost server a menu was opened for (undefined without one); null when the menu's node is not one, or no longer. */
   const lostNode = (args: CommandArgs | undefined) => {
     const node = explorerNodeOf(args)
     if (!node) return undefined
-    return node.kind === 'server' && node.lost && connections.get(node.connectionId)?.lost ? node : null
+    const connection = connections.get(node.connectionId)
+    return node.kind === 'server' && node.lost && offline(connection) && connection?.inExplorer !== false ? node : null
   }
   /**
-   * Why a server cannot be disconnected now: a query running on it, a long run on it (a restore, Create Catalog), or a
-   * document's DDL (an Apply, a Save) that a disconnect would cut short.
+   * Long operations retain their existing blockers. The disconnect coordinator owns running-query and transaction
+   * choices so a command cannot bypass the whole-server preflight.
    */
-  const disconnectRefusal = (id: string) => queries.isConnectionRunning(id) ? runningOnServer : longRuns.disconnectRefusal(id) ?? documents.connectionBusy(id)
+  const disconnectRefusal = (id: string) => longRuns.disconnectRefusal(id) ?? documents.connectionBusy(id)
+  const disconnect = (remove: boolean) => ({
+    when: (args?: CommandArgs) => { const node = explorerNodeOf(args); return node?.kind !== 'server' || (!node.lost && connected(connections.get(node.connectionId)) && !disconnectRefusal(node.connectionId)) },
+    run: (args?: CommandArgs) => {
+      const node = explorerNodeOf(args)
+      if (node?.kind === 'server') return remove ? host.disconnect(node.connectionId, true) : host.disconnect(node.connectionId)
+      quickInput.show({
+        ariaLabel: remove ? 'Disconnect and Remove from Explorer' : 'Disconnect from Server', placeholder: 'Select a server to disconnect', noun: 'servers',
+        items: serverItems(connections.live().filter(connection => connected(connection) && connection.inExplorer !== false), disconnectRefusal), onDidAccept: item => remove ? host.disconnect(item.id, true) : host.disconnect(item.id)
+      })
+    }
+  })
+  const remove = {
+    when: (args?: CommandArgs) => lostNode(args) !== null,
+    run: (args?: CommandArgs) => {
+      const node = lostNode(args)
+      if (node) return host.removeConnection(node.connectionId)
+      quickInput.show({
+        ariaLabel: 'Remove from Explorer', placeholder: 'Select a disconnected server to remove from Explorer', noun: 'servers',
+        items: serverItems(connections.getSnapshot().filter(connection => offline(connection) && connection.inExplorer !== false)), onDidAccept: item => host.removeConnection(item.id)
+      })
+    }
+  }
   const registrations = [
     // Remembering the layout is best-effort; a failed preferences write must never prevent exit.
     // A long run (Create Catalog, a restore) would be stopped part way by the close (its request is cancelled as the page unloads), so the close is refused.
@@ -136,17 +162,8 @@ export function shellContribution({ commands, documents, files, quickInput, conn
     commands.register('edit.redo', { when: args => inputOf(args)?.canRedo ?? true, run: args => edit(documents, 'redo', args) }),
     commands.register('connection.connect', { run: () => host.showConnect() }),
     // From a server node's menu, that server; otherwise the user picks one.
-    commands.register('connection.disconnect', {
-      when: args => { const node = explorerNodeOf(args); return node?.kind !== 'server' || (!node.lost && connections.isLive(node.connectionId) && !disconnectRefusal(node.connectionId)) },
-      run: args => {
-        const node = explorerNodeOf(args)
-        if (node?.kind === 'server') return host.disconnect(node.connectionId)
-        quickInput.show({
-          ariaLabel: 'Disconnect from Server', placeholder: 'Select a server to disconnect', noun: 'servers',
-          items: serverItems(connections.live(), disconnectRefusal), onDidAccept: item => host.disconnect(item.id)
-        })
-      }
-    }),
+    commands.register('connection.disconnect', disconnect(false)),
+    commands.register('connection.disconnectAndRemove', disconnect(true)),
     // A server node's menu labels that server; otherwise the active query's server, else the user picks a connected one.
     commands.register('connection.environment', {
       when: args => { const node = explorerNodeOf(args); return node?.kind !== 'server' || (!node.lost && connections.isLive(node.connectionId)) },
@@ -169,25 +186,15 @@ export function shellContribution({ commands, documents, files, quickInput, conn
         const node = lostNode(args)
         if (node) return host.reconnect(node.connectionId)
         const active = documents.active?.connectionId ? connections.get(documents.active.connectionId) : undefined
-        if (active?.lost) return host.reconnect(active.id)
+        if (offline(active) && active) return host.reconnect(active.id)
         quickInput.show({
-          ariaLabel: 'Reconnect', placeholder: 'Select a lost connection to reconnect', noun: 'servers',
-          items: serverItems(connections.getSnapshot().filter(connection => connection.lost)), onDidAccept: item => host.reconnect(item.id)
+          ariaLabel: 'Reconnect', placeholder: 'Select a disconnected server to reconnect', noun: 'servers',
+          items: serverItems(connections.getSnapshot().filter(connection => offline(connection) && connection.inExplorer !== false)), onDidAccept: item => host.reconnect(item.id)
         })
       }
     }),
-    // A lost server's menu removes that server, as its Remove button does; otherwise the user picks among the lost ones.
-    commands.register('connection.removeLost', {
-      when: args => lostNode(args) !== null,
-      run: args => {
-        const node = lostNode(args)
-        if (node) return host.disconnect(node.connectionId)
-        quickInput.show({
-          ariaLabel: 'Remove Lost Connection', placeholder: 'Select a lost connection to remove', noun: 'servers',
-          items: serverItems(connections.getSnapshot().filter(connection => connection.lost)), onDidAccept: item => host.disconnect(item.id)
-        })
-      }
-    }),
+    commands.register('connection.removeFromExplorer', remove),
+    commands.register('connection.removeLost', remove),
     commands.register('pane.float', { when: args => located(args, 'grid'), run: onPane(pane => host.floatPane(pane)) }),
     commands.register('pane.dock', { when: args => located(args, 'floating'), run: onPane(pane => host.dockPane(pane)) }),
     commands.register('pane.moveToNewWindow', { when: args => { const pane = paneOf(args); return !!pane && canPopOut(pane) && (located(args, 'grid') || located(args, 'floating')) }, run: onPane(pane => host.movePaneToWindow(pane)) }),

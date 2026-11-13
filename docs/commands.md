@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (304)
+## Commands (306)
 
 ### File
 
@@ -195,9 +195,11 @@ keys it uses are listed below.
 | --- | --- | --- | --- | --- | --- | --- |
 | Connect to Server… | `connection.connect` | — | — | — | `backendReady` | File › Connect to Server…; Query › Connection › Connect…; Object Explorer context menu › Connect… |
 | Disconnect from Server… | `connection.disconnect` | — | — | — | `hasConnection && !documentBusy` | File › Disconnect from Server…; Object Explorer context menu › Disconnect |
+| Disconnect and Remove from Explorer | `connection.disconnectAndRemove` | — | — | — | `hasConnection && !documentBusy` | Object Explorer context menu › Disconnect and Remove from Explorer |
 | Set Connection Environment… | `connection.environment` | — | — | — | `hasConnection && !documentBusy` | Query › Connection › Environment…; Object Explorer context menu › Environment… |
 | Reconnect… | `connection.reconnect` | — | — | — | `hasLostConnection && backendReady` | File › Reconnect…; Query › Connection › Reconnect…; Object Explorer context menu › Reconnect… |
-| Remove Lost Connection… | `connection.removeLost` | — | — | — | `hasLostConnection && !documentBusy` | Object Explorer context menu › Remove |
+| Remove from Explorer | `connection.removeFromExplorer` | — | — | — | `hasLostConnection && !documentBusy` | Object Explorer context menu › Remove from Explorer |
+| Remove Lost Connection… (not in the palette) | `connection.removeLost` | — | — | — | `hasLostConnection && !documentBusy` | — |
 | Restart SQL Backend… | `backend.restart` | — | — | — | Always | — |
 
 ### Object Explorer
@@ -625,8 +627,9 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | --- | --- | --- | --- |
 | `0_connect` | **C**onnect… | `connection.connect` | `explorerNode == 'server' \|\| explorerNode == 'background'` |
 | `0_connect` | **D**isconnect | `connection.disconnect` | `explorerNode == 'server' && !explorerServerLost` |
+| `0_connect` | Disc**o**nnect and Remove from Explorer | `connection.disconnectAndRemove` | `explorerNode == 'server' && !explorerServerLost` |
 | `0_connect` | **R**econnect… | `connection.reconnect` | `explorerServerLost` |
-| `0_connect` | Rem**o**ve | `connection.removeLost` | `explorerServerLost` |
+| `0_connect` | Rem**o**ve from Explorer | `connection.removeFromExplorer` | `explorerServerLost` |
 | `0_connect` | En**v**ironment… | `connection.environment` | `explorerNode == 'server' && !explorerServerLost` |
 | `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `explorerNode == 'folder' && (explorerFolder == 'tables' \|\| (explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance') && !explorerServerLost))` |
 | `0_new` | **N**ew Database… | `explorer.newDatabase` | `explorerNode == 'folder' && explorerFolder == 'databases' && !explorerServerLost && explorerServerEngine == 'box'` |
@@ -1025,8 +1028,8 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `documentBusy` | boolean | state | A document task is in progress: opening, saving, or closing a query, or changing its connection. |
 | `hasConnection` | boolean | state | At least one server is connected (lost connections do not count). |
 | `activeDocumentConnected` | boolean | state | The active query's server is connected and its connection was not lost. |
-| `hasLostConnection` | boolean | state | A connection was lost when the SQL backend restarted and has not been reconnected or removed. |
-| `activeConnectionLost` | boolean | state | The active query's connection was lost when the SQL backend restarted. |
+| `hasLostConnection` | boolean | state | A remembered server is disconnected or was lost and has not been reconnected or removed. |
+| `activeConnectionLost` | boolean | state | The active query's remembered server is disconnected or was lost. |
 | `queryRunning` | boolean | state | The active query is running. |
 | `includeActualPlan` | boolean | state | The active query will capture actual execution plans. |
 | `includeLivePlan` | boolean | state | The active query will show live execution plans. |
@@ -1098,7 +1101,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `scriptingRunning` | boolean | state | A Script As request is running. |
 | `hasNotifications` | boolean | state | A notification toast is showing or waiting to show. |
 | `explorerNode` | `'background'`, `'folder'`, `'server'`, `'login'`, `'serverRole'`, `'credential'`, `'cryptographicProvider'`, `'audit'`, `'serverAuditSpecification'`, `'backupDevice'`, `'linkedServer'`, `'serverTrigger'`, `'database'`, `'user'`, `'databaseRole'`, `'applicationRole'`, `'schema'`, `'assembly'`, `'asymmetricKey'`, `'certificate'`, `'symmetricKey'`, `'columnMasterKey'`, `'columnEncryptionKey'`, `'databaseAuditSpecification'`, `'databaseTrigger'`, `'externalDataSource'`, `'externalFileFormat'`, `'fullTextCatalog'`, `'fullTextStoplist'`, `'partitionScheme'`, `'partitionFunction'`, `'searchPropertyList'`, `'planGuide'`, `'table'`, `'view'`, `'synonym'`, `'procedure'`, `'function'`, `'sequence'`, `'type'`, `'tableType'`, `'xmlSchemaCollection'`, `'rule'`, `'default'`, `'securityPolicy'`, `'column'`, `'key'`, `'constraint'`, `'trigger'`, `'index'`, `'statistic'`, `'parameter'`, `'returnValue'`, `'ssisCatalog'`, `'ssisFolder'`, `'ssisProject'`, `'ssisPackage'`, `'ssisEnvironment'`, `''` | target | The kind of Object Explorer node the menu is for: 'folder', an object kind from `src/shared/explorer/catalog.ts`, or 'background' for the empty area below the servers. |
-| `explorerServerLost` | boolean | target | The menu is for a server whose connection was lost when the SQL backend restarted. |
+| `explorerServerLost` | boolean | target | The menu is for a disconnected server, including a connection lost when the SQL backend restarted. |
 | `explorerFolderFilterable` | boolean | target | The menu is for an Object Explorer folder that Filter Settings can filter. |
 | `explorerFolderFiltered` | boolean | target | The menu is for an Object Explorer folder that has a filter. |
 | `explorerFolder` | `''`, `'databases'`, `'systemDatabases'`, `'databaseSnapshots'`, `'serverSecurity'`, `'logins'`, `'serverRoles'`, `'credentials'`, `'cryptographicProviders'`, `'audits'`, `'serverAuditSpecifications'`, `'serverObjects'`, `'backupDevices'`, `'linkedServers'`, `'serverTriggers'`, `'tables'`, `'systemTables'`, `'fileTables'`, `'externalTables'`, `'graphTables'`, `'droppedLedgerTables'`, `'views'`, `'systemViews'`, `'droppedLedgerViews'`, `'externalResources'`, `'externalDataSources'`, `'externalFileFormats'`, `'synonyms'`, `'programmability'`, `'storedProcedures'`, `'systemStoredProcedures'`, `'functions'`, `'tableValuedFunctions'`, `'scalarValuedFunctions'`, `'aggregateFunctions'`, `'databaseTriggers'`, `'assemblies'`, `'types'`, `'userDefinedDataTypes'`, `'userDefinedTableTypes'`, `'userDefinedTypes'`, `'xmlSchemaCollections'`, `'rules'`, `'defaults'`, `'planGuides'`, `'sequences'`, `'storage'`, `'fullTextCatalogs'`, `'partitionSchemes'`, `'partitionFunctions'`, `'fullTextStoplists'`, `'searchPropertyLists'`, `'databaseSecurity'`, `'users'`, `'roles'`, `'databaseRoles'`, `'applicationRoles'`, `'schemas'`, `'asymmetricKeys'`, `'certificates'`, `'symmetricKeys'`, `'alwaysEncryptedKeys'`, `'columnMasterKeys'`, `'columnEncryptionKeys'`, `'databaseAuditSpecifications'`, `'securityPolicies'`, `'columns'`, `'keys'`, `'constraints'`, `'tableTriggers'`, `'indexes'`, `'statistics'`, `'parameters'`, `'integrationServicesCatalogs'`, `'ssisProjects'`, `'ssisEnvironments'`, `'ssisPackages'` | target | The id of the Object Explorer folder the menu is for, from `src/shared/explorer/catalog.ts` ('tables' offers New › Table…), or '' for anything else. |

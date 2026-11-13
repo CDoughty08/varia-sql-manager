@@ -66,11 +66,9 @@ const sameChips = (left: readonly StatusChip[] | undefined, right: readonly Stat
 const bit = (text: string) => text === '1' || text.toLowerCase() === 'true'
 const integer = (text: string) => { const value = Number.parseInt(text, 10); return Number.isFinite(value) ? value : 0 }
 
-/** Which connections share one view: the same server, as typed, and the same login. The view reads from master, so the
- *  connection's database does not matter; another login may see other databases and hold other permissions, so it gets a
- *  view of its own. A connection whose login is unknown gets its own. */
-export function statusKey(connection: Pick<LiveConnection, 'id' | 'server' | 'login'>): string {
-  return connection.login ? `${connection.server.trim().toLowerCase()}\u0000${connection.login.toLowerCase()}` : 'id\u0000' + connection.id
+/** Status belongs to an exact target and live handle. A reconnect must not reuse a previous session's sampled facts. */
+export function statusKey(connection: Pick<LiveConnection, 'id' | 'generation' | 'targetId'>): string {
+  return `${connection.targetId ?? connection.id}\u0000${connection.generation}\u0000${connection.id}`
 }
 
 /** Reads a status table's rows as cell texts (null for NULL), and whether they are all of them. */
@@ -297,10 +295,9 @@ export class ExplorerStatusService extends SnapshotStore<ExplorerStatusSnapshot>
     if (reopen) this.sync()
   }
 
-  /** The connections that want a view, by id, with their statusKey: every connection that is not lost, while the setting
-   *  is on. */
+  /** Only connected Explorer members sample metadata. Pending connects and disconnect preflights have no probes. */
   private wanted(): Map<string, string> {
-    return new Map(this.enabled ? this.o.connections.getSnapshot().filter(connection => !connection.lost).map(connection => [connection.id, statusKey(connection)]) : [])
+    return new Map(this.enabled ? this.o.connections.getSnapshot().filter(connection => !connection.lost && connection.inExplorer !== false && (!connection.lifecycle || connection.lifecycle.state === 'connected')).map(connection => [connection.id, statusKey(connection)]) : [])
   }
 
   /** The live connections a view serves, oldest first: the first is the one it reads through. */
@@ -308,7 +305,7 @@ export class ExplorerStatusService extends SnapshotStore<ExplorerStatusSnapshot>
     return [...this.wanted()].filter(([, other]) => other === key).map(([id]) => id)
   }
 
-  /** Opens a view for every connected server and login (while the setting is on) and ends the others. A server connected
+  /** Opens a view for every connected target (while the setting is on) and ends the others. A server connected
    *  while Object Explorer is hidden gets its view when the tree shows, so it runs no SQL before anyone can see it. */
   private sync(): void {
     if (this.disposed) return

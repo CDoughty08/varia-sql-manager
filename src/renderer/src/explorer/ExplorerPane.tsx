@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type Ref } from 'react'
 import { displayText } from '../../../shared/explorer/refs.ts'
+import { commandDescriptor } from '../../../shared/commands/catalog'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { useCommandEnabled, useCommandsEnabled, useKeybindingLabel } from '../core/useCommand'
 import type { CommandArgs, CommandId } from '../core/types'
@@ -40,7 +41,7 @@ const focusTree = (near: Element | null | undefined) => (near?.ownerDocument ?? 
  * Home and End move between the enabled buttons. A focused button that turns disabled (Stop once loading ends,
  * Disconnect while it runs) would drop focus to the page, so focus moves on to the next enabled button, or the tree.
  */
-function ExplorerToolbar({ tools }: { tools: readonly Tool[] }) {
+export function ExplorerToolbar({ tools }: { tools: readonly Tool[] }) {
   const enabled = useCommandsEnabled(tools)
   const buttons = useRef<(HTMLButtonElement | null)[]>([])
   const [current, setCurrent] = useState(0)
@@ -48,7 +49,9 @@ function ExplorerToolbar({ tools }: { tools: readonly Tool[] }) {
   const focused = useRef(-1)
   const rescue = () => {
     const index = focused.current, button = buttons.current[index]
-    if (!button?.disabled || (button.ownerDocument.activeElement !== button && !focusLost(button.ownerDocument))) return
+    if (!button || (button.ownerDocument.activeElement !== button && !focusLost(button.ownerDocument))) return
+    // Reconnect and Disconnect share a toolbar slot. Replacing its command also replaces the focused DOM button.
+    if (!button.disabled) { if (button.ownerDocument.activeElement !== button) button.focus(); return }
     focused.current = -1
     const count = buttons.current.length
     const next = Array.from({ length: count - 1 }, (_, step) => buttons.current[(index + 1 + step) % count]).find(candidate => candidate && !candidate.disabled)
@@ -73,7 +76,7 @@ function ExplorerToolbar({ tools }: { tools: readonly Tool[] }) {
     buttons.current[next]?.focus()
   }
   return <div className="explorer-toolbar" role="toolbar" aria-label="Object Explorer toolbar" onKeyDown={onKeyDown}>
-    {tools.map((tool, index) => <ToolbarButton key={tool.id} tool={tool} enabled={enabled[index]} tabbable={index === stop}
+    {tools.map((tool, index) => <ToolbarButton key={index} tool={tool} enabled={enabled[index]} tabbable={index === stop}
       buttonRef={button => { buttons.current[index] = button }} onFocus={() => { focused.current = index; setCurrent(index) }} onBlur={event => blurred(index, event)} />)}
   </div>
 }
@@ -121,17 +124,23 @@ export default function ExplorerPane({ error, activeConnectionId, activeQueryId 
   const { explorer, connections, commands } = useWorkbench()
   const { selected } = useServiceSnapshot(explorer)
   const { explorerSelectionFiltered: filtered, explorerGroupBySchema: grouped } = useServiceSnapshot(explorer.context)
-  const servers = useServiceSnapshot(connections)
+  const servers = useServiceSnapshot(connections).filter(connection => connection.inExplorer !== false)
   const connect = useCommandEnabled('connection.connect')
   const selectedServer = explorer.menuNode(selected)?.connectionId
   const serverNode = selectedServer === undefined ? undefined : explorer.menuNode(explorer.rootIds.find(id => explorer.node(id)?.connectionId === selectedServer))
   const disconnectArgs: CommandArgs | undefined = serverNode ? { target: { kind: 'explorer', node: serverNode } } : undefined
+  const offline = !!serverNode?.lost
+  const connectionTool = (id: CommandId, icon: IconId): Tool => {
+    const descriptor = commandDescriptor(id), label = descriptor.menus?.find(menu => menu.menu === 'explorer.context')?.title ?? descriptor.title
+    return { id, icon, label, ...(disconnectArgs ? { args: disconnectArgs } : {}) }
+  }
   // The empty area below the servers: Connect… and Refresh. Rows register their own menus.
   const background = useMenuTarget<HTMLDivElement>(() => ({ kind: 'explorer' }))
   const live = servers.filter(value => !value.lost).length
   const tools: Tool[] = [
     { id: 'connection.connect', icon: 'plug', label: 'Connect Object Explorer' },
-    { id: 'connection.disconnect', icon: 'debug-disconnect', label: 'Disconnect', ...(disconnectArgs ? { args: disconnectArgs } : {}) },
+    connectionTool(offline ? 'connection.reconnect' : 'connection.disconnect', offline ? 'plug' : 'debug-disconnect'),
+    connectionTool(offline ? 'connection.removeFromExplorer' : 'connection.disconnectAndRemove', 'close'),
     { id: 'explorer.stop', icon: 'debug-stop', label: 'Stop' },
     { id: 'explorer.filter', icon: filtered ? 'filter-filled' : 'filter', label: 'Filter Settings', hint: 'Filter the selected folder\'s contents. Select a folder such as Tables, Views, Databases, or Logins.' },
     { id: 'explorer.refresh', icon: 'refresh', label: 'Refresh' },

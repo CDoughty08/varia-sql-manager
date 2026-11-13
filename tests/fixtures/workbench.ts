@@ -9,6 +9,7 @@ import { InputModeService, type InputModeName, type MonacoInputMode } from '../.
 import { KeybindingService } from '../../src/renderer/src/core/keybindings'
 import type { Timers } from '../../src/renderer/src/core/timers'
 import { ConnectionService } from '../../src/renderer/src/services/connections'
+import { ConnectionTargetService } from '../../src/renderer/src/services/connection-targets'
 import { BackendStateService } from '../../src/renderer/src/services/backend'
 import { EditorOptionsService } from '../../src/renderer/src/services/editor-options'
 import { ShellOptionsService } from '../../src/renderer/src/services/shell-options'
@@ -337,7 +338,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   // Seeded values apply at once, as if main had answered before the workbench was created.
   const settings = new SettingsService(api, { ...defaultSettings, ...options.settings })
   settings.subscribe(() => documents.refreshOptions())
-  const connections = new ConnectionService(), editorOptions = new EditorOptionsService(settings), shellOptions = new ShellOptionsService(settings), panes = new PaneService()
+  const connectionTargets = new ConnectionTargetService(), connections = new ConnectionService(connectionTargets), editorOptions = new EditorOptionsService(settings), shellOptions = new ShellOptionsService(settings), panes = new PaneService()
   const bookmarks = new BookmarkService(documents, events), editorDialogs = new EditorDialogs(), tabRename = new TabRenameService(documents)
   const editorGroups = new EditorGroupService(documents)
   // Monaco's command and keybinding registries, for the editor chords the bridge registers.
@@ -435,7 +436,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen: options.modal ?? (() => false), editorHasTextFocus: () => false })
   const host: ShellHost = {
-    disconnect: vi.fn(async () => {}), reveal: vi.fn(), manageLayouts: vi.fn(), resetLayout: vi.fn(), flushLayout: vi.fn(async () => {}), layoutCloseCancelled: vi.fn(), showConnect: vi.fn(), reconnect: vi.fn(), editEnvironment: vi.fn(), closePane: vi.fn(),
+    disconnect: vi.fn(async () => {}), removeConnection: vi.fn(), reveal: vi.fn(), manageLayouts: vi.fn(), resetLayout: vi.fn(), flushLayout: vi.fn(async () => {}), layoutCloseCancelled: vi.fn(), showConnect: vi.fn(), reconnect: vi.fn(), editEnvironment: vi.fn(), closePane: vi.fn(),
     paneLocation: vi.fn<ShellHost['paneLocation']>(() => 'grid'), floatPane: vi.fn(), dockPane: vi.fn(), dockPaneAt: vi.fn(), tabPaneWith: vi.fn(), movePaneToWindow: vi.fn(), movePaneToMainWindow: vi.fn(),
     revealOutput: vi.fn(), toggleOutput: vi.fn<ShellHost['toggleOutput']>(() => 'hidden')
   }
@@ -471,6 +472,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     connections,
     backend,
     targets,
+    connectionTargets,
     quickInput,
     keybindings,
     events,
@@ -589,6 +591,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     help.dispose()
     documents.dispose()
     backend.dispose()
+    connections.dispose()
+    connectionTargets.dispose()
   }
   return {
     ...doc,
@@ -597,6 +601,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     connections,
     backend,
     editorOptions,
+    connectionTargets,
     editorGroups,
     shellOptions,
     bookmarks,

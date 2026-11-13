@@ -68,6 +68,10 @@ being true.
   database and attachment intent; v1 server names remain display hints and never establish identity. Reload capture
   shares hot-exit's eligibility and pin validation. `docs/connections-persistence-integration.md` records the workbench
   hooks that Explorer owns; `docs/connections-explorer-implementation-plan.md` defines the parallel integration tracks.
+  Workbench exposes it as `connectionTargets`; ConnectionService projects authenticated targets for legacy
+  runtime-handle consumers. Its isolated legacy receipt lane remains until the main request owner supplies verified
+  target receipts. `src/main/connection-reuse.ts` owns live/pending equivalence and single-owner cleanup; its
+  integration requirements are in `docs/connections-explorer-main-seam.md`.
 - Background connect is explicitly noninteractive and preserves credential policy independently of the ordinary
   dialog's Remember Password flag. Main requires a pinned prior principal and exact opaque credential revision for
   password authentication. Backend and provider cancellation enforce a bounded attempt even with unlimited stored
@@ -186,7 +190,7 @@ being true.
   only through `ChartView` (`live/ChartView.ts`): a canvas read from the probe's ring, at most one draw a frame and none
   while off screen or hidden, at most two vertices a pixel column, colors only from the theme (its `charts.*` keys and the surface the chart sits on,
   `chartSurfaces` in `src/shared/theme/charts.ts`) or, under forced colors, the system colors as the DOM resolves them. Object
-  Explorer's status chips are `background` views (`ExplorerStatusService`, one per connected server and login, owned by
+  Explorer's status chips are `background` views (`ExplorerStatusService`, isolated by exact target, handle and generation, owned by
   the pane, sampling in master): at most 8 a window, in slots no other view wants, given up to views the user opens when
   the window's slots are taken or the backend refuses them `BUSY` on that server; they never reload the tree.
   Job progress EVENTs (`results.export`, `actions.execute`, `explorer.index`) are droppable, per-request and not periodic data.

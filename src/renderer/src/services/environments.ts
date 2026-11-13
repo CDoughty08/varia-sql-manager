@@ -45,6 +45,7 @@ export async function applyEnvironment(deps: EnvironmentDeps, connectionId: stri
   if (!connection) return { ok: false, error: 'This server is no longer connected.' }
   const parsed = parseEnvironment(value)
   if (!parsed.ok) return parsed
+  if (connection.lifecycle) { deps.connections.relabel(connectionId, parsed.environment); return parsed }
   const { environment: _previous, ...options } = connection.options
   try {
     const result = await deps.setEnvironment({ options, ...parsed.environment ? { environment: parsed.environment } : {} })
