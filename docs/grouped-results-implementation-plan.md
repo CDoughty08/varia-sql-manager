@@ -319,7 +319,7 @@ Consumers to move off position (PR 2's scope):
   `ResultGrid`, `ColumnFilterPopover`, `ResultsStack` (weights, collapsed, mounted, narrow, focused, splitter labels,
   `settledContent`).
 - Results tools: search (matches, names, reveal), `HighlightsService` (keyed by ordinal so highlights follow re-runs),
-  `ColumnProfilePanel`, `PivotService`, `PivotPanel`, `TransposeService`, `CompareService`, `OutputPane`'s profile target.
+  `ColumnProfilePanel`, `PivotService`, `PivotPanel`, `TransposeService` (until PR 8), `CompareService`, `OutputPane`'s profile target.
 - Commands and menus: `core/types.ts` cell targets, `services/result-selection.ts`, `menus/targets.ts`,
   `contributions/output.ts`, `pivot.ts`, `transpose.ts`, `compare.ts`, `highlights.ts`; `plans/ResultPlans.tsx`.
 - Tests that assert positions change with it and are listed in the PR: `grid-selection`, `grid-stack`, `live-grid`,
@@ -376,11 +376,11 @@ before publishing.
 
 ### Backend and protocol
 
-`results.pivot`, `results.diff`, `results.view` and `results.transpose` are results-port methods: their places are
+`results.pivot`, `results.diff` and `results.view` are results-port methods (as `results.transpose` was until PR 8): their places are
 `RpcMethods`, `methodPolicies`, `ipc/port-messages.ts`, `main/backend/results-port.ts`, the worker protocol and client,
 and the C# records and dispatch. `results.copy` and `results.export` also have zod schemas in `main/validation.ts`.
 
-Smoke suites and the grid benchmark run on a fake backend with its own filters, pivot, diff, transpose, copy and export
+Smoke suites and the grid benchmark run on a fake backend with its own filters, pivot, diff, copy and export
 (`tests/fixtures/backend.mjs`), and the text goldens are checked against its writer too
 (`tests/fixtures/backend/text-writer.mjs`). Every backend change below is made there as well.
 
@@ -523,11 +523,27 @@ Outcome, accepted by the owner:
      - Highlights after an orientation change were lost and are fixed, with no automated check until PR 7's smoke
        steps.
      - Not done: changing the shared width by hand, and a pass with a screen reader; see Follow-ups.
-6. **Transposed copy and save.** In progress.
-7. **Commands switch to the orientation.** In progress. If it merges before PR 6, Copy and Save of a grid turned by
-   command still go through the stored path, so the two PRs say which order they need. The three transpose commands, the header option, the cap's strip, the Find Next
+6. **Transposed copy and save. Merged as #448.**
+7. **Commands switch to the orientation. Merged as #449.** The three transpose commands, the header option, the cap's strip, the Find Next
    message past the cap, a context key for "this grid is transposed" so Transpose reads as a toggle, smoke steps.
-8. **Remove the stored transpose.** After PRs 6 and 7.
+8. **Remove the stored transpose.** After PRs 6 and 7. What it settled or left:
+   - Gone: `results.transpose` (`RpcMethods`, `methodPolicies`, the port request and answer schemas, `ResultsPortHost`,
+     the worker protocol and core, `ResultHandle.transpose`, `SqlService`'s dispatch, lane, `MethodNames` entry and
+     `TransposeAsync`, the two records in `Contracts.cs`), `ResultTransposer`, `TransposeService` with its strip, the
+     `transpose` result kind in `ResultDescriptor` and the descriptor schema, the fake backend's handler, and
+     `TransposeChecks.cs`. It was a port method, so it never had a preload method or a schema in `main/validation.ts`.
+   - Kept: `limits.transpose.maxRows` (the 4,095 rows a transposed grid draws, a transposed copy or save writes and a
+     `keepRows` filter names), now the limit's only member (`maxCells` and `maxRanges` went with the method), and not
+     renamed; `ResultTextWriter.MaxTransposedRows`, which `ViewSorter.MaxKeepRows` now reads directly; `RowAccess`,
+     `ViewSorter.Merge`, `ColumnNames.Unique` (the overload a pivot calls) and `PivotOutput.GroupName`, which the text writer,
+     filters and pivots use. `GroupName`'s hex, 128-character cut and blank rules were checked only through a transpose's
+     header column; those checks moved to `PivotChecks.cs`.
+   - The backend answers `results.transpose` `METHOD_NOT_FOUND` (`HostChecks`' retired methods) and the port refuses a
+     `transpose` request as invalid; `tests/results-transpose.test.ts` now pins that the method, the request, the kind
+     and the service stay gone. No protocol version change: main and the backend ship together.
+   - `ResultsService` had no branch on the `transpose` kind (only comments), so nothing there changed for PR 9 to
+     conflict with. If PR 9 merges after this one it drops its own allowance: `ResultGroup.transposes`, the `'transpose'`
+     `ViewKind` and its branches, and the transposes test in `tests/results-groups.test.ts`.
 9. **Groups.** In progress. It also takes what PR 3 left: closing through a command or menu target, and a Results badge
    that counts original groups. The group and slot model drawn in the stack (a Pivot under its Table; a transposed item sized by its
    drawn rows), plan-set groups, and the bare mode Peek uses. The renderer's rules land here so every list is representable: Pivot is offered only on Tables, the "Pivot
@@ -539,10 +555,8 @@ Outcome, accepted by the owner:
        is. A slot's identity is its entry key: grid state, sort and filters were already kept by it, so nothing was
        re-keyed. Because the old Pivot is released before the new one is built, a rebuilt Pivot is a new entry with a new
        key in this PR; the slot's `revision` counts them. PR 10 keeps the key.
-     - A stored transpose is a slot of view `transpose` in the group of what it transposed (`ResultGroup.transposes`),
-       drawn after the group's Pivot and closed with the group. A transpose of a transpose is one more of them, so
-       nothing in `contributions/transpose.ts` or `TransposeService` changed. Since PR 7 no command makes one, so the
-       slot is reached only through `addSet`; PR 8 removes the field.
+     - PR 8 merged first, so this PR dropped its allowance for a stored transpose (`ResultGroup.transposes`, the
+       `'transpose'` view kind and their branches) when it merged `main`: transposed is how a slot is drawn, never a slot.
      - Provenance is `ResultSlot.sources`: frozen references (entry key, set key, number, name) to a Pivot's Table and to
        a comparison's old and new inputs. The recipe, resolved filters and input rows are PR 10's.
      - The builder keeps one draft per group already (by ordinal, so a re-run's group takes it over), since a builder
@@ -597,7 +611,7 @@ shared width by hand; a screen reader pass over the transposed grid.
 | Budgets | backend `DiffChecks.cs`, `PivotChecks.cs`, result store checks |
 | Identity and cleanup | `tests/results-service.test.ts`, `tests/result-client.test.ts`, `tests/results-port.test.ts` |
 | Pivot slot | `tests/results-pivot.test.ts`, backend `PivotChecks.cs` |
-| Orientation | grid tests, `tests/results-transpose.test.ts`, `tests/results-toolbar-transpose.test.ts`, text-writer goldens, grid benchmark |
+| Orientation | grid tests, `tests/results-orientation.test.ts`, `tests/results-toolbar-transpose.test.ts`, `tests/results-transpose.test.ts` (the stored transpose stays gone), text-writer goldens, grid benchmark |
 | Filters | backend `FilterChecks.cs`, `tests/results-service.test.ts` |
 | Comparisons | `tests/results-diff.test.ts`, backend `DiffChecks.cs`, shared pairing fixtures |
 | Search and highlights | `tests/results-search.test.ts`, `tests/results-highlights.test.ts` |

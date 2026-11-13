@@ -804,7 +804,7 @@ describe('results service entry keys', () => {
     expect(api.saveResults.mock.calls.map(([request]) => [request.resultId, request.suggestedName, request.viewId])).toEqual([[3, 'SQLQuery1-Result3', 9], [803, 'SQLQuery1-Result4', undefined]])
     // A result made afterwards takes the next number, not the pivot's, stands with the group it was made from, and has
     // no share of the stack yet.
-    const added = service.addSet('t1', descriptor(701, { index: 0, kind: 'transpose' }), 'Transpose of Result 1', ['1:1'])
+    const added = service.addSet('t1', descriptor(801, { index: 0, kind: 'pivot' }), 'Pivot of Result 1', ['1:1'])
     flush()
     expect(tab().sets.map(set => set.number)).toEqual([1, 5, 3, 4])
     expect(tab().sets[1].key).toBe(added)

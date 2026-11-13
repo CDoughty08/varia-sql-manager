@@ -381,14 +381,13 @@ describe('ResultsJobHost over the fake backend', () => {
     expect([lines.length, lines[0], lines[1].split(',').slice(0, 2)]).toEqual([3002, '\ufeffid,name,created,amount,key,note,active,score', ['0', 'Customer 0000000000 GmbH']])
     expect((await readdir(control)).filter(name => name.endsWith('.tmp'))).toEqual([])
   })
-  it('passes BUDGET_STOPPED from a pivot, diff or transpose of a stopped query through main with its sentence', async () => {
+  it('passes BUDGET_STOPPED from a pivot or diff of a stopped query through main with its sentence', async () => {
     const { control, supervisor, execute } = await workbench()
     const [first, second] = (await execute('-- varia-fake: sets=N1*10,N1*10\nSELECT 1')).resultSets
     // Asked one at a time: a request that fails before anything awaits it is an unhandled rejection.
     const asks = [
       () => supervisor.request('results.pivot', { resultId: first.resultId, rows: [0], values: [{ aggregate: 'count' }] }),
-      () => supervisor.request('results.diff', { left: first.resultId, right: second.resultId }),
-      () => supervisor.request('results.transpose', { resultId: first.resultId })
+      () => supervisor.request('results.diff', { left: first.resultId, right: second.resultId })
     ]
     // The fake's sentences are the backend's: each is written in SqlService.cs.
     const service = await readFile(join('backend', 'Varia.Backend', 'SqlService.cs'), 'utf8')

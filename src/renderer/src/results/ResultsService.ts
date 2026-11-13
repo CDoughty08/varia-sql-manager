@@ -27,7 +27,7 @@ export type EntryKey = string
 /**
  * One result set of the run, named everywhere by its `key` (the grid's `data-result-entry`), never by its place in the
  * list. `ordinal` is an original result's number in its run (`descriptor.index + 1`); a result Varia made (a pivot, a
- * transpose, a diff) has none. `number` is what the entry is numbered by where it has no name of its own ("Result 4" in
+ * diff) has none. `number` is what the entry is numbered by where it has no name of its own ("Result 4" in
  * its caption, on a job's strip, in a save's suggested name): the ordinal, or for a derived entry the next number after
  * the run's highest when it was appended, fixed for its life. That is the place it was appended at, and stays unique when
  * an entry before it has gone.
@@ -41,11 +41,9 @@ export const entryName = (entry: Pick<ResultSetEntry, 'label' | 'number'>): stri
 /** The entry of `sets` with the key, for a consumer that holds a published list (the service looks its own up in a map). */
 export const entryOf = (sets: readonly ResultSetEntry[] | undefined, key: EntryKey | undefined): ResultSetEntry | undefined =>
   key === undefined ? undefined : sets?.find(entry => entry.key === key)
-/**
- * How a slot shows its result: a group's Table (the original result) or its Pivot, a comparison, or `transpose`, a stored
- * transpose of something in a group, which exists until the orientation replaces it (grouped results PR 8).
- */
-export type ViewKind = 'table' | 'pivot' | 'transpose' | 'comparison'
+/** How a slot shows its result: a group's Table (the original result) or its Pivot, or a comparison. Transposed is not a
+ *  view kind: it is how a Table or a Pivot is drawn (its grid state's orientation). */
+export type ViewKind = 'table' | 'pivot' | 'comparison'
 /**
  * What a derived slot was made from, frozen when it was made and kept apart from the source's handle: the source's entry
  * key and set key (for telling whether it is still that exact result), and the number and name it had. A closed or
@@ -56,8 +54,8 @@ export interface SourceRef { readonly key: EntryKey; readonly set: string; reado
  * A presentation slot: one view the stack draws. Its identity is `key`, the key of the entry it shows, which is also where
  * its grid state lives (`ResultsService.gridState(tabId, key)`: scroll, widths, selection, orientation) and its sort and
  * filters (`TabResults.sorts`). `entry` is the stored result it shows now and `revision` counts the results the slot has
- * shown (a group's second Pivot is revision 2). `sources` is its provenance: none for a Table, the Table for a Pivot, the
- * transposed entry for a transpose, and the old and the new input, in that order, for a comparison.
+ * shown (a group's second Pivot is revision 2). `sources` is its provenance: none for a Table, the Table for a Pivot, and
+ * the old and the new input, in that order, for a comparison.
  */
 export interface ResultSlot {
   readonly key: EntryKey; readonly view: ViewKind; readonly entry: ResultSetEntry; readonly revision: number
@@ -68,12 +66,11 @@ export interface ResultSlot {
 /**
  * An original result and what was made of it: named by its `ordinal` ("Result 3"), with the batch it came from, its Table,
  * at most one Pivot, and the view of the two that last had the focus (`selected`). A SQL-returned plan set is a group too
- * (`planSet`), with Pivot, Compare and Transposed off. `transposes` are stored transposes of its Table or Pivot, which
- * close with the group; they go when the stored transpose does.
+ * (`planSet`), with Pivot, Compare and Transposed off.
  */
 export interface ResultGroup {
   readonly ordinal: number; readonly batchNumber: number; readonly iteration: number; readonly planSet: boolean
-  readonly table: ResultSlot; readonly pivot?: ResultSlot; readonly transposes: readonly ResultSlot[]
+  readonly table: ResultSlot; readonly pivot?: ResultSlot
   readonly selected: 'table' | 'pivot'
 }
 type Shape = Pick<TabResults, 'groups' | 'comparisons'>
@@ -83,14 +80,13 @@ export function slotOf(tab: Shape | undefined, key: EntryKey | undefined): Resul
   for (const group of tab.groups) {
     if (group.table.key === key) return group.table
     if (group.pivot?.key === key) return group.pivot
-    for (const slot of group.transposes) if (slot.key === key) return slot
   }
   return tab.comparisons.find(slot => slot.key === key)
 }
-/** The group the entry `key` belongs to (as its Table, its Pivot or a stored transpose); a comparison has none. */
+/** The group the entry `key` belongs to (as its Table or its Pivot); a comparison has none. */
 export function groupOf(tab: Pick<TabResults, 'groups'> | undefined, key: EntryKey | undefined): ResultGroup | undefined {
   if (!tab || key === undefined) return undefined
-  return tab.groups.find(group => group.table.key === key || group.pivot?.key === key || group.transposes.some(slot => slot.key === key))
+  return tab.groups.find(group => group.table.key === key || group.pivot?.key === key)
 }
 /**
  * A grid's sort and filters (results.view): its keys in order, with the text mode each was sorted by, its filters, and the
@@ -209,7 +205,7 @@ export interface TabViewState { stackScrollTop: number; weights?: ReadonlyMap<En
  *  drawn columns (Using Column as Headers). */
 export interface ViewOrientation { readonly transposed: boolean; readonly headerColumn?: number }
 /** The entry kinds a view can be drawn transposed for: a query's rows and a pivot. Never a comparison (its tone column
- *  marks rows), a plan set, or a stored transpose. */
+ *  marks rows) or a plan set. */
 export const turnableKinds: ReadonlySet<string> = new Set(['rows', 'pivot'])
 /** A mounted grid, for the commands that act on it. */
 export interface GridController {
@@ -556,7 +552,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
 
   /**
    * Closes one view of a run that has ended (a caption's close button, Close Result): a Table closes its group, so its
-   * Pivot and any stored transpose of either go with it; a Pivot, a comparison or a stored transpose closes alone. What
+   * Pivot goes with it; a Pivot or a comparison closes alone. What
    * closes leaves the run and its results are released (`drop`); the entries after move up and keep their keys, numbers,
    * names and state. A comparison copied its cells, so it outlives its inputs, under its name. When what closed had the
    * focus, the next surviving entry takes it, else the one before. The run's status, summary and row total do not change;
@@ -570,7 +566,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const view = this.views.get(tabId)
     let next: ResultSetEntry | undefined
     if (view?.focused !== undefined && keys.has(view.focused)) {
-      // A Pivot (or a stored transpose) leaves the focus in its group, on the Table.
+      // A Pivot leaves the focus in its group, on the Table.
       const slot = run.slots.get(key), last = run.sets.indexOf(gone[gone.length - 1])
       next = (slot?.view !== 'table' && slot?.group !== undefined ? run.sets.find(item => item.ordinal === slot.group) : undefined)
         ?? run.sets[last + 1] ?? run.sets[run.sets.indexOf(gone[0]) - 1]
@@ -601,11 +597,11 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** How many times a grid has taken the focus in this window: one that takes it again (a click into the grid that already
    *  had it) changes nothing published, and this still counts it. */
   focusStamp(): number { return this.focusEvents }
-  /** The entry `key` has the focus: its group's selected view is the one it shows (a stored transpose changes none).
+  /** The entry `key` has the focus: its group's selected view is the one it shows (a comparison has no group).
    *  Whether that changed. */
   private select(run: Run, key: EntryKey): boolean {
     const record = run.slots.get(key)
-    if (!record || record.group === undefined || record.view === 'transpose' || run.selected.has(record.group) === (record.view === 'pivot')) return false
+    if (!record || record.group === undefined || run.selected.has(record.group) === (record.view === 'pivot')) return false
     if (record.view === 'pivot') run.selected.add(record.group)
     else run.selected.delete(record.group)
     run.shape = undefined
@@ -1194,7 +1190,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** Shows `text` in the tab's results toolbar for a few seconds and reads it out. */
   /** Adds a result Varia made from the run's own after the run ended, named `label`, into the slot its kind takes: a pivot
    *  (results.pivot) as its source group's Pivot, directly under the Table, in place of the Pivot the group had; a diff
-   *  (results.diff) as a comparison, after the groups; a stored transpose after its source's group. It is released with
+   *  (results.diff) as a comparison, after the groups. It is released with
    *  the run's others, and its rows are not counted among those the query read. `sources` are the set keys it was made
    *  from (a pivot's Table; a diff's old side, then its new one): a run without them (a newer one) does not take it.
    *  Returns its entry's key, or undefined when the run is gone, still running, lacks a source, has its most sets, is
@@ -1207,12 +1203,12 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const refuse = () => { void this.client.release([{ generation: descriptor.generation, resultId: descriptor.resultId }]).catch(() => {}); return undefined }
     if (!run || run.status === 'running' || run.status === 'closed' || sources.some(source => !run.setKeys.has(source))) return refuse()
     const from = sources.map(source => run.sets.find(entry => setKey(entry.descriptor) === source)!)
-    const view: ViewKind = descriptor.kind === 'pivot' ? 'pivot' : descriptor.kind === 'transpose' ? 'transpose' : 'comparison'
+    const view: ViewKind = descriptor.kind === 'pivot' ? 'pivot' : 'comparison'
     const origin = from.length ? run.slots.get(from[0].key) : undefined
     // A bare run (Peek) shows its rows alone: no Pivot and no comparison.
-    if (run.bare && view !== 'transpose') return refuse()
+    if (run.bare) return refuse()
     // The rules that keep every list a list of groups: a Pivot is made only from a group's Table of rows (never from a
-    // Pivot, a transpose, a comparison or a plan set), and a group has one, so the one it had is released first.
+    // Pivot, a comparison or a plan set), and a group has one, so the one it had is released first.
     const group = view === 'comparison' ? undefined : origin?.group
     let replaced: ResultSetEntry | undefined
     if (view === 'pivot') {
@@ -1226,13 +1222,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (run.setsPublished) { run.sets = run.sets.slice(); run.setsPublished = false }
     // Numbered once, for its life: an entry that goes before it does not renumber it, nor give its number to the next.
     const entry: ResultSetEntry = { key: this.mint(), number: ++run.numbered, descriptor, handle: this.client.open(descriptor), label }
-    // A group's Pivot stands directly under its Table and a stored transpose after the group's other views; a comparison
-    // (and a transpose of something in no group) goes last, after the groups.
-    let at = run.sets.length
-    if (group !== undefined) {
-      at = run.sets.findIndex(item => item.ordinal === group) + 1
-      if (view !== 'pivot') while (at < run.sets.length && run.slots.get(run.sets[at].key)?.group === group) at++
-    }
+    // A group's Pivot stands directly under its Table; a comparison goes last, after the groups.
+    const at = group === undefined ? run.sets.length : run.sets.findIndex(item => item.ordinal === group) + 1
     run.sets.splice(at, 0, entry)
     run.entries.set(entry.key, entry)
     let revision = 1
@@ -1489,7 +1480,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       run.entries.delete(key)
       const slot = run.slots.get(key)
       run.slots.delete(key)
-      if (slot?.group !== undefined && slot.view !== 'transpose') run.selected.delete(slot.group)
+      if (slot?.group !== undefined) run.selected.delete(slot.group)
       run.shape = undefined
       run.setKeys.delete(setKey(entry.descriptor))
       if (run.settled.has(setKey(entry.descriptor))) {
@@ -1520,7 +1511,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   }
 
   /** Whether a run still shows an entry (or captured plan set): work that answers for one it does not is dropped. */
-  /** What closing an entry closes: a Table's group (its Pivot and stored transposes with it), any other view alone. */
+  /** What closing an entry closes: a Table's group (its Pivot with it), any other view alone. */
   private owned(run: Run, entry: ResultSetEntry): ResultSetEntry[] {
     const slot = run.slots.get(entry.key)
     return slot?.view === 'table' ? run.sets.filter(item => run.slots.get(item.key)?.group === slot.group) : [entry]
@@ -1530,19 +1521,18 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private shapeOf(run: Run): Shape {
     if (run.shape) return run.shape
     const groups: ResultGroup[] = [], comparisons: ResultSlot[] = []
-    let open: { -readonly [K in keyof ResultGroup]: ResultGroup[K] } & { transposes: ResultSlot[] } | undefined
+    let open: { -readonly [K in keyof ResultGroup]: ResultGroup[K] } | undefined
     for (const entry of run.sets) {
       const record = run.slots.get(entry.key)
       if (!record) continue
       const slot: ResultSlot = { key: entry.key, entry, ...record }
       if (record.view === 'table') {
         const { descriptor } = entry
-        groups.push(open = { ordinal: record.group!, batchNumber: descriptor.batchNumber, iteration: descriptor.iteration, planSet: descriptor.kind === 'executionPlan', table: slot, transposes: [], selected: 'table' })
+        groups.push(open = { ordinal: record.group!, batchNumber: descriptor.batchNumber, iteration: descriptor.iteration, planSet: descriptor.kind === 'executionPlan', table: slot, selected: 'table' })
       } else if (open && record.group === open.ordinal && record.view === 'pivot') {
         open.pivot = slot
         if (run.selected.has(open.ordinal)) open.selected = 'pivot'
-      } else if (open && record.group === open.ordinal && record.view === 'transpose') open.transposes.push(slot)
-      else comparisons.push(slot)
+      } else comparisons.push(slot)
     }
     return run.shape = { groups, comparisons }
   }

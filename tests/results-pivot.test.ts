@@ -114,7 +114,7 @@ describe('PivotService', () => {
     expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: true, source: table, draft: { rows: [0] } })
   })
 
-  it('makes no pivot of a Pivot, a comparison, a transpose or a plan set, and none in a bare run', async () => {
+  it('makes no pivot of a Pivot, a comparison or a plan set, and none in a bare run', async () => {
     const { client, results, pivot, run } = fixture()
     const [first] = run(2)
     const one = keyAt(results, 't1', 0)
@@ -124,15 +124,16 @@ describe('PivotService', () => {
     const made = results.getSnapshot().t1.sets[1]
     expect(made.label).toBe('Pivot of Result 1')
     const diff = results.addSet('t1', descriptor(901, { index: 0, kind: 'diff' }), 'Differences: Result 1 → Result 2', [setKey(results.getSnapshot().t1.sets[0].descriptor), setKey(results.getSnapshot().t1.sets[2].descriptor)])!
-    const turned = results.addSet('t1', descriptor(701, { index: 0, kind: 'transpose' }), 'Transpose of Result 1', [setKey(results.getSnapshot().t1.sets[0].descriptor)])!
     // The builder is the group's whichever of its views is named: on the Pivot it edits the Pivot, read from the Table.
     expect(pivotGroup(results.getSnapshot().t1, made.key)?.table.key).toBe(one)
     expect(pivot.canPivot('t1', made.key)).toBe(true)
-    // A comparison and a stored transpose have no group to pivot.
-    for (const key of [diff, turned]) {
-      expect(pivotGroup(results.getSnapshot().t1, key)).toBeUndefined()
-      expect(pivot.canPivot('t1', key)).toBe(false)
-    }
+    // A comparison has no group to pivot.
+    expect(pivotGroup(results.getSnapshot().t1, diff)).toBeUndefined()
+    expect(pivot.canPivot('t1', diff)).toBe(false)
+    // Drawn transposed, the Pivot is still the group's one Pivot: transposed is how a view is drawn, not another view.
+    expect(results.setOrientation('t1', made.key, { transposed: true })).toBe(true)
+    expect(results.getSnapshot().t1.sets).toHaveLength(4)
+    expect(pivotGroup(results.getSnapshot().t1, made.key)?.pivot?.key).toBe(made.key)
     // Opened on one of them, the builder stays on the group it had: what it builds is still read from Result 1.
     pivot.open('t1', diff)
     expect(pivot.getSnapshot().tabs.t1.source).toBe(one)
@@ -141,11 +142,11 @@ describe('PivotService', () => {
     expect(first.pivot).toHaveBeenCalledOnce()
     expect(client.handle(801)!.pivot).not.toHaveBeenCalled()
     expect(results.getSnapshot().t1.sets.filter(set => set.descriptor.kind === 'pivot')).toHaveLength(1)
-    // The service itself takes a pivot only from a group's Table of rows: one made of a Pivot, a comparison or a
-    // transpose is refused and released, whoever asks.
+    // The service itself takes a pivot only from a group's Table of rows: one made of a Pivot or a comparison is refused
+    // and released, whoever asks.
     const sets = results.getSnapshot().t1.sets
     const pivotNow = sets.find(set => set.descriptor.kind === 'pivot')!
-    for (const [id, source] of [[811, pivotNow], [812, sets.find(set => set.key === diff)!], [813, sets.find(set => set.key === turned)!]] as const) {
+    for (const [id, source] of [[811, pivotNow], [812, sets.find(set => set.key === diff)!]] as const) {
       expect(results.addSet('t1', descriptor(id, { index: 0, kind: 'pivot' }), 'Pivot of ' + source.label, [setKey(source.descriptor)])).toBeUndefined()
       expect(client.released()).toContain(id)
     }
@@ -445,18 +446,13 @@ describe('PivotService', () => {
     expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()
   })
 
-  it('follows a stored transpose to its group, and keeps a group\'s draft untouched while a new run has yet to return it', async () => {
+  it('keeps a group\'s draft untouched while a new run has yet to return the group', async () => {
     const { client, results, pivot, run } = fixture()
     run(2)
     const sets = () => results.getSnapshot().t1.sets
     const two = sets()[1].key
     pivot.open('t1', two)
     pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
-    const turned = results.addSet('t1', descriptor(702, { index: 1, kind: 'transpose' }), 'Transpose of Result 2', [setKey(sets()[1].descriptor)])!
-    results.focusEntry('t1', sets()[0].key)
-    expect(pivot.getSnapshot().tabs.t1.sourceName).toBe('Result 1')
-    // The transpose is one of Result 2's views: the builder is Result 2's, not the first group's.
-    results.focusEntry('t1', turned)
     expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: two, sourceName: 'Result 2', draft: { rows: [0] } })
     // A new run that has returned only Result 1: the builder still names Result 2, and an edit made now writes nothing
     // over the draft it keeps for it.

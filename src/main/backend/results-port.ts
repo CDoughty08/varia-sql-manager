@@ -1,5 +1,5 @@
-import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsDiffParams, ResultsDiffResult, ResultsDistinctCloseParams, ResultsDistinctCloseResult, ResultsDistinctParams, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsParams, ResultsFindRowsResult, ResultsIdentifyParams, ResultsIdentifyResult, ResultsPivotParams, ResultsPivotResult, ResultsTransposeParams, ResultsTransposeResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsRowIdsParams, ResultsRowIdsResult, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult, ViewCells, ViewFilter } from '../../shared/contracts'
-import { diffResultSchema, distinctCloseResultSchema, distinctReadResultSchema, distinctResultSchema, distinctTickResultSchema, findRowsResultSchema, identifyResultSchema, type MemoryFeature, type MemoryReport, pivotResultSchema, type PortEndResult, type PortMessage, type PortRequest, portRequestSchema, profileResultSchema, rowBytesResultSchema, rowIdsResultSchema, searchResultSchema, testPortRequestSchema, transposeResultSchema, viewCloseResultSchema, viewResultSchema } from '../../shared/ipc/port-messages'
+import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsDiffParams, ResultsDiffResult, ResultsDistinctCloseParams, ResultsDistinctCloseResult, ResultsDistinctParams, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsParams, ResultsFindRowsResult, ResultsIdentifyParams, ResultsIdentifyResult, ResultsPivotParams, ResultsPivotResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsRowIdsParams, ResultsRowIdsResult, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult, ViewCells, ViewFilter } from '../../shared/contracts'
+import { diffResultSchema, distinctCloseResultSchema, distinctReadResultSchema, distinctResultSchema, distinctTickResultSchema, findRowsResultSchema, identifyResultSchema, type MemoryFeature, type MemoryReport, pivotResultSchema, type PortEndResult, type PortMessage, type PortRequest, portRequestSchema, profileResultSchema, rowBytesResultSchema, rowIdsResultSchema, searchResultSchema, testPortRequestSchema, viewCloseResultSchema, viewResultSchema } from '../../shared/ipc/port-messages'
 import { liveDescriptors, liveRetired, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../../shared/live/schema'
 import { cancelReasons, limits as wire, type CancelReason, type ErrorCode } from '../../shared/ipc/wire/protocol'
 import type { StreamSink } from './connection'
@@ -38,8 +38,6 @@ export interface ResultsBackend {
   diff(generation: number, params: ResultsDiffParams): { readonly done: Promise<ResultsDiffResult>; cancel(reason: CancelReason): void }
   /** Pivoting a result may take seconds: the worker's cancel stops it, as it does a sort. */
   pivot(generation: number, params: ResultsPivotParams): { readonly done: Promise<ResultsPivotResult>; cancel(reason: CancelReason): void }
-  /** Transposing a result copies its cells: the worker's cancel stops it, as it does a sort. */
-  transpose(generation: number, params: ResultsTransposeParams): { readonly done: Promise<ResultsTransposeResult>; cancel(reason: CancelReason): void }
   /** A search reads every stored row: the worker's cancel (a newer search, or the text cleared) stops it. */
   search(generation: number, params: ResultsSearchParams): { readonly done: Promise<ResultsSearchResult>; cancel(reason: CancelReason): void }
   /** A profile reads every row: the worker's cancel (a newer profile, or the panel closed) stops it. */
@@ -277,7 +275,6 @@ export class ResultsPortHost {
       case 'findRows': return this.findRows(request)
       case 'diff': return this.diff(request)
       case 'pivot': return this.pivot(request)
-      case 'transpose': return this.transpose(request)
       case 'search': return this.search(request)
       case 'profile': return this.profile(request)
       case 'distinct': return this.distinct(request)
@@ -790,45 +787,6 @@ export class ResultsPortHost {
     })
   }
 
-  /** A transpose of a result this renderer owns (results.transpose; a view id is checked against its result by the
-   *  backend); cancelled like a sort, and counted with sorts. The transpose is a new result: the port owns it once
-   *  answered, and main closes one answered after its port went (a reload). */
-  private transpose(request: Extract<PortRequest, { t: 'transpose' }>): void {
-    const { rid, generation } = request
-    if (this.sorting.has(rid)) return this.end(rid, 'INVALID_REQUEST', 'The results request was invalid.')
-    if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
-    if (!this.current(generation, request.resultId)) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
-    const port = this.port
-    // Copied member by member, so nothing but the schema's members reaches the backend.
-    const params: ResultsTransposeParams = { resultId: request.resultId }
-    if (request.viewId !== undefined) params.viewId = request.viewId
-    if (request.rows !== undefined) params.rows = request.rows.map(([first, count]) => [first, count])
-    if (request.headerColumn !== undefined) params.headerColumn = request.headerColumn
-    const transpose = this.backend.transpose(generation, params)
-    this.sorting.set(rid, transpose)
-    transpose.done.then(result => {
-      const parsed = transposeResultSchema.safeParse(result)
-      // The result the backend stored, even from an answer its schema refuses: nothing else would close it.
-      const stored = parsed.success ? parsed.data.descriptor.resultId : storedResultId(result)
-      const close = () => { if (stored !== undefined) void this.backend.close(generation, [stored]).catch(() => undefined) }
-      if (this.port !== port || this.sorting.get(rid) !== transpose) return close()
-      this.sorting.delete(rid)
-      // Its shape (a column per row taken past "Column", a row per source column) is the schema's; ranges bound the rows.
-      const asked = request.rows?.reduce((sum, [, count]) => sum + count, 0) ?? Number.MAX_SAFE_INTEGER
-      if (!parsed.success || parsed.data.rows > asked) {
-        close()
-        return this.end(rid, 'BACKEND_ERROR', 'The results could not be transposed.')
-      }
-      const descriptor: ResultDescriptor = { ...parsed.data.descriptor, generation }
-      if (generation === this.generation) this.own([descriptor])
-      this.post({ t: 'end', rid, ok: true, result: { ...parsed.data, descriptor } })
-    }, error => {
-      if (this.port !== port || this.sorting.get(rid) !== transpose) return
-      this.sorting.delete(rid)
-      this.fail(rid, error)
-    })
-  }
-
   /** A request of a result this renderer owns, counted with live updates against the 64; `check` bounds its answer. */
   private counted<T>(rid: number, generation: number, resultId: number, run: () => Promise<unknown>, check: (result: unknown) => T | undefined): void {
     if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
@@ -919,11 +877,6 @@ export function supervisorResults(supervisor: BackendSupervisor): ResultsBackend
     pivot: (generation, params) => {
       let id = 0
       const done = supervisor.request('results.pivot', params, { generation, onSent: sent => { id = sent } })
-      return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
-    },
-    transpose: (generation, params) => {
-      let id = 0
-      const done = supervisor.request('results.transpose', params, { generation, onSent: sent => { id = sent } })
       return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
     },
     search: (generation, params) => {

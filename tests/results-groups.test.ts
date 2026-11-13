@@ -7,7 +7,6 @@ import { EventBus } from '../src/renderer/src/core/events'
 import { CompareService } from '../src/renderer/src/results/CompareService'
 import { PivotService } from '../src/renderer/src/results/PivotService'
 import { groupOf, ResultsService, setKey, slotOf, type TabResults } from '../src/renderer/src/results/ResultsService'
-import { TransposeService } from '../src/renderer/src/results/TransposeService'
 import { descriptor, fakeResultClient, summaryOf } from './fixtures/results'
 import { manualTimers } from './fixtures/workbench'
 
@@ -21,7 +20,7 @@ function fixture() {
     onResultsJob: vi.fn<VariaApi['onResultsJob']>(listener => { progress.add(listener); return () => { progress.delete(listener) } })
   }
   const results = new ResultsService({ client, api, events, frame: callback => callback(), timers: timers.timers, newId: () => crypto.randomUUID() })
-  const pivot = new PivotService(results), compare = new CompareService(results), transpose = new TransposeService(results)
+  const pivot = new PivotService(results), compare = new CompareService(results)
   let next = 1
   /** Runs a query of `count` complete sets (of `kinds`, rows unless said) in tab `tabId`. */
   const run = (count: number, o: { queryId?: string; tabId?: string; plan?: number; bare?: boolean; batches?: number[] } = {}) => {
@@ -42,7 +41,7 @@ function fixture() {
     await pivot.run('t1')
     await settle()
   }
-  return { client, results, pivot, compare, transpose, run, tab, names, build }
+  return { client, results, pivot, compare, run, tab, names, build }
 }
 
 describe('result groups', () => {
@@ -70,7 +69,7 @@ describe('result groups', () => {
     expect(groupOf(tab(), diff.key)).toBeUndefined()
     expect(slotOf(tab(), diff.key)).toBe(diff)
     // Every entry the stack draws is exactly one slot.
-    const slots = tab().groups.flatMap(group => [group.table, ...group.pivot ? [group.pivot] : [], ...group.transposes]).concat(tab().comparisons)
+    const slots = tab().groups.flatMap(group => [group.table, ...group.pivot ? [group.pivot] : []]).concat(tab().comparisons)
     expect(slots.map(slot => slot.key)).toEqual(tab().sets.map(set => set.key))
     expect(tab().sets.every(set => slotOf(tab(), set.key)?.entry === set)).toBe(true)
     expect(groupOf(tab(), tab().groups[2].pivot!.key)?.ordinal).toBe(3)
@@ -177,13 +176,13 @@ describe('result groups', () => {
   })
 
   it('make a SQL-returned plan set a group of its own with Pivot, Compare and Transpose off, and compare Tables only', async () => {
-    const { client, results, pivot, compare, transpose, run, tab, names, build } = fixture()
+    const { client, results, pivot, compare, run, tab, names, build } = fixture()
     const [one, plan, three] = run(3, { plan: 1 })
     expect(tab().groups.map(group => [group.ordinal, group.planSet])).toEqual([[1, false], [2, true], [3, false]])
     expect(names()).toEqual(['Result 1', 'Result 2', 'Result 3'])
     expect(pivot.canPivot('t1', plan)).toBe(false)
     expect(compare.canCompare('t1', plan)).toBe(false)
-    expect(transpose.canTranspose('t1', plan)).toBe(false)
+    expect(results.canTranspose('t1', plan)).toBe(false)
     // Result 3 is compared with the nearest Table of rows before it: the plan set is passed over.
     expect(compare.previousOf('t1', three)?.key).toBe(one)
     // A Pivot is never an input, though it stands between the Tables now.
@@ -200,29 +199,19 @@ describe('result groups', () => {
     expect(tab().groups.map(group => group.ordinal)).toEqual([1, 3])
   })
 
-  it('hold a stored transpose in the group of what it transposed until the stored transpose goes, closing it with the group', async () => {
-    const { client, results, transpose, run, tab, names, build } = fixture()
-    const [one, two] = run(2)
+  it('keep a view drawn transposed one entry of its group: the orientation is how a slot is drawn, not another slot', async () => {
+    const { results, run, tab, names, build } = fixture()
+    const [one] = run(2)
     await build(one)
-    await transpose.transpose('t1', one)
-    await transpose.transpose('t1', tab().groups[0].pivot!.key)
-    await settle()
-    // After the group's Table and Pivot, before the next group.
-    expect(names()).toEqual(['Result 1', 'Pivot of Result 1', 'Transpose of Result 1', 'Transpose of Pivot of Result 1', 'Result 2'])
-    const group = tab().groups[0]
-    expect(group.transposes.map(slot => [slot.view, slot.group, slot.sources.map(source => source.name)])).toEqual([['transpose', 1, ['Result 1']], ['transpose', 1, ['Pivot of Result 1']]])
-    // It is not a view Pivot acts on, and focusing it leaves the group's selected view alone.
-    results.focusEntry('t1', group.transposes[0].key)
-    expect(tab().groups[0].selected).toBe('table')
-    // Its own close closes it alone; the group's close takes the rest.
-    expect(results.closing('t1', group.transposes[0].key)).toHaveLength(1)
-    expect(results.removeEntry('t1', group.transposes[0].key)).toBe(true)
-    expect(tab().focused).toBe(one)
-    expect(results.closing('t1', one).map(entry => entry.label ?? 'Result 1')).toEqual(['Result 1', 'Pivot of Result 1', 'Transpose of Pivot of Result 1'])
+    const made = tab().groups[0].pivot!.key
+    expect(results.setOrientation('t1', one, { transposed: true })).toBe(true)
+    expect(results.setOrientation('t1', made, { transposed: true })).toBe(true)
+    expect(names()).toEqual(['Result 1', 'Pivot of Result 1', 'Result 2'])
+    expect(tab().groups[0]).toMatchObject({ table: { key: one, view: 'table' }, pivot: { key: made, view: 'pivot' } })
+    expect([one, made].map(key => results.orientation('t1', key).transposed)).toEqual([true, true])
+    // The orientation is the entry's grid state, so it goes with the entry when its group closes.
     expect(results.removeEntry('t1', one)).toBe(true)
-    expect(names()).toEqual(['Result 2'])
-    expect(tab().focused).toBe(two)
-    expect(client.released().length).toBe(4)
+    expect(results.viewState('t1').grids.has(one) || results.viewState('t1').grids.has(made)).toBe(false)
   })
 
   it('draw a bare run with Pivot, Compare and close off, whoever asks', async () => {

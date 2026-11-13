@@ -423,7 +423,7 @@ internal static class PivotOutput
         if (view.Wire(column) == WireKind.Binary)
             return "0x" + Convert.ToHexString(span[..Math.Min(span.Length, ResultPivoter.MaxLabelChars / 2)]) + (span.Length > ResultPivoter.MaxLabelChars / 2 ? "…" : "");
         // Only the first characters are kept: decode a prefix that holds more than them (four bytes a character at most),
-        // cut at a character boundary, not a value of megabytes (a transpose names up to 4,095 columns this way).
+        // cut at a character boundary, not a value of megabytes.
         var take = Math.Min(span.Length, 4 * (ResultPivoter.MaxLabelChars + 1));
         while (take < span.Length && take > 0 && (span[take] & 0xc0) == 0x80) take--;
         var text = Encoding.UTF8.GetString(span[..take]);

@@ -77,8 +77,8 @@ export function batchText(batchNumber: number, iteration: number, totalBatches: 
 /**
  * A set's caption: Collapse, its name, rows (counting while they stream) and columns, the batch it came from, Save
  * Results As for it and, in a stack that closes results (`onClose`), its close button, which is disabled while the query
- * runs (`running`). A Table's closes its group, so its tooltip says what goes with it (`others`: its Pivot, and any stored
- * transposes); a Pivot's or a comparison's closes that view alone. It renders for each set in view, so a set's facts show before its grid mounts.
+ * runs (`running`). A Table's closes its group, so its tooltip says what goes with it (`others`: its Pivot); a Pivot's or
+ * a comparison's closes that view alone. It renders for each set in view, so a set's facts show before its grid mounts.
  */
 const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, totalBatches, sort, running, others, onToggle, onClose }: {
   tabId: string; entry: ResultSetEntry; collapsed: boolean; totalBatches: number; sort?: GridSort; running: boolean; others: string; onToggle(key: EntryKey): void; onClose?(key: EntryKey): void
@@ -135,16 +135,13 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
   const sets = tab.sets, count = sets.length, closable = !tab.bare
   // What each entry shows of its group, for its grid's attributes and its caption.
   const slots = useMemo(() => {
-    const map = new Map<EntryKey, { view: 'table' | 'pivot' | 'comparison' | 'plan' | 'transpose'; group?: number; others: string }>()
+    const map = new Map<EntryKey, { view: 'table' | 'pivot' | 'comparison' | 'plan'; group?: number; others: string }>()
     for (const group of tab.groups) {
       // What a Table's close takes with it, for its button's tooltip.
-      const more = group.transposes.length, also = more === 0 ? '' : more === 1 ? 'its transpose' : `its ${more} transposes`
-      const others = group.pivot ? ` and its Pivot${also && ' and ' + also}` : also && ' and ' + also
-      map.set(group.table.key, { view: group.planSet ? 'plan' : 'table', group: group.ordinal, others })
+      map.set(group.table.key, { view: group.planSet ? 'plan' : 'table', group: group.ordinal, others: group.pivot ? ' and its Pivot' : '' })
       if (group.pivot) map.set(group.pivot.key, { view: 'pivot', group: group.ordinal, others: '' })
-      for (const slot of group.transposes) map.set(slot.key, { view: 'transpose', group: group.ordinal, others: '' })
     }
-    for (const slot of tab.comparisons) map.set(slot.key, { view: slot.view === 'transpose' ? 'transpose' : 'comparison', others: '' })
+    for (const slot of tab.comparisons) map.set(slot.key, { view: 'comparison', others: '' })
     return map
   }, [tab.groups, tab.comparisons])
   const stackRef = useRef<HTMLDivElement>(null)
@@ -234,7 +231,7 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
     const stack = stackRef.current, list = results.getSnapshot()[tabId]?.sets ?? []
     const gone = new Set(results.closing(tabId, key).map(entry => entry.key))
     const places = list.flatMap((entry, place) => gone.has(entry.key) ? [place] : [])
-    // A Pivot (or a stored transpose) leaves the focus in its group, on the Table's caption, as the service leaves the
+    // A Pivot leaves the focus in its group, on the Table's caption, as the service leaves the
     // grid focus on the Table; a group or a comparison passes it to the next surviving item, else the one before.
     const slot = slots.get(key), table = slot?.group !== undefined && slot.view !== 'table' && slot.view !== 'plan' ? list.find(entry => entry.ordinal === slot.group) : undefined
     const next = table ?? (places.length ? list[places[places.length - 1] + 1] ?? list[places[0] - 1] : undefined)

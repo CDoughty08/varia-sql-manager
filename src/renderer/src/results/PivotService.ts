@@ -30,14 +30,14 @@ export interface PivotSnapshot {
 
 type Results = Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'sortOf' | 'removeEntry' | 'focusEntry' | 'focusStamp' | 'orientation' | 'setOrientation'>
 
-/** A set a pivot can read: a query's rows that have all loaded. Never a pivot, a transpose, a comparison or a plan set. */
+/** A set a pivot can read: a query's rows that have all loaded. Never a pivot, a comparison or a plan set. */
 export const pivotable = (entry: ResultSetEntry | undefined): boolean =>
   entry !== undefined && entry.descriptor.kind === 'rows' && entry.handle.getSnapshot().state === 'complete'
 /** A group a builder can belong to: one whose Table holds a query's rows (not a SQL-returned plan set). */
 const buildable = (group: ResultGroup | undefined): group is ResultGroup => !!group && !group.planSet && group.table.entry.descriptor.kind === 'rows'
 /**
  * The group Pivot acts on for the grid of entry `key`: the group whose Table or Pivot it shows. A comparison, a plan set,
- * a stored transpose and any grid of a bare run (Peek) have none, so Pivot is not offered there.
+ * and any grid of a bare run (Peek) have none, so Pivot is not offered there.
  */
 export function pivotGroup(tab: TabResults | undefined, key: EntryKey | undefined): ResultGroup | undefined {
   if (!tab || tab.bare) return undefined
@@ -275,7 +275,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       let ordinal = this.groups.get(tabId)
       if (run.focused !== this.focus.get(tabId)) {
         this.focus.set(tabId, run.focused)
-        // The focused grid's group, whichever of its views it is (a stored transpose too); a comparison or a plan set
+        // The focused grid's group, whichever of its views it is; a comparison or a plan set
         // has none to pivot, so the first that can be.
         const group = groupOf(run, run.focused)
         if (run.focused !== undefined) ordinal = (buildable(group) ? group.ordinal : undefined) ?? run.groups.find(buildable)?.ordinal ?? ordinal

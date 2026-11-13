@@ -370,9 +370,10 @@ internal static class HostChecks
             && service.LaneOf("results.copy") == RequestLane.Results && service.LaneOf("results.export") == RequestLane.Results
             && service.LaneOf("query.cancel") == RequestLane.Control && service.LaneOf("no.such.method") == RequestLane.Control,
             "every method announced in HELLO is dispatched, on its lane: " + string.Join(", ", undispatched));
-        // explorer.children replaced the v1 catalog lists and scripting.script replaced tables.script; a stale renderer or
-        // main must get METHOD_NOT_FOUND, not data.
-        string[] retiredMethods = ["tables.list", "server.objects.list", "tables.script"];
+        // explorer.children replaced the v1 catalog lists, scripting.script replaced tables.script, and a transposed grid
+        // is drawn from its source, so results.transpose stores nothing any more; a stale renderer or main must get
+        // METHOD_NOT_FOUND, not data.
+        string[] retiredMethods = ["tables.list", "server.objects.list", "tables.script", "results.transpose"];
         var retired = new List<string>();
         foreach (var method in retiredMethods)
         {
@@ -381,7 +382,7 @@ internal static class HostChecks
             catch (Exception) { }
         }
         check(retired.Count == retiredMethods.Length && !retiredMethods.Any(SqlService.MethodNames.Contains),
-            "the retired v1 catalog and table script methods are neither announced nor dispatched: " + string.Join(", ", retired));
+            "the retired v1 catalog, table script and stored transpose methods are neither announced nor dispatched: " + string.Join(", ", retired));
     }
 
     /// <summary>A summary is written after SummaryBudget took its figure, so a results.close answered meanwhile (Close

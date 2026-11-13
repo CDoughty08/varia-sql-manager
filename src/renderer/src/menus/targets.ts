@@ -62,7 +62,7 @@ export interface OutputTarget {
   readonly row?: number
   /** Refuses commands after the entry came to show another stored result than the one the menu opened on. */
   readonly result?: { readonly generation: number; readonly resultId: number }
-  /** The grid's result kind ('rows', 'diff', 'pivot', 'transpose'…), for the commands only some kinds offer. */
+  /** The grid's result kind ('rows', 'diff', 'pivot'…), for the commands only some kinds offer. */
   readonly resultKind?: string
   /** The grid is drawn bare (Peek's rows): Pivot, Compare and the close commands are off for it. */
   readonly bare?: true

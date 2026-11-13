@@ -345,6 +345,9 @@ describe('ResultClient', () => {
       { rows: [0, 1, 2, 3, 4, 5, 6, 7, 8], values: [{ aggregate: 'count' as const }] },
       { rows: [], values: Array.from({ length: 17 }, () => ({ aggregate: 'count' as const })) }
     ]) await expect(handle.pivot(spec)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    // A transposed grid is drawn from its result: neither a result nor a view can be asked for a stored one.
+    expect(handle).not.toHaveProperty('transpose')
+    expect(view).not.toHaveProperty('transpose')
     expect(worker().fromWorker.length).toBe(pivotBefore)
     const pivoting = view.pivot({ rows: [], column: 0, values: [{ aggregate: 'max', column: 0 }] })
     const pivotAnswer = { descriptor: descriptor({ resultId: 11, kind: 'pivot' }), rows: 10, rowGroups: 2, columnGroups: 3, approximate: false }
@@ -360,30 +363,6 @@ describe('ResultClient', () => {
     worker().toWorker({ t: 'end', rid: pivotAsked.rid, ok: true, result: { ...pivotAnswer, descriptor: descriptor({ resultId: 12, kind: 'pivot' }) } } as never)
     await settle()
     expect(worker().fromWorker.findLast(item => item.t === 'close')).toMatchObject({ generation: 1, resultIds: [12] })
-    // A transpose names 1 to 256 well-formed row ranges and a header column of the result; it reads through a view.
-    const transposeBefore = worker().fromWorker.length
-    for (const spec of [{ rows: [] }, { rows: [[0, 0] as const] }, { rows: [[-1, 1] as const] }, { rows: [[0.5, 1] as const] }, { rows: Array.from({ length: 257 }, () => [0, 1] as const) }, { headerColumn: 99 }, { headerColumn: -1 }])
-      await expect(handle.transpose(spec)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
-    expect(worker().fromWorker.length).toBe(transposeBefore)
-    const transposing = view.transpose({ rows: [[4, 2], [0, 1]], headerColumn: 0 })
-    const transposeAnswer = { descriptor: descriptor({ resultId: 13, kind: 'transpose' }), rows: 3, transposed: 3, columns: 2 }
-    expect(await answer('transpose', transposeAnswer)).toMatchObject({ t: 'transpose', generation: 1, resultId: 3, rows: [[4, 2], [0, 1]], headerColumn: 0, viewId: 2 })
-    expect(await transposing).toEqual(transposeAnswer)
-    const whole = handle.transpose()
-    const wholeSent = await answer('transpose', { ...transposeAnswer, descriptor: descriptor({ resultId: 14, kind: 'transpose' }) })
-    expect(wholeSent).not.toHaveProperty('rows')
-    expect(wholeSent).not.toHaveProperty('viewId')
-    await whole
-    // A transpose given up whose answer comes anyway is closed.
-    const dropTranspose = new AbortController()
-    const droppedTranspose = handle.transpose({}, { signal: dropTranspose.signal })
-    await settle()
-    const transposeAsked = worker().fromWorker.findLast(item => item.t === 'transpose')!
-    dropTranspose.abort()
-    await expect(droppedTranspose).rejects.toMatchObject({ name: 'AbortError' })
-    worker().toWorker({ t: 'end', rid: transposeAsked.rid, ok: true, result: { ...transposeAnswer, descriptor: descriptor({ resultId: 15, kind: 'transpose' }) } } as never)
-    await settle()
-    expect(worker().fromWorker.findLast(item => item.t === 'close')).toMatchObject({ generation: 1, resultIds: [15] })
   })
 
   it('sorts a result into a view read by position, replaces and closes views, and drops them with their result', async () => {
