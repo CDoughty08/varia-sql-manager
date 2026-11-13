@@ -426,7 +426,7 @@ internal static class SqlLanguageChecks
         var directory = Path.Combine(Path.GetTempPath(), "varia-sqltools-runtime-" + Guid.NewGuid().ToString("N"));
         try
         {
-            var backend = Path.Combine(directory, "backend", "Varia.Backend", "bin", "Debug", "net10.0");
+            var backend = Path.Combine(directory, "backend", "Varia.Backend", "bin", "Debug", "net11.0");
             var source = Path.Combine(directory, "artifacts", "sqltools-service", "win-x64", "MicrosoftSqlToolsServiceLayer.exe");
             Directory.CreateDirectory(Path.GetDirectoryName(source)!);
             File.WriteAllText(source, "path fixture only");

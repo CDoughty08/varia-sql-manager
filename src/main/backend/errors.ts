@@ -32,7 +32,7 @@ export const sentences = {
   liveDuplicate: 'This live view is already open.',
   liveEnded: 'This live view has ended.',
   invalid: 'The SQL backend sent an invalid response. The request was cancelled.',
-  spawnDevelopment: 'Could not start the .NET backend. Install .NET 10 and run npm run backend:build.',
+  spawnDevelopment: 'Could not start the .NET backend. Install .NET 11 and run npm run backend:build.',
   spawnPackaged: 'Could not start the SQL backend. Reinstall Varia SQL Manager.',
   incompatible: (detail: string, packaged: boolean) => `The SQL backend is from a different build (${detail}). ${packaged ? 'Reinstall Varia SQL Manager.' : 'Run npm run backend:build, then restart.'}`,
   timeout: (seconds: number) => `The SQL backend did not answer within ${seconds} seconds. The request was cancelled.`

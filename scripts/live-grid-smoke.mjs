@@ -45,7 +45,7 @@ const active = () => page.evaluate(({ grid, cell: cellPart, tones }) => {
 }, parts)
 
 try {
-  await expect(backendReady(page, /\.NET 10\./)).toHaveText('Ready', { timeout: 30000 })
+  await expect(backendReady(page, /\.NET 11\./)).toHaveText('Ready', { timeout: 30000 })
   await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
 
   step = 'tones'

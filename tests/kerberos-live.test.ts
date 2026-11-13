@@ -11,7 +11,7 @@ import type { ConnectionOptions } from '../src/shared/contracts'
 const enabled = process.env.VARIA_TEST_KERBEROS_NO_TICKET === '1' && !!process.env.VARIA_TEST_SQL_SERVER && process.platform !== 'win32'
 // Asked for but unable to run is a failure, so CI cannot pass by skipping it.
 if (process.env.VARIA_TEST_KERBEROS_NO_TICKET === '1' && !enabled) throw new Error('VARIA_TEST_KERBEROS_NO_TICKET needs VARIA_TEST_SQL_SERVER on Linux or macOS.')
-const dll = resolve('backend/Varia.Backend/bin/Release/net10.0/Varia.Backend.dll')
+const dll = resolve('backend/Varia.Backend/bin/Release/net11.0/Varia.Backend.dll')
 const connections: BackendConnection[] = []
 afterEach(async () => { await Promise.all(connections.splice(0).map(connection => connection.close())) })
 
