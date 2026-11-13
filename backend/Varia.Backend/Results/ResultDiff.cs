@@ -45,12 +45,20 @@ internal sealed class DiffModel(DiffEntry[] entries, (int Left, int Right)[] pai
     }
 }
 
-/// <summary>Random access to a complete result's stored rows: each page's header is parsed once.</summary>
+/// <summary>Where one diff's time went, for the result-work benchmark (--result-work-bench): Stopwatch ticks spent on rows'
+/// identities, matching them and aligning the matched rows (comparing their cells). Times only: nothing of the rows.</summary>
+internal sealed class DiffStages
+{
+    public long Identity, Matching, Aligning;
+}
+
+/// <summary>Random access to a complete result's stored rows: each page's header is parsed once. Several threads may read
+/// through one: a page's parsed header is published whole (two threads meeting an unparsed page may both parse it, alike).</summary>
 internal sealed class RowAccess
 {
     private readonly StoredPage[] pages;
     private readonly long[] starts;
-    private readonly (int[] Layout, int BlobStart)?[] parsed;
+    private readonly Parsed?[] parsed;
     private readonly int columns;
 
     public RowAccess(StoredPage[] pages, int columns)
@@ -58,7 +66,7 @@ internal sealed class RowAccess
         this.pages = pages;
         this.columns = columns;
         starts = new long[pages.Length];
-        parsed = new (int[], int)?[pages.Length];
+        parsed = new Parsed?[pages.Length];
         long rows = 0;
         for (var i = 0; i < pages.Length; i++) { starts[i] = pages[i].FirstRow; rows += pages[i].Rows; }
         Rows = rows;
@@ -91,13 +99,15 @@ internal sealed class RowAccess
     {
         var stored = pages[page];
         lengths = stored.Lengths;
-        if (parsed[page] is not { } layout)
+        if (Volatile.Read(ref parsed[page]) is not { } layout)
         {
             var first = PageView.Parse(stored.Body, columns);
-            parsed[page] = layout = (first.Layout, first.BlobStart);
+            Volatile.Write(ref parsed[page], layout = new Parsed(first.Layout, first.BlobStart));
         }
         return PageView.At(stored.Body, layout.BlobStart, layout.Layout, stored.FirstRow, stored.Rows, columns);
     }
+
+    private sealed record Parsed(int[] Layout, int BlobStart);
 }
 
 /// <summary>Aligns two complete results (results.diff). Columns pair by name (case-insensitively, in the first result's
@@ -110,15 +120,17 @@ internal static class ResultDiffer
 {
     private const int CancelEvery = 1 << 12;
 
-    /// <summary>Bytes the alignment holds per row while it runs: a left row's identity, match, chain and lookup entry
-    /// (8 + 4 + 4 + 24), a right row's identity and match (8 + 4), and up to one entry a row of both results (20), held
-    /// twice while the list becomes the model's array. Differing cells are charged as they are found (<see cref="CellBytes"/>).</summary>
-    public static long WorkingBytes(long leftRows, long rightRows) => 40 * leftRows + 12 * rightRows + 2 * EntryBytes * (leftRows + rightRows);
+    /// <summary>Bytes the alignment holds per row while it runs: a left row's identity, match, chain, place in its part and
+    /// lookup entry with its bucket (8 + 4 + 4 + 4 + 24 + 4, and 6 for the lookups' sizes rounding up to a prime, up to a
+    /// fifth more: the parts' lookups together hold one entry a left row), a right row's identity, match and place in its
+    /// part (8 + 4 + 4), and up to one entry a row of both results (20), written straight into the model's array. Differing
+    /// cells are charged as they are found (<see cref="CellBytes"/>).</summary>
+    public static long WorkingBytes(long leftRows, long rightRows) => 54 * leftRows + 16 * rightRows + EntryBytes * (leftRows + rightRows);
 
     private const long EntryBytes = 20;
 
-    /// <summary>Bytes one differing cell can hold at most while the alignment runs: its index in a list grown by doubling
-    /// (twice 4), and once more in the model's array.</summary>
+    /// <summary>Bytes one differing cell can hold at most while the alignment runs: its index in its run's list grown by
+    /// doubling (twice 4), and once more in the model's array.</summary>
     public const long CellBytes = 12;
 
     /// <summary>Differing cells charged at a time, through Compare's <c>reserve</c>.</summary>
@@ -153,8 +165,9 @@ internal static class ResultDiffer
     /// <see cref="CellChunk"/> cells at a time, beyond the <see cref="WorkingBytes"/> the caller reserved; a refusal fails
     /// the diff with TOO_LARGE, since every value of two wide results can differ.</summary>
     public static DiffModel Compare(ResultSetBuffer left, StoredPage[] leftPages, ResultSetBuffer right, StoredPage[] rightPages, bool exact, CancellationToken token,
-        Func<long, bool>? reserve = null)
+        Func<long, bool>? reserve = null, DiffStages? stages = null)
     {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
         var pairs = Pairs(left.Columns, right.Columns, left.Wires, right.Wires);
         if (pairs.Length == 0)
             throw new RequestException("INVALID_PARAMS", Pairs(left.Columns, right.Columns).Length == 0
@@ -199,57 +212,198 @@ internal static class ResultDiffer
             approximate |= Rows(rightHasher, rightPages, rightColumns, rightIds, token);
         }
 
-        // Match: each right row to a left row with its identity, the k-th copy to the k-th copy.
-        var matchedLeft = new int[leftTotal];
-        Array.Fill(matchedLeft, -1);
-        var rightMatch = new int[rightTotal];
-        Dictionary<long, int>? heads = new((int)Math.Min(leftTotal, int.MaxValue));
-        var next = new int[leftTotal];
-        for (var i = (int)leftTotal - 1; i >= 0; i--)
-        {
-            next[i] = heads.TryGetValue(leftIds[i], out var head) ? head : -1;
-            heads[leftIds[i]] = i;
-        }
-        var counter = 0;
-        for (var j = 0; j < rightTotal; j++)
-        {
-            if (++counter == CancelEvery) { counter = 0; token.ThrowIfCancellationRequested(); }
-            if (heads.TryGetValue(rightIds[j], out var i) && i >= 0)
-            {
-                rightMatch[j] = i;
-                matchedLeft[i] = j;
-                heads[rightIds[j]] = next[i];
-            }
-            else rightMatch[j] = -1;
-        }
-        heads = null;
+        var matching = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (stages is not null) stages.Identity += matching - started;
+        var (matchedLeft, rightMatch) = Match(leftIds, rightIds, token);
+        var aligning = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (stages is not null) stages.Matching += aligning - matching;
+        var (entries, cells) = Align(leftHasher, leftPages, rightHasher, rightPages, pairs, exact, matchedLeft, rightMatch, reserve, ref approximate, token);
+        if (stages is not null) stages.Aligning += System.Diagnostics.Stopwatch.GetTimestamp() - aligning;
+        return new DiffModel(entries, pairs, cells, keyPair, approximate);
+    }
 
-        // Unified order: removed rows before the first match go first; then each right row, and after a matched one the
-        // left rows that followed its left row up to the next matched one.
-        var entries = new List<DiffEntry>((int)(leftTotal + rightTotal));
-        var cells = new List<int>();
-        long cellsCharged = 0;
-        var leftAccess = new RowAccess(leftPages, left.Wires.Count);
-        var rightAccess = new RowAccess(rightPages, right.Wires.Count);
-        var at = 0;
-        while (at < leftTotal && matchedLeft[at] < 0) entries.Add(new DiffEntry(DiffKind.Removed, at++, -1));
-        for (var j = 0; j < rightTotal; j++)
+    /// <summary>Each right row's left row with its identity, the k-th copy to the k-th copy, and each left row's right row
+    /// (-1 for none). Identities are hashes below 2^53, so their high bits split them evenly into parts, one a thread asked
+    /// for. Each part's rows are gathered in order (<see cref="ByPart"/>), so a part's copies meet in the order one pass meets
+    /// them and the answer is one pass's; each part then matches only its own rows, writing only them.</summary>
+    private static (int[] MatchedLeft, int[] RightMatch) Match(long[] leftIds, long[] rightIds, CancellationToken token)
+    {
+        var matchedLeft = new int[leftIds.Length];
+        Array.Fill(matchedLeft, -1);
+        var rightMatch = new int[rightIds.Length];
+        Array.Fill(rightMatch, -1);
+        var next = new int[leftIds.Length];
+        var parts = (int)Math.Clamp(Math.Max(leftIds.Length, rightIds.Length) / RowIdentity.MinSlice, 1, ViewSorter.Workers);
+        using var threads = ViewSorter.Gate.Take(parts);
+        var (leftRows, leftStarts) = ByPart(threads, leftIds, parts, token);
+        var (rightRows, rightStarts) = ByPart(threads, rightIds, parts, token);
+        threads.For(parts, part =>
         {
-            if (++counter == CancelEvery) { counter = 0; token.ThrowIfCancellationRequested(); }
-            var i = rightMatch[j];
-            if (i < 0) { entries.Add(new DiffEntry(DiffKind.Added, -1, j)); continue; }
-            var before = cells.Count;
-            approximate |= CompareCells(leftHasher, leftAccess, i, rightHasher, rightAccess, j, pairs, exact, cells, out var hard);
-            while (cells.Count > cellsCharged)
+            // Each part's lookup holds as many entries as its left rows, together one a left row, as one lookup would.
+            var heads = new Dictionary<long, int>(leftStarts[part + 1] - leftStarts[part]);
+            for (var at = leftStarts[part + 1] - 1; at >= leftStarts[part]; at--)
             {
-                if (reserve is not null && !reserve(CellChunk * CellBytes))
-                    throw new RequestException("TOO_LARGE", "These results differ in too many values to compare in the result memory left. Close other results and try again.");
-                cellsCharged += CellChunk;
+                if ((at & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+                var i = leftRows?[at] ?? at;
+                ref var head = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(heads, leftIds[i], out var known);
+                next[i] = known ? head : -1;
+                head = i;
             }
-            entries.Add(new DiffEntry(hard ? DiffKind.Changed : DiffKind.Same, i, j, before, cells.Count - before));
-            for (var k = i + 1; k < leftTotal && matchedLeft[k] < 0; k++) entries.Add(new DiffEntry(DiffKind.Removed, k, -1));
+            for (var at = rightStarts[part]; at < rightStarts[part + 1]; at++)
+            {
+                if ((at & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+                var j = rightRows?[at] ?? at;
+                ref var head = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrNullRef(heads, rightIds[j]);
+                if (System.Runtime.CompilerServices.Unsafe.IsNullRef(ref head) || head < 0) continue;
+                rightMatch[j] = head;
+                matchedLeft[head] = j;
+                head = next[head];
+            }
+        }, token);
+        return (matchedLeft, rightMatch);
+    }
+
+    private static int Part(long id, int parts) => (int)(id * parts >> 53);
+
+    /// <summary>The rows by the part their identity is in, in row order within a part, and where each part starts: even
+    /// runs of the rows each count their parts' rows, then place them after the earlier parts' and the earlier runs' (a
+    /// stable counting sort, on the lease's threads). One part needs no order: null, and the rows are their own places.</summary>
+    private static (int[]? Rows, int[] Starts) ByPart(ViewSorter.WorkerGate.Lease threads, long[] ids, int parts, CancellationToken token)
+    {
+        if (parts == 1) return (null, [0, ids.Length]);
+        var runs = parts;
+        // counts[run * parts + part]: a run's rows in a part, then where they go.
+        var counts = new int[runs * parts];
+        threads.For(runs, run =>
+        {
+            for (int i = ViewSorter.RunStart(ids.Length, run, runs), end = ViewSorter.RunStart(ids.Length, run + 1, runs); i < end; i++)
+            {
+                if ((i & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+                counts[run * parts + Part(ids[i], parts)]++;
+            }
+        }, token);
+        var starts = new int[parts + 1];
+        var place = 0;
+        for (var part = 0; part < parts; part++)
+        {
+            starts[part] = place;
+            for (var run = 0; run < runs; run++)
+            {
+                var size = counts[run * parts + part];
+                counts[run * parts + part] = place;
+                place += size;
+            }
         }
-        return new DiffModel([.. entries], pairs, [.. cells], keyPair, approximate);
+        starts[parts] = place;
+        var rows = new int[ids.Length];
+        threads.For(runs, run =>
+        {
+            for (int i = ViewSorter.RunStart(ids.Length, run, runs), end = ViewSorter.RunStart(ids.Length, run + 1, runs); i < end; i++)
+            {
+                if ((i & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+                rows[counts[run * parts + Part(ids[i], parts)]++] = i;
+            }
+        }, token);
+        return (rows, starts);
+    }
+
+    /// <summary>The entries in unified order: removed rows before the first match go first; then each right row, and after a
+    /// matched one the left rows that followed its left row up to the next matched one. The right rows are split into even
+    /// runs on the threads the gate has free: each run first counts its entries (so each knows where its own go in the one
+    /// array), then compares its matched rows' cells with hashers and pages of its own into a list of its own; the lists are
+    /// joined in run order and each entry's cells moved on by the cells of the runs before it: the entries and cells one
+    /// pass makes. Each run charges its cells as it finds them, a chunk at a time.</summary>
+    private static (DiffEntry[] Entries, int[] Cells) Align(CellHasher leftHasher, StoredPage[] leftPages, CellHasher rightHasher, StoredPage[] rightPages, (int Left, int Right)[] pairs,
+        bool exact, int[] matchedLeft, int[] rightMatch, Func<long, bool>? reserve, ref bool approximate, CancellationToken token)
+    {
+        var leftTotal = matchedLeft.Length;
+        var rightTotal = rightMatch.Length;
+        var leading = 0;
+        while (leading < leftTotal && matchedLeft[leading] < 0) leading++;
+        var runs = Math.Clamp(rightTotal / RowIdentity.MinSlice, 1, ViewSorter.Workers);
+        using var threads = ViewSorter.Gate.Take(runs);
+        int Start(int run) => ViewSorter.RunStart(rightTotal, run, runs);
+        var places = new long[runs + 1];
+        threads.For(runs, run =>
+        {
+            long count = 0;
+            for (int j = Start(run), end = Start(run + 1); j < end; j++)
+            {
+                if ((j & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+                count++;
+                var i = rightMatch[j];
+                if (i < 0) continue;
+                for (var k = i + 1; k < leftTotal && matchedLeft[k] < 0; k++) count++;
+            }
+            places[run + 1] = count;
+        }, token);
+        places[0] = leading;
+        for (var run = 0; run < runs; run++) places[run + 1] += places[run];
+        var entries = new DiffEntry[places[runs]];
+        for (var i = 0; i < leading; i++) entries[i] = new DiffEntry(DiffKind.Removed, i, -1);
+        var found = new List<int>[runs];
+        // One cache of parsed page headers a result, shared by the runs: one a run would hold up to a copy each.
+        var leftAccess = new RowAccess(leftPages, leftHasher.Count);
+        var rightAccess = new RowAccess(rightPages, rightHasher.Count);
+        var cut = 0;
+        var refused = 0;
+        var charging = new object();
+        long differing = 0, charged = 0;
+        threads.For(runs, run =>
+        {
+            var (ownLeft, ownRight) = run == 0 ? (leftHasher, rightHasher) : (leftHasher.Fork(), rightHasher.Fork());
+            var cells = found[run] = [];
+            var counted = 0;
+            var at = (int)places[run];
+            var inexact = false;
+            for (int j = Start(run), end = Start(run + 1); j < end; j++)
+            {
+                if ((j & (CancelEvery - 1)) == 0)
+                {
+                    token.ThrowIfCancellationRequested();
+                    // Another run was refused: the diff fails as a whole.
+                    if (Volatile.Read(ref refused) != 0) return;
+                }
+                var i = rightMatch[j];
+                if (i < 0) { entries[at++] = new DiffEntry(DiffKind.Added, -1, j); continue; }
+                var before = cells.Count;
+                inexact |= CompareCells(ownLeft, leftAccess, i, ownRight, rightAccess, j, pairs, exact, cells, out var hard);
+                if (cells.Count > counted)
+                {
+                    // The runs' cells together, charged a chunk at a time as one pass charges them, however many runs find them.
+                    var all = Interlocked.Add(ref differing, cells.Count - counted);
+                    counted = cells.Count;
+                    if (all > Volatile.Read(ref charged))
+                        lock (charging)
+                            while (all > charged)
+                            {
+                                if (reserve is not null && !reserve(CellChunk * CellBytes))
+                                {
+                                    Volatile.Write(ref refused, 1);
+                                    throw new RequestException("TOO_LARGE", "These results differ in too many values to compare in the result memory left. Close other results and try again.");
+                                }
+                                Volatile.Write(ref charged, charged + CellChunk);
+                            }
+                }
+                entries[at++] = new DiffEntry(hard ? DiffKind.Changed : DiffKind.Same, i, j, before, cells.Count - before);
+                for (var k = i + 1; k < leftTotal && matchedLeft[k] < 0; k++) entries[at++] = new DiffEntry(DiffKind.Removed, k, -1);
+            }
+            if (inexact) Volatile.Write(ref cut, 1);
+        }, token);
+        if (cut != 0) approximate = true;
+        var bases = new int[runs + 1];
+        for (var run = 0; run < runs; run++) bases[run + 1] = checked(bases[run] + found[run].Count);
+        var all = new int[bases[runs]];
+        threads.For(runs, run =>
+        {
+            found[run].CopyTo(all, bases[run]);
+            found[run] = [];
+            var shift = bases[run];
+            if (shift == 0) return;
+            for (long e = places[run]; e < places[run + 1]; e++)
+                if (entries[e].Kind is DiffKind.Same or DiffKind.Changed) entries[e] = entries[e] with { CellStart = entries[e].CellStart + shift };
+        }, token);
+        return (entries, all);
     }
 
     /// <summary>Each row's identity over the given columns.</summary>
