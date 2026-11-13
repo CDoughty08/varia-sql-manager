@@ -20,6 +20,7 @@ internal sealed class QueryBudget(string sessionId, LiveBudget? live = null, lon
 {
     internal long used;
     private int stopped;
+    private long refusedBytes, stoppedBytes;
     public string SessionId { get; } = sessionId;
     /// <summary>The live subscription this budget belongs to, or null for a query's.</summary>
     public LiveBudget? Live { get; } = live;
@@ -27,7 +28,17 @@ internal sealed class QueryBudget(string sessionId, LiveBudget? live = null, lon
     public long UsedBytes => Interlocked.Read(ref used);
     /// <summary>Set by the first failed reservation: later rows and later result sets of the query store nothing.</summary>
     public TruncationReason Stopped => (TruncationReason)Volatile.Read(ref stopped);
-    internal void Stop(TruncationReason reason) => Interlocked.CompareExchange(ref stopped, (int)reason, 0);
+    /// <summary>The figure the query stopped at, for a budget reason: the one in force at the refusal that stopped it, which
+    /// a later change of the limit (ResultStore.Resize) does not alter. Null otherwise.</summary>
+    public long? StoppedBytes => Volatile.Read(ref stoppedBytes) is > 0 and var bytes ? bytes : null;
+    /// <summary>Records the figure a reservation was just refused at (ResultStore.TryReserve).</summary>
+    internal void Refused(long figure) => Interlocked.Exchange(ref refusedBytes, figure);
+    internal void Stop(TruncationReason reason)
+    {
+        // The refusal that stops a query comes just before its Stop, on the same thread.
+        if (Interlocked.CompareExchange(ref stopped, (int)reason, 0) == 0 && reason is TruncationReason.QueryBudget or TruncationReason.GlobalBudget)
+            Volatile.Write(ref stoppedBytes, Interlocked.Read(ref refusedBytes));
+    }
 }
 
 /// <summary>Query results kept in backend memory (never on disk) under a byte budget: a global one, at most half of it per
@@ -232,7 +243,8 @@ internal sealed class ResultStore
     private bool TryReserve(QueryBudget query, long bytes, bool checkSystem, Figures budget, out TruncationReason reason)
     {
         if (checkSystem && IsSystemMemoryLow()) { reason = TruncationReason.SystemMemory; return false; }
-        if (Interlocked.Read(ref query.used) + bytes > Math.Min(budget.Query, query.MaxBytes)) { reason = TruncationReason.QueryBudget; return false; }
+        var queryLimit = Math.Min(budget.Query, query.MaxBytes);
+        if (Interlocked.Read(ref query.used) + bytes > queryLimit) { query.Refused(queryLimit); reason = TruncationReason.QueryBudget; return false; }
         var live = query.Live;
         // Added first and taken back on a refusal, so concurrent reservations never pass a limit together.
         if (live is not null)
@@ -240,6 +252,7 @@ internal sealed class ResultStore
             if (Interlocked.Add(ref live.used, bytes) > live.Limit)
             {
                 Interlocked.Add(ref live.used, -bytes);
+                query.Refused(live.Limit);
                 reason = TruncationReason.QueryBudget;
                 return false;
             }
@@ -247,6 +260,7 @@ internal sealed class ResultStore
             {
                 Interlocked.Add(ref liveUsed, -bytes);
                 Interlocked.Add(ref live.used, -bytes);
+                query.Refused(budget.Live);
                 reason = TruncationReason.GlobalBudget;
                 return false;
             }
@@ -255,6 +269,7 @@ internal sealed class ResultStore
         {
             if (current + bytes > budget.Global)
             {
+                query.Refused(budget.Global);
                 if (live is not null)
                 {
                     Interlocked.Add(ref liveUsed, -bytes);

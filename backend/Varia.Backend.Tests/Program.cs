@@ -33,6 +33,13 @@ if (args is [PivotBench.Argument, ..])
     return;
 }
 
+// The result-work benchmark (pivot Distinct Count, Compare Results, distinct value lists), run by hand: measures only.
+if (args is [ResultWorkBench.Argument, ..])
+{
+    ResultWorkBench.Run(args);
+    return;
+}
+
 var passed = 0;
 var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
 // VARIA_TEST_SLOW_MS=<ms> prints each check reached more than that long after the previous one (to stderr), to find the
@@ -365,6 +372,7 @@ if (liveGroup is null)
         ("Profile", Sync(() => ProfileChecks.Run(Check))),
         ("Pivot", Sync(() => PivotChecks.Run(Check))),
         ("Distinct", Sync(() => DistinctChecks.Run(Check))),
+        ("ParallelResult", Sync(() => ParallelResultChecks.Run(Check))),
         ("CellLength", Sync(() => CellLengthChecks.Run(Check))),
         ("Text", () => TextChecks.RunAsync(Check)),
         ("TransposedText", () => TransposedTextChecks.RunAsync(Check)),

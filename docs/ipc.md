@@ -1250,7 +1250,7 @@ Notes appended to the summary's messages:
 | `truncated` | Note |
 | --- | --- |
 | `rowLimit` (or truncated cells) | "Results were truncated by display limits. Display limits do not stop script execution." |
-| `queryBudget`, `globalBudget` | "Results were truncated because the result memory budget ({n} MB) is full. Execution continued; close other query results to free memory." |
+| `queryBudget`, `globalBudget` | "Results were truncated because the result memory budget ({n} MB) is full. Execution continued; close other query results to free memory." {n} is the figure the query stopped at (`budget.stoppedBytes`), or the current half or whole budget when it did not stop |
 | `systemMemory` | "Results were truncated because the computer is low on memory. Execution continued." |
 | more than `maxResultSets` sets | "Only the first ten result sets are displayed. Display limits do not stop script execution." ("first {n}" for other limits) |
 | column lists past the summary's 8 MiB | "{n} later result sets are not displayed because their column lists are too large to return. Display limits do not stop script execution." |
@@ -1359,7 +1359,10 @@ renderer adds its `error` as one.
   "Execution stopped unexpectedly: …". The summary's `error` keeps the first 20 errors (16,384 characters) as before.
 - **`completedAt`** is the backend's local time, `yyyy-MM-ddTHH:mm:ss.fffffffzzz`, for SSMS's "Completion time:" line.
 - **`budget`** is `{ usedBytes, globalBytes, queryBytes, seq }` when the summary was built; main adds `generation`. `seq`
-  orders it with the `results.memory` events (see [Query events](#query-events)).
+  orders it with the `results.memory` events (see [Query events](#query-events)). `stoppedBytes`, present only when the
+  query stopped storing for the budget, is the figure it stopped at: its half (or an actual plan's own ceiling) for
+  `queryBudget`, the whole budget for `globalBudget`, as they were at that refusal. The limit can change while the backend
+  runs (`results.setMemoryLimit`), so the truncation note and the grid's strip name this figure, not the current one.
 
 ## Sorted views
 
@@ -1526,8 +1529,16 @@ receives a new result to read like any other, never rows to compare.
   released with the query's other results, and released at once when its answer is not delivered: a CANCEL or the
   deadline answered first (the backend), its answer failed validation or its port went (main), or the page gave it up
   (the worker). A source released while the results were compared ends it (`RESULT_RELEASED`).
-  While it is built the alignment holds about 80 bytes a row of both results (`ResultDiffer.WorkingBytes`) and 12 bytes
+  While it is built the alignment holds about 55 bytes a row of both results (`ResultDiffer.WorkingBytes`) and 12 bytes
   a differing cell, charged to the budget too as they grow (`TOO_LARGE` without room).
+- **Threads.** Identities are hashed in runs of pages on several threads. Matching splits them by their hashes' high bits
+  into one part per thread it asks for; each part's rows are first gathered in row order (a stable counting sort, on
+  several threads), so each part reads only its own and copies meet in the order one pass meets them. Alignment splits the
+  later result's rows into even runs: each counts its entries (so it knows where they go in the one array), then compares
+  its matched rows' cells into a list of its own, charging them a chunk at a time (one charge at a time between the runs),
+  reading pages through one cache of parsed headers a result that the runs share; the lists are joined in run order. The
+  entries, their order and their cells are one thread's, however many threads the operations leave free; a refusal or a
+  cancellation stops every run.
 - **Renderer.** `ResultHandle.diff(right, { exact, context, signal })` relays it; `CompareService` appends the new result
   as the run's last set (`ResultsService.addSet`), named "Differences: Result 1 → Result 2", and its grid's strip says what
   was compared, and when `approximate`. A new run in the tab gives up a comparison in flight, and `addSet` takes a diff
@@ -1590,8 +1601,12 @@ receives a new result to read like any other, never the rows it grouped.
 - **Work.** One pass sorts the rows by each grouped column's key (`ResultPivoter.WorkingBytes`: the sort keys and 12 bytes
   a row); each grouping keeps its groups' first rows only up to its bound and is refused before the next runs. Then the
   figures (4 to 25 bytes a cell and value) are charged to the query budget before they are computed
-  (`TOO_LARGE`, "There is not enough result memory to pivot these rows. Close other results and try again."). The worker's
-  `cancel` stops it (`CANCELLED`).
+  (`TOO_LARGE`, "There is not enough result memory to pivot these rows. Close other results and try again."). COUNT
+  DISTINCT places each cell's non-NULL rows together (a counting sort, with a bound a cell: 4 bytes, charged with the
+  figures), then the cells are shared among the threads the operations leave free, each sorting and counting its own; a
+  cell of 65,536 rows or more is sorted on several threads and its runs counted in parts. Without room for the bounds it
+  sorts the rows by cell and value in one sort, on several threads too. The counts are one thread's either way. The
+  worker's `cancel` stops it (`CANCELLED`), every thread with it.
 - **Renderer.** `ResultHandle.pivot(spec, { signal })` validates the spec before sending. `PivotService` keeps each tab's
   panel (source set, row groups, column group, values) and appends the pivot as the run's last set, named "Pivot of Result
   N", whose grid strip says what was read and how many groups it has; a refusal shows in the panel, which keeps the draft. A new run gives up a pivot in flight, and
@@ -1730,7 +1745,10 @@ receives at most 512 values a window, never rows.
   another filter builds the view again from the same frozen snapshot.
 - **Work and memory.** Building takes one key per row for the column (as a filter builds it), the rows grouped in one
   pass when the key's 8 bytes are its whole value (a number, a date or time, a text length, ranked text or bytes) and there are
-  at most 65,536 values, otherwise by a stable sort (a duplicates filter on one such column groups the same way), and the snapshot itself: `DistinctWorkingBytes` (about 57 bytes a row) is charged to the result's query
+  at most 65,536 values, otherwise by a stable sort (a duplicates filter on one such column groups the same way) whose
+  runs of equal values are found in even parts on several threads, each part reading only its own rows (a value on most
+  rows is read by every thread, and counted once), and ranked by
+  count with the parallel sort, and the snapshot itself: `DistinctWorkingBytes` (about 57 bytes a row) is charged to the result's query
   budget while it builds (`TOO_LARGE` without room) and returned when it ends. The snapshot keeps
   `DistinctSnapshotBytes` (26 bytes a value and 4 KiB) charged until it is closed or its result goes. The worker's
   `cancel` stops a build or a read (`CANCELLED`). Main checks each answer before forwarding it: rows below 2³¹,

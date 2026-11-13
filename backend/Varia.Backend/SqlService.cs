@@ -1502,7 +1502,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (budget?.Stopped is { } stopped and not TruncationReason.None) reasons.Add(ResultSetBuffer.Name(stopped));
         if (reasons.Contains("rowLimit") || descriptors.Any(set => set.TruncatedCells > 0)) Note("Results were truncated by display limits. Display limits do not stop script execution.");
         if (reasons.Contains("queryBudget") || reasons.Contains("globalBudget"))
-            Note("Results were truncated because the result memory budget (" + (reasons.Contains("queryBudget") ? store.QueryBytes : store.GlobalBytes) / (1024 * 1024)
+            // The figure the query stopped at, not today's: the limit may have changed since (results.setMemoryLimit).
+            Note("Results were truncated because the result memory budget (" + (budget?.StoppedBytes ?? (reasons.Contains("queryBudget") ? store.QueryBytes : store.GlobalBytes)) / (1024 * 1024)
                 + " MB) is full. Execution continued; close other query results to free memory.");
         if (reasons.Contains("systemMemory")) Note("Results were truncated because the computer is low on memory. Execution continued.");
         if (unkeptSets > 0)
@@ -1527,7 +1528,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (context is not null) context.Unsent = () => store.Release(descriptors.Concat(plans).Select(set => set.ResultId));
         var completedAt = DateTimeOffset.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz", CultureInfo.InvariantCulture);
         return new(descriptors, overflowSets + oversizeSets + budgetSets + unkeptSets, output, recordsAffected, watch.ElapsedMilliseconds, status, failure, completed,
-            totalBatches, database, messages.Truncated, SummaryBudget(), completedAt, spid, login, plans.Count > 0 ? plans : null, planOrder,
+            totalBatches, database, messages.Truncated, SummaryBudget(budget?.StoppedBytes), completedAt, spid, login, plans.Count > 0 ? plans : null, planOrder,
             statisticsSample ?? (args.IncludeClientStatistics ? new([], null, "Execution ended before statistics collection could start.") : null));
     }
 
@@ -2309,7 +2310,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// summary is written only after this returns, so an event published meanwhile (a close in another tab) can reach main
     /// first; both take their sequence number under this lock with the usage they carry, and the status bar ignores a
     /// figure older than the one it shows.</summary>
-    internal ResultBudget SummaryBudget()
+    internal ResultBudget SummaryBudget(long? stoppedBytes = null)
     {
         lock (memoryGate)
         {
@@ -2317,7 +2318,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             var global = store.GlobalBytes;
             reportedBytes = used;
             reportedGlobalBytes = global;
-            return new ResultBudget(used, global, store.QueryBytes, ++memorySeq);
+            return new ResultBudget(used, global, store.QueryBytes, ++memorySeq, stoppedBytes);
         }
     }
 
