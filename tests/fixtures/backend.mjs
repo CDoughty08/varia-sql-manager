@@ -460,12 +460,23 @@ function beginQuery(sessionId) {
 }
 // The last sample sent in an event or summary. Report changes on the timer and after a close.
 let reportedBytes = -1
+// A summary carries no detail: the next check sends one even when usage is unchanged (SqlService.detailPending).
+let detailPending = false
 let memorySeq = 0
 function reportMemory() {
   const used = usedBytes()
-  if (used === reportedBytes) return
+  if (used === reportedBytes && !detailPending) return
   reportedBytes = used
-  write(FrameKind.EVENT, 0, 0, { type: 'results.memory', usedBytes: used, globalBytes, seq: ++memorySeq })
+  detailPending = false
+  write(FrameKind.EVENT, 0, 0, { type: 'results.memory', usedBytes: used, globalBytes, seq: ++memorySeq, detail: memoryDetail(used) })
+}
+/** The event's detail as the real backend sends it while nothing is compressed: stored equal to the rows as read, the
+ *  largest eight raw, the codec off. */
+function memoryDetail(used) {
+  const largest = [...heldBytes].filter(([, bytes]) => bytes > 0).sort((a, b) => b[1] - a[1]).slice(0, 8)
+    .map(([resultId, bytes]) => ({ resultId, logicalBytes: bytes, storedBytes: bytes, state: 'raw' }))
+  const codec = { pagesPacked: 0, pagesUnpacked: 0, packInputBytes: 0, packMicroseconds: 0, unpackOutputBytes: 0, unpackMicroseconds: 0, cacheHits: 0, cacheLookups: 0, lastUnpackMicroseconds: 0 }
+  return { logicalBytes: used, storedBytes: used, compressedBytes: 0, packedLogicalBytes: 0, cacheBytes: 0, largest, codec, heap: { committedBytes: 64 * 1024 * 1024, freeBytes: 8 * 1024 * 1024 } }
 }
 const indexedConnections = new Set()
 let lastIndexBytes = -1
@@ -480,6 +491,7 @@ function reportIndexMemory() {
 function summaryBudget() {
   const used = usedBytes()
   reportedBytes = used
+  detailPending = true
   return { usedBytes: used, globalBytes, queryBytes: globalBytes / 2, seq: ++memorySeq }
 }
 const column = (name, dataType) => ({ name, dataType, wire: 'text', nullable: true })

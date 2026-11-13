@@ -98,6 +98,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private readonly object memoryGate = new();
     private long reportedBytes = -1;
     private long reportedGlobalBytes = -1;
+    /// <summary>A summary's budget counted as a report but carries no detail: the next check sends the store's detail once.</summary>
+    private bool detailPending;
     /// <summary>Orders memory reports (events and summary budgets) for this process; main pairs it with the generation.</summary>
     private long memorySeq;
     private long reportedIndexBytes = -1;
@@ -2227,18 +2229,22 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     internal static MessageKind InformationalKind(int number) => number == 0 || number >= 50000 ? MessageKind.Print : MessageKind.Server;
 
     /// <summary>A global results.memory EVENT on the first sample and whenever sampled usage or the budget changes. The timer checks
-    /// once a second and results.close checks before it answers. A refused event is retried at the next check.</summary>
+    /// once a second and results.close checks before it answers. A refused event is retried at the next check. Its detail
+    /// (the Memory panel's Nerd metrics) is read only when an event goes out, so it adds no work to an unchanged check. A
+    /// query summary's budget counts as a report but has no detail, so the next check after one sends an event even when the
+    /// figures are unchanged, and the panel's results follow the query.</summary>
     internal void ReportMemory()
     {
         lock (memoryGate)
         {
             var used = store.UsedBytes;
             var global = store.GlobalBytes;
-            if (publish is null || used == reportedBytes && global == reportedGlobalBytes) return;
-            if (!publish(new { Type = "results.memory", UsedBytes = used, GlobalBytes = global, Seq = memorySeq + 1 })) return;
+            if (publish is null || used == reportedBytes && global == reportedGlobalBytes && !detailPending) return;
+            if (!publish(new ResultsMemoryEvent(used, global, memorySeq + 1, store.MemoryDetail()))) return;
             memorySeq++;
             reportedBytes = used;
             reportedGlobalBytes = global;
+            detailPending = false;
         }
     }
 
@@ -2267,6 +2273,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             var global = store.GlobalBytes;
             reportedBytes = used;
             reportedGlobalBytes = global;
+            detailPending = true;
             return new ResultBudget(used, global, store.QueryBytes, ++memorySeq, stoppedBytes);
         }
     }

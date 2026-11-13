@@ -1,11 +1,13 @@
-import type { MemoryOrder } from '../../../shared/contracts'
+import type { MemoryOrder, ResultMemoryDetail } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport } from '../../../shared/ipc/port-messages'
 import type { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import type { ResultClient } from './ResultClient'
 
-export type MemoryUsage = Pick<MemoryReport, 'usedBytes' | 'globalBytes'>
+/** A budget's figures. Results also has what the store holds (`detail`, from the backend's events; a summary's budget keeps
+ *  the last one) and the backend generation it came from, whose result ids it names. */
+export type MemoryUsage = Pick<MemoryReport, 'usedBytes' | 'globalBytes'> & { readonly detail?: ResultMemoryDetail; readonly generation?: number }
 const unavailable: MemoryUsage = { usedBytes: 0, globalBytes: 0 }
 
 /** A backend memory budget and its usage. Results also updates from query summaries. */
@@ -28,9 +30,10 @@ export class MemoryUsageService extends SnapshotStore<MemoryUsage> implements Di
     else if (generation > shown.generation || (generation === shown.generation && seq > shown.seq)) this.shown = { generation, seq }
     else return
     const current = this.getSnapshot()
-    const next = seq === 0 ? unavailable
-      : { usedBytes: Math.max(0, memory.usedBytes), globalBytes: memory.globalBytes > 0 ? memory.globalBytes : current.globalBytes }
-    if (next.usedBytes !== current.usedBytes || next.globalBytes !== current.globalBytes) this.publish(next)
+    const detail = seq === 0 ? undefined : memory.detail ?? (current.generation === generation ? current.detail : undefined)
+    const next: MemoryUsage = seq === 0 ? unavailable
+      : { usedBytes: Math.max(0, memory.usedBytes), globalBytes: memory.globalBytes > 0 ? memory.globalBytes : current.globalBytes, ...detail ? { detail, generation } : {} }
+    if (next.usedBytes !== current.usedBytes || next.globalBytes !== current.globalBytes || next.detail !== current.detail) this.publish(next)
   }
   dispose(): void { this.subscriptions.forEach(subscription => subscription.dispose()); this.clearListeners() }
 }

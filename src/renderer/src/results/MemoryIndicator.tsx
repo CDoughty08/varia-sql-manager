@@ -1,4 +1,4 @@
-import { useId, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
+import { useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import type { MemoryFeature } from '../../../shared/ipc/port-messages'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
@@ -6,31 +6,39 @@ import { modalOpen } from '../core/modal'
 import { watchModals } from '../core/windows'
 import Icon from '../Icon'
 import { memoryLevel, type MemoryUsage } from './memory'
-import { formatBytes } from './status'
+import { nerdMetrics, panelBytes as bytes, resultNames, type NerdMetricsModel } from './memory-details'
+import { NerdMetrics } from './NerdMetrics'
 
 // Chromium handles Escape through close requests, independently of the panel's visual layer.
 declare const CloseWatcher: new () => EventTarget & { destroy(): void }
 
 const labels = { index: 'Search Indexer', results: 'Results' }
 const levelLabels = { unavailable: 'Unavailable', normal: 'Normal', warning: 'Near limit', critical: 'Critical' }
-const bytes = (value: number) => value === 0 ? '0 MB' : formatBytes(value)
+
+/** What compression gave back: the bytes and the rows as read they stand for, while any page is compressed. */
+interface Packed { readonly givenBack: number; readonly logicalBytes: number; readonly memoryBytes: number }
 
 function reading(feature: MemoryFeature, memory: MemoryUsage) {
   const level = memoryLevel(memory, feature)
   const percent = memory.globalBytes > 0 ? 100 * memory.usedBytes / memory.globalBytes : 0
   const percentage = percent > 0 && percent < 1 ? '<1%' : `${Math.floor(percent)}%`
-  return { ...memory, feature, level, percent, percentage }
+  const detail = memory.detail
+  const packed: Packed | undefined = detail && detail.compressedBytes > 0 && detail.packedLogicalBytes > 0
+    ? { givenBack: Math.max(0, detail.logicalBytes - detail.storedBytes - detail.cacheBytes), logicalBytes: detail.logicalBytes, memoryBytes: detail.storedBytes + detail.cacheBytes } : undefined
+  // The ring's faint second tone: the rows as read on the budget's scale, beyond the memory that holds them.
+  const asRead = packed && memory.globalBytes > 0 ? 100 * (memory.usedBytes + packed.givenBack) / memory.globalBytes : undefined
+  return { ...memory, feature, level, percent, percentage, packed, asRead }
 }
 
 type Reading = ReturnType<typeof reading>
 
-function Ring({ reading: { feature, percent, level } }: { reading: Reading }) {
-  return <span className="memory-ring" data-feature={feature} data-level={level}
-    style={{ '--memory-fill': `${Math.min(100, percent)}%` } as CSSProperties} aria-hidden="true" />
+function Ring({ reading: { feature, percent, level, asRead } }: { reading: Reading }) {
+  return <span className="memory-ring" data-feature={feature} data-level={level} data-packed={asRead === undefined ? undefined : ''}
+    style={{ '--memory-fill': `${Math.min(100, percent)}%`, ...asRead === undefined ? {} : { '--memory-read': `${Math.min(100, asRead)}%` } } as CSSProperties} aria-hidden="true" />
 }
 
 function MemoryRow({ item }: { item: Reading }) {
-  const { feature, level, percentage, usedBytes, globalBytes } = item
+  const { feature, level, percentage, usedBytes, globalBytes, packed } = item
   const available = level !== 'unavailable'
   const note = feature === 'index'
     ? level === 'critical' ? 'Objects or databases may be skipped.' : level === 'warning' ? 'Module definitions may be omitted.' : 'Shared across connections.'
@@ -43,15 +51,37 @@ function MemoryRow({ item }: { item: Reading }) {
     {available && <>
       <span className="memory-usage">{bytes(usedBytes)} / {bytes(globalBytes)}</span>
       <span className="memory-remaining">{bytes(Math.max(0, globalBytes - usedBytes))} left</span>
+      {packed && <span className="memory-packed">
+        <span className="memory-packed-chip">−{bytes(packed.givenBack)} packed</span> {bytes(packed.logicalBytes)} of rows held in {bytes(packed.memoryBytes)}
+      </span>}
       <p>{note ? note + ' ' : ''}{action}</p>
     </>}
   </section>
 }
 
+const nerdKey = 'environment.statusBar.memoryNerdMetrics'
+
+/** The section's container, mounted only while the panel shows: it follows the setting, and the tabs and documents that
+ *  name the largest results, without re-rendering the status bar while the panel is closed. */
+function NerdSection({ memory }: { memory: MemoryUsage }) {
+  const { settings, results, documents } = useWorkbench()
+  const open = useServiceSnapshot(settings).values[nerdKey]
+  const tabs = useServiceSnapshot(results)
+  const { documents: docs } = useServiceSnapshot(documents)
+  const { detail, generation } = memory
+  const model = useMemo<NerdMetricsModel | undefined>(() => {
+    if (!open || !detail) return undefined
+    const names = new Map(docs.map(document => [document.id, document.name]))
+    return nerdMetrics(detail, resultNames(tabs, id => names.get(id), generation))
+  }, [open, detail, generation, tabs, docs])
+  return <NerdMetrics model={model} open={open} onToggle={() => void settings.toggle(nerdKey)} />
+}
+
 export default function MemoryIndicator() {
   const { indexMemory, resultMemory, menus } = useWorkbench()
   const index = reading('index', useServiceSnapshot(indexMemory))
-  const results = reading('results', useServiceSnapshot(resultMemory))
+  const resultUsage = useServiceSnapshot(resultMemory)
+  const results = reading('results', resultUsage)
   const readings = [index, results]
   const alert = readings.some(item => item.level === 'critical') ? 'critical' : readings.some(item => item.level === 'warning') ? 'warning' : undefined
   const summary = readings.map(item => `${labels[item.feature]} ${item.level === 'unavailable' ? 'unavailable' : item.percentage}`).join(', ')
@@ -104,6 +134,7 @@ export default function MemoryIndicator() {
     {createPortal(<section ref={panel} id={id} className="memory-details" hidden={!open} aria-labelledby={heading}>
       <div className="memory-heading"><h2 id={heading}>Memory usage</h2><span>SQL backend</span></div>
       {readings.map(item => <MemoryRow key={item.feature} item={item} />)}
+      {open && <NerdSection memory={resultUsage} />}
     </section>, document.body)}
   </div>
 }

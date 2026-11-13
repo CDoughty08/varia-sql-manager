@@ -105,7 +105,7 @@ Every frame is a 16-byte little-endian header followed immediately by its body.
 | 1 | HELLO | both; the first frame each way, exactly once | map, see [Handshake](#handshake) |
 | 2 | REQUEST | main → backend | `{ method: str ≤ 64, params: map, credit?: uint }`; `credit` only for stream methods (64 KiB – 16 MiB) |
 | 3 | RESPONSE | backend → main | `{ result: any }` or `{ error: { code: str, message: str ≤ 16,384, details?: map } }` ([details](#error-codes-and-fixed-sentences)); exactly one per REQUEST |
-| 4 | EVENT | backend → main | id of a `query.execute` request: a [query event](#query-events). id 0: `{ type: 'results.memory' or 'explorer.index.memory', usedBytes, globalBytes, seq }` |
+| 4 | EVENT | backend → main | id of a `query.execute` request: a [query event](#query-events). id 0: `{ type: 'results.memory' or 'explorer.index.memory', usedBytes, globalBytes, seq }`, results with `detail` ([Global memory events](#global-memory-events)) |
 | 5 | DATA | backend → main | One [result page](#result-pages); id of a `results.read` request |
 | 6 | CANCEL | main → backend | Empty. arg: 1 user, 2 deadline backstop, 3 consumer gone, 4 shutdown |
 | 7 | CREDIT | main → backend | Empty. arg: bytes, 1 – 16,777,216 |
@@ -1116,12 +1116,31 @@ ignores a query's events once its summary has arrived.
 
 | type | Emitted |
 | --- | --- |
-| `results.memory` | Checked once a second, after `results.close` and after `results.setMemoryLimit`, before their answers. Reports the first sample and any change of use or of the global figure since the last report. Each query summary's `budget` counts as a report and shares this event's sequence. This lets the renderer discard an older summary when a close's event arrives first. |
+| `results.memory` | Checked once a second, after `results.close` and after `results.setMemoryLimit`, before their answers. Reports the first sample and any change of use or of the global figure since the last report. Each query summary's `budget` counts as a report and shares this event's sequence. This lets the renderer discard an older summary when a close's event arrives first. A summary has no `detail`, so the next check after one sends the event once even when use is unchanged. |
 | `explorer.index.memory` | Checked once a second and after a disconnect drops a connection's index. Reports the first sample and changes to the usage charged to the shared index budget. This event has its own sequence. |
 
 Both events are droppable. A refused sample stays eligible for the next check and consumes no sequence number. Main
 pairs each sequence with the backend generation, retains the latest report for each feature, and replays both when a new
 results port opens.
+
+`results.memory` also carries `detail`, what the result store holds, for the status bar Memory panel's Nerd metrics
+([status-bar-memory.md](status-bar-memory.md)). It is read only when an event goes out, at the moments above, so it adds
+no timer and nothing to a check that finds no change; a query summary's `budget` has none, so main keeps the last
+event's with it until the check after the summary sends a new one. `resultMemoryDetailSchema` (`src/shared/ipc/port-messages.ts`) and `ResultMemoryDetail`
+(`Contracts.cs`) define it:
+
+| Field | Meaning |
+| --- | --- |
+| `logicalBytes` | The rows as read: every stored result's pages uncompressed |
+| `storedBytes` | What holds them now: raw pages plus compressed ones |
+| `compressedBytes`, `packedLogicalBytes` | The compressed pages' size, and the rows as read they hold |
+| `cacheBytes` | Decompressed pages kept for reads |
+| `largest` | At most 8 results, largest as read first: `{ resultId, logicalBytes, storedBytes, state: 'raw' \| 'packed' \| 'unpacking', progress? (0 to 100, only while unpacking), live? (a live view's table) }`. Ids are the event's generation's |
+| `codec` | Counters since the backend started: `name` and `level` (left out while compression is off), `pagesPacked`, `pagesUnpacked`, `packInputBytes`, `packMicroseconds`, `unpackOutputBytes`, `unpackMicroseconds`, `cacheHits`, `cacheLookups`, `lastUnpackMicroseconds` (the last operation that unpacked a result; 0 before one) |
+| `heap` | The managed heap after the last collection (`GC.GetGCMemoryInfo`): `committedBytes`, and `freeBytes` free inside it for reuse |
+
+Nothing is compressed yet: `storedBytes` equals `logicalBytes`, the compressed and cache figures and the codec's counters
+are 0, every result is `raw`, and the codec has no name.
 
 ## Result pages
 

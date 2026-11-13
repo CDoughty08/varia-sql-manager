@@ -1798,8 +1798,8 @@
         },
         "charts.orange": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Second series of a chart. Default $chart2 (Dark #d95926, Light #d4581f).",
-          "markdownDescription": "(VS Code) Second series of a chart. Default `$chart2` (Dark `#d95926`, Light `#d4581f`)."
+          "description": "(VS Code) Second series of a chart; also the decompressed-page cache in the Memory panel. Default $chart2 (Dark #d95926, Light #d4581f).",
+          "markdownDescription": "(VS Code) Second series of a chart; also the decompressed-page cache in the Memory panel. Default `$chart2` (Dark `#d95926`, Light `#d4581f`)."
         },
         "charts.green": {
           "$ref": "#/definitions/value",

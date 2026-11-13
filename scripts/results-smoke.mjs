@@ -1448,6 +1448,20 @@ try {
   await expect(memoryDetails).toBeHidden()
   await memory.press('Enter')
   await expect(memoryDetails).toBeVisible()
+  // Nerd metrics start collapsed; the heading opens them (a saved setting) with what the store holds, nothing compressed,
+  // and the largest results named by their tab and Results caption.
+  const nerd = memoryDetails.getByRole('button', { name: 'Nerd metrics', exact: true })
+  await expect(nerd).toHaveAttribute('aria-expanded', 'false')
+  await nerd.focus()
+  await page.keyboard.press('Enter')
+  await expect(nerd).toHaveAttribute('aria-expanded', 'true')
+  await expect(memoryDetails.getByRole('img', { name: 'In memory now: 236 MB. Raw pages 236 MB', exact: true })).toBeVisible()
+  const biggest = memoryDetails.getByRole('list', { name: 'Biggest results', exact: true }).getByRole('listitem')
+  await expect(biggest).toHaveCount(1)
+  await expect(biggest.first()).toContainText(/ · Result \d+.*Raw$/)
+  await expect(memoryDetails).toContainText('Compression off')
+  await page.keyboard.press('Space')
+  await expect(nerd).toHaveAttribute('aria-expanded', 'false')
   await page.mouse.click(5, 80)
   await expect(memoryDetails).toBeHidden()
   await run('-- varia-fake: sets=W1*10 memory=0.96')
@@ -1507,7 +1521,7 @@ try {
   await page.keyboard.press('Control+W')
   await expect(queryTabs()).toHaveCount(1)
   await expect(resultsMemory).toHaveText('0 MB / 256 MB')
-  console.log('Results checks: both memory rings, hover and click details, the 90 % and 95 % Results thresholds, and memory released on close.')
+  console.log('Results checks: both memory rings, hover and click details, Nerd metrics, the 90 % and 95 % Results thresholds, and memory released on close.')
 
   // 13. Menu: Shift+F10 on the grid lists its commands; a right-click on an unselected cell selects it first.
   await cell(1, 1).click()
