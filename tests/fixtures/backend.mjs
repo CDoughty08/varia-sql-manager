@@ -1751,6 +1751,7 @@ async function workbench(id, method, params, credit) {
       return respond(id, await databaseRows())
     case 'connections.discover': return respond(id, { servers: [] })
     case 'entra.cache.clear': return respond(id, { cleared: true })
+    case 'results.setMemoryLimit': return respond(id, { applied: false, globalBytes: 256 * 1024 * 1024, queryBytes: 128 * 1024 * 1024 })
     case 'live.subscribe': return liveSubscribe(id, credit, params)
     case 'live.update': return liveUpdate(id, params)
     case 'connections.preview': return respond(id, { connectionString: 'Data Source=' + params.server })

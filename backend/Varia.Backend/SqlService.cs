@@ -32,7 +32,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
         "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.identify", "results.rowIds", "results.findRows", "results.diff", "results.search", "results.profile", "results.pivot", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.peekDefinition", "explorer.index", "explorer.search", "results.copy", "results.export",
-        "results.distinct", "results.distinctRead", "results.distinctTick", "results.distinctClose",
+        "results.setMemoryLimit", "results.distinct", "results.distinctRead", "results.distinctTick", "results.distinctClose",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
         "ssis.describe", "ssis.execute", "ssis.catalogSetup"
@@ -97,6 +97,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private readonly Timer? memoryTimer;
     private readonly object memoryGate = new();
     private long reportedBytes = -1;
+    private long reportedGlobalBytes = -1;
     /// <summary>Orders memory reports (events and summary budgets) for this process; main pairs it with the generation.</summary>
     private long memorySeq;
     private long reportedIndexBytes = -1;
@@ -311,7 +312,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "live.subscribe" or "activity.details" => RequestLane.Live,
         // Kill Process takes no metadata slot: it runs at once under its own gates, as object actions do under theirs.
         "activity.kill" => RequestLane.Actions,
-        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.distinctClose" or "results.rowIds" or "entra.cache.clear"
+        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.distinctClose" or "results.rowIds" or "results.setMemoryLimit" or "entra.cache.clear"
             or "live.update" or "language.status" or "language.refresh" or "language.close" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
         _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
@@ -364,6 +365,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "query.session.state" => await SessionStateAsync(Read<SessionStateArgs>(parameters, json), Token(context)),
         "results.read" => await ReadResultsAsync(Read<ResultsReadArgs>(parameters, json), context),
         "results.close" => CloseResults(Read<ResultsCloseArgs>(parameters, json)),
+        "results.setMemoryLimit" => SetMemoryLimit(Read<ResultsMemoryLimitArgs>(parameters, json)),
         "results.rowBytes" => RowBytes(Read<ResultsRowBytesArgs>(parameters, json)),
         "results.view" => await ViewAsync(Read<ResultsViewArgs>(parameters, json), Token(context)),
         "results.viewClose" => CloseViews(Read<ResultsViewCloseArgs>(parameters, json)),
@@ -2171,6 +2173,21 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         return new ResultsCloseResult(closed, store.UsedBytes);
     }
 
+    /// <summary>The most a user's limit is, in GiB, as Tools › Options allows (queryResults.grid.memoryLimitGiB).</summary>
+    internal const int MaxMemoryLimitGiB = 1024;
+
+    /// <summary>Tools › Options' result memory limit, applied at once (main sends it when the setting changes and as each
+    /// backend becomes ready): 0 is automatic, otherwise GiB, clamped as at launch (ResultStore.GlobalBytesFor). What it
+    /// does to what is stored and storing is ResultStore.Resize's. The status bar's figure follows by a results.memory
+    /// event before this answers, or at the timer's next check if the control lane refuses it.</summary>
+    private ResultsMemoryLimitResult SetMemoryLimit(ResultsMemoryLimitArgs args)
+    {
+        if (args.LimitGiB is not { } gib || gib < 0 || gib > MaxMemoryLimitGiB) throw new RequestException("INVALID_PARAMS", "The result memory limit must be 0 to 1024 GiB.");
+        var applied = store.SetLimit(gib == 0 ? null : (long)gib << 30);
+        ReportMemory();
+        return new ResultsMemoryLimitResult(applied, store.GlobalBytes, store.QueryBytes);
+    }
+
     /// <summary>Stores synthetic rows (SyntheticRows shapes) through the same budgeted path as a query.</summary>
     private ResultDescriptor Synthesize(SynthesizeArgs args, CancellationToken token)
     {
@@ -2208,7 +2225,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private static MessageKind InformationalKind(SqlError error) => InformationalKind(error.Number);
     internal static MessageKind InformationalKind(int number) => number == 0 || number >= 50000 ? MessageKind.Print : MessageKind.Server;
 
-    /// <summary>A global results.memory EVENT on the first sample and whenever sampled usage changes. The timer checks
+    /// <summary>A global results.memory EVENT on the first sample and whenever sampled usage or the budget changes. The timer checks
     /// once a second and results.close checks before it answers. A refused event is retried at the next check.</summary>
     internal void ReportMemory()
     {
@@ -2216,10 +2233,11 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         {
             var used = store.UsedBytes;
             var global = store.GlobalBytes;
-            if (publish is null || used == reportedBytes) return;
+            if (publish is null || used == reportedBytes && global == reportedGlobalBytes) return;
             if (!publish(new { Type = "results.memory", UsedBytes = used, GlobalBytes = global, Seq = memorySeq + 1 })) return;
             memorySeq++;
             reportedBytes = used;
+            reportedGlobalBytes = global;
         }
     }
 
@@ -2245,8 +2263,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         lock (memoryGate)
         {
             var used = store.UsedBytes;
+            var global = store.GlobalBytes;
             reportedBytes = used;
-            return new ResultBudget(used, store.GlobalBytes, store.QueryBytes, ++memorySeq);
+            reportedGlobalBytes = global;
+            return new ResultBudget(used, global, store.QueryBytes, ++memorySeq);
         }
     }
 

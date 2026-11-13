@@ -16,5 +16,5 @@ The control takes the more severe of the two levels and adds a warning symbol. T
 ## Data and implementation
 
 - **Search Indexer.** The backend samples the estimated bytes charged for object records, names, and definitions across connections. It also reports usage after a server disconnects and releases its index.
-- **Results.** The ring shows the result store’s runtime budget, which is a quarter of the computer's memory between 256 MiB and 16 GiB, or the limit set in Tools › Options, and includes live tables that draw from that store. Results memory updates come from global events and query summaries.
+- **Results.** The ring shows the result store’s runtime budget, which is a quarter of the computer's memory between 256 MiB and 16 GiB, or the limit set in Tools › Options, and includes live tables that draw from that store. Results memory updates come from global events and query summaries. A change to the limit applies to the running backend at once, and its `results.memory` event carries the new budget, so the ring and breakdown follow it without a restart. A limit lowered below what results hold shows above 100 % (red) until results are closed.
 - **Lifecycle.** Both rings show unavailable until the backend reports a sample. A backend restart clears the old generation’s samples. [Memory events](ipc.md#global-memory-events)

@@ -270,9 +270,10 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `activity.details` | invoke; cancelled with `cancelActivity` (closing Details) | unary | live (the live gates) | 15 s; the backend answers its own 10 s budget as an `error: TIMEOUT` value |
 | `activity.kill` | invoke | unary | actions (its own gates) | 30 s; the backend answers its own 25 s budget as an `error: TIMEOUT` value with the outcomes of the sessions it tried. Never re-sent |
 | `entra.cache.clear` | main only (`varia:entra-cache-clear`, after its confirmation) | unary | control | 10 s. Takes `{}` (unknown members refused); answers `{ cleared: true }` |
+| `results.setMemoryLimit` | main only (`ResultMemoryLimit`, `src/main/backend/result-memory.ts`): as each generation becomes ready and when `queryResults.grid.memoryLimitGiB` changes, one request in flight at a time | unary | control | 10 s. Takes `{ limitGiB }`, a whole number 0 (automatic) to 1024 (`resultsMemoryLimitSchema`; the backend refuses anything else with `INVALID_PARAMS`, unknown members too); answers `{ applied, globalBytes, queryBytes }`, `applied` false only for the test hooks' fixed budget. A `results.memory` event with a changed figure goes out before the answer when the control lane takes it; one it refuses follows at the next once-a-second check. Main also sends it once the first settings read finishes (a read slower than the first launch's wait starts that backend on the defaults). A failed request is not re-sent: a value set while it was in flight, the generation's recovery from unresponsive, the next change or the next launch sends a new one. See [Result store and memory budget](#result-store-and-memory-budget) |
 | `debug.results.synthesize` | `__variaTest` and tests only | unary | metadata | 120 s; exists only with `VARIA_BACKEND_TEST_HOOKS=1` |
 
-`mainOnlyMethods` (`results.copy`, `results.export`, `entra.cache.clear`, `debug.results.synthesize`) are sent only by
+`mainOnlyMethods` (`results.copy`, `results.export`, `entra.cache.clear`, `results.setMemoryLimit`, `debug.results.synthesize`) are sent only by
 main on its own behalf: they are in no renderer schema (`requestSchemas`) and no port schema (`portRequestSchema`).
 
 **Microsoft Entra ID.** The six Entra types (`authentication`: `entraMfa`, `entraPassword`, `entraIntegrated`,
@@ -1115,7 +1116,7 @@ ignores a query's events once its summary has arrived.
 
 | type | Emitted |
 | --- | --- |
-| `results.memory` | Checked once a second and after `results.close`, before its answer. Reports the first sample and any change since the last report. Each query summary's `budget` counts as a report and shares this event's sequence. This lets the renderer discard an older summary when a close's event arrives first. |
+| `results.memory` | Checked once a second, after `results.close` and after `results.setMemoryLimit`, before their answers. Reports the first sample and any change of use or of the global figure since the last report. Each query summary's `budget` counts as a report and shares this event's sequence. This lets the renderer discard an older summary when a close's event arrives first. |
 | `explorer.index.memory` | Checked once a second and after a disconnect drops a connection's index. Reports the first sample and changes to the usage charged to the shared index budget. This event has its own sequence. |
 
 Both events are droppable. A refused sample stays eligible for the next check and consumes no sequence number. Main
@@ -1166,8 +1167,19 @@ Results stay in backend memory, never on disk (`ResultStore`).
 - **Budget.** Global: a quarter of the memory available to the process (container-aware `TotalAvailableMemoryBytes`),
   within 256 MiB – 16 GiB, or the limit of Tools › Options (`queryResults.grid.memoryLimitGiB`, 0 for automatic), used as it
   is up to three quarters of that memory. Main reads the setting and gives it to the backend in its environment
-  (`VARIA_RESULT_MEMORY_MIB`) at each launch; the backend sizes its store once, as it starts, so a change applies after a
-  restart (of Varia, or Restart SQL Backend). The budget holds the rows and the working memory of the operations on
+  (`VARIA_RESULT_MEMORY_MIB`) at each launch, so a backend starts with the right figure, and sends it again with
+  `results.setMemoryLimit` as each generation becomes ready (the setting may change between the spawn and HELLO) and
+  whenever it changes, so a change applies at once to the running backend. The new global figure is sized as at launch
+  (the same clamp), with half of it per query and the live share keeping its fraction; the figures are replaced
+  together, and each reservation reads them once, so a concurrent change applies from the next reservation. Lowered
+  below what is stored, nothing is dropped: every reservation is refused, so a query storing rows stops with
+  `globalBudget` (or `queryBudget` past its new half) and later queries, sorts and pivots are refused as at a full
+  budget, until closes bring use under the new figure; live tables (Activity Monitor, SSIS) likewise store no new
+  revision until then. Raised, the room is there for the next reservation, of a
+  running query's rows or of working memory. A query that already stopped storing stays stopped (a stop is never
+  undone; operations on it still answer `BUDGET_STOPPED`). A query's own ceiling fixed when it began (an actual plan's)
+  stays: the smaller of it and the current half holds. The test hooks' `VARIA_RESULT_BUDGET_BYTES` budget is fixed and
+  ignores the limit. The budget holds the rows and the working memory of the operations on
   them alike (a sort's keys, a profile's figures), so the budget is all the backend commits to results (a quarter of memory unless the user set more); a
   result that fills its query's half leaves no room to sort it. Working memory of 64 MiB or more, and any memory that
   only makes an operation faster once 64 MiB of it is held, is refused under high system memory load as rows are

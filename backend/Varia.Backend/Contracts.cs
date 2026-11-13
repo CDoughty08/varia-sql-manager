@@ -84,6 +84,10 @@ internal sealed record ResultsReadArgs(uint ResultId, long FirstRow, int MaxRows
 internal sealed record ResultsReadResult(long NextRow, long RowsAvailable, bool Complete, int Pages, int Rows);
 internal sealed record ResultsCloseArgs(uint[] ResultIds);
 internal sealed record ResultsCloseResult(int Closed, long UsedBytes);
+/// <summary>results.setMemoryLimit (main only): Tools › Options' limit in GiB, 0 for automatic, 0 to 1024.</summary>
+internal sealed record ResultsMemoryLimitArgs(int? LimitGiB);
+/// <summary>results.setMemoryLimit: whether the limit applied (false with the test hooks' fixed budget) and the figures now.</summary>
+internal sealed record ResultsMemoryLimitResult(bool Applied, long GlobalBytes, long QueryBytes);
 internal sealed record ResultsRowBytesArgs(uint ResultId, long FirstRow, int Count, uint? ViewId = null);
 /// <summary>One results.view sort key: a column, its direction, and Mode "value" (by SQL type and collation), "chars" or
 /// "bytes" (each cell's length; text and binary columns only, others sort by value).</summary>

@@ -147,7 +147,7 @@ describe('Options OK', () => {
     expect(rowNotes(settingDef('queryExecution.executionTimeout'))).toEqual(['Applies to the next execution.'])
     expect(rowNotes(settingDef('queryExecution.stopOnError'))).toEqual(['Applies to the next execution.', 'Not in SSMS.'])
     expect(rowNotes(settingDef('textEditor.sql.wordWrap'))).toEqual([])
-    expect(rowNotes(settingDef('queryResults.grid.memoryLimitGiB'))).toEqual(['Applies when the SQL backend next starts, as when Varia restarts or with Restart SQL Backend.', 'Not in SSMS.'])
+    expect(rowNotes(settingDef('queryResults.grid.memoryLimitGiB'))).toEqual(['Not in SSMS.'])
     expect(rowNotes(settingDef('queryResults.grid.maxRows'))).toEqual(['Applies to the next execution.', 'Not in SSMS.'])
   })
 })
