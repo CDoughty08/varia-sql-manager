@@ -63,6 +63,10 @@ The results toolbar's **Tabs** (also **Show Results as Tabs** in the command pal
 Tools › Options › Query Results › SQL Server › Results to Grid › **Show results**, `queryResults.grid.layout`) shows the
 groups one at a time instead of stacked. Stacked stays the default for now.
 
+![Results as tabs in the Dark theme: three result tabs, Result 1 selected, with its Table and Pivot view tabs and the Pivot shown](images/results-tabs-dark.png)
+
+![The same in the Light theme](images/results-tabs-light.png)
+
 - A row of tabs, one per result ("Result 2") and one per comparison after them, then the selected result's view tabs:
   **Table** (**Plan set** for a SQL-returned plan set) and, once one is built, **Pivot**, with the view's rows, columns,
   batch, filters and Save Results As beside them. A comparison has no view tabs.
