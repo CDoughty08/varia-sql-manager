@@ -158,13 +158,15 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     if (state?.session) this.update(id, { ...state, session: undefined })
   }
   /** What Tools › Options and the connection's Advanced properties ask of an execution; `stopOnError` only when on. Rows
-   *  are bounded by the backend's memory budget, and by Options' limit on rows kept when one is set (0 is none). */
+   *  are bounded by the backend's memory budget, and by Options' limit on rows kept when one is set (0 is none); with
+   *  Discard results after execution none are kept. */
   private executionOptions(connection: QueryConnection) {
     const settings = this.settings()
     return {
       maxRows: settings['queryResults.grid.maxRows'], maxResultSets: settings['queryResults.grid.maxResultSets'],
       timeoutSeconds: connection.options?.advanced?.commandTimeout ?? settings['queryExecution.executionTimeout'],
-      ...settings['queryExecution.stopOnError'] ? { stopOnError: true } : {}
+      ...settings['queryExecution.stopOnError'] ? { stopOnError: true } : {},
+      ...settings['queryResults.grid.discardResults'] ? { discardResults: true } : {}
     }
   }
   private planContext(tabId: string, executionId: string, sql: string, startLine: number, startedAt: number, estimateMode?: EstimatedPlanMode): PlanExecutionContext {

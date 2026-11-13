@@ -284,6 +284,11 @@ describe('query orchestration', () => {
     const plain = fixture()
     await plain.queries.execute()
     expect(plain.queryApi.execute.mock.calls[0][0]).toMatchObject({ maxRows: 0 })
+    // Discard results after execution is asked of the backend only when on.
+    expect(plain.queryApi.execute.mock.calls[0][0]).not.toHaveProperty('discardResults')
+    const discarding = fixture(undefined, undefined, { 'queryResults.grid.discardResults': true })
+    await discarding.queries.execute()
+    expect(discarding.queryApi.execute.mock.calls[0][0]).toMatchObject({ discardResults: true })
   })
   it('delivers events to later listeners when an earlier one throws', () => {
     const bus = new EventBus(), received: string[] = []

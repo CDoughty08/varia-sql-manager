@@ -545,8 +545,8 @@ using var service = new SqlService();
 async Task<T> Call<T>(string method, object args) => (T)await service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, json), json);
 var info = await Call<ConnectionInfo>("connections.connect", Live("master"));
 var sessionId = Guid.NewGuid().ToString();
-Task<QueryResult> Run(string sql, string? session = null, int timeout = 15, string? query = null, int startLine = 1, int maxRows = 1000, string database = "master", bool stopOnError = false) =>
-    Call<QueryResult>("query.execute", new QueryArgs(info.Id, session ?? sessionId, database, sql, query ?? Guid.NewGuid().ToString(), maxRows, timeout, startLine, StopOnError: stopOnError));
+Task<QueryResult> Run(string sql, string? session = null, int timeout = 15, string? query = null, int startLine = 1, int maxRows = 1000, string database = "master", bool stopOnError = false, bool discard = false) =>
+    Call<QueryResult>("query.execute", new QueryArgs(info.Id, session ?? sessionId, database, sql, query ?? Guid.NewGuid().ToString(), maxRows, timeout, startLine, StopOnError: stopOnError, DiscardResults: discard));
 // Rows stay in the backend's result store; read them back as the results worker would, from the stored pages.
 List<string?[]> RowsOf(ResultDescriptor set) => LiveResultChecks.RowsOf(service.Results, set);
 List<string> Texts(QueryResult value) => LiveResultChecks.Texts(value);
@@ -812,6 +812,16 @@ try
         Check(result.Status == "completed" && result.ResultSets.Where(set => set.Kind == "rows").Select(set => set.RowsStored).SequenceEqual([1L, 4L])
             && planned.Count == 2 && planned.All(set => set is { RowsStored: 1, Truncated: null }),
             "a plan's row is not counted against the row limit");
+        // Discard results after execution: every row is read and none kept, the statements all run and say what they
+        // did, and a plan asked for with the rows is kept. A set under a plan's column name is looked at, and is rows.
+        result = await Run("SELECT TOP (10) object_id FROM sys.all_objects;\nSELECT CAST(N'<a/>' AS nvarchar(max)) AS [Microsoft SQL Server 2005 XML Showplan];\nSELECT name, CAST(N'<a/>' AS xml) AS x FROM (VALUES (N'a'), (N'b')) AS v(name);\nGO\nPRINT 'after discarded';", discard: true);
+        Check(result.Status == "completed" && result.ResultSets.Count == 0 && result.DiscardedResultSets == 3 && Texts(result).Contains("after discarded")
+            && Texts(result).Contains("(10 rows affected)") && Texts(result).Contains("Results were discarded, as Discard results after execution is on: 3 result sets, 13 rows."),
+            "discarding results reads every row, keeps none and says how many: " + string.Join(" | ", Texts(result)));
+        result = await Run("SET STATISTICS XML ON;\nSELECT TOP (10) object_id FROM sys.all_objects;\nSET STATISTICS XML OFF;", discard: true);
+        Check(result.Status == "completed" && result.ResultSets.Count == 1 && result.ResultSets[0] is { Kind: "executionPlan", RowsStored: 1, Truncated: null } && result.DiscardedResultSets == 1
+            && Texts(result).Contains("Results were discarded, as Discard results after execution is on: 1 result set, 10 rows."),
+            "discarding results keeps the execution plan returned with them: " + string.Join(" | ", Texts(result)));
         await Call<object>("query.session.close", new SessionArgs(sessionId));
         result = await Run("SELECT * FROM #VariaBatchTest;");
         Check(result.Status == "completedWithErrors" && result.Error?.Message.Contains("Msg 208") == true, "closing a tab removes temporary objects and session state");

@@ -14,6 +14,11 @@ export const queryResultsSettings = [
     description: 'Copy and Save Results As (CSV and tab-delimited text) start with a row of column names. JSON always names its keys, and Copy with Headers always includes them.'
   },
   {
+    key: 'queryResults.grid.discardResults', page: 'queryResults.sqlServer.grid', label: 'Discard results after execution', type: 'boolean', default: false,
+    applies: 'nextExecution', keywords: ['discard', 'no results', 'rows', 'timing', 'profile', 'memory', 'large', 'million'],
+    description: 'The query runs and every row is read from the server, but none is kept or shown: the Messages tab has the row counts and says how many result sets and rows were discarded. Execution plans and client statistics are still collected. For timing a large query without spending memory on its rows.'
+  },
+  {
     key: 'queryResults.grid.maxResultSets', page: 'queryResults.sqlServer.grid', label: 'Maximum result sets kept per execution', type: 'integer', min: 1, max: 1000, default: 1000,
     varia: true, applies: 'nextExecution', keywords: ['result sets', 'limit'],
     description: 'Result sets after this many still run and are counted, but their rows are not kept; the Messages tab says so.'

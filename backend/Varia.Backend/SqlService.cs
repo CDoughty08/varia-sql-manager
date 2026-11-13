@@ -964,7 +964,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var totalBatches = batches.Sum(batch => batch.RepeatCount);
         long storedRows = 0;
         // Sets past maxResultSets, sets whose descriptors would not fit in the summary, and sets after the budget stopped.
-        int overflowSets = 0, oversizeSets = 0, budgetSets = 0;
+        int overflowSets = 0, oversizeSets = 0, budgetSets = 0, unkeptSets = 0;
+        long unkeptRows = 0;
         long descriptorBytes = 0;
         QueryBudget? budget = null;
         long recordsAffected = -1;
@@ -1139,15 +1140,31 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                                     bool? hasLong = null;
                                     var skipped = false;
                                     var prefetched = false;
+                                    var unkept = false;
                                     if (reader.FieldCount > 0)
                                     {
-                                        if (sets.Count >= args.MaxResultSets) overflowSets++;
+                                        // Discard results: only a plan is looked for (its first row says), and kept.
+                                        if (args.DiscardResults && !(ColumnPlan.MayBeExecutionPlan(reader) && sets.Count < args.MaxResultSets && oversizeSets == 0))
+                                        {
+                                            unkept = true;
+                                            unkeptSets++;
+                                        }
+                                        else if (sets.Count >= args.MaxResultSets) overflowSets++;
                                         else if (oversizeSets > 0) oversizeSets++;
                                         else
                                         {
                                             prefetched = ColumnPlan.MayBeExecutionPlan(reader) && await reader.ReadAsync(CancellationToken.None);
                                             plan = ColumnPlan.From(reader, prefetched ? ColumnPlan.ReadShowplanPrefix(reader) : null);
-                                            if (plan.DescriptorBytes + descriptorBytes > MaxSummaryDescriptorBytes) { oversizeSets++; plan = null; }
+                                            if (args.DiscardResults && !plan.IsPlan)
+                                            {
+                                                // It looked like a plan and is rows: the row read to tell is one of them.
+                                                unkept = true;
+                                                unkeptSets++;
+                                                if (prefetched) unkeptRows++;
+                                                prefetched = false;
+                                                plan = null;
+                                            }
+                                            else if (plan.DescriptorBytes + descriptorBytes > MaxSummaryDescriptorBytes) { oversizeSets++; plan = null; }
                                             else if (store.Open(budget, sets.Count, batchNumber, iteration, plan.IsPlan ? "executionPlan" : "rows", plan.Columns, plan.Wires, lengths: plan.Lengths) is { } opened)
                                             {
                                                 descriptorBytes += plan.DescriptorBytes;
@@ -1158,7 +1175,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                                             else { budgetSets++; plan = null; }
                                         }
                                     }
-                                    if (plan?.ForXml is not null && currentSet is not null)
+                                    // Read past on a thread of its own, as a set that stopped storing is: nothing waits on its rows.
+                                    if (unkept) unkeptRows += await SkipRowsAsync(reader, null, events, token);
+                                    else if (plan?.ForXml is not null && currentSet is not null)
                                     {
                                         // FOR XML and FOR JSON output: every row is a chunk of one value, stored as the set's one row.
                                         using var collector = new ForXmlCollector(store, budget!);
@@ -1421,6 +1440,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             Note("Results were truncated because the result memory budget (" + (reasons.Contains("queryBudget") ? store.QueryBytes : store.GlobalBytes) / (1024 * 1024)
                 + " MB) is full. Execution continued; close other query results to free memory.");
         if (reasons.Contains("systemMemory")) Note("Results were truncated because the computer is low on memory. Execution continued.");
+        if (unkeptSets > 0)
+            Note("Results were discarded, as Discard results after execution is on: " + unkeptSets.ToString("N0", CultureInfo.InvariantCulture) + (unkeptSets == 1 ? " result set, " : " result sets, ")
+                + unkeptRows.ToString("N0", CultureInfo.InvariantCulture) + (unkeptRows == 1 ? " row." : " rows."));
         if (overflowSets > 0) Note("Only the first " + (args.MaxResultSets == 10 ? "ten" : args.MaxResultSets.ToString("N0", CultureInfo.InvariantCulture)) + " result sets are displayed. Display limits do not stop script execution.");
         if (oversizeSets > 0) Note(oversizeSets + " later result sets are not displayed because their column lists are too large to return. Display limits do not stop script execution.");
         if (omittedPlans || plans.Any(set => set.Truncated is not null || set.TruncatedCells > 0))
@@ -1439,7 +1461,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         }
         if (context is not null) context.Unsent = () => store.Release(descriptors.Concat(plans).Select(set => set.ResultId));
         var completedAt = DateTimeOffset.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz", CultureInfo.InvariantCulture);
-        return new(descriptors, overflowSets + oversizeSets + budgetSets, output, recordsAffected, watch.ElapsedMilliseconds, status, failure, completed,
+        return new(descriptors, overflowSets + oversizeSets + budgetSets + unkeptSets, output, recordsAffected, watch.ElapsedMilliseconds, status, failure, completed,
             totalBatches, database, messages.Truncated, SummaryBudget(), completedAt, spid, login, plans.Count > 0 ? plans : null, planOrder,
             statisticsSample ?? (args.IncludeClientStatistics ? new([], null, "Execution ended before statistics collection could start.") : null));
     }
@@ -2274,13 +2296,13 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// send the next row (a lock, a slow plan, a remote server), so it runs on a thread of its own: on pool threads, a
     /// few such queries delayed every other request, cancels included, by seconds. The batch's StatementStop cancels it;
     /// a cancel of its own from another thread could deadlock with that one.</summary>
-    private static Task SkipRowsAsync(SqlDataReader reader, ResultSetBuffer? set, QueryEventSink events, CancellationToken token) =>
+    private static Task<long> SkipRowsAsync(SqlDataReader reader, ResultSetBuffer? set, QueryEventSink events, CancellationToken token) =>
         Task.Factory.StartNew(() =>
         {
-            while (true)
+            for (long rows = 0; ; rows++)
             {
                 token.ThrowIfCancellationRequested();
-                if (!reader.Read()) return;
+                if (!reader.Read()) return rows;
                 if (set is null) continue;
                 set.CountRow();
                 events.RowsChanged();
