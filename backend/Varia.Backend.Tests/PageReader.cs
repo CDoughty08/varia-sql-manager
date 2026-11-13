@@ -14,6 +14,16 @@ internal sealed class PageFormatException(string code) : Exception("Invalid resu
 internal sealed record PageCell(string? Text, int Flags);
 internal sealed record DecodedPage(uint ResultId, long FirstRow, PageCell[][] Rows);
 
+/// <summary>A stored page's bytes as the checks read them: through the accessor, its set pinned for the read.</summary>
+internal static class PinnedPage
+{
+    public static byte[] Body(StoredPage page)
+    {
+        using var pin = page.Set!.Pin();
+        return page.Body();
+    }
+}
+
 /// <summary>A test-only page decoder, written independently of PageBuilder and with the same checks and error codes as
 /// decodePage in src/shared/ipc/wire/pages.ts.</summary>
 internal static class PageReader

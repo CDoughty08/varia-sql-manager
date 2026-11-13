@@ -41,6 +41,9 @@ if (args is [ResultWorkBench.Argument, ..])
 }
 
 var passed = 0;
+// Every check reads result pages as the product must: through ResultSetBuffer.Body, with the set pinned or leased. A reader
+// that forgets the pin fails whichever check reaches it.
+Varia.Backend.Results.ResultSetBuffer.RequirePins = true;
 var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
 // VARIA_TEST_SLOW_MS=<ms> prints each check reached more than that long after the previous one (to stderr), to find the
 // waits that make the run slow (docs/ci.md).

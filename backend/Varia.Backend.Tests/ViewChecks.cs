@@ -135,6 +135,7 @@ internal static class ViewChecks
             }
             set.Complete();
             var approximate = false;
+            using var pin = set.Pin();
             var key = ViewSorter.Build(set, new ViewSorter.PageSource(set.SealedSnapshot(), 1), new ViewKey(0, false, SortMode.Value), null, cells.Length, CancellationToken.None, ref approximate);
             return [key.Layout, string.Join(",", ViewSorter.Sort(set, set.SealedSnapshot(), [new ViewKey(0, false, SortMode.Value)], CancellationToken.None).Order)];
         }
@@ -259,6 +260,7 @@ internal static class ViewChecks
             set.TryCommitRow();
         }
         set.Complete();
+        using var pin = set.Pin();
         var pages = set.SealedSnapshot();
         var none = CancellationToken.None;
         long reserved = 0, returned = 0, asked = 0;
@@ -342,6 +344,7 @@ internal static class ViewChecks
             ordered.TryCommitRow();
         }
         ordered.Complete();
+        using var orderedPin = ordered.Pin();
         var orderedPages = ordered.SealedSnapshot();
         var orderedSource = new ViewSorter.PageSource(orderedPages, 2);
         string Held(int column)

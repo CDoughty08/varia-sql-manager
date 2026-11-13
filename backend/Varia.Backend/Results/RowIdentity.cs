@@ -48,6 +48,7 @@ internal static class RowIdentity
 
     public static (int Column, bool Unique, bool Approximate, long[] Ids) Build(ResultSetBuffer set, StoredPage[] pages, IdentityBy by, int column, CancellationToken token)
     {
+        using var pin = set.Pin();
         long total = 0;
         foreach (var page in pages) total += page.Rows;
         if (total > Array.MaxLength) throw new RequestException("TOO_LARGE", "This result has too many rows to tell apart.");
@@ -94,7 +95,7 @@ internal static class RowIdentity
             for (int index = (int)((long)pages.Length * run / runs), end = (int)((long)pages.Length * (run + 1) / runs); index < end; index++)
             {
                 token.ThrowIfCancellationRequested();
-                read(own, pages[index], PageView.Parse(pages[index].Body, own.Count, scratch));
+                read(own, pages[index], PageView.Parse(pages[index].Body(), own.Count, scratch));
             }
         }
         if (runs == 1)
@@ -127,7 +128,7 @@ internal static class RowIdentity
             foreach (var page in pages)
             {
                 token.ThrowIfCancellationRequested();
-                var view = PageView.Parse(page.Body, hasher.Count, scratch);
+                var view = PageView.Parse(page.Body(), hasher.Count, scratch);
                 var first = (int)page.FirstRow;
                 for (var r = 0; r < page.Rows && probed < Probe; r++, probed++)
                 {

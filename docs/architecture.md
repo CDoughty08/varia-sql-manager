@@ -119,6 +119,13 @@ being true.
 - Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never
   leave main except to the backend.
 - Results are released on re-execute, tab close, Close Results, closing one result and backend loss; jobs lease them.
+  Every backend reader of stored pages (results.read, view pages, sort, filter, distinct values, profile, search, row
+  identity, diff, pivot, Copy and Save, plan pairing) reads a page's bytes only through `StoredPage.Body()`, which is
+  `ResultSetBuffer.Body`, and pins its result while it reads (`ResultSetBuffer.Pin`, a count beside the leases): a release
+  meanwhile ends reads at their next check, but frees the pages and their budget only when the last pin and lease end.
+  The store may keep a page in another form than it sealed, so nothing else touches `StoredPage.Stored`
+  (`tests/result-page-access.test.ts`), and the .NET checks refuse a read of an unpinned, unleased set
+  (`ResultSetBuffer.RequirePins`).
 - A run's results are groups (`TabResults.groups`): each original result owns its Table slot and at most one Pivot slot,
   and a comparison is a slot of its own with frozen references to its two inputs (`TabResults.comparisons`). `sets` stays
   the one flat list, in the order drawn: a group's Table, its Pivot directly under it, the next group, comparisons last.

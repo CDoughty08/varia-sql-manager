@@ -401,6 +401,7 @@ internal static partial class ViewSorter
 
     private static (int[] Order, bool Approximate, ViewFilter[] Filters) Build(ResultSetBuffer set, StoredPage[] pages, IReadOnlyList<ViewKey> keys, IReadOnlyList<ViewFilter> filters, KeyMemory? memory, CancellationToken token)
     {
+        using var pin = set.Pin();
         long total = 0;
         foreach (var page in pages) total += page.Rows;
         if (total > Array.MaxLength) throw new RequestException("TOO_LARGE", "This result has too many rows to sort.");
@@ -1023,6 +1024,7 @@ internal static partial class ViewSorter
     {
         private readonly StoredPage[] pages;
         private readonly long[] starts;
+        private readonly byte[][] bodies;
         private readonly int[][] layouts;
         private readonly int[] blobStarts;
         private readonly int columns;
@@ -1032,12 +1034,13 @@ internal static partial class ViewSorter
             this.pages = pages;
             this.columns = columns;
             starts = new long[pages.Length];
+            bodies = new byte[pages.Length][];
             layouts = new int[pages.Length][];
             blobStarts = new int[pages.Length];
             for (var i = 0; i < pages.Length; i++)
             {
                 starts[i] = pages[i].FirstRow;
-                var view = PageView.Parse(pages[i].Body, columns);
+                var view = PageView.Parse(bodies[i] = pages[i].Body(), columns);
                 layouts[i] = view.Layout;
                 blobStarts[i] = view.BlobStart;
             }
@@ -1051,7 +1054,7 @@ internal static partial class ViewSorter
             for (var i = 0; i < pages.Length; i++) yield return (i, pages[i]);
         }
 
-        public PageView View(int index) => PageView.At(pages[index].Body, blobStarts[index], layouts[index], pages[index].FirstRow, pages[index].Rows, columns);
+        public PageView View(int index) => PageView.At(bodies[index], blobStarts[index], layouts[index], pages[index].FirstRow, pages[index].Rows, columns);
 
         /// <summary>Row <paramref name="row"/>'s stored bytes in a column (empty for NULL).</summary>
         public ReadOnlySpan<byte> Cell(int row, int column)
@@ -1608,7 +1611,7 @@ internal static class ViewPages
 {
     public static IEnumerable<byte[]> Build(ResultView view, long firstRow, int maxRows)
     {
-        foreach (var page in Stored(view, firstRow, maxRows)) yield return page.Body;
+        foreach (var page in Stored(view, firstRow, maxRows)) yield return page.Body();
     }
 
     /// <summary>The same pages as stored pages numbered by view position (Copy and Save through a view), with no length
@@ -1618,10 +1621,11 @@ internal static class ViewPages
         var set = view.Set;
         var end = Math.Min(view.Rows, firstRow + maxRows);
         if (firstRow >= end) yield break;
+        using var pin = set.Pin();
         var pages = set.SealedSnapshot();
         var starts = new long[pages.Length];
         for (var i = 0; i < pages.Length; i++) starts[i] = pages[i].FirstRow;
-        var parsed = new Dictionary<int, (int[] Layout, int BlobStart)>();
+        var parsed = new Dictionary<int, (byte[] Body, int[] Layout, int BlobStart)>();
         var columns = set.Wires.Count;
         var builder = new PageBuilder(set.ResultId, set.Wires, firstRow);
         var start = firstRow;
@@ -1633,10 +1637,11 @@ internal static class ViewPages
             var page = pages[index];
             if (!parsed.TryGetValue(index, out var layout))
             {
-                var first = PageView.Parse(page.Body, columns);
-                parsed[index] = layout = (first.Layout, first.BlobStart);
+                var body = page.Body();
+                var first = PageView.Parse(body, columns);
+                parsed[index] = layout = (body, first.Layout, first.BlobStart);
             }
-            Copy(builder, PageView.At(page.Body, layout.BlobStart, layout.Layout, page.FirstRow, page.Rows, columns), (int)(row - page.FirstRow), set.Wires);
+            Copy(builder, PageView.At(layout.Body, layout.BlobStart, layout.Layout, page.FirstRow, page.Rows, columns), (int)(row - page.FirstRow), set.Wires);
             if (builder.IsFull)
             {
                 yield return new StoredPage(start, (int)(position + 1 - start), builder.Seal(), PageLengths.Empty);

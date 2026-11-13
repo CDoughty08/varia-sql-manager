@@ -28,7 +28,7 @@ internal static class StoreChecks
         }
     }
 
-    private static int StoredRows(ResultSetBuffer set) => set.PagesFor(0, int.MaxValue).Sum(page => PageReader.Read(page.Body, set.Wires).Rows.Length);
+    private static int StoredRows(ResultSetBuffer set) => set.PagesFor(0, int.MaxValue).Sum(page => PageReader.Read(PinnedPage.Body(page), set.Wires).Rows.Length);
 
     public static void Run(Action<bool, string> check)
     {
@@ -117,7 +117,7 @@ internal static class StoreChecks
         check(set.RowsAvailable == 64 && !set.HasPendingRows, "the first page is sealed at 64 rows, so the first rows are readable at once");
         Fill(set, 64, 10_000);
         var pages = set.PagesFor(0, int.MaxValue);
-        check(pages.Skip(1).All(page => page.Rows == PageBuilder.MaxRows || page.Body.Length >= PageBuilder.SealBytes) && set.SealDelay == TimeSpan.FromMilliseconds(200),
+        check(pages.Skip(1).All(page => page.Rows == PageBuilder.MaxRows || page.Length >= PageBuilder.SealBytes) && set.SealDelay == TimeSpan.FromMilliseconds(200),
             "later pages seal at 4,096 rows or 256 KiB, and idle rows after 200 ms (" + string.Join(",", pages.Select(page => page.Rows)) + ")");
         set.Complete();
         pages = set.PagesFor(0, int.MaxValue);
@@ -134,7 +134,7 @@ internal static class StoreChecks
         }
         check(lookups, "the page directory finds exactly the pages that overlap a row range");
         var descriptor = set.Describe();
-        check(descriptor is { State: "complete", RowsRead: 10_064, RowsStored: 10_064, RowsAvailable: 10_064, Truncated: null } && descriptor.BytesStored == pages.Sum(page => (long)page.Body.Length)
+        check(descriptor is { State: "complete", RowsRead: 10_064, RowsStored: 10_064, RowsAvailable: 10_064, Truncated: null } && descriptor.BytesStored == pages.Sum(page => (long)page.Length)
             && query.UsedBytes == store.UsedBytes && store.UsedBytes >= descriptor.BytesStored + pages.Count * ResultStore.PageOverhead && store.UsedBytes < descriptor.BytesStored + 256 * 1024,
             "a complete set is charged its pages plus overhead and metadata (" + store.UsedBytes + " for " + descriptor.BytesStored + " bytes)");
 
@@ -245,6 +245,7 @@ internal static class StoreChecks
 
         LimitChanges(check);
         Leases(check);
+        Pins(check);
         Collection(check);
         Events(check);
         MemoryReports(check);
@@ -754,6 +755,71 @@ internal static class StoreChecks
         var threw = false;
         try { plain.ReleaseLease(); } catch (InvalidOperationException) { threw = true; }
         check(threw, "ending a lease that was never taken is a bug, not a silent no-op");
+    }
+
+    /// <summary>Readers pin their result while they read its pages (ResultSetBuffer.Pin), and read bodies only through the
+    /// accessor: a release meanwhile ends reads at once but frees the pages and budget when the last pin or lease ends.</summary>
+    private static void Pins(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        var set = Open(store, store.BeginQuery("tab"));
+        Fill(set, 0, 5000);
+        set.Complete();
+        var page = set.SealedSnapshot()[0];
+        string? refused = null;
+        try { page.Body(); } catch (InvalidOperationException error) { refused = error.Message; }
+        byte[] pinned, leased;
+        using (set.Pin()) pinned = page.Body();
+        check(set.TryLease(), "a complete result can be leased");
+        leased = page.Body();
+        set.ReleaseLease();
+        check(ResultSetBuffer.RequirePins && refused is not null && ReferenceEquals(pinned, leased) && pinned.Length == page.Length && set.Pins == 0,
+            "the checks read a page only while its result is pinned or leased, and the accessor gives the page's bytes as sealed: " + refused);
+        var other = Open(store, store.BeginQuery("other"));
+        Fill(other, 0, 10);
+        other.Complete();
+        var wrongSet = false;
+        using (other.Pin())
+        {
+            try { other.Body(page); } catch (ArgumentException) { wrongSet = true; }
+        }
+        check(wrongSet, "a page is read only through its own result's accessor");
+        store.Release(other.ResultId);
+
+        var used = store.UsedBytes;
+        var first = set.Pin();
+        var second = set.Pin();
+        check(set.Pins == 2, "pins nest");
+        var freedBefore = store.FreedSinceCollect;
+        var released = store.Release(set.ResultId);
+        var pagesKept = set.PagesFor(0, int.MaxValue).Count;
+        check(released && set.IsReleased && store.Find(set.ResultId) is null && store.WasReleased(set.ResultId) && pagesKept > 0 && store.UsedBytes == used
+            && store.FreedSinceCollect == freedBefore && !set.TryLease(),
+            "releasing a pinned result removes it from lookup but keeps its pages and budget until the read ends (" + pagesKept + " pages)");
+        var readWhileReleased = set.PagesFor(0, 1) is [var kept] && kept.Body().Length == kept.Length;
+        first.Dispose();
+        first.Dispose();
+        check(readWhileReleased && set.Pins == 1 && store.UsedBytes == used && set.PagesFor(0, int.MaxValue).Count == pagesKept,
+            "a read still pinned reads its pages after a release, and disposing a pin twice unpins once");
+        second.Dispose();
+        check(store.UsedBytes == 0 && set.PagesFor(0, int.MaxValue).Count == 0 && store.FreedSinceCollect > freedBefore,
+            "the last pin frees the pages, returns every byte and counts them toward the next collection");
+        var threw = false;
+        try { set.Unpin(); } catch (InvalidOperationException) { threw = true; }
+        check(threw, "ending a pin that was never taken is a bug, not a silent no-op");
+
+        // A lease and a pin together: whichever ends last frees the set.
+        var both = Open(store, store.BeginQuery("both"));
+        Fill(both, 0, 5000);
+        both.Complete();
+        var pin = both.Pin();
+        check(both.TryLease(), "a pinned result can be leased");
+        store.Release(both.ResultId);
+        both.ReleaseLease();
+        var keptAfterLease = store.UsedBytes > 0 && both.PagesFor(0, int.MaxValue).Count > 0;
+        pin.Dispose();
+        check(keptAfterLease && store.UsedBytes == 0 && both.PagesFor(0, int.MaxValue).Count == 0,
+            "a released result's last lease leaves it to the pin still held, and the pin's end frees it");
     }
 
     /// <summary>results.read and results.close through ProtocolHost with the real service and synthetic results.</summary>

@@ -321,6 +321,7 @@ internal static class ResultSearchChecks
         const int wide = 4096, count = 120;
         var set = Build(store, [.. Enumerable.Range(0, wide).Select(c => new ResultColumn("c" + c, "varchar", "text"))],
             Enumerable.Range(0, count).Select(_ => Enumerable.Repeat<object?>("v", wide).ToArray()));
+        using var pin = set.Pin();
         var pages = set.SealedSnapshot();
         var layout = 4L * PageView.ScratchLength(wide);
         var baseOrder = new ResultSearcher.Source(pages, wide, 1);

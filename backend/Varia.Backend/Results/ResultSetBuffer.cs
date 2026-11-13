@@ -1,8 +1,26 @@
 namespace Varia.Backend.Results;
 
 /// <summary>A sealed page: its first row, row count, the exact bytes that were (and will again be) written to main, and its
-/// lengths sidecar, which never leaves the backend except through results.rowBytes.</summary>
-internal sealed record StoredPage(long FirstRow, int Rows, byte[] Body, PageLengths Lengths);
+/// lengths sidecar, which never leaves the backend except through results.rowBytes. Its bytes are read only through
+/// <see cref="Body"/> (its set's <see cref="ResultSetBuffer.Body"/>) while the set is pinned: the store may keep them in
+/// another form, which only the accessor reads (tests/result-page-access.test.ts checks that no reader touches
+/// <see cref="Stored"/>). A page with no set is one built for a single read (a view's pages in view order), whose bytes are
+/// its own.</summary>
+internal sealed class StoredPage(long firstRow, int rows, byte[] stored, PageLengths lengths, ResultSetBuffer? set = null)
+{
+    public long FirstRow { get; } = firstRow;
+    public int Rows { get; } = rows;
+    public PageLengths Lengths { get; } = lengths;
+    /// <summary>The page's length as sealed (what results.read sends), whatever form the store keeps it in.</summary>
+    public int Length { get; } = stored.Length;
+    /// <summary>The set that stores the page, or null for a page built for one read.</summary>
+    public ResultSetBuffer? Set { get; } = set;
+    /// <summary>The bytes as the store keeps them. Only <see cref="ResultSetBuffer"/> reads this.</summary>
+    internal byte[] Stored { get; } = stored;
+    /// <summary>The page's bytes as sealed, through its set's accessor (<see cref="ResultSetBuffer.Body"/>). A call, not a
+    /// field: hold the array while reading the page rather than asking again for every row.</summary>
+    public byte[] Body() => Set is null ? Stored : Set.Body(this);
+}
 
 /// <summary>One stored result set: an append-only page directory that results.read serves, and, while the set is open,
 /// the page being built. One query task writes; readers, progress events and releases may run concurrently.
@@ -10,7 +28,10 @@ internal sealed record StoredPage(long FirstRow, int Rows, byte[] Body, PageLeng
 /// row, 24 per sparse cell entry, <see cref="PageLengths.MemoryBytes"/>), and the builder's buffers are charged as they
 /// grow; both come from reservations taken in 256 KiB steps.
 /// Copy and export jobs lease the set: a release during a job ends reads and stops storing at once, but its pages and
-/// budget are freed only when the last lease ends, so re-executing or closing a tab never breaks a save.</summary>
+/// budget are freed only when the last lease ends, so re-executing or closing a tab never breaks a save.
+/// Every reader of page bodies pins the set while it reads (<see cref="Pin"/>) and reads them through <see cref="Body"/>:
+/// a release frees the pages and their budget only once the last pin and the last lease have ended, so the budget never
+/// counts as free the pages a running sort or read still holds.</summary>
 internal sealed class ResultSetBuffer
 {
     private static readonly TimeSpan FirstPageDelay = TimeSpan.FromMilliseconds(20);
@@ -26,6 +47,7 @@ internal sealed class ResultSetBuffer
     private int state;
     private int sealedPages;
     private int leases;
+    private int pins;
     private bool freePending;
     private TruncationReason refused;
     private volatile bool incomplete;
@@ -185,7 +207,7 @@ internal sealed class ResultSetBuffer
             slack = 0;
         }
         pending = 0;
-        pages.Add(new StoredPage(first, rows, page, lengths));
+        pages.Add(new StoredPage(first, rows, page, lengths, this));
         Volatile.Write(ref sealedPages, pages.Count);
         rowsAvailable += rows;
         bytesStored += page.Length;
@@ -239,7 +261,7 @@ internal sealed class ResultSetBuffer
         {
             state = 2;
             builder = null;
-            if (leases > 0)
+            if (leases > 0 || pins > 0)
             {
                 freePending = true;
                 return 0;
@@ -267,13 +289,51 @@ internal sealed class ResultSetBuffer
         lock (gate)
         {
             if (leases == 0) throw new InvalidOperationException("The result set is not leased.");
-            if (--leases > 0 || !freePending) return;
+            if (--leases > 0 || pins > 0 || !freePending) return;
             freed = FreeLocked();
         }
         store.Freed(freed, Budget.Live is not null);
     }
 
     public int Leases { get { lock (gate) return leases; } }
+
+    /// <summary>Pins the set while a request reads its pages: a release meanwhile ends the request's reads at their next
+    /// check (<see cref="IsReleased"/>), but frees the pages and their budget only when the last pin ends, as for a lease.
+    /// Pins nest and cost a lock each; a released set can still be pinned, and its pages are then empty or the ones a lease
+    /// keeps. Dispose the pin when the read ends.</summary>
+    public PagePin Pin()
+    {
+        lock (gate) pins++;
+        return new PagePin(this);
+    }
+
+    public int Pins { get { lock (gate) return pins; } }
+
+    internal void Unpin()
+    {
+        long freed;
+        lock (gate)
+        {
+            if (pins == 0) throw new InvalidOperationException("The result set is not pinned.");
+            if (--pins > 0 || leases > 0 || !freePending) return;
+            freed = FreeLocked();
+        }
+        store.Freed(freed, Budget.Live is not null);
+    }
+
+    /// <summary>Makes <see cref="Body"/> refuse a set that is neither pinned nor leased. The checks turn it on, so a reader
+    /// that does not pin fails them; the product leaves it off, where such a reader would still read correct bytes.</summary>
+    internal static bool RequirePins { get; set; }
+
+    /// <summary>The one way to a sealed page's bytes, as they were sealed (and as results.read sends them). Read only while
+    /// the set is pinned (<see cref="Pin"/>) or leased.</summary>
+    public byte[] Body(StoredPage page)
+    {
+        if (page.Set != this) throw new ArgumentException("The page is not this result's.", nameof(page));
+        if (RequirePins && Volatile.Read(ref pins) == 0 && Volatile.Read(ref leases) == 0)
+            throw new InvalidOperationException("A result page was read without a pin.");
+        return page.Stored;
+    }
 
     private long FreeLocked()
     {
@@ -348,7 +408,8 @@ internal sealed class ResultSetBuffer
         if (found.Count == 0 || found[0].FirstRow > row) return null;
         var page = found[0];
         var at = (int)(row - page.FirstRow);
-        var view = PageView.Parse(page.Body, Wires.Count);
+        using var pin = Pin();
+        var view = PageView.Parse(page.Body(), Wires.Count);
         if (view.IsNull(column, at)) return null;
         if (page.Lengths.TryCell(at, column, out var cell)) return new CellSize(cell.Chars, cell.Bytes, cell.Exact && !Lengths[column].Estimated);
         var size = Lengths[column].Derive(view.Span(column, at), Wires[column]);
@@ -384,4 +445,15 @@ internal sealed class ResultSetBuffer
         TruncationReason.SystemMemory => "systemMemory",
         _ => throw new ArgumentOutOfRangeException(nameof(reason))
     };
+}
+
+/// <summary>A pin on a result set (<see cref="ResultSetBuffer.Pin"/>); disposing it more than once unpins once.</summary>
+internal sealed class PagePin(ResultSetBuffer set) : IDisposable
+{
+    private int disposed;
+    public ResultSetBuffer Set { get; } = set;
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref disposed, 1) == 0) Set.Unpin();
+    }
 }

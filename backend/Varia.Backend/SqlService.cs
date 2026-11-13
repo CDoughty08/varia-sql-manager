@@ -1521,11 +1521,12 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (args.ViewId is { } viewId) return await ReadViewAsync(args, FindView(args.ResultId, viewId), context);
         var next = args.FirstRow;
         int pages = 0, rows = 0;
+        using var pin = set.Pin();
         foreach (var page in set.PagesFor(args.FirstRow, args.MaxRows))
         {
             // A release ends the read after the page already sent.
             if (set.IsReleased) throw Unavailable(args.ResultId);
-            await context.SendDataAsync(page.Body);
+            await context.SendDataAsync(page.Body());
             next = page.FirstRow + page.Rows;
             pages++;
             rows += page.Rows;
@@ -1603,6 +1604,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             });
         }
         var complete = set.IsComplete;
+        using var pin = set.Pin();
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
@@ -1716,6 +1718,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var complete = view?.Complete ?? set.IsComplete;
+        using var pin = set.Pin();
         var pages = set.SealedSnapshot();
         var stopped = ResultSearcher.Stopped(store, set, view);
         var found = await Task.Run(() => ResultSearcher.Search(set, pages, view, args.Text, args.FromRow, args.Backward, args.MaxMatches, token, stopped), token);
@@ -1737,6 +1740,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 throw new RequestException("INVALID_PARAMS", "Each profiled column must be a distinct column of the result.");
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var complete = view?.Complete ?? set.IsComplete;
+        using var pin = set.Pin();
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
@@ -1793,6 +1797,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var keptView = args.KeptViewId is { } keptId ? FindView(args.ResultId, keptId) : null;
         var complete = view?.Complete ?? set.IsComplete;
+        using var pin = set.Pin();
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
@@ -1883,6 +1888,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (args.Column is { } column && (column < 0 || column >= set.Columns.Count))
             throw new RequestException("INVALID_PARAMS", "The column is not one of the result's.");
         if (!set.IsComplete) throw new RequestException("RESULT_OPEN", "Highlight rows after this result set finishes loading.");
+        using var pin = set.Pin();
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
@@ -1999,6 +2005,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             throw new RequestException("INVALID_PARAMS", "Only two result sets of the same query can be compared.");
         if (!left.IsComplete || !right.IsComplete) throw new RequestException("RESULT_OPEN", "Compare the results after they finish loading.");
         ThrowIfStopped(left.Budget);
+        using var leftPin = left.Pin();
+        using var rightPin = right.Pin();
         var leftPages = left.SealedSnapshot();
         var rightPages = right.SealedSnapshot();
         long leftRows = 0, rightRows = 0;
@@ -2071,6 +2079,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (!set.IsComplete) throw new RequestException("RESULT_OPEN", "Pivot the results after they finish loading.");
         ThrowIfStopped(set.Budget);
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
+        using var pin = set.Pin();
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;

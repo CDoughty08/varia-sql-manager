@@ -62,6 +62,7 @@ internal static class ResultSearcher
     public static SearchOutcome? Search(ResultSetBuffer set, StoredPage[] pages, ResultView? view, string text, long fromRow, bool backward, int maxMatches, CancellationToken token, Func<bool>? stopped = null, int? workers = null, ViewSorter.WorkerGate? gate = null)
     {
         var columns = set.Wires.Count;
+        using var pin = set.Pin();
         var matchers = new Matcher?[columns];
         // A hidden column (a diff's or live table's row tone) is not in the grid, so its text never matches.
         for (var c = 0; c < columns; c++) matchers[c] = ResultTextWriter.Hidden(set.Columns[c]) ? null : MatcherFor(set.Columns[c], set.Wires[c], text);
@@ -260,6 +261,7 @@ internal static class ResultSearcher
         private readonly long[] starts;
         private readonly int[] slotPages;
         private readonly int[]?[] slotLayouts;
+        private readonly byte[]?[] slotBodies;
         private readonly int[] slotBlobStarts;
         private readonly int columns;
 
@@ -277,6 +279,7 @@ internal static class ResultSearcher
             slotPages = new int[slots];
             Array.Fill(slotPages, -1);
             slotLayouts = new int[slots][];
+            slotBodies = new byte[slots][];
             slotBlobStarts = new int[slots];
         }
 
@@ -293,13 +296,14 @@ internal static class ResultSearcher
             var slot = index % slotPages.Length;
             if (slotPages[slot] != index)
             {
-                var parsed = PageView.Parse(page.Body, columns, slotLayouts[slot]);
+                var body = slotBodies[slot] = page.Body();
+                var parsed = PageView.Parse(body, columns, slotLayouts[slot]);
                 slotLayouts[slot] = parsed.Layout;
                 slotBlobStarts[slot] = parsed.BlobStart;
                 slotPages[slot] = index;
             }
             local = (int)(row - page.FirstRow);
-            return PageView.At(page.Body, slotBlobStarts[slot], slotLayouts[slot]!, page.FirstRow, page.Rows, columns);
+            return PageView.At(slotBodies[slot]!, slotBlobStarts[slot], slotLayouts[slot]!, page.FirstRow, page.Rows, columns);
         }
     }
 }
