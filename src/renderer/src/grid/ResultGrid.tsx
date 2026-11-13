@@ -41,11 +41,12 @@ const lostText = 'These results are no longer available because the SQL backend 
 const incompleteText = 'This result is incomplete because an error, cancellation, or timeout stopped it. See Messages.'
 
 /** Why the grid shows fewer rows than the query read, if it does (B8 strips). */
-function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: number; budget?: QueryResult['budget'] }): string | undefined {
+export function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: number; budget?: QueryResult['budget'] }): string | undefined {
   const shown = `Only the first ${formatCount(o.rowsStored)} of ${formatCount(o.rowsRead)} rows are shown`
   if (o.truncated === 'systemMemory') return `${shown} because the computer is low on memory. Execution continued.`
   if (o.truncated === 'queryBudget' || o.truncated === 'globalBudget') {
-    const bytes = o.truncated === 'queryBudget' ? o.budget?.queryBytes : o.budget?.globalBytes
+    // The figure the query stopped at when it did, not today's: the limit can change while the backend runs.
+    const bytes = o.budget?.stoppedBytes ?? (o.truncated === 'queryBudget' ? o.budget?.queryBytes : o.budget?.globalBytes)
     return `${shown}: the result memory budget${bytes ? ` (${formatBytes(bytes)})` : ''} is full. Execution continued; close other results to free memory.`
   }
   if (o.truncated === 'rowLimit') return `${shown}: the limit on rows kept per execution was reached (Tools › Options › Query Results › SQL Server › Results to Grid). Execution continued.`

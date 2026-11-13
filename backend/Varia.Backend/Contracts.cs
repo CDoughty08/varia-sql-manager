@@ -59,8 +59,10 @@ internal sealed record ResultDescriptor(uint ResultId, int Index, int BatchNumbe
 internal sealed record ColumnInfo(string Name, string DataType);
 internal sealed record TableColumnsResult(List<ColumnInfo> Columns, bool Truncated);
 internal sealed record QueryFailure(string Code, string Message, int BatchNumber, int Iteration);
-/// <summary>Seq orders it with the results.memory events: the status bar applies only a figure newer than the last it showed.</summary>
-internal sealed record ResultBudget(long UsedBytes, long GlobalBytes, long QueryBytes, long Seq);
+/// <summary>Seq orders it with the results.memory events: the status bar applies only a figure newer than the last it showed.
+/// StoppedBytes is the figure the query stopped at for a budget reason, which a later limit change does not alter; null
+/// (left out) otherwise.</summary>
+internal sealed record ResultBudget(long UsedBytes, long GlobalBytes, long QueryBytes, long Seq, long? StoppedBytes = null);
 /// <summary>One line of the Messages tab: kind is "info" (Varia's row counts and notes), "print" (PRINT and RAISERROR with
 /// severity 10 or less), "server" (SQL Server's other informational messages: warnings, SET STATISTICS output, DBCC) or "error"
 /// (SQL errors, cancellation and timeout, shown in red).</summary>

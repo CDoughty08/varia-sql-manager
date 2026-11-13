@@ -318,6 +318,43 @@ internal static class StoreChecks
         check(store.UsedBytes <= store.GlobalBytes && again.Describe() is { Truncated: null, RowsStored: 100 } && loading.Stopped != TruncationReason.None,
             "once releases bring use under the lowered limit a new query stores again; the stopped one stays stopped");
 
+        // The figure a query stopped at is kept as it was then: the truncation note and the summary's budget name it, not
+        // a figure the limit was changed to afterwards. Only a budget stop has one.
+        store = new ResultStore(2L << 20, 3L << 19);
+        var halfFull = store.BeginQuery("half");
+        var halfSet = Open(store, halfFull);
+        Fill(halfSet, 0, 20_000);
+        halfSet.Complete();
+        var wholeFull = store.BeginQuery("whole");
+        var wholeSet = Open(store, wholeFull);
+        Fill(wholeSet, 0, 20_000);
+        wholeSet.Complete();
+        var atStop = (halfFull.Stopped, halfFull.StoppedBytes, wholeFull.Stopped, wholeFull.StoppedBytes);
+        store.Resize(1L << 30, 1L << 29);
+        var raisedAfter = (halfFull.StoppedBytes, wholeFull.StoppedBytes);
+        store.Resize(1L << 19, 1L << 18);
+        var loweredAfter = (halfFull.StoppedBytes, wholeFull.StoppedBytes);
+        var pressured = new ResultStore(1L << 30, 1L << 29, () => (100, 50));
+        var pressedQuery = pressured.BeginQuery("pressed");
+        var pressedSet = Open(pressured, pressedQuery);
+        Fill(pressedSet, 0, 9000);
+        pressedSet.Complete();
+        check(atStop == (TruncationReason.QueryBudget, 3L << 19, TruncationReason.GlobalBudget, 2L << 20) && raisedAfter == (3L << 19, 2L << 20) && loweredAfter == (3L << 19, 2L << 20)
+            && pressedQuery.Stopped == TruncationReason.SystemMemory && pressedQuery.StoppedBytes is null && store.BeginQuery("open").StoppedBytes is null,
+            $"a query keeps the budget figure it stopped at, whatever the limit becomes; only a budget stop has one: {atStop} {raisedAfter} {loweredAfter} {pressedQuery.StoppedBytes}");
+        // Its live share and subscription limit are the figures for a live table.
+        var liveStore = new ResultStore(1L << 30, 1L << 29);
+        liveStore.ShareWithLive(0.001);
+        var liveQuery = new QueryBudget("live:stop", new LiveBudget(64L << 20));
+        var liveShare = liveStore.LiveBytes;
+        var refusedShare = !liveStore.TryReserve(liveQuery, liveShare + 1, false, out var shareReason);
+        liveQuery.Stop(shareReason);
+        var limitQuery = new QueryBudget("live:limit", new LiveBudget(1024));
+        var refusedLimit = !liveStore.TryReserve(limitQuery, 2048, false, out var limitReason);
+        limitQuery.Stop(limitReason);
+        check(refusedShare && liveQuery.StoppedBytes == liveShare && refusedLimit && limitQuery.StoppedBytes == 1024,
+            $"a live table stops at the live share or its subscription's limit, and keeps that figure: {liveQuery.StoppedBytes} {limitQuery.StoppedBytes}");
+
         // A query's own ceiling (an actual plan's) stays: the smaller of it and the store's half holds.
         store = new ResultStore(1L << 20, 1L << 19);
         var plan = new QueryBudget("plan", maxBytes: 1000);
@@ -407,6 +444,10 @@ internal static class StoreChecks
         check(raised is { Applied: true, GlobalBytes: 4 * GiB, QueryBytes: 2 * GiB } && afterRaise == 4 * GiB && capped.GlobalBytes == 6 * GiB && automatic.GlobalBytes == 2 * GiB && Last() == 2 * GiB
             && JsonSerializer.Serialize(raised, HostChecks.Json) == "{\"applied\":true,\"globalBytes\":4294967296,\"queryBytes\":2147483648}",
             $"results.setMemoryLimit applies the limit at once, clamped as at launch, and the status bar's figure follows before it answers: {afterRaise} {capped.GlobalBytes} {automatic.GlobalBytes}");
+        // A summary's budget carries the figure its query stopped at, and leaves it out when there is none.
+        var stoppedJson = JsonSerializer.Serialize(service.SummaryBudget(3L << 30), HostChecks.Json);
+        var openJson = JsonSerializer.Serialize(service.SummaryBudget(), HostChecks.Json);
+        check(stoppedJson.Contains("\"stoppedBytes\":3221225472") && !openJson.Contains("stoppedBytes"), "a query summary's budget names the figure its query stopped at, and only then: " + stoppedJson + " " + openJson);
         var refusals = new[] { "{\"limitGiB\":1025}", "{\"limitGiB\":-1}", "{}", "{\"limitGiB\":null}", "{\"limitGiB\":1.5}", "{\"limitGiB\":4,\"extra\":1}" }.Select(body =>
         {
             try { Set(body); return "accepted"; }

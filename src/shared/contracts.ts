@@ -202,7 +202,9 @@ export interface QueryResult {
   totalBatches: number
   database: string
   messagesTruncated: boolean
-  budget: { usedBytes: number; globalBytes: number; queryBytes: number } & MemoryOrder
+  /** `stoppedBytes`: the figure the query stopped storing at, past its half or the whole budget, as it was then (the limit
+   *  can change while the backend runs); absent when it did not stop for the budget. */
+  budget: { usedBytes: number; globalBytes: number; queryBytes: number; stoppedBytes?: number } & MemoryOrder
   completedAt: string
   /** The session's SPID and login (SUSER_SNAME(), ≤ 128 characters), read once when it opened; both are present while it
    *  is still open after the script. Its open transaction is read only when it is about to end (`query.session.state`). */
