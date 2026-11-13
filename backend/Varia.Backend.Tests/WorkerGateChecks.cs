@@ -193,8 +193,11 @@ internal static class WorkerGateChecks
             catch (InvalidOperationException error) { failed = error.Message; }
             heldAfterFailure = lease.Count;
         }
+        // Each thread looks at the token before every item, so once Cancel has returned at most one more item starts on
+        // each of the step's four threads. How many run before that is not bounded: a thread preempted between its 100th
+        // item and Cancel can leave the others to run every item first (seen on a Linux CI runner).
         string? canceled = null;
-        var ran = 0;
+        int ran = 0, cancelDone = 0, startedAfter = 0;
         using (var cancel = new CancellationTokenSource())
         using (var lease = gate.Take(4))
         {
@@ -202,7 +205,12 @@ internal static class WorkerGateChecks
             {
                 lease.For(5000, index =>
                 {
-                    if (Interlocked.Increment(ref ran) == 100) cancel.Cancel();
+                    if (Volatile.Read(ref cancelDone) == 1) Interlocked.Increment(ref startedAfter);
+                    if (Interlocked.Increment(ref ran) == 100)
+                    {
+                        cancel.Cancel();
+                        Volatile.Write(ref cancelDone, 1);
+                    }
                 }, cancel.Token);
             }
             catch (OperationCanceledException) { canceled = "canceled"; }
@@ -249,8 +257,8 @@ internal static class WorkerGateChecks
         var states = 0;
         using (var lease = gate.Take(4)) lease.For(64, () => Interlocked.Increment(ref states), (_, _) => { }, CancellationToken.None);
         check(straggling == 0 && (stateFailed == "state" || made < 2), "no body runs after For has rethrown a failure, and a failing state factory is rethrown as itself (" + straggling + ", " + stateFailed + ")");
-        check(runs.All(count => count == 1) && failed == "item" && heldAfterFailure == 1 && canceled == "canceled" && ran < 5000 && both is [1280, 1280]
+        check(runs.All(count => count == 1) && failed == "item" && heldAfterFailure == 1 && canceled == "canceled" && startedAfter <= 4 && both is [1280, 1280]
             && states is >= 1 and <= 4 && gate.Busy == 0 && gate.Peak <= 5,
-            "a step's items each run once on the gate's threads; a failure or cancellation is rethrown after its workers stop, and every thread is given back (peak " + gate.Peak + ", ran " + ran + ", states " + states + ")");
+            "a step's items each run once on the gate's threads; a failure or cancellation is rethrown after its workers stop, and every thread is given back (peak " + gate.Peak + ", ran " + ran + ", started after the cancel " + startedAfter + ", states " + states + ")");
     }
 }
