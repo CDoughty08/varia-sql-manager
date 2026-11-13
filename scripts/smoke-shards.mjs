@@ -25,7 +25,7 @@ export const suiteSeconds = {
     'scripts/backend-smoke.mjs': 34, 'scripts/live-smoke.mjs': 28, 'scripts/chart-smoke.mjs': 31,
     'scripts/live-grid-smoke.mjs': 21, 'scripts/activity-monitor-smoke.mjs': 38, 'scripts/menus-smoke.mjs': 70,
     'scripts/explorer-smoke.mjs': 54, 'scripts/scripting-smoke.mjs': 19, 'scripts/object-actions-smoke.mjs': 106,
-    'scripts/results-smoke.mjs': 85, 'scripts/estimated-plans-smoke.mjs': 12, 'scripts/options-resize-smoke.mjs': 3, 'scripts/options-smoke.mjs': 18,
+    'scripts/results-smoke.mjs': 85, 'scripts/grouped-results-smoke.mjs': 25, 'scripts/estimated-plans-smoke.mjs': 12, 'scripts/options-resize-smoke.mjs': 3, 'scripts/options-smoke.mjs': 18,
     'scripts/files-smoke.mjs': 15, 'scripts/hot-exit-smoke.mjs': 18, 'scripts/editor-smoke.mjs': 21, 'scripts/language-services-smoke.mjs': 12, 'scripts/language-diagnostics-smoke.mjs': 20,
     'scripts/table-designer-smoke.mjs': 5, 'scripts/document-frame-smoke.mjs': 16, 'scripts/ssis-smoke.mjs': 5,
     'scripts/ssis-operations-smoke.mjs': 18, 'scripts/updates-smoke.mjs': 11
@@ -38,7 +38,7 @@ export const suiteSeconds = {
     'scripts/backend-smoke.mjs': 30, 'scripts/live-smoke.mjs': 25, 'scripts/chart-smoke.mjs': 32,
     'scripts/live-grid-smoke.mjs': 21, 'scripts/activity-monitor-smoke.mjs': 29, 'scripts/menus-smoke.mjs': 73,
     'scripts/explorer-smoke.mjs': 42, 'scripts/scripting-smoke.mjs': 18, 'scripts/object-actions-smoke.mjs': 149,
-    'scripts/results-smoke.mjs': 66, 'scripts/estimated-plans-smoke.mjs': 12, 'scripts/options-resize-smoke.mjs': 2, 'scripts/options-smoke.mjs': 16,
+    'scripts/results-smoke.mjs': 66, 'scripts/grouped-results-smoke.mjs': 25, 'scripts/estimated-plans-smoke.mjs': 12, 'scripts/options-resize-smoke.mjs': 2, 'scripts/options-smoke.mjs': 16,
     'scripts/files-smoke.mjs': 13, 'scripts/hot-exit-smoke.mjs': 13, 'scripts/editor-smoke.mjs': 25, 'scripts/language-services-smoke.mjs': 15, 'scripts/language-diagnostics-smoke.mjs': 25,
     'scripts/table-designer-smoke.mjs': 7, 'scripts/document-frame-smoke.mjs': 22, 'scripts/ssis-smoke.mjs': 4,
     'scripts/ssis-operations-smoke.mjs': 18, 'scripts/updates-smoke.mjs': 11

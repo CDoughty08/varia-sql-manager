@@ -34,6 +34,10 @@ export const gridLimits = {
   /** A set's caption (.rs-caption) and a grid's one-line strip (.rg-strip: 16 px line, 4 px padding, 1 px border), for sizing
    *  stacked sets to their rows. */
   captionHeight: 26, stripHeight: 25,
+  /** Tabs layout: the row of result and comparison tabs (.rt-results) and the row of a result's view tabs (.rt-views), for
+   *  the Messages strip's room; and the most result tabs drawn at once, a window around the selected one (the overflow
+   *  picker that lists them all is PR 14's). */
+  resultTabsHeight: 28, viewTabsHeight: 28, resultTabsDrawn: 64,
   /** The Messages strip's line (.messages-strip-toggle), and the least it takes open: the line, the log's padding and three
    *  lines of messages (.messages .msg, 12 px at 1.7), so an open strip always shows some. */
   messagesStripLine: 26, messagesStripOpen: 26 + 10 + 62 + 1,

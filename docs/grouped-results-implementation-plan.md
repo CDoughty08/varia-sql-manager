@@ -597,6 +597,50 @@ Outcome, accepted by the owner:
     tabs, the strip rule, focus fallback. Existing smoke suites pin Stacked by setting; a new `grouped-results` suite
     covers Tabs, with its seconds recorded in `scripts/smoke-shards.mjs` and `docs/ci.md` (`results-smoke` is already near
     the split guideline).
+    - **What PR 13 settled or left** (`tests/results-tabs.test.ts` holds its checks; `scripts/grouped-results-smoke.mjs`
+      its interface steps):
+      - The layout is `ResultsTabs` beside `ResultsStack`, chosen by `OutputPane` from `queryResults.grid.layout`
+        (`stacked` | `tabs`, default `stacked`). The toggle is `output.toggleResultsTabs` ("Show Results as Tabs"), a
+        context key `resultsTabs`, a toolbar button in the results toolbar's last group, and Window › Results as Tabs.
+        It is not in the grid menu: that menu has no free access key left (as PR 9 found), so the native menu
+        placement every toggle needs went to the Window menu, beside Panel Tabs.
+      - One `ResultsService` change: `removeEntry` gives the focus to the view the neighbouring group last showed
+        (`shownView`), not the next entry of the flat list, so closing Result 2 neither lands on Result 1's Pivot it
+        never showed nor makes Result 3 forget its Pivot. `tests/results-groups.test.ts`' check of PR 9's old rule
+        changed with it. Otherwise the selected view is the published `focused` entry, falling back to the run's first
+        entry; a tab click, an arrow key, Find Next and a close all go through `focusEntry`/`removeEntry`, so commands,
+        the toolbar, the menus' Transposed toggle and the builder follow the view shown. A group's tab selects
+        `ResultGroup.selected`. Column Profile follows the selected view in Tabs (in Stacked it still follows DOM focus).
+      - Streaming keeps the first group selected because `focused` stays unset until a grid or tab takes it. A run that
+        inherits a focused ordinal from the previous run (`refocus`, PR 9) selects that group when it arrives, even
+        mid-stream: "a tab the user picks stays picked" is read as covering the pick from the last run. Owner to confirm.
+      - A Pivot built for the selected group is selected at once (in `ResultsTabs`, not `PivotService`, which PR 10
+        rewrites); a rebuilt Pivot already took the focus through `PivotService`. A Pivot that appears for another group
+        selects nothing.
+      - Only the selected grid is mounted, keyed by entry key: switching unmounts the other `ResultGrid`, whose
+        `GridShell` disposes its view, pool and registration; its state stays in `TabViewState.grids`. The service's
+        retiring of backend views superseded while unmounted is still as before (plan, Rendering and commands).
+      - Without the overflow picker, a run of more than `gridLimits.resultTabsDrawn` (64) results draws a window of 64
+        result tabs around the selected one with "+N" counts either side; arrow keys and Find Next reach the rest. PR 14
+        replaces the counts with the picker. Comparisons are tabs in the same row, after the groups, with a "Comparison"
+        label where view tabs would be.
+      - The view row carries the view's facts (rows, columns, batch), its filter chips (the stack's `FilterChips`, now
+        shared) and Save Results As; there is no caption. The two rows are `gridLimits.resultTabsHeight` and
+        `viewTabsHeight` (28 px each), which `tabsNeed` adds to the grid's floor (or settled rows) for the strip rule.
+      - A switch while a grid had the focus (F3 onto another view, Close Just This Result, a Pivot shown as it is built)
+        focuses the grid shown instead before its effects run, so a reveal makes the match its active cell and the grid's
+        keys keep working.
+      - Close focus: a closed view moves the focus to the tab selected next in the row it was in (a Pivot's to its
+        Table's view tab), else the Results tab, only when the focus was in what closed or nowhere. Tab close buttons
+        are not Tab stops (one Tab stop per row); `output.closeResult` from the palette closes the selected view.
+      - Existing suites that read stacked captions pin Stacked: `results-smoke`, `popout-smoke`, `electron-smoke` and
+        `explorer-smoke` through `pinStackedResults` (`scripts/fixtures/results-pane.mjs`), `menus-smoke` in its seeded
+        `settings.json`. The new suite's CI seconds are placeholders (25 s) until the first CI run.
+      - Departures from the mock: one toggle button rather than a Stacked/Tabs segmented pair (the toolbar must fit a
+        1,024 px window); no facts row of its own under the view tabs; no streaming dot on a group's tab; the view's
+        actions stay in the results toolbar (the mock's Actions menu is PR 15's narrow-pane work).
+      - Getting Started: the results guide describes per-grid actions and no layout, so it is unchanged; PR 14, which
+        makes Tabs the default, should add the layout there.
 14. **Overflow picker and navigation commands; Tabs becomes the default.** The 1,000-group case is a vitest and a
     benchmark case, not smoke.
 15. **Save names, narrow and short panes, popouts.**

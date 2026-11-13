@@ -98,6 +98,7 @@ export const part = {
   /** A set's caption above its grid: Collapse and its name, its rows and columns, its batch, and Save Results As. */
   resultCaption: '.rs-caption',
   resultStack: '.rs-stack',
+  resultTabs: '.rt-root',
   /** A live grid's frame (LiveGridPane), which holds the grid and its strips. */
   liveGrid: '.live-grid',
   // Object Explorer
@@ -640,6 +641,19 @@ export const messagesStrip = page => outputPane(page).getByRole('button', { name
 export const planViewer = page => page.getByRole('region', { name: 'Execution plan viewer', exact: true })
 export const planCanvas = page => planViewer(page).getByRole('region', { name: 'Query plan canvas', exact: true })
 export const resultSplitters = page => page.getByRole('separator', { name: /^Resize Result \d+$/ })
+
+// Results as tabs (queryResults.grid.layout = tabs): a row of result and comparison tabs, the selected result's view tabs.
+
+/** The row of result and comparison tabs, and one tab in it by its name ("Result 2", "Differences: Result 1 → Result 2"). */
+export const resultTabs = page => outputPane(page).getByRole('tablist', { name: 'Results and comparisons', exact: true })
+export const resultTab = (page, name) => resultTabs(page).getByRole('tab', { name, exact: true })
+/** The selected result's view tabs ("Views of Result 2"), and one by its name: Table, Plan set, or "Pivot of Result 2". */
+export const viewTabs = page => outputPane(page).getByRole('tablist', { name: /^Views of Result \d+$/ })
+export const viewTab = (page, name) => viewTabs(page).getByRole('tab', { name, exact: true })
+/** A tab's close button ("Close Result 2", "Close Pivot of Result 2"): a result's closes its Table and Pivot. */
+export const tabClose = (page, name) => outputPane(page).locator(part.resultTabs).getByRole('button', { name: 'Close ' + name, exact: true })
+/** The tab panel that holds the selected view's grid. */
+export const resultTabPanel = page => outputPane(page).locator(part.resultTabs).getByRole('tabpanel')
 
 // Live grids (LiveGridPane): a grid its owner names, in a frame with the overlay, the error strip and the new-rows button.
 

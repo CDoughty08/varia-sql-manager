@@ -41,6 +41,10 @@ with `node scripts/ci-timings.mjs` (add `--steps` for per-step times) before and
   are 20 seconds on Linux and 25 on Windows; the local Windows run took 7.5 seconds. The SQL language live suite additionally
   validates real syntax/binding issues, qualified joined completions and diagnostic cache refresh against marked fixtures.
 
+  `grouped-results-smoke.mjs` covers the results' Tabs layout (grouped results PR 13) in its own launch, because
+  `results-smoke.mjs` is already near the split guideline; the existing results suites pin the Stacked layout by setting.
+  Its weights are 25 seconds on Linux and Windows until CI measures it; replace them with the first PR run's seconds.
+
   About coverage shares `updates-smoke.mjs`: Help/palette opening, keyboard focus, clipboard success/failure, fixed
   browser destinations, update states and restart through About. It adds no suite or job. The expanded suite took
   5.1 seconds locally on Windows. PR #406's CI measured 6 seconds on Linux and 7 seconds on Windows; the shard weights

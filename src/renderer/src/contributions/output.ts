@@ -30,6 +30,14 @@ const baseName = (name: string) => name.replace(/\.[^.]*$/, '') || 'Results'
  * view's grid (view `live`) is the same grid with a live source: the commands it takes act through its `LiveOutput`.
  */
 export function outputContribution({ commands, results, menuTargets, documents, settings, resultsSearch, panes }: Pick<Workbench, 'commands' | 'results' | 'menuTargets' | 'documents' | 'settings' | 'resultsSearch' | 'panes'>, api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
+  // The setting changes once main has saved it, so a second toggle meanwhile would choose the same layout again: it waits.
+  let layoutChange: Promise<void> | undefined
+  const toggleLayout = async () => {
+    if (layoutChange) return layoutChange
+    const next = settings.getSnapshot().values['queryResults.grid.layout'] === 'tabs' ? 'stacked' : 'tabs'
+    layoutChange = settings.choose('queryResults.grid.layout', next).finally(() => { layoutChange = undefined })
+    return layoutChange
+  }
   const showWhitespace = (mode: 'spaces' | 'all') =>
     settings.choose('queryResults.grid.whitespace', settings.getSnapshot().values['queryResults.grid.whitespace'] === mode ? 'none' : mode)
   const targetOf = (args?: CommandArgs) => outputOf(args) ?? (args?.target ? undefined : focusedOutput(menuTargets))
@@ -314,6 +322,7 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     commands.register('output.showSpaces', { run: () => showWhitespace('spaces') }),
     commands.register('output.showAllWhitespace', { run: () => showWhitespace('all') }),
     commands.register('output.toggleColumnProfile', { run: () => settings.toggle('queryResults.grid.columnProfile') }),
+    commands.register('output.toggleResultsTabs', { run: toggleLayout }),
     commands.register('output.toggleRowSize', { run: () => settings.toggle('queryResults.grid.rowSize') })
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }

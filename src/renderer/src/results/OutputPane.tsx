@@ -7,6 +7,7 @@ import { observeResize } from '../core/windows'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { gridLimits as g } from '../grid/constants'
 import ResultsStack, { stackNeed } from '../grid/ResultsStack'
+import ResultsTabs, { selectedEntry, tabsNeed } from '../grid/ResultsTabs'
 import ResultPlans from '../plans/ResultPlans'
 import EstimatedPlans from '../plans/EstimatedPlans'
 import RetainedPlans from '../plans/RetainedPlans'
@@ -151,7 +152,8 @@ const viewNames: Record<OutputPaneId, string> = { results: 'Results', messages: 
  */
 function OutputPane({ pane, tabId, query, connected, hint }: Props) {
   const { results, panes, queries, queryPlans, retainedPlans, settings, pivot } = useWorkbench()
-  const profileOpen = useServiceSnapshot(settings).values['queryResults.grid.columnProfile']
+  const values = useServiceSnapshot(settings).values
+  const profileOpen = values['queryResults.grid.columnProfile']
   const pivotOpen = !!useServiceSnapshot(pivot).tabs[tabId]?.open
   // The set the profile describes: the grid that last had focus in this tab.
   const [profiled, setProfiled] = useState<{ tabId: string; target: ProfileTarget } | undefined>(undefined)
@@ -169,6 +171,8 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
   const hasSets = hasResultsView(tab)
   // Grids to show: not when the results were closed, all at once or down to the last.
   const shown = !!tab && tab.status !== 'closed' && tab.sets.length > 0
+  // One view at a time under tabs, or every view stacked (queryResults.grid.layout). Peek's bare runs are never drawn here.
+  const tabs = values['queryResults.grid.layout'] === 'tabs' && !tab?.bare
   const plans = plansOf(tab)
   const planCount = estimated ? estimated.result?.plans.length ?? 0 : plans.length
   const errors = !!tab?.messages.some(entry => entry.kind === 'error')
@@ -185,7 +189,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
   // only when the stack keeps room for its sets at their floors.
   const stripSummary = tab ? messagesSummary(tab.messages) : undefined
   const showStrip = !!tab && pane === 'results' && hasSets && messages > 0 && (stripSummary!.readable || tab.strip)
-  const need = tab && showStrip && shown ? stackNeed(tab, results.viewState(tabId).collapsed, results.viewState(tabId).grids) : 0
+  const need = tab && showStrip && shown ? tabs ? tabsNeed(tab, results.viewState(tabId).grids) : stackNeed(tab, results.viewState(tabId).collapsed, results.viewState(tabId).grids) : 0
   const stripFits = viewHeight > 0 && viewHeight >= need + g.messagesStripOpen
   const stripMax = viewHeight > 0 ? Math.max(g.messagesStripOpen, Math.min(Math.floor(viewHeight * 0.4), viewHeight - need)) : undefined
   // The results tools sit in the head beside the views, taking no rows from the grids: results panes are often short.
@@ -256,10 +260,10 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
             const entry = grid?.getAttribute('data-result-entry')
             if (entry) setProfiled({ tabId, target: profileTarget(tab.sets, entry) })
           }}>
-            {shown ? <ResultsStack key={'stack:' + tab.queryId} tabId={tabId} tab={tab} />
+            {shown ? tabs ? <ResultsTabs key={'tabs:' + tab.queryId} tabId={tabId} tab={tab} /> : <ResultsStack key={'stack:' + tab.queryId} tabId={tabId} tab={tab} />
               : <EmptyState className="output-empty" {...hasSets ? {} : { icon: 'table' as const }} detail={emptyResultsText(tab)} />}
             {profileOpen && shown && <ColumnProfilePanel key={'profile:' + tab.queryId} tabId={tabId} tab={tab}
-              shown={profiled?.tabId === tabId ? profiledEntry(tab.sets, profiled.target)?.key : undefined} />}
+              shown={tabs ? selectedEntry(tab)?.key : profiled?.tabId === tabId ? profiledEntry(tab.sets, profiled.target)?.key : undefined} />}
             {pivotOpen && shown && <PivotPanel key={'pivot:' + tab.queryId} tabId={tabId} tab={tab} />}
           </div>
           {showStrip && <MessagesStrip tabId={tabId} tab={tab} fits={stripFits} maxHeight={stripMax} />}

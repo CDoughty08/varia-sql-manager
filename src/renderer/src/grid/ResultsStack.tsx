@@ -77,6 +77,23 @@ export function batchText(batchNumber: number, iteration: number, totalBatches: 
 }
 
 /**
+ * A filtered result's filters, each its words and a Remove button, and Clear filters when there are several. Removing the
+ * last one (or clearing them) removes the button that has the focus, so the focus goes first to `refocus`'s target: the
+ * caption's Collapse button in the stack, the selected view tab in Tabs.
+ */
+export function FilterChips({ tabId, entry, name, sort, refocus }: { tabId: string; entry: ResultSetEntry; name: string; sort?: GridSort; refocus(): void }) {
+  const { results } = useWorkbench()
+  if (!sort || sort.filters.length === 0) return null
+  return <span className="rs-filters" role="group" aria-label={`Filters of ${name}`}>
+    {sort.filters.map((item, at) => <span key={at} className="rs-filter" title={item.label}>
+      <Icon name="filter" /><span className="rs-filter-text">{item.label}</span>
+      <button type="button" className="icon-button rs-filter-remove" aria-label={`Remove filter ${item.label}`} title="Remove filter" onClick={() => { if (at === sort.filters.length - 1) refocus(); results.removeFilter(tabId, entry.key, at) }}><Icon name="close" /></button>
+    </span>)}
+    {sort.filters.length > 1 && <button type="button" className="rs-filters-clear" onClick={() => { refocus(); results.clearFilters(tabId, entry.key) }}>Clear filters</button>}
+  </span>
+}
+
+/**
  * A set's caption: Collapse, its name, rows (counting while they stream) and columns, the batch it came from, Save
  * Results As for it and, in a stack that closes results (`onClose`), its close button, which is disabled while the query
  * runs (`running`). A Table's closes its group, so its tooltip says what goes with it (`others`: its Pivot); a Pivot's or
@@ -85,7 +102,7 @@ export function batchText(batchNumber: number, iteration: number, totalBatches: 
 const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, totalBatches, sort, running, others, onToggle, onClose }: {
   tabId: string; entry: ResultSetEntry; collapsed: boolean; totalBatches: number; sort?: GridSort; running: boolean; others: string; onToggle(key: EntryKey): void; onClose?(key: EntryKey): void
 }) {
-  const { commands, results } = useWorkbench()
+  const { commands } = useWorkbench()
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
   const { descriptor } = entry, columns = descriptor.columns.length, name = entryName(entry)
   const facts = [rowsFact(snapshot, sort), `${formatCount(columns)} ${plural(columns, 'column')}`]
@@ -97,19 +114,14 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
   }
   // A Remove or Clear button that goes with its filters hands focus to the caption, not the page.
   const toggleRef = useRef<HTMLButtonElement>(null)
+  const refocus = useCallback(() => toggleRef.current?.focus(), [])
   return <div className="rs-caption">
     <button ref={toggleRef} type="button" className="rs-caption-toggle" data-caption-entry={entry.key} aria-expanded={!collapsed} onClick={() => onToggle(entry.key)}>
       <Icon name={collapsed ? 'chevron-right' : 'chevron-down'} /><span className="rs-caption-name">{name}</span>
     </button>
     {/* Rows change while the set streams; the grid's own label announces its counts. */}
     <span className="rs-caption-facts" aria-live="off">{facts.join(' · ')}</span>
-    {sort && sort.filters.length > 0 && <span className="rs-filters" role="group" aria-label={`Filters of ${name}`}>
-      {sort.filters.map((item, at) => <span key={at} className="rs-filter" title={item.label}>
-        <Icon name="filter" /><span className="rs-filter-text">{item.label}</span>
-        <button type="button" className="icon-button rs-filter-remove" aria-label={`Remove filter ${item.label}`} title="Remove filter" onClick={() => { if (at === sort.filters.length - 1) toggleRef.current?.focus(); results.removeFilter(tabId, entry.key, at) }}><Icon name="close" /></button>
-      </span>)}
-      {sort.filters.length > 1 && <button type="button" className="rs-filters-clear" onClick={() => { toggleRef.current?.focus(); results.clearFilters(tabId, entry.key) }}>Clear filters</button>}
-    </span>}
+    <FilterChips tabId={tabId} entry={entry} name={name} sort={sort} refocus={refocus} />
     {batch && <span className="rs-caption-batch">{batch}</span>}
     {held && <button type="button" className="icon-button rs-caption-save" aria-label={`Save ${name} As…`} title={`Save ${name} As…`} onClick={save}><Icon name="save-as" /></button>}
     {/* A Table closes its group, its Pivot with it; a comparison made from it stays. There is no undo. */}

@@ -1052,6 +1052,11 @@ export const commandCatalog = {
     title: 'Show Column Profile', category: 'Query', icon: 'graph', keywords: ['profile', 'stats', 'statistics', 'distinct', 'nulls', 'histogram', 'grid', 'column'],
     toggled: 'resultsColumnProfile', menus: [{ menu: 'output.context', group: '4_view', order: 3, title: 'Column Profile', mnemonic: 'f', when: "outputView == 'grid'" }]
   },
+  // The results toolbar's layout toggle (queryResults.grid.layout): every result stacked, or one at a time under tabs.
+  'output.toggleResultsTabs': {
+    title: 'Show Results as Tabs', category: 'Query', icon: 'window', keywords: ['tabs', 'stacked', 'stack', 'groups', 'results', 'one', 'grid'],
+    toggled: 'resultsTabs', menus: [{ menu: 'window', group: '1_panes', order: 9, title: 'Results as Tabs', mnemonic: 'b' }]
+  },
   'output.toggleRowSize': {
     title: 'Show Row Size in Results', category: 'Query', icon: 'list-flat', keywords: ['row', 'size', 'bytes', 'datalength', 'bar', 'grid'],
     toggled: 'resultsRowSize', menus: [{ menu: 'output.context', group: '4_view', order: 4, title: 'Show Row Size', mnemonic: 'z', when: "outputView == 'grid'" }]
