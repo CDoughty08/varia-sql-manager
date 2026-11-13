@@ -57,6 +57,15 @@ being true.
   `SqlAuthenticationProvider`, `backend/Varia.Backend/Entra/`): never on disk, in logs or messages, and never sent to
   main or the renderer. Only connect and Load databases open a browser sign-in, under the request's token
   (Stop); sign-in hosts and token resources the server names are allowlisted. New Login's password lives only in `ObjectDialogService`'s secret slot (`setSecret`, never the snapshot), travels only in the sensitive `actions.execute`, reaches SQL only as one parameter read inside a constant batch, is scrubbed from replies, and Script writes `<password>` instead.
+- Durable connection targets use `src/shared/connection-targets.ts`: a stable target ID, saved-profile hint and
+  backend handle are distinct. Persist only the strict nonsecret target/workspace shapes; live lifecycle, handles,
+  operation epochs and main-only comparison keys never enter persisted snapshots. `ConnectionIdentityRegistry`
+  (`src/main/connection-identity.ts`) compares candidates only with authenticated live handles, using actual
+  credentials and trusted resolved-account evidence; neither the saved-profile key nor server-name equality proves
+  equivalence. The target registry (`src/renderer/src/services/connection-targets.ts`) returns stale successful
+  handles for the backend owner to close. It keeps intentional disconnect separate from unexpected loss and Explorer
+  membership separate from document references. These additive contracts are not yet wired into the workbench;
+  `docs/connections-explorer-implementation-plan.md` defines the owning integration tracks.
 - Query rows stay in backend memory (never on disk) under the result budget. Main forwards DATA pages undecoded, as
   exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). Peek's Top rows are no
   exception: Select Top Rows' script with N = 10 through `query.execute`, in a session and results entry of the Peek's own
