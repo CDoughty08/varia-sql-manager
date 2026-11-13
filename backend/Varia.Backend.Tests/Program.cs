@@ -32,6 +32,12 @@ if (args is [PivotBench.Argument, ..])
     PivotBench.Run(args);
     return;
 }
+// How result operations share the worker threads, run by hand (docs/ipc.md): measures only, no checks.
+if (args is [FairnessBench.Argument, ..])
+{
+    FairnessBench.Run(args);
+    return;
+}
 
 // The result-work benchmark (pivot Distinct Count, Compare Results, distinct value lists), run by hand: measures only.
 if (args is [ResultWorkBench.Argument, ..])
@@ -349,6 +355,7 @@ if (liveGroup is null)
         ("Entra", () => EntraChecks.RunAsync(Check)),
         ("Store", Sync(() => StoreChecks.Run(Check))),
         ("View", Sync(() => ViewChecks.Run(Check))),
+        ("WorkerGate", Sync(() => WorkerGateChecks.Run(Check))),
         ("Filter", Sync(() => FilterChecks.Run(Check))),
         ("Identity", Sync(() => IdentityChecks.Run(Check))),
         ("Diff", Sync(() => DiffChecks.Run(Check))),
