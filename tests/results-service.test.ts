@@ -802,15 +802,18 @@ describe('results service entry keys', () => {
     await service.saveAs('t1', keys[2], 'SQLQuery1')
     await service.saveAs('t1', keys[3], 'SQLQuery1')
     expect(api.saveResults.mock.calls.map(([request]) => [request.resultId, request.suggestedName, request.viewId])).toEqual([[3, 'SQLQuery1-Result3', 9], [803, 'SQLQuery1-Result4', undefined]])
-    // A result made afterwards takes the next number, not the pivot's, and has no share of the stack yet.
+    // A result made afterwards takes the next number, not the pivot's, stands with the group it was made from, and has
+    // no share of the stack yet.
     const added = service.addSet('t1', descriptor(801, { index: 0, kind: 'pivot' }), 'Pivot of Result 1', ['1:1'])
     flush()
-    expect(tab().sets.map(set => set.number)).toEqual([1, 3, 4, 5])
-    expect(tab().sets[3].key).toBe(added)
+    expect(tab().sets.map(set => set.number)).toEqual([1, 5, 3, 4])
+    expect(tab().sets[1].key).toBe(added)
     expect(view.weights!.has(added!)).toBe(false)
-    // The entry that had the focus going leaves the first to take it.
+    // Result 3 had the focus: closing it closes its group (its Pivot too), and with nothing after it the entry before
+    // takes the focus.
     service.removeEntry('t1', keys[2])
-    expect(service.focusedEntry('t1')?.key).toBe(keys[0])
+    expect(tab().sets.map(set => set.number)).toEqual([1, 5])
+    expect(service.focusedEntry('t1')?.key).toBe(added)
   })
   it('moves an entry\'s state with it when a set arrives before it in a streaming run', async () => {
     const { service, client, tab, flush } = fixture()

@@ -930,7 +930,7 @@ Capture controls, live subscriptions and client statistics are outside this view
 ## Query execution
 
 `query.execute` takes `{ connectionId, sessionId, database, sql, queryId, maxRows, timeoutSeconds, startLine?,
-maxResultSets?, stopOnError?, includeActualPlan? }`. `sessionId` is the query tab's UUID: the tab's SQL session is one unpooled connection
+maxResultSets?, stopOnError?, includeActualPlan?, discardResults? }`. `sessionId` is the query tab's UUID: the tab's SQL session is one unpooled connection
 with connection recovery off, opened on its first execution and kept until the tab closes, its server changes, or it is
 lost.
 
@@ -1185,6 +1185,11 @@ Results stay in backend memory, never on disk (`ResultStore`).
   returned when the set ends. A failed reservation rolls back the current row, so pages never hold partial rows; later
   rows are still read and counted in `rowsRead` but not stored, later result sets of the query are not kept (they count
   in `discardedResultSets`), and execution always continues.
+- **Discarded results.** With `discardResults` (the renderer sends `queryResults.grid.discardResults`) every result
+  set's rows are read and none stored: no set is opened, so nothing is charged to the budget; each counts in
+  `discardedResultSets`, and an informational message gives the sets and the rows read, also when the run is stopped
+  or fails. A set that is an execution plan (told by its column's name and first row) is kept as ever, within
+  `maxResultSets`; rows after a plan's in its set are not kept.
 - **Rows per query.** `maxRows` 0 – 2,147,483,647 counted across result sets (0 means the budget only; the renderer
   sends `queryResults.grid.maxRows`, 0 by default). A row of an execution plan returned with the rows (the first row of a
   plan set) is kept past it and not counted. **Result sets kept** `maxResultSets` 1 – 1,000 (default 10); later sets are counted, not stored. The
@@ -2736,7 +2741,7 @@ access, choose Help › Clear Entra ID Token Cache, then connect again." The sam
 | Banner: unexpected restart | "The SQL backend stopped unexpectedly and was restarted. {n} connection(s) were lost and {m} running script(s) were stopped; nothing was re-run." **Reconnect…** **Dismiss** |
 | Banner: manual restart | "The SQL backend was restarted. {n} connection(s) were closed." **Reconnect…** **Dismiss** |
 | Banner: crash loop | "The SQL backend stopped repeatedly and was not restarted again." **Restart SQL Backend** **Copy details** |
-| Banner: cannot start | Development: "Could not start the .NET backend. Install .NET 10 and run npm run backend:build." Packaged: "Could not start the SQL backend. Reinstall Varia SQL Manager." |
+| Banner: cannot start | Development: "Could not start the .NET backend. Install .NET 11 and run npm run backend:build." Packaged: "Could not start the SQL backend. Reinstall Varia SQL Manager." |
 | Banner: different build | "The SQL backend is from a different build (protocol {x}, expected 2{; missing: method}). Run npm run backend:build, then restart." (packaged: "Reinstall Varia SQL Manager.") |
 | `SESSION_LIMIT` | "This query was not executed: 1,000 query tabs already hold SQL sessions, the most Varia SQL Manager keeps open. Close query tabs you no longer need, or disconnect idle ones (Query > Connection > Disconnect), then execute again." |
 | `SESSION_LOST` (commit) | "The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed." While the commit ran: "The SQL session was lost while committing, so it is not known whether its transaction was committed. Check the data before running the work again." After a commit that never answered (state read too): "The SQL session was lost after a commit that did not finish (it was cancelled or timed out), so it is not known whether that commit took effect. Check the data before running the work again." |
@@ -3034,15 +3039,15 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | Grid: funnel search over 1,000,000 values / OK with 1,111 ticked → grid filtered | ≤ 600 / 1,000 ms | reported only | 323 / 948 ms (Windows, 24 CPUs; the search includes its 200 ms debounce) | not measured |
 | Grid: `frame()` after a scroll bar jump, 300 columns, p95 | ≤ 8 ms | ≤ 16 ms | 2.3 – 3.1 ms | 2.5 – 3.3 ms |
 | Grid: main-thread task time per scroll bar jump, 300 columns / 300 bit columns, p95 | ≤ 50 / 50 ms | ≤ 170 / 260 ms | 73 – 85 / 102 – 128 ms | 75 – 76 / 99 – 129 ms |
-| Grid: UI long tasks over 50 ms in those two jump segments (one retry each) | 0 | ≤ 50 | 7 – 23 | 4 – 16 |
+| Grid: UI long tasks over 50 ms in those two jump segments (one retry each, the better attempt counting) | 0 | ≤ 50 | 7 – 23 | 4 – 16 |
 | Grid: `frame()` scrolling across 300 columns, p95 | ≤ 6 ms | ≤ 12 ms | 0.5 – 0.8 ms | 0.7 ms |
 | Grid: animation-frame interval, 300 columns scrolled 400 px a frame for 3 s, natively / past the cap, p95 | ≤ 17.5 / 17.5 ms | ≤ 60 / 60 ms | 18.4 / 18.9 ms | 21.4 / 22.7 ms |
 | Grid: the same over 300 bit columns, p95 | ≤ 17.5 / 17.5 ms | ≤ 80 / 80 ms | 23.1 / 25.3 ms | 30.2 / 32.7 ms |
 | Grid: UI long tasks over 50 ms in those four wheel segments | 0 | ≤ 20 | 0 | 0 |
 | Grid: DOM elements, 8 / 300 / 300 bit columns | ≤ 1,500 / 4,000 / 4,000 | same | 535 / 931 / 1,811 | 535 / 931 / 1,811 |
 | Grid, transposed (4,096 long-text columns as rows by 4,095 rows as columns): `frame()` after a scroll bar jump / scrolling across / scrolling down, p95 | ≤ 8 / 6 / 6 ms | ≤ 16 / 12 / 12 ms | 1.1 / 0.6 / 0.6 ms (Windows, 24 CPUs) | 1.9 / 0.9 / 0.8 ms |
-| Grid, transposed: main-thread task time per scroll bar jump over the same / over 300 bit columns as rows, p95 | ≤ 50 / 50 ms | ≤ 170 / 260 ms | 46 – 79 / 37 – 76 ms, medians 58 / 42 ms over 11 runs on a busy desktop (Windows, 24 CPUs) | 90 / 74 ms |
-| Grid, transposed: scroll bar jump → painted, p95 (each jump reads up to four tiles of 32 rows × 128 long values, eight pages each, so this is where a costlier page read shows) | ≤ 500 ms | reported only | 463 – 614 ms (Windows, 24 CPUs) | 596 ms |
+| Grid, transposed: main-thread task time per scroll bar jump over the same / over 300 bit columns as rows, p95 | ≤ 50 / 50 ms | ≤ 170 / 260 ms | 32 – 47 ms, median 37 ms over 10 runs / 41 – 66 ms over 3 (Windows, 24 CPUs, a fifth to a half of them busy with other work; 46 – 102 ms, median 62 ms, while the wait looked every frame) | 56 – 81 / 57 – 71 ms over 3 runs of Linux CI (67 – 198 / 47 – 102 ms over 24 while the wait looked every frame) |
+| Grid, transposed: scroll bar jump → painted, p95 (each jump reads up to four tiles of 32 rows × 128 long values, eight pages each, so this is where a costlier page read shows) | ≤ 500 ms | ≤ 2,500 ms | 378 – 700 ms over 6 runs (Windows, 24 CPUs) | 448 – 922 ms over 24 runs of Linux CI, by runner CPU |
 | Grid, transposed: animation-frame interval during those scrolls, the worse p95 | ≤ 17.5 ms | ≤ 60 ms | 17.1 ms (Windows, 24 CPUs, 59 Hz) | 23.2 ms |
 | Grid, transposed: DOM elements, 4,096 long-text columns / 300 bit columns | ≤ 4,000 / 4,000 | same | 966 / 1,577 | 966 / 1,483 |
 | Grid, transposed: UI thread busy while 4,095 rows of 300 columns stream in at 1,000 a second | ≤ 10 % | ≤ 25 % | 6 % (Windows, 24 CPUs) | 8 % |
@@ -3065,6 +3070,33 @@ announced at once; the live first window needs 100 rows, from the second page, w
 of them comes once with each read (it is decoded once); that is the extra page bytes sent. The budget charge is the
 pages, their bookkeeping and the column metadata, against the distinct page bytes main forwarded. The end-to-end W1 rate
 includes copying each page from main into the renderer and cloning every window's text to the UI thread.
+
+A jump's task time is measured around the benchmark's wait for its paint, so the wait itself must cost the main thread
+nothing: `grid-bench.mjs` looks at the view only when the grid writes to its DOM (a `MutationObserver`), and
+`tests/bench-floors.test.ts` holds it to that. Until November 2026 it looked every animation frame (about 70 box reads,
+and a frame the page would not otherwise have drawn), which cost about as much as the jump for as long as its tiles took
+to read. A 300-column jump paints in three or four frames, so little was added; a transposed jump over 4,096 long-text
+columns waits a median of 280 ms for its tiles (500 ms on CI), some 22 looks. With that wait the transposed figure read
+56 to 65 ms on a 24-CPU Windows desktop at each of four commits from the orientation's merge on, and 67 to 198 ms over 24
+runs of Linux CI: 1.5 to 2.7 times the 300-column figure of the same run, and set by the runner's CPU model (67 to 80 ms
+on an EPYC 9V45, 90 to 172 ms on a 9V74, 148 to 198 ms on a 7763), since a slower CPU both waits for more frames and
+takes longer over each look. It crossed its 170 ms floor twice with no change in the grid. A trace of the main thread
+showed the grid's own share of a transposed jump to be no more than the table's (style 4.6 ms, script 4.3 ms of which
+`frame()` is 2.8 ms, paint 3.1 ms, layout 3.9 ms, against 4.7, 4.6, 3.6 and 4.5 ms for 300 columns), over more frames (3.7
+a jump against 2.5, as up to four tiles arrive). With the wait that costs nothing the same four commits read 33 to
+38 ms, as the 300-column jump does (31 to 32 ms), with a mean of 24.5 to 25.0 ms a jump at every one: no merge changed
+it. (The wait then takes one animation frame to time the paint, about 1 ms a jump.) On Linux CI the first three runs with
+it read 56, 71 and 81 ms (an EPYC 9V45, a 9V74 and a Xeon 6975P-C, whose kind had read 67 to 80, 90 to 172 and 104 to
+109 ms), against 43, 51 and 44 ms for 300 columns: less was gained there than on the desktop, because a runner's four
+CPUs are shared with the worker and the fake backend while the tiles are read, and task time is by the clock. Pinned to
+two CPUs the desktop read 115 and 144 ms with the old wait and 25 and 56 ms with the new one. The floor stays at 170 ms,
+the 300-column jump's, which is now the same measurement of the same work; it was not raised. What is left is the noise
+of a p95 over 40 jumps, which is their third-largest value, so a jump segment whose figure is over half its floor is
+measured once more and the better attempt counts (`scripts/fixtures/bench.mjs`, with the retry a long task already
+caused): a build that is really that slow reads so twice and still fails, and one stalled run does not. The time to
+paint has a floor of 2,500 ms, 2.7 times the slowest of those 24 runs: most of it is the fake backend encoding pages of
+16,384 long values, but the rest is the worker's decoding and the tile reads, and a read path three times slower should
+fail a pull request rather than be found in a release.
 
 A single scroll bar jump reads its tiles at once; the grid waits for scrolling to settle (50 ms) only while it stays
 faster than three views a frame. The grid's cache and element rows are bounds rather than speeds, so their floors are

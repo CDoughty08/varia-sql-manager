@@ -28,7 +28,7 @@ describe('backend restore', () => {
   it('keeps the lock file\'s RID sections in step with the project\'s, so the locked RID-specific restore stays valid', () => {
     const rids = /<RuntimeIdentifiers>([^<]+)<\/RuntimeIdentifiers>/.exec(readFileSync(project, 'utf8'))?.[1].split(';')
     const lock = JSON.parse(readFileSync('backend/Varia.Backend/packages.lock.json', 'utf8')) as { dependencies: Record<string, unknown> }
-    expect(Object.keys(lock.dependencies).sort()).toEqual(['net10.0', ...rids!.map(rid => `net10.0/${rid}`)].sort())
+    expect(Object.keys(lock.dependencies).sort()).toEqual(['net11.0', ...rids!.map(rid => `net11.0/${rid}`)].sort())
     expect(readFileSync('.github/workflows/package.yml', 'utf8')).toMatch(/dotnet publish backend\/Varia\.Backend\/Varia\.Backend\.csproj .*-r \$\{\{ inputs\.rid \}\} .*-p:RestoreLockedMode=true/)
   })
 })

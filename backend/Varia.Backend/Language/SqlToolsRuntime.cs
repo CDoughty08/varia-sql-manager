@@ -24,7 +24,7 @@ internal sealed record SqlToolsRuntime(string ExecutablePath, bool IsOverride)
         var executable = platform == "win" ? "MicrosoftSqlToolsServiceLayer.exe" : "MicrosoftSqlToolsServiceLayer";
         var installed = Path.GetFullPath(Path.Combine(backendDirectory, "..", "sqltools-service", executable));
         if (File.Exists(installed)) return new(installed, false);
-        // backend/Varia.Backend/bin/{configuration}/net10.0: five parents reach the source checkout.
+        // backend/Varia.Backend/bin/{configuration}/net11.0: five parents reach the source checkout.
         var source = Path.GetFullPath(Path.Combine(backendDirectory, "..", "..", "..", "..", "..", "artifacts", "sqltools-service", platform + "-" + architecture, executable));
         return new(File.Exists(source) ? source : installed, false);
     }

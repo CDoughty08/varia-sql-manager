@@ -15,7 +15,7 @@ import {
   activeDocument, anyResultGrid, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice,
   jobProgress, kindIcon, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
   outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultToggle, statusBar,
-  pivotPanel, profileCard, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark
+  pivotPanel, pivotSource, profileCard, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark
 } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -1367,6 +1367,30 @@ try {
   await expect.poll(clipboard).toContain('Commands completed successfully.')
   console.log('Results checks: Messages stream, show errors in red and in order, and end with the completion time; Ctrl+A selects only their text.')
 
+  // A result that stopped keeping rows (its budget full) while the script runs: the strip offers Stop query, reached by
+  // Tab and Enter, which cancels the run as Cancel Executing Query does; it goes with the run and gives the focus back to
+  // the grid. The row limit, the user's own cap, says so with no button.
+  await writeFile(join(control, 'hold', 'query.execute'), '')
+  await run('-- varia-fake: sets=W1*100 truncated=queryBudget hold', { running: true })
+  await outputTab(/^Results/).click()
+  const stopQuery = strip().getByRole('button', { name: 'Stop query', exact: true })
+  await expect(strip()).toContainText('Only the first 100 of 200 rows are shown: the result memory budget')
+  await expect(stopQuery).toBeVisible()
+  await expect(stopQuery).toHaveAttribute('title', /^Cancel Executing Query/)
+  await grid().focus()
+  await page.keyboard.press('Tab')
+  await expect(stopQuery).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(status()).toContainText(/^Cancelled · /)
+  await expect(stopQuery).toHaveCount(0)
+  await expect(grid()).toBeFocused()
+  await run('-- varia-fake: sets=W1*100 truncated=rowLimit hold', { running: true })
+  await expect(strip()).toContainText('the limit on rows kept per execution was reached')
+  await expect(strip().getByRole('button')).toHaveCount(0)
+  await rm(join(control, 'hold', 'query.execute'))
+  await expect(status()).toContainText(/^Completed · /)
+  console.log('Results checks: a result past its budget offers Stop query while the script runs, by keyboard, and it cancels the run; the row limit offers none.')
+
   // 11. Lifecycle: running again frees the last run's windows, closing a tab disposes its grids, and results outlive
   // Disconnect.
   await run('-- varia-fake: sets=W1*5000')
@@ -1490,7 +1514,7 @@ try {
   await page.keyboard.press('Shift+F10')
   const outputMenu = page.getByRole('menu', { name: 'Query output', exact: true })
   await expect(outputMenu).toBeVisible()
-  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Filter', 'Highlight', 'Compare with Previous Result', 'Pivot Results…', 'Transpose', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Results'])
+  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Filter', 'Highlight', 'Compare with Previous Result', 'Pivot Results…', 'Transpose', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Just This Result', 'Close Results'])
   await page.keyboard.press('Escape')
   // Shift+F10 right after a click opens at the cell just clicked, though the grid paints it as active only on its next
   // frame: below it (or above, when there is no room), from its left edge (or to its right edge, near the window's).
@@ -1566,13 +1590,17 @@ try {
   await expect(rowNumber(0)).toHaveAttribute('title', /^Row 1: /)
   console.log('Results checks: the column profile panel shows the figures the backend computes for each column, and the row-size bar shows and hides with its bytes.')
 
-  // 13b2. Pivot: the results toolbar's Pivot opens the panel on the grid; a row group (active: 1 for every third id) with a
-  // Count of rows and a Max of id, built in the backend (results.pivot), adds the pivot as the run's next result.
+  // 13b2. Pivot: the results toolbar's Pivot opens the builder on the grid's group; a row group (active: 1 for every third
+  // id) with a Count of rows and a Max of id, built in the backend (results.pivot), shows as the group's Pivot, under its
+  // Table. The builder names its source and has nothing to pick; from the Pivot's own grid it edits that Pivot, and
+  // building again replaces it, so no pivot is made of a pivot and a group never has two.
   await expect(show('Pivot')).toHaveAttribute('aria-pressed', 'false')
   await show('Pivot').click()
   const pivoting = pivotPanel(page)
   await expect(pivoting).toBeVisible()
   await expect(show('Pivot')).toHaveAttribute('aria-pressed', 'true')
+  await expect(pivotSource(page)).toHaveText('Result 1')
+  await expect(pivoting.getByRole('combobox', { name: 'Pivot source', exact: true })).toHaveCount(0)
   await pivoting.getByRole('combobox', { name: 'Add row group', exact: true }).selectOption({ label: 'active' })
   await expect(pivoting.getByRole('button', { name: 'Remove row group active', exact: true })).toBeVisible()
   await pivoting.getByRole('button', { name: 'Add value', exact: true }).click()
@@ -1584,14 +1612,32 @@ try {
   await pivoting.getByRole('combobox', { name: 'Value 1 aggregate', exact: true }).selectOption({ label: 'Count' })
   await pivoting.getByRole('combobox', { name: 'Value 1 column', exact: true }).selectOption({ label: '(Rows)' })
   await pivoting.getByRole('button', { name: 'Build Pivot', exact: true }).click()
-  const pivoted = grid('Pivot of Result 1')
+  const pivoted = resultGrid(page, 'Result 1', 'pivot')
   await expect(cell(1, 2, pivoted)).toHaveText('99')
   for (const name of ['active', 'Count of rows', 'Max of id']) await expect(pivoted.getByRole('columnheader', { name: new RegExp(`^${name}`) })).toHaveCount(1)
   expect(await Promise.all([0, 1].map(row => Promise.all([0, 1, 2].map(column => cell(row, column, pivoted).textContent()))))).toEqual([['0', '66', '98'], ['1', '34', '99']])
   await expect(strip('Pivot of Result 1')).toContainText('Pivot of Result 1: 100 rows in 2 row groups.')
   await expect(page.getByRole('button', { name: 'Pivot of Result 1', exact: true })).toBeVisible()
-  await expect(pivoting.getByRole('combobox', { name: 'Pivot source', exact: true }).getByRole('option', { name: 'Pivot of Result 1', exact: true })).toHaveCount(1)
+  await expect(resultGrid(page, 'Result 1', 'table')).toHaveCount(1)
   await page.screenshot({ path: resolve('artifacts', 'results-pivot.png') })
+  // The Pivot's own menu opens the builder on its group: the source is still Result 1, and it says what building does.
+  await cell(0, 0, pivoted).click({ button: 'right' })
+  await outputMenu.getByRole('menuitem', { name: 'Pivot Results…', exact: true }).click()
+  await expect(pivotSource(page)).toHaveText('Result 1')
+  await expect(pivoting).toContainText('Building again replaces Pivot of Result 1.')
+  // A second build, without Max of id, replaces the group's Pivot: still one Pivot, now of two columns.
+  await pivoting.getByRole('button', { name: 'Remove value 2', exact: true }).click()
+  await pivoting.getByRole('button', { name: 'Build Pivot', exact: true }).click()
+  await expect(pivoted.getByRole('columnheader', { name: /^Count of rows/ })).toHaveCount(1)
+  await expect(pivoted.getByRole('columnheader', { name: /^Max of id/ })).toHaveCount(0)
+  await expect(anyResultGrid(page)).toHaveCount(2)
+  await expect(pivoted).toHaveCount(1)
+  // The Table's close button says the Pivot goes with it; the Pivot's closes the Pivot alone.
+  await expect(resultClose(page, 'Result 1')).toHaveAttribute('title', 'Close Result 1 and its Pivot')
+  await resultClose(page, 'Pivot of Result 1').click()
+  await expect(anyResultGrid(page)).toHaveCount(1)
+  await expect(pivoted).toHaveCount(0)
+  await expect(resultClose(page, 'Result 1')).toHaveAttribute('title', 'Close Result 1')
   await pivoting.getByRole('button', { name: 'Close Pivot', exact: true }).click()
   await expect(pivotPanel(page)).toHaveCount(0)
   await expect(show('Pivot')).toHaveAttribute('aria-pressed', 'false')
@@ -1610,7 +1656,7 @@ try {
   await run('-- varia-fake: sets=W1*100')
   await settled()
   await expect(anyResultGrid(page)).toHaveCount(1)
-  console.log('Results checks: Pivot groups the rows of a grid by a column in the backend and adds the counts and maxima as a new result, offering Sum only for numeric columns and refusing a pivot past its bounds in the panel.')
+  console.log('Results checks: Pivot groups the rows of a group\'s Table by a column in the backend and shows the counts and maxima as the group\'s Pivot under it, replaces that Pivot when built again (from the Table or from the Pivot), offers Sum only for numeric columns and refuses a pivot past its bounds in the builder.')
 
   // 13b3. Transposed: the results toolbar's Transposed (and the grid menu's Transpose › Transposed) draws the grid's 8
   // columns as rows and its 100 rows as columns. It is the same grid over the same result: nothing is added to the run,
@@ -1694,7 +1740,9 @@ try {
   await (await transposeMenu(cell(3, 0), 'Selected Rows')).click()
   await expect(turned()).toHaveCount(1)
   await expect(grid()).toHaveAttribute('aria-colcount', '3')
-  expect(await Promise.all([0, 1].map(row => transposedCell(grid(), row, 0).textContent()))).toEqual(['2', '3'])
+  // The turned grid reads its tiles after it is built: wait for the cells' text, not one read of it.
+  await expect(transposedCell(grid(), 0, 0)).toHaveText('2')
+  await expect(transposedCell(grid(), 1, 0)).toHaveText('3')
   await expect(anyResultGrid(page)).toHaveCount(1)
   // Past 4,095 rows: the first ones are drawn, the strip says so, and Find Next onto a match in a row past them says so
   // in the toolbar and moves nothing.

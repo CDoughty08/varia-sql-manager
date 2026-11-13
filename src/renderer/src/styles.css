@@ -1091,6 +1091,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-strip { flex-shrink: 0; padding: 4px 8px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: var(--varia-size-xs)/16px var(--varia-font-ui); color: var(--varia-resultsGrid-truncationForeground); border-top: 1px solid var(--varia-panel-border); }
 .rg-strip.error { white-space: normal; color: var(--varia-errorForeground); }
 .rg-strip button { margin-left: 8px; padding: 0 8px; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); color: var(--varia-foreground); font-size: var(--varia-size-xs); }
+/* A strip with a button (Stop query while a truncated query runs): the text is cut, the button always shows. */
+.rg-strip.has-action { display: flex; align-items: center; }
+.rg-strip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.rg-strip .rg-strip-action { flex-shrink: 0; display: inline-flex; align-items: center; gap: var(--varia-space-1); }
 /* A live log scrolled up: rows that arrived since, and a way back to the tail (LiveGridPane). */
 .live-grid-new-rows { position: absolute; bottom: var(--varia-space-3); left: 50%; z-index: 5; transform: translateX(-50%); padding: var(--varia-space-0) var(--varia-space-3); border-radius: var(--varia-radius-pill); font: var(--varia-size-xs)/var(--varia-line-xs) var(--varia-font-ui); background: var(--varia-button-background); color: var(--varia-button-foreground); }
 .live-grid-new-rows:hover { background: var(--varia-button-hoverBackground); }
@@ -2647,7 +2651,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .pivot-body { flex: 1; min-height: 0; overflow: auto; padding: 6px 8px; }
 .pivot-field { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; color: var(--varia-descriptionForeground); }
 .pivot-panel select { min-width: 0; height: 24px; padding: 0 6px; font-size: var(--varia-size-xs); }
-.pivot-field select { flex: 1; }
+.pivot-source { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-foreground); }
 .pivot-section { margin-bottom: 10px; }
 .pivot-section > select { width: 100%; }
 .pivot-section h3 { margin: 0 0 4px; font-size: var(--varia-size-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--varia-descriptionForeground); }

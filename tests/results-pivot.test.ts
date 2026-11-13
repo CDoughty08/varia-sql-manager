@@ -2,12 +2,13 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ResultColumn, ResultsJobProgress, VariaApi } from '../src/shared/contracts'
 import { EventBus } from '../src/renderer/src/core/events'
 import { ResultError } from '../src/renderer/src/results/ResultClient'
-import { PivotService } from '../src/renderer/src/results/PivotService'
+import { pivotGroup, PivotService } from '../src/renderer/src/results/PivotService'
 import { aggregateFits, columnGroupLimit, draftSpec, emptyDraft, fitDraft, isNumericColumn, pivotFacts, pivotStrip, pivotText, remapDraft, valueLabel } from '../src/renderer/src/results/pivot'
 import { ResultsService, setKey } from '../src/renderer/src/results/ResultsService'
 import { descriptor, fakeResultClient, summaryOf, type FakeHandle } from './fixtures/results'
 import { manualTimers } from './fixtures/workbench'
 import { keyAt } from './fixtures/entries'
+import { deferred } from './fixtures/documents'
 
 const settle = async () => { for (let i = 0; i < 10; i++) await Promise.resolve() }
 const column = (name: string, dataType: string, patch: Partial<ResultColumn> = {}): ResultColumn => ({ name, dataType, wire: 'text', nullable: true, ...patch }) as ResultColumn
@@ -84,71 +85,205 @@ describe('pivot helpers', () => {
 })
 
 describe('PivotService', () => {
-  it("opens on a grid's set, builds the pivot from the draft, appends it as the run's last set, and says what it pivoted", async () => {
+  it("opens on a grid's group, builds the pivot from the draft, shows it under the Table as the group's Pivot, and says what it pivoted", async () => {
     const { results, pivot, run } = fixture()
-    const [, second] = run(2)
-    expect(pivot.canPivot('t1', keyAt(results, 't1', 1))).toBe(true)
-    pivot.open('t1', keyAt(results, 't1', 1))
-    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: true, source: keyAt(results, 't1', 1), draft: emptyDraft, running: false })
-    // A draft is fitted to the set: a text Sum becomes a Count of that column.
+    const [, second] = run(3)
+    const table = keyAt(results, 't1', 1)
+    expect(pivot.canPivot('t1', table)).toBe(true)
+    pivot.open('t1', table)
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: true, source: table, sourceName: 'Result 2', draft: emptyDraft, running: false })
+    expect(pivot.getSnapshot().tabs.t1.pivot).toBeUndefined()
+    // A draft is fitted to the Table: a text Sum becomes a Count of that column.
     pivot.setDraft('t1', { rows: [0], column: 1, values: [{ aggregate: 'sum', column: 2 }, { aggregate: 'sum', column: 0 }] })
     expect(pivot.getSnapshot().tabs.t1.draft).toEqual({ rows: [0], column: 1, values: [{ aggregate: 'sum', column: 2 }, { aggregate: 'count', column: 0 }] })
     await pivot.run('t1')
     await settle()
     expect(second.pivot).toHaveBeenCalledWith({ rows: [0], column: 1, values: [{ aggregate: 'sum', column: 2 }, { aggregate: 'count', column: 0 }] }, { signal: expect.any(AbortSignal) })
-    const sets = results.getSnapshot().t1.sets
-    expect(sets).toHaveLength(3)
-    expect(sets[2]).toMatchObject({ number: 3, label: 'Pivot of Result 2', descriptor: { kind: 'pivot', resultId: 802 } })
-    expect(pivot.getSnapshot().info.get(setKey(sets[2].descriptor))).toEqual({ source: keyAt(results, 't1', 1), sourceLabel: 'Result 2', viewed: false, rows: 3, rowGroups: 2, columnGroups: 0, approximate: false })
-    expect(pivot.getSnapshot().tabs.t1.running).toBe(false)
-    // A pivot can be pivoted again; closing the panel keeps its draft for the next open on the same set.
-    expect(pivot.canPivot('t1', keyAt(results, 't1', 2))).toBe(true)
+    const tab = results.getSnapshot().t1, sets = tab.sets
+    expect(sets).toHaveLength(4)
+    // Directly under Result 2, before Result 3; numbered after the run's highest, and named after its Table.
+    expect(sets[2]).toMatchObject({ number: 4, label: 'Pivot of Result 2', descriptor: { kind: 'pivot', resultId: 802 } })
+    expect(sets[3]).toMatchObject({ ordinal: 3 })
+    expect(tab.groups[1]).toMatchObject({ ordinal: 2, table: { key: table, view: 'table' }, pivot: { key: sets[2].key, view: 'pivot', revision: 1, group: 2, sources: [{ key: table, set: setKey(sets[1].descriptor), number: 2, name: 'Result 2', ordinal: 2 }] } })
+    expect(pivot.getSnapshot().info.get(setKey(sets[2].descriptor))).toEqual({ source: table, sourceLabel: 'Result 2', viewed: false, rows: 3, rowGroups: 2, columnGroups: 0, approximate: false })
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ running: false, pivot: sets[2].key })
+    // Closing the builder keeps the group's draft for the next open, from the Table or from the Pivot (which edits it).
     pivot.close('t1')
     expect(pivot.getSnapshot().tabs.t1.open).toBe(false)
-    pivot.open('t1', keyAt(results, 't1', 1))
-    expect(pivot.getSnapshot().tabs.t1.draft.rows).toEqual([0])
+    pivot.open('t1', sets[2].key)
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: true, source: table, draft: { rows: [0] } })
   })
 
-  it('follows the entry it pivots and not its place: when a middle entry goes, and by its number into the next run', async () => {
+  it('makes no pivot of a Pivot, a comparison or a plan set, and none in a bare run', async () => {
     const { client, results, pivot, run } = fixture()
-    const [, , third] = run(3)
-    const sets = () => results.getSnapshot().t1.sets
-    pivot.open('t1', keyAt(results, 't1', 2))
+    const [first] = run(2)
+    const one = keyAt(results, 't1', 0)
+    pivot.open('t1', one)
     pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
-    results.removeEntry('t1', sets()[1].key)
-    // Result 3 moved up a place: the panel is still on it, with its draft.
-    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: true, source: keyAt(results, 't1', 1), draft: { rows: [0] } })
+    await pivot.run('t1')
+    const made = results.getSnapshot().t1.sets[1]
+    expect(made.label).toBe('Pivot of Result 1')
+    const diff = results.addSet('t1', descriptor(901, { index: 0, kind: 'diff' }), 'Differences: Result 1 → Result 2', [setKey(results.getSnapshot().t1.sets[0].descriptor), setKey(results.getSnapshot().t1.sets[2].descriptor)])!
+    // The builder is the group's whichever of its views is named: on the Pivot it edits the Pivot, read from the Table.
+    expect(pivotGroup(results.getSnapshot().t1, made.key)?.table.key).toBe(one)
+    expect(pivot.canPivot('t1', made.key)).toBe(true)
+    // A comparison has no group to pivot.
+    expect(pivotGroup(results.getSnapshot().t1, diff)).toBeUndefined()
+    expect(pivot.canPivot('t1', diff)).toBe(false)
+    // Drawn transposed, the Pivot is still the group's one Pivot: transposed is how a view is drawn, not another view.
+    expect(results.setOrientation('t1', made.key, { transposed: true })).toBe(true)
+    expect(results.getSnapshot().t1.sets).toHaveLength(4)
+    expect(pivotGroup(results.getSnapshot().t1, made.key)?.pivot?.key).toBe(made.key)
+    // Opened on one of them, the builder stays on the group it had: what it builds is still read from Result 1.
+    pivot.open('t1', diff)
+    expect(pivot.getSnapshot().tabs.t1.source).toBe(one)
+    vi.mocked(first.pivot).mockClear()
+    await pivot.run('t1')
+    expect(first.pivot).toHaveBeenCalledOnce()
+    expect(client.handle(801)!.pivot).not.toHaveBeenCalled()
+    expect(results.getSnapshot().t1.sets.filter(set => set.descriptor.kind === 'pivot')).toHaveLength(1)
+    // The service itself takes a pivot only from a group's Table of rows: one made of a Pivot or a comparison is refused
+    // and released, whoever asks.
+    const sets = results.getSnapshot().t1.sets
+    const pivotNow = sets.find(set => set.descriptor.kind === 'pivot')!
+    for (const [id, source] of [[811, pivotNow], [812, sets.find(set => set.key === diff)!]] as const) {
+      expect(results.addSet('t1', descriptor(id, { index: 0, kind: 'pivot' }), 'Pivot of ' + source.label, [setKey(source.descriptor)])).toBeUndefined()
+      expect(client.released()).toContain(id)
+    }
+    expect(results.addSet('t1', descriptor(814, { index: 0, kind: 'pivot' }), 'Pivot of nothing')).toBeUndefined()
+    expect(results.getSnapshot().t1.sets.filter(set => set.descriptor.kind === 'pivot')).toHaveLength(1)
+
+    // A SQL-returned plan set is a group with data operations off.
+    results.begin('t1', 'q-plan')
+    const plan = descriptor(60, { index: 0, kind: 'executionPlan' }), rows = descriptor(61, { index: 1, columns })
+    for (const value of [plan, rows]) client.emit('q-plan', { type: 'resultSet.opened', descriptor: value })
+    void results.finish('t1', 'q-plan', { summary: summaryOf([plan, rows]) })
+    const planned = results.getSnapshot().t1
+    expect(planned.groups.map(group => [group.ordinal, group.planSet])).toEqual([[1, true], [2, false]])
+    expect(pivot.canPivot('t1', planned.sets[0].key)).toBe(false)
+    expect(results.addSet('t1', descriptor(860, { index: 0, kind: 'pivot' }), 'Pivot of Result 1', [setKey(plan)])).toBeUndefined()
+    // The builder followed Result 1 by number; that is a plan set now, so it moves to the first group it can pivot.
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: planned.sets[1].key, sourceName: 'Result 2' })
+    pivot.open('t1', planned.sets[0].key)
+    expect(pivot.getSnapshot().tabs.t1.source).toBe(planned.sets[1].key)
+
+    // A bare run (Peek's rows): no builder, no pivot, whoever asks.
+    results.begin('peek', 'q-peek', undefined, { bare: true })
+    const peeked = descriptor(70, { index: 0, columns })
+    client.emit('q-peek', { type: 'resultSet.opened', descriptor: peeked })
+    void results.finish('peek', 'q-peek', { summary: summaryOf([peeked]) })
+    const bare = results.getSnapshot().peek
+    expect(bare.bare).toBe(true)
+    expect(pivotGroup(bare, bare.sets[0].key)).toBeUndefined()
+    expect(pivot.canPivot('peek', bare.sets[0].key)).toBe(false)
+    pivot.open('peek', bare.sets[0].key)
+    expect(pivot.getSnapshot().tabs.peek).toBeUndefined()
+    expect(results.addSet('peek', descriptor(870, { index: 0, kind: 'pivot' }), 'Pivot of Result 1', [setKey(peeked)])).toBeUndefined()
+    expect(results.addSet('peek', descriptor(970, { index: 0, kind: 'diff' }), 'Differences', [setKey(peeked)])).toBeUndefined()
+    expect(results.removeEntry('peek', bare.sets[0].key)).toBe(false)
+    results.closeResults('peek')
+    expect(results.getSnapshot().peek).toMatchObject({ status: 'completed', sets: [{ key: bare.sets[0].key }] })
+    expect(client.released()).toEqual(expect.arrayContaining([860, 870, 970]))
+    expect(client.released()).not.toContain(70)
+  })
+
+  it("replaces a group's Pivot when it is built again: the old one is released first, then the new one shown in its place", async () => {
+    const { client, results, pivot, run } = fixture()
+    const [first] = run(2)
+    const one = keyAt(results, 't1', 0)
+    pivot.open('t1', one)
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
+    await pivot.run('t1')
+    const old = results.getSnapshot().t1.sets[1]
+    expect(results.getSnapshot().t1.groups[0].pivot).toMatchObject({ key: old.key, revision: 1 })
+    // The Pivot's grid has the focus when it is built again.
+    results.focusEntry('t1', old.key)
+    expect(results.getSnapshot().t1.groups[0].selected).toBe('pivot')
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: one, pivot: old.key })
+    const building = deferred<Awaited<ReturnType<FakeHandle['pivot']>>>()
+    vi.mocked(first.pivot).mockImplementationOnce(() => building.promise)
+    pivot.setDraft('t1', { rows: [1], values: [{ aggregate: 'count' }] })
+    const pivoting = pivot.run('t1')
+    // Released before the new one is built (not yet atomic): the group has no Pivot meanwhile, and the focus is on its
+    // Table, so the builder stays with the group.
+    expect(client.released()).toEqual([801])
+    expect(results.getSnapshot().t1.sets.map(set => set.number)).toEqual([1, 2])
+    expect(results.getSnapshot().t1.groups[0].pivot).toBeUndefined()
+    expect(results.getSnapshot().t1.focused).toBe(one)
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: one, running: true })
+    expect(pivot.getSnapshot().tabs.t1.pivot).toBeUndefined()
+    building.resolve({ descriptor: descriptor(811, { index: 0, kind: 'pivot' }), rows: 3, rowGroups: 2, columnGroups: 0, approximate: false })
+    await pivoting
+    await settle()
+    const tab = results.getSnapshot().t1
+    // One Pivot, in the old one's place under the Table, as the slot's second result; the old one's strip went with it.
+    expect(tab.sets.map(set => [set.number, set.label])).toEqual([[1, undefined], [4, 'Pivot of Result 1'], [2, undefined]])
+    expect(tab.groups[0].pivot).toMatchObject({ key: tab.sets[1].key, revision: 2, entry: { descriptor: { resultId: 811 } } })
+    expect(tab.groups[0].pivot!.key).not.toBe(old.key)
+    expect([...pivot.getSnapshot().info.keys()]).toEqual(['1:811'])
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ running: false, pivot: tab.sets[1].key })
+    // The old Pivot's grid had the focus: the new one has it, and is its group's selected view again.
+    expect(tab.focused).toBe(tab.sets[1].key)
+    expect(tab.groups[0].selected).toBe('pivot')
+    // The service keeps the rule whoever adds one: a second pivot of the Table takes the slot, releasing the one in it.
+    const third = results.addSet('t1', descriptor(821, { index: 0, kind: 'pivot' }), 'Pivot of Result 1', [setKey(tab.sets[0].descriptor)])!
+    expect(client.released()).toEqual([801, 811])
+    expect(results.getSnapshot().t1.groups[0].pivot).toMatchObject({ key: third, revision: 3 })
+    expect(results.getSnapshot().t1.sets.filter(set => set.descriptor.kind === 'pivot')).toHaveLength(1)
+    // A build that fails after the release leaves the group without a Pivot, and says why.
+    vi.mocked(first.pivot).mockRejectedValueOnce(new ResultError('TOO_LARGE', 'There is not enough result memory to pivot these rows. Close other results and try again.'))
+    await pivot.run('t1')
+    expect(client.released()).toEqual([801, 811, 821])
+    expect(results.getSnapshot().t1.groups[0].pivot).toBeUndefined()
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ running: false, error: 'There is not enough result memory to pivot these rows. Close other results and try again.' })
+  })
+
+  it('follows the focused group with a draft per group, falls back to the first it can pivot, and keeps its group by number into the next run', async () => {
+    const { client, results, pivot, run } = fixture()
+    run(3)
+    const sets = () => results.getSnapshot().t1.sets
+    const [one, two, three] = sets().map(set => set.key)
+    pivot.open('t1', three)
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
+    // Another grid takes the focus: the builder is that group's, with that group's own draft.
+    results.focusEntry('t1', two)
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: true, source: two, sourceName: 'Result 2', draft: emptyDraft })
+    pivot.setDraft('t1', { rows: [1], values: [{ aggregate: 'count' }] })
+    results.focusEntry('t1', three)
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: three, sourceName: 'Result 3', draft: { rows: [0] } })
+    // A comparison takes the focus: the builder falls back to the first group it can pivot.
+    const diff = results.addSet('t1', descriptor(901, { index: 0, kind: 'diff' }), 'Differences: Result 1 → Result 2', [setKey(sets()[0].descriptor), setKey(sets()[1].descriptor)])!
+    results.focusEntry('t1', diff)
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: one, sourceName: 'Result 1', draft: emptyDraft })
+    results.focusEntry('t1', three)
+    // A middle group goes: the builder is still Result 3's, with its draft.
+    results.removeEntry('t1', two)
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: true, source: three, draft: { rows: [0] } })
     await pivot.run('t1')
     await settle()
-    expect(third.pivot).toHaveBeenCalledOnce()
-    // The pivot is named after its source's number, and numbered after the run's highest, whatever places they have.
-    expect(sets()[2]).toMatchObject({ number: 4, label: 'Pivot of Result 3', descriptor: { kind: 'pivot', resultId: 803 } })
-    expect(pivot.getSnapshot().info.get(setKey(sets()[2].descriptor))).toMatchObject({ source: keyAt(results, 't1', 1), sourceLabel: 'Result 3' })
-    // A derived entry is followed by its key.
-    pivot.setSource('t1', keyAt(results, 't1', 2))
-    results.removeEntry('t1', sets()[0].key)
-    expect(pivot.getSnapshot().tabs.t1.source).toBe(keyAt(results, 't1', 1))
-    expect(sets()[1].label).toBe('Pivot of Result 3')
-    // When the entry it pivots goes, the panel moves to the first set it can pivot, not to whatever took its place.
+    expect(sets().map(set => set.label ?? set.number)).toEqual([1, 3, 'Pivot of Result 3', 'Differences: Result 1 → Result 2'])
+    // The group it belongs to goes (its Pivot with it): the focus moves on, and the builder with it. The comparison is
+    // next, so the builder falls back to the first group it can pivot.
+    results.removeEntry('t1', three)
+    expect(sets().map(set => set.label ?? set.number)).toEqual([1, 'Differences: Result 1 → Result 2'])
+    expect(results.getSnapshot().t1.focused).toBe(diff)
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: one, sourceName: 'Result 1' })
+    // An original result is followed by its number into the next run, with its group's draft.
     run(3, { queryId: 'q0' })
-    pivot.setSource('t1', keyAt(results, 't1', 1))
-    results.removeEntry('t1', sets()[1].key)
-    expect(pivot.getSnapshot().tabs.t1.source).toBe(keyAt(results, 't1', 0))
-    expect(sets()[0]).toMatchObject({ ordinal: 1 })
-    results.removeEntry('t1', sets()[0].key)
-    // An original result is followed by its number into the next run: Result 3, though it stood first when the run began.
-    pivot.setSource('t1', keyAt(results, 't1', 0))
-    expect(sets()[0]).toMatchObject({ ordinal: 3 })
-    // While the next run has returned only its first result, the panel waits for Result 3 and still names it.
+    results.focusEntry('t1', keyAt(results, 't1', 2))
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ sourceName: 'Result 3', draft: { rows: [0] } })
+    // While the next run has returned only its first result, the builder waits for Result 3 and still names it.
     results.begin('t1', 'q-streaming')
     client.emit('q-streaming', { type: 'resultSet.opened', descriptor: descriptor(50, { index: 0, columns }) })
     expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: undefined, sourceName: 'Result 3', draft: { rows: [0] } })
     run(3, { queryId: 'q2' })
     expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: keyAt(results, 't1', 2), sourceName: 'Result 3', draft: { rows: [0] } })
     expect(sets()[2]).toMatchObject({ ordinal: 3 })
+    // The focus came along by number too: Result 3's Table has it in the new run.
+    expect(results.getSnapshot().t1.focused).toBe(keyAt(results, 't1', 2))
   })
 
-  it("pivots nothing while the query runs, shows why a pivot failed, and keeps a new run's panel on its set", async () => {
+  it("pivots nothing while the query runs, shows why a pivot failed, and keeps a new run's builder on its group", async () => {
     const { results, pivot, run } = fixture()
     run(2, { finish: false })
     expect(pivot.canPivot('t1', keyAt(results, 't1', 0))).toBe(false)
@@ -158,16 +293,16 @@ describe('PivotService', () => {
     await pivot.run('t1')
     expect(pivot.getSnapshot().tabs.t1).toMatchObject({ running: false, error: 'There is not enough result memory to pivot these rows. Close other results and try again.' })
     expect(results.getSnapshot().t1.sets).toHaveLength(2)
-    // Editing the draft clears the failure; a new run keeps the draft and points the panel at its first set.
-    pivot.setSource('t1', keyAt(results, 't1', 1))
+    // Editing the draft clears the failure; a new run keeps the draft and the group.
+    pivot.open('t1', keyAt(results, 't1', 1))
     pivot.setDraft('t1', { rows: [1], values: [{ aggregate: 'count' }] })
     expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()
     run(2, { queryId: 'q3' })
     expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: true, source: keyAt(results, 't1', 1), draft: { rows: [1] }, running: false })
-    // A run without that set starts the panel on its first set.
+    // A run without that group starts the builder on its first, which has a draft of its own.
     run(1, { queryId: 'q4' })
-    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: keyAt(results, 't1', 0), draft: { rows: [1] } })
-    // A closed tab forgets its panel.
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: keyAt(results, 't1', 0), sourceName: 'Result 1', draft: emptyDraft })
+    // A closed tab forgets its builder.
     results.release('t1')
     expect(pivot.getSnapshot().tabs.t1).toBeUndefined()
   })
@@ -203,7 +338,7 @@ describe('PivotService', () => {
     sortOf.mockRestore()
     await pivot.run('t1')
     expect(pivot.getSnapshot().info.size).toBe(1)
-    // Close Results changes no panel, but the closed pivot's strip goes.
+    // Close Results changes no builder, but the closed pivot's strip goes.
     results.closeResults('t1')
     expect(pivot.getSnapshot().info.size).toBe(0)
   })
@@ -229,5 +364,171 @@ describe('PivotService', () => {
     expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()
     // The earlier pivot's run is gone, and its strip with it.
     expect(pivot.getSnapshot().info.size).toBe(0)
+  })
+
+  it('leaves the focus where the user put it during a rebuild, and draws a rebuilt Pivot transposed when the old one was', async () => {
+    const { results, pivot, run } = fixture()
+    const [first] = run(2)
+    const one = keyAt(results, 't1', 0)
+    pivot.open('t1', one)
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
+    await pivot.run('t1')
+    const old = results.getSnapshot().t1.groups[0].pivot!.key
+    // The Pivot is drawn transposed, headed by its Region column, and has the focus when it is built again.
+    expect(results.setOrientation('t1', old, { transposed: true, headerColumn: 0 })).toBe(true)
+    expect(results.orientation('t1', old)).toEqual({ transposed: true, headerColumn: 0 })
+    results.focusEntry('t1', old)
+    const building = deferred<Awaited<ReturnType<FakeHandle['pivot']>>>()
+    vi.mocked(first.pivot).mockImplementationOnce(() => building.promise)
+    const pivoting = pivot.run('t1')
+    expect(results.getSnapshot().t1.focused).toBe(one)
+    // The user clicks into the Table's grid while it builds: the focus was parked there already, so nothing published
+    // changes, and it is still theirs.
+    results.focusEntry('t1', one)
+    building.resolve({ descriptor: descriptor(811, { index: 0, kind: 'pivot', columns }), rows: 3, rowGroups: 2, columnGroups: 0, approximate: false })
+    await pivoting
+    await settle()
+    const rebuilt = results.getSnapshot().t1.groups[0].pivot!.key
+    expect(rebuilt).not.toBe(old)
+    expect(results.getSnapshot().t1.focused).toBe(one)
+    expect(results.getSnapshot().t1.groups[0].selected).toBe('table')
+    // The new Pivot is drawn as the old one was: transposed, and headed by Region, which is its second column now.
+    expect(results.getSnapshot().t1.groups[0].pivot!.entry.descriptor.columns.map(column => column.name).indexOf('Region')).toBe(0)
+    expect(results.orientation('t1', rebuilt)).toEqual({ transposed: true, headerColumn: 0 })
+    // A header column the new Pivot does not have heads nothing: it is transposed under "Row N".
+    vi.mocked(first.pivot).mockResolvedValueOnce({ descriptor: descriptor(813, { index: 0, kind: 'pivot', columns: [columns[1], columns[2]] }), rows: 3, rowGroups: 2, columnGroups: 0, approximate: false })
+    await pivot.run('t1')
+    await settle()
+    const renamed = results.getSnapshot().t1.groups[0].pivot!.key
+    expect(results.orientation('t1', renamed)).toEqual({ transposed: true })
+    // A grid of another tab taking the focus during a rebuild is not this tab's user moving on: the rebuilt Pivot still
+    // takes the focus its predecessor had.
+    results.begin('t2', 'q-other')
+    const elsewhere = descriptor(77, { index: 0, columns })
+    void results.finish('t2', 'q-other', { summary: summaryOf([elsewhere]) })
+    results.focusEntry('t1', renamed)
+    const again = deferred<Awaited<ReturnType<FakeHandle['pivot']>>>()
+    vi.mocked(first.pivot).mockImplementationOnce(() => again.promise)
+    const second = pivot.run('t1')
+    results.focusEntry('t2', results.getSnapshot().t2.sets[0].key)
+    again.resolve({ descriptor: descriptor(812, { index: 0, kind: 'pivot', columns }), rows: 3, rowGroups: 2, columnGroups: 0, approximate: false })
+    await second
+    await settle()
+    expect(results.getSnapshot().t1.focused).toBe(results.getSnapshot().t1.groups[0].pivot!.key)
+    // A Pivot that was not transposed is not turned by a rebuild.
+    results.setOrientation('t1', results.getSnapshot().t1.groups[0].pivot!.key, { transposed: false })
+    await pivot.run('t1')
+    await settle()
+    expect(results.orientation('t1', results.getSnapshot().t1.groups[0].pivot!.key).transposed).toBe(false)
+  })
+
+  it('keeps a build and its failure with the group they are for when the builder moves to another', async () => {
+    const { results, pivot, run } = fixture()
+    const [first] = run(2)
+    const [one, two] = results.getSnapshot().t1.sets.map(set => set.key)
+    pivot.open('t1', one)
+    const building = deferred<Awaited<ReturnType<FakeHandle['pivot']>>>()
+    let fail!: (reason: unknown) => void
+    vi.mocked(first.pivot).mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; void building.promise }))
+    const pivoting = pivot.run('t1')
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: one, running: true })
+    // Another grid takes the focus while Result 1 builds: the builder is Result 2's, which is not building, and says
+    // whose build is in the way.
+    results.focusEntry('t1', two)
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: two, running: false, busy: 'Result 1' })
+    expect(pivot.canPivot('t1', two)).toBe(false)
+    fail(new ResultError('TOO_LARGE', 'Not enough memory for Result 1.'))
+    await pivoting
+    // The failure is Result 1's: Result 2's builder shows none, and Result 1's shows it when the builder is back.
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: two, running: false })
+    expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()
+    expect(pivot.getSnapshot().tabs.t1.busy).toBeUndefined()
+    expect(pivot.canPivot('t1', two)).toBe(true)
+    results.focusEntry('t1', one)
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: one, error: 'Not enough memory for Result 1.' })
+    // Editing Result 2's draft leaves it; editing Result 1's clears it.
+    results.focusEntry('t1', two)
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
+    results.focusEntry('t1', one)
+    expect(pivot.getSnapshot().tabs.t1.error).toBe('Not enough memory for Result 1.')
+    pivot.setDraft('t1', { rows: [1], values: [{ aggregate: 'count' }] })
+    expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()
+    // A failure also outlives another group's build: Result 1 fails, Result 2 is built, Result 1 still says why.
+    vi.mocked(first.pivot).mockRejectedValueOnce(new ResultError('TOO_LARGE', 'Still not enough memory for Result 1.'))
+    await pivot.run('t1')
+    results.focusEntry('t1', two)
+    await pivot.run('t1')
+    await settle()
+    expect(results.getSnapshot().t1.groups[1].pivot).toBeDefined()
+    expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()
+    results.focusEntry('t1', one)
+    expect(pivot.getSnapshot().tabs.t1.error).toBe('Still not enough memory for Result 1.')
+    // Its own next build clears it.
+    await pivot.run('t1')
+    expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()
+  })
+
+  it('keeps a group\'s draft untouched while a new run has yet to return the group', async () => {
+    const { client, results, pivot, run } = fixture()
+    run(2)
+    const sets = () => results.getSnapshot().t1.sets
+    const two = sets()[1].key
+    pivot.open('t1', two)
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: two, sourceName: 'Result 2', draft: { rows: [0] } })
+    // A new run that has returned only Result 1: the builder still names Result 2, and an edit made now writes nothing
+    // over the draft it keeps for it.
+    results.begin('t1', 'q-streaming')
+    client.emit('q-streaming', { type: 'resultSet.opened', descriptor: descriptor(50, { index: 0, columns }) })
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: undefined, sourceName: 'Result 2' })
+    pivot.setDraft('t1', { rows: [], values: [{ aggregate: 'count' }] })
+    run(2, { queryId: 'q2', columns: [columns[1], columns[0]] })
+    // Fitted by name to the moved columns: Region is the second column now.
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ sourceName: 'Result 2', draft: { rows: [1] } })
+  })
+
+  it('keeps a new Pivot\'s strip when another tab publishes before the frame that shows the Pivot', async () => {
+    const client = fakeResultClient(), events = new EventBus(), timers = manualTimers()
+    const api = { copyResults: vi.fn<VariaApi['copyResults']>(), saveResults: vi.fn<VariaApi['saveResults']>(), cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(), onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}) }
+    const frames: (() => void)[] = []
+    const results = new ResultsService({ client, api, events, frame: callback => { frames.push(callback) }, timers: timers.timers, newId: () => crypto.randomUUID() })
+    const pivot = new PivotService(results)
+    for (const [tabId, id] of [['a', 1], ['b', 2]] as const) {
+      const value = descriptor(id, { index: 0, columns })
+      results.begin(tabId, 'q' + tabId)
+      client.emit('q' + tabId, { type: 'resultSet.opened', descriptor: value })
+      void results.finish(tabId, 'q' + tabId, { summary: summaryOf([value]) })
+    }
+    pivot.open('a', results.getSnapshot().a.sets[0].key)
+    await pivot.run('a')
+    // The pivot is added, but tab a's snapshot shows it only on the next frame.
+    expect(results.getSnapshot().a.sets).toHaveLength(1)
+    expect([...pivot.getSnapshot().info.keys()]).toEqual(['1:801'])
+    // Tab b publishes first.
+    results.focusEntry('b', results.getSnapshot().b.sets[0].key)
+    expect([...pivot.getSnapshot().info.keys()]).toEqual(['1:801'])
+    for (const frame of frames.splice(0)) frame()
+    expect(results.getSnapshot().a.sets).toHaveLength(2)
+    expect([...pivot.getSnapshot().info.keys()]).toEqual(['1:801'])
+    // Once shown it is kept only while shown.
+    results.removeEntry('a', results.getSnapshot().a.sets[1].key)
+    expect(pivot.getSnapshot().info.size).toBe(0)
+  })
+
+  it('gives up a pivot whose Table is closed while it is built, and adds nothing when it answers', async () => {
+    const { client, results, pivot, run } = fixture()
+    const [first] = run(2)
+    pivot.open('t1', keyAt(results, 't1', 0))
+    let signal: AbortSignal | undefined
+    const building = deferred<Awaited<ReturnType<FakeHandle['pivot']>>>()
+    vi.mocked(first.pivot).mockImplementationOnce((_spec, o) => { signal = o?.signal; return building.promise })
+    const pivoting = pivot.run('t1')
+    results.removeEntry('t1', keyAt(results, 't1', 0))
+    expect(signal?.aborted).toBe(true)
+    building.resolve({ descriptor: descriptor(991, { index: 0, kind: 'pivot' }), rows: 1, rowGroups: 1, columnGroups: 0, approximate: false })
+    await pivoting
+    expect(client.released()).toEqual([1, 991])
+    expect(results.getSnapshot().t1.sets.map(set => set.number)).toEqual([2])
+    expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()
   })
 })

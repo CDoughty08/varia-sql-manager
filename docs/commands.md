@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (303)
+## Commands (304)
 
 ### File
 
@@ -146,6 +146,7 @@ keys it uses are listed below.
 | Select All (not in the palette) | `output.selectAll` | Ctrl+A (`outputGridFocus \|\| messagesFocus`) | Ctrl+A (`outputGridFocus \|\| messagesFocus`) | ⌘A (`outputGridFocus \|\| messagesFocus`) | Always | Query Output context menu › Select All |
 | Save Results As… | `output.saveResultsAs` | Ctrl+S (`outputGridFocus`) | Ctrl+S (`outputGridFocus`) | ⌘S (`outputGridFocus`) | Always | Query Output context menu › Save Results As… |
 | Close Results | `output.closeResults` | — | — | — | `!documentBusy` | Query Output context menu › Close Results |
+| Close Result | `output.closeResult` | — | — | — | `!documentBusy` | Query Output context menu › Close Just This Result |
 | Show Spaces and Tabs in Results | `output.showSpaces` | — | — | — | Always; checked when `resultsWhitespaceSpaces` | Query Output context menu › Show Spaces and Tabs |
 | Show All White Space in Results | `output.showAllWhitespace` | — | — | — | Always; checked when `resultsWhitespaceAll` | Query Output context menu › Show All White Space |
 | Sort Ascending (not in the palette) | `output.sortAscending` | — | — | — | Always | Query Output context menu › Sort Ascending |
@@ -839,8 +840,8 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | `2_sort` | Clea**r** Sort | `output.clearSort` | `outputView == 'grid' \|\| outputLiveSortable` |
 | `2_sort` | Filt**e**r › | Submenu: Query Output context menu › Filter | `outputView == 'grid' \|\| outputLiveFilterable` |
 | `2_sort` | Hi**g**hlight › | Submenu: Query Output context menu › Highlight | `outputView == 'grid'` |
-| `2_sort` | Co**m**pare with Previous Result | `output.compareWithPrevious` | `outputView == 'grid'` |
-| `2_sort` | Pivot Res**u**lts… | `output.pivot` | `outputView == 'grid'` |
+| `2_sort` | Co**m**pare with Previous Result | `output.compareWithPrevious` | `outputView == 'grid' && !outputGridBare` |
+| `2_sort` | Pivot Res**u**lts… | `output.pivot` | `outputView == 'grid' && !outputGridBare` |
 | `2_sort` | Trans**p**ose › | Submenu: Query Output context menu › Transpose | `outputGridTransposable` |
 | `2_width` | F**i**t Column | `output.fitColumn` | `outputView == 'grid' \|\| outputView == 'live'` |
 | `3_save` | Sa**v**e Results As… | `output.saveResultsAs` | `outputView == 'grid' \|\| outputView == 'live'` |
@@ -848,7 +849,8 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | `4_view` | Show All **W**hite Space | `output.showAllWhitespace` | `outputView == 'grid' \|\| outputView == 'live'` |
 | `4_view` | Column Pro**f**ile | `output.toggleColumnProfile` | `outputView == 'grid'` |
 | `4_view` | Show Row Si**z**e | `output.toggleRowSize` | `outputView == 'grid'` |
-| `z_close` | C**l**ose Results | `output.closeResults` | `outputView != 'live'` |
+| `z_close` | Close **J**ust This Result | `output.closeResult` | `outputView == 'grid' && !outputGridBare` |
+| `z_close` | C**l**ose Results | `output.closeResults` | `outputView != 'live' && !outputGridBare` |
 
 #### Query Output context menu › Highlight
 
@@ -954,7 +956,7 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
 | `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
 
-## Context keys (152)
+## Context keys (153)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1107,6 +1109,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerServerLinux` | boolean | target | The menu is for a node on SQL Server on Linux. |
 | `outputView` | `'grid'`, `'messages'`, `'live'`, `''` | target | The Query Output view the menu is for: a results grid, the messages, or a live view's grid (an Activity Monitor pane). |
 | `outputGridTransposable` | boolean | target | The menu is for a results grid that can be drawn transposed: a query's rows or a pivot, not a comparison or a plan set. |
+| `outputGridBare` | boolean | target | The menu is for a results grid drawn bare (Peek's rows): Pivot, Compare and the close commands are not offered for it. |
 | `outputLiveFilterable` | boolean | target | The live view's grid the menu is for filters some columns by value at its source (its headers have funnels). |
 | `outputLiveRows` | `'session'`, `''` | target | What the rows of the live view's grid the menu is for are: 'session' for an Activity Monitor pane of sessions (Details and Kill Process act on its active row), else ''. |
 | `outputLiveSortable` | boolean | target | The live view's grid the menu is for sorts (its table is a snapshot, not a log that keeps arrival order). |

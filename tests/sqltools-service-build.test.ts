@@ -266,7 +266,7 @@ describe('bundled SQL Tools Service preparation', () => {
     expect(release).toContain('      - scripts/prepare-sqltools-service.mjs\n')
     const ci = await readFile('.github/workflows/ci.yml', 'utf8')
     // These are workflow paths, not a test that launches the backend (check.mjs classifies backend consumers).
-    const testAssembly = posix.join('backend', 'Varia.Backend.Tests', 'bin', 'Release', 'net10.0', 'Varia.Backend.Tests.dll')
+    const testAssembly = posix.join('backend', 'Varia.Backend.Tests', 'bin', 'Release', 'net11.0', 'Varia.Backend.Tests.dll')
     expect(ci).toContain(`if: matrix.group == 1 && (success() || failure()) && hashFiles('${testAssembly}') != ''`)
     expect(ci).toContain('dotnet run --no-build --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --sql-language-live')
   })

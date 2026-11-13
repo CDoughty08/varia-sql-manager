@@ -102,7 +102,7 @@ import { fakeResultClient, summaryOf } from './results'
 export const connectionInfo = (id: string, generation = 1): ConnectionInfo => ({ id, server: `${id}.example`, database: 'master', serverVersion: '17.0', generation })
 /** What the Connect dialog passes with a connection, password included: the connection service must drop it. */
 export const connectionOptions: ConnectionOptions = { server: 'server.example', database: 'master', authentication: 'sql', username: 'reader', password: 'never-keep-this', trustServerCertificate: false }
-export const readyBackend = (generation = 1): BackendState => ({ status: 'ready', generation, pid: 100 + generation, runtime: '.NET 10.0.0', platform: 'test' })
+export const readyBackend = (generation = 1): BackendState => ({ status: 'ready', generation, pid: 100 + generation, runtime: '.NET 11.0.0', platform: 'test' })
 /** The backend half of VariaApi, with `push` standing in for main's state pushes. */
 export function backendApi(initial: BackendState = { status: 'starting', generation: 1 }) {
   const listeners = new Set<(state: BackendState) => void>()

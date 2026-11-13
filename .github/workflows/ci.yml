@@ -178,7 +178,7 @@ jobs:
         run: npx vitest run tests/*-live.test.ts
       - name: Bundled SQL language service against SQL Server
         # Runs after other checks fail too, provided their Release build exists; the SQL container is disposable.
-        if: matrix.group == 1 && (success() || failure()) && hashFiles('backend/Varia.Backend.Tests/bin/Release/net10.0/Varia.Backend.Tests.dll') != ''
+        if: matrix.group == 1 && (success() || failure()) && hashFiles('backend/Varia.Backend.Tests/bin/Release/net11.0/Varia.Backend.Tests.dll') != ''
         timeout-minutes: 5
         run: |
           node scripts/prepare-sqltools-service.mjs --rid linux-x64

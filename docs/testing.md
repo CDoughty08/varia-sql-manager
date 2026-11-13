@@ -34,7 +34,7 @@ the rules that keep it lean.
 
 ## Environment
 
-- Node.js 24+ and the .NET 10 SDK (`global.json`, latest feature band). In cloud sessions `.claude/hooks/session-start.sh`
+- Node.js 24+ and the .NET 11 SDK (`global.json`, latest feature band). In cloud sessions `.claude/hooks/session-start.sh`
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
