@@ -2651,7 +2651,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .pivot-body { flex: 1; min-height: 0; overflow: auto; padding: 6px 8px; }
 .pivot-field { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; color: var(--varia-descriptionForeground); }
 .pivot-panel select { min-width: 0; height: 24px; padding: 0 6px; font-size: var(--varia-size-xs); }
-.pivot-field select { flex: 1; }
+.pivot-source { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-foreground); }
 .pivot-section { margin-bottom: 10px; }
 .pivot-section > select { width: 100%; }
 .pivot-section h3 { margin: 0 0 4px; font-size: var(--varia-size-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--varia-descriptionForeground); }

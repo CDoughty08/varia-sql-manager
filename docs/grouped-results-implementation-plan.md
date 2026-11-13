@@ -549,6 +549,34 @@ Outcome, accepted by the owner:
    drawn rows), plan-set groups, and the bare mode Peek uses. The renderer's rules land here so every list is representable: Pivot is offered only on Tables, the "Pivot
    source" picker goes, and building a group's Pivot again releases the old one first and then shows the new (not yet
    atomic). `results-smoke`'s pivot steps change here. Checks: no nested pivot from menu, palette, key or service.
+   - **What PR 9 settled or left** (`tests/results-groups.test.ts`, `tests/results-pivot.test.ts` and
+     `tests/results-stack.test.ts` hold its checks):
+     - `sets` stays the one flat list, now in the order drawn; `TabResults.groups` and `comparisons` say what each entry
+       is. A slot's identity is its entry key: grid state, sort and filters were already kept by it, so nothing was
+       re-keyed. Because the old Pivot is released before the new one is built, a rebuilt Pivot is a new entry with a new
+       key in this PR; the slot's `revision` counts them. PR 10 keeps the key.
+     - PR 8 merged first, so this PR dropped its allowance for a stored transpose (`ResultGroup.transposes`, the
+       `'transpose'` view kind and their branches) when it merged `main`: transposed is how a slot is drawn, never a slot.
+     - Provenance is `ResultSlot.sources`: frozen references (entry key, set key, number, name) to a Pivot's Table and to
+       a comparison's old and new inputs. The recipe, resolved filters and input rows are PR 10's.
+     - The builder keeps one draft per group already (by ordinal, so a re-run's group takes it over), since a builder
+       that follows the focus would otherwise lose a draft at every click. It is not yet the Pivot's stored recipe.
+     - The builder follows the focus by moving when the focused grid changes; `output.pivot` on a grid focuses it first.
+       Focus is published (`TabResults.focused`) and follows a group by ordinal into the next run.
+     - Closing a Pivot leaves the focus on its group's Table; closing a group moves it to the next surviving item, else
+       the previous. A command closes one view: `output.closeResult` ("Close Just This Result" in the grid menu, whose
+       access keys left no letter of "Close Result" free).
+     - A bare run is an option of `ResultsService.begin`; its stack draws no caption while it has one grid without
+       filters (a caption returns to hold filter chips, which have no other place). Close Results is refused for it too.
+     - Pivot is shown disabled, not hidden, for a comparison and a plan set; it is hidden only for a Peek grid
+       (`outputGridBare`). No comparison has a source link yet, so "reads closed" has nothing to draw until PR 16;
+       the frozen references are there for it.
+     - The Results badge counts groups.
+     - A transposed item is sized by its drawn rows from each grid's state, read again with every snapshot (PR 7's
+       `setOrientation` publishes), so an item whose grid is not mounted resizes too; the Messages strip's room
+       (`stackNeed`) counts the same rows.
+     - A build and its failure belong to one group: the builder shows "running" and the message only while it is that
+       group's, and names the group that is building when it is another's (one build per tab until PR 10).
 10. **Atomic Pivot replacement.** Stored recipe and per-group draft, provenance, replacement that keeps the old Pivot
     until the new one publishes, `results.pivot` from Tables only in the backend, parallel builds with their cap and
     retry, the 1,000 rule. Checks: replacement success, cancellation, failure, late answer, memory overlap.
