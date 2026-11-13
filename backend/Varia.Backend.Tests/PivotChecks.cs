@@ -147,6 +147,17 @@ internal static class PivotChecks
         var blanks = Source(store, [["a", ""], ["b", "  "], ["c", "x"]], [new("k", "nvarchar(5)", "text", Collation: CaseInsensitive), new("v", "nvarchar(5)", "text", Collation: CaseInsensitive)]);
         var (_, blank) = Pivot(store, blanks, new PivotSpec([0], 1, [Rows()]));
         check(Names(blank) == "k,(blank),x,Total", "empty and blank values name their column (blank), and equal by trailing-space rules: " + Names(blank));
+        // A column group's name (PivotOutput.GroupName) shows a binary value as hex, and keeps the first 128 characters of a
+        // long one, multi-byte ones included; spaces before text are not blank.
+        var bytes = Source(store, [["a", "AB"], ["b", null], ["c", "C"], ["d", ""]], [new("k", "nvarchar(5)", "text", Collation: CaseInsensitive), new("b", "varbinary(8)", "binary")]);
+        var (_, hex) = Pivot(store, bytes, new PivotSpec([0], 1, [Rows()]));
+        check(hex.Columns.Skip(1).Select(column => column.Name).Order(StringComparer.Ordinal).SequenceEqual(new[] { "NULL", "0x", "0x4142", "0x43", "Total" }.Order(StringComparer.Ordinal)),
+            "binary column groups are named by their hex: " + Names(hex));
+        var longValues = Source(store, [["a", new string('a', 1 << 20)], ["b", new string('é', 1000)], ["c", new string(' ', 2000) + "x"], ["d", new string(' ', 2000)]],
+            [new("k", "nvarchar(5)", "text", Collation: CaseInsensitive), new("v", "nvarchar(max)", "text", Collation: CaseInsensitive)]);
+        var (_, cut) = Pivot(store, longValues, new PivotSpec([0], 1, [Rows()]));
+        check(cut.Columns.Skip(1).Select(column => column.Name).Order(StringComparer.Ordinal).SequenceEqual(new[] { new string('a', 128) + "…", new string('é', 128) + "…", new string(' ', 128) + "…", "(blank)", "Total" }.Order(StringComparer.Ordinal)),
+            "long column group values name their columns by their first 128 characters, and only an all-space value is (blank): " + string.Join("|", cut.Columns.Select(column => column.Name.Length)));
     }
 
     /// <summary>Each aggregate: COUNT(column) skips NULLs, COUNT(DISTINCT) counts by collation, SUM and AVG by value with their

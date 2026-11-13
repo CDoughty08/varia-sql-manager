@@ -39,7 +39,7 @@ The code is the reference implementation; this document describes it.
 - [Row identities and highlights](#row-identities-and-highlights)
 - [Result diffs](#result-diffs)
 - [Pivots](#pivots)
-- [Transpose](#transpose)
+- [Transposed](#transposed)
 - [Search in results](#search-in-results)
 - [Column profiles](#column-profiles)
 - [Distinct values](#distinct-values)
@@ -245,7 +245,6 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `results.diff` | port | unary | results | 120 s; the unified diff of two results of one query, stored as a new result ([Result diffs](#result-diffs)) |
 | `results.search` | port | unary | results | 120 s; the cells of a result (or a view) containing a text ([Search in results](#search-in-results)) |
 | `results.pivot` | port | unary | results | 120 s; a result's or a view's rows grouped and aggregated, stored as a new result ([Pivots](#pivots)) |
-| `results.transpose` | port | unary | results | 120 s; a result's columns as rows and its rows (a view's, or selected ones) as columns, stored as a new result ([Transpose](#transpose)) |
 | `results.profile` | port | unary | results | 120 s; aggregates over a result's or a view's rows ([Column profiles](#column-profiles)) |
 | `results.distinct` | port | unary | results | 120 s; a snapshot of a column's distinct values and their counts over a result's or a view's rows ([Distinct values](#distinct-values)) |
 | `results.distinctRead` | port | unary | results | 30 s; a window of 1 – 512 of a snapshot's values, optionally searched |
@@ -1172,7 +1171,7 @@ Results stay in backend memory, never on disk (`ResultStore`).
   them alike (a sort's keys, a profile's figures), so the budget is all the backend commits to results (a quarter of memory unless the user set more); a
   result that fills its query's half leaves no room to sort it. Working memory of 64 MiB or more, and any memory that
   only makes an operation faster once 64 MiB of it is held, is refused under high system memory load as rows are
-  (`TOO_LARGE`, saying the computer is low on memory, as does a pivot, diff or transpose refused while the load is
+  (`TOO_LARGE`, saying the computer is low on memory, as does a pivot or diff refused while the load is
   high). One query may use half of it. Nothing more is stored while the operating system reports high
   memory load (checked at every page seal; the load is the runtime's reading at its last garbage collection, taken
   again by a collection of the youngest generation when it is more than a second old). A release's forced collection
@@ -1451,7 +1450,7 @@ the rows it holds (`Results/RowIdentity.cs`); the renderer never compares rows.
   the ascending positions (view positions with `viewId`) of the rows whose identity is in `ids`, each with the index in
   `ids` it matched, at most 100,000 (`truncated`).
 - **Renderer.** `HighlightsService` keeps highlights per tab and result (a query's own result by its number in the run, which a re-run's
-  result of that number takes over; a pivot, transpose or diff by its entry, and gone with it): the first highlight identifies the set
+  result of that number takes over; a pivot or diff by its entry, and gone with it): the first highlight identifies the set
   (`auto`) and fixes how its rows are told apart (the key column's name and base type, or the whole row); a re-run of the
   tab's query identifies its new set the same way once complete (a column whose length changed still counts) and finds the
   highlighted ids there, and a sorted view finds them by view position. A re-run without the key column finds nothing: the
@@ -1548,7 +1547,7 @@ receives a new result to read like any other, never the rows it grouped.
   columns plus (column groups + 1) × values columns. It is a result of the source's query, charged to its
   budget, released with the query's other results and at once when its answer is not delivered (as a diff). It is
   stored whole or not at all: rows the budget refuses part-way release it with `TOO_LARGE`. A query that stopped
-  storing keeps nothing more, whatever memory is free now, so it stores no pivot, diff or transpose: `BUDGET_STOPPED`,
+  storing keeps nothing more, whatever memory is free now, so it stores no pivot or diff: `BUDGET_STOPPED`,
   with one of three sentences by why it stopped. Its own results filled its share (the query budget): "This query's
   results filled its result memory, so it can store nothing more. Run the query again returning fewer rows." Every
   query's results together filled the memory (the global budget), where this one may be small: "The result memory
@@ -1559,7 +1558,7 @@ receives a new result to read like any other, never the rows it grouped.
   never stops its query, so a smaller pivot of the same results can still fit. Low system memory is checked when a
   page is sealed; a derived set sealing one under it stores no further row (so it is refused, `TOO_LARGE`) and leaves
   the query's budget open, and one whose last page is sealed under it is whole. A source is complete while its query may
-  still be reading later sets: a pivot, diff or transpose refused memory for its figures or differing cells, not opened,
+  still be reading later sets: a pivot or diff refused memory for its figures or differing cells, not opened,
   or cut short, because that query stopped storing or a source was released while it was built, answers
   `BUDGET_STOPPED` or `RESULT_RELEASED`, not `TOO_LARGE`.
 - **Work.** One pass sorts the rows by each grouped column's key (`ResultPivoter.WorkingBytes`: the sort keys and 12 bytes
@@ -1573,45 +1572,21 @@ receives a new result to read like any other, never the rows it grouped.
   `addSet` releases one the run cannot take (the panel says why when its run is unchanged). A re-run keeps the draft,
   which follows its columns by name if the query now returns them in another order (`remapDraft`).
 
-## Transpose
+## Transposed
 
-Transpose turns a result's columns into rows and its rows into columns in the backend (`Results/ResultTranspose.cs`); like
-a pivot, the renderer receives a new result to read like any other, never the rows it transposed.
+Transposed is how a results grid is drawn (its columns as rows, its rows as columns), not a result: the renderer turns the
+grid it already has, so the protocol has no request for it and the backend stores nothing. What the protocol does carry:
 
-- **`results.transpose { resultId, viewId?, rows?, headerColumn? }`** answers `{ descriptor, rows, transposed, columns }`.
-  Through a view it reads the view's rows, so its sort and filters apply. `rows` takes only 1 to 256 `[first, count]`
-  position ranges (the view's positions through a view), merged where they overlap or touch as a filter's selection is
-  (`ViewSorter.Merge`), for Transpose Selected Rows; positions past the rows are ignored. `headerColumn` names the columns
-  by that column's values. The result must be complete (`RESULT_OPEN`) and be a query's rows, a pivot or another transpose
-  (`INVALID_PARAMS` for a diff, an execution plan or any other kind); `headerColumn` must be a shown column of the result.
-  In the answer `rows` counts the rows it could take (the view's or the ranges'), `transposed` the first of them it took,
-  and `columns` the source columns it holds as rows.
-- **The transpose result** (`kind: 'transpose'`, stamped with the generation and owned by main as a pivot is) has a
-  `Column` column holding the source columns' names, then one column per row taken, named "Row 1", "Row 2"… by the row's
-  position (as the grid numbers it), or by `headerColumn`'s values as a pivot names its column groups ("NULL", "(blank)"
-  for empty text, binary as `0x` hex, cut to 128 characters with "…"). No two columns share a name, ignoring case
-  (`PivotOutput.Unique`): `Column` keeps its name and a repeated one is numbered " (2)", " (3)". A diff's hidden tone
-  column (`role: 'tone'`) is never a row. Each cell is the source cell's display text as stored, with its NULL, error and
-  truncation flags kept, so a truncated value stays marked and its full length is kept when the source kept it; binary
-  values become their `0x` hex text. Every column past `Column` is typed `nvarchar(max)` with a text wire, since one
-  column now holds every source column's type: its sort, filters, profile and lengths treat the values as text.
-- **Limits.** Rows become columns, so at most 4,095 rows (a page's 4,096 columns less `Column`), and fewer when the cells
-  (rows times columns) would pass 4,000,000. Past either it takes the first rows and says so: `transposed` is less than
-  `rows`, and the grid strip says "Transposed the first 4,095 of 10,000 rows; filter or select rows to transpose others."
-  A cell past a row's 8 MiB is cut and marked truncated, as any stored cell. Main checks the answer's shape: a `Column`
-  column plus one per row taken, all text, a row per source column, `transposed` at most `rows` (no more than the ranges
-  asked for) and within the cell bound.
-- **Memory.** It is a derived set (`ResultStore.Open(derived: true)`) of the source's query, charged to its budget,
-  released with the query's other results and at once when its answer is not delivered. It is stored whole or not at
-  all: rows the budget refuses part-way release it with `TOO_LARGE` ("There is not enough result memory to transpose these
-  rows. Close other results, or select fewer rows, and try again."), and a query that stopped storing stores no
-  transpose (`BUDGET_STOPPED`, as a pivot). A refusal never stops its query. The worker's `cancel` stops it (`CANCELLED`).
-- **Renderer.** `ResultHandle.transpose(spec?, { signal })` validates the ranges and header column before sending.
-  `TransposeService` runs Transpose (the results toolbar and the grid menu's Transpose › All Rows), Selected Rows (the
-  selection's rows as merged ranges; offered when rows are selected) and Using Column as Headers (the active cell's
-  column), through the grid's view when it shows one and only once that view is built. It appends the transpose as the
-  run's last set, named "Transpose of Result N", whose grid strip says what it holds; a failure is said in the results
-  toolbar. A new run gives up a transpose in flight, and `addSet` releases one the run cannot take.
+- **Copy and Save** of a grid drawn transposed: `transposed` and `headerColumn` on `results.copy` and `results.export`
+  ([Transposed text](#copy-and-save-results-as)).
+- **The cap.** A transposed grid draws the view's first 4,095 rows as columns (a page's 4,096 columns less the one that
+  names the result's columns): `limits.transpose.maxRows`, `ResultTextWriter.MaxTransposedRows` in C#. Transposed Copy
+  and Save write those rows, and a `keepRows` filter names at most as many.
+- **`results.transpose` was removed.** It stored a transposed copy of a result as a new result of the query
+  (`kind: 'transpose'`). HELLO no longer lists it, the backend answers it `METHOD_NOT_FOUND` as any unknown method
+  (`HostChecks`' retired methods), the results port refuses a `transpose` request as invalid, and no descriptor may have
+  that kind. Main and the backend ship together and main requires only the methods it knows, so removing a method
+  needs no protocol version change. `tests/results-transpose.test.ts` pins the removal on the TypeScript side.
 
 ## Search in results
 
@@ -1795,7 +1770,7 @@ drawn: `transposed: true` on either request turns the writer column-major, in ev
 | Values | As the table's: NULL, text, binary and truncation follow the format's column above. JSON writes every value as a string (a field holds a value of every column, so numbers and bits are not typed) and NULL as `null`. |
 | Parts (Copy) | Each part is its rows by its columns, in the result's coordinates as ever, written turned; with headers each part has its own first line. |
 
-Rows are read through per-row page lookups (`RowAccess`, as a stored transpose reads them): each row's page is found once,
+Rows are read through per-row page lookups (`RowAccess`): each row's page is found once,
 then every line reads its cell there, through the view's order when there is one, so no rows are copied and nothing is
 held but the stored pages. A line can be far longer than a chunk (4,095 values): the writer stops whenever a 1 MiB chunk
 is ready so the job can send or write it, and the token is checked every 1,024 cells. `TransposedTextChecks.cs` holds the
@@ -2652,7 +2627,6 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Row identities | `results.rowIds` 1 – 16,384 rows; `results.findRows` 1 – 10,000 ids, 100,000 matches (`limits.identity`); 8 bytes a row (and a set of the first 32,768 rows) while identifying, 8 kept, under the query budget | zod and backend |
 | Result diffs | context -1 – 100 rows, 64 one-sided column names each side (`limits.diff`); about 80 bytes a row of both results and 12 a differing cell while aligning, the diff's rows under the query budget, whole or refused | zod and backend |
 | Sorted views | 0 – 16 keys and 0 – 16 filters a view (one at least), 4,096 distinct values a filter, 256 cell ranges a selection, 4,095 rows a `keepRows` filter (`limits.transpose.maxRows`), 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key or filtered column while building (and a text, date or binary key's ranked or whole values while there is room), 4 bytes a row kept, under the query budget | zod and backend |
-| Transpose | 1 – 256 row ranges, at most 4,095 rows taken and 4,000,000 cells, the first rows taken past either with explicit truncation (`limits.transpose`); the stored set under the query budget, whole or refused | zod and backend |
 | Transposed Copy and Save | `transposed` a boolean, `headerColumn` 0 – 4,095 and a shown column of the result, taken only with `transposed`; at most 4,095 source rows written a part (`limits.transpose.maxRows`), the rest counted in `capped`; a copy still under `maxBytes` and 64 parts of 64 ranges | zod and backend |
 | Pivots | 0 – 8 row columns, 1 – 16 values, 100,000 row groups, 256 column groups, 4,000,000 figures, refused past any of them (`INVALID_PARAMS`), column-group names cut to 128 characters (`limits.pivot`); a sort key per grouped column and 12 bytes a row while grouping, and the figures, under the query budget | zod and backend |
 | Search in results | 1 – 1,024 characters of text, 1 – 10,000 matches an answer plus its last row's columns (`limits.search`); no budget held | zod and backend |
@@ -2731,7 +2705,7 @@ access, choose Help › Clear Entra ID Token Cache, then connect again." The sam
 
 | Origin | Codes |
 | --- | --- |
-| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot, diff or transpose of a query that stopped storing; [Pivots](#pivots)) |
+| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot or diff of a query that stopped storing; [Pivots](#pivots)) |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
 | Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads, scripting, object actions and SSIS requests), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs), `STALE` (a shortcuts save based on an older revision), `DUPLICATE_REQUEST` and `NOT_FOUND` (live streams of the results port); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |

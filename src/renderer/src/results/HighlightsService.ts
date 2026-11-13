@@ -104,7 +104,7 @@ const complete = (entry: ResultSetEntry | undefined): entry is ResultSetEntry =>
 
 /**
  * Row highlights in each query tab's grids (results PR 8). A highlight belongs to the tab and to its result: an original
- * result's by its number in the run, so they follow re-runs of the query; a derived entry's (a pivot, a transpose, a diff)
+ * result's by its number in the run, so they follow re-runs of the query; a derived entry's (a pivot, a diff)
  * by the entry, so they go with it. It follows its row by identity: a unique key column the backend picks, else the whole
  * row's values (results.identify), hashed by collation, so it stays on its row through sorting and re-runs. Rows are found in the backend
  * (results.findRows) for the handle each grid shows; the grid draws them from theme colours (GridView.setHighlights).

@@ -46,7 +46,7 @@ internal static class TransposedTextChecks
     /// <summary>The rows a transposed grid draws are written, and the rest counted, for a save, a whole copy and blocks.</summary>
     private static async Task CapAsync(Action<bool, string> check, string folder)
     {
-        check(Cap == 4095 && ResultTransposer.MaxRows == Cap && ViewSorter.MaxKeepRows == Cap, "transposed text writes at most the 4,095 rows a transposed grid draws");
+        check(Cap == 4095 && ResultTextWriter.MaxTransposedRows == Cap && ViewSorter.MaxKeepRows == Cap, "transposed text writes at most the 4,095 rows a transposed grid draws");
         var store = new ResultStore(1L << 30, 1L << 29);
         var jobs = new ResultJobs(store);
         var set = TextChecks.Synthetic(store, "W1", 5000);

@@ -2,7 +2,7 @@
 // from main through the results port, validates and caches them (decodePage), and answers the UI's windows and cells
 // with display text decoded only for the cells asked for. It also relays live subscriptions between the page and main
 // without decoding anything, and grants each live event's bytes back only once the page says it applied the event.
-import type { BackendStatus, ResultsCloseResult, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsTransposeResult, ResultsViewCloseResult, ResultsViewResult, WireKind } from '../../../shared/contracts'
+import type { BackendStatus, ResultsCloseResult, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult, WireKind } from '../../../shared/contracts'
 import type { PortEndResult, PortMessage, PortRequest } from '../../../shared/ipc/port-messages'
 import { decodePage, pageMemoryBytes, PageFormatError, type PageView } from '../../../shared/ipc/wire/pages'
 import { CELL_ERROR, CELL_NULL, cellFlags, cellSlice, cellText, displayText, runSlice, textRun, type TextRun } from '../../../shared/ipc/wire/cells'
@@ -466,12 +466,6 @@ export class ResultsWorkerCore {
         t: 'pivot', rid, generation, resultId, rows: [...body.rows], ...(body.column === undefined ? {} : { column: body.column }),
         values: body.values.map(value => value.column === undefined ? { aggregate: 'count' as const } : { aggregate: value.aggregate, column: value.column }), ...viewId
       })
-    } else if (body.method === 'transpose') {
-      this.diffs.set(rid, { generation, cancelled: false, cancelledText: 'The transpose was cancelled.' })
-      this.send({
-        t: 'transpose', rid, generation, resultId, ...viewId, ...(body.rows === undefined ? {} : { rows: body.rows.map(([first, count]) => [first, count] as [number, number]) }),
-        ...(body.headerColumn === undefined ? {} : { headerColumn: body.headerColumn })
-      })
     } else {
       this.diffs.set(rid, { generation, cancelled: false, cancelledText: 'The comparison was cancelled.' })
       this.send({ t: 'diff', rid, generation, resultId, right: body.right, exact: body.exact, context: body.context })
@@ -691,10 +685,10 @@ export class ResultsWorkerCore {
       if (diff?.cancelled) {
         const close = this.allocate()
         this.orphanCloses.add(close)
-        this.send({ t: 'close', rid: close, generation: diff.generation, resultIds: [(result as ResultsDiffResult | ResultsPivotResult | ResultsTransposeResult).descriptor.resultId] })
+        this.send({ t: 'close', rid: close, generation: diff.generation, resultIds: [(result as ResultsDiffResult | ResultsPivotResult).descriptor.resultId] })
         return this.error(identity, 'CANCELLED', diff.cancelledText)
       }
-      this.post({ type: 'identity', id: identity, result: result as ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsDiffResult | ResultsPivotResult | ResultsTransposeResult })
+      this.post({ type: 'identity', id: identity, result: result as ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsDiffResult | ResultsPivotResult })
       return
     }
     const sizes = this.sizes.get(rid)

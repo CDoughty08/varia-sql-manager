@@ -2,7 +2,7 @@ using System.Globalization;
 
 namespace Varia.Backend.Results;
 
-/// <summary>Distinct column names for a derived result (a pivot, a transpose), so no two headers match (ignoring case) and a
+/// <summary>Distinct column names for a derived result (a pivot), so no two headers match (ignoring case) and a
 /// JSON save has no repeated key.</summary>
 internal static class ColumnNames
 {
@@ -22,9 +22,6 @@ internal static class ColumnNames
             columns[i] = columns[i] with { Name = Numbered(name, n) };
         }
     }
-
-    /// <summary>Distinct names keeping the columns' order: earlier columns keep theirs.</summary>
-    public static void Unique(List<ResultColumn> columns) => Unique(columns, Enumerable.Range(0, columns.Count));
 
     private static string Numbered(string name, int n) => name + " (" + n.ToString(CultureInfo.InvariantCulture) + ")";
 }

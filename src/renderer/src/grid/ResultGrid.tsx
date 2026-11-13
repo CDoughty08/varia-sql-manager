@@ -8,7 +8,6 @@ import { resultsFilterSource } from '../results/ColumnFilterPopover'
 import { compareText } from '../results/CompareService'
 import { highlightText } from '../results/HighlightsService'
 import { pivotStrip } from '../results/pivot'
-import { transposeStrip } from '../results/TransposeService'
 import { formatBytes, formatCount } from '../results/status'
 import GridShell, { GridErrorBoundary, instanceKey, type GridFunnels, type GridShellApi, type GridSpec } from './GridShell'
 import type { GridView } from './GridView'
@@ -50,15 +49,14 @@ const keysOf = (sort: GridSort | undefined) => (sort?.keys.map(key => `${key.col
 
 /**
  * A query's result set in the results grid (GridShell): the set's handle and its sorted views, ResultsService's sort and
- * filters for the header, and the strips (truncation, highlights, compare, pivot, transpose). A live view mounts the same
+ * filters for the header, and the strips (truncation, highlights, compare, pivot, the transposed cap). A live view mounts the same
  * shell with its own source (LiveGridPane).
  */
 function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, onWide }: ResultGridProps) {
-  const { results, commands, gridStats, panes, settings, resultsSearch, highlights, compare, pivot, transpose } = useWorkbench()
+  const { results, commands, gridStats, panes, settings, resultsSearch, highlights, compare, pivot } = useWorkbench()
   const marked = useSyncExternalStore(highlights.subscribe, () => highlights.getSnapshot()[tabId]?.get(entry.key))
   const compared = useSyncExternalStore(compare.subscribe, () => compare.getSnapshot().get(setKey(entry.descriptor)))
   const pivoted = useSyncExternalStore(pivot.subscribe, () => pivot.getSnapshot().info.get(setKey(entry.descriptor)))
-  const transposed = useSyncExternalStore(transpose.subscribe, () => transpose.getSnapshot().get(setKey(entry.descriptor)))
   const values = useServiceSnapshot(settings).values
   const showTypes = values['queryResults.grid.showColumnTypes'], rowSize = values['queryResults.grid.rowSize']
   const viewRef = useRef<GridView | undefined>(undefined), apiRef = useRef<GridShellApi | undefined>(undefined)
@@ -159,7 +157,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, o
   const onApi = useCallback((api: GridShellApi | undefined) => { apiRef.current = api }, [])
   const lost = snapshot.state === 'lost'
   const truncation = truncationText({ truncated: snapshot.truncated, rowsStored: snapshot.rowsStored, rowsRead: snapshot.rowsRead, budget })
-  const highlightNote = !lost && snapshot.state === 'complete' ? compared ? compareText(compared) : pivoted ? pivotStrip(pivoted, highlightText(marked)) : transposed ? transposeStrip(transposed, highlightText(marked)) : highlightText(marked) : undefined
+  const highlightNote = !lost && snapshot.state === 'complete' ? compared ? compareText(compared) : pivoted ? pivotStrip(pivoted, highlightText(marked)) : highlightText(marked) : undefined
   // Transposed, the first rows of the view (the sorted and filtered one, when the grid shows one) are drawn as columns:
   // past them the strip says so first, since no scrolling reaches the rest.
   const shownRows = useSyncExternalStore((target ?? entry.handle).subscribe, () => (target ?? entry.handle).getSnapshot().rowsAvailable)
