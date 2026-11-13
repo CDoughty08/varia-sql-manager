@@ -107,7 +107,15 @@ export function rememberedProfile(profiles: readonly ConnectionProfile[], savedI
 /** The fourth argument of `varia:request`, for `connections.connect` and `.databases` only. `requestId` is what the
  *  dialog's Stop cancels the request by (varia:connections-cancel). `setsEnvironment` says the user set the form's
  *  Environment (or cleared it); without it a connect that carries no label keeps the one its entry has. */
-export const connectContextSchema = z.object({ profileId: z.uuid().optional(), remember: z.boolean().optional(), requestId: z.uuid().optional(), setsEnvironment: z.boolean().optional() }).strict()
+// These inline shapes avoid a runtime cycle: connection-targets itself builds its allowlist from this module.
+const contextCredential = z.object({ profileId: z.uuid(), revision: z.uuid() }).strict()
+const contextPrincipal = z.object({ provider: z.literal('sqlServer'), authentication: z.enum(authenticationModes), id: z.string().min(1).max(256).refine(value => !!value.trim() && !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value)) }).strict()
+export const connectContextSchema = z.object({
+  profileId: z.uuid().optional(), remember: z.boolean().optional(), requestId: z.uuid().optional(), setsEnvironment: z.boolean().optional(),
+  targetId: z.uuid().optional(),
+  mode: z.enum(['interactive', 'background']).optional(), credentialPolicy: z.enum(['preserve', 'remember', 'forget']).optional(),
+  credential: contextCredential.optional(), expectedPrincipal: contextPrincipal.optional(), credentialIntent: z.enum(['preserve', 'update-credentials']).optional()
+}).strict().refine(value => value.mode !== 'background' || ((!value.credentialPolicy || value.credentialPolicy === 'preserve') && value.remember === undefined && value.credentialIntent !== 'update-credentials'), 'Background connections preserve credentials.')
 export type ConnectContext = z.infer<typeof connectContextSchema>
 /** The library with the ids of the entries that have a remembered password; never the password or its ciphertext. */
 export interface ConnectionLibraryView { library: ConnectionLibrary; savedPasswords: string[] }

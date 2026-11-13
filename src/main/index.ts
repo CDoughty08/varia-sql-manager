@@ -31,6 +31,7 @@ import { legacyCodePage } from './text-encoding'
 import { LayoutStore } from './layout-store'
 import { ConnectionStore } from './connection-store'
 import { SavedPasswordStore } from './saved-passwords'
+import { ConnectionAuthenticationGuard } from './connection-authentication'
 import { lockedCipher, safeStorageCipher, testCipher } from './secret-cipher'
 import { prepare as prepareConnection, settle as settleConnection, type Settled } from './connection-requests'
 import { connectionLibrary } from './connection-library'
@@ -42,7 +43,7 @@ import { ShortcutStore, shortcutHandlers } from './shortcut-store'
 import { effectiveRules } from '../shared/commands/effective'
 import { toPlatform } from '../shared/commands/keybindings'
 import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
-import { encodeSession, SessionStore, sessionWriteSchema, type SessionInput, type SessionRecord, type SessionRecordDocument } from './session-store'
+import { encodeReloadSession, SessionStore, sessionWriteSchema, type SessionInput, type SessionRecord, type SessionRecordDocument } from './session-store'
 import { sessionLimits, type ReloadPins, type RestoredDocument, type RestoredSession, type SessionWrite } from '../shared/files/session'
 import { remapEditorGroups } from '../shared/editor-groups'
 import { lossDetails } from '../shared/files/recovery'
@@ -125,8 +126,9 @@ type SessionCheckpoint = { generation: number } & (
   { kind: 'reload'; record: SessionRecord; sourceGeneration: number; recoveryIds: readonly (string | null)[] }
 )
 let sessionCheckpoint: SessionCheckpoint | undefined
+const connectionAuthentication = new ConnectionAuthenticationGuard()
 const reloadRequest = z.object({
-  role: z.literal('reload'), session: sessionWriteSchema.refine(value => value.documents.length > 0 && value.documents.every(tab => tab.pinned)),
+  role: z.literal('reload'), session: sessionWriteSchema,
   recoveryIds: z.array(recoveryTakeSchema.shape.id.nullable()).max(sessionLimits.documents)
 }).strict().refine(value => value.recoveryIds.length === value.session.documents.length)
 let closeApproved = false
@@ -275,7 +277,7 @@ function resetRendererState({ relaunch = true, replacePage = false } = {}): void
   reloadRefresh = 'waiting'
   rendererGeneration++
   const checkpoint = sessionCheckpoint
-  sessionCheckpoint = replacePage && checkpoint && (checkpoint.kind === 'disk' || checkpoint.record.documents.length)
+  sessionCheckpoint = replacePage && checkpoint && (checkpoint.kind === 'disk' || checkpoint.record.documents.length || checkpoint.record.workspace?.targets.length)
     ? { ...checkpoint, generation: rendererGeneration } : undefined
   longRuns = noLongRuns
   // A popout's content belongs to the page that opened it.
@@ -365,14 +367,14 @@ function sessionInput(request: SessionWrite): SessionInput {
   const documents = request.documents.map(({ fileId, ...document }) => ({
     ...document, ...fileId ? files.sessionFile(fileId) : undefined
   }))
-  return { documents, activeIndex: request.activeIndex, ...request.groups ? { groups: request.groups } : {} }
+  return { documents, activeIndex: request.activeIndex, ...request.groups ? { groups: request.groups } : {}, ...request.workspace ? { workspace: connectionAuthentication.project(request.workspace) } : {} }
 }
 
 function reloadCheckpoint(pins?: ReloadPins): Extract<SessionCheckpoint, { kind: 'reload' }> {
   const session = pins?.session ?? { documents: [], activeIndex: -1 }
   return {
     kind: 'reload', generation: rendererGeneration + 1, sourceGeneration: rendererGeneration,
-    record: encodeSession(sessionInput(session)).record, recoveryIds: pins?.recoveryIds ?? []
+    ...encodeReloadSession(sessionInput(session), pins?.recoveryIds ?? [])
   }
 }
 
@@ -612,8 +614,9 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
     const generation = rendererGeneration
     const checkpoint = sessionCheckpoint?.generation === generation + 1 ? sessionCheckpoint : undefined
     const keepsPins = checkpoint?.kind === 'reload' && checkpoint.record.documents.length > 0
+    const keepsQueries = checkpoint?.kind === 'reload' && checkpoint.record.documents.some(tab => !tab.pinned)
     const abandon = () => { if (sessionCheckpoint === checkpoint) sessionCheckpoint = undefined }
-    void oneDialog(signal => window.isDestroyed() ? Promise.resolve({ response: 1 }) : dialog.showMessageBox(window, { type: 'warning', title: 'Reload workbench', message: 'Reload Varia SQL Manager?', detail: reloadDetail(longRuns, lossDetailsFor(pageGeneration, keepsPins ? 'pins' : undefined).reload), buttons: ['Reload', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal }),
+    void oneDialog(signal => window.isDestroyed() ? Promise.resolve({ response: 1 }) : dialog.showMessageBox(window, { type: 'warning', title: 'Reload workbench', message: 'Reload Varia SQL Manager?', detail: reloadDetail(longRuns, lossDetailsFor(pageGeneration, keepsQueries ? 'session' : keepsPins ? 'pins' : undefined).reload), buttons: ['Reload', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal }),
       { response: 1 }, true).then(({ response }) => {
       if (response !== 0 || window.isDestroyed() || generation !== rendererGeneration) { abandon(); return }
       reloadApproved = true
@@ -644,7 +647,7 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
     // What this process restored is in no other copy until a close keeps the tabs again (AutoRecover waits for its
     // interval), so the replacement page reopens previous.json as the next process would.
     sessionTaken = false
-    const restores = sessionCheckpoint?.kind === 'reload' ? 'pins' : sessionCheckpoint ? 'session' : undefined
+    const restores = sessionCheckpoint?.kind === 'reload' && sessionCheckpoint.record.documents.every(tab => tab.pinned) ? 'pins' : sessionCheckpoint ? 'session' : undefined
     void oneDialog(() => window.isDestroyed() ? Promise.resolve({ response: -1 }) : dialog.showMessageBox(window, { type: 'error', title: 'Workbench stopped', message: 'The workbench stopped unexpectedly.', detail: lossDetailsFor(lostPage, restores).stopped, buttons: ['Reload', 'Close'], defaultId: 0, cancelId: 1, noLink: true }),
       { response: -1 }).then(({ response }) => {
       if (window.isDestroyed()) return
@@ -924,10 +927,10 @@ app.whenReady().then(async () => {
     if (!main) return
     if (role === 'reload' && sessionCheckpoint) {
       if (sessionCheckpoint.generation === rendererGeneration + 1) return
-      throw new Error(sessionCheckpoint.kind === 'reload' ? 'Wait for the pinned tabs to reopen before reloading.' : 'Wait for the saved tabs to reopen before reloading.')
+      throw new Error('Wait for the saved tabs to reopen before reloading.')
     }
     if (request || (role === 'reload' && hotExitAvailable)) {
-      if (!hotExitAvailable || pageGeneration !== rendererGeneration) throw new Error('The pinned tabs cannot be kept by this page.')
+      if (!hotExitAvailable || pageGeneration !== rendererGeneration) throw new Error('The queries cannot be kept by this page.')
       sessionCheckpoint = reloadCheckpoint(request)
       reloadRefresh = 'waiting'
     }
@@ -942,7 +945,7 @@ app.whenReady().then(async () => {
   ipcMain.on('varia:reload-pins-pending', event => { event.returnValue = trusted(event) && pendingReload() })
   ipcMain.on('varia:reload-pins-refresh', (event, value: unknown) => {
     if (!trusted(event) || !pendingReload()) {
-      event.returnValue = { ok: false, error: 'The pinned tabs cannot be kept by this page.' }
+      event.returnValue = { ok: false, error: 'The queries cannot be kept by this page.' }
       return
     }
     try {
@@ -951,7 +954,7 @@ app.whenReady().then(async () => {
       event.returnValue = { ok: true, value: undefined }
     } catch (error) {
       reloadRefresh = 'failed'
-      event.returnValue = failure(error, 'The pinned tabs could not be kept.')
+      event.returnValue = failure(error, 'The queries could not be kept.')
     }
   })
   handle('varia:context-menu', value => { const target = activeWindow(); if (!target) throw new Error('The window is unavailable.'); return contextMenus.show(value, target.window) })
@@ -963,7 +966,8 @@ app.whenReady().then(async () => {
     }
     try {
       const validated = validateRequest(method, params)
-      const prepared = await prepareConnection(method, validated, context, { savedPasswords })
+      const prepared = await prepareConnection(method, validated, context, { savedPasswords, authentication: connectionAuthentication })
+      try {
       // Only main creates the compressed wire form; the renderer cannot supply compressed data or an encoding.
       if (method === 'plans.parse') prepared.params = await preparePlan((validated as { xml: string }).xml)
       // A script's events reach the results worker; its results become readable by this renderer.
@@ -991,10 +995,11 @@ app.whenReady().then(async () => {
         outcome = { ok: true, value: result }
       } catch (error) { outcome = { ok: false, error } }
       // History and remembered passwords for the connect methods; other methods pass through.
-      outcome = await settleConnection(prepared, outcome, { savedPasswords, connections: connectionStore })
-      if (!outcome.ok) return { ...failure(outcome.error, 'Backend request failed.'), ...(outcome.passwordForgotten ? { passwordForgotten: true as const } : {}) }
+      outcome = await settleConnection(prepared, outcome, { savedPasswords, authentication: connectionAuthentication, connections: connectionStore, disconnect: connectionId => backend.request('connections.disconnect', { connectionId }) })
+      if (!outcome.ok) return { ...failure(outcome.error, 'Backend request failed.'), ...(outcome.passwordForgotten ? { passwordForgotten: true as const } : {}), ...(outcome.credentialRejected ? { credentialRejected: true as const } : {}) }
       if (queryId !== undefined) results.querySummary(result as QueryResult)
       return { ok: true, value: result }
+      } finally { prepared.release?.() }
     } catch (error) { return failure(error, 'Backend request failed.') }
   })
   handle('varia:explorer-cancel', value => ({ cancelled: explorerRequests.cancel(explorerCancelParamsSchema.parse(value).requestIds) }))
@@ -1093,6 +1098,10 @@ app.whenReady().then(async () => {
       if (sessionCheckpoint?.record === checkpoint.record) sessionCheckpoint = undefined
       throw error
     }
+    if (record?.workspace) {
+      if (checkpoint.kind === 'disk') connectionAuthentication.restore(record.workspace)
+      record = { ...record, workspace: connectionAuthentication.project(record.workspace) }
+    }
     const documents: RestoredDocument[] = [], problems: string[] = [], places = new Map<number, number>()
     let activeIndex = -1
     const targets = files.targets()
@@ -1109,7 +1118,7 @@ app.whenReady().then(async () => {
     }
     // The editor groups follow the tabs that reopened; a group whose files are all gone goes.
     const groups = record?.groups ? remapEditorGroups(record.groups, index => places.get(index)) : undefined
-    return { documents, activeIndex, ...groups ? { groups } : {}, problems: problems.slice(0, 32), restoreGeneration: generation }
+    return { documents, activeIndex, ...groups ? { groups } : {}, ...record?.workspace ? { workspace: record.workspace } : {}, problems: problems.slice(0, 32), restoreGeneration: generation }
   })
   handle('varia:session-restored', value => {
     const generation = z.int().parse(value)

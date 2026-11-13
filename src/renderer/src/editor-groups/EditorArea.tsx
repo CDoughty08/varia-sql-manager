@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 import { DockviewReact, themeDark, themeLight, type DockviewApi, type DockviewGroupPanel, type DockviewReadyEvent, type FloatingGroupDragContext, type IDockviewHeaderActionsProps, type IDockviewPanel, type IDockviewPanelHeaderProps, type IDockviewPanelProps, type IWatermarkPanelProps, type SerializedDockview } from 'dockview-react'
 import { captureEditorGroups, editorGroupLimits, restoreEditorGroups, type EditorGroupsLayout, type EditorTabRows } from '../../../shared/editor-groups'
 import { environmentTag } from '../../../shared/environments'
+import { queryConnectionPresentation } from '../query-connection'
 import { isSsisDocumentKind } from '../../../shared/ssis/catalog.ts'
 import type { ThemeType } from '../../../shared/theme/types'
 import { useServiceSelector, useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
@@ -151,9 +152,12 @@ function DocumentTab({ api, containerApi }: IDockviewPanelHeaderProps) {
   const query = useServiceSelector(workbench.queries, snapshot => snapshot[id]), running = !!query?.running
   const renaming = useServiceSelector(workbench.tabRename, snapshot => snapshot.id === id)
   const connections = useServiceSnapshot(workbench.connections)
+  const rememberedTargets = useServiceSnapshot(workbench.targets)
   // Re-renders when the theme changes, which the accent relies on.
   useServiceSnapshot(workbench.theme)
-  const connection = connections.find(value => value.id === tab?.connectionId), environment = connection?.options.environment
+  const connection = connections.find(value => value.id === tab?.connectionId)
+  const presentation = queryConnectionPresentation(tab ?? {}, connection, rememberedTargets.find(target => target.id === tab?.targetId))
+  const environment = presentation.environment
   const element = useRef<HTMLDivElement | null>(null)
   // Selected in its group: the group shows it.
   const [selected, setSelected] = useState(api.isVisible)
@@ -163,10 +167,10 @@ function DocumentTab({ api, containerApi }: IDockviewPanelHeaderProps) {
   // Dockview's tab element is the tab (role, name, selection, roving focus): F2 renames while it has focus, and screen
   // readers hear its environment.
   // A query's live SQL session shows after its name, and screen readers hear it with the tab's environment and pin.
-  const spid = tab && isQueryDocument(tab) ? liveQuerySession(query, connection)?.spid : undefined
+  const spid = tab && isQueryDocument(tab) && !presentation.disconnected ? liveQuerySession(query, connection)?.spid : undefined
   const session = spid === undefined ? 'No live SQL session' : `SQL session ID ${spid}`
-  const description = [environmentTag(environment)?.description, tab?.pinned && 'Pinned', tab?.file?.readOnly && 'Read-only', running && 'Executing', spid !== undefined && session].filter(Boolean).join('. ') || undefined
-  const tooltip = tab ? [tabTooltip(tab), environmentTag(environment)?.description, running && 'Executing'].filter(Boolean).join('\n') : ''
+  const description = [presentation.disconnected && presentation.server && presentation.label, environmentTag(environment)?.description, tab?.pinned && 'Pinned', tab?.file?.readOnly && 'Read-only', running && 'Executing', spid !== undefined && session].filter(Boolean).join('. ') || undefined
+  const tooltip = tab ? [tabTooltip(tab), presentation.disconnected && presentation.server && presentation.label, environmentTag(environment)?.description, running && 'Executing'].filter(Boolean).join('\n') : ''
   useEffect(() => {
     const update = () => {
       const host = element.current?.closest<HTMLElement>('.dv-tab')
@@ -215,9 +219,10 @@ function DocumentTab({ api, containerApi }: IDockviewPanelHeaderProps) {
   }, [])
   if (!tab) return null
   const kind = kindInfo[documentKind(tab)], pin = `${tab.pinned ? 'Unpin' : 'Pin'} ${tab.name}`
-  const sid = isQueryDocument(tab) && <span className="tab-sid" title={session} aria-hidden="true">{spid === undefined ? '—' : `SID ${spid}`}</span>
+  const rememberedServer = isQueryDocument(tab) && presentation.disconnected ? presentation.server : undefined
+  const sid = isQueryDocument(tab) && <span className="tab-sid" title={session} aria-hidden="true">{rememberedServer ? 'Disconnected' : spid === undefined ? '—' : `SID ${spid}`}</span>
   const metadata = sid || environmentTag(environment)
-  return <div className={selected ? 'query-tab active' : 'query-tab'} ref={ref} data-tab-id={id} data-dirty={tab.dirty || undefined} data-pinned={tab.pinned || undefined} style={{ borderTopColor: workbench.theme.accent(connection?.color) }}
+  return <div className={selected ? 'query-tab active' : 'query-tab'} ref={ref} data-tab-id={id} data-dirty={tab.dirty || undefined} data-pinned={tab.pinned || undefined} style={{ borderTopColor: workbench.theme.accent(presentation.color) }}
     onDoubleClick={event => { if (workbench.gestures.matches('documentTabs.rename', event) && !(event.target as Element).closest('.tab-close, .tab-pin')) workbench.tabRename.start(id) }}>
     <div className={renaming ? 'tab-select tab-renaming' : 'tab-select'}>
       <Icon name={kind.icon} className="tab-icon" label={kind.label} />
@@ -225,7 +230,7 @@ function DocumentTab({ api, containerApi }: IDockviewPanelHeaderProps) {
         <div className="tab-title">{renaming ? <TabRenameBox tabId={id} name={tab.name} service={workbench.tabRename} /> : <>
           <span className="tab-name">{tab.name}</span>{tab.file?.readOnly && <Icon name="lock" className="tab-readonly" label="Read-only" />}{running && <Icon name="loading" spin className="tab-running" label="Executing" />}
         </>}</div>
-        {metadata && <div className="tab-metadata"><EnvironmentTag environment={environment} place="tab" />{sid}</div>}
+        {metadata && <div className="tab-metadata"><EnvironmentTag environment={environment} place="tab" />{rememberedServer && <span className="tab-remembered-server" aria-hidden="true">{rememberedServer}</span>}{sid}</div>}
       </div>
       {tab.dirty && <span className="dirty-dot" role="img" aria-label="Unsaved changes" />}
     </div>

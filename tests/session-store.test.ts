@@ -1,11 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { SessionStore, sessionCapMessage, sessionWriteSchema, type SessionInput } from '../src/main/session-store'
+import { encodeReloadSession, SessionStore, sessionCapMessage, sessionWriteSchema, type SessionInput } from '../src/main/session-store'
+import * as jsonFile from '../src/main/json-file'
 import { maxSqlFileBytes } from '../src/main/sql-files'
 import { saveDefaultPath } from '../src/main/file-names'
 import { cleanTabName, sessionLimits, tabNameChars } from '../src/shared/files/session'
+import { connectionDefaults } from '../src/shared/connections'
+import { connectionWorkspaceSchema } from '../src/shared/connection-targets'
 
 let directory: string, folder: string
 beforeEach(async () => {
@@ -14,6 +17,7 @@ beforeEach(async () => {
   folder = join(directory, 'Session')
 })
 afterEach(async () => {
+  vi.restoreAllMocks()
   expect(directory.startsWith(resolve('artifacts') + sep)).toBe(true)
   await rm(directory, { recursive: true, force: true })
 })
@@ -30,6 +34,120 @@ const tabs: SessionInput = {
 }
 
 describe('the hot exit session store', () => {
+  it('remaps reload recovery copies when main cannot reopen a preceding unpinned file', () => {
+    const checkpoint = encodeReloadSession({ activeIndex: 1, documents: [
+      { name: 'gone.sql', kind: 'sql', eol: 'lf', dirty: false },
+      { name: 'kept.sql', kind: 'sql', eol: 'lf', dirty: true, text: 'SELECT fresh' }
+    ] }, ['gone-copy', 'kept-copy'])
+    expect(checkpoint.record.documents.map(document => document.name)).toEqual(['kept.sql'])
+    expect(checkpoint.record.activeIndex).toBe(0)
+    expect(checkpoint.recoveryIds).toEqual(['kept-copy'])
+  })
+
+  it.each(['session.json', 'previous.json'])('preserves %s after a temporary read failure instead of replacing or clearing it', async file => {
+    const store = new SessionStore(folder)
+    await store.write(tabs, 1)
+    if (file === 'previous.json') await store.take(true)
+    const path = join(folder, file), before = await readFile(path, 'utf8'), originalRead = jsonFile.readJsonFile
+    const read = vi.spyOn(jsonFile, 'readJsonFile').mockImplementation((requested, limit) => requested === path
+      ? Promise.reject(new Error('Temporary access failure.')) : originalRead(requested, limit))
+    await expect(store.take(true)).rejects.toThrow('Temporary access failure.')
+    await expect(store.write({ activeIndex: 0, documents: [tabs.documents[1]] }, 2)).rejects.toThrow('Temporary access failure.')
+    await expect(store.clear()).rejects.toThrow('Temporary access failure.')
+    expect(await readFile(path, 'utf8')).toBe(before)
+    read.mockRestore()
+    expect((await store.take(true))?.documents).toEqual(tabs.documents)
+  })
+
+  it('preserves invalid bytes when quarantine is temporarily unavailable and retries safely', async () => {
+    await mkdir(folder, { recursive: true })
+    const path = join(folder, 'session.json'), before = '{ invalid but unrecovered'
+    await writeFile(path, before)
+    const store = new SessionStore(folder), quarantine = vi.spyOn(jsonFile, 'quarantine').mockRejectedValue(new Error('Temporary rename failure.'))
+    await expect(store.take(true)).rejects.toThrow('Temporary rename failure.')
+    await expect(store.write(tabs, 1)).rejects.toThrow('Temporary rename failure.')
+    await expect(store.clear()).rejects.toThrow('Temporary rename failure.')
+    expect(await readFile(path, 'utf8')).toBe(before)
+    quarantine.mockRestore()
+    await store.write(tabs, 2)
+    const preserved = (await files()).find(name => name.startsWith('session.json.invalid-'))!
+    expect(await readFile(join(folder, preserved), 'utf8')).toBe(before)
+    expect((await store.take(true))?.documents).toEqual(tabs.documents)
+  })
+
+  it('does not replace an unrecovered previous checkpoint while taking a newer valid session', async () => {
+    const store = new SessionStore(folder)
+    await store.write(tabs, 1)
+    const current = await readFile(join(folder, 'session.json'), 'utf8')
+    const previous = '{ unrecovered previous checkpoint'
+    await writeFile(join(folder, 'previous.json'), previous)
+    const quarantine = vi.spyOn(jsonFile, 'quarantine').mockRejectedValue(new Error('Temporary rename failure.'))
+    await expect(store.take(true)).rejects.toThrow('Temporary rename failure.')
+    expect(await readFile(join(folder, 'session.json'), 'utf8')).toBe(current)
+    expect(await readFile(join(folder, 'previous.json'), 'utf8')).toBe(previous)
+    quarantine.mockRestore()
+    expect((await store.take(true))?.documents).toEqual(tabs.documents)
+  })
+
+  const workspace = () => connectionWorkspaceSchema.parse({ version: 1, targets: [
+    { id: randomUUID(), options: { ...connectionDefaults('win32'), server: 'sql01' }, details: { displayName: 'Production', environment: 'Production', autoReconnect: 'off' }, inExplorer: true, resumeWanted: false },
+    { id: randomUUID(), options: { ...connectionDefaults('win32'), server: 'sql01' }, details: {}, inExplorer: false, resumeWanted: true }
+  ] })
+
+  it('round-trips distinct unresolved targets, per-query databases and deliberate query disconnects across repeated starts', async () => {
+    const targets = workspace(), [first, second] = targets.targets
+    const session: SessionInput = { activeIndex: 0, workspace: targets, documents: [
+      { ...tabs.documents[0], targetId: first.id, database: 'Sales', attachWanted: true },
+      { ...tabs.documents[1], targetId: first.id, database: 'Reports', attachWanted: false },
+      { ...tabs.documents[0], targetId: second.id, database: '', attachWanted: true }
+    ] }
+    await new SessionStore(folder).write(session, 1)
+    for (let start = 0; start < 3; start++) {
+      const store = new SessionStore(folder), restored = await store.take(true)
+      expect(restored).toMatchObject({ version: 2, ...session })
+      expect(restored?.workspace?.targets.map(target => target.id)).toEqual([first.id, second.id])
+      expect(JSON.stringify(restored)).not.toMatch(/connectionId|sessionId|lifecycle|password|accessToken/)
+      await store.write(restored!, start + 2)
+    }
+  })
+
+  it('keeps a target workspace when no query tabs are open', async () => {
+    const targets = workspace()
+    await new SessionStore(folder).write({ activeIndex: -1, documents: [], workspace: targets }, 1)
+    expect(await new SessionStore(folder).take(true)).toMatchObject({ documents: [], workspace: targets })
+  })
+
+  it('migrates version 1 as display hints without guessing a target or attachment intent', async () => {
+    await mkdir(folder, { recursive: true })
+    const legacy = { version: 1, savedAt: '2026-11-04T09:00:00.000Z', activeIndex: 0, documents: [tabs.documents[0]] }
+    await writeFile(join(folder, 'session.json'), JSON.stringify(legacy))
+    const restored = await new SessionStore(folder).take(true)
+    expect(restored).toEqual({ ...legacy, version: 2 })
+    expect(restored?.documents[0]).not.toHaveProperty('targetId')
+    expect(restored?.documents[0]).not.toHaveProperty('attachWanted')
+    expect(restored).not.toHaveProperty('workspace')
+  })
+
+  it('rejects dangling associations, partial attachment fields, value-document targets and secret workspace fields', async () => {
+    const targets = workspace(), document = { ...tabs.documents[0], targetId: targets.targets[0].id, attachWanted: true }
+    const session = { activeIndex: 0, workspace: targets, documents: [document] }
+    expect(sessionWriteSchema.safeParse(session).success).toBe(true)
+    for (const invalid of [
+      { ...session, workspace: undefined },
+      { ...session, documents: [{ ...document, targetId: randomUUID() }] },
+      { ...session, documents: [{ ...document, attachWanted: undefined }] },
+      { ...session, documents: [{ ...document, targetId: undefined }] },
+      { ...session, documents: [{ ...document, database: undefined }] },
+      { ...session, documents: [{ ...document, kind: 'xml' }] },
+      { ...session, workspace: { ...targets, targets: [{ ...targets.targets[0], options: { ...targets.targets[0].options, password: 'secret' } }] } },
+      { ...session, workspace: { ...targets, targets: [{ ...targets.targets[0], lifecycle: { state: 'connected', handle: { id: randomUUID(), generation: 1 } } }] } }
+    ]) expect(sessionWriteSchema.safeParse(invalid).success).toBe(false)
+    await mkdir(folder, { recursive: true })
+    await writeFile(join(folder, 'session.json'), JSON.stringify({ ...session, version: 2, savedAt: '2026-11-04T09:00:00.000Z', documents: [{ ...document, targetId: randomUUID() }] }))
+    expect(await new SessionStore(folder).take(true)).toBeUndefined()
+    expect((await files()).some(name => name.startsWith('session.json.invalid-'))).toBe(true)
+  })
+
   it('keeps a single group’s requested shelf heights through the disk session checkpoint', async () => {
     const groups = {
       root: { type: 'branch' as const, children: [{ type: 'leaf' as const, views: [0], active: 0, tabRows: { pinned: 3, unpinned: 80 } }] },
@@ -58,7 +176,7 @@ describe('the hot exit session store', () => {
     expect(store.keptBy(4)).toBe(false)
     expect(await files()).toEqual(['session.json'])
     const stored = JSON.parse(await readFile(join(folder, 'session.json'), 'utf8'))
-    expect(stored).toEqual({ version: 1, savedAt: '2026-11-04T09:00:00.000Z', activeIndex: 1, documents: tabs.documents })
+    expect(stored).toEqual({ version: 2, savedAt: '2026-11-04T09:00:00.000Z', activeIndex: 1, documents: tabs.documents })
     if (posix) {
       expect((await stat(folder)).mode & 0o777).toBe(0o700)
       expect((await stat(join(folder, 'session.json'))).mode & 0o777).toBe(0o600)

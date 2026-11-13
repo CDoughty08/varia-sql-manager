@@ -59,17 +59,18 @@ export function lossDetails(autoRecover: { readonly enabled: boolean; readonly m
   const stoppedConnections = 'Connections were closed and uncommitted transactions were rolled back.'
   const retrySession = restores === 'session' ? `Reload retries opening the saved tabs. ${stoppedConnections}` : undefined
   const connections = 'Connections are closed and uncommitted transactions are rolled back.'
+  const reloadSession = restores === 'session' ? `Kept queries reopen; tabs outside the session limits may be lost. ${connections}` : undefined
   if (!autoRecover.enabled || !autoRecover.saved) {
     return {
       stopped: retrySession ?? `${pinned}${keepsPins ? 'Unsaved changes in unpinned queries may have been lost.' : 'Unsaved queries were lost.'} ${stoppedConnections}`,
       unresponsive: 'The workbench is not responding. Unsaved queries will be lost.',
-      reload: `${pinned}${keepsPins ? 'Unsaved changes in unpinned queries will be lost.' : 'Unsaved queries will be lost.'} ${connections}`
+      reload: reloadSession ?? `${pinned}${keepsPins ? 'Unsaved changes in unpinned queries will be lost.' : 'Unsaved queries will be lost.'} ${connections}`
     }
   }
   const minutes = autoRecover.minutes === 1 ? 'minute' : `${autoRecover.minutes} minutes`
   return {
     stopped: retrySession ?? `${pinned}Queries saved by AutoRecover can be recovered after reloading; changes from the last ${minutes} may be lost. ${stoppedConnections}`,
     unresponsive: 'The workbench is not responding. Changes since the last AutoRecover save will be lost; the rest is offered when Varia SQL Manager starts again.',
-    reload: `${pinned}${keepsPins ? 'Changes in unpinned queries since the last AutoRecover save will be lost.' : 'Changes since the last AutoRecover save will be lost.'} ${connections}`
+    reload: reloadSession ?? `${pinned}${keepsPins ? 'Changes in unpinned queries since the last AutoRecover save will be lost.' : 'Changes since the last AutoRecover save will be lost.'} ${connections}`
   }
 }

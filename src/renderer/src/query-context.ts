@@ -1,5 +1,7 @@
 import type { DatabaseInfo } from '../../shared/contracts'
 import type { LiveConnection } from './services/connections'
+import type { ConnectionTarget } from '../../shared/connection-targets'
+import { queryConnectionPresentation } from './query-connection'
 
 /** Tooltip text with the command's key on this platform, such as "Open File… (Ctrl+O)". */
 export function withKey(text: string, label: { text: string } | undefined): string { return label ? `${text} (${label.text})` : text }
@@ -9,6 +11,9 @@ export const lostHint = "This query's connection was lost when the SQL backend r
 export interface QueryContextInput {
   /** The document's connection, absent while disconnected. */
   readonly connectionId: string | undefined
+  readonly targetId?: string
+  readonly target?: ConnectionTarget
+  readonly lastServer?: string
   readonly database: string
   readonly connections: readonly LiveConnection[]
   /** The databases listed for the document's connection, when it is live. */
@@ -33,20 +38,26 @@ export interface QueryContextModel {
   readonly databaseDisabled: boolean
   /** The connection's name as the lists show it, for tooltips: `name (server)` or the server. */
   readonly serverName: string | undefined
+  readonly serverValue: string
+  readonly environment?: string
+  readonly color?: string
 }
 
 export const serverLabel = (connection: Pick<LiveConnection, 'displayName' | 'server'>): string => connection.displayName ? `${connection.displayName} (${connection.server})` : connection.server
 
-export function queryContextModel({ connectionId, database, connections, databases, query, running, busy }: QueryContextInput): QueryContextModel {
+export function queryContextModel({ connectionId, targetId, target, lastServer, database, connections, databases, query, running, busy }: QueryContextInput): QueryContextModel {
   const connection = connectionId ? connections.find(value => value.id === connectionId) : undefined
-  const live = !!connection && !connection.lost
+  const presentation = queryConnectionPresentation({ targetId, lastServer }, connection, target)
+  const live = !presentation.disconnected
+  const serverValue = connection?.id ?? (presentation.server ? `remembered:${targetId ?? lastServer}` : '')
   const servers = [{ id: '', label: 'Disconnected', disabled: false }, ...connections.filter(value => !value.lost || value === connection)
-    .map(value => ({ id: value.id, label: `${serverLabel(value)}${value.lost ? ' (connection lost)' : ''}`, disabled: !!value.lost }))]
+    .map(value => ({ id: value.id, label: value === connection ? presentation.label : `${serverLabel(value)}${value.lost ? ' Disconnected' : ''}`, disabled: value === connection ? !live : !!value.lost }))]
+  if (!connection && presentation.server) servers.push({ id: serverValue, label: presentation.label, disabled: true })
   const listed = live ? databases.map(value => value.name) : []
   return {
     connection, live, servers, serverDisabled: !query || running || busy,
     databases: listed.includes(database) ? listed : [database, ...listed], database, databaseDisabled: !query || !live || running || busy,
-    serverName: connection && serverLabel(connection)
+    serverName: presentation.server ? presentation.label : undefined, serverValue, environment: presentation.environment, color: presentation.color
   }
 }
 

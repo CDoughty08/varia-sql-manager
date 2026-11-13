@@ -25,6 +25,7 @@ Varia is a cross-platform desktop workbench for Microsoft SQL Server. It combine
 - Profile a result's columns: the results toolbar's **Profile** (or **Column Profile** on the grid's menu) opens a panel with each column's NULLs, distinct values (exact up to 16,384, then estimated; equal under the column's collation), lowest and highest values, lengths in characters and bytes, and a histogram, computed in the backend over the rows the grid shows. **Row size** draws a bar behind each row number for the row's size (the sum of DATALENGTH over its columns); hover it for the bytes.
 - Use the Table Designer, Activity Monitor, live data views, and Integration Services Catalog tools.
 - Split query tabs into editor groups side by side or floating, as in VS Code, and keep them across restarts with hot exit.
+- Remember each query's exact connection target and database across hot exit and reload. Disconnected queries keep their server and environment labels; reconnecting opens fresh SQL sessions and never runs their buffers. See [connection restoration](docs/hot-exit.md#connections) and the [integration contract](docs/connections-persistence-integration.md).
 - Query tabs show the filename above their environment and live session ID, leaving short names readable without widening the tab.
 - Customize themes and workspace layouts, and access commands through the command palette.
 

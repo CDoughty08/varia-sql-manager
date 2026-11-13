@@ -288,6 +288,16 @@ internal static class EntraChecks
         try { await provider.AcquireTokenAsync(Parameters(SqlAuthenticationMethod.ActiveDirectoryDefault, id, timeout: 1)); }
         catch (EntraProviderException) { }
         check(watch.ElapsedMilliseconds < 8_000 && service.Attempts.Take(id) is EntraFailure { Message: EntraFailures.Messages.TokenTimedOut }, "a non-interactive type is bounded by the connect timeout");
+        // The background request's token reaches the provider even when the stored connect timeout is unlimited.
+        using (var background = new CancellationTokenSource())
+        {
+            background.Cancel();
+            using var scope = new EntraConnectScope(background.Token);
+            id = Guid.NewGuid();
+            try { await provider.AcquireTokenAsync(Parameters(SqlAuthenticationMethod.ActiveDirectoryDefault, id, timeout: 0)); }
+            catch (EntraProviderException) { }
+            check(service.Attempts.Take(id) is EntraFailure { Message: EntraFailures.Messages.TokenTimedOut }, "a background request cancels the provider inside an unlimited login");
+        }
         fake = new FakeSource { Other = (_, _, _) => throw new MsalServiceException("invalid_client", "AADSTS7000215: Invalid client secret provided.") };
         service.Source = fake;
         id = Guid.NewGuid();
@@ -535,6 +545,31 @@ internal static class EntraChecks
         // Connect and Load databases sign in through the browser when the login needs it, and Stop ends that wait.
         var waiting = new TaskCompletionSource();
         fake.Interactive = async (_, token) => { waiting.TrySetResult(); await Task.Delay(Timeout.Infinite, token); return Token("never"); };
+        service.OpenUser = (_, _, _) =>
+        {
+            opens++;
+            var id = Guid.NewGuid();
+            service.Entra.Attempts.Record(id, new InteractionRequired(Request()));
+            throw ProviderFailure(id);
+        };
+        var backgroundTimeout = 0;
+        service.OpenUser = (text, _, _) =>
+        {
+            backgroundTimeout = new SqlConnectionStringBuilder(text).ConnectTimeout;
+            var id = Guid.NewGuid();
+            service.Entra.Attempts.Record(id, new InteractionRequired(Request()));
+            throw ProviderFailure(id);
+        };
+        foreach (var run in new Func<Task>[] {
+            () => service.ConnectAsync(Options("entraMfa") with { NonInteractive = true, Advanced = new(ConnectTimeout: 0) }, CancellationToken.None),
+            () => service.DiscoverDatabasesAsync(Options("entraMfa") with { NonInteractive = true, Advanced = new(ConnectTimeout: 0) }, CancellationToken.None) })
+        {
+            fake.Calls.Clear();
+            RequestException? required = null;
+            try { await run(); } catch (RequestException error) { required = error; }
+            check(required is { Code: "AUTH_ENTRA" } && fake.Count("interactive") == 0 && backgroundTimeout == 15,
+                "background reconnect and database discovery never open a browser and cap an unlimited login at 15 seconds");
+        }
         service.OpenUser = (_, _, _) =>
         {
             opens++;

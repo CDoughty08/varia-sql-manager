@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ConnectionStore } from '../src/main/connection-store'
+import { ConnectionAuthenticationGuard } from '../src/main/connection-authentication'
 import { validateRequest } from '../src/main/validation'
 import { connectionDefaults, connectionKey, connectionLibrarySchema, connectionOptionsSchema, credentialBinding, savedConnection } from '../src/shared/connections'
 import type { ConnectionInfo, ConnectionOptions } from '../src/shared/contracts'
@@ -79,7 +80,7 @@ describe('environment in the connection options', () => {
   it('keeps a saved label when a connect does not carry one, unless the user set the form\'s Environment', async () => {
     const { path, store } = await tempStore()
     await store.save({ options: { ...base, environment: 'Production' }, favorite: true })
-    const deps: ConnectionRequestDeps = { connections: store, savedPasswords: { get: async () => undefined, set: async () => {}, forget: async () => {}, forgetCredentials: async () => {}, reconcile: async () => ({ ids: [] }) } }
+    const deps: ConnectionRequestDeps = { connections: store, authentication: new ConnectionAuthenticationGuard(), savedPasswords: { get: async () => undefined, getReferenced: async () => undefined, reference: async () => undefined, set: async () => {}, forget: async () => {}, forgetCredentials: async () => {}, forgetRejected: async () => {}, reconcile: async () => ({ ids: [] }) } }
     const connect = async (options: ConnectionOptions, context?: unknown) => {
       const info: ConnectionInfo = { id: crypto.randomUUID(), server: options.server, database: options.database, serverVersion: '17.0', generation: 1 }
       const settled = await settle(await prepare('connections.connect', validateRequest('connections.connect', options), context, deps), { ok: true, value: info }, deps)

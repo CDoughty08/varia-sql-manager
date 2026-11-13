@@ -19,9 +19,9 @@ default. While it is off, pinned tabs still reopen, and a close asks about unsav
   height with the saved layout.
 - The SID badge to the right of a query name shows its SQL Server session ID as soon as execution acquires a session.
   A dash means there is no known live session. Restored queries start disconnected.
-- View › Reload Window keeps pinned tabs and reopens them disconnected. Unpinned tabs follow the workbench's existing
-  reload and AutoRecover behavior. The checkpoint uses the pinned text as the page unloads, including edits made
-  while a reload is pending.
+- View › Reload Window uses the same tab eligibility as a normal close: all eligible text tabs while startup restore
+  is enabled, and only pinned tabs while it is disabled. Its checkpoint uses the text as the page unloads, including
+  edits made while a reload is pending. Queries reopen disconnected before eligible targets reconnect.
 - If the renderer crashes while reopening tabs at startup or after Reload Window, choosing Reload in the crash dialog
   retries the same checkpoint, including its unsaved text.
 
@@ -37,8 +37,13 @@ default. While it is off, pinned tabs still reopen, and a close asks about unsav
   whose file is gone reopens with its text, without the file.
 - A kept buffer with a file carries the disk fingerprint it was based on. With external-change detection enabled,
   saving asks before replacing newer disk contents. Older kept buffers without a fingerprint also ask before replacing an existing file.
-- The tab's name, the user's rename, its line ending, and for a connected query the server name and database.
-- Never results, connections, logins, passwords or connection strings.
+- The tab's name, the user's rename and its line ending. Each query keeps its exact connection target, its own
+  database and whether it wants to attach after that target reconnects. A query deliberately disconnected from its
+  target keeps that context without attaching automatically.
+- Connection targets keep their order, chosen name, color, environment, Explorer membership, sanitized connection
+  settings, expected account and reconnect intent. A remembered credential is an opaque reference with a revision;
+  changing a saved profile or password cannot silently redirect an older query.
+- Never results, live connections, SQL session IDs, transactions, access tokens, unremembered passwords or connection strings.
 - Table designers, Database Properties, monitors and other custom tabs are not kept; one with unsaved changes still
   asks. Unpinned tabs past the caps (64 tabs, 64 MB as written) are skipped, and those with unsaved changes still ask.
   If a pin cannot be kept, Varia leaves the window open and names the tab.
@@ -59,6 +64,14 @@ the tabs again or AutoRecover's interval comes round), and a later close then ke
 A reload of the page within one process otherwise reopens only a session written since (macOS: closing the window and
 opening a new one).
 
+Version 2 keeps the nonsecret connection workspace beside the text tabs, including when there are no tabs. Version 1
+sessions migrate with their server and database hints intact; the migration does not infer a target or account from
+a server name. Unknown fields, secrets, duplicate target IDs and query associations to missing targets are rejected
+and the file is quarantined. A failed or oversized write leaves the previous checkpoint available.
+Temporary read or quarantine failures preserve the original bytes and refuse a replacement or clear until the file
+can be read or safely quarantined. Reload checkpoints also keep each surviving tab's matching AutoRecover copy when
+an unavailable file is omitted.
+
 AutoRecover is unchanged: a hot-exit close counts as handling every query, so AutoRecover's copies are deleted and the
 next start shows no Recover dialog.
 
@@ -74,9 +87,15 @@ does not wait, so it is not held. `session-end` (the end can no longer wait) ask
 
 ## Connections
 
-Reopened tabs are disconnected; nothing auto-connects. A query remembers the server it was on (shown in its tooltip as
-"Last connected to …"); its first connection to that server (by name, case-insensitive) keeps its database. Connecting
-to another server uses that connection's database. Either way the memory is cleared.
+Reopened queries immediately show their remembered server and **Disconnected**, with their environment still visible.
+The connection workspace restores before the queries. Automatic reconnect uses the global setting and each target's
+override, and respects explicit Disconnect. It can restore a connection without running a query or opening browser
+sign-in. Missing credentials or a required sign-in leave the target available for an explicit reconnect.
+
+Only queries that wanted attachment to the exact successfully reconnected target attach. Each keeps its own database;
+an unavailable database needs an explicit choice and never silently falls back to another one. A new SQL session has
+none of the old temporary tables, SET state or transactions, so the existing session-restarted notice remains.
+Queries restored from older server-only sessions retain the server hint but need an explicit connection choice.
 
 ## Rename Tab
 

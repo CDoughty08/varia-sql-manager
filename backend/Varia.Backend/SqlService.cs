@@ -418,10 +418,15 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     internal async Task<ConnectionInfo> ConnectAsync(ConnectOptions options, CancellationToken token)
     {
+        using var background = CancellationTokenSource.CreateLinkedTokenSource(token);
+        if (options.NonInteractive) background.CancelAfter(EntraConnectScope.BackgroundLimit);
+        token = background.Token;
+        using var providerScope = new EntraConnectScope(token);
         if (!EntraModes.IsKnown(options.Authentication))
             throw new RequestException("INVALID_PARAMS", "Unsupported authentication mode.");
         entra.Refuse(options);
         var builder = ConnectBuilder(options);
+        if (options.NonInteractive) builder.ConnectTimeout = builder.ConnectTimeout == 0 ? 15 : Math.Min(builder.ConnectTimeout, 15);
         // For MFA without a user name, the connection string kept names the account its token is for.
         var (opened, connectionString) = await OpenForUserAsync(builder.ConnectionString, options, null, token);
         await using var connection = opened;
@@ -472,8 +477,13 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     internal async Task<List<DatabaseInfo>> DiscoverDatabasesAsync(ConnectOptions options, CancellationToken token)
     {
+        using var background = CancellationTokenSource.CreateLinkedTokenSource(token);
+        if (options.NonInteractive) background.CancelAfter(EntraConnectScope.BackgroundLimit);
+        token = background.Token;
+        using var providerScope = new EntraConnectScope(token);
         // Use the login's default database to discover choices, even if the typed database is stale.
         var builder = ConnectionSettings.Build(options with { Database = "", Advanced = (options.Advanced ?? new()) with { AttachDbFilename = "" } });
+        if (options.NonInteractive) builder.ConnectTimeout = builder.ConnectTimeout == 0 ? 15 : Math.Min(builder.ConnectTimeout, 15);
         builder.Pooling = false;
         entra.Refuse(options);
         // One budget for the opens and the read; an MFA sign-in in the browser between two opens has its own 3 minutes.
@@ -513,7 +523,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         {
             return await entra.OpenForUserAsync(connectionString, options.Server,
                 (text, cancel) => budget is null ? OpenUser(text, null, cancel) : budget.SpendAsync(remaining => OpenUser(text, remaining, cancel)),
-                static connection => connection.ClientConnectionId, token);
+                static connection => connection.ClientConnectionId, token, allowInteractive: !options.NonInteractive);
         }
         catch (Exception error) when (!token.IsCancellationRequested && error is not (RequestException or OperationCanceledException)
             && ConnectionFailures.Describe(error, options.Server, ConnectionFailures.UsesKerberos(options), KerberosProbe.Inspect) is { } failure)
