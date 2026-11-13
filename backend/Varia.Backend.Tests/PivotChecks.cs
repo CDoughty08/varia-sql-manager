@@ -280,18 +280,18 @@ internal static class PivotChecks
         var budget = tight.BeginQuery("tight");
         var set = tight.Open(budget, 0, 1, 1, "rows", [new("id", "int", "text")], [WireKind.Text])!;
         // Nearly full, not stopped: a stopped query answers BUDGET_STOPPED instead (Pressure).
-        for (var row = 0; row < 100_000 && tight.UsedBytes < 56 * 1024; row++)
+        for (var row = 0; row < 100_000 && Held.Bytes(tight) < 56 * 1024; row++)
         {
             if (set.BeginRow() is not { } builder) break;
             builder.AppendText(row.ToString(CultureInfo.InvariantCulture));
             if (!set.TryCommitRow()) break;
         }
         set.Complete();
-        var used = tight.UsedBytes;
+        var used = Held.Bytes(tight);
         string? refused;
         try { service.DispatchAsync("results.pivot", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, rows = new[] { 0 }, values = new[] { new { aggregate = "count" } } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); refused = null; }
         catch (RequestException error) { refused = error.Code; }
-        check(refused == "TOO_LARGE" && budget.Stopped == TruncationReason.None && tight.UsedBytes == used, "a pivot the budget has no room for answers TOO_LARGE and takes nothing: " + refused + " " + budget.Stopped);
+        check(refused == "TOO_LARGE" && budget.Stopped == TruncationReason.None && Held.Bytes(tight) == used, "a pivot the budget has no room for answers TOO_LARGE and takes nothing: " + refused + " " + budget.Stopped);
     }
 
     /// <summary>A cancelled pivot stops while it groups and while it writes.</summary>
@@ -325,11 +325,11 @@ internal static class PivotChecks
             catch (RequestException error) { return error.Code; }
             catch (JsonException) { return "INVALID_PARAMS"; }
         }
-        var before = store.UsedBytes;
+        var before = Held.Bytes(store);
         var pivot = Call<ResultsPivotResult>("results.pivot", new { resultId = set.ResultId, rows = new[] { 0 }, column = 1, values = new object[] { new { aggregate = "sum", column = 2 } } });
         var stored = store.Find(pivot.Descriptor.ResultId);
         check(SqlService.MethodNames.Contains("results.pivot") && pivot.Descriptor is { Kind: "pivot", State: "complete", RowsStored: 3 } && pivot is { Rows: 6, RowGroups: 3, ColumnGroups: 3, Approximate: false }
-            && stored is not null && ReferenceEquals(stored.Budget, set.Budget) && store.UsedBytes > before && string.Join(";", Text(stored)) == "NULL|NULL|NULL|2.00|2.00;East|NULL|10.75|4.25|15.00;West|NULL|1.00|NULL|1.00",
+            && stored is not null && ReferenceEquals(stored.Budget, set.Budget) && Held.Bytes(store) > before && string.Join(";", Text(stored)) == "NULL|NULL|NULL|2.00|2.00;East|NULL|10.75|4.25|15.00;West|NULL|1.00|NULL|1.00",
             "results.pivot stores the pivot as a complete result of the same query: " + (stored is null ? "" : string.Join(";", Text(stored))));
         var filtered = Call<ResultsViewResult>("results.view", new { resultId = set.ResultId, sort = Array.Empty<object>(), filters = new object[] { new { op = "in", column = 0, rows = new[] { 2 } } } });
         var viewed = Call<ResultsPivotResult>("results.pivot", new { resultId = set.ResultId, viewId = filtered.ViewId, rows = Array.Empty<int>(), values = new object[] { new { aggregate = "count" } } });
@@ -356,7 +356,7 @@ internal static class PivotChecks
         Call<ResultsCloseResult>("results.close", new { resultIds = new[] { viewed.Descriptor.ResultId } });
         check(store.Find(viewed.Descriptor.ResultId) is null, "results.close releases a pivot");
         store.BeginQuery(set.Budget.SessionId);
-        check(store.Find(pivot.Descriptor.ResultId) is null && store.UsedBytes <= before, "a pivot is released with its query's other results, and with it all it charged");
+        check(store.Find(pivot.Descriptor.ResultId) is null && Held.Bytes(store) <= before, "a pivot is released with its query's other results, and with it all it charged");
         // Only a query's rows or another pivot: a diff is refused.
         var diff = store.Open(set.Budget, 1, 1, 1, "diff", Sales, [.. Sales.Select(_ => WireKind.Text)])!;
         diff.Complete();
@@ -390,11 +390,11 @@ internal static class PivotChecks
         static object Total(ResultSetBuffer of) => new { resultId = of.ResultId, rows = Array.Empty<int>(), values = new object[] { new { aggregate = "count" } } };
         // 200 groups: the pivot's first page seals after 64 rows, with 136 still to store.
         var set = Source(store, [.. Enumerable.Range(0, 200).Select(i => new string?[] { i.ToString(CultureInfo.InvariantCulture) })], [new("g", "int", "text")]);
-        var used = store.UsedBytes;
+        var used = Held.Bytes(store);
         low = true;
         var pressed = Message(Grouped(set));
-        check(pressed == "TOO_LARGE: " + SqlService.LowMemory && set.Budget.Stopped == TruncationReason.None && store.UsedBytes == used,
-            $"a pivot cut short by low system memory is refused whole, saying the computer is low on memory, and leaves its query's budget open: {pressed} {set.Budget.Stopped} {store.UsedBytes - used}");
+        check(pressed == "TOO_LARGE: " + SqlService.LowMemory && set.Budget.Stopped == TruncationReason.None && Held.Bytes(store) == used,
+            $"a pivot cut short by low system memory is refused whole, saying the computer is low on memory, and leaves its query's budget open: {pressed} {set.Budget.Stopped} {Held.Bytes(store) - used}");
         var whole = Call<ResultsPivotResult>(Total(set));
         check(whole.Descriptor is { RowsStored: 1, Truncated: null, State: "complete" } && set.Budget.Stopped == TruncationReason.None,
             $"a pivot whose last page is sealed under low system memory is kept whole and not marked truncated: {whole.Descriptor.RowsStored} {whole.Descriptor.Truncated} {set.Budget.Stopped}");
@@ -416,12 +416,12 @@ internal static class PivotChecks
             "a pivot of a query that filled its result memory answers BUDGET_STOPPED and says to return fewer rows: " + filled);
         // The source is complete, but its query may still be reading later sets, and its tab may run again: one that
         // stops or goes while the pivot is written is the reason the pivot was not kept, not the memory left.
-        used = store.UsedBytes;
+        used = Held.Bytes(store);
         sealing = () => set.Budget.Stop(TruncationReason.GlobalBudget);
         var during = Message(Grouped(set));
         // Every query's results together filled the memory: closing other results is the advice, not fewer rows.
-        check(sealing is null && during == "BUDGET_STOPPED: The result memory filled while this query ran, so it can store nothing more. Close other results, then run the query again." && during == "BUDGET_STOPPED: " + SqlService.BudgetStoppedGlobal && store.UsedBytes == used,
-            $"a pivot whose query stops at the global budget while it is written answers BUDGET_STOPPED and says to close other results: {during} {store.UsedBytes - used}");
+        check(sealing is null && during == "BUDGET_STOPPED: The result memory filled while this query ran, so it can store nothing more. Close other results, then run the query again." && during == "BUDGET_STOPPED: " + SqlService.BudgetStoppedGlobal && Held.Bytes(store) == used,
+            $"a pivot whose query stops at the global budget while it is written answers BUDGET_STOPPED and says to close other results: {during} {Held.Bytes(store) - used}");
         var closing = Source(store, [.. Enumerable.Range(0, 200).Select(i => new string?[] { i.ToString(CultureInfo.InvariantCulture) })], [new("g", "int", "text")]);
         // As the tab running again does: the source and the pivot being written both go.
         sealing = () => store.ReleaseSession(closing.Budget.SessionId);
@@ -443,13 +443,13 @@ internal static class PivotChecks
             return (columns, wired);
         }
         var grouping = Wired();
-        used = store.UsedBytes;
+        used = Held.Bytes(store);
         grouping.Columns.OnRead = () => grouping.Set.Budget.Stop(TruncationReason.SystemMemory);
         var unopened = Message(Grouped(grouping.Set));
-        check(grouping.Columns.OnRead is null && unopened == "BUDGET_STOPPED: " + SqlService.BudgetStoppedLowMemory && store.UsedBytes == used,
-            $"a pivot whose query stops storing while it groups answers BUDGET_STOPPED and keeps nothing: {unopened} {store.UsedBytes - used}");
+        check(grouping.Columns.OnRead is null && unopened == "BUDGET_STOPPED: " + SqlService.BudgetStoppedLowMemory && Held.Bytes(store) == used,
+            $"a pivot whose query stops storing while it groups answers BUDGET_STOPPED and keeps nothing: {unopened} {Held.Bytes(store) - used}");
         var filling = Wired();
-        used = store.UsedBytes;
+        used = Held.Bytes(store);
         long taken = 0;
         filling.Columns.OnRead = () =>
         {
@@ -459,8 +459,8 @@ internal static class PivotChecks
         };
         var figures = Message(Grouped(filling.Set));
         store.Return(filling.Set.Budget, taken);
-        check(filling.Columns.OnRead is null && taken > 0 && figures == "BUDGET_STOPPED: " + SqlService.BudgetStoppedFull && store.UsedBytes == used,
-            $"a pivot refused memory for its figures because its query filled the budget answers BUDGET_STOPPED: {figures} {store.UsedBytes - used}");
+        check(filling.Columns.OnRead is null && taken > 0 && figures == "BUDGET_STOPPED: " + SqlService.BudgetStoppedFull && Held.Bytes(store) == used,
+            $"a pivot refused memory for its figures because its query filled the budget answers BUDGET_STOPPED: {figures} {Held.Bytes(store) - used}");
     }
 
     /// <summary>A pivot whose rows run out of the query's budget part-way is refused and released, never kept in part.</summary>
@@ -469,19 +469,20 @@ internal static class PivotChecks
         ResultColumn[] columns = [new("g", "int", "text"), new("t", "nvarchar(100)", "text")];
         var rows = Enumerable.Range(0, 20_000).Select(i => new string?[] { i.ToString(CultureInfo.InvariantCulture), new string('x', 90) + i.ToString(CultureInfo.InvariantCulture) }).ToArray();
         // The source's bytes, measured in a roomy store; the tight one leaves room for the grouping and about half the pivot.
-        var roomy = new ResultStore(1L << 30, 1L << 29);
+        // Measured raw: in the packed pass results.pivot unpacks its source before it reads it.
+        var roomy = new ResultStore(1L << 30, 1L << 29) { Packing = PagePacking.Off };
         Source(roomy, rows, columns);
-        var source = roomy.UsedBytes;
+        var source = Held.Bytes(roomy);
         var spec = new PivotSpec([0], -1, [new(PivotAggregate.Max, 1)]);
         var grouping = ResultPivoter.WorkingBytes(rows.Length, ResultPivoter.KeyColumns(spec)) + 4L * rows.Length;
         var store = new ResultStore(1L << 30, source + grouping + source / 2);
         using var service = new SqlService(store);
         var set = Source(store, rows, columns);
-        var used = store.UsedBytes;
+        var used = Held.Bytes(store);
         string? code = null;
         try { service.DispatchAsync("results.pivot", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, rows = new[] { 0 }, values = new object[] { new { aggregate = "max", column = 1 } } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); }
         catch (RequestException error) { code = error.Code; }
-        check(code == "TOO_LARGE" && store.UsedBytes == used, $"a pivot cut short by the budget is refused and releases what it stored: {code} {store.UsedBytes - used}");
+        check(code == "TOO_LARGE" && Held.Bytes(store) == used, $"a pivot cut short by the budget is refused and releases what it stored: {code} {Held.Bytes(store) - used}");
         // The refusal fails only that pivot: the query is not stopped, so a smaller one still fits.
         var small = service.DispatchAsync("results.pivot", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, rows = Array.Empty<int>(), values = new object[] { new { aggregate = "count" } } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult() as ResultsPivotResult;
         check(set.Budget.Stopped == TruncationReason.None && small is { RowGroups: 1 } && small.Descriptor.RowsStored == 1,

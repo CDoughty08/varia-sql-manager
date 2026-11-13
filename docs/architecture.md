@@ -123,9 +123,21 @@ being true.
   identity, diff, pivot, Copy and Save, plan pairing) reads a page's bytes only through `StoredPage.Body()`, which is
   `ResultSetBuffer.Body`, and pins its result while it reads (`ResultSetBuffer.Pin`, a count beside the leases): a release
   meanwhile ends reads at their next check, but frees the pages and their budget only when the last pin and lease end.
-  The store may keep a page in another form than it sealed, so nothing else touches `StoredPage.Stored`
-  (`tests/result-page-access.test.ts`), and the .NET checks refuse a read of an unpinned, unleased set
-  (`ResultSetBuffer.RequirePins`).
+  The store may keep a page packed (`PackedPage`: Zstandard level 2, a one-page window, `PageCodec`), so nothing else
+  touches `StoredPage.Stored` (`tests/result-page-access.test.ts`), and the .NET checks refuse a read of an unpinned,
+  unleased set (`ResultSetBuffer.RequirePins`). Packing is behind an internal switch, `ResultStore.Packing`, off in the
+  product until a policy decides which results to pack (docs/page-compression-findings.md); the checks' second pass
+  packs every complete result. `ResultSetBuffer.Pack` packs only a complete, unpinned, unleased result that is not a
+  live table, page by page, leaving raw a page that saves under a tenth; a packed page is charged its packed length plus
+  `PageOverhead` plus its sidecar, the saving goes back to the budgets at once and counts toward `CollectNow`'s next
+  collection but never toward a compacting one. Reads of a packed page unpack it into a per-result cache of six pages
+  (`CachePages`, charged as working memory whatever the budget); a view read unpacks the base pages behind its rows 64 at
+  a time on the workers (`BodiesTogether`, working memory reserved and returned, one at a time through the cache when
+  refused); an operation on the whole result (sort, filter, distinct values, profile, search, row identity, diff, pivot)
+  first unpacks it in place (`TryUnpackAll`, reserved as working memory; a refusal answers `TOO_LARGE` with the
+  operation's sentence). Copy and Save read page by page through the cache. `ResultStore.PackingSnapshot` holds the
+  counters (packed, logical and cached bytes; pages packed, kept raw and unpacked; cache hits; time), not yet in
+  `results.memory`.
 - A run's results are groups (`TabResults.groups`): each original result owns its Table slot and at most one Pivot slot,
   and a comparison is a slot of its own with frozen references to its two inputs (`TabResults.comparisons`). `sets` stays
   the one flat list, in the order drawn: a group's Table, its Pivot directly under it, the next group, comparisons last.

@@ -335,9 +335,9 @@ internal static class FilterChecks
         // Positions 0 to 9 of the descending view are ids 999 down to 990: Between keeps those ten rows.
         var filtered = Ask(3, new { resultId = id, sort = Array.Empty<object>(), filters = new object[] { new { op = "between", column = 0, cells = new { viewId = sortedId, ranges = new[] { new long[] { 0, 10 } } } } } }).GetProperty("result");
         var echoed = filtered.GetProperty("filters")[0];
-        var before = store.UsedBytes;
+        var before = Held.Bytes(store);
         Ask(30, new { resultId = id, sort = Array.Empty<object>(), filters = new object[] { new { op = "in", column = 0, rows = new[] { 7 } } } });
-        check(store.UsedBytes - before == 4 + ResultStore.ViewOverhead, "a filtered view keeps only its rows' order in the budget, and returns what filtering needed");
+        check(Held.Bytes(store) - before == 4 + ResultStore.ViewOverhead, "a filtered view keeps only its rows' order in the budget, and returns what filtering needed");
         check(filtered.GetProperty("rows").GetInt64() == 10 && filtered.GetProperty("complete").GetBoolean() && echoed.GetProperty("op").GetString() == "between"
             && echoed.GetProperty("column").GetInt32() == 0 && echoed.GetProperty("rows").EnumerateArray().Select(row => row.GetInt32()).SequenceEqual([990, 999]) && !echoed.TryGetProperty("cells", out _),
             "results.view filters a result with no sort keys, by cells of another view, and answers the filter resolved to base rows");
@@ -358,7 +358,7 @@ internal static class FilterChecks
             "cells of a closed view answer VIEW_NOT_FOUND");
         // Room for one key of the sort and filter on column 0, not two: a Value key on the filtered column fits, a Chars key does not.
         var set = store.Find(id)!;
-        var once = ViewSorter.WorkingBytes(1000, 1) + ViewSorter.FilterBytes * 1000 + 4 * 1000 + ResultStore.ViewOverhead;
+        var once = ViewSorter.WorkingBytes(1000, 1) + ViewSorter.FilterBytes * 1000 + 4 * 1000 + ResultStore.ViewOverhead + Held.Unpacking(set);
         var filler = Math.Min(store.QueryBytes, set.Budget.MaxBytes) - set.Budget.UsedBytes - once;
         check(store.TryReserve(set.Budget, filler, false, out _), "the budget check reserves all but one shared key's room");
         object Shared(string mode) => new { resultId = id, sort = new[] { new { column = 0, descending = true, mode } }, filters = new object[] { new { op = "in", column = 0, rows = new[] { 7, 8 } } } };

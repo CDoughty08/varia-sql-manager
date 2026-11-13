@@ -249,21 +249,22 @@ internal static class ProfileChecks
         check(stopped == "cancelled, too large" && gate.Busy == 0, "a profile on several threads stops as a cancellation, and a refused charge as too large, and gives its threads back: " + stopped);
 
         // The service takes the threads' figures only with room to spare in the budget, and reads on one thread without.
-        var used = store.UsedBytes;
+        var used = Held.Bytes(store);
         using var service = new SqlService(store);
         ResultsProfileResult Asked(SqlService host, uint resultId) =>
             (ResultsProfileResult)host.DispatchAsync("results.profile", JsonSerializer.SerializeToElement(new { resultId, columns = all }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult();
         var roomy = JsonSerializer.Serialize(Asked(service, set.ResultId), HostChecks.Json);
         // The same rows in a budget they nearly fill: no eighth to spare, but room for one thread's figures.
-        var rowsBytes = set.Budget.UsedBytes;
+        // As sealed: in the packed pass results.profile unpacks the rows first.
+        var rowsBytes = Held.AsSealed(store, set);
         var single = ColumnProfiler.WorkingBytes(rows, all.Length);
         var snug = new ResultStore(4L << 30, rowsBytes + single + (2L << 20));
         using var snugService = new SqlService(snug);
         var copy = Filled(snug.Open(snug.BeginQuery("snug"), 0, 1, 1, "rows", columns, [.. columns.Select(column => column.Wire == "binary" ? WireKind.Binary : WireKind.Text)])!);
-        var before = snug.UsedBytes;
+        var before = Held.Bytes(snug);
         var cramped = JsonSerializer.Serialize(Asked(snugService, copy.ResultId), HostChecks.Json);
-        check(roomy == one && store.UsedBytes == used && cramped == one && snug.UsedBytes == before
-            && !snug.TryReserveSpare(copy.Budget, ColumnProfiler.WorkingBytes(rows, all.Length, 2)),
+        check(roomy == one && Held.Bytes(store) == used && cramped == one && Held.Bytes(snug) == before
+            && !snug.TryReserveSpare(copy.Budget, ColumnProfiler.WorkingBytes(rows, all.Length, 2) + Held.Unpacking(copy)),
             "results.profile answers the same profile with room for every thread's figures and with room for one thread's only, and returns what it took");
     }
 
@@ -302,10 +303,10 @@ internal static class ProfileChecks
         catch (ColumnProfiler.ProfileTooLargeException) { refused = "too large"; }
         // A budget with room for four threads' figures and for what one thread keeps of the values, not for what four keep.
         var figures = ColumnProfiler.WorkingBytes(48, 1, 4, ColumnProfiler.RunRows(pages, 4));
-        var snug = new ResultStore(1L << 30, set.Budget.UsedBytes + figures + between);
+        var snug = new ResultStore(1L << 30, Held.AsSealed(roomy, set) + figures + between);
         var copy = Filled(snug);
         using var service = new SqlService(snug);
-        var before = snug.UsedBytes;
+        var before = Held.Bytes(snug);
         var spare = snug.TryReserveSpare(copy.Budget, figures);
         if (spare) snug.Return(copy.Budget, figures);
         string answered;
@@ -317,7 +318,7 @@ internal static class ProfileChecks
         }
         finally { ViewSorter.Workers = workers; }
         check(pages.Length >= 8 && four.Shown == one.Shown && four.Charged > one.Charged + 100_000 && refused == "too large" && Profiled(1, between).Shown == one.Shown
-            && spare && answered == one.Shown && snug.UsedBytes == before && gate.Busy == 0,
+            && spare && answered == one.Shown && Held.Bytes(snug) == before && gate.Busy == 0,
             "four threads keep more of long values than one (" + four.Charged + " bytes against " + one.Charged + "); a profile refused them on several threads is read again on one, "
             + "answers the same and returns what it took");
     }
@@ -337,9 +338,9 @@ internal static class ProfileChecks
         try { ColumnProfiler.Profile(set, set.SealedSnapshot(), null, [0], true, CancellationToken.None, new ColumnProfiler.Charges(bytes => bytes < 50_000)); refused = "ran"; }
         catch (ColumnProfiler.ProfileTooLargeException) { refused = "TOO_LARGE"; }
         check(refused == "TOO_LARGE", "a profile whose long keys the budget refuses stops");
-        var baseline = store.UsedBytes;
+        var baseline = Held.Bytes(store);
         var answered = (ResultsProfileResult)service.DispatchAsync("results.profile", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, columns = new[] { 0, 1 } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult();
-        check(answered.Columns[0].Max?.Length == ColumnProfiler.ValueChars + 1 && store.UsedBytes == baseline, "results.profile returns what it charged for long keys");
+        check(answered.Columns[0].Max?.Length == ColumnProfiler.ValueChars + 1 && Held.Bytes(store) == baseline, "results.profile returns what it charged for long keys");
     }
 
     private static void Requests(Action<bool, string> check)
@@ -347,7 +348,7 @@ internal static class ProfileChecks
         var store = new ResultStore(1L << 30, 1L << 29);
         using var service = new SqlService(store);
         var set = Fill(store, Columns, Rows);
-        var baseline = store.UsedBytes;
+        var baseline = Held.Bytes(store);
         T Call<T>(string method, object args) => (T)service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult();
         string? Code(object args)
         {
@@ -357,7 +358,7 @@ internal static class ProfileChecks
         }
         var result = Call<ResultsProfileResult>("results.profile", new { resultId = set.ResultId, columns = new[] { 2, 0 } });
         check(SqlService.MethodNames.Contains("results.profile") && service.LaneOf("results.profile") == RequestLane.Results && result.Columns.Select(column => column.Column).SequenceEqual([2, 0])
-            && store.UsedBytes == baseline, "results.profile answers the columns asked, in order, and returns its working memory");
+            && Held.Bytes(store) == baseline, "results.profile answers the columns asked, in order, and returns its working memory");
         var view = Call<ResultsViewResult>("results.view", new { resultId = set.ResultId, sort = new[] { new { column = 2, descending = false, mode = "value" } } });
         var viewed = Call<ResultsProfileResult>("results.profile", new { resultId = set.ResultId, columns = new[] { 0 }, viewId = view.ViewId });
         check(viewed.Rows == 5 && viewed.Columns[0].Distinct == 3, "results.profile reads through a view");
@@ -377,11 +378,11 @@ internal static class ProfileChecks
         var tight = new ResultStore(4096, 4096);
         using var small = new SqlService(tight);
         var cramped = Fill(tight, [new("id", "int", "text")], [["1"]]);
-        var before = tight.UsedBytes;
+        var before = Held.Bytes(tight);
         string? refused;
         try { small.DispatchAsync("results.profile", JsonSerializer.SerializeToElement(new { resultId = cramped.ResultId, columns = new[] { 0 } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); refused = null; }
         catch (RequestException error) { refused = error.Code; }
-        check(refused == "TOO_LARGE" && tight.UsedBytes == before, "a profile the budget has no room for answers TOO_LARGE and takes nothing");
+        check(refused == "TOO_LARGE" && Held.Bytes(tight) == before, "a profile the budget has no room for answers TOO_LARGE and takes nothing");
     }
 
     private static void Hashes(Action<bool, string> check)

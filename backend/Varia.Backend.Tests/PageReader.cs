@@ -24,6 +24,20 @@ internal static class PinnedPage
     }
 }
 
+/// <summary>What a store holds without the pages it keeps unpacked for reads: in the packed pass (Program.cs) reading a page
+/// caches it, charged as working memory, so the checks that compare exact figures compare this. Zero cache otherwise.</summary>
+internal static class Held
+{
+    public static long Bytes(ResultStore store) => store.UsedBytes - store.PackingSnapshot().CacheBytes;
+
+    /// <summary>What unpacking the set whole adds to its charge (an operation on all of it does that first): none unpacked.</summary>
+    public static long Unpacking(ResultSetBuffer set) => set.SealedSnapshot().Sum(page => (long)page.Length - page.StoredLength);
+
+    /// <summary>What a store whose only result is <paramref name="set"/> would hold with its pages as sealed and none cached:
+    /// the figure a check sizes a budget by, which an operation on all of it reaches once it has unpacked it.</summary>
+    public static long AsSealed(ResultStore store, ResultSetBuffer set) => Bytes(store) + Unpacking(set);
+}
+
 /// <summary>A test-only page decoder, written independently of PageBuilder and with the same checks and error codes as
 /// decodePage in src/shared/ipc/wire/pages.ts.</summary>
 internal static class PageReader

@@ -1605,6 +1605,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         }
         var complete = set.IsComplete;
         using var pin = set.Pin();
+        Unpack(set, filters.Length > 0
+            ? "There is not enough result memory to filter these rows. Close other results and try again."
+            : "There is not enough result memory to sort these rows. Close other results and try again.", token);
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
@@ -1719,6 +1722,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var complete = view?.Complete ?? set.IsComplete;
         using var pin = set.Pin();
+        Unpack(set, "There is not enough result memory to search these rows. Close other results and try again.", token);
         var pages = set.SealedSnapshot();
         var stopped = ResultSearcher.Stopped(store, set, view);
         var found = await Task.Run(() => ResultSearcher.Search(set, pages, view, args.Text, args.FromRow, args.Backward, args.MaxMatches, token, stopped), token);
@@ -1741,6 +1745,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var complete = view?.Complete ?? set.IsComplete;
         using var pin = set.Pin();
+        Unpack(set, "There is not enough result memory to profile these rows. Close other results and try again.", token);
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
@@ -1798,6 +1803,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var keptView = args.KeptViewId is { } keptId ? FindView(args.ResultId, keptId) : null;
         var complete = view?.Complete ?? set.IsComplete;
         using var pin = set.Pin();
+        Unpack(set, "There is not enough result memory to list this column's values. Close other results and try again.", token);
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
@@ -1889,6 +1895,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             throw new RequestException("INVALID_PARAMS", "The column is not one of the result's.");
         if (!set.IsComplete) throw new RequestException("RESULT_OPEN", "Highlight rows after this result set finishes loading.");
         using var pin = set.Pin();
+        Unpack(set, "There is not enough result memory to tell these rows apart. Close other results and try again.", token);
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
@@ -1985,6 +1992,14 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     internal const string BudgetStoppedGlobal = "The result memory filled while this query ran, so it can store nothing more. Close other results, then run the query again.";
     /// <summary>Working memory was refused: by the budget, with the request's own sentence, or (the budget having room)
     /// because the machine is short of memory, which closing results here may not cure.</summary>
+    /// <summary>Unpacks a packed result whole before an operation that reads all of it (ResultSetBuffer.TryUnpackAll), the
+    /// caller holding its pin; TOO_LARGE with the operation's own sentence when the budget has no room for its pages as
+    /// sealed. Plain and view reads never need this.</summary>
+    private void Unpack(ResultSetBuffer set, string tooLarge, CancellationToken token)
+    {
+        if (!set.TryUnpackAll(token)) throw TooLarge(tooLarge);
+    }
+
     private RequestException TooLarge(string budget) => new("TOO_LARGE", store.IsSystemMemoryLow() ? LowMemory : budget);
 
     internal const string LowMemory = "The computer is low on memory, so there is no room to do this now. Close other programs or other results and try again.";
@@ -2007,6 +2022,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         ThrowIfStopped(left.Budget);
         using var leftPin = left.Pin();
         using var rightPin = right.Pin();
+        const string compareTooLarge = "There is not enough result memory to compare these results. Close other results and try again.";
+        Unpack(left, compareTooLarge, token);
+        Unpack(right, compareTooLarge, token);
         var leftPages = left.SealedSnapshot();
         var rightPages = right.SealedSnapshot();
         long leftRows = 0, rightRows = 0;
@@ -2079,12 +2097,13 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (!set.IsComplete) throw new RequestException("RESULT_OPEN", "Pivot the results after they finish loading.");
         ThrowIfStopped(set.Budget);
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
+        const string tooLarge = "There is not enough result memory to pivot these rows. Close other results and try again.";
         using var pin = set.Pin();
+        Unpack(set, tooLarge, token);
         var pages = set.SealedSnapshot();
         long rows = 0;
         foreach (var page in pages) rows += page.Rows;
         var working = ResultPivoter.WorkingBytes(rows, ResultPivoter.KeyColumns(spec));
-        const string tooLarge = "There is not enough result memory to pivot these rows. Close other results and try again.";
         if (!store.TryReserveWork(set.Budget, working)) throw TooLarge(tooLarge);
         long figures = 0;
         bool Reserve(long bytes)

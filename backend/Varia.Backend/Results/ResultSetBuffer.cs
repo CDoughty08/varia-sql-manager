@@ -2,31 +2,56 @@ namespace Varia.Backend.Results;
 
 /// <summary>A sealed page: its first row, row count, the exact bytes that were (and will again be) written to main, and its
 /// lengths sidecar, which never leaves the backend except through results.rowBytes. Its bytes are read only through
-/// <see cref="Body"/> (its set's <see cref="ResultSetBuffer.Body"/>) while the set is pinned: the store may keep them in
-/// another form, which only the accessor reads (tests/result-page-access.test.ts checks that no reader touches
-/// <see cref="Stored"/>). A page with no set is one built for a single read (a view's pages in view order), whose bytes are
-/// its own.</summary>
-internal sealed class StoredPage(long firstRow, int rows, byte[] stored, PageLengths lengths, ResultSetBuffer? set = null)
+/// <see cref="Body"/> (its set's <see cref="ResultSetBuffer.Body"/>) while the set is pinned: the store may keep them
+/// packed (<see cref="PackedPage"/>), which only the accessor reads (tests/result-page-access.test.ts checks that no reader
+/// touches <see cref="Stored"/>). A page with no set is one built for a single read (a view's pages in view order), whose
+/// bytes are its own.</summary>
+internal sealed class StoredPage
 {
-    public long FirstRow { get; } = firstRow;
-    public int Rows { get; } = rows;
-    public PageLengths Lengths { get; } = lengths;
+    private object stored;
+
+    public StoredPage(long firstRow, int rows, byte[] stored, PageLengths lengths, ResultSetBuffer? set = null)
+    {
+        FirstRow = firstRow;
+        Rows = rows;
+        Lengths = lengths;
+        Length = stored.Length;
+        Set = set;
+        this.stored = stored;
+    }
+
+    public long FirstRow { get; }
+    public int Rows { get; }
+    public PageLengths Lengths { get; }
     /// <summary>The page's length as sealed (what results.read sends), whatever form the store keeps it in.</summary>
-    public int Length { get; } = stored.Length;
+    public int Length { get; }
+    /// <summary>The bytes the store holds for the page now (its packed length when packed): what its budget charge counts.</summary>
+    public int StoredLength => Stored is PackedPage packed ? packed.Bytes.Length : Length;
     /// <summary>The set that stores the page, or null for a page built for one read.</summary>
-    public ResultSetBuffer? Set { get; } = set;
-    /// <summary>The bytes as the store keeps them. Only <see cref="ResultSetBuffer"/> reads this.</summary>
-    internal byte[] Stored { get; } = stored;
+    public ResultSetBuffer? Set { get; }
+    /// <summary>The bytes as the store keeps them: the page as sealed (a byte array) or a <see cref="PackedPage"/>. Only
+    /// <see cref="ResultSetBuffer"/> reads or replaces this, under its lock; a reader may see either form.</summary>
+    internal object Stored { get => Volatile.Read(ref stored); set => Volatile.Write(ref stored, value); }
+    /// <summary>Packing saved less than a tenth of the page, so it is not tried again (ResultSetBuffer.Pack).</summary>
+    internal bool KeptRaw { get; set; }
     /// <summary>The page's bytes as sealed, through its set's accessor (<see cref="ResultSetBuffer.Body"/>). A call, not a
-    /// field: hold the array while reading the page rather than asking again for every row.</summary>
-    public byte[] Body() => Set is null ? Stored : Set.Body(this);
+    /// field: a packed page is unpacked (or found in its set's cache) on every call, so hold the array while reading the
+    /// page rather than asking again for every row.</summary>
+    public byte[] Body() => Set is null ? (byte[])Stored : Set.Body(this);
+}
+
+/// <summary>A page's Zstandard bytes (<see cref="PageCodec"/>); its length as sealed is the page's.</summary>
+internal sealed class PackedPage(byte[] bytes)
+{
+    public byte[] Bytes { get; } = bytes;
 }
 
 /// <summary>One stored result set: an append-only page directory that results.read serves, and, while the set is open,
 /// the page being built. One query task writes; readers, progress events and releases may run concurrently.
 /// Budget: each sealed page costs its length plus <see cref="ResultStore.PageOverhead"/> plus its lengths sidecar (4 bytes a
 /// row, 24 per sparse cell entry, <see cref="PageLengths.MemoryBytes"/>), and the builder's buffers are charged as they
-/// grow; both come from reservations taken in 256 KiB steps.
+/// grow; both come from reservations taken in 256 KiB steps. A packed page (<see cref="Pack"/>) costs its packed length
+/// instead, and the pages unpacked for reads (<see cref="CachePages"/> of them) are charged as working memory while kept.
 /// Copy and export jobs lease the set: a release during a job ends reads and stops storing at once, but its pages and
 /// budget are freed only when the last lease ends, so re-executing or closing a tab never breaks a save.
 /// Every reader of page bodies pins the set while it reads (<see cref="Pin"/>) and reads them through <see cref="Body"/>:
@@ -48,7 +73,11 @@ internal sealed class ResultSetBuffer
     private int sealedPages;
     private int leases;
     private int pins;
-    private bool freePending;
+    private bool freePending, gone;
+    /// <summary>Packed pages' bytes, their bytes as sealed, and the unpacked cache's bytes (all under the lock).</summary>
+    private long packedBytes, packedLogical, cacheBytes;
+    /// <summary>The pages read most recently from packed ones, newest first (<see cref="CachePages"/> at most).</summary>
+    private readonly List<(StoredPage Page, byte[] Body)> cache = [];
     private TruncationReason refused;
     private volatile bool incomplete;
 
@@ -251,6 +280,7 @@ internal sealed class ResultSetBuffer
             builder = null;
             state = 1;
         }
+        if (store.Packing == PagePacking.EveryComplete) Pack();
     }
 
     /// <summary>Marks the set released, so in-flight reads stop after their current page and nothing more is stored, and
@@ -285,14 +315,21 @@ internal sealed class ResultSetBuffer
     /// <summary>Ends a lease. The last one frees a set that was released while it was held.</summary>
     public void ReleaseLease()
     {
-        long freed;
+        long bytes;
+        var repack = false;
         lock (gate)
         {
             if (leases == 0) throw new InvalidOperationException("The result set is not leased.");
-            if (--leases > 0 || pins > 0 || !freePending) return;
-            freed = FreeLocked();
+            if (--leases > 0 || pins > 0) return;
+            if (!freePending)
+            {
+                repack = state == 1 && store.Packing == PagePacking.EveryComplete;
+                bytes = 0;
+            }
+            else bytes = FreeLocked();
         }
-        store.Freed(freed, Budget.Live is not null);
+        if (repack) Pack();
+        else store.Freed(bytes, Budget.Live is not null);
     }
 
     public int Leases { get { lock (gate) return leases; } }
@@ -311,14 +348,21 @@ internal sealed class ResultSetBuffer
 
     internal void Unpin()
     {
-        long freed;
+        long bytes;
+        var repack = false;
         lock (gate)
         {
             if (pins == 0) throw new InvalidOperationException("The result set is not pinned.");
-            if (--pins > 0 || leases > 0 || !freePending) return;
-            freed = FreeLocked();
+            if (--pins > 0 || leases > 0) return;
+            if (!freePending)
+            {
+                repack = state == 1 && store.Packing == PagePacking.EveryComplete;
+                bytes = 0;
+            }
+            else bytes = FreeLocked();
         }
-        store.Freed(freed, Budget.Live is not null);
+        if (repack) Pack();
+        else store.Freed(bytes, Budget.Live is not null);
     }
 
     /// <summary>Makes <see cref="Body"/> refuse a set that is neither pinned nor leased. The checks turn it on, so a reader
@@ -332,13 +376,226 @@ internal sealed class ResultSetBuffer
         if (page.Set != this) throw new ArgumentException("The page is not this result's.", nameof(page));
         if (RequirePins && Volatile.Read(ref pins) == 0 && Volatile.Read(ref leases) == 0)
             throw new InvalidOperationException("A result page was read without a pin.");
-        return page.Stored;
+        return page.Stored as byte[] ?? Unpacked(page);
     }
+
+    /// <summary>Pages read from packed ones kept unpacked per result, newest first: a plain grid's reads ask for the same
+    /// few pages again as it scrolls (0.3 ms a read with six, measured, against 0.7 ms with none).</summary>
+    public const int CachePages = 6;
+
+    /// <summary>A packed page's bytes: from the cache, or unpacked and kept there, charged to the budget as working memory
+    /// whatever its figures (six pages, about 1.5 MiB, at most) so a read never fails for room.</summary>
+    private byte[] Unpacked(StoredPage page)
+    {
+        lock (gate)
+        {
+            for (var i = 0; i < cache.Count; i++)
+            {
+                if (cache[i].Page != page) continue;
+                var hit = cache[i];
+                if (i > 0)
+                {
+                    cache.RemoveAt(i);
+                    cache.Insert(0, hit);
+                }
+                store.CountCacheHit();
+                return hit.Body;
+            }
+        }
+        if (page.Stored is not PackedPage packed) return (byte[])page.Stored;
+        var body = store.Unpack(packed, page.Length);
+        lock (gate) CacheLocked(page, body);
+        return body;
+    }
+
+    private void CacheLocked(StoredPage page, byte[] body)
+    {
+        // A freed set keeps no charge; a page unpacked meanwhile needs no copy.
+        if (gone || page.Stored is not PackedPage || cache.Exists(item => item.Page == page)) return;
+        cache.Insert(0, (page, body));
+        Charge(body.Length);
+        cacheBytes += body.Length;
+        store.Held(0, 0, body.Length);
+        while (cache.Count > CachePages) DropCachedLocked(cache.Count - 1);
+    }
+
+    private void DropCachedLocked(int index)
+    {
+        var length = cache[index].Body.Length;
+        cache.RemoveAt(index);
+        ReturnLocked(length);
+        cacheBytes -= length;
+        store.Held(0, 0, -length);
+    }
+
+    /// <summary>Charges bytes whatever the budget, as the set's own (returned with it).</summary>
+    private void Charge(long bytes)
+    {
+        store.Force(Budget, bytes);
+        charged += bytes;
+    }
+
+    /// <summary>Whether any page is packed now.</summary>
+    public bool HasPacked { get { lock (gate) return packedLogical > 0; } }
+
+    /// <summary>Packs a complete result's pages one at a time (<see cref="PageCodec"/>), as the store's
+    /// <see cref="ResultStore.Packing"/> allows: nothing when it is off or for a live table. It stops, keeping what it
+    /// packed, once the set is pinned, leased or released, and checks that before each page it replaces, so a reader
+    /// never meets a page replaced while it reads. A page that saves less than a tenth stays raw (the checks' mode packs
+    /// every page). The bytes saved go back to the budgets at once and count toward the store's next collection, but
+    /// never toward a compacting one (ResultStore.Freed): the space is reused anyway. Returns the bytes saved.</summary>
+    public long Pack()
+    {
+        var mode = store.Packing;
+        if (mode == PagePacking.Off || Budget.Live is not null) return 0;
+        StoredPage[] candidates;
+        lock (gate)
+        {
+            if (state != 1 || pins > 0 || leases > 0) return 0;
+            candidates = [.. pages.Where(page => page.Stored is byte[] && (mode == PagePacking.EveryComplete || !page.KeptRaw))];
+        }
+        long saved = 0;
+        foreach (var page in candidates)
+        {
+            if (page.Stored is not byte[] raw || store.Pack(raw) is not { } bytes) continue;
+            var keep = mode == PagePacking.EveryComplete || bytes.Length <= raw.Length - raw.Length / 10;
+            lock (gate)
+            {
+                if (state != 1 || pins > 0 || leases > 0) break;
+                if (!ReferenceEquals(page.Stored, raw)) continue;
+                if (!keep)
+                {
+                    page.KeptRaw = true;
+                    store.CountKeptRaw();
+                    continue;
+                }
+                page.Stored = new PackedPage(bytes);
+                var difference = (long)raw.Length - bytes.Length;
+                if (difference >= 0) ReturnLocked(difference);
+                else Charge(-difference);
+                packedBytes += bytes.Length;
+                packedLogical += raw.Length;
+                store.Held(bytes.Length, raw.Length, 0);
+                saved += difference;
+            }
+        }
+        if (saved > 0) store.Freed(saved, Budget.Live is not null, compacts: false);
+        return saved;
+    }
+
+    /// <summary>Unpacks every packed page in place before an operation that reads the whole result (a sort, a filter, a
+    /// profile, a pivot, a diff, a search, row identities), on the workers, after reserving the bytes it adds from the
+    /// budget as working memory is (<see cref="ResultStore.TryReserveWork"/>: refused under high system memory load from
+    /// 64 MiB, as a sort's keys are). False, changing nothing, when the budget refuses: the caller answers TOO_LARGE, and plain and view reads still work. The caller holds a pin, so nothing
+    /// packs the pages again until it ends.</summary>
+    public bool TryUnpackAll(CancellationToken token = default)
+    {
+        StoredPage[] packed;
+        long need = 0;
+        lock (gate)
+        {
+            if (pins == 0) throw new InvalidOperationException("A result is unpacked only while pinned.");
+            packed = [.. pages.Where(page => page.Stored is PackedPage)];
+            foreach (var page in packed) need += page.Length - ((PackedPage)page.Stored).Bytes.Length;
+        }
+        if (packed.Length == 0) return true;
+        var reserved = Math.Max(0, need);
+        if (reserved > 0 && !store.TryReserveWork(Budget, reserved)) return false;
+        var bodies = new byte[packed.Length][];
+        try
+        {
+            using var threads = ViewSorter.Gate.Take(Math.Min(packed.Length, ViewSorter.Workers));
+            threads.For(packed.Length, i => bodies[i] = Cached(packed[i]) ?? (packed[i].Stored is PackedPage bytes ? store.Unpack(bytes, packed[i].Length) : null!), token);
+        }
+        catch
+        {
+            store.Return(Budget, reserved);
+            throw;
+        }
+        lock (gate)
+        {
+            charged += reserved;
+            long added = 0;
+            for (var i = 0; i < packed.Length; i++)
+            {
+                if (packed[i].Stored is not PackedPage bytes || bodies[i] is null) continue;
+                var at = cache.FindIndex(item => item.Page == packed[i]);
+                if (at >= 0) DropCachedLocked(at);
+                packed[i].Stored = bodies[i];
+                added += packed[i].Length - bytes.Bytes.Length;
+                packedBytes -= bytes.Bytes.Length;
+                packedLogical -= packed[i].Length;
+                store.Held(-bytes.Bytes.Length, -packed[i].Length, 0);
+            }
+            // Pages another operation unpacked meanwhile give their share back.
+            if (added > reserved) Charge(added - reserved);
+            else ReturnLocked(reserved - added);
+        }
+        return true;
+    }
+
+    private byte[]? Cached(StoredPage page)
+    {
+        lock (gate) return cache.Find(item => item.Page == page).Body;
+    }
+
+    /// <summary>The bytes of several pages at once, for a read that needs them together (a view's rows in view order): the
+    /// packed ones unpacked on the workers, after reserving their bytes as working memory, which the caller returns
+    /// (<see cref="ReturnWork"/>, <paramref name="reserved"/>) when it is done with them. Null, reserving nothing, when the
+    /// budget has no room: the caller then reads them one at a time through <see cref="Body"/>.</summary>
+    public byte[][]? BodiesTogether(IReadOnlyList<StoredPage> wanted, out long reserved, CancellationToken token = default)
+    {
+        reserved = 0;
+        var bodies = new byte[wanted.Count][];
+        var unpack = new List<int>();
+        for (var i = 0; i < wanted.Count; i++)
+        {
+            if (wanted[i].Set != this) throw new ArgumentException("The page is not this result's.", nameof(wanted));
+            if (wanted[i].Stored is byte[] raw) bodies[i] = raw;
+            else if (Cached(wanted[i]) is { } hit) bodies[i] = hit;
+            else
+            {
+                unpack.Add(i);
+                reserved += wanted[i].Length;
+            }
+        }
+        if (unpack.Count == 0) return bodies;
+        if (RequirePins && Volatile.Read(ref pins) == 0 && Volatile.Read(ref leases) == 0)
+            throw new InvalidOperationException("A result page was read without a pin.");
+        if (!store.TryReserveWork(Budget, reserved))
+        {
+            reserved = 0;
+            return null;
+        }
+        var held = reserved;
+        try
+        {
+            using var threads = ViewSorter.Gate.Take(Math.Min(unpack.Count, ViewSorter.Workers));
+            threads.For(unpack.Count, k =>
+            {
+                var page = wanted[unpack[k]];
+                bodies[unpack[k]] = page.Stored is PackedPage packed ? store.Unpack(packed, page.Length) : (byte[])page.Stored;
+            }, token);
+        }
+        catch
+        {
+            store.Return(Budget, held);
+            throw;
+        }
+        return bodies;
+    }
+
+    /// <summary>Returns working memory reserved by <see cref="BodiesTogether"/>.</summary>
+    public void ReturnWork(long bytes) => store.Return(Budget, bytes);
 
     private long FreeLocked()
     {
         freePending = false;
+        gone = true;
         pages.Clear();
+        cache.Clear();
+        store.Held(-packedBytes, -packedLogical, -cacheBytes);
+        packedBytes = packedLogical = cacheBytes = 0;
         var freed = charged;
         ReturnLocked(charged);
         slack = working = pending = 0;

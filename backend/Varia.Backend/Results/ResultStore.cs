@@ -179,6 +179,8 @@ internal sealed class ResultStore
     public long LiveUsedBytes => Interlocked.Read(ref liveUsed);
     /// <summary>Bytes released toward the next forced collection (the checks read it).</summary>
     internal long FreedSinceCollect => Interlocked.Read(ref freedSinceCollect);
+    /// <summary>Bytes released toward the next compacting collection (the checks read it).</summary>
+    internal long FreedSinceCompact => Interlocked.Read(ref freedSinceCompact);
     /// <summary>Sets the live share: <paramref name="share"/> of the global budget (limits.live.budgetShare).</summary>
     public void ShareWithLive(double share)
     {
@@ -190,6 +192,63 @@ internal sealed class ResultStore
         }
     }
     public int Count { get { lock (gate) return sets.Count; } }
+
+    /// <summary>The packing a new store starts with: off, but for the checks' second pass over the result suites, which
+    /// packs every complete result (<see cref="PagePacking.EveryComplete"/>).</summary>
+    internal static PagePacking DefaultPacking { get; set; } = PagePacking.Off;
+
+    /// <summary>Whether and how complete results' pages are packed (<see cref="ResultSetBuffer.Pack"/>). An internal switch:
+    /// off in the product until a policy decides which results to pack (docs/page-compression-findings.md, the later
+    /// steps). Switching it off packs nothing more and leaves packed pages packed; they read as ever.</summary>
+    internal PagePacking Packing { get; set; } = DefaultPacking;
+
+    private long packedBytes, packedLogical, cacheBytes, pagesPacked, pagesKeptRaw, pagesUnpacked, cacheHits, packedIn, packedOut, unpackedOut, packTicks, unpackTicks;
+
+    /// <summary>The store's packing figures (<see cref="PackingSnapshot"/>): what is held now (packed bytes, their bytes as
+    /// sealed, the unpacked pages cached for reads) and counts since the store began (pages packed, kept raw because
+    /// packing saved under a tenth, and unpacked; cache hits; bytes in and out; time spent, in Stopwatch ticks).</summary>
+    internal sealed record PackingCounters(long PackedBytes, long PackedLogicalBytes, long CacheBytes, long PagesPacked, long PagesKeptRaw, long PagesUnpacked,
+        long CacheHits, long PackedInBytes, long PackedOutBytes, long UnpackedBytes, long PackTicks, long UnpackTicks);
+
+    /// <summary>The packing figures now. Internal: results.memory does not carry them yet.</summary>
+    internal PackingCounters PackingSnapshot() => new(Interlocked.Read(ref packedBytes), Interlocked.Read(ref packedLogical), Interlocked.Read(ref cacheBytes),
+        Interlocked.Read(ref pagesPacked), Interlocked.Read(ref pagesKeptRaw), Interlocked.Read(ref pagesUnpacked), Interlocked.Read(ref cacheHits),
+        Interlocked.Read(ref packedIn), Interlocked.Read(ref packedOut), Interlocked.Read(ref unpackedOut), Interlocked.Read(ref packTicks), Interlocked.Read(ref unpackTicks));
+
+    /// <summary>A page packed (<see cref="PageCodec.Pack"/>), timed and counted; null when the codec failed.</summary>
+    internal byte[]? Pack(byte[] page)
+    {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var packed = PageCodec.Pack(page);
+        Interlocked.Add(ref packTicks, System.Diagnostics.Stopwatch.GetTimestamp() - started);
+        Interlocked.Add(ref packedIn, page.Length);
+        if (packed is null) return null;
+        Interlocked.Increment(ref pagesPacked);
+        Interlocked.Add(ref packedOut, packed.Length);
+        return packed;
+    }
+
+    /// <summary>A packed page's bytes as sealed (<see cref="PageCodec.Unpack"/>), timed and counted.</summary>
+    internal byte[] Unpack(PackedPage packed, int length)
+    {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var page = PageCodec.Unpack(packed.Bytes, length);
+        Interlocked.Add(ref unpackTicks, System.Diagnostics.Stopwatch.GetTimestamp() - started);
+        Interlocked.Increment(ref pagesUnpacked);
+        Interlocked.Add(ref unpackedOut, length);
+        return page;
+    }
+
+    /// <summary>Moves what the sets hold packed and cached (each set keeps its own share and gives it back when freed).</summary>
+    internal void Held(long packed, long logical, long cached)
+    {
+        if (packed != 0) Interlocked.Add(ref packedBytes, packed);
+        if (logical != 0) Interlocked.Add(ref packedLogical, logical);
+        if (cached != 0) Interlocked.Add(ref cacheBytes, cached);
+    }
+
+    internal void CountCacheHit() => Interlocked.Increment(ref cacheHits);
+    internal void CountKeptRaw() => Interlocked.Increment(ref pagesKeptRaw);
 
     /// <summary>A new query on a session replaces that session's earlier results, whatever connection produced them.</summary>
     public QueryBudget BeginQuery(string sessionId)
@@ -552,13 +611,15 @@ internal sealed class ResultStore
     }
 
     /// <summary>Memory a release returned, now or when a leased set's last job ended. Live tables' memory is not counted:
-    /// see LiveBudget.</summary>
-    internal void Freed(long freed, bool live = false)
+    /// see LiveBudget. Packing's saving (<paramref name="compacts"/> false) counts toward the next collection as a release
+    /// does, but not toward a compacting one: the space it frees is reused for new pages without one, and compacting copies
+    /// what remains, 0.1 to 0.3 s a GiB (docs/page-compression-findings.md).</summary>
+    internal void Freed(long freed, bool live = false, bool compacts = true)
     {
         if (freed == 0 || live) return;
         // Counted across calls: closing many small results, together or one at a time, frees as much as one large release.
         var sinceCollect = Interlocked.Add(ref freedSinceCollect, freed);
-        var sinceCompact = Interlocked.Add(ref freedSinceCompact, freed);
+        var sinceCompact = compacts ? Interlocked.Add(ref freedSinceCompact, freed) : Interlocked.Read(ref freedSinceCompact);
         if (sinceCollect > CollectAfterRelease || UsedBytes == 0 && sinceCompact > CompactWhenEmpty) Collect();
     }
 

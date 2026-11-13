@@ -1614,6 +1614,10 @@ internal static class ViewPages
         foreach (var page in Stored(view, firstRow, maxRows)) yield return page.Body();
     }
 
+    /// <summary>Base pages a view read of a packed result unpacks together on the workers (16 MiB of 256 KiB pages): a
+    /// screen of a sorted view reads about one page a row, which one thread unpacks in 45 ms and 16 in 5 ms (measured).</summary>
+    internal const int UnpackTogether = 64;
+
     /// <summary>The same pages as stored pages numbered by view position (Copy and Save through a view), with no length
     /// sidecar, which neither reads.</summary>
     public static IEnumerable<StoredPage> Stored(ResultView view, long firstRow, int maxRows)
@@ -1625,31 +1629,62 @@ internal static class ViewPages
         var pages = set.SealedSnapshot();
         var starts = new long[pages.Length];
         for (var i = 0; i < pages.Length; i++) starts[i] = pages[i].FirstRow;
+        int IndexOf(long row)
+        {
+            var index = Array.BinarySearch(starts, row);
+            return index < 0 ? ~index - 1 : index;
+        }
         var parsed = new Dictionary<int, (byte[] Body, int[] Layout, int BlobStart)>();
+        // A packed result's base pages are unpacked a group at a time, as working memory returned with the group.
+        var packed = set.HasPacked;
+        long held = 0;
         var columns = set.Wires.Count;
         var builder = new PageBuilder(set.ResultId, set.Wires, firstRow);
         var start = firstRow;
-        for (var position = firstRow; position < end; position++)
+        try
         {
-            var row = view.Order[position];
-            var index = Array.BinarySearch(starts, (long)row);
-            if (index < 0) index = ~index - 1;
-            var page = pages[index];
-            if (!parsed.TryGetValue(index, out var layout))
+            for (var position = firstRow; position < end; position++)
             {
-                var body = page.Body();
-                var first = PageView.Parse(body, columns);
-                parsed[index] = layout = (body, first.Layout, first.BlobStart);
+                var row = view.Order[position];
+                var index = IndexOf(row);
+                var page = pages[index];
+                if (!parsed.TryGetValue(index, out var layout))
+                {
+                    if (packed)
+                    {
+                        // The next distinct pages from this row on, this one first.
+                        parsed.Clear();
+                        set.ReturnWork(held);
+                        held = 0;
+                        var group = new List<int> { index };
+                        var seen = new HashSet<int> { index };
+                        for (var ahead = position + 1; ahead < end && group.Count < UnpackTogether; ahead++)
+                            if (seen.Add(IndexOf(view.Order[ahead]))) group.Add(IndexOf(view.Order[ahead]));
+                        if (group.Count > 1 && set.BodiesTogether([.. group.Select(at => pages[at])], out held) is { } bodies)
+                            for (var g = 0; g < group.Count; g++)
+                            {
+                                var parse = PageView.Parse(bodies[g], columns);
+                                parsed[group[g]] = (bodies[g], parse.Layout, parse.BlobStart);
+                            }
+                    }
+                    if (!parsed.TryGetValue(index, out layout))
+                    {
+                        var body = page.Body();
+                        var first = PageView.Parse(body, columns);
+                        parsed[index] = layout = (body, first.Layout, first.BlobStart);
+                    }
+                }
+                Copy(builder, PageView.At(layout.Body, layout.BlobStart, layout.Layout, page.FirstRow, page.Rows, columns), (int)(row - page.FirstRow), set.Wires);
+                if (builder.IsFull)
+                {
+                    yield return new StoredPage(start, (int)(position + 1 - start), builder.Seal(), PageLengths.Empty);
+                    start = position + 1;
+                    if (!packed) parsed.Clear();
+                }
             }
-            Copy(builder, PageView.At(layout.Body, layout.BlobStart, layout.Layout, page.FirstRow, page.Rows, columns), (int)(row - page.FirstRow), set.Wires);
-            if (builder.IsFull)
-            {
-                yield return new StoredPage(start, (int)(position + 1 - start), builder.Seal(), PageLengths.Empty);
-                start = position + 1;
-                parsed.Clear();
-            }
+            if (builder.HasRows) yield return new StoredPage(start, (int)(end - start), builder.Seal(), PageLengths.Empty);
         }
-        if (builder.HasRows) yield return new StoredPage(start, (int)(end - start), builder.Seal(), PageLengths.Empty);
+        finally { set.ReturnWork(held); }
     }
 
     private static void Copy(PageBuilder builder, PageView source, int row, IReadOnlyList<WireKind> wires)
