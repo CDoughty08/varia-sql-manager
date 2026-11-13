@@ -68,7 +68,11 @@ const keysOf = (sort: GridSort | undefined) => (sort?.keys.map(key => `${key.col
  */
 function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, group, bare, onFocus, onWide }: ResultGridProps) {
   const { results, commands, gridStats, panes, settings, resultsSearch, highlights, compare, pivot, queries } = useWorkbench()
-  const running = !!useServiceSnapshot(queries)[tabId]?.running
+  // The query still running that made the rows shown: an estimate runs without results, and a finished run's results stay
+  // drawn until its tab's state catches up, so the tab's run must be this result's run and still running.
+  const runningId = useSyncExternalStore(queries.subscribe, () => queries.getSnapshot()[tabId]?.running?.queryId)
+  const resultsRun = useSyncExternalStore(results.subscribe, () => { const run = results.getSnapshot()[tabId]; return run?.status === 'running' ? run.queryId : undefined })
+  const running = runningId !== undefined && runningId === resultsRun
   const cancelKey = useKeybindingLabel('query.cancel')
   const marked = useSyncExternalStore(highlights.subscribe, () => highlights.getSnapshot()[tabId]?.get(entry.key))
   const compared = useSyncExternalStore(compare.subscribe, () => compare.getSnapshot().get(setKey(entry.descriptor)))

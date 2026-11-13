@@ -138,14 +138,16 @@ export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mo
     // Alt+Down, Ctrl+C and the other Query Output keys are the catalogue's (output.*, outputGridFocus), never the shell's.
     if (viewRef.current?.key(event.nativeEvent)) { event.preventDefault(); event.stopPropagation() }
   }
-  // A strip's button that goes while it has the keyboard focus (Stop query, once the query ends) gives the focus to the grid,
-  // not to the page.
-  const action = strip?.action, actionFocused = useRef(false)
+  // A strip's button that goes while it has the keyboard focus (Stop query once the query ends, or a strip that replaced it)
+  // gives the focus to the grid, not to the page. Chromium may not blur an element it removes, so each commit looks for the
+  // button; the grid's own document, since a popped-out pane's is not the main window's.
+  const action = strip?.action, actionRef = useRef<HTMLButtonElement>(null), actionFocused = useRef(false)
   useLayoutEffect(() => {
-    if (action || !actionFocused.current) return
+    if (!actionFocused.current || actionRef.current?.isConnected) return
     actionFocused.current = false
-    if (!document.activeElement || document.activeElement === document.body) rootRef.current?.focus()
-  }, [action])
+    const owner = rootRef.current?.ownerDocument, active = owner?.activeElement
+    if (owner && (!active || active === owner.body)) rootRef.current?.focus()
+  })
   const setRoot = useCallback((element: HTMLDivElement | null) => { rootRef.current = element; outerRef?.(element) }, [outerRef])
   const retry = () => viewRef.current?.retry()
   const failed = failedText(contents)
@@ -162,8 +164,8 @@ export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mo
       : !gone && status.tileError ? <div className="rg-strip error" role="status">Some rows could not be loaded: {status.tileError} <button onClick={retry}>Retry</button></div>
         : strip ? <div className={(strip.error ? 'rg-strip error' : 'rg-strip') + (action ? ' has-action' : '')} role="status" title={strip.error ? undefined : strip.text}>
           {action ? <><span className="rg-strip-text">{strip.text}</span>
-            <button type="button" className="rg-strip-action" title={action.title} aria-keyshortcuts={action.keys} onClick={action.run}
-              onFocus={() => { actionFocused.current = true }} onBlur={event => { if (event.relatedTarget) actionFocused.current = false }}>
+            <button ref={actionRef} type="button" className="rg-strip-action" title={action.title} aria-keyshortcuts={action.keys} onClick={action.run}
+              onFocus={() => { actionFocused.current = true }} onBlur={event => { if (event.relatedTarget || event.currentTarget.isConnected) actionFocused.current = false }}>
               {action.icon && <Icon name={action.icon} />}{action.label}
             </button></> : strip.text}
         </div> : null}

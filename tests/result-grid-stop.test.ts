@@ -41,8 +41,8 @@ async function running(truncated: 'queryBudget' | 'globalBudget' | 'systemMemory
   await act(async () => root.render(createElement(WorkbenchProvider, { workbench: f as unknown as Workbench, children: createElement(ResultGrid, { tabId: tab.id, entry: entry(), count: 1, focused: true, onFocus: () => {} }) })))
   const stop = () => container.querySelector<HTMLButtonElement>('.rg-strip button')
   const strip = () => container.querySelector('.rg-strip')
-  /** Ends the run as the backend would after a cancel or the last row. */
-  const finish = async () => { await act(async () => { run.resolve({ ok: true, value: { ...queryOutput, resultSets: [{ ...set, state: 'complete', incomplete: true }] } }); await executed }) }
+  /** Ends the run as the backend would after a cancel (an incomplete result) or the last row. */
+  const finish = async (incomplete = true) => { await act(async () => { run.resolve({ ok: true, value: { ...queryOutput, resultSets: [{ ...set, state: 'complete', incomplete }] } }); await executed }) }
   return { ...f, tab, queryId, stop, strip, finish }
 }
 
@@ -72,6 +72,22 @@ describe('the results strip\'s Stop query', () => {
     act(() => { documents.create('SQLQuery2.sql', 'SELECT 2', 'master') })
     await act(async () => { stop()!.click() })
     expect(api.cancel).toHaveBeenCalledWith(queryId)
+  })
+
+  it('does not come back on a finished result while an estimated plan runs in its tab', async () => {
+    const { api, queries, tab, stop, strip, finish } = await running('queryBudget')
+    await finish(false)
+    // The run read every row: its strip still says what the budget left out, with nothing to stop.
+    expect(strip()?.textContent).toContain('the result memory budget')
+    expect(stop()).toBeNull()
+    // The estimate keeps the tab running but begins no results: the finished run's grid stays drawn.
+    const plan = deferred<Awaited<ReturnType<typeof api.estimatePlan>>>()
+    api.estimatePlan.mockReturnValueOnce(plan.promise)
+    let estimating: Promise<void> | undefined
+    act(() => { estimating = queries.estimate(tab.id) })
+    expect(queries.getSnapshot()[tab.id].running?.kind).toBe('estimate')
+    expect(stop()).toBeNull()
+    await act(async () => { plan.resolve({ ok: true, value: { plans: [], database: 'master' } }); await estimating })
   })
 
   it('shows for low memory but not for the row limit', async () => {

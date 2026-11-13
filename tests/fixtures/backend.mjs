@@ -1058,7 +1058,7 @@ async function runDirective(id, params, directive) {
         if (cancelledQueries.has(queryId)) { status = 'cancelled'; result.incomplete = true; break }
         await sleep(100)
         result.read = Math.min(set.rows, result.read + Math.max(1, Math.round(set.rate / 10)))
-        write(FrameKind.EVENT, id, 0, { type: 'progress', completedBatches: 0, totalBatches: 1, batchNumber: 1, iteration: 1, results: [{ resultId: result.resultId, rowsRead: result.read, rowsStored: result.read, rowsAvailable: available(result), bytesStored: available(result) * 100 }] })
+        write(FrameKind.EVENT, id, 0, { type: 'progress', completedBatches: 0, totalBatches: 1, batchNumber: 1, iteration: 1, results: [{ resultId: result.resultId, rowsRead: result.truncated ? result.read * 2 : result.read, rowsStored: result.read, rowsAvailable: available(result), bytesStored: available(result) * 100, ...result.truncated ? { truncated: result.truncated } : {} }] })
       }
       result.complete = true
       write(FrameKind.EVENT, id, 0, { type: 'resultSet.closed', descriptor: describe(result) })

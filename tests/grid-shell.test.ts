@@ -128,5 +128,12 @@ describe('GridShell', () => {
     show(createElement(GridShell, props(false)))
     expect(container.querySelector('.rg-strip button')).toBeNull()
     expect(document.activeElement).toBe(container.querySelector('[role="grid"]'))
+    // Focus the user moved away from the button (to nothing focusable) is not taken back to the grid when the button goes.
+    show(createElement(GridShell, props(true)))
+    act(() => container.querySelector<HTMLButtonElement>('.rg-strip button')!.focus())
+    act(() => (document.activeElement as HTMLElement).blur())
+    expect(document.activeElement).toBe(document.body)
+    show(createElement(GridShell, props(false)))
+    expect(document.activeElement).toBe(document.body)
   })
 })
