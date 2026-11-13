@@ -1,3 +1,4 @@
+import { CustomDocumentTargets, type CustomDocumentTargetOptions } from '../services/custom-document-targets'
 import { actionLimits } from '../../../shared/actions/catalog.ts'
 import {
   isRestoreSystemDatabase, restoreFilesSections, restoreMessages, restoreModeTitles, restoreSections, restoreSetIdPattern, type RestoreMode, type RestoreModel, type RestoreSource
@@ -87,7 +88,7 @@ export type AnyRestoreRequest = RestoreRequest | RestoreFilesRequest
 
 export interface RestoreSnapshot { readonly documents: Readonly<Record<string, RestoreState>> }
 
-export interface RestoreServiceOptions {
+export interface RestoreServiceOptions extends CustomDocumentTargetOptions {
   readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText'>
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'activate'> & DeliverScriptDeps['documents'] & Partial<Pick<DocumentService, 'subscribe' | 'update'>>
   readonly files: DeliverScriptDeps['files']
@@ -150,10 +151,12 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
   /** The request a confirm bar waits on, by document. */
   private readonly pending = new Map<string, AnyRestoreRequest>()
   private readonly contextStore = new (class extends SnapshotStore<RestoreContextState> { set(value: RestoreContextState) { this.publish(value) } clear() { this.clearListeners() } })({ byDocument: {} })
+  private readonly targetBindings: CustomDocumentTargets
   private disposed = false
 
   constructor(private readonly options: RestoreServiceOptions) {
     super({ documents: {} })
+    this.targetBindings = new CustomDocumentTargets(options)
     this.newId = options.newId ?? (() => crypto.randomUUID())
     this.timers = options.timers ?? browserTimers
     this.now = options.now ?? (() => new Date())
@@ -177,6 +180,7 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
     const connection = this.options.connections.getSnapshot().find(item => item.id === connectionId && !item.lost)
     if (!connection) throw new Error('Connect to the server first.')
     const document = this.options.documents.openCustom('restoreDatabase', restoreTabTitle(database, mode), connection.id, 'master')
+    this.targetBindings.bind(document.id, connection.id)
     this.put({
       id: document.id, mode, server: connection.server, ...connection.login ? { login: connection.login } : {}, phase: 'loading', facts: emptyFacts, sets: 'idle', files: 'idle', revision: 0,
       frame: initialFrameState(mode === 'files' ? restoreFilesSections : restoreSections), script: { state: 'idle', message: restoreServiceMessages.noScript }, ...folderNodeId !== undefined ? { folderNodeId } : {}
@@ -283,7 +287,7 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
     const requestId = this.newId()
     slots.set(slot, requestId)
     const result = await this.call(() => this.options.api.describeObject({ connectionId, requestId, dialog: 'restoreDatabase', target: { kind: 'server' }, restore }))
-    if (this.disposed || !this.get(id) || this.reads.get(id)?.get(slot) !== requestId) return undefined
+    if (this.disposed || !this.get(id) || this.reads.get(id)?.get(slot) !== requestId || this.connectionOf(id) !== connectionId || !this.live(id)) return undefined
     slots.delete(slot)
     if (!result.ok) return error(result.code === 'CONNECTION_LOST' || result.code === 'BACKEND_LOST' ? 'CONNECTION_LOST' : 'SQL_ERROR', result.error)
     if (result.value.error) return result.value.error
@@ -514,7 +518,7 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
     this.previews.set(id, requestId)
     this.patch(id, { script: { state: 'loading' } })
     const result = await this.call(() => this.options.api.scriptObjectAction(request))
-    if (this.previews.get(id) !== requestId || this.disposed || !this.get(id)) return undefined
+    if (this.previews.get(id) !== requestId || this.disposed || !this.get(id) || this.connectionOf(id) !== connectionId || !this.live(id)) return undefined
     this.previews.delete(id)
     const failure = !result.ok ? { message: result.error, ...result.code ? { code: result.code } : {} } : result.value.error ? { message: result.value.error.message, code: result.value.error.code } : undefined
     const text = result.ok ? result.value.text : undefined
@@ -531,8 +535,11 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
   canClose(id: string): string | undefined { return this.isRunning(id) ? restoreServiceMessages.running : undefined }
   revision(): number { return 0 }
   focus(id: string): void { this.options.focus?.(id) }
-  follows(id: string, server: string): boolean { const state = this.get(id); return !!state && state.server.trim().toLowerCase() === server.trim().toLowerCase() }
+  /** Legacy server-name reassociation is refused; reconnect callers must supply durable identity. */
+  follows(_id: string, _server: string): boolean { return false }
+  canFollowTarget(id: string, targetId: string): boolean { return this.targetBindings.canFollowTarget(id, targetId) }
   closed(id: string): void {
+    this.targetBindings.forget(id)
     const run = this.get(id)?.run
     this.cancel([...this.reads.get(id)?.values() ?? [], ...this.previews.has(id) ? [this.previews.get(id)!] : [], ...run?.phase === 'running' && run.requestId ? [run.requestId] : []])
     this.reads.delete(id)
@@ -547,6 +554,7 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.targetBindings.clear()
     this.cancel([...this.reads.values()].flatMap(slots => [...slots.values()]).concat([...this.previews.values()]))
     for (const timer of this.previewTimers.values()) this.timers.clearTimeout(timer)
     this.reads.clear()
@@ -588,7 +596,7 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
   private connectionOf(id: string): string | undefined { return this.options.documents.get(id)?.connectionId }
   private live(id: string): boolean {
     const connectionId = this.connectionOf(id)
-    return !!connectionId && this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost)
+    return this.targetBindings.matchesConnection(id, connectionId) && this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost)
   }
   private async call<T>(send: () => Promise<ApiResult<T>>): Promise<ApiResult<T>> {
     try { return await send() } catch (failure) { return { ok: false, error: failure instanceof Error ? failure.message : 'The request failed.' } }

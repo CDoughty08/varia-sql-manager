@@ -85,7 +85,7 @@ export function sessionPrompt({ action, tabs }: SessionPromptRequest): SessionPr
       running.length ? `Still executing:\n${listed(running, () => '')}\n${runningNote}` : ''
     ].filter(Boolean).join('\n\n')
     return {
-      title: 'Uncommitted transactions', message, detail, defaultId: running.length ? 2 : 0, cancelId: 2,
+      title: 'Uncommitted transactions', message, detail, defaultId: running.length || action === 'disconnect' ? 2 : 0, cancelId: 2,
       buttons: [{ label: 'Yes', answer: 'commit' }, { label: 'No', answer: 'rollback' }, { label: 'Cancel', answer: 'cancel' }]
     }
   }
@@ -93,8 +93,10 @@ export function sessionPrompt({ action, tabs }: SessionPromptRequest): SessionPr
   return {
     title: 'Query executing',
     message: one ? `${running[0].name} is still executing.` : `${queries(running.length)} are still executing.`,
-    detail: [one ? '' : listed(running, () => ''), `Cancel ${one ? 'it' : 'them'} and close ${closes(action)}? Anything ${one ? 'it' : 'they'} left uncommitted is rolled back.`].filter(Boolean).join('\n\n'),
+    detail: [one ? '' : listed(running, () => ''), action === 'disconnect'
+      ? `Cancel ${one ? 'it' : 'them'} and disconnect the server? Cancellation does not undo work already committed. If completion cannot be confirmed, the outcome may be unknown and disconnect stops with every tab open.`
+      : `Cancel ${one ? 'it' : 'them'} and close ${closes(action)}? Anything ${one ? 'it' : 'they'} left uncommitted is rolled back.`].filter(Boolean).join('\n\n'),
     defaultId: 1, cancelId: 1,
-    buttons: [{ label: one ? 'Cancel Query and Close' : 'Cancel Queries and Close', answer: 'proceed' }, { label: 'Keep Running', answer: 'cancel' }]
+    buttons: [{ label: action === 'disconnect' ? one ? 'Cancel Query and Disconnect' : 'Cancel Queries and Disconnect' : one ? 'Cancel Query and Close' : 'Cancel Queries and Close', answer: 'proceed' }, { label: 'Keep Running', answer: 'cancel' }]
   }
 }

@@ -295,18 +295,14 @@ describe('Activity Monitor document', () => {
     expect(initialMonitor('m', 's', { ...defaultSettings, 'activityMonitor.queriesIntervalSeconds': 5 }).queriesIntervalSeconds).toBe(30)
     expect(initialMonitor('m', 's', defaultSettings).queriesIntervalSeconds).toBe(30)
   })
-  it('closes like a tab, ending its view, and follows a reconnect only to its own server', async () => {
+  it('refuses server-name-only reassociation and closes through the normal document path', async () => {
     const { activity, commands, connect, liveViews, documents, targets } = monitorFixture()
     connect(connectionInfo('c1'))
     const id = activity.open('c1')
-    // Reconnect: a connection to another server does not take it, one to its own does.
-    connect({ ...connectionInfo('other'), server: 'elsewhere.example' })
-    targets.retarget('c1', 'other')
-    expect(documents.get(id)?.connectionId).toBe('c1')
-    connect({ ...connectionInfo('c1b'), server: 'C1.EXAMPLE' })
+    connect({ ...connectionInfo('c1b'), server: 'C1.EXAMPLE', login: 'another-account' })
     targets.retarget('c1', 'c1b')
-    expect(documents.get(id)?.connectionId).toBe('c1b')
-    expect(activity.monitorOf('c1b')).toBe(id)
+    expect(documents.get(id)?.connectionId).toBe('c1')
+    expect(activity.monitorOf('c1b')).toBeUndefined()
     await commands.execute('activity.close', undefined, 'keybinding')
     await settled()
     expect(documents.get(id)).toBeUndefined()

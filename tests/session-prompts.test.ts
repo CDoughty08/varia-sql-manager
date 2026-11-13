@@ -28,13 +28,13 @@ describe('session prompts', () => {
   for (const action of sessionActions) {
     it.each(matrix)(`${action}: %s`, (_situation, tabs, expected) => {
       expect(needsSessionPrompt(tabs)).toBe(expected !== undefined)
-      expect(answers(action, tabs)).toEqual(expected)
+      expect(answers(action, tabs)).toEqual(action === 'disconnect' ? expected?.map(answer => answer.replace('and Close=', 'and Disconnect=')) : expected)
       const prompt = sessionPrompt({ action, tabs })
       if (!prompt) return
       // Escape is Cancel (Keep Running). As in SSMS, Enter commits an open transaction (Yes); with an executing query among
       // the tabs it keeps everything as it is, so Enter never cancels a running query.
       expect(prompt.buttons[prompt.cancelId].answer).toBe('cancel')
-      expect(prompt.buttons[prompt.defaultId].answer).toBe(prompt.title === 'Uncommitted transactions' && !tabs.some(tab => tab.running) ? 'commit' : 'cancel')
+      expect(prompt.buttons[prompt.defaultId].answer).toBe(prompt.title === 'Uncommitted transactions' && !tabs.some(tab => tab.running) && action !== 'disconnect' ? 'commit' : 'cancel')
     })
   }
   it('asks SSMS\'s question, naming the queries and what is about to happen', () => {
@@ -74,6 +74,13 @@ describe('session prompts', () => {
     const detail = sessionPrompt({ action: 'exit', tabs })!.detail
     expect(detail.split('\n').filter(line => line.startsWith('• '))).toHaveLength(sessionPromptLimits.listed)
     expect(detail).toContain('• q10.sql\n… and 3 more\n\nYes commits every nesting level')
+  })
+  it('names disconnect rather than close when cancelling executions and explains an unknown outcome', () => {
+    const prompt = sessionPrompt({ action: 'disconnect', tabs: [running('report.sql')] })!
+    expect(prompt.detail).toContain('disconnect the server')
+    expect(prompt.detail).toContain('does not undo work already committed')
+    expect(prompt.detail).toContain('outcome may be unknown')
+    expect(prompt.buttons[prompt.defaultId].answer).toBe('cancel')
   })
   it('accepts only bounded facts about queries that need asking', () => {
     const valid = { action: 'close', tabs: [open('a.sql')] }
