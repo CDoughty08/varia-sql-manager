@@ -93,7 +93,7 @@ internal sealed class ResultSetBuffer
     /// <summary>Records why a row was not stored; the first reason sticks.</summary>
     public void Skip(TruncationReason reason) => Interlocked.CompareExchange(ref truncated, (int)reason, 0);
 
-    /// <summary>A set made from stored results (a pivot, a diff, a transpose), not read from the server: a refusal or low
+    /// <summary>A set made from stored results (a pivot, a diff), not read from the server: a refusal or low
     /// system memory fails only this set, which its caller then releases whole, and never stops its query from storing
     /// more, so a smaller one can still fit.</summary>
     public bool Derived { get; init; }

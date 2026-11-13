@@ -26,7 +26,6 @@ import { ResultsService } from '../../src/renderer/src/results/ResultsService'
 import { HighlightsService } from '../../src/renderer/src/results/HighlightsService'
 import { CompareService } from '../../src/renderer/src/results/CompareService'
 import { PivotService } from '../../src/renderer/src/results/PivotService'
-import { TransposeService } from '../../src/renderer/src/results/TransposeService'
 import { highlightsContribution } from '../../src/renderer/src/contributions/highlights'
 import { pivotContribution } from '../../src/renderer/src/contributions/pivot'
 import { transposeContribution } from '../../src/renderer/src/contributions/transpose'
@@ -354,7 +353,6 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const highlights = new HighlightsService(results, { timers: options.timers ?? browserTimers })
   const compare = new CompareService(results)
   const pivot = new PivotService(results)
-  const transpose = new TransposeService(results)
   const resultsSearch = new ResultsSearchService({ results, timers: options.timers ?? browserTimers })
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
   const files = new FileService(documents, queries, api, { autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'] })
@@ -487,7 +485,6 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     highlights,
     compare,
     pivot,
-    transpose,
     resultsSearch,
     settings,
     scripting,
@@ -565,7 +562,6 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     highlights.dispose()
     compare.dispose()
     pivot.dispose()
-    transpose.dispose()
     resultsSearch.dispose()
     results.dispose()
     explorer.dispose()
@@ -616,7 +612,6 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     pivot,
     highlights,
     compare,
-    transpose,
     settings,
     scripting,
     actions,

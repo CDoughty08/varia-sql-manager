@@ -11,8 +11,8 @@ Right-click a result column header or cell, or press Shift+F10 in the grid, to o
   keeps Messages. It is unavailable while that query is executing. Hiding the results pane still keeps its results.
 - The **Close** button at the end of a result's caption ("Close Result 2") closes that one result and frees its memory.
   The other results keep their names and numbers (closing Result 2 does not rename Result 3), their sort, filters,
-  selection and heights. A pivot, transpose or comparison made from a closed result stays: it is a result of its own.
-  Anything still being built from the closed result (a pivot, a transpose, a comparison, a sort, a copy) is cancelled; a
+  selection and heights. A pivot or comparison made from a closed result stays: it is a result of its own.
+  Anything still being built from the closed result (a pivot, a comparison, a sort, a copy) is cancelled; a
   save that has already started writing its file finishes. The run summary and its row count do not change. Closing the
   last result leaves the Results view saying "Results were closed. Execute the query again to see them."; Messages and
   captured execution plans stay. The button is unavailable while the query is executing, and there is no undo. Peek's
@@ -23,7 +23,7 @@ a result replaced by another execution or lost with the backend. The toolbar clo
 switch or close query documents. Closing results from the output moves focus to its surviving Results tab. Closing one
 result from its caption moves focus to the next result's caption, else the previous one's, else the Results tab.
 
-The run summary's row count is the rows the query returned: pivots, transposes and comparisons do not add to it. After a
+The run summary's row count is the rows the query returned: pivots and comparisons do not add to it. After a
 splitter between results has been dragged, a result added later (a pivot, say) takes an average share and the others
 keep their proportions.
 

@@ -39,10 +39,10 @@ export const limits = {
   /** results.pivot: row-group columns and values one pivot takes, and the row groups, column groups and figures (cells
    *  times values) it can have: a pivot past any of them is refused, never shown in part (ResultPivoter in C#). */
   pivot: { maxRowFields: 8, maxValues: 16, maxRowGroups: 100_000, maxColumnGroups: 256, maxCells: 4_000_000 },
-  /** results.transpose: source rows one takes (they become columns, so a page's columns less "Column"), cells it holds
-   *  (fewer rows for a wide result), and row ranges one request names. Past the rows or cells it takes the first ones and
-   *  says so (ResultTransposer in C#). */
-  transpose: { maxRows: 4095, maxCells: 4_000_000, maxRanges: 256 },
+  /** Rows a grid drawn transposed shows as columns (a page's columns less the one that names the result's columns): what
+   *  such a grid draws, a transposed copy or save writes, and one Keep Selected Rows filter names
+   *  (ResultTextWriter.MaxTransposedRows in C#). */
+  transpose: { maxRows: 4095 },
   /** Distinct snapshots: values one results.distinctRead answers and groups one results.distinctTick names
    *  (ViewSorter.MaxDistinctWindow in C#), snapshots one result keeps (MaxDistinctSnapshots), ids one results.distinctClose
    *  takes, and characters of a value's text (DistinctValueChars). A snapshot itself has no cap but the result's budget. */
@@ -115,7 +115,7 @@ export const errorCodes = [
   // Backend, results jobs: an export failure (its message is one token: ACCESS, DISK_FULL, IN_USE, NOT_FOUND,
   // IS_DIRECTORY or IO) and an export of a set still loading.
   'EXPORT_FAILED', 'RESULT_OPEN',
-  // Backend: a pivot, diff or transpose of a query that stopped storing (its result memory filled, or the computer was low
+  // Backend: a pivot or diff of a query that stopped storing (its result memory filled, or the computer was low
   // on memory while it ran); the message says which, and what to do.
   'BUDGET_STOPPED',
   // Backend and main: an Object Explorer requestId that is already running.

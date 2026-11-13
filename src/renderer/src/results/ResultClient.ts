@@ -1,7 +1,7 @@
 // The renderer's access to stored query results (the PR7 grid contract). Rows stay in the backend; the results worker
 // reads and decodes pages, and the UI thread receives only windows of display text. Live subscriptions run through the
 // same worker and port: their tables are ordinary stored results, opened with the same handles.
-import type { ApiResult, BackendStatus, IdentityBy, PivotValueSpec, QueryEvent, QueryResult, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultsDiffResult, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ResultsTransposeResult, TruncationReason, VariaApi, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
+import type { ApiResult, BackendStatus, IdentityBy, PivotValueSpec, QueryEvent, QueryResult, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultsDiffResult, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, TruncationReason, VariaApi, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport } from '../../../shared/ipc/port-messages'
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
@@ -110,11 +110,6 @@ export interface ResultHandle extends Disposable {
    *  1 to `limits.pivot.maxValues` values each, stored as a new result whose descriptor the answer carries: open it with
    *  `ResultClient.open`. The result must have finished loading. */
   pivot(spec: PivotSpec, o?: { signal?: AbortSignal }): Promise<ResultsPivotResult>
-  /** Transposes the rows (a view's rows, in its order and with its filters, through a view; only `rows`' [first, count]
-   *  position ranges when given) in the backend (results.transpose): the columns become rows and up to
-   *  `limits.transpose.maxRows` rows become columns, named by `headerColumn`'s values or "Row N", stored as a new result
-   *  whose descriptor the answer carries: open it with `ResultClient.open`. The result must have finished loading. */
-  transpose(spec?: TransposeSpec, o?: { signal?: AbortSignal }): Promise<ResultsTransposeResult>
   /** The cells whose grid text contains `text`, searched in the backend over the stored rows (results.search; a view's
    *  positions on a view): every match counted, and a run of up to `maxMatches` in whole rows from `fromRow`, or with
    *  `backward` the last before it. Aborting the signal stops the search. */
@@ -122,8 +117,6 @@ export interface ResultHandle extends Disposable {
 }
 /** A pivot's layout: row-group columns, an optional column-group column and its values. */
 export interface PivotSpec { readonly rows: readonly number[]; readonly column?: number; readonly values: readonly PivotValueSpec[] }
-/** A transpose's rows (position ranges; all when left out) and the column naming the rows' columns. */
-export interface TransposeSpec { readonly rows?: readonly (readonly [number, number])[]; readonly headerColumn?: number }
 export interface SearchOptions { readonly maxMatches?: number; readonly backward?: boolean; readonly signal?: AbortSignal }
 /** A column's distinct snapshot (results.distinct): what it found when built, windows of its values, ticks, and close (once;
  *  later calls, and a close after its result went, do nothing). */
@@ -472,24 +465,6 @@ export class ResultClient implements Disposable {
         const response = await this.request(id => ({ type: 'identity', id, key: state.key, request }), o.signal, late)
         if (response.type !== 'identity') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
         return response.result as ResultsPivotResult
-      },
-      transpose: async (spec = {}, o = {}) => {
-        this.usable(state)
-        const { rows, headerColumn } = spec
-        // Main counts a request its schema refuses toward closing the port, so a bad transpose never leaves the page.
-        if ((headerColumn !== undefined && (!Number.isInteger(headerColumn) || headerColumn < 0 || headerColumn >= state.columns.length))
-          || (rows !== undefined && (rows.length < 1 || rows.length > wire.transpose.maxRanges || rows.some(([first, count]) => !Number.isSafeInteger(first) || first < 0 || !Number.isSafeInteger(count) || count < 1))))
-          throw new ResultError('INVALID_PARAMS', 'A transpose takes 1 to 256 row ranges and a header column of the result.')
-        // A transpose answered just before the abort reached the worker is a stored result nobody holds: it is released.
-        const late = (message: WorkerResponse) => {
-          if (message.type !== 'identity') return
-          const { descriptor } = message.result as ResultsTransposeResult
-          void this.release([{ generation: descriptor.generation, resultId: descriptor.resultId }]).catch(() => {})
-        }
-        const request = { method: 'transpose' as const, ...(rows === undefined ? {} : { rows: rows.map(([first, count]) => [first, count] as const) }), ...(headerColumn === undefined ? {} : { headerColumn }) }
-        const response = await this.request(id => ({ type: 'identity', id, key: state.key, request }), o.signal, late)
-        if (response.type !== 'identity') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
-        return response.result as ResultsTransposeResult
       },
       search: async (text, fromRow, o = {}) => {
         this.usable(state)
