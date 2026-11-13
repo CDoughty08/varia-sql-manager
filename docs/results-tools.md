@@ -19,6 +19,12 @@ Right-click a result column header or cell, or press Shift+F10 in the grid, to o
   already started writing its file finishes. The run summary and its row count do not change. Closing the last result
   leaves the Results view saying "Results were closed. Execute the query again to see them."; Messages and captured
   execution plans stay. Closing one view is unavailable while the query is executing, and there is no undo.
+- When a running query stops keeping rows because the result memory budget is full or the computer is low on memory, the
+  grid's strip says so while the query keeps reading and counting rows, and offers **Stop query**. It is Cancel
+  Executing Query (Alt+Pause on Windows and Linux) for that grid's query tab: Tab reaches it from the grid, and Enter or
+  Space presses it. The rows already kept stay. The button goes when the query ends, and the focus returns to the grid.
+  The strip for **Maximum rows kept per execution** has no button: that limit is one you set, reached as you asked, and
+  the toolbar's Cancel still stops the query.
 
 The menu keeps the query, result set and column it was opened for, including in popped-out panels. Column actions refuse
 a result replaced by another execution or lost with the backend. The toolbar closes its own query's results; it does not

@@ -36,9 +36,9 @@ export const guideCatalog = {
     title: 'Work with query results', summary: 'Sort and filter returned rows, select cells and copy with confidence.',
     keywords: ['grid', 'copy', 'headers', 'sort', 'filter', 'selection'],
     sections: [{ id: 'browse', title: 'Explore returned rows' }, { id: 'select', title: 'Select and copy' }, { id: 'limits', title: 'Know the limits' }],
-    related: ['run-query'], commands: [{ id: 'output.copy', context: 'resultsGrid' }, { id: 'output.copyWithHeaders', context: 'resultsGrid' }],
+    related: ['run-query'], commands: [{ id: 'output.copy', context: 'resultsGrid' }, { id: 'output.copyWithHeaders', context: 'resultsGrid' }, { id: 'query.cancel', context: 'queryEditor' }],
     settings: ['queryResults.grid.includeColumnHeaders'], gestures: ['grid.addToSelection'],
-    sourceAreas: ['src/renderer/src/results', 'src/shared/settings/query-results.ts']
+    sourceAreas: ['src/renderer/src/results', 'src/renderer/src/grid/ResultGrid.tsx', 'src/shared/settings/query-results.ts']
   }
 } as const satisfies Record<string, GuideMetadata>
 export type GuideId = keyof typeof guideCatalog

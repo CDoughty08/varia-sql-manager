@@ -1367,6 +1367,30 @@ try {
   await expect.poll(clipboard).toContain('Commands completed successfully.')
   console.log('Results checks: Messages stream, show errors in red and in order, and end with the completion time; Ctrl+A selects only their text.')
 
+  // A result that stopped keeping rows (its budget full) while the script runs: the strip offers Stop query, reached by
+  // Tab and Enter, which cancels the run as Cancel Executing Query does; it goes with the run and gives the focus back to
+  // the grid. The row limit, the user's own cap, says so with no button.
+  await writeFile(join(control, 'hold', 'query.execute'), '')
+  await run('-- varia-fake: sets=W1*100 truncated=queryBudget hold', { running: true })
+  await outputTab(/^Results/).click()
+  const stopQuery = strip().getByRole('button', { name: 'Stop query', exact: true })
+  await expect(strip()).toContainText('Only the first 100 of 200 rows are shown: the result memory budget')
+  await expect(stopQuery).toBeVisible()
+  await expect(stopQuery).toHaveAttribute('title', /^Cancel Executing Query/)
+  await grid().focus()
+  await page.keyboard.press('Tab')
+  await expect(stopQuery).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(status()).toContainText(/^Cancelled · /)
+  await expect(stopQuery).toHaveCount(0)
+  await expect(grid()).toBeFocused()
+  await run('-- varia-fake: sets=W1*100 truncated=rowLimit hold', { running: true })
+  await expect(strip()).toContainText('the limit on rows kept per execution was reached')
+  await expect(strip().getByRole('button')).toHaveCount(0)
+  await rm(join(control, 'hold', 'query.execute'))
+  await expect(status()).toContainText(/^Completed · /)
+  console.log('Results checks: a result past its budget offers Stop query while the script runs, by keyboard, and it cancels the run; the row limit offers none.')
+
   // 11. Lifecycle: running again frees the last run's windows, closing a tab disposes its grids, and results outlive
   // Disconnect.
   await run('-- varia-fake: sets=W1*5000')

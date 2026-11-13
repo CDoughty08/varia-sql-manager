@@ -4,6 +4,8 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { ColumnFilterPopover, type ColumnFilterSource, type ColumnFilterTarget } from '../results/ColumnFilterPopover'
 import { GridView, type GridStatus, type GridViewOptions, type HeaderSortKey } from './GridView'
 import type { WhitespaceMode } from './whitespace'
+import type { IconId } from '../../../shared/icons'
+import Icon from '../Icon'
 
 /** What a grid's source gives GridView; the shell adds its elements, the client, the platform, the white space setting, its
  *  status and errors, and the header's sort buttons and funnels. */
@@ -35,6 +37,9 @@ export interface GridFunnels {
   columnName(column: number): string | undefined
 }
 
+/** A strip's button: its accessible name, icon, tooltip and the keys of the command it runs (`aria-keyshortcuts`). */
+export interface StripAction { readonly label: string; readonly icon?: IconId; readonly title?: string; readonly keys?: string; run(): void }
+
 export interface GridShellProps {
   /** The grid element's own attributes (its name, the data-* the menus read, focus handlers). */
   readonly rootProps: HTMLAttributes<HTMLDivElement> & Record<`data-${string}`, string | number | undefined>
@@ -58,8 +63,8 @@ export interface GridShellProps {
   readonly update?: { readonly resultCount: number; readonly showTypes?: boolean; readonly rowSize?: boolean; readonly headerColumn?: number | null }
   /** The rows are gone (a released or lost result, a stopped live view): an overlay says why, over the strips. */
   readonly gone?: string
-  /** A note under the rows when nothing failed (a truncation, a highlight, a failed copy). */
-  readonly strip?: { readonly text: string; readonly error?: boolean }
+  /** A note under the rows when nothing failed (a truncation, a highlight, a failed copy), and a button after it that acts on it. */
+  readonly strip?: { readonly text: string; readonly error?: boolean; readonly action?: StripAction }
   /** What the render error strip calls the grid's contents. */
   readonly contents?: 'result' | 'rows'
   /** How cells show white space, when not the results setting (a grid whose menu has no White space item). */
@@ -133,6 +138,16 @@ export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mo
     // Alt+Down, Ctrl+C and the other Query Output keys are the catalogue's (output.*, outputGridFocus), never the shell's.
     if (viewRef.current?.key(event.nativeEvent)) { event.preventDefault(); event.stopPropagation() }
   }
+  // A strip's button that goes while it has the keyboard focus (Stop query once the query ends, or a strip that replaced it)
+  // gives the focus to the grid, not to the page. Chromium may not blur an element it removes, so each commit looks for the
+  // button; the grid's own document, since a popped-out pane's is not the main window's.
+  const action = strip?.action, actionRef = useRef<HTMLButtonElement>(null), actionFocused = useRef(false)
+  useLayoutEffect(() => {
+    if (!actionFocused.current || actionRef.current?.isConnected) return
+    actionFocused.current = false
+    const owner = rootRef.current?.ownerDocument, active = owner?.activeElement
+    if (owner && (!active || active === owner.body)) rootRef.current?.focus()
+  })
   const setRoot = useCallback((element: HTMLDivElement | null) => { rootRef.current = element; outerRef?.(element) }, [outerRef])
   const retry = () => viewRef.current?.retry()
   const failed = failedText(contents)
@@ -147,7 +162,13 @@ export default function GridShell({ rootProps, frameProps, rootRef: outerRef, mo
     {gone && <div className="rg-overlay" role="status">{gone}</div>}
     {!gone && status.renderError ? <div className="rg-strip error" role="status">{failed} <button onClick={retry}>Retry</button></div>
       : !gone && status.tileError ? <div className="rg-strip error" role="status">Some rows could not be loaded: {status.tileError} <button onClick={retry}>Retry</button></div>
-        : strip ? <div className={strip.error ? 'rg-strip error' : 'rg-strip'} role="status" title={strip.error ? undefined : strip.text}>{strip.text}</div> : null}
+        : strip ? <div className={(strip.error ? 'rg-strip error' : 'rg-strip') + (action ? ' has-action' : '')} role="status" title={strip.error ? undefined : strip.text}>
+          {action ? <><span className="rg-strip-text">{strip.text}</span>
+            <button ref={actionRef} type="button" className="rg-strip-action" title={action.title} aria-keyshortcuts={action.keys} onClick={action.run}
+              onFocus={() => { actionFocused.current = true }} onBlur={event => { if (event.relatedTarget || event.currentTarget.isConnected) actionFocused.current = false }}>
+              {action.icon && <Icon name={action.icon} />}{action.label}
+            </button></> : strip.text}
+        </div> : null}
     {funnel && !gone && funnels && columnName !== undefined && rootRef.current && <ColumnFilterPopover key={funnel.column} source={funnels.source} target={funnel}
       columnName={columnName || '(No column name)'} filtered={funnels.filtered.has(funnel.column)} grid={rootRef.current} onClose={closeFunnel} />}
   </div>
