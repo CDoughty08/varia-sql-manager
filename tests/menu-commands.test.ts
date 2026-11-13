@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { connectionInfo, connectionOptions, queryOutput, readyBackend, workbenchFixture } from './fixtures/workbench'
 import { deferred, TestEditor } from './fixtures/documents'
 import type { QueryResult, ResultColumn } from '../src/shared/contracts'
+import { connectionTargetOptions } from '../src/shared/connection-targets'
 import { descriptor } from './fixtures/results'
 import { contextRecord } from '../src/shared/commands/context-keys'
 import type { Platform } from '../src/shared/commands/keybindings'
@@ -470,16 +471,19 @@ describe('Object Explorer commands', () => {
     await commands.execute('explorer.collapseAll', undefined, 'toolbar')
     expect([stop.mock.calls.length, collapse.mock.calls.length]).toEqual([1, 1])
   })
-  it('disconnect a server node\'s server without asking which, unless a query runs on it', async () => {
+  it('send both server disconnect actions through the host preflight, including a running query', async () => {
     const { commands, documents, host, quickInput, startQuery } = connected()
     expect(await commands.execute('connection.disconnect', server, 'menu')).toBe(true)
     expect(vi.mocked(host.disconnect).mock.calls).toEqual([['server-a']])
     expect(quickInput.getSnapshot()).toMatchObject({ visible: false })
     documents.create('SQLQuery1.sql', 'SELECT 1', 'master', 'server-a')
     const running = startQuery()
-    expect(commands.isEnabled('connection.disconnect', server)).toBe(false)
+    expect(commands.isEnabled('connection.disconnect', server)).toBe(true)
+    expect(await commands.execute('connection.disconnectAndRemove', server, 'menu')).toBe(true)
+    expect(vi.mocked(host.disconnect).mock.calls).toEqual([['server-a'], ['server-a', true]])
     expect(commands.isEnabled('connection.disconnect', on({ kind: 'server' }, 'gone'))).toBe(false)
-    // The picker stays available; it disables that server's row instead.
+    expect(commands.isEnabled('connection.disconnectAndRemove', on({ kind: 'server' }, 'gone'))).toBe(false)
+    // The picker delegates the same preflight for the server the user chooses.
     expect(commands.isEnabled('connection.disconnect')).toBe(true)
     await running.finish()
     expect(commands.isEnabled('connection.disconnect', server)).toBe(true)
@@ -498,21 +502,61 @@ describe('Object Explorer commands', () => {
     expect(await commands.execute('connection.environment', undefined, 'menu')).toBe(true)
     expect(vi.mocked(host.editEnvironment).mock.calls).toEqual([['server-a'], ['server-a']])
   })
+  it('offer disconnect and removal separately, preserving long-operation blockers in both paths', async () => {
+    const { commands, host, menus, longRuns, quickInput } = connected()
+    const connectionItems = menus.resolve('explorer.context', server.target).filter(item => item.kind === 'command' && item.id.startsWith('connection.'))
+    expect(connectionItems.map(item => item.kind === 'command' ? item.title : '')).toEqual(['Connect…', 'Disconnect', 'Disconnect and Remove from Explorer', 'Environment…'])
+    expect(commands.isEnabled('connection.removeFromExplorer', server)).toBe(false)
+    const run = longRuns.begin({ kind: 'restore', connectionId: 'server-a', server: 'sql.example.test' })
+    for (const command of ['connection.disconnect', 'connection.disconnectAndRemove'] as const) {
+      expect(commands.isEnabled(command, server)).toBe(false)
+      expect(await commands.execute(command, undefined, 'palette')).toBe(true)
+      expect(quickInput.getSnapshot().rows[0].item).toMatchObject({ id: 'server-a', disabled: true })
+      quickInput.hide('cancel')
+    }
+    expect(host.disconnect).not.toHaveBeenCalled()
+    run.dispose()
+    expect(await commands.execute('connection.disconnectAndRemove', undefined, 'palette')).toBe(true)
+    quickInput.accept()
+    expect(host.disconnect).toHaveBeenCalledWith('server-a', true)
+  })
   it('reconnect or remove a lost server from its menu, and pick among the lost ones elsewhere', async () => {
     const { commands, host, connections, quickInput } = connected()
     connections.add(connectionInfo('server-l', 0), connectionOptions)
     expect(connections.get('server-l')).toMatchObject({ lost: true })
     const lost = on({ kind: 'server' }, 'server-l', true)
     expect(await commands.execute('connection.reconnect', lost, 'menu')).toBe(true)
-    expect(await commands.execute('connection.removeLost', lost, 'menu')).toBe(true)
-    expect([vi.mocked(host.reconnect).mock.calls, vi.mocked(host.disconnect).mock.calls]).toEqual([[['server-l']], [['server-l']]])
+    expect(await commands.execute('connection.removeFromExplorer', lost, 'menu')).toBe(true)
+    expect([vi.mocked(host.reconnect).mock.calls, vi.mocked(host.removeConnection).mock.calls]).toEqual([[['server-l']], [['server-l']]])
+    expect(host.disconnect).not.toHaveBeenCalled()
     // Not for a live server, nor for a lost one that was reconnected or removed meanwhile.
     for (const args of [server, on({ kind: 'server' }, 'server-x', true)]) {
       expect(commands.isEnabled('connection.reconnect', args)).toBe(false)
       expect(commands.isEnabled('connection.removeLost', args)).toBe(false)
+      expect(commands.isEnabled('connection.removeFromExplorer', args)).toBe(false)
+      expect(commands.isEnabled('connection.disconnectAndRemove', lost)).toBe(false)
     }
     expect(await commands.execute('connection.removeLost', undefined, 'palette')).toBe(true)
-    expect(quickInput.getSnapshot()).toMatchObject({ visible: true, ariaLabel: 'Remove Lost Connection', rows: [{ item: { id: 'server-l' } }] })
+    expect(quickInput.getSnapshot()).toMatchObject({ visible: true, ariaLabel: 'Remove from Explorer', rows: [{ item: { id: 'server-l' } }] })
+  })
+  it('reject stale offline menus during a connection attempt and after Explorer removal', async () => {
+    const { commands, connectionTargets, quickInput, host } = connected()
+    const targetId = crypto.randomUUID()
+    connectionTargets.add({ id: targetId, options: connectionTargetOptions(connectionOptions), details: { autoReconnect: 'inherit' }, inExplorer: true, resumeWanted: false })
+    const offline = on({ kind: 'server' }, targetId, true)
+    for (const id of ['connection.reconnect', 'connection.removeFromExplorer'] as const) expect(commands.isEnabled(id, offline)).toBe(true)
+    expect(connectionTargets.beginConnect(targetId, 1, crypto.randomUUID())).toBeDefined()
+    for (const id of ['connection.reconnect', 'connection.removeFromExplorer'] as const) expect(commands.isEnabled(id, offline)).toBe(false)
+    connectionTargets.cancelConnect(targetId)
+    connectionTargets.removeFromExplorer(targetId)
+    for (const id of ['connection.reconnect', 'connection.removeFromExplorer'] as const) {
+      expect(commands.isEnabled(id, offline)).toBe(false)
+      expect(await commands.execute(id, undefined, 'palette')).toBe(true)
+      expect(quickInput.getSnapshot().rows).toEqual([])
+      quickInput.hide('cancel')
+    }
+    expect(host.reconnect).not.toHaveBeenCalled()
+    expect(host.removeConnection).not.toHaveBeenCalled()
   })
   it('leave a server lost with a backend restart alone, even when the restart comes while a command waits', async () => {
     const fixture = connected(), { commands, documents, api, connections } = fixture
@@ -547,11 +591,11 @@ describe('Object Explorer commands', () => {
     api.push(readyBackend(2))
     const lost = on({ kind: 'server' }, 'server-b', true)
     const items = (resolved: ReturnType<typeof menus.resolve>) => resolved.map(item => item.kind === 'command' ? [item.title, item.enabled] : item.kind)
-    expect(items(menus.resolve('explorer.context', lost.target))).toEqual([['Connect…', true], ['Reconnect…', true], ['Remove', true]])
+    expect(items(menus.resolve('explorer.context', lost.target))).toEqual([['Connect…', true], ['Reconnect…', true], ['Remove from Explorer', true]])
     // A lost server's node acts on that server, not on the active query's lost one.
     expect(await commands.execute('connection.reconnect', lost, 'menu')).toBe(true)
     expect(await commands.execute('connection.removeLost', lost, 'menu')).toBe(true)
-    expect([vi.mocked(host.reconnect).mock.calls, vi.mocked(host.disconnect).mock.calls]).toEqual([[['server-b']], [['server-b']]])
+    expect([vi.mocked(host.reconnect).mock.calls, vi.mocked(host.removeConnection).mock.calls]).toEqual([[['server-b']], [['server-b']]])
     const connection = menus.resolve('query').find(item => item.key === 'query.connection')
     if (connection?.kind !== 'submenu') throw new Error('Query › Connection is missing')
     expect(items(connection.items)).toEqual([['Connect…', true], ['Disconnect', false], ['Disconnect All Queries', false], ['Reconnect…', true], 'separator', ['Change Connection…', true], ['Environment…', false]])

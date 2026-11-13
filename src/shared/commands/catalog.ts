@@ -325,6 +325,11 @@ export const commandCatalog = {
       { menu: 'explorer.context', group: '0_connect', order: 2, title: 'Disconnect', mnemonic: 'd', when: "explorerNode == 'server' && !explorerServerLost" }
     ]
   },
+  'connection.disconnectAndRemove': {
+    title: 'Disconnect and Remove from Explorer', category: 'Connection', icon: 'close', keywords: ['disconnect', 'remove', 'explorer'],
+    precondition: 'hasConnection && !documentBusy', unavailableHint: noServer,
+    menus: [{ menu: 'explorer.context', group: '0_connect', order: 3, mnemonic: 'o', when: "explorerNode == 'server' && !explorerServerLost" }]
+  },
   // Not in SSMS: labels a connected server Production, Staging, Test, Development or a custom label, saved with its entry.
   // A server node's menu labels that server; elsewhere, the active query's server or one the user picks.
   'connection.environment': {
@@ -335,20 +340,23 @@ export const commandCatalog = {
       { menu: 'explorer.context', group: '0_connect', order: 5, title: 'Environment…', when: "explorerNode == 'server' && !explorerServerLost" }
     ]
   },
-  // A lost server's menu reconnects that server; elsewhere, the active query's lost connection or one the user picks.
+  // An offline server's menu reconnects that target; elsewhere, the active query's target or one the user picks.
   'connection.reconnect': {
-    title: 'Reconnect…', category: 'Connection', icon: 'plug', keywords: ['lost', 'restart'], precondition: 'hasLostConnection && backendReady',
-    unavailableHint: 'No connection was lost.',
+    title: 'Reconnect…', category: 'Connection', icon: 'plug', keywords: ['disconnected', 'lost', 'restart'], precondition: 'hasLostConnection && backendReady',
+    unavailableHint: 'No server is disconnected.',
     menus: [
       { menu: 'file', group: '0_connect', order: 3, mnemonic: 'r' }, { menu: 'query.connection', group: '1_connect', order: 4, mnemonic: 'r' },
       { menu: 'explorer.context', group: '0_connect', order: 3, mnemonic: 'r', when: 'explorerServerLost' }
     ]
   },
-  // Takes a lost connection out of Object Explorer; its queries become disconnected. Its access key leaves M to Rename,
-  // which SSMS underlines there.
+  'connection.removeFromExplorer': {
+    title: 'Remove from Explorer', category: 'Connection', icon: 'close', keywords: ['disconnected', 'remove', 'explorer'], precondition: 'hasLostConnection && !documentBusy',
+    unavailableHint: 'No server is disconnected.', menus: [{ menu: 'explorer.context', group: '0_connect', order: 4, mnemonic: 'o', when: 'explorerServerLost' }]
+  },
+  // Keep user shortcuts from earlier versions working while the visible action names Explorer membership precisely.
   'connection.removeLost': {
-    title: 'Remove Lost Connection…', category: 'Connection', icon: 'close', keywords: ['lost', 'restart'], precondition: 'hasLostConnection && !documentBusy',
-    unavailableHint: 'No connection was lost.', menus: [{ menu: 'explorer.context', group: '0_connect', order: 4, title: 'Remove', mnemonic: 'o', when: 'explorerServerLost' }]
+    title: 'Remove Lost Connection…', category: 'Connection', icon: 'close', palette: false, precondition: 'hasLostConnection && !documentBusy',
+    unavailableHint: 'No server is disconnected.'
   },
   // Always available: it is also the way out of an unresponsive or failed backend.
   'backend.restart': { title: 'Restart SQL Backend…', category: 'Connection', icon: 'debug-restart', keywords: ['backend', 'restart', 'sidecar'] },

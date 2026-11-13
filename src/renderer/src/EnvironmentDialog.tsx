@@ -49,9 +49,8 @@ export function EnvironmentField({ id, value, disabled, onChange }: FieldProps) 
 }
 
 /**
- * Object Explorer's Environment… for a connected server: the same field, saved with the connection's entry in
- * connections.json and shown at once on every connection to it. Cancel and Escape change nothing; focus goes back to
- * where the command came from.
+ * Object Explorer's Environment… labels an exact target. Legacy receipts still save the profile through the old
+ * library path. Cancel and Escape change nothing; focus goes back to where the command came from.
  */
 export default function EnvironmentDialog({ connectionId, onClose }: { readonly connectionId: string; onClose(): void }) {
   const { connections } = useWorkbench()
@@ -88,7 +87,7 @@ export default function EnvironmentDialog({ connectionId, onClose }: { readonly 
         <div className="property-row"><label htmlFor="environment-choice">Environment</label><EnvironmentField id="environment-choice" value={value} disabled={busy || !connection} onChange={next => { setValue(next); setError('') }} /></div>
         <div className="property-row"><span />{parsed.ok ? parsed.environment ? <span className="environment-preview"><span>Shown as</span><EnvironmentTag environment={parsed.environment} place="list" /></span> : <span className="field-note">No environment tag.</span> : <p className="field-note" id="environment-hint">{parsed.error}</p>}</div>
       </div>
-      <p className="field-note">Saved with this connection in Varia on this computer. Production shows a red PROD tag on the server, its query tabs and the status bars, beside the connection colour.</p>
+      <p className="field-note">{connection?.lifecycle ? 'Shown on this connection and its attached query badges. Saved profiles keep their own environment.' : 'Saved with this connection in Varia on this computer.'} Production shows a red PROD tag on the server, its query tabs and the status bars, beside the connection colour.</p>
       {error && <p className="connect-error" role="alert">{error}</p>}
     </div>
     <div className="connection-footer"><span /><button className="primary" type="submit" disabled={busy || !connection || !parsed.ok}>OK</button><button type="button" disabled={busy} onClick={close}>Cancel</button></div>

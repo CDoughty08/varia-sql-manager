@@ -918,17 +918,20 @@ describe('Search', () => {
 })
 
 describe('server and database pickers', () => {
-  it('disconnects the picked server, leaving busy servers unavailable', async () => {
-    const { commands, quickInput, view, connections, documents, startQuery, host } = palette()
+  it('delegates a picked server with a running query to the disconnect preflight without cancelling its query', async () => {
+    const { commands, quickInput, view, connections, documents, queries, startQuery, host } = palette()
     connections.add({ ...connectionInfo('server-a'), displayName: 'Production' }, connectionOptions); connections.add(connectionInfo('server-b'), connectionOptions)
-    documents.create('a.sql', 'SELECT 1', 'master', 'server-a')
+    const tab = documents.create('a.sql', 'SELECT 1', 'master', 'server-a')
     const running = startQuery()
     await commands.execute('connection.disconnect', undefined, 'menu')
     expect(view()).toMatchObject({ ariaLabel: 'Disconnect from Server', noun: 'servers' })
     expect(view().rows.map(row => [row.item.label, row.item.description, row.item.icon, row.item.disabled])).toEqual([
-      ['Production', 'server-a.example · 17.0', 'server', true], ['server-b.example', '17.0', 'server', undefined]])
+      ['Production', 'server-a.example · 17.0', 'server', undefined], ['server-b.example', '17.0', 'server', undefined]])
     quickInput.accept()
-    expect(view().message?.text).toBe('A query is running on this server.')
+    expect(host.disconnect).toHaveBeenCalledWith('server-a')
+    expect(view().visible).toBe(false)
+    expect(queries.isRunning(tab.id)).toBe(true)
+    await commands.execute('connection.disconnect', undefined, 'menu')
     quickInput.move('next')
     quickInput.accept()
     expect(host.disconnect).toHaveBeenCalledWith('server-b')

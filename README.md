@@ -74,6 +74,12 @@ In Connect, single-click or Space selects a saved connection for editing; Enter 
 Explorer's recovery rows offer **Retry**, **Continue loading**, and **Filter** actions. Search Objects opened from a
 database starts with that database's visible, removable scope.
 
+Object Explorer retains disconnected servers as collapsed roots. Use **Reconnect…** to connect again, **Remove from
+Explorer** for an offline root, or **Disconnect and Remove from Explorer** for a connected one. Removing a root does
+not delete saved profiles or query text. Equivalent connections select the existing root; differing
+name, color, environment or startup reconnect details receive an explicit Current/Selected confirmation.
+See [connection roots in Object Explorer](docs/connections-explorer.md) for the lifecycle and integration details.
+
 The [result grid tools](docs/results-tools.md) include **Copy Column Name**, keyboard-accessible **Fit Column**, and
 **Close Results** beside the results; each result's caption has a button that closes that result alone. Located SQL errors offer **Go to line** while the source text is unchanged.
 

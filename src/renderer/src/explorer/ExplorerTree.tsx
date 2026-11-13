@@ -184,7 +184,9 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
   }, [commands, explorer])
   // Enter or a double-click on a node that does not expand runs its kind's default action, as SSMS opens a package's Properties.
   const activate = useCallback((rowId: number) => {
-    const verb = ssisDefaultVerb(explorer.menuNode(rowId)?.kind)
+    const node = explorer.menuNode(rowId)
+    if (node?.lost && node.kind === 'server') { run('connection.reconnect', rowId); return }
+    const verb = ssisDefaultVerb(node?.kind)
     if (verb) run(ssisVerbSpecs[verb].command, rowId)
   }, [explorer, run])
   const actions = useMemo<RowActions>(() => ({
@@ -192,7 +194,7 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     toggle: rowId => explorer.toggle(rowId),
     activate,
     reconnect: rowId => run('connection.reconnect', rowId),
-    remove: rowId => run('connection.removeLost', rowId),
+    remove: rowId => run('connection.removeFromExplorer', rowId),
     // The text goes as plain text too, so other apps take it; the query editor accepts only the Varia type.
     dragStart: (rowId, transfer) => {
       const text = explorer.insertText(rowId)

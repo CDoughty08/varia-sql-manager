@@ -6,11 +6,13 @@ import { liveProbes, liveSources } from '../src/shared/live/catalog'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveTick } from '../src/shared/live/schema'
 import { defaultSettings, type SettingsValues } from '../src/shared/settings/catalog'
 import { explorerContribution } from '../src/renderer/src/contributions/explorer'
-import { ExplorerStatusService, onlineStatus, rowStatus } from '../src/renderer/src/explorer/ExplorerStatusService'
+import { ExplorerStatusService, onlineStatus, rowStatus, statusKey } from '../src/renderer/src/explorer/ExplorerStatusService'
 import { LiveService, liveServiceLimits, type PageVisibility } from '../src/renderer/src/live/LiveService'
 import type { LivePatch, LiveStream, ResultHandle, RowWindow } from '../src/renderer/src/results/ResultClient'
 import type { ResultKey } from '../src/renderer/src/results/worker-protocol'
 import { ConnectionService } from '../src/renderer/src/services/connections'
+import type { LiveConnection } from '../src/renderer/src/services/connections'
+import { SnapshotStore } from '../src/renderer/src/core/store'
 import { PaneService } from '../src/renderer/src/services/panes'
 import type { ConnectionInfo } from '../src/shared/contracts'
 
@@ -354,26 +356,52 @@ describe('ExplorerStatusService', () => {
     expect(live.getSnapshot().handles).toHaveLength(10)
   })
 
-  it('shares one view between connections to the same server and login, and moves it when the first goes', async () => {
+  it('keeps status separate for distinct targets even when their server and login look equivalent', async () => {
     connections.add(info(first, { server: 'SQL01 ', login: 'CORP\\ana' }), { server: 'SQL01' } as never)
     connections.add(info(second, { server: 'sql01', login: 'corp\\ANA' }), { server: 'sql01' } as never)
     const other = '00000000-0000-4000-8000-000000000003'
     connections.add(info(other, { server: 'sql01', login: 'sa' }), { server: 'sql01' } as never)
-    expect(client.streams.map(stream => stream.params.connectionId)).toEqual([first, other])
+    expect(client.streams.map(stream => stream.params.connectionId)).toEqual([first, second, other])
     const fake = streamOf(first)
     open(fake)
     fake.onEvent(tick([table('explorer.databases', [['Sales', '6', '0', '0', '0']])]), 10)
     await settle()
-    expect(status.server(second)).toBe(status.server(first))
-    expect(status.server(second)?.databases?.get('Sales')?.words).toBe('Offline')
+    expect(status.server(first)?.databases?.get('Sales')?.words).toBe('Offline')
+    expect(status.server(second)?.databases).toBeUndefined()
     expect(status.server(other)?.databases).toBeUndefined()
-    // The view reads through the oldest connection; when it goes, the next one takes over.
+    // Disconnecting one target ends only that target's view.
     connections.remove(first)
     await settle()
     expect(fake.cancelled).toBe(true)
-    expect(client.streams.at(-1)!.params.connectionId).toBe(second)
+    expect(client.streams).toHaveLength(3)
+    expect(streamOf(second).cancelled).toBe(false)
     expect(status.server(first)).toBeUndefined()
     expect(live.getSnapshot().handles).toHaveLength(2)
+  })
+  it('uses a fresh status identity for a new handle or backend generation on the same target', () => {
+    const connection = { targetId: first, id: second, generation: 1 }
+    expect(statusKey(connection)).not.toBe(statusKey({ ...connection, generation: 2 }))
+    expect(statusKey(connection)).not.toBe(statusKey({ ...connection, id: first }))
+    expect(statusKey(connection)).not.toBe(statusKey({ ...connection, targetId: second }))
+  })
+  it('samples only connected visible targets, ending a probe before disconnect and reopening on a fresh handle', () => {
+    class Connections extends SnapshotStore<readonly LiveConnection[]> { set(value: readonly LiveConnection[]) { this.publish(value) } }
+    const source = new Connections([])
+    status.dispose()
+    status = new ExplorerStatusService({ live, connections: source, panes, settings, schedule: callback => callback() })
+    const connection: LiveConnection = { ...info(first), targetId: second, options: { server: 'a' } as never }
+    source.set([{ ...connection, inExplorer: false }])
+    expect(client.streams).toHaveLength(0)
+    source.set([{ ...connection, lifecycle: { state: 'connecting', attemptId: first } }])
+    expect(client.streams).toHaveLength(0)
+    source.set([{ ...connection, lifecycle: { state: 'connected', handle: { id: first, generation: 1 } } }])
+    expect(client.streams).toHaveLength(1)
+    source.set([{ ...connection, lifecycle: { state: 'disconnecting', handle: { id: first, generation: 1 }, attemptId: first } }])
+    expect(streamOf(first).cancelled).toBe(true)
+    expect(status.server(first)).toBeUndefined()
+    source.set([{ ...connection, id: second, generation: 2, lifecycle: { state: 'connected', handle: { id: second, generation: 2 } } }])
+    expect(client.streams).toHaveLength(2)
+    expect(client.streams[1].params.connectionId).toBe(second)
   })
 
   it('says nothing of a database past a list cut at its row cap, rather than call it online', async () => {

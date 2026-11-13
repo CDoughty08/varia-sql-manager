@@ -22,8 +22,8 @@ export const guideCatalog = {
     title: 'Connect to SQL Server', summary: 'Choose a server and sign-in method, then find your databases.',
     keywords: ['connection', 'authentication', 'login', 'password', 'Entra', 'TLS'],
     sections: [{ id: 'prepare', title: 'Before you connect' }, { id: 'sign-in', title: 'Choose your sign-in' }, { id: 'next', title: 'Connect and explore' }, { id: 'trouble', title: 'If connecting fails' }],
-    related: ['run-query'], commands: [{ id: 'connection.connect', context: 'workbench' }], settings: [], gestures: [],
-    sourceAreas: ['src/renderer/src/ConnectDialog.tsx', 'src/shared/auth.ts']
+    related: ['run-query'], commands: [{ id: 'connection.connect', context: 'workbench' }, { id: 'connection.reconnect', context: 'workbench' }, { id: 'connection.removeFromExplorer', context: 'workbench' }], settings: [], gestures: [],
+    sourceAreas: ['src/renderer/src/ConnectDialog.tsx', 'src/renderer/src/explorer/', 'src/renderer/src/services/connections.ts', 'src/shared/auth.ts']
   },
   'run-query': {
     title: 'Run your first query', summary: 'Create a query, choose its database and understand what Execute runs.',

@@ -712,17 +712,20 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
 
   private syncConnections(): void {
     if (this.disposed) return
-    const list = this.connections.getSnapshot(), ids = new Set(list.map(connection => connection.id))
+    const list = this.connections.getSnapshot().filter(connection => connection.inExplorer !== false), ids = new Set(list.map(connection => connection.id))
+    const targets = new Set(list.flatMap(connection => connection.targetId ? [connection.targetId] : []))
+    const retained = new Map(this.roots.flatMap(id => { const root = this.nodes.get(id); return root?.targetId ? [[root.targetId, id] as const] : [] }))
     const selectedRoot = this.selected === undefined ? undefined : this.rootOf(this.nodes.get(rowOwner(this.selected)))
     let removedAt = -1
     for (const [connectionId, rootId] of [...this.rootByConnection]) {
-      if (ids.has(connectionId)) continue
+      const root = this.nodes.get(rootId)
+      if (ids.has(connectionId) || (root?.targetId && targets.has(root.targetId))) continue
       if (selectedRoot?.id === rootId) removedAt = this.roots.indexOf(rootId)
       this.removeRoot(connectionId, rootId)
     }
     const roots: number[] = [], added: number[] = []
     for (const connection of list) {
-      const existing = this.rootByConnection.get(connection.id)
+      const existing = this.rootByConnection.get(connection.id) ?? (connection.targetId ? retained.get(connection.targetId) : undefined)
       if (existing === undefined) {
         const id = this.addRoot(connection)
         roots.push(id)
@@ -730,7 +733,23 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
         continue
       }
       const root = this.nodes.get(existing)!
+      const changedHandle = root.connectionId !== connection.id
+      if (changedHandle) {
+        this.markLost(root)
+        const previousId = root.connectionId, filters = this.filters.get(previousId)
+        if (filters) { this.filterCount -= filters.size; this.filters.delete(previousId) }
+        this.rootByConnection.delete(previousId)
+        root.connectionId = connection.id
+        this.rootByConnection.set(connection.id, root.id)
+      }
       if (connection.lost && !root.lost) this.markLost(root)
+      else if (!connection.lost && root.lost) {
+        root.lost = false
+        root.hasChildren = true
+        root.generation++
+        added.push(root.id)
+      }
+      this.updateRoot(root, connection)
       roots.push(existing)
     }
     this.roots = roots
@@ -743,15 +762,24 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   }
   private addRoot(connection: LiveConnection): number {
     const node = this.createNode(0, connection.id, serverRef, 'server', undefined, 0, connection.displayName || connection.server, 'server')
-    node.sublabel = serverSublabel(connection)
-    node.brief = serverBrief(connection)
-    const facts = [connection.displayName ? connection.server : '', connection.engineEdition !== undefined && (cloudEngineEditions as readonly number[]).includes(connection.engineEdition) ? 'Only databases can be browsed on this edition.' : '']
-    node.detail = facts.filter(Boolean).join(' · ') || undefined
+    node.targetId = connection.targetId
+    this.updateRoot(node, connection)
     node.hasChildren = !connection.lost
     node.lost = !!connection.lost
     node.lastUsed = ++this.clock
     this.rootByConnection.set(connection.id, node.id)
     return node.id
+  }
+  private updateRoot(node: TreeNode, connection: LiveConnection): void {
+    node.targetId = connection.targetId ?? node.targetId
+    const label = connection.displayName || connection.server
+    node.label = label
+    node.lower = label.toLocaleLowerCase()
+    node.sublabel = serverSublabel(connection)
+    node.brief = serverBrief(connection)
+    const facts = [connection.displayName ? connection.server : '', connection.engineEdition !== undefined && (cloudEngineEditions as readonly number[]).includes(connection.engineEdition) ? 'Only databases can be browsed on this edition.' : '']
+    node.detail = facts.filter(Boolean).join(' · ') || undefined
+    node.rev++
   }
   private removeRoot(connectionId: string, rootId: number): void {
     this.abortWhere(task => task.connectionId === connectionId)
@@ -761,12 +789,13 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.roots = this.roots.filter(id => id !== rootId)
     this.bury(rootId)
   }
-  /** A connection lost with its backend generation keeps its row, collapsed and loading nothing, until it is reconnected or removed. */
+  /** Disconnect retains the server row, discarding metadata and every load owned by its former handle. */
   private markLost(root: TreeNode): void {
     this.abortWhere(task => task.connectionId === root.connectionId)
     this.detach(root, root.children ?? [])
-    Object.assign(root, { lost: true, hasChildren: false, expanded: false, children: undefined, load: 'none', more: 'none', cursor: undefined, total: undefined, error: undefined, connectionError: undefined, staticCount: 0, updatedAt: undefined, staleSince: undefined })
-    // A lost root never loads again (reconnecting adds a new one); this only lets go of the rows a reconcile held.
+    Object.assign(root, { lost: true, hasChildren: false, expanded: false, children: undefined, load: 'none', more: 'none', cursor: undefined, total: undefined, error: undefined, connectionError: undefined, staticCount: 0, updatedAt: undefined, staleSince: undefined, note: undefined })
+    root.generation++
+    // A reconnect starts from fresh metadata, including rows a previous reconcile held.
     const state = this.state(root)
     state.pendingMode = state.retryMode = state.deep = state.held = state.reconciling = undefined
     root.rev++

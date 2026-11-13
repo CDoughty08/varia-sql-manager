@@ -64,8 +64,10 @@ being true.
   credentials and trusted resolved-account evidence; neither the saved-profile key nor server-name equality proves
   equivalence. The target registry (`src/renderer/src/services/connection-targets.ts`) returns stale successful
   handles for the backend owner to close. It keeps intentional disconnect separate from unexpected loss and Explorer
-  membership separate from document references. These additive contracts are not yet wired into the workbench;
-  `docs/connections-explorer-implementation-plan.md` defines the owning integration tracks.
+  membership separate from document references. Workbench exposes it as `connectionTargets`; ConnectionService projects
+  authenticated targets for legacy runtime-handle consumers. Its isolated legacy receipt lane remains until the main
+  request owner supplies verified target receipts. `src/main/connection-reuse.ts` owns live/pending equivalence and
+  single-owner cleanup; its integration requirements are in `docs/connections-explorer-main-seam.md`.
 - Query rows stay in backend memory (never on disk) under the result budget. Main forwards DATA pages undecoded, as
   exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). Peek's Top rows are no
   exception: Select Top Rows' script with N = 10 through `query.execute`, in a session and results entry of the Peek's own
@@ -162,7 +164,7 @@ being true.
   only through `ChartView` (`live/ChartView.ts`): a canvas read from the probe's ring, at most one draw a frame and none
   while off screen or hidden, at most two vertices a pixel column, colors only from the theme (its `charts.*` keys and the surface the chart sits on,
   `chartSurfaces` in `src/shared/theme/charts.ts`) or, under forced colors, the system colors as the DOM resolves them. Object
-  Explorer's status chips are `background` views (`ExplorerStatusService`, one per connected server and login, owned by
+  Explorer's status chips are `background` views (`ExplorerStatusService`, isolated by exact target, handle and generation, owned by
   the pane, sampling in master): at most 8 a window, in slots no other view wants, given up to views the user opens when
   the window's slots are taken or the backend refuses them `BUSY` on that server; they never reload the tree.
   Job progress EVENTs (`results.export`, `actions.execute`, `explorer.index`) are droppable, per-request and not periodic data.

@@ -2694,3 +2694,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .help-sample table { width: 100%; border-collapse: collapse; }
 .help-sample th, .help-sample td { text-align: left; padding: var(--varia-space-2); border-bottom: 1px solid var(--varia-panel-border); }
 .help-sample-output { display: flex; flex-wrap: wrap; gap: var(--varia-space-5); padding: var(--varia-space-3); border: 1px solid var(--varia-panel-border); }
+.connection-details-dialog { width: min(680px, calc(100vw - 32px)); }
+.connection-details-dialog table { width: 100%; border-collapse: collapse; text-align: left; }
+.connection-details-dialog th, .connection-details-dialog td { padding: 8px; overflow-wrap: anywhere; }
+.connection-details-dialog .connection-footer { flex-wrap: wrap; justify-content: flex-end; }

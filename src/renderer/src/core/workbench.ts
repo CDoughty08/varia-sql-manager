@@ -10,6 +10,7 @@ import { blockPrimaryPaste } from './primary-selection'
 import { DocumentService, settingsDocumentOptions } from '../services/documents'
 import { QueryService } from '../services/queries'
 import { ConnectionService } from '../services/connections'
+import { ConnectionTargetService } from '../services/connection-targets'
 import { FileService } from '../services/files'
 import { RecentFilesService } from '../services/recent-files'
 import { RecoveryService } from '../services/recovery'
@@ -136,6 +137,9 @@ export interface Workbench extends Disposable {
   readonly sqlDiagnostics: SqlDiagnosticsService
   readonly queries: QueryService
   readonly connections: ConnectionService
+  readonly connectionTargets: ConnectionTargetService
+  /** Installed by the disconnect track; App uses this before its pre-migration compatibility flow. */
+  readonly disconnectCoordinator?: { disconnect(targetId: string, mode: 'disconnect' | 'remove-from-explorer'): Promise<{ readonly status: string; readonly error?: string; readonly warning?: string }> }
   readonly backend: BackendStateService
   /** Stored query results, read through the results worker. */
   readonly resultClient: ResultClient
@@ -267,7 +271,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const platform = toPlatform(api.platform)
   // Normally loaded before the workbench (start.tsx), so the first key already follows the user's shortcuts.
   const userShortcuts = shortcuts ?? new ShortcutsService({ api: api.shortcuts, platform })
-  const events = new EventBus(), connections = new ConnectionService(), editorOptions = new EditorOptionsService(settings), shellOptions = new ShellOptionsService(settings), panes = new PaneService()
+  const connectionTargets = new ConnectionTargetService()
+  const events = new EventBus(), connections = new ConnectionService(connectionTargets), editorOptions = new EditorOptionsService(settings), shellOptions = new ShellOptionsService(settings), panes = new PaneService()
   // Group by Schema follows its setting (the toolbar button and the palette flip it).
   const groupBySchema = { get: () => settings.get('objectExplorer.groupBySchema'), subscribe: settings.subscribe }
   const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame, groupBySchema }), databaseList = new DatabaseListService(api, connections, events)
@@ -500,6 +505,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     connections,
     backend,
     resultClient,
+    connectionTargets,
     results,
     highlights,
     compare,
@@ -621,6 +627,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       ssisCatalog.dispose()
       longRuns.dispose()
       connections.dispose()
+      connectionTargets.dispose()
       editorOptions.dispose()
       shellOptions.dispose()
       bookmarks.dispose()

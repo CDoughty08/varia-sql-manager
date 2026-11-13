@@ -647,7 +647,7 @@ export const explorerToolbar = page => page.getByRole('toolbar', { name: 'Object
 export const explorerTree = page => page.getByRole('tree', { name: 'Object Explorer', exact: true })
 /** The servers: the tree's first level. */
 export const serverRows = page => explorerTree(page).locator('[role="treeitem"][aria-level="1"]')
-export const lostServerRows = page => explorerTree(page).getByRole('treeitem', { name: /\(connection lost\)$/ })
+export const lostServerRows = page => explorerTree(page).getByRole('treeitem', { name: /\(Disconnected\)$/ })
 export const explorerLabel = row => row.locator(part.explorerLabel)
 export const explorerSublabel = row => row.locator(part.explorerSublabel)
 export const itemCount = row => row.locator(part.explorerCount)

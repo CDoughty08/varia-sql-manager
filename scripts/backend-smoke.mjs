@@ -222,7 +222,7 @@ try {
     const after = await ready(before.state.generation + 1)
     expect(after.pid).not.toBe(before.pid)
     await expect(banner()).toContainText('1 connection was lost and 1 running script was stopped; nothing was re-run.')
-    await expect(lostServerRows(page)).toContainText('(connection lost)')
+    await expect(lostServerRows(page)).toContainText('(Disconnected)')
     await lostServerRows(page).getByRole('button', { name: /^Reconnect/ }).click()
     dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
     await expect(dialog.getByLabel('Server Name', { exact: true })).toHaveValue(process.env.VARIA_TEST_SQL_SERVER)
@@ -297,7 +297,7 @@ try {
   await expect(backendReady(page, 'fake')).toHaveText('Ready')
   // Object Explorer keeps the server's row, collapsed and dimmed, with Reconnect and Remove (in its menu too).
   const lostRow = lostServerRows(page)
-  await expect(lostRow).toHaveAttribute('aria-label', 'crash-server (connection lost)')
+  await expect(lostRow).toHaveAttribute('aria-label', 'crash-server (Disconnected)')
   await expect(lostRow).not.toHaveAttribute('aria-expanded')
   // Its dot is a ring, in forced colors too; with no live server, Object Explorer's search box goes, as its command does.
   await expect(connectionDot(lostRow)).toHaveAttribute('data-state', 'lost')
@@ -310,7 +310,7 @@ try {
   // Focus the box held moves to the tree rather than the page, so keys still reach Object Explorer.
   await expect(explorerTree(page)).toBeFocused()
   await explorerLabel(lostRow).click({ button: 'right' })
-  await expect.poll(() => menuItemNames(page.getByRole('menu', { name: 'Object Explorer', exact: true }))).toEqual(['Connect…', 'Reconnect…', 'Remove'])
+  await expect.poll(() => menuItemNames(page.getByRole('menu', { name: 'Object Explorer', exact: true }))).toEqual(['Connect…', 'Reconnect…', 'Remove from Explorer'])
   await page.keyboard.press('Escape')
   await expect(openMenus(page)).toHaveCount(0)
   // Enter on the lost row reconnects it, as its button does: the Connect dialog opens filled in from it.
@@ -333,7 +333,7 @@ try {
   await explorerLabel(lostRow).click()
   await expect(lostRow).toHaveAttribute('aria-selected', 'true')
   await page.keyboard.press('Shift+F10')
-  await expect.poll(() => menuItemNames(explorerMenu)).toEqual(['Connect…', 'Reconnect…', 'Remove'])
+  await expect.poll(() => menuItemNames(explorerMenu)).toEqual(['Connect…', 'Reconnect…', 'Remove from Explorer'])
   await page.keyboard.press('Escape')
   await expect(explorerMenu).toHaveCount(0)
   await size(1024, 700)

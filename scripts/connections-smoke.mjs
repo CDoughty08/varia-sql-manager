@@ -4,7 +4,7 @@ import { resolve, join } from 'node:path'
 import { userInfo } from 'node:os'
 import { explorerRow, explorerStatics } from './fixtures/explorer-tree.mjs'
 import {
-  activeDocument, backendReady, connectErrorDetails, connectFailure, connectFailureCopyStatus, connectFailureNote, connectFailureSentence, connectOutcome, databaseErrorDetails,
+  activeDocument, activeDocumentName, backendReady, connectErrorDetails, connectFailure, connectFailureCopyStatus, connectFailureNote, connectFailureSentence, connectOutcome, databaseErrorDetails,
   documentTab, editorGroups, editorTextbox, environmentPill, explorerLabel, part, queryBar, queryServer, queryStatus, savedConnections, selectOpenDocument, statusBar, toolbarButton
 } from './fixtures/ui.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
@@ -964,6 +964,7 @@ async function environmentLabels() {
   await expect(dialog).toHaveCount(0)
   await shows('PROD', 'critical')
   const row = await explorerRow(page, 'prod-server')
+  const originalQuery = await activeDocumentName(page)
   await expect(row).toHaveAttribute('aria-label', /, Production environment$/)
   await expect(page.getByRole('tablist', { name: 'Query documents', exact: true }).getByRole('tab', { selected: true })).toHaveAttribute('aria-description', 'Production environment')
   expect(await saved()).toBe('Production')
@@ -1123,6 +1124,11 @@ async function environmentLabels() {
   await expect(labelling).toHaveCount(0)
   await expect.poll(saved).toBe(long)
   await expect(tag('explorer').first()).toHaveAttribute('title', `${long} environment`)
+  // The separately submitted PROD-SERVER target keeps its own details, even though the profile library matches it.
+  await expect(tag('query')).toHaveText('STAGING')
+  await expect(tag('status')).toHaveText('STAGING')
+  await selectOpenDocument(page, originalQuery)
+  await expect(tag('status')).toHaveText(long)
   const bounded = await page.evaluate(part => {
     const tree = document.querySelector(part.explorerTreeBox), em = element => parseFloat(getComputedStyle(element).fontSize)
     // Each server row keeps its name (at least a quarter of the row, or all of a shorter one) and the tag inside the row.
