@@ -21,6 +21,12 @@ export interface ResultGridProps {
   /** The grid F6 and the Query Output pane focus first: the one that last had focus. */
   readonly focused: boolean
   readonly budget?: QueryResult['budget']
+  /** What the grid shows of its group, for menus and scripts (`data-result-view`): a Table, a Pivot, a comparison, a plan
+   *  set; and the group's ordinal (`data-result-group`), which a comparison lacks. */
+  readonly view?: 'table' | 'pivot' | 'comparison' | 'plan'
+  readonly group?: number
+  /** A bare stack's grid (Peek): Pivot, Compare and close are off for it (`data-result-bare`). */
+  readonly bare?: boolean
   /** The grid's sort, while it has one: the grid shows its view once it is built. */
   readonly sort?: GridSort
   onFocus(key: EntryKey): void
@@ -52,7 +58,7 @@ const keysOf = (sort: GridSort | undefined) => (sort?.keys.map(key => `${key.col
  * filters for the header, and the strips (truncation, highlights, compare, pivot, the transposed cap). A live view mounts the same
  * shell with its own source (LiveGridPane).
  */
-function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, onWide }: ResultGridProps) {
+function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, group, bare, onFocus, onWide }: ResultGridProps) {
   const { results, commands, gridStats, panes, settings, resultsSearch, highlights, compare, pivot } = useWorkbench()
   const marked = useSyncExternalStore(highlights.subscribe, () => highlights.getSnapshot()[tabId]?.get(entry.key))
   const compared = useSyncExternalStore(compare.subscribe, () => compare.getSnapshot().get(setKey(entry.descriptor)))
@@ -169,9 +175,11 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, o
   return <GridShell mountKey={`${tabId}|${key}|${instanceKey(entry)}${turnedView ? '|transposed' : ''}`} mount={mount} onApi={onApi}
     rootProps={{
       'data-result-grid': '', 'data-output-view': 'grid', 'data-tab-id': tabId, 'data-result-entry': key, 'data-result-generation': entry.descriptor.generation,
-      'data-result-id': entry.descriptor.resultId, 'data-result-kind': entry.descriptor.kind, 'data-pane-focus': focused ? 'selected' : 'grid',
-      // The stack keeps the focused entry for its own drawing; the service hears of it so the toolbar and the menus' toggle follow.
-      onFocus: () => { onFocus(key); results.focusEntry(tabId, key) }
+      'data-result-id': entry.descriptor.resultId, 'data-result-kind': entry.descriptor.kind, ...view ? { 'data-result-view': view } : {}, ...group === undefined ? {} : { 'data-result-group': group },
+      ...bare ? { 'data-result-bare': '' } : {}, 'data-pane-focus': focused ? 'selected' : 'grid',
+      // The stack keeps the focused entry for its own drawing and tells the service (`focusEntry`), so the toolbar, the
+      // menus' toggle and the pivot builder follow.
+      onFocus: () => onFocus(key)
     }}
     sort={sort?.keys} onSort={(column, add) => results.cycleSort(tabId, key, column, add)} funnels={funnels}
     update={{ resultCount: count, showTypes, rowSize, ...turnedView ? { headerColumn: headerColumn ?? null } : {} }} gone={lost ? lostText : undefined}
