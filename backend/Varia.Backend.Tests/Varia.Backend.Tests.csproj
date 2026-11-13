@@ -14,4 +14,9 @@
   <ItemGroup>
     <None Include="Fixtures/*.sql" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <!-- Only for the page compression benchmark built by hand for .NET 11 (docs/page-compression-findings.md): LZ4 beside
+       the runtime's Zstandard. The default net10.0 build, npm run check and CI never restore it. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net11.0'">
+    <PackageReference Include="K4os.Compression.LZ4" Version="1.3.8" />
+  </ItemGroup>
 </Project>

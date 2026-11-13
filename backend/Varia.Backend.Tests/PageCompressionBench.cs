@@ -260,10 +260,69 @@ internal static class PageCompressionBench
             decompressor.ReadExactly(destination);
         });
 
+#if NET11_0_OR_GREATER
+    // ---- .NET 11: Zstandard in System.IO.Compression, and LZ4 from K4os.Compression.LZ4 (managed code, no native
+    // library; referenced only when this project is built for net11.0) for comparison.
+
+    /// <summary>Zstandard through the one-shot API, which sets up a compression context on every call.</summary>
+    private static Codec ZstdCodec(int quality, int window) => new("zstd" + (quality < 0 ? "m" + -quality : quality.ToString(CultureInfo.InvariantCulture)) + (window == 18 ? "" : "w" + window),
+        (source, scratch) =>
+        {
+            var room = scratch.Room((int)ZstandardEncoder.GetMaxCompressedLength(source.Length));
+            if (!ZstandardEncoder.TryCompress(source, room, out var written, quality, window)) throw new InvalidOperationException("Zstandard failed.");
+            return room.AsSpan(0, written).ToArray();
+        },
+        (packed, destination) =>
+        {
+            if (!ZstandardDecoder.TryDecompress(packed, destination, out var written) || written != destination.Length) throw new InvalidDataException("Zstandard failed.");
+        });
+
+    [ThreadStatic] private static Dictionary<int, ZstandardEncoder>? encoders;
+    [ThreadStatic] private static ZstandardDecoder? decoder;
+
+    /// <summary>Zstandard with one encoder and decoder a thread, reset between pages, as a store would keep them.</summary>
+    private static Codec ZstdReusedCodec(int quality) => new("zstd" + (quality < 0 ? "m" + -quality : quality.ToString(CultureInfo.InvariantCulture)) + "r",
+        (source, scratch) =>
+        {
+            encoders ??= [];
+            if (!encoders.TryGetValue(quality, out var encoder)) encoders[quality] = encoder = new ZstandardEncoder(quality, 18);
+            var room = scratch.Room((int)ZstandardEncoder.GetMaxCompressedLength(source.Length));
+            var status = encoder.Compress(source, room, out var consumed, out var written, isFinalBlock: true);
+            encoder.Reset();
+            if (status != OperationStatus.Done || consumed != source.Length) throw new InvalidOperationException("Zstandard failed.");
+            return room.AsSpan(0, written).ToArray();
+        },
+        (packed, destination) =>
+        {
+            decoder ??= new ZstandardDecoder();
+            var status = decoder.Decompress(packed, destination, out _, out var written);
+            decoder.Reset();
+            if (status != OperationStatus.Done || written != destination.Length) throw new InvalidDataException("Zstandard failed.");
+        });
+
+    private static Codec Lz4Codec(K4os.Compression.LZ4.LZ4Level level, string name) => new(name,
+        (source, scratch) =>
+        {
+            var room = scratch.Room(K4os.Compression.LZ4.LZ4Codec.MaximumOutputSize(source.Length));
+            var written = K4os.Compression.LZ4.LZ4Codec.Encode(source, room, level);
+            if (written <= 0) throw new InvalidOperationException("LZ4 failed.");
+            return room.AsSpan(0, written).ToArray();
+        },
+        (packed, destination) =>
+        {
+            if (K4os.Compression.LZ4.LZ4Codec.Decode(packed, destination) != destination.Length) throw new InvalidDataException("LZ4 failed.");
+        });
+#endif
+
     private static readonly Codec[] AllCodecs =
     [
         BrotliCodec(0, 18), BrotliCodec(1, 18), BrotliCodec(2, 18), BrotliCodec(3, 18), BrotliCodec(5, 18), BrotliCodec(1, 22),
-        DeflateCodec(1, false), DeflateCodec(6, false), DeflateCodec(1, true)
+        DeflateCodec(1, false), DeflateCodec(6, false), DeflateCodec(1, true),
+#if NET11_0_OR_GREATER
+        ZstdCodec(-5, 18), ZstdCodec(-1, 18), ZstdCodec(1, 18), ZstdCodec(2, 18), ZstdCodec(3, 18), ZstdCodec(6, 18), ZstdCodec(1, 22),
+        ZstdReusedCodec(-1), ZstdReusedCodec(1), ZstdReusedCodec(3),
+        Lz4Codec(K4os.Compression.LZ4.LZ4Level.L00_FAST, "lz4"), Lz4Codec(K4os.Compression.LZ4.LZ4Level.L03_HC, "lz4hc3"),
+#endif
     ];
 
     /// <summary>A Save's output: counts the bytes and drops them, so only formatting and page reads are timed.</summary>
@@ -473,6 +532,7 @@ internal static class PageCompressionBench
                 var starts = kept.Select(packed => packed.FirstRow).ToArray();
                 var viewTrials = 40;
                 var viewTimes = new double[viewTrials];
+                var viewParallel = new double[viewTrials];
                 var touched = new double[viewTrials];
                 for (var t = 0; t < viewTrials; t++)
                 {
@@ -486,10 +546,20 @@ internal static class PageCompressionBench
                     timer.Restart();
                     foreach (var index in distinct) keep.Unpack(kept[index].Data, scratch.RawFor(kept[index].RawLength));
                     viewTimes[t] = timer.Elapsed.TotalMilliseconds;
+                    int[] pagesNeeded = [.. distinct];
+                    timer.Restart();
+                    Parallel.For(0, pagesNeeded.Length, new ParallelOptions { MaxDegreeOfParallelism = workers }, () => new Scratch(), (i, _, local) =>
+                    {
+                        keep.Unpack(kept[pagesNeeded[i]].Data, local.RawFor(kept[pagesNeeded[i]].RawLength));
+                        return local;
+                    }, _ => { });
+                    viewParallel[t] = timer.Elapsed.TotalMilliseconds;
                     touched[t] = distinct.Count;
                 }
                 Print("viewRead." + keep.Name + ".milliseconds", Median(viewTimes), "ms", "256 rows of a view sorted by a random int: median " + Median(touched).ToString("0", CultureInfo.InvariantCulture) +
                     " distinct source pages decompressed, one thread; p99 " + Percentile(viewTimes, 0.99).ToString("0.0", CultureInfo.InvariantCulture) + " ms");
+                Print("viewRead." + keep.Name + ".parallelMilliseconds", Median(viewParallel), "ms", "the same pages decompressed on " + workers + " workers; p99 " +
+                    Percentile(viewParallel, 0.99).ToString("0.0", CultureInfo.InvariantCulture) + " ms");
             }
 
             // A scroll: forward a page at a time through 300 pages reading three, back 100, then 50 jumps; each
