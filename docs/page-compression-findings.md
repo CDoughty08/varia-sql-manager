@@ -301,6 +301,35 @@ result being compressed stays readable: each page switches when its compressed c
   key memory is a separate question, left alone here.
 - **Live tables** are never compressed.
 
+### What the memory panel shows
+
+The status bar's Memory popover (status-bar-memory.md) keeps its two rows and gains a collapsible **Nerd metrics**
+section for compression. This mock, made with Varia's dark and light palettes and the popover's spacing, was
+accepted as the direction; the figures in it are illustrative, chosen to agree with the zstd 2 measurements above.
+
+![Memory panel with compression metrics, dark theme](images/memory-compression-dark.png)
+
+![Memory panel with compression metrics, light theme](images/memory-compression-light.png)
+
+- **The Results row** still charges the budget's bytes ("2.31 GB / 8.00 GB"), because that is what the budget sees.
+  Its ring has two tones: the solid arc is memory held, the faint arc the rows' size as read. A chip under it says
+  how much compression gave back ("−2.10 GB packed") and how many bytes of rows that memory holds.
+- **Three tiles:** the share of rows compressed, by size; the ratio over packed pages with the codec and level; and
+  the bytes saved with their share of the rows as read.
+- **Where it lives:** two bars on one scale, rows as read above and memory now below, split into raw pages (results on
+  screen), packed pages, the decompressed-page cache, and a hatched part for what was given back.
+- **Biggest results:** the largest results with their size as read, stored size, and state (Packed, Unpacking with
+  its progress while an operation rehydrates, or On screen). Names follow the Results tab's captions.
+- **Codec counters:** pages packed, cache hit rate, the last unpack's time, and pack and unpack speeds and time per
+  page since the backend started.
+- **Footer:** the managed heap and the part free for reuse, which explains why the operating system's figure lags the
+  budget (see Memory returned to the operating system), and a light line ("Your rows are 2.4× cozier") for the fun of
+  a panel for the curious.
+
+The section is collapsed by default; its open state is a setting. Everything in it comes from the `results.memory`
+events the backend already pushes to the status bar, extended with compressed bytes, cache bytes, per-result sizes and
+codec counters: no polling or new timers in the renderer. The popover grows from 350 to about 384 px wide.
+
 ## What it would save
 
 Compressed results take 36 to 52 % of their raw memory in these shapes (1.9 to 2.8 times smaller; less if the data
@@ -350,7 +379,8 @@ forecast.
 4. **Visibility.** A `results.visibility` method in all five places (contract, zod, method policy, preload,
    `SqlService` dispatch), sent by the renderer when a result's grid is shown or hidden in any window.
 5. **Stage 1 policy.** Compress complete, unpinned, hidden results of 1 MiB or more after 5 s, through the worker
-   gate. The status bar and `results.memory` report compressed bytes. README, status-bar memory docs, CHANGELOG.
+   gate. `results.memory` reports compressed bytes, and the Memory popover gets its Nerd metrics section (above).
+   README, status-bar memory docs, CHANGELOG, and the Getting Started guides that show the status bar.
 6. **Fused reads.** Whole-result operations decompress page by page on their workers instead of rehydrating; measure
    sort ties and Save with decompression ahead.
 7. **Stage 2 policy.** Compress idle visible results too, after measuring scrolling and sorting in the app.
