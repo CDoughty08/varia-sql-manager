@@ -58,6 +58,13 @@ internal sealed class ResultStore
     /// <summary>Each result's row identities (results.identify), at most one per result.</summary>
     private readonly Dictionary<uint, ResultIdentity> identities = [];
     private readonly Func<(long Load, long Threshold)>? memory;
+    /// <summary>The memory a user's limit is measured against (<see cref="SetLimit"/>), or null when the figures are fixed.</summary>
+    private readonly Func<long>? machineMemory;
+    /// <summary>The budget's figures, replaced whole (<see cref="Resize"/>) so a reservation reads one consistent set.</summary>
+    private sealed record Figures(long Global, long Query, long Live);
+    private Figures figures;
+    private readonly object figuresGate = new();
+    private double liveShare = 0.25;
     private uint nextId = 1;
     private long used;
     private long liveUsed;
@@ -68,13 +75,14 @@ internal sealed class ResultStore
     /// <param name="memory">The memory load and its high-load threshold, in bytes (<see cref="OperatingSystemMemory"/> in the
     /// process). Null stores up to the budgets whatever the machine's load: the checks build their stores so, because their
     /// budget assertions otherwise fail whenever the machine running them is busy (above 90 % load under parallel lanes).</param>
-    public ResultStore(long globalBytes, long queryBytes, Func<(long Load, long Threshold)>? memory = null)
+    /// <param name="machineMemory">The memory available to the process, which <see cref="SetLimit"/> sizes the budget by.
+    /// Null fixes the figures: <see cref="SetLimit"/> then changes nothing (the test hooks' budget override).</param>
+    public ResultStore(long globalBytes, long queryBytes, Func<(long Load, long Threshold)>? memory = null, Func<long>? machineMemory = null)
     {
         if (globalBytes <= 0 || queryBytes <= 0) throw new ArgumentOutOfRangeException(nameof(globalBytes));
-        GlobalBytes = globalBytes;
-        QueryBytes = Math.Min(queryBytes, globalBytes);
+        figures = new Figures(globalBytes, Math.Min(queryBytes, globalBytes), globalBytes / 4);
         this.memory = memory;
-        LiveBytes = globalBytes / 4;
+        this.machineMemory = machineMemory;
     }
 
     /// <summary>The least a budget is, and the most it is without a limit of the user's.</summary>
@@ -95,8 +103,34 @@ internal sealed class ResultStore
     public static ResultStore FromSystem(long? globalOverride = null, long? limitBytes = null)
     {
         if (globalOverride is > 0) return new ResultStore(globalOverride.Value, globalOverride.Value / 2);
-        var global = GlobalBytesFor(GC.GetGCMemoryInfo().TotalAvailableMemoryBytes, limitBytes);
-        return new ResultStore(global, global / 2, OperatingSystemMemory);
+        var global = GlobalBytesFor(AvailableMemory(), limitBytes);
+        return new ResultStore(global, global / 2, OperatingSystemMemory, AvailableMemory);
+    }
+
+    private static long AvailableMemory() => GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
+
+    /// <summary>Applies the user's limit to the running store (results.setMemoryLimit): the global figure becomes
+    /// <see cref="GlobalBytesFor"/> of it, half of that per query. Returns false, changing nothing, when the figures are
+    /// fixed (the test hooks' override). See <see cref="Resize"/> for what a change does to what is stored and storing.</summary>
+    public bool SetLimit(long? limitBytes)
+    {
+        if (machineMemory is null) return false;
+        var global = GlobalBytesFor(machineMemory(), limitBytes);
+        Resize(global, global / 2);
+        return true;
+    }
+
+    /// <summary>Replaces the global and per-query figures, keeping the live share's fraction. Every reservation from now on
+    /// checks the new figures; none already made is taken back. Lowered below what is stored, nothing is dropped: every
+    /// reservation is refused (a query storing rows stops with GlobalBudget, or QueryBudget past its new half, as it would
+    /// at a full budget) until releases bring use under the new figure. Raised, the room is there for the next
+    /// reservation, of rows or working memory alike. A query that has already stopped stays stopped: a stop is never
+    /// undone. A query's own ceiling (<see cref="QueryBudget.MaxBytes"/>, an actual plan's, fixed when it began) stays as
+    /// it was; it holds the query to the smaller of it and the new half.</summary>
+    public void Resize(long globalBytes, long queryBytes)
+    {
+        if (globalBytes <= 0 || queryBytes <= 0) throw new ArgumentOutOfRangeException(nameof(globalBytes));
+        lock (figuresGate) Volatile.Write(ref figures, new Figures(globalBytes, Math.Min(queryBytes, globalBytes), (long)(globalBytes * liveShare)));
     }
 
     /// <summary>Whether reservations checked at a seal stop under high memory load.</summary>
@@ -126,16 +160,24 @@ internal sealed class ResultStore
     public static long? LimitFromEnvironment(string? value) =>
         long.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var mib) && mib is > 0 and <= 1L << 20 ? mib << 20 : null;
 
-    public long GlobalBytes { get; }
-    public long QueryBytes { get; }
+    public long GlobalBytes => Volatile.Read(ref figures).Global;
+    public long QueryBytes => Volatile.Read(ref figures).Query;
     public long UsedBytes => Interlocked.Read(ref used);
     /// <summary>What all live tables may hold together (the live share of the budget), and hold now.</summary>
-    public long LiveBytes { get; private set; }
+    public long LiveBytes => Volatile.Read(ref figures).Live;
     public long LiveUsedBytes => Interlocked.Read(ref liveUsed);
     /// <summary>Bytes released toward the next forced collection (the checks read it).</summary>
     internal long FreedSinceCollect => Interlocked.Read(ref freedSinceCollect);
     /// <summary>Sets the live share: <paramref name="share"/> of the global budget (limits.live.budgetShare).</summary>
-    public void ShareWithLive(double share) => LiveBytes = (long)(GlobalBytes * Math.Clamp(share, 0, 1));
+    public void ShareWithLive(double share)
+    {
+        lock (figuresGate)
+        {
+            liveShare = Math.Clamp(share, 0, 1);
+            var current = figures;
+            Volatile.Write(ref figures, current with { Live = (long)(current.Global * liveShare) });
+        }
+    }
     public int Count { get { lock (gate) return sets.Count; } }
 
     /// <summary>A new query on a session replaces that session's earlier results, whatever connection produced them.</summary>
@@ -186,7 +228,9 @@ internal sealed class ResultStore
     public bool TryReserve(QueryBudget query, long bytes, bool checkSystem, out TruncationReason reason)
     {
         if (checkSystem && IsSystemMemoryLow()) { reason = TruncationReason.SystemMemory; return false; }
-        if (Interlocked.Read(ref query.used) + bytes > Math.Min(QueryBytes, query.MaxBytes)) { reason = TruncationReason.QueryBudget; return false; }
+        // One reading of the figures for the whole reservation: a concurrent Resize applies to the next one.
+        var budget = Volatile.Read(ref figures);
+        if (Interlocked.Read(ref query.used) + bytes > Math.Min(budget.Query, query.MaxBytes)) { reason = TruncationReason.QueryBudget; return false; }
         var live = query.Live;
         // Added first and taken back on a refusal, so concurrent reservations never pass a limit together.
         if (live is not null)
@@ -197,7 +241,7 @@ internal sealed class ResultStore
                 reason = TruncationReason.QueryBudget;
                 return false;
             }
-            if (Interlocked.Add(ref liveUsed, bytes) > LiveBytes)
+            if (Interlocked.Add(ref liveUsed, bytes) > budget.Live)
             {
                 Interlocked.Add(ref liveUsed, -bytes);
                 Interlocked.Add(ref live.used, -bytes);
@@ -207,7 +251,7 @@ internal sealed class ResultStore
         }
         for (var current = Interlocked.Read(ref used); ; current = Interlocked.Read(ref used))
         {
-            if (current + bytes > GlobalBytes)
+            if (current + bytes > budget.Global)
             {
                 if (live is not null)
                 {
@@ -232,8 +276,9 @@ internal sealed class ResultStore
     /// that much taken, so a busy machine does not lose a few kilobytes that make a sort many times faster.</param>
     public bool TryReserveSpare(QueryBudget query, long bytes, bool? checkSystem = null)
     {
-        var limit = Math.Min(QueryBytes, query.MaxBytes);
-        if (query.UsedBytes + bytes > limit - limit / 8 || UsedBytes + bytes > GlobalBytes - GlobalBytes / 8) return false;
+        var budget = Volatile.Read(ref figures);
+        var limit = Math.Min(budget.Query, query.MaxBytes);
+        if (query.UsedBytes + bytes > limit - limit / 8 || UsedBytes + bytes > budget.Global - budget.Global / 8) return false;
         return TryReserve(query, bytes, checkSystem ?? bytes >= WorkCheckBytes, out _);
     }
 

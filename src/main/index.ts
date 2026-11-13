@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { BackendSupervisor } from './backend/supervisor'
 import { BackendError } from './backend/errors'
 import { backendSpawnSpec, resultMemoryEnvironment } from './backend/spawn-spec'
+import { ResultMemoryLimit } from './backend/result-memory'
 import { rendererUrlVerifier } from './trusted-renderer'
 import { appIndexUrl, appProtocolHandler, appScheme, appSchemePrivileges } from './app-protocol'
 import { installTestHooks, type BackendTestHooks, type RendererLossSource } from './backend/test-hooks'
@@ -750,8 +751,8 @@ app.whenReady().then(async () => {
   loaded.catch(() => {})
   backend = new BackendSupervisor(backendSpawnSpec({ packaged: app.isPackaged, root, resourcesPath: process.resourcesPath, platform: process.platform, smokeTest: process.env.VARIA_SMOKE_TEST === '1', env: process.env, locale: app.getSystemLocale() }), {
     appVersion: app.getVersion(),
-    // The backend sizes its result memory once, as it starts: its first launch waits for the settings (a read of one
-    // small file), and every launch takes the limit as it is then.
+    // The backend starts with the result memory limit as it is at each launch: its first launch waits for the settings
+    // (a read of one small file). Changes after that go to the running backend (ResultMemoryLimit).
     before: loaded,
     environment: () => resultMemoryEnvironment(settings.current()['queryResults.grid.memoryLimitGiB']),
     // Frame kinds, ids and lengths only; never bodies.
@@ -764,6 +765,10 @@ app.whenReady().then(async () => {
     ...liveness
   })
   // Test-only live sources (debug.synthetic) are accepted only in unpackaged smoke runs, whose backend has its test hooks.
+  const memoryLimit = new ResultMemoryLimit({
+    request: (params, generation) => backend.request('results.setMemoryLimit', params, { generation }),
+    onState: listener => backend.onState(listener), read: () => settings.current()['queryResults.grid.memoryLimitGiB']
+  })
   const results = resultsPort = new ResultsPortHost({ backend: supervisorResults(backend), createChannel: () => new MessageChannelMain(), testSources: testSeams })
   const explorerRequests = new ExplorerRequests(backend)
   // AutoRecover's copies older than Keep AutoRecover information for go before the page can list them; with settings
@@ -774,6 +779,7 @@ app.whenReady().then(async () => {
   void openSession.purge(retentionDays(settings))
   settings.onDidChange(state => {
     updater?.settingsChanged()
+    memoryLimit.settingsChanged()
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:settings-changed', state)
     buildMenu()
     // Items shown in recently used file lists may have changed.

@@ -108,5 +108,8 @@ export const copyPartSchema = z.object({ rows: rangesSchema(Number.MAX_SAFE_INTE
 const turned = { transposed: z.boolean().optional(), headerColumn: z.number().int().min(0).max(limits.page.maxColumns - 1).optional() }
 const turnedRule = [(request: { transposed?: boolean; headerColumn?: number }) => request.headerColumn === undefined || request.transposed === true, 'Only a transposed request has a header column.'] as const
 export const resultsCopyRequestSchema = z.object({ jobId: z.uuid(), generation: u31, resultId: u32, headers: z.boolean(), parts: z.array(copyPartSchema).min(1).max(64), viewId: u32.optional(), ...turned }).strict().refine(...turnedRule)
+/** results.setMemoryLimit, which only main sends (Tools › Options' result memory limit): whole GiB, 0 automatic, at most
+ *  1024 as the setting allows. The backend clamps it as at launch (ResultStore.GlobalBytesFor) and checks the same bounds. */
+export const resultsMemoryLimitSchema = z.object({ limitGiB: z.number().int().min(0).max(1024) }).strict()
 /** varia:results-save. The name only suggests the file; the path comes from main's save dialog. */
 export const resultsSaveRequestSchema = z.object({ jobId: z.uuid(), generation: u31, resultId: u32, format: z.enum(['csv', 'tsv', 'json']).optional(), suggestedName: z.string().min(1).max(limits.jobs.suggestedName), viewId: u32.optional(), ...turned }).strict().refine(...turnedRule)

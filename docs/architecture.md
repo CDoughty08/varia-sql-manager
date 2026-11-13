@@ -62,6 +62,10 @@ being true.
   exception: Select Top Rows' script with N = 10 through `query.execute`, in a session and results entry of the Peek's own
   (`PeekService`), released when its card or tab closes, moves on or refreshes, and on backend loss. Results-port
   messages from the renderer are validated with `portRequestSchema`, ownership, and the current generation.
+- The result budget's figures change while the backend runs only through `ResultStore.Resize` (`results.setMemoryLimit`,
+  sent by main alone when Tools › Options' limit changes and as each generation becomes ready). They are replaced whole and
+  each reservation reads them once; a change never drops stored results or undoes a query's stop (docs/ipc.md, Result
+  store and memory budget).
 - Rows are compared only in the backend: row identities for highlights (`Results/RowIdentity.cs`, `results.identify`,
   `results.findRows`) hash collation-normalized values there, and the renderer only receives positions and ids, never rows
   to compare. `GridView` draws highlights from sorted positions by binary search per painted row, with theme colours only.

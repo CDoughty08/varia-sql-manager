@@ -243,11 +243,172 @@ internal static class StoreChecks
         check(store.Count == 2 && store.Release(fourth.ResultId) && store.Release(third.ResultId) && !store.Release(third.ResultId) && store.Count == 0 && store.UsedBytes == 0,
             "closing results returns every byte to the budget");
 
+        LimitChanges(check);
         Leases(check);
         Collection(check);
         Events(check);
         MemoryReports(check);
         HostReads(check);
+    }
+
+    /// <summary>The limit changed on a running store (results.setMemoryLimit, ResultStore.Resize): raising it gives running
+    /// and new queries the room at once; lowering it below use drops nothing and refuses what is asked until releases bring
+    /// use under it; a stopped query stays stopped; a query's own ceiling stays; concurrent changes keep every counter whole.</summary>
+    private static void LimitChanges(Action<bool, string> check)
+    {
+        const long MiB = 1L << 20, GiB = 1L << 30;
+        // The figures a limit gives, as at launch (GlobalBytesFor of the machine's memory), with the live share kept.
+        var sized = new ResultStore(2 * GiB, GiB, machineMemory: () => 8 * GiB);
+        sized.ShareWithLive(0.5);
+        var four = sized.SetLimit(4 * GiB) && sized is { GlobalBytes: 4 * GiB, QueryBytes: 2 * GiB, LiveBytes: 2 * GiB };
+        var capped = sized.SetLimit(1024 * GiB) && sized is { GlobalBytes: 6 * GiB, QueryBytes: 3 * GiB };
+        var floor = sized.SetLimit(100 * MiB) && sized is { GlobalBytes: 256 * MiB, QueryBytes: 128 * MiB };
+        var automatic = sized.SetLimit(null) && sized is { GlobalBytes: 2 * GiB, QueryBytes: GiB, LiveBytes: GiB };
+        var fixedStore = ResultStore.FromSystem(4L << 20);
+        check(four && capped && floor && automatic && !fixedStore.SetLimit(GiB) && fixedStore is { GlobalBytes: 4L << 20, QueryBytes: 2L << 20 } && ResultStore.FromSystem(null, 300 * MiB).SetLimit(null),
+            "a limit set on a running store sizes it as at launch (up to three quarters of memory, never under 256 MiB, 0 automatic) and keeps the live share; the test hooks' fixed budget does not change");
+
+        // Raised: a query storing rows goes on into the new room, a new one has it at once, and so does working memory.
+        var store = new ResultStore(2L << 20, 1L << 20);
+        var running = store.BeginQuery("running");
+        var growing = Open(store, running);
+        Fill(growing, 0, 100);
+        var stopped = store.BeginQuery("stopped");
+        var full = Open(store, stopped);
+        Fill(full, 0, 20_000);
+        full.Complete();
+        var stopReason = stopped.Stopped;
+        store.Resize(1L << 30, 1L << 29);
+        Fill(growing, 100, 20_000);
+        growing.Complete();
+        var fresh = Open(store, store.BeginQuery("fresh"));
+        Fill(fresh, 0, 20_000);
+        fresh.Complete();
+        check(stopReason != TruncationReason.None && growing.Describe() is { Truncated: null, RowsStored: 20_100 } && fresh.Describe() is { Truncated: null, RowsStored: 20_000 }
+            && store.TryReserveWork(running, 64 * MiB) && store.TryReserveSpare(running, MiB),
+            $"raising the limit lets a running query, a new one and working memory use the room at once: {growing.Describe().Truncated} {fresh.Describe().Truncated}");
+        check(stopped.Stopped == stopReason && store.Open(stopped, 1, 1, 1, "rows", W1Columns, W1Wires) is null && full.Describe().Truncated is "queryBudget" or "globalBudget",
+            "a query that stopped storing stays stopped when the limit is raised");
+
+        // Lowered below use: nothing stored is dropped, a running query stops at its next reservation, a new one stores
+        // nothing and working memory is refused, until releases bring use under the new figure.
+        store = new ResultStore(1L << 30, 1L << 29);
+        var kept = Open(store, store.BeginQuery("kept"));
+        Fill(kept, 0, 20_000);
+        kept.Complete();
+        var loading = store.BeginQuery("loading");
+        var cut = Open(store, loading);
+        Fill(cut, 0, 100);
+        var used = store.UsedBytes;
+        var keptBytes = kept.Budget.UsedBytes;
+        store.Resize(used / 2, used / 4);
+        Fill(cut, 100, 20_000);
+        cut.Complete();
+        var late = store.BeginQuery("late");
+        var refusedOpen = store.Open(late, 0, 1, 1, "rows", W1Columns, W1Wires);
+        var work = store.BeginQuery("work");
+        check(StoredRows(kept) == 20_000 && kept.Describe().Truncated is null && kept.Budget.UsedBytes == keptBytes && store.UsedBytes > store.GlobalBytes && cut.Describe() is { Truncated: "globalBudget" or "queryBudget", RowsStored: >= 100 and < 20_100 }
+            && loading.Stopped != TruncationReason.None && refusedOpen is null && late.Stopped == TruncationReason.GlobalBudget && !store.TryReserveWork(work, 1) && !store.TryReserveSpare(work, 1),
+            $"lowering the limit below use drops nothing, stops a running query and refuses new rows and working memory: {cut.Describe().Truncated} {cut.Describe().RowsStored} {late.Stopped} {StoredRows(kept)} {kept.Budget.UsedBytes - keptBytes} {store.UsedBytes} {store.GlobalBytes} {loading.Stopped} {refusedOpen is null}");
+        store.Release(kept.ResultId);
+        store.Release(cut.ResultId);
+        var again = Open(store, store.BeginQuery("again"));
+        Fill(again, 0, 100);
+        again.Complete();
+        check(store.UsedBytes <= store.GlobalBytes && again.Describe() is { Truncated: null, RowsStored: 100 } && loading.Stopped != TruncationReason.None,
+            "once releases bring use under the lowered limit a new query stores again; the stopped one stays stopped");
+
+        // A query's own ceiling (an actual plan's) stays: the smaller of it and the store's half holds.
+        store = new ResultStore(1L << 20, 1L << 19);
+        var plan = new QueryBudget("plan", maxBytes: 1000);
+        var overCeiling = !store.TryReserve(plan, 2000, false, out var ceilingReason) && ceilingReason == TruncationReason.QueryBudget;
+        store.Resize(1L << 30, 1L << 29);
+        var stillOver = !store.TryReserve(plan, 2000, false, out _);
+        store.Resize(1000, 500);
+        check(overCeiling && stillOver && !store.TryReserve(plan, 600, false, out var halfReason) && halfReason == TruncationReason.QueryBudget && store.TryReserve(plan, 500, false, out _),
+            "a query's own ceiling stays when the limit changes, and the smaller of it and the new half holds");
+
+        // Concurrent changes: reservations, returns, the live share and resizes together leave every counter whole, never
+        // let use pass the larger figure, and leave the live share a fraction of the figure in force.
+        store = new ResultStore(64 * MiB, 32 * MiB);
+        var queries = Enumerable.Range(0, 8).Select(i => store.BeginQuery("c" + i)).ToArray();
+        var live = new QueryBudget("live:c", new LiveBudget(64 * MiB));
+        long highest = 0, highestQuery = 0;
+        var done = 0;
+        var resizer = Task.Run(() =>
+        {
+            for (var i = 0; i < 4000; i++)
+            {
+                if (i % 2 == 0) store.Resize(8 * MiB, 4 * MiB); else store.Resize(64 * MiB, 32 * MiB);
+                store.ShareWithLive(i % 3 == 0 ? 0.25 : 0.5);
+            }
+            Volatile.Write(ref done, 1);
+        });
+        Parallel.For(0, queries.Length + 1, index =>
+        {
+            var query = index < queries.Length ? queries[index] : live;
+            long held = 0;
+            for (var step = 0; Volatile.Read(ref done) == 0 || step < 2000; step++)
+            {
+                if (store.TryReserve(query, 64 * 1024, false, out _))
+                {
+                    held += 64 * 1024;
+                    Raise(ref highest, store.UsedBytes);
+                    Raise(ref highestQuery, query.UsedBytes);
+                }
+                if (held >= 2 * MiB || step % 7 == 0) { store.Return(query, held); held = 0; }
+            }
+            store.Return(query, held);
+        });
+        resizer.Wait();
+        var whole = store.UsedBytes == 0 && store.LiveUsedBytes == 0 && live.Live!.UsedBytes == 0 && queries.All(query => query.UsedBytes == 0);
+        // The last ShareWithLive (i = 3999) set a quarter of the figure the last Resize (64 MiB) left.
+        var shareFollows = store.LiveBytes == 16 * MiB && store.GlobalBytes == 64 * MiB;
+        store.Resize(8 * MiB, 4 * MiB);
+        long filled = 0;
+        foreach (var query in queries) while (store.TryReserve(query, 64 * 1024, false, out _)) filled += 64 * 1024;
+        check(whole && highest <= 64 * MiB && highestQuery <= 32 * MiB && shareFollows && store.LiveBytes == 2 * MiB && filled == 8 * MiB,
+            $"reservations under concurrent limit changes keep every counter whole and within the larger figure, and the next reservations keep to the figure in force: {whole} {highest} {highestQuery} {store.LiveBytes} {filled}");
+    }
+
+    private static void Raise(ref long highest, long seen)
+    {
+        for (var top = Interlocked.Read(ref highest); seen > top; top = Interlocked.Read(ref highest))
+            if (Interlocked.CompareExchange(ref highest, seen, top) == top) return;
+    }
+
+    /// <summary>The service's results.setMemoryLimit: main only, on the control lane, bounded 0 to 1024 GiB, and the status
+    /// bar's figure follows by a results.memory event before it answers, though use is unchanged.</summary>
+    private static void MemoryLimitMethod(Action<bool, string> check)
+    {
+        const long GiB = 1L << 30;
+        var globals = new List<long>();
+        var store = new ResultStore(2 * GiB, GiB, machineMemory: () => 8 * GiB);
+        using var service = new SqlService(store, publish: value =>
+        {
+            var report = JsonSerializer.SerializeToElement(value, HostChecks.Json);
+            if (report.GetProperty("type").GetString() == "results.memory") lock (globals) globals.Add(report.GetProperty("globalBytes").GetInt64());
+            return true;
+        });
+        object Set(string body) => service.DispatchAsync("results.setMemoryLimit", JsonDocument.Parse(body).RootElement, HostChecks.Json).GetAwaiter().GetResult();
+        long? Last() { lock (globals) return globals.Count > 0 ? globals[^1] : null; }
+        service.ReportMemory();
+        var raised = (ResultsMemoryLimitResult)Set("{\"limitGiB\":4}");
+        var afterRaise = Last();
+        var capped = (ResultsMemoryLimitResult)Set("{\"limitGiB\":1024}");
+        var automatic = (ResultsMemoryLimitResult)Set("{\"limitGiB\":0}");
+        check(raised is { Applied: true, GlobalBytes: 4 * GiB, QueryBytes: 2 * GiB } && afterRaise == 4 * GiB && capped.GlobalBytes == 6 * GiB && automatic.GlobalBytes == 2 * GiB && Last() == 2 * GiB
+            && JsonSerializer.Serialize(raised, HostChecks.Json) == "{\"applied\":true,\"globalBytes\":4294967296,\"queryBytes\":2147483648}",
+            $"results.setMemoryLimit applies the limit at once, clamped as at launch, and the status bar's figure follows before it answers: {afterRaise} {capped.GlobalBytes} {automatic.GlobalBytes}");
+        var refusals = new[] { "{\"limitGiB\":1025}", "{\"limitGiB\":-1}", "{}", "{\"limitGiB\":null}", "{\"limitGiB\":1.5}", "{\"limitGiB\":4,\"extra\":1}" }.Select(body =>
+        {
+            try { Set(body); return "accepted"; }
+            catch (RequestException error) { return error.Code; }
+            catch (JsonException) { return "json"; }
+        }).ToArray();
+        check(refusals.SequenceEqual(["INVALID_PARAMS", "INVALID_PARAMS", "INVALID_PARAMS", "INVALID_PARAMS", "json", "json"]) && store.GlobalBytes == 2 * GiB
+            && service.LaneOf("results.setMemoryLimit") == RequestLane.Control && SqlService.MethodNames.Contains("results.setMemoryLimit"),
+            "results.setMemoryLimit refuses a limit outside 0 to 1024 GiB, a missing or non-integer one and unknown members, changing nothing, and runs on the control lane: " + string.Join(",", refusals));
     }
 
     /// <summary>results.memory reports small increases without a query summary, and reports memory released by
@@ -297,6 +458,7 @@ internal static class StoreChecks
             "results.memory deduplicates a summary's sample and reports the fall to 0 when the results are closed: " + before + ", " + afterSummary + ", " + Count() + ", " + Last());
 
         MemoryBudgetReports(check);
+        MemoryLimitMethod(check);
     }
 
     private static void MemoryBudgetReports(Action<bool, string> check)
