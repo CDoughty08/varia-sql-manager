@@ -156,7 +156,7 @@ describe('closing one result', () => {
     expect(tab().jobNotice).toBe('')
   })
 
-  it('leaves work on another result alone when one is closed, and a derived result outlives its source under its name', async () => {
+  it('leaves work on another result alone when one is closed, and a comparison outlives its source under its name', async () => {
     const { results, pivot, compare, run, tab, handle, releases } = fixture()
     const keys = run(3)
     await compare.compare('t1', keys[1])
@@ -173,10 +173,11 @@ describe('closing one result', () => {
     building.answer.resolve(answer)
     await pivoting
     await settle()
-    expect(tab().sets.map(set => [set.number, set.label])).toEqual([[2, undefined], [3, undefined], [4, 'Differences: Result 1 → Result 2'], [5, 'Pivot of Result 3']])
+    // The Pivot stands under its Table, the comparison after the groups.
+    expect(tab().sets.map(set => [set.number, set.label])).toEqual([[2, undefined], [3, undefined], [5, 'Pivot of Result 3'], [4, 'Differences: Result 1 → Result 2']])
     expect(releases()).toEqual({ 1: 1 })
     // The comparison's own close releases only the comparison.
-    results.removeEntry('t1', tab().sets[2].key)
+    results.removeEntry('t1', tab().sets[3].key)
     expect(releases()).toEqual({ 1: 1, 901: 1 })
     expect(tab().sets.map(set => set.number)).toEqual([2, 3, 5])
   })

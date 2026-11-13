@@ -113,8 +113,24 @@ export function outputContribution({ commands, results, menuTargets, documents, 
   const closeTab = (args?: CommandArgs) => {
     const target = outputOf(args) ?? (args?.tabId || args?.target ? undefined : focusedOutput(menuTargets))
     if (args?.target && !target) return undefined
-    if (target?.view === 'grid' && !grid(target)) return undefined
+    if (target?.view === 'grid' && (target.bare || !grid(target))) return undefined
     return target?.tabId ?? args?.tabId ?? documents.getSnapshot().activeId
+  }
+  /** The view Close Result closes: the menu's grid, else the focused one, else (from the palette) the grid that last had
+   *  the focus in the named or active query tab, and nothing when none has had it; once the run has ended, and never a
+   *  Peek grid. */
+  const closeEntry = (args?: CommandArgs) => {
+    const named = outputOf(args), focused = named || args?.tabId || args?.target ? undefined : focusedOutput(menuTargets)
+    if (args?.target && !named) return undefined
+    // A menu's target must be a grid. Focus in Messages (a key, the palette) names no grid: the one last used, as from the editor.
+    const target = named ?? (focused?.view === 'grid' ? focused : undefined)
+    if (named ? named.view !== 'grid' : focused?.view === 'live') return undefined
+    if (target && (target.bare || !grid(target))) return undefined
+    const tabId = target?.tabId ?? focused?.tabId ?? args?.tabId ?? documents.getSnapshot().activeId
+    const tab = tabId ? results.getSnapshot()[tabId] : undefined
+    // Never the run's first result for want of one: closing has no undo, so it takes a grid the user has used.
+    const key = target?.entry ?? tab?.focused
+    return tabId && tab && key !== undefined && !tab.bare && tab.status !== 'running' && tab.status !== 'closed' ? { tabId, key } : undefined
   }
   /** F3 in a grid moves its active cell to the match as well; from the search box or the editor it only scrolls. */
   const fromGrid = (args?: CommandArgs) => targetOf(args)?.view === 'grid'
@@ -230,6 +246,22 @@ export function outputContribution({ commands, results, menuTargets, documents, 
         if (message) commands.reportError(message)
         // The value's tab is active now; typing goes to it, as in SSMS.
         if (opened) documents.focusActive()
+      }
+    }),
+    commands.register('output.closeResult', {
+      when: args => !!closeEntry(args),
+      run: args => {
+        const target = closeEntry(args)
+        if (!target) return
+        // The grid unmounts: the focus goes to the grid the service gives it to, else to the Results tab, which stays.
+        // Only when the focus is in a grid that closes; elsewhere it stays where it is.
+        const closing = new Set(results.closing(target.tabId, target.key).map(entry => entry.key))
+        const from = windows.activeElement()?.closest('[data-result-grid]')
+        const own = from && closing.has(from.getAttribute('data-result-entry') ?? '') ? from.closest('.output-panel') : undefined
+        own?.querySelector<HTMLElement>('[role="tab"][data-output-tab="results"]')?.focus({ preventScroll: true })
+        if (!results.removeEntry(target.tabId, target.key) || !own) return
+        const next = results.getSnapshot()[target.tabId]?.focused
+        if (next !== undefined) own.querySelector<HTMLElement>(`[data-result-grid][data-result-entry="${next}"]`)?.focus({ preventScroll: true })
       }
     }),
     commands.register('output.closeResults', {

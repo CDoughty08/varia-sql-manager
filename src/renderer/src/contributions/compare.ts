@@ -5,12 +5,13 @@ import { focusedOutput } from './output'
 
 /**
  * Compare with Previous Result and its Exact Text form (CompareService): the menu's grid, else the focused one, against the
- * run's result before it, once both have every row.
+ * run's result before it, once both have every row. Tables of rows only: never a Pivot, a comparison, a plan set or a Peek
+ * grid.
  */
 export function compareContribution({ commands, compare, menuTargets }: Pick<Workbench, 'commands' | 'compare' | 'menuTargets'>): Disposable {
   const targetOf = (args?: CommandArgs) => {
     const target = outputOf(args) ?? (args?.target ? undefined : focusedOutput(menuTargets))
-    return target?.view === 'grid' && target.entry !== undefined && compare.canCompare(target.tabId, target.entry) ? { tabId: target.tabId, key: target.entry } : undefined
+    return target?.view === 'grid' && target.entry !== undefined && !target.bare && compare.canCompare(target.tabId, target.entry) ? { tabId: target.tabId, key: target.entry } : undefined
   }
   const command = (exact: boolean) => ({
     when: (args?: CommandArgs) => !!targetOf(args),
