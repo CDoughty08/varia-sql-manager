@@ -28,6 +28,10 @@ the rules that keep it lean.
   backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --pivot-bench` (backend, stage by
   stage) and `node scripts/pivot-bench.mjs` (the built app against `VARIA_TEST_SQL_SERVER`).
   docs/pivot-performance-findings.md has their options and what they measured.
+- `dotnet run --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release --
+  --fairness-bench [--rows N] [--runs N]` (by hand, enforces nothing) times a sort, a pivot and a profile alone and in
+  pairs started together, to see how they share the worker threads; docs/ipc.md's "Worker threads measured" holds what
+  it measured. Prefix `DOTNET_PROCESSOR_COUNT=n` for the workers a smaller machine would have.
 
 ## Environment
 

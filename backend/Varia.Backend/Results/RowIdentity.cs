@@ -86,7 +86,7 @@ internal static class RowIdentity
     internal static void EachPage(CellHasher hasher, StoredPage[] pages, long rows, CancellationToken token, PageRead read)
     {
         using var threads = ViewSorter.Gate.Take((int)Math.Clamp(Math.Min(rows / MinSlice, pages.Length), 1, ViewSorter.Workers));
-        var runs = threads.Count;
+        var runs = threads.Wanted;
         void Run(int run)
         {
             var own = run == 0 ? hasher : hasher.Fork();
@@ -97,16 +97,7 @@ internal static class RowIdentity
                 read(own, pages[index], PageView.Parse(pages[index].Body, own.Count, scratch));
             }
         }
-        if (runs == 1)
-        {
-            Run(0);
-            return;
-        }
-        try { Parallel.For(0, runs, new ParallelOptions { MaxDegreeOfParallelism = runs }, Run); }
-        catch (AggregateException error) when (error.InnerExceptions.Count > 0)
-        {
-            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerExceptions[0]).Throw();
-        }
+        threads.For(runs, Run);
     }
 
     /// <summary>Hashes each row's identity into <paramref name="ids"/> (column -1: the whole row), the pages in runs on
@@ -181,7 +172,7 @@ internal static class RowIdentity
         if (ids.Length < 2) return true;
         using var threads = ViewSorter.Gate.Take(Math.Max(1, Math.Min(ViewSorter.Workers, ids.Length / MinSlice)));
         var bits = 0;
-        while (2 << bits <= threads.Count && ids.Length >> (bits + 1) >= MinSlice) bits++;
+        while (2 << bits <= threads.Wanted && ids.Length >> (bits + 1) >= MinSlice) bits++;
         var parts = 1 << bits;
         var shift = 53 - bits;
         var starts = new int[parts + 1];
@@ -200,13 +191,7 @@ internal static class RowIdentity
             for (var i = 1; i < span.Length; i++)
                 if (span[i] == span[i - 1]) { Volatile.Write(ref repeated, 1); return; }
         }
-        if (parts == 1) Part(0);
-        else
-            try { Parallel.For(0, parts, new ParallelOptions { MaxDegreeOfParallelism = parts }, Part); }
-            catch (AggregateException error) when (error.InnerExceptions.Count > 0)
-            {
-                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerExceptions[0]).Throw();
-            }
+        threads.For(parts, Part);
         return repeated == 0;
     }
 

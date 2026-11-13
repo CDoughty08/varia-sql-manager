@@ -94,31 +94,6 @@ internal static partial class ViewSorter
     internal const int MaxGroups = 1 << 16;
     internal const string TooSlow = "There is not enough result memory to compare this much text. Close other results and try again.";
 
-    /// <summary>The threads operations share. Each takes what is free of <see cref="Workers"/> when it starts a parallel
-    /// step, and one at least (its own), so several operations at once do not ask the thread pool for several times the
-    /// machine's cores and leave the requests it answers waiting.</summary>
-    internal sealed class WorkerGate(Func<int> limit)
-    {
-        private int busy;
-        public int Busy => Volatile.Read(ref busy);
-
-        public Lease Take(int wanted)
-        {
-            while (true)
-            {
-                var now = Volatile.Read(ref busy);
-                var take = Math.Max(1, Math.Min(wanted, limit() - now));
-                if (Interlocked.CompareExchange(ref busy, now + take, now) == now) return new Lease(this, take);
-            }
-        }
-
-        internal readonly struct Lease(WorkerGate gate, int count) : IDisposable
-        {
-            public int Count => count;
-            public void Dispose() => Interlocked.Add(ref gate.busy, -count);
-        }
-    }
-
     internal static readonly WorkerGate Gate = new(() => Workers);
 
     /// <summary>The budget a build's keys take what they hold beyond their rows' fixed bytes from, and give it back to.</summary>
@@ -168,38 +143,31 @@ internal static partial class ViewSorter
             return;
         }
         using var threads = Gate.Take(Math.Min(Workers, count / MinSlice));
-        var slices = Slices(count, threads.Count);
+        var slices = Slices(count, threads.Wanted);
         if (slices == 1)
         {
             Array.Sort(items, start, count, comparer);
             return;
         }
         int At(int slice, int of) => start + (int)((long)count * slice / of);
-        var options = new ParallelOptions { MaxDegreeOfParallelism = threads.Count };
-        try
+        // Each slice and each merge is an item: a sort holding more than its share hands threads back between them. The
+        // comparer throws a cancellation, which For rethrows once the other threads have stopped.
+        threads.For(slices, slice => Array.Sort(items, At(slice, slices), At(slice + 1, slices) - At(slice, slices), comparer));
+        int[] from = items, to = new int[items.Length];
+        for (var width = slices; width > 1; width /= 2)
         {
-            Parallel.For(0, slices, options, slice => Array.Sort(items, At(slice, slices), At(slice + 1, slices) - At(slice, slices), comparer));
-            int[] from = items, to = new int[items.Length];
-            for (var width = slices; width > 1; width /= 2)
+            var (source, target, of) = (from, to, width);
+            threads.For(width / 2, pair =>
             {
-                var (source, target, of) = (from, to, width);
-                Parallel.For(0, width / 2, options, pair =>
-                {
-                    int left = At(2 * pair, of), middle = At(2 * pair + 1, of), end = At(2 * pair + 2, of);
-                    int a = left, b = middle, at = left;
-                    while (a < middle && b < end) target[at++] = comparer.Compare(source[b], source[a]) < 0 ? source[b++] : source[a++];
-                    while (a < middle) target[at++] = source[a++];
-                    while (b < end) target[at++] = source[b++];
-                });
-                (from, to) = (to, from);
-            }
-            if (from != items) Array.Copy(from, start, items, start, count);
+                int left = At(2 * pair, of), middle = At(2 * pair + 1, of), end = At(2 * pair + 2, of);
+                int a = left, b = middle, at = left;
+                while (a < middle && b < end) target[at++] = comparer.Compare(source[b], source[a]) < 0 ? source[b++] : source[a++];
+                while (a < middle) target[at++] = source[a++];
+                while (b < end) target[at++] = source[b++];
+            });
+            (from, to) = (to, from);
         }
-        catch (AggregateException error) when (error.InnerExceptions.Count > 0)
-        {
-            // What one thread's sort would have thrown (a cancellation, or the sort's wrapping of one).
-            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerExceptions[0]).Throw();
-        }
+        if (from != items) Array.Copy(from, start, items, start, count);
     }
 
     /// <summary>A sort's comparisons as the time one thread would take to make that many one after another: the slices
@@ -726,14 +694,12 @@ internal static partial class ViewSorter
         again = false;
         key.Begin();
         do
-        try
-        {
-            Parallel.For(0, source.Count, new ParallelOptions { MaxDegreeOfParallelism = threads.Count, CancellationToken = token }, () => new Scratch(), (index, _, scratch) =>
+            threads.For(source.Count, () => new Scratch(), (index, scratch) =>
             {
                 var page = source.Page(index);
                 var first = (int)page.FirstRow;
                 var (start, stop) = starts is null ? (first, first + page.Rows) : (starts[index], starts[index + 1]);
-                if (start == stop) return scratch;
+                if (start == stop) return;
                 var view = source.View(index);
                 key.BeginPage(scratch, index);
                 for (var row = start; row < stop; row++)
@@ -764,13 +730,7 @@ internal static partial class ViewSorter
                     key.Set(row, span, scratch);
                 }
                 key.EndPage(scratch, index);
-                return scratch;
-            }, _ => { });
-        }
-        catch (AggregateException error) when (error.InnerExceptions.Count > 0)
-        {
-            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerExceptions[0]).Throw();
-        }
+            }, token);
         while (key.Finish());
         if (key is InstantKey { Declined: true })
         {

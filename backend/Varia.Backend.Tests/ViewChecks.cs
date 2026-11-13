@@ -414,16 +414,6 @@ internal static class ViewChecks
         check(cost1 == 24.0 * (1 << 24) && Math.Abs(cost16 - (1 << 24) * (20.0 / 16 + 1.0 / 8 + 1.0 / 4 + 1.0 / 2 + 1)) < 1,
             "a sort's cost counts its merges, which do not spread over the threads as its slices do (" + cost1 / (1 << 24) + " and " + cost16 / (1 << 24) + " comparisons a row)");
 
-        // Operations share their threads: what is free when each asks, and one at least.
-        var gate = new ViewSorter.WorkerGate(() => 6);
-        ViewSorter.WorkerGate.Lease a = gate.Take(4), b = gate.Take(4), c = gate.Take(4);
-        var taken = (a.Count, b.Count, c.Count, gate.Busy);
-        a.Dispose();
-        b.Dispose();
-        c.Dispose();
-        using (var again = gate.Take(9)) taken.Busy += 100 * again.Count;
-        check(taken == (4, 2, 1, 607) && gate.Busy == 0, "operations take the threads that are free of the ones they share, one at least, and give them back: " + taken);
-
         // A sort key is asked for once; a buffer too short for it grows, and says by how much.
         var info = System.Globalization.CultureInfo.GetCultureInfo("en-US").CompareInfo;
         var text = string.Concat(Enumerable.Repeat("Straße № 12 ", 40));

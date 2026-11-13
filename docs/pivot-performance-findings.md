@@ -106,6 +106,10 @@ Parallel builds, 5,000,000 rows at 1 GiB a query:
   (1.1 to 1.3 s here, as on 2026-11-11). Nothing is slower than it was, but two builds at once finish later than the
   same two one after the other would (0.7 s). Dividing the threads between the operations that are running is the
   change that would fix it; it was not made here.
+- **Update, 2026-11-12: the threads are now shared fairly.** The gate gives each running operation a share and takes
+  threads back between items (docs/ipc.md, Sorted views, "Threads"). Rerun on a busier machine, builds at once took 0.76
+  to 1.1 s each instead of 1.3 to 2.0 s, and one alone the same as before (0.92 to 1.26 s against 0.84 to 1.15 s that
+  day); docs/ipc.md's "Worker threads measured" has the pairs of sorts, pivots and profiles.
 - Four at once are still safe, and still refused only by the query's budget.
 
 Cancellation stopped a 2.3 s build of five million rows within 0.2 to 15 ms at seven points; a source that leaves no
