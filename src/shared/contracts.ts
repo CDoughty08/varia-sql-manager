@@ -465,6 +465,9 @@ export interface RpcMethods {
   'query.session.close': { params: { sessionId: string; transaction?: SessionEnd }; result: { closed: boolean } }
   /** An idle session's @@TRANCOUNT, read before it ends; see SessionState. */
   'query.session.state': { params: { sessionId: string }; result: SessionState }
+  /** The results whose grids are shown in any window now: the whole set each time, replacing the last (an advisory hint for
+   *  the backend's memory policy). `visible` is how many ids the backend recorded. */
+  'results.visibility': { params: ResultsVisibilityParams; result: { visible: number } }
   'explorer.children': { params: ExplorerChildrenParams; result: ExplorerChildrenResult }
   /** (Re)builds the connection's object index in backend memory; progress EVENTs, and Stop is varia:explorer-cancel. */
   'explorer.index': { params: ObjectIndexParams; result: ObjectIndexResult }
@@ -495,6 +498,8 @@ export interface RpcMethods {
   'activity.kill': { params: ActivityKillRequest; result: ActivityKillResult }
 }
 export type RpcMethod = keyof RpcMethods
+/** results.visibility: distinct result ids of the backend's current generation, at most limits.visibility.maxResults. */
+export interface ResultsVisibilityParams { visible: number[] }
 /** Methods the renderer reaches only through the results port (validated by portRequestSchema, never by invoke). */
 export interface PortMethods {
   'results.read': { params: ResultsReadParams; result: ResultsReadResult }
@@ -741,6 +746,8 @@ export interface VariaApi {
   closeQuerySession(sessionId: string, transaction?: SessionEnd): Promise<ApiResult<{ closed: boolean }>>
   /** Reads an idle query session's open transaction before it ends. A busy, lost or unknown session is an error value. */
   querySessionState(sessionId: string): Promise<ApiResult<SessionState>>
+  /** Tells the backend which results' grids are shown in any window (the whole set, replacing the last). */
+  setResultVisibility(params: ResultsVisibilityParams): Promise<ApiResult<{ visible: number }>>
   getBackendState(): Promise<ApiResult<BackendState>>
   onBackendState(callback: (state: BackendState) => void): () => void
   /** Ends the current backend generation and starts the next one; main asks first when servers are connected.

@@ -276,6 +276,13 @@ describe('IPC validation', () => {
     expect(methodPolicies['query.session.state']).toMatchObject({ kind: 'unary', lane: 'control' })
     expect(deadlineFor('query.session.state', { sessionId })).toEqual({ deadlineMs: 5000, backstopMs: 10_000 })
   })
+  it('takes the shown results as at most limits.visibility.maxResults distinct ids, on the control lane', () => {
+    const most = Array.from({ length: limits.visibility.maxResults }, (_, at) => at + 1)
+    for (const visible of [[], [7], [0xffffffff], most]) expect(validateRequest('results.visibility', { visible })).toEqual({ visible })
+    for (const params of [{}, { visible: [0] }, { visible: [7, 7] }, { visible: [1.5] }, { visible: [-1] }, { visible: [2 ** 32] }, { visible: ['7'] }, { visible: [...most, most.length + 1] }, { visible: [7], generation: 1 }])
+      expect(() => validateRequest('results.visibility', params), JSON.stringify(params).slice(0, 80)).toThrow()
+    expect(methodPolicies['results.visibility']).toEqual({ kind: 'unary', lane: 'control', deadlineMs: 10_000 })
+  })
   it('validates copy and save requests strictly', () => {
     const copy = { jobId: crypto.randomUUID(), generation: 1, resultId: 7, headers: true, parts: [{ rows: [[0, 9], [20, Number.MAX_SAFE_INTEGER]], columns: [[0, 0], [2, 4095]] }] }
     expect(resultsCopyRequestSchema.parse(copy)).toEqual(copy)

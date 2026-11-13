@@ -234,6 +234,7 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `query.cancel` | invoke | unary | control | 10 s |
 | `query.session.close` | invoke | unary | control | 10 s, 60 s with `transaction: 'commit'`; answered locally `{ closed: false }` for a session of an ended generation |
 | `query.session.state` | invoke | unary | control | 5 s; answered locally `SESSION_LOST` for a session of an ended generation |
+| `results.visibility` | invoke (`ResultVisibilityService`, `src/renderer/src/results/ResultVisibilityService.ts`): when the set of results whose grids are shown in any window changes, and again to each new generation; one request in flight at a time | unary | control | 10 s. Takes `{ visible }`, the whole set of shown result ids of the current generation (0 to 4,096 distinct u32 ids above 0, `limits.visibility.maxResults`; the backend refuses anything else with `INVALID_PARAMS`), replacing the last; answers `{ visible }`, how many of them are stored. Ids of results not stored are ignored. A hint for a memory policy over hidden results: the backend only records it (`ResultVisibility`, see [Result store and memory budget](#result-store-and-memory-budget)) |
 | `results.read` | port | stream | results | 60 s |
 | `results.close` | port | unary | control | 10 s |
 | `results.rowBytes` | port | unary | control | 10 s; each row's bytes for 1 – 16,384 sealed rows ([Cell lengths and row sizes](#cell-lengths-and-row-sizes)) |
@@ -1224,6 +1225,15 @@ Results stay in backend memory, never on disk (`ResultStore`).
   exit. Closing a session (`query.session.close`) and disconnecting keep results readable, copyable and saveable, as in
   SSMS; the renderer closes them when their tab closes. A release fails the result's in-flight reads with
   `RESULT_RELEASED` after the current page and stops storing at once.
+- **Visibility.** `results.visibility` tells the backend which results' grids are shown in any window, popouts
+  included. A grid is shown while its element has a size (a background tab, a hidden or collapsed Results panel and a
+  detached panel have none) and its window is visible (main's word for the main window while popouts keep its document
+  visible; a popout's own document). The renderer sends the whole set when it changes (one message per task's changes,
+  never on a timer), and again after a restart, so a lost or refused message only delays what reads it. `ResultVisibility`
+  (`Results/ResultVisibility.cs`) keeps the set and, for every other stored result, the time it became hidden (or was
+  first asked about), within 16,384 entries; results.close forgets released results at once and each set drops the rest.
+  It changes nothing in the store: `IsHidden(resultId, out since)` is the query for a later policy that compresses
+  hidden results (stage 1 of the page compression plan).
 - **Leases.** `results.copy` and `results.export` lease their result: released while a job runs, it leaves lookup at once
   (new reads get `RESULT_RELEASED`), but its pages and budget are freed when the last lease ends, so re-executing or
   closing a tab never breaks a save. Every 64 MiB released, counted across releases (one large result or many small ones, closed together

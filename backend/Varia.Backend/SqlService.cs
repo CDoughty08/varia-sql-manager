@@ -31,7 +31,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
-        "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.identify", "results.rowIds", "results.findRows", "results.diff", "results.search", "results.profile", "results.pivot", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.peekDefinition", "explorer.index", "explorer.search", "results.copy", "results.export",
+        "results.visibility", "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.identify", "results.rowIds", "results.findRows", "results.diff", "results.search", "results.profile", "results.pivot", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.peekDefinition", "explorer.index", "explorer.search", "results.copy", "results.export",
         "results.setMemoryLimit", "results.distinct", "results.distinctRead", "results.distinctTick", "results.distinctClose",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
@@ -91,6 +91,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private readonly object sessionGate = new();
     private readonly ServerDiscovery discovery = new();
     private readonly ResultStore store;
+    private readonly ResultVisibility visibility;
     private readonly ResultJobs jobs;
     private readonly bool hooks;
     private readonly Func<object, bool>? publish;
@@ -166,6 +167,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     {
         this.store = store ?? ResultStore.FromSystem();
         jobs = new ResultJobs(this.store);
+        visibility = new ResultVisibility(id => this.store.Find(id) is not null);
         this.hooks = hooks;
         this.publish = publish;
         Methods = hooks ? [.. MethodNames, SynthesizeMethod] : MethodNames;
@@ -312,7 +314,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "live.subscribe" or "activity.details" => RequestLane.Live,
         // Kill Process takes no metadata slot: it runs at once under its own gates, as object actions do under theirs.
         "activity.kill" => RequestLane.Actions,
-        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.distinctClose" or "results.rowIds" or "results.setMemoryLimit" or "entra.cache.clear"
+        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.distinctClose" or "results.rowIds" or "results.setMemoryLimit" or "results.visibility" or "entra.cache.clear"
             or "live.update" or "language.status" or "language.refresh" or "language.close" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
         _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
@@ -365,6 +367,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "query.session.state" => await SessionStateAsync(Read<SessionStateArgs>(parameters, json), Token(context)),
         "results.read" => await ReadResultsAsync(Read<ResultsReadArgs>(parameters, json), context),
         "results.close" => CloseResults(Read<ResultsCloseArgs>(parameters, json)),
+        "results.visibility" => SetVisibility(Read<ResultsVisibilityArgs>(parameters, json)),
         "results.setMemoryLimit" => SetMemoryLimit(Read<ResultsMemoryLimitArgs>(parameters, json)),
         "results.rowBytes" => RowBytes(Read<ResultsRowBytesArgs>(parameters, json)),
         "results.view" => await ViewAsync(Read<ResultsViewArgs>(parameters, json), Token(context)),
@@ -2167,11 +2170,24 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     {
         if (args.ResultIds is not { Length: >= 1 and <= 1024 } || args.ResultIds.Contains(0u)) throw new RequestException("INVALID_PARAMS", "Between 1 and 1024 result IDs are required.");
         var closed = store.Release(args.ResultIds);
+        visibility.Forget(args.ResultIds);
         // The fall goes out as an event before this answer, in order with the other results.memory events; the status bar
         // follows only those, so an answer overtaken by a newer event cannot show stale usage.
         if (closed > 0) ReportMemory();
         return new ResultsCloseResult(closed, store.UsedBytes);
     }
+
+    /// <summary>Which results' grids are shown in any window (the whole set, replacing the last): bookkeeping only, for a
+    /// memory policy over hidden results (<see cref="ResultVisibility"/>). Ids of results not stored are ignored.</summary>
+    private ResultsVisibilityResult SetVisibility(ResultsVisibilityArgs args)
+    {
+        if (args.Visible is not { Length: <= ResultVisibility.MaxResults } ids || ids.Contains(0u) || ids.Distinct().Count() != ids.Length)
+            throw new RequestException("INVALID_PARAMS", $"At most {ResultVisibility.MaxResults} distinct result IDs are allowed.");
+        return new ResultsVisibilityResult(visibility.Set(ids));
+    }
+
+    /// <summary>Which results are shown, for a memory policy over hidden ones and for the checks.</summary>
+    internal ResultVisibility Visibility => visibility;
 
     /// <summary>The most a user's limit is, in GiB, as Tools › Options allows (queryResults.grid.memoryLimitGiB).</summary>
     internal const int MaxMemoryLimitGiB = 1024;
@@ -2591,6 +2607,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         homes.Clear();
         connections.Clear();
         store.ReleaseAll();
+        visibility.Clear();
         SqlConnection.ClearAllPools();
     }
 }

@@ -192,7 +192,8 @@ export interface GridViewOptions {
 export class GridView {
   private readonly o: GridViewOptions
   private get gestures() { return gesturesFor(this.o.platform) }
-  private readonly root: HTMLElement
+  /** The grid element (GridShell's), which result visibility observes. */
+  readonly root: HTMLElement
   private readonly scroller: HTMLElement
   private readonly spacer: HTMLDivElement
   private readonly head: HTMLDivElement

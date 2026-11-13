@@ -62,6 +62,10 @@ being true.
   exception: Select Top Rows' script with N = 10 through `query.execute`, in a session and results entry of the Peek's own
   (`PeekService`), released when its card or tab closes, moves on or refreshes, and on backend loss. Results-port
   messages from the renderer are validated with `portRequestSchema`, ownership, and the current generation.
+- Which results are shown reaches the backend only through `results.visibility`, sent by `ResultVisibilityService` from
+  the grids `ResultGrid` registers (one shared ResizeObserver per window, document visibility, no timers), as the whole
+  set when it changes and again to each new generation. The backend keeps it in `ResultVisibility`, outside the store's
+  page code, as a hint: it never releases, pins or changes a result by itself.
 - The result budget's figures change while the backend runs only through `ResultStore.Resize` (`results.setMemoryLimit`,
   sent by main alone when Tools › Options' limit changes and as each generation becomes ready). They are replaced whole and
   each reservation reads them once; a change never drops stored results or undoes a query's stop (docs/ipc.md, Result

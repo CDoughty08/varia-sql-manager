@@ -357,6 +357,7 @@ if (liveGroup is null)
         ("Pivot", Sync(() => PivotChecks.Run(Check))),
         ("Distinct", Sync(() => DistinctChecks.Run(Check))),
         ("ParallelResult", Sync(() => ParallelResultChecks.Run(Check))),
+        ("Visibility", Sync(() => VisibilityChecks.Run(Check))),
         ("CellLength", Sync(() => CellLengthChecks.Run(Check))),
         ("Text", () => TextChecks.RunAsync(Check)),
         ("TransposedText", () => TransposedTextChecks.RunAsync(Check)),
