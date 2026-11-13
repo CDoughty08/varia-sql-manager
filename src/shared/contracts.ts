@@ -121,7 +121,7 @@ export interface QueryOptions {
   includeActualPlan?: boolean
   includeLivePlan?: boolean
   includeClientStatistics?: boolean
-  /** Read every row and keep none (SSMS's Discard results after execution): sets count in `discardedResultSets`, plans are kept. */
+  /** Read every row and keep none (SSMS's Discard results after execution): sets count in `discardedResultSets` (with those past a limit or the budget), plans are kept. */
   discardResults?: boolean
 }
 /** `text` cells carry their SSMS display text; `binary` cells are shown as 0x plus hexadecimal. */

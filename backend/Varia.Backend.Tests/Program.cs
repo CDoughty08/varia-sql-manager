@@ -816,12 +816,23 @@ try
         // did, and a plan asked for with the rows is kept. A set under a plan's column name is looked at, and is rows.
         result = await Run("SELECT TOP (10) object_id FROM sys.all_objects;\nSELECT CAST(N'<a/>' AS nvarchar(max)) AS [Microsoft SQL Server 2005 XML Showplan];\nSELECT name, CAST(N'<a/>' AS xml) AS x FROM (VALUES (N'a'), (N'b')) AS v(name);\nGO\nPRINT 'after discarded';", discard: true);
         Check(result.Status == "completed" && result.ResultSets.Count == 0 && result.DiscardedResultSets == 3 && Texts(result).Contains("after discarded")
-            && Texts(result).Contains("(10 rows affected)") && Texts(result).Contains("Results were discarded, as Discard results after execution is on: 3 result sets, 13 rows."),
+            && Texts(result).Contains("(10 rows affected)") && Texts(result).Contains("Discard results after execution is on: 3 result sets (13 rows) were read and not kept."),
             "discarding results reads every row, keeps none and says how many: " + string.Join(" | ", Texts(result)));
         result = await Run("SET STATISTICS XML ON;\nSELECT TOP (10) object_id FROM sys.all_objects;\nSET STATISTICS XML OFF;", discard: true);
         Check(result.Status == "completed" && result.ResultSets.Count == 1 && result.ResultSets[0] is { Kind: "executionPlan", RowsStored: 1, Truncated: null } && result.DiscardedResultSets == 1
-            && Texts(result).Contains("Results were discarded, as Discard results after execution is on: 1 result set, 10 rows."),
+            && Texts(result).Contains("Discard results after execution is on: 1 result set (10 rows) was read and not kept."),
             "discarding results keeps the execution plan returned with them: " + string.Join(" | ", Texts(result)));
+        // A run that is cut short says how many rows it had read, whichever way they were read past (long values go
+        // another way), and leaves the session as any timed-out run does.
+        foreach (var column in new[] { "a.object_id", "CAST(a.name AS nvarchar(max))" })
+        {
+            result = await Run("SELECT " + column + " FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b CROSS JOIN sys.all_objects AS c;", timeout: 1, discard: true);
+            var note = Texts(result).FirstOrDefault(text => text.StartsWith("Discard results after execution is on: 1 result set (", StringComparison.Ordinal)) ?? "";
+            Check(result.Status == "timedOut" && result.ResultSets.Count == 0 && note.EndsWith(" rows) was read and not kept.", StringComparison.Ordinal) && !note.Contains("(0 rows)"),
+                "a discarded read that times out says how many rows it read (" + column + "): " + note);
+        }
+        result = await Run("SELECT 1 AS after_discard;", discard: true);
+        Check(result.Status == "completed" && Texts(result).Contains("Discard results after execution is on: 1 result set (1 row) was read and not kept."), "the session runs on after a discarded read that timed out");
         await Call<object>("query.session.close", new SessionArgs(sessionId));
         result = await Run("SELECT * FROM #VariaBatchTest;");
         Check(result.Status == "completedWithErrors" && result.Error?.Message.Contains("Msg 208") == true, "closing a tab removes temporary objects and session state");

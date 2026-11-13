@@ -16,7 +16,7 @@ export const queryResultsSettings = [
   {
     key: 'queryResults.grid.discardResults', page: 'queryResults.sqlServer.grid', label: 'Discard results after execution', type: 'boolean', default: false,
     applies: 'nextExecution', keywords: ['discard', 'no results', 'rows', 'timing', 'profile', 'memory', 'large', 'million'],
-    description: 'The query runs and every row is read from the server, but none is kept or shown: the Messages tab has the row counts and says how many result sets and rows were discarded. Execution plans and client statistics are still collected. For timing a large query without spending memory on its rows.'
+    description: 'Every query, in every query tab, runs and has its rows read from the server, but none is kept or shown: the Messages tab says how many result sets and rows were read. Execution plans and client statistics are still collected. For timing a large query without spending memory on its rows; turn it off again to see results.'
   },
   {
     key: 'queryResults.grid.maxResultSets', page: 'queryResults.sqlServer.grid', label: 'Maximum result sets kept per execution', type: 'integer', min: 1, max: 1000, default: 1000,
