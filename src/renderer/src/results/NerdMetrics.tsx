@@ -16,12 +16,14 @@ function Usage({ bar }: { bar: Bar }) {
 }
 
 /** The Memory panel's Nerd metrics: a heading that opens and closes it, and while open what results hold as read and in
- *  memory, the largest results, the page codec's counters and the managed heap. */
-export function NerdMetrics({ model, open, onToggle }: { model: NerdMetricsModel | undefined; open: boolean; onToggle: () => void }) {
+ *  memory, the largest results, the page codec's counters and the managed heap. The heading joins the tab order only
+ *  while the panel is pinned: a preview opened by focus must not catch the next Tab (the panel follows the whole window
+ *  in the page's order), and Enter or Space on the Memory control pins it. */
+export function NerdMetrics({ model, open, pinned, onToggle }: { model: NerdMetricsModel | undefined; open: boolean; pinned: boolean; onToggle: () => void }) {
   const body = useId()
   return <section className="memory-nerd" aria-label="Nerd metrics">
     <h3 className="memory-nerd-heading">
-      <button type="button" className="memory-nerd-toggle" aria-expanded={open} aria-controls={body} onClick={onToggle}>
+      <button type="button" className="memory-nerd-toggle" tabIndex={pinned ? undefined : -1} aria-expanded={open} aria-controls={body} onClick={onToggle}>
         <Icon name="chevron-right" /><span>Nerd metrics</span>
       </button>
       {model?.compressed && <span className="memory-nerd-ratio">{model.tiles[1].value}×</span>}

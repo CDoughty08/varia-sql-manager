@@ -1432,6 +1432,9 @@ try {
   await memory.hover()
   await expect(memoryDetails).toBeVisible()
   await expect(memoryDetails).toContainText('New results may be truncated.')
+  // A preview keeps Nerd metrics' heading out of the tab order: the next Tab from the window's last control wraps to the
+  // menubar, as before (menus-smoke).
+  await expect(memoryDetails.getByRole('button', { name: 'Nerd metrics', exact: true })).toHaveAttribute('tabindex', '-1')
   await expect(memoryUsage(page, 'index')).toHaveText(/^[1-9]\d* MB \/ 512 MB$/)
   await expect(resultsMemory).toHaveText('236 MB / 256 MB')
   const triggerBox = await memory.boundingBox(), detailsBox = await memoryDetails.boundingBox()
@@ -1452,7 +1455,9 @@ try {
   // and the largest results named by their tab and Results caption.
   const nerd = memoryDetails.getByRole('button', { name: 'Nerd metrics', exact: true })
   await expect(nerd).toHaveAttribute('aria-expanded', 'false')
-  await nerd.focus()
+  // Pinned by Enter, the panel's heading is the next stop after the Memory control.
+  await page.keyboard.press('Tab')
+  await expect(nerd).toBeFocused()
   await page.keyboard.press('Enter')
   await expect(nerd).toHaveAttribute('aria-expanded', 'true')
   await expect(memoryDetails.getByRole('img', { name: 'In memory now: 236 MB. Raw pages 236 MB', exact: true })).toBeVisible()

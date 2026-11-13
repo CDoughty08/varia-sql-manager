@@ -63,7 +63,7 @@ const nerdKey = 'environment.statusBar.memoryNerdMetrics'
 
 /** The section's container, mounted only while the panel shows: it follows the setting, and the tabs and documents that
  *  name the largest results, without re-rendering the status bar while the panel is closed. */
-function NerdSection({ memory }: { memory: MemoryUsage }) {
+function NerdSection({ memory, pinned }: { memory: MemoryUsage; pinned: boolean }) {
   const { settings, results, documents } = useWorkbench()
   const open = useServiceSnapshot(settings).values[nerdKey]
   const tabs = useServiceSnapshot(results)
@@ -74,7 +74,7 @@ function NerdSection({ memory }: { memory: MemoryUsage }) {
     const names = new Map(docs.map(document => [document.id, document.name]))
     return nerdMetrics(detail, resultNames(tabs, id => names.get(id), generation))
   }, [open, detail, generation, tabs, docs])
-  return <NerdMetrics model={model} open={open} onToggle={() => void settings.toggle(nerdKey)} />
+  return <NerdMetrics model={model} open={open} pinned={pinned} onToggle={() => void settings.toggle(nerdKey)} />
 }
 
 export default function MemoryIndicator() {
@@ -134,7 +134,7 @@ export default function MemoryIndicator() {
     {createPortal(<section ref={panel} id={id} className="memory-details" hidden={!open} aria-labelledby={heading}>
       <div className="memory-heading"><h2 id={heading}>Memory usage</h2><span>SQL backend</span></div>
       {readings.map(item => <MemoryRow key={item.feature} item={item} />)}
-      {open && <NerdSection memory={resultUsage} />}
+      {open && <NerdSection memory={resultUsage} pinned={mode === 'pinned'} />}
     </section>, document.body)}
   </div>
 }

@@ -135,6 +135,8 @@ describe('Memory panel', () => {
     const view = await mount({ usedBytes: 300 * MB, globalBytes: 1024 * MB, detail: raw })
     expect([...view.panel().querySelectorAll('.memory-row h3')].map(node => node.textContent)).toEqual(['Search Indexer', 'Results'])
     expect(view.toggle().getAttribute('aria-expanded')).toBe('false')
+    // Pinned by a click, the heading is in the tab order (a preview keeps it out: menus-smoke, results-smoke).
+    expect(view.toggle().tabIndex).toBe(0)
     expect(view.panel().querySelector<HTMLElement>('.memory-nerd-body')!.hidden).toBe(true)
     expect(view.panel().querySelector('.memory-tiles')).toBeNull()
     expect(view.panel().querySelector('.memory-packed')).toBeNull()
