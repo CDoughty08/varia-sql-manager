@@ -193,7 +193,7 @@ export const queryResultSchema = z.object({
   recordsAffected: z.number().int().min(-1), elapsedMs: count, status: z.enum(['completed', 'completedWithErrors', 'failed', 'cancelled', 'timedOut']),
   error: z.object({ code: z.string().max(64), message: z.string().max(limits.messages.errorCharacters + 1), batchNumber: count, iteration: count }).strict().optional(),
   completedBatches: count, totalBatches: count, database: z.string().max(256), messagesTruncated: z.boolean(),
-  budget: z.object({ usedBytes: count, globalBytes: count, queryBytes: count, seq: count }).strict(), completedAt: z.string().max(40),
+  budget: z.object({ usedBytes: count, globalBytes: count, queryBytes: count, seq: count, stoppedBytes: count.min(1).optional() }).strict(), completedAt: z.string().max(40),
   // The session's @@SPID (a smallint) and SUSER_SNAME(), read when it opened.
   ...session, spid: session.spid.optional()
 }).strict()

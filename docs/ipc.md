@@ -1237,7 +1237,7 @@ Notes appended to the summary's messages:
 | `truncated` | Note |
 | --- | --- |
 | `rowLimit` (or truncated cells) | "Results were truncated by display limits. Display limits do not stop script execution." |
-| `queryBudget`, `globalBudget` | "Results were truncated because the result memory budget ({n} MB) is full. Execution continued; close other query results to free memory." |
+| `queryBudget`, `globalBudget` | "Results were truncated because the result memory budget ({n} MB) is full. Execution continued; close other query results to free memory." {n} is the figure the query stopped at (`budget.stoppedBytes`), or the current half or whole budget when it did not stop |
 | `systemMemory` | "Results were truncated because the computer is low on memory. Execution continued." |
 | more than `maxResultSets` sets | "Only the first ten result sets are displayed. Display limits do not stop script execution." ("first {n}" for other limits) |
 | column lists past the summary's 8 MiB | "{n} later result sets are not displayed because their column lists are too large to return. Display limits do not stop script execution." |
@@ -1346,7 +1346,10 @@ renderer adds its `error` as one.
   "Execution stopped unexpectedly: …". The summary's `error` keeps the first 20 errors (16,384 characters) as before.
 - **`completedAt`** is the backend's local time, `yyyy-MM-ddTHH:mm:ss.fffffffzzz`, for SSMS's "Completion time:" line.
 - **`budget`** is `{ usedBytes, globalBytes, queryBytes, seq }` when the summary was built; main adds `generation`. `seq`
-  orders it with the `results.memory` events (see [Query events](#query-events)).
+  orders it with the `results.memory` events (see [Query events](#query-events)). `stoppedBytes`, present only when the
+  query stopped storing for the budget, is the figure it stopped at: its half (or an actual plan's own ceiling) for
+  `queryBudget`, the whole budget for `globalBudget`, as they were at that refusal. The limit can change while the backend
+  runs (`results.setMemoryLimit`), so the truncation note and the grid's strip name this figure, not the current one.
 
 ## Sorted views
 
