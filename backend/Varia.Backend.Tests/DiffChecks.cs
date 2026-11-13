@@ -25,6 +25,7 @@ internal static class DiffChecks
         Context(check);
         CellMemory(check);
         WireMismatch(check);
+        SharedPairing(check);
         Rules(check);
         Tones(check);
         Halves(check);
@@ -33,11 +34,11 @@ internal static class DiffChecks
         Refusals(check);
     }
 
-    private static ResultSetBuffer Fill(ResultStore store, QueryBudget budget, int index, string?[][] rows, ResultColumn[]? columns = null)
+    private static ResultSetBuffer Fill(ResultStore store, QueryBudget budget, int index, string?[][] rows, ResultColumn[]? columns = null, string kind = "rows")
     {
         columns ??= Columns;
         var wires = columns.Select(column => column.Wire == "binary" ? WireKind.Binary : WireKind.Text).ToArray();
-        var set = store.Open(budget, index, 1, 1, "rows", columns, wires) ?? throw new InvalidOperationException("The result set was not kept.");
+        var set = store.Open(budget, index, 1, 1, kind, columns, wires) ?? throw new InvalidOperationException("The result set was not kept.");
         foreach (var row in rows)
         {
             set.CountRow();
@@ -293,6 +294,27 @@ internal static class DiffChecks
         check(ResultDiffer.WorkingBytes(10, 10) == 54 * 10 + 16 * 10 + 20 * 20, "a diff reserves its identities, match tables, parts, lookups and entries, written straight into the model");
     }
 
+    /// <summary>tests/fixtures/compare-pairing: ResultDiffer.Pairs gives each case's pairs. The Compare picker's copy of the
+    /// rule (src/renderer/src/results/compare-pairing.ts) reads the same cases in tests/compare-pairing.test.ts.</summary>
+    private static void SharedPairing(Action<bool, string> check)
+    {
+        var path = Path.Combine(GoldenText.Repository(), "tests", "fixtures", "compare-pairing", "cases.json");
+        var cases = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!["cases"]!.AsArray();
+        static ResultColumn[] ColumnsOf(System.Text.Json.Nodes.JsonNode side) =>
+            [.. side.AsArray().Select(item => new ResultColumn((string)item!["name"]!, "nvarchar", (string)item["wire"]!, Role: (string?)item["role"]))];
+        static WireKind[] WiresOf(ResultColumn[] columns) => [.. columns.Select(column => column.Wire == "binary" ? WireKind.Binary : WireKind.Text)];
+        var differences = new List<string>();
+        foreach (var item in cases)
+        {
+            var left = ColumnsOf(item!["left"]!);
+            var right = ColumnsOf(item["right"]!);
+            var pairs = string.Join(" ", ResultDiffer.Pairs(left, right, WiresOf(left), WiresOf(right)).Select(pair => pair.Left + ":" + pair.Right));
+            var expected = string.Join(" ", item["pairs"]!.AsArray().Select(pair => (int)pair![0]! + ":" + (int)pair[1]!));
+            if (pairs != expected) differences.Add((string)item["name"]! + " gave [" + pairs + "], not [" + expected + "]");
+        }
+        check(cases.Count >= 9 && differences.Count == 0, "ResultDiffer.Pairs gives each pairing case in tests/fixtures/compare-pairing: " + string.Join("; ", differences));
+    }
+
     private static void Host(Action<bool, string> check)
     {
         var store = new ResultStore(1L << 30, 1L << 29);
@@ -328,6 +350,19 @@ internal static class DiffChecks
         check(string.Join(",", codes) == "INVALID_PARAMS,INVALID_PARAMS,RESULT_NOT_FOUND,RESULT_OPEN,INVALID_PARAMS,INVALID_PARAMS",
             "results.diff checks its results: two different, complete, comparable results of one query: " + string.Join(",", codes));
         check(Code("results.diff", new { left = left.ResultId, right = other.ResultId }) == "INVALID_PARAMS", "results of different queries are not compared");
+        // Tables only (grouped results PR 16): a pivot, a plan set or a comparison of the same query is refused either way
+        // round, before anything is compared, with the sentence that says so.
+        var pivot = Fill(store, left.Budget, 7, [["1", "a", "1"]], kind: "pivot");
+        var plan = Fill(store, left.Budget, 8, [["1", "a", "1"]], kind: "executionPlan");
+        string? Sentence(long l, long r)
+        {
+            try { Call<object>("results.diff", new { left = l, right = r }); return null; }
+            catch (RequestException error) { return error.Code + ": " + error.Message; }
+        }
+        var notTables = new[] { Sentence(left.ResultId, pivot.ResultId), Sentence(pivot.ResultId, right.ResultId), Sentence(plan.ResultId, right.ResultId), Sentence(left.ResultId, plan.ResultId),
+            Sentence(diff.Descriptor.ResultId, right.ResultId) };
+        check(notTables.All(text => text == "INVALID_PARAMS: " + SqlService.NotTablesSentence),
+            "results.diff compares a query's own result sets only, never a pivot, a plan set or a comparison: " + string.Join(" | ", notTables));
         store.BeginQuery(left.Budget.SessionId);
         check(store.Find(diff.Descriptor.ResultId) is null, "a diff is released with its query's other results");
         var tight = new ResultStore(8192, 8192);

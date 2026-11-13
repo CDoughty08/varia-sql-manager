@@ -808,9 +808,24 @@ describe('Query Output commands', () => {
     }
     expect(builder().source).toBe(key(1))
     expect([0, 1, 2, 3, 4].map(place => commands.isEnabled('output.compareWithPrevious', on('grid', { place })))).toEqual([false, true, false, false, false])
+    // Compare… is offered for a Table another Table shares a column with, never for a Pivot, a plan set or a comparison;
+    // it opens the picker in the pivot builder's place, on the menu's grid.
+    expect([0, 1, 2, 3, 4].map(place => commands.isEnabled('output.compare', on('grid', { place })))).toEqual([true, true, false, false, false])
+    expect(await commands.execute('output.compare', on('grid', { place: 0 }), 'menu')).toBe(true)
+    expect(compare.getSnapshot().pickers[tab.id]).toMatchObject({ active: key(0), target: key(1) })
+    expect(builder().open).toBe(false)
+    expect(results.getSnapshot()[tab.id].focused).toBe(key(0))
+    // And Pivot… takes its place back.
+    expect(await commands.execute('output.pivot', on('grid', { place: 0 }), 'menu')).toBe(true)
+    expect(compare.getSnapshot().pickers[tab.id]).toBeUndefined()
+    // The toolbar names its tab: a grid focused in another tab is not the one it acts on.
+    active.mockReturnValue(element('grid', 0).dom)
+    expect(commands.isEnabled('output.compare', { tabId: tab.id })).toBe(true)
+    expect(commands.isEnabled('output.compare', { tabId: 'another-tab' })).toBe(false)
+    active.mockReturnValue(null)
     // A Peek grid says it is bare: Pivot, Compare, Close Result and Close Results are off for it, though its run is like any other.
     const bare = (place: number): CommandArgs => { const args = on('grid', { place }); return { ...args, target: { ...args.target as OutputTarget, bare: true } } }
-    for (const id of ['output.pivot', 'output.compareWithPrevious', 'output.compareWithPreviousExact', 'output.closeResult', 'output.closeResults'] as const) expect(commands.isEnabled(id, bare(1)), id).toBe(false)
+    for (const id of ['output.pivot', 'output.compare', 'output.compareWithPrevious', 'output.compareWithPreviousExact', 'output.closeResult', 'output.closeResults'] as const) expect(commands.isEnabled(id, bare(1)), id).toBe(false)
     expect(commands.isEnabled('output.copy', bare(1))).toBe(commands.isEnabled('output.copy', on('grid', { place: 1 })))
   })
   it('Close Result closes the view the grid shows: a Table with its group, a Pivot or a comparison alone, and nothing while the query runs', async () => {

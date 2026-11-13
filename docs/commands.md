@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (304)
+## Commands (305)
 
 ### File
 
@@ -179,6 +179,7 @@ keys it uses are listed below.
 | Clear Highlight (not in the palette) | `output.clearHighlight` | — | — | — | Always | Query Output context menu › Highlight › Clear Highlight |
 | Clear All Highlights (not in the palette) | `output.clearAllHighlights` | — | — | — | Always | Query Output context menu › Highlight › Clear All Highlights |
 | Compare with Previous Result | `output.compareWithPrevious` | — | — | — | Always | Query Output context menu › Compare with Previous Result |
+| Compare Results… | `output.compare` | — | — | — | Always | Query Output context menu › Compare with Any Result… |
 | Pivot Results… | `output.pivot` | — | — | — | Always | Query Output context menu › Pivot Results… |
 | Transpose Results | `output.transpose` | — | — | — | Always; checked when `resultsGridTransposed` | Query Output context menu › Transpose › Transposed |
 | Transpose Selected Rows | `output.transposeSelectedRows` | — | — | — | Always | Query Output context menu › Transpose › Selected Rows |
@@ -841,6 +842,7 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | `2_sort` | Filt**e**r › | Submenu: Query Output context menu › Filter | `outputView == 'grid' \|\| outputLiveFilterable` |
 | `2_sort` | Hi**g**hlight › | Submenu: Query Output context menu › Highlight | `outputView == 'grid'` |
 | `2_sort` | Co**m**pare with Previous Result | `output.compareWithPrevious` | `outputView == 'grid' && !outputGridBare` |
+| `2_sort` | Compare with An**y** Result… | `output.compare` | `outputView == 'grid' && !outputGridBare` |
 | `2_sort` | Pivot Res**u**lts… | `output.pivot` | `outputView == 'grid' && !outputGridBare` |
 | `2_sort` | Trans**p**ose › | Submenu: Query Output context menu › Transpose | `outputGridTransposable` |
 | `2_width` | F**i**t Column | `output.fitColumn` | `outputView == 'grid' \|\| outputView == 'live'` |

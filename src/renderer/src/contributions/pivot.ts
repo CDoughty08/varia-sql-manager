@@ -11,7 +11,7 @@ import { focusedOutput } from './output'
  * the Table); from the toolbar or the palette, while some group can be pivoted. Never for a comparison, a plan set or a
  * Peek grid, so no pivot is made of anything but a Table.
  */
-export function pivotContribution({ commands, pivot, results, documents, menuTargets }: Pick<Workbench, 'commands' | 'pivot' | 'results' | 'documents' | 'menuTargets'>): Disposable {
+export function pivotContribution({ commands, pivot, compare, results, documents, menuTargets }: Pick<Workbench, 'commands' | 'pivot' | 'compare' | 'results' | 'documents' | 'menuTargets'>): Disposable {
   /** The tab, and the grid when the command names one (`key`). Undefined when it names something Pivot does not act on. */
   const targetOf = (args?: CommandArgs): { tabId: string; key?: string } | undefined => {
     const target = outputOf(args) ?? (args?.tabId || args?.target ? undefined : focusedOutput(menuTargets))
@@ -32,6 +32,8 @@ export function pivotContribution({ commands, pivot, results, documents, menuTar
       if (!offered(target)) return
       // A grid the command names is the one the builder follows from now on.
       if (target.key !== undefined) results.focusEntry(target.tabId, target.key)
+      // The builder takes the Compare picker's place.
+      compare.close(target.tabId)
       pivot.open(target.tabId, target.key ?? results.getSnapshot()[target.tabId]?.focused)
       results.setView(target.tabId, 'results')
     }

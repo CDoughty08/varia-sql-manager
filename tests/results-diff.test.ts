@@ -47,11 +47,11 @@ describe('result diffs', () => {
     expect(sets).toHaveLength(3)
     expect(sets[2]).toMatchObject({ number: 3, label: 'Differences: Result 1 → Result 2', descriptor: { kind: 'diff', resultId: 901 } })
     expect(results.getSnapshot().t1.settled.get(setKey(sets[2].descriptor))).toEqual({ rows: 3, strip: true })
-    const info = compare.getSnapshot().get(setKey(sets[2].descriptor))!
+    const info = compare.getSnapshot().info.get(setKey(sets[2].descriptor))!
     expect(info).toMatchObject({ left: sets[0].key, right: sets[1].key, leftNumber: 1, rightNumber: 2, key: 'Id', changed: 1, added: 1, removed: 0, same: 1 })
-    expect(compareText(info)).toBe('Result 1 → Result 2, rows matched by Id: 1 changed row, 1 added row, 0 removed rows, 1 unchanged.')
+    expect(compareText(info)).toBe('Result 1 → Result 2, rows matched by Id: 1 changed row, 1 added row, 0 removed rows, 1 unchanged. Filters and sorts on the inputs were not applied.')
     expect(compareText({ ...info, key: null, exact: true, soft: 2, leftOnly: ['Old'], rightOnly: ['New'] }))
-      .toBe('Result 1 → Result 2, whole rows matched, text compared exactly: 1 changed row, 1 added row, 0 removed rows, 1 unchanged. 2 values differ only by collation (case or trailing spaces), underlined. Not compared: Old (Result 1), New (Result 2).')
+      .toBe('Result 1 → Result 2, whole rows matched, text compared exactly: 1 changed row, 1 added row, 0 removed rows, 1 unchanged. 2 values differ only by collation (case or trailing spaces), underlined. Not compared: Old (Result 1), New (Result 2). Filters and sorts on the inputs were not applied.')
     // A diff is not compared again, nor is a set whose previous one is the diff.
     expect(compare.canCompare('t1', keyAt(results, 't1', 2))).toBe(false)
   })
@@ -69,9 +69,9 @@ describe('result diffs', () => {
     await settle()
     expect(second.diff).toHaveBeenCalledWith(third, { exact: false, signal: expect.any(AbortSignal) })
     expect(sets()[2]).toMatchObject({ number: 4, label: 'Differences: Result 2 → Result 3', descriptor: { kind: 'diff', resultId: 902 } })
-    const info = compare.getSnapshot().get(setKey(sets()[2].descriptor))!
+    const info = compare.getSnapshot().info.get(setKey(sets()[2].descriptor))!
     expect(info).toMatchObject({ left: two.key, right: three.key, leftNumber: 2, rightNumber: 3 })
-    expect(compareText(info)).toBe('Result 2 → Result 3, rows matched by Id: 1 changed row, 1 added row, 0 removed rows, 1 unchanged.')
+    expect(compareText(info)).toBe('Result 2 → Result 3, rows matched by Id: 1 changed row, 1 added row, 0 removed rows, 1 unchanged. Filters and sorts on the inputs were not applied.')
     expect(compareText({ ...info, leftOnly: ['Old'], rightOnly: ['New'] })).toContain('Not compared: Old (Result 2), New (Result 3).')
   })
 
@@ -86,10 +86,10 @@ describe('result diffs', () => {
     expect(notify).toHaveBeenCalledWith('t1', 'There is not enough result memory to compare these results. Close other results and try again.')
     expect(results.getSnapshot().t1.sets).toHaveLength(2)
     await compare.compare('t1', keyAt(results, 't1', 1))
-    expect(compare.getSnapshot().size).toBe(1)
+    expect(compare.getSnapshot().info.size).toBe(1)
     run(2, { queryId: 'q3' })
     await compare.compare('t1', keyAt(results, 't1', 1))
-    expect(compare.getSnapshot().size).toBe(1)
+    expect(compare.getSnapshot().info.size).toBe(1)
   })
 
   it('releases a diff a newer run or a closed tab cannot take, and gives up a comparison when a run starts', async () => {
@@ -147,7 +147,7 @@ describe('result diffs', () => {
 
   it('says when values were compared by their stored prefix', () => {
     const info = { left: 'e1', right: 'e2', leftNumber: 1, rightNumber: 2, key: 'Id', exact: false, same: 1, changed: 0, added: 0, removed: 0, soft: 0, leftOnly: [], rightOnly: [], approximate: true }
-    expect(compareText(info)).toBe('Result 1 → Result 2, rows matched by Id: 0 changed rows, 0 added rows, 0 removed rows, 1 unchanged. Long values were compared by the part these results keep, so a difference past it does not show.')
+    expect(compareText(info)).toBe('Result 1 → Result 2, rows matched by Id: 0 changed rows, 0 added rows, 0 removed rows, 1 unchanged. Long values were compared by the part these results keep, so a difference past it does not show. Filters and sorts on the inputs were not applied.')
   })
 
   it('reads a diff row\'s differing cells from its tone text', () => {

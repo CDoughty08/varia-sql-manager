@@ -1479,14 +1479,18 @@ the rows it holds (`Results/RowIdentity.cs`); the renderer never compares rows.
 
 ## Result diffs
 
-Compare with Previous Result compares two results of one query in the backend (`Results/ResultDiff.cs`); the renderer
-receives a new result to read like any other, never rows to compare.
+Compare with Previous Result and the Compare picker compare two results of one query in the backend
+(`Results/ResultDiff.cs`); the renderer receives a new result to read like any other, never rows to compare. The renderer
+runs at most four comparisons at once per window (`DerivedWork`, which Pivot builds can share) and asks again after a `TOO_MANY_REQUESTS` or `BUSY`
+refusal (after 1, 4 and 16 s), as highlights do; the backend is unchanged by that.
 
 - **`results.diff { left, right, exact?, context? }`** answers `{ descriptor, key, same, changed, added, removed, soft,
-  approximate, leftOnly, rightOnly }`. Both results must belong to the same query (`INVALID_PARAMS` otherwise, and for a diff
-  of a diff) and be complete (`RESULT_OPEN`, "Compare the results after they finish loading."), and the query must not
+  approximate, leftOnly, rightOnly }`. Both results must belong to the same query (`INVALID_PARAMS` otherwise) and be a
+  query's own result sets, kind `rows` (`INVALID_PARAMS`, "Only a query's own result sets can be compared: not a pivot, a
+  comparison or an execution plan set."), and complete (`RESULT_OPEN`, "Compare the results after they finish loading."), and the query must not
   have stopped storing (`BUDGET_STOPPED`, as a pivot). Columns pair by name,
-  case-insensitively, in `left`'s order, when both hold text or both binary; at least one must pair (`INVALID_PARAMS`), at
+  case-insensitively (`OrdinalIgnoreCase`), in `left`'s order, when both hold text or both binary, a repeated name with the
+  next unused one (`tests/fixtures/compare-pairing/cases.json` pins the rule for the backend and the picker's copy of it); at least one must pair (`INVALID_PARAMS`), at
   most 4,092 may (`INVALID_PARAMS`: the unified result adds four columns to a page's 4,096), and `leftOnly` and `rightOnly`
   name up to 64 that do not, which are not compared.
 - **Alignment.** Rows match by `key`: the first shared column that is unique, NULL-free and untruncated in both results,

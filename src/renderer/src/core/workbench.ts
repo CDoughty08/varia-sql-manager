@@ -24,6 +24,7 @@ import { ResultClient } from '../results/ResultClient'
 import { ResultsService } from '../results/ResultsService'
 import { HighlightsService } from '../results/HighlightsService'
 import { CompareService } from '../results/CompareService'
+import { DerivedWork } from '../results/derived-work'
 import { PivotService } from '../results/PivotService'
 import { ResultsSearchService } from '../results/search'
 import { MemoryUsageService } from '../results/memory'
@@ -291,7 +292,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     // Sorted grids follow Sort text by as it changes, from the toolbar, the palette or Options.
     onSortTextChange: listener => settings.subscribe(listener) })
   const highlights = new HighlightsService(results)
-  const compare = new CompareService(results)
+  // The window's places for derived results built in the backend: comparisons now (Pivot builds can share them).
+  const derivedWork = new DerivedWork()
+  const compare = new CompareService(results, { work: derivedWork })
   const pivot = new PivotService(results)
   const resultsSearch = new ResultsSearchService({ results })
   const resultMemory = new MemoryUsageService(resultClient, 'results', events)
