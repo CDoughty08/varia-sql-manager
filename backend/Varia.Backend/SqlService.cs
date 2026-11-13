@@ -260,8 +260,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     /// <summary>Own: under one of Varia's own program names (a pool's, Object Actions'), which the Activity Monitor trusts; a plain
     /// pooled connection is recorded only for freeing a database.</summary>
-    private sealed record Owner(string ConnectionId, bool Pooled, bool Own, string? PrincipalId)
+    private sealed record Owner(string ConnectionId, bool Pooled, string? PrincipalId)
     {
+        internal bool Own;
         internal bool Opening;
     }
 
@@ -270,23 +271,34 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// Every such connection must be made through here.</summary>
     private SqlConnection Owned(SqlConnection connection, string connectionId, bool own = true)
     {
-        // Session recovery can authenticate again during a later command, outside the guarded Open above.
-        var principal = profiles.TryGetValue(connectionId, out var profile) ? profile.PrincipalId : null;
-        if (principal is not null)
-            connection.ConnectionString = new SqlConnectionStringBuilder(connection.ConnectionString) { ConnectRetryCount = 0 }.ConnectionString;
-        var pooled = new SqlConnectionStringBuilder(connection.ConnectionString).Pooling;
-        var owner = new Owner(connectionId, pooled, own, principal);
-        owners.AddOrUpdate(connection, owner);
-        if (principal is not null)
-            connection.StateChange += (_, change) =>
+        lock (owners)
+        {
+            if (owners.TryGetValue(connection, out var existing))
             {
-                if (change.CurrentState != System.Data.ConnectionState.Open || owner.Opening) return;
-                // A library must not silently authenticate this target again after central preflight has returned.
-                connection.Close();
-                throw new RequestException("AUTH_IDENTITY", ConnectionPrincipal.ChangedMessage);
-            };
-        if (pooled && pools.TryGetValue(connectionId, out var used)) used.TryAdd(connection.ConnectionString, 0);
-        return connection;
+                if (existing.ConnectionId != connectionId) throw new RequestException("AUTH_IDENTITY", ConnectionPrincipal.ChangedMessage);
+                // A plain factory can be promoted to an own-session role (isolated estimated plans), but its
+                // identity and the single state-change guard must keep the same Owner that Open marks as opening.
+                existing.Own |= own;
+                return connection;
+            }
+            // Session recovery can authenticate again during a later command, outside the guarded Open above.
+            var principal = profiles.TryGetValue(connectionId, out var profile) ? profile.PrincipalId : null;
+            if (principal is not null)
+                connection.ConnectionString = new SqlConnectionStringBuilder(connection.ConnectionString) { ConnectRetryCount = 0 }.ConnectionString;
+            var pooled = new SqlConnectionStringBuilder(connection.ConnectionString).Pooling;
+            var owner = new Owner(connectionId, pooled, principal) { Own = own };
+            owners.AddOrUpdate(connection, owner);
+            if (principal is not null)
+                connection.StateChange += (_, change) =>
+                {
+                    if (change.CurrentState != System.Data.ConnectionState.Open || owner.Opening) return;
+                    // A library must not silently authenticate this target again after central preflight has returned.
+                    connection.Close();
+                    throw new RequestException("AUTH_IDENTITY", ConnectionPrincipal.ChangedMessage);
+                };
+            if (pooled && pools.TryGetValue(connectionId, out var used)) used.TryAdd(connection.ConnectionString, 0);
+            return connection;
+        }
     }
 
     /// <summary>Records the session id an owned connection was given as it opened (a pooled connection keeps its physical
@@ -478,7 +490,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         }
         var probed = profile.ProductVersion is not null;
         return new(id, options.Server, connection.Database, connection.ServerVersion, options.DisplayName, options.Color, builder.CommandTimeout,
-            profile.ProductVersion, profile.Login, probed ? profile.EngineEdition : null, probed ? profile.Linux : null, principalId);
+            profile.ProductVersion, profile.Login, probed ? profile.EngineEdition : null, probed ? profile.Linux : null, principalId, BindingRevisionOf(id));
     }
 
     /// <summary>Records a connected profile under a new id: its settings, the server's profile, and the database its session
@@ -488,10 +500,14 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var id = Guid.NewGuid().ToString();
         if (profile.PrincipalId?.StartsWith("entra:", StringComparison.Ordinal) == true)
             connectionString = ConnectionPrincipal.IsolatePool(connectionString, id);
-        profiles[id] = profile;
-        homes[id] = database;
-        connections[id] = connectionString;
-        pools[id] = new() { [connectionString] = 0 };
+        lock (bindingGate)
+        {
+            profiles[id] = profile;
+            homes[id] = database;
+            connections[id] = connectionString;
+            pools[id] = new() { [connectionString] = 0 };
+            bindingRevisions[id] = 0;
+        }
         return id;
     }
 
@@ -642,7 +658,13 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     private async Task<object> DisconnectAsync(ConnectionArgs args)
     {
-        var removed = connections.TryRemove(args.ConnectionId, out var connectionString);
+        bool removed;
+        string? connectionString;
+        lock (bindingGate)
+        {
+            removed = connections.TryRemove(args.ConnectionId, out connectionString);
+            bindingRevisions.Remove(args.ConnectionId);
+        }
         profiles.TryRemove(args.ConnectionId, out _);
         serverScopeInMaster.TryRemove(args.ConnectionId, out _);
         homes.TryRemove(args.ConnectionId, out _);
@@ -794,15 +816,20 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// or to master after a drop, and the old database's pools are cleared.</summary>
     public void DatabaseChanged(string connectionId, string database, string? newName)
     {
-        foreach (var id in SameServer(connectionId))
+        lock (bindingGate)
         {
-            // First: a pool whose settings name no database is in the home, which changes below.
-            ClearPoolsFor(id, database);
-            if (!connections.TryGetValue(id, out var current) || !string.Equals(DatabaseOf(id, current), database, StringComparison.OrdinalIgnoreCase)) continue;
-            var builder = new SqlConnectionStringBuilder(current) { InitialCatalog = newName ?? "master" };
-            if (!connections.TryUpdate(id, builder.ConnectionString, current)) continue;
-            homes[id] = builder.InitialCatalog;
-            if (pools.TryGetValue(id, out var used)) used.TryAdd(builder.ConnectionString, 0);
+            foreach (var id in SameServer(connectionId))
+            {
+                // First: a pool whose settings name no database is in the home, which changes below.
+                ClearPoolsFor(id, database);
+                if (!connections.TryGetValue(id, out var current) || !string.Equals(DatabaseOf(id, current), database, StringComparison.OrdinalIgnoreCase)) continue;
+                var builder = new SqlConnectionStringBuilder(current) { InitialCatalog = newName ?? "master" };
+                var revision = NextBindingRevision(id);
+                if (!connections.TryUpdate(id, builder.ConnectionString, current)) continue;
+                homes[id] = builder.InitialCatalog;
+                if (pools.TryGetValue(id, out var used)) used.TryAdd(builder.ConnectionString, 0);
+                BindingChanged(new(id, revision, NewDatabase: builder.InitialCatalog));
+            }
         }
     }
 
@@ -811,13 +838,17 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// similar name) keeps the new password for its later sessions. Sessions already open stay signed in.</summary>
     public void PasswordChanged(string connectionId, string login, string password)
     {
-        foreach (var id in SameServer(connectionId))
+        lock (bindingGate)
         {
-            if (!connections.TryGetValue(id, out var current) || !profiles.TryGetValue(id, out var profile) || profile.Contained || !string.Equals(profile.Login, login, StringComparison.Ordinal)) continue;
-            var builder = new SqlConnectionStringBuilder(current);
-            if (builder.IntegratedSecurity || builder.Authentication is not (SqlAuthenticationMethod.NotSpecified or SqlAuthenticationMethod.SqlPassword)) continue;
-            builder.Password = password;
-            connections.TryUpdate(id, builder.ConnectionString, current);
+            foreach (var id in SameServer(connectionId))
+            {
+                if (!connections.TryGetValue(id, out var current) || !profiles.TryGetValue(id, out var profile) || profile.Contained || !string.Equals(profile.Login, login, StringComparison.Ordinal)) continue;
+                var builder = new SqlConnectionStringBuilder(current);
+                if (builder.IntegratedSecurity || builder.Authentication is not (SqlAuthenticationMethod.NotSpecified or SqlAuthenticationMethod.SqlPassword)) continue;
+                builder.Password = password;
+                var revision = NextBindingRevision(id);
+                if (connections.TryUpdate(id, builder.ConnectionString, current)) BindingChanged(new(id, revision, PasswordChanged: true));
+            }
         }
     }
 
@@ -1128,7 +1159,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                     try
                     {
                         var observer = CreateConnection(args.ConnectionId, database, stateful: true);
-                        capture = new ActualPlanCapture(observer, profile.EngineEdition == 5);
+                        capture = new ActualPlanCapture(observer, profile.EngineEdition == 5, open: Open);
                         await Open(observer, setup.Token);
                         if (await capture.StartAsync(captureSpid, connection.ClientConnectionId, profile.Major, args.TimeoutSeconds, setup.Token) is { } unavailable)
                             messages.Add(unavailable);
@@ -2641,7 +2672,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         profiles.Clear();
         serverScopeInMaster.Clear();
         homes.Clear();
-        connections.Clear();
+        lock (bindingGate) { connections.Clear(); bindingRevisions.Clear(); }
         store.ReleaseAll();
         SqlConnection.ClearAllPools();
     }

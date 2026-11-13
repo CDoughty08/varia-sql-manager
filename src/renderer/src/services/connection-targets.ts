@@ -5,6 +5,7 @@ import {
   type ConnectionTarget, type ConnectionWorkspace, type PersistedConnectionTarget
 } from '../../../shared/connection-targets'
 import { SnapshotStore } from '../core/store'
+import { connectionBindingsChangedSchema, type ConnectionBindingsChanged } from '../../../shared/connection-bindings'
 
 /** An operation epoch is distinct from a backend generation and is never written to the workspace. */
 interface ConnectionOperationBase {
@@ -37,16 +38,23 @@ export class ConnectionTargetService extends SnapshotStore<readonly ConnectionTa
   private generation = 0
   private revision = 0
   private operations = new Map<string, ConnectionOperation>()
+  private readonly bindingRevisions = new Map<string, { readonly id: string; readonly generation: number; readonly revision: number }>()
 
   constructor() { super(Object.freeze([])) }
   get(id: string): ConnectionTarget | undefined { return this.getSnapshot().find(target => target.id === id) }
   operation(id: string): ConnectionOperation | undefined { return this.operations.get(id) }
+  bindingRevision(handle: BackendConnectionHandle): number {
+    const target = this.getSnapshot().find(value => (value.lifecycle.state === 'connected' || value.lifecycle.state === 'disconnecting') && value.lifecycle.handle.id === handle.id && value.lifecycle.handle.generation === handle.generation)
+    const current = target ? this.bindingRevisions.get(target.id) : undefined
+    return current?.id === handle.id && current.generation === handle.generation ? current.revision : 0
+  }
 
   /** Restore does not authenticate, deduplicate or open anything, and cannot discard a live transport. */
   restore(workspace: ConnectionWorkspace): boolean {
     const parsed = connectionWorkspaceSchema.parse(workspace)
     if (this.getSnapshot().some(target => !['disconnected', 'lost'].includes(target.lifecycle.state))) return false
     this.operations.clear()
+    this.bindingRevisions.clear()
     this.publish(Object.freeze(parsed.targets.map(target => entry(target, { state: 'disconnected' }))))
     return true
   }
@@ -67,6 +75,32 @@ export class ConnectionTargetService extends SnapshotStore<readonly ConnectionTa
     if (!target) return false
     this.replace(id, { ...persisted(target), details: parsed }, target.lifecycle)
     return true
+  }
+
+  /** Main confirmed a runtime mutation. Settings and credential evidence move together on this exact current binding. */
+  applyBindings(update: ConnectionBindingsChanged): readonly ConnectionBindingsChanged['changes'][number][] {
+    const parsed = connectionBindingsChangedSchema.safeParse(update)
+    if (!parsed.success || parsed.data.generation !== this.generation) return []
+    const targets = [...this.getSnapshot()], accepted: ConnectionBindingsChanged['changes'][number][] = []
+    for (const change of parsed.data.changes) {
+      const index = targets.findIndex(target => target.id === change.targetId), target = targets[index], lifecycle = target?.lifecycle
+      if (!target || (lifecycle?.state !== 'connected' && lifecycle?.state !== 'disconnecting')
+        || lifecycle.handle.id !== change.handle.id || lifecycle.handle.generation !== change.handle.generation) continue
+      const previous = this.bindingRevisions.get(target.id), expected = target.expectedPrincipal, actual = change.authentication.principal
+      if (previous?.id === change.handle.id && previous.generation === change.handle.generation && previous.revision >= change.revision) continue
+      if (!expected || expected.provider !== actual.provider || expected.authentication !== actual.authentication || expected.id !== actual.id) continue
+      const { database: _oldDatabase, ...oldSettings } = target.options, { database: _newDatabase, ...newSettings } = change.options
+      if (JSON.stringify(oldSettings) !== JSON.stringify(newSettings)) continue
+      const { credential: oldCredential, ...rest } = persisted(target)
+      const credential = change.authentication.credential === undefined ? oldCredential : change.authentication.credential ?? undefined
+      const replacement = persistedConnectionTargetSchema.safeParse({ ...rest, options: change.options, ...credential ? { credential } : {} })
+      if (!replacement.success) continue
+      targets[index] = entry(replacement.data, lifecycle)
+      this.bindingRevisions.set(target.id, { ...change.handle, revision: change.revision })
+      accepted.push(change)
+    }
+    if (accepted.length) this.publish(Object.freeze(targets))
+    return Object.freeze(accepted)
   }
 
   /** Main explicitly changed remembered credentials for this same authenticated, already-live transport. */
@@ -147,6 +181,7 @@ export class ConnectionTargetService extends SnapshotStore<readonly ConnectionTa
       return { status: 'rejected', reason: 'unknown', dispose: parsed }
     }
     this.operations.delete(target.id)
+    this.bindingRevisions.delete(target.id)
     this.replace(target.id, replacement.data, { state: 'connected', handle: parsed })
     return { status: 'accepted' }
   }
@@ -216,7 +251,7 @@ export class ConnectionTargetService extends SnapshotStore<readonly ConnectionTa
     const removed = this.getSnapshot().filter(target => !target.inExplorer && !references.has(target.id) && ['disconnected', 'lost'].includes(target.lifecycle.state)).map(target => target.id)
     if (removed.length) {
       const ids = new Set(removed)
-      for (const id of ids) this.operations.delete(id)
+      for (const id of ids) { this.operations.delete(id); this.bindingRevisions.delete(id) }
       this.publish(Object.freeze(this.getSnapshot().filter(target => !ids.has(target.id))))
     }
     return Object.freeze(removed)
@@ -240,6 +275,7 @@ export class ConnectionTargetService extends SnapshotStore<readonly ConnectionTa
   dispose(): void {
     this.clearListeners()
     this.operations.clear()
+    this.bindingRevisions.clear()
     this.publish(Object.freeze([]))
   }
 

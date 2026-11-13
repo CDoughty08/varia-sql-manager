@@ -264,8 +264,11 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const doc = documentFixture({ ...settingsDocumentOptions(() => settings.getSnapshot().values), target: id => targets.targetForConnection(id), server: id => connections.get(id)?.server })
   /** What query.session.state answers for each tab's session: its @@TRANCOUNT, or 'unchecked'; a tab without one has no session. */
   const sessionStates = new Map<string, number | 'unchecked'>()
+  const bindingListeners = new Set<Parameters<VariaApi['onConnectionBindingsChanged']>[0]>()
   const api = {
     ...doc.api,
+    onConnectionBindingsChanged: vi.fn<VariaApi['onConnectionBindingsChanged']>(listener => { bindingListeners.add(listener); return () => { bindingListeners.delete(listener) } }),
+    pushConnectionBindings: (update: Parameters<Parameters<VariaApi['onConnectionBindingsChanged']>[0]>[0]) => { for (const listener of bindingListeners) listener(update) },
     connect: vi.fn<VariaApi['connect']>(async () => ({ ok: false, error: 'No connection response configured in this fixture.' })),
     disconnect: vi.fn<VariaApi['disconnect']>(async () => ({ ok: true, value: { disconnected: true } })),
     cancelConnectionRequests: vi.fn<VariaApi['cancelConnectionRequests']>(async ids => ({ ok: true, value: { cancelled: ids.length } })),
@@ -447,6 +450,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     activeElement
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
+  const stopConnectionBindings = api.onConnectionBindingsChanged(update => { if (connections.bindingsChanged(update) && update.warning) commands.reportWarning(update.warning) })
   const actions = new ObjectActionService({
     api, explorer, documents, queries, connections, selectTopCount: () => settings.get('objectExplorer.selectTopRows'),
     report: { error: message => commands.reportError(message), warning: message => commands.reportWarning(message), clear: message => commands.clearError(message), notice: message => notifications.notify({ severity: 'info', message, key: objectActionNoticeKey }) },
@@ -573,6 +577,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   /** Connects a server as the Connect dialog would. */
   const connect = (info: ConnectionInfo) => connections.add(info, connectionOptions)
   const dispose = () => {
+    stopConnectionBindings()
     startupReconnect.dispose()
     connectionPruning.dispose()
     disconnectPrompts.dispose()

@@ -9,13 +9,17 @@ and presentation. A saved profile, target UUID and backend handle identify diffe
 
 1. The renderer submits options and a strict `ConnectContext`: request UUID, proposed target UUID, manual/background
    mode, credential policy and, when available, the expected principal and exact remembered credential reference.
+   The selected profile's metadata identity is separate from the profile supplying a remembered secret.
    Main validates existing target settings, principal, reference and explicit credential-update intent against its own
    pins. Renderer checkpoint writes cannot replace those pins.
 2. Main resolves the exact saved credential revision before comparing connections. Equality includes the supplied
    secret and every effective transport/session setting, preserving meaningful case, routing and explicit timeout
    intent. Display name, color, environment, favorites and reconnect preference do not change connection identity.
    Comparison material is an opaque process-local HMAC. It never enters IPC, disk, diagnostics or logs.
-3. SQL username/password candidates may join equivalent pending work or reuse an authenticated live handle. Dynamic
+3. Nonempty SQL username/password candidates may join equivalent pending work or reuse an authenticated live handle.
+   Blank SQL credentials remain unkeyed until successful authentication; their authenticated key includes the stable
+   principal. Missing saved background credentials still require explicit input. Post-authentication equivalence must
+   match the actual principal; ambiguous live candidates authenticate independently before choosing a target. Dynamic
    accounts authenticate independently unless trusted infrastructure has already resolved their account. A requested
    username, account hint, renderer principal or display login cannot supply that proof.
 4. The backend returns bounded `principalId`: a server-verified SQL/Windows `sid:<hex>` or Entra
@@ -27,6 +31,33 @@ and presentation. A saved profile, target UUID and backend handle identify diffe
    connection settles authentication and recent-history work once. Each equivalent manual caller can still explicitly
    Remember or Forget the same proven credentials; those choices do not create another transport. Background mode
    preserves the vault, uses noninteractive authentication and never starts user SQL or a browser flow.
+
+Saved profiles keep optional `autoReconnect` metadata outside transport options and credential/equality keys. Ordinary
+successful Connect records the selected preference; omitted metadata preserves the profile's current value. Reused
+manual Connect changes only the exact selected profile's policy without repeating recency or transport settlement.
+Background reconnect never edits profile policy. The details confirmation separately controls the open target's policy.
+
+## Administrative binding changes
+
+Login password and initial-database changes preserve the existing runtime sessions, so their comparison evidence must
+change too. Potential binding-mutating actions use serialized main admission, fenced against connection settlement,
+unacknowledged receipts and disconnect cleanup. Backend `actions.execute` returns at most 256 authoritative
+`bindingChanges` with per-handle monotonic revisions and `bindingChangesComplete`, including confirmed partial success.
+An initial Connect result must still have binding revision zero; a registration mutated before delivery cannot prove
+that its requested settings remain current.
+
+Main rekeys database changes using a process-local opaque credential component rather than retaining a raw password.
+Confirmed password changes use the validated sensitive action input, which never appears in the receipt. Existing
+remembered intent can update its encrypted credential revision; unremembered credentials stay unremembered. Storage
+failure clears an obsolete reference and reports a warning. Unknown or incomplete outcomes invalidate unproven reuse
+evidence while leaving accepted sessions usable; they never claim that server changes were rolled back.
+
+`onConnectionBindingsChanged` delivers at most 200 nonsecret updates through `varia:connection-bindings-changed`:
+generation, optional warning, and changes containing target ID, handle, main event revision, sanitized options and
+authentication evidence. The renderer accepts only its exact current handle/generation/principal and an increasing
+revision. It updates database options and credential references together, preserves document databases/drafts and
+disconnect operation ownership, and invalidates older details or pending-execution snapshots. Native mutation revisions
+stay between backend and main; neither comparison material nor plaintext credentials cross this event channel.
 
 An explicit Remember/Forget chosen on Connect can finish once its authenticated atomic storage action starts, even
 when cancellation races it. Cancellation does not promise storage rollback. Storage failures produce a warning; an

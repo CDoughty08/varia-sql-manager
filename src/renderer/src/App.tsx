@@ -33,7 +33,7 @@ import ConnectDialog from './ConnectDialog'
 import ConnectionDetailsDialog from './ConnectionDetailsDialog'
 import DisconnectDialog from './disconnect/DisconnectDialog'
 import { detailsOf, type ConnectionAttempt, type TargetConnectionInfo } from './services/connections'
-import { finishConnectionDetails, needsDetailsConfirmation, type OpenedConnection } from './services/connection-opening'
+import { executePendingQuery, finishConnectionDetails, needsDetailsConfirmation, type OpenedConnection } from './services/connection-opening'
 import { acceptConnectionReceipt } from './services/connection-receipts'
 import { focusWhenDrawn } from './core/modal'
 import { nextFrame } from './core/frame'
@@ -232,14 +232,10 @@ export default function App() {
       try { workbench.activity.open(info.id) } catch (error) { setExplorerError(errorText(error)) }
       return
     }
-    const waiting = pendingExecute ? documents.get(pendingExecute) : undefined
-    if (waiting && !workbench.connections.isLive(waiting.connectionId ?? '') && isQueryDocument(waiting) && !queries.isRunning(waiting.id)) {
-      await targets.changeConnection(waiting.id, info.id)
-      const attached = documents.get(waiting.id)
-      if (attached?.connectionId === info.id && attached.attachWanted && workbench.connections.isLive(info.id) && !queries.isRunning(waiting.id)) void queries.execute(waiting.id)
+    if (pendingExecute) {
+      await executePendingQuery({ tabId: pendingExecute, opened, connections: workbench.connections, documents, targets, queries })
       return
     }
-    if (pendingExecute) return
     // A provisional root can appear while Connect still holds focus. Transfer it only after the picker has unmounted.
     focusWhenDrawn(nextFrame, () => workspaceRef.current?.reveal('explorer', { focus: true }))
     // Ordinary reuse only selects the existing root. New Query remains an explicit independent command.
@@ -292,7 +288,7 @@ export default function App() {
       {!shell.queryStatusBar && queryStatus}<ScriptingStatus /><IndexStatus /><EditorStatus /><MemoryIndicator /><UpdateStatus />
     </footer>
     {environmentFor && <EnvironmentDialog key={environmentFor} connectionId={environmentFor} onClose={() => setEnvironmentFor(undefined)} />}
-    {showConnect && <ConnectDialog initial={options} reviewOpen={!!detailsReview} initialTargetId={reconnecting && workbench.connectionTargets.get(workbench.connections.get(reconnecting)?.targetId ?? '') ? workbench.connections.get(reconnecting)?.targetId : undefined} initialAutoReconnect={reconnecting ? workbench.connections.details(reconnecting)?.autoReconnect : 'inherit'} onConnected={connected} onClose={() => { setDetailsReview(undefined); setShowConnect(false); setReconnecting(undefined); setPendingExecute(undefined); setPendingMonitor(false) }} />}
+    {showConnect && <ConnectDialog initial={options} reviewOpen={!!detailsReview} initialTargetId={reconnecting && workbench.connectionTargets.get(workbench.connections.get(reconnecting)?.targetId ?? '') ? workbench.connections.get(reconnecting)?.targetId : undefined} initialAutoReconnect={reconnecting ? workbench.connections.details(reconnecting)?.autoReconnect : undefined} onConnected={connected} onClose={() => { setDetailsReview(undefined); setShowConnect(false); setReconnecting(undefined); setPendingExecute(undefined); setPendingMonitor(false) }} />}
     {detailsReview && <ConnectionDetailsDialog current={detailsReview.current} selected={detailsReview.selected} server={workbench.connections.get(detailsReview.id)?.server ?? ''} database={workbench.connections.get(detailsReview.id)?.database ?? ''} account={workbench.connections.get(detailsReview.id)?.login} onChoose={choice => { void finishConnected(detailsReview, choice).catch(error => setExplorerError(errorText(error))) }} />}
     <DisconnectDialog service={workbench.disconnectPrompts} />
     {filterFolder !== undefined && <FilterDialog key={filterFolder} folderId={filterFolder} />}

@@ -220,7 +220,7 @@ export class SsisPropertiesService extends SnapshotStore<SsisPropertiesSnapshot>
   }
 
   private live(connectionId: string): LiveConnection | undefined {
-    return this.options.connections.getSnapshot().find(connection => connection.id === connectionId && !connection.lost)
+    return this.options.connections.getSnapshot().find(connection => connection.id === connectionId && !connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'connected'))
   }
   private patch(id: string, patch: Partial<SsisPropertiesState>): void {
     const state = this.get(id)

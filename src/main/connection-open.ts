@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import type { BackendState, ConnectionInfo, ConnectionOptions } from '../shared/contracts'
 import { connectContextSchema } from '../shared/connections'
-import { backendConnectionHandleSchema, connectionTargetLimits, type BackendConnectionHandle, type ConnectionFailureReason } from '../shared/connection-targets'
+import { backendConnectionHandleSchema, connectionAuthenticationSchema, connectionTargetLimits, type BackendConnectionHandle, type ConnectionCredentialReference, type ConnectionFailureReason } from '../shared/connection-targets'
+import { connectionBindingsChangedSchema, type ConnectionBindingsChanged } from '../shared/connection-bindings'
+import type { ActionExecuteRequest, ActionExecuteResult } from '../shared/actions/schema'
 import { BackendError } from './backend/errors'
 import { ConnectionReuseCoordinator } from './connection-reuse'
 import { verifiedConnectionAuthentication } from './connection-principal'
-import { ConnectionPreparationError, prepare, settle, settleReused, type ConnectionRequestDeps, type PreparedRequest, type Settled } from './connection-requests'
+import { admitVerifiedCredentialReference, ConnectionPreparationError, hasPendingCredentialRequests, prepare, rejectCredentialReference, settle, settleReused, type ConnectionRequestDeps, type PreparedRequest, type Settled } from './connection-requests'
 import { validateResult } from './validation'
 
 export interface ConnectionReceiptResult { readonly accepted: boolean; readonly retained: boolean }
@@ -13,6 +15,7 @@ export interface ConnectionOpenDeps extends ConnectionRequestDeps {
   readonly generation: () => number | undefined
   readonly open: (options: unknown, generation: number, signal: AbortSignal) => Promise<ConnectionInfo>
   readonly close: (handle: BackendConnectionHandle) => Promise<{ disconnected: boolean }>
+  readonly bindingsChanged?: (event: ConnectionBindingsChanged) => void
 }
 interface Receipt {
   readonly id: string
@@ -23,14 +26,16 @@ interface Receipt {
   targetId?: string
 }
 interface Owned {
-  readonly info: ConnectionInfo
+  info: ConnectionInfo
   readonly receipts: Set<string>
   initialization?: Promise<ConnectionInfo>
   accepted: boolean
   closing?: Promise<boolean>
   cleanup?: Promise<void>
   fenced: boolean
+  bindingEventRevision: number
 }
+interface Mutation { readonly id: string; readonly generation: number; readonly handles: readonly BackendConnectionHandle[]; readonly password?: string }
 const handleKey = (handle: BackendConnectionHandle) => `${handle.generation}:${handle.id}`
 const cancelled = () => new BackendError('CANCELLED', 'The connection request was cancelled.')
 
@@ -77,12 +82,17 @@ export class ConnectionOpenService {
   private readonly pendingPrunes = new Set<string>()
   private epoch = 0
   private generation = 0
+  private mutation?: Mutation
+  private mutationSettlements = 0
+
+  get mutationPending(): boolean { return !!this.mutation || this.mutationSettlements > 0 }
 
   constructor(private readonly deps: ConnectionOpenDeps) { this.reuse = this.coordinator() }
 
   async connect(options: ConnectionOptions, contextValue: unknown): Promise<Settled> {
     let receipt: Receipt | undefined, prepared: PreparedRequest | undefined, ownsSettlement = false
     try {
+      if (this.mutationPending) throw new BackendError('BUSY', 'Wait for the connection settings change to finish before connecting.')
       const context = connectContextSchema.parse(contextValue ?? {}), id = context.requestId ?? randomUUID()
       if (this.cancelledIds.delete(id)) throw cancelled()
       if (this.receipts.has(id)) throw new BackendError('DUPLICATE_REQUEST', 'This connection request already exists.')
@@ -105,6 +115,10 @@ export class ConnectionOpenService {
         signal: active.controller.signal
       }, async signal => {
         const connection = await this.deps.open(request.params, generation, signal)
+        if ((connection.bindingRevision ?? 0) !== 0) {
+          await this.closeUnowned(connection)
+          throw new BackendError('AUTH_IDENTITY', 'The connection settings changed during authentication. Reconnect explicitly.')
+        }
         const proof = verifiedConnectionAuthentication(connection, options.authentication)
         if (!proof) {
           await this.closeUnowned(connection)
@@ -125,7 +139,7 @@ export class ConnectionOpenService {
       const key = handleKey(result.connection)
       let owned = this.handles.get(key)
       if (!owned) {
-        owned = { info: { ...result.connection, targetId: result.targetId }, receipts: new Set(), accepted: false, fenced: false }
+        owned = { info: { ...result.connection, targetId: result.targetId }, receipts: new Set(), accepted: false, fenced: false, bindingEventRevision: 0 }
         this.handles.set(key, owned)
       }
       const owner = owned
@@ -211,6 +225,7 @@ export class ConnectionOpenService {
   }
 
   async disconnect(connectionId: string): Promise<{ disconnected: boolean }> {
+    if (this.mutationPending) throw new BackendError('BUSY', 'Wait for the connection settings change to finish before disconnecting.')
     const generation = this.deps.generation(), owner = [...this.handles.values()].find(value => value.info.id === connectionId && value.info.generation === generation)
     if (!owner) return { disconnected: false }
     if (owner.closing || owner.fenced || !this.reuse.beginDisconnect(owner.info)) throw new Error('This connection is already being disconnected.')
@@ -230,6 +245,89 @@ export class ConnectionOpenService {
     } finally { owner.closing = undefined }
   }
 
+  beginBindingMutation(request: ActionExecuteRequest): string | undefined {
+    const password = request.action === 'loginProperties' && request.loginChanges.password ? request.secrets?.password : undefined
+    const database = 'target' in request && request.target.kind === 'database' && ['rename', 'delete', 'detach', 'restore', 'restoreFiles'].includes(request.action)
+    if (password === undefined && !database) return undefined
+    if (this.mutationPending || hasPendingCredentialRequests(this.deps.savedPasswords) || [...this.handles.values()].some(owner => owner.closing || owner.fenced) || [...this.receipts.values()].some(receipt => receipt.state === 'pending' || receipt.state === 'delivered') || !this.reuse.beginBindingMutation()) throw new BackendError('BUSY', 'Wait for the current connection operation to finish before changing connection settings.')
+    const generation = this.deps.generation()
+    if (generation === undefined) { this.reuse.endBindingMutation(); throw new BackendError('BACKEND_UNAVAILABLE', 'The SQL backend is not running.') }
+    const id = randomUUID()
+    this.mutation = { id, generation, password, handles: [...this.handles.values()].filter(owner => owner.accepted && owner.info.generation === generation).map(owner => ({ id: owner.info.id, generation })) }
+    return id
+  }
+
+  async finishBindingMutation(id: string, result?: ActionExecuteResult): Promise<void> {
+    const mutation = this.mutation
+    if (!mutation || mutation.id !== id) return
+    this.mutationSettlements++
+    const changes: ConnectionBindingsChanged['changes'] = [], applied = new Set<string>()
+    let warning: string | undefined
+    try {
+      if (this.deps.generation() !== mutation.generation) return
+      // Project all confirmed durable changes before vault I/O: a generation loss must not leave later affected pins
+      // claiming the old secret while one replacement write is draining.
+      const plans = (result?.bindingChanges ?? []).flatMap(change => {
+        const handle = { id: change.connectionId, generation: mutation.generation }, key = handleKey(handle), owner = this.handles.get(key), before = this.reuse.binding(handle)
+        if (!owner?.accepted || !before) return []
+        if (!this.reuse.applyBinding(handle, change, change.passwordChanged ? mutation.password : undefined)) {
+          if (change.bindingRevision > before.bindingRevision) this.reuse.invalidateBinding(handle)
+          return []
+        }
+        applied.add(key)
+        const after = this.reuse.binding(handle)!, pin = this.deps.authentication.resolve(before.targetId)
+        if (!pin?.expectedPrincipal) { this.reuse.invalidateBinding(handle); return [] }
+        if (change.passwordChanged && pin.credential) rejectCredentialReference(this.deps.savedPasswords, pin.credential)
+        const authentication = connectionAuthenticationSchema.parse({ principal: pin.expectedPrincipal, credential: change.passwordChanged ? null : pin.credential ?? null })
+        this.deps.authentication.rebind(before.targetId, before.options, after.options, authentication)
+        return [{ change, handle, key, owner, before, after, principal: pin.expectedPrincipal, previousCredential: pin.credential }]
+      })
+      if (result?.bindingChangesComplete !== true) {
+        for (const handle of mutation.handles) if (!applied.has(handleKey(handle))) this.reuse.invalidateBinding(handle)
+      }
+      for (const plan of plans) {
+        const { change, handle, key, owner, before, after, principal, previousCredential } = plan
+        let credential = previousCredential
+        if (change.passwordChanged) {
+          credential = undefined
+          if (previousCredential) {
+            try {
+              credential = await this.replaceRememberedCredential(previousCredential, after.options, mutation.password)
+            } catch {
+              await this.deps.savedPasswords.forgetRejected(previousCredential, before.options).catch(() => {})
+              warning = 'The password changed, but its saved credential could not be updated. Enter credentials to reconnect.'
+            }
+          }
+        }
+        if (!this.deps.authentication.resolve(before.targetId)) continue
+        const authentication = connectionAuthenticationSchema.parse({ principal, credential: credential ?? null })
+        this.deps.authentication.rebind(before.targetId, after.options, after.options, authentication)
+        if (this.mutation !== mutation || this.deps.generation() !== mutation.generation || this.handles.get(key) !== owner) continue
+        owner.info = Object.freeze({ ...owner.info, database: after.options.database, authentication, bindingRevision: change.bindingRevision })
+        owner.initialization = Promise.resolve(owner.info)
+        changes.push({ targetId: before.targetId, handle, revision: ++owner.bindingEventRevision, options: after.options, authentication })
+      }
+      if (changes.length) this.deps.bindingsChanged?.(connectionBindingsChangedSchema.parse({ generation: mutation.generation, changes, ...warning ? { warning } : {} }))
+    } catch (error) {
+      for (const handle of mutation.handles) this.reuse.invalidateBinding(handle)
+      throw error
+    } finally {
+      this.mutationSettlements--
+      if (this.mutation === mutation) { this.mutation = undefined; this.reuse.endBindingMutation() }
+    }
+  }
+
+  private async replaceRememberedCredential(previous: ConnectionCredentialReference, options: ConnectionOptions, password?: string): Promise<ConnectionCredentialReference> {
+    if (password === undefined || !await this.deps.savedPasswords.storageAvailable()) throw new Error('The saved credential cannot be updated.')
+    const current = await this.deps.savedPasswords.reference(previous.profileId, options)
+    if (!current || current.revision !== previous.revision && await this.deps.savedPasswords.getReferenced(current, options) !== password) throw new Error('The saved credential revision changed.')
+    if (current.revision === previous.revision) await this.deps.savedPasswords.set(previous.profileId, { ...options, password })
+    const reference = await this.deps.savedPasswords.reference(previous.profileId, options)
+    if (!reference || await this.deps.savedPasswords.getReferenced(reference, options) !== password) throw new Error('The replacement credential is unavailable.')
+    admitVerifiedCredentialReference(this.deps.savedPasswords, reference)
+    return reference
+  }
+
   backendState(state: BackendState): void {
     if (state.status === 'stopped') { this.reset(); return }
     if ('generation' in state) this.markLostBefore(state.generation)
@@ -243,6 +341,7 @@ export class ConnectionOpenService {
     this.cancelledIds.clear()
     this.pendingPrunes.clear()
     this.handles.clear()
+    this.mutation = undefined
     this.reuse.dispose()
     this.reuse = this.coordinator()
     this.generation = 0
@@ -266,7 +365,8 @@ export class ConnectionOpenService {
       throw new OpenFailure({ ok: false, error: new Error('The authenticated connection receipt is incomplete.') })
     }
     if (equivalentTarget && prepared.context?.mode !== 'background' && (prepared.context?.credentialPolicy === 'remember' || prepared.context?.credentialPolicy === 'forget' || prepared.context?.remember !== undefined)) info.credentialUpdated = true
-    return Object.freeze(info)
+    owner.info = Object.freeze(info)
+    return owner.info
   }
 
   private release(receipt: Receipt): void {

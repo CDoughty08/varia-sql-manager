@@ -159,7 +159,7 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
   open(node: ExplorerMenuNode): string {
     if (this.disposed) throw new Error('Database Properties is not available.')
     const target = node.ref.type === 'object' && node.ref.object.kind === 'database' ? node.ref.object : undefined
-    const connection = this.options.connections.getSnapshot().find(item => item.id === node.connectionId && !item.lost)
+    const connection = this.options.connections.getSnapshot().find(item => item.id === node.connectionId && !item.lost && (!item.lifecycle || item.lifecycle.state === 'connected'))
     if (!target) throw new Error('Select a database in Object Explorer.')
     if (!connection) throw new Error('Connect to the server first.')
     const documents = Object.values(this.getSnapshot().documents).filter(state => state.target.name === target.name)
@@ -583,7 +583,7 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
   private connectionOf(id: string): string | undefined { return this.options.documents.get(id)?.connectionId }
   private live(id: string): boolean {
     const connectionId = this.connectionOf(id)
-    return this.targetBindings.matchesConnection(id, connectionId) && this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost)
+    return this.targetBindings.matchesConnection(id, connectionId) && this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'connected'))
   }
   private begin(id: string, kind: 'describe' | 'apply'): string {
     const requestId = this.newId()

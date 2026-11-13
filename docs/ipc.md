@@ -2701,6 +2701,24 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Restarts | after 0 s, 1 s, 2 s; breaker at 3 unexpected losses in 120 s; reset after 300 s ready | main |
 | Registries | 1,024 lost connection ids; 4,096 abandoned request ids; 100,000 owned results per generation; stderr 32 lines × 512 characters | main |
 
+## Connection ownership and binding updates
+
+Connection requests use acknowledged main-owned receipts. `acceptConnectionRequest` and `pruneConnectionTargets` are
+bounded, trusted-sender, main-only IPC; they do not expose generic backend access. Cancelling a request releases only
+its own ownership interest. The successful receipt carries main's authoritative target and authentication evidence.
+
+`ConnectionInfo.bindingRevision` is zero for an unchanged initial registration. Administrative `actions.execute`
+results can include `bindingChanges` (at most 256 records) and `bindingChangesComplete`. Each record identifies the
+native handle and monotonic revision, with a changed initial database and/or `passwordChanged: true`; it contains no
+password. Partial-success results retain confirmed receipts. Main fences these actions, verifies ordering and updates
+its process-local equality evidence and durable credential pins.
+
+The main-only `varia:connection-bindings-changed` event, exposed by `onConnectionBindingsChanged`, carries generation,
+an optional bounded warning, and at most 200 changes with target ID, handle, increasing main revision, sanitized options
+and authentication evidence. Strict schemas reject unknown/secret fields. Renderer consumers must match the current
+target, handle, generation and principal; this channel cannot establish another account or endpoint. See
+[main connection ownership](connections-explorer-main-seam.md) for mutation and checkpoint ordering.
+
 ## Error codes and fixed sentences
 
 Failures reach the renderer as `{ ok: false, error, code, details? }`. Messages are complete sentences shown as they are.

@@ -64,6 +64,33 @@ describe('live connection identity', () => {
     expect(registry.key({ ...options, connectionString: 'Password=never-retained' } as ConnectionOptions)).toBeUndefined()
   })
 
+  it('keys an authenticated blank SQL password only with stable account evidence', () => {
+    const registry = new ConnectionIdentityRegistry(), account = principal('sql', 'sid:01020304')
+    const blank = { ...options, password: '' }, absent = { ...options, password: undefined }
+    expect(registry.key(blank, account)).toBeUndefined()
+    expect(registry.key(absent, account)).toBeUndefined()
+    expect(registry.authenticatedKey(blank, account)).toBeDefined()
+    expect(registry.authenticatedKey(blank, account)).toBe(registry.authenticatedKey(absent, account))
+    expect(registry.authenticatedKey(blank, account)).not.toBe(registry.authenticatedKey(blank, principal('sql', 'sid:05060708')))
+    expect(registry.authenticatedKey(blank, account)).not.toBe(registry.authenticatedKey(options, account))
+    expect(registry.authenticatedKey(options, account)).toBe(registry.key(options))
+    expect(registry.authenticatedKey(blank, principal('windows'))).toBeUndefined()
+    for (const authentication of ['entraPassword', 'entraServicePrincipal'] as const)
+      expect(registry.authenticatedKey({ ...blank, authentication }, principal(authentication))).toBeUndefined()
+  })
+
+  it('rekeys nonsecret database settings using only an ephemeral credential component', () => {
+    const registry = new ConnectionIdentityRegistry(), material = registry.authenticatedMaterial(options, principal('sql', 'sid:01020304'))!
+    const { password: _password, ...withoutPassword } = options
+    const renamed = { ...withoutPassword, database: 'RenamedSales' }
+    expect(registry.rekey(renamed, material.credential)).toBe(registry.key({ ...options, database: renamed.database }))
+    expect(registry.rekey(renamed, material.credential)).not.toBe(material.key)
+    expect(JSON.stringify(material)).not.toContain(options.password)
+    expect(material.credential).toMatch(/^[a-f0-9]{64}$/)
+    registry.dispose()
+    expect(registry.rekey(renamed, material.credential)).toBeUndefined()
+  })
+
   it('requires authoritative principal evidence for OS and every Entra authentication mode', () => {
     const registry = new ConnectionIdentityRegistry()
     for (const authentication of ['windows', 'entraMfa', 'entraPassword', 'entraIntegrated', 'entraServicePrincipal', 'entraManagedIdentity', 'entraDefault'] as const) {

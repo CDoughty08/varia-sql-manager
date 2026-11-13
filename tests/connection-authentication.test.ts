@@ -60,4 +60,16 @@ describe('main-owned target authentication evidence', () => {
     guard.forget(id)
     expect(guard.resolve(id)).toBeUndefined()
   })
+  it('uses the current pin for explicit typed interactive recovery without relaxing saved-reference or principal checks', () => {
+    const { guard, id, credential } = fixture()
+    const stale = { ...credential, revision: randomUUID() }, typed = { ...options, password: 'corrected-secret' }
+    const update = { targetId: id, credential: stale, expectedPrincipal: principal, credentialIntent: 'update-credentials' as const }
+    expect(guard.prepare(typed, update)).toMatchObject({ credential, expectedPrincipal: principal })
+    expect(guard.prepare(typed, { ...update, mode: 'interactive' })).toMatchObject({ credential, expectedPrincipal: principal })
+    for (const context of [{ ...update, mode: 'background' as const }, { ...update, credentialIntent: 'preserve' as const }])
+      expect(() => guard.prepare(typed, context)).toThrow('identity changed')
+    expect(() => guard.prepare(options, update)).toThrow('identity changed')
+    expect(() => guard.prepare({ ...typed, server: 'another' }, update)).toThrow('identity changed')
+    expect(() => guard.prepare(typed, { ...update, expectedPrincipal: { ...principal, id: 'another-account' } })).toThrow('identity changed')
+  })
 })

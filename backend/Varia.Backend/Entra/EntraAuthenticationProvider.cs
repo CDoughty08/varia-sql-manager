@@ -18,7 +18,9 @@ internal sealed class EntraAuthenticationProvider(EntraService service) : SqlAut
     {
         var method = parameters.AuthenticationMethod;
         EntraAttempt attempt;
-        if (!EntraEndpoints.TryParseAuthority(parameters.Authority, out var host, out var tenant))
+        if (!EntraConnectScope.Authorized)
+            attempt = new EntraFailure("AUTH_IDENTITY", ConnectionPrincipal.ChangedMessage);
+        else if (!EntraEndpoints.TryParseAuthority(parameters.Authority, out var host, out var tenant))
             attempt = new EntraFailure("AUTH_ENTRA", EntraFailures.Messages.RefusedAuthority(EntraEndpoints.HostOf(parameters.Authority)));
         else if (!EntraEndpoints.IsAllowedResource(parameters.Resource))
             attempt = new EntraFailure("AUTH_ENTRA", EntraFailures.Messages.RefusedResource(EntraEndpoints.HostOf(parameters.Resource)));

@@ -34,8 +34,9 @@ import { ConnectionStore } from './connection-store'
 import { SavedPasswordStore } from './saved-passwords'
 import { ConnectionAuthenticationGuard } from './connection-authentication'
 import { ConnectionOpenService, validateOpenedConnection } from './connection-open'
+import { ConnectionSessionCheckpoint } from './connection-session-checkpoint'
 import { lockedCipher, safeStorageCipher, testCipher } from './secret-cipher'
-import { prepare as prepareConnection, settle as settleConnection, type Settled } from './connection-requests'
+import { hasPendingCredentialRequests, prepare as prepareConnection, settle as settleConnection, type Settled } from './connection-requests'
 import { connectionLibrary } from './connection-library'
 import { clearEntraPrompt, clearEntraTokenCache } from './entra'
 import { SettingsStore } from './settings-store'
@@ -129,6 +130,7 @@ type SessionCheckpoint = { generation: number } & (
 )
 let sessionCheckpoint: SessionCheckpoint | undefined
 const connectionAuthentication = new ConnectionAuthenticationGuard()
+let credentialRequestsPending = () => false
 let connectionOpen: ConnectionOpenService | undefined
 const reloadRequest = z.object({
   role: z.literal('reload'), session: sessionWriteSchema,
@@ -185,6 +187,7 @@ const recent = new RecentFilesStore(join(app.getPath('userData'), 'recent-files.
 const recovery = new RecoveryStore(join(app.getPath('userData'), 'AutoRecover'), { pathsRefused })
 // Hot exit's copy of the open tabs, user-only, in the profile; see session-store.ts.
 const openSession = new SessionStore(join(app.getPath('userData'), 'Session'), { pathsRefused })
+const connectionSession = new ConnectionSessionCheckpoint(connectionAuthentication, openSession, () => credentialRequestsPending())
 // Whether a page of this process has taken the session: only the first also reopens what a crashed run restored.
 let sessionTaken = false
 // Smoke suites keep the quit prompts they check unless they ask for hot exit (VARIA_TEST_HOT_EXIT=1).
@@ -829,6 +832,7 @@ app.whenReady().then(async () => {
   // Remember password: OS-protected ciphertext beside connections.json, read and decrypted only here (saved-passwords.ts).
   const secretCipher = smokeProfile ? lockedCipher() : testSeams && process.env.VARIA_TEST_SAFE_STORAGE === 'test' ? testCipher() : safeStorageCipher(safeStorage, process.platform)
   const savedPasswords = new SavedPasswordStore(join(app.getPath('userData'), 'saved-passwords.json'), secretCipher)
+  credentialRequestsPending = () => hasPendingCredentialRequests(savedPasswords) || !!connectionOpen?.mutationPending
   connectionOpen = new ConnectionOpenService({
     authentication: connectionAuthentication, savedPasswords, connections: connectionStore,
     generation: () => backend.current?.generation,
@@ -840,7 +844,8 @@ app.whenReady().then(async () => {
       try { return await validateOpenedConnection(await backend.request('connections.connect', params as ConnectionOptions, { generation, onSent: load.sent }), generation, handle => backend.request('connections.disconnect', { connectionId: handle.id }, { generation: handle.generation })) }
       finally { signal.removeEventListener('abort', cancel); load.end() }
     },
-    close: handle => backend.request('connections.disconnect', { connectionId: handle.id }, { generation: handle.generation })
+    close: handle => backend.request('connections.disconnect', { connectionId: handle.id }, { generation: handle.generation }),
+    bindingsChanged: event => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:connection-bindings-changed', event) }
   })
   connectionOpen.backendState(backend.state)
   const library = connectionLibrary({ connections: connectionStore, savedPasswords })
@@ -985,7 +990,9 @@ app.whenReady().then(async () => {
     }
     try {
       const validated = validateRequest(method, params)
+      if (closeApproved && ['connections.connect', 'connections.databases', 'actions.execute'].includes(method)) throw new BackendError('BACKEND_UNAVAILABLE', 'The application is closing.')
       if (method === 'connections.connect') {
+        if (closeApproved) throw new BackendError('BACKEND_UNAVAILABLE', 'The application is closing.')
         if (!connectionOpen) throw new Error('The connection owner is unavailable.')
         const outcome = await connectionOpen.connect(validated as ConnectionOptions, context)
         if (!outcome.ok) return { ...failure(outcome.error, 'Connection failed.'), ...(outcome.passwordForgotten ? { passwordForgotten: true as const } : {}), ...(outcome.credentialRejected ? { credentialRejected: true as const } : {}), ...(outcome.connectionFailure ? { connectionFailure: outcome.connectionFailure } : {}) }
@@ -996,6 +1003,7 @@ app.whenReady().then(async () => {
         return { ok: true, value: await connectionOpen.disconnect((validated as { connectionId: string }).connectionId) }
       }
       const prepared = await prepareConnection(method, validated, context, { savedPasswords, authentication: connectionAuthentication })
+      let bindingMutation: string | undefined
       try {
       // Only main creates the compressed wire form; the renderer cannot supply compressed data or an encoding.
       if (method === 'plans.parse') prepared.params = await preparePlan((validated as { xml: string }).xml)
@@ -1013,22 +1021,31 @@ app.whenReady().then(async () => {
       let outcome: Settled
       try {
         try {
-          result = await backend.request(method as RpcMethod, prepared.params as never, queryId !== undefined ? { onEvent: queryEvent => results.queryEvent(queryId, queryEvent) }
-            : load ? { onSent: load.sent, ...progress ? { onActionProgress: progress.event } : {}, ...indexing ? { onIndexProgress: indexing.event } : {} } : {})
+          if (method === 'actions.execute') bindingMutation = connectionOpen?.beginBindingMutation(validated as RpcMethods['actions.execute']['params'])
+          result = await backend.request(method as RpcMethod, prepared.params as never, { ...queryId !== undefined ? { onEvent: (queryEvent: import('../shared/contracts').QueryEvent) => results.queryEvent(queryId, queryEvent) }
+            : load ? { onSent: load.sent, ...progress ? { onActionProgress: progress.event } : {}, ...indexing ? { onIndexProgress: indexing.event } : {} } : {}, ...bindingMutation ? { generation: backend.current?.generation } : {} })
         } finally {
           load?.end()
           progress?.close()
           indexing?.close()
         }
         result = validateResult(method as RpcMethod, result)
+        if (bindingMutation) {
+          const ticket = bindingMutation
+          bindingMutation = undefined
+          await connectionOpen?.finishBindingMutation(ticket, result as RpcMethods['actions.execute']['result'])
+        }
         outcome = { ok: true, value: result }
-      } catch (error) { outcome = { ok: false, error } }
+      } catch (error) {
+        if (bindingMutation) { const ticket = bindingMutation; bindingMutation = undefined; await connectionOpen?.finishBindingMutation(ticket).catch(() => {}) }
+        outcome = { ok: false, error }
+      }
       // History and remembered passwords for the connect methods; other methods pass through.
       outcome = await settleConnection(prepared, outcome, { savedPasswords, authentication: connectionAuthentication, connections: connectionStore, disconnect: connectionId => backend.request('connections.disconnect', { connectionId }) })
       if (!outcome.ok) return { ...failure(outcome.error, 'Backend request failed.'), ...(outcome.passwordForgotten ? { passwordForgotten: true as const } : {}), ...(outcome.credentialRejected ? { credentialRejected: true as const } : {}) }
       if (queryId !== undefined) results.querySummary(result as QueryResult)
       return { ok: true, value: result }
-      } finally { prepared.release?.() }
+      } finally { if (bindingMutation) await connectionOpen?.finishBindingMutation(bindingMutation).catch(() => {}); prepared.release?.() }
     } catch (error) { return failure(error, 'Backend request failed.') }
   })
   handle('varia:explorer-cancel', value => ({ cancelled: explorerRequests.cancel(explorerCancelParamsSchema.parse(value).requestIds) }))
@@ -1122,7 +1139,9 @@ app.whenReady().then(async () => {
   // Hot exit: the page's tabs as its close goes ahead, with main's paths in place of file ids, and the next start's restore.
   handle('varia:session-write', async value => {
     if (!hotExitAvailable) throw new Error('Restore open queries on startup is off.')
-    await openSession.write(sessionInput(sessionWriteSchema.parse(value)), pageGeneration)
+    const generation = pageGeneration
+    await connectionSession.write(sessionInput(sessionWriteSchema.parse(value)), generation)
+    if (generation !== pageGeneration || generation !== rendererGeneration) throw new Error('The workbench changed while keeping the session.')
   })
   handle('varia:session-take', async (): Promise<RestoredSession> => {
     const generation = pageGeneration
@@ -1209,13 +1228,17 @@ app.whenReady().then(async () => {
   // The page has handled every unsaved query. On macOS a window close leaves the app running, as macOS apps do.
   ipcMain.handle('varia:close-window', async event => {
     if (!trusted(event)) return
+    connectionSession.assertCurrent(pageGeneration)
     closeApproved = true
     // Every query was saved, discarded or kept by hot exit, so AutoRecover's copies of this page's go, before the app can
     // exit. A close that kept nothing leaves nothing for the next start to reopen.
-    await recovery.discardOwned(pageGeneration).catch(() => {})
-    if (!openSession.keptBy(pageGeneration)) await openSession.clear().catch(() => {})
-    if (closeAction(process.platform, closeIntent) === 'closeWindow') mainWindow?.close()
-    else app.quit()
+    try {
+      await recovery.discardOwned(pageGeneration).catch(() => {})
+      if (!openSession.keptBy(pageGeneration)) await openSession.clear().catch(() => {})
+      connectionSession.assertCurrent(pageGeneration)
+      if (closeAction(process.platform, closeIntent) === 'closeWindow') mainWindow?.close()
+      else app.quit()
+    } catch (error) { closeApproved = false; throw error }
   })
   buildMenu()
   createWindow()

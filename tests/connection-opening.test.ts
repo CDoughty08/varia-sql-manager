@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ConnectionOptions } from '../src/shared/contracts'
 import type { ConnectionAuthentication, ConnectionDetails } from '../src/shared/connection-targets'
-import { adoptConnection, finishConnectionDetails, needsDetailsConfirmation } from '../src/renderer/src/services/connection-opening'
+import { adoptConnection, executePendingQuery, finishConnectionDetails, needsDetailsConfirmation } from '../src/renderer/src/services/connection-opening'
 import { ConnectionService, type ConnectionAttempt, type TargetConnectionInfo } from '../src/renderer/src/services/connections'
 import { ConnectionTargetService, type ConnectionCompletion } from '../src/renderer/src/services/connection-targets'
 import { connectionOptions, workbenchFixture } from './fixtures/workbench'
@@ -251,6 +251,24 @@ describe('registry connection attempt ownership', () => {
 })
 
 describe('selected connection details confirmation', () => {
+  it('refuses a stale review and pending Execute after a same-handle authoritative binding change', async () => {
+    const workbench = workbenchFixture(), { connections, connectionTargets, documents, targets, queries } = workbench
+    cleanups.push(workbench.dispose)
+    const opened = open(connections)!, review = adoptConnection(connections, receipt(), options, selected)!
+    const query = documents.create('pending.sql', 'SELECT 1', 'Sales')
+    documents.update(query.id, { targetId: opened.targetId, attachWanted: true })
+    targets.attachTarget(opened.targetId!, opened.id)
+    const execute = vi.spyOn(queries, 'execute').mockResolvedValue()
+    expect(review.bindingRevision).toBe(0)
+    connections.bindingsChanged({ generation: 1, changes: [{ targetId: opened.targetId!, handle: { id: opened.id, generation: opened.generation }, revision: 1,
+      options: connectionTargets.get(opened.targetId!)!.options, authentication }] })
+    expect(finishConnectionDetails(connections, review, 'selected')).toBeUndefined()
+    expect(finishConnectionDetails(connections, review, 'current')).toBeUndefined()
+    await executePendingQuery({ ...workbench, tabId: query.id, opened })
+    expect(execute).not.toHaveBeenCalled()
+    expect(connectionTargets.get(opened.targetId!)?.details).toEqual(current)
+    expect(documents.get(query.id)?.database).toBe('Sales')
+  })
   it.each(['selected', 'current', 'cancel'] as const)('%s changes only the chosen target details and preserves attached query sessions', choice => {
     const workbench = workbenchFixture(), { connections, connectionTargets, documents, queries, api, host } = workbench
     cleanups.push(workbench.dispose)
@@ -297,5 +315,53 @@ describe('selected connection details confirmation', () => {
     expect(targets.getSnapshot()).toBe(before)
     expect(targets.get(uuid(1))?.details).toEqual(current)
     if (change === 'remove') expect(targets.get(uuid(1))?.inExplorer).toBe(false)
+  })
+})
+
+describe('explicit Execute after reconnect', () => {
+  it.each([true, false])('runs the requested query once after accepted reconnect when attachWanted was %s, preserving its database', async attachWanted => {
+    const workbench = workbenchFixture(), { connections, documents, targets, queries, api } = workbench
+    cleanups.push(workbench.dispose)
+    const opened = open(connections)!, query = documents.create('pending.sql', 'SELECT 1', 'Sales')
+    documents.update(query.id, { targetId: opened.targetId, attachWanted })
+    const execute = vi.spyOn(queries, 'execute').mockResolvedValue()
+    targets.attachTarget(opened.targetId!, opened.id)
+    expect(execute).not.toHaveBeenCalled()
+    await executePendingQuery({ ...workbench, tabId: query.id, opened })
+    expect(execute).toHaveBeenCalledExactlyOnceWith(query.id)
+    expect(documents.get(query.id)).toMatchObject({ connectionId: opened.id, targetId: opened.targetId, attachWanted: true, database: 'Sales' })
+    expect(api.execute).not.toHaveBeenCalled()
+  })
+
+  it('never executes or retargets a pending query that moved to another live target, closed, or is busy', async () => {
+    const workbench = workbenchFixture(), { connections, documents, queries } = workbench
+    cleanups.push(workbench.dispose)
+    const opened = open(connections)!, other = open(connections, receipt(2, 102))!
+    const moved = documents.create('moved.sql', 'SELECT 2', 'Warehouse', other.id)
+    const execute = vi.spyOn(queries, 'execute').mockResolvedValue()
+    await executePendingQuery({ ...workbench, tabId: moved.id, opened })
+    expect(documents.get(moved.id)).toMatchObject({ connectionId: other.id, targetId: other.targetId, database: 'Warehouse' })
+    await executePendingQuery({ ...workbench, tabId: 'closed-query', opened })
+    await documents.runTask(() => executePendingQuery({ ...workbench, tabId: moved.id, opened }))
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('does not execute when an accepted handle was replaced before the pending continuation', async () => {
+    const workbench = workbenchFixture(), { connections, documents, targets, queries } = workbench
+    cleanups.push(workbench.dispose)
+    const opened = open(connections)!, query = documents.create('pending.sql', 'SELECT 1', 'Sales')
+    documents.update(query.id, { targetId: opened.targetId, attachWanted: true })
+    targets.attachTarget(opened.targetId!, opened.id)
+    connections.disconnected(opened.id)
+    const next = open(connections, receipt(1, 103))!
+    targets.attachTarget(next.targetId!, next.id)
+    const offline = documents.create('still-offline.sql', 'SELECT 3', 'Audit')
+    documents.update(offline.id, { targetId: opened.targetId, attachWanted: true })
+    const execute = vi.spyOn(queries, 'execute').mockResolvedValue()
+    await executePendingQuery({ ...workbench, tabId: query.id, opened })
+    await executePendingQuery({ ...workbench, tabId: offline.id, opened })
+    expect(execute).not.toHaveBeenCalled()
+    expect(documents.get(query.id)?.connectionId).toBe(next.id)
+    expect(documents.get(offline.id)).toMatchObject({ connectionId: undefined, attachWanted: true, targetId: opened.targetId })
   })
 })

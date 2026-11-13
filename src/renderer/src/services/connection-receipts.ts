@@ -49,5 +49,6 @@ export async function acceptConnectionReceipt({ api, connections, info, options,
   if (!accepted.value.accepted || !accepted.value.retained || !current()) return
   const connection = connections.get(opened.targetId ?? opened.id)
   if (!connection || !connections.isLive(connection.id) || connection.id !== opened.id || connection.generation !== opened.generation) return
+  if (connections.bindingRevision(connection) !== opened.bindingRevision) return
   return opened
 }

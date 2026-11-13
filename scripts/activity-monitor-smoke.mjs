@@ -714,8 +714,11 @@ try {
   await expect(dialog).toHaveCount(0)
   // A server-name match cannot move a monitor onto another account.
   await expect.poll(async () => (await viewOf(id)).status).toBe('lost')
-  await expect(livePill(monitor())).toHaveText('Stopped · backend unavailable')
+  // Connecting the distinct account opens its query; the original monitor remains on its own stopped tab.
+  await expect(queryTabs().filter({ hasText: 'activity-server - Activity Monitor' })).toHaveCount(1)
   await queryTabs().filter({ hasText: 'activity-server - Activity Monitor' }).click()
+  await expect(livePill(monitor())).toHaveText('Stopped · backend unavailable')
+  await stays(id)
   await page.keyboard.press(mod + '+W')
   await expect(queryTabs().filter({ hasText: 'Activity Monitor' })).toHaveCount(0)
   await expect.poll(async () => (await handles()).length).toBe(0)

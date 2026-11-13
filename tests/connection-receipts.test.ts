@@ -86,6 +86,19 @@ describe('authenticated connection receipt adoption', () => {
     expect(setup.connections.get(id(1))?.lifecycle?.state).toBe('lost')
   })
 
+  it('cannot continue when an authoritative binding revision changes before acknowledgement, even on the same handle', async () => {
+    const setup = fixture(), pending = deferred<Awaited<ReturnType<typeof setup.api.acceptConnectionRequest>>>()
+    setup.api.acceptConnectionRequest.mockImplementation(() => pending.promise)
+    const accepting = acceptConnectionReceipt(setup)
+    expect(setup.connections.bindingRevision({ id: setup.info.id, generation: 1 })).toBe(0)
+    setup.connections.bindingsChanged({ generation: 1, changes: [{ targetId: id(1), handle: { id: setup.info.id, generation: 1 }, revision: 1,
+      options: setup.connections.connectionTargets.get(id(1))!.options, authentication: setup.info.authentication! }] })
+    pending.resolve({ ok: true, value: { accepted: true, retained: true } })
+    expect(await accepting).toBeUndefined()
+    expect(setup.connections.bindingRevision({ id: setup.info.id, generation: 1 })).toBe(1)
+    expect(setup.connections.isLive(setup.info.id)).toBe(true)
+  })
+
   it('updates remembered credential references on already-live reuse only with main explicit proof', async () => {
     const setup = fixture()
     await acceptConnectionReceipt(setup)

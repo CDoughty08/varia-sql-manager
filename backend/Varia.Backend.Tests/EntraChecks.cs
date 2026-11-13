@@ -239,6 +239,7 @@ internal static class EntraChecks
 
     private static async Task ProviderAsync(Action<bool, string> check, EntraService service)
     {
+        using var initialAuthentication = new EntraConnectScope(CancellationToken.None, allowUnpinned: true);
         var fake = new FakeSource { Silent = (_, _) => Task.FromResult<EntraToken?>(Token("silent")) };
         service.Source = fake;
         var provider = (EntraAuthenticationProvider)SqlAuthenticationProvider.GetProvider(SqlAuthenticationMethod.ActiveDirectoryInteractive)!;
@@ -292,7 +293,7 @@ internal static class EntraChecks
         using (var background = new CancellationTokenSource())
         {
             background.Cancel();
-            using var scope = new EntraConnectScope(background.Token);
+            using var scope = new EntraConnectScope(background.Token, allowUnpinned: true);
             id = Guid.NewGuid();
             try { await provider.AcquireTokenAsync(Parameters(SqlAuthenticationMethod.ActiveDirectoryDefault, id, timeout: 0)); }
             catch (EntraProviderException) { }
@@ -486,6 +487,7 @@ internal static class EntraChecks
     /// already has a token).</summary>
     private static async Task AccountsAsync(Action<bool, string> check, EntraService service)
     {
+        using var initialAuthentication = new EntraConnectScope(CancellationToken.None, allowUnpinned: true);
         var accounts = new List<string>();
         var next = "alice@contoso.com";
         service.Source = new FakeSource

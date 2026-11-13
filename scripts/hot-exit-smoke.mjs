@@ -259,7 +259,7 @@ try {
   if (await tabShelfRows(editorGroups(page).first()) === '1') await tabMenuItem('Welcome', 'Increase Tab Stack Height')
   await expect.poll(() => tabShelfRows(editorGroups(page).first())).toBe('2')
   console.log('Hot exit checks: every query floating survives a relaunch, and joining them leaves no empty group.')
-  // A canceled reload leaves the current page and its pins intact. An accepted reload reopens just the pins.
+  // A canceled reload leaves the page intact. With startup restore On, an accepted reload reopens all eligible tabs.
   await selectOpenDocument(page, 'Orders report')
   await pinDocumentButton(page, 'Orders report').click()
   await page.evaluate(() => window.__variaRecovery.flush())
@@ -283,7 +283,7 @@ try {
   await tabMenuItem('Totals', 'Increase Tab Stack Height')
   await expect.poll(() => tabShelfRows(editorGroups(page).first(), true)).toBe('2')
   await page.evaluate(() => window.__variaRecovery.flush())
-  // Hold the saved pin's read so the replacement page can issue another reload during the restore.
+  // Hold the saved pin's read so the replacement page can issue another reload during the all-tab restore.
   await application.evaluate(() => {
     globalThis.variaHotExit.reloadAnswer = 0
     globalThis.variaHotExit.holdConfirmation = true
@@ -320,17 +320,26 @@ try {
     })
     await releaseRead()
   }
-  await expect.poll(tabNames).toEqual(['Totals', 'Orders report', 'Welcome', 'SQLQuery4.sql'])
+  const reloadedNames = ['Totals', 'Orders report', 'Welcome', 'SQLQuery4.sql', 'Month end']
+  await expect.poll(tabNames).toEqual(reloadedNames)
+  await expect(editorGroups(page)).toHaveCount(1)
+  expect(await groupNames(0)).toEqual(reloadedNames)
+  expect(await activeDocumentName(page)).toBe('Orders report')
   const recover = page.getByRole('dialog', { name: 'Recover Unsaved Queries', exact: true })
-  await expect(recover.getByRole('checkbox', { name: 'Recover Month end', exact: true })).toBeVisible()
-  await expect(recover.getByRole('checkbox', { name: 'Recover Totals', exact: true })).toHaveCount(0)
-  await recover.getByRole('button', { name: 'Later', exact: true }).click()
+  expect(await page.evaluate(() => window.varia.listRecovery())).toMatchObject({ ok: true, value: [] })
+  await expect(recover).toHaveCount(0)
   await expect.poll(() => tabShelfRows(editorGroups(page).first(), true)).toBe('2')
+  for (const name of ['Totals', 'Orders report', 'Welcome', 'SQLQuery4.sql']) await expect(pinDocumentButton(page, name, true)).toBeVisible()
+  await selectOpenDocument(page, 'Month end')
+  await expect.poll(text).toContain('SELECT 2 AS month_end')
+  await expect(unsavedMark(documentTab(page, 'Month end'))).toBeVisible()
+  await expect(pinDocumentButton(page, 'Month end')).toBeVisible()
+  await expect(documentTab(page, 'Month end')).toHaveCount(1)
   for (const name of ['Welcome', 'SQLQuery4.sql']) {
     await pinDocumentButton(page, name, true).click()
     await tabMenuItem(name, 'Close')
   }
-  await expect.poll(tabNames).toEqual(['Totals', 'Orders report'])
+  await expect.poll(tabNames).toEqual(['Totals', 'Orders report', 'Month end'])
   await selectOpenDocument(page, 'Orders report')
   expect(await activeDocumentName(page)).toBe('Orders report')
   await expect.poll(text).toContain('SELECT 2 AS orders')
@@ -338,7 +347,7 @@ try {
   await expect.poll(text).toContain('SELECT 3 AS totals')
   await expect.poll(text).toContain('SELECT 33 AS before_reload_confirmation')
   await expect(unsavedMark(documentTab(page, 'Totals'))).toBeVisible()
-  console.log('Hot exit checks: canceling Reload Window keeps the page, edits before confirmation survive, and a second reload during restore preserves both pins.')
+  console.log('Hot exit checks: canceling Reload Window keeps the page; all eligible tabs, groups and active state survive acceptance; edits before confirmation survive; and a second reload cannot replace an unfinished restore.')
 
   expect(await page.evaluate(() => window.varia.updateSettings({
     'environment.documents.hotExit': false, 'environment.documents.detectExternalChanges': true
@@ -399,8 +408,10 @@ try {
   console.log('Hot exit checks: a saved XML pin above 5 MB reopens with startup restore off.')
 
   const recoverAgain = page.getByRole('dialog', { name: 'Recover Unsaved Queries', exact: true })
-  await expect(recoverAgain.getByRole('checkbox', { name: 'Recover Month end', exact: true })).toBeVisible()
-  await recoverAgain.getByRole('button', { name: 'Later', exact: true }).click()
+  expect(await page.evaluate(() => window.varia.listRecovery())).toMatchObject({ ok: true, value: [] })
+  await expect(recoverAgain).toHaveCount(0)
+  await expect.poll(tabNames).toEqual(['Totals', 'Orders report', 'large-pin.xml'])
+  await expect(documentTab(page, 'Month end')).toHaveCount(0)
 
   // Save from the restored dirty pin sees the disk change made while the app was closed.
   await selectOpenDocument(page, 'Orders report')
@@ -429,8 +440,7 @@ try {
   await launch([])
   await expect.poll(tabNames).toEqual(['Totals', 'Orders report', 'large-pin.xml'])
   const recoverBeforeCrash = page.getByRole('dialog', { name: 'Recover Unsaved Queries', exact: true })
-  await expect(recoverBeforeCrash.getByRole('checkbox', { name: 'Recover Month end', exact: true })).toBeVisible()
-  await recoverBeforeCrash.getByRole('button', { name: 'Later', exact: true }).click()
+  await expect(recoverBeforeCrash).toHaveCount(0)
   expect(await page.evaluate(() => window.varia.updateSettings({ 'environment.autoRecover.enabled': false }))).toMatchObject({ ok: true })
   await selectOpenDocument(page, 'Totals')
   await editorTextbox(page).focus()

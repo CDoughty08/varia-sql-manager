@@ -177,7 +177,7 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
    */
   open(connectionId: string, database?: string, folderNodeId?: number, mode: RestoreMode = 'database'): string {
     if (this.disposed) throw new Error(`${restoreModeTitles[mode]} is not available.`)
-    const connection = this.options.connections.getSnapshot().find(item => item.id === connectionId && !item.lost)
+    const connection = this.options.connections.getSnapshot().find(item => item.id === connectionId && !item.lost && (!item.lifecycle || item.lifecycle.state === 'connected'))
     if (!connection) throw new Error('Connect to the server first.')
     const document = this.options.documents.openCustom('restoreDatabase', restoreTabTitle(database, mode), connection.id, 'master')
     this.targetBindings.bind(document.id, connection.id)
@@ -597,7 +597,7 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
   private connectionOf(id: string): string | undefined { return this.options.documents.get(id)?.connectionId }
   private live(id: string): boolean {
     const connectionId = this.connectionOf(id)
-    return this.targetBindings.matchesConnection(id, connectionId) && this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost)
+    return this.targetBindings.matchesConnection(id, connectionId) && this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'connected'))
   }
   private async call<T>(send: () => Promise<ApiResult<T>>): Promise<ApiResult<T>> {
     try { return await send() } catch (failure) { return { ok: false, error: failure instanceof Error ? failure.message : 'The request failed.' } }

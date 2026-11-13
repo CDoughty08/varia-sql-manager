@@ -5,6 +5,9 @@ discarded, including pending loads. Reconnect reads metadata afresh. Completed q
 query keeps its own SQL session, so reconnecting starts a fresh session rather than recovering temporary tables,
 transactions or SET state.
 
+Connect retry settings apply to initial connection attempts. Once connected, idle-session recovery is disabled so a
+lost session cannot silently authenticate under a different account; an explicit reconnect opens a fresh session.
+
 Connected roots offer Disconnect and Disconnect and Remove from Explorer. Offline roots offer Reconnect and Remove
 from Explorer. The toolbar, server menu and command palette share these commands. Removing Explorer membership does
 not delete profiles, saved credentials or query text. A target referenced by a query can remain hidden until explicitly
@@ -32,7 +35,9 @@ label but is not automatically reattached by a later server reconnect. Query Cha
 way to choose another target or clear it.
 
 Tools > Options > Environment > Connections controls automatic startup/reload reconnect. Each connection's Custom
-Properties can inherit that default or choose On/Off. Only servers left connected attempt resume; an intentional
+Properties can inherit that default or choose On/Off. Saved profiles retain their own startup preference.
+Selecting a profile supplies its preference to Connect; the details confirmation still controls whether an existing
+target adopts it. Reset returns to the global default. Only servers left connected attempt resume; an intentional
 Disconnect stays respected. Startup restores labels immediately, attempts eligible targets in the background, and
 leaves failures available for explicit Reconnect. Missing credentials, unavailable OS secret storage, sign-in, network,
 certificate and database errors do not block unrelated targets. Browser sign-in remains explicit. OS keychain access
@@ -40,5 +45,11 @@ may still request unlock. Query buffers are never executed automatically.
 
 Saved credentials use the existing OS-protected vault. Connection snapshots contain nonsecret settings and opaque
 credential revision references. Server, database and account metadata remain readable in local session JSON under the
-user's file permissions; the complete workspace is not encrypted. Account/destination changes cannot silently redirect existing query tabs or custom
-drafts. See [hot exit and query tabs](hot-exit.md#connections) for restoration and local storage details.
+user's file permissions; the complete workspace is not encrypted. Account/destination changes cannot silently redirect
+existing query tabs or custom drafts. See [hot exit and query tabs](hot-exit.md#connections) for restoration and local
+storage details.
+
+Changing a login password through Varia also updates the encrypted copy for affected connections that already remember
+it. Unremembered passwords stay unremembered. If storage cannot be updated, Varia reports a warning and requires
+credentials again instead of claiming that the old saved password is current. Database-management changes likewise
+update the remembered initial database without moving unrelated query databases or replacing existing SQL sessions.

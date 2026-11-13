@@ -177,7 +177,7 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const folder = isServerAction(action) || isCreateAction(action) || isKindDialogAction(action) ? undefined : objectActionSpecs[action].folder
     const target = definition.targetOf ? definition.targetOf(node)
       : node.ref.type === 'object' ? (folder ? undefined : node.ref.object) : folder && node.ref.folder === folder ? node.ref.owner : undefined
-    const connection = this.options.connections.getSnapshot().find(item => item.id === node.connectionId && !item.lost)
+    const connection = this.options.connections.getSnapshot().find(item => item.id === node.connectionId && !item.lost && (!item.lifecycle || item.lifecycle.state === 'connected'))
     if (!target || !connection) throw new Error('Connect to the server first.')
     const label = folder ? connection.server : scriptObjectLabel(target)
     const open: OpenObjectDialog = {
@@ -685,7 +685,7 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   /** A server that disconnects leaves only Close; its request is cancelled. */
   private connectionsChanged(): void {
     const open = this.current
-    if (!open || open.phase === 'disconnected' || this.options.connections.getSnapshot().some(item => item.id === open.connectionId && !item.lost)) return
+    if (!open || open.phase === 'disconnected' || this.options.connections.getSnapshot().some(item => item.id === open.connectionId && !item.lost && (!item.lifecycle || item.lifecycle.state === 'connected'))) return
     if (this.request?.dialog === open.id) { this.cancel([this.request.id]); this.request = undefined }
     this.cancelLookup()
     this.secrets.clear()

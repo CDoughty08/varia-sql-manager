@@ -53,6 +53,9 @@ internal sealed class EntraService
     /// successful open's provider evidence. The caller must reject missing evidence before registering an Entra target.</returns>
     internal async Task<(T Opened, string ConnectionString, string? PrincipalId)> OpenForUserAsync<T>(string connectionString, string server, Func<string, CancellationToken, Task<T>> open, Func<T, Guid> idOf, CancellationToken token, bool allowInteractive = true)
     {
+        // Only intentional Connect/Load databases may discover an account without a prior target principal.
+        // Their Entra physical opens are unpooled, so this permission cannot seed a maintenance timer's context.
+        using var scope = new EntraConnectScope(token, allowUnpinned: true);
         async Task<(T, string, string?)> Attempt(string text)
         {
             if (!UsesEntra(text)) return (await open(text, token).ConfigureAwait(false), text, null);

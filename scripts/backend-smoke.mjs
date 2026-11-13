@@ -12,7 +12,6 @@ import { anyResultGrid, backendBanner, backendReady, connectionDot, errorMessage
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
 if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
 const lostQuery = 'The SQL backend stopped while this script was running. It was not re-run.'
-const lostHint = "This query's connection was lost when the SQL backend restarted. Reconnect to run queries."
 const newSession = 'This query opened a new SQL session. The previous session ended when the SQL backend restarted'
 await mkdir('artifacts', { recursive: true })
 const temporary = []
@@ -222,7 +221,7 @@ try {
     const after = await ready(before.state.generation + 1)
     expect(after.pid).not.toBe(before.pid)
     await expect(banner()).toContainText('1 connection was lost and 1 running script was stopped; nothing was re-run.')
-    await expect(lostServerRows(page)).toContainText('(Disconnected)')
+    await expect(lostServerRows(page)).toContainText('(Disconnected · Backend restarted)')
     await lostServerRows(page).getByRole('button', { name: /^Reconnect/ }).click()
     dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
     await expect(dialog.getByLabel('Server Name', { exact: true })).toHaveValue(process.env.VARIA_TEST_SQL_SERVER)
@@ -231,7 +230,7 @@ try {
       await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue('')
       await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
     } else await expect(dialog.getByLabel('Password', { exact: true })).toHaveCount(0)
-    await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+    await dialog.getByRole('button', { name: liveUser ? 'Update Credentials and Reconnect' : 'Connect', exact: true }).click()
     await expect(dialog).toHaveCount(0, { timeout: 30000 })
     await expect(lostServerRows(page)).toHaveCount(0)
     // SPIDs can be reused, so the old session's temporary table shows whether the session is new.
@@ -297,7 +296,8 @@ try {
   await expect(backendReady(page, 'fake')).toHaveText('Ready')
   // Object Explorer keeps the server's row, collapsed and dimmed, with Reconnect and Remove (in its menu too).
   const lostRow = lostServerRows(page)
-  await expect(lostRow).toHaveAttribute('aria-label', 'crash-server (Disconnected)')
+  await expect(lostRow).toHaveAttribute('aria-label', 'crash-server (Disconnected · Backend restarted)')
+  const retainedRootId = await lostRow.getAttribute('id')
   await expect(lostRow).not.toHaveAttribute('aria-expanded')
   // Its dot is a ring, in forced colors too; with no live server, Object Explorer's search box goes, as its command does.
   await expect(connectionDot(lostRow)).toHaveAttribute('data-state', 'lost')
@@ -319,9 +319,15 @@ try {
   await expect(page.getByRole('dialog', { name: 'Connect', exact: true }).getByLabel('Server Name', { exact: true })).toHaveValue('crash-server')
   await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog')).toHaveCount(0)
-  await expect(execute()).toBeDisabled()
-  await expect(execute()).toHaveAttribute('title', lostHint)
-  await expect(queryStatus(page)).toContainText('crash-server (connection lost)')
+  // Execute is an explicit reconnect request for this remembered target; cancelling Connect runs nothing.
+  await expect(execute()).toBeEnabled()
+  await execute().click()
+  const executeReconnect = page.getByRole('dialog', { name: 'Connect', exact: true })
+  await expect(executeReconnect.getByLabel('Server Name', { exact: true })).toHaveValue('crash-server')
+  await executeReconnect.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(executeReconnect).toHaveCount(0)
+  await expect(queryStatus(page)).toContainText('Connection lost.')
+  await expect(queryStatus(page)).toContainText('crash-server Disconnected')
   await expect(banner()).toContainText('The SQL backend stopped unexpectedly and was restarted. 1 connection was lost and 1 running script was stopped; nothing was re-run.')
   // Nothing written to generation 1 reached generation 2, and the password never reached the call log.
   let recorded = await calls()
@@ -345,12 +351,14 @@ try {
   await expect(dialog.getByLabel('Login', { exact: true })).toHaveValue('reader')
   await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue('')
   await dialog.getByLabel('Password', { exact: true }).fill('smoke-password-marker')
-  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await dialog.getByRole('button', { name: 'Update Credentials and Reconnect', exact: true }).click()
   await expect(dialog).toHaveCount(0)
   await expect(lostServerRows(page)).toHaveCount(0)
   await expect(await explorerRow(page, 'crash-server')).toHaveAttribute('aria-expanded', 'true')
+  await expect(await explorerRow(page, 'crash-server')).toHaveAttribute('id', retainedRootId)
   await expect(explorerSearchBox(page)).toHaveCount(1)
-  await expect(queryStatus(page)).not.toContainText('connection lost')
+  await expect(queryStatus(page)).not.toContainText('Connection lost.')
+  await expect(queryStatus(page)).not.toContainText('Disconnected')
   await expect(execute()).toBeEnabled()
   await execute().click()
   await expect(page.locator('[data-result-grid]')).toHaveAttribute('aria-rowcount', '2')

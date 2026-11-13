@@ -12,6 +12,7 @@ using Varia.Backend.Ssis;
 using Varia.Backend.Search;
 using Varia.Backend.Live;
 using Varia.Backend.Activity;
+using Varia.Backend.Plans;
 
 namespace Varia.Backend.Tests;
 
@@ -93,7 +94,94 @@ internal static class ConnectionPrincipalChecks
         catch (RequestException error) { missing = error; }
         check(missing is { Code: "AUTH_IDENTITY" } && closed.ConnectionString.Length == 0,
             "an Entra open missing provider evidence is disposed before metadata or backend target registration");
+        await ScopesAsync(check, expected);
         await LaterOpensAsync(check, expected);
+        await PlanOwnershipAsync(check);
+        await ConnectionBindingChecks.RunAsync(check);
+    }
+
+    private static void RaiseOpen(SqlConnection connection)
+    {
+        var raise = typeof(DbConnection).GetMethod("OnStateChange", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new Exception("DbConnection.OnStateChange changed; update the native ownership regression.");
+        raise.Invoke(connection, [new StateChangeEventArgs(ConnectionState.Closed, ConnectionState.Open)]);
+    }
+
+    private static async Task PlanOwnershipAsync(Action<bool, string> check)
+    {
+        using var sql = new SqlService();
+        var target = sql.Register("Data Source=offline;Integrated Security=true", ServerProfile.Fallback("16.00.1000") with { PrincipalId = "sid:01" }, "master");
+        var signaled = false;
+        sql.OpenConnection = (connection, _) =>
+        {
+            // Exercise the event the real SqlClient raises, rather than a no-op fake Open that cannot expose duplicate guards.
+            RaiseOpen(connection);
+            signaled = true;
+            throw new InvalidOperationException("estimated-open-approved");
+        };
+        Exception? failure = null;
+        try
+        {
+            await sql.DispatchAsync("plans.estimate", JsonSerializer.SerializeToElement(new EstimatedPlanArgs(target, Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "master", "SELECT 1;"), HostChecks.Json), HostChecks.Json);
+        }
+        catch (Exception error) { failure = error; }
+        check(signaled && failure is InvalidOperationException { Message: "estimated-open-approved" },
+            "an isolated estimated-plan connection promoted from plain ownership raises Open through one shared identity fence");
+
+        sql.OpenConnection = (connection, _) => { RaiseOpen(connection); return Task.CompletedTask; };
+        sql.ProbePrincipal = (_, _) => Task.FromResult<string?>("sid:02");
+        var observer = ((IExplorerHost)sql).Connection(target, "master");
+        var capture = new ActualPlanCapture(observer, false, open: sql.Open);
+        // Model capture setup/user SQL having completed before its observer connection was lost.
+        typeof(ActualPlanCapture).GetField("attempted", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(capture, true);
+        typeof(ActualPlanCapture).GetField("name", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(capture, "VariaActual_cleanup_regression");
+        typeof(ActualPlanCapture).GetProperty(nameof(ActualPlanCapture.Started))!.SetValue(capture, true);
+        var cleanup = await capture.CloseAsync(CancellationToken.None);
+        check(cleanup == "Actual plan capture could not remove its Extended Events session (VariaActual_cleanup_regression)." && observer.ConnectionString.Length == 0,
+            "a lost actual-plan observer reopens through the target SID guard and reports cleanup-only identity failure as a notice, preserving the executed query outcome");
+        var calls = 0;
+        var unused = new ActualPlanCapture(new SqlConnection("Data Source=offline"), false, open: (_, _) => { calls++; throw new RequestException("AUTH_IDENTITY", "unused"); });
+        check(await unused.CloseAsync(CancellationToken.None) is null && calls == 0,
+            "actual-plan cleanup never authenticates a new observer when capture setup was not attempted");
+    }
+
+    private static async Task ScopesAsync(Action<bool, string> check, string expected)
+    {
+        var fake = new EntraChecks.FakeSource { Silent = (_, _) => Task.FromResult<EntraToken?>(new(Jwt(Claims()), DateTimeOffset.UtcNow.AddHours(1), "same-name@contoso.com")) };
+        var service = new EntraService(fake);
+        async Task<bool> Refused(Guid id)
+        {
+            try { await service.Provider.AcquireTokenAsync(Parameters(id)); return false; }
+            catch (EntraProviderException) { return service.Attempts.Take(id) is EntraFailure { Code: "AUTH_IDENTITY" }; }
+        }
+        check(!EntraConnectScope.Authorized && await Refused(Guid.NewGuid()) && fake.Calls.Count == 0,
+            "a provider acquisition without an explicit authorized scope fails before fetching or supplying any token");
+        using var initialBudget = new CancellationTokenSource();
+        using (var initial = new EntraConnectScope(initialBudget.Token, allowUnpinned: true))
+        {
+            var hit = await service.Provider.AcquireTokenAsync(Parameters(Guid.NewGuid()));
+            check(hit.AccessToken == Jwt(Claims()) && EntraConnectScope.Authorized && EntraConnectScope.ExpectedPrincipal is null && EntraConnectScope.Token == initialBudget.Token,
+                "intentional initial authentication explicitly permits discovering a token account under its own budget");
+            using (var pinned = new EntraConnectScope(CancellationToken.None, expected))
+            {
+                hit = await service.Provider.AcquireTokenAsync(Parameters(Guid.NewGuid()));
+                check(hit.AccessToken == Jwt(Claims()) && EntraConnectScope.ExpectedPrincipal == expected,
+                    "a pinned native open permits only its expected tenant and object identity");
+                using (var unapproved = new EntraConnectScope(CancellationToken.None))
+                    check(!EntraConnectScope.Authorized && await Refused(Guid.NewGuid()), "a token-budget-only scope cannot acquire an unpinned account for a native target");
+                check(EntraConnectScope.Authorized && EntraConnectScope.ExpectedPrincipal == expected && EntraConnectScope.Token == CancellationToken.None,
+                    "nested scopes restore the pinned native target and its budget exactly");
+            }
+            check(EntraConnectScope.Authorized && EntraConnectScope.ExpectedPrincipal is null && EntraConnectScope.Token == initialBudget.Token,
+                "disposing a nested pinned scope restores only the intentional initial-authentication permission");
+            var before = fake.Calls.Count;
+            Task<bool> background;
+            using (ExecutionContext.SuppressFlow()) background = Task.Run(() => Refused(Guid.NewGuid()));
+            check(await background && fake.Calls.Count == before,
+                "context-free background pool maintenance cannot fetch another account's token or seed its authentication cache");
+        }
+        check(!EntraConnectScope.Authorized && EntraConnectScope.ExpectedPrincipal is null && EntraConnectScope.Token == CancellationToken.None,
+            "authorization and request budgets do not escape their explicit authentication scopes");
     }
 
     private static async Task LaterOpensAsync(Action<bool, string> check, string expected)

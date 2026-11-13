@@ -470,6 +470,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     editor: () => documents.boundEditor
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen })
+  const stopConnectionBindings = api.onConnectionBindingsChanged(update => { if (connections.bindingsChanged(update) && update.warning) commands.reportWarning(update.warning) })
   const menuTargets = new MenuTargetService({ editor: () => {
     const editor = documents.boundEditor, tabId = documents.getSnapshot().activeId
     return editor && tabId ? { container: editor.getContainerDomNode(), tabId } : undefined
@@ -588,6 +589,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     dispose: () => {
       if (disposed) return
       disposed = true
+      stopConnectionBindings()
       startup.dispose()
       connectionPruning.dispose()
       disconnectPrompts.dispose()

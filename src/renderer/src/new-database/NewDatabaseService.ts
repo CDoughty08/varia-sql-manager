@@ -78,7 +78,7 @@ export interface NewDatabaseSnapshot { readonly documents: Readonly<Record<strin
 
 export interface NewDatabaseServiceOptions extends CustomDocumentTargetOptions {
   readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText'>
-  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'activate' | 'getSnapshot' | 'close'> & DeliverScriptDeps['documents']
+  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'activate' | 'getSnapshot' | 'close' | 'subscribe'> & DeliverScriptDeps['documents']
   readonly files: DeliverScriptDeps['files']
   readonly connections: ExternalStore<readonly LiveConnection[]>
   readonly explorer: { databasesFolderOf(nodeId: number): number | undefined; reconcile(nodeId: number, options?: { readonly select?: ExplorerNodeRef }): void }
@@ -203,7 +203,9 @@ export class NewDatabaseService extends SnapshotStore<NewDatabaseSnapshot> imple
     this.newId = options.newId ?? (() => crypto.randomUUID())
     this.timers = options.timers ?? browserTimers
     this.registration = options.documents.registerProvider(this)
-    this.unsubscribe = options.connections.subscribe(() => { try { this.connectionsChanged() } catch (failure) { onUnexpectedError(failure) } })
+    const follow = () => { try { this.connectionsChanged() } catch (failure) { onUnexpectedError(failure) } }
+    const stopConnections = options.connections.subscribe(follow), stopDocuments = options.documents.subscribe(follow)
+    this.unsubscribe = () => { stopConnections(); stopDocuments() }
   }
 
   get context(): ExternalStore<NewDatabaseContextState> { return this.contextStore }
@@ -214,7 +216,7 @@ export class NewDatabaseService extends SnapshotStore<NewDatabaseSnapshot> imple
     if (this.disposed) throw new Error('New Database is not available.')
     const folder = node.ref.type === 'folder' && node.ref.folder === 'databases'
     const database = node.ref.type === 'object' && node.ref.object.kind === 'database'
-    const connection = this.options.connections.getSnapshot().find(item => item.id === node.connectionId && !item.lost)
+    const connection = this.options.connections.getSnapshot().find(item => item.id === node.connectionId && !item.lost && (!item.lifecycle || item.lifecycle.state === 'connected'))
     if (!folder && !database) throw new Error('Select the Databases folder in Object Explorer.')
     if (!connection) throw new Error('Connect to the server first.')
     // Tabs that read alike cannot be told apart in the tab strip, the Window menu or a screen reader: a second one is numbered.
@@ -580,7 +582,7 @@ export class NewDatabaseService extends SnapshotStore<NewDatabaseSnapshot> imple
   private connectionOf(id: string): string | undefined { return this.options.documents.get(id)?.connectionId }
   private live(id: string): boolean {
     const connectionId = this.connectionOf(id)
-    return this.targetBindings.matchesConnection(id, connectionId) && this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost)
+    return this.targetBindings.matchesConnection(id, connectionId) && this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'connected'))
   }
   private begin(id: string, kind: 'describe' | 'create'): string {
     const requestId = this.newId()

@@ -76,7 +76,10 @@ being true.
   targets pin the login's SID; Entra targets pin the token's tenant/object GUIDs. Backend-owned native connections
   validate that pinned principal before caller SQL. Entra uses target-private pools, and identity-bound connections
   disable idle connection recovery so a newly selected account cannot silently replace the pinned one. Failed identity
-  checks close the physical connection and invalidate language context. SQL Tools Service remains a separate process
+  checks close the physical connection and invalidate language context. Entra token acquisition requires an explicit
+  request scope: initial Connect/database discovery may establish an account, while later native opens carry the
+  pinned principal. Unscoped driver background replenishment cannot acquire a token or seed a target's pool.
+  SQL Tools Service remains a separate process
   with its existing SQL/Windows credential contract and unsupported Entra modes; it does not provide the native
   connection owner's cross-open identity proof. No token, raw password or secret-derived comparison key enters a
   workspace snapshot or renderer receipt.
@@ -91,6 +94,9 @@ being true.
   attachment follows only exact query targets with attachment intent; it never resumes custom-document sampling.
   Every capture/checkpoint includes the target workspace, including target-only sessions, and revalidates it after
   asynchronous writes before allowing final close/reload.
+  Main's `ConnectionSessionCheckpoint` separately projects current authentication pins and checks their revision
+  around the write and final close. Credential settlement must drain before approval; new admissions cannot race an
+  approved close. A renderer-only checkpoint comparison cannot prove that main's saved credential revision stayed current.
 - Disconnect orchestration lives in `services/disconnect.ts`, behind `DisconnectHost`; `disconnect-workbench.ts` adapts
   existing services without owning connection state. Save and transaction choices finish before cancellation,
   session completion or backend teardown. Revalidate document revisions/associations, management blockers and target

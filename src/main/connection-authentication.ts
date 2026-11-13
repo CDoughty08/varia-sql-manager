@@ -21,6 +21,9 @@ const different = () => new Error('The remembered target identity changed. Choos
 /** Security evidence only. The renderer registry remains the sole owner of lifecycle, intent and Explorer membership. */
 export class ConnectionAuthenticationGuard {
   private readonly pins = new Map<string, Pin>()
+  private version = 0
+
+  get revision(): number { return this.version }
 
   /** Only main's strict disk checkpoint reader calls restore; renderer snapshots must go through project instead. */
   restore(workspace: ConnectionWorkspace): void {
@@ -28,13 +31,14 @@ export class ConnectionAuthenticationGuard {
       if (this.pins.has(target.id)) continue
       if (this.pins.size >= connectionTargetLimits.targets) throw new Error('Too many remembered connection identities.')
       this.pins.set(target.id, Object.freeze({ id: target.id, options: target.options, ...(target.expectedPrincipal ? { expectedPrincipal: target.expectedPrincipal } : {}), ...(target.credential ? { credential: target.credential } : {}) }))
+      this.version++
     }
   }
 
   resolve(id: string): Readonly<Pin> | undefined { return this.pins.get(id) }
 
   /** The reuse owner calls this only after pruning a target with no documents, live transport or pending attempt. */
-  forget(id: string): void { this.pins.delete(id) }
+  forget(id: string): void { if (this.pins.delete(id)) this.version++ }
 
   prepare(options: ConnectionOptions, context: ConnectContext = {}): ConnectContext {
     const targetId = context.targetId ?? randomUUID(), pin = this.pins.get(targetId)
@@ -42,11 +46,14 @@ export class ConnectionAuthenticationGuard {
       if (context.mode === 'background') throw new Error('Choose this target explicitly before reconnecting it.')
       return { ...context, targetId }
     }
+    const typedUpdate = context.mode !== 'background' && context.credentialIntent === 'update-credentials' && !!options.password
     if (!sameSettings(pin.options, options)
       || context.expectedPrincipal && !equal(context.expectedPrincipal, pin.expectedPrincipal)
-      || context.credential && !equal(context.credential, pin.credential)) throw different()
+      || context.credential && !equal(context.credential, pin.credential) && !typedUpdate) throw different()
     if (pin.expectedPrincipal && options.password && context.credentialIntent !== 'update-credentials') throw new Error('Use Update Credentials to replace this target credential.')
     if (context.mode === 'background' && !pin.expectedPrincipal) throw new Error('Reconnect requires the previous authenticated account.')
+    // A confirmed mutation may advance main's pin while a lost generation prevents the renderer update. An explicit
+    // typed recovery uses that current pin; it never substitutes settings, principal evidence or a saved secret.
     return { ...context, targetId, expectedPrincipal: pin.expectedPrincipal, credential: pin.credential }
   }
 
@@ -57,8 +64,17 @@ export class ConnectionAuthenticationGuard {
     if (pin?.expectedPrincipal && intent !== 'update-credentials' && authentication.credential !== undefined && !equal(authentication.credential, pin.credential)) throw different()
     if (!pin && this.pins.size >= connectionTargetLimits.targets) throw new Error('Too many remembered connection identities.')
     const credential = authentication.credential === undefined || pin?.credential && intent !== 'update-credentials' ? pin?.credential : authentication.credential ?? undefined
-    this.pins.set(id, Object.freeze({ id, options: clean, expectedPrincipal: authentication.principal, ...(credential ? { credential } : {}) }))
+    const next = Object.freeze({ id, options: clean, expectedPrincipal: authentication.principal, ...(credential ? { credential } : {}) })
+    if (!equal(pin, next)) { this.pins.set(id, next); this.version++ }
     return { established: !pin?.expectedPrincipal }
+  }
+
+  /** Only an exact-handle backend mutation receipt may change a pinned initial database or remembered reference. */
+  rebind(id: string, previous: ConnectionOptions, options: ConnectionOptions, value: ConnectionAuthentication): void {
+    const pin = this.pins.get(id), authentication = connectionAuthenticationSchema.parse(value), clean = connectionTargetOptions(options)
+    if (!pin || !sameSettings(pin.options, previous) || !sameSettings({ ...clean, database: previous.database }, previous) || !equal(pin.expectedPrincipal, authentication.principal)) throw different()
+    const next = Object.freeze({ id, options: clean, expectedPrincipal: authentication.principal, ...authentication.credential ? { credential: authentication.credential } : {} })
+    if (!equal(pin, next)) { this.pins.set(id, next); this.version++ }
   }
 
   /** Renderer writes can change presentation and intent, never the destination or authenticated identity of a pin. */

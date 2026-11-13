@@ -27,11 +27,16 @@ const inUse = { code: 'IN_USE', message: 'Other connections use the database.', 
 const connectionsAdd = (connections: ConnectionService, id: string, server: string) => connections.add({ ...connectionInfo(id), server }, connectionOptions)
 
 /** A workbench whose describe answers Database Properties' model, on manual timers so the Script preview's delay is the test's. */
-function opened(model = databaseModel()) {
+function opened(model = databaseModel(), canonical = false) {
   const clock = manualTimers()
   const fixture = workbenchFixture({ timers: clock.timers })
   cleanups.push(() => fixture.dispose())
-  fixture.connect(connectionInfo('c1'))
+  const connectionId = canonical ? crypto.randomUUID() : 'c1', targetId = crypto.randomUUID()
+  if (canonical) {
+    fixture.api.push(readyBackend())
+    const attempt = fixture.connections.beginConnect(connectionOptions, 1, targetId)!
+    fixture.connections.accept(connectionInfo(connectionId), connectionOptions, targetId, { principal: { provider: 'sqlServer', authentication: 'sql', id: 'sid:reader' } }, attempt)
+  } else fixture.connect(connectionInfo(connectionId))
   fixture.api.describeObject.mockImplementation(async params => ({ ok: true, value: (params.dialog === 'databaseProperties' ? { databaseProperties: { ...model, general: { ...model.general, name: params.target.name ?? '' } }, elapsedMs: 1 } : { elapsedMs: 1 }) as ActionDescribeResult }))
   fixture.api.scriptObjectAction.mockImplementation(async params => ({ ok: true, value: { text: `ALTER DATABASE -- ${JSON.stringify(params.action === 'properties' ? params.changes : {})}`, database: 'master', warnings: [] } as ActionScriptResult }))
   const listing = vi.spyOn(fixture.explorer, 'listingFolderOf').mockReturnValue(3)
@@ -39,16 +44,33 @@ function opened(model = databaseModel()) {
   // After Apply, the listing folder changes in place (not deep), as Rename, Delete and the Table Designer do.
   const reconcile = vi.spyOn(fixture.explorer, 'reconcile').mockImplementation(() => {})
   const { properties, documents } = fixture
-  const id = properties.open(node())
+  const id = properties.open(node(appData, connectionId))
   const state = () => properties.get(id)!
   const draft = () => state().draft!
   const edit = (key: string, value: string) => properties.updateDraft(id, setOption(draft(), key, value))
   const executes = () => fixture.api.executeObjectAction.mock.calls.map(([request]) => request as ActionRequest)
   const scripts = () => fixture.api.scriptObjectAction.mock.calls.map(([request]) => request as ActionRequest)
-  return { ...fixture, properties, documents, id, state, draft, edit, executes, scripts, clock, listing, refresh, reconcile }
+  return { ...fixture, properties, documents, id, state, draft, edit, executes, scripts, clock, listing, refresh, reconcile, connectionId, targetId }
 }
 
 describe('Database Properties as a document', () => {
+  it('blocks Apply as teardown begins, preserving the exact attached handle and dirty draft until disconnect completes', async () => {
+    const f = opened(undefined, true)
+    await settled()
+    f.edit('recoveryModel', 'SIMPLE')
+    const draft = f.draft()
+    expect(f.properties.canApply(f.id)).toBe(true)
+    const operation = f.connectionTargets.beginDisconnect(f.targetId, crypto.randomUUID())!
+    expect(f.properties.canApply(f.id)).toBe(false)
+    expect(f.properties.context.getSnapshot().byDocument[f.id].applicable).toBe(false)
+    await f.properties.apply(f.id)
+    expect(f.api.executeObjectAction).not.toHaveBeenCalled()
+    expect(f.documents.get(f.id)).toMatchObject({ connectionId: f.connectionId, targetId: f.targetId, dirty: true })
+    expect(f.draft()).toBe(draft)
+    f.connectionTargets.failDisconnect(operation)
+    expect(f.properties.canApply(f.id)).toBe(true)
+    expect(f.properties.context.getSnapshot().byDocument[f.id].applicable).toBe(true)
+  })
   it('opens a clean tab at once, reads the database, and brings an open one forward rather than opening it twice', async () => {
     const { properties, documents, id, state, api } = opened()
     expect(documents.active).toMatchObject({ id, kind: 'databaseProperties', name: 'Database Properties - AppData', dirty: false, connectionId: 'c1', database: 'AppData' })

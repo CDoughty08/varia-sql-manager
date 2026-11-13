@@ -72,7 +72,7 @@ export interface DesignerSnapshot { readonly designers: Readonly<Record<string, 
 
 export interface TableDesignerServiceOptions extends CustomDocumentTargetOptions {
   readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions'>
-  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty' | 'activate' | 'getSnapshot'>
+  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty' | 'activate' | 'getSnapshot' | 'subscribe'>
   readonly files: { saveCopy(name: string, content: string): Promise<unknown> }
   readonly connections: ExternalStore<readonly LiveConnection[]>
   readonly explorer: { reconcile(nodeId: number, options?: { readonly select?: ExplorerNodeRef }): void }
@@ -112,7 +112,9 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
     this.targetBindings = new CustomDocumentTargets(options)
     this.newId = options.newId ?? (() => crypto.randomUUID())
     this.registration = options.documents.registerProvider(this)
-    this.unsubscribe = options.connections.subscribe(() => { try { this.connectionsChanged() } catch (failure) { onUnexpectedError(failure) } })
+    const follow = () => { try { this.connectionsChanged() } catch (failure) { onUnexpectedError(failure) } }
+    const stopConnections = options.connections.subscribe(follow), stopDocuments = options.documents.subscribe(follow)
+    this.unsubscribe = () => { stopConnections(); stopDocuments() }
   }
 
   /** The designers' context keys (activeDocumentIsDesigner, designerEditable, …). */
@@ -128,7 +130,7 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
   open(node: ExplorerMenuNode): string {
     if (this.disposed) throw new Error('The table designer is not available.')
     const owner = node.ref.type === 'folder' && node.ref.folder === 'tables' ? node.ref.owner : undefined
-    const connection = this.options.connections.getSnapshot().find(item => item.id === node.connectionId && !item.lost)
+    const connection = this.options.connections.getSnapshot().find(item => item.id === node.connectionId && !item.lost && (!item.lifecycle || item.lifecycle.state === 'connected'))
     const database = owner?.kind === 'database' ? owner.name : owner?.kind === 'schema' ? owner.database : undefined
     if (!owner || !database || !owner.name) throw new Error('Select the Tables folder of a database in Object Explorer.')
     if (!connection) throw new Error('Connect to the server first.')
@@ -542,7 +544,7 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
   private connectionOf(id: string): string | undefined { return this.options.documents.get(id)?.connectionId }
   private live(id: string): boolean {
     const connectionId = this.connectionOf(id)
-    return this.targetBindings.matchesConnection(id, connectionId) && this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost)
+    return this.targetBindings.matchesConnection(id, connectionId) && this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'connected'))
   }
   private begin(id: string, kind: 'describe' | 'script' | 'save'): string {
     const requestId = this.newId()

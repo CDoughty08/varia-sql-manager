@@ -13,7 +13,7 @@ const maxPassword = 1024
 export interface ConnectionRequestDeps {
   authentication: ConnectionAuthenticationGuard
   savedPasswords: Pick<SavedPasswordStore, 'get' | 'set' | 'forget' | 'forgetCredentials' | 'reconcile' | 'reference' | 'getReferenced' | 'forgetRejected' | 'storageAvailable'>
-  connections: Pick<ConnectionStore, 'rememberEntry' | 'load'>
+  connections: Pick<ConnectionStore, 'rememberEntry' | 'setAutoReconnect' | 'load'>
   disconnect?: (connectionId: string) => Promise<unknown>
 }
 /**
@@ -30,6 +30,16 @@ const gates = new WeakMap<object, Map<string, Promise<void>>>()
 const rejected = new WeakMap<object, Set<string>>()
 const pending = new WeakMap<object, number>()
 const attempts = new WeakMap<object, number>()
+/** Includes cancelled callers whose authenticated storage settlement is still draining under its owned lease. */
+export const hasPendingCredentialRequests = (store: object): boolean => (attempts.get(store) ?? 0) > 0
+export function rejectCredentialReference(store: object, reference: ConnectionCredentialReference): void {
+  let revisions = rejected.get(store)
+  if (!revisions) { revisions = new Set(); rejected.set(store, revisions) }
+  revisions.add(reference.revision)
+  if (revisions.size > 512) revisions.delete(revisions.values().next().value!)
+}
+/** Only trusted authentication/storage proof can readmit a revision whose exact saved secret is current again. */
+export function admitVerifiedCredentialReference(store: object, reference: ConnectionCredentialReference): void { rejected.get(store)?.delete(reference.revision) }
 async function acquire(store: object, binding: string): Promise<() => void> {
   const count = pending.get(store) ?? 0
   if (count >= 16) throw new BackendError('TOO_MANY_REQUESTS', 'Too many pending credential requests.')
@@ -102,12 +112,12 @@ export async function prepare(method: string, validated: unknown, value: unknown
     context = deps.authentication.prepare(options, context)
     prepared.context = context
     const reference = context?.credential
-    if (reference && rejected.get(deps.savedPasswords)?.has(reference.revision)) throw new ConnectionPreparationError('credentials-required', 'The saved credential was rejected. Update credentials to reconnect.')
     const profileId = reference?.profileId ?? context?.profileId
     if (!profileId || options.password) {
       if (background && canRememberPassword(options.authentication)) throw new ConnectionPreparationError('credentials-required', 'Enter credentials to reconnect this target.')
       return prepared
     }
+    if (reference && rejected.get(deps.savedPasswords)?.has(reference.revision)) throw new ConnectionPreparationError('credentials-required', 'The saved credential was rejected. Update credentials to reconnect.')
     if (canRememberPassword(options.authentication) && !await deps.savedPasswords.storageAvailable()) throw new ConnectionPreparationError('secret-storage-unavailable', 'Secret storage is unavailable. Enter credentials to reconnect.')
     let password: string | undefined
     try { password = reference ? await deps.savedPasswords.getReferenced(reference, options) : background ? undefined : await deps.savedPasswords.get(profileId, options) }
@@ -148,10 +158,7 @@ async function settleRequest(prepared: PreparedRequest, outcome: Settled, deps: 
       && outcome.error.details?.number === 18456 && (outcome.error.details.state === undefined || outcome.error.details.state === 1)
     if (!prepared.injected || !profileId || !erase && !ambiguousLogin) return outcome
     if (prepared.injectedCredential) {
-      let revisions = rejected.get(deps.savedPasswords)
-      if (!revisions) { revisions = new Set(); rejected.set(deps.savedPasswords, revisions) }
-      revisions.add(prepared.injectedCredential.revision)
-      if (revisions.size > 512) revisions.delete(revisions.values().next().value!)
+      rejectCredentialReference(deps.savedPasswords, prepared.injectedCredential)
     }
     // A redacted SQL login failure does not prove a bad password; keep its ciphertext while stopping queued replays.
     if (!erase) return { ...outcome, credentialRejected: true }
@@ -189,7 +196,7 @@ async function settleRequest(prepared: PreparedRequest, outcome: Settled, deps: 
   }
   let id: string
   try {
-    const entry = await deps.connections.rememberEntry(validated, !context?.setsEnvironment)
+    const entry = await deps.connections.rememberEntry(validated, !context?.setsEnvironment, context?.autoReconnect, context?.selectedProfileId)
     id = entry.id
     if (entry.environment && !validated.environment) info.environment = entry.environment
   } catch { info.historyWarning = 'Connected successfully, but recent connections could not be saved.'; return outcome }
@@ -238,6 +245,11 @@ export async function settleReused(prepared: PreparedRequest, connected: Connect
     const { credentialUpdated: _credentialUpdated, ...base } = connected
     const info: ConnectionInfo = { ...base, authentication: connectionAuthenticationSchema.parse({ principal: pin.expectedPrincipal, ...(pin.credential ? { credential: pin.credential } : {}) }) }
     const context = prepared.context, params = prepared.params as ConnectionOptions
+    if (context?.mode !== 'background' && context?.autoReconnect !== undefined) {
+      try {
+        if (!await deps.connections.setAutoReconnect(options, context.autoReconnect, context.selectedProfileId)) throw new Error('The saved connection is unavailable.')
+      } catch { info.historyWarning ??= 'Connected successfully, but the reconnect preference could not be saved.' }
+    }
     const policy = context?.mode === 'background' ? 'preserve' : context?.credentialPolicy ?? (context?.remember === undefined ? 'preserve' : context.remember ? 'remember' : 'forget')
     if (policy === 'preserve' || !canRememberPassword(params.authentication)) return { ok: true, value: info }
     if (!await deps.savedPasswords.storageAvailable()) {
@@ -254,7 +266,7 @@ export async function settleReused(prepared: PreparedRequest, connected: Connect
         if (read.trusted === false) throw new Error('The saved connection library is unavailable.')
         const matching = read.library.profiles.find(profile => profile.id === context?.profileId && credentialBinding(profile.options) === credentialBinding(options))
           ?? read.library.profiles.find(profile => connectionKey(profile.options) === connectionKey(options))
-        const profileId = matching?.id ?? (await deps.connections.rememberEntry(options, !context?.setsEnvironment)).id
+        const profileId = matching?.id ?? (await deps.connections.rememberEntry(options, !context?.setsEnvironment, context?.autoReconnect, context?.selectedProfileId)).id
         await deps.savedPasswords.set(profileId, params)
         const reference = await deps.savedPasswords.reference(profileId, params)
         if (!reference) throw new Error('The saved credential revision is unavailable.')

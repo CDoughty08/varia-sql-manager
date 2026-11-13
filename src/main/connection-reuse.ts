@@ -1,8 +1,9 @@
 import { z } from 'zod'
-import { backendConnectionHandleSchema, connectionTargetLimits, expectedConnectionPrincipalSchema, type BackendConnectionHandle } from '../shared/connection-targets'
+import { backendConnectionHandleSchema, connectionTargetLimits, connectionTargetOptions, expectedConnectionPrincipalSchema, type BackendConnectionHandle } from '../shared/connection-targets'
 import { connectionOptionsSchema } from '../shared/connections'
 import type { ConnectionOptions } from '../shared/contracts'
-import { ConnectionIdentityRegistry, type ConnectionIdentityKey, type ConnectionPrincipalEvidence } from './connection-identity'
+import { ConnectionIdentityRegistry, type ConnectionCredentialKey, type ConnectionIdentityKey, type ConnectionPrincipalEvidence } from './connection-identity'
+import type { BackendConnectionBindingChange } from '../shared/connection-bindings'
 
 export interface ConnectionReuseRequest {
   readonly targetId: string
@@ -37,8 +38,12 @@ export interface ConnectionReuseDeps<T extends BackendConnectionHandle> {
 }
 
 interface Live<T extends BackendConnectionHandle> extends AuthenticatedConnection<T> {
+  connection: T
   readonly targetId: string
-  readonly key: ConnectionIdentityKey
+  key?: ConnectionIdentityKey
+  credential?: ConnectionCredentialKey
+  options: Omit<ConnectionOptions, 'password'>
+  bindingRevision: number
   disconnecting: boolean
 }
 interface Waiter<T extends BackendConnectionHandle> {
@@ -57,6 +62,7 @@ const targetIdSchema = z.uuid()
 const samePrincipal = (left: ConnectionPrincipalEvidence, right: ConnectionPrincipalEvidence) => left.authentication === right.authentication && left.id === right.id
 const validPrincipal = (principal: ConnectionPrincipalEvidence) => expectedConnectionPrincipalSchema.safeParse({ provider: 'sqlServer', ...principal }).success
 const handleKey = (handle: BackendConnectionHandle) => `${handle.generation}:${handle.id}`
+const affinityKey = (key: ConnectionIdentityKey, principal: ConnectionPrincipalEvidence) => JSON.stringify([key, principal.authentication, principal.id])
 
 /**
  * Main's sole owner of live Explorer transports and their pending opens. This class never serializes keys or keeps
@@ -65,14 +71,15 @@ const handleKey = (handle: BackendConnectionHandle) => `${handle.generation}:${h
  */
 export class ConnectionReuseCoordinator<T extends BackendConnectionHandle> {
   readonly #deps: ConnectionReuseDeps<T>
-  readonly #identity = new ConnectionIdentityRegistry()
+  #identity = new ConnectionIdentityRegistry()
   readonly #live = new Map<string, Live<T>>()
   readonly #pending = new Set<Pending<T>>()
   readonly #joins = new Map<string, Pending<T>>()
   /** Ephemeral credential-sensitive affinity, never a transport owner or a persisted password verifier. */
-  readonly #offline = new Map<ConnectionIdentityKey, { targetId: string; principal: ConnectionPrincipalEvidence }>()
+  readonly #offline = new Map<string, { targetId: string; principal: ConnectionPrincipalEvidence }>()
   #generation = 0
   #disposed = false
+  #bindingBusy = false
 
   constructor(deps: ConnectionReuseDeps<T>) { this.#deps = deps }
 
@@ -82,6 +89,7 @@ export class ConnectionReuseCoordinator<T extends BackendConnectionHandle> {
       || (request.principal && !validPrincipal(request.principal)) || (request.expectedPrincipal && !validPrincipal(request.expectedPrincipal))
       || (request.credentialIntent !== undefined && request.credentialIntent !== 'preserve' && request.credentialIntent !== 'update-credentials')) return Promise.resolve({ status: 'invalid' })
     if (this.#disposed || request.generation < this.#generation || request.signal?.aborted) return Promise.resolve({ status: 'cancelled' })
+    if (this.#bindingBusy) return Promise.resolve({ status: 'busy' })
     this.markLostBefore(request.generation)
     // Copy validated inputs before asynchronous authentication, including evidence, so a caller cannot mutate a join.
     const candidate: ConnectionReuseRequest = { ...request, options: parsed.data,
@@ -89,12 +97,14 @@ export class ConnectionReuseCoordinator<T extends BackendConnectionHandle> {
       ...(request.expectedPrincipal ? { expectedPrincipal: { ...request.expectedPrincipal } } : {}) }
     const key = this.#key(candidate.options, candidate.principal)
     if (key && [...this.#live.values()].some(value => value.key === key && value.disconnecting)) return Promise.resolve({ status: 'busy' })
-    const live = key ? this.#matchingLive(key) : undefined
+    const candidatePrincipal = candidate.principal ?? candidate.expectedPrincipal
+    const live = key ? this.#matchingLive(key, candidatePrincipal) : undefined
     if (live) {
       if ((candidate.expectedPrincipal && !samePrincipal(candidate.expectedPrincipal, live.principal))
         || (candidate.principal && !samePrincipal(candidate.principal, live.principal))) return Promise.resolve({ status: 'identity-changed' })
       return Promise.resolve(this.#outcome(live, 'reused'))
     }
+    if (key && candidatePrincipal && this.#matchingLive(key)) return Promise.resolve({ status: 'identity-changed' })
     // A target already being disconnected cannot acquire a replacement transport during its close preflight/mutation.
     if ([...this.#live.values()].some(value => value.targetId === candidate.targetId)) return Promise.resolve({ status: 'busy' })
     const joinKey = key ? JSON.stringify([key, candidate.credentialIntent ?? 'preserve', candidate.expectedPrincipal ?? null]) : undefined
@@ -134,7 +144,7 @@ export class ConnectionReuseCoordinator<T extends BackendConnectionHandle> {
     if (!live?.disconnecting) return false
     if (succeeded) {
       this.#live.delete(key)
-      this.#offline.set(live.key, { targetId: live.targetId, principal: live.principal })
+      if (live.key) this.#offline.set(affinityKey(live.key, live.principal), { targetId: live.targetId, principal: live.principal })
       if (this.#offline.size > connectionTargetLimits.targets) this.#offline.delete(this.#offline.keys().next().value!)
     }
     else live.disconnecting = false
@@ -153,9 +163,51 @@ export class ConnectionReuseCoordinator<T extends BackendConnectionHandle> {
     return [...this.#live.values()].some(value => value.targetId === targetId) || [...this.#pending].some(value => !value.cancelled && (value.request.targetId === targetId || [...value.waiters].some(waiter => waiter.targetId === targetId)))
   }
 
+  beginBindingMutation(): boolean {
+    if (this.#bindingBusy || this.#disposed || [...this.#live.values()].some(live => live.disconnecting)) return false
+    this.#bindingBusy = true
+    for (const pending of this.#pending) this.#cancel(pending)
+    return true
+  }
+
+  endBindingMutation(): void { this.#bindingBusy = false }
+
+  binding(handle: BackendConnectionHandle) {
+    const live = this.#live.get(handleKey(handle))
+    return live ? { targetId: live.targetId, options: live.options, principal: live.principal, bindingRevision: live.bindingRevision } : undefined
+  }
+
+  invalidateBinding(handle: BackendConnectionHandle): void {
+    const live = this.#live.get(handleKey(handle))
+    if (!live) return
+    live.key = undefined
+    live.credential = undefined
+    this.#forgetAffinity(live.targetId)
+  }
+
+  applyBinding(handle: BackendConnectionHandle, change: BackendConnectionBindingChange, password?: string): boolean {
+    const live = this.#live.get(handleKey(handle))
+    if (!live || live.disconnecting || handle.generation !== this.#generation || change.connectionId !== handle.id || change.bindingRevision <= live.bindingRevision) return false
+    const options = connectionTargetOptions({ ...live.options, ...change.newDatabase !== undefined ? { database: change.newDatabase } : {} })
+    if (live.credential) {
+      if (change.passwordChanged) {
+        const material = password !== undefined ? this.#identity.authenticatedMaterial({ ...options, password }, live.principal) : undefined
+        live.credential = material?.credential
+        live.key = material?.key
+      } else live.key = this.#identity.rekey(options, live.credential)
+    }
+    live.options = options
+    live.bindingRevision = change.bindingRevision
+    live.connection = Object.freeze({ ...live.connection, ...change.newDatabase !== undefined ? { database: change.newDatabase } : {}, bindingRevision: change.bindingRevision })
+    this.#forgetAffinity(live.targetId)
+    return true
+  }
+
   markLostBefore(generation: number): void {
     if (!Number.isSafeInteger(generation) || generation <= this.#generation) return
     this.#generation = generation
+    this.#identity.dispose()
+    this.#identity = new ConnectionIdentityRegistry()
     this.#offline.clear()
     for (const pending of this.#pending) if (pending.request.generation < generation) this.#cancel(pending)
     for (const [key, live] of this.#live) if (live.connection.generation < generation) this.#live.delete(key)
@@ -177,8 +229,17 @@ export class ConnectionReuseCoordinator<T extends BackendConnectionHandle> {
     return this.#identity.key(options, options.authentication === 'sql' ? undefined : principal)
   }
 
-  #matchingLive(key: ConnectionIdentityKey): Live<T> | undefined {
-    return [...this.#live.values()].find(value => value.key === key && !value.disconnecting && value.connection.generation === this.#generation)
+  #forgetAffinity(targetId: string): void {
+    for (const [key, value] of this.#offline) if (value.targetId === targetId) this.#offline.delete(key)
+  }
+
+  #matchingLive(key: ConnectionIdentityKey, principal?: ConnectionPrincipalEvidence): Live<T> | undefined {
+    const matches = [...this.#live.values()].filter(value => value.key === key && !value.disconnecting && value.connection.generation === this.#generation)
+    if (principal) return matches.find(value => samePrincipal(principal, value.principal))
+    // Separately authenticated opens can reveal account recreation during a pending race. An unqualified SQL
+    // username/password candidate cannot choose between those actual principals; authenticate it again instead.
+    const first = matches[0]
+    return first && matches.every(value => samePrincipal(first.principal, value.principal)) ? first : undefined
   }
 
   #outcome(live: Live<T>, status: 'connected' | 'reused'): ConnectionReuseOutcome<T> {
@@ -236,7 +297,7 @@ export class ConnectionReuseCoordinator<T extends BackendConnectionHandle> {
         await this.#cleanup(answer.connection)
         outcome = { status: 'identity-changed' }
       } else {
-        const key = this.#key(request.options, answer.principal), equivalent = key ? this.#matchingLive(key) : undefined
+        const material = this.#identity.authenticatedMaterial(request.options, answer.principal), key = material?.key, equivalent = key ? this.#matchingLive(key, answer.principal) : undefined
         const occupied = this.#live.get(handleKey(answer.connection))
         if (equivalent) {
           await this.#cleanup(answer.connection)
@@ -250,12 +311,12 @@ export class ConnectionReuseCoordinator<T extends BackendConnectionHandle> {
           await this.#cleanup(answer.connection)
           outcome = { status: 'busy' }
         } else {
-          const affinity = this.#offline.get(key)
+          const selectedAffinityKey = affinityKey(key, answer.principal), affinity = this.#offline.get(selectedAffinityKey)
           const targetId = affinity && samePrincipal(affinity.principal, answer.principal) && ![...this.#live.values()].some(value => value.targetId === affinity.targetId) ? affinity.targetId : request.targetId
-          const live: Live<T> = { targetId, key, connection: Object.freeze({ ...answer.connection }), principal: Object.freeze({ ...answer.principal }), disconnecting: false }
+          const live: Live<T> = { targetId, key, credential: material!.credential, options: connectionTargetOptions(request.options), bindingRevision: 0, connection: Object.freeze({ ...answer.connection }), principal: Object.freeze({ ...answer.principal }), disconnecting: false }
           // Only the latest binding of a target can supply offline affinity. An old credential must not attach a
           // second handle to that target after an explicit credential update opened a different live key.
-          for (const [offlineKey, value] of this.#offline) if (offlineKey === key || value.targetId === targetId) this.#offline.delete(offlineKey)
+          for (const [offlineKey, value] of this.#offline) if (offlineKey === selectedAffinityKey || value.targetId === targetId) this.#offline.delete(offlineKey)
           this.#live.set(handleKey(live.connection), live)
           outcome = this.#outcome(live, 'connected')
         }

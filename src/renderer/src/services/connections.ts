@@ -1,7 +1,8 @@
 import type { ConnectionInfo, ConnectionOptions } from '../../../shared/contracts'
-import { connectionAuthenticationSchema, connectionDetailsSchema, connectionTargetOptions, type ConnectionAuthentication, type ConnectionDetails, type ConnectionLifecycle, type ConnectionFailureReason } from '../../../shared/connection-targets'
+import { connectionAuthenticationSchema, connectionDetailsSchema, connectionTargetOptions, type BackendConnectionHandle, type ConnectionAuthentication, type ConnectionDetails, type ConnectionLifecycle, type ConnectionFailureReason } from '../../../shared/connection-targets'
 import { SnapshotStore } from '../core/store'
 import { ConnectionTargetService, type ConnectionCompletion, type ConnectionCredentialIntent, type ConnectionOperation } from './connection-targets'
+import type { ConnectionBindingsChanged } from '../../../shared/connection-bindings'
 
 /** Connection settings without the password, which the renderer never keeps: a reconnect asks for it again, unless main
  *  remembers one for the same credentials (Remember password) and fills it in itself. */
@@ -44,6 +45,17 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
   live(): LiveConnection[] { return this.getSnapshot().filter(connection => this.isLive(connection.id)) }
   /** The connection is still there and was not lost with its backend generation. */
   isLive(id: string): boolean { const connection = this.get(id); return !!connection && !connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'connected') }
+  bindingRevision(handle: BackendConnectionHandle): number { return this.connectionTargets.bindingRevision(handle) }
+  bindingsChanged(update: ConnectionBindingsChanged): boolean {
+    const accepted = this.connectionTargets.applyBindings(update)
+    for (const change of accepted) {
+      const info = this.metadata.get(change.targetId)
+      if (info?.id === change.handle.id && info.generation === change.handle.generation)
+        this.metadata.set(change.targetId, { ...info, database: change.options.database || info.database, authentication: change.authentication })
+    }
+    if (accepted.length) this.refresh()
+    return accepted.length > 0
+  }
   add(info: ConnectionInfo, options: ConnectionOptions): void {
     if (this.getSnapshot().some(connection => connection.id === info.id && connection.generation === info.generation)) return
     this.legacy = [...this.legacy, { ...this.entry(info, options), targetId: crypto.randomUUID(), inExplorer: true }]

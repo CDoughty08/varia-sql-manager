@@ -15,7 +15,7 @@ internal sealed partial class SqlService
     private async Task<object> ExecuteActionWithLanguagePausedAsync(ActionArgs args, CancellationToken token, Action<object>? progress)
     {
         using var suspension = language.Suspend();
-        return await actions.ExecuteAsync(args, token, progress);
+        return await CaptureBindingChangesAsync(() => actions.ExecuteAsync(args, token, progress));
     }
 
     /// <summary>Resolves only an existing Varia connection. The renderer cannot supply credentials or executable paths.

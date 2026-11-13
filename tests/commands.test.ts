@@ -91,7 +91,7 @@ describe('command execution', () => {
     expect(commands.getSnapshot().error).toBe('')
     expect(run).not.toHaveBeenCalled()
   })
-  it('connects a disconnected query first when Execute runs, as SSMS\'s F5 does, but never a lost one', async () => {
+  it('connects a disconnected query first when Execute runs, but never infers identity from an obsolete unverified handle', async () => {
     const { commands, documents, connections, backend, events, api } = fixture()
     const requested: string[] = []
     events.subscribe(event => { if (event.type === 'query.connectRequested') requested.push(event.tabId) })
@@ -115,6 +115,48 @@ describe('command execution', () => {
     documents.openText({ name: 'doc1.xml', text: '<a/>', kind: 'xml' })
     expect(commands.isEnabled('query.execute')).toBe(false)
     expect(requested).toEqual([tab.id])
+  })
+  it.each(['restored', 'disconnected', 'backend-lost'] as const)('requests explicit reconnect for a %s target without executing SQL, and blocks changes in flight', async state => {
+    const { commands, documents, connections, connectionTargets, targets, events, api } = fixture()
+    const targetId = crypto.randomUUID(), handle = crypto.randomUUID(), requested: string[] = []
+    const proof = { principal: { provider: 'sqlServer' as const, authentication: 'sql' as const, id: 'reader' } }
+    api.push(readyBackend(1))
+    const attempt = connections.beginConnect(connectionOptions, 1, targetId)!
+    connections.accept({ ...connectionInfo(handle), targetId }, connectionOptions, targetId, proof, attempt)
+    const tab = documents.create('remembered.sql', 'SELECT 1', 'Sales', handle)
+    targets.rememberConnection(handle, targetId)
+    events.subscribe(event => { if (event.type === 'query.connectRequested') requested.push(event.tabId) })
+    if (state === 'backend-lost') {
+      api.push({ status: 'restarting', generation: 1, retryInMs: 0 })
+      api.push(readyBackend(2))
+    } else {
+      const operation = connectionTargets.beginDisconnect(targetId, crypto.randomUUID())!
+      expect(commands.isEnabled('query.execute')).toBe(false)
+      connectionTargets.completeDisconnect(operation)
+      targets.detached(targetId, { id: handle, generation: 1 })
+      if (state === 'restored') {
+        const workspace = connectionTargets.exportWorkspace()
+        connectionTargets.restore(workspace)
+        documents.update(tab.id, { connectionId: undefined, attachWanted: false })
+      }
+    }
+    expect(commands.isEnabled('query.execute')).toBe(true)
+    expect(await commands.execute('query.execute', undefined, 'keybinding')).toBe(true)
+    expect(requested).toEqual([tab.id])
+    expect(api.execute).not.toHaveBeenCalled()
+    expect(documents.get(tab.id)).toMatchObject({ targetId, database: 'Sales' })
+    const generation = state === 'backend-lost' ? 2 : 1
+    const pending = connectionTargets.beginConnect(targetId, generation, crypto.randomUUID())!
+    expect(commands.isEnabled('query.execute')).toBe(false)
+    expect(await commands.execute('query.execute', undefined, 'keybinding')).toBe(false)
+    connectionTargets.failConnect(pending, 'credentials-required')
+    const closing = deferred<void>(), busy = documents.runTask(() => closing.promise)
+    expect(commands.isEnabled('query.execute')).toBe(false)
+    closing.resolve()
+    await busy
+    expect(commands.isEnabled('query.execute')).toBe(true)
+    expect(requested).toEqual([tab.id])
+    expect(api.execute).not.toHaveBeenCalled()
   })
   it('turns a failing handler into the error banner and never rejects', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})

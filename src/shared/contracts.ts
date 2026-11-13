@@ -2,6 +2,7 @@ import type { LayoutLoad, LayoutState, WorkspaceLayout } from './layouts'
 import type { EstimatedPlanRequest, EstimatedPlanResult } from './estimated-plans'
 import type { ConnectContext, ConnectionEnvironmentInput, ConnectionLibraryView, ConnectionProfileInput, SecretStorageState } from './connections'
 import type { ConnectionAuthentication, ConnectionFailureReason } from './connection-targets'
+import type { ConnectionBindingsChanged } from './connection-bindings'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
 import type { CommandId, RendererRole } from './commands/catalog'
 import type { ContextMenuCommand, ContextMenuRequest, MenuState } from './commands/menus'
@@ -100,6 +101,8 @@ export interface ConnectionInfo {
   productVersion?: string; login?: string; engineEdition?: number; linux?: boolean
   /** Backend verified stable identity (SQL/Windows SID or Entra tenant/object IDs), never a display login or token. */
   principalId?: string
+  /** Backend ordering of confirmed runtime credential/initial-database mutations. */
+  bindingRevision?: number
 }
 export interface DiscoveredServer { server: string; version: string; source: 'local' | 'network' }
 export interface DatabaseInfo { name: string; isSystem: boolean; isSnapshot: boolean }
@@ -681,6 +684,7 @@ export interface VariaApi {
   acceptConnectionRequest(requestId: string): Promise<ApiResult<{ accepted: boolean; retained: boolean }>>
   /** Forget security pins only after the renderer pruned hidden targets with no remaining document references. */
   pruneConnectionTargets(targetIds: readonly string[]): Promise<ApiResult<{ pruned: number }>>
+  onConnectionBindingsChanged(callback: (event: ConnectionBindingsChanged) => void): () => void
   /** Help › Clear Entra ID Token Cache: main asks first; resolves to false when the user cancels. */
   clearEntraTokenCache(): Promise<ApiResult<boolean>>
   discoverServers(scope: 'local' | 'network'): Promise<ApiResult<{ servers: DiscoveredServer[]; warning?: string }>>

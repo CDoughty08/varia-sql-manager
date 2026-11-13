@@ -112,6 +112,16 @@ describe('environment in the connection options', () => {
     expect(savedEntry(profiles, keys, { ...base, server: '' })).toBeUndefined()
     expect(savedEntry(profiles, keys, { ...base, authentication: 'sql' })).toBeUndefined()
   })
+  it('resolves shared-settings aliases by explicit selection or unique presentation, never library order', () => {
+    const first = { id: crypto.randomUUID(), options: { ...base, displayName: 'First', environment: 'Production' }, favorite: true, registered: false }
+    const second = { id: crypto.randomUUID(), options: { ...base, displayName: 'Second', environment: 'Staging' }, favorite: true, registered: false }
+    const profiles = [first, second], keys = new Map(profiles.map(profile => [profile.id, entryKey(profile.options)]))
+    expect(savedEntry(profiles, keys, second.options)).toBe(second)
+    expect(savedEntry(profiles, keys, second.options, first.id)).toBe(first)
+    expect(savedEntry(profiles, keys, base)).toBeUndefined()
+    const duplicate = { ...second, id: crypto.randomUUID() }
+    expect(savedEntry([...profiles, duplicate], new Map([...keys, [duplicate.id, entryKey(duplicate.options)]]), second.options)).toBeUndefined()
+  })
 })
 
 describe('Set Connection Environment', () => {

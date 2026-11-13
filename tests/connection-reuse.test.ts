@@ -107,6 +107,88 @@ describe('authoritative main connection reuse', () => {
     expect(dispose).toHaveBeenCalledExactlyOnceWith(answer().connection)
   })
 
+  it('keeps separately authenticated SQL principals distinct and authenticates ambiguous candidates before reuse', async () => {
+    const { coordinator, dispose } = fixture(), one = deferred<AuthenticatedConnection<BackendConnectionHandle>>(), two = deferred<AuthenticatedConnection<BackendConnectionHandle>>()
+    const first = coordinator.connect(request(), () => one.promise)
+    const second = coordinator.connect(request(2, { credentialIntent: 'update-credentials' }), () => two.promise)
+    one.resolve(answer(50, 1, 'sql', 'sid:01020304'))
+    expect(await first).toMatchObject({ status: 'connected', targetId: id(1) })
+    two.resolve(answer(51, 1, 'sql', 'sid:05060708'))
+    expect(await second).toMatchObject({ status: 'connected', targetId: id(2), principal: { id: 'sid:05060708' } })
+    expect(dispose).not.toHaveBeenCalled()
+    const open = vi.fn(async () => answer(52, 1, 'sql', 'sid:05060708'))
+    expect(await coordinator.connect(request(3), open)).toMatchObject({ status: 'reused', targetId: id(2), connection: { id: id(51) } })
+    expect(open).toHaveBeenCalledOnce()
+    expect(dispose).toHaveBeenCalledExactlyOnceWith(answer(52).connection)
+    const unused = vi.fn(async () => answer(53))
+    for (const [target, account] of [[1, 'sid:01020304'], [2, 'sid:05060708']] as const)
+      expect(await coordinator.connect(request(target, { expectedPrincipal: { authentication: 'sql', id: account } }), unused)).toMatchObject({ status: 'reused', targetId: id(target) })
+    expect(unused).not.toHaveBeenCalled()
+  })
+
+  it('retains independent offline affinities for SQL principals sharing the requested login and password', async () => {
+    const { coordinator } = fixture(), one = deferred<AuthenticatedConnection<BackendConnectionHandle>>(), two = deferred<AuthenticatedConnection<BackendConnectionHandle>>()
+    const accountA = { authentication: 'sql' as const, id: 'sid:01020304' }, accountB = { authentication: 'sql' as const, id: 'sid:05060708' }
+    const first = coordinator.connect(request(), () => one.promise)
+    const second = coordinator.connect(request(2, { credentialIntent: 'update-credentials' }), () => two.promise)
+    one.resolve(answer(50, 1, 'sql', accountA.id))
+    two.resolve(answer(51, 1, 'sql', accountB.id))
+    expect(await first).toMatchObject({ status: 'connected', targetId: id(1) })
+    expect(await second).toMatchObject({ status: 'connected', targetId: id(2) })
+    for (const handle of [50, 51]) {
+      coordinator.beginDisconnect(answer(handle).connection)
+      coordinator.finishDisconnect(answer(handle).connection, true)
+    }
+    expect(await coordinator.connect(request(3, { expectedPrincipal: accountA }), async () => answer(52, 1, 'sql', accountA.id))).toMatchObject({ status: 'connected', targetId: id(1) })
+    coordinator.beginDisconnect(answer(52).connection)
+    coordinator.finishDisconnect(answer(52).connection, true)
+    expect(await coordinator.connect(request(4, { expectedPrincipal: accountB }), async () => answer(53, 1, 'sql', accountB.id))).toMatchObject({ status: 'connected', targetId: id(2) })
+  })
+
+  it('bounds total offline account affinities even when every principal shares one credential candidate key', async () => {
+    const { coordinator } = fixture(), gate = deferred<void>()
+    const principal = (number: number) => ({ authentication: 'sql' as const, id: `sid:${number.toString(16).padStart(4, '0')}` })
+    const pending = Array.from({ length: 200 }, (_, index) => coordinator.connect(request(index + 1, { expectedPrincipal: principal(index + 1) }), async () => {
+      await gate.promise
+      return answer(index + 1000, 1, 'sql', principal(index + 1).id)
+    }))
+    gate.resolve()
+    expect((await Promise.all(pending)).every(value => value.status === 'connected')).toBe(true)
+    for (let handle = 1000; handle < 1200; handle++) {
+      coordinator.beginDisconnect(answer(handle).connection)
+      coordinator.finishDisconnect(answer(handle).connection, true)
+    }
+    expect(await coordinator.connect(request(201, { expectedPrincipal: principal(201) }), async () => answer(1201, 1, 'sql', principal(201).id))).toMatchObject({ status: 'connected', targetId: id(201) })
+    coordinator.beginDisconnect(answer(1201).connection)
+    coordinator.finishDisconnect(answer(1201).connection, true)
+    // The 201st account evicts the oldest affinity, rather than allowing 200 entries under each credential key.
+    expect(await coordinator.connect(request(202, { expectedPrincipal: principal(1) }), async () => answer(1202, 1, 'sql', principal(1).id))).toMatchObject({ status: 'connected', targetId: id(202) })
+    coordinator.beginDisconnect(answer(1202).connection)
+    coordinator.finishDisconnect(answer(1202).connection, true)
+    expect(await coordinator.connect(request(203, { expectedPrincipal: principal(201) }), async () => answer(1203, 1, 'sql', principal(201).id))).toMatchObject({ status: 'connected', targetId: id(201) })
+  })
+
+  it('retires an updated target binding without dropping another principal affinity for that old key', async () => {
+    const { coordinator } = fixture(), one = deferred<AuthenticatedConnection<BackendConnectionHandle>>(), two = deferred<AuthenticatedConnection<BackendConnectionHandle>>()
+    const accountA = { authentication: 'sql' as const, id: 'sid:01020304' }, accountB = { authentication: 'sql' as const, id: 'sid:05060708' }
+    const first = coordinator.connect(request(), () => one.promise), second = coordinator.connect(request(2, { credentialIntent: 'update-credentials' }), () => two.promise)
+    one.resolve(answer(50, 1, 'sql', accountA.id))
+    two.resolve(answer(51, 1, 'sql', accountB.id))
+    await Promise.all([first, second])
+    for (const handle of [50, 51]) {
+      coordinator.beginDisconnect(answer(handle).connection)
+      coordinator.finishDisconnect(answer(handle).connection, true)
+    }
+    const changed = { ...options, password: 'updated-secret' }
+    expect(await coordinator.connect(request(1, { options: changed, expectedPrincipal: accountA, credentialIntent: 'update-credentials' }), async () => answer(52, 1, 'sql', accountA.id))).toMatchObject({ status: 'connected', targetId: id(1) })
+    coordinator.beginDisconnect(answer(52).connection)
+    coordinator.finishDisconnect(answer(52).connection, true)
+    expect(await coordinator.connect(request(3, { expectedPrincipal: accountB }), async () => answer(53, 1, 'sql', accountB.id))).toMatchObject({ status: 'connected', targetId: id(2) })
+    coordinator.beginDisconnect(answer(53).connection)
+    coordinator.finishDisconnect(answer(53).connection, true)
+    expect(await coordinator.connect(request(4, { expectedPrincipal: accountA }), async () => answer(54, 1, 'sql', accountA.id))).toMatchObject({ status: 'connected', targetId: id(4) })
+  })
+
   it('cancels one joined caller without allowing it to dispose the accepted connection', async () => {
     const { coordinator, dispose } = fixture(), pending = deferred<AuthenticatedConnection<BackendConnectionHandle>>(), joinedSignal = new AbortController()
     const owner = coordinator.connect(request(), () => pending.promise)
@@ -168,8 +250,11 @@ describe('authoritative main connection reuse', () => {
     expect(coordinator.removeTarget(id(1))).toBe(false)
     expect(coordinator.beginDisconnect(answer().connection)).toBe(true)
     expect(coordinator.beginDisconnect(answer().connection)).toBe(false)
+    expect(coordinator.beginBindingMutation()).toBe(false)
     expect(await coordinator.connect(request(), open)).toEqual({ status: 'busy' })
     expect(coordinator.finishDisconnect(answer().connection, false)).toBe(true)
+    expect(coordinator.beginBindingMutation()).toBe(true)
+    coordinator.endBindingMutation()
     expect((await coordinator.connect(request(), open)).status).toBe('reused')
     expect(coordinator.beginDisconnect(answer().connection)).toBe(true)
     expect(coordinator.finishDisconnect(answer().connection, true)).toBe(true)

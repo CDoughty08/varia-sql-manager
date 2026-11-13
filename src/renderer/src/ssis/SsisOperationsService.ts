@@ -226,7 +226,7 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
   /** Active Operations, All Executions, All Validations or All Operations for a connection: its document, with the preset's filters. */
   open(connectionId: string, preset: OperationsPreset): string {
     if (this.disposed) throw new Error('Integration Services Operations is not available.')
-    const connection = this.options.connections.getSnapshot().find(item => item.id === connectionId && !item.lost)
+    const connection = this.options.connections.getSnapshot().find(item => item.id === connectionId && !item.lost && (!item.lifecycle || item.lifecycle.state === 'connected'))
     if (!connection) throw new Error('Connect to the server first.')
     const existing = Object.values(this.getSnapshot().documents).find(state => state.connectionId === connectionId)
     if (existing) {
@@ -271,7 +271,8 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
   private following(): void {
     for (const state of Object.values(this.getSnapshot().documents)) {
       const connectionId = this.options.documents.get(state.id)?.connectionId
-      if (connectionId !== state.connectionId) this.patch(state.id, { connectionId })
+      if (connectionId !== state.connectionId) this.patch(state.id, { connectionId, selected: undefined, confirm: undefined, stopping: [] })
+      else if (!this.live(state.id) && (state.selected || state.confirm || state.stopping.length)) this.patch(state.id, { selected: undefined, confirm: undefined, stopping: [] })
     }
     this.publishContext()
   }
@@ -287,6 +288,7 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
   }
   /** Refresh (and Retry) apply: to a running view, and to one that failed for a reason other than a missing catalog. */
   refreshable(id: string): boolean {
+    if (!this.live(id)) return false
     const snapshot = this.handles.get(id)?.getSnapshot()
     if (!snapshot) return false
     if (snapshot.status !== 'ended') return true
@@ -294,7 +296,7 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
     return !!end && !end.missing
   }
   /** Pause applies while the view runs: an ended one reads nothing to pause. */
-  pausable(id: string): boolean { const status = this.handles.get(id)?.getSnapshot().status; return status !== undefined && status !== 'ended' }
+  pausable(id: string): boolean { const status = this.handles.get(id)?.getSnapshot().status; return this.live(id) && status !== undefined && status !== 'ended' }
 
   // --- Filters ---------------------------------------------------------------------------------------------------------
 
@@ -304,7 +306,7 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
     if (!state) return
     this.patch(id, { filters, ...preset ? { preset } : {} })
     const handle = this.handles.get(id)
-    if (!handle) return
+    if (!handle || !this.live(id)) return
     handle.setArgs(operationsArgs(filters))
     // A view that failed reads nothing: new filters (or the document opened again) subscribe again with them.
     if (handle.getSnapshot().status === 'ended') handle.refresh()
@@ -386,7 +388,9 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
 
   private async stop(id: string, operation: SelectedOperation): Promise<void> {
     const state = this.get(id)
-    if (!state?.connectionId) return
+    if (!state?.connectionId || !this.live(id) || state.stopping.includes(operation.id)) return
+    const connectionId = state.connectionId, targetId = this.options.documents.get(id)?.targetId
+    const generation = this.options.connections.getSnapshot().find(connection => connection.id === connectionId)?.generation
     const requestId = this.newId()
     let requests = this.stopRequests.get(id)
     if (!requests) this.stopRequests.set(id, requests = new Set())
@@ -400,16 +404,17 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
     }
     requests.delete(requestId)
     const now = this.get(id)
-    if (!now) return
+    if (!now || this.stopRequests.get(id) !== requests || now.connectionId !== connectionId || this.options.documents.get(id)?.targetId !== targetId
+      || this.options.connections.getSnapshot().find(connection => connection.id === connectionId)?.generation !== generation || !this.live(id)) return
     this.patch(id, { stopping: now.stopping.filter(item => item !== operation.id), notice: stopNotice(operation, result) })
     // The row turns Stopping, then Canceled, on its own from the live view; reading it now shows the change at once.
     if (result.ok && !result.value.error) this.handles.get(id)?.refresh()
   }
 
-  refresh(id: string): void { this.handles.get(id)?.refresh() }
+  refresh(id: string): void { if (this.refreshable(id)) this.handles.get(id)?.refresh() }
   togglePause(id: string): void {
     const handle = this.handles.get(id)
-    if (handle) handle.setUserPaused(!this.paused(id))
+    if (handle && this.pausable(id)) handle.setUserPaused(!this.paused(id))
   }
   dismissNotice(id: string): void { if (this.get(id)?.notice) this.patch(id, { notice: undefined }) }
   /** Copy (with headers): the rows selected in the grid, as the results grid copies them. */
@@ -420,7 +425,7 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
 
   private live(id: string): boolean {
     const connectionId = this.get(id)?.connectionId
-    return this.targetBindings.matchesConnection(id, connectionId) && this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost)
+    return this.targetBindings.matchesConnection(id, connectionId) && this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'connected'))
   }
 
   // --- CustomDocumentProvider ------------------------------------------------------------------------------------------
