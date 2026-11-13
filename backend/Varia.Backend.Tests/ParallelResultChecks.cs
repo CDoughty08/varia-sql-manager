@@ -41,18 +41,14 @@ internal static class ParallelResultChecks
         return set;
     }
 
-    /// <summary>Runs <paramref name="work"/> with eight threads, then with one.</summary>
+    /// <summary>Runs <paramref name="work"/> with eight threads, then with one. The count is set for this check's flow
+    /// alone, so suites running beside it neither change it nor see it. The steps split their rows by the threads they ask
+    /// for, so the eight-thread run crosses eight runs' boundaries even when the gate, busy with other suites, grants fewer.</summary>
     private static (T Parallel, T Alone) Both<T>(Func<T> work)
     {
-        var workers = ViewSorter.Workers;
-        try
-        {
-            ViewSorter.Workers = 8;
-            var parallel = work();
-            ViewSorter.Workers = 1;
-            return (parallel, work());
-        }
-        finally { ViewSorter.Workers = workers; }
+        T parallel;
+        using (ViewSorter.WorkersHere(8)) parallel = work();
+        using (ViewSorter.WorkersHere(1)) return (parallel, work());
     }
 
     private static void DistinctValues(Action<bool, string> check)
@@ -148,21 +144,22 @@ internal static class ParallelResultChecks
         foreach (var (cell, _) in seen[1]) textExpected[cell]++;
         check(figures[0].AsSpan().SequenceEqual(expected) && figures[1].AsSpan().SequenceEqual(textExpected),
             "Distinct Count on eight threads counts each cell's and each row group's distinct values, NULL not among them and text equal by its collation as one");
-        // A cancellation while the cells are counted (asked for as their bounds are reserved) stops the threads as itself.
-        using var cancel = new CancellationTokenSource();
-        string? Stopped(Func<long, bool> reserve)
+        // A cancellation once the rows are placed, as the cells are sorted and counted on several threads (the next check of
+        // the token is a worker's), stops the build as itself: with the cell bounds, small cells and one large cell, and
+        // without them.
+        foreach (var (spec, reserve, name) in new[] { (Spec([0], 1), (Func<Func<long, bool>>)(() => _ => true), "small cells"), (Spec([], -1), () => _ => true, "one large cell"), (Spec([0], 1), NoBounds, "no cell bounds") })
         {
-            try { Counts(Spec([0], 1), reserve, cancel.Token); return null; }
-            catch (OperationCanceledException) { return "cancelled"; }
-            catch (Exception error) { return error.GetType().Name; }
+            using var eight = ViewSorter.WorkersHere(8);
+            using var cancel = new CancellationTokenSource();
+            var stages = new PivotStages { Placed = cancel.Cancel };
+            string stopped;
+            try { ResultPivoter.Build(set, pages, null, spec, cancel.Token, reserve(), null, stages); stopped = "finished"; }
+            catch (OperationCanceledException) { stopped = "cancelled"; }
+            // Array.Sort wraps what its comparer throws; the host answers a cancelled request at once, whatever follows.
+            catch (InvalidOperationException error) when (error.InnerException is OperationCanceledException) { stopped = "cancelled"; }
+            catch (Exception error) { stopped = error.GetType().Name; }
+            check(stopped == "cancelled", $"a pivot cancelled while its distinct values are counted on several threads ({name}) stops with the cancellation ({stopped})");
         }
-        var reserved = 0;
-        var (stopped, _) = Both(() => Stopped(_ =>
-        {
-            if (++reserved == 2) cancel.Cancel();
-            return true;
-        }));
-        check(stopped == "cancelled", "a pivot cancelled while its distinct values are counted on several threads stops with the cancellation (" + stopped + ")");
     }
 
     private static void Diff(Action<bool, string> check)

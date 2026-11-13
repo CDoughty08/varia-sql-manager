@@ -298,17 +298,20 @@ internal static partial class ViewSorter
     }
 
     /// <summary>The runs of equal values in sorted rows, in value order: each run's first row (the lowest holding it, since
-    /// ties fall back to the base row), its length, and whether a kept row is among it. Even runs of the rows are read on
-    /// the threads the gate has free: first each marks where a value starts (comparing a row with the one before it, so a
-    /// value that spans runs starts in one only), then, with the groups each run starts numbered, each fills its groups,
-    /// reading a group's rows past its own run's end when the value goes on.</summary>
+    /// ties fall back to the base row), its length, and whether a kept row is among it. The rows are read in even runs on the
+    /// threads the gate has free, each run reading only its own rows: first each marks where a value starts (comparing a row
+    /// with the one before it, so a value that spans runs starts in one only); then, with the values each run starts
+    /// numbered, each notes where its values start and ticks the value each of its rows is in (a value its run continues from
+    /// the run before is the one numbered just before its first); a value's length is where the next starts less its own
+    /// start. So a value on most of the rows is read by every thread, not one.</summary>
     private static (int[] Reps, int[] Counts, bool[] Ticks) Runs(Key key, int[] values, int count, bool[]? marks, CancellationToken token)
     {
         var starts = new bool[count];
-        using var threads = Gate.Take(Math.Clamp(count / MinSlice, 1, Workers));
-        var runs = threads.Count;
+        var wanted = Math.Clamp(count / MinSlice, 1, Workers);
+        using var threads = Gate.Take(wanted);
+        var runs = wanted;
         var found = new int[runs + 1];
-        Each(runs, runs, run =>
+        threads.For(runs, run =>
         {
             var at = 0;
             for (int i = RunStart(count, run, runs), end = RunStart(count, run + 1, runs); i < end; i++)
@@ -318,33 +321,30 @@ internal static partial class ViewSorter
                 if (i == 0 || key.Compare(values[i - 1], values[i]) != 0) { starts[i] = true; at++; }
             }
             found[run + 1] = at;
-        });
+        }, token);
         for (var run = 0; run < runs; run++) found[run + 1] += found[run];
         var groups = found[runs];
         var reps = new int[groups];
+        // Each value's first row's place first, its length once every place is known.
         var counts = new int[groups];
         var ticks = new bool[groups];
-        Each(runs, runs, run =>
+        threads.For(runs, run =>
         {
-            var group = found[run];
+            var group = found[run] - 1;
             for (int i = RunStart(count, run, runs), end = RunStart(count, run + 1, runs); i < end; i++)
             {
                 if ((i & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
-                if (!starts[i]) continue;
-                var any = marks is null || marks[values[i]];
-                var last = i + 1;
-                for (; last < count && !starts[last]; last++)
+                if (starts[i])
                 {
-                    // One value can hold most rows.
-                    if ((last & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
-                    any |= marks is not null && marks[values[last]];
+                    group++;
+                    reps[group] = values[i];
+                    counts[group] = i;
                 }
-                reps[group] = values[i];
-                counts[group] = last - i;
-                ticks[group] = any;
-                group++;
+                // Two runs may tick the value one continues from the other: both write true.
+                if (marks is null || marks[values[i]]) ticks[group] = true;
             }
-        });
+        }, token);
+        for (var group = 0; group < groups; group++) counts[group] = (group + 1 < groups ? counts[group + 1] : count) - counts[group];
         return (reps, counts, ticks);
     }
 

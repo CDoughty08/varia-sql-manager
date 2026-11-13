@@ -1496,14 +1496,16 @@ receives a new result to read like any other, never rows to compare.
   released with the query's other results, and released at once when its answer is not delivered: a CANCEL or the
   deadline answered first (the backend), its answer failed validation or its port went (main), or the page gave it up
   (the worker). A source released while the results were compared ends it (`RESULT_RELEASED`).
-  While it is built the alignment holds about 50 bytes a row of both results (`ResultDiffer.WorkingBytes`) and 12 bytes
+  While it is built the alignment holds about 54 bytes a row of both results (`ResultDiffer.WorkingBytes`) and 12 bytes
   a differing cell, charged to the budget too as they grow (`TOO_LARGE` without room).
 - **Threads.** Identities are hashed in runs of pages on several threads. Matching splits them by their hashes' high bits
-  into one part per thread the operations leave free; each part reads every row in order and keeps its own identities, so
-  copies meet in the order one pass meets them. Alignment splits the later result's rows into even runs: each counts its
-  entries (so it knows where they go in the one array), then compares its matched rows' cells into a list of its own,
-  charging them a chunk at a time (one charge at a time between the runs); the lists are joined in run order. The entries,
-  their order and their cells are one thread's; a refusal or a cancellation stops every run.
+  into one part per thread it asks for; each part's rows are first gathered in row order (a stable counting sort, on
+  several threads), so each part reads only its own and copies meet in the order one pass meets them. Alignment splits the
+  later result's rows into even runs: each counts its entries (so it knows where they go in the one array), then compares
+  its matched rows' cells into a list of its own, charging them a chunk at a time (one charge at a time between the runs),
+  reading pages through one cache of parsed headers a result that the runs share; the lists are joined in run order. The
+  entries, their order and their cells are one thread's, however many threads the operations leave free; a refusal or a
+  cancellation stops every run.
 - **Renderer.** `ResultHandle.diff(right, { exact, context, signal })` relays it; `CompareService` appends the new result
   as the run's last set (`ResultsService.addSet`), named "Differences: Result 1 → Result 2", and its grid's strip says what
   was compared, and when `approximate`. A new run in the tab gives up a comparison in flight, and `addSet` takes a diff
@@ -1711,7 +1713,8 @@ receives at most 512 values a window, never rows.
 - **Work and memory.** Building takes one key per row for the column (as a filter builds it), the rows grouped in one
   pass when the key's 8 bytes are its whole value (a number, a date or time, a text length, ranked text or bytes) and there are
   at most 65,536 values, otherwise by a stable sort (a duplicates filter on one such column groups the same way) whose
-  runs of equal values are found in even parts on several threads, a value that spans parts counted once, and ranked by
+  runs of equal values are found in even parts on several threads, each part reading only its own rows (a value on most
+  rows is read by every thread, and counted once), and ranked by
   count with the parallel sort, and the snapshot itself: `DistinctWorkingBytes` (about 57 bytes a row) is charged to the result's query
   budget while it builds (`TOO_LARGE` without room) and returned when it ends. The snapshot keeps
   `DistinctSnapshotBytes` (26 bytes a value and 4 KiB) charged until it is closed or its result goes. The worker's

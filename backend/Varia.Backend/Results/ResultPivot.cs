@@ -20,10 +20,12 @@ internal sealed class PivotTooLargeException : Exception;
 
 /// <summary>Where one build's time went, for the pivot benchmark (--pivot-bench): Stopwatch ticks spent building sort keys,
 /// grouping (the sorts by row groups and by the column group), aggregating over the pages and counting distinct values. Times
-/// only: nothing of the rows.</summary>
+/// only: nothing of the rows. <see cref="Placed"/> is called each time distinct counting has placed its rows, just before it
+/// sorts and counts them on several threads, so a check can cancel the build there.</summary>
 internal sealed class PivotStages
 {
     public long Keys, Grouping, Aggregation, Distinct;
+    public Action? Placed;
 }
 
 /// <summary>Groups and aggregates, ready to write: each row group's and column group's first row (by the source's row
@@ -247,7 +249,7 @@ internal static class ResultPivoter
             if (item.Value.Aggregate != PivotAggregate.CountDistinct) continue;
             var distinctKey = KeyOf(item.Value.Column);
             var counting = Stopwatch.GetTimestamp();
-            Distinct(item, distinctKey, positions, scratch, CellOf, bounds, token);
+            Distinct(item, distinctKey, positions, scratch, CellOf, bounds, stages?.Placed, token);
             if (stages is not null) stages.Distinct += Stopwatch.GetTimestamp() - counting;
         }
 
@@ -374,7 +376,7 @@ internal static class ResultPivoter
     /// shared among the threads the gate has free, each sorting and counting its own; a cell of many rows is sorted on
     /// several threads and its runs counted in parts. Without, one sort by cell then value (on several threads) and one pass.
     /// Either way a cell's count is its number of distinct values, whatever order its rows were met in.</summary>
-    private static void Distinct(PivotFigures figures, ViewSorter.Key key, int[] positions, int[] scratch, CellFinder cellOf, int[]? bounds, CancellationToken token)
+    private static void Distinct(PivotFigures figures, ViewSorter.Key key, int[] positions, int[] scratch, CellFinder cellOf, int[]? bounds, Action? placed, CancellationToken token)
     {
         var comparer = new ViewSorter.Comparer([key], null, token);
         foreach (var totals in new[] { false, true })
@@ -386,7 +388,7 @@ internal static class ResultPivoter
             }
             if (bounds is null)
             {
-                Sorted(figures, key, positions, scratch, Cell, comparer, token);
+                Sorted(figures, key, positions, scratch, Cell, comparer, placed, token);
                 continue;
             }
             // Counts by cell, shifted one up, become each cell's start; placing a row moves its cell's start on, so after
@@ -413,6 +415,7 @@ internal static class ResultPivoter
                 var cell = Cell(row);
                 if (cell >= 0) scratch[bounds[cell]++] = row;
             }
+            placed?.Invoke();
             int Start(int cell) => cell == 0 ? 0 : bounds[cell - 1];
             // A cell of many rows is sorted by the parallel sort, its runs counted in parts on the threads the gate has free.
             for (var cell = 0; cell < cells; cell++)
@@ -420,24 +423,25 @@ internal static class ResultPivoter
                 var (start, end) = (Start(cell), bounds[cell]);
                 if (end - start < 2 * ViewSorter.MinSlice) continue;
                 ViewSorter.Sort(scratch, start, end - start, comparer);
-                using var threads = ViewSorter.Gate.Take(Math.Min(ViewSorter.Workers, (end - start) / ViewSorter.MinSlice));
-                var parts = threads.Count;
+                var parts = Math.Min(ViewSorter.Workers, (end - start) / ViewSorter.MinSlice);
+                using var threads = ViewSorter.Gate.Take(parts);
                 var found = new long[parts];
-                ViewSorter.Each(parts, parts, part =>
+                threads.For(parts, part =>
                 {
                     long runs = 0;
                     for (int i = start + ViewSorter.RunStart(end - start, part, parts), stop = start + ViewSorter.RunStart(end - start, part + 1, parts); i < stop; i++)
                         if (i == start || comparer.Values(scratch[i - 1], scratch[i]) != 0) runs++;
                     found[part] = runs;
-                });
+                }, token);
                 figures.Counts[cell] = found.Sum();
             }
             // The other cells in even runs of rows, each cell in the run its first row is in.
             {
-                using var threads = ViewSorter.Gate.Take(Math.Clamp(count / ViewSorter.MinSlice, 1, ViewSorter.Workers));
+                var wanted = Math.Clamp(count / ViewSorter.MinSlice, 1, ViewSorter.Workers);
+                using var threads = ViewSorter.Gate.Take(wanted);
                 // More runs than threads, so a run of slow cells does not keep the rest waiting.
-                var runs = threads.Count == 1 ? 1 : 8 * threads.Count;
-                ViewSorter.Each(runs, threads.Count, run =>
+                var runs = wanted == 1 ? 1 : 8 * wanted;
+                threads.For(runs, run =>
                 {
                     var stop = ViewSorter.RunStart(count, run + 1, runs);
                     for (var cell = FirstCell(bounds, ViewSorter.RunStart(count, run, runs)); cell < cells && Start(cell) < stop; cell++)
@@ -451,7 +455,7 @@ internal static class ResultPivoter
                             if (comparer.Values(scratch[i - 1], scratch[i]) != 0) distinct++;
                         figures.Counts[cell] = distinct;
                     }
-                });
+                }, token);
             }
         }
     }
@@ -473,7 +477,7 @@ internal static class ResultPivoter
 
     /// <summary>COUNT(DISTINCT) without cell bounds: the non-NULL rows sorted by cell then value (on several threads),
     /// counting each run of equal values once.</summary>
-    private static void Sorted(PivotFigures figures, ViewSorter.Key key, int[] positions, int[] scratch, Func<int, int> cellOf, ViewSorter.Comparer comparer, CancellationToken token)
+    private static void Sorted(PivotFigures figures, ViewSorter.Key key, int[] positions, int[] scratch, Func<int, int> cellOf, ViewSorter.Comparer comparer, Action? placed, CancellationToken token)
     {
         var count = 0;
         for (var i = 0; i < positions.Length; i++)
@@ -482,6 +486,7 @@ internal static class ResultPivoter
             var row = positions[i];
             if (!key.IsNull(row) && cellOf(row) >= 0) scratch[count++] = row;
         }
+        placed?.Invoke();
         var byCell = new CellOrder(cellOf, comparer);
         ViewSorter.Sort(scratch, 0, count, byCell);
         for (var i = 0; i < count; i++)
