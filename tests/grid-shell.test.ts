@@ -112,4 +112,21 @@ describe('GridShell', () => {
       expect(container.textContent).toBe('rows')
     } finally { errors.mockRestore() }
   })
+
+  it('puts a strip\'s button after its text, runs it, and gives the focus to the grid when the button goes while focused', () => {
+    const run = vi.fn()
+    const props = (action: boolean): ShellProps => ({ rootProps: {}, mountKey: 'a', mount: create => { create(spec); return () => {} },
+      strip: { text: 'Only the first rows are shown.', ...action ? { action: { label: 'Stop query', icon: 'debug-stop', title: 'Cancel Executing Query (Alt+Pause)', keys: 'Alt+Pause', run } } : {} } })
+    const { container, show } = render(createElement(GridShell, props(true)))
+    const strip = container.querySelector('.rg-strip')!
+    const button = strip.querySelector('button')!
+    expect([strip.getAttribute('role'), strip.querySelector('.rg-strip-text')?.textContent, button.textContent, button.getAttribute('aria-keyshortcuts')])
+      .toEqual(['status', 'Only the first rows are shown.', 'Stop query', 'Alt+Pause'])
+    act(() => button.click())
+    expect(run).toHaveBeenCalledTimes(1)
+    act(() => button.focus())
+    show(createElement(GridShell, props(false)))
+    expect(container.querySelector('.rg-strip button')).toBeNull()
+    expect(document.activeElement).toBe(container.querySelector('[role="grid"]'))
+  })
 })

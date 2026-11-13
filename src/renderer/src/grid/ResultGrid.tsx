@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { commandDescriptor } from '../../../shared/commands/catalog'
 import type { QueryResult } from '../../../shared/contracts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
+import { useKeybindingLabel } from '../core/useCommand'
+import { withKey } from '../query-context'
 import type { ResultHandle } from '../results/ResultClient'
 import { capStripText, filteredColumns, setKey, type EntryKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
@@ -43,6 +46,11 @@ function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: n
   return undefined
 }
 
+/** Whether a truncation strip offers Stop query while the query runs. Past the result budget or low memory the rest of the run
+ *  only reads and counts rows nobody asked to lose, so stopping is the way out; the row limit is the user's own cap (off by
+ *  default), reached as they asked, so its strip only says so and the toolbar's Cancel stays where it always is. */
+export const stopsQuery = (truncated: string | undefined) => truncated === 'queryBudget' || truncated === 'globalBudget' || truncated === 'systemMemory'
+
 /** The sort's keys and filters as a string: a new order or other rows put the grid back at its first row; the same view
  *  built again (once every row is in) keeps its place. */
 const keysOf = (sort: GridSort | undefined) => (sort?.keys.map(key => `${key.column}${key.descending ? 'd' : 'a'}`).join(',') ?? '') + '|' + JSON.stringify(sort?.filters.map(item => item.filter) ?? [])
@@ -53,7 +61,9 @@ const keysOf = (sort: GridSort | undefined) => (sort?.keys.map(key => `${key.col
  * shell with its own source (LiveGridPane).
  */
 function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, onWide }: ResultGridProps) {
-  const { results, commands, gridStats, panes, settings, resultsSearch, highlights, compare, pivot } = useWorkbench()
+  const { results, commands, gridStats, panes, settings, resultsSearch, highlights, compare, pivot, queries } = useWorkbench()
+  const running = !!useServiceSnapshot(queries)[tabId]?.running
+  const cancelKey = useKeybindingLabel('query.cancel')
   const marked = useSyncExternalStore(highlights.subscribe, () => highlights.getSnapshot()[tabId]?.get(entry.key))
   const compared = useSyncExternalStore(compare.subscribe, () => compare.getSnapshot().get(setKey(entry.descriptor)))
   const pivoted = useSyncExternalStore(pivot.subscribe, () => pivot.getSnapshot().info.get(setKey(entry.descriptor)))
@@ -164,6 +174,12 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, o
   const cap = turnedView && !lost && shownRows > wire.transpose.maxRows ? capStripText(shownRows, entry.descriptor.kind === 'pivot') : undefined
   const other = lost ? undefined : snapshot.incomplete ? incompleteText : truncation ?? highlightNote
   const note = cap && other ? `${cap} ${other}` : cap ?? other
+  // While the query that filled the budget still runs, the strip can stop it: the catalogue's Cancel Executing Query, for this
+  // grid's tab, whose running state stands in for the active tab's in the command's precondition.
+  const stop = running && other !== undefined && other === truncation && stopsQuery(snapshot.truncated)
+    ? { label: 'Stop query', icon: commandDescriptor('query.cancel').icon, title: withKey(commandDescriptor('query.cancel').title, cancelKey), keys: cancelKey?.aria,
+      run: () => void commands.execute('query.cancel', { tabId, state: { queryRunning: running } }, 'toolbar') }
+    : undefined
   // The entry's key names the grid for commands and menus; the generation and result id say which stored result it showed
   // when a target was read from it, so a target read before a re-run is told from the new one.
   return <GridShell mountKey={`${tabId}|${key}|${instanceKey(entry)}${turnedView ? '|transposed' : ''}`} mount={mount} onApi={onApi}
@@ -175,7 +191,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, o
     }}
     sort={sort?.keys} onSort={(column, add) => results.cycleSort(tabId, key, column, add)} funnels={funnels}
     update={{ resultCount: count, showTypes, rowSize, ...turnedView ? { headerColumn: headerColumn ?? null } : {} }} gone={lost ? lostText : undefined}
-    strip={note ? { text: note } : undefined} />
+    strip={note ? { text: note, ...stop ? { action: stop } : {} } : undefined} />
 }
 
 /** A result set's grid: a throw while rendering it stays in its frame (GridErrorBoundary), whose Retry renders it again. */
