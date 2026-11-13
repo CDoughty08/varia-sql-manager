@@ -1,12 +1,12 @@
 # Page compression findings
 
 A measured prototype for compressing stored result pages, measured on 2026-11-12. This is a benchmark and design page.
-It changes nothing in the product: pages are still stored as they are sealed, and the product still targets .NET 10.
+It changes nothing in the product: pages are still stored as they are sealed, and the backend now runs on .NET 11 (#459).
 The rule agreed with the owner still holds: results stay in memory and never spill to disk.
 
 The first version of this page measured only what .NET 10 has (Brotli, Deflate, ZLib) and recommended Brotli. The
-owner pointed at zstd and LZ4 and is willing to move to .NET 11 (STS), whose `System.IO.Compression` has Zstandard
-built in. This version measures both on .NET 11, and the recommendation changes with them.
+owner pointed at zstd and LZ4 and moved the backend to .NET 11 (STS, #459), whose `System.IO.Compression` has
+Zstandard built in. This version measures both on .NET 11, and the recommendation changes with them.
 
 ## Summary
 
@@ -35,7 +35,8 @@ built in. This version measures both on .NET 11, and the recommendation changes 
   pages without growing (4.2 to 5.3 GiB of new pages fitted with no growth in the GC heap's commit). Only giving
   memory back to the operating system needs a compacting collection, which paused 1.0 to 1.4 s for the 3 to 4 GiB
   that remained.
-- **Prerequisite: move the backend to .NET 11.** zstd is not in .NET 10; a NuGet wrapper would add a native library.
+- **Prerequisite, done: the backend runs on .NET 11** (#459). zstd is not in .NET 10, and a NuGet wrapper would have
+  added a native library.
 
 ## Environment
 
@@ -58,10 +59,7 @@ do.
 
 `dotnet run --project backend/Varia.Backend.Tests --configuration Release -- --page-compression-bench <GiB> <shape>
 [--codecs name,name] [--keep name] [--no-ops]` (`PageCompressionBench.cs`), one size and shape a process so each
-memory reading is its own. On .NET 10 it has the Brotli, Deflate and ZLib codecs. The zstd and LZ4 codecs compile only
-for .NET 11 (`#if NET11_0_OR_GREATER`, and the LZ4 package is referenced only for `net11.0`). Until the repository moves,
-build them from a copy of `backend/` outside the repository, where `global.json` does not pin SDK 10, with the three
-projects' `TargetFramework` set to `net11.0`.
+memory reading is its own. The LZ4 package is referenced only by the test project, for this comparison.
 
 It fills a query budget as ingestion does (`ResultSetBuffer.BeginRow`/`TryCommitRow`, real `PageBuilder` pages and
 lengths sidecars), then:
@@ -320,8 +318,8 @@ forecast.
 
 ## Risks
 
-- **The .NET 11 move comes first.** STS support is shorter than .NET 10's LTS, and the upgrade touches the whole
-  backend and its packages (SqlClient, SMO, ScriptDom). It is its own PR with the full live suites.
+- **.NET 11 is an STS release.** Its support is shorter than .NET 10's LTS, so the backend moves to .NET 12 (LTS) when
+  that ships. The move itself (#459) passed the full live suites.
 - **Correctness surface.** Every reader moves behind the accessor. A missed call site would read compressed bytes as a
   page and fail with "Unsupported result page" (`PageView.Parse` checks the header). The offline checks need a mode
   that compresses every complete result at once, so the whole suite runs against compressed results.
@@ -341,8 +339,7 @@ forecast.
 
 ## Proposed PR order
 
-1. **Move the backend to .NET 11.** Target framework, `global.json`, CI images and the packaging workflow; the full
-   live suites. No feature change.
+1. **Move the backend to .NET 11.** Done in #459.
 2. **One page accessor and pins.** Every `SealedSnapshot`/`PagesFor` reader gets bodies through one accessor and pins
    the result while it reads (a pin count beside the lease count; release waits for pins as for leases). No behaviour
    change.

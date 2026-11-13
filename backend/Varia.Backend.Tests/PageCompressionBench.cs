@@ -230,7 +230,7 @@ internal static class PageCompressionBench
         }
     }
 
-    // ---- Codecs available in .NET 10 without a native dependency. Zstandard arrives in System.IO.Compression in .NET 11.
+    // ---- Codecs that .NET 10 already had: Brotli, Deflate and ZLib.
 
     private static Codec BrotliCodec(int quality, int window) => new("brotli" + quality + (window == 18 ? "" : "w" + window),
         (source, scratch) =>
@@ -260,9 +260,8 @@ internal static class PageCompressionBench
             decompressor.ReadExactly(destination);
         });
 
-#if NET11_0_OR_GREATER
-    // ---- .NET 11: Zstandard in System.IO.Compression, and LZ4 from K4os.Compression.LZ4 (managed code, no native
-    // library; referenced only when this project is built for net11.0) for comparison.
+    // ---- Zstandard, new in .NET 11's System.IO.Compression, and LZ4 from K4os.Compression.LZ4 (managed code, no native
+    // library; referenced only by this test project) for comparison.
 
     /// <summary>Zstandard through the one-shot API, which sets up a compression context on every call.</summary>
     private static Codec ZstdCodec(int quality, int window) => new("zstd" + (quality < 0 ? "m" + -quality : quality.ToString(CultureInfo.InvariantCulture)) + (window == 18 ? "" : "w" + window),
@@ -312,17 +311,14 @@ internal static class PageCompressionBench
         {
             if (K4os.Compression.LZ4.LZ4Codec.Decode(packed, destination) != destination.Length) throw new InvalidDataException("LZ4 failed.");
         });
-#endif
 
     private static readonly Codec[] AllCodecs =
     [
         BrotliCodec(0, 18), BrotliCodec(1, 18), BrotliCodec(2, 18), BrotliCodec(3, 18), BrotliCodec(5, 18), BrotliCodec(1, 22),
         DeflateCodec(1, false), DeflateCodec(6, false), DeflateCodec(1, true),
-#if NET11_0_OR_GREATER
         ZstdCodec(-5, 18), ZstdCodec(-1, 18), ZstdCodec(1, 18), ZstdCodec(2, 18), ZstdCodec(3, 18), ZstdCodec(6, 18), ZstdCodec(1, 22),
         ZstdReusedCodec(-1), ZstdReusedCodec(1), ZstdReusedCodec(3),
         Lz4Codec(K4os.Compression.LZ4.LZ4Level.L00_FAST, "lz4"), Lz4Codec(K4os.Compression.LZ4.LZ4Level.L03_HC, "lz4hc3"),
-#endif
     ];
 
     /// <summary>A Save's output: counts the bytes and drops them, so only formatting and page reads are timed.</summary>
