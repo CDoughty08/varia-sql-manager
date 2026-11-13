@@ -764,11 +764,13 @@ app.whenReady().then(async () => {
     },
     ...liveness
   })
-  // Test-only live sources (debug.synthetic) are accepted only in unpackaged smoke runs, whose backend has its test hooks.
   const memoryLimit = new ResultMemoryLimit({
     request: (params, generation) => backend.request('results.setMemoryLimit', params, { generation }),
     onState: listener => backend.onState(listener), read: () => settings.current()['queryResults.grid.memoryLimitGiB']
   })
+  // A first read slower than the first launch's wait leaves that backend on the defaults, and a load fires no change.
+  loaded.then(() => memoryLimit.settingsChanged(), () => {})
+  // Test-only live sources (debug.synthetic) are accepted only in unpackaged smoke runs, whose backend has its test hooks.
   const results = resultsPort = new ResultsPortHost({ backend: supervisorResults(backend), createChannel: () => new MessageChannelMain(), testSources: testSeams })
   const explorerRequests = new ExplorerRequests(backend)
   // AutoRecover's copies older than Keep AutoRecover information for go before the page can list them; with settings

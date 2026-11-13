@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { BackendState } from '../src/shared/contracts'
 import { ResultMemoryLimit, resultMemoryLimitParams } from '../src/main/backend/result-memory'
@@ -21,7 +23,8 @@ function harness(initial: unknown = 0) {
     onState: listener => { listeners.add(listener); return () => listeners.delete(listener) },
     read: () => value
   })
-  const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+  // Settles the sender's promise chain (an answer, its then, the loop's next turn) without a timer.
+  const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve() }
   return {
     limit, sent,
     state: (state: BackendState) => { for (const listener of listeners) listener(state) },
@@ -105,5 +108,45 @@ describe('result memory limit (results.setMemoryLimit)', () => {
     await h.answer(false)
     expect(h.requests().at(-1)).toEqual({ limitGiB: 3, generation: 2 })
     h.limit.dispose()
+  })
+
+  it('sends a value set while a request was in flight even when that request fails', async () => {
+    const h = harness(0)
+    h.state(ready(1))
+    await h.answer()
+    h.set(4)
+    h.set(8)
+    await h.answer(false)
+    expect(h.requests()).toEqual([{ limitGiB: 0, generation: 1 }, { limitGiB: 4, generation: 1 }, { limitGiB: 8, generation: 1 }])
+  })
+
+  it('sends a value whose request failed again when the backend recovers from unresponsive', async () => {
+    const h = harness(0)
+    h.state(ready(1))
+    await h.answer()
+    h.set(4)
+    h.state({ status: 'unresponsive', generation: 1, silentMs: 9000 })
+    await h.answer(false)
+    expect(h.requests()).toHaveLength(2)
+    h.state(ready(1))
+    expect(h.requests().at(-1)).toEqual({ limitGiB: 4, generation: 1 })
+    await h.answer()
+    h.state(ready(1))
+    expect(h.requests()).toHaveLength(3)
+  })
+
+  it('sends nothing once disposed', async () => {
+    const h = harness(0)
+    h.limit.dispose()
+    h.state(ready(1))
+    h.set(4)
+    await h.flush()
+    expect(h.requests()).toEqual([])
+  })
+
+  it('is applied by main when the first settings read finishes, which fires no change of its own', () => {
+    const source = readFileSync(join(__dirname, '../src/main/index.ts'), 'utf8')
+    expect(source).toMatch(/loaded\.then\(\(\) => memoryLimit\.settingsChanged\(\)/)
+    expect(source).toMatch(/settings\.onDidChange\([^]*?memoryLimit\.settingsChanged\(\)/)
   })
 })

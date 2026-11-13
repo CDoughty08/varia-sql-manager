@@ -2179,7 +2179,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// <summary>Tools › Options' result memory limit, applied at once (main sends it when the setting changes and as each
     /// backend becomes ready): 0 is automatic, otherwise GiB, clamped as at launch (ResultStore.GlobalBytesFor). What it
     /// does to what is stored and storing is ResultStore.Resize's. The status bar's figure follows by a results.memory
-    /// event before this answers.</summary>
+    /// event before this answers, or at the timer's next check if the control lane refuses it.</summary>
     private ResultsMemoryLimitResult SetMemoryLimit(ResultsMemoryLimitArgs args)
     {
         if (args.LimitGiB is not { } gib || gib < 0 || gib > MaxMemoryLimitGiB) throw new RequestException("INVALID_PARAMS", "The result memory limit must be 0 to 1024 GiB.");

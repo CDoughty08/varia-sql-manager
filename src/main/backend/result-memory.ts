@@ -22,17 +22,20 @@ export interface ResultMemoryLimitDeps {
  *  backend generation becomes ready: a launch already carries it in its environment, but the setting may change between
  *  the spawn and the backend's HELLO. One request is in flight at a time, so a later value never arrives before an
  *  earlier one; a value is sent again only when it differs from the last one the generation applied. A failure is a
- *  value: the next change or launch sends again. */
+ *  value: a value set while it was in flight is still sent, and otherwise the next change, the generation's recovery
+ *  from unresponsive, or the next launch sends again (a new request each time; none is re-sent). */
 export class ResultMemoryLimit {
   private generation: number | undefined
   private applied: number | undefined
   private sending = false
+  private disposed = false
   private readonly unsubscribe: () => void
 
   constructor(private readonly deps: ResultMemoryLimitDeps) {
     this.unsubscribe = deps.onState(state => {
       if (state.status === 'ready') {
-        if (state.generation === this.generation) return
+        // Ready again after unresponsive: a value whose request failed meanwhile is sent now.
+        if (state.generation === this.generation) return void this.flush()
         this.generation = state.generation
         this.applied = undefined
         void this.flush()
@@ -43,7 +46,10 @@ export class ResultMemoryLimit {
   /** The settings changed: sends the limit if it differs from what the ready generation applied. */
   settingsChanged(): void { void this.flush() }
 
-  dispose(): void { this.unsubscribe() }
+  dispose(): void {
+    this.disposed = true
+    this.unsubscribe()
+  }
 
   private async flush(): Promise<void> {
     if (this.sending) return
@@ -52,12 +58,13 @@ export class ResultMemoryLimit {
       for (;;) {
         const generation = this.generation
         const params = resultMemoryLimitParams(this.deps.read())
-        if (generation === undefined || params.limitGiB === this.applied) return
-        // A generation that went meanwhile is the next one's to apply; a failure on this one waits for the next change.
+        if (this.disposed || generation === undefined || params.limitGiB === this.applied) return
         const sent = await this.deps.request(params, generation).then(() => true, () => false)
+        // A generation that went meanwhile is the next one's to apply.
         if (this.generation !== generation) continue
-        if (!sent) return
-        this.applied = params.limitGiB
+        if (sent) this.applied = params.limitGiB
+        // A failure waits for the next change or recovery, unless a newer value was set while it was in flight.
+        else if (resultMemoryLimitParams(this.deps.read()).limitGiB === params.limitGiB) return
       }
     } finally {
       this.sending = false

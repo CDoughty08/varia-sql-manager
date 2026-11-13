@@ -225,11 +225,13 @@ internal sealed class ResultStore
     /// <summary>Reserves bytes for a query. Checks run in this order: the system's memory load (only when asked, at page
     /// seals, and by working and spare memory of some size), the query's half of the budget, for a live table its subscription's limit (QueryBudget) and the live share
     /// (GlobalBudget), then the global budget.</summary>
-    public bool TryReserve(QueryBudget query, long bytes, bool checkSystem, out TruncationReason reason)
+    public bool TryReserve(QueryBudget query, long bytes, bool checkSystem, out TruncationReason reason) =>
+        // One reading of the figures for the whole reservation: a concurrent Resize applies to the next one.
+        TryReserve(query, bytes, checkSystem, Volatile.Read(ref figures), out reason);
+
+    private bool TryReserve(QueryBudget query, long bytes, bool checkSystem, Figures budget, out TruncationReason reason)
     {
         if (checkSystem && IsSystemMemoryLow()) { reason = TruncationReason.SystemMemory; return false; }
-        // One reading of the figures for the whole reservation: a concurrent Resize applies to the next one.
-        var budget = Volatile.Read(ref figures);
         if (Interlocked.Read(ref query.used) + bytes > Math.Min(budget.Query, query.MaxBytes)) { reason = TruncationReason.QueryBudget; return false; }
         var live = query.Live;
         // Added first and taken back on a refusal, so concurrent reservations never pass a limit together.
@@ -279,7 +281,8 @@ internal sealed class ResultStore
         var budget = Volatile.Read(ref figures);
         var limit = Math.Min(budget.Query, query.MaxBytes);
         if (query.UsedBytes + bytes > limit - limit / 8 || UsedBytes + bytes > budget.Global - budget.Global / 8) return false;
-        return TryReserve(query, bytes, checkSystem ?? bytes >= WorkCheckBytes, out _);
+        // The same reading as the eighth left free: a lowering in between cannot let spare memory take that eighth.
+        return TryReserve(query, bytes, checkSystem ?? bytes >= WorkCheckBytes, budget, out _);
     }
 
     /// <summary>Working memory at this size or more is refused while the operating system reports high memory load, as a

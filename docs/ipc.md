@@ -270,7 +270,7 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `activity.details` | invoke; cancelled with `cancelActivity` (closing Details) | unary | live (the live gates) | 15 s; the backend answers its own 10 s budget as an `error: TIMEOUT` value |
 | `activity.kill` | invoke | unary | actions (its own gates) | 30 s; the backend answers its own 25 s budget as an `error: TIMEOUT` value with the outcomes of the sessions it tried. Never re-sent |
 | `entra.cache.clear` | main only (`varia:entra-cache-clear`, after its confirmation) | unary | control | 10 s. Takes `{}` (unknown members refused); answers `{ cleared: true }` |
-| `results.setMemoryLimit` | main only (`ResultMemoryLimit`, `src/main/backend/result-memory.ts`): as each generation becomes ready and when `queryResults.grid.memoryLimitGiB` changes, one request in flight at a time | unary | control | 10 s. Takes `{ limitGiB }`, a whole number 0 (automatic) to 1024 (`resultsMemoryLimitSchema`; the backend refuses anything else with `INVALID_PARAMS`, unknown members too); answers `{ applied, globalBytes, queryBytes }`, `applied` false only for the test hooks' fixed budget. A `results.memory` event with the new figure goes out before the answer. See [Result store and memory budget](#result-store-and-memory-budget) |
+| `results.setMemoryLimit` | main only (`ResultMemoryLimit`, `src/main/backend/result-memory.ts`): as each generation becomes ready and when `queryResults.grid.memoryLimitGiB` changes, one request in flight at a time | unary | control | 10 s. Takes `{ limitGiB }`, a whole number 0 (automatic) to 1024 (`resultsMemoryLimitSchema`; the backend refuses anything else with `INVALID_PARAMS`, unknown members too); answers `{ applied, globalBytes, queryBytes }`, `applied` false only for the test hooks' fixed budget. A `results.memory` event with a changed figure goes out before the answer when the control lane takes it; one it refuses follows at the next once-a-second check. Main also sends it once the first settings read finishes (a read slower than the first launch's wait starts that backend on the defaults). A failed request is not re-sent: a value set while it was in flight, the generation's recovery from unresponsive, the next change or the next launch sends a new one. See [Result store and memory budget](#result-store-and-memory-budget) |
 | `debug.results.synthesize` | `__variaTest` and tests only | unary | metadata | 120 s; exists only with `VARIA_BACKEND_TEST_HOOKS=1` |
 
 `mainOnlyMethods` (`results.copy`, `results.export`, `entra.cache.clear`, `results.setMemoryLimit`, `debug.results.synthesize`) are sent only by
@@ -1174,7 +1174,8 @@ Results stay in backend memory, never on disk (`ResultStore`).
   together, and each reservation reads them once, so a concurrent change applies from the next reservation. Lowered
   below what is stored, nothing is dropped: every reservation is refused, so a query storing rows stops with
   `globalBudget` (or `queryBudget` past its new half) and later queries, sorts and pivots are refused as at a full
-  budget, until closes bring use under the new figure. Raised, the room is there for the next reservation, of a
+  budget, until closes bring use under the new figure; live tables (Activity Monitor, SSIS) likewise store no new
+  revision until then. Raised, the room is there for the next reservation, of a
   running query's rows or of working memory. A query that already stopped storing stays stopped (a stop is never
   undone; operations on it still answer `BUDGET_STOPPED`). A query's own ceiling fixed when it began (an actual plan's)
   stays: the smaller of it and the current half holds. The test hooks' `VARIA_RESULT_BUDGET_BYTES` budget is fixed and

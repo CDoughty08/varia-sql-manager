@@ -329,12 +329,14 @@ internal static class StoreChecks
             "a query's own ceiling stays when the limit changes, and the smaller of it and the new half holds");
 
         // Concurrent changes: reservations, returns, the live share and resizes together leave every counter whole, never
-        // let use pass the larger figure, and leave the live share a fraction of the figure in force.
+        // let use pass the larger figure, and leave the live share a fraction of the figure in force. Each worker holds
+        // until refused (or 40 MiB), so together they press on the global, query and live figures, not under them.
         store = new ResultStore(64 * MiB, 32 * MiB);
         var queries = Enumerable.Range(0, 8).Select(i => store.BeginQuery("c" + i)).ToArray();
         var live = new QueryBudget("live:c", new LiveBudget(64 * MiB));
-        long highest = 0, highestQuery = 0;
+        long highest = 0, highestQuery = 0, highestLive = 0;
         var done = 0;
+        var refusals = 0;
         var resizer = Task.Run(() =>
         {
             for (var i = 0; i < 4000; i++)
@@ -348,15 +350,19 @@ internal static class StoreChecks
         {
             var query = index < queries.Length ? queries[index] : live;
             long held = 0;
-            for (var step = 0; Volatile.Read(ref done) == 0 || step < 2000; step++)
+            // Each goes on for 2,000 steps after the resizes end, so the last figure (64 MiB) is pressed whatever the timing.
+            for (var tail = 0; tail < 2000; tail += Volatile.Read(ref done))
             {
-                if (store.TryReserve(query, 64 * 1024, false, out _))
+                var reserved = store.TryReserve(query, 64 * 1024, false, out _);
+                if (reserved)
                 {
                     held += 64 * 1024;
                     Raise(ref highest, store.UsedBytes);
                     Raise(ref highestQuery, query.UsedBytes);
+                    Raise(ref highestLive, store.LiveUsedBytes);
                 }
-                if (held >= 2 * MiB || step % 7 == 0) { store.Return(query, held); held = 0; }
+                else Interlocked.Increment(ref refusals);
+                if (!reserved || held >= 40 * MiB) { store.Return(query, held); held = 0; }
             }
             store.Return(query, held);
         });
@@ -367,8 +373,9 @@ internal static class StoreChecks
         store.Resize(8 * MiB, 4 * MiB);
         long filled = 0;
         foreach (var query in queries) while (store.TryReserve(query, 64 * 1024, false, out _)) filled += 64 * 1024;
-        check(whole && highest <= 64 * MiB && highestQuery <= 32 * MiB && shareFollows && store.LiveBytes == 2 * MiB && filled == 8 * MiB,
-            $"reservations under concurrent limit changes keep every counter whole and within the larger figure, and the next reservations keep to the figure in force: {whole} {highest} {highestQuery} {store.LiveBytes} {filled}");
+        // Pressed: use went past the small figure (8 MiB) and reservations were refused, yet never past the large one.
+        check(whole && highest is > 8 * MiB and <= 64 * MiB && highestQuery <= 32 * MiB && highestLive <= 32 * MiB && refusals > 0 && shareFollows && store.LiveBytes == 2 * MiB && filled == 8 * MiB,
+            $"reservations under concurrent limit changes keep every counter whole and within the larger figure, and the next reservations keep to the figure in force: {whole} {highest} {highestQuery} {highestLive} {refusals} {store.LiveBytes} {filled}");
     }
 
     private static void Raise(ref long highest, long seen)
