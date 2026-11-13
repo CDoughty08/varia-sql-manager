@@ -404,7 +404,7 @@ describe('smoke-test backends', () => {
     const env = { VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath }
     expect(backendSpawnSpec({ ...base, smokeTest: true, env })).toEqual({ command: process.execPath, args: ['--disable-warning=ExperimentalWarning', join(base.root, 'tests/fixtures/backend.mjs'), 'workbench'], cwd: base.root, packaged: false })
     expect(backendSpawnSpec({ ...base, smokeTest: true, env: { ...env, VARIA_TEST_BACKEND: 'crash-after:2' } }).args.slice(-2)).toEqual(['crash-after', '2'])
-    expect(backendSpawnSpec({ ...base, smokeTest: false, env })).toMatchObject({ command: 'dotnet', requires: join(base.root, 'backend/Varia.Backend/bin/Debug/net10.0/Varia.Backend.dll') })
+    expect(backendSpawnSpec({ ...base, smokeTest: false, env })).toMatchObject({ command: 'dotnet', requires: join(base.root, 'backend/Varia.Backend/bin/Debug/net11.0/Varia.Backend.dll') })
     expect(backendSpawnSpec({ ...base, packaged: true, smokeTest: true, env })).toMatchObject({ args: [], cwd: base.resourcesPath, packaged: true })
     expect(() => backendSpawnSpec({ ...base, smokeTest: true, env: { ...env, VARIA_TEST_NODE: 'node' } })).toThrow('absolute VARIA_TEST_NODE')
   })

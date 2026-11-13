@@ -1,6 +1,6 @@
 # Varia SQL Manager
 
-SSMS-style SQL Server workbench. Electron 44 + React 19 + Monaco 0.57 + Dockview renderer; a .NET 10 sidecar
+SSMS-style SQL Server workbench. Electron 44 + React 19 + Monaco 0.57 + Dockview renderer; a .NET 11 sidecar
 (Microsoft.Data.SqlClient 7.1, SMO 181) speaks length-prefixed MessagePack frames (protocol v2) over stdio. It is not a
 VS Code fork.
 
@@ -31,7 +31,7 @@ docs/architecture.md or docs/testing.md; add a line here only when an agent woul
 
 ## Environment
 
-- Node.js 24+ and the .NET 10 SDK (`global.json`). Cloud sessions: `.claude/hooks/session-start.sh` installs both, builds
+- Node.js 24+ and the .NET 11 SDK (`global.json`). Cloud sessions: `.claude/hooks/session-start.sh` installs both, builds
   the backend and starts a SQL Server container.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set (with `VARIA_TEST_SQL_USER`/`VARIA_TEST_SQL_PASSWORD` for SQL
   authentication); `VARIA_TEST_SQL_SCRATCH=1` lets them create marked scratch databases. Entra and SSIS checks are opt-in.

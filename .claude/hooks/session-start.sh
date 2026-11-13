@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prepares a Claude Code cloud session: a best-effort SQL Server container for the live checks, .NET 10 SDK,
+# Prepares a Claude Code cloud session: a best-effort SQL Server container for the live checks, .NET 11 SDK,
 # Node.js 24, npm packages, and backend builds. Local sessions are left untouched.
 set -euo pipefail
 
@@ -78,10 +78,10 @@ start_sql || say 'SQL Server setup failed; live SQL checks will be skipped'
 
 # dotnet-install.sh is blocked in cloud sessions; Ubuntu's archive carries the SDK.
 if ! dotnet --list-sdks 2>/dev/null | grep -q '^10\.0\.'; then
-  command -v apt-get >/dev/null 2>&1 || fail 'the .NET 10 SDK is missing and apt-get is unavailable to install it.'
-  say 'installing the .NET 10 SDK from apt'
+  command -v apt-get >/dev/null 2>&1 || fail 'the .NET 11 SDK is missing and apt-get is unavailable to install it.'
+  say 'installing the .NET 11 SDK from apt'
   quiet apt-update as_root apt-get update
-  quiet apt-dotnet as_root apt-get install -y dotnet-sdk-10.0
+  quiet apt-dotnet as_root apt-get install -y dotnet-sdk-11.0
 fi
 
 install_node() {

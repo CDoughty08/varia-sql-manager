@@ -20,7 +20,7 @@ const cpus = Math.min(option('--cpus', 3), availableParallelism()), copies = opt
 const deadline = option('--deadline', 300) * 1000
 const block = /offlineSuites =([\s\S]*?)\];/.exec(readFileSync('backend/Varia.Backend.Tests/Program.cs', 'utf8'))?.[1] ?? ''
 const suites = [...block.matchAll(/\("([\w.]+)", /g)].map(match => match[1])
-const dll = resolve('backend/Varia.Backend.Tests/bin/Release/net10.0/Varia.Backend.Tests.dll')
+const dll = resolve('backend/Varia.Backend.Tests/bin/Release/net11.0/Varia.Backend.Tests.dll')
 if (!existsSync(dll)) { console.error('Build the Release checks first: npm run backend:test'); process.exit(2) }
 
 const taskset = process.platform === 'linux' && spawnSync('taskset', ['--version']).status === 0
