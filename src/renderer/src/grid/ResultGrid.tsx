@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { commandDescriptor } from '../../../shared/commands/catalog'
 import type { QueryResult } from '../../../shared/contracts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
+import { useKeybindingLabel } from '../core/useCommand'
+import { withKey } from '../query-context'
 import type { ResultHandle } from '../results/ResultClient'
 import { capStripText, filteredColumns, setKey, type EntryKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
@@ -21,6 +24,12 @@ export interface ResultGridProps {
   /** The grid F6 and the Query Output pane focus first: the one that last had focus. */
   readonly focused: boolean
   readonly budget?: QueryResult['budget']
+  /** What the grid shows of its group, for menus and scripts (`data-result-view`): a Table, a Pivot, a comparison, a plan
+   *  set; and the group's ordinal (`data-result-group`), which a comparison lacks. */
+  readonly view?: 'table' | 'pivot' | 'comparison' | 'plan'
+  readonly group?: number
+  /** A bare stack's grid (Peek): Pivot, Compare and close are off for it (`data-result-bare`). */
+  readonly bare?: boolean
   /** The grid's sort, while it has one: the grid shows its view once it is built. */
   readonly sort?: GridSort
   onFocus(key: EntryKey): void
@@ -43,6 +52,11 @@ function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: n
   return undefined
 }
 
+/** Whether a truncation strip offers Stop query while the query runs. Past the result budget or low memory the rest of the run
+ *  only reads and counts rows nobody asked to lose, so stopping is the way out; the row limit is the user's own cap (off by
+ *  default), reached as they asked, so its strip only says so and the toolbar's Cancel stays where it always is. */
+export const stopsQuery = (truncated: string | undefined) => truncated === 'queryBudget' || truncated === 'globalBudget' || truncated === 'systemMemory'
+
 /** The sort's keys and filters as a string: a new order or other rows put the grid back at its first row; the same view
  *  built again (once every row is in) keeps its place. */
 const keysOf = (sort: GridSort | undefined) => (sort?.keys.map(key => `${key.column}${key.descending ? 'd' : 'a'}`).join(',') ?? '') + '|' + JSON.stringify(sort?.filters.map(item => item.filter) ?? [])
@@ -52,8 +66,14 @@ const keysOf = (sort: GridSort | undefined) => (sort?.keys.map(key => `${key.col
  * filters for the header, and the strips (truncation, highlights, compare, pivot, the transposed cap). A live view mounts the same
  * shell with its own source (LiveGridPane).
  */
-function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, onWide }: ResultGridProps) {
-  const { results, commands, gridStats, panes, settings, resultsSearch, highlights, compare, pivot } = useWorkbench()
+function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, group, bare, onFocus, onWide }: ResultGridProps) {
+  const { results, commands, gridStats, panes, settings, resultsSearch, highlights, compare, pivot, queries } = useWorkbench()
+  // The query still running that made the rows shown: an estimate runs without results, and a finished run's results stay
+  // drawn until its tab's state catches up, so the tab's run must be this result's run and still running.
+  const runningId = useSyncExternalStore(queries.subscribe, () => queries.getSnapshot()[tabId]?.running?.queryId)
+  const resultsRun = useSyncExternalStore(results.subscribe, () => { const run = results.getSnapshot()[tabId]; return run?.status === 'running' ? run.queryId : undefined })
+  const running = runningId !== undefined && runningId === resultsRun
+  const cancelKey = useKeybindingLabel('query.cancel')
   const marked = useSyncExternalStore(highlights.subscribe, () => highlights.getSnapshot()[tabId]?.get(entry.key))
   const compared = useSyncExternalStore(compare.subscribe, () => compare.getSnapshot().get(setKey(entry.descriptor)))
   const pivoted = useSyncExternalStore(pivot.subscribe, () => pivot.getSnapshot().info.get(setKey(entry.descriptor)))
@@ -164,18 +184,26 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, onFocus, o
   const cap = turnedView && !lost && shownRows > wire.transpose.maxRows ? capStripText(shownRows, entry.descriptor.kind === 'pivot') : undefined
   const other = lost ? undefined : snapshot.incomplete ? incompleteText : truncation ?? highlightNote
   const note = cap && other ? `${cap} ${other}` : cap ?? other
+  // While the query that filled the budget still runs, the strip can stop it: the catalogue's Cancel Executing Query, for this
+  // grid's tab, whose running state stands in for the active tab's in the command's precondition.
+  const stop = running && other !== undefined && other === truncation && stopsQuery(snapshot.truncated)
+    ? { label: 'Stop query', icon: commandDescriptor('query.cancel').icon, title: withKey(commandDescriptor('query.cancel').title, cancelKey), keys: cancelKey?.aria,
+      run: () => void commands.execute('query.cancel', { tabId, state: { queryRunning: running } }, 'toolbar') }
+    : undefined
   // The entry's key names the grid for commands and menus; the generation and result id say which stored result it showed
   // when a target was read from it, so a target read before a re-run is told from the new one.
   return <GridShell mountKey={`${tabId}|${key}|${instanceKey(entry)}${turnedView ? '|transposed' : ''}`} mount={mount} onApi={onApi}
     rootProps={{
       'data-result-grid': '', 'data-output-view': 'grid', 'data-tab-id': tabId, 'data-result-entry': key, 'data-result-generation': entry.descriptor.generation,
-      'data-result-id': entry.descriptor.resultId, 'data-result-kind': entry.descriptor.kind, 'data-pane-focus': focused ? 'selected' : 'grid',
-      // The stack keeps the focused entry for its own drawing; the service hears of it so the toolbar and the menus' toggle follow.
-      onFocus: () => { onFocus(key); results.focusEntry(tabId, key) }
+      'data-result-id': entry.descriptor.resultId, 'data-result-kind': entry.descriptor.kind, ...view ? { 'data-result-view': view } : {}, ...group === undefined ? {} : { 'data-result-group': group },
+      ...bare ? { 'data-result-bare': '' } : {}, 'data-pane-focus': focused ? 'selected' : 'grid',
+      // The stack keeps the focused entry for its own drawing and tells the service (`focusEntry`), so the toolbar, the
+      // menus' toggle and the pivot builder follow.
+      onFocus: () => onFocus(key)
     }}
     sort={sort?.keys} onSort={(column, add) => results.cycleSort(tabId, key, column, add)} funnels={funnels}
     update={{ resultCount: count, showTypes, rowSize, ...turnedView ? { headerColumn: headerColumn ?? null } : {} }} gone={lost ? lostText : undefined}
-    strip={note ? { text: note } : undefined} />
+    strip={note ? { text: note, ...stop ? { action: stop } : {} } : undefined} />
 }
 
 /** A result set's grid: a throw while rendering it stays in its frame (GridErrorBoundary), whose Retry renders it again. */

@@ -34,9 +34,10 @@ internal sealed record DiscoveryResult(List<DiscoveredServer> Servers, string? W
 internal sealed record ConnectionArgs(string ConnectionId);
 internal sealed record TableArgs(string ConnectionId, string Database, string Schema, string Name);
 /// <summary>query.execute. StopOnError keeps the remaining batches from running after one that raised an error (for SQLCMD's
-/// :on error exit); by default execution continues with the next batch, as SSMS does.</summary>
+/// :on error exit); by default execution continues with the next batch, as SSMS does. DiscardResults reads every row
+/// and keeps none (SSMS's Discard results after execution): result sets are counted, execution plans are kept.</summary>
 internal sealed record QueryArgs(string ConnectionId, string SessionId, string Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10,
-    bool StopOnError = false, bool IncludeActualPlan = false, bool IncludeClientStatistics = false, bool IncludeLivePlan = false);
+    bool StopOnError = false, bool IncludeActualPlan = false, bool IncludeClientStatistics = false, bool IncludeLivePlan = false, bool DiscardResults = false);
 /// <summary>query.session.close: Transaction "commit" commits the session's open transaction first; "rollback" is a plain close,
 /// since SQL Server rolls back what a closed session left open.</summary>
 internal sealed record SessionArgs(string SessionId, string? Transaction = null);

@@ -41,7 +41,8 @@ export function queryContribution({ commands, queries, documents, connections, t
       when: () => queries.canExecute() || connectsFirst(),
       run: () => { if (queries.canExecute()) return queries.execute(); if (connectsFirst()) events.emit({ type: 'query.connectRequested', tabId: documents.active!.id }) }
     }),
-    commands.register('query.cancel', { run: () => queries.cancel() }),
+    // A results strip's Stop query names its own tab; menus, keys and toolbars cancel the active one.
+    commands.register('query.cancel', { run: args => queries.cancel(args?.tabId) }),
     commands.register('query.estimatePlan', { when: () => queries.canExecute(), run: () => queries.estimate() }),
     commands.register('query.estimateSessionPlan', { when: () => queries.canExecute(), run: () => queries.estimate(undefined, 'session') }),
     commands.register('query.includeActualPlan', { run: () => {
