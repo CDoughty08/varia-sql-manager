@@ -4,6 +4,7 @@
 
 ### Added
 
+- Hold Ctrl and scroll the mouse wheel over the query editor to increase or decrease the editor font size.
 - **Getting Started:** read offline connection, query and results guides with live shortcuts, option values and mouse gestures, plus interactive fictional examples. Open it from Help or the command palette. Navigation stays available if a guide cannot load.
 - **About Varia:** find the running version, platform and update status from Help or the command palette (also the app menu on macOS). Copy version details for support and open the project, issue form or release notes without needing a server connection.
 - **In-app release notes:** read curated release highlights and limits offline, browse bundled history and open notes for the exact version advertised by an update. Missing notes are reported clearly, with release downloads available separately.
@@ -38,6 +39,7 @@
 
 ### Fixed
 
+- Clicking inside selected query text clears the selection and places the caret where you clicked.
 - **Execution timeouts on Linux and macOS:** a query whose execution timeout passed while many tabs were connecting at once could run past its timeout and report "Query completed with errors" instead of timing out. Timeouts now stop the query on time.
 - **Results:** when a running query fills its result memory budget (or reaches a row limit, or the computer runs low on memory), the grid now says so at once, with the rows read still counting, instead of only after the query ends.
 - **Results:** the notice for a running query that has filled its result memory, or that stopped keeping rows because the computer is low on memory, now has a **Stop query** button (Cancel Executing Query for that tab), reachable by keyboard, until the query ends. The row limit you set yourself only says it was reached.

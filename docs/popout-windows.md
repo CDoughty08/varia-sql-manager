@@ -53,7 +53,7 @@ Each window is a full citizen (`core/windows.ts`, `workbench.attachWindow`):
   draw none. Throttling off also keeps the page's own visibility at visible, so main tells the page when the main window
   is minimized or hidden (`onMainWindowHidden`): live views in the main window pause then, and Object Explorer's status
   views keep sampling only while Object Explorer is in a popout (`LiveOwner.popout`).
-- Chromium's own zoom (Ctrl+wheel, a pinch) in any window is given to every window.
+- When Chromium zooms a window, main applies that zoom to every window. Wheel zoom over the query editor changes the editor font size.
 - A window name is the page's handle on its popout in main: `raisePopout(name)` (`varia:popout-raise`, the main page's
   trusted IPC, a name that must match `varia-popout-<uuid>`) brings that popout to the top, restored if minimized, without
   activating it (`moveTop`, `showInactive`). Where `showInactive` leaves a minimized window minimized (macOS, some Linux window
