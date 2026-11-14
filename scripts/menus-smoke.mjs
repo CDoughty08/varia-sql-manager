@@ -547,11 +547,14 @@ try {
   await selectToken.click({ button: 'right', force: true })
   const editorMenu = menu('Query editor')
   await expect(editorMenu).toBeVisible()
-  expect(await menuItemNames(editorMenu)).toEqual(['Insert Snippet…', 'Surround With…', 'Connection', 'Execute', 'Cancel Executing Query', 'Display Estimated Execution Plan', 'Display Estimated Plan in Query Session', 'Cut', 'Copy', 'Paste', 'Command Palette…'])
+  expect(await menuItemNames(editorMenu)).toEqual(['Insert Snippet…', 'Surround With…', 'Connection', 'Go To Definition', 'Peek Definition', 'Execute', 'Cancel Executing Query', 'Display Estimated Execution Plan', 'Display Estimated Plan in Query Session', 'Cut', 'Copy', 'Paste', 'Command Palette…'])
   // The query is not connected: Execute connects it first; nothing is running to cancel.
   await expect(editorMenu.getByRole('menuitem', { name: 'Execute', exact: true })).not.toHaveAttribute('aria-disabled', 'true')
   await expect(editorMenu.getByRole('menuitem', { name: 'Cancel Executing Query', exact: true })).toHaveAttribute('aria-disabled', 'true')
   await expect(editorMenu.getByRole('menuitem', { name: 'Copy', exact: true })).toContainText('Ctrl+C')
+  // The right-click focused the editor, so Go To Definition is offered for the name under it, with SSMS's F12.
+  await expect(editorMenu.getByRole('menuitem', { name: 'Go To Definition', exact: true })).not.toHaveAttribute('aria-disabled', 'true')
+  await expect(editorMenu.getByRole('menuitem', { name: 'Go To Definition', exact: true })).toContainText('F12')
   await expect(page.locator('.monaco-menu')).toHaveCount(0)
   await page.keyboard.press('Escape')
   await expect(openMenus()).toHaveCount(0)
