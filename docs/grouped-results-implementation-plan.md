@@ -621,8 +621,8 @@ Outcome, accepted by the owner:
       - Parallel builds: `DerivedJobs` (`results/derived-jobs.ts`, one per window as `workbench.derivedJobs`) gives four
         places for pivot builds. Comparisons do not take them yet: PR 16 is to route `CompareService` through the same
         instance, which the plan's "at most four builds and comparisons" needs. A free place is taken in the same task, so
-        a build starts as before; the rest wait in order and the builder says "Waiting for other pivots or comparisons to
-        finish". `BUSY` and `TOO_MANY_REQUESTS` are asked again after 1, 4 and 16 s, giving the place up while waiting;
+        a build starts as before; the rest wait in order and the builder says "Waiting for other pivots to finish" (or, while it
+        waits to ask a busy backend again, that it is asked again in a moment). `BUSY` and `TOO_MANY_REQUESTS` are asked again after 1, 4 and 16 s, giving the place up while waiting;
         never `TIMEOUT`. Builds of different groups no longer block each other (`PivotTab.busy` is gone, `queued` is
         new); a newer build of the same group cancels the older.
       - The view a build reads is held through `ResultsService.holdView` until the build ends, so a grid re-sorted

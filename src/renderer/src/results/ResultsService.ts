@@ -1289,7 +1289,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (run.setsPublished) { run.sets = run.sets.slice(); run.setsPublished = false }
     run.sets[run.sets.indexOf(old)] = entry
     run.entries.set(key, entry)
-    run.slots.set(key, { ...record, revision: record.revision + 1, sources, ...pivot ? { pivot } : {} })
+    // The old build's provenance never describes the new one: without its own, the slot has none.
+    const { pivot: _previous, ...kept } = record
+    run.slots.set(key, { ...kept, revision: record.revision + 1, sources, ...pivot ? { pivot } : {} })
     run.shape = undefined
     const grids = this.views.get(tabId)?.grids, state = grids?.get(key)
     if (grids && state) grids.set(key, carriedState(state, moved, descriptor.columns.length))

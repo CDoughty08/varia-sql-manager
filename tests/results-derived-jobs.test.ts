@@ -67,4 +67,24 @@ describe('DerivedJobs', () => {
     expect(tries).toBe(1)
     expect(jobs.load).toEqual({ running: 0, waiting: 0 })
   })
+
+  it('frees the place when onStart throws, and says why a task waits', async () => {
+    const timers = manualTimers()
+    const jobs = new DerivedJobs({ timers: timers.timers, limit: 1 })
+    await expect(jobs.run(async () => 1, { onStart: () => { throw new Error('listener') } })).rejects.toThrow('listener')
+    expect(jobs.load).toEqual({ running: 0, waiting: 0 })
+    const why: string[] = []
+    const gate = deferred<void>()
+    const first = jobs.run(() => gate.promise)
+    let refusals = 1
+    const second = jobs.run(async () => { if (refusals-- > 0) throw new ResultError('BUSY', 'Busy.'); return 2 }, { onWait: reason => why.push(reason), onStart: () => why.push('start') })
+    expect(why).toEqual(['place'])
+    gate.resolve()
+    await first
+    await settle()
+    expect(why).toEqual(['place', 'start', 'busy'])
+    timers.advance(1_000)
+    await expect(second).resolves.toBe(2)
+    expect(why).toEqual(['place', 'start', 'busy', 'start'])
+  })
 })

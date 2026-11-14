@@ -261,6 +261,8 @@ describe('PivotService', () => {
     expect(results.addSet('t1', descriptor(821, { index: 0, kind: 'pivot' }), 'Pivot of Result 1', [setKey(tab.sets[0].descriptor)])).toBe(old.key)
     expect(client.released()).toEqual([801, 811])
     expect(results.getSnapshot().t1.groups[0].pivot).toMatchObject({ key: old.key, revision: 3 })
+    // Added without provenance, the slot keeps none of the last build's.
+    expect(results.getSnapshot().t1.groups[0].pivot!.pivot).toBeUndefined()
     expect(results.getSnapshot().t1.sets.filter(set => set.descriptor.kind === 'pivot')).toHaveLength(1)
   })
 
@@ -406,7 +408,7 @@ describe('PivotService', () => {
   })
 
   it('builds the Pivots of different groups at once, keeps each build and failure with its group, and a newer build of a group gives up the older', async () => {
-    const { results, pivot, run } = fixture()
+    const { client, results, pivot, run } = fixture()
     const [first, second] = run(2)
     const [one, two] = results.getSnapshot().t1.sets.map(set => set.key)
     pivot.open('t1', one)
@@ -450,6 +452,8 @@ describe('PivotService', () => {
     slow.resolve({ descriptor: descriptor(871, { index: 0, kind: 'pivot' }), rows: 1, rowGroups: 1, columnGroups: 0, approximate: false })
     await superseded
     await settle()
+    // The older build's late answer is released, never shown.
+    expect(client.released()).toContain(871)
     expect(results.getSnapshot().t1.groups[0].pivot!.entry.descriptor.resultId).toBe(801)
     expect(pivot.getSnapshot().tabs.t1).toMatchObject({ running: false })
     expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()
@@ -476,7 +480,16 @@ describe('PivotService', () => {
     expect(asked()).toEqual([1, 2, 3])
     expect(jobs.load).toEqual({ running: 4, waiting: 2 })
     // The builder of a group that waits says so.
-    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: results.getSnapshot().t1.sets[4].key, running: true, queued: true })
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: results.getSnapshot().t1.sets[4].key, running: true, queued: 'place' })
+    // Cancelled while it waits: it leaves the line, never asked, and building again joins the line anew.
+    pivot.cancel('t1')
+    await builds[4]
+    expect(jobs.load).toEqual({ running: 4, waiting: 1 })
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ running: false })
+    expect(pivot.getSnapshot().tabs.t1.queued).toBeUndefined()
+    expect(asked()).toEqual([1, 2, 3])
+    builds[4] = pivot.run('t1')
+    expect(jobs.load).toEqual({ running: 4, waiting: 2 })
     // A place frees: the first that waited is asked.
     answers[0].resolve({ descriptor: descriptor(801, { index: 0, kind: 'pivot' }), rows: 1, rowGroups: 1, columnGroups: 0, approximate: false })
     await builds[0]
@@ -501,6 +514,8 @@ describe('PivotService', () => {
     await settle()
     const calls = () => vi.mocked(fifth.pivot).mock.calls.length
     expect(calls()).toBe(1)
+    // While it waits to ask again, the builder says the backend is busy.
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ running: true, queued: 'busy' })
     for (const [ms, count] of [[1_000, 2], [4_000, 3], [16_000, 4]] as const) {
       timers.advance(ms - 1)
       await settle()
@@ -511,6 +526,7 @@ describe('PivotService', () => {
     }
     await busy
     expect(pivot.getSnapshot().tabs.t1.error).toBe('The SQL backend is busy. Try again.')
+    expect(pivot.getSnapshot().tabs.t1.queued).toBeUndefined()
     // TIMEOUT ran: it is never asked again.
     vi.mocked(fifth.pivot).mockRejectedValueOnce(new ResultError('TIMEOUT', 'The pivot took too long.'))
     await pivot.run('t1')

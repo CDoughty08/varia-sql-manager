@@ -20,7 +20,7 @@ export interface PivotTab {
   /** This group's Pivot is being built, or waits to be. */
   readonly running: boolean
   /** It waits for one of the window's places: four pivot builds and comparisons run at once. */
-  readonly queued?: true
+  readonly queued?: 'place' | 'busy'
   /** Why this group's last build failed. */
   readonly error?: string
 }
@@ -35,7 +35,7 @@ type Results = Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'di
  *  still waits for a place, and whether the user cancelled it. */
 interface Build {
   readonly abort: AbortController; readonly queryId: string; readonly source: EntryKey; readonly ordinal: number; readonly replaces?: EntryKey
-  queued: boolean; cancelled: boolean
+  queued: 'place' | 'busy' | undefined; cancelled: boolean
 }
 /** What one build read and made: the pivot, the filters of the view it read (none for the stored rows), and whether it read
  *  a view. */
@@ -182,12 +182,14 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     builds.delete(group.ordinal)
     this.errors.get(tabId)?.delete(group.ordinal)
     const abort = new AbortController(), spec = draftSpec(state.draft)
-    const item: Build = { abort, queryId: tab.queryId, source: entry.key, ordinal: group.ordinal, ...replaces === undefined ? {} : { replaces }, queued: true, cancelled: false }
+    const item: Build = { abort, queryId: tab.queryId, source: entry.key, ordinal: group.ordinal, ...replaces === undefined ? {} : { replaces }, queued: undefined, cancelled: false }
     builds.set(group.ordinal, item)
     this.refresh(tabId)
     let error: string | undefined
     try {
-      const built = await this.jobs.run<Built>(() => this.build(tabId, entry, spec, abort.signal), { signal: abort.signal, onStart: () => { item.queued = false; this.refresh(tabId) } })
+      const built = await this.jobs.run<Built>(() => this.build(tabId, entry, spec, abort.signal), {
+        signal: abort.signal, onWait: why => { item.queued = why; this.refresh(tabId) }, onStart: () => { item.queued = undefined; this.refresh(tabId) }
+      })
       const { result, filters } = built
       // A build given up (a newer one, its Table or Pivot closed, a new run) adds nothing: its answer is released.
       if (abort.signal.aborted) {
@@ -305,7 +307,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     return {
       open, source: group?.table.key, ...ordinal === undefined ? {} : { sourceName: `Result ${ordinal}` }, ...group?.pivot ? { pivot: group.pivot.key } : {},
       draft: this.draftOf(tabId, ordinal, group?.table.entry.descriptor.columns), running: !!live,
-      ...live?.queued ? { queued: true as const } : {}, ...failed ? { error: failed } : {}
+      ...live?.queued ? { queued: live.queued } : {}, ...failed ? { error: failed } : {}
     }
   }
 

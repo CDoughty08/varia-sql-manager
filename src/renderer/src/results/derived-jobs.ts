@@ -33,24 +33,28 @@ export class DerivedJobs {
   /** How many run now, and how many wait for a place. */
   get load(): { readonly running: number; readonly waiting: number } { return { running: this.running, waiting: this.waiting.length } }
 
-  /** Runs `task` once it has a place (`onStart` says when, for a builder that shows it waiting), asking again on a refusal
-   *  that came before it ran. */
-  async run<T>(task: (signal?: AbortSignal) => Promise<T>, o: { signal?: AbortSignal; onStart?: () => void } = {}): Promise<T> {
+  /** Runs `task` once it has a place, asking again on a refusal that came before it ran. `onWait` says why it waits (for a
+   *  place, or to ask a busy backend again) and `onStart` says each time it has its place, for a builder that shows it. */
+  async run<T>(task: (signal?: AbortSignal) => Promise<T>, o: { signal?: AbortSignal; onWait?: (why: 'place' | 'busy') => void; onStart?: () => void } = {}): Promise<T> {
     for (let attempt = 0; ; attempt++) {
       // A free place is taken at once, so the backend is asked in the same task as the click.
       if (o.signal?.aborted) throw abortError()
       if (this.running < this.limit) this.running++
-      else await this.place(o.signal)
-      if (attempt === 0) o.onStart?.()
+      else {
+        o.onWait?.('place')
+        await this.place(o.signal)
+      }
       try {
         // Given up while it waited for its place.
         if (o.signal?.aborted) throw abortError()
+        o.onStart?.()
         return await task(o.signal)
       } catch (error) {
         if (!(error instanceof ResultError) || !refusedBeforeRunning.has(error.code) || attempt >= derivedLimits.retryMs.length || o.signal?.aborted) throw error
       } finally {
         this.free()
       }
+      o.onWait?.('busy')
       await this.wait(derivedLimits.retryMs[attempt], o.signal)
     }
   }

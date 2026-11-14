@@ -362,12 +362,14 @@ internal static class PivotChecks
         diff.Complete();
         var plan = store.Open(set.Budget, 2, 1, 1, "executionPlan", Sales, [.. Sales.Select(_ => WireKind.Text)])!;
         plan.Complete();
+        // Still loading, so a check after the kind's would say RESULT_OPEN: the kind is checked first, before any reservation.
+        var loading = store.Open(set.Budget, 3, 1, 1, "diff", Sales, [.. Sales.Select(_ => WireKind.Text)])!;
         var source = Source(store);
         var again = Call<ResultsPivotResult>("results.pivot", new { resultId = source.ResultId, rows = new[] { 0 }, values = new object[] { new { aggregate = "count" } } });
         var reserved = store.UsedBytes;
-        var refused = new[] { diff.ResultId, again.Descriptor.ResultId, plan.ResultId }.Select(id => Code(new { resultId = id, rows = new[] { 0 }, values = new object[] { new { aggregate = "count" } } })).ToArray();
-        check(string.Join(",", refused) == "INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS" && store.UsedBytes == reserved,
-            "results.pivot takes only a query's rows: a diff, a pivot and a plan set are refused and charge nothing: " + string.Join(",", refused));
+        var refused = new[] { diff.ResultId, again.Descriptor.ResultId, plan.ResultId, loading.ResultId }.Select(id => Code(new { resultId = id, rows = new[] { 0 }, values = new object[] { new { aggregate = "count" } } })).ToArray();
+        check(string.Join(",", refused) == "INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS,INVALID_PARAMS" && store.UsedBytes == reserved,
+            "results.pivot takes only a query's rows: a diff, a pivot, a plan set and a loading diff are refused first and charge nothing: " + string.Join(",", refused));
         Partial(check);
         Pressure(check);
     }
