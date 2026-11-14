@@ -526,7 +526,7 @@ same statements: Lock escalation (Table = `TABLE`, Auto = `AUTO`, Disable = `DIS
 memory-optimized table), Change Tracking on or off with Track columns updated (SQL Server changes that only by turning
 change tracking off and on again, as SSMS does; turning it on needs a primary key and change tracking on the database), and
 extended properties added, changed or removed (text values of at most 3,750 characters; a value of another type is
-shown with its type and can only be removed). Its steps are "Set lock escalation", "Turn off change tracking", "Turn on change tracking", "Add the extended property", "Change the extended property", "Remove the extended property". A
+shown with its type and can only be removed, as can a longer text value or one read cut short, shown with "…"). Its steps are "Set lock escalation", "Turn off change tracking", "Turn on change tracking", "Add the extended property", "Change the extended property", "Remove the extended property". A
 failure or Stop rolls the whole transaction back, so nothing is left half changed. Turning change tracking off, or
 changing Track columns updated, asks first (`disableChangeTracking`), since SQL Server discards what it tracked.
 Apply's first step finds the table again by its object id and creation date and plans again, refusing a table renamed,

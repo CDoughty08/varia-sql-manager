@@ -109,10 +109,27 @@ internal static class TablePropertiesChecks
             && Plan(new("AUTO", null, null), Plain with { MemoryOptimized = true }).Refusal == tables.Message("memoryOptimized")
             && Plan(new(null, new(true, null), null), Plain with { PrimaryKey = false }).Refusal == tables.Message("primaryKey")
             && Plan(new(null, new(true, null), null), Plain with { MemoryOptimized = true }).Refusal == tables.Message("trackingMemoryOptimized")
+            && Plan(new(null, new(true, null), null), Plain with { MemoryOptimized = true, PrimaryKey = false }).Refusal == tables.Message("trackingMemoryOptimized")
             && Plan(new(null, null, [new("add", "MS_Description", "x")]), Plain with { MemoryOptimized = true }).Plan is { Count: 1 },
             "the plan refuses SQL Server's own, external and dropped ledger tables, lock escalation and change tracking on a memory-optimized table, and change tracking without a primary key");
+        check(Plan(new(null, new(false, null), null), Plain with { MemoryOptimized = true }).Refusal == tables.Message("nothingToChange"),
+            "change tracking already off on a memory-optimized table plans nothing, rather than refusing change tracking");
         check(TableAlter.NeedsDatabaseTracking(all) && !TableAlter.NeedsDatabaseTracking(Plan(new(null, new(false, null), null), tracked).Plan!),
             "only turning change tracking on needs the database to track changes");
+
+        // Apply's recheck in the transaction: the same table unchanged passes; gone, another table, or a change that alters the plan is refused.
+        var changes = new TableChangesDto("AUTO", new(true, true), [new("add", "C", "c")]);
+        var planned = Plan(changes).Plan!;
+        (string Code, string Message)? Recheck(TableProperties.Facts? now) => TableAlter.Recheck(Catalog, "AppData", "Sales", "Orders", changes, Plain, planned, now);
+        check(Recheck(Plain) is null && Recheck(Plain with { }) is null
+            && Recheck(null) is { Code: "NOT_FOUND" }
+            && Recheck(Plain with { Id = 902 }) == ("NOT_FOUND", tables.Message("notTheTable"))
+            && Recheck(Plain with { Created = "2026-01-02T00:00:00.000" }) == ("NOT_FOUND", tables.Message("notTheTable"))
+            && Recheck(Plain with { LockEscalation = "AUTO" }) == ("NOT_SUPPORTED", tables.Message("changed"))
+            && Recheck(Plain with { Tracking = true, TrackColumns = true }) == ("NOT_SUPPORTED", tables.Message("changed"))
+            && Recheck(Plain with { PrimaryKey = false }) == ("NOT_SUPPORTED", tables.Message("changed"))
+            && Recheck(Plain with { MemoryOptimized = true }) == ("NOT_SUPPORTED", tables.Message("changed")),
+            "the recheck passes the same table unchanged, and refuses one gone, replaced (another id or create date), or changed so the plan differs or is refused");
     }
 
     private static void Scripts(Action<bool, string> check)

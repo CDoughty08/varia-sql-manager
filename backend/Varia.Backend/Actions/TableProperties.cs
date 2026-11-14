@@ -98,7 +98,10 @@ internal static class TableProperties
                 + "JOIN sys.schemas AS sps ON sps.schema_id = spo.schema_id WHERE spr.target_object_id = @object_id ORDER BY sps.name, spo.name, spr.security_predicate_id;\n";
         return text + "SELECT " + Top(tables, "extendedProperties") + " ep.name AS name, CONVERT(sysname, SQL_VARIANT_PROPERTY(ep.value, 'BaseType')) AS base_type, "
             + "CASE WHEN CONVERT(sysname, SQL_VARIANT_PROPERTY(ep.value, 'BaseType')) IN (N'binary', N'varbinary') THEN CONVERT(nvarchar(4000), CONVERT(varbinary(8000), ep.value), 1) "
-            + "ELSE CONVERT(nvarchar(4000), ep.value) END AS value "
+            + "ELSE CONVERT(nvarchar(4000), ep.value) END AS value, "
+            // The text above holds 4,000 characters: 1,999 bytes as hex, or a varchar of more (sql_variant holds up to 8,000 bytes).
+            + "CASE WHEN CONVERT(sysname, SQL_VARIANT_PROPERTY(ep.value, 'BaseType')) IN (N'binary', N'varbinary') THEN CASE WHEN DATALENGTH(ep.value) > 1999 THEN 1 ELSE 0 END "
+            + "WHEN DATALENGTH(ep.value) > 4000 AND LEN(CONVERT(nvarchar(4000), ep.value)) >= 4000 AND CONVERT(sysname, SQL_VARIANT_PROPERTY(ep.value, 'BaseType')) IN (N'varchar', N'char') THEN 1 ELSE 0 END AS value_cut "
             + "FROM sys.extended_properties AS ep WHERE ep.class = 1 AND ep.major_id = @object_id AND ep.minor_id = 0 ORDER BY ep.name;";
     }
 
@@ -183,7 +186,7 @@ internal static class TableProperties
             [.. permissions.Take(Limit("permissions")).Select(item => new TablePermissionDto(item.Name("principal"), item.Text("principal_type") ?? "", item.Text("permission") ?? "", item.Text("state") ?? "",
                 item.Name("grantor"), NameOrNull(item, "column_name")))],
             permissions.Count > Limit("permissions"),
-            [.. properties.Take(Limit("extendedProperties")).Select(item => new TableExtendedPropertyDto(item.Name("name"), item.Raw("value") as string ?? "", TextType(item.Text("base_type"))))],
+            [.. properties.Take(Limit("extendedProperties")).Select(item => new TableExtendedPropertyDto(item.Name("name"), item.Raw("value") as string ?? "", TextType(item.Text("base_type")), item.Int("value_cut") == 1 ? true : null))],
             properties.Count > Limit("extendedProperties"), band, temporal, ledger,
             predicates is null ? null : [.. predicates.Take(Limit("securityPredicates")).Select(item => new TableSecurityPredicateDto(Qualified(item, "policy") ?? item.Name("policy_name"), item.Text("predicate_type") ?? "",
                 item.Raw("predicate") as string ?? "", item.Bool("enabled"), item.Text("operation"), item.Long("predicate_length") > chars ? true : null))],

@@ -63,6 +63,7 @@ internal static class TablePropertiesLiveChecks
             + "ALTER TABLE [Sa'les]]].[Or]]ders x] ENABLE CHANGE_TRACKING WITH (TRACK_COLUMNS_UPDATED = ON);\n"
             + "EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'Customer orders', @level0type = N'SCHEMA', @level0name = N'Sa''les]', @level1type = N'TABLE', @level1name = N'Or]ders x';\n"
             + "EXEC sys.sp_addextendedproperty @name = N'Blob', @value = 0x0102, @level0type = N'SCHEMA', @level0name = N'Sa''les]', @level1type = N'TABLE', @level1name = N'Or]ders x';\n"
+            + "DECLARE @long varchar(5000) = REPLICATE('a', 5000);\nEXEC sys.sp_addextendedproperty @name = N'Long', @value = @long, @level0type = N'SCHEMA', @level0name = N'Sa''les]', @level1type = N'TABLE', @level1name = N'Or]ders x';\n"
             + "GRANT SELECT ON [Sa'les]]].[Or]]ders x] TO public;\nINSERT [Sa'les]]].[Or]]ders x] (id, note) VALUES (1, N'a'), (2, N'b');", db) : setup;
         check(setup.Error is null, "the Table Properties scratch table is created with change tracking, compression, a permission and extended properties");
         var table = new ObjectRefDto("table", Database: db, Schema: schema, Name: name);
@@ -71,9 +72,11 @@ internal static class TablePropertiesLiveChecks
         var read = await Model();
         check(read is { ReadOnlyReason: null, General.LockEscalation: "TABLE", ChangeTracking: { DatabaseEnabled: true, Enabled: true, TrackColumnsUpdated: true, PrimaryKey: true }, Storage: { Compression: "PAGE", RowCount: 2, Filegroup: "PRIMARY", Partitioned: false } }
             && read.ExtendedProperties.Any(property => property is { Name: "MS_Description", Value: "Customer orders", Type: null })
-            && read.ExtendedProperties.Any(property => property is { Name: "Blob", Type: "varbinary" })
+            && read.ExtendedProperties.Any(property => property is { Name: "Blob", Type: "varbinary", Truncated: null })
+            && read.ExtendedProperties.Any(property => property is { Name: "Long", Type: null, Truncated: true, Value.Length: 4000 })
+            && read.ExtendedProperties.Single(property => property.Name == "MS_Description").Truncated is null
             && read.Permissions.Any(permission => permission is { Principal: "public", Permission: "SELECT", State: "GRANT" }) && read.General.Name == name && read.General.Schema == schema,
-            "Table Properties reads change tracking, Track columns updated, compression, rows, the permission and both extended properties (the binary one by its type)");
+            "Table Properties reads change tracking, Track columns updated, compression, rows, the permission and the extended properties (the binary one by its type, a varchar longer than it reads as cut short)");
         var identity = read is null ? null : new DatabaseIdentityDto(read.General.Id, read.General.Created);
 
         // Script runs nothing.

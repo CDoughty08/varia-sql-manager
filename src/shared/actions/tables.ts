@@ -131,8 +131,9 @@ export interface TableSecurityPredicate {
   readonly predicateTruncated?: boolean
   readonly enabled: boolean
 }
-/** One extended property: its name, its value as text, and the value's base type when it is not text (read-only then). */
-export interface TableExtendedProperty { readonly name: string; readonly value: string; readonly type?: string }
+/** One extended property: its name, its value as text, the value's base type when it is not text, and whether the value was read cut
+ *  short (read-only then, either way). */
+export interface TableExtendedProperty { readonly name: string; readonly value: string; readonly type?: string; readonly truncated?: boolean }
 /** What Table Properties shows. */
 export interface TablePropertiesModel {
   readonly general: TableGeneral

@@ -5,7 +5,7 @@ import { tableLimits, tableMessages, type TablePropertiesModel } from '../src/sh
 import { actionMenuState, dialogSpecs } from '../src/shared/actions/catalog'
 import type { ApiResult } from '../src/shared/contracts'
 import type { ObjectRef } from '../src/shared/explorer/refs'
-import { addPropertyRow, initialTableDraft, patchPropertyRow, propertyKey, tableChanged, tableChanges, tableConfirmation, tableErrors, tableNotes, tableRequest, type TableDraft, type TableRequest } from '../src/renderer/src/dialogs/table-properties'
+import { addPropertyRow, initialTableDraft, patchPropertyRow, propertyKey, rowEditable, tableChanged, tableChanges, tableConfirmation, tableErrors, tableNotes, tableRequest, type TableDraft, type TableRequest } from '../src/renderer/src/dialogs/table-properties'
 import { setScriptOpen } from '../src/renderer/src/kit/document-frame'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { generalFacts, storageFacts, tablePages, versioningFacts } from '../src/renderer/src/properties/table-fields'
@@ -54,6 +54,39 @@ describe('Table Properties draft', () => {
     expect(patchPropertyRow(start, 'read-1', { value: 'y' })).toEqual(start)
     expect(tableChanges(model, patchPropertyRow(start, 'read-1', { removed: true })).extendedProperties).toEqual([{ op: 'drop', name: 'Version' }])
     expect(patchPropertyRow(addPropertyRow(start, 'new-3'), 'new-3', { removed: true })).toEqual(start)
+  })
+  it('diffs renames, swaps and replacements by name, and turns a non-text value replaced by a row of its name into text', () => {
+    const model = tableModel({ extendedProperties: [{ name: 'A', value: '1' }, { name: 'B', value: '2' }, { name: 'Version', value: '0x01', type: 'varbinary' }] }), start = initialTableDraft(model)
+    // A case-only rename drops the old name first, then adds the new (the backend orders drops before adds).
+    expect(tableChanges(model, patchPropertyRow(start, 'read-0', { name: 'a' })).extendedProperties).toEqual([{ op: 'drop', name: 'A' }, { op: 'add', name: 'a', value: '1' }])
+    // Swapping two names changes both values in place.
+    const swapped = patchPropertyRow(patchPropertyRow(start, 'read-0', { name: 'B' }), 'read-1', { name: 'A' })
+    expect(tableChanges(model, swapped).extendedProperties).toEqual([{ op: 'update', name: 'B', value: '1' }, { op: 'update', name: 'A', value: '2' }])
+    expect(tableErrors(model, swapped).size).toBe(0)
+    // Removing a text property and adding it back as it was sends nothing.
+    const back = patchPropertyRow(patchPropertyRow(addPropertyRow(patchPropertyRow(start, 'read-0', { removed: true }), 'n'), 'n', { name: 'A' }), 'n', { value: '1' })
+    expect(tableChanged(model, back)).toBe(false)
+    // Removing a non-text property and adding text of its name writes that text, even when it reads the same as the hex shown.
+    const retyped = patchPropertyRow(patchPropertyRow(addPropertyRow(patchPropertyRow(start, 'read-2', { removed: true }), 'v'), 'v', { name: 'Version' }), 'v', { value: '0x01' })
+    expect(tableChanges(model, retyped).extendedProperties).toEqual([{ op: 'update', name: 'Version', value: '0x01' }])
+  })
+  it('checks only the rows that write: what SQL Server already holds never blocks Apply', () => {
+    // A varchar longer than Varia writes, one read cut short, a NUL, and two names that differ only by case (a case-sensitive database).
+    const long = 'x'.repeat(tableLimits.extendedPropertyValue + 10)
+    const model = tableModel({ extendedProperties: [{ name: 'Desc', value: long }, { name: 'desc', value: 'a\0b' }, { name: 'Cut', value: 'y'.repeat(4000), truncated: true }] }), start = initialTableDraft(model)
+    expect(tableErrors(model, start).size).toBe(0)
+    expect(request(model, { ...start, lockEscalation: 'AUTO' }).tableChanges).toEqual({ lockEscalation: 'AUTO' })
+    // The long and the cut values can only be removed; the others still take edits, which are checked.
+    const [desc, lower, cut] = start.extendedProperties
+    expect([rowEditable(desc!), rowEditable(lower!), rowEditable(cut!)]).toEqual([false, true, false])
+    expect(tableChanges(model, patchPropertyRow(start, 'read-2', { removed: true })).extendedProperties).toEqual([{ op: 'drop', name: 'Cut' }])
+    const edited = patchPropertyRow(start, 'read-1', { value: 'still\0bad' })
+    expect(tableErrors(model, edited).get(propertyKey(edited.extendedProperties[1]!, 'value'))).toBe(tableNotes.nul)
+    // A name that writes may not take another's under the default collation (case and trailing spaces), and a broken character is refused.
+    const clash = patchPropertyRow(patchPropertyRow(addPropertyRow(start, 'n'), 'n', { name: 'DESC ' }), 'n', { value: '\ud800' })
+    const errors = tableErrors(model, clash), row = clash.extendedProperties[3]!
+    expect([errors.get(propertyKey(row, 'name')), errors.get(propertyKey(row, 'value'))]).toEqual([tableMessages.duplicateName, tableNotes.broken])
+    expect(errors.get(propertyKey(clash.extendedProperties[0]!, 'name'))).toBeUndefined()
   })
   it('turns change tracking off and on again only to change Track columns updated, and asks first when it discards what was tracked', () => {
     const tracked = tableModel({ changeTracking: { databaseEnabled: true, enabled: true, trackColumnsUpdated: false, primaryKey: true } }), start = initialTableDraft(tracked)
@@ -177,6 +210,22 @@ describe('Table Properties as a document', () => {
     api.executeObjectAction.mockResolvedValueOnce(done)
     expect(await tableProperties.apply(id)).toBe(true)
     expect(executes()).toEqual([expect.objectContaining({ tableChanges: { changeTracking: { enabled: false } } })])
+  })
+  it('sends nothing when the server goes while the question is open, whatever the answer', async () => {
+    const { tableProperties, id, state, executes, api, connections } = opened(tableModel({ changeTracking: { databaseEnabled: true, enabled: true, trackColumnsUpdated: true, primaryKey: true } }))
+    await settled()
+    tableProperties.updateDraft(id, { changeTracking: false })
+    let answer!: (value: ApiResult<'apply' | 'cancel'>) => void
+    api.confirmAction.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    const applying = tableProperties.apply(id)
+    await settled()
+    expect(state().phase).toBe('confirming')
+    connections.remove('c1')
+    expect(state().phase).toBe('ready')
+    answer({ ok: true, value: 'apply' })
+    expect(await applying).toBe(false)
+    expect(executes()).toEqual([])
+    expect(state()).toMatchObject({ changed: true, stale: false })
   })
   it('keeps the changes after a failure SQL Server rolled back, and marks an Apply whose outcome is unknown', async () => {
     const { tableProperties, id, state, api } = opened()

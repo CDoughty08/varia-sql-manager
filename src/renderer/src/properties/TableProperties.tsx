@@ -141,18 +141,21 @@ function ExtendedPropertiesSection({ state, model, draft, editable: documentEdit
     {draft.extendedProperties.length === 0 ? <p className="field-note">The table has no extended properties.</p> : <div className="properties-table">
       <table className="object-dialog-grid" aria-labelledby={heading}>
         <thead><tr><th scope="col">Name</th><th scope="col">Value</th><th scope="col"><span className="visually-hidden">Remove</span></th></tr></thead>
-        <tbody>{draft.extendedProperties.map(row => {
+        <tbody>{draft.extendedProperties.map((row, index) => {
           const nameId = fieldId(state.id, `${row.key}-name`), valueId = fieldId(state.id, `${row.key}-value`), rowEdit = editable && rowEditable(row) && !row.removed
           const nameError = errors.get(propertyKey(row, 'name')), valueError = errors.get(propertyKey(row, 'value'))
           const nameChanged = row.origin ? row.name !== row.origin.name : true, valueChanged = row.origin ? row.value !== row.origin.value : true
+          // Each row's fields say which property they are; a problem is linked to its field and read when the field is, not announced as it appears.
+          const label = `property ${index + 1}`, readOnlyNote = row.origin?.type ? tableNotes.nonString : !rowEditable(row) ? tableNotes.tooLong : undefined
+          const errorAria = (id: string, error: string | undefined) => error ? { 'aria-invalid': true as const, 'aria-errormessage': `${id}-error`, 'aria-describedby': `${id}-error` } : {}
           return <tr key={row.key} data-removed={row.removed || undefined}>
-            <td><input id={nameId} className="property-input" type="text" aria-label="Name" maxLength={128} spellCheck={false} value={row.name} disabled={!rowEdit}
-              data-changed={nameChanged || undefined} aria-invalid={nameError ? true : undefined} title={nameError} onChange={event => service.patchProperty(state.id, row.key, { name: event.target.value })} />
-              {nameError && <span className="property-field-error" role="alert"><Icon name="error" />{nameError}</span>}</td>
-            <td>{row.origin?.type ? <span className="property-value" title={tableNotes.nonString}>{row.value} ({row.origin.type})</span>
-              : <input id={valueId} className="property-input" type="text" aria-label="Value" maxLength={tableLimits.extendedPropertyValue} spellCheck={false} value={row.value} disabled={!rowEdit}
-                data-changed={valueChanged || undefined} aria-invalid={valueError ? true : undefined} title={valueError} onChange={event => service.patchProperty(state.id, row.key, { value: event.target.value })} />}
-              {valueError && <span className="property-field-error" role="alert"><Icon name="error" />{valueError}</span>}</td>
+            <td><input id={nameId} className="property-input" type="text" aria-label={`Name of ${label}`} maxLength={128} spellCheck={false} value={row.name} disabled={!rowEdit}
+              data-changed={nameChanged || undefined} {...errorAria(nameId, nameError)} title={nameError} onChange={event => service.patchProperty(state.id, row.key, { name: event.target.value })} />
+              {nameError && <span id={`${nameId}-error`} className="property-field-error"><Icon name="error" />{nameError}</span>}</td>
+            <td>{readOnlyNote ? <span className="property-value" title={readOnlyNote}>{row.value}{row.origin?.truncated ? '…' : ''}{row.origin?.type ? ` (${row.origin.type})` : ''}</span>
+              : <input id={valueId} className="property-input" type="text" aria-label={`Value of ${label}`} maxLength={tableLimits.extendedPropertyValue} spellCheck={false} value={row.value} disabled={!rowEdit}
+                data-changed={valueChanged || undefined} {...errorAria(valueId, valueError)} title={valueError} onChange={event => service.patchProperty(state.id, row.key, { value: event.target.value })} />}
+              {valueError && <span id={`${valueId}-error`} className="property-field-error"><Icon name="error" />{valueError}</span>}</td>
             <td data-wrap="never">{row.removed
               ? <button type="button" disabled={!editable} onClick={() => service.patchProperty(state.id, row.key, { removed: false })}>Restore</button>
               : <button type="button" className="property-browse" aria-label={`Remove ${row.name || 'the new property'}`} title="Remove" disabled={!editable} onClick={() => service.patchProperty(state.id, row.key, { removed: true })}><Icon name="trash" /></button>}</td>

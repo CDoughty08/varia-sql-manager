@@ -672,7 +672,7 @@ internal sealed record TableLedgerDto(string Type, bool Dropped, string? View = 
 internal sealed record TableChangeTrackingDto(bool DatabaseEnabled, bool Enabled, bool TrackColumnsUpdated, bool PrimaryKey);
 internal sealed record TablePermissionDto(string Principal, string PrincipalType, string Permission, string State, string Grantor, string? Column = null);
 internal sealed record TableSecurityPredicateDto(string Policy, string Type, string Predicate, bool Enabled, string? Operation = null, bool? PredicateTruncated = null);
-internal sealed record TableExtendedPropertyDto(string Name, string Value, string? Type = null);
+internal sealed record TableExtendedPropertyDto(string Name, string Value, string? Type = null, bool? Truncated = null);
 /// <summary>Check Names (the windowsPrincipal describe, D2e; logins.ts WindowsPrincipal): the account as typed (xp_logininfo echoes it), whether a
 /// login gives it access (no row: the server found the account but none does), its type (user or group) and the path of its access.</summary>
 internal sealed record WindowsPrincipalDto(string AccountName, bool Access, string? Type = null, string? Via = null);

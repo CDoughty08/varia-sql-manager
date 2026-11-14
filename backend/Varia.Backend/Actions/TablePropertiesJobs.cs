@@ -81,12 +81,8 @@ internal sealed partial class ActionService
         async Task Recheck(StepContext context)
         {
             var now = await TableFactsAsync(connection, target, band, context.Token, context.Transaction);
-            if (now is null) throw new StepRefusedException(Error("NOT_FOUND", "The table " + Display(target) + " no longer exists. Refresh Object Explorer."));
-            if (now.Id != facts!.Id || now.Created != facts.Created) throw new StepRefusedException(Error("NOT_FOUND", catalog.Tables.Message("notTheTable")));
-            var (again, _) = TableAlter.Plan(catalog, target.Database!, target.Schema!, target.Name!, args.TableChanges!, now);
-            // TableStatement is a record: equal plans are the same statements, values and titles.
-            if (again is null || !again.SequenceEqual(plan))
-                throw new StepRefusedException(Error("NOT_SUPPORTED", catalog.Tables.Message("changed")));
+            if (TableAlter.Recheck(catalog, target.Database!, target.Schema!, target.Name!, args.TableChanges!, facts!, plan, now) is { } refusal)
+                throw new StepRefusedException(Error(refusal.Code, now is null ? "The table " + Display(target) + " no longer exists. Refresh Object Explorer." : refusal.Message));
         }
         var run = plan.Select((statement, index) => new RunStep(statement.Title, async context =>
         {

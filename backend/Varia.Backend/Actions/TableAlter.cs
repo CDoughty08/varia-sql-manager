@@ -75,10 +75,12 @@ internal static partial class TableAlter
         }
         if (changes.ChangeTracking is { } tracking)
         {
-            if (facts.MemoryOptimized) return (null, tables.Message("trackingMemoryOptimized"));
+            var before = plan.Count;
             var columns = tracking.TrackColumnsUpdated ?? (facts.Tracking && facts.TrackColumns);
             if (tracking.Enabled && !facts.Tracking)
             {
+                // Before the primary key: adding one would not help a memory-optimized table.
+                if (facts.MemoryOptimized) return (null, tables.Message("trackingMemoryOptimized"));
                 if (!facts.PrimaryKey) return (null, tables.Message("primaryKey"));
                 plan.Add(Statement(TableTemplate.EnableTracking, "enableTracking", columns ? "ON" : "OFF"));
             }
@@ -89,11 +91,25 @@ internal static partial class TableAlter
                 plan.Add(Statement(TableTemplate.EnableTracking, "enableTracking", columns ? "ON" : "OFF"));
             }
             else if (!tracking.Enabled && facts.Tracking) plan.Add(Statement(TableTemplate.DisableTracking, "disableTracking"));
+            // Refused only when it would change something: a request for the state the table has plans nothing, and says so.
+            if (plan.Count > before && facts.MemoryOptimized) return (null, tables.Message("trackingMemoryOptimized"));
         }
         foreach (var op in new[] { "drop", "update", "add" })
             foreach (var change in (changes.ExtendedProperties ?? []).Where(change => change.Op == op))
                 plan.Add(Statement(op switch { "drop" => TableTemplate.DropProperty, "update" => TableTemplate.UpdateProperty, _ => TableTemplate.AddProperty }, op, name: change.Name, value: change.Value));
         return plan.Count == 0 ? (null, tables.Message("nothingToChange")) : (plan, null);
+    }
+
+    /// <summary>Apply's recheck, the transaction's first step: why the table read again (<paramref name="now"/>; null when it is gone)
+    /// may not take the plan made from <paramref name="read"/>'s facts: another table, or one changed so the plan differs. Null when
+    /// it may. TableStatement is a record, so equal plans are the same statements, values and titles.</summary>
+    public static (string Code, string Message)? Recheck(ActionsCatalog catalog, string database, string schema, string table, TableChangesDto changes, TableProperties.Facts read,
+        IReadOnlyList<TableStatement> plan, TableProperties.Facts? now)
+    {
+        if (now is null) return ("NOT_FOUND", "gone");
+        if (now.Id != read.Id || now.Created != read.Created) return ("NOT_FOUND", catalog.Tables.Message("notTheTable"));
+        var (again, _) = Plan(catalog, database, schema, table, changes, now);
+        return again is null || !again.SequenceEqual(plan) ? ("NOT_SUPPORTED", catalog.Tables.Message("changed")) : null;
     }
 
     /// <summary>Whether the database must track changes before the plan runs: it turns a table's change tracking on.</summary>
