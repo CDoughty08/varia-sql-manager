@@ -654,7 +654,8 @@ Outcome, accepted by the owner:
         has the table.
 11. **Out of date and Update.**
     - **What PR 11 settled or left** (`tests/results-pivot.test.ts`'s "an out-of-date Pivot and Update",
-      `tests/menu-commands.test.ts`'s Update Pivot case and `results-smoke` step 13b2 hold its checks):
+      `tests/menu-commands.test.ts`'s Update Pivot case, `tests/results-stack.test.ts` and `tests/results-tabs.test.ts`
+      for the marks, and `results-smoke` step 13b2 hold its checks):
       - Out of date is a pure function of the published run, `pivotOutOfDate(tab, group)` in `ResultsService.ts`: the
         Pivot's recorded `filters` (PR 10's provenance) against `shownFilters`, the resolved filters of the view the
         Table's grid shows (none while it shows its stored rows). A view still being built does not count until it
@@ -670,11 +671,17 @@ Outcome, accepted by the owner:
       - Drawn on the Pivot's caption in Stacked, as the mock does: a warning chip "Out of date" and an **Update** button
         ("Update Pivot of Result N"), disabled while the query runs or the Table cannot be pivoted (its sort or filter
         being built, its rows lost). The strip starts with "Out of date: Result N's filters changed after this Pivot
-        was built. Update builds it again from Result N as it is filtered now." The view tab's dot belongs to PR 13's
-        tab strip, which had not merged; it reads `pivotOutOfDate` the same way.
+        was built. Update builds it again from Result N as it is filtered now." The mark is one component, `PivotMark`
+        (`ResultsStack.tsx`), which PR 13's Tabs layout also draws on its view row while the Pivot is shown; there the
+        Pivot's view tab carries a warning dot (described as "Out of date") whichever view is shown.
       - Update is a command, `output.updatePivot` ("Update Pivot"), offered for a group's Pivot or Table grid (the named
         one, else the focused one) while the Pivot is out of date, not being built and its Table can be pivoted. It is
-        not in the grid menu (no access key is left there) nor the toolbar; the caption and the palette carry it.
+        on the grid menu under Pivot Results… (with the same `when`, disabled until out of date), the caption and the
+        palette, not the toolbar. That menu shows up to 24 items and their titles hold only 23 letters (none has k, q or
+        x), so no assignment gives each a key. With the owner's agreement Update takes **u** and Pivot Results…, whose key
+        was assigned automatically, goes without one; every other key is unchanged. `tests/command-catalog.test.ts` now
+        lets an item go without a key only where `keylessItems` names it and every letter of its title is the key of an
+        item shown with it. The menu already reaches such an item by arrow keys and type-ahead.
       - `PivotService.update(tabId, key)` builds from the Pivot's stored recipe, never the builder's draft (an edit not
         yet built stays in the draft), through the same `start` path as Build Pivot: the Table's shown view held, one of
         `DerivedJobs`' places with its retries, `addSet`'s atomic replacement, the old Pivot readable until then. A second
@@ -687,8 +694,10 @@ Outcome, accepted by the owner:
       - A closed source: closing the Table (which closes the Pivot), closing the Pivot, a re-run, Close Results and the
         tab closing give an Update up through PR 10's rules, its late answer released, and nothing is said. After
         backend loss the Table cannot be pivoted, so Update is neither offered nor sent.
-      - Left: rebuilding by itself (PR 17); the Tabs dot (PR 13 or whichever lands second); a Pivot whose last build
-        failed or was cancelled stays marked, with no record of the failure on its caption (the toolbar's notice fades).
+      - Left: rebuilding by itself (PR 17); a Pivot whose last build failed or was cancelled stays marked, with no
+        record of the failure on its caption (the toolbar's notice fades); comparing filters by the values they keep
+        rather than their representative rows and snapshots, so re-ticking the same values does not mark a Pivot (a
+        follow-up the owner asked for).
 12. **`hasResultSets`** and its consumers (after PRs 7 and 9, which edit the same contributions). Until then an
     emptied run with captured plans still has `hasResults`, so Find and Save Results As are enabled and do nothing.
     Consumers: `contributions/output.ts`, `pivot.ts`, `transpose.ts`, `PivotService`'s sync,
@@ -697,6 +706,71 @@ Outcome, accepted by the owner:
     tabs, the strip rule, focus fallback. Existing smoke suites pin Stacked by setting; a new `grouped-results` suite
     covers Tabs, with its seconds recorded in `scripts/smoke-shards.mjs` and `docs/ci.md` (`results-smoke` is already near
     the split guideline).
+    - **What PR 13 settled or left** (`tests/results-tabs.test.ts` holds its checks, with `tests/layout-focus.test.ts` for
+      the focus across a switch and `tests/results-stack.test.ts` for the stack's side; `scripts/grouped-results-smoke.mjs`
+      its interface steps):
+      - The layout is `ResultsTabs` beside `ResultsStack`, chosen by `OutputPane` from `queryResults.grid.layout`
+        (`stacked` | `tabs`, default `stacked`). The toggle is `output.toggleResultsTabs` ("Show Results as Tabs"), a
+        context key `resultsTabs`, a toolbar button in the results toolbar's last group, and Window › Results as Tabs.
+        It is not in the grid menu: that menu has no free access key left (as PR 9 found), so the native menu
+        placement every toggle needs went to the Window menu, beside Panel Tabs.
+      - After PR 10 (a rebuilt Pivot keeps its entry key and swaps in a new result), the one grid is keyed by its
+        result's `setKey`, as the stack's is, so a rebuilt Pivot is drawn over its new result, and the layout tells a
+        built Pivot by its result rather than its key: building a result's Pivot again from its Table shows it at once.
+      - One `ResultsService` change: `removeEntry` gives the focus to the view the neighbouring group last showed
+        (`shownView`), not the next entry of the flat list, so closing Result 2 neither lands on Result 1's Pivot it
+        never showed nor makes Result 3 forget its Pivot. `tests/results-groups.test.ts`' check of PR 9's old rule
+        changed with it. Otherwise the selected view is the published `focused` entry, falling back to the run's first
+        entry; a tab click, an arrow key, Find Next and a close all go through `focusEntry`/`removeEntry`, so commands,
+        the toolbar, the menus' Transposed toggle and the builder follow the view shown. A group's tab selects
+        `ResultGroup.selected`. Column Profile follows the selected view in Tabs (in Stacked it still follows DOM focus).
+      - Streaming keeps the first group selected because `focused` stays unset until a grid or tab takes it. A run that
+        inherits a focused ordinal from the previous run (`refocus`, PR 9) selects that group when it arrives, even
+        mid-stream: "a tab the user picks stays picked" covers the pick from the last run (the owner confirmed this on 2026-11-13).
+      - A Pivot built for the selected group is selected at once (in `ResultsTabs`, not `PivotService`, which PR 10
+        rewrites); a rebuilt Pivot already took the focus through `PivotService`. While a comparison or a plan set is selected the builder
+        works on a group it can pivot, so a Pivot built for any group is selected. A Pivot that appears for another group
+        while a group that can be pivoted is selected, or while a grid of the layout has the focus (the user went back to a
+        grid during the build, where PivotService also leaves the focus), selects nothing. A comparison made while the layout is drawn is selected the same way (it is the row's last tab,
+        often past the strip's edge).
+      - Only the selected grid is mounted, keyed by entry key: switching unmounts the other `ResultGrid`, whose
+        `GridShell` disposes its view, pool and registration; its state stays in `TabViewState.grids`. The service's
+        retiring of backend views superseded while unmounted is still as before (plan, Rendering and commands).
+      - Without the overflow picker, a run of more than `gridLimits.resultTabsDrawn` (64) results draws a window of 64
+        result tabs around the selected one with "+N" counts either side; arrow keys and Find Next reach the rest. PR 14
+        replaces the counts with the picker. Fewer tabs than that fit a pane, so the tabs drawn sit in a strip that scrolls
+        sideways (the wheel too) with no scroll bar and fades a clipped edge. It brings the selected tab into view, clear
+        of the fade (`revealLeft`), when the selection or the window moves and when the strip is resized (`observeResize`,
+        so in a popout too), never on a plain redraw, so a strip the user scrolled stays put. Comparisons are tabs in the same row, after the groups, with a "Comparison"
+        label where view tabs would be.
+      - The view row carries the view's facts (rows, columns, batch), its filter chips (the stack's `FilterChips`, now
+        shared) and Save Results As; there is no caption. The two rows are `gridLimits.resultTabsHeight` and
+        `viewTabsHeight` (28 px each), which `tabsNeed` adds to the grid's floor (or settled rows) for the strip rule.
+      - A switch while a grid had the focus (F3 onto another view, Close Just This Result, a comparison shown as it is
+        made) focuses the grid shown instead before its effects run, so a reveal makes the match its active cell and the grid's
+        keys keep working.
+      - Close focus: a closed view moves the focus to the tab selected next in the row it was in (a Pivot's to its
+        Table's view tab), else the Results tab, only when the focus was in what closed or nowhere. Tab close buttons
+        are not Tab stops (one Tab stop per row); `output.closeResult` from the palette closes the selected view once a tab or
+        grid has been used: as in Stacked, it never closes the run's first result for want of one.
+      - Stacked's caption close follows the service's new rule: when the closed view had the grid focus, the caption focus
+        goes to the view the service focused (the neighbour's last-shown Pivot or Table), so the two never disagree.
+      - Switching the layout while a grid has the focus (the palette and the menus give it back to the grid before the
+        command runs) gives the focus to the focused view's grid in the other layout once it is mounted (`OutputPane`'s
+        `useLayoutFocus`), instead of letting it fall to the page. The stack drawn then opens that view if collapsed and
+        scrolls it into view (`revealFocused`, through Find Next's reveal), so its grid mounts; the hand-off gives up as
+        soon as the user clicks, wheels or moves the focus. Whether a grid of the pane had the focus is read in the render
+        that switches, not kept from focus events, so a grid removed by a re-run or Close Results leaves nothing behind.
+      - The strip's wheel is the fixed gesture `resultTabs.scroll` (Control+wheel still zooms), and in forced colours the
+        selected tab's focus ring is HighlightText on Highlight.
+      - Existing suites that read stacked captions pin Stacked: `results-smoke`, `popout-smoke`, `electron-smoke` and
+        `explorer-smoke` through `pinStackedResults` (`scripts/fixtures/results-pane.mjs`), `menus-smoke` in its seeded
+        `settings.json`. The new suite took 4 s on Linux and 6 s on Windows in CI (its shard weights).
+      - Departures from the mock: one toggle button rather than a Stacked/Tabs segmented pair (the toolbar must fit a
+        1,024 px window); no facts row of its own under the view tabs; no streaming dot on a group's tab; the view's
+        actions stay in the results toolbar (the mock's Actions menu is PR 15's narrow-pane work).
+      - Getting Started: the results guide describes per-grid actions and no layout, so it is unchanged; PR 14, which
+        makes Tabs the default, should add the layout there.
 14. **Overflow picker and navigation commands; Tabs becomes the default.** The 1,000-group case is a vitest and a
     benchmark case, not smoke.
 15. **Save names, narrow and short panes, popouts.**

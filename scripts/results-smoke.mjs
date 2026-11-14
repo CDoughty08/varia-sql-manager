@@ -9,7 +9,7 @@ import { join, resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
 import { checkClientStatistics } from './fixtures/client-statistics.mjs'
-import { enlargeOutput, sizeResultStack } from './fixtures/results-pane.mjs'
+import { enlargeOutput, pinStackedResults, sizeResultStack } from './fixtures/results-pane.mjs'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, anyResultGrid, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice,
@@ -196,6 +196,8 @@ async function focusRingPixels() {
 
 try {
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
+  // These steps read the stacked layout: captions, splitters, several grids at once. scripts/grouped-results-smoke.mjs covers Tabs.
+  await pinStackedResults(page)
   // A hidden window draws about once a second; the grid's frames and the scroll steps need real ones.
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive())
   // Closing an unsaved query asks first; answer Don't Save.
@@ -1533,7 +1535,7 @@ try {
   await page.keyboard.press('Shift+F10')
   const outputMenu = page.getByRole('menu', { name: 'Query output', exact: true })
   await expect(outputMenu).toBeVisible()
-  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Filter', 'Highlight', 'Compare with Previous Result', 'Compare…', 'Pivot Results…', 'Transpose', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Just This Result', 'Close Results'])
+  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Filter', 'Highlight', 'Compare with Previous Result', 'Compare…', 'Pivot Results…', 'Update Pivot', 'Transpose', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Just This Result', 'Close Results'])
   await page.keyboard.press('Escape')
   // Shift+F10 right after a click opens at the cell just clicked, though the grid paints it as active only on its next
   // frame: below it (or above, when there is no room), from its left edge (or to its right edge, near the window's).
@@ -2164,9 +2166,11 @@ try {
       groups: [...tools.children].filter(child => child.getBoundingClientRect().width > 0).map(child => ({ name: child.getAttribute('aria-label'), width: child.getBoundingClientRect().width })) }
   })
   expect(toolsLayout.fits, JSON.stringify(toolsLayout)).toBe(true)
-  // Transposed and Compare give way in a narrow window (both are in the grid's menu and the palette), so the other groups fit.
+  // Transposed and Compare give way in a narrow window (both are in the grid's menu and the palette), so the other groups
+  // fit; so does Tabs (in the palette and the Window menu).
   await expect(resultsToolbar(page).getByRole('button', { name: 'Transposed', exact: true })).toBeHidden()
   await expect(resultsToolbar(page).getByRole('button', { name: 'Compare', exact: true })).toBeHidden()
+  await expect(resultsToolbar(page).getByRole('button', { name: 'Tabs', exact: true })).toBeHidden()
   await expect(resultsToolbar(page).getByRole('button', { name: 'Close Results', exact: true })).toBeInViewport({ ratio: 1 })
   await cell(0, 0).click()
   await page.keyboard.press('Control+F')
@@ -2675,6 +2679,7 @@ try {
     page = await application.firstWindow()
     page.setDefaultTimeout(30000)
     page.on('pageerror', error => failures.push(error.message))
+    await pinStackedResults(page)
     await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive())
     await application.evaluate(({ dialog }) => {
       dialog.showMessageBox = async (...args) => {

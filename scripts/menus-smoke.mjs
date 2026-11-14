@@ -12,7 +12,7 @@ await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'menus-profile-'))
 // The suite sends the window synthetic focus events with a saved query open; the external-change check each one starts
 // 500 ms later holds the document lock, and a menu item chosen then (New Query needs !documentBusy) was refused.
-await writeFile(join(profile, 'settings.json'), JSON.stringify({ version: 1, values: { 'environment.documents.detectExternalChanges': false } }))
+await writeFile(join(profile, 'settings.json'), JSON.stringify({ version: 1, values: { 'environment.documents.detectExternalChanges': false, 'queryResults.grid.layout': 'stacked' } }))
 const control = await mkdtemp(resolve('artifacts', 'menus-backend-'))
 const liveEnv = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile }
 delete liveEnv.ELECTRON_RUN_AS_NODE
@@ -1015,7 +1015,7 @@ try {
   await expect(grid.getByRole('columnheader').nth(2)).toContainText('(No column name)')
   // A right-click selects the cell under it first; Copy copies its value.
   await cell(1, 2).click({ button: 'right', force: true })
-  expect(await outputLabels()).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Filter', 'Highlight', 'Compare with Previous Result', 'Compare…', 'Pivot Results…', 'Transpose', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Just This Result', 'Close Results'])
+  expect(await outputLabels()).toEqual(['Copy', 'Copy with Headers', 'Copy Column Name', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Filter', 'Highlight', 'Compare with Previous Result', 'Compare…', 'Pivot Results…', 'Update Pivot', 'Transpose', 'Fit Column', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size', 'Close Just This Result', 'Close Results'])
   await expect(selected()).toHaveCount(1)
   await expect(cell(1, 2)).toHaveAttribute('aria-selected', 'true')
   await outputMenu.getByRole('menuitem', { name: 'Copy', exact: true }).click()

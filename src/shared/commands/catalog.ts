@@ -1033,9 +1033,12 @@ export const commandCatalog = {
   },
   // A group's Pivot is out of date once its Table's filters differ from those its last build read; Update builds it again
   // from its own recipe over the Table as filtered now, replacing it atomically (the old one stays until the new one is
-  // built). The Pivot's caption offers it beside its Out of date mark; the grid menu has no letter left for it.
+  // built). The Pivot's caption offers it beside its Out of date mark, and the grid menu under Pivot Results…. That menu
+  // shows more items than its titles have letters, so Update takes 'u' and Pivot Results… is left without an access key
+  // (arrow keys and type-ahead still reach it); every other item keeps the key it had.
   'output.updatePivot': {
-    title: 'Update Pivot', category: 'Query', icon: 'refresh', keywords: ['pivot', 'update', 'rebuild', 'refresh', 'outdated', 'stale', 'filters', 'grid', 'result']
+    title: 'Update Pivot', category: 'Query', icon: 'refresh', keywords: ['pivot', 'update', 'rebuild', 'refresh', 'outdated', 'stale', 'filters', 'grid', 'result'],
+    menus: [{ menu: 'output.context', group: '2_sort', order: 11, mnemonic: 'u', when: "outputView == 'grid' && !outputGridBare" }]
   },
   // Transposed is a way a grid is drawn, kept with the view and stored nowhere (ResultsService.setOrientation): the result's
   // columns as rows and its first limits.transpose.maxRows rows as columns, following its sort and filters. Transpose
@@ -1065,6 +1068,11 @@ export const commandCatalog = {
   'output.toggleColumnProfile': {
     title: 'Show Column Profile', category: 'Query', icon: 'graph', keywords: ['profile', 'stats', 'statistics', 'distinct', 'nulls', 'histogram', 'grid', 'column'],
     toggled: 'resultsColumnProfile', menus: [{ menu: 'output.context', group: '4_view', order: 3, title: 'Column Profile', mnemonic: 'f', when: "outputView == 'grid'" }]
+  },
+  // The results toolbar's layout toggle (queryResults.grid.layout): every result stacked, or one at a time under tabs.
+  'output.toggleResultsTabs': {
+    title: 'Show Results as Tabs', category: 'Query', icon: 'window', keywords: ['tabs', 'stacked', 'stack', 'groups', 'results', 'one', 'grid'],
+    toggled: 'resultsTabs', menus: [{ menu: 'window', group: '1_panes', order: 9, title: 'Results as Tabs', mnemonic: 'b' }]
   },
   'output.toggleRowSize': {
     title: 'Show Row Size in Results', category: 'Query', icon: 'list-flat', keywords: ['row', 'size', 'bytes', 'datalength', 'bar', 'grid'],
