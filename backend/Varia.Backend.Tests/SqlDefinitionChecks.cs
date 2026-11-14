@@ -175,6 +175,39 @@ internal static class SqlDefinitionChecks
             && Candidates("USE [Sales Data]\nGO\nSELECT o.To|tal FROM dbo.Orders AS o") is [{ Database: "Sales Data", Schema: "dbo", Name: "Orders" }]
             && Candidates("USE Sales; SELECT * FROM Other.dbo.Ord|ers") is [{ Database: "Other" }],
             "USE earlier in the script is the database a name without one resolves in");
+        check(Candidates("SELECT * FROM dbo.T OPTION (USE HINT('FORCE_LEGACY_CARDINALITY_ESTIMATION'))\nSELECT * FROM dbo.Ord|ers") is [{ Database: null, Schema: "dbo", Name: "Orders" }],
+            "a query's USE HINT is no USE statement");
+        check(Candidates("SELECT * FROM dbo.Lines l WHERE\nSELECT o.Total FROM dbo.Orders o ORDER BY o.Status|") is [{ Schema: "dbo", Name: "Orders" }]
+            && Candidates("SELECT * FROM dbo.Lines l WHERE\nSELECT o.Total FROM dbo.Orders o|") is [{ Schema: "dbo", Name: "Orders" }],
+            "a caret at the end of the text still finds its statement's aliases");
+        check(Candidates("SELECT COUNT( FROM dbo.X\nSELECT o.Tot|al FROM dbo.Orders o WHERE o.Id = 1") is [{ Schema: "dbo", Name: "Orders" }]
+            && Candidates("SELECT * FROM dbo.X WHERE Id IN (1, 2\nSELECT l.Qt|y FROM dbo.Lines l WHERE l.Id = 1") is [{ Schema: "dbo", Name: "Lines" }],
+            "an unclosed parenthesis before the caret's statement does not hide it");
+        check(Candidates("SELECT o.Id\nFROM dbo.Orders o\nWHERE o.Id IN (\n  SELECT a.X FROM dbo.A a)\n  OR o.Id IN (\n  SELECT b.X FROM dbo.B b)\n  OR o.Id IN (\n  SELECT c.X FROM dbo.C c)\n  OR o.Id IN (\n  SELECT d.X FROM dbo.D d)\nORDER BY o.To|tal\n\nSELECT * FROM dbo.Lines WHERE") is [{ Schema: "dbo", Name: "Orders" }]
+            && Candidates("WITH a AS (\n  SELECT 1 AS x), b AS (\n  SELECT 1 AS x), c AS (\n  SELECT 1 AS x), d AS (\n  SELECT 1 AS x)\nSELECT * FROM d|\nSELECT * FROM dbo.Lines WHERE") is [],
+            "subqueries on their own lines never crowd their statement's start out of the fallback's reach");
+        check(Candidates("ALTER TABLE dbo.Lines ADD CONSTRAINT fk FOREIGN KEY (Order|Id) REFERENCES dbo.Orders (Id)") is [{ Schema: "dbo", Name: "Lines" }]
+            && Candidates("CREATE TABLE dbo.T (Id int, PId int, CONSTRAINT fk FOREIGN KEY (P|Id) REFERENCES dbo.P (Id))") is [{ Schema: "dbo", Name: "T" }]
+            && Candidates("ALTER TABLE dbo.Lines ADD CONSTRAINT pk PRIMARY KEY (I|d)") is [{ Schema: "dbo", Name: "Lines" }],
+            "a key's or foreign key's own columns are its table's");
+        check(Candidates("SELECT * FROM dbo.tv|f(1) AS f") is [{ Schema: "dbo", Name: "tvf", Column: null }],
+            "a FROM clause's table-valued function is never a column's method");
+        check(Candidates("WITH src AS (SELECT Id, Name FROM dbo.Staging) INSERT INTO dbo.Customer (Id, Name) SELECT Id, Na|me FROM src") is []
+            && Candidates("INSERT INTO dbo.Archive (Id) SELECT I|d FROM dbo.Orders") is [{ Schema: "dbo", Name: "Orders", Column: null }]
+            && Candidates("INSERT INTO dbo.Archive (I|d) SELECT Id FROM dbo.Orders") is [{ Schema: "dbo", Name: "Archive" }],
+            "an INSERT's target is no source of its SELECT's columns, only of its column list");
+        check(Candidates("SELECT o|.* FROM dbo.Orders o JOIN dbo.Lines l ON o.Id = l.OrderId") is [{ Schema: "dbo", Name: "Orders" }]
+            && Candidates("SELECT l|.* FROM dbo.Orders o JOIN dbo.Lines l ON o.Id = l.OrderId") is [{ Schema: "dbo", Name: "Lines" }]
+            && Candidates("SELECT d|.* FROM (SELECT 1 AS a) AS d") is [],
+            "a qualified star's qualifier is its table");
+        check(At("CREATE TABLE dbo.T (I|d int)") is null
+            && At("WITH c(a|b, cd) AS (SELECT 1, 2) SELECT * FROM c") is null
+            && At("SELECT * FROM (VALUES (1)) AS t(v|v)") is null
+            && At("SELECT * FROM dbo.X x CROSS APPLY x.Doc.nodes('/a') AS t(c|)") is null,
+            "a declared column has no object");
+        check(Candidates("SELECT t.c.val|ue('.', 'int') FROM dbo.X x CROSS APPLY x.Doc.nodes('/a') AS t(c)") is []
+            && Candidates("SELECT * FROM dbo.X x CROSS APPLY x.Doc.no|des('/a') AS t(c)") is [{ Schema: "dbo", Name: "X" }],
+            "an XML nodes() call is a method of its table's column, never a database's function");
         // A batch that does not parse still has a caret statement that may.
         check(Candidates("SELECT c.Na|me FROM dbo.C c; SELECT * FROM") is [{ Schema: "dbo", Name: "C" }]
             && Candidates("SELECT Na|me FROM dbo.C; SELECT * FROM") is [{ Schema: "dbo", Name: "C", Column: null }]

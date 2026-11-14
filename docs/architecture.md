@@ -45,9 +45,12 @@ being true.
   an alias hides an object of its name, while a table reference's own name is always the object it names; a CTE, derived
   table, table variable, PIVOT or trigger's inserted names no object; a table-valued function's alias stands for the
   function, MERGE's target alias for its target, OUTPUT's inserted and deleted for the DML target, and a column in an
-  INSERT, OUTPUT INTO, index or foreign key list for that list's table. A correlated subquery's or APPLY's bare column may be
+  INSERT, OUTPUT INTO, index, key or foreign key list for that list's table. A correlated subquery's or APPLY's bare column may be
   an outer table's (offered after its own, with the column checked); a derived table's or CTE's may not. A call on a column
-  (t.Doc.value()) is its table's column, and USE earlier in the script is the database for names without one. Constant `DefinitionSql.Lookup` resolves the candidates on the Object
+  (t.Doc.value(), x.Doc.nodes()) is its table's column, a qualified star's qualifier (o.*) is its table, an INSERT's or
+  OUTPUT INTO's table is never a source of the statement's columns, a declared column (a table's, CTE's or derived table's
+  column list, a select-list alias) names no object, and USE earlier in the script (never a query's USE HINT) is the database
+  for names without one. Constant `DefinitionSql.Lookup` resolves the candidates on the Object
   Explorer pool, names only as parameters, another database's through the `QUOTENAME(@db)` wrapper, a one-part name in the
   default schema, then dbo, then sys, within a 10 s budget. A missing object or a database that is gone or closed to the
   login is `null`, which the renderer shows as a status-bar notice, never an error banner; a server or login that cannot be

@@ -68,7 +68,8 @@ internal static class DefinitionNames
         // USE earlier in the script changes the database a name without one resolves in, as it does when the script runs.
         string? use = null;
         for (var index = 0; index < first; index++)
-            if (tokens[index].TokenType == TSqlTokenType.Use && Ahead(index) is var database && Name(database) && Unquote(tokens[database]) is { Length: > 0 and <= 128 } named) use = named;
+            if (tokens[index].TokenType == TSqlTokenType.Use && Ahead(index) is var database && Name(database) && !Is(Ahead(database), TSqlTokenType.LeftParenthesis)
+                && Unquote(tokens[database]) is { Length: > 0 and <= 128 } named) use = named;
         var scope = Scope.Read(text, tokens, offset);
         if (parts.Count == 4 && (!scope.Column || call)) return null;
         var candidates = new List<DefinitionName>();
@@ -95,7 +96,7 @@ internal static class DefinitionNames
             else
             {
                 Add(Object(parts));
-                if (target is [{ } column]) foreach (var source in scope.Sources.Concat(scope.OuterSources)) Add(source with { Column = column });
+                if (target is [{ } column] && !scope.TableFunction) foreach (var source in scope.Sources.Concat(scope.OuterSources)) Add(source with { Column = column });
             }
             return Done();
         }
@@ -124,6 +125,7 @@ internal static class DefinitionNames
         // Not a column: a table reference's own name is that object, an alias where it is declared is its table, and any other
         // name (EXEC, a type, a FROM name) is the object it names; another scope's alias never hides it.
         if (scope.Declares) Add(scope.Declared);
+        else if (scope.Star && parts is [{ } qualifier] && scope.Knows(qualifier, out var starred)) Add(starred);
         else Add(Object(parts));
         // Without a parse, a qualified column (alias.column or table.column) is as likely as an object.
         if (!scope.Parsed && parts.Count >= 2) Add(Object(parts.Take(parts.Count - 1).ToList()));
@@ -209,6 +211,10 @@ internal static class DefinitionNames
         /// <summary>The caret's column is in a column list (INSERT's, OUTPUT INTO's) of this table; null when none, or unknown.</summary>
         public DefinitionName? ListTable { get; private set; }
         public bool InList { get; private set; }
+        /// <summary>The caret is on the qualifier of a select list's qualified star (o.*).</summary>
+        public bool Star { get; private set; }
+        /// <summary>The caret is on a FROM clause's table-valued function name, which is never a column's method.</summary>
+        public bool TableFunction { get; private set; }
 
         public bool Knows(string name, out DefinitionName? target) => aliases.TryGetValue(name, out target);
 
@@ -233,27 +239,41 @@ internal static class DefinitionNames
             // A batch that does not parse (a half-typed statement before or after this one, or one too long) may still hold a
             // caret statement that does. Statements start after a semicolon or at a statement keyword outside parentheses; the
             // widest span of up to four statements around the caret that parses wins (keywords like SET or WITH also occur
-            // inside a statement, so a wider span keeps them together).
-            List<int> bounds = [from];
-            var depth = 0;
-            foreach (var token in tokens)
+            // inside a statement, so a wider span keeps them together). Only when none parses does a keyword that starts its
+            // line count inside parentheses too, so an unclosed one in a half-typed statement does not hide the statements after
+            // it (tried second, as a well-formatted statement's subqueries would otherwise crowd its own start out of reach).
+            List<(int From, int To)> tried = [(from, to)];
+            foreach (var lines in (bool[])[false, true])
             {
-                if (token.Offset < from) continue;
-                if (token.Offset >= to) break;
-                if (token.TokenType == TSqlTokenType.LeftParenthesis) depth++;
-                else if (token.TokenType == TSqlTokenType.RightParenthesis) depth = Math.Max(0, depth - 1);
-                else if (token.TokenType == TSqlTokenType.Semicolon) bounds.Add(token.Offset + 1);
-                else if (depth == 0 && token.Offset > from && StatementStarts.Contains(token.TokenType)) bounds.Add(token.Offset);
+                List<int> bounds = [from];
+                var depth = 0;
+                var lineStart = true;
+                foreach (var token in tokens)
+                {
+                    if (token.Offset < from) continue;
+                    if (token.Offset >= to) break;
+                    if (token.TokenType == TSqlTokenType.WhiteSpace) { lineStart |= token.Text.Contains('\n') || token.Text.Contains('\r'); continue; }
+                    if (token.TokenType == TSqlTokenType.LeftParenthesis) depth++;
+                    else if (token.TokenType == TSqlTokenType.RightParenthesis) depth = Math.Max(0, depth - 1);
+                    else if (token.TokenType == TSqlTokenType.Semicolon) { bounds.Add(token.Offset + 1); depth = 0; }
+                    else if ((depth == 0 || lines && lineStart) && token.Offset > from && StatementStarts.Contains(token.TokenType)) bounds.Add(token.Offset);
+                    lineStart = token.TokenType == TSqlTokenType.SingleLineComment;
+                }
+                bounds.Add(to);
+                bounds = [.. bounds.Distinct().Order()];
+                // The statement the caret is in or ends: a caret at a bound (the end of the text, or a name just before a
+                // keyword) belongs to the statement before it.
+                var at = Math.Max(0, bounds.FindLastIndex(bound => bound < offset));
+                List<(int From, int To)> spans = [];
+                for (var left = Math.Max(0, at - 3); left <= at; left++)
+                    for (var right = at + 1; right < Math.Min(bounds.Count, at + 5); right++)
+                        if (!tried.Contains((bounds[left], bounds[right]))) spans.Add((bounds[left], bounds[right]));
+                foreach (var span in spans.OrderByDescending(span => span.To - span.From))
+                {
+                    tried.Add(span);
+                    if (Parse(text[span.From..span.To], offset - span.From) is { } scope) return scope;
+                }
             }
-            bounds.Add(to);
-            bounds = [.. bounds.Distinct().Order()];
-            var at = bounds.FindLastIndex(bound => bound <= offset);
-            List<(int From, int To)> spans = [];
-            for (var left = Math.Max(0, at - 3); left <= at; left++)
-                for (var right = at + 1; right < Math.Min(bounds.Count, at + 5); right++)
-                    if ((bounds[left], bounds[right]) != (from, to)) spans.Add((bounds[left], bounds[right]));
-            foreach (var span in spans.OrderByDescending(span => span.To - span.From))
-                if (Parse(text[span.From..span.To], offset - span.From) is { } scope) return scope;
             return None;
         }
 
@@ -274,7 +294,7 @@ internal static class DefinitionNames
             if (errors.Count != 0) return null;
             var visitor = new CaretVisitor(offset);
             fragment.Accept(visitor);
-            var scope = new Scope { Parsed = true, Column = visitor.Column is not null };
+            var scope = new Scope { Parsed = true, Column = visitor.Column is not null, Star = visitor.Star, TableFunction = visitor.TableFunction };
             if (visitor.Statement is null) return scope;
             var ctes = new CteCollector();
             visitor.Statement.Accept(ctes);
@@ -295,7 +315,10 @@ internal static class DefinitionNames
                 bool NamesAnother(TableRef table) => table.ByName && table.Target is { Database: null, Schema: null } && table.Alias is null && table.BaseName is { } own
                     && tables.Refs.Any(other => !ReferenceEquals(other, table) && other.Target != table.Target
                         && (string.Equals(other.Alias, own, StringComparison.OrdinalIgnoreCase) || other.Alias is null && string.Equals(other.BaseName, own, StringComparison.OrdinalIgnoreCase)));
-                var named = tables.Refs.Where(table => !NamesAnother(table)).ToList();
+                // x.Doc.nodes('/a') AS t(c) calls a method of table x's column Doc: no object (and no database x).
+                bool Method(TableRef table) => table.Function && table.Target is { Database: { } database }
+                    && (scope.aliases.ContainsKey(database) || tables.Refs.Any(other => string.Equals(other.Alias ?? other.BaseName, database, StringComparison.OrdinalIgnoreCase)));
+                var named = tables.Refs.Where(table => !NamesAnother(table)).Select(table => Method(table) ? table with { Target = null } : table).ToList();
                 // Aliases before base names, so an alias is never taken for a table of its name; an aliased table's own name is
                 // hidden, as SQL Server hides it.
                 foreach (var table in named) if (table.Alias is { } alias) scope.aliases.TryAdd(alias, table.Target);
@@ -418,6 +441,10 @@ internal static class DefinitionNames
         public SchemaObjectName? ListName { get; private set; }
         /// <summary>The caret is on a select list's column alias (AS name), which has no object.</summary>
         public bool ColumnAlias { get; private set; }
+        /// <summary>The caret is on the qualifier of a select list's qualified star (o.*).</summary>
+        public bool Star { get; private set; }
+        /// <summary>The caret is on a FROM clause's table-valued function name, which is never a column's method.</summary>
+        public bool TableFunction { get; private set; }
 
         private bool Contains(TSqlFragment? node) => node is not null && node.StartOffset >= 0 && node.StartOffset <= offset && offset <= node.StartOffset + node.FragmentLength;
 
@@ -441,6 +468,7 @@ internal static class DefinitionNames
         public override void ExplicitVisit(CommonTableExpression node)
         {
             if (Contains(node.ExpressionName)) CteName = true;
+            if (node.Columns.Any(Contains)) ColumnAlias = true;
             var saved = closing;
             closing = true;
             base.ExplicitVisit(node);
@@ -459,6 +487,24 @@ internal static class DefinitionNames
             base.ExplicitVisit(node);
         }
 
+        // A column a statement declares (a table's, a CTE's or a derived table's column list) is no object.
+        public override void ExplicitVisit(ColumnDefinition node)
+        {
+            if (Contains(node.ColumnIdentifier)) ColumnAlias = true;
+            base.ExplicitVisit(node);
+        }
+
+        public override void Visit(TableReferenceWithAliasAndColumns node)
+        {
+            if (node.Columns.Any(Contains)) ColumnAlias = true;
+        }
+
+        public override void ExplicitVisit(SelectStarExpression node)
+        {
+            if (Contains(node.Qualifier)) Star = true;
+            base.ExplicitVisit(node);
+        }
+
         public override void ExplicitVisit(CreateIndexStatement node)
         {
             if (node.Columns.Any(column => Contains(column)) || node.IncludeColumns.Any(Contains)) ListName ??= node.OnName;
@@ -468,6 +514,24 @@ internal static class DefinitionNames
         public override void ExplicitVisit(ForeignKeyConstraintDefinition node)
         {
             if (node.ReferencedTableColumns.Any(Contains)) ListName ??= node.ReferenceTableName;
+            else if (node.Columns.Any(Contains) && owner is not null) ListName ??= owner;
+            base.ExplicitVisit(node);
+        }
+
+        public override void ExplicitVisit(UniqueConstraintDefinition node)
+        {
+            if (node.Columns.Any(Contains) && owner is not null) ListName ??= owner;
+            base.ExplicitVisit(node);
+        }
+
+        // The table a CREATE or ALTER TABLE defines, whose key and foreign key column lists are its own columns.
+        private SchemaObjectName? owner;
+        public override void Visit(CreateTableStatement node) => owner = node.SchemaObjectName;
+        public override void Visit(AlterTableStatement node) => owner = node.SchemaObjectName;
+
+        public override void ExplicitVisit(SchemaObjectFunctionTableReference node)
+        {
+            if (Contains(node.SchemaObject)) TableFunction = true;
             base.ExplicitVisit(node);
         }
 
@@ -525,7 +589,7 @@ internal static class DefinitionNames
     }
 
     /// <summary>A table a query level names: its alias, its own name when it has one, and the object it is (null when none).</summary>
-    private sealed record TableRef(string? Alias, string? BaseName, DefinitionName? Target, bool ByName = false);
+    private sealed record TableRef(string? Alias, string? BaseName, DefinitionName? Target, bool ByName = false, bool Function = false);
 
     /// <summary>The statement's CTE names, which its FROM clauses use as tables that are no objects.</summary>
     private sealed class CteCollector : TSqlFragmentVisitor
@@ -541,14 +605,23 @@ internal static class DefinitionNames
     {
         public List<TableRef> Refs { get; } = [];
 
-        private void Named(SchemaObjectName name, Identifier? alias) => Refs.Add(new(alias?.Value, name.BaseIdentifier?.Value, IsCte(name, ctes) ? null : NameOf(name)));
+        private void Named(SchemaObjectName name, Identifier? alias, bool function = false) =>
+            Refs.Add(new(alias?.Value, name.BaseIdentifier?.Value, IsCte(name, ctes) ? null : NameOf(name), Function: function));
 
         public override void ExplicitVisit(NamedTableReference node) =>
             Refs.Add(new(node.Alias?.Value, node.SchemaObject.BaseIdentifier?.Value, IsCte(node.SchemaObject, ctes) ? null : NameOf(node.SchemaObject), ReferenceEquals(node, byName)));
         // Its parameters may hold subqueries: not this level's tables.
-        public override void ExplicitVisit(SchemaObjectFunctionTableReference node) => Named(node.SchemaObject, node.Alias);
+        public override void ExplicitVisit(SchemaObjectFunctionTableReference node) => Named(node.SchemaObject, node.Alias, function: true);
         public override void ExplicitVisit(QueryDerivedTable node) => Refs.Add(new(node.Alias?.Value, null, null));
         public override void ExplicitVisit(ScalarSubquery node) { }
+        // INSERT's and OUTPUT INTO's tables are written, never read: their columns are not in scope.
+        public override void ExplicitVisit(InsertSpecification node)
+        {
+            node.InsertSource?.Accept(this);
+            node.OutputClause?.Accept(this);
+            node.TopRowFilter?.Accept(this);
+        }
+        public override void ExplicitVisit(OutputIntoClause node) { }
         public override void ExplicitVisit(CommonTableExpression node) { }
         public override void ExplicitVisit(MergeSpecification node)
         {
