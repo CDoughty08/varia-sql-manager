@@ -152,7 +152,7 @@ describe('closing one result', () => {
     expect(pivot.getSnapshot().tabs.t1).toMatchObject({ running: false, source: keys[0] })
     expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()
     expect(pivot.getSnapshot().info.size).toBe(0)
-    expect(compare.getSnapshot().size).toBe(0)
+    expect(compare.getSnapshot().info.size).toBe(0)
     expect(tab().jobNotice).toBe('')
   })
 

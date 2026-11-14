@@ -152,7 +152,7 @@ internal static class ResultDiffer
             if (ResultTextWriter.Hidden(left[l])) continue;
             for (var r = 0; r < right.Count; r++)
             {
-                if (used[r] || ResultTextWriter.Hidden(right[r]) || !string.Equals(left[l].Name, right[r].Name, StringComparison.OrdinalIgnoreCase)) continue;
+                if (used[r] || ResultTextWriter.Hidden(right[r]) || !OrdinalNames.Same(left[l].Name, right[r].Name)) continue;
                 if (leftWires is not null && rightWires is not null && leftWires[l] != rightWires[r]) continue;
                 used[r] = true;
                 pairs.Add((l, r));

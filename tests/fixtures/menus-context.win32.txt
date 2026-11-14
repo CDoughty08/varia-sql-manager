@@ -336,7 +336,7 @@ explorer.context, for a login
 output.context, for a results grid with selected cells
   &Copy  Ctrl+C  ++++
   Copy with &Headers  Ctrl+Shift+C  ++++
-  Copy Column &Name  ++++
+  Cop&y Column Name  ++++
   ---
   Select &All  Ctrl+A  ++++
   ---
@@ -370,8 +370,9 @@ output.context, for a results grid with selected cells
     &Clear Highlight  ++++
     Clear &All Highlights  ----
   Co&mpare with Previous Result  ++++
+  Com&pare…  ++++
   Pivot Res&ults…  ++++
-  Trans&pose >
+  Tra&nspose >
     &Transposed [ ]  ++++
     &Selected Rows  ++++
     ---
@@ -392,7 +393,7 @@ output.context, for a results grid with selected cells
 output.context, for a results grid without
   &Copy  Ctrl+C  ----
   Copy with &Headers  Ctrl+Shift+C  ----
-  Copy Column &Name  ----
+  Cop&y Column Name  ----
   ---
   Select &All  Ctrl+A  ++++
   ---
@@ -426,8 +427,9 @@ output.context, for a results grid without
     &Clear Highlight  ++++
     Clear &All Highlights  ----
   Co&mpare with Previous Result  ----
+  Com&pare…  ++++
   Pivot Res&ults…  ++++
-  Trans&pose >
+  Tra&nspose >
     &Transposed [ ]  ++++
     &Selected Rows  ----
     ---

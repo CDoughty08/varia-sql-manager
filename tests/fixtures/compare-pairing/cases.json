@@ -1,0 +1,199 @@
+{
+  "about": "Column pairing for results.diff (ResultDiffer.Pairs in the backend; pairColumns in src/renderer/src/results/compare-pairing.ts for the Compare picker). Visible columns of the old side, in order, each with the first unused visible column of the new side of the same name, compared as OrdinalIgnoreCase does (src/shared/ordinal-casing.ts holds .NET's table), and the same wire. A tone column is hidden and never pairs. Both DiffChecks.cs and tests/compare-pairing.test.ts read these cases.",
+  "cases": [
+    {
+      "name": "same names, same order",
+      "left": [
+        { "name": "Id", "wire": "text" },
+        { "name": "Name", "wire": "text" }
+      ],
+      "right": [
+        { "name": "Id", "wire": "text" },
+        { "name": "Name", "wire": "text" }
+      ],
+      "pairs": [
+        [0, 0],
+        [1, 1]
+      ]
+    },
+    {
+      "name": "names compare case-insensitively, in the old side's order",
+      "left": [
+        { "name": "name", "wire": "text" },
+        { "name": "ID", "wire": "text" }
+      ],
+      "right": [
+        { "name": "Id", "wire": "text" },
+        { "name": "NAME", "wire": "text" }
+      ],
+      "pairs": [
+        [0, 1],
+        [1, 0]
+      ]
+    },
+    {
+      "name": "a column of another wire does not pair",
+      "left": [
+        { "name": "Id", "wire": "text" },
+        { "name": "Hash", "wire": "binary" }
+      ],
+      "right": [
+        { "name": "Id", "wire": "text" },
+        { "name": "Hash", "wire": "text" }
+      ],
+      "pairs": [
+        [0, 0]
+      ]
+    },
+    {
+      "name": "a later column of the same name and wire pairs past one of another wire",
+      "left": [
+        { "name": "Id", "wire": "text" }
+      ],
+      "right": [
+        { "name": "Id", "wire": "binary" },
+        { "name": "id", "wire": "text" }
+      ],
+      "pairs": [
+        [0, 1]
+      ]
+    },
+    {
+      "name": "repeated names pair in order",
+      "left": [
+        { "name": "Value", "wire": "text" },
+        { "name": "Value", "wire": "text" },
+        { "name": "Value", "wire": "text" }
+      ],
+      "right": [
+        { "name": "Value", "wire": "text" },
+        { "name": "Value", "wire": "text" }
+      ],
+      "pairs": [
+        [0, 0],
+        [1, 1]
+      ]
+    },
+    {
+      "name": "the new side's extra repeats stay unpaired",
+      "left": [
+        { "name": "A", "wire": "text" }
+      ],
+      "right": [
+        { "name": "A", "wire": "text" },
+        { "name": "a", "wire": "text" }
+      ],
+      "pairs": [
+        [0, 0]
+      ]
+    },
+    {
+      "name": "a tone column is hidden on either side",
+      "left": [
+        { "name": "", "wire": "text", "role": "tone" },
+        { "name": "Id", "wire": "text" }
+      ],
+      "right": [
+        { "name": "Id", "wire": "text" },
+        { "name": "", "wire": "text", "role": "tone" }
+      ],
+      "pairs": [
+        [1, 0]
+      ]
+    },
+    {
+      "name": "no name in common pairs nothing",
+      "left": [
+        { "name": "A", "wire": "text" }
+      ],
+      "right": [
+        { "name": "B", "wire": "text" }
+      ],
+      "pairs": []
+    },
+    {
+      "name": "unnamed columns pair with unnamed ones",
+      "left": [
+        { "name": "", "wire": "text" },
+        { "name": "Id", "wire": "text" }
+      ],
+      "right": [
+        { "name": "Id", "wire": "text" },
+        { "name": "", "wire": "text" }
+      ],
+      "pairs": [
+        [0, 1],
+        [1, 0]
+      ]
+    },
+    {
+      "name": "a name equal only by lower-casing (the Kelvin sign) does not pair, as OrdinalIgnoreCase compares upper-cased characters",
+      "left": [
+        { "name": "Key", "wire": "text" }
+      ],
+      "right": [
+        { "name": "key", "wire": "text" }
+      ],
+      "pairs": []
+    },
+    {
+      "name": "the dotless i does not pair with I, as .NET keeps it as itself when upper-casing",
+      "left": [
+        { "name": "ıd", "wire": "text" }
+      ],
+      "right": [
+        { "name": "ID", "wire": "text" }
+      ],
+      "pairs": []
+    },
+    {
+      "name": "the long s does not pair with S, which JavaScript's upper-casing would give",
+      "left": [
+        { "name": "\u017Fid", "wire": "text" }
+      ],
+      "right": [
+        { "name": "SID", "wire": "text" }
+      ],
+      "pairs": []
+    },
+    {
+      "name": "a letter past the Basic Multilingual Plane pairs with its upper case (Deseret), compared as one code point",
+      "left": [
+        { "name": "\uD801\uDC28d", "wire": "text" }
+      ],
+      "right": [
+        { "name": "\uD801\uDC00D", "wire": "text" }
+      ],
+      "pairs": [
+        [0, 0]
+      ]
+    },
+    {
+      "name": "a letter whose full upper case is two letters pairs by its simple one (alpha with ypogegrammeni)",
+      "left": [
+        { "name": "\u1FB3", "wire": "text" }
+      ],
+      "right": [
+        { "name": "\u1FBC", "wire": "text" }
+      ],
+      "pairs": [
+        [0, 0]
+      ]
+    },
+    {
+      "name": "each old column takes the first match wherever it stands on the new side",
+      "left": [
+        { "name": "A", "wire": "text" },
+        { "name": "B", "wire": "text" }
+      ],
+      "right": [
+        { "name": "b", "wire": "text" },
+        { "name": "a", "wire": "text" }
+      ],
+      "pairs": [
+        [0, 1],
+        [1, 0]
+      ]
+    }
+  ]
+}

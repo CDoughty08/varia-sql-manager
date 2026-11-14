@@ -33,7 +33,7 @@ describe('pivot builder', () => {
     set({ running: true, queued: 'place' })
     // The same region, now saying why it waits, with no busy ancestor; the draft's controls are the busy part.
     expect(status()).toBe(live)
-    expect(live.textContent).toBe('Waiting for other pivots to finish: four build at once.')
+    expect(live.textContent).toBe('Waiting for other pivots and comparisons to finish: four build at once.')
     expect(live.closest('[aria-busy]')).toBeNull()
     expect(container.querySelector('[aria-busy="true"]')).not.toBeNull()
     set({ queued: 'busy' })
