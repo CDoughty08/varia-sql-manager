@@ -72,9 +72,9 @@ describe('Compare popover', () => {
     const view = fixture({ count: 3, open: 2, columns: { 0: [column('Id'), column('Name')], 1: [column('Id'), column('Price')], 2: [column('Id'), column('Name')] } })
     const radios = [...view.popover()!.querySelectorAll<HTMLInputElement>('input[type="radio"]')]
     expect(radios).toHaveLength(2)
-    // Result 2 is the previous Table; it pairs one of two columns, which its row says.
+    // Result 2 is the previous Table; of the three columns between them (Id, Name, Price) one pairs, which its row says.
     expect(document.activeElement).toBe(radios[1])
-    expect(radios[1].closest('label')?.textContent).toContain('1 of 2 columns')
+    expect(radios[1].closest('label')?.textContent).toContain('1 of 3 columns')
     expect(radios[0].closest('label')?.textContent).not.toContain('columns')
     const unpaired = view.popover()!.querySelector('section')!
     expect(unpaired.textContent).toContain('Price')
@@ -206,6 +206,33 @@ describe('Compare popover', () => {
     view.unmount()
     await Promise.resolve()
     expect(view.compare.getSnapshot().pickers.t1).toBeUndefined()
+  })
+
+  it('marks a target that has a column the result lacks, and one that pairs every column not at all', () => {
+    const view = fixture({ count: 3, open: 2, columns: { 0: [column('Id'), column('Name')], 1: [column('Id'), column('Name'), column('Price')], 2: [column('Id'), column('Name')] } })
+    const radios = [...view.popover()!.querySelectorAll<HTMLInputElement>('input[type="radio"]')]
+    expect(radios[1].closest('label')?.textContent).toContain('2 of 3 columns')
+    expect(radios[0].closest('label')?.querySelector('.compare-chip')).toBeNull()
+    view.unmount()
+  })
+
+  it('opened again while its comparison runs, takes the focus on Compare rather than on a disabled target', async () => {
+    const view = fixture({ count: 3, open: 2 })
+    vi.mocked(view.handle(view.keys[1]).diff).mockImplementationOnce(() => new Promise<DiffAnswer>(() => {}))
+    await act(async () => { view.button('Compare')!.click() })
+    act(() => { view.compare.close('t1') })
+    act(() => { view.compare.open('t1', view.keys[2]) })
+    view.draw()
+    expect(view.popover()!.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.disabled).toBe(true)
+    expect(document.activeElement).toBe(view.popover()!.querySelector('button[type="submit"]'))
+    view.unmount()
+  })
+
+  it('closes when its window loses the focus (a press in another window)', () => {
+    const view = fixture()
+    act(() => { window.dispatchEvent(new Event('blur')) })
+    expect(view.compare.getSnapshot().pickers.t1).toBeUndefined()
+    view.unmount()
   })
 })
 

@@ -855,8 +855,9 @@ Outcome, accepted by the owner:
       - It opens beside its trigger, in that window: under the toolbar's Compare (which passes itself as the command's
         `anchor`; the picker records `anchor: 'toolbar'`), else at the top right of the Table's grid. It no longer takes
         the builder's slot, so Compare no longer closes the Pivot builder; Pivot… still closes the popover.
-      - Transient: Escape, Close, the close button and the toolbar's Compare (`aria-expanded`) close it and return the
-        focus to the trigger (the button, else the grid); a press outside closes it; it closes once its comparison is
+      - Transient: Escape, Close and the close button close it and return the focus to the trigger (the button, else the
+        grid); the toolbar's Compare (`aria-expanded`), a press outside and its window losing the focus close it too
+        (`output.compare` is offered only while the Results panel shows); it closes once its comparison is
         shown (Compare or Show It), when the query runs again, when its Table closes, or with the results; also when it is
         no longer drawn (its pane hidden, another document shown) and when its pane moves window (`windows.onDidAdopt`).
         It is placed by `placePopover`, held inside the window and, on a grid, to the grid's part in view. The follow-into-
@@ -867,7 +868,7 @@ Outcome, accepted by the owner:
         target is offered. Only a pick, a swap, Exact text or Compare records; opening does not. Close Results keeps it;
         the tab going (`ResultsService.release`) forgets it.
       - Content says only what applies: no list with one target (just the two sides), an amber "N of M columns" on a
-        target that does not pair every column, "Not compared" only when columns are left out (the pairing rule in its
+        target with a column of either result left out (M counts a pair once), "Not compared" only when columns are left out (the pairing rule in its
         ⓘ), the sorted-or-filtered warning only while it holds, the comparison's name in the Compare button's tooltip.
         Enter on a target or Exact text compares.
 17. **Pivots follow filters.** Automatic when the Table's result stores at most 500,000 rows and the Pivot's last build

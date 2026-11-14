@@ -2383,6 +2383,10 @@ try {
   await outputMenu.getByRole('menuitem', { name: 'Compare…', exact: true }).click()
   const picker = page.getByRole('dialog', { name: 'Compare', exact: true })
   await expect(picker).toBeVisible()
+  // At the top right of Result 1's grid (opened from its menu).
+  const [gridBox, openBox] = [await grid('Result 1').boundingBox(), await picker.boundingBox()]
+  expect(openBox.y, JSON.stringify({ gridBox, openBox })).toBeGreaterThanOrEqual(gridBox.y)
+  expect(openBox.x + openBox.width, JSON.stringify({ gridBox, openBox })).toBeLessThanOrEqual(gridBox.x + gridBox.width)
   await expect(picker.getByRole('radio')).toHaveCount(0)
   await expect(picker.getByRole('group', { name: 'Old side' })).toContainText('Result 2')
   await expect(picker.getByRole('group', { name: 'New side' })).toContainText('Result 1')

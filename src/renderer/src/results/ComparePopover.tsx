@@ -105,14 +105,18 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
     return () => { view.removeEventListener('resize', measure); element.ownerDocument.removeEventListener('scroll', measure, true) }
   }, [host, picker?.anchor, picker?.active, tabId, targets.length, !!sides, sides?.pairing.oldOnly.length, sides?.pairing.newOnly.length, picker?.error])
 
-  // The focus goes in once it is placed: to the picked target when there is a list, else to Compare.
+  // Closed, it is placed afresh (and takes the focus again) when it next opens.
+  useLayoutEffect(() => { if (!picker) setPlace(undefined) }, [!!picker])
+  // The focus goes in once it is placed, and again when it opens on another Table: to the picked target when there is a
+  // list, else to Compare.
   const placed = !!place
   useLayoutEffect(() => {
     if (!placed) return
     const form = card.current
-    const into = form?.querySelector<HTMLInputElement>('input[type="radio"]:checked') ?? form?.querySelector<HTMLInputElement>('input[type="radio"]') ?? button.current
+    // Never a disabled target (while its comparison runs): focusing one does nothing, and the keys would stay outside.
+    const into = form?.querySelector<HTMLInputElement>('input[type="radio"]:checked:not(:disabled)') ?? form?.querySelector<HTMLInputElement>('input[type="radio"]:not(:disabled)') ?? button.current
     into?.focus({ preventScroll: true })
-  }, [placed])
+  }, [placed, picker?.active, picker?.anchor])
 
   // Its pane moving to another window (popping out, docking back) closes it: its listeners and anchor are in the old one.
   useEffect(() => {
@@ -133,7 +137,8 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
     }
   }, [compare, tabId])
 
-  // A press outside closes it, leaving the focus where the press put it; the toolbar's Compare closes it itself.
+  // A press outside closes it, leaving the focus where the press put it, as does the window losing the focus; the
+  // toolbar's Compare closes it itself.
   useEffect(() => {
     const element = home.current
     if (!element || !picker) return
@@ -145,8 +150,12 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
       if (at?.closest('.results-compare') && element.closest('[data-pane]')?.contains(at)) return
       compare.close(tabId)
     }
+    // A press in another window (the main one, or a popout) reaches this window only as its losing the focus.
+    const view = doc.defaultView
+    const blur = () => compare.close(tabId)
     doc.addEventListener('pointerdown', press, true)
-    return () => doc.removeEventListener('pointerdown', press, true)
+    view?.addEventListener('blur', blur)
+    return () => { doc.removeEventListener('pointerdown', press, true); view?.removeEventListener('blur', blur) }
   }, [compare, tabId, !!picker])
 
   if (!picker) return null
@@ -178,7 +187,6 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
     else if (event.key === 'Enter' && (event.target as Element).matches('input')) { event.preventDefault(); button.current?.focus(); void start() }
   }
 
-  const columns = (active?.descriptor.columns ?? []).filter(column => column.role !== 'tone').length
   const list = targets.length > 1 || (targets.length === 1 && !sides)
   const reordered = (entry: ResultSetEntry) => { const sort = results.sortOf(tabId, entry.key); return !!sort && (sort.keys.length > 0 || sort.filters.length > 0) }
   const filtered = sides ? [sides.old, sides.neu].filter(reordered) : []
@@ -204,11 +212,12 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
         {list && <fieldset className="compare-targets">
           <legend className="visually-hidden">Compare {name} with</legend>
           {targets.map(target => {
-            const partial = target.pairing.pairs.length < columns
+            // Columns of either result left out: "2 of 3 columns" counts both results' columns, a pair once.
+            const paired = target.pairing.pairs.length, all = paired + target.pairing.oldOnly.length + target.pairing.newOnly.length
             return <label key={target.entry.key} className={picker.target === target.entry.key ? 'compare-target picked' : 'compare-target'}>
               <input type="radio" name={ids + 'target'} disabled={running} checked={picker.target === target.entry.key} onChange={() => compare.pick(tabId, target.entry.key)} />
               <span className="compare-target-name">{entryName(target.entry)}</span>
-              {partial && <span className="compare-chip" title={`${formatCount(target.pairing.pairs.length)} of ${formatCount(columns)} columns pair; the rest are not compared`}>{formatCount(target.pairing.pairs.length)} of {formatCount(columns)} columns</span>}
+              {paired < all && <span className="compare-chip" title={`${formatCount(paired)} of ${formatCount(all)} columns pair; the rest are not compared`}>{formatCount(paired)} of {formatCount(all)} columns</span>}
               <small>{rows(target.entry)} rows</small>
             </label>
           })}

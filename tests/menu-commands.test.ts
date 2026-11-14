@@ -574,6 +574,8 @@ describe('Query Output commands', () => {
     const tab = fixture.documents.create('SQLQuery1.sql', 'SELECT 1', 'master', 'server-a')
     fixture.api.execute.mockResolvedValueOnce({ ok: true, value })
     await fixture.queries.execute()
+    // The run's results are on screen, as the layout reports once the Results panel shows.
+    fixture.panes.set({ ...fixture.panes.getSnapshot(), results: true })
     const doc = fakeDocument()
     /** The key of the run's result at `place`, which its grid carries and its targets name it by. */
     const key = (place = 0) => keyAt(fixture.results, tab.id, place)
@@ -756,7 +758,7 @@ describe('Query Output commands', () => {
     expect(commands.isEnabled('output.copy', stale)).toBe(false)
   })
   it('Pivot acts on a group from the menu, the palette and a key and never makes a pivot of a Pivot, and is off for comparisons, plan sets and Peek grids', async () => {
-    const { commands, results, resultClient, pivot, compare, tab, on, key, element } = await ran('win32', { ...queryOutput, resultSets: [descriptor(1), descriptor(2, { index: 1 }), descriptor(3, { index: 2, kind: 'executionPlan' })] })
+    const { commands, results, resultClient, pivot, compare, panes, tab, on, key, element } = await ran('win32', { ...queryOutput, resultSets: [descriptor(1), descriptor(2, { index: 1 }), descriptor(3, { index: 2, kind: 'executionPlan' })] })
     const builder = () => pivot.getSnapshot().tabs[tab.id]
     const build = async () => { pivot.setDraft(tab.id, { rows: [0], values: [{ aggregate: 'count' }] }); await pivot.run(tab.id) }
     const pivots = () => results.getSnapshot()[tab.id].sets.filter(set => set.descriptor.kind === 'pivot')
@@ -818,6 +820,10 @@ describe('Query Output commands', () => {
     expect(results.getSnapshot()[tab.id].focused).toBe(key(0))
     // It is a popover, not the builder's slot: the builder stays open.
     expect(builder().open).toBe(true)
+    // Drawn in the Results panel, it is not offered while that panel is hidden.
+    panes.set({ ...panes.getSnapshot(), results: false })
+    expect(commands.isEnabled('output.compare', on('grid', { place: 0 }))).toBe(false)
+    panes.set({ ...panes.getSnapshot(), results: true })
     // The toolbar passes its button as the anchor, so the popover is drawn under it.
     active.mockReturnValue(element('grid', 0).dom)
     expect(await commands.execute('output.compare', { tabId: tab.id, anchor: {} as Element }, 'toolbar')).toBe(true)
