@@ -84,7 +84,7 @@ internal static class PivotChecks
         var rows = new List<string>();
         foreach (var page in set.SealedSnapshot())
         {
-            var view = PageView.Parse(page.Body, set.Wires.Count);
+            var view = PageView.Parse(PinnedPage.Body(page), set.Wires.Count);
             for (var r = 0; r < page.Rows; r++)
             {
                 var cells = new string[set.Wires.Count];

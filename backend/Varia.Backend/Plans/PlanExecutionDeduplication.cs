@@ -35,8 +35,9 @@ internal static class PlanExecutionDeduplication
             // Prefer a full manual document, which normally carries the original statement text. Keep the observer
             // copy when the manual result was skipped, truncated, unreadable, or holds more than one document.
             if (descriptor is not { RowsRead: 1, RowsAvailable: 1, TruncatedCells: 0, Incomplete: false }) continue;
+            using var pin = set.Pin();
             if (set.PagesFor(0, 1).FirstOrDefault() is not { } page) continue;
-            var view = PageView.Parse(page.Body, 1);
+            var view = PageView.Parse(set.Body(page), 1);
             if (view.IsNull(0, 0) || view.IsError(0, 0) || view.IsTruncated(0, 0)) continue;
             var xml = view.Span(0, 0);
             if (xml.Length > byteLimit) break;

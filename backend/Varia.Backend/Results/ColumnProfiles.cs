@@ -81,6 +81,7 @@ internal static class ColumnProfiler
     public static ResultsProfileResult Profile(ResultSetBuffer set, StoredPage[] pages, ResultView? view, IReadOnlyList<int> columns, bool complete, CancellationToken token, Charges? charges = null, int? workers = null, ViewSorter.WorkerGate? gate = null)
     {
         charges ??= new Charges(_ => true);
+        using var pin = set.Pin();
         long baseRows = 0;
         foreach (var page in pages) baseRows += page.Rows;
         byte[]? included = null;
@@ -131,7 +132,7 @@ internal static class ColumnProfiler
                 var estimated = new HashSet<int>();
                 if (measured) page.Lengths.EstimatedRows(0, page.Rows, row => estimated.Add(row));
                 // Row sizes come from the page's lengths: with no columns asked (the row-size bar), the body is never parsed.
-                var parsed = own.Length > 0 ? PageView.Parse(page.Body, count, scratch) : default;
+                var parsed = own.Length > 0 ? PageView.Parse(page.Body(), count, scratch) : default;
                 for (var r = 0; r < page.Rows; r++)
                 {
                     if (!Included(first + r)) continue;
@@ -162,7 +163,7 @@ internal static class ColumnProfiler
                     if (Volatile.Read(ref failed) != 0) return;
                     token.ThrowIfCancellationRequested();
                     var page = pages[index];
-                    var parsed = PageView.Parse(page.Body, count, scratch);
+                    var parsed = PageView.Parse(page.Body(), count, scratch);
                     for (var r = 0; r < page.Rows; r++)
                     {
                         if (!Included(page.FirstRow + r)) continue;
