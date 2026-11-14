@@ -82,6 +82,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // Pages arrive as DATA frames within the stream's credit; the RESPONSE ends the stream.
   'results.read': { kind: 'stream', lane: 'results', deadlineMs: 60_000 },
   'results.close': control,
+  // Tools › Options' result memory limit, from main: it changes two figures in memory, at once.
+  'results.setMemoryLimit': control,
   // Reads the lengths recorded beside stored pages: memory only, at most 16,384 numbers.
   'results.rowBytes': control,
   // Sorts a result's stored rows in memory off the frame loop (5 million rows take seconds); Stop cancels it.
@@ -158,7 +160,7 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
 }
 
 /** Methods only main sends, on its own behalf: no renderer schema (requestSchemas) or port schema accepts them. */
-export const mainOnlyMethods = ['results.copy', 'results.export', 'entra.cache.clear', 'debug.results.synthesize'] as const satisfies readonly BackendMethod[]
+export const mainOnlyMethods = ['results.copy', 'results.export', 'entra.cache.clear', 'results.setMemoryLimit', 'debug.results.synthesize'] as const satisfies readonly BackendMethod[]
 
 /** Every method main may call; a backend whose HELLO lacks one of them is from a different build. `debug.*` methods
  *  exist only in a backend started with test hooks, so HELLO need not list them. */

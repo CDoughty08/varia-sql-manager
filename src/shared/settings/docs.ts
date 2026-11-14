@@ -19,7 +19,7 @@ function typeText(def: SettingDef): string {
   if (def.type === 'integer') return `Integer ${def.min.toLocaleString('en-US')}–${def.max.toLocaleString('en-US')}${def.unit ? ' ' + def.unit : ''}`
   return 'One of ' + def.values.map(item => `${code(item.value)} (${item.label})`).join(', ')
 }
-const applies = { immediately: 'At once', nextExecution: 'Next execution', newConnections: 'New connections', restart: 'Next backend start' } as const
+const applies = { immediately: 'At once', nextExecution: 'Next execution', newConnections: 'New connections' } as const
 function notes(def: SettingDef): string {
   const parts = [def.description]
   if (def.varia) parts.push('Not in SSMS.')

@@ -2,7 +2,7 @@
 import type { Platform } from '../commands/keybindings'
 
 /** When a changed value takes effect; the description pane says so for anything but 'immediately'. */
-export type SettingApplies = 'immediately' | 'nextExecution' | 'newConnections' | 'restart'
+export type SettingApplies = 'immediately' | 'nextExecution' | 'newConnections'
 
 interface SettingBase {
   /** A dotted id: `^[a-z][A-Za-z0-9]*(\.[a-z][A-Za-z0-9]*){1,4}$`, at most 96 characters. */

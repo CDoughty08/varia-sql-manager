@@ -202,7 +202,9 @@ export interface QueryResult {
   totalBatches: number
   database: string
   messagesTruncated: boolean
-  budget: { usedBytes: number; globalBytes: number; queryBytes: number } & MemoryOrder
+  /** `stoppedBytes`: the figure the query stopped storing at, past its half or the whole budget, as it was then (the limit
+   *  can change while the backend runs); absent when it did not stop for the budget. */
+  budget: { usedBytes: number; globalBytes: number; queryBytes: number; stoppedBytes?: number } & MemoryOrder
   completedAt: string
   /** The session's SPID and login (SUSER_SNAME(), ≤ 128 characters), read once when it opened; both are present while it
    *  is still open after the script. Its open transaction is read only when it is about to end (`query.session.state`). */
@@ -536,6 +538,12 @@ export interface JobMethods {
 export interface AuthMethods {
   'entra.cache.clear': { params: Record<string, never>; result: { cleared: boolean } }
 }
+/** Result memory methods only main sends: no renderer schema accepts them. `results.setMemoryLimit` applies Tools ›
+ *  Options' `queryResults.grid.memoryLimitGiB` (0 automatic, 1 to 1024 GiB) to the running backend; `applied` is false
+ *  only for the test hooks' fixed budget. */
+export interface ResultMemoryMethods {
+  'results.setMemoryLimit': { params: { limitGiB: number }; result: { applied: boolean; globalBytes: number; queryBytes: number } }
+}
 /** Synthetic result shapes (backend SyntheticRows, the fake backend's shapes.mjs). */
 export type SyntheticShape = 'W1' | 'B1' | 'N1' | 'X1' | 'L1' | 'M1'
 /** Test-only methods: the backend offers them with VARIA_BACKEND_TEST_HOOKS=1, and no renderer schema accepts them. */
@@ -545,7 +553,7 @@ export interface DebugMethods {
 /** Every method main sends to the backend. */
 /** Main compresses plan input before the existing 4 MiB request boundary. Renderers can supply only raw XML. */
 export interface PlanMethods { 'plans.parse': { params: { xml: string; encoding: 'gzip' }; result: PlanDocument } }
-export interface BackendMethods extends Omit<RpcMethods, 'plans.parse'>, PlanMethods, PortMethods, JobMethods, AuthMethods, DebugMethods {}
+export interface BackendMethods extends Omit<RpcMethods, 'plans.parse'>, PlanMethods, PortMethods, JobMethods, AuthMethods, ResultMemoryMethods, DebugMethods {}
 export type BackendMethod = keyof BackendMethods
 /** Facts about a failed connection for the Connect dialog: SQL Server's error number, state and class (level), the
  *  server that answered (at most 256 characters), and `reason` 'certificate' when the server's TLS certificate was not

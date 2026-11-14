@@ -31,6 +31,13 @@ the rules that keep it lean.
 - The page compression benchmark is run by hand and enforces nothing: `dotnet run --project
   backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --page-compression-bench <GiB>
   <shape>`, one size and shape a process. docs/page-compression-findings.md has its options and what it measured.
+- `dotnet run --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release --
+  --fairness-bench [--rows N] [--runs N]` (by hand, enforces nothing) times a sort, a pivot and a profile alone and in
+  pairs started together, to see how they share the worker threads; docs/ipc.md's "Worker threads measured" holds what
+  it measured. Prefix `DOTNET_PROCESSOR_COUNT=n` for the workers a smaller machine would have.
+- `-- --result-work-bench [--rows N] [--runs N] [--only name,name]` on the same project times, stage by stage, a pivot's
+  Distinct Count, Compare Results and a column's distinct values past the coded limit on synthetic results (4,000,000 rows
+  by default); set `DOTNET_PROCESSOR_COUNT` to simulate fewer cores. Measures only, run by hand.
 
 ## Environment
 

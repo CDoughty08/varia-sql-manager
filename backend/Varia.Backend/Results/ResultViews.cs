@@ -80,7 +80,24 @@ internal static partial class ViewSorter
 
     /// <summary>Threads the results' operations use between them: most of the machine's, leaving some for the queries
     /// still reading and for the requests the thread pool answers.</summary>
-    internal static int Workers { get; set; } = Math.Clamp(Environment.ProcessorCount * 3 / 4, 1, 16);
+    internal static int Workers
+    {
+        get => scopedWorkers.Value > 0 ? scopedWorkers.Value : workers;
+        set => workers = value;
+    }
+    private static int workers = Math.Clamp(Environment.ProcessorCount * 3 / 4, 1, 16);
+    private static readonly AsyncLocal<int> scopedWorkers = new();
+
+    /// <summary><see cref="Workers"/> for the calling flow alone (and the threads it starts) until disposed: checks that
+    /// compare a count of threads with another, while other checks run beside them, set it here rather than for them all.</summary>
+    internal static IDisposable WorkersHere(int count) => new ScopedWorkers(count);
+
+    private sealed class ScopedWorkers : IDisposable
+    {
+        private readonly int before = scopedWorkers.Value;
+        public ScopedWorkers(int count) => scopedWorkers.Value = count;
+        public void Dispose() => scopedWorkers.Value = before;
+    }
     /// <summary>The fewest rows a slice of a parallel sort holds; fewer rows than two of these sort on one thread.</summary>
     internal const int MinSlice = 1 << 15;
     /// <summary>Rows sampled to learn how a column's values repeat.</summary>
@@ -93,31 +110,6 @@ internal static partial class ViewSorter
     /// <summary>The most values rows are grouped by without sorting them (<see cref="Key.Coded"/>); more are sorted.</summary>
     internal const int MaxGroups = 1 << 16;
     internal const string TooSlow = "There is not enough result memory to compare this much text. Close other results and try again.";
-
-    /// <summary>The threads operations share. Each takes what is free of <see cref="Workers"/> when it starts a parallel
-    /// step, and one at least (its own), so several operations at once do not ask the thread pool for several times the
-    /// machine's cores and leave the requests it answers waiting.</summary>
-    internal sealed class WorkerGate(Func<int> limit)
-    {
-        private int busy;
-        public int Busy => Volatile.Read(ref busy);
-
-        public Lease Take(int wanted)
-        {
-            while (true)
-            {
-                var now = Volatile.Read(ref busy);
-                var take = Math.Max(1, Math.Min(wanted, limit() - now));
-                if (Interlocked.CompareExchange(ref busy, now + take, now) == now) return new Lease(this, take);
-            }
-        }
-
-        internal readonly struct Lease(WorkerGate gate, int count) : IDisposable
-        {
-            public int Count => count;
-            public void Dispose() => Interlocked.Add(ref gate.busy, -count);
-        }
-    }
 
     internal static readonly WorkerGate Gate = new(() => Workers);
 
@@ -164,43 +156,56 @@ internal static partial class ViewSorter
     {
         if (count < 2 * MinSlice)
         {
-            if (count > 1) Array.Sort(items, start, count, comparer);
+            if (count > 1) SortRange(items, start, count, comparer);
             return;
         }
         using var threads = Gate.Take(Math.Min(Workers, count / MinSlice));
-        var slices = Slices(count, threads.Count);
+        // Up to four slices a thread: a sort holding more than its share hands threads back between slices too, and one
+        // given fewer threads than it asked for still spreads its slices evenly over them. The two extra rounds of merges
+        // cost about the comparisons the smaller slices save.
+        var slices = Slices(count, threads.Wanted == 1 ? 1 : 4 * threads.Wanted);
         if (slices == 1)
         {
-            Array.Sort(items, start, count, comparer);
+            SortRange(items, start, count, comparer);
             return;
         }
         int At(int slice, int of) => start + (int)((long)count * slice / of);
-        var options = new ParallelOptions { MaxDegreeOfParallelism = threads.Count };
-        try
+        // Each slice and each merge is an item. The comparer throws a cancellation, which For rethrows once the other threads
+        // have stopped.
+        threads.For(slices, slice => SortRange(items, At(slice, slices), At(slice + 1, slices) - At(slice, slices), comparer));
+        // The merges go through a buffer of the items sorted, not of the whole array: a caller sorting many ranges of one
+        // array (a pivot's cells) holds one range's buffer at a time. Positions are from start; the buffer's are from 0.
+        int[] from = items, to = new int[count];
+        int fromAt = start, toAt = 0;
+        for (var width = slices; width > 1; width /= 2)
         {
-            Parallel.For(0, slices, options, slice => Array.Sort(items, At(slice, slices), At(slice + 1, slices) - At(slice, slices), comparer));
-            int[] from = items, to = new int[items.Length];
-            for (var width = slices; width > 1; width /= 2)
+            var (source, target, of, sourceAt, targetAt) = (from, to, width, fromAt - start, toAt - start);
+            threads.For(width / 2, pair =>
             {
-                var (source, target, of) = (from, to, width);
-                Parallel.For(0, width / 2, options, pair =>
-                {
-                    int left = At(2 * pair, of), middle = At(2 * pair + 1, of), end = At(2 * pair + 2, of);
-                    int a = left, b = middle, at = left;
-                    while (a < middle && b < end) target[at++] = comparer.Compare(source[b], source[a]) < 0 ? source[b++] : source[a++];
-                    while (a < middle) target[at++] = source[a++];
-                    while (b < end) target[at++] = source[b++];
-                });
-                (from, to) = (to, from);
-            }
-            if (from != items) Array.Copy(from, start, items, start, count);
+                int left = At(2 * pair, of), middle = At(2 * pair + 1, of), end = At(2 * pair + 2, of);
+                int a = left, b = middle, at = left;
+                while (a < middle && b < end) target[targetAt + at++] = comparer.Compare(source[sourceAt + b], source[sourceAt + a]) < 0 ? source[sourceAt + b++] : source[sourceAt + a++];
+                while (a < middle) target[targetAt + at++] = source[sourceAt + a++];
+                while (b < end) target[targetAt + at++] = source[sourceAt + b++];
+            });
+            (from, to, fromAt, toAt) = (to, from, toAt, fromAt);
         }
-        catch (AggregateException error) when (error.InnerExceptions.Count > 0)
+        if (from != items) Array.Copy(from, 0, items, start, count);
+    }
+
+    /// <summary>Array.Sort over a range, a cancellation its comparer throws rethrown as itself: Array.Sort wraps whatever a
+    /// comparer throws in an InvalidOperationException.</summary>
+    internal static void SortRange(int[] items, int start, int count, IComparer<int> comparer)
+    {
+        try { Array.Sort(items, start, count, comparer); }
+        catch (InvalidOperationException error) when (error.InnerException is OperationCanceledException cancelled)
         {
-            // What one thread's sort would have thrown (a cancellation, or the sort's wrapping of one).
-            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerExceptions[0]).Throw();
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(cancelled).Throw();
         }
     }
+
+    /// <summary>The start of run <paramref name="run"/> of <paramref name="runs"/> even runs over <paramref name="count"/> items.</summary>
+    internal static int RunStart(int count, int run, int runs) => (int)((long)count * run / runs);
 
     /// <summary>A sort's comparisons as the time one thread would take to make that many one after another: the slices
     /// are sorted side by side, but each round of merges runs on half the threads of the one before, the last on one.</summary>
@@ -726,14 +731,12 @@ internal static partial class ViewSorter
         again = false;
         key.Begin();
         do
-        try
-        {
-            Parallel.For(0, source.Count, new ParallelOptions { MaxDegreeOfParallelism = threads.Count, CancellationToken = token }, () => new Scratch(), (index, _, scratch) =>
+            threads.For(source.Count, () => new Scratch(), (index, scratch) =>
             {
                 var page = source.Page(index);
                 var first = (int)page.FirstRow;
                 var (start, stop) = starts is null ? (first, first + page.Rows) : (starts[index], starts[index + 1]);
-                if (start == stop) return scratch;
+                if (start == stop) return;
                 var view = source.View(index);
                 key.BeginPage(scratch, index);
                 for (var row = start; row < stop; row++)
@@ -764,13 +767,7 @@ internal static partial class ViewSorter
                     key.Set(row, span, scratch);
                 }
                 key.EndPage(scratch, index);
-                return scratch;
-            }, _ => { });
-        }
-        catch (AggregateException error) when (error.InnerExceptions.Count > 0)
-        {
-            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerExceptions[0]).Throw();
-        }
+            }, token);
         while (key.Finish());
         if (key is InstantKey { Declined: true })
         {

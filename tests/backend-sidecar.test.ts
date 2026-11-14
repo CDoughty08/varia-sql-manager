@@ -515,6 +515,24 @@ describe('real .NET sidecar results (test hooks)', () => {
     expect((await backend({ VARIA_RESULT_MEMORY_MIB: 'lots' }).ready).resultBudget).toEqual(automatic)
   }, 60_000)
 
+  it('applies a result memory limit main sends while it runs (results.setMemoryLimit), and the status bar figure follows', async () => {
+    const MiB = 1024 * 1024
+    const globals: number[] = []
+    const connection = new BackendConnection({ command: 'dotnet', args: [dll], cwd: process.cwd(), env: { ...process.env, VARIA_RESULT_MEMORY_MIB: '300' }, packaged: false }, 1, {
+      onGlobalEvent: event => { if ((event as { type?: string }).type === 'results.memory') globals.push((event as { globalBytes: number }).globalBytes) }
+    })
+    connections.push(connection)
+    expect((await connection.ready).resultBudget).toEqual({ globalBytes: 300 * MiB, queryBytes: 150 * MiB })
+    // 1 GiB is under three quarters of any machine that runs these checks, so it is used as it is.
+    await expect(call(connection, 'results.setMemoryLimit', { limitGiB: 1 })).resolves.toEqual({ applied: true, globalBytes: 1024 * MiB, queryBytes: 512 * MiB })
+    expect(globals.at(-1)).toBe(1024 * MiB)
+    const automatic = await call(connection, 'results.setMemoryLimit', { limitGiB: 0 })
+    expect(automatic.globalBytes).toBeGreaterThanOrEqual(256 * MiB)
+    expect(automatic.globalBytes).toBeLessThanOrEqual(16 * 1024 * MiB)
+    expect(automatic.queryBytes).toBe(Math.floor(automatic.globalBytes / 2))
+    await expect(call(connection, 'results.setMemoryLimit', { limitGiB: 1025 })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+  }, 60_000)
+
   it('truncates at the result budget (VARIA_RESULT_BUDGET_BYTES) and frees it on close', async () => {
     const connection = backend({ ...hooks, VARIA_RESULT_BUDGET_BYTES: String(4 * 1024 * 1024) })
     expect((await connection.ready).resultBudget).toEqual({ globalBytes: 4 * 1024 * 1024, queryBytes: 2 * 1024 * 1024 })
