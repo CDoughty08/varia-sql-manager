@@ -24,6 +24,7 @@ export type GestureKind = 'modifier' | 'pointerCommand' | 'fixed'
 /** Where a gesture works; titles follow the Shortcuts page's scopes. */
 export const gestureScopes = {
   global: 'Global',
+  queryEditor: 'SQL Query Editor',
   resultsGrid: 'Results Grid',
   messages: 'Query Messages',
   tableDesigner: 'Table Designer',
@@ -95,9 +96,14 @@ export const gestureCatalog = {
     locked: 'Double-clicking a column border fits it, as in SSMS; Fit Column in the grid menu also works from the keyboard.', keyboard: ['output.fitColumn']
   },
   'global.wheelZoom': {
-    title: 'Zoom', description: 'Zooms the window, except over a document tab shelf where Control+wheel changes its row count.',
-    kind: 'fixed', scope: 'global', action: 'wheel', target: 'anywhere', modifiers: ['ctrl'], keyboard: ['view.zoomIn', 'view.zoomOut', 'view.resetZoom'],
+    title: 'Zoom', description: 'Zooms the window outside surfaces with their own wheel gestures.',
+    kind: 'fixed', scope: 'global', action: 'wheel', target: 'the workbench', modifiers: ['ctrl'], keyboard: ['view.zoomIn', 'view.zoomOut', 'view.resetZoom'],
     locked: 'Chromium zooms the window with Control+wheel and with a trackpad pinch.'
+  },
+  'editor.wheelZoom': {
+    title: 'Zoom Editor Text', description: 'Scroll up to enlarge editor text or down to shrink it for this session.',
+    kind: 'fixed', scope: 'queryEditor', action: 'wheel', target: 'editor text', modifiers: ['ctrl'],
+    locked: 'Monaco handles editor zoom. On macOS, Command+wheel and trackpad pinch also work.'
   },
   'connections.connect': {
     title: 'Connect to Saved Connection', description: 'Connects to the saved connection in the Connect dialog.',
@@ -140,6 +146,11 @@ export const gestureCatalog = {
     title: 'Move Back into Main Window', description: 'Docks a popout window\'s panel back into the main window.',
     kind: 'pointerCommand', scope: 'popouts', action: 'doubleClick', target: 'a popout tab', modifiers: ['ctrl'],
     choices: [['ctrl'], ['alt'], ['shift'], []], darwin: { modifiers: ['meta'], choices: [['meta'], ['alt'], ['shift'], []] }, keyboard: ['pane.moveToMainWindow']
+  },
+  'resultTabs.scroll': {
+    title: 'Scroll Result Tabs', description: 'Scrolls the row of result tabs sideways when the pane is too narrow to show them all, in the Tabs layout.',
+    kind: 'fixed', scope: 'resultsGrid', action: 'wheel', target: 'the result tabs', modifiers: [],
+    locked: 'Wheel input scrolls the result tabs sideways; Control+wheel still zooms. Arrow keys, Home and End on a focused tab also reach every tab.'
   },
   'documentTabs.scroll': {
     title: 'Scroll Tabs', description: 'Scrolls one-row shelves horizontally, or an expanded tab header vertically when its rows extend beyond the editor group.',

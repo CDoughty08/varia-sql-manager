@@ -18,7 +18,9 @@ Right-click a result column header or cell, or press Shift+F10 in the grid, to o
   built from the closed result (a pivot, a comparison, a sort, a copy) is cancelled; a save that has
   already started writing its file finishes. The run summary and its row count do not change. Closing the last result
   leaves the Results view saying "Results were closed. Execute the query again to see them."; Messages and captured
-  execution plans stay. Closing one view is unavailable while the query is executing, and there is no undo.
+  execution plans stay, and so does Close Results, which releases those plans. Find in Results, Find Next and Previous,
+  Save Results As, Pivot, Compare and Transpose are then unavailable, as they need a grid. Closing one view is
+  unavailable while the query is executing, and there is no undo.
 - When a running query stops keeping rows because the result memory budget is full or the computer is low on memory, the
   grid's strip says so while the query keeps reading and counting rows, and offers **Stop query**. It is Cancel
   Executing Query (Alt+Pause on Windows and Linux) for that grid's query tab: Tab reaches it from the grid, and Enter or
@@ -57,7 +59,23 @@ and column widths you set on columns whose names appear once in both; its filter
 the toolbar says when filters were removed. Pivots of different results build at the same time, at most four in a
 window (the builder says when one waits for the others), and a busy SQL backend is asked again after
 1, 4 and 16 seconds. A failed build's message stays with the result it was for until that result's draft is edited or it
-is built again. A Pivot's strip says when the result it was built from holds only part of its query's rows.
+is built again. Like the Compare picker, the builder goes with the results themselves: **Close Results**, a run that
+leaves no result, or closing its last result closes it, and the next run does not reopen it; each result's draft is kept
+for the next **Pivot…**. A Pivot's strip says when the result it was built from holds only part of its query's rows.
+
+A Pivot records the filters of the result it was built from. When that result's filters change (a filter added, removed
+or replaced, Keep Selected Rows included), its Pivot is **out of date**: its caption shows an "Out of date" mark with
+**Update** (in Tabs layout, on the row above the Pivot's grid, and its Pivot tab carries a dot), and its strip says so
+first. Sorting the result does not mark it, since the order of the rows changes no
+figure. **Update** (also **Update Pivot** on the grid's menu, under Pivot Results…, and in the command palette for the grid you
+last used) builds the Pivot again from what it
+was built with, not from an edit in the builder not yet built, over the result as it is filtered now, and replaces it as
+**Build Pivot** does: the old Pivot stays readable until the new one is ready, and an Update that fails, does not fit or
+is cancelled (the caption offers **Cancel** while a Pivot is built again) leaves it as it was, with the reason in the
+results toolbar. Update waits for the query to finish and for the result's sort or filter to be built, and is not offered
+once the SQL backend has stopped. Nothing rebuilds by itself. The grid's menu shows more items than its titles have
+letters, so Update Pivot takes **U** and Pivot Results… has no access key; arrow keys and typing its first letters still
+reach it.
 
 ## Comparisons
 
@@ -88,6 +106,43 @@ goes with the results themselves: closing the tab, **Close Results**, a run that
 
 A comparison's strip starts with its two inputs: each is a link to that result's grid while that exact result is open.
 Once one is closed it reads "Result 1 (closed)": the comparison copied what it compared, so it stays.
+
+## Tabs
+
+The results toolbar's **Tabs** (also **Show Results as Tabs** in the command palette and Window › Results as Tabs, and
+Tools › Options › Query Results › SQL Server › Results to Grid › **Show results**, `queryResults.grid.layout`) shows the
+groups one at a time instead of stacked. Stacked stays the default for now. In a window 1,440 pixels wide or narrower
+the toolbar's Tabs gives way, like Transposed and Compare in a narrower one; the palette and the Window menu still switch the layout.
+
+![Results as tabs in the Dark theme: three result tabs, Result 1 selected, with its Table and Pivot view tabs and the Pivot shown](images/results-tabs-dark.png)
+
+![The same in the Light theme](images/results-tabs-light.png)
+
+- A row of tabs, one per result ("Result 2") and one per comparison after them, then the selected result's view tabs:
+  **Table** (**Plan set** for a SQL-returned plan set) and, once one is built, **Pivot**, with the view's rows, columns,
+  batch, filters and Save Results As beside them. A comparison has no view tabs.
+- One grid is mounted: the selected view's. Switching unmounts the other and releases nothing, so each grid comes back
+  with its scroll, column widths, selection, orientation, sort and filters.
+- The selection is the grid you last used, so the toolbar, the menus, Column Profile and the pivot builder act on the view
+  shown. A result's tab returns to the view it showed last, and a Pivot built for the selected result, or a new
+  comparison, is shown at once (a Pivot stays behind its tab when you went back to a grid while it was built). Switching
+  between Stacked and Tabs keeps the focus on the grid of the view you were in.
+- While a query runs the first result stays selected as the others arrive; a tab you pick stays picked. After a re-run
+  the result of the same number is selected again.
+- Find Next onto a match in another result or view selects that tab and view, then reveals the match. From a grid (F3),
+  the grid shown takes the focus and the match becomes its active cell.
+- Each tab has a close button: a result's closes its Table and Pivot (its tooltip says so), a Pivot's or a comparison's
+  that view alone. Closing the selected view selects its result's Table (after a Pivot), else the next tab, else the
+  previous one, in the view that result showed last, and the focus goes to that tab; with nothing left, to the Results tab. Closing is unavailable while the
+  query runs.
+- The arrow keys, Home and End move along a row of tabs and select as they go; each row is one Tab stop.
+- There is no scroll bar around the grid. The Messages strip opens by itself when the pane fits the two rows of tabs, the
+  grid at its minimum height (or its rows' height, when a finished result needs less) and the strip.
+- When the row has more tabs than fit, it scrolls sideways (the mouse wheel scrolls it too), brings the selected tab into
+  view whenever the selection changes and fades the edge that hides tabs.
+- A run of more than 64 results draws 64 result tabs around the selected one, with a count of those before and after;
+  the arrow keys, Home, End and Find Next reach the rest. A picker that lists them all comes with Tabs becoming the default.
+- Peek's rows are never drawn as tabs.
 
 A SQL-returned execution plan set (`SET SHOWPLAN_XML ON`, say) is a group too: it is numbered, its link opens the plan,
 and closing it removes that plan from the Execution plan pane. Pivot, Compare and Transpose are unavailable for it.

@@ -8,13 +8,19 @@ matches; a gesture matches when all of its modifiers are held. "Modifier" gestur
 pointing; "Command" gestures run a command that the keyboard also reaches; "Fixed" gestures belong to the platform,
 Chromium, or a library and cannot be remapped. "Choices" are the modifiers the Shortcuts page will offer.
 
-## Gestures (19)
+## Gestures (21)
 
 ### Global
 
 | Gesture | Id | What it does | Kind | Windows | Linux | macOS | Choices or lock | Keyboard |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Zoom | `global.wheelZoom` | Zooms the window, except over a document tab shelf where Control+wheel changes its row count. | Fixed | Ctrl+Wheel anywhere | Ctrl+Wheel anywhere | ⌃ Wheel anywhere | Locked: Chromium zooms the window with Control+wheel and with a trackpad pinch. | Zoom In (`view.zoomIn`), Zoom Out (`view.zoomOut`), Reset Zoom (`view.resetZoom`) |
+| Zoom | `global.wheelZoom` | Zooms the window outside surfaces with their own wheel gestures. | Fixed | Ctrl+Wheel the workbench | Ctrl+Wheel the workbench | ⌃ Wheel the workbench | Locked: Chromium zooms the window with Control+wheel and with a trackpad pinch. | Zoom In (`view.zoomIn`), Zoom Out (`view.zoomOut`), Reset Zoom (`view.resetZoom`) |
+
+### SQL Query Editor
+
+| Gesture | Id | What it does | Kind | Windows | Linux | macOS | Choices or lock | Keyboard |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Zoom Editor Text | `editor.wheelZoom` | Scroll up to enlarge editor text or down to shrink it for this session. | Fixed | Ctrl+Wheel editor text | Ctrl+Wheel editor text | ⌃ Wheel editor text | Locked: Monaco handles editor zoom. On macOS, Command+wheel and trackpad pinch also work. | — |
 
 ### Results Grid
 
@@ -25,6 +31,7 @@ Chromium, or a library and cannot be remapped. "Choices" are the modifiers the S
 | Context Menu Click (also Table Designer) | `grid.secondaryClick` | Control+click is a right-click on macOS: it opens the context menu and keeps a selected block. | Fixed | — | — | ⌃ Click a cell or header | Locked: macOS treats Control+click as a right-click. | — |
 | Add Sort Column | `grid.addSortKey` | Adds the column to the grid's sort after the columns it already sorts by, or changes its direction there. | Modifier | Shift+Click a column header's sort button | Shift+Click a column header's sort button | ⇧ Click a column header's sort button | Choose: Shift / ⇧, Ctrl / ⌘, Off | Then Sort Ascending (`output.thenSortAscending`), Then Sort Descending (`output.thenSortDescending`) |
 | Fit Column | `grid.fitColumn` | Fits a column to its widest loaded value. | Fixed | Double-click a column border | Double-click a column border | Double-click a column border | Locked: Double-clicking a column border fits it, as in SSMS; Fit Column in the grid menu also works from the keyboard. | Fit Column (`output.fitColumn`) |
+| Scroll Result Tabs | `resultTabs.scroll` | Scrolls the row of result tabs sideways when the pane is too narrow to show them all, in the Tabs layout. | Fixed | Wheel the result tabs | Wheel the result tabs | Wheel the result tabs | Locked: Wheel input scrolls the result tabs sideways; Control+wheel still zooms. Arrow keys, Home and End on a focused tab also reach every tab. | — |
 
 ### Query Messages
 

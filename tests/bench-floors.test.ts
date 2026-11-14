@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url'
 // The benchmark floor checker (scripts/check-bench.mjs) and tests/bench/floors.json, which CI enforces on Linux.
 interface Spec { title: string; unit: string; better: 'higher' | 'lower'; target: number; floor: number | null; live?: boolean }
 interface Floors { metrics: Record<string, Spec> }
-interface Result { harness: 'node' | 'e2e' | 'grid'; live?: boolean; view?: { width: number; height: number }; platform?: string; arch?: string; cpus?: number; cpu?: string; node?: string; metrics: Record<string, { value: number; unit: string }> }
+interface Result { harness: 'node' | 'e2e' | 'grid' | 'startup'; live?: boolean; view?: { width: number; height: number }; platform?: string; arch?: string; cpus?: number; cpu?: string; node?: string; metrics: Record<string, { value: number; unit: string }> }
 interface Row { id: string; status: 'target' | 'floor' | 'below' | 'report' | 'missing'; required: boolean }
 interface CheckBench { compare(floors: Floors, results: Result[]): Row[]; failed(rows: Row[]): Row[]; markdown(rows: Row[], results: Result[]): string }
 
@@ -15,11 +15,11 @@ interface BenchRules { measuresAgain(attempt: Attempt, floor: number | null): bo
 const rules = (): Promise<BenchRules> => import(/* @vite-ignore */ pathToFileURL(resolve('scripts/fixtures/bench.mjs')).href)
 const checker = (): Promise<CheckBench> => import(/* @vite-ignore */ pathToFileURL(resolve('scripts/check-bench.mjs')).href)
 const floors = JSON.parse(readFileSync('tests/bench/floors.json', 'utf8')) as Floors
-const sources = ['tests/bench/codec.bench.ts', 'tests/bench/backend.bench.ts', 'tests/bench/grid.bench.ts', 'tests/bench/chart.bench.ts', 'tests/bench/plans.bench.ts', 'tests/bench/search.bench.ts', 'scripts/ipc-bench.mjs', 'scripts/grid-bench.mjs'].map(path => readFileSync(path, 'utf8')).join('\n')
+const sources = ['tests/bench/codec.bench.ts', 'tests/bench/backend.bench.ts', 'tests/bench/grid.bench.ts', 'tests/bench/chart.bench.ts', 'tests/bench/plans.bench.ts', 'tests/bench/search.bench.ts', 'scripts/ipc-bench.mjs', 'scripts/grid-bench.mjs', 'scripts/startup-bench.mjs'].map(path => readFileSync(path, 'utf8')).join('\n')
 
 describe('benchmark floors', () => {
   it('describe every metric the benchmarks record, and nothing else', () => {
-    const recorded = new Set([...sources.matchAll(/\b(?:id: |record\()'((?:node|e2e|grid)\.[\w.]+)'/g)].map(match => match[1]))
+    const recorded = new Set([...sources.matchAll(/\b(?:id: |record\()'((?:node|e2e|grid|startup)\.[\w.]+)'/g)].map(match => match[1]))
     expect([...recorded].sort()).toEqual(Object.keys(floors.metrics).sort())
     for (const [id, spec] of Object.entries(floors.metrics)) {
       expect(spec.title, id).toMatch(/\S/)

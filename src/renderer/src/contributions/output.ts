@@ -30,6 +30,14 @@ const baseName = (name: string) => name.replace(/\.[^.]*$/, '') || 'Results'
  * view's grid (view `live`) is the same grid with a live source: the commands it takes act through its `LiveOutput`.
  */
 export function outputContribution({ commands, results, menuTargets, documents, settings, resultsSearch, panes }: Pick<Workbench, 'commands' | 'results' | 'menuTargets' | 'documents' | 'settings' | 'resultsSearch' | 'panes'>, api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
+  // The setting changes once main has saved it, so a second toggle meanwhile toggles the layout still being saved: two quick
+  // presses cancel out, as SettingsService.toggle's do.
+  let layoutTarget: 'stacked' | 'tabs' | undefined
+  const toggleLayout = async () => {
+    const next = (layoutTarget ?? settings.getSnapshot().values['queryResults.grid.layout']) === 'tabs' ? 'stacked' : 'tabs'
+    layoutTarget = next
+    try { await settings.choose('queryResults.grid.layout', next) } finally { if (layoutTarget === next) layoutTarget = undefined }
+  }
   const showWhitespace = (mode: 'spaces' | 'all') =>
     settings.choose('queryResults.grid.whitespace', settings.getSnapshot().values['queryResults.grid.whitespace'] === mode ? 'none' : mode)
   const targetOf = (args?: CommandArgs) => outputOf(args) ?? (args?.target ? undefined : focusedOutput(menuTargets))
@@ -59,9 +67,10 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     const selection = shown && results.selection(shown.tabId, shown.key)
     return shown && selection && resolveBlocks(selection, shown.rows, shown.columns).length > 0 ? shown : undefined
   }
-  /** The hasResults context key for a query (results not closed, nor lost with a stopped backend), which Find and Save
-   *  check in their handlers: a live view's grid has rows without a query's results. */
-  const hasResults = (tabId: string | undefined) => !!tabId && !!results.context.getSnapshot()[tabId]
+  /** The hasResultSets context key for a query (a result set a grid shows, not closed nor lost with a stopped backend),
+   *  which Find and Save check in their handlers: a live view's grid has rows without a query's results. Not hasResults,
+   *  which captured plans keep true after the last result set is closed, when there is no grid to find in or save. */
+  const hasResultSets = (tabId: string | undefined) => !!tabId && !!results.resultSets.getSnapshot()[tabId]
   // What Find and Save say without results: a query's, since a live view's grid always has its own source.
   const noResults = 'Execute a query that returns results first.'
   /** A live grid's commands, and the column captured by its menu, else its active cell's. */
@@ -137,8 +146,8 @@ export function outputContribution({ commands, results, menuTargets, documents, 
   const registrations = [
     commands.register('output.find', {
       unavailable: args => liveOf(args) ? undefined : noResults,
-      // A query's results (no hasResults precondition: a live view's grid finds through its owner's filter box).
-      when: args => { const live = liveOf(args); return live ? live.canFind() : hasResults(searchTab(args)) },
+      // A query's result sets (no hasResultSets precondition: a live view's grid finds through its owner's filter box).
+      when: args => { const live = liveOf(args); return live ? live.canFind() : hasResultSets(searchTab(args)) },
       run: args => {
         const live = liveOf(args)
         if (live) { live.find(); return }
@@ -149,8 +158,9 @@ export function outputContribution({ commands, results, menuTargets, documents, 
         resultsSearch.focus(tabId)
       }
     }),
-    commands.register('output.findNext', { run: args => { const tabId = searchTab(args); if (tabId) resultsSearch.step(tabId, 1, fromGrid(args)) } }),
-    commands.register('output.findPrevious', { run: args => { const tabId = searchTab(args); if (tabId) resultsSearch.step(tabId, -1, fromGrid(args)) } }),
+    // The catalogue's hasResultSets precondition reads the active query; the tab they step through may be another's.
+    commands.register('output.findNext', { when: args => hasResultSets(searchTab(args)), run: args => { const tabId = searchTab(args); if (tabId) resultsSearch.step(tabId, 1, fromGrid(args)) } }),
+    commands.register('output.findPrevious', { when: args => hasResultSets(searchTab(args)), run: args => { const tabId = searchTab(args); if (tabId) resultsSearch.step(tabId, -1, fromGrid(args)) } }),
     commands.register('output.sortAscending', sortCommand('ascending', false)),
     commands.register('output.sortDescending', sortCommand('descending', false)),
     commands.register('output.thenSortAscending', sortCommand('ascending', true)),
@@ -221,8 +231,8 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     }),
     commands.register('output.saveResultsAs', {
       unavailable: args => liveOf(args) ? undefined : noResults,
-      // A query's results, or a live view's grid with rows (which has no query, so no hasResults precondition).
-      when: args => { const live = liveOf(args); return live ? live.hasRows() : hasResults(targetOf(args)?.tabId ?? documents.getSnapshot().activeId) },
+      // A query's result sets, or a live view's grid with rows (which has no query, so no hasResultSets precondition).
+      when: args => { const live = liveOf(args); return live ? live.hasRows() : hasResultSets(targetOf(args)?.tabId ?? documents.getSnapshot().activeId) },
       run: async args => {
         const live = liveOf(args)
         if (live) { if (live.hasRows()) live.save(); return }
@@ -314,6 +324,7 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     commands.register('output.showSpaces', { run: () => showWhitespace('spaces') }),
     commands.register('output.showAllWhitespace', { run: () => showWhitespace('all') }),
     commands.register('output.toggleColumnProfile', { run: () => settings.toggle('queryResults.grid.columnProfile') }),
+    commands.register('output.toggleResultsTabs', { run: toggleLayout }),
     commands.register('output.toggleRowSize', { run: () => settings.toggle('queryResults.grid.rowSize') })
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }

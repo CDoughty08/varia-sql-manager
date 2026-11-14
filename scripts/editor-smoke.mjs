@@ -135,6 +135,28 @@ try {
   await page.keyboard.press('ArrowRight')
   await expect(queryBarButton(page, 'Execute')).toBeVisible()
   await expect(queryScope(page)).toHaveText('Entire query')
+
+  // Click the start of the middle line, inside the selected text.
+  await page.keyboard.press('Control+A')
+  await expect(queryScope(page)).toHaveText('Lines 1–3')
+  const middleLine = page.locator('.monaco-editor .view-lines').getByText('two', { exact: true })
+  await middleLine.click({ position: { x: 1, y: 4 }, force: true })
+  await expect(queryScope(page)).toHaveText('Entire query')
+  await expect(caretStatus(page)).toHaveText('Ln 2Col 1Ch 1')
+
+  const fontSize = () => middleLine.evaluate(line => parseFloat(getComputedStyle(line).fontSize))
+  const windowZoom = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getZoomFactor())
+  const originalFontSize = await fontSize(), originalWindowZoom = await windowZoom()
+  await page.keyboard.down('Control')
+  await page.mouse.wheel(0, -120)
+  await expect.poll(fontSize).toBeGreaterThan(originalFontSize)
+  expect(await windowZoom()).toBe(originalWindowZoom)
+  await page.mouse.wheel(0, 120)
+  await page.keyboard.up('Control')
+  await expect.poll(fontSize).toBe(originalFontSize)
+  expect(await windowZoom()).toBe(originalWindowZoom)
+  console.log('Editor checks: clicking selected text places the caret there, and Ctrl+wheel changes the editor font in both directions.')
+
   await caretStatus(page).click()
   await expect(goTo).toBeVisible()
   await page.keyboard.press('Escape')
