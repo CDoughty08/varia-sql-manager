@@ -809,11 +809,12 @@ describe('results service entry keys', () => {
     expect(tab().sets.map(set => set.number)).toEqual([1, 5, 3, 4])
     expect(tab().sets[1].key).toBe(added)
     expect(view.weights!.has(added!)).toBe(false)
-    // Result 3 had the focus: closing it closes its group (its Pivot too), and with nothing after it the entry before
-    // takes the focus.
+    // Result 3 had the focus: closing it closes its group (its Pivot too), and with nothing after it the group before
+    // takes the focus, on the view it last showed: Result 1's Table, not the Pivot it never showed.
     service.removeEntry('t1', keys[2])
     expect(tab().sets.map(set => set.number)).toEqual([1, 5])
-    expect(service.focusedEntry('t1')?.key).toBe(added)
+    expect(service.focusedEntry('t1')?.key).toBe(keys[0])
+    expect(tab().groups[0].selected).toBe('table')
   })
   it('moves an entry\'s state with it when a set arrives before it in a streaming run', async () => {
     const { service, client, tab, flush } = fixture()

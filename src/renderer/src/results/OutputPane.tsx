@@ -1,12 +1,13 @@
-import { memo, useEffect, useId, useLayoutEffect, useState, type CSSProperties, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react'
+import { memo, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { outputPaneIds, type OutputPaneId } from '../../../shared/layouts'
 import PaneMenuButton from '../PaneMenuButton'
 import Icon from '../Icon'
 import { useTicker } from '../core/useTicker'
-import { observeResize } from '../core/windows'
+import { observeResize, windowOf } from '../core/windows'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { gridLimits as g } from '../grid/constants'
 import ResultsStack, { stackNeed } from '../grid/ResultsStack'
+import ResultsTabs, { selectedEntry, tabsNeed } from '../grid/ResultsTabs'
 import ResultPlans from '../plans/ResultPlans'
 import EstimatedPlans from '../plans/EstimatedPlans'
 import RetainedPlans from '../plans/RetainedPlans'
@@ -123,6 +124,52 @@ function MessagesStrip({ tabId, tab, fits, maxHeight }: { tabId: string; tab: Ta
   </div>
 }
 
+/**
+ * Switching the layout while a grid had the focus (the palette and the menus give it back to the grid before the command
+ * runs) unmounts that grid: the focus would fall to the page. Once the other layout is drawn, the focused view's grid
+ * takes it instead, as soon as it is mounted (the stack mounts its grids over a few frames), unless the focus has gone
+ * somewhere else meanwhile. Whether a grid of this pane had it is read in the render that switches, while the old grid is
+ * still drawn: a mark kept from focus events would outlive a grid removed some other way (a re-run, Close Results).
+ */
+export function useLayoutFocus(tabs: boolean, focused: () => string | undefined) {
+  const mainRef = useRef<HTMLDivElement>(null)
+  const layout = useRef(tabs)
+  const held = useRef<{ readonly tabs: boolean; readonly grid: boolean } | undefined>(undefined)
+  if (layout.current === tabs) held.current = undefined
+  else if (held.current?.tabs !== tabs) {
+    const main = mainRef.current, active = main?.ownerDocument.activeElement
+    held.current = { tabs, grid: !!main && !!active && main.contains(active) && !!active.closest('[data-result-grid]') }
+  }
+  // Drawn now in place of the other layout while a grid had the focus: the stack brings the focused view into view.
+  const switching = layout.current !== tabs && !!held.current?.grid
+  useLayoutEffect(() => {
+    if (layout.current === tabs) return
+    layout.current = tabs
+    const main = mainRef.current, hadGrid = held.current?.grid
+    held.current = undefined
+    if (!hadGrid || !main) return
+    const place = () => {
+      const doc = main.ownerDocument, active = doc.activeElement
+      if (active && active !== doc.body) return true
+      const key = focused()
+      const grid = [...main.querySelectorAll<HTMLElement>('[data-result-grid]')].find(element => key === undefined || element.getAttribute('data-result-entry') === key)
+      grid?.focus({ preventScroll: true })
+      return !!grid && doc.activeElement === grid
+    }
+    if (place()) return
+    // Until the grid is mounted, or the user does something else: a click, the wheel or the focus moving.
+    const doc = main.ownerDocument, observer = new (windowOf(main).MutationObserver)(() => { if (place()) stop() })
+    const stop = () => {
+      observer.disconnect()
+      for (const type of ['pointerdown', 'wheel', 'focusin'] as const) doc.removeEventListener(type, stop, true)
+    }
+    observer.observe(main, { childList: true, subtree: true })
+    for (const type of ['pointerdown', 'wheel', 'focusin'] as const) doc.addEventListener(type, stop, true)
+    return stop
+  }, [tabs])
+  return { mainRef, switching }
+}
+
 /** The output view's height, followed while it is mounted. */
 function useHeight(): [(element: HTMLDivElement | null) => void, number] {
   const [element, setElement] = useState<HTMLDivElement | null>(null)
@@ -151,7 +198,8 @@ const viewNames: Record<OutputPaneId, string> = { results: 'Results', messages: 
  */
 function OutputPane({ pane, tabId, query, connected, hint }: Props) {
   const { results, panes, queries, queryPlans, retainedPlans, settings, pivot } = useWorkbench()
-  const profileOpen = useServiceSnapshot(settings).values['queryResults.grid.columnProfile']
+  const values = useServiceSnapshot(settings).values
+  const profileOpen = values['queryResults.grid.columnProfile']
   const pivotOpen = !!useServiceSnapshot(pivot).tabs[tabId]?.open
   // The set the profile describes: the grid that last had focus in this tab.
   const [profiled, setProfiled] = useState<{ tabId: string; target: ProfileTarget } | undefined>(undefined)
@@ -169,6 +217,9 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
   const hasSets = hasResultsView(tab)
   // Grids to show: not when the results were closed, all at once or down to the last.
   const shown = !!tab && tab.status !== 'closed' && tab.sets.length > 0
+  // One view at a time under tabs, or every view stacked (queryResults.grid.layout). Peek's bare runs are never drawn here.
+  const tabs = values['queryResults.grid.layout'] === 'tabs' && !tab?.bare
+  const layoutFocus = useLayoutFocus(tabs, () => tabId ? results.focusedEntry(tabId)?.key : undefined)
   const plans = plansOf(tab)
   const planCount = estimated ? estimated.result?.plans.length ?? 0 : plans.length
   const errors = !!tab?.messages.some(entry => entry.kind === 'error')
@@ -185,7 +236,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
   // only when the stack keeps room for its sets at their floors.
   const stripSummary = tab ? messagesSummary(tab.messages) : undefined
   const showStrip = !!tab && pane === 'results' && hasSets && messages > 0 && (stripSummary!.readable || tab.strip)
-  const need = tab && showStrip && shown ? stackNeed(tab, results.viewState(tabId).collapsed, results.viewState(tabId).grids) : 0
+  const need = tab && showStrip && shown ? tabs ? tabsNeed(tab, results.viewState(tabId).grids) : stackNeed(tab, results.viewState(tabId).collapsed, results.viewState(tabId).grids) : 0
   const stripFits = viewHeight > 0 && viewHeight >= need + g.messagesStripOpen
   const stripMax = viewHeight > 0 ? Math.max(g.messagesStripOpen, Math.min(Math.floor(viewHeight * 0.4), viewHeight - need)) : undefined
   // The results tools sit in the head beside the views, taking no rows from the grids: results panes are often short.
@@ -251,15 +302,15 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
       : <div ref={viewRef} className="output-view" role="tabpanel" id={panelId} aria-labelledby={tabIds[pane]}>
         {pane === 'results' ? <>
           {/* Siblings keyed by run: their keys must differ, or React keeps a superseded run's grids beside the new ones. */}
-          <div className="results-main" onFocus={(event: FocusEvent<HTMLDivElement>) => {
+          <div className="results-main" ref={layoutFocus.mainRef} onFocus={(event: FocusEvent<HTMLDivElement>) => {
             const grid = (event.target as Element).closest('[data-result-grid]')
             const entry = grid?.getAttribute('data-result-entry')
             if (entry) setProfiled({ tabId, target: profileTarget(tab.sets, entry) })
           }}>
-            {shown ? <ResultsStack key={'stack:' + tab.queryId} tabId={tabId} tab={tab} />
+            {shown ? tabs ? <ResultsTabs key={'tabs:' + tab.queryId} tabId={tabId} tab={tab} /> : <ResultsStack key={'stack:' + tab.queryId} tabId={tabId} tab={tab} revealFocused={layoutFocus.switching} />
               : <EmptyState className="output-empty" {...hasSets ? {} : { icon: 'table' as const }} detail={emptyResultsText(tab)} />}
             {profileOpen && shown && <ColumnProfilePanel key={'profile:' + tab.queryId} tabId={tabId} tab={tab}
-              shown={profiled?.tabId === tabId ? profiledEntry(tab.sets, profiled.target)?.key : undefined} />}
+              shown={tabs ? selectedEntry(tab)?.key : profiled?.tabId === tabId ? profiledEntry(tab.sets, profiled.target)?.key : undefined} />}
             {pivotOpen && shown && <PivotPanel key={'pivot:' + tab.queryId} tabId={tabId} tab={tab} />}
           </div>
           {showStrip && <MessagesStrip tabId={tabId} tab={tab} fits={stripFits} maxHeight={stripMax} />}

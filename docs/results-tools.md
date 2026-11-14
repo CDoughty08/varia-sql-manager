@@ -57,6 +57,43 @@ message stays with the result it was for until that result's draft is edited or 
 **Compare with Previous Result** compares a result's own grid with the nearest earlier result's own grid; Pivots,
 comparisons and plan sets are never compared.
 
+## Tabs
+
+The results toolbar's **Tabs** (also **Show Results as Tabs** in the command palette and Window › Results as Tabs, and
+Tools › Options › Query Results › SQL Server › Results to Grid › **Show results**, `queryResults.grid.layout`) shows the
+groups one at a time instead of stacked. Stacked stays the default for now. In a window narrower than 1,180 pixels the
+toolbar's Tabs gives way, like Transposed; the palette and the Window menu still switch the layout.
+
+![Results as tabs in the Dark theme: three result tabs, Result 1 selected, with its Table and Pivot view tabs and the Pivot shown](images/results-tabs-dark.png)
+
+![The same in the Light theme](images/results-tabs-light.png)
+
+- A row of tabs, one per result ("Result 2") and one per comparison after them, then the selected result's view tabs:
+  **Table** (**Plan set** for a SQL-returned plan set) and, once one is built, **Pivot**, with the view's rows, columns,
+  batch, filters and Save Results As beside them. A comparison has no view tabs.
+- One grid is mounted: the selected view's. Switching unmounts the other and releases nothing, so each grid comes back
+  with its scroll, column widths, selection, orientation, sort and filters.
+- The selection is the grid you last used, so the toolbar, the menus, Column Profile and the pivot builder act on the view
+  shown. A result's tab returns to the view it showed last, and a Pivot built for the selected result, or a new
+  comparison, is shown at once (a Pivot stays behind its tab when you went back to a grid while it was built). Switching
+  between Stacked and Tabs keeps the focus on the grid of the view you were in.
+- While a query runs the first result stays selected as the others arrive; a tab you pick stays picked. After a re-run
+  the result of the same number is selected again.
+- Find Next onto a match in another result or view selects that tab and view, then reveals the match. From a grid (F3),
+  the grid shown takes the focus and the match becomes its active cell.
+- Each tab has a close button: a result's closes its Table and Pivot (its tooltip says so), a Pivot's or a comparison's
+  that view alone. Closing the selected view selects its result's Table (after a Pivot), else the next tab, else the
+  previous one, in the view that result showed last, and the focus goes to that tab; with nothing left, to the Results tab. Closing is unavailable while the
+  query runs.
+- The arrow keys, Home and End move along a row of tabs and select as they go; each row is one Tab stop.
+- There is no scroll bar around the grid. The Messages strip opens by itself when the pane fits the two rows of tabs, the
+  grid at its minimum height (or its rows' height, when a finished result needs less) and the strip.
+- When the row has more tabs than fit, it scrolls sideways (the mouse wheel scrolls it too), brings the selected tab into
+  view whenever the selection changes and fades the edge that hides tabs.
+- A run of more than 64 results draws 64 result tabs around the selected one, with a count of those before and after;
+  the arrow keys, Home, End and Find Next reach the rest. A picker that lists them all comes with Tabs becoming the default.
+- Peek's rows are never drawn as tabs.
+
 A SQL-returned execution plan set (`SET SHOWPLAN_XML ON`, say) is a group too: it is numbered, its link opens the plan,
 and closing it removes that plan from the Execution plan pane. Pivot, Compare and Transpose are unavailable for it.
 

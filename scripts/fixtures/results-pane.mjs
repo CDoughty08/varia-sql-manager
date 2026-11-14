@@ -1,4 +1,4 @@
-// Shared by results-smoke.mjs and grid-bench.mjs.
+// Shared by the results smoke suites and grid-bench.mjs.
 import { outputPane, part } from './ui.mjs'
 
 /** The box of Dockview's sash right above the output pane, the one between it and the query editor. */
@@ -37,4 +37,14 @@ export async function sizeResultStack(page, height) {
     current = await stackHeight()
   }
   return current
+}
+
+/**
+ * Pins the results layout to Stacked (queryResults.grid.layout), for suites whose steps find results by their stacked
+ * captions, splitters and several grids at once. Stacked is the default until the overflow picker lands; the pin keeps
+ * those suites on it after Tabs becomes the default. The grouped-results suite covers Tabs.
+ */
+export async function pinStackedResults(page) {
+  const result = await page.evaluate(() => window.varia.updateSettings({ 'queryResults.grid.layout': 'stacked' }))
+  if (!result.ok) throw new Error(result.error)
 }

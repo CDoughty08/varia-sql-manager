@@ -87,9 +87,9 @@ describe('gesture rows follow the page', () => {
     for (const query of ['@kind:', '@kind:m', '@kind:mo', '@kind:mouse', '@conflict', '@whatever:x']) expect(gestureRows(file, 'win32', query), query).toHaveLength(all)
     expect(gestureRows(file, 'win32', '@kind:k')).toEqual([])
     expect(ids(gestureRows(file, 'win32', '@source:u'))).toEqual(['explorer.peekHover', 'dock.floatWhileDragging'])
-    expect(ids(gestureRows(file, 'win32', '@scope:grid'))).toEqual(['grid.addToSelection', 'grid.addSortKey', 'grid.extendSelection', 'grid.fitColumn'])
+    expect(ids(gestureRows(file, 'win32', '@scope:grid'))).toEqual(['grid.addToSelection', 'grid.addSortKey', 'grid.extendSelection', 'grid.fitColumn', 'resultTabs.scroll'])
     // Scope ids match too, as the page's `@scope:editor` does for keyboard rows (case-folded, like every token).
-    expect(ids(gestureRows(file, 'win32', '@scope:resultsgrid'))).toEqual(['grid.addToSelection', 'grid.addSortKey', 'grid.extendSelection', 'grid.fitColumn'])
+    expect(ids(gestureRows(file, 'win32', '@scope:resultsgrid'))).toEqual(['grid.addToSelection', 'grid.addSortKey', 'grid.extendSelection', 'grid.fitColumn', 'resultTabs.scroll'])
     expect(ids(gestureRows(file, 'win32', '@scope:tableDesigner'))).toEqual(['grid.addToSelection', 'grid.extendSelection'])
     expect(ids(gestureRows(file, 'win32', '@scope:queryeditor', { multiCursorModifier: 'alt' }))).toEqual(['textEditor.multiCursorModifier'])
     expect(ids(gestureRows(file, 'win32', '@scope:messages'))).toEqual(['messages.revealError'])

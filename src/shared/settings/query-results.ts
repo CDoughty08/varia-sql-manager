@@ -51,6 +51,12 @@ export const queryResultsSettings = [
     description: 'How a sorted results grid orders its text and binary columns. Value sorts as ORDER BY would, by the column\'s collation, with NULL first ascending. Length in characters counts every character, spaces included; length in bytes sorts by DATALENGTH. Other columns always sort by value. The results toolbar changes this too, and sorted grids sort again.'
   },
   {
+    key: 'queryResults.grid.layout', page: 'queryResults.sqlServer.grid', label: 'Show results', type: 'enum', varia: true,
+    values: [{ value: 'stacked', label: 'Stacked' }, { value: 'tabs', label: 'As tabs' }], default: 'stacked',
+    keywords: ['layout', 'tabs', 'stacked', 'stack', 'groups', 'results', 'pivot', 'comparison', 'view'],
+    description: 'Stacked shows every result of a run one under another, each Pivot under its result, comparisons last. As tabs shows one at a time: a row of tabs for the results and comparisons, the selected result\'s Table and Pivot as view tabs beneath, and one grid. Switching keeps each grid\'s scroll, column widths, selection, sort and filters. The results toolbar changes this too.'
+  },
+  {
     key: 'queryResults.grid.rowSize', page: 'queryResults.sqlServer.grid', label: 'Show row size behind row numbers', type: 'boolean', default: true, varia: true,
     keywords: ['row size', 'bytes', 'datalength', 'bar', 'gutter', 'row number'],
     description: 'A bar behind each row number shows the row\'s size, the sum of DATALENGTH over its columns, scaled to the largest row of the result (or of its filtered rows); rows over half the largest stand out. Hover a row number for the exact bytes. The results toolbar changes this too.'

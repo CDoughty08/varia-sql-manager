@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (304)
+## Commands (305)
 
 ### File
 
@@ -186,6 +186,7 @@ keys it uses are listed below.
 | Choose Headers for Transposed Results… | `output.transposeChooseHeaders` | — | — | — | Always | Query Output context menu › Transpose › Choose Headers… |
 | Compare with Previous Result (Exact Text) | `output.compareWithPreviousExact` | — | — | — | Always | — |
 | Show Column Profile | `output.toggleColumnProfile` | — | — | — | Always; checked when `resultsColumnProfile` | Query Output context menu › Column Profile |
+| Show Results as Tabs | `output.toggleResultsTabs` | — | — | — | Always; checked when `resultsTabs` | Window › Results as Tabs |
 | Show Row Size in Results | `output.toggleRowSize` | — | — | — | Always; checked when `resultsRowSize` | Query Output context menu › Show Row Size |
 | Open Value in New Tab (not in the palette) | `output.openValue` | — | — | — | Always | — |
 
@@ -574,6 +575,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_panes` | S**h**ow Results Pane | `view.toggleResultsPane` | Always |
 | `1_panes` | Panel **T**abs | `window.togglePanelTabs` | Always |
 | `1_panes` | **C**lient Statistics | `window.statistics` | Always |
+| `1_panes` | Results as Ta**b**s | `output.toggleResultsTabs` | Always |
 | `2_documents` | **N**ext Query | `document.next` | Always |
 | `2_documents` | **P**revious Query | `document.previous` | Always |
 | `2_documents` | C**l**ose All Documents | `file.closeAll` | Always |
@@ -956,7 +958,7 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
 | `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
 
-## Context keys (153)
+## Context keys (154)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1044,6 +1046,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `resultsSortTextBytes` | boolean | state | Sorted results grids order text and binary columns by their length in bytes (Sort Text by Length in Bytes). |
 | `resultsColumnProfile` | boolean | state | The column profile panel shows beside the results (Show Column Profile). |
 | `resultsGridTransposed` | boolean | state | The results grid that last had the focus in the active query is drawn transposed (Transpose Results); in a results grid's own menu, that grid is. |
+| `resultsTabs` | boolean | state | Results show as tabs, one at a time, rather than stacked (Show Results as Tabs). |
 | `resultsRowSize` | boolean | state | A bar behind each row number shows the row's size (Show Row Size in Results). |
 | `hasBookmarks` | boolean | state | An open document has a bookmark. |
 | `activeDocumentHasBookmarks` | boolean | state | The active document has a bookmark. |

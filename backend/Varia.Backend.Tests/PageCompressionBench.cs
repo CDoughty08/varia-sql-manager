@@ -371,7 +371,7 @@ internal static class PageCompressionBench
         set.Complete();
         StoredPage[]? pages = set.SealedSnapshot();
         long bodyBytes = 0, lengthBytes = 0;
-        foreach (var page in pages) { bodyBytes += page.Body.Length; lengthBytes += page.Lengths.MemoryBytes; }
+        foreach (var page in pages) { bodyBytes += page.Length; lengthBytes += page.Lengths.MemoryBytes; }
         var detail = rows.ToString("N0", CultureInfo.InvariantCulture) + " rows, " + pages.Length.ToString("N0", CultureInfo.InvariantCulture) + " pages, " + columns.Length + " columns";
         Print("rows", rows, "rows", detail);
         Print("pages", pages.Length, "pages", detail);
@@ -383,7 +383,7 @@ internal static class PageCompressionBench
 
         // ---- Codecs: ratio, and speed one thread over a sample and the workers over all pages.
         StoredPage[]? sample = Enumerable.Range(0, Math.Min(SamplePages, pages.Length)).Select(i => pages[(int)((long)i * pages.Length / Math.Min(SamplePages, pages.Length))]).ToArray();
-        long sampleBytes = sample.Sum(page => (long)page.Body.Length);
+        long sampleBytes = sample.Sum(page => (long)page.Length);
         Packed[]? kept = null;
         Codec[] run = codecs.Contains(keep) ? codecs : [.. codecs, keep];
         foreach (var codec in run)
@@ -392,13 +392,13 @@ internal static class PageCompressionBench
             var scratch = new Scratch();
             var packedSample = new byte[sample.Length][];
             // Warm up the codec (and its native state) on a few pages first.
-            for (var i = 0; i < Math.Min(8, sample.Length); i++) codec.Unpack(codec.Pack(sample[i].Body, scratch), scratch.RawFor(sample[i].Body.Length));
+            for (var i = 0; i < Math.Min(8, sample.Length); i++) codec.Unpack(codec.Pack(sample[i].Body(), scratch), scratch.RawFor(sample[i].Length));
             var perPage = new double[sample.Length];
             var timer = Stopwatch.StartNew();
             for (var i = 0; i < sample.Length; i++)
             {
                 var start = timer.Elapsed.TotalMicroseconds;
-                packedSample[i] = codec.Pack(sample[i].Body, scratch);
+                packedSample[i] = codec.Pack(sample[i].Body(), scratch);
                 perPage[i] = timer.Elapsed.TotalMicroseconds - start;
             }
             var compressSeconds = timer.Elapsed.TotalSeconds;
@@ -408,7 +408,7 @@ internal static class PageCompressionBench
             for (var i = 0; i < sample.Length; i++)
             {
                 var start = timer.Elapsed.TotalMicroseconds;
-                codec.Unpack(packedSample[i], scratch.RawFor(sample[i].Body.Length));
+                codec.Unpack(packedSample[i], scratch.RawFor(sample[i].Length));
                 perPage[i] = timer.Elapsed.TotalMicroseconds - start;
             }
             var decompressSeconds = timer.Elapsed.TotalSeconds;
@@ -420,7 +420,7 @@ internal static class PageCompressionBench
             Parallel.For(0, source.Length, new ParallelOptions { MaxDegreeOfParallelism = workers }, () => new Scratch(), (i, _, local) =>
             {
                 var page = source[i];
-                all[i] = new Packed(page.FirstRow, page.Rows, page.Body.Length, codec.Pack(page.Body, local), page.Lengths);
+                all[i] = new Packed(page.FirstRow, page.Rows, page.Length, codec.Pack(page.Body(), local), page.Lengths);
                 return local;
             }, _ => { });
             var parallelCompress = timer.Elapsed.TotalSeconds;
@@ -458,7 +458,7 @@ internal static class PageCompressionBench
             writer.Header(selected);
             foreach (var page in source)
             {
-                var view = PageView.Parse(page.Body, columns.Length, scratch);
+                var view = PageView.Parse(page.Body(), columns.Length, scratch);
                 for (var row = 0; row < view.Rows; row++) writer.Row(view, row, selected);
             }
             writer.End();
@@ -505,7 +505,7 @@ internal static class PageCompressionBench
                 var first = (int)Below(t, 900, Math.Max(1, pages.Length - 3));
                 timer.Restart();
                 long sum = 0;
-                for (var p = first; p < Math.Min(first + 3, pages.Length); p++) { pages[p].Body.AsSpan(0, Math.Min(pages[p].Body.Length, copy.Length)).CopyTo(copy); sum += copy[0]; }
+                for (var p = first; p < Math.Min(first + 3, pages.Length); p++) { pages[p].Body().AsSpan(0, Math.Min(pages[p].Length, copy.Length)).CopyTo(copy); sum += copy[0]; }
                 raw[t] = timer.Elapsed.TotalMicroseconds;
                 timer.Restart();
                 for (var p = first; p < Math.Min(first + 3, kept.Length); p++)

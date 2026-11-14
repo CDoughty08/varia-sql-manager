@@ -557,7 +557,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    * Pivot goes with it; a Pivot or a comparison closes alone. What
    * closes leaves the run and its results are released (`drop`); the entries after move up and keep their keys, numbers,
    * names and state. A comparison copied its cells, so it outlives its inputs, under its name. When what closed had the
-   * focus, the next surviving entry takes it, else the one before. The run's status, summary and row total do not change;
+   * focus, the next surviving item takes it, else the one before, as the view its group last showed (its Table or its
+   * Pivot), so that group keeps what it remembered. The run's status, summary and row total do not change;
    * closing its last entry marks it `emptied`. Unavailable while the query runs and in a bare run (Peek). False when there
    * is no such entry.
    */
@@ -571,13 +572,21 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       // A Pivot leaves the focus in its group, on the Table.
       const slot = run.slots.get(key), last = run.sets.indexOf(gone[gone.length - 1])
       next = (slot?.view !== 'table' && slot?.group !== undefined ? run.sets.find(item => item.ordinal === slot.group) : undefined)
-        ?? run.sets[last + 1] ?? run.sets[run.sets.indexOf(gone[0]) - 1]
+        ?? this.shownView(run, run.sets[last + 1] ?? run.sets[run.sets.indexOf(gone[0]) - 1])
     }
     this.drop(tabId, run, gone)
     if (view && next) { view.focused = next.key; this.select(run, next.key) }
     if (run.sets.length === 0) run.emptied = true
     this.publishNow(tabId)
     return true
+  }
+  /** The view of `entry`'s group that the group last showed (its Pivot while selected and built, else its Table); a
+   *  comparison is itself. */
+  private shownView(run: Run, entry: ResultSetEntry | undefined): ResultSetEntry | undefined {
+    const group = entry && run.slots.get(entry.key)?.group
+    if (!entry || group === undefined) return entry
+    const pivot = run.selected.has(group) ? run.sets.find(item => { const slot = run.slots.get(item.key); return slot?.group === group && slot.view === 'pivot' }) : undefined
+    return pivot ?? run.sets.find(item => { const slot = run.slots.get(item.key); return slot?.group === group && slot.view === 'table' }) ?? entry
   }
   /** The entries closing `key` would close, in the order drawn: a Table's whole group, any other view alone. */
   closing(tabId: string, key: EntryKey): readonly ResultSetEntry[] {
