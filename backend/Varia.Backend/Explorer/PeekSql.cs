@@ -367,13 +367,14 @@ internal static class PeekSql
         // A trigger's table's subtype, as for the row's own (Tables › Graph Tables, FileTables …), so the tree can walk to it.
         + render.Col(13, "pt.temporal_type", "CONVERT(tinyint, 0)") + ", " + render.Col(16, "pt.ledger_type", "CONVERT(tinyint, 0)") + ", "
         + render.Col(14, "pt.is_node", "CONVERT(bit, 0)") + ", " + render.Col(14, "pt.is_edge", "CONVERT(bit, 0)") + ", pt.is_filetable, " + render.Col(13, "pt.is_external", "CONVERT(bit, 0)") + ", "
-        + render.Col(16, "pt.is_dropped_ledger_table", "CONVERT(bit, 0)") + ", po.is_ms_shipped "
+        + render.Col(16, "pt.is_dropped_ledger_table", "CONVERT(bit, 0)") + ", CONVERT(bit, CASE WHEN po.is_ms_shipped = 1 OR pep.major_id IS NOT NULL THEN 1 ELSE 0 END) "
         + "FROM (SELECT r.server_name, r.database_name, r.schema_name, r.entity_name, r.id, r.via, CONVERT(bit, MAX(CONVERT(tinyint, r.bound))) AS bound FROM (" + rows + ") AS r "
         + "GROUP BY r.server_name, r.database_name, r.schema_name, r.entity_name, r.id, r.via) AS x "
         + "LEFT JOIN sys.all_objects AS o ON o.object_id = x.id LEFT JOIN sys.tables AS t ON t.object_id = x.id LEFT JOIN sys.all_views AS v ON v.object_id = x.id "
         + "LEFT JOIN sys.extended_properties AS ep ON ep.class = 1 AND ep.major_id = x.id AND ep.minor_id = 0 AND ep.name = N'microsoft_database_tools_support' "
         + "LEFT JOIN sys.all_objects AS po ON po.object_id = o.parent_object_id AND o.type IN ('TR', 'TA') LEFT JOIN sys.schemas AS ps ON ps.schema_id = po.schema_id "
         + "LEFT JOIN sys.tables AS pt ON pt.object_id = po.object_id "
+        + "LEFT JOIN sys.extended_properties AS pep ON pep.class = 1 AND pep.major_id = po.object_id AND pep.minor_id = 0 AND pep.name = N'microsoft_database_tools_support' "
         + "ORDER BY x.server_name, x.database_name, x.schema_name, x.entity_name, x.via;\n";
 
     /// <summary>What the object uses, for the band.</summary>

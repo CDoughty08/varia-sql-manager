@@ -80,7 +80,11 @@ internal static class PeekLiveChecks
             + "CREATE PROCEDURE " + s + ".[PB] AS SELECT 1;\nGO\n"
             + "CREATE PROCEDURE " + s + ".[PA] AS EXEC " + s + ".[PB];\nGO\n"
             + "ALTER PROCEDURE " + s + ".[PB] AS EXEC " + s + ".[PA];\nGO\n"
-            + "CREATE PROCEDURE " + s + ".[PX] AS SELECT * FROM [VariaNoSuchDb].[dbo].[Elsewhere];\nGO\n", database);
+            + "CREATE PROCEDURE " + s + ".[PX] AS SELECT * FROM [VariaNoSuchDb].[dbo].[Elsewhere];\nGO\n"
+            // A table Object Explorer lists under System Tables only for its tools-support property, with a trigger of its own.
+            + "CREATE TABLE " + s + ".[TS] (Id int NOT NULL);\nGO\n"
+            + "EXEC sys.sp_addextendedproperty @name = N'microsoft_database_tools_support', @value = 1, @level0type = N'SCHEMA', @level0name = N'Dep]''Ü', @level1type = N'TABLE', @level1name = N'TS';\nGO\n"
+            + "CREATE TRIGGER " + s + ".[TRS] ON " + s + ".[TS] AFTER INSERT AS SET NOCOUNT ON;\nGO\n", database);
         try
         {
             check(created.Status == "completed", "the View Dependencies fixtures are created: " + created.Error);
@@ -119,12 +123,15 @@ internal static class PeekLiveChecks
             // Another database's table is named, never resolved: a leaf with its database and no kind or type.
             var px = await Level(service, connectionId, Own("procedure", "PX"), "uses", json);
             var gone = await Level(service, connectionId, Own("view", "NoSuchView"), "usedBy", json);
+            var ts = await Level(service, connectionId, Own("table", "TS"), "usedBy", json);
+            check(ts.Items.Count == 1 && ts.Items[0] is { Name: "TRS", Kind: "trigger", ParentSubtype: "system" } && ts.Items[0].Parent?.Name == "TS",
+                "a trigger names its table's subtype, system for a table with the tools-support property, so the tree walks to System Tables: " + Names(ts) + " " + (ts.Items.FirstOrDefault()?.ParentSubtype ?? "none"));
             check(px.Items.Count == 1 && px.Items[0] is { Name: "Elsewhere", Schema: "dbo", Database: "VariaNoSuchDb", Kind: null, Type: null } && gone.Error?.Code == "NOT_FOUND",
                 "a reference to another database is named with its database and no kind, and a level of an object that is gone is NOT_FOUND: " + Names(px) + " " + gone.Error?.Code);
         }
         finally
         {
-            await sql("DROP TRIGGER IF EXISTS " + s + ".[TR];\nDROP PROCEDURE IF EXISTS " + s + ".[PA], " + s + ".[PB], " + s + ".[PX], " + s + ".[P3];\n"
+            await sql("DROP TRIGGER IF EXISTS " + s + ".[TRS];\nDROP TABLE IF EXISTS " + s + ".[TS];\nDROP TRIGGER IF EXISTS " + s + ".[TR];\nDROP PROCEDURE IF EXISTS " + s + ".[PA], " + s + ".[PB], " + s + ".[PX], " + s + ".[P3];\n"
                 + "DROP VIEW IF EXISTS " + s + ".[V2], " + s + ".[V1];\nDROP TABLE IF EXISTS " + s + ".[T]]'表];\nGO\nDROP SCHEMA IF EXISTS " + s + ";", database);
         }
     }
