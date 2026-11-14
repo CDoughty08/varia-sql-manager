@@ -331,7 +331,7 @@ internal sealed record PeekDependenciesResult(List<PeekDependency> Uses, List<Pe
 /// object's sys.objects type (trimmed; absent when SQL Server did not resolve the reference here), and SchemaBound is true for a
 /// schema-bound reference (sys.sql_expression_dependencies, or a column or parameter of a type).</summary>
 internal sealed record PeekDependency(string Name, string? Schema = null, string? Database = null, string? Server = null, string? Kind = null, bool? ForeignKey = null, string? Subtype = null,
-    string? Type = null, bool? SchemaBound = null, ParentRefDto? Parent = null);
+    string? Type = null, bool? SchemaBound = null, ParentRefDto? Parent = null, string? ParentSubtype = null);
 /// <summary>explorer.dependencies (src/shared/explorer/dependencies.ts): one level of View Dependencies' tree for an object of a kind
 /// whose Peek has the Dependencies tab, Direction "uses" (what it depends on) or "usedBy" (what depends on it). Cancellation as explorer.peek's.</summary>
 internal sealed record DependenciesArgs(string ConnectionId, string RequestId, ObjectRefDto Target, string Direction);

@@ -104,7 +104,8 @@ export class DependencyTree {
   expand(id: number): void {
     const node = this.nodes.get(id)
     if (this.disposed || !node || node.leaf || node.expanded && node.load !== 'error') return
-    if (node.load === 'ready' || node.load === 'loading') { this.set({ ...node, expanded: true }); return }
+    // Once stopped, a failed level only opens again to show why: it cannot be read again.
+    if (node.load === 'ready' || node.load === 'loading' || this.stopped && node.load === 'error') { this.set({ ...node, expanded: true }); return }
     if (this.stopped) return
     this.set({ ...node, expanded: true, load: 'loading', error: undefined })
     void this.read(node)

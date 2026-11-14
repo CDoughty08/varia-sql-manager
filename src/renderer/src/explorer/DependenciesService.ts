@@ -131,8 +131,9 @@ export class DependenciesService extends SnapshotStore<DependenciesSnapshot> imp
     // The root's own subtype only for the root: a dependency without one is a plain object, whatever the root is.
     const subtype = id === 0 ? open.root.subtype : node.item?.subtype
     const ref = node.ref!, folder = listingFolder(ref, subtype)!
-    // A trigger on the root is listed below the root's own folder (Graph Tables, FileTables …), which its row does not name.
-    const parentFolder = ref.parent && root(open) && sameObject(ref.parent, root(open)!) ? listingFolder(root(open)!, open.root.subtype) : undefined
+    // A trigger is listed below its table's folder (Graph Tables, FileTables …): the root's when it is the root, else its row's.
+    const parentFolder = !ref.parent ? undefined : root(open) && sameObject(ref.parent, root(open)!) ? listingFolder(root(open)!, open.root.subtype)
+      : listingFolder({ kind: ref.parent.kind, schema: ref.parent.schema, name: ref.parent.name }, node.item?.parentSubtype)
     this.options.reveal(open.connectionId, { object: ref, folder, label: node.label, ...(subtype ? { subtype } : {}), ...(parentFolder ? { parentFolder } : {}) })
   }
 

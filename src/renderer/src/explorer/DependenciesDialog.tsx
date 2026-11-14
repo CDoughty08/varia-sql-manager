@@ -52,7 +52,8 @@ function DependenciesForm({ open }: { open: OpenDependencies }) {
   }
   const treeKeys = (event: KeyboardEvent<HTMLDivElement>) => {
     const node = rows[at]?.node
-    if (!node || event.altKey || event.ctrlKey || event.metaKey) return
+    // Keys on a control inside the tree (a failed level's Retry) are that control's: Enter retries rather than revealing the selection.
+    if (event.target !== event.currentTarget || !node || event.altKey || event.ctrlKey || event.metaKey) return
     const move = (index: number) => { const row = rows[Math.max(0, Math.min(rows.length - 1, index))]; if (row) dependencies.select(row.node.id) }
     switch (event.key) {
       case 'ArrowDown': move(at + 1); break

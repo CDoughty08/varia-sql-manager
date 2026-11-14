@@ -203,6 +203,11 @@ describe('View Dependencies tree', () => {
     read.tree.expand(read.tree.rows()[1]!.node.id)
     expect(read.calls).toHaveLength(1)
     expect(read.tree.rows()[1]!.node).toMatchObject({ expanded: false, load: 'none' })
+    // A level that ended in error opens again to show why, though it is not read again.
+    lost.tree.collapse(0)
+    lost.tree.expand(0)
+    expect(lost.tree.node(0)).toMatchObject({ expanded: true, load: 'error' })
+    expect(lost.calls).toHaveLength(1)
   })
 
   it('names a dependency in the root database only when the tree can read it there', () => {
@@ -327,6 +332,12 @@ describe('View Dependencies service and request', () => {
     await settle()
     service.reveal(service.current!.rows[1]!.node.id)
     expect(reveal).toHaveBeenLastCalledWith(connectionId, { object: { kind: 'trigger', database: 'Sales', parent: { kind: 'table', schema: 'dbo', name: 'Orders' }, name: 'TR' }, folder: 'tableTriggers', label: 'dbo.Orders.TR', parentFolder: 'graphTables' })
+    // A trigger on another table is revealed below that table's folder, which its row names by the table's subtype.
+    answers.usedBy = { ok: true, value: { items: [{ name: 'FTR', schema: 'dbo', kind: 'trigger', type: 'TR', parent: { kind: 'table', schema: 'dbo', name: 'Docs' }, parentSubtype: 'fileTable' }], elapsedMs: 1 } }
+    service.open(graphRoot)
+    await settle()
+    service.reveal(service.current!.rows[1]!.node.id)
+    expect(reveal).toHaveBeenLastCalledWith(connectionId, expect.objectContaining({ object: expect.objectContaining({ name: 'FTR' }), folder: 'tableTriggers', parentFolder: 'fileTables' }))
     service.dispose()
   })
 

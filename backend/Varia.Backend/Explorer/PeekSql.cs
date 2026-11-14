@@ -363,12 +363,17 @@ internal static class PeekSql
         + render.Col(13, "t.temporal_type", "CONVERT(tinyint, 0)") + ", " + render.Col(16, "t.ledger_type", "CONVERT(tinyint, 0)") + ", "
         + render.Col(14, "t.is_node", "CONVERT(bit, 0)") + ", " + render.Col(14, "t.is_edge", "CONVERT(bit, 0)") + ", t.is_filetable, " + render.Col(13, "t.is_external", "CONVERT(bit, 0)") + ", "
         + render.Col(16, "t.is_dropped_ledger_table", "CONVERT(bit, 0)") + ", CONVERT(bit, CASE WHEN o.is_ms_shipped = 1 OR ep.major_id IS NOT NULL THEN 1 ELSE 0 END), "
-        + render.Col(16, "v.ledger_view_type", "CONVERT(tinyint, 0)") + ", " + render.Col(16, "v.is_dropped_ledger_view", "CONVERT(bit, 0)") + ", x.bound, ps.name, po.name, po.type "
+        + render.Col(16, "v.ledger_view_type", "CONVERT(tinyint, 0)") + ", " + render.Col(16, "v.is_dropped_ledger_view", "CONVERT(bit, 0)") + ", x.bound, ps.name, po.name, po.type, "
+        // A trigger's table's subtype, as for the row's own (Tables › Graph Tables, FileTables …), so the tree can walk to it.
+        + render.Col(13, "pt.temporal_type", "CONVERT(tinyint, 0)") + ", " + render.Col(16, "pt.ledger_type", "CONVERT(tinyint, 0)") + ", "
+        + render.Col(14, "pt.is_node", "CONVERT(bit, 0)") + ", " + render.Col(14, "pt.is_edge", "CONVERT(bit, 0)") + ", pt.is_filetable, " + render.Col(13, "pt.is_external", "CONVERT(bit, 0)") + ", "
+        + render.Col(16, "pt.is_dropped_ledger_table", "CONVERT(bit, 0)") + ", po.is_ms_shipped "
         + "FROM (SELECT r.server_name, r.database_name, r.schema_name, r.entity_name, r.id, r.via, CONVERT(bit, MAX(CONVERT(tinyint, r.bound))) AS bound FROM (" + rows + ") AS r "
         + "GROUP BY r.server_name, r.database_name, r.schema_name, r.entity_name, r.id, r.via) AS x "
         + "LEFT JOIN sys.all_objects AS o ON o.object_id = x.id LEFT JOIN sys.tables AS t ON t.object_id = x.id LEFT JOIN sys.all_views AS v ON v.object_id = x.id "
         + "LEFT JOIN sys.extended_properties AS ep ON ep.class = 1 AND ep.major_id = x.id AND ep.minor_id = 0 AND ep.name = N'microsoft_database_tools_support' "
         + "LEFT JOIN sys.all_objects AS po ON po.object_id = o.parent_object_id AND o.type IN ('TR', 'TA') LEFT JOIN sys.schemas AS ps ON ps.schema_id = po.schema_id "
+        + "LEFT JOIN sys.tables AS pt ON pt.object_id = po.object_id "
         + "ORDER BY x.server_name, x.database_name, x.schema_name, x.entity_name, x.via;\n";
 
     /// <summary>What the object uses, for the band.</summary>
@@ -595,9 +600,10 @@ internal static class PeekSql
             var parent = trigger && Text(reader, 17) is { } parentSchema && Text(reader, 18) is { } parentName && ParentKindOf(Text(reader, 19)) is { } parentKind
                 ? new ParentRefDto(parentKind, parentSchema, parentName) : null;
             var kind = trigger ? parent is null ? null : "trigger" : KindOf(type);
+            var parentSubtype = parent?.Kind == "table" ? ExplorerLabels.TableSubtype(Number(reader, 20), Number(reader, 21), Flag(reader, 22), Flag(reader, 23), Flag(reader, 24), Flag(reader, 25), Flag(reader, 26), Flag(reader, 27)) : null;
             items.Add(new(reader.GetString(3), Text(reader, 2), Text(reader, 1), Text(reader, 0), kind, reader.GetBoolean(5) ? true : null,
                 SubtypeOf(kind, type, Number(reader, 6), Number(reader, 7), Flag(reader, 8), Flag(reader, 9), Flag(reader, 10), Flag(reader, 11), Flag(reader, 12), Flag(reader, 13),
-                    Number(reader, 14), Flag(reader, 15)), type, Flag(reader, 16) ? true : null, parent));
+                    Number(reader, 14), Flag(reader, 15)), type, Flag(reader, 16) ? true : null, parent, parentSubtype));
         }
         return (items, false);
     }

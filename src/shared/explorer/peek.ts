@@ -280,6 +280,8 @@ export interface PeekDependency {
   readonly schemaBound?: true
   /** A trigger's table or view. */
   readonly parent?: ParentRef
+  /** A trigger's table's subtype, which names the folder that lists the table (Graph Tables, FileTables …). */
+  readonly parentSubtype?: NodeSubtype
 }
 export interface PeekParams {
   readonly connectionId: string
