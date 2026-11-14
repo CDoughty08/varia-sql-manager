@@ -1,8 +1,12 @@
 # Page compression findings
 
 A measured prototype for compressing stored result pages, measured on 2026-11-12. This is a benchmark and design page.
-It changes nothing in the product: pages are still stored as they are sealed, and the backend now runs on .NET 11 (#459).
 The rule agreed with the owner still holds: results stay in memory and never spill to disk.
+
+**Status (2026-11-14):** steps 1 to 5 of the [proposed PR order](#proposed-pr-order) are in. The product packs every
+complete result of 1 MiB or more that no window has shown for 5 seconds (stage 1, `ResultPacker`), and the Memory
+panel's Nerd metrics report the packed figures. Fused reads (step 6) and stage 2 (step 7) are not. See
+[Stage 1 as built](#stage-1-as-built) for where it differs from the design below.
 
 The first version of this page measured only what .NET 10 has (Brotli, Deflate, ZLib) and recommended Brotli. The
 owner pointed at zstd and LZ4 and moved the backend to .NET 11 (STS, #459), whose `System.IO.Compression` has
@@ -337,6 +341,7 @@ It is a separate step because it depends on the fused reads, and because the gri
 0.3 ms a scroll read that today costs 0.05 ms. That is invisible in a frame, but it should be measured in the app
 before it becomes the default.
 
+(As built, stage 1 packs on a thread of its own instead, compressing at the lowest priority: see [Stage 1 as built](#stage-1-as-built).)
 Compression runs in the background on the results' workers, through `ViewSorter.Gate` at the lowest priority, page by
 page, at about 0.2 s of 16 workers per GiB. A visible operation that needs the workers stops it between pages. A
 result being compressed stays readable: each page switches when its compressed copy is ready.
@@ -421,25 +426,68 @@ forecast.
   a release triggers a compaction. The status bar's memory (status-bar-memory.md) should show compressed bytes
   separately.
 - **CPU in the background.** Compressing 8 GiB takes 1.5 to 2.0 s of 16 workers (about 6 to 8 s on 3 workers,
-  extrapolated). It runs through the worker gate at the lowest priority and stops for visible work.
+  extrapolated). As built, stage 1 packs on one thread of its own instead, compressing at the lowest priority (about 3 s a GiB) and stops for any reader.
 - **Ratios depend on the data.** Results of random keys, hashes or GUIDs compress to 1.1 to 1.5 times or not at all.
   Pages that save less than 10 % stay raw.
 - **The numbers come from a loaded machine.** Treat the times as ranges. Ratios and memory figures are solid.
 
+## Stage 1 as built
+
+`ResultPacker` (`backend/Varia.Backend/Results/ResultPacker.cs`) follows [When a result is compressed](#when-a-result-is-compressed)
+with these differences, decided from the code:
+
+- **Its own thread, not the worker gate.** The gate shares its threads fairly and has no priority, so packing through
+  it would take half the workers from a visible sort. One thread packs a result page by page, compressing each page at
+  the lowest priority where the operating system honours it (Windows; on Linux and macOS it competes as an ordinary thread), and leaves every worker to visible work. Everything it does under a lock or that allocates (the
+  visibility lookup, renting and copying the page's buffer, replacing a page, charging the budget) runs at normal priority: a lowest-priority thread preempted while holding the
+  store's or a set's lock would stall reads and new queries until the scheduler boosted it, seconds later. It is slower than 16 workers (measured below: 275 to 400 MB/s, about three
+  seconds a GiB), which only delays the saving. On a machine whose processors are all busy it may barely run (the
+  offline stress run showed a lowest-priority thread waiting tens of seconds); the result then simply stays raw a
+  while longer.
+- **One reused encoder, streamed.** The one-shot call creates and frees a native context per page, which would
+  allocate while the thread is lowered, so the thread keeps one encoder, warmed at normal priority, and compresses each
+  page as a stream of unknown length. A known length would make zstd choose its tables by size and resize its working
+  memory whenever the size changed; with the length unknown it uses level 2's tables for inputs over 256 KiB for every
+  page. Full pages are a little over 256 KiB, so they already used those tables: re-measured after the change, the
+  ratios below are unchanged (orders 506 MiB, log 464 MiB packed). Only a result's short last page, or a page of very
+  few narrow rows, may pack a few percent less.
+- **Event-driven.** The thread sleeps until the next hidden result falls due or until a result of 1 MiB or more
+  completes, `results.visibility` applies a new set, or a pin, lease or operation that stopped or undid packing ends.
+- **An operation's unpack counts as a use.** A hidden result that a search, value list or comparison has just unpacked
+  waits the delay again, so a result read run after run is not unpacked and packed each time.
+- **Copy and Save do not rehydrate.** A plain Copy or Save reads page by page through the cache (1.3 to 1.8 times the
+  raw Save, above) and so is never refused for want of room; a transposed one unpacks the pages its rows lie on.
+- **No setting.** Packing is on in every backend Varia starts (`SqlService`'s `packHidden`, which only the backend
+  process passes); the checks' stores leave it off unless a check turns it on.
+
+Measured on 2026-11-14 with `--page-compression-bench 1 <shape> --policy` (the real `ResultPacker`, a 1 GiB result,
+two runs each, other sessions busy on the machine):
+
+| | `orders` | `log` |
+| --- | ---: | ---: |
+| Budget charged, raw → packed | 1,039 → 506 MiB (2.05×) | 1,030 → 464 MiB (2.22×) |
+| The policy's pass, one thread | 2.7 to 3.9 s (275 to 400 MB/s) | 3.4 to 3.5 s (303 to 316 MB/s) |
+| Three pages read at random positions, raw → packed with a cold cache | 1 µs → 0.63 to 0.70 ms | 1 µs → 0.62 ms |
+| An operation's whole unpack, 16 workers | 0.07 to 0.16 s | 0.06 s |
+| A second query's fill (a quarter of the rows) alone → beside packing | 0.89 to 1.21 s → 0.80 to 1.09 s | 0.80 to 0.85 s → 0.77 to 0.78 s |
+
+A new query stored its rows no slower while the policy packed (within noise). Reads of a packed result cost what the
+codec measurements above predicted.
+
 ## Proposed PR order
 
 1. **Move the backend to .NET 11.** Done in #459.
-2. **One page accessor and pins.** Every `SealedSnapshot`/`PagesFor` reader gets bodies through one accessor and pins
+2. **One page accessor and pins.** Done in #462. Every `SealedSnapshot`/`PagesFor` reader gets bodies through one accessor and pins
    the result while it reads (a pin count beside the lease count; release waits for pins as for leases). No behaviour
    change.
-3. **Compressed pages inside the store, behind an internal switch.** zstd 2 per page, the skip for pages that save
+3. **Compressed pages inside the store, behind an internal switch.** Done in #468. zstd 2 per page, the skip for pages that save
    under 10 %, the decompressed-page cache, parallel decompression for view reads, rehydrate with its reservation,
    budget transfer, and freed bytes counted for `CollectNow`. An offline mode that compresses every complete result,
    run as a second pass of the result checks.
-4. **Visibility.** A `results.visibility` method in all five places (contract, zod, method policy, preload,
+4. **Visibility.** Done in #463. A `results.visibility` method in all five places (contract, zod, method policy, preload,
    `SqlService` dispatch), sent by the renderer when a result's grid is shown or hidden in any window.
-5. **Stage 1 policy.** Compress complete, unpinned, hidden results of 1 MiB or more after 5 s, through the worker
-   gate. `results.memory` reports compressed bytes, and the Memory popover gets its Nerd metrics section (above).
+5. **Stage 1 policy.** Done (see [Stage 1 as built](#stage-1-as-built)); the Nerd metrics section came first, in #464. Compress complete, unpinned, hidden results of 1 MiB or more after 5 s, on a
+   thread of its own that compresses at the lowest priority. `results.memory` reports compressed bytes, and the Memory popover gets its Nerd metrics section (above).
    README, status-bar memory docs, CHANGELOG, and the Getting Started guides that show the status bar.
 6. **Fused reads.** Done: sort, filter, profile, pivot and plain Copy/Save read packed pages fused, sort ties through a
    column extract (measured above). Left: distinct values, row identity, diff, search and transposed Copy/Save still

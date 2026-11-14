@@ -79,6 +79,17 @@ internal sealed class ResultSetBuffer
     private long packedBytes, packedLogical, cacheBytes;
     /// <summary>The pages read most recently from packed ones, newest first (<see cref="CachePages"/> at most).</summary>
     private readonly List<(StoredPage Page, byte[] Body)> cache = [];
+    /// <summary>A whole pass of <see cref="Pack"/> ended with every page packed or kept raw; cleared when the result is
+    /// unpacked again. The policy (<see cref="ResultPacker"/>) passes over a result marked so.</summary>
+    private bool packDone;
+    /// <summary>Counts whole unpacks (<see cref="UnpackAll"/>), so a pass of <see cref="Pack"/> that an operation's unpack
+    /// overtook between its last page and its end does not mark the result packed.</summary>
+    private int unpacks;
+    /// <summary>Packing stopped, or was refused, for a pin or lease, or an operation unpacked the result: the last pin or
+    /// lease to end tells the store (<see cref="ResultStore.Settle"/>), so the policy looks at the result again.</summary>
+    private bool notifyIdle;
+    /// <summary>Pages an operation is unpacking whole (<see cref="UnpackAll"/>) and how many it has done, for the Memory panel.</summary>
+    private int unpackTotal, unpackDone;
     private TruncationReason refused;
     private volatile bool incomplete;
 
@@ -282,6 +293,8 @@ internal sealed class ResultSetBuffer
             state = 1;
         }
         if (store.Packing == PagePacking.EveryComplete) Pack();
+        // Only a result the policy could pack wakes it: a script of thousands of small sets does not rescan the store each time.
+        else if (BytesStored >= ResultPacker.FloorBytes) store.Settle();
     }
 
     /// <summary>Marks the set released, so in-flight reads stop after their current page and nothing more is stored, and
@@ -334,7 +347,7 @@ internal sealed class ResultSetBuffer
     public void ReleaseLease()
     {
         long bytes;
-        var repack = false;
+        bool repack = false, settled = false;
         lock (gate)
         {
             if (leases == 0) throw new InvalidOperationException("The result set is not leased.");
@@ -342,11 +355,14 @@ internal sealed class ResultSetBuffer
             if (!freePending)
             {
                 repack = state == 1 && store.Packing == PagePacking.EveryComplete;
+                settled = !repack && state == 1 && notifyIdle;
+                notifyIdle &= !settled;
                 bytes = 0;
             }
             else bytes = FreeLocked();
         }
         if (repack) Pack();
+        else if (settled) store.Settle();
         else store.Freed(bytes, Budget.Live is not null);
     }
 
@@ -367,7 +383,7 @@ internal sealed class ResultSetBuffer
     internal void Unpin()
     {
         long bytes;
-        var repack = false;
+        bool repack = false, settled = false;
         lock (gate)
         {
             if (pins == 0) throw new InvalidOperationException("The result set is not pinned.");
@@ -375,11 +391,14 @@ internal sealed class ResultSetBuffer
             if (!freePending)
             {
                 repack = state == 1 && store.Packing == PagePacking.EveryComplete;
+                settled = !repack && state == 1 && notifyIdle;
+                notifyIdle &= !settled;
                 bytes = 0;
             }
             else bytes = FreeLocked();
         }
         if (repack) Pack();
+        else if (settled) store.Settle();
         else store.Freed(bytes, Budget.Live is not null);
     }
 
@@ -443,6 +462,7 @@ internal sealed class ResultSetBuffer
     /// A read never fails for room: without it the page is unpacked for the read alone.</summary>
     private byte[] Unpacked(StoredPage page)
     {
+        store.CountCacheLookup();
         lock (gate)
         {
             for (var i = 0; i < cache.Count; i++)
@@ -497,30 +517,86 @@ internal sealed class ResultSetBuffer
     /// <summary>Whether any page is packed now.</summary>
     public bool HasPacked { get { lock (gate) return packedLogical > 0; } }
 
+    /// <summary>The bytes of the sealed pages as sealed (the rows as read; the descriptor's bytesStored).</summary>
+    public long BytesStored { get { lock (gate) return bytesStored; } }
+
+    /// <summary>How many times an operation has unpacked the result whole (the policy counts each as a use).</summary>
+    public int Unpacks { get { lock (gate) return unpacks; } }
+
+    /// <summary>Whether the policy (<see cref="ResultPacker"/>) may pack this result: complete, not a live table, and not
+    /// already packed by a whole pass since it was last unpacked.</summary>
+    public bool NeedsPacking { get { lock (gate) return state == 1 && !packDone && Budget.Live is null; } }
+
+    /// <summary>What the set holds now, for the Memory panel (ResultStore.MemoryDetail): its pages' bytes as sealed, what
+    /// they take (raw pages plus packed ones), the packed pages' bytes and their bytes as sealed, the unpacked pages cached
+    /// for reads, and, while an operation unpacks the whole result, how far it has got (0 to 100), else null.</summary>
+    public (long Logical, long StoredBytes, long Packed, long PackedLogical, long Cache, int? Unpacking) Memory()
+    {
+        lock (gate)
+        {
+            var total = Volatile.Read(ref unpackTotal);
+            int? unpacking = total > 0 ? (int)Math.Min(100, 100L * Volatile.Read(ref unpackDone) / total) : null;
+            return (bytesStored, bytesStored - packedLogical + packedBytes, packedBytes, packedLogical, cacheBytes, unpacking);
+        }
+    }
+
     /// <summary>Packs a complete result's pages one at a time (<see cref="PageCodec"/>), as the store's
     /// <see cref="ResultStore.Packing"/> allows: nothing when it is off or for a live table. It stops, keeping what it
     /// packed, once the set is pinned, leased or released, and checks that before each page it replaces, so a reader
-    /// never meets a page replaced while it reads. A page that saves less than a tenth stays raw (the checks' mode packs
+    /// never meets a page replaced while it reads; stopped or refused for a pin or lease, the last one to end tells the
+    /// store (<see cref="ResultStore.Settle"/>), so the policy can finish. A whole pass marks the set packed until an
+    /// operation unpacks it (<see cref="NeedsPacking"/>). A page that saves less than a tenth stays raw (the checks' mode packs
     /// every page). The bytes saved go back to the budgets at once and count toward the store's next collection, but
     /// never toward a compacting one (ResultStore.Freed): the space is reused anyway. Returns the bytes saved.</summary>
-    public long Pack()
+    /// <param name="proceed">Asked before each page, outside the set's lock: false stops packing there, keeping what was
+    /// packed (the policy's: the result was shown again, or the backend is shutting down).</param>
+    /// <param name="quiet">Passed to the codec around each page's compression (<see cref="PageCodec.Pack"/>): the policy's,
+    /// which lowers its thread's priority for the compression alone, outside every lock.</param>
+    /// <param name="unpacks">The policy's: the <see cref="Unpacks"/> it saw when it found the result due. An operation that
+    /// unpacked the result since then is a use, so nothing is packed and the policy looks again.</param>
+    public long Pack(Func<bool>? proceed = null, Action<bool>? quiet = null, int? unpacks = null)
     {
         var mode = store.Packing;
         if (mode == PagePacking.Off || Budget.Live is not null) return 0;
         StoredPage[] candidates;
+        int generation;
         lock (gate)
         {
-            if (state != 1 || pins > 0 || leases > 0) return 0;
+            generation = this.unpacks;
+            if (state != 1 || unpacks is { } seen && seen != generation) return 0;
+            if (pins > 0 || leases > 0)
+            {
+                notifyIdle = true;
+                return 0;
+            }
             candidates = [.. pages.Where(page => page.Stored is byte[] && (mode == PagePacking.EveryComplete || !page.KeptRaw))];
         }
         long saved = 0;
+        var whole = true;
         foreach (var page in candidates)
         {
-            if (page.Stored is not byte[] raw || store.Pack(raw) is not { } bytes) continue;
+            if (proceed is not null && !proceed())
+            {
+                whole = false;
+                break;
+            }
+            if (page.Stored is not byte[] raw || store.Pack(raw, quiet) is not { } bytes) continue;
             var keep = mode == PagePacking.EveryComplete || bytes.Length <= raw.Length - raw.Length / 10;
             lock (gate)
             {
-                if (state != 1 || pins > 0 || leases > 0) break;
+                if (state != 1 || pins > 0 || leases > 0)
+                {
+                    notifyIdle = state == 1;
+                    whole = false;
+                    break;
+                }
+                // An operation unpacked the result whole between two pages and has already ended (its end poked the
+                // policy): a use, so the rest waits the delay again.
+                if (unpacks is not null && this.unpacks != generation)
+                {
+                    whole = false;
+                    break;
+                }
                 if (!ReferenceEquals(page.Stored, raw)) continue;
                 if (!keep)
                 {
@@ -529,6 +605,7 @@ internal sealed class ResultSetBuffer
                     continue;
                 }
                 page.Stored = new PackedPage(bytes);
+                store.CountPacked();
                 var difference = (long)raw.Length - bytes.Length;
                 if (difference >= 0) ReturnLocked(difference);
                 else Charge(-difference);
@@ -538,6 +615,9 @@ internal sealed class ResultSetBuffer
                 saved += difference;
             }
         }
+        if (whole)
+            lock (gate)
+                packDone = state == 1 && this.unpacks == generation;
         if (saved > 0) store.Freed(saved, Budget.Live is not null, compacts: false);
         return saved;
     }
@@ -580,6 +660,10 @@ internal sealed class ResultSetBuffer
         {
             if (pins == 0) throw new InvalidOperationException("A result is unpacked only while pinned.");
             packed = [.. pages.Where(page => page.Stored is PackedPage)];
+            // Whatever happens next, the policy may pack the result again once the operation's pin ends.
+            packDone = false;
+            unpacks++;
+            notifyIdle = true;
         }
         if (packed.Length == 0)
         {
@@ -587,16 +671,27 @@ internal sealed class ResultSetBuffer
             return;
         }
         var bodies = new byte[packed.Length][];
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        // Two operations unpacking at once share the figures; the Memory panel shows one's progress or the other's.
+        Volatile.Write(ref unpackDone, 0);
+        Volatile.Write(ref unpackTotal, packed.Length);
         try
         {
             using var threads = ViewSorter.Gate.Take(Math.Min(packed.Length, ViewSorter.Workers));
-            threads.For(packed.Length, i => bodies[i] = Cached(packed[i]) ?? (packed[i].Stored is PackedPage bytes ? store.Unpack(bytes, packed[i].Length) : null!), token);
+            threads.For(packed.Length, i =>
+            {
+                bodies[i] = Cached(packed[i]) ?? (packed[i].Stored is PackedPage bytes ? store.Unpack(bytes, packed[i].Length) : null!);
+                Interlocked.Increment(ref unpackDone);
+            }, token);
         }
         catch
         {
+            Volatile.Write(ref unpackTotal, 0);
             store.Return(Budget, reserved);
             throw;
         }
+        Volatile.Write(ref unpackTotal, 0);
+        store.Unpacked(System.Diagnostics.Stopwatch.GetTimestamp() - started);
         lock (gate)
         {
             charged += reserved;
@@ -638,9 +733,15 @@ internal sealed class ResultSetBuffer
         {
             if (wanted[i].Set != this) throw new ArgumentException("The page is not this result's.", nameof(wanted));
             if (wanted[i].Stored is byte[] raw) bodies[i] = raw;
-            else if (Cached(wanted[i]) is { } hit) bodies[i] = hit;
+            else if (Cached(wanted[i]) is { } hit)
+            {
+                store.CountCacheLookup();
+                store.CountCacheHit();
+                bodies[i] = hit;
+            }
             else
             {
+                store.CountCacheLookup();
                 unpack.Add(i);
                 need += wanted[i].Length;
             }

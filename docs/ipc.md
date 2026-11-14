@@ -248,7 +248,7 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `query.cancel` | invoke | unary | control | 10 s |
 | `query.session.close` | invoke | unary | control | 10 s, 60 s with `transaction: 'commit'`; answered locally `{ closed: false }` for a session of an ended generation |
 | `query.session.state` | invoke | unary | control | 5 s; answered locally `SESSION_LOST` for a session of an ended generation |
-| `results.visibility` | invoke (`ResultVisibilityService`, `src/renderer/src/results/ResultVisibilityService.ts`): when the set of results whose grids are shown in any window changes, and again each time the backend becomes ready or the results port's generation changes; once main has reported a state (read at start, then pushed), only while it reports the backend ready in the port's generation; one request in flight at a time | unary | control | 10 s. Takes `{ source, seq, visible }`: a UUID per renderer load, a number rising from 1 (at most 2^31 - 1), and the whole set of shown result ids of the current generation (0 to 4,096 distinct u32 ids above 0, `limits.visibility.maxResults`; the backend refuses anything else with `INVALID_PARAMS`), replacing the last. Answers `{ visible, applied }`: how many ids the backend's visible set holds, and false for a set from the same source not numbered above the last one applied (control requests run concurrently, and one past its deadline still runs). Ids of results not stored are ignored. A hint for a memory policy over hidden results: the backend only records it (`ResultVisibility`, see [Result store and memory budget](#result-store-and-memory-budget)) |
+| `results.visibility` | invoke (`ResultVisibilityService`, `src/renderer/src/results/ResultVisibilityService.ts`): when the set of results whose grids are shown in any window changes, and again each time the backend becomes ready or the results port's generation changes; once main has reported a state (read at start, then pushed), only while it reports the backend ready in the port's generation; one request in flight at a time | unary | control | 10 s. Takes `{ source, seq, visible }`: a UUID per renderer load, a number rising from 1 (at most 2^31 - 1), and the whole set of shown result ids of the current generation (0 to 4,096 distinct u32 ids above 0, `limits.visibility.maxResults`; the backend refuses anything else with `INVALID_PARAMS`), replacing the last. Answers `{ visible, applied }`: how many ids the backend's visible set holds, and false for a set from the same source not numbered above the last one applied (control requests run concurrently, and one past its deadline still runs). Ids of results not stored are ignored. A hint for the policy that packs hidden results (`ResultVisibility`, `ResultPacker`, see [Result store and memory budget](#result-store-and-memory-budget)): a change wakes it, and a result shown again stops packing at its next page |
 | `results.read` | port | stream | results | 60 s |
 | `results.close` | port | unary | control | 10 s |
 | `results.rowBytes` | port | unary | control | 10 s; each row's bytes for 1 – 16,384 sealed rows ([Cell lengths and row sizes](#cell-lengths-and-row-sizes)) |
@@ -1152,11 +1152,14 @@ event's with it until the check after the summary sends a new one. `resultMemory
 | `compressedBytes`, `packedLogicalBytes` | The compressed pages' size, and the rows as read they hold |
 | `cacheBytes` | Decompressed pages kept for reads |
 | `largest` | At most 8 results, largest as read first: `{ resultId, logicalBytes, storedBytes, state: 'raw' \| 'packed' \| 'unpacking', progress? (0 to 100, only while unpacking), live? (a live view's table) }`. Ids are the event's generation's |
-| `codec` | Counters since the backend started: `name` and `level` (left out while compression is off), `pagesPacked`, `pagesUnpacked`, `packInputBytes`, `packMicroseconds`, `unpackOutputBytes`, `unpackMicroseconds`, `cacheHits`, `cacheLookups`, `lastUnpackMicroseconds` (the last operation that unpacked a result; 0 before one) |
+| `codec` | Counters since the backend started: `name` and `level` (left out while compression is off), `pagesPacked`, `pagesUnpacked`, `packInputBytes`, `packMicroseconds` (elapsed time, which includes any wait while the policy compresses at low priority), `unpackOutputBytes`, `unpackMicroseconds`, `cacheHits`, `cacheLookups`, `lastUnpackMicroseconds` (the last operation that unpacked a result; 0 before one) |
 | `heap` | The managed heap after the last collection (`GC.GetGCMemoryInfo`): `committedBytes`, and `freeBytes` free inside it for reuse |
 
-Nothing is compressed yet: `storedBytes` equals `logicalBytes`, the compressed and cache figures and the codec's counters
-are 0, every result is `raw`, and the codec has no name.
+Each result's figures are read under its own lock and added up (`ResultStore.MemoryDetail`), so `storedBytes` is
+`logicalBytes` less `packedLogicalBytes` plus `compressedBytes`, and the saving it shows is the one the budget got back.
+A result is `packed` once any of its pages is, and `unpacking` while an operation unpacks it whole. The codec's
+`name` is `zstd` and its `level` 2 while packing is on, which it is in every backend Varia starts
+([Packing hidden results](#result-store-and-memory-budget)).
 
 ## Result pages
 
@@ -1238,7 +1241,7 @@ Results stay in backend memory, never on disk (`ResultStore`).
   `SqlService` are pinned by `tests/working-memory-lint.test.ts`. `VARIA_RESULT_BUDGET_BYTES` replaces the global figure only with the test
   hooks, and turns the memory-load check off so tests see their budget's truncation reasons on a busy machine (the offline
   checks' stores never check it unless given a probe).
-- **Charges.** Each sealed page costs its length plus 96 bytes plus its cell lengths ([Cell lengths and row sizes](#cell-lengths-and-row-sizes)); a result set's metadata 512 bytes plus 2 per name
+- **Charges.** Each sealed page costs its length (its packed length once packed) plus 96 bytes plus its cell lengths ([Cell lengths and row sizes](#cell-lengths-and-row-sizes)); a result set's metadata 512 bytes plus 2 per name
   character and 64 per column, reserved like rows; the page builder's working space is reserved in 256 KiB steps and
   returned when the set ends. A failed reservation rolls back the current row, so pages never hold partial rows; later
   rows are still read and counted in `rowsRead` but not stored, later result sets of the query are not kept (they count
@@ -1286,9 +1289,28 @@ Results stay in backend memory, never on disk (`ResultStore`).
   `ResultVisibility` (`Results/ResultVisibility.cs`) keeps the set and, for every other stored result, the time it
   became hidden (or was first asked about). Nothing is evicted by age: results.close forgets released results at once,
   and other released results' entries are swept once the table has doubled since the last sweep, so it stays within
-  twice its size after the last sweep. It changes nothing in the store: `IsHidden(resultId, out since)` is the query for
-  a later policy that compresses hidden results (stage 1 of the page compression plan), which must not call it while
-  holding the store's locks.
+  twice its size after the last sweep. It changes nothing in the store itself: `IsHidden(resultId, out since)` is what
+  the packing policy below asks, never while holding the store's locks.
+- **Packing hidden results.** A complete result of 1 MiB or more whose grid has been shown in no window for 5 seconds
+  is packed: each sealed page is replaced by its Zstandard bytes (level 2, one page's window; a page that would save
+  under a tenth stays raw), and the budget is charged the packed size at once, so packing makes room. Never a result
+  still storing rows, a live table, or one a read, operation, Copy or Save holds. Nothing is evicted and nothing goes to
+  disk. `ResultPacker` (`Results/ResultPacker.cs`) schedules it in the backend alone: one thread, which compresses
+  each page at the lowest priority (honoured on Windows; on Linux and macOS it competes as an ordinary thread) and does
+  everything that takes a lock or allocates at normal priority (so it is never preempted holding a lock a read or a new
+  query needs), sleeps until the next hidden result falls due, or until a result completes, `results.visibility` changes the
+  shown set, or a read or job that stopped packing ends; it packs one result at a time, largest first, page by page
+  (about 275 to 400 MB/s, a 1 GiB result in about three seconds), and stops between pages when the result is shown
+  again, held, released or the backend shuts down, keeping what it packed. It runs beside the results' workers, never
+  through their gate, so sorts, reads and new queries never wait for it. Showing a packed result again needs no wait:
+  `results.read` unpacks the pages it sends (0.3 ms a read through a six-page cache), and a view read unpacks the pages
+  behind its rows on the workers. A sort, filter, profile or pivot reads a packed result fused and leaves it packed
+  (docs/architecture.md); an operation that needs every row at once (distinct values, row identity, search, diff, and a
+  fused read refused its rooms) first unpacks it in place after reserving its raw size as working memory, and answers
+  `TOO_LARGE` with its own sentence, changing nothing, when the budget refuses; the policy packs it again once the
+  operation has ended and the result has gone unused for the same 5 seconds (an operation's unpack counts as a use). A plain Copy or Save reads page by page through the cache and is never refused
+  for it; a transposed one unpacks the pages its rows lie on. A visible result is never packed (that is stage 2 of
+  [page-compression-findings.md](page-compression-findings.md)).
 - **Leases.** `results.copy` and `results.export` lease their result: released while a job runs, it leaves lookup at once
   (new reads get `RESULT_RELEASED`), but its pages and budget are freed when the last lease ends, so re-executing or
   closing a tab never breaks a save. Every 64 MiB released, counted across releases (one large result or many small ones, closed together

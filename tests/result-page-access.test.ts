@@ -41,10 +41,17 @@ describe('result page access', () => {
     const views = readFileSync('backend/Varia.Backend/Results/ResultViews.cs', 'utf8')
     expect([...views.matchAll(/new StoredPage\(([^;]*)\);/g)].map(match => match[1].split(',').length)).toEqual([4, 4])
   })
-  it('packs only behind the store\'s switch, off unless a check turns it on', () => {
+  it('packs only behind the store\'s switch, off unless a check or the backend process\'s hidden-result policy turns it on', () => {
     const store = readFileSync('backend/Varia.Backend/Results/ResultStore.cs', 'utf8')
     expect(store).toMatch(/internal static PagePacking DefaultPacking \{ get; set; \} = PagePacking\.Off;/)
     expect(lines(/DefaultPacking\s*=(?!=)/, ['backend/Varia.Backend.Tests/Program.cs']).filter(line => !line.startsWith('backend/Varia.Backend/Results/ResultStore.cs'))).toEqual([])
-    expect(lines(/\.Packing\s*=(?!=)|Packing = PagePacking\.(OnRequest|EveryComplete)/, []).filter(line => line.startsWith('backend/Varia.Backend/'))).toEqual([])
+    // Only the service that runs the policy (ResultPacker) turns a product store on request, and only the backend process asks it to.
+    const file = (line: string) => line.replace(/:\d+$/, '')
+    const product = lines(/\.Packing\s*=(?!=)|Packing = PagePacking\.(OnRequest|EveryComplete)/, []).filter(line => line.startsWith('backend/Varia.Backend/'))
+    expect(product.map(file)).toEqual(['backend/Varia.Backend/SqlService.cs'])
+    const service = readFileSync('backend/Varia.Backend/SqlService.cs', 'utf8')
+    expect(service).toMatch(/if \(packHidden\)\n\s*\{\n\s*if \(this\.store\.Packing == PagePacking\.Off\) this\.store\.Packing = PagePacking\.OnRequest;/)
+    expect(lines(/packHidden: true/, []).filter(line => line.startsWith('backend/Varia.Backend/')).map(file)).toEqual(['backend/Varia.Backend/SqlService.cs'])
+    expect(service).toMatch(/return new SqlService\(ResultStore\.FromSystem\(budget, limit\), hooks, publish, packHidden: true\);/)
   })
 })
