@@ -14,6 +14,7 @@ import {
 } from './logins.ts'
 import { designerEngines } from '../designer/catalog.ts'
 import { restoredFilesLimit } from './schema.ts'
+import { lockEscalationLabels, lockEscalationTokens, tableLimits, tableStepTitles } from './tables.ts'
 import {
   backupSetTypes, backupSetTypeSpecs, plannedSetTypes, restoreDescribeId, restoreDevicePickerTitles, restoreFilesRecoveryLabels, restoreFilesSections, restoreLimits, restoreMessages, restoreRecoveryLabels, restoreRecoveryStates, restoreSections,
   restoreSourceKinds, restoreStepTitles, restoreSystemDatabases, timelineIntervals, timelineIntervalSpecs
@@ -154,7 +155,8 @@ function narrowingDocs(): string[] {
 
 const promptSamples: { readonly [P in ActionPromptRequest['prompt']]: Extract<ActionPromptRequest, { prompt: P }>['facts'] } = {
   renameDatabase: { database: 'Sales', sessions: 3, transactions: 1, tabs: 2, tabsWithTransactions: ['Query 1.sql'], canClose: true },
-  disableLogin: { login: 'app_user', sessions: 2, service: 'SQL Server Agent (MSSQLSERVER)', sysadmin: false, connections: ['Reporting (sql01)'] }
+  disableLogin: { login: 'app_user', sessions: 2, service: 'SQL Server Agent (MSSQLSERVER)', sysadmin: false, connections: ['Reporting (sql01)'] },
+  disableChangeTracking: { schema: 'Sales', table: 'Orders', reenable: false }
 }
 /** The native confirmations, with an example of each. */
 function promptDocs(): string[] {
@@ -501,6 +503,7 @@ export function renderObjectActionsDocs(): string {
     ...promptDocs(),
     ...longRunDocs(),
     ...databasePropertiesDocs(),
+    ...tablePropertiesDocs(),
     ...newDatabaseDocs(),
     ...attachDocs(),
     ...restoreDocs(),
@@ -1121,6 +1124,36 @@ const optionRow = (def: DatabaseOptionDef): string[] =>
   [def.label, def.category === 'header' ? 'Header' : def.category, yesNo(def.settable), optionSql(def), def.exclusive ? 'Yes' : '', def.settable && def.refusedReadOnly ? 'Yes' : '', def.since ? String(def.since) : '', notOnText(def)]
 
 /** Database Properties: its pages, the options it changes, the order its statements run in, and the Open Connections rule. */
+/** Table Properties: its pages, what Apply changes and how, and what it leaves to a query window. */
+function tablePropertiesDocs(): string[] {
+  return [
+    '## Table Properties',
+    '',
+    'A table\'s Properties opens Table Properties as a document tab, on every table (SQL Server\'s own and the special kinds',
+    'included, as in SSMS), from Object Explorer and from Peek\'s table card. Its pages are SSMS\'s: General (name, schema,',
+    'dates, system object, ANSI NULLs, replicated, memory optimized, FileTable, external and graph kinds, Lock escalation, and',
+    'the temporal and ledger facts of a table that is either), Permissions (each grant or deny on the table and its columns, by',
+    `principal, at most ${tableLimits.permissions.toLocaleString('en-US')} rows), Change Tracking, Storage (compression, filegroups, partitioning, rows and`,
+    `space, at most ${tableLimits.partitions.toLocaleString('en-US')} partitions), Security Predicates (only when a row-level security policy names the table, SQL`,
+    `Server 2016 and later) and Extended Properties (at most ${tableLimits.extendedProperties} read). SSMS\'s Quoted identifier is not shown: only`,
+    '`OBJECTPROPERTY` reports it, and the catalog lint refuses metadata functions.',
+    '',
+    'Apply changes only what differs from what was read, in one transaction (`SET XACT_ABORT ON`), with Script showing the',
+    'same statements: Lock escalation (' + lockEscalationTokens.map(token => `${lockEscalationLabels[token]} = ${code(token)}`).join(', ') + '; not on a',
+    'memory-optimized table), Change Tracking on or off with Track columns updated (SQL Server changes that only by turning',
+    'change tracking off and on again, as SSMS does; turning it on needs a primary key and change tracking on the database), and',
+    `extended properties added, changed or removed (text values of at most ${tableLimits.extendedPropertyValue.toLocaleString('en-US')} characters; a value of another type is`,
+    'shown with its type and can only be removed). Its steps are ' + Object.values(tableStepTitles).map(title => `"${title}"`).join(', ') + '. A',
+    'failure or Stop rolls the whole transaction back, so nothing is left half changed. Turning change tracking off, or',
+    'changing Track columns updated, asks first (`disableChangeTracking`), since SQL Server discards what it tracked.',
+    'Apply\'s first step finds the table again by its object id and creation date and plans again, refusing a table renamed,',
+    'dropped or replaced since it was read, or changed so the plan would differ. SQL Server\'s own, external and dropped ledger',
+    'tables, and tables in a read-only database, are read-only. Permissions, compression and partitioning are changed in a',
+    'query window.',
+    ''
+  ]
+}
+
 /** Server actions: New Database. */
 function newDatabaseDocs(): string[] {
   const places = (spec: typeof serverActionSpecs[typeof serverActions[number]]) =>

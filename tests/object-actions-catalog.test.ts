@@ -50,12 +50,13 @@ describe('object action catalogue', () => {
     expect(actionMenuState({ kind: 'login' })).toEqual(none)
   })
   it('offers SSMS\'s actions per kind, greying SQL Server\'s own objects and the subtypes that need more handling', () => {
-    expect(states('table')).toBe('enabled enabled enabled - - - -')
-    for (const subtype of ['graphNode', 'graphEdge'] as const) expect(states('table', subtype), subtype).toBe('enabled enabled enabled - - - -')
+    expect(states('table')).toBe('enabled enabled enabled enabled - - -')
+    for (const subtype of ['graphNode', 'graphEdge'] as const) expect(states('table', subtype), subtype).toBe('enabled enabled enabled enabled - - -')
     for (const subtype of ['system', 'systemVersioned', 'history', 'updatableLedger', 'appendOnlyLedger', 'ledgerHistory', 'fileTable', 'external'] as const) {
-      expect(states('table', subtype), subtype).toBe('enabled disabled disabled - - - -')
+      expect(states('table', subtype), subtype).toBe('enabled disabled disabled enabled - - -')
     }
-    expect(states('table', 'droppedLedger')).toBe('- disabled disabled - - - -')
+    // Table Properties opens on every table, as in SSMS; its Apply refuses what may not change.
+    expect(states('table', 'droppedLedger')).toBe('- disabled disabled enabled - - -')
     expect(states('view')).toBe('enabled enabled enabled - - - -')
     for (const subtype of ['system', 'ledger'] as const) expect(states('view', subtype), subtype).toBe('enabled disabled disabled - - - -')
     expect(states('view', 'droppedLedger')).toBe('- disabled disabled - - - -')
@@ -65,8 +66,8 @@ describe('object action catalogue', () => {
     expect(states('function', 'aggregate')).toBe('- enabled disabled - - - -')
     // Properties opens for every database, SQL Server's own and snapshots included, as in SSMS.
     expect([states('database'), states('database', 'system'), states('database', 'snapshot')]).toEqual(['- enabled enabled enabled - - -', '- disabled disabled enabled - - -', '- disabled enabled enabled - - -'])
-    // A login's Properties (D2c) opens Login Properties, a database's the Database Properties document.
-    expect(nodeKinds.filter(kind => actionOffered(kind, 'properties'))).toEqual(['login', 'database'])
+    // A login's Properties (D2c) opens Login Properties, a database's the Database Properties document, a table's Table Properties.
+    expect(nodeKinds.filter(kind => actionOffered(kind, 'properties'))).toEqual(['login', 'database', 'table'])
     // Tasks › Detach…, Take Offline, Bring Online and Restore › Database…: user databases only; greyed on SQL Server's own (as SSMS for
     // Detach and the state changes; critic A19 for a restore, which takes T-SQL there), absent on a snapshot, which cannot be restored over.
     expect([tasks('database'), tasks('database', 'system'), tasks('database', 'snapshot')]).toEqual(['enabled enabled enabled enabled enabled', 'disabled disabled disabled disabled disabled', '- - - - -'])
@@ -106,7 +107,7 @@ describe('object action catalogue', () => {
     expect(entries['explorer.selectTopRows']).toMatchObject({ title: 'Select Top 1000 Rows', titleSetting: { setting: 'objectExplorer.selectTopRows', template: 'Select Top {n} Rows' },
       precondition: "backendReady && explorerActionSelectTop == 'enabled' && !documentBusy" })
     expect(entries['explorer.rename'].precondition).toBe("backendReady && explorerActionRename == 'enabled'")
-    expect(entries['explorer.properties']).toMatchObject({ title: 'Properties', icon: 'settings-gear', unavailableHint: 'Select a database or login in Object Explorer.',
+    expect(entries['explorer.properties']).toMatchObject({ title: 'Properties', icon: 'settings-gear', unavailableHint: 'Select a database, table or login in Object Explorer.',
       precondition: "backendReady && explorerActionProperties == 'enabled'", menus: [{ menu: 'explorer.context', group: '9_properties', order: 1, mnemonic: 'p' }] })
     // A login's Disable and Enable: the palette's title names the login, the menu's is SSMS's one word; no keys, as in SSMS.
     expect(entries['explorer.disable']).toEqual({ title: 'Disable Login', category: 'Object Explorer', icon: 'circle-slash', keywords: ['login', 'account', 'block', 'deactivate'],
@@ -198,7 +199,7 @@ describe('object action catalogue', () => {
     expect(ids.slice(at('explorer.refresh'))).toEqual(['explorer.refresh', '---', 'explorer.properties', 'ssis.folderProperties', 'ssis.projectProperties', 'ssis.packageProperties', 'ssis.environmentProperties'])
   })
   it('declares Delete Object and Database Properties with SSMS\'s titles, pages and Script button wording', () => {
-    expect(dialogIds).toEqual(['deleteObject', 'databaseProperties', 'newDatabase', 'attachDatabase', 'newLogin', 'takeOffline', 'bringOnline', 'detachDatabase', 'unlockLogin', 'loginProperties'])
+    expect(dialogIds).toEqual(['deleteObject', 'databaseProperties', 'newDatabase', 'attachDatabase', 'newLogin', 'takeOffline', 'bringOnline', 'detachDatabase', 'unlockLogin', 'loginProperties', 'tableProperties'])
     // Learn's Detach Database dialog, as a modal (wave 5 decisions): its title names the database.
     expect(dialogSpecs.detachDatabase).toEqual({ title: 'Detach Database', surface: 'modal', titleFormat: 'withName', size: 'compact', action: 'detach',
       pages: [{ id: 'general', title: 'General', icon: 'settings-gear' }], steps: true })
@@ -242,8 +243,8 @@ describe('object action catalogue', () => {
     expectTypeOf<ActionCommandId>().toEqualTypeOf<'explorer.selectTopRows' | 'explorer.rename' | 'explorer.delete' | 'explorer.properties' | 'explorer.attachDatabase' | 'explorer.takeOffline' | 'explorer.bringOnline' | 'explorer.detachDatabase' | 'explorer.restoreDatabase' | 'explorer.tasks.restoreDatabase'
       | 'explorer.restoreFiles' | 'explorer.tasks.restoreFiles' | 'explorer.disable' | 'explorer.enable' | 'explorer.unlock'>()
     expectTypeOf<ModalDialogId>().toEqualTypeOf<'deleteObject' | 'attachDatabase' | 'newLogin' | 'takeOffline' | 'bringOnline' | 'detachDatabase' | 'unlockLogin' | 'loginProperties'>()
-    expectTypeOf<PageId>().toEqualTypeOf<'general' | 'files' | 'filegroups' | 'options' | 'serverRoles' | 'userMapping' | 'securables' | 'status'>()
-    expect(pageIds).toEqual(['general', 'files', 'filegroups', 'options', 'serverRoles', 'userMapping', 'securables', 'status'])
+    expectTypeOf<PageId>().toEqualTypeOf<'general' | 'files' | 'filegroups' | 'options' | 'serverRoles' | 'userMapping' | 'securables' | 'status' | 'permissions' | 'changeTracking' | 'storage' | 'securityPredicates' | 'extendedProperties'>()
+    expect(pageIds).toEqual(['general', 'files', 'filegroups', 'options', 'serverRoles', 'userMapping', 'securables', 'status', 'permissions', 'changeTracking', 'storage', 'securityPredicates', 'extendedProperties'])
     for (const dialog of dialogIds) for (const page of dialogSpecs[dialog].pages) {
       expect(isIconId(page.icon), `${dialog}: ${page.id}`).toBe(true)
       expect(pageIds, dialog).toContain(page.id)

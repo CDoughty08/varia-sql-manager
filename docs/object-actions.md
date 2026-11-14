@@ -59,9 +59,9 @@ is reserved on Windows and Linux.
 | `database` | none | – | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | – | – |
 | `database` | `system` | – | ○ | ○ | ✓ | ○ | ○ | ○ | – | – | – |
 | `database` | `snapshot` | – | ○ | ✓ | ✓ | – | – | – | – | – | – |
-| `table` | none, `graphNode`, `graphEdge` | ✓ | ✓ | ✓ | – | – | – | – | – | – | – |
-| `table` | `systemVersioned`, `history`, `updatableLedger`, `appendOnlyLedger`, `ledgerHistory`, `fileTable`, `external`, `system` | ✓ | ○ | ○ | – | – | – | – | – | – | – |
-| `table` | `droppedLedger` | – | ○ | ○ | – | – | – | – | – | – | – |
+| `table` | none, `graphNode`, `graphEdge` | ✓ | ✓ | ✓ | ✓ | – | – | – | – | – | – |
+| `table` | `systemVersioned`, `history`, `updatableLedger`, `appendOnlyLedger`, `ledgerHistory`, `fileTable`, `external`, `system` | ✓ | ○ | ○ | ✓ | – | – | – | – | – | – |
+| `table` | `droppedLedger` | – | ○ | ○ | ✓ | – | – | – | – | – | – |
 | `view` | none | ✓ | ✓ | ✓ | – | – | – | – | – | – | – |
 | `view` | `system`, `ledger` | ✓ | ○ | ○ | – | – | – | – | – | – | – |
 | `view` | `droppedLedger` | – | ○ | ○ | – | – | – | – | – | – | – |
@@ -126,6 +126,7 @@ the Servers column above says which, and on another server the menu hides the it
 | `detachDatabase` | Detach Database - <name> | Modal dialog | `detach` | General (`settings-gear`) | Yes |
 | `unlockLogin` | Unlock Login - <name> | Modal dialog | `unlock` | General (`settings-gear`) | Yes |
 | `loginProperties` | Login Properties - <name> | Modal dialog | `loginProperties` | General (`settings-gear`, kept mounted), Server Roles (`settings-gear`), User Mapping (`settings-gear`, kept mounted), Securables (`settings-gear`, kept mounted), Status (`settings-gear`) | Yes |
+| `tableProperties` | Table Properties - <name> | Document tab | `tableProperties` | General (`settings-gear`), Permissions (`settings-gear`), Change Tracking (`settings-gear`), Storage (`settings-gear`), Security Predicates (`settings-gear`), Extended Properties (`settings-gear`) | No |
 
 A modal dialog is for a confirmation (Delete Object). A property sheet opens as a document tab instead (U1 D2): its
 pages are sections in one scrolling column with a section list beside it, and a Script drawer under it.
@@ -326,6 +327,7 @@ choose its default. Database Properties' Open Connections prompt keeps its own c
 | --- | --- | --- | --- |
 | `renameDatabase` | Rename Database | **Close Connections and Rename**, Rename When Free, Cancel | 3 connections are using Sales (2 query windows in Varia). Close them and rename the database? 1 session has an open transaction, which closing rolls back. Varia's query windows with open transactions: Query 1.sql. Rename When Free waits until they disconnect; Stop in the status bar ends the wait. |
 | `disableLogin` | Disable Login | Disable, **Cancel** | Disable the login app_user? New connections will be refused. 2 sessions connected as this login stay connected until they end; Activity Monitor can end them. SQL Server Agent (MSSQLSERVER) runs as this account, and cannot connect while it is disabled. Varia's connection Reporting (sql01) signs in as this login, and cannot reconnect while it is disabled. |
+| `disableChangeTracking` | Change Tracking | Turn Off, **Cancel** | Turn off change tracking on Sales.Orders? SQL Server discards the changes it has tracked for the table. Applications that synchronize from those changes must start again from a full copy of the table. |
 
 The default button is bold. Rename Database defaults to Rename When Free where Varia may not close the connections, and
 Disable Login to Cancel for a login a service runs as.
@@ -507,6 +509,30 @@ rather than wait for the other sessions' transactions; SQL Server gives up after
 choosing Yes only after an exclusive change made without closing connections; otherwise (Broker Enabled or Containment
 type with other sessions, which SSMS does not close connections for) it advises closing them first. Script never
 asks: it always writes WITH NO_WAIT, as SSMS does.
+
+## Table Properties
+
+A table's Properties opens Table Properties as a document tab, on every table (SQL Server's own and the special kinds
+included, as in SSMS), from Object Explorer and from Peek's table card. Its pages are SSMS's: General (name, schema,
+dates, system object, ANSI NULLs, replicated, memory optimized, FileTable, external and graph kinds, Lock escalation, and
+the temporal and ledger facts of a table that is either), Permissions (each grant or deny on the table and its columns, by
+principal, at most 1,024 rows), Change Tracking, Storage (compression, filegroups, partitioning, rows and
+space, at most 1,000 partitions), Security Predicates (only when a row-level security policy names the table, SQL
+Server 2016 and later) and Extended Properties (at most 256 read). SSMS's Quoted identifier is not shown: only
+`OBJECTPROPERTY` reports it, and the catalog lint refuses metadata functions.
+
+Apply changes only what differs from what was read, in one transaction (`SET XACT_ABORT ON`), with Script showing the
+same statements: Lock escalation (Table = `TABLE`, Auto = `AUTO`, Disable = `DISABLE`; not on a
+memory-optimized table), Change Tracking on or off with Track columns updated (SQL Server changes that only by turning
+change tracking off and on again, as SSMS does; turning it on needs a primary key and change tracking on the database), and
+extended properties added, changed or removed (text values of at most 3,750 characters; a value of another type is
+shown with its type and can only be removed). Its steps are "Set lock escalation", "Turn off change tracking", "Turn on change tracking", "Add the extended property", "Change the extended property", "Remove the extended property". A
+failure or Stop rolls the whole transaction back, so nothing is left half changed. Turning change tracking off, or
+changing Track columns updated, asks first (`disableChangeTracking`), since SQL Server discards what it tracked.
+Apply's first step finds the table again by its object id and creation date and plans again, refusing a table renamed,
+dropped or replaced since it was read, or changed so the plan would differ. SQL Server's own, external and dropped ledger
+tables, and tables in a read-only database, are read-only. Permissions, compression and partitioning are changed in a
+query window.
 
 ## New Database
 

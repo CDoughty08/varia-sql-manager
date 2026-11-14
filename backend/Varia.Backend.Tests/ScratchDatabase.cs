@@ -58,6 +58,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string ActionsRenamed => Name + "_actr";
     /// <summary>Where the Database Properties checks change options, scoped configurations and the owner (created on demand).</summary>
     public string Properties => Name + "_dbp";
+    /// <summary>Where the Table Properties checks read and change a table (created on demand).</summary>
+    public string TableProperties => Name + "_tbp";
     /// <summary>Where the table designer checks create tables (created on demand).</summary>
     public string Designer => Name + "_tbd";
     /// <summary>A second table designer database, whose name HAS_PERMS_BY_NAME cannot read unbracketed (created on demand).</summary>
@@ -471,6 +473,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
 
     /// <summary>Creates the empty, marked Database Properties database.</summary>
     public Task<string> CreatePropertiesAsync() => CreateMarkedAsync(Properties);
+
+    /// <summary>Creates the empty, marked Table Properties database.</summary>
+    public Task<string> CreateTablePropertiesAsync() => CreateMarkedAsync(TableProperties);
 
     /// <summary>Creates the empty, marked live tables database.</summary>
     public Task<string> CreateLiveAsync() => CreateMarkedAsync(Live);

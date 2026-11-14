@@ -231,7 +231,7 @@ try {
   await expandExplorerPath(page, ...ordersPath.slice(0, -1))
   const orders = await explorerRow(page, ...ordersPath)
   await orders.click({ button: 'right', force: true })
-  expect(await menuItemNames(explorerMenu())).toEqual(['Select Top 1000 Rows', 'Peek', 'Script Table as', 'Copy Name', 'Rename', 'Delete', 'Refresh'])
+  expect(await menuItemNames(explorerMenu())).toEqual(['Select Top 1000 Rows', 'Peek', 'Script Table as', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await explorerMenu().getByRole('menuitem', { name: 'Script Table as', exact: true }).click()
   const scriptMenu = menuNamed('Script Table as')
   expect(await menuItemNames(scriptMenu)).toEqual(['CREATE To', 'ALTER To', 'CREATE OR ALTER To', 'DROP To', 'DROP And CREATE To', 'SELECT To', 'INSERT To', 'UPDATE To', 'DELETE To', 'EXECUTE To'])

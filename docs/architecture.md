@@ -309,7 +309,9 @@ being true.
   in `src/shared/actions/catalog.ts`, `database.ts` and `logins.ts` (login subtypes, protected-principal rules and limits); after changing them, regenerate `docs/object-actions.md` and the
   backend's embedded `Actions/actions-catalog.json` with `npx vitest run tests/object-actions-catalog.test.ts -u`. DDL runs
   only in `ActionService` (and, for the SSIS Catalog's server verbs, in `SsisActionService`; see the SSIS bullet): on its own unpooled connection (the application name plus " - Object Actions", never retried),
-  never the explorer or scripting pool; with statements only from constant templates in `ActionSql`, `Actions/DatabaseAlter`
+  never the explorer or scripting pool; with statements only from constant templates in `ActionSql`, `Actions/DatabaseAlter`,
+  `Actions/TableAlter` (Table Properties' ALTER TABLE builders; its extended property procedures, called through `QUOTENAME(@db)`
+  with names and value only as their arguments, are checked by `TableAlter.LintProcedure`, which `ActionSql.Lint` chains)
   and `Designer/DesignerSql`, all checked by `ActionSql.LintExecutable` (its template form for `ActionSql`, its builder
   forms for the others), New Database's `Actions/CreateDatabaseSql`, checked by its own `Lint` (file names and paths as
   N'' literals quoted on the server, under a binary collation) with the designer form's OPENJSON rules

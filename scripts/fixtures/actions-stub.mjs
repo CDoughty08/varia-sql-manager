@@ -124,6 +124,8 @@ export const databaseRoles = database => ({ roles: ['db_datareader', 'db_owner',
 export const loginDeleteScript = (name, users = []) => [...users.map(([database, user]) => `USE [${database}]\r\nGO\r\nDROP USER [${user}]\r\nGO\r\n`), `USE [master]\r\nGO\r\nDROP LOGIN [${name}]\r\nGO\r\n`].join('')
 /** Login Properties' script as the backend writes it for a change of the default language alone (SSMS's form: GO after each statement). */
 export const loginPropertiesScript = (name, language) => `USE [master]\r\nGO\r\nALTER LOGIN [${name}] WITH DEFAULT_LANGUAGE=[${language}]\r\nGO\r\n`
+/** Table Properties' Script of a lock escalation change, as the backend writes it (TableAlter.ScriptText). */
+export const tablePropertiesScript = (name, token) => `USE [AppData]\r\nGO\r\nSET XACT_ABORT ON;\r\nBEGIN TRANSACTION;\r\nALTER TABLE [dbo].[${name}] SET (LOCK_ESCALATION = ${token});\r\nCOMMIT TRANSACTION;\r\nGO\r\n`
 
 /** Installs the stub; pass it to `application.evaluate` with `actionsStubData()`. Runs in main, so it is self-contained. */
 export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
@@ -162,7 +164,35 @@ GO
   const restoreFilesScript = "USE [master]\r\nRESTORE DATABASE [AppData] FILE = N'AppData_2' FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NORECOVERY,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
   const loginDeleteScript = (name, users = []) => [...users.map(([database, user]) => `USE [${database}]\r\nGO\r\nDROP USER [${user}]\r\nGO\r\n`), `USE [master]\r\nGO\r\nDROP LOGIN [${name}]\r\nGO\r\n`].join('')
   const loginPropertiesScript = (name, language) => `USE [master]\r\nGO\r\nALTER LOGIN [${name}] WITH DEFAULT_LANGUAGE=[${language}]\r\nGO\r\n`
+  const tablePropertiesScript = (name, token) => `USE [AppData]\r\nGO\r\nSET XACT_ABORT ON;\r\nBEGIN TRANSACTION;\r\nALTER TABLE [dbo].[${name}] SET (LOCK_ESCALATION = ${token});\r\nCOMMIT TRANSACTION;\r\nGO\r\n`
   const ok = value => ({ ok: true, value })
+  // Table Properties: one model per table, which Apply changes as the backend would.
+  const tableModels = new Map()
+  const tableModel = target => {
+    const key = `${target.schema}.${target.name}`
+    if (!tableModels.has(key)) tableModels.set(key, {
+      general: { name: target.name, schema: target.schema, created: '2026-01-01T00:00:00.000', systemObject: false, ansiNulls: true, replicated: false, lockEscalation: 'TABLE', memoryOptimized: false, fileTable: false, external: false, id: 901 },
+      storage: { rowCount: 1200, dataSpaceKb: 72, indexSpaceKb: 16, compression: 'PAGE', filegroup: 'PRIMARY', partitioned: false, partitions: [{ number: 1, rows: 1200, compression: 'PAGE', filegroup: 'PRIMARY' }], partitionsTruncated: false },
+      changeTracking: { databaseEnabled: true, enabled: true, trackColumnsUpdated: false, primaryKey: true },
+      permissions: [{ principal: 'app', principalType: 'SQL_USER', permission: 'SELECT', state: 'GRANT', grantor: 'dbo' }], permissionsTruncated: false,
+      securityPredicates: [], securityPredicatesTruncated: false, extendedProperties: [{ name: 'MS_Description', value: 'Order lines' }], extendedPropertiesTruncated: false, level: 16
+    })
+    return tableModels.get(key)
+  }
+  function changeTable(params) {
+    const model = tableModel(params.target), changes = params.tableChanges, steps = []
+    if (changes.lockEscalation) { model.general = { ...model.general, lockEscalation: changes.lockEscalation }; steps.push({ status: 'done', title: 'Set lock escalation' }) }
+    if (changes.changeTracking) {
+      model.changeTracking = { ...model.changeTracking, enabled: changes.changeTracking.enabled, trackColumnsUpdated: changes.changeTracking.trackColumnsUpdated ?? false }
+      steps.push({ status: 'done', title: changes.changeTracking.enabled ? 'Turn on change tracking' : 'Turn off change tracking' })
+    }
+    for (const change of changes.extendedProperties ?? []) {
+      const rest = model.extendedProperties.filter(property => property.name !== change.name)
+      model.extendedProperties = change.op === 'drop' ? rest : [...rest, { name: change.name, value: change.value }]
+      steps.push({ status: 'done', title: change.op === 'add' ? 'Add the extended property' : change.op === 'update' ? 'Change the extended property' : 'Remove the extended property', detail: change.name })
+    }
+    return ok({ steps, messages: [], elapsedMs: 1 })
+  }
   const folders = (owner, ids) => ids.map(folder => ({ ref: { type: 'folder', owner, folder }, label: statics.labels[folder], icon: 'folder', hasChildren: true }))
   const object = (value, label, icon, extra = {}) => ({ ref: { type: 'object', object: value }, label, icon, hasChildren: true, ...extra })
   const lists = {
@@ -554,6 +584,7 @@ GO
     if (params.action === 'disable' || params.action === 'enable') return loginState(params)
     if (params.action === 'unlock') return unlock(params)
     if (params.action === 'loginProperties') return changeLogin(params)
+    if (params.action === 'tableProperties') return changeTable(params)
     if (params.action === 'rename' && target.kind === 'login') {
       if (params.newName === 'Taken') return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NAME_IN_USE', message: 'The name Taken is already used by another login or server role.', retryable: false } })
       const login = loginOf(target)
@@ -638,6 +669,7 @@ GO
           case 'newLogin': return ok({ newLogin: newLoginModel(), elapsedMs: 1 })
           case 'windowsPrincipal': return windowsPrincipal(params)
           case 'loginProperties': return loginProperties(params)
+          case 'tableProperties': return ok({ tableProperties: structuredClone(tableModel(params.target)), elapsedMs: 1 })
           case 'loginEffectivePermissions': return effective(params)
           case 'newDatabase': {
             const folder = serverFiles.roots[1].path
@@ -655,6 +687,7 @@ GO
           case 'properties': return ok({ text: propertiesScript, database: 'master', warnings: [] })
           case 'createTable': return ok({ text: designerScript(params.design.name), database: params.target.name, warnings: [] })
           case 'loginProperties': return ok({ text: loginPropertiesScript(params.target.name, params.loginChanges.defaultLanguage ?? 'us_english'), database: 'master', warnings: [] })
+          case 'tableProperties': return ok({ text: tablePropertiesScript(params.target.name, params.tableChanges.lockEscalation ?? 'TABLE'), database: params.target.database, warnings: [] })
           case 'unlock': return ok({ text: ['USE [master]', 'GO', 'SET XACT_ABORT ON;', 'BEGIN TRANSACTION;', `ALTER LOGIN [${params.target.name}] WITH CHECK_POLICY = OFF;`, `ALTER LOGIN [${params.target.name}] WITH CHECK_POLICY = ON, CHECK_EXPIRATION = ON;`, 'COMMIT TRANSACTION;', 'GO', ''].join(String.fromCharCode(13, 10)), database: 'master', warnings: [] })
           case 'createLogin': return ok({ text: newLoginScript(params.login.name), database: 'master', warnings: [] })
           case 'restore': return ok({ text: restoreScript, database: 'master', warnings: [] })

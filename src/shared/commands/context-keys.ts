@@ -76,6 +76,7 @@ export const contextKeys = {
   designerRowSelected: { type: 'boolean', scope: 'state', description: 'The active table designer has a column selected.' },
   designerPrimaryKeyRemovable: { type: 'boolean', scope: 'state', description: "Every column selected in the active table designer is a primary key column, so Remove Primary Key replaces Set Primary Key." },
   activeDocumentIsProperties: { type: 'boolean', scope: 'state', description: 'The active document is Database Properties.' },
+  activeDocumentIsTableProperties: { type: 'boolean', scope: 'state', description: 'The active document is Table Properties.' },
   propertiesChanged: { type: 'boolean', scope: 'state', description: 'The active Database Properties document has changes that are not applied yet.' },
   propertiesApplicable: { type: 'boolean', scope: 'state', description: 'The active Database Properties document can apply its changes now: it has loaded and has changes, nothing runs in it, it does not need reading again, and its server is connected.' },
   propertiesApplying: { type: 'boolean', scope: 'state', description: 'The active Database Properties document is applying its changes (Stop cancels them in SQL Server).' },

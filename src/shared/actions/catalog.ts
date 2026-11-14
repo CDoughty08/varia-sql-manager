@@ -11,6 +11,7 @@ import { compatibilityLevels, databaseOptionDefs, ownerNotOn, scopedConfiguratio
 import type { LongRunKind } from '../long-runs.ts'
 import { loginRules, loginSubtypes, loginsCatalog, type LoginRule, type LoginSubtype } from './logins.ts'
 import { restoreCatalog, restoreMessages } from './restore.ts'
+import { tablesCatalog } from './tables.ts'
 
 // One entry per line, so later actions and dialogs append cleanly.
 export const objectActions = [
@@ -47,7 +48,8 @@ export type CreateAction = typeof createActions[number]
  * `properties`), so menus, keys and context keys stay the verb's. One entry per line.
  */
 export const kindDialogActions = [
-  'loginProperties'
+  'loginProperties',
+  'tableProperties'
 ] as const
 export type KindDialogAction = typeof kindDialogActions[number]
 export interface KindDialogActionSpec {
@@ -79,7 +81,8 @@ export const dialogIds = [
   'bringOnline',
   'detachDatabase',
   'unlockLogin',
-  'loginProperties'
+  'loginProperties',
+  'tableProperties'
 ] as const
 export type DialogId = typeof dialogIds[number]
 /** The menus an action can be placed in: Object Explorer's context menu and its Tasks submenus (src/shared/commands/menus.ts). */
@@ -238,6 +241,8 @@ export interface ActionKindSpec {
 }
 const all: ActionRow = { selectTop: 'enabled', rename: 'enabled', delete: 'enabled' }
 const selectOnly: ActionRow = { selectTop: 'enabled', rename: 'disabled', delete: 'disabled' }
+/** Properties opens on every table, SQL Server's own and the special ones included, as in SSMS (Table Properties); its Apply refuses what may not change. */
+const withProperties = (row: ActionRow): ActionRow => ({ ...row, properties: 'enabled' })
 const editable: ActionRow = { rename: 'enabled', delete: 'enabled' }
 const locked: ActionRow = { rename: 'disabled', delete: 'disabled' }
 /** The login verbs whose rows this catalogue declares from logins.ts' rules. Enable is not here: only a disabled login's overlay
@@ -256,11 +261,13 @@ const loginDisabled = (subtype: LoginSubtype): ActionRowOverlay => ({ disable: '
 // or dropped (a follow-up); a dropped ledger table or view can be neither selected from nor changed.
 export const actionKindSpecs: { readonly [K in NodeKind]?: ActionKindSpec } = {
   table: {
-    row: all,
+    row: withProperties(all),
     subtypes: {
-      system: selectOnly, systemVersioned: selectOnly, history: selectOnly, updatableLedger: selectOnly, appendOnlyLedger: selectOnly, ledgerHistory: selectOnly,
-      fileTable: selectOnly, external: selectOnly, droppedLedger: locked
-    }
+      system: withProperties(selectOnly), systemVersioned: withProperties(selectOnly), history: withProperties(selectOnly), updatableLedger: withProperties(selectOnly),
+      appendOnlyLedger: withProperties(selectOnly), ledgerHistory: withProperties(selectOnly), fileTable: withProperties(selectOnly), external: withProperties(selectOnly),
+      droppedLedger: withProperties(locked)
+    },
+    dialogs: { properties: 'tableProperties' }
   },
   view: { row: all, subtypes: { system: selectOnly, ledger: selectOnly, droppedLedger: locked } },
   procedure: { row: editable, subtypes: { system: locked, extended: locked, replicationFilter: locked } },
@@ -468,8 +475,8 @@ const commandData: { readonly [A in ObjectAction]: Omit<ActionCommandEntry, 'tit
   },
   // ⌘I is Finder's Get Info. Alt+Enter is reserved on Windows and Linux, and SSMS 22's binding is unverified, so there is no key there.
   properties: {
-    icon: 'settings-gear', keywords: ['options', 'files', 'filegroups', 'recovery', 'compatibility', 'collation', 'settings', 'login', 'password', 'roles', 'mapping'], documentTask: false,
-    unavailableHint: 'Select a database or login in Object Explorer.', keybindings: [{ mac: 'meta+i', when: explorerKeyWhen }]
+    icon: 'settings-gear', keywords: ['options', 'files', 'filegroups', 'recovery', 'compatibility', 'collation', 'settings', 'login', 'password', 'roles', 'mapping', 'table', 'tracking', 'extended', 'escalation', 'permissions'], documentTask: false,
+    unavailableHint: 'Select a database, table or login in Object Explorer.', keybindings: [{ mac: 'meta+i', when: explorerKeyWhen }]
   },
   // No default key, as in SSMS.
   attach: { icon: 'plug', keywords: ['attach', 'mdf', 'ldf', 'files', 'detached'], documentTask: false, unavailableHint: 'Select the Databases folder of a connected SQL Server in Object Explorer.' },
@@ -610,6 +617,38 @@ export function propertiesCommandEntries(): { readonly [K in PropertiesCommandId
   }
 }
 
+/** The Table Properties document's header verbs: catalogue commands, so the palette offers them too. */
+export type TablePropertiesCommandId = 'tableProperties.apply' | 'tableProperties.discard' | 'tableProperties.refresh' | 'tableProperties.stop'
+export interface TablePropertiesCommandEntry {
+  readonly title: string
+  readonly category: 'Table Properties'
+  readonly icon: 'check' | 'discard' | 'refresh' | 'debug-stop'
+  readonly keywords: readonly string[]
+  readonly precondition: string
+  readonly unavailableHint: string
+}
+/** Table Properties' verbs, as Database Properties' (Apply keeps the document open and reads the table again); they share its state keys. */
+export function tablePropertiesCommandEntries(): { readonly [K in TablePropertiesCommandId]: TablePropertiesCommandEntry } {
+  return {
+    'tableProperties.apply': {
+      title: 'Apply Changes', category: 'Table Properties', icon: 'check', keywords: ['ok', 'save', 'alter', 'table', 'tracking', 'extended'],
+      precondition: 'activeDocumentIsTableProperties && propertiesApplicable', unavailableHint: 'Change a table property first.'
+    },
+    'tableProperties.discard': {
+      title: 'Discard Changes', category: 'Table Properties', icon: 'discard', keywords: ['revert', 'undo', 'cancel'],
+      precondition: 'activeDocumentIsTableProperties && propertiesChanged && !propertiesApplying', unavailableHint: 'There are no changes to discard.'
+    },
+    'tableProperties.refresh': {
+      title: 'Refresh', category: 'Table Properties', icon: 'refresh', keywords: ['reload', 'read'],
+      precondition: 'activeDocumentIsTableProperties && propertiesRefreshable', unavailableHint: 'Apply or discard the changes first, on a connected server.'
+    },
+    'tableProperties.stop': {
+      title: 'Stop', category: 'Table Properties', icon: 'debug-stop', keywords: ['cancel', 'apply'],
+      precondition: 'activeDocumentIsTableProperties && propertiesApplying', unavailableHint: 'The changes are not being applied.'
+    }
+  }
+}
+
 /** The Restore Database document's header verbs (D1f): catalogue commands, so the palette offers them too. */
 export type RestoreCommandId = 'restoreDatabase.run' | 'restoreDatabase.stop' | 'restoreDatabase.refresh'
 export interface RestoreCommandEntry {
@@ -650,7 +689,12 @@ export const pageIds = [
   'serverRoles',
   'userMapping',
   'securables',
-  'status'
+  'status',
+  'permissions',
+  'changeTracking',
+  'storage',
+  'securityPredicates',
+  'extendedProperties'
 ] as const
 export type PageId = typeof pageIds[number]
 export interface DialogPageSpec {
@@ -723,6 +767,13 @@ const dialogSpecData = {
   loginProperties: {
     title: 'Login Properties', surface: 'modal', titleFormat: 'withName', size: 'large', action: 'loginProperties', steps: true,
     pages: [page('general', 'General', { keepMounted: true }), page('serverRoles', 'Server Roles'), page('userMapping', 'User Mapping', { keepMounted: true }), page('securables', 'Securables', { keepMounted: true }), page('status', 'Status')]
+  },
+  // SSMS's "Table Properties - name": its pages, as a document like Database Properties. Security Predicates shows only where the
+  // table has row-level security; Apply changes Lock escalation, Change Tracking and extended properties, in one transaction.
+  tableProperties: {
+    title: 'Table Properties', surface: 'document', titleFormat: 'withName', size: 'large', action: 'tableProperties',
+    pages: [page('general', 'General'), page('permissions', 'Permissions'), page('changeTracking', 'Change Tracking'), page('storage', 'Storage'), page('securityPredicates', 'Security Predicates'),
+      page('extendedProperties', 'Extended Properties')]
   }
 } as const satisfies { readonly [D in DialogId]: DialogSpec }
 export const dialogSpecs: { readonly [D in DialogId]: DialogSpec } = dialogSpecData
@@ -857,7 +908,9 @@ export const createActionSpecs: { readonly [A in CreateAction]: CreateActionSpec
 export const isCreateAction = (action: string): action is CreateAction => (createActions as readonly string[]).includes(action)
 /** The kind dialog actions. Login Properties runs where Properties does (Managed Instance's ALTER LOGIN grammar is SQL Server's, Learn). */
 export const kindDialogActionSpecs: { readonly [A in KindDialogAction]: KindDialogActionSpec } = {
-  loginProperties: { title: 'Login Properties', dialog: 'loginProperties', kind: 'login', verb: 'properties', engines: onServers }
+  loginProperties: { title: 'Login Properties', dialog: 'loginProperties', kind: 'login', verb: 'properties', engines: onServers },
+  // Table Properties runs where Properties does; its statements are SQL Server's on Managed Instance too.
+  tableProperties: { title: 'Table Properties', dialog: 'tableProperties', kind: 'table', verb: 'properties', engines: onServers }
 }
 export const isKindDialogAction = (action: string): action is KindDialogAction => (kindDialogActions as readonly string[]).includes(action)
 /** The object action whose rows decide where an action runs: itself, or a kind dialog action's verb; none for a create action. */
@@ -936,6 +989,7 @@ export function actionsCatalogJson(): string {
     `  "rows": ${block(rows)},`,
     `  "scopedConfigurations": ${block(scopedConfigurationDefs.map(optionJson))},`,
     `  "serverFiles": ${block(serverFilePurposes.map(purpose => ({ purpose, extensions: serverFilePurposeSpecs[purpose].extensions })))},`,
+    `  "tables": ${line(tablesCatalog())},`,
     '  "version": 4',
     '}',
     ''

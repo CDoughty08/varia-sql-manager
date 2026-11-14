@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { chooseExplorerMenuItem, expandExplorerPath, explorerMenuItems, explorerRow, expectSelectedExplorerRow, explorerSubmenuItems, explorerTree, openExplorerMenu, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { resizeWindow } from './fixtures/window-resize.mjs'
-import { actionsStubData, caution, dependentsMessage, detachFiles, detachScript, installActionsStub, longDatabase, longRole, offlineScript, offlineWarning, propertiesScript, restoreFilesScript, restoreScript, scriptText, stubServerFiles, stubSessions } from './fixtures/actions-stub.mjs'
+import { actionsStubData, caution, dependentsMessage, detachFiles, detachScript, installActionsStub, longDatabase, longRole, offlineScript, offlineWarning, propertiesScript, restoreFilesScript, restoreScript, scriptText, stubServerFiles, stubSessions, tablePropertiesScript } from './fixtures/actions-stub.mjs'
 import {
   activeDocument, activeDocumentName, addObjectDialogSteps, attachFileNameShown, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentVerb, editorText, editorTextbox, openDocument, openDocuments, selectOpenDocument,
   errorBanner, explorerLabel, fieldHint, frameSection, inputShowsEnd, objectDialogConnection, objectDialogMappedUsers, objectDialogPage, objectDialogProgress, objectDialogSessions, objectDialogSessionsToggle, objectDialogStepItems, objectDialogTabs, objectDialogWarningIcons, objectDialogWarnings, openMenus as openMenusOf, part,
@@ -88,9 +88,9 @@ try {
   expect(await page.evaluate(() => window.__variaMovedPress)).toBe(true)
   await expect(explorerTree(page)).toHaveAttribute('aria-busy', 'false')
 
-  // 1. SSMS's order: the query items, Script … as, Copy Name, then Rename and Delete, then Refresh; SQL Server's own
+  // 1. SSMS's order: the query items, Script … as, Copy Name, then Rename and Delete, then Refresh, and Properties on tables; SQL Server's own
   // database shows Rename and Delete greyed, and F2 does nothing there.
-  expect(await menuOf(...ordersPath)).toEqual(['Select Top 1000 Rows', 'Peek', 'Script Table as', 'Copy Name', 'Rename', 'Delete', 'Refresh'])
+  expect(await menuOf(...ordersPath)).toEqual(['Select Top 1000 Rows', 'Peek', 'Script Table as', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await closeMenu()
   expect(await menuOf(...appData, 'Views', 'dbo.OrderSummary')).toEqual(['Select Top 1000 Rows', 'Peek', 'Script View as', 'Copy Name', 'Rename', 'Delete', 'Refresh'])
   await closeMenu()
@@ -248,6 +248,67 @@ try {
   await expect(explorerTree(page).locator(part.explorerLabel, { hasText: 'dbo.Orders2' })).toHaveCount(0)
   await expect(explorerTree(page)).toBeFocused()
   console.log('Object action checks: Delete opens one Delete Object dialog, Script Action to Clipboard leaves it open, DEPENDENTS keeps it with the error, and OK deletes and reloads Tables.')
+
+  // Table Properties: a table's Properties opens a document with SSMS's pages (Security Predicates only when a policy names the
+  // table), facts as text, Lock escalation as segments, a Script preview of only the change, Change tracking's Turn Off asked
+  // natively first, and Apply reading the table again.
+  {
+    await application.evaluate(({ dialog }) => {
+      globalThis.variaStub.prompts = []
+      globalThis.variaStub.answers = []
+      dialog.showMessageBox = async (_window, options) => {
+        globalThis.variaStub.prompts.push({ title: options.title, message: options.message, buttons: options.buttons, defaultId: options.defaultId, cancelId: options.cancelId })
+        return { response: globalThis.variaStub.answers.shift() ?? options.cancelId, checkboxChecked: false }
+      }
+    })
+    await chooseExplorerMenuItem(page, [...tablesPath, 'dbo.Lines'], 'Properties')
+    const table = () => documentFrame(page, 'dbo.Lines')
+    const tableVerb = name => documentVerb(table(), 'dbo.Lines', name)
+    await expect(table()).toBeVisible()
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    await expect(documentTab(page, 'Table Properties - dbo.Lines')).toHaveAttribute('aria-selected', 'true')
+    await expect(documentSubtitle(table())).toHaveText('Table Properties')
+    await expect(documentCrumbs(table())).toHaveText(['server-a', 'AppData', 'Tables'])
+    await expect(sectionListOf(table()).getByRole('button')).toHaveText(['General', 'Permissions', 'Change Tracking', 'Storage', 'Extended Properties'])
+    await expect(propertyFact(table(), 'Name')).toHaveText('Lines')
+    await expect(propertyFact(table(), 'Schema')).toHaveText('dbo')
+    await expect(propertyFact(table(), 'Data compression')).toHaveText('Page')
+    await expect(propertyFact(table(), 'Row count')).toHaveText((1200).toLocaleString())
+    await expect(tableVerb('Apply')).toBeDisabled()
+    const escalation = table().getByRole('radiogroup', { name: 'Lock escalation', exact: true })
+    await expect(escalation.getByRole('radio', { name: 'Table', exact: true })).toHaveAttribute('aria-checked', 'true')
+    await escalation.getByRole('radio', { name: 'Disable', exact: true }).click()
+    await expect(tableVerb('Apply')).toBeEnabled()
+    await expect(unsavedMark(documentTab(page, 'Table Properties - dbo.Lines'))).toBeVisible()
+    // The Script drawer previews only the change.
+    await scriptToggle(table()).click()
+    await expect(drawerText(table())).toHaveValue(tablePropertiesScript('Lines', 'DISABLE').replaceAll('\r\n', '\n'))
+    expect((await stubCalls('actions.script')).at(-1)).toMatchObject({ action: 'tableProperties', target: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'Lines' }, tableChanges: { lockEscalation: 'DISABLE' }, identity: { id: 901 } })
+    await scriptToggle(table()).click()
+    // Change tracking off asks first; Cancel (the default) sends nothing.
+    await sectionListOf(table()).getByRole('button', { name: 'Change Tracking', exact: true }).click()
+    const tracking = table().getByRole('switch', { name: 'Change Tracking', exact: true })
+    await expect(tracking).toBeChecked()
+    await tracking.click()
+    await expect(table().getByRole('switch', { name: 'Track Columns Updated', exact: true })).toBeDisabled()
+    await tableVerb('Apply').click()
+    await expect.poll(async () => (await application.evaluate(() => globalThis.variaStub.prompts)).length).toBe(1)
+    expect((await application.evaluate(() => globalThis.variaStub.prompts))[0]).toMatchObject({ title: 'Change Tracking', message: 'Turn off change tracking on dbo.Lines?', buttons: ['Turn Off', 'Cancel'], defaultId: 1, cancelId: 1 })
+    await expect(tableVerb('Apply')).toBeEnabled()
+    expect((await stubCalls('actions.execute')).filter(call => call.action === 'tableProperties')).toHaveLength(0)
+    // Turn Off: Apply sends both changes, reads the table again and is clean.
+    await application.evaluate(() => { globalThis.variaStub.answers = [0] })
+    await tableVerb('Apply').click()
+    await expect(documentBanner(table())).toContainText('The changes were applied.')
+    expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'tableProperties', tableChanges: { lockEscalation: 'DISABLE', changeTracking: { enabled: false } }, identity: { id: 901, created: '2026-01-01T00:00:00.000' } })
+    await expect(tracking).not.toBeChecked()
+    await expect(tableVerb('Apply')).toBeDisabled()
+    await expect(unsavedMark(documentTab(page, 'Table Properties - dbo.Lines'))).toHaveCount(0)
+    await page.screenshot({ path: resolve('artifacts', 'table-properties-dark.png') })
+    await closeDocumentButton(page, 'Table Properties - dbo.Lines').click()
+    await expect(documentTab(page, 'Table Properties - dbo.Lines')).toHaveCount(0)
+    console.log('Object action checks: Table Properties opens as a document with SSMS\'s pages and facts, previews only its change, asks before turning change tracking off and applies it with lock escalation in one request.')
+  }
 
   // 5. Database Properties as a document: a tab rather than a modal, SSMS's pages as sections with their list, facts as
   // text, switches and segments, a description on focus, a Script drawer whose preview and Copy carry only the changes,

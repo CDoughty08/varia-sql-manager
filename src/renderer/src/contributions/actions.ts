@@ -15,12 +15,17 @@ import { actionDialog, isModalDialog } from '../../../shared/actions/catalog'
  * and Restore Files and Filegroups… on the Databases folder or as a database's Tasks › Restore › Database… and Files and
  * Filegroups….
  */
-export function actionsContribution({ commands, explorer, actions, dialogs, properties, newDatabase, restore, documents, ssisCatalog, connections }: Pick<Workbench, 'commands' | 'explorer' | 'actions' | 'dialogs' | 'properties' | 'newDatabase' | 'restore' | 'documents' | 'ssisCatalog' | 'connections'>): Disposable {
+export function actionsContribution({ commands, explorer, actions, dialogs, properties, tableProperties, newDatabase, restore, documents, ssisCatalog, connections }: Pick<Workbench, 'commands' | 'explorer' | 'actions' | 'dialogs' | 'properties' | 'tableProperties' | 'newDatabase' | 'restore' | 'documents' | 'ssisCatalog' | 'connections'>): Disposable {
   // The verbs act on the document whose header runs them (`tabId`), else the active one.
   const propertiesOf = (args?: CommandArgs): string | undefined => { const id = args?.tabId ?? documents.getSnapshot().activeId; return properties.get(id) ? id : undefined }
   const on = (when: (id: string) => boolean, run: (id: string) => unknown) => ({
     when: (args?: CommandArgs) => { const id = propertiesOf(args); return !!id && when(id) },
     run: async (args?: CommandArgs) => { const id = propertiesOf(args); if (id && when(id)) await run(id) }
+  })
+  const tablePropertiesOf = (args?: CommandArgs): string | undefined => { const id = args?.tabId ?? documents.getSnapshot().activeId; return tableProperties.get(id) ? id : undefined }
+  const onTable = (when: (id: string) => boolean, run: (id: string) => unknown) => ({
+    when: (args?: CommandArgs) => { const id = tablePropertiesOf(args); return !!id && when(id) },
+    run: async (args?: CommandArgs) => { const id = tablePropertiesOf(args); if (id && when(id)) await run(id) }
   })
   const restoreOf = (args?: CommandArgs): string | undefined => { const id = args?.tabId ?? documents.getSnapshot().activeId; return restore.get(id) ? id : undefined }
   const onRestore = (when: (id: string) => boolean, run: (id: string) => unknown) => ({
@@ -89,7 +94,8 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
         // A kind whose Properties is a modal (a login's Login Properties, D2c) opens it; a database's is a document.
         const dialog = node.ref.type === 'object' ? actionDialog(node.ref.object.kind, 'properties') : undefined
         if (dialog && isModalDialog(dialog)) { dialogs.open(dialog, node); return }
-        properties.open(node)
+        if (dialog === 'tableProperties') tableProperties.open(node)
+        else properties.open(node)
         // The menu returned focus to the tree; the document's section list mounts on a later frame.
         documents.focusActive()
       }
@@ -158,6 +164,10 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
     commands.register('databaseProperties.discard', on(id => properties.canDiscard(id), id => properties.discard(id))),
     commands.register('databaseProperties.refresh', on(id => properties.canRefresh(id), id => properties.refresh(id))),
     commands.register('databaseProperties.stop', on(id => properties.get(id)?.phase === 'applying', id => properties.stop(id))),
+    commands.register('tableProperties.apply', onTable(id => tableProperties.canApply(id), id => tableProperties.apply(id))),
+    commands.register('tableProperties.discard', onTable(id => tableProperties.canDiscard(id), id => tableProperties.discard(id))),
+    commands.register('tableProperties.refresh', onTable(id => tableProperties.canRefresh(id), id => tableProperties.refresh(id))),
+    commands.register('tableProperties.stop', onTable(id => tableProperties.get(id)?.phase === 'applying', id => tableProperties.stop(id))),
     commands.register('restoreDatabase.run', onRestore(id => restore.canRun(id), id => restore.run(id))),
     commands.register('restoreDatabase.stop', onRestore(id => restore.isRunning(id), id => restore.stop(id))),
     commands.register('restoreDatabase.refresh', onRestore(id => restore.canRefresh(id), id => restore.refresh(id)))

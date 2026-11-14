@@ -52,6 +52,8 @@ explorer.context, for a table
   D&elete
   ---
   Re&fresh
+  ---
+  &Properties
 explorer.context, for a history table
   Select Top 1000 Ro&ws
   Pee&k (disabled)
@@ -106,6 +108,8 @@ explorer.context, for a history table
   D&elete (disabled)
   ---
   Re&fresh
+  ---
+  &Properties
 explorer.context, for a ledger history table
   Select Top 1000 Ro&ws
   Pee&k (disabled)
@@ -160,6 +164,8 @@ explorer.context, for a ledger history table
   D&elete (disabled)
   ---
   Re&fresh
+  ---
+  &Properties
 explorer.context, for a view
   Select Top 1000 Ro&ws
   Pee&k (disabled)

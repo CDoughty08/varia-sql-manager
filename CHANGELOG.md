@@ -4,6 +4,7 @@
 
 ### Added
 
+- **Table Properties:** choose Properties on a table in Object Explorer, or Open Properties on Peek's table card, for SSMS's Table Properties as a document: General (with lock escalation and temporal and ledger facts), Permissions, Change Tracking, Storage (compression, filegroups, partitions, rows and space), Security Predicates when a row-level security policy names the table, and Extended Properties. Apply changes lock escalation, change tracking (and Track columns updated) and extended properties in one transaction that rolls back entirely on a failure or Stop, asks before turning change tracking off, and Script shows the same statements. SQL Server's own, external and dropped ledger tables are read-only. Quoted identifier is not shown.
 - **Getting Started:** read offline connection, query and results guides with live shortcuts, option values and mouse gestures, plus interactive fictional examples. Open it from Help or the command palette. Navigation stays available if a guide cannot load.
 - **About Varia:** find the running version, platform and update status from Help or the command palette (also the app menu on macOS). Copy version details for support and open the project, issue form or release notes without needing a server connection.
 - **In-app release notes:** read curated release highlights and limits offline, browse bundled history and open notes for the exact version advertised by an update. Missing notes are reported clearly, with release downloads available separately.

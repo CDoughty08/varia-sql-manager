@@ -140,7 +140,9 @@ internal static partial class CatalogSql
         // Database Properties (Actions/DatabaseProperties.cs).
         ("is_ledger_on", 16), ("sys.database_scoped_configurations", 13), ("is_autogrow_all_files", 13),
         // Peek (Explorer/PeekSql.cs).
-        ("is_query_store_on", 13), ("last_used_value", 14), ("optimize_for_sequential_key", 15), ("is_accelerated_database_recovery_on", 15)
+        ("is_query_store_on", 13), ("last_used_value", 14), ("optimize_for_sequential_key", 15), ("is_accelerated_database_recovery_on", 15),
+        // Table Properties (Actions/TableProperties.cs).
+        ("sys.periods", 13), ("history_retention_period", 14), ("ledger_view_id", 16)
     ];
     private static readonly HashSet<string> Literals = ["N'microsoft_database_tools_support'", "N'%'", "N'\\'", "N'.sys.sp_executesql'"];
 

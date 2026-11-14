@@ -301,6 +301,8 @@ explorer.context, for a table
   D&elete  ⌘⌫  -+++
   ---
   Re&fresh  F5  -+++
+  ---
+  &Properties  ⌘I  -+++
 explorer.context, for a Columns folder still loading
   Re&fresh  F5  -+++
 explorer.context, for a fully loaded Columns folder

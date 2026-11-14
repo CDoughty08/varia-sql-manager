@@ -1,14 +1,14 @@
 import type { Platform } from './keybindings'
 import type { MenuId } from './menus'
 import type { SettingKey } from '../settings/catalog'
-import { actionCommandEntries, newDatabaseCommandEntries, propertiesCommandEntries, restoreCommandEntries, serverActionCommandEntries } from '../actions/catalog.ts'
+import { actionCommandEntries, newDatabaseCommandEntries, propertiesCommandEntries, restoreCommandEntries, serverActionCommandEntries, tablePropertiesCommandEntries } from '../actions/catalog.ts'
 import { designerCommandEntries } from '../designer/catalog.ts'
 import { scriptCommandEntries, scriptUnavailableHint } from '../scripting/catalog.ts'
 import { operationsCommandEntries } from '../ssis/operations.ts'
 import type { IconId } from '../icons.ts'
 import { ssisCommandEntries } from '../ssis/catalog.ts'
 
-export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Table Designer' | 'Database Properties' | 'New Database' | 'Restore Database' | 'Integration Services' | 'Tools' | 'Activity Monitor' | 'Preferences' | 'Developer' | 'Help'
+export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Table Designer' | 'Database Properties' | 'Table Properties' | 'New Database' | 'Restore Database' | 'Integration Services' | 'Tools' | 'Activity Monitor' | 'Preferences' | 'Developer' | 'Help'
 /** Electron roles a command can stand for: native menus show `{ role }`, while custom menus and the palette run its handler. */
 export type RoleName = 'cut' | 'copy' | 'paste' | 'delete' | 'selectAll' | 'reload' | 'toggleDevTools' | 'resetZoom' | 'zoomIn' | 'zoomOut' | 'togglefullscreen' | 'quit'
 /** The roles the renderer may ask main to run (`varia:run-role`); quitting goes through the renderer's own close flow instead. */
@@ -415,6 +415,7 @@ export const commandCatalog = {
   ...actionCommandEntries(),
   // The Database Properties document's verbs (Apply, Discard, Refresh, Stop): also from src/shared/actions/catalog.ts.
   ...propertiesCommandEntries(),
+  ...tablePropertiesCommandEntries(),
   // Databases › New Database…, and the New Database document's verbs (OK, Cancel, Stop): also from src/shared/actions/catalog.ts.
   ...serverActionCommandEntries(),
   ...newDatabaseCommandEntries(),

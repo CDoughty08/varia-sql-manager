@@ -93,6 +93,7 @@ import { ssisFocuser } from '../ssis/focus'
 import { SsisPropertiesService } from '../ssis/SsisPropertiesService'
 import { ssisContribution } from '../contributions/ssis'
 import { DatabasePropertiesService } from '../properties/DatabasePropertiesService'
+import { TablePropertiesService } from '../properties/TablePropertiesService'
 import { NewDatabaseService } from '../new-database/NewDatabaseService'
 import { RestoreService } from '../restore/RestoreService'
 import { SsisOperationsService } from '../ssis/SsisOperationsService'
@@ -223,6 +224,8 @@ export interface Workbench extends Disposable {
   readonly ssisProperties: SsisPropertiesService
   /** Database Properties documents: their drafts, Apply, Script previews and frames. */
   readonly properties: DatabasePropertiesService
+  /** Table Properties documents: their drafts, Apply in one transaction, Script previews and frames. */
+  readonly tableProperties: TablePropertiesService
   /** New Database documents (D1b): their designs, OK as a long run, Script previews and frames. */
   readonly newDatabase: NewDatabaseService
   /** Restore Database documents: read, Script (D1e) and run with Stop (D1f), opened from the Databases folder and a database's Tasks › Restore. */
@@ -378,6 +381,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     // The current section's item in the list: one tab stop, from which the keys move through the sections.
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-properties="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus())
   })
+  const tableProperties = new TablePropertiesService({
+    api, documents, files, connections,
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-table-properties="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus())
+  })
   const newDatabase = new NewDatabaseService({
     api, documents, files, connections, explorer, longRuns, serverFiles, focusEditor: () => focusLater(() => documents.focusActive()),
     // The database name, once the first read has drawn it; until then the document's first section in its list.
@@ -451,6 +458,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     recovery,
     designer: designers.context,
     properties: properties.context,
+    tableProperties: tableProperties.context,
     newDatabase: newDatabase.context,
     restore: restore.context,
     notifications,
@@ -561,6 +569,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     designers,
     ssisProperties,
     properties,
+    tableProperties,
     newDatabase,
     restore,
     activity,
@@ -624,6 +633,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       ssisFocus.dispose()
       ssisProperties.dispose()
       properties.dispose()
+      tableProperties.dispose()
       newDatabase.dispose()
       restore.dispose()
       sqlDiagnostics.dispose()

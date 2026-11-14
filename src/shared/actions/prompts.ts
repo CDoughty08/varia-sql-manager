@@ -53,9 +53,17 @@ export const disableLoginFactsSchema = z.object({
   /** Login Properties (D2c): its Status denies the login permission to connect rather than disabling it. */
   deny: z.literal(true).optional()
 }).strict()
+/** Table Properties: turning a table's change tracking off, or changing Track columns updated, which turns it off and on again. */
+export const disableChangeTrackingFactsSchema = z.object({
+  schema: name,
+  table: name,
+  /** Track columns updated changes: change tracking is turned on again at once, with the new setting. */
+  reenable: z.boolean()
+}).strict()
 export const actionPromptRequestSchema = z.discriminatedUnion('prompt', [
   z.object({ prompt: z.literal('renameDatabase'), facts: renameDatabaseFactsSchema }).strict(),
-  z.object({ prompt: z.literal('disableLogin'), facts: disableLoginFactsSchema }).strict()
+  z.object({ prompt: z.literal('disableLogin'), facts: disableLoginFactsSchema }).strict(),
+  z.object({ prompt: z.literal('disableChangeTracking'), facts: disableChangeTrackingFactsSchema }).strict()
 ])
 export type ActionPromptRequest = z.infer<typeof actionPromptRequestSchema>
 export type ActionPromptId = ActionPromptRequest['prompt']
@@ -121,7 +129,20 @@ export const actionPrompts = {
     buttons: facts => [facts.deny ? { answer: 'deny' as const, label: 'Deny' } : { answer: 'disable' as const, label: 'Disable' }, { answer: 'cancel', label: 'Cancel' }],
     defaultAnswer: facts => facts.service ? 'cancel' : facts.deny ? 'deny' : 'disable',
     cancelAnswer: 'cancel'
-  } satisfies ActionPromptSpec<'disableLogin', 'disable' | 'deny' | 'cancel'>
+  } satisfies ActionPromptSpec<'disableLogin', 'disable' | 'deny' | 'cancel'>,
+  // SSMS turns change tracking off without asking; Varia asks, with Cancel the default, as what SQL Server tracked cannot come back.
+  disableChangeTracking: {
+    title: 'Change Tracking',
+    message: facts => facts.reenable ? `Change Track columns updated on ${show(facts.schema)}.${show(facts.table)}?` : `Turn off change tracking on ${show(facts.schema)}.${show(facts.table)}?`,
+    detail: facts => [
+      facts.reenable ? 'SQL Server can change it only by turning change tracking off and on again, which discards the changes it has tracked for the table.'
+        : 'SQL Server discards the changes it has tracked for the table.',
+      'Applications that synchronize from those changes must start again from a full copy of the table.'
+    ],
+    buttons: facts => [{ answer: 'apply' as const, label: facts.reenable ? 'Change' : 'Turn Off' }, { answer: 'cancel', label: 'Cancel' }],
+    defaultAnswer: () => 'cancel',
+    cancelAnswer: 'cancel'
+  } satisfies ActionPromptSpec<'disableChangeTracking', 'apply' | 'cancel'>
 } as const
 export type ActionPromptAnswer<P extends ActionPromptId = ActionPromptId> = ReturnType<typeof actionPrompts[P]['buttons']>[number]['answer']
 
