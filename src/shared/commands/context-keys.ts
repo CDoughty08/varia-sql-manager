@@ -117,6 +117,7 @@ export const contextKeys = {
   resultsSortTextBytes: { type: 'boolean', scope: 'state', description: 'Sorted results grids order text and binary columns by their length in bytes (Sort Text by Length in Bytes).' },
   resultsColumnProfile: { type: 'boolean', scope: 'state', description: 'The column profile panel shows beside the results (Show Column Profile).' },
   resultsGridTransposed: { type: 'boolean', scope: 'state', description: "The results grid that last had the focus in the active query is drawn transposed (Transpose Results); in a results grid's own menu, that grid is." },
+  resultsTabs: { type: 'boolean', scope: 'state', description: 'Results show as tabs, one at a time, rather than stacked (Show Results as Tabs).' },
   resultsRowSize: { type: 'boolean', scope: 'state', description: 'A bar behind each row number shows the row\'s size (Show Row Size in Results).' },
   hasBookmarks: { type: 'boolean', scope: 'state', description: 'An open document has a bookmark.' },
   activeDocumentHasBookmarks: { type: 'boolean', scope: 'state', description: 'The active document has a bookmark.' },
