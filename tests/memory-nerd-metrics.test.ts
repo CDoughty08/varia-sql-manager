@@ -23,7 +23,7 @@ import { settingsApi } from './fixtures/workbench'
 const MB = 1048576
 const key = 'environment.statusBar.memoryNerdMetrics'
 const off = { pagesPacked: 0, pagesUnpacked: 0, packInputBytes: 0, packMicroseconds: 0, unpackOutputBytes: 0, unpackMicroseconds: 0, cacheHits: 0, cacheLookups: 0, lastUnpackMicroseconds: 0 }
-/** What the backend reports today: nothing compressed, stored equal to the rows as read, the codec off. */
+/** What a backend with packing off reports (and one before anything is packed, but for the codec's name): nothing compressed, stored equal to the rows as read. */
 const raw: ResultMemoryDetail = {
   logicalBytes: 300 * MB, storedBytes: 300 * MB, compressedBytes: 0, packedLogicalBytes: 0, cacheBytes: 0,
   largest: [{ resultId: 7, logicalBytes: 200 * MB, storedBytes: 200 * MB, state: 'raw' }, { resultId: 9, logicalBytes: 100 * MB, storedBytes: 100 * MB, state: 'raw', live: true }],

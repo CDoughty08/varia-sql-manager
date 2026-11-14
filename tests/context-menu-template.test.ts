@@ -38,6 +38,7 @@ describe('native context menu template', () => {
       // SSMS's query window menu starts with the snippet pickers; their chords cannot be accelerators.
       'Insert Snippet… (click)', 'Surround With… (click)', '---',
       'Connection >', '  Connect… (click)', '  Disconnect (click)', '  Disconnect All Queries (click)', '  Reconnect… (click)', '  ---', '  Change Connection… (click)', '  Environment… (click)', '---',
+      'Go To Definition (click, F12)', 'Peek Definition (click, Alt+F12)', '---',
       'Execute (click, F5, disabled)', 'Cancel Executing Query (click)', 'Display Estimated Execution Plan (click, Cmd+L)', 'Display Estimated Plan in Query Session (click)', '---', 'Cut (role cut, Cmd+X, disabled)', 'Copy (role copy, Cmd+C)', 'Paste (role paste, Cmd+V)', '---',
       'Command Palette… (click, Cmd+Shift+P)'
     ])

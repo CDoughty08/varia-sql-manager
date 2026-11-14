@@ -9,7 +9,8 @@ namespace Varia.Backend.Tests;
 
 /// <summary>The page compression benchmark, run by hand (docs/page-compression-findings.md holds what it measured):
 /// <c>dotnet run --project backend/Varia.Backend.Tests --configuration Release -- --page-compression-bench &lt;GiB&gt; &lt;shape&gt;
-/// [--codecs name,name] [--keep name] [--no-ops] [--fused]</c>, one size and shape a process so each memory reading is its own.
+/// [--codecs name,name] [--keep name] [--no-ops] [--fused] [--policy]</c>, one size and shape a process so each memory reading is its own.
+/// <c>--policy</c> measures only the stage 1 policy (ResultPacker) on the filled result instead: see <see cref="Policy"/>.
 /// Fills one query budget of that size with rows of the shape, then measures, without changing how the product stores
 /// pages: each codec's ratio and its compress and decompress speed (one thread over a sample of pages, and the results'
 /// worker count over all of them); what the operations that read pages cost when the pages must be decompressed first
@@ -361,7 +362,10 @@ internal static partial class PageCompressionBench
 
         // ---- Fill.
         var budget = (long)(gib * (1L << 30));
-        var store = new ResultStore(4 * budget, budget);
+        // The policy run leaves its query room to unpack the result again (a result that fills its query's half cannot be
+        // sorted raw either), so it fills to the size and stops there.
+        var policy = args.Contains("--policy");
+        var store = new ResultStore(4 * budget, policy ? 2 * budget : budget);
         var query = store.BeginQuery("compression");
         var set = store.Open(query, 0, 1, 1, "rows", columns, [.. columns.Select(_ => WireKind.Text)]) ?? throw new InvalidOperationException("The result set was not kept.");
         var watch = Stopwatch.StartNew();
@@ -373,8 +377,15 @@ internal static partial class PageCompressionBench
             else foreach (var column in shape.Columns) column.Write(builder, rows);
             if (!set.TryCommitRow()) break;
             rows++;
+            if (policy && (rows & 4095) == 0 && set.BytesStored >= budget) break;
         }
         set.Complete();
+        if (policy)
+        {
+            Print("fillSeconds", watch.Elapsed.TotalSeconds, "s", rows.ToString("N0", CultureInfo.InvariantCulture) + " rows");
+            Policy(store, set, shapeName == "w1" ? null : shape, rows);
+            return;
+        }
         StoredPage[]? pages = set.SealedSnapshot();
         // Its pages are read through their set's accessor while it is pinned, until the raw pages are dropped below.
         var pin = set.Pin();
@@ -663,6 +674,81 @@ internal static partial class PageCompressionBench
             Memory("afterRehydrate", "after dropping the decompressed pages and compacting", compact: false, collect: false);
         }
         GC.KeepAlive(kept);
+    }
+
+    /// <summary>The stage 1 policy (<c>--policy</c>) on the filled result: the budget before and after the real
+    /// <see cref="ResultPacker"/> packs it, the pass's time on one thread, reads of three pages raw and packed (a cold
+    /// cache: random positions), the whole unpack an operation does first, and a second query's fill alone and while the
+    /// policy packs the first result again on its own thread (packing must not slow a new query).</summary>
+    private static void Policy(ResultStore store, ResultSetBuffer set, Shape? shape, long rows)
+    {
+        store.Packing = PagePacking.OnRequest;
+        var pages = set.SealedSnapshot().Length;
+        var random = new Random(11);
+        double[] ReadThree()
+        {
+            var times = new double[300];
+            for (var i = 0; i < times.Length; i++)
+            {
+                var first = (long)(random.NextDouble() * Math.Max(1, set.RowsAvailable - 1));
+                var start = Stopwatch.GetTimestamp();
+                using (set.Pin()) foreach (var page in set.PagesFor(first, 3 * 1024).Take(3)) page.Body();
+                times[i] = Stopwatch.GetElapsedTime(start).TotalMicroseconds;
+            }
+            return times;
+        }
+        ReadThree();
+        var raw = ReadThree();
+        Print("policy.readRawMicroseconds", Median(raw), "µs", "three pages at random positions, raw; p99 " + Percentile(raw, 0.99).ToString("0", CultureInfo.InvariantCulture));
+        var rawUsed = store.UsedBytes;
+        var clock = 0L;
+        var visibility = new ResultVisibility(id => store.Find(id) is not null, () => clock);
+        var packer = new ResultPacker(store, visibility);
+        packer.PackDue();
+        clock = ResultPacker.DelayMs;
+        var timer = Stopwatch.StartNew();
+        packer.PackDue();
+        var packSeconds = timer.Elapsed.TotalSeconds;
+        var packedUsed = store.UsedBytes;
+        Print("policy.usedRawMiB", rawUsed >> 20, "MiB", "the budget charged before packing (" + pages + " pages)");
+        Print("policy.usedPackedMiB", packedUsed >> 20, "MiB", "the budget charged once the policy packed the hidden result; " + ((double)rawUsed / packedUsed).ToString("0.00", CultureInfo.InvariantCulture) + "x less");
+        Print("policy.packSeconds", packSeconds, "s", "one pass of the policy on one thread; " + (set.BytesStored / 1e6 / packSeconds).ToString("0", CultureInfo.InvariantCulture) + " MB/s");
+        var packed = ReadThree();
+        Print("policy.readPackedMicroseconds", Median(packed), "µs", "three pages at random positions, packed (cache cold); p99 " + Percentile(packed, 0.99).ToString("0", CultureInfo.InvariantCulture));
+        timer.Restart();
+        using (set.Pin()) if (!set.TryUnpackAll()) throw new InvalidOperationException("The budget refused the unpack.");
+        Print("policy.unpackSeconds", timer.Elapsed.TotalSeconds, "s", "an operation's whole unpack on " + ViewSorter.Workers + " workers");
+        if (shape is null) return;
+        // A second query of a quarter of the first's rows, alone, then while the policy packs the first again.
+        long FillSecond(string session)
+        {
+            var second = store.Open(store.BeginQuery(session), 0, 1, 1, "rows", [.. shape.Columns.Select(column => column.Meta)], [.. shape.Columns.Select(_ => WireKind.Text)])!;
+            for (long row = 0; row < rows / 4 && second.BeginRow() is { } builder; row++)
+            {
+                second.CountRow();
+                foreach (var column in shape.Columns) column.Write(builder, row);
+                if (!second.TryCommitRow()) break;
+            }
+            second.Complete();
+            store.Release(second.ResultId);
+            return second.RowsRead;
+        }
+        timer.Restart();
+        FillSecond("alone");
+        var alone = timer.Elapsed.TotalSeconds;
+        Print("policy.secondFillAloneSeconds", alone, "s", "a quarter of the rows into a second query, nothing packing");
+        // The unpack counts as a use: the result is due again only once its delay has passed since then.
+        packer.PackDue();
+        clock += ResultPacker.DelayMs;
+        var background = new Thread(() => packer.PackDue()) { Priority = ThreadPriority.Lowest, IsBackground = true };
+        timer.Restart();
+        background.Start();
+        FillSecond("beside");
+        var beside = timer.Elapsed.TotalSeconds;
+        background.Join();
+        var both = timer.Elapsed.TotalSeconds;
+        if (!set.HasPacked) throw new InvalidOperationException("The policy packed nothing beside the second query.");
+        Print("policy.secondFillBesideSeconds", beside, "s", "the same while the policy packs the first result on its own thread, compressing at the lowest priority (" + both.ToString("0.00", CultureInfo.InvariantCulture) + " s until both ended); " + (beside / alone).ToString("0.00", CultureInfo.InvariantCulture) + "x alone");
     }
 
     private static T Time<T>(string name, Func<T> work, Func<T, string> about)
