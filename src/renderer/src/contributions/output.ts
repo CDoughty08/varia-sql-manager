@@ -158,8 +158,9 @@ export function outputContribution({ commands, results, menuTargets, documents, 
         resultsSearch.focus(tabId)
       }
     }),
-    commands.register('output.findNext', { run: args => { const tabId = searchTab(args); if (tabId) resultsSearch.step(tabId, 1, fromGrid(args)) } }),
-    commands.register('output.findPrevious', { run: args => { const tabId = searchTab(args); if (tabId) resultsSearch.step(tabId, -1, fromGrid(args)) } }),
+    // The catalogue's hasResultSets precondition reads the active query; the tab they step through may be another's.
+    commands.register('output.findNext', { when: args => hasResultSets(searchTab(args)), run: args => { const tabId = searchTab(args); if (tabId) resultsSearch.step(tabId, 1, fromGrid(args)) } }),
+    commands.register('output.findPrevious', { when: args => hasResultSets(searchTab(args)), run: args => { const tabId = searchTab(args); if (tabId) resultsSearch.step(tabId, -1, fromGrid(args)) } }),
     commands.register('output.sortAscending', sortCommand('ascending', false)),
     commands.register('output.sortDescending', sortCommand('descending', false)),
     commands.register('output.thenSortAscending', sortCommand('ascending', true)),

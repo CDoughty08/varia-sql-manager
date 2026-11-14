@@ -1036,7 +1036,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `includeLivePlan` | boolean | state | The active query will show live execution plans. |
 | `includeClientStatistics` | boolean | state | The active query will collect client statistics. |
 | `hasResults` | boolean | state | The active query has results (result sets or captured execution plans), and they were not closed (Close Results) or lost with a run the SQL backend stopped. |
-| `hasResultSets` | boolean | state | The active query has a result set a grid shows (rows, a plan set or a comparison), not closed or lost with a run the SQL backend stopped. Captured execution plans alone do not count. |
+| `hasResultSets` | boolean | state | The active query has a result set a grid shows (rows, a Pivot, a plan set or a comparison), not closed or lost with a run the SQL backend stopped. Captured execution plans alone do not count. |
 | `anyDocumentConnected` | boolean | state | Some open query's server is connected. |
 | `outputPaneVisible` | boolean | state | An output panel (Results, Messages or Execution plan) is open and showing: its tab is selected, and no other panel is maximized. |
 | `panelTabsVisible` | boolean | state | Window › Panel Tabs is on: a panel alone in its dock group shows its tab. |

@@ -193,7 +193,7 @@ being true.
   closing the last entry sets `TabResults.emptied`, which keeps the Results view (`hasResultsView`, `OutputPane.tsx`).
   Two context keys tell the states apart: `hasResults` (`ResultsService.context`) holds while the run keeps a result
   set or a captured plan, so Close Results stays; `hasResultSets` (`ResultsService.resultSets`) only while it keeps a
-  result set a grid shows (rows, a plan set or a comparison), and gates what needs a grid (Find, Find Next and
+  result set a grid shows (rows, a Pivot, a plan set or a comparison), and gates what needs a grid (Find, Find Next and
   Previous, Save Results As). Pivot, Compare and Transpose read the run's groups and sets, which an emptied run has
   none of.
 - In the renderer a result is an entry of its run, named everywhere by the opaque key `ResultsService` mints for it

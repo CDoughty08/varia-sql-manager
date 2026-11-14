@@ -105,7 +105,7 @@ export const contextKeys = {
   includeLivePlan: { type: 'boolean', scope: 'state', description: 'The active query will show live execution plans.' },
   includeClientStatistics: { type: 'boolean', scope: 'state', description: 'The active query will collect client statistics.' },
   hasResults: { type: 'boolean', scope: 'state', description: 'The active query has results (result sets or captured execution plans), and they were not closed (Close Results) or lost with a run the SQL backend stopped.' },
-  hasResultSets: { type: 'boolean', scope: 'state', description: 'The active query has a result set a grid shows (rows, a plan set or a comparison), not closed or lost with a run the SQL backend stopped. Captured execution plans alone do not count.' },
+  hasResultSets: { type: 'boolean', scope: 'state', description: 'The active query has a result set a grid shows (rows, a Pivot, a plan set or a comparison), not closed or lost with a run the SQL backend stopped. Captured execution plans alone do not count.' },
   anyDocumentConnected: { type: 'boolean', scope: 'state', description: "Some open query's server is connected." },
   outputPaneVisible: { type: 'boolean', scope: 'state', description: 'An output panel (Results, Messages or Execution plan) is open and showing: its tab is selected, and no other panel is maximized.' },
   panelTabsVisible: { type: 'boolean', scope: 'state', description: 'Window › Panel Tabs is on: a panel alone in its dock group shows its tab.' },
