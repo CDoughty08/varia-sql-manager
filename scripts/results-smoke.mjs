@@ -2396,6 +2396,8 @@ try {
   await page.keyboard.press('Escape')
   await expect(picker).toHaveCount(0)
   await expect(grid('Result 1')).toBeFocused()
+  // The toolbar's Compare gives way below 1180px (a CI runner's window can be narrower), so the window is made wide enough.
+  await resize(1280, 800)
   const compareTool = resultsToolbar(page).getByRole('button', { name: 'Compare', exact: true })
   await compareTool.click()
   await expect(picker).toBeVisible()
@@ -2412,6 +2414,7 @@ try {
   await compareTool.click()
   await expect(picker).toHaveCount(0)
   await expect(compareTool).toHaveAttribute('aria-expanded', 'false')
+  await resize(...fullSize)
   await cell(0, 0, grid('Result 1')).click({ button: 'right' })
   await outputMenu.getByRole('menuitem', { name: 'Compare…', exact: true }).click()
   await picker.getByRole('button', { name: 'Swap old and new' }).click()
