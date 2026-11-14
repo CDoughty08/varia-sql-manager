@@ -132,6 +132,22 @@ describe('the machine lock', () => {
     expect(process.listenerCount('exit')).toBe(before)
   })
 
+  it('cancels an exclusive reservation while shared holders drain without retaining listeners or marking its environment', async () => {
+    const shared = await take('shared'), logs: string[] = [], controller = new AbortController(), own = env()
+    const listeners = process.listenerCount('exit')
+    const pending = acquire('exclusive', { dir, env: own, signal: controller.signal, log: text => logs.push(text) })
+    const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    await waiting(logs)
+    expect(existsSync(join(dir, 'exclusive.lock'))).toBe(true)
+    controller.abort()
+    await rejected
+    expect(readdirSync(dir)).toEqual(['shared-0.lock'])
+    expect(process.listenerCount('exit')).toBe(listeners)
+    expect(own.VARIA_LOCK_HELD).toBeUndefined()
+    shared.release()
+    await take('exclusive')
+  })
+
   it('stays out of CI, VARIA_LOCK=off and processes started under a holder', async () => {
     for (const skipped of [{ CI: 'true' }, { VARIA_LOCK: 'off' }, { VARIA_LOCK_HELD: 'shared' }]) {
       await acquire('exclusive', { env: skipped, dir: join(dir, 'unused') })

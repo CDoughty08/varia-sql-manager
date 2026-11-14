@@ -4,6 +4,7 @@ import type { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import type { Disposable, ExternalStore } from '../core/types'
 import type { LiveConnection } from './connections'
+import { isLiveConnection } from './connection-availability'
 
 export type DatabaseLists = ReadonlyMap<string, readonly DatabaseInfo[]>
 const none: readonly DatabaseInfo[] = []
@@ -54,13 +55,16 @@ export class DatabaseListService extends SnapshotStore<DatabaseLists> implements
     this.clearListeners()
   }
 
-  private live(connectionId: string): boolean { return !this.disposed && this.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost) }
+  private live(connectionId: string): boolean { return !this.disposed && this.connections.getSnapshot().some(connection => connection.id === connectionId && isLiveConnection(connection)) }
 
   private sync(): void {
     if (this.disposed) return
-    const live = new Set(this.connections.getSnapshot().filter(connection => !connection.lost).map(connection => connection.id))
+    const connections = this.connections.getSnapshot(), live = new Set(connections.filter(isLiveConnection).map(connection => connection.id))
+    // Disconnect can fail. Keep this handle's cache for rollback while admission still refuses new loads.
+    const retained = new Set(connections.filter(connection => isLiveConnection(connection) || !connection.lost && connection.lifecycle?.state === 'disconnecting'
+      && connection.lifecycle.handle.id === connection.id && connection.lifecycle.handle.generation === connection.generation).map(connection => connection.id))
     const lists = this.getSnapshot()
-    const dropped = [...lists.keys()].filter(id => !live.has(id))
+    const dropped = [...lists.keys()].filter(id => !retained.has(id))
     if (dropped.length) { const next = new Map(lists); dropped.forEach(id => next.delete(id)); this.publish(next) }
     for (const id of live) if (!lists.has(id) && !this.loading.has(id)) void this.reload(id)
   }

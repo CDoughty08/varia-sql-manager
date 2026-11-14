@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { connectionEnvironmentInputSchema, connectionKey, connectionLibrarySchema, connectionProfileInputSchema, savedConnection, type ConnectionEnvironmentInput, type ConnectionLibrary, type ConnectionProfileInput } from '../shared/connections'
+import { connectionAutoReconnectSchema, connectionEnvironmentInputSchema, connectionKey, connectionLibrarySchema, connectionProfileInputSchema, savedConnection, type ConnectionEnvironmentInput, type ConnectionLibrary, type ConnectionProfile, type ConnectionProfileInput } from '../shared/connections'
 import type { ConnectionOptions } from '../shared/contracts'
 import { quarantine, readJsonFile, writeJsonAtomic } from './json-file'
 
@@ -46,17 +46,20 @@ export class ConnectionStore {
    * `keepEnvironment`, options without an environment keep the entry's label: a connect only clears it when the user
    * cleared the form's Environment, so typing a production server's name never drops its PROD tag.
    */
-  private async upsert(value: ConnectionProfileInput, connected: boolean, keepEnvironment = false): Promise<{ library: ConnectionLibrary; id: string; environment?: string }> {
+  private async upsert(value: ConnectionProfileInput, connected: boolean, keepEnvironment = false, selectedProfileId?: string): Promise<{ library: ConnectionLibrary; id: string; environment?: string }> {
     const input = connectionProfileInputSchema.parse(value)
     const options = savedConnection(input.options)
     const changed = await this.change(library => {
-      let profile = input.id ? library.profiles.find(item => item.id === input.id) : library.profiles.find(item => connectionKey(item.options) === connectionKey(options))
+      const key = connectionKey(options)
+      const selected = selectedProfileId ? library.profiles.find(item => item.id === selectedProfileId && connectionKey(item.options) === key) : undefined
+      let profile = input.id ? library.profiles.find(item => item.id === input.id) : selected ?? library.profiles.find(item => connectionKey(item.options) === key)
       if (input.id && !profile) throw new Error('This saved connection no longer exists.')
-      if (!profile) { profile = { id: randomUUID(), options, favorite: false, registered: false }; library.profiles.push(profile) }
+      if (!profile) { profile = { id: randomUUID(), options, favorite: false, registered: false, autoReconnect: 'inherit' }; library.profiles.push(profile) }
       const kept = keepEnvironment && options.environment === undefined ? profile.options.environment : undefined
       profile.options = kept ? { ...options, environment: kept } : options
       if (input.favorite !== undefined) profile.favorite = input.favorite
       if (input.registered !== undefined) profile.registered = input.registered
+      if (input.autoReconnect !== undefined) profile.autoReconnect = input.autoReconnect
       if (connected) profile.lastConnected = new Date().toISOString()
       prune(library)
       return { id: profile.id, environment: profile.options.environment }
@@ -74,7 +77,7 @@ export class ConnectionStore {
     const options = savedConnection(input.options), key = connectionKey(options)
     return (await this.change(library => {
       let profile = library.profiles.find(item => connectionKey(item.options) === key)
-      if (!profile) { profile = { id: randomUUID(), options, favorite: false, registered: false, lastConnected: new Date().toISOString() }; library.profiles.push(profile) }
+      if (!profile) { profile = { id: randomUUID(), options, favorite: false, registered: false, autoReconnect: 'inherit', lastConnected: new Date().toISOString() }; library.profiles.push(profile) }
       const next = { ...profile.options }
       if (input.environment) next.environment = input.environment
       else delete next.environment
@@ -86,6 +89,17 @@ export class ConnectionStore {
   remember(options: ConnectionOptions) { return this.save({ options }, true) }
   /** remember(), with the id of the history entry it touched (a remembered password is kept under that id) and the
    *  environment that entry now has. */
-  rememberEntry(options: ConnectionOptions, keepEnvironment = false) { return this.upsert({ options }, true, keepEnvironment) }
+  rememberEntry(options: ConnectionOptions, keepEnvironment = false, autoReconnect?: ConnectionProfile['autoReconnect'], selectedProfileId?: string) { return this.upsert({ options, autoReconnect }, true, keepEnvironment, selectedProfileId) }
+  /** A proven live reuse can save the caller's explicit profile policy without changing history, labels or credentials. */
+  async setAutoReconnect(options: ConnectionOptions, value: NonNullable<ConnectionProfile['autoReconnect']>, selectedProfileId?: string): Promise<boolean> {
+    const preference = connectionAutoReconnectSchema.parse(value), key = connectionKey(options)
+    return (await this.change(library => {
+      const selected = selectedProfileId ? library.profiles.find(profile => profile.id === selectedProfileId && connectionKey(profile.options) === key) : undefined
+      const profile = selected ?? library.profiles.find(profile => connectionKey(profile.options) === key)
+      if (!profile) return false
+      profile.autoReconnect = preference
+      return true
+    })).value
+  }
   async remove(id: string) { return (await this.change(library => { library.profiles = library.profiles.filter(item => item.id !== id) })).library }
 }

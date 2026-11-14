@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using Microsoft.Data.SqlClient;
 using Microsoft.Data.SqlClient.Diagnostics;
 
@@ -52,7 +53,24 @@ internal static class CommandTracker
     private const string Before = "Microsoft.Data.SqlClient.WriteCommandBefore", After = "Microsoft.Data.SqlClient.WriteCommandAfter",
         Error = "Microsoft.Data.SqlClient.WriteCommandError";
     private static readonly AsyncLocal<TrackedJob?> Current = new();
-    private static int started;
+    private static readonly ConditionalWeakTable<SqlConnection, object> RejectedConnections = new();
+    private static readonly Lazy<IDisposable> Subscription = new(static () => DiagnosticListener.AllListeners.Subscribe(new Listeners()), LazyThreadSafetyMode.ExecutionAndPublication);
+    private static int hasRejectedConnections;
+
+    /// <summary>A refused native open stays unusable even when a library catches the StateChange exception. Weak keys
+    /// keep no connection alive; the same listener that stops SMO commands before send enforces this exact-instance fence.</summary>
+    internal static void RejectConnection(SqlConnection connection)
+    {
+        RejectedConnections.GetValue(connection, static _ => new object());
+        Volatile.Write(ref hasRejectedConnections, 1);
+        Start();
+    }
+
+    internal static void ThrowIfRejected(SqlConnection? connection)
+    {
+        if (connection is not null && RejectedConnections.TryGetValue(connection, out _))
+            throw new RequestException("AUTH_IDENTITY", ConnectionPrincipal.ChangedMessage);
+    }
 
     /// <summary>Makes the job current on this flow (and the tasks and threads it starts) until disposed.</summary>
     public static IDisposable Track(TrackedJob job)
@@ -65,8 +83,9 @@ internal static class CommandTracker
 
     private static void Start()
     {
-        // A process-wide subscription, kept for the life of the backend.
-        if (Interlocked.Exchange(ref started, 1) == 0) _ = DiagnosticListener.AllListeners.Subscribe(new Listeners());
+        // A process-wide subscription, kept for the life of the backend. Value publishes only after existing listeners
+        // have been subscribed; a concurrent rejection must wait rather than return with its SQL fence uninstalled.
+        _ = Subscription.Value;
     }
 
     private sealed class Scope(TrackedJob? previous) : IDisposable
@@ -78,7 +97,8 @@ internal static class CommandTracker
     {
         public void OnNext(DiagnosticListener listener)
         {
-            if (listener.Name == ListenerName) listener.Subscribe(new Events(), (name, _, _) => Current.Value is not null && name is Before or After or Error);
+            if (listener.Name == ListenerName) listener.Subscribe(new Events(), (name, _, _) =>
+                name == Before && Volatile.Read(ref hasRejectedConnections) != 0 || Current.Value is not null && name is Before or After or Error);
         }
         public void OnCompleted() { }
         public void OnError(Exception error) { }
@@ -88,6 +108,7 @@ internal static class CommandTracker
     {
         public void OnNext(KeyValuePair<string, object?> value)
         {
+            if (value.Value is SqlClientCommandBefore sending) ThrowIfRejected(sending.Command.Connection);
             if (Current.Value is not { } job) return;
             switch (value.Value)
             {

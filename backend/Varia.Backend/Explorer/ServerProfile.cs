@@ -13,7 +13,7 @@ namespace Varia.Backend.Explorer;
 /// who cannot open master, so the backend's server-scope pools keep the connection's database (critic A5); unknown counts as
 /// contained.</summary>
 internal sealed record ServerProfile(int Major, string? ProductVersion, int EngineEdition, string? Login, bool Hadr, bool ViewServerState, bool VectorDimensions,
-    int CatalogBand = ExplorerCatalog.MinBand, bool Linux = false, string? ServerName = null, bool Contained = false)
+    int CatalogBand = ExplorerCatalog.MinBand, bool Linux = false, string? ServerName = null, bool Contained = false, string? PrincipalId = null)
 {
     public const string ProbeSql = "SELECT CONVERT(int, SERVERPROPERTY('ProductMajorVersion')), CONVERT(nvarchar(32), SERVERPROPERTY('ProductVersion')),"
         + " CONVERT(int, SERVERPROPERTY('EngineEdition')), SUSER_SNAME(), CONVERT(int, ISNULL(SERVERPROPERTY('IsHadrEnabled'), 0)),"
@@ -22,7 +22,7 @@ internal sealed record ServerProfile(int Major, string? ProductVersion, int Engi
         + " WHEN COL_LENGTH('sys.tables', 'is_node') IS NOT NULL THEN 14 WHEN COL_LENGTH('sys.tables', 'temporal_type') IS NOT NULL THEN 13 ELSE 12 END,"
         + " CONVERT(bit, CASE WHEN CONVERT(nvarchar(4), SERVERPROPERTY('PathSeparator')) = N'/' THEN 1 ELSE 0 END),"
         + " CONVERT(nvarchar(128), SERVERPROPERTY('ServerName')),"
-        + " CONVERT(bit, CASE WHEN (SELECT s.authenticating_database_id FROM sys.dm_exec_sessions AS s WHERE s.session_id = @@SPID) = 1 THEN 0 ELSE 1 END);";
+        + " CONVERT(bit, CASE WHEN (SELECT s.authenticating_database_id FROM sys.dm_exec_sessions AS s WHERE s.session_id = @@SPID) = 1 THEN 0 ELSE 1 END), SUSER_SID();";
 
     public ExplorerProfile Explorer(ExplorerCatalog catalog) => catalog.Profile(Major, EngineEdition, CatalogBand) with { Linux = Linux };
 
@@ -40,13 +40,18 @@ internal sealed record ServerProfile(int Major, string? ProductVersion, int Engi
                 return new(reader.GetInt32(0), reader.IsDBNull(1) ? null : reader.GetString(1), reader.IsDBNull(2) ? 3 : reader.GetInt32(2), reader.IsDBNull(3) ? null : reader.GetString(3),
                     !reader.IsDBNull(4) && reader.GetInt32(4) == 1, !reader.IsDBNull(5) && Convert.ToInt32(reader.GetValue(5), CultureInfo.InvariantCulture) == 1, !reader.IsDBNull(6) && reader.GetBoolean(6),
                     reader.IsDBNull(7) ? ExplorerCatalog.MinBand : reader.GetInt32(7), !reader.IsDBNull(8) && reader.GetBoolean(8), reader.IsDBNull(9) ? null : reader.GetString(9),
-                    reader.IsDBNull(10) || reader.GetBoolean(10));
+                    reader.IsDBNull(10) || reader.GetBoolean(10), reader.IsDBNull(11) ? null : ConnectionPrincipal.FromSid(reader.GetFieldValue<byte[]>(11)));
         }
-        catch (SqlException) { }
+        catch (SqlException error) when (CanFallback(error, connection.State)) { }
         catch (InvalidCastException) { }
         token.ThrowIfCancellationRequested();
         return Fallback(connection.ServerVersion);
     }
+
+    /// <summary>Managed SNI can report a fatal error before State changes. Authentication errors likewise cannot be
+    /// downgraded into optional metadata failures just because the provider still briefly reports an open session.</summary>
+    internal static bool CanFallback(SqlException error, System.Data.ConnectionState state) =>
+        !SqlService.IsSessionLost(error, state) && !error.Errors.Cast<SqlError>().Any(item => ConnectionFailures.LoginFailed(item.Number));
 
     /// <summary>The major version from the provider's "16.00.4135" form; a sign-in it could not check counts as contained.</summary>
     public static ServerProfile Fallback(string? serverVersion) =>

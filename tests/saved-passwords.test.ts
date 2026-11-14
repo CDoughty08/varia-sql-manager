@@ -32,6 +32,35 @@ const library = (...profiles: ConnectionProfile[]): ConnectionLibrary => ({ vers
 afterEach(async () => { await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))) })
 
 describe('saved passwords', () => {
+  it('pins opaque revisions and never substitutes a replacement or legacy credential', async () => {
+    const { store: saved, path } = await store()
+    const id = randomUUID()
+    await saved.set(id, options)
+    const original = (await saved.reference(id, options))!
+    expect(await saved.getReferenced(original, options)).toBe(marker)
+    await saved.set(id, options)
+    expect(await saved.reference(id, options)).toEqual(original)
+    await saved.set(id, { ...options, password: 'replacement-marker' })
+    const replacement = (await saved.reference(id, options))!
+    expect(replacement.revision).not.toBe(original.revision)
+    expect(await saved.getReferenced(original, options)).toBeUndefined()
+    await saved.forgetRejected(original, options)
+    expect(await saved.getReferenced(replacement, options)).toBe('replacement-marker')
+    const forged = JSON.parse(await readFile(path, 'utf8'))
+    forged.entries[0].revision = original.revision
+    await writeFile(path, JSON.stringify(forged))
+    await expect(saved.getReferenced(original, options)).rejects.toThrow(savedPasswordMessages.unreadable)
+    forged.entries[0].revision = replacement.revision
+    await writeFile(path, JSON.stringify(forged))
+    const legacy = JSON.parse(await readFile(path, 'utf8'))
+    const legacyPassword = 'replacement-marker'
+    legacy.entries[0].cipher = (await testCipher().encrypt(createHash('sha256').update(JSON.stringify([credentialBinding(options), legacyPassword])).digest('hex') + legacyPassword)).toString('base64')
+    delete legacy.entries[0].revision
+    await writeFile(path, JSON.stringify(legacy))
+    expect(await saved.get(id, options)).toBe('replacement-marker')
+    expect(await saved.reference(id, options)).toBeUndefined()
+    expect(await saved.getReferenced(replacement, options)).toBeUndefined()
+  })
   it('round-trips a password, keeping it, its base64 and the server and login names out of the file', async () => {
     const { store: saved, path } = await store()
     const id = randomUUID()
@@ -205,7 +234,7 @@ describe('saved passwords', () => {
     expect(Buffer.from(after, 'base64').subarray(-2).toString()).toBe('v2')
     expect(await saved.get(id, options)).toBe(marker)
     huge = true
-    await expect(saved.set(randomUUID(), options)).rejects.toThrow(savedPasswordMessages.notSaved)
+    await expect(saved.set(randomUUID(), { ...options, password: 'replacement-needs-encryption' })).rejects.toThrow(savedPasswordMessages.notSaved)
     huge = false
     await expect(saved.set(randomUUID(), { ...options, authentication: 'windows' })).rejects.toThrow(savedPasswordMessages.notSaved)
     await expect(saved.set(randomUUID(), { ...options, password: '' })).rejects.toThrow(savedPasswordMessages.notSaved)

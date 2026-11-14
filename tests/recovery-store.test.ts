@@ -279,6 +279,8 @@ describe('the AutoRecover store', () => {
     expect(lossDetails({ enabled: true, minutes: 1, saved: true }).stopped).toContain('changes from the last minute may be lost')
     expect(lossDetails({ enabled: false, minutes: 5, saved: false }, 'pins').stopped).toContain('Pinned tabs reopen with their text.')
     expect(lossDetails({ enabled: false, minutes: 5, saved: false }, 'session').stopped).toContain('Reload retries opening the saved tabs.')
+    expect(lossDetails({ enabled: false, minutes: 5, saved: false }, 'session').reload).toContain('Kept queries reopen; tabs outside the session limits may be lost.')
+    expect(lossDetails({ enabled: true, minutes: 5, saved: true }, 'session').reload).not.toContain('Changes since the last AutoRecover save will be lost.')
   })
 })
 

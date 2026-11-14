@@ -79,6 +79,30 @@ describe('DatabaseListService', () => {
     expect(f.service.get('server-a').map(database => database.name)).toEqual(['master'])
     expect(listener).not.toHaveBeenCalled()
   })
+  it('retains the exact handle cache through a failed disconnect and refresh without admitting work during teardown', async () => {
+    const f = fixture(), targetId = '00000000-0000-4000-8000-000000000001', connectionId = '00000000-0000-4000-8000-000000000050'
+    const attempt = f.connections.beginConnect(connectionOptions, 1, targetId)!
+    f.connections.accept(connectionInfo(connectionId), connectionOptions, targetId, { principal: { provider: 'sqlServer', authentication: 'sql', id: 'reader' } }, attempt)
+    f.answer(0, { ok: true, value: list('master', 'AppData') })
+    await Promise.resolve()
+    const cached = f.service.get(connectionId), refresh = f.service.reload(connectionId)
+    expect(cached.map(database => database.name)).toEqual(['master', 'AppData'])
+    const disconnect = f.connections.connectionTargets.beginDisconnect(targetId, crypto.randomUUID())!
+    expect(f.service.get(connectionId)).toBe(cached)
+    await f.service.reload(connectionId)
+    expect(f.api.databases).toHaveBeenCalledTimes(2)
+    f.connections.connectionTargets.failDisconnect(disconnect)
+    f.answer(1, { ok: false, error: 'The refresh failed while disconnecting.' })
+    await refresh
+    expect(f.connections.isLive(connectionId)).toBe(true)
+    expect(f.service.get(connectionId)).toBe(cached)
+    expect(f.api.databases).toHaveBeenCalledTimes(2)
+    const completed = f.connections.connectionTargets.beginDisconnect(targetId, crypto.randomUUID())!
+    f.connections.connectionTargets.completeDisconnect(completed)
+    expect(f.service.get(connectionId)).toEqual([])
+    f.service.dispose()
+    f.connections.dispose()
+  })
   it('drops the lists of removed and lost connections, and ignores their late answers', async () => {
     const f = fixture()
     f.connections.add(connectionInfo('server-a', 1), connectionOptions)

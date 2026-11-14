@@ -480,7 +480,7 @@ describe('object action catalogue', () => {
     // A scripted action always fits a query window, so Script Action to New Query Window can always run it.
     expect(actionLimits.scriptChars).toBeLessThanOrEqual(maxScriptCharacters)
     expect(actionErrorCodes.filter(code => !actionErrorRetryable[code])).toEqual(['NOT_FOUND', 'NOT_SUPPORTED', 'DEPENDENTS', 'NAME_IN_USE', 'PATH_NOT_FOUND', 'MEDIA', 'BACKUP_MISMATCH',
-      'TAIL_LOG_NEEDED', 'RESTORE_SEQUENCE'])
+      'TAIL_LOG_NEEDED', 'RESTORE_SEQUENCE', 'AUTH_IDENTITY'])
     // The server file picker: a path fits sys.master_files.physical_name, and main's 15 s deadline outlasts the backend's budget.
     expect([actionLimits.serverPath, actionLimits.browseEntries, actionLimits.browseMs]).toEqual([260, 2_000, 10_000])
     expect(actionLimits.browseMs).toBeLessThan(serverFilesDeadlineMs)

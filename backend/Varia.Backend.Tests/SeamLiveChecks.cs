@@ -205,7 +205,7 @@ internal static class SeamLiveChecks
             var refused = await Sql("ALTER DATABASE " + Bracket(db) + " SET OFFLINE WITH NO_WAIT;");
             await using (var monitor = ((IActivityHost)service).MonitorConnection(inside.Id))
             {
-                await monitor.OpenAsync();
+                await ((IActivityHost)service).OpenAsync(monitor, CancellationToken.None);
                 await using var command = new SqlCommand("SELECT DB_NAME();", monitor);
                 var monitorDatabase = (string?)await command.ExecuteScalarAsync();
                 check(inside.Database == db && before.Any(node => node.Label == db) && explorerInside is not (null or "0") && refused.Status != "completed" && monitorDatabase == "master",

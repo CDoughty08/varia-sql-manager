@@ -719,6 +719,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .tab-title:only-child { margin-block: auto; }
 /* The automatic margins split the space below the title equally above and below the chips. */
 .tab-metadata { display: flex; align-items: center; flex: none; gap: var(--varia-space-1); min-width: 0; margin-block: auto; }
+.tab-remembered-server { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab-renaming { padding-right: 6px; }
 .tab-rename { flex: 1; min-width: 0; width: 180px; height: 20px; padding: 0 4px; border-color: var(--varia-focusBorder); }
@@ -2833,6 +2834,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .help-sample table { width: 100%; border-collapse: collapse; }
 .help-sample th, .help-sample td { text-align: left; padding: var(--varia-space-2); border-bottom: 1px solid var(--varia-panel-border); }
 .help-sample-output { display: flex; flex-wrap: wrap; gap: var(--varia-space-5); padding: var(--varia-space-3); border: 1px solid var(--varia-panel-border); }
+.connection-details-dialog { width: min(680px, calc(100vw - 32px)); }
+.connection-details-dialog table { width: 100%; border-collapse: collapse; text-align: left; }
+.connection-details-dialog th, .connection-details-dialog td { padding: 8px; overflow-wrap: anywhere; }
+.connection-details-dialog .connection-footer { flex-wrap: wrap; justify-content: flex-end; }
 /* The Compare popover (ComparePopover): the column filter's card, beside the toolbar's Compare or the Table's grid. */
 .compare-popover { position: fixed; z-index: 13000; display: flex; flex-direction: column; box-sizing: border-box; width: 300px; max-width: calc(100vw - 16px); min-height: 0; overflow: hidden; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); font: var(--varia-size-sm)/var(--varia-line-sm) var(--varia-font-ui); animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease); }
 .compare-head { display: flex; flex-shrink: 0; align-items: center; gap: var(--varia-space-1); padding: var(--varia-space-1) var(--varia-space-1) 0 var(--varia-space-3); }

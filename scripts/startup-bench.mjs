@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { cpus, totalmem } from 'node:os'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { within } from './fixtures/smoke.mjs'
+import { trackElectronProcess, within } from './fixtures/smoke.mjs'
 import { backendReady, documentTabSlots } from './fixtures/ui.mjs'
 
 // Startup and memory benchmarks (npm run bench:startup): the built app with the Release backend, launched several times
@@ -109,7 +109,7 @@ async function launch() {
   delete env.ELECTRON_RUN_AS_NODE
   const before = Date.now()
   // Playwright adds --no-sandbox on Linux unless chromiumSandbox is set; only root (cloud sessions) needs it.
-  app = await electron.launch({ args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 })
+  app = trackElectronProcess(await electron.launch({ args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 }))
   const created = await app.evaluate(({ app, BrowserWindow }) => {
     const show = window => window.showInactive()
     for (const window of BrowserWindow.getAllWindows()) show(window)

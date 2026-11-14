@@ -232,7 +232,7 @@ describe('SSIS properties documents', () => {
     await settled()
     expect(ssisProperties.getSnapshot().documents).toEqual({})
   })
-  it('cancels a read when its server disconnects, cannot refresh until it reconnects, and reads again on the new connection', async () => {
+  it('cancels a disconnected read, keeps the last model, and refuses a name-only reconnect', async () => {
     const { documents, api, state, run, connections, targets: retarget, commands, connect } = ssis()
     await run('ssis.folderProperties', 'ssisFolder')
     await settled()
@@ -243,73 +243,43 @@ describe('SSIS properties documents', () => {
     const requestId = api.describeSsis.mock.calls.at(-1)![0].requestId
     connections.markLostBefore(2)
     expect(api.cancelSsis).toHaveBeenCalledWith([requestId])
-    expect(state(id)).toMatchObject({ loading: false, disconnected: true, model: folder })
-    expect(commands.isEnabled('ssis.refreshProperties', { tabId: id })).toBe(false)
-    expect(ssisHeaderState(state(id))).toMatchObject({ tone: 'warning', label: 'Disconnected' })
     pending.resolve({ ok: true, value: { model: { ...folder, description: 'stale' }, elapsedMs: 1 } })
     await settled()
-    expect(state(id).model).toEqual(folder)
-    // Reconnect to the same server moves the tab and reads it on the new connection; another server's would not.
-    expect(documents.follows(id, 'C1.EXAMPLE ')).toBe(true)
-    expect(documents.follows(id, 'other.example')).toBe(false)
+    expect(state(id)).toMatchObject({ loading: false, disconnected: true, model: folder })
+    expect(documents.follows(id, 'C1.EXAMPLE ')).toBe(false)
     connect({ ...connectionInfo('c3', 2), server: 'c1.example' })
     retarget.retarget('c1', 'c3')
     await settled()
-    expect(state(id)).toMatchObject({ connectionId: 'c3', disconnected: false, loading: false })
-    expect(api.describeSsis.mock.calls.at(-1)![0]).toMatchObject({ connectionId: 'c3', view: 'folder' })
+    expect(state(id)).toMatchObject({ connectionId: 'c1', disconnected: true })
+    expect(commands.isEnabled('ssis.refreshProperties', { tabId: id })).toBe(false)
   })
-  it('reconnects on a new Connect to its server after a Disconnect or a removed lost server, and reads again there', async () => {
-    const { documents, api, state, run, connections, targets: retarget, commands, connect } = ssis()
+  it('keeps a disconnected document separate when another connection uses the same server name', async () => {
+    const { documents, state, run, connections, connect } = ssis()
     await run('ssis.folderProperties', 'ssisFolder')
     await settled()
     const id = documents.getSnapshot().activeId
-    // Disconnect, as App does: the connection goes, and a custom document keeps its connection id.
     connections.remove('c1')
-    retarget.update(id, { connectionId: undefined })
-    expect(state(id)).toMatchObject({ connectionId: 'c1', disconnected: true })
-    // A connection to another server leaves it where it is.
-    connect(connectionInfo('c2'))
-    expect(state(id)).toMatchObject({ connectionId: 'c1', disconnected: true })
     connect({ ...connectionInfo('c3'), server: ' C1.EXAMPLE' })
     await settled()
-    expect(state(id)).toMatchObject({ connectionId: 'c3', disconnected: false, loading: false })
-    expect(documents.get(id)?.connectionId).toBe('c3')
-    expect(api.describeSsis.mock.calls.at(-1)![0]).toMatchObject({ connectionId: 'c3', view: 'folder' })
-    expect(commands.isEnabled('ssis.refreshProperties', { tabId: id })).toBe(true)
-    // Properties on the same object from the new connection shows this tab instead of opening a second.
+    expect(state(id)).toMatchObject({ connectionId: 'c1', disconnected: true, model: folder })
     await run('ssis.folderProperties', 'ssisFolder', 'c3', ' C1.EXAMPLE')
-    expect(documents.getSnapshot().activeId).toBe(id)
-    expect(documents.getSnapshot().documents.filter(document => document.kind === 'ssisFolder')).toHaveLength(1)
-    // A lost server removed (after a backend crash, say), then a fresh Connect instead of Reconnect.
-    connections.markLostBefore(2)
-    expect(state(id).disconnected).toBe(true)
-    connections.remove('c3')
-    connect({ ...connectionInfo('c4', 2), server: 'c1.example' })
-    await settled()
-    expect(state(id)).toMatchObject({ connectionId: 'c4', disconnected: false })
-    expect(api.describeSsis.mock.calls.at(-1)![0]).toMatchObject({ connectionId: 'c4' })
+    expect(documents.getSnapshot().activeId).not.toBe(id)
+    expect(documents.getSnapshot().documents.filter(document => document.kind === 'ssisFolder')).toHaveLength(2)
   })
-  it('never moves to another connection to its server that was already open when it disconnected, which may be another login', async () => {
+  it('never adopts another account on a matching server, including connections opened after disconnect', async () => {
     const { documents, api, state, run, connections, targets: retarget, connect } = ssis()
     connect({ ...connectionInfo('c2'), server: 'c1.example', displayName: 'Other login' })
     await run('ssis.folderProperties', 'ssisFolder')
     await settled()
     const id = documents.getSnapshot().activeId
     connections.remove('c1')
-    retarget.update(id, { connectionId: undefined })
+    connect({ ...connectionInfo('c3'), server: 'c1.example', displayName: 'New login' })
+    retarget.retarget('c1', 'c2')
+    // Even an erroneous central document update cannot start a read using the other account.
+    documents.update(id, { connectionId: 'c2' })
     await settled()
     expect(state(id)).toMatchObject({ connectionId: 'c1', disconnected: true, serverLabel: 'c1.example' })
     expect(api.describeSsis).toHaveBeenCalledTimes(1)
-    // A Connect made afterwards is the way back, and the header then names that connection.
-    connect({ ...connectionInfo('c3'), server: 'c1.example', displayName: 'Reconnected' })
-    await settled()
-    expect(state(id)).toMatchObject({ connectionId: 'c3', disconnected: false, serverLabel: 'Reconnected' })
-    expect(api.describeSsis.mock.calls.at(-1)![0]).toMatchObject({ connectionId: 'c3' })
-    // Reconnect onto the other open connection is explicit, so it moves there.
-    connections.remove('c3')
-    retarget.retarget('c3', 'c2')
-    await settled()
-    expect(state(id)).toMatchObject({ connectionId: 'c2', disconnected: false, serverLabel: 'Other login' })
   })
   it('names its tab without drawing bidi overrides or control characters from the catalog name', async () => {
     const { documents, ssisProperties, select } = ssis()

@@ -213,7 +213,7 @@ internal static class SsisCreateLiveChecks
             for (var tries = 0; tries < 400 && !running.IsCompleted; tries++)
             {
                 if (service.SsisActions.SessionOf(requestId) is { } session
-                    && (await sql("SELECT COUNT(*) FROM sys.dm_exec_requests AS r WHERE r.session_id = " + session.ToString(CultureInfo.InvariantCulture) + " AND r.command LIKE N'RESTORE%';", "master")).Scalar == "1")
+                    && (await sql("SELECT COUNT(*) FROM sys.dm_exec_requests AS r WHERE r.session_id = " + session.ToString(CultureInfo.InvariantCulture) + " AND r.command = N'RESTORE DATABASE';", "master")).Scalar == "1")
                     return true;
                 await Task.Delay(10);
             }
@@ -369,7 +369,7 @@ internal static class SsisCreateLiveChecks
             for (var tries = 0; tries < 400 && !running.IsCompleted && !restoring; tries++)
             {
                 if (service.SsisActions.SessionOf(requestId) is { } session)
-                    restoring = (await sql("SELECT COUNT(*) FROM sys.dm_exec_requests AS r WHERE r.session_id = " + session.ToString(CultureInfo.InvariantCulture) + " AND r.command LIKE N'RESTORE%';", "master")).Scalar == "1";
+                    restoring = (await sql("SELECT COUNT(*) FROM sys.dm_exec_requests AS r WHERE r.session_id = " + session.ToString(CultureInfo.InvariantCulture) + " AND r.command = N'RESTORE DATABASE';", "master")).Scalar == "1";
                 if (!restoring) await Task.Delay(10);
             }
             if (!restoring)

@@ -299,6 +299,31 @@ describe('ObjectSearchService', () => {
     expect(service.getSnapshot().indexes.a).toEqual({ connectionId: 'a', done: 0, total: 0, objects: 40, status: status() })
   })
 
+  it('cancels a disconnected single-target search and typing task, retaining filters and completed hits while rejecting late replies', async () => {
+    const { service, calls, pendingSearch, connections, timers } = harness({ indexOnConnect: false })
+    connections.set([connection('a')])
+    const id = service.open('a', 'orders', false, 'Sales')!
+    const completed = { hits: [hit], total: 1, partial: false, elapsedMs: 1, index: status() }
+    pendingSearch[0]({ ok: true, value: completed })
+    await settle()
+    const reading = service.search(id)
+    const requestId = calls.search.at(-1)!.requestId
+    service.setQuery(id, { text: 'customer draft' })
+    connections.set([connection('a', true)])
+    expect(calls.cancel).toContainEqual([requestId])
+    expect(service.getSnapshot().documents[id]).toMatchObject({ connectionId: 'a', text: 'customer draft', database: 'Sales', result: completed, error: 'The server is not connected.' })
+    expect(service.getSnapshot().documents[id].requestId).toBeUndefined()
+    timers.run()
+    expect(calls.search).toHaveLength(2)
+    // Even a new live handle with the same display name cannot accept the old handle's response.
+    connections.set([{ ...connection('other'), server: 'srv-a' }])
+    pendingSearch[1]({ ok: true, value: { ...completed, hits: [], total: 0 } })
+    await reading
+    expect(service.getSnapshot().documents[id].result).toEqual(completed)
+    expect(service.getSnapshot().documents[id].connectionId).toBe('a')
+    service.dispose()
+  })
+
   it('searches after a pause in typing, at once for an option, cancels the search it replaces, and drops stale answers', async () => {
     const { service, calls, pendingSearch, pendingIndex, connections, timers } = harness()
     connections.set([connection('a')])

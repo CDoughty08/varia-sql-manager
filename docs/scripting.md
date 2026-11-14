@@ -202,6 +202,7 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `AUTH_KERBEROS` | Yes |
 | `AUTH_UNSUPPORTED` | Yes |
 | `AUTH_ENTRA` | Yes |
+| `AUTH_IDENTITY` | No |
 
 ## Limits
 

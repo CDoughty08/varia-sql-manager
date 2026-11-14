@@ -607,12 +607,19 @@ GO
       stub.blocked.set(requestId, () => { clearTimeout(timer); resolve(ok({ elapsedMs: 1, error: { code: 'CANCELLED', message: 'Cancelled.', retryable: true } })) })
     })
   }
+  // This UI fixture replaces the request owner, so its verified receipts are acknowledged within the same fixture.
+  ipcMain.removeHandler('varia:connections-accept')
+  ipcMain.handle('varia:connections-accept', () => ok({ accepted: true, retained: true }))
   ipcMain.removeHandler('varia:request')
-  ipcMain.handle('varia:request', async (_event, method, params) => {
+  ipcMain.handle('varia:request', async (_event, method, params, context) => {
     stub.calls.push({ method, params: method === 'connections.connect' ? { server: params.server } : params })
     switch (method) {
       case 'system.health': return ok({ protocolVersion: 2, runtime: 'stub', platform: process.platform, smoVersion: 'stub', sqlClientVersion: 'stub' })
-      case 'connections.connect': return ok({ id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.00.4135', productVersion: '16.0.4135.4', login: 'sa', engineEdition: 3, generation: 1 })
+      case 'connections.connect': {
+        const principalId = params.authentication.startsWith('entra') ? 'entra:11111111-1111-1111-1111-111111111111:22222222-2222-2222-2222-222222222222' : 'sid:01020304'
+        return ok({ id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.00.4135', productVersion: '16.0.4135.4', login: 'sa', engineEdition: 3, generation: 1,
+          targetId: context?.targetId ?? crypto.randomUUID(), principalId, authentication: { principal: { provider: 'sqlServer', authentication: params.authentication, id: principalId } } })
+      }
       case 'connections.disconnect': return ok({ disconnected: true })
       case 'databases.list': return ok([{ name: 'master', isSystem: true, isSnapshot: false }, ...stub.databases.map(name => ({ name, isSystem: false, isSnapshot: false }))])
       case 'explorer.children': return children(params)

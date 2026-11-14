@@ -476,7 +476,7 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
   }
 
   private isLive(connectionId: string): boolean {
-    return this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost)
+    return this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'connected'))
   }
   /** A disconnected or lost server's jobs: their outcome is dropped, and the backend is told to stop them. */
   private connectionsChanged(): void {

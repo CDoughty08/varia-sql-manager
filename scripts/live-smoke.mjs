@@ -144,7 +144,7 @@ try {
   const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
   await expect(dialog.getByLabel('Server Name', { exact: true })).toHaveValue('live-server')
   await dialog.getByLabel('Password', { exact: true }).fill('live-smoke-password')
-  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await dialog.getByRole('button', { name: 'Update Credentials and Reconnect', exact: true }).click()
   await expect(dialog).toHaveCount(0)
   await expect.poll(async () => (await snapshot(id)).status, { timeout: 15000 }).toBe('live')
   const back = await snapshot(id)

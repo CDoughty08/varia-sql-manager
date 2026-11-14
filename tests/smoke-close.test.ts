@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { spawn } from 'node:child_process'
-import { once } from 'node:events'
-import { boundedClose, groupMembers } from '../scripts/fixtures/smoke.mjs'
+import { execFileSync, spawn } from 'node:child_process'
+import { EventEmitter, once } from 'node:events'
+import { boundedClose, groupMembers, trackElectronProcess } from '../scripts/fixtures/smoke.mjs'
+
+vi.mock('node:child_process', async importOriginal => ({
+  ...await importOriginal<typeof import('node:child_process')>(), execFileSync: vi.fn()
+}))
 
 const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
 let exitCode: typeof process.exitCode
@@ -27,6 +31,29 @@ const fakeApplication = () => {
 }
 
 describe('smoke close backstop', () => {
+  it('owns a raw Windows app tree only until that exact child exits, even when another launch reuses its pid', () => {
+    usePlatform('win32')
+    const child = Object.assign(new EventEmitter(), { pid: 4321, kill: vi.fn((_signal?: NodeJS.Signals) => true) })
+    const replacement = Object.assign(new EventEmitter(), { pid: child.pid, kill: vi.fn((_signal?: NodeJS.Signals) => true) })
+    const application = { process: () => child } as unknown as Parameters<typeof trackElectronProcess>[0]
+    const next = { process: () => replacement } as unknown as Parameters<typeof trackElectronProcess>[0]
+    vi.mocked(execFileSync).mockClear()
+    try {
+      expect(trackElectronProcess(application)).toBe(application)
+      expect(child.kill('SIGKILL')).toBe(true)
+      expect(execFileSync).toHaveBeenCalledExactlyOnceWith('taskkill', ['/PID', '4321', '/T', '/F'], { stdio: 'ignore' })
+      child.emit('exit', 0, null)
+      vi.mocked(execFileSync).mockClear()
+      expect(child.kill('SIGKILL')).toBe(false)
+      expect(execFileSync).not.toHaveBeenCalled()
+      trackElectronProcess(next)
+      expect(child.kill('SIGKILL')).toBe(false)
+      expect(execFileSync).not.toHaveBeenCalled()
+      expect(replacement.kill('SIGKILL')).toBe(true)
+      expect(execFileSync).toHaveBeenCalledExactlyOnceWith('taskkill', ['/PID', '4321', '/T', '/F'], { stdio: 'ignore' })
+    } finally { child.emit('exit', 0, null); replacement.emit('exit', 0, null) }
+  })
+
   it.each(['linux', 'darwin'] as const)('kills a hung app\'s process group on %s so descendants release its pipes', async value => {
     usePlatform(value)
     const { child, application } = fakeApplication()

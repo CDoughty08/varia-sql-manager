@@ -99,7 +99,7 @@ try {
   await expect(optionsNotes(dialog()).first()).toHaveText('Color theme: View › Theme')
   for (const name of ['Text Editor', 'Transact-SQL', 'Query Execution', 'Query Results', 'SQL Server Object Explorer']) await node(name).click()
   expect(await treeNames()).toEqual([
-    'Environment', '  General', '  AutoRecover', '  Documents', '  Fonts and Colors', '  Shortcuts', '  Product Updates', '  Live Data', '  Object Explorer', 'Text Editor', '  General', '  Editor Tab and Status Bar', '  Transact-SQL', '    General', '    IntelliSense', '    Tabs', 'Query Execution', '  SQL Server', '    General', '    Advanced',
+    'Environment', '  General', '  AutoRecover', '  Documents', '  Fonts and Colors', '  Shortcuts', '  Product Updates', '  Live Data', '  Object Explorer', '  Connections', 'Text Editor', '  General', '  Editor Tab and Status Bar', '  Transact-SQL', '    General', '    IntelliSense', '    Tabs', 'Query Execution', '  SQL Server', '    General', '    Advanced',
     'Query Results', '  SQL Server', '    Results to Grid', 'SQL Server Object Explorer', '  Commands', '  Scripting', 'Activity Monitor',
     'SQL Server Integration Services'
   ])
@@ -152,7 +152,12 @@ try {
   await expect(field('Keep chart history for')).toBeEnabled()
   await field('Pause live views that are hidden').check()
   await expect(field('Pause after hidden for')).toBeEnabled()
-  console.log('Options checks: Alt+T, O opens Environment › General with the search box focused, the tree has SSMS\'s 22 nodes plus Live Data and its keys, AutoRecover has SSMS\'s defaults, and Live Data its own.')
+  // Connections defaults to one silent startup reconnect attempt. This draft is discarded by Escape below.
+  await node('Connections').click()
+  await expect(heading()).toHaveText('Environment › Connections')
+  await expect(field('Automatically reconnect on startup')).toBeChecked()
+  await field('Automatically reconnect on startup').uncheck()
+  console.log('Options checks: Alt+T, O opens Environment › General with the search box focused, the page tree has its expected pages and keys, AutoRecover has SSMS\'s defaults, and Connections enables startup reconnect by default.')
 
   // 2. Ctrl+E (⌘E) searches: "time-out" leaves Query Execution › SQL Server › General, highlighted; Escape clears, then closes.
   await node('Shortcuts').focus()
@@ -205,9 +210,13 @@ try {
   await field('Follow active query').uncheck()
   await field('Pinned server headers at top').fill('1')
   await field('Pinned server headers at bottom').fill('3')
+  await showPage('Environment', 'Connections')
+  await expect(field('Automatically reconnect on startup')).toBeChecked()
+  await field('Automatically reconnect on startup').uncheck()
   await dialog().getByRole('button', { name: 'OK', exact: true }).click()
   await expect(dialog()).toHaveCount(0)
   await expect.poll(stored).toEqual({ version: 1, values: {
+    'environment.connections.autoReconnect': false,
     'objectExplorer.followActiveQuery': false, 'objectExplorer.pinnedServerHeadersBottom': 3, 'objectExplorer.pinnedServerHeadersTop': 1,
     'objectExplorer.selectTopRows': 50, 'queryExecution.executionTimeout': 7, 'queryExecution.stopOnError': true, 'textEditor.sql.indentSize': 2, 'textEditor.sql.tabSize': 2, 'textEditor.sql.tabs': 'spaces', 'textEditor.sql.wordWrap': true
   } })
@@ -245,24 +254,29 @@ try {
     await explorerMenu.getByRole('menuitem', { name: 'Select Top 50 Rows', exact: true }).click()
     await expect.poll(async () => (await calls('query.execute')).at(-1)?.sql).toContain('SELECT TOP (50) [Id]')
   }
-  console.log('Options checks: one OK saves only the changed settings, including Follow active query and independent header limits under Environment › Object Explorer.')
+  console.log('Options checks: one OK saves only the changed settings, including startup reconnect and Follow active query with independent Object Explorer header limits.')
 
-  // 4. OK refuses an out-of-range value, shows why and focuses the field; Cancel discards a draft that spans two pages.
+  // 4. OK refuses an out-of-range value, shows why and focuses the field; Cancel discards a draft across pages.
   await openOptions()
   await node('Query Execution').click()
   await field('Execution time-out').fill('99999')
   await showPage('Text Editor', 'Transact-SQL', 'Tabs')
   await expect(heading()).toHaveText('Text Editor › Transact-SQL › Tabs')
   await field('Tab size').fill('3')
+  await showPage('Environment', 'Connections')
+  await expect(field('Automatically reconnect on startup')).not.toBeChecked()
+  await field('Automatically reconnect on startup').check()
   await dialog().getByRole('button', { name: 'OK', exact: true }).click()
   await expect(heading()).toHaveText('Query Execution › SQL Server › General')
   await expect(dialog().getByText('Execution time-out must be a whole number from 0 to 86,400.', { exact: true })).toBeVisible()
   await expect(field('Execution time-out')).toBeFocused()
   await dialog().getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(dialog()).toHaveCount(0)
-  expect((await stored()).values).toMatchObject({ 'queryExecution.executionTimeout': 7, 'textEditor.sql.tabSize': 2 })
+  expect((await stored()).values).toMatchObject({ 'environment.connections.autoReconnect': false, 'queryExecution.executionTimeout': 7, 'textEditor.sql.tabSize': 2 })
   await openOptions()
   await expect(field('Execution time-out')).toHaveValue('7')
+  await showPage('Environment', 'Connections')
+  await expect(field('Automatically reconnect on startup')).not.toBeChecked()
   await page.keyboard.press('Escape')
   console.log('Options checks: OK names the bounds of an out-of-range value and focuses it; Cancel discards a draft across pages.')
 
@@ -298,6 +312,8 @@ try {
   await expect(field('Follow active query')).not.toBeChecked()
   await expect(field('Pinned server headers at top')).toHaveValue('1')
   await expect(field('Pinned server headers at bottom')).toHaveValue('3')
+  await showPage('Environment', 'Connections')
+  await expect(field('Automatically reconnect on startup')).not.toBeChecked()
   await page.keyboard.press('Escape')
   if (!mac) {
     await textbox().focus()
