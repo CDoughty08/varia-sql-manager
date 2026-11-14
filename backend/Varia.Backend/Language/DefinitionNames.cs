@@ -72,8 +72,12 @@ internal static class DefinitionNames
             {
                 // A bare column: its statement's tables, the column deciding when there are several or when a derived table,
                 // a CTE or a table variable may hold it instead.
-                var sources = scope.Sources;
-                foreach (var source in sources) Add(sources.Count == 1 && !scope.Partial ? source : source with { Column = parts[0] });
+                if (scope.ListTable is { } listed) Add(listed);
+                else
+                {
+                    var sources = scope.Sources;
+                    foreach (var source in sources) Add(sources.Count == 1 && !scope.Partial ? source : source with { Column = parts[0] });
+                }
             }
             else
             {
@@ -85,7 +89,10 @@ internal static class DefinitionNames
             }
             return candidates.Count == 0 ? null : new(range, candidates);
         }
-        if (parts.Count == 1 && scope.Knows(parts[0]!, out var alias)) Add(alias);
+        // Not a column: a table reference's own name is that object (a CTE's is none), an alias where it is declared is its
+        // table, and any other name (EXEC, a type, a FROM name) is the object it names; another scope's alias never hides it.
+        if (scope.NoObject) return null;
+        if (scope.Declares) Add(scope.Declared);
         else Add(Object(parts));
         // Without a parse, a qualified column (alias.column or table.column) is as likely as an object.
         if (!scope.Parsed && parts.Count >= 2) Add(Object(parts.Take(parts.Count - 1).ToList()));
@@ -161,6 +168,14 @@ internal static class DefinitionNames
         /// <summary>The level that gave <see cref="Sources"/> also names a table that is no object, which may hold the column.</summary>
         public bool Partial { get; private set; }
 
+        /// <summary>The caret is on a CTE's name, a CTE reference or another name with no object.</summary>
+        public bool NoObject { get; private set; }
+        /// <summary>The caret is on an alias where its table declares it; <see cref="Declared"/> is that table (null for none).</summary>
+        public bool Declares { get; private set; }
+        public DefinitionName? Declared { get; private set; }
+        /// <summary>The caret's column is in a column list (INSERT's, OUTPUT INTO's) of this table; null when none, or unknown.</summary>
+        public DefinitionName? ListTable { get; private set; }
+
         public bool Knows(string name, out DefinitionName? target) => aliases.TryGetValue(name, out target);
 
         public static Scope Read(string text, IList<TSqlParserToken> tokens, int offset)
@@ -168,11 +183,17 @@ internal static class DefinitionNames
             // Only the caret's batch: an unfinished statement in another batch must not hide this one's aliases.
             var from = 0;
             var to = text.Length;
-            foreach (var token in tokens)
+            for (var index = 0; index < tokens.Count; index++)
             {
+                var token = tokens[index];
                 if (token.TokenType != TSqlTokenType.Go) continue;
-                if (token.Offset + token.Text.Length <= offset) from = token.Offset + token.Text.Length;
-                else if (token.Offset > offset) { to = token.Offset; break; }
+                if (token.Offset > offset) { to = token.Offset; break; }
+                // GO 2 repeats the batch before it: the count is GO's, not the next batch's.
+                var after = token.Offset + token.Text.Length;
+                var count = index + 1;
+                while (count < tokens.Count && tokens[count].TokenType == TSqlTokenType.WhiteSpace && !tokens[count].Text.Contains('\n')) count++;
+                if (count < tokens.Count && tokens[count].TokenType == TSqlTokenType.Integer) after = tokens[count].Offset + tokens[count].Text.Length;
+                if (after <= offset) from = after;
             }
             // A batch that does not parse (a half-typed statement after this one, or one too long) may still have a caret
             // statement that does: up to the next semicolon, then from the previous one.
@@ -213,27 +234,73 @@ internal static class DefinitionNames
                 var tables = new TableCollector(ctes.Names);
                 level.Accept(tables);
                 var sourcing = !sourced && tables.Refs.Count != 0;
-                // Aliases before base names: UPDATE c ... FROM dbo.T AS c names its target by the alias, not a table called c.
-                foreach (var table in tables.Refs) if (table.Alias is { } alias) scope.aliases.TryAdd(alias, table.Target);
-                foreach (var table in tables.Refs)
+                // UPDATE c ... FROM dbo.T AS c, and UPDATE T ... FROM dbo.T, name their target by another table of the level: a
+                // one-part name with no alias that another table declares (as its alias, or as its own unaliased name).
+                bool NamesAnother(TableRef table) => table.Target is { Database: null, Schema: null } && table.Alias is null && table.BaseName is { } own
+                    && tables.Refs.Any(other => !ReferenceEquals(other, table) && other.Target != table.Target
+                        && (string.Equals(other.Alias, own, StringComparison.OrdinalIgnoreCase) || other.Alias is null && string.Equals(other.BaseName, own, StringComparison.OrdinalIgnoreCase)));
+                var named = tables.Refs.Where(table => !NamesAnother(table)).ToList();
+                // Aliases before base names, so an alias is never taken for a table of its name.
+                foreach (var table in named) if (table.Alias is { } alias) scope.aliases.TryAdd(alias, table.Target);
+                foreach (var table in named)
                 {
                     if (table.BaseName is not { } baseName) continue;
                     scope.aliases.TryAdd(baseName, table.Target);
-                    var aliasOnly = table.Target is { Database: null, Schema: null } && table.Alias is null && scope.aliases.TryGetValue(baseName, out var target) && target != table.Target;
-                    if (sourcing && table.Target is { } name && !aliasOnly && !scope.Sources.Contains(name)) scope.Sources.Add(name);
+                    if (sourcing && table.Target is { } name && !scope.Sources.Contains(name)) scope.Sources.Add(name);
                 }
                 if (!sourcing) continue;
                 sourced = true;
                 scope.Partial = tables.Refs.Any(table => table.Target is null);
             }
+            // OUTPUT's inserted and deleted are the DML target's rows; elsewhere (a trigger's) they are no object to go to.
+            if (DmlTarget(visitor.Statement) is { } dml)
+            {
+                var target = dml.SchemaObject is { SchemaIdentifier: null, DatabaseIdentifier: null } && scope.aliases.TryGetValue(dml.SchemaObject.BaseIdentifier.Value, out var aliased) ? aliased : NameOf(dml.SchemaObject);
+                scope.aliases.TryAdd("inserted", target);
+                scope.aliases.TryAdd("deleted", target);
+            }
+            scope.aliases.TryAdd("inserted", null);
+            scope.aliases.TryAdd("deleted", null);
+            // The caret's own table reference, alias or column list.
+            DefinitionName? Table(TableReference? reference) => reference switch
+            {
+                NamedTableReference named2 when IsCte(named2.SchemaObject, ctes.Names) => null,
+                NamedTableReference named2 => named2.SchemaObject is { SchemaIdentifier: null, DatabaseIdentifier: null } && scope.aliases.TryGetValue(named2.SchemaObject.BaseIdentifier.Value, out var known) && named2.Alias is null ? known : NameOf(named2.SchemaObject),
+                SchemaObjectFunctionTableReference function => NameOf(function.SchemaObject),
+                _ => null
+            };
+            if (visitor.CteName || visitor.TableName is { } reference2 && IsCte(reference2.SchemaObject, ctes.Names)) scope.NoObject = true;
+            if (visitor.AliasOf is { } declaring)
+            {
+                scope.Declares = true;
+                scope.Declared = declaring is NamedTableReference { } own2 && IsCte(own2.SchemaObject, ctes.Names) ? null
+                    : declaring is NamedTableReference { } plain ? NameOf(plain.SchemaObject) : Table(declaring);
+            }
+            if (visitor.ListOf is { } list) scope.ListTable = Table(list);
             return scope;
         }
     }
 
-    /// <summary>An object by its name in a FROM clause or DML target; null for a linked server's or a temporary table.</summary>
+    private static bool IsCte(SchemaObjectName name, IReadOnlySet<string> ctes) =>
+        name.SchemaIdentifier is null && name.DatabaseIdentifier is null && name.ServerIdentifier is null && ctes.Contains(name.BaseIdentifier.Value);
+
+    /// <summary>The table an INSERT, UPDATE, DELETE or MERGE writes, when it is named.</summary>
+    private static NamedTableReference? DmlTarget(TSqlStatement statement) => statement switch
+    {
+        InsertStatement insert => insert.InsertSpecification?.Target as NamedTableReference,
+        UpdateStatement update => update.UpdateSpecification?.Target as NamedTableReference,
+        DeleteStatement delete => delete.DeleteSpecification?.Target as NamedTableReference,
+        MergeStatement merge => merge.MergeSpecification?.Target as NamedTableReference,
+        _ => null
+    };
+
+    /// <summary>An object by its name in a FROM clause or DML target; null for a linked server's, a temporary table, or a
+    /// trigger's inserted and deleted.</summary>
     private static DefinitionName? NameOf(SchemaObjectName name)
     {
         if (name.ServerIdentifier is not null || name.BaseIdentifier?.Value is not { Length: > 0 } baseName || baseName.StartsWith('#')) return null;
+        // A trigger's inserted and deleted are its table's rows, not objects of those names.
+        if (name.SchemaIdentifier is null && name.DatabaseIdentifier is null && (baseName.Equals("inserted", StringComparison.OrdinalIgnoreCase) || baseName.Equals("deleted", StringComparison.OrdinalIgnoreCase))) return null;
         return new(name.DatabaseIdentifier?.Value is { Length: > 0 } database ? database : null, name.SchemaIdentifier?.Value is { Length: > 0 } schema ? schema : null, baseName);
     }
 
@@ -243,8 +310,51 @@ internal static class DefinitionNames
         public ColumnReferenceExpression? Column { get; private set; }
         public TSqlStatement? Statement { get; private set; }
         public List<QuerySpecification> Queries { get; private set; } = [];
+        /// <summary>The table reference whose own name the caret is on.</summary>
+        public NamedTableReference? TableName { get; private set; }
+        /// <summary>The table reference (or MERGE's target) whose alias the caret is on, where the alias is declared.</summary>
+        public TableReference? AliasOf { get; private set; }
+        /// <summary>The caret is on a CTE's own name, in its WITH clause.</summary>
+        public bool CteName { get; private set; }
+        /// <summary>The table whose column list (INSERT's, OUTPUT INTO's) holds the caret's column.</summary>
+        public TableReference? ListOf { get; private set; }
 
-        private bool Contains(TSqlFragment node) => node.StartOffset <= offset && offset <= node.StartOffset + node.FragmentLength;
+        private bool Contains(TSqlFragment? node) => node is not null && node.StartOffset >= 0 && node.StartOffset <= offset && offset <= node.StartOffset + node.FragmentLength;
+
+        public override void ExplicitVisit(NamedTableReference node)
+        {
+            if (Contains(node.SchemaObject)) TableName ??= node;
+            base.ExplicitVisit(node);
+        }
+
+        public override void Visit(TableReferenceWithAlias node)
+        {
+            if (Contains(node.Alias)) AliasOf ??= node;
+        }
+
+        public override void ExplicitVisit(MergeSpecification node)
+        {
+            if (Contains(node.TableAlias)) AliasOf ??= node.Target;
+            base.ExplicitVisit(node);
+        }
+
+        public override void ExplicitVisit(CommonTableExpression node)
+        {
+            if (Contains(node.ExpressionName)) CteName = true;
+            base.ExplicitVisit(node);
+        }
+
+        public override void ExplicitVisit(InsertSpecification node)
+        {
+            if (node.Columns.Any(Contains)) ListOf ??= node.Target;
+            base.ExplicitVisit(node);
+        }
+
+        public override void ExplicitVisit(OutputIntoClause node)
+        {
+            if (node.IntoTableColumns.Any(Contains)) ListOf ??= node.IntoTable;
+            base.ExplicitVisit(node);
+        }
 
         public override void Visit(TSqlStatement node)
         {
@@ -287,11 +397,7 @@ internal static class DefinitionNames
     {
         public List<TableRef> Refs { get; } = [];
 
-        private void Named(SchemaObjectName name, Identifier? alias)
-        {
-            var cte = name.SchemaIdentifier is null && name.DatabaseIdentifier is null && name.ServerIdentifier is null && ctes.Contains(name.BaseIdentifier.Value);
-            Refs.Add(new(alias?.Value, name.BaseIdentifier?.Value, cte ? null : NameOf(name)));
-        }
+        private void Named(SchemaObjectName name, Identifier? alias) => Refs.Add(new(alias?.Value, name.BaseIdentifier?.Value, IsCte(name, ctes) ? null : NameOf(name)));
 
         public override void ExplicitVisit(NamedTableReference node) => Named(node.SchemaObject, node.Alias);
         // Its parameters may hold subqueries: not this level's tables.

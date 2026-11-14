@@ -90,6 +90,29 @@ internal static class SqlDefinitionChecks
             "a derived table's, a table variable's and a PIVOT's alias have no object");
         check(Candidates("SELECT To|tal FROM (SELECT 1 AS Total) AS d CROSS JOIN dbo.T") is [{ Schema: "dbo", Name: "T", Column: "Total" }],
             "beside a derived table, a bare column's table must have the column");
+        // A table reference's own name is that object: another scope's alias of the same name never hides it.
+        check(Candidates("SELECT * FROM (SELECT * FROM Ord|ers WHERE x = 1) AS Orders") is [{ Schema: null, Name: "Orders" }]
+            && Candidates("WITH c AS (SELECT * FROM Ord|ers) SELECT * FROM c AS Orders") is [{ Name: "Orders" }]
+            && Candidates("SELECT * FROM dbo.X AS Orders WHERE EXISTS (SELECT 1 FROM Ord|ers)") is [{ Schema: null, Name: "Orders" }]
+            && Candidates("IF EXISTS (SELECT 1 FROM Ord|ers) SELECT * FROM dbo.Archive AS Orders") is [{ Schema: null, Name: "Orders" }]
+            && Candidates("CREATE PROCEDURE p @t Fixture|List READONLY AS SELECT * FROM dbo.X AS FixtureList") is [{ Name: "FixtureList" }],
+            "a table, type or other name is the object it names, whatever an alias elsewhere is called");
+        check(Candidates("SELECT c.Name FROM dbo.Customer AS |c") is [{ Schema: "dbo", Name: "Customer" }]
+            && Candidates("MERGE dbo.Target AS |t USING dbo.Src AS s ON t.Id = s.Id WHEN MATCHED THEN DELETE;") is [{ Name: "Target" }]
+            && At("SELECT * FROM (SELECT 1 AS x) AS |d") is null && At("WITH |o AS (SELECT 1 AS x) SELECT * FROM o") is null,
+            "an alias where it is declared is its table's, and a CTE's or derived table's is none");
+        // GO 2 repeats the batch before it; the next batch starts after the count.
+        check(Candidates("SELECT 1\nGO 2\nSELECT c.Na|me FROM dbo.C AS c") is [{ Schema: "dbo", Name: "C" }], "GO with a count still starts the next batch");
+        // A column list's column is its own table's.
+        check(Candidates("UPDATE dbo.T SET id = 1 OUTPUT inserted.id INTO dbo.Audit (i|d)") is [{ Schema: "dbo", Name: "Audit", Column: null }]
+            && Candidates("INSERT INTO dbo.T (c|ol) SELECT x FROM dbo.S") is [{ Schema: "dbo", Name: "T" }],
+            "OUTPUT INTO's and INSERT's column lists name their own table");
+        check(Candidates("UPDATE dbo.T SET id = 1 OUTPUT inserted.i|d INTO dbo.Audit (id)") is [{ Schema: "dbo", Name: "T" }]
+            && Candidates("UPDATE c SET Name = 1 OUTPUT deleted.Na|me FROM dbo.Customer AS c") is [{ Schema: "dbo", Name: "Customer" }]
+            && At("SELECT inserted.Na|me FROM inserted") is null,
+            "OUTPUT's inserted and deleted are the DML target's rows, and elsewhere no object");
+        check(Candidates("UPDATE T SET c|c = 1 FROM dbo.T") is [{ Schema: "dbo", Name: "T", Column: null }],
+            "UPDATE T ... FROM dbo.T names one table, the FROM clause's");
         // A batch that does not parse still has a caret statement that may.
         check(Candidates("SELECT c.Na|me FROM dbo.C c; SELECT * FROM") is [{ Schema: "dbo", Name: "C" }]
             && Candidates("SELECT Na|me FROM dbo.C; SELECT * FROM") is [{ Schema: "dbo", Name: "C", Column: null }]
@@ -103,8 +126,9 @@ internal static class SqlDefinitionChecks
         var deep = "SELECT " + string.Concat(Enumerable.Repeat("(", 200)) + "c.Na|me" + string.Concat(Enumerable.Repeat(")", 200)) + " FROM dbo.Customer AS c";
         check(Candidates(deep) is [{ Schema: "c", Name: "Name" }, ..], "deep nesting skips the parse rather than recursing, and still finds the name");
         check(At(new string('x', 200) + "|") is null, "a name longer than sysname is refused");
-        check(Candidates(string.Join(" UNION ALL ", Enumerable.Range(0, 20).Select(index => "SELECT x FROM dbo.T" + index)).Replace("SELECT x", "SELECT |x", StringComparison.Ordinal)).Length <= DefinitionNames.MaxCandidates,
-            "candidates are bounded");
+        var joins = "SELECT |x FROM dbo.T0" + string.Concat(Enumerable.Range(1, 11).Select(index => " CROSS JOIN dbo.T" + index));
+        check(Candidates(joins) is { Length: DefinitionNames.MaxCandidates } bounded && bounded[0] is { Name: "T0", Column: "x" } && bounded[^1].Name == "T" + (DefinitionNames.MaxCandidates - 1),
+            "a bare column of twelve tables keeps the first eight candidates");
     }
 
     private static async Task RequestsAsync(Action<bool, string> check)
