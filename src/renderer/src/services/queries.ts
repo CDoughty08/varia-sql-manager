@@ -247,15 +247,17 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     if (document.includeClientStatistics) this.statistics.begin(tabId, queryId, connection.id, document.database, !!(document.includeActualPlan || document.includeLivePlan), connection.server, !!document.includeLivePlan)
     let summary: QueryResult | undefined, error: string | undefined, code: ErrorCode | undefined
     try {
+      // The options are read once, so the Results view's discard notice describes what this run was asked.
+      const options = this.executionOptions(connection)
       // The run's events are followed before the script is sent, so no early result set is missed.
       this.results.begin(tabId, queryId, ({ spid, login }) => {
         const state = this.getSnapshot()[tabId]
         if (state?.running?.queryId === queryId && this.documents.get(tabId)?.connectionId === connection.id && this.connected(tabId))
           this.update(tabId, { ...state, session: { connectionId: connection.id, spid, login } })
-      })
+      }, { discard: options.discardResults === true })
       this.events.emit({ type: 'query.started', tabId, queryId })
       const response = await this.api.execute({ connectionId: connection.id, sessionId: tabId, database: document.database, sql, startLine, queryId,
-        ...this.executionOptions(connection), ...document.includeActualPlan ? { includeActualPlan: true } : {},
+        ...options, ...document.includeActualPlan ? { includeActualPlan: true } : {},
         ...document.includeClientStatistics ? { includeClientStatistics: true } : {}, ...document.includeLivePlan ? { includeLivePlan: true } : {} })
       if (response.ok) summary = response.value
       else { error = response.error; code = response.code }

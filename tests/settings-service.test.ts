@@ -169,6 +169,11 @@ describe('settings service', () => {
     expect(service.dialog.getSnapshot()).toEqual({ open: true, page: 'textEditor.transactSql.tabs' })
     service.openDialog('objectExplorer.scripting')
     expect(service.dialog.getSnapshot()).toEqual({ open: true, page: 'objectExplorer.scripting' })
+    // A setting opens its own page, focused there; an unknown one is ignored.
+    service.openDialog(undefined, 'queryResults.grid.discardResults')
+    expect(service.dialog.getSnapshot()).toEqual({ open: true, page: 'queryResults.sqlServer.grid', setting: 'queryResults.grid.discardResults' })
+    service.openDialog('objectExplorer.scripting', 'no.such.setting')
+    expect(service.dialog.getSnapshot()).toEqual({ open: true, page: 'objectExplorer.scripting' })
   })
   it('unsubscribes from main on dispose and ignores answers after it', async () => {
     const answer = deferred<Loaded>()

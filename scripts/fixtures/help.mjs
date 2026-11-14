@@ -58,7 +58,7 @@ export async function gettingStartedSmoke(page, menu, application) {
       if (!changed.ok) throw new Error(changed.error)
       await expect(results.getByRole('table', { name: 'Fictional returned rows' }).getByRole('cell')).toHaveText(['20', 'Lyra', 'Open', '30', 'Orion', 'Open'])
     }
-    await results.getByRole('button', { name: 'Open this Options page', exact: true }).click()
+    await results.getByRole('button', { name: 'Open this Options page for Include column headers when copying or saving the results', exact: true }).click()
     const options = page.getByRole('dialog', { name: 'Options', exact: true })
     await expect(options).toBeVisible()
     await expect(options.getByRole('checkbox', { name: 'Include column headers when copying or saving the results', exact: true })).toBeChecked()
