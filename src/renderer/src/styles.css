@@ -900,6 +900,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* An out-of-date Pivot: a warning chip and Update beside it; while it is built again, the state and Cancel. */
 .rs-caption-stale { display: inline-flex; flex-shrink: 0; align-items: center; gap: var(--varia-space-1); height: 20px; padding: 0 var(--varia-space-2); border-radius: var(--varia-radius-pill); background: var(--varia-statusPill-warningBackground); color: var(--varia-statusPill-warningForeground); }
 .rs-caption-state { flex-shrink: 0; }
+/* Empty while nothing is built, but kept in the tree as a live region: it takes no room. */
+.rs-caption-state:empty { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .rs-caption-action { display: inline-flex; flex-shrink: 0; align-items: center; gap: var(--varia-space-1); height: 20px; padding: 0 var(--varia-space-2); border: 1px solid var(--varia-widget-border); border-radius: var(--varia-radius-sm); color: var(--varia-foreground); }
 .rs-caption-action:focus-visible { outline-offset: -2px; }
 /* A filtered result's filters (results PR 4), after its facts: each its words and a Remove button; they give way to the name. */

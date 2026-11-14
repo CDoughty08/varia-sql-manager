@@ -107,6 +107,17 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
   }
   // A Remove or Clear button that goes with its filters hands focus to the caption, not the page.
   const toggleRef = useRef<HTMLButtonElement>(null)
+  // A Pivot's one action: Cancel while it is built again, else Update while it is out of date. It is one button, so the
+  // focus stays on it as Update turns into Cancel and back; when it goes (built, and up to date) the focus goes to the
+  // caption, not the page, unless the user had put it somewhere else.
+  const action = pivotOf === undefined ? undefined : rebuilding ? 'cancel' : stale ? 'update' : undefined
+  const actionFocus = useRef(false)
+  useLayoutEffect(() => {
+    if (action || !actionFocus.current) return
+    actionFocus.current = false
+    const active = toggleRef.current?.ownerDocument.activeElement
+    if (!active || active === toggleRef.current?.ownerDocument.body) toggleRef.current?.focus()
+  }, [action])
   return <div className="rs-caption">
     <button ref={toggleRef} type="button" className="rs-caption-toggle" data-caption-entry={entry.key} aria-expanded={!collapsed} onClick={() => onToggle(entry.key)}>
       <Icon name={collapsed ? 'chevron-right' : 'chevron-down'} /><span className="rs-caption-name">{name}</span>
@@ -121,14 +132,15 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
       {sort.filters.length > 1 && <button type="button" className="rs-filters-clear" onClick={() => { toggleRef.current?.focus(); results.clearFilters(tabId, entry.key) }}>Clear filters</button>}
     </span>}
     {batch && <span className="rs-caption-batch">{batch}</span>}
-    {pivotOf !== undefined && rebuilding && <>
-      <span className="rs-caption-state" role="status">Building again…</span>
-      <button type="button" className="rs-caption-action" title={`Stop building ${name} again; it keeps its last build`} onClick={() => pivot.cancel(tabId, pivotOf)}>Cancel</button>
-    </>}
-    {pivotOf !== undefined && !rebuilding && stale && <>
-      <span className="rs-caption-stale" title={`Result ${pivotOf}'s filters changed after this Pivot was built`}><Icon name="warning" />Out of date</span>
-      <button type="button" className="rs-caption-action" aria-label={`Update ${name}`} title={`Build ${name} again from Result ${pivotOf} as it is filtered now`} disabled={!updatable || running} onClick={update}><Icon name="refresh" />Update</button>
-    </>}
+    {/* Mounted with the caption, so a screen reader hears "Building again…" when it starts. */}
+    {pivotOf !== undefined && <span className="rs-caption-state" role="status">{rebuilding ? 'Building again…' : ''}</span>}
+    {action === 'update' && <span className="rs-caption-stale" title={`Result ${pivotOf}'s filters changed after this Pivot was built`}><Icon name="warning" />Out of date</span>}
+    {action && <button type="button" className="rs-caption-action" onFocus={() => { actionFocus.current = true }} onBlur={event => { if (event.relatedTarget) actionFocus.current = false }}
+      {...action === 'cancel'
+        ? { 'aria-label': `Cancel building ${name} again`, title: `Stop building ${name} again; it keeps its last build`, onClick: () => pivot.cancel(tabId, pivotOf) }
+        : { 'aria-label': `Update ${name}`, title: `Build ${name} again from Result ${pivotOf} as it is filtered now`, disabled: !updatable || running, onClick: update }}>
+      {action === 'cancel' ? 'Cancel' : <><Icon name="refresh" />Update</>}
+    </button>}
     {held && <button type="button" className="icon-button rs-caption-save" aria-label={`Save ${name} As…`} title={`Save ${name} As…`} onClick={save}><Icon name="save-as" /></button>}
     {/* A Table closes its group, its Pivot with it; a comparison made from it stays. There is no undo. */}
     {onClose && <button type="button" className="icon-button rs-caption-close" aria-label={`Close ${name}`} title={running ? `Close ${name} (unavailable while the query runs)` : `Close ${name}${others}`}

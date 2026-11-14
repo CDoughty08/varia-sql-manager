@@ -1027,6 +1027,38 @@ describe('an out-of-date Pivot and Update', () => {
     expect(results.getSnapshot().t1.groups[0].pivot).toBeUndefined()
   })
 
+  it('shows the rebuilt Pivot before its build stops reading as building, so its old mark and Update never come back between', async () => {
+    const { results, pivot, run, flush } = fixture({ frames: true })
+    const [first] = run(1)
+    flush()
+    const one = keyAt(results, 't1', 0)
+    pivot.open('t1', one)
+    await pivot.run('t1')
+    flush()
+    const old = results.getSnapshot().t1.groups[0].pivot!
+    const filtered = view(first, 1, [{ op: 'in', column: 0, rows: [1], nulls: false }])
+    vi.mocked(first.sort).mockResolvedValueOnce(filtered)
+    results.sortBy('t1', one, 0, 'ascending')
+    await settle()
+    flush()
+    results.viewShown('t1', one, filtered)
+    expect(pivotOutOfDate(results.getSnapshot().t1, results.getSnapshot().t1.groups[0])).toBe(true)
+    filtered.pivot.mockResolvedValueOnce(pivoted(941, 1))
+    // Whenever the builds change, the run the results publish says whether the Pivot is out of date: while one is in
+    // flight the caption shows Cancel; once none is, the published Pivot is already the new one, up to date. Results that
+    // publish on frames (no flush here) still publish a replacement at once (ResultsService.replaceSet).
+    const seen: string[] = []
+    const unsubscribe = pivot.subscribe(() => {
+      const tab = results.getSnapshot().t1
+      seen.push(`${pivot.building('t1', 1) ? 'building' : 'idle'} ${tab.groups[0].pivot!.entry.descriptor.resultId} ${pivotOutOfDate(tab, tab.groups[0]) ? 'stale' : 'current'}`)
+    })
+    await pivot.update('t1', old.key)
+    unsubscribe()
+    expect(seen.filter(line => line.startsWith('idle')).length).toBeGreaterThan(0)
+    expect(new Set(seen.filter(line => line.startsWith('idle')))).toEqual(new Set(['idle 941 current']))
+    expect(seen).not.toContain(`idle ${old.entry.descriptor.resultId} stale`)
+  })
+
   it('keeps the old Pivot when Update fails, is cancelled or is refused, and says why in the toolbar and the builder', async () => {
     const { client, results, pivot, run } = fixture()
     const [first] = run(2)

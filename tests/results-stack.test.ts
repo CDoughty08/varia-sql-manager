@@ -425,21 +425,45 @@ describe('the stacked results', () => {
     expect(container!.querySelector('button[aria-label="Update Pivot of Result 3"]')).toBeNull()
     act(() => { update()!.click() })
     expect(commands.execute).toHaveBeenCalledWith('output.updatePivot', { target: expect.objectContaining({ kind: 'output', tabId: 't1', view: 'grid', entry: made }) }, 'toolbar')
-    // Built again (here straight through the service): the caption says so and offers Cancel, which keeps the old Pivot.
+    // Update waits while the Table's sort is being built, and the caption follows by itself, with no redraw from here.
+    const table = client.handle(1)!
+    let sorted: ((view: ResultView) => void) | undefined
+    vi.mocked(table.sort).mockImplementationOnce(() => new Promise(resolve => { sorted = resolve }))
+    act(() => { results.sortBy('t1', results.getSnapshot().t1.sets[0].key, 1, 'ascending') })
+    expect(update()!.disabled).toBe(true)
+    await act(async () => { sorted!({ ...table, viewId: 1, base: table, keys: [], filters: [], rows: 10_000, baseRows: 10_000, complete: true, approximate: false, close: vi.fn(async () => {}), pivot: vi.fn() } as unknown as ResultView) })
+    expect(update()!.disabled).toBe(false)
+    // Built again (here straight through the service): the same button turns into Cancel, named for its Pivot, and keeps
+    // the focus; the status line, mounted all along, says what happens.
+    const view = results.sortOf('t1', results.getSnapshot().t1.sets[0].key)!.view!
     let signal: AbortSignal | undefined
-    vi.mocked(client.handle(1)!.pivot).mockImplementationOnce((_spec, o) => new Promise((_resolve, reject) => { signal = o?.signal; o?.signal?.addEventListener('abort', () => reject(new Error('Cancelled.'))) }))
+    vi.mocked(view.pivot as ReturnType<typeof vi.fn>).mockImplementationOnce((_spec: unknown, o?: { signal?: AbortSignal }) => new Promise((_resolve, reject) => { signal = o?.signal; o?.signal?.addEventListener('abort', () => reject(new Error('Cancelled.'))) }))
+    const status = container!.querySelector('.rs-caption-state')!
+    expect(status.textContent).toBe('')
+    const button = update()!
+    button.focus()
     let updating: Promise<void> | undefined
     act(() => { updating = pivot.update('t1', made) })
-    draw()
     expect(update()).toBeNull()
-    expect(container!.querySelector('.rs-caption-state')!.textContent).toBe('Building again…')
-    const cancel = [...container!.querySelectorAll<HTMLButtonElement>('.rs-caption-action')].find(button => button.textContent === 'Cancel')!
+    expect(container!.querySelector('.rs-caption-state')).toBe(status)
+    expect(status.textContent).toBe('Building again…')
+    const cancel = container!.querySelector<HTMLButtonElement>('button[aria-label="Cancel building Pivot of Result 1 again"]')!
+    expect(cancel).toBe(button)
+    expect(document.activeElement).toBe(cancel)
     await act(async () => { cancel.click(); await updating })
     expect(signal?.aborted).toBe(true)
-    draw()
-    expect(container!.querySelector('.rs-caption-state')).toBeNull()
-    expect(update()).not.toBeNull()
+    // Still out of date: Update again, on the same button, with the focus.
+    expect(status.textContent).toBe('')
+    expect(update()).toBe(button)
+    expect(document.activeElement).toBe(button)
     expect(results.getSnapshot().t1.groups[0].pivot!.key).toBe(made)
+    // Built and up to date (drawn again with the new run state): the button goes and the focus goes to the caption.
+    vi.mocked(view.pivot as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ descriptor: descriptor(811, { index: 0, kind: 'pivot' }), rows: 1, rowGroups: 1, columnGroups: 0, approximate: false })
+    await act(async () => { await pivot.update('t1', made) })
+    draw()
+    expect(results.getSnapshot().t1.groups[0].pivot!.entry.descriptor.resultId).toBe(811)
+    expect(update()).toBeNull()
+    expect((document.activeElement as HTMLElement).dataset.captionEntry).toBe(made)
   })
 
   it('disable the close buttons while the query runs', () => {
