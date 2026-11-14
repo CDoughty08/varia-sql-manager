@@ -1216,8 +1216,8 @@ Results stay in backend memory, never on disk (`ResultStore`).
   compacts, which alone returns the memory to the operating system, only when what remains is no more than was
   released and no more than 8 GiB (compacting stops every thread for 0.1 to 0.2 s per GiB it copies); under high
   memory load the 8 GiB does not apply. So with a limit over 16 GiB, closing more than 8 GiB of results while more than
-  8 GiB remain keeps the released memory in the process, reused by the next results, until a later close finds the
-  machine low on memory; packing pages (below) does not change this, since its saving never counts toward a compacting
+  8 GiB remain keeps the released memory in the process, reused by the next results, until a later close leaves no
+  more than 8 GiB and no more than has been closed since the last compaction, or finds the machine low on memory; packing pages (below) does not change this, since its saving never counts toward a compacting
   collection, and it stays until a measurement shows a pause worth taking. Every operation's reservations in
   `SqlService` are pinned by `tests/working-memory-lint.test.ts`. `VARIA_RESULT_BUDGET_BYTES` replaces the global figure only with the test
   hooks, and turns the memory-load check off so tests see their budget's truncation reasons on a busy machine (the offline

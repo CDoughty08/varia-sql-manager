@@ -76,6 +76,10 @@ it('lists every method that reserves working memory, so a new one is added to th
   // Every reservation in the file is in a listed method.
   const listed = Object.keys(expected).map(body).join('\n')
   for (const [kind, pattern] of Object.entries(reservations)) expect({ kind, count: count(listed, pattern) }).toEqual({ kind, count: count(source, pattern) })
+  // However it is written: a reservation tested the other way round, kept in a variable or made directly.
+  const any = /\bstore\.TryReserve(?:Work|Spare)?\(/g
+  expect(count(listed, any)).toBe(count(source, any))
+  expect(count('if (store.TryReserveWork(budget, bytes)) { } var ok = store.TryReserve(budget, bytes, true, out _);', any)).toBe(2)
   // And the lint sees what it pins: removing one reservation changes the counts.
   expect(counts(body('DiffAsync').replace(/\bstore\.TryReserveWork\(/, 'store.Return('))).not.toEqual(expected.DiffAsync)
   expect(counts(body('DiffAsync').replace(/cells\.TryReserve\b/, '_ => true'))).not.toEqual(expected.DiffAsync)
