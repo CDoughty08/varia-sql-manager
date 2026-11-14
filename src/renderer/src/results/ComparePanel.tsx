@@ -71,7 +71,7 @@ export default function ComparePanel({ tabId, tab }: { tabId: string; tab: TabRe
           {targets.map(target => <label key={target.entry.key} className="compare-target">
             <input type="radio" name={ids + 'target'} checked={picker.target === target.entry.key} onChange={() => compare.pick(tabId, target.entry.key)} />
             <span className="compare-target-name">{entryName(target.entry)}</span>
-            <small>{formatCount(target.pairing.pairs.length)} of {formatCount((active?.descriptor.columns ?? []).filter(column => column.role !== 'tone').length)} columns pair · {formatCount(target.entry.descriptor.rowsStored)} rows</small>
+            <small>{formatCount(target.pairing.pairs.length)} of {formatCount((active?.descriptor.columns ?? []).filter(column => column.role !== 'tone').length)} columns pair · {formatCount(target.entry.handle.getSnapshot().rowsStored)} rows</small>
           </label>)}
         </fieldset>
         <div className="pivot-hint">Tables of this run that share a column. Pivots, comparisons and plan sets are not offered.</div>

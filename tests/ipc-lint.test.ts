@@ -59,6 +59,16 @@ await import(${JSON.stringify(core)})`
     const docs = readFileSync(join('docs', 'ipc.md'), 'utf8')
     expect(errorCodes.filter(code => !docs.includes('`' + code + '`'))).toEqual([])
   })
+  it('reads a backend answer\'s null member as absent: the backend leaves nulls out (Contracts.cs, WhenWritingNull)', () => {
+    // A bare .nullable() member is required, so an answer that leaves it out is refused: a whole-row results.diff once
+    // failed as "The results could not be compared." because its schema required a null key the backend never sends.
+    // An array's elements keep their nulls (z.array(z.number().nullable())), so those are not members.
+    for (const file of [join('src', 'shared', 'ipc', 'port-messages.ts'), join('src', 'shared', 'ipc', 'descriptors.ts'), join('src', 'shared', 'live', 'schema.ts')]) {
+      const members = (line: string) => line.replace(/z\.array\(z\.\w+\(\)\.nullable\(\)\)/g, '')
+      const bare = readFileSync(file, 'utf8').split('\n').flatMap((line, at) => /\.nullable\(\)(?!\.(optional|default)\()/.test(members(line)) ? [`${file}:${at + 1}`] : [])
+      expect(bare, 'use .optional() for a member the backend may leave out').toEqual([])
+    }
+  })
   it('honours the backend test seams only in unpackaged smoke runs', () => {
     const main = readFileSync(join('src', 'main', 'index.ts'), 'utf8')
     expect(main).toContain("const testSeams = process.env.VARIA_SMOKE_TEST === '1' && !app.isPackaged")

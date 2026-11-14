@@ -50,7 +50,7 @@ describe('result diffs', () => {
     const info = compare.getSnapshot().info.get(setKey(sets[2].descriptor))!
     expect(info).toMatchObject({ left: sets[0].key, right: sets[1].key, leftNumber: 1, rightNumber: 2, key: 'Id', changed: 1, added: 1, removed: 0, same: 1 })
     expect(compareText(info)).toBe('Result 1 → Result 2, rows matched by Id: 1 changed row, 1 added row, 0 removed rows, 1 unchanged. Filters and sorts on the inputs were not applied.')
-    expect(compareText({ ...info, key: null, exact: true, soft: 2, leftOnly: ['Old'], rightOnly: ['New'] }))
+    expect(compareText({ ...info, key: undefined, exact: true, soft: 2, leftOnly: ['Old'], rightOnly: ['New'] }))
       .toBe('Result 1 → Result 2, whole rows matched, text compared exactly: 1 changed row, 1 added row, 0 removed rows, 1 unchanged. 2 values differ only by collation (case or trailing spaces), underlined. Not compared: Old (Result 1), New (Result 2). Filters and sorts on the inputs were not applied.')
     // A diff is not compared again, nor is a set whose previous one is the diff.
     expect(compare.canCompare('t1', keyAt(results, 't1', 2))).toBe(false)

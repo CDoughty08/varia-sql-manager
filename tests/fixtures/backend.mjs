@@ -741,7 +741,8 @@ function buildDiff(left, right, exact, context) {
   const count = kind => entries.filter(entry => entry.kind === kind).length
   const oneSided = (result, side) => visible(result).filter(({ at }) => !pairs.some(pair => pair[side] === at)).map(({ item }) => item.name).slice(0, 64)
   return {
-    set: { columns, rows, kind: 'diff', batchNumber: right.batchNumber, iteration: right.iteration }, key: key < 0 ? null : right.columns[pairs[key][1]].name,
+    // Whole rows matched: no key member at all, as the backend leaves out a null member (Contracts.cs, WhenWritingNull).
+    set: { columns, rows, kind: 'diff', batchNumber: right.batchNumber, iteration: right.iteration }, ...(key < 0 ? {} : { key: right.columns[pairs[key][1]].name }),
     same: count('same'), changed: count('changed'), added: count('added'), removed: count('removed'), soft: entries.reduce((sum, entry) => sum + entry.cells.filter(cell => cell < 0).length, 0),
     leftOnly: oneSided(left, 0), rightOnly: oneSided(right, 1)
   }
@@ -1168,6 +1169,14 @@ const fixtures = {
     return summary(id, params.database, [
       { columns, rows: [['1', 'apple', '1.50'], ['2', 'pear', '2.00'], ['3', 'plum', '3.00'], ['4', 'fig', '4.00']] },
       { columns, rows: [['1', 'apple', '1.75'], ['2', 'PEAR', '2.00'], ['4', 'fig', '4.00'], ['5', 'kiwi', '5.00']] }
+    ])
+  },
+  // No column unique in both (repeated rows, NULLs), so whole rows match: the diff's answer has no key member.
+  DIFF_WHOLE_ROWS_FIXTURE: (id, params) => {
+    const columns = [column('high', 'int'), column('name', 'nvarchar')]
+    return summary(id, params.database, [
+      { columns, rows: [['1', 'offline'], ['1', 'offline'], [null, 'offline'], [null, 'online']] },
+      { columns, rows: [['8', 'offline'], ['1', 'offline'], [null, 'offline'], [null, 'online']] }
     ])
   }
 }

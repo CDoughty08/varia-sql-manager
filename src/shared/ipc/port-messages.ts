@@ -130,9 +130,10 @@ export const rowIdsResultSchema = z.object({ firstRow: count, ids: z.array(z.num
 export const findRowsResultSchema = z.object({ positions: z.array(count).max(limits.identity.maxMatches), marks: z.array(z.number().int().min(0).max(limits.identity.maxFind - 1)).max(limits.identity.maxMatches), truncated: z.boolean(), rows: count }).strict()
   .refine(result => result.positions.length === result.marks.length && result.positions.every((position, index) => index === 0 || position > result.positions[index - 1]), 'Positions ascend, one mark each.')
 const columnNames = z.array(z.string().max(512)).max(limits.diff.maxColumnNames)
-/** A results.diff answer as the backend sends it (its descriptor without the generation, which main adds). */
+/** A results.diff answer as the backend sends it (its descriptor without the generation, which main adds). `key` is absent
+ *  when whole rows matched: the backend leaves out a null member (Contracts.cs, WhenWritingNull), never sends it as null. */
 export const diffResultSchema = z.object({
-  descriptor: backendDescriptorSchema.extend({ kind: z.literal('diff') }), key: z.string().max(512).nullable(), same: count, changed: count, added: count, removed: count, soft: count,
+  descriptor: backendDescriptorSchema.extend({ kind: z.literal('diff') }), key: z.string().max(512).optional(), same: count, changed: count, added: count, removed: count, soft: count,
   approximate: z.boolean(), leftOnly: columnNames, rightOnly: columnNames
 }).strict()
 /** A results.search answer as the backend sends it: a run of at most maxMatches plus one row's columns. Main also checks

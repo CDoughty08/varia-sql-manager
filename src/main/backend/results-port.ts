@@ -106,11 +106,15 @@ export class ResultsPortHost {
   private readonly searching = new Map<number, { cancel(reason: CancelReason): void }>()
   private invalid = 0
   private opens: number[] = []
+  private readonly onRefused?: (method: 'results.diff' | 'results.pivot', issues: readonly string[]) => void
 
   /** `testSources`: accept test-only live sources (debug.synthetic); main sets it only for unpackaged smoke runs. `schema`
-   *  replaces the request schema (tests, with a catalogue the shipped one does not match yet). */
-  constructor(o: { backend: ResultsBackend; createChannel: () => { port1: PortMainLike; port2: unknown }; now?: () => number; limits?: Partial<PortLimits>; testSources?: boolean; schema?: typeof portRequestSchema }) {
+   *  replaces the request schema (tests, with a catalogue the shipped one does not match yet). `onRefused` hears which of a
+   *  derived result's answer members failed its schema (member paths and zod issue codes, never values or names), which
+   *  the worker only sees as a generic sentence. */
+  constructor(o: { backend: ResultsBackend; createChannel: () => { port1: PortMainLike; port2: unknown }; now?: () => number; limits?: Partial<PortLimits>; testSources?: boolean; schema?: typeof portRequestSchema; onRefused?: (method: 'results.diff' | 'results.pivot', issues: readonly string[]) => void }) {
     this.backend = o.backend
+    this.onRefused = o.onRefused
     this.schema = o.schema ?? (o.testSources ? testPortRequestSchema : portRequestSchema)
     this.createChannel = o.createChannel
     this.now = o.now ?? (() => Date.now())
@@ -737,6 +741,7 @@ export class ResultsPortHost {
       this.sorting.delete(rid)
       if (!parsed.success) {
         close()
+        this.onRefused?.('results.diff', refusedMembers(parsed.error))
         return this.end(rid, 'BACKEND_ERROR', 'The results could not be compared.')
       }
       const descriptor: ResultDescriptor = { ...parsed.data.descriptor, generation }
@@ -778,6 +783,7 @@ export class ResultsPortHost {
       if (!parsed.success || (request.column === undefined && parsed.data.columnGroups !== 0) || parsed.data.descriptor.columns.length !== request.rows.length + stride * values
         || parsed.data.rowGroups * stride * values > wire.pivot.maxCells) {
         close()
+        if (!parsed.success) this.onRefused?.('results.pivot', refusedMembers(parsed.error))
         return this.end(rid, 'BACKEND_ERROR', 'The results could not be pivoted.')
       }
       const descriptor: ResultDescriptor = { ...parsed.data.descriptor, generation }
@@ -922,6 +928,12 @@ function storedResultId(answer: unknown): number | undefined {
   const descriptor = typeof answer === 'object' && answer !== null ? (answer as { descriptor?: unknown }).descriptor : undefined
   const id = typeof descriptor === 'object' && descriptor !== null ? (descriptor as { resultId?: unknown }).resultId : undefined
   return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 && id <= 0xffff_ffff ? id : undefined
+}
+
+/** Which members of a refused answer failed, as "path: code" (the path of the schema's own members, "(answer)" for the
+ *  whole), at most 8: the schema's names and positions only, never a value or a result's column names. */
+function refusedMembers(error: { readonly issues: readonly { readonly path: readonly PropertyKey[]; readonly code: string }[] }): string[] {
+  return error.issues.slice(0, 8).map(issue => (issue.path.length > 0 ? issue.path.map(String).join('.') : '(answer)') + ': ' + issue.code)
 }
 
 const copyCells = (cells: ViewCells): ViewCells => ({ ranges: cells.ranges.map(([first, count]) => [first, count]), ...(cells.viewId === undefined ? {} : { viewId: cells.viewId }) })

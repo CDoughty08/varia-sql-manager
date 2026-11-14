@@ -7,7 +7,7 @@ import { ResultClient, type PortMessageEvent, type WindowLike, type WorkerLike }
 import { ResultsWorkerCore } from '../src/renderer/src/results/worker-core'
 import { FLAG_NULL, type WorkerRequest, type WorkerResponse } from '../src/renderer/src/results/worker-protocol'
 import type { ConnectionOptions, QueryOptions, QueryResult } from '../src/shared/contracts'
-import type { PortMessage } from '../src/shared/ipc/port-messages'
+import { diffResultSchema, type PortMessage } from '../src/shared/ipc/port-messages'
 import { quoteName, selectTopRowsScript } from '../src/shared/sql/identifiers'
 
 const server = process.env.VARIA_TEST_SQL_SERVER, user = process.env.VARIA_TEST_SQL_USER
@@ -98,7 +98,7 @@ async function connect() {
     await supervisor.request('query.session.close', { sessionId })
     await supervisor.request('connections.disconnect', { connectionId: connection.id })
   })
-  return { supervisor, connection, run }
+  return { supervisor, connection, run, execute, sessionId }
 }
 
 describe.runIf(server)('Select Top 1000 Rows against SQL Server', () => {
@@ -162,4 +162,23 @@ describe.runIf(server)('Select Top 1000 Rows against SQL Server', () => {
       expect(dropped.status).toBe('completed')
     }
   }, 120_000)
+})
+
+describe.runIf(server)('Compare against SQL Server', () => {
+  it('compares results with no column unique in both by whole rows, in an answer main accepts', async () => {
+    const { supervisor, connection, execute, sessionId } = await connect()
+    // As the owner's repro: spt_values joined to itself repeats rows, and high is often NULL, so no column keys the rows.
+    const sql = [
+      'SELECT TOP 100 t.high, t.name FROM dbo.spt_values t INNER JOIN dbo.spt_values b ON t.low = b.low ORDER BY t.number, t.type, b.number, b.type;',
+      'SELECT TOP 100 t.high + 7 AS high, t.name FROM dbo.spt_values t INNER JOIN dbo.spt_values b ON t.low = b.low ORDER BY t.number, t.type, b.number, b.type;'
+    ].join(' ')
+    const { value: summary } = await execute({ connectionId: connection.id, sessionId, database: 'master', sql, queryId: crypto.randomUUID(), maxRows: 0, maxResultSets: 10, timeoutSeconds: 30 })
+    const [left, right] = summary.resultSets
+    expect([left.rowsStored, right.rowsStored]).toEqual([100, 100])
+    // The real backend's answer through main's schema: it leaves out the null key, which the schema once refused.
+    const parsed = diffResultSchema.safeParse(await supervisor.request('results.diff', { left: left.resultId, right: right.resultId }))
+    expect(parsed.error?.issues).toBeUndefined()
+    expect(parsed.data?.key).toBeUndefined()
+    expect(parsed.data?.descriptor.kind).toBe('diff')
+  }, 90_000)
 })

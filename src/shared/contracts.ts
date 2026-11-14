@@ -311,7 +311,8 @@ export interface ResultsDiffParams { left: number; right: number; exact?: boolea
 /** `descriptor` is the diff's result (kind `diff`); `key` the shared column whose values matched rows (null: whole rows
  *  did); counts by kind, `soft` the values equal only by collation; `leftOnly` and `rightOnly` the columns not compared. */
 export interface ResultsDiffResult {
-  descriptor: ResultDescriptor; key: string | null; same: number; changed: number; added: number; removed: number; soft: number; approximate: boolean
+  /** The column whose values matched rows; absent when whole rows did. */
+  descriptor: ResultDescriptor; key?: string; same: number; changed: number; added: number; removed: number; soft: number; approximate: boolean
   leftOnly: string[]; rightOnly: string[]
 }
 /** What a pivot value computes over each cell's rows: COUNT(column) (COUNT(*) without a column), COUNT(DISTINCT column),

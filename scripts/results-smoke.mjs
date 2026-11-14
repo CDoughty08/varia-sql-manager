@@ -2388,6 +2388,21 @@ try {
   await expect(picker).toHaveCount(0)
   console.log('Results checks: the Compare picker offers the other Table only, swaps its sides, shows a comparison the run has, makes a new one that takes the focus while it stays open, and its strip links to its inputs and reads a closed one closed.')
 
+  // 14h. Results with no column unique in both (repeated rows, NULLs) compare by whole rows: the picker counts the target's
+  // rows as the grid does, and Compare makes the comparison instead of saying the results could not be compared.
+  await run('SELECT high, name FROM Values -- DIFF_WHOLE_ROWS_FIXTURE')
+  await expect(cell(3, 1, grid('Result 2'))).toHaveText('online')
+  await cell(0, 0, grid('Result 1')).click({ button: 'right' })
+  await outputMenu.getByRole('menuitem', { name: 'Compare…', exact: true }).click()
+  await expect(picker.getByRole('radio', { name: /^Result 2/ })).toBeChecked()
+  await expect(picker.locator('label', { has: page.getByRole('radio', { name: /^Result 2/ }) })).toContainText('2 of 2 columns pair · 4 rows')
+  await picker.getByRole('button', { name: 'Compare', exact: true }).click()
+  await expect(grid('Result 3')).toBeFocused()
+  await expect(strip('Result 3')).toContainText('Result 2 → Result 1, whole rows matched: 0 changed rows, 1 added row, 1 removed row, 3 unchanged.')
+  await expect(picker.getByRole('status')).not.toContainText('could not be compared')
+  await picker.getByRole('button', { name: 'Close', exact: true }).click()
+  console.log('Results checks: results with no shared unique column compare by whole rows from the picker, which counts each target by its stored rows.')
+
   // 15. Panes and tabs: F6 goes to the results and back; Ctrl+R hides and shows them keeping scroll, selection and a
   // resized column; a tab switch restores all three.
   await run('-- varia-fake: sets=W1*2000')

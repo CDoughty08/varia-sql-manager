@@ -15,8 +15,8 @@ export interface CompareInfo {
   /** The numbers the compared results are named by ("Result 3"). */
   readonly leftNumber: number
   readonly rightNumber: number
-  /** The column whose values matched rows, or null when whole rows did. */
-  readonly key: string | null
+  /** The column whose values matched rows; undefined when whole rows did. */
+  readonly key: string | undefined
   readonly exact: boolean
   readonly same: number
   readonly changed: number

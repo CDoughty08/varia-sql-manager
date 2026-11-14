@@ -41,6 +41,7 @@
 
 ### Fixed
 
+- **Compare:** comparing two results that no column keys (repeated rows or NULLs, so whole rows are matched) failed with "The results could not be compared."; such results now compare. The Compare picker also counted each result as 0 rows; it now shows the rows the result holds.
 - Clicking inside selected query text clears the selection and places the caret where you clicked.
 - **Execution timeouts on Linux and macOS:** a query whose execution timeout passed while many tabs were connecting at once could run past its timeout and report "Query completed with errors" instead of timing out. Timeouts now stop the query on time.
 - **Results:** when a running query fills its result memory budget (or reaches a row limit, or the computer runs low on memory), the grid now says so at once, with the rows read still counting, instead of only after the query ends.
