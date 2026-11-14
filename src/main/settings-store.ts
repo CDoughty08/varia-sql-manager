@@ -63,6 +63,7 @@ export class SettingsStore {
   private values: SettingsValues = defaultSettings
   private revision = 0
   private listeners = new Set<(state: SettingsState) => void>()
+  private loadListeners = new Set<(state: SettingsState) => void>()
   /** settings.json was read or written in this session: from then on a missing file holds nothing, not the legacy file. */
   private established = false
   /** What the store moved settings.json away from (quarantine, salvage) and could not write back. */
@@ -89,6 +90,15 @@ export class SettingsStore {
     this.listeners.add(listener)
     return () => { this.listeners.delete(listener) }
   }
+  /**
+   * After every read of the file that succeeded: the first, or one after a failed read (the next `load()` reads again).
+   * A read is not a change, so `onDidChange` stays quiet; main code that applied the values before they were read (the
+   * backend's result memory limit) applies them again here.
+   */
+  onDidLoad(listener: (state: SettingsState) => void): () => void {
+    this.loadListeners.add(listener)
+    return () => { this.loadListeners.delete(listener) }
+  }
 
   /**
    * The complete values. A read that succeeded or is in flight is shared. A warning about the file goes only to waiters
@@ -96,7 +106,12 @@ export class SettingsStore {
    * reloaded window does not show it again.
    */
   async load(reader: { readonly showsWarning?: boolean } = {}): Promise<SettingsLoad> {
-    const pending = this.loading ??= this.serial(() => this.read())
+    const pending = this.loading ??= this.serial(async () => {
+      const read = await this.read()
+      const state = this.state()
+      for (const listener of [...this.loadListeners]) { try { listener(state) } catch (error) { console.error(error) } }
+      return read
+    })
     try {
       const { warning } = await pending
       if (!warning || !reader.showsWarning) return this.state()

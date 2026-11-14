@@ -1784,8 +1784,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 working = ColumnProfiler.WorkingBytes(rows, args.Columns.Length);
                 if (!store.TryReserveWork(set.Budget, working)) throw TooLarge(tooLarge);
             }
-            // Large values (a long lowest or highest key, a long sort key) are charged as the profile meets them.
-            var charges = new ColumnProfiler.Charges(bytes => store.TryReserveWork(set.Budget, bytes));
+            // Large values (a long lowest or highest key, a long sort key) are charged as the profile meets them, asking the
+            // system's memory load once for every 64 MiB of them.
+            var steps = new WorkSteps(store, set.Budget);
+            var charges = new ColumnProfiler.Charges(steps.TryReserve);
             try
             {
                 var threads = workers;
@@ -1796,12 +1798,13 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             }
             catch (ColumnProfiler.ProfileTooLargeException) when (workers > 1)
             {
-                // Every thread keeps long values of its own: one thread's may still fit.
+                // Every thread keeps long values of its own: one thread's may still fit, and under high memory load they
+                // may stay under the 64 MiB at which the threads' values together asked it.
                 workers = 1;
             }
             catch (ColumnProfiler.ProfileTooLargeException)
             {
-                throw new RequestException("TOO_LARGE", tooLarge);
+                throw steps.LowMemory ? new RequestException("TOO_LARGE", LowMemory) : TooLarge(tooLarge);
             }
             finally { store.Return(set.Budget, working + charges.Extra); }
         }
@@ -2083,18 +2086,16 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var working = ResultDiffer.WorkingBytes(leftRows, rightRows);
         if (!store.TryReserveWork(left.Budget, working))
             throw TooLarge("There is not enough result memory to compare these results. Close other results and try again.");
-        long cellBytes = 0;
-        bool ReserveCells(long bytes)
-        {
-            if (!store.TryReserveWork(left.Budget, bytes)) return false;
-            cellBytes += bytes;
-            return true;
-        }
+        // The differing cells are charged a chunk at a time, asking the system's memory load once for every 64 MiB of them.
+        var cells = new WorkSteps(store, left.Budget);
         try
         {
             DiffModel model;
-            try { model = await UntilReleased(work => ResultDiffer.Compare(left, leftPages, right, rightPages, args.Exact, work, ReserveCells), token, left, right); }
-            catch (RequestException error) when (error.Code == "TOO_LARGE") { throw NotStored(left.Budget, error, (left, args.Left), (right, args.Right)); }
+            try { model = await UntilReleased(work => ResultDiffer.Compare(left, leftPages, right, rightPages, args.Exact, work, cells.TryReserve), token, left, right); }
+            catch (RequestException error) when (error.Code == "TOO_LARGE")
+            {
+                throw NotStored(left.Budget, cells.LowMemory ? new RequestException("TOO_LARGE", LowMemory) : error, (left, args.Left), (right, args.Right));
+            }
             if (left.IsReleased) throw Unavailable(args.Left);
             if (right.IsReleased) throw Unavailable(args.Right);
             const string tooLarge = "There is not enough result memory to show the differences. Close other results and try again.";
@@ -2129,7 +2130,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 throw;
             }
         }
-        finally { store.Return(left.Budget, working + cellBytes); }
+        finally { store.Return(left.Budget, working + cells.Held); }
     }
 
     /// <summary>results.pivot: groups and aggregates a complete result's rows (ResultPivoter), or its view's, off the frame
@@ -2156,19 +2157,19 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         foreach (var page in pages) rows += page.Rows;
         var working = ResultPivoter.WorkingBytes(rows, ResultPivoter.KeyColumns(spec));
         if (!store.TryReserveWork(set.Budget, working)) throw TooLarge(tooLarge);
-        long figures = 0;
-        bool Reserve(long bytes)
-        {
-            if (!store.TryReserveWork(set.Budget, bytes)) return false;
-            figures += bytes;
-            return true;
-        }
+        // The figures and the bounds of Distinct Count's runs, charged as the build meets them.
+        var figures = new WorkSteps(store, set.Budget);
         try
         {
             PivotModel model;
             var keyMemory = new ViewSorter.KeyMemory((bytes, large) => store.TryReserveSpare(set.Budget, bytes, large), bytes => store.Return(set.Budget, bytes));
-            try { model = await UntilReleased(work => ResultPivoter.Build(set, pages, view?.Order, spec, work, Reserve, keyMemory), token, set); }
-            catch (PivotTooLargeException) { throw NotStored(set.Budget, tooLarge, (set, args.ResultId)); }
+            try { model = await UntilReleased(work => ResultPivoter.Build(set, pages, view?.Order, spec, work, figures.TryReserve, keyMemory), token, set); }
+            catch (PivotTooLargeException)
+            {
+                // Thrown only for the figures, the first step: a refused Distinct Count bounds step (also LowMemory) comes
+                // later and is not an error, the build sorts by cell and value instead.
+                throw figures.LowMemory ? NotStored(set.Budget, new RequestException("TOO_LARGE", LowMemory), (set, args.ResultId)) : NotStored(set.Budget, tooLarge, (set, args.ResultId));
+            }
             if (set.IsReleased) throw Unavailable(args.ResultId);
             if (view is not null && !store.HasView(view)) throw ViewClosed();
             var (columns, wires, lengths) = PivotOutput.Shape(set, pages, spec, model);
@@ -2194,7 +2195,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 throw;
             }
         }
-        finally { store.Return(set.Budget, working + figures); }
+        finally { store.Return(set.Budget, working + figures.Held); }
     }
 
     /// <summary>A pivot request checked against its result: distinct row columns, a column group that is not one of them, and

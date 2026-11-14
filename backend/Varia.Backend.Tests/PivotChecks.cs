@@ -38,6 +38,7 @@ internal static class PivotChecks
         Budget(check);
         Cancellation(check);
         Host(check);
+        LowMemorySteps(check);
     }
 
     private static ResultSetBuffer Fill(ResultStore store, QueryBudget budget, string?[][] rows, ResultColumn[] columns, int index = 0)
@@ -496,5 +497,35 @@ internal static class PivotChecks
         var small = service.DispatchAsync("results.pivot", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, rows = Array.Empty<int>(), values = new object[] { new { aggregate = "count" } } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult() as ResultsPivotResult;
         check(set.Budget.Stopped == TruncationReason.None && small is { RowGroups: 1 } && small.Descriptor.RowsStored == 1,
             $"a refused pivot leaves its query able to store a smaller one: {set.Budget.Stopped}");
+    }
+
+    /// <summary>A pivot's figures are charged in a step that asks the system's memory load (WorkSteps): under high load a
+    /// refused step says the computer is low on memory, not that the result memory is full, and returns what it took.</summary>
+    private static void LowMemorySteps(Action<bool, string> check)
+    {
+        // High always, or for the next reading only: the refused step's, the load gone by the time the answer is worded.
+        var high = false;
+        var once = 0;
+        string? Pivoted(long mark, bool always)
+        {
+            var store = new ResultStore(1L << 30, 1L << 29, () => (high || Interlocked.Decrement(ref once) >= 0 ? 100 : 0, 50)) { Packing = PagePacking.Off, WorkStepBytes = mark };
+            using var service = new SqlService(store);
+            var set = Source(store);
+            var before = Held.Bytes(store);
+            if (always) high = true;
+            else once = 1;
+            try
+            {
+                service.DispatchAsync("results.pivot", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, rows = Array.Empty<int>(), values = new object[] { new { aggregate = "count" } } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult();
+                return "kept";
+            }
+            catch (RequestException error) { return error.Code + ": " + error.Message + (Held.Bytes(store) == before && set.Budget.Stopped == TruncationReason.None ? "" : " (memory kept or budget stopped)"); }
+            finally { (high, once) = (false, 0); }
+        }
+        // Under the default mark a few figures never ask, and the pivot's one page is its last, kept whole.
+        var kept = Pivoted(ResultStore.WorkCheckBytes, always: true);
+        var refused = Pivoted(1, always: false);
+        check(kept == "kept" && refused == "TOO_LARGE: " + SqlService.LowMemory,
+            $"a pivot whose figures pass a load reading under high memory load is refused, saying the computer is low on memory, and returns what it took: {kept} / {refused}");
     }
 }
