@@ -37,6 +37,13 @@ async function run(sql) {
   await expect(status()).toContainText(/^Completed( with errors)? · /)
 }
 
+async function toggleFromPalette() {
+  await page.keyboard.press('F1')
+  await page.keyboard.type('show results as tabs')
+  await expect(quickInputActive(page)).toContainText('Query: Show Results as Tabs')
+  await page.keyboard.press('Enter')
+}
+
 try {
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   // A hidden window draws about once a second; clicks and focus wait for frames.
@@ -161,6 +168,17 @@ try {
   await resultTab(page, 'Result 29').press('Home')
   await expect(resultTab(page, 'Result 1')).toBeInViewport({ ratio: 1 })
   console.log('Grouped results checks: a row of more tabs than fit scrolls to keep the selected tab in view.')
+  // Stacked from the last result's grid: the stack opens at that result, so its grid takes the focus back; and Tabs again.
+  await resultTab(page, 'Result 1').press('End')
+  await gridCell(resultGrid(page, 'Result 30'), 1, 0).click()
+  await expect(resultGrid(page, 'Result 30')).toBeFocused()
+  await toggleFromPalette()
+  await expect(page.locator(part.resultStack)).toHaveCount(1)
+  await expect(resultGrid(page, 'Result 30')).toBeFocused()
+  await toggleFromPalette()
+  await expect(resultTabs(page)).toHaveCount(1)
+  await expect(resultGrid(page, 'Result 30')).toBeFocused()
+  console.log('Grouped results checks: switching the layout from a result far down the stack keeps its grid focused.')
 
   // 7. The Messages strip opens by itself beside the two rows of tabs when an error arrives and the pane has room.
   await run('-- varia-fake: sets=N1*3,W1*2000 messages=2 errors=1')
@@ -171,12 +189,6 @@ try {
 
   // 8. The palette's Show Results as Tabs from a grid switches the layout, and the grid of the same view takes the focus
   // back; then Stacked again from the editor: every grid is drawn, nothing was rebuilt.
-  const toggleFromPalette = async () => {
-    await page.keyboard.press('F1')
-    await page.keyboard.type('show results as tabs')
-    await expect(quickInputActive(page)).toContainText('Query: Show Results as Tabs')
-    await page.keyboard.press('Enter')
-  }
   await resultTab(page, 'Result 1').click()
   await gridCell(resultGrid(page, 'Result 1'), 1, 0).click()
   await expect(resultGrid(page, 'Result 1')).toBeFocused()

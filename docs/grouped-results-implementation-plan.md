@@ -644,7 +644,9 @@ Outcome, accepted by the owner:
         goes to the view the service focused (the neighbour's last-shown Pivot or Table), so the two never disagree.
       - Switching the layout while a grid has the focus (the palette and the menus give it back to the grid before the
         command runs) gives the focus to the focused view's grid in the other layout once it is mounted (`OutputPane`'s
-        `useLayoutFocus`), instead of letting it fall to the page.
+        `useLayoutFocus`), instead of letting it fall to the page. The stack drawn then opens that view if collapsed and
+        scrolls it into view (`revealFocused`, through Find Next's reveal), so its grid mounts; the hand-off gives up as
+        soon as the user clicks, wheels or moves the focus.
       - The strip's wheel is the fixed gesture `resultTabs.scroll` (Control+wheel still zooms), and in forced colours the
         selected tab's focus ring is HighlightText on Highlight.
       - Existing suites that read stacked captions pin Stacked: `results-smoke`, `popout-smoke`, `electron-smoke` and

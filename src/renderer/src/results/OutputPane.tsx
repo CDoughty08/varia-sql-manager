@@ -152,11 +152,19 @@ function useLayoutFocus(tabs: boolean, focused: () => string | undefined) {
       return !!grid
     }
     if (place()) return
-    const observer = new (windowOf(main).MutationObserver)(() => { if (place()) observer.disconnect() })
+    // Until the grid is mounted, or the user does something else: a click, the wheel or the focus moving.
+    const view = windowOf(main), observer = new view.MutationObserver(() => { if (place()) stop() })
+    const stop = () => {
+      observer.disconnect()
+      for (const type of ['pointerdown', 'wheel', 'focusin'] as const) doc.removeEventListener(type, stop, true)
+    }
     observer.observe(main, { childList: true, subtree: true })
-    return () => observer.disconnect()
+    for (const type of ['pointerdown', 'wheel', 'focusin'] as const) doc.addEventListener(type, stop, true)
+    return stop
   }, [tabs])
-  return { mainRef, onFocus, onBlur }
+  // Drawn now in place of the other layout while a grid had the focus: the stack brings the focused view into view.
+  const switching = layout.current !== tabs && gridHeld.current
+  return { mainRef, onFocus, onBlur, switching }
 }
 
 /** The output view's height, followed while it is mounted. */
@@ -297,7 +305,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
             const entry = grid?.getAttribute('data-result-entry')
             if (entry) setProfiled({ tabId, target: profileTarget(tab.sets, entry) })
           }}>
-            {shown ? tabs ? <ResultsTabs key={'tabs:' + tab.queryId} tabId={tabId} tab={tab} /> : <ResultsStack key={'stack:' + tab.queryId} tabId={tabId} tab={tab} />
+            {shown ? tabs ? <ResultsTabs key={'tabs:' + tab.queryId} tabId={tabId} tab={tab} /> : <ResultsStack key={'stack:' + tab.queryId} tabId={tabId} tab={tab} revealFocused={layoutFocus.switching} />
               : <EmptyState className="output-empty" {...hasSets ? {} : { icon: 'table' as const }} detail={emptyResultsText(tab)} />}
             {profileOpen && shown && <ColumnProfilePanel key={'profile:' + tab.queryId} tabId={tabId} tab={tab}
               shown={tabs ? selectedEntry(tab)?.key : profiled?.tabId === tabId ? profiledEntry(tab.sets, profiled.target)?.key : undefined} />}

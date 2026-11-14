@@ -142,7 +142,7 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
  * run (`tab.bare`, Peek's rows) draws the grid alone: no close buttons, and no caption either while it has one grid
  * without filters (a caption returns to hold the filters, so they can be removed).
  */
-export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabResults }) {
+export default function ResultsStack({ tabId, tab, revealFocused = false }: { tabId: string; tab: TabResults; revealFocused?: boolean }) {
   const { results, resultsSearch } = useWorkbench()
   const view = results.viewState(tabId)
   const search = useServiceSnapshot(resultsSearch)[tabId]
@@ -315,6 +315,16 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
     if (collapsedEntries.has(revealEntry)) toggle(revealEntry)
     stackReveal.current = revealEntry
   }, [revealSeq, revealEntry])
+  // Drawn in place of the Tabs layout while a grid had the focus (OutputPane): the focused view opens and scrolls into
+  // view as a match does, so its grid mounts and can take the focus back. Only at mount.
+  const revealAtMount = useRef(revealFocused)
+  useLayoutEffect(() => {
+    const key = tab.focused
+    if (!revealAtMount.current || key === undefined || !sets.some(entry => entry.key === key)) return
+    revealAtMount.current = false
+    if (collapsedEntries.has(key)) toggle(key)
+    stackReveal.current = key
+  }, [])
   useLayoutEffect(() => {
     const element = stackRef.current, key = stackReveal.current
     if (key === undefined) return
