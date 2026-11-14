@@ -28,13 +28,19 @@ export interface PivotSnapshot {
   readonly tabs: Readonly<Record<string, PivotTab>>
   /** Each pivot set's strip, by its set key. */
   readonly info: ReadonlyMap<string, PivotInfo>
+  /** Changes whenever a build starts or ends, listing the groups with a build in flight by tab and ordinal. A build a new
+   *  run gave up stays listed until it settles, so read `building(tabId, ordinal)` (which checks the run), as captions do. */
+  readonly building: Readonly<Record<string, readonly number[]>>
 }
 
-type Results = Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'discard' | 'sortOf' | 'holdView'>
+type Results = Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'discard' | 'sortOf' | 'holdView' | 'notify'>
 /** A build in flight: its run, the Table it reads, its group, the Pivot it replaces (none for a group's first), whether it
  *  still waits for a place, and whether the user cancelled it. */
 interface Build {
   readonly abort: AbortController; readonly queryId: string; readonly source: EntryKey; readonly ordinal: number; readonly replaces?: EntryKey
+  /** Update started it (the Pivot's own recipe, not the builder's draft): what it says goes to the toolbar too, since the
+   *  builder may be closed or on another group. */
+  readonly update: boolean
   queued: 'place' | 'busy' | undefined; cancelled: boolean
 }
 /** What one build read and made: the pivot, the filters of the view it read (none for the stored rows), and whether it read
@@ -99,7 +105,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
   private readonly unsubscribe: () => void
 
   constructor(results: Results, o: { jobs?: DerivedJobs; adding?: (tabId: string) => number } = {}) {
-    super({ tabs: {}, info: new Map() })
+    super({ tabs: {}, info: new Map(), building: {} })
     this.results = results
     this.jobs = o.jobs ?? new DerivedJobs()
     this.elsewhere = o.adding ?? (() => 0)
@@ -129,12 +135,12 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     }
     this.runs.set(tabId, tab.queryId)
     this.focus.set(tabId, tab.focused)
-    this.update(tabId, this.tabOf(tabId, tab, ordinal, true))
+    this.setTab(tabId, this.tabOf(tabId, tab, ordinal, true))
   }
 
   close(tabId: string): void {
     const current = this.getSnapshot().tabs[tabId]
-    if (current?.open) this.update(tabId, { ...current, open: false })
+    if (current?.open) this.setTab(tabId, { ...current, open: false })
   }
 
   setDraft(tabId: string, draft: PivotDraft): void {
@@ -148,7 +154,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     drafts.set(ordinal, { draft: fitColumns(draft, columns), columns })
     // Editing the group's draft clears what its last build said.
     this.errors.get(tabId)?.delete(ordinal)
-    this.update(tabId, this.tabOf(tabId, tab, ordinal, current.open))
+    this.setTab(tabId, this.tabOf(tabId, tab, ordinal, current.open))
   }
 
   /** Whether the group of a grid can be pivoted now: the grid shows the group's Table or Pivot, the run has ended, the
@@ -173,8 +179,36 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
   async run(tabId: string): Promise<void> {
     const state = this.getSnapshot().tabs[tabId]
     const tab = this.results.getSnapshot()[tabId]
-    const group = tab?.groups.find(item => item.ordinal === this.groups.get(tabId)), entry = group?.table.entry
-    if (!state || !tab || !group || !entry || !this.canPivot(tabId, entry.key)) return
+    const group = tab?.groups.find(item => item.ordinal === this.groups.get(tabId))
+    if (!state || !tab || !group || !this.canPivot(tabId, group.table.key)) return
+    return this.start(tabId, tab, group, draftSpec(state.draft), false)
+  }
+
+  /**
+   * Update: builds a group's Pivot again from its own recipe (what it was last built with, not the builder's draft, which
+   * stays as it is) over the Table as its grid shows it now, through Build Pivot's path: the old Pivot stays readable until
+   * the new one publishes in its slot, the build takes one of the window's places, and a failure, a cancellation or a
+   * refusal keeps the old Pivot and says why in the toolbar (and in the builder while it is on that group). `key` is the
+   * Pivot's grid or its Table's. It does nothing while the group has no Pivot, cannot be pivoted now, or its Pivot is being
+   * built.
+   */
+  async update(tabId: string, key: EntryKey | undefined): Promise<void> {
+    const tab = this.results.getSnapshot()[tabId], group = pivotGroup(tab, key)
+    const recipe = group?.pivot?.pivot?.recipe
+    if (!tab || !group || !recipe || this.building(tabId, group.ordinal) || !this.canPivot(tabId, group.table.key)) return
+    const spec = { rows: [...recipe.rows], ...recipe.column === undefined ? {} : { column: recipe.column }, values: recipe.values.map(value => ({ ...value })) } as PivotSpec
+    return this.start(tabId, tab, group, spec, true)
+  }
+
+  /** Whether a group's Pivot is being built, or waits to be, for the tab's current run. */
+  building(tabId: string, ordinal: number): boolean {
+    const build = this.running.get(tabId)?.get(ordinal)
+    return !!build && build.queryId === this.results.getSnapshot()[tabId]?.queryId
+  }
+
+  /** One build of a group's Pivot from `spec`: Build Pivot's (the draft) or Update's (`update`, the Pivot's recipe). */
+  private async start(tabId: string, tab: TabResults, group: ResultGroup, spec: PivotSpec, update: boolean): Promise<void> {
+    const entry = group.table.entry
     let builds = this.running.get(tabId)
     if (!builds) this.running.set(tabId, builds = new Map())
     const replaces = group.pivot?.key
@@ -191,13 +225,14 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     builds.get(group.ordinal)?.abort.abort()
     builds.delete(group.ordinal)
     this.errors.get(tabId)?.delete(group.ordinal)
-    const abort = new AbortController(), spec = draftSpec(state.draft)
+    const abort = new AbortController()
     // The rows as the grid shows them now: canPivot refused while a sort or filter was being built.
     const shown = this.results.sortOf(tabId, entry.key)?.view
     const hold = shown ? this.results.holdView(tabId, entry.key, shown) : undefined
-    const item: Build = { abort, queryId: tab.queryId, source: entry.key, ordinal: group.ordinal, ...replaces === undefined ? {} : { replaces }, queued: undefined, cancelled: false }
+    const item: Build = { abort, queryId: tab.queryId, source: entry.key, ordinal: group.ordinal, ...replaces === undefined ? {} : { replaces }, update, queued: undefined, cancelled: false }
     builds.set(group.ordinal, item)
     this.refresh(tabId)
+    this.publishBuilding()
     let error: string | undefined
     try {
       const built = await this.jobs.run<Built>(() => this.build(tabId, entry, spec, shown, abort.signal), {
@@ -232,7 +267,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       }
       const current = this.getSnapshot()
       this.fresh.set(setKey(result.descriptor), { tabId, queryId: tab.queryId })
-      this.publish({ tabs: current.tabs, info: new Map([...this.shown(current.info), [setKey(result.descriptor), info]]) })
+      this.publish({ ...current, info: new Map([...this.shown(current.info), [setKey(result.descriptor), info]]) })
     } catch (failure) {
       if (abort.signal.aborted) {
         // Cancelled by the user while a Pivot is shown: it stays, and the builder says so.
@@ -249,7 +284,11 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       if (this.running.get(tabId)?.get(item.ordinal) === item) {
         this.running.get(tabId)!.delete(item.ordinal)
         if (error) this.fail(tabId, item.ordinal, error)
+        // Update's caller, or a caption's Cancel, may not be looking at the builder: the toolbar says it too, while the run is still the one it
+        // updated (a new run or a closed tab has nothing to say it about).
+        if (error && (item.update || item.cancelled) && this.results.getSnapshot()[tabId]?.queryId === item.queryId) this.results.notify(tabId, error)
         this.refresh(tabId)
+        this.publishBuilding()
       }
     }
   }
@@ -280,9 +319,10 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     }
   }
 
-  /** Stops the builder's group's build. A Pivot the group has stays as it was. */
-  cancel(tabId: string): void {
-    const ordinal = this.groups.get(tabId), build = ordinal === undefined ? undefined : this.running.get(tabId)?.get(ordinal)
+  /** Stops a group's build: the builder's group's, or the one `ordinal` names (a caption's Cancel). A Pivot the group has
+   *  stays as it was. */
+  cancel(tabId: string, ordinal = this.groups.get(tabId)): void {
+    const build = ordinal === undefined ? undefined : this.running.get(tabId)?.get(ordinal)
     if (!build) return
     build.cancelled = true
     build.abort.abort()
@@ -293,6 +333,15 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     for (const builds of this.running.values()) for (const build of builds.values()) build.abort.abort()
     this.running.clear()
     this.clearListeners()
+  }
+
+  /** Publishes which groups' Pivots are being built, when that changed. */
+  private publishBuilding(): void {
+    const current = this.getSnapshot(), building: Record<string, readonly number[]> = {}
+    for (const [tabId, builds] of this.running) if (builds.size) building[tabId] = [...builds.keys()].sort((a, b) => a - b)
+    const same = Object.keys(building).length === Object.keys(current.building).length
+      && Object.entries(building).every(([tabId, list]) => current.building[tabId]?.join(',') === list.join(','))
+    if (!same) this.publish({ ...current, building })
   }
 
   private fail(tabId: string, ordinal: number, error: string): void {
@@ -326,7 +375,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
   /** Publishes the builder's state again, on the group it has (after a build started or ended). */
   private refresh(tabId: string): void {
     const current = this.getSnapshot().tabs[tabId], tab = this.results.getSnapshot()[tabId]
-    if (current && tab) this.update(tabId, this.tabOf(tabId, tab, this.groups.get(tabId), current.open))
+    if (current && tab) this.setTab(tabId, this.tabOf(tabId, tab, this.groups.get(tabId), current.open))
   }
 
   /** A group's draft, fitted to its Table's columns: by name when they are not the ones it was last fitted to (a re-run). */
@@ -339,9 +388,9 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     return draft
   }
 
-  private update(tabId: string, tab: PivotTab): void {
+  private setTab(tabId: string, tab: PivotTab): void {
     const snapshot = this.getSnapshot()
-    this.publish({ tabs: { ...snapshot.tabs, [tabId]: tab }, info: snapshot.info })
+    this.publish({ ...snapshot, tabs: { ...snapshot.tabs, [tabId]: tab } })
   }
 
   /** Only pivots some run still shows keep their strips, and those just added that their run has yet to publish. */
@@ -401,6 +450,6 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     }
     // Strips of pivots no run shows any more go, whether or not a builder changed (Close Results changes none).
     const info = current.info.size ? this.shown(current.info) : current.info
-    if (tabs || info.size !== current.info.size) this.publish({ tabs: tabs ?? current.tabs, info })
+    if (tabs || info.size !== current.info.size) this.publish({ ...current, tabs: tabs ?? current.tabs, info })
   }
 }

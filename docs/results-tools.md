@@ -59,6 +59,20 @@ window (the builder says when one waits for the others), and a busy SQL backend 
 1, 4 and 16 seconds. A failed build's message stays with the result it was for until that result's draft is edited or it
 is built again. A Pivot's strip says when the result it was built from holds only part of its query's rows.
 
+A Pivot records the filters of the result it was built from. When that result's filters change (a filter added, removed
+or replaced, Keep Selected Rows included), its Pivot is **out of date**: its caption shows an "Out of date" mark with
+**Update** (in Tabs layout, on the row above the Pivot's grid, and its Pivot tab carries a dot), and its strip says so
+first. Sorting the result does not mark it, since the order of the rows changes no
+figure. **Update** (also **Update Pivot** on the grid's menu, under Pivot Results…, and in the command palette for the grid you
+last used) builds the Pivot again from what it
+was built with, not from an edit in the builder not yet built, over the result as it is filtered now, and replaces it as
+**Build Pivot** does: the old Pivot stays readable until the new one is ready, and an Update that fails, does not fit or
+is cancelled (the caption offers **Cancel** while a Pivot is built again) leaves it as it was, with the reason in the
+results toolbar. Update waits for the query to finish and for the result's sort or filter to be built, and is not offered
+once the SQL backend has stopped. Nothing rebuilds by itself. The grid's menu shows more items than its titles have
+letters, so Update Pivot takes **U** and Pivot Results… has no access key; arrow keys and typing its first letters still
+reach it.
+
 ## Comparisons
 
 **Compare…** in a result's grid menu (**Compare Results…** in the command palette, or the results

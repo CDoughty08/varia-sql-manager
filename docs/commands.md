@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (306)
+## Commands (307)
 
 ### File
 
@@ -181,6 +181,7 @@ keys it uses are listed below.
 | Compare with Previous Result | `output.compareWithPrevious` | — | — | — | Always | Query Output context menu › Compare with Previous Result |
 | Compare Results… | `output.compare` | — | — | — | Always | Query Output context menu › Compare… |
 | Pivot Results… | `output.pivot` | — | — | — | Always | Query Output context menu › Pivot Results… |
+| Update Pivot | `output.updatePivot` | — | — | — | Always | Query Output context menu › Update Pivot |
 | Transpose Results | `output.transpose` | — | — | — | Always; checked when `resultsGridTransposed` | Query Output context menu › Transpose › Transposed |
 | Transpose Selected Rows | `output.transposeSelectedRows` | — | — | — | Always | Query Output context menu › Transpose › Selected Rows |
 | Transpose Using Column as Headers | `output.transposeWithHeaders` | — | — | — | Always | Query Output context menu › Transpose › Using Column as Headers |
@@ -845,7 +846,8 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | `2_sort` | Hi**g**hlight › | Submenu: Query Output context menu › Highlight | `outputView == 'grid'` |
 | `2_sort` | Co**m**pare with Previous Result | `output.compareWithPrevious` | `outputView == 'grid' && !outputGridBare` |
 | `2_sort` | Com**p**are… | `output.compare` | `outputView == 'grid' && !outputGridBare` |
-| `2_sort` | Pivot Res**u**lts… | `output.pivot` | `outputView == 'grid' && !outputGridBare` |
+| `2_sort` | Pivot Results… | `output.pivot` | `outputView == 'grid' && !outputGridBare` |
+| `2_sort` | **U**pdate Pivot | `output.updatePivot` | `outputView == 'grid' && !outputGridBare` |
 | `2_sort` | Tra**n**spose › | Submenu: Query Output context menu › Transpose | `outputGridTransposable` |
 | `2_width` | F**i**t Column | `output.fitColumn` | `outputView == 'grid' \|\| outputView == 'live'` |
 | `3_save` | Sa**v**e Results As… | `output.saveResultsAs` | `outputView == 'grid' \|\| outputView == 'live'` |
