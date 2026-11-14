@@ -77,6 +77,8 @@ export class DependencyTree {
   private readonly running = new Map<number, string>()
   private next = 1
   private disposed = false
+  /** Abandoned (the server was lost): the tree still expands and collapses what it has read, but reads nothing more. */
+  private stopped = false
 
   constructor(
     readonly connectionId: string,
@@ -103,6 +105,7 @@ export class DependencyTree {
     const node = this.nodes.get(id)
     if (this.disposed || !node || node.leaf || node.expanded && node.load !== 'error') return
     if (node.load === 'ready' || node.load === 'loading') { this.set({ ...node, expanded: true }); return }
+    if (this.stopped) return
     this.set({ ...node, expanded: true, load: 'loading', error: undefined })
     void this.read(node)
   }
@@ -135,22 +138,28 @@ export class DependencyTree {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
-    const ids = [...this.running.values()]
-    this.running.clear()
-    // explorer.cancel takes at most `explorerLimits.cancelBatch` ids a call; queued expansions can outnumber that.
-    for (let at = 0; at < ids.length; at += explorerLimits.cancelBatch) this.loader.cancel(ids.slice(at, at + explorerLimits.cancelBatch))
+    this.cancelRunning()
   }
 
-  /** Stops the tree for good (the server was lost): the levels still loading show `message`, and nothing more is read. */
+  /** Stops reading for good (the server was lost): the levels still loading show `message`, nothing more is read, and what was
+   *  read can still be expanded and collapsed. */
   abandon(message: string): void {
-    if (this.disposed) return
+    if (this.disposed || this.stopped) return
+    this.stopped = true
     const loading = [...this.running.keys()]
-    this.dispose()
+    this.cancelRunning()
     for (const id of loading) {
       const node = this.nodes.get(id)
       if (node?.load === 'loading') this.nodes.set(id, { ...node, load: 'error', error: message })
     }
     if (loading.length) this.onChange()
+  }
+
+  private cancelRunning(): void {
+    const ids = [...this.running.values()]
+    this.running.clear()
+    // explorer.cancel takes at most `explorerLimits.cancelBatch` ids a call; queued expansions can outnumber that.
+    for (let at = 0; at < ids.length; at += explorerLimits.cancelBatch) this.loader.cancel(ids.slice(at, at + explorerLimits.cancelBatch))
   }
 
   private set(node: DependencyNode): void {

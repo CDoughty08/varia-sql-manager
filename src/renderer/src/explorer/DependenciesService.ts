@@ -57,6 +57,9 @@ export function listingFolder(ref: ObjectRef, subtype?: NodeSubtype): FolderId |
   }
 }
 
+const root = (open: OpenDependencies): ObjectRef | undefined => open.root.ref.type === 'object' ? open.root.ref.object : undefined
+const sameObject = (parent: NonNullable<ObjectRef['parent']>, object: ObjectRef) => parent.kind === object.kind && parent.schema === object.schema && parent.name === object.name
+
 /**
  * View Dependencies (SSMS's dialog of that name): at most one open, for an object of a `dependencyKinds` kind on a live server.
  * It holds one `DependencyTree` for the chosen direction; changing the choice drops that tree (its reads cancelled) and starts
@@ -109,7 +112,7 @@ export class DependenciesService extends SnapshotStore<DependenciesSnapshot> imp
     const open = this.current
     if (open && open.selected !== id && this.tree?.node(id)) this.publish({ open: { ...open, selected: id } })
   }
-  expand(id: number): void { if (!this.current?.lost) this.tree?.expand(id) }
+  expand(id: number): void { this.tree?.expand(id) }
   collapse(id: number): void { this.tree?.collapse(id) }
   retry(id: number): void { if (!this.current?.lost) this.tree?.retry(id) }
   node(id: number): DependencyNode | undefined { return this.tree?.node(id) }
@@ -128,7 +131,9 @@ export class DependenciesService extends SnapshotStore<DependenciesSnapshot> imp
     // The root's own subtype only for the root: a dependency without one is a plain object, whatever the root is.
     const subtype = id === 0 ? open.root.subtype : node.item?.subtype
     const ref = node.ref!, folder = listingFolder(ref, subtype)!
-    this.options.reveal(open.connectionId, { object: ref, folder, label: node.label, ...(subtype ? { subtype } : {}) })
+    // A trigger on the root is listed below the root's own folder (Graph Tables, FileTables …), which its row does not name.
+    const parentFolder = ref.parent && root(open) && sameObject(ref.parent, root(open)!) ? listingFolder(root(open)!, open.root.subtype) : undefined
+    this.options.reveal(open.connectionId, { object: ref, folder, label: node.label, ...(subtype ? { subtype } : {}), ...(parentFolder ? { parentFolder } : {}) })
   }
 
   /** Whether a node can be peeked: an object of a kind Peek describes, named in the root's database. */

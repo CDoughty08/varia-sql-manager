@@ -106,9 +106,9 @@ internal static class PeekLiveChecks
             var p3Uses = await Level(service, connectionId, Own("procedure", "P3"), "uses", json);
             var v2Uses = await Level(service, connectionId, Own("view", "V2"), "uses", json);
             var v1Uses = await Level(service, connectionId, Own("view", "V1"), "uses", json);
-            check(tr.Items.Any(item => item is { Name: "P3", Kind: "procedure" }) && p3Uses.Items.Count == 1 && p3Uses.Items[0].Name == "V2" && v2Uses.Items.Count == 1 && v2Uses.Items[0].Name == "V1"
+            check(tr.Items.Count == 2 && tr.Items.Any(item => item is { Name: "P3", Kind: "procedure" }) && tr.Items.Any(item => item is { Name: "T]'表", Kind: "table", Type: "U" } && item.Schema == schema) && p3Uses.Items.Count == 1 && p3Uses.Items[0].Name == "V2" && v2Uses.Items.Count == 1 && v2Uses.Items[0].Name == "V1"
                 && v1Uses.Items.Count == 1 && v1Uses.Items[0] is { Name: "T]'表", Kind: "table", Type: "U", SchemaBound: true },
-                "Objects a trigger depends on go up the chain to the table, which the schema-bound view names as such: " + Names(tr) + " | " + Names(p3Uses) + " | " + Names(v2Uses) + " | " + Names(v1Uses));
+                "Objects a trigger depends on are its table and what it runs, up the chain to the table, which the schema-bound view names as such: " + Names(tr) + " | " + Names(p3Uses) + " | " + Names(v2Uses) + " | " + Names(v1Uses));
             // The cycle: each procedure lists the other, so the dialog meets PA again below PB and marks it.
             var pa = await Level(service, connectionId, Own("procedure", "PA"), "uses", json);
             var pb = await Level(service, connectionId, Own("procedure", "PB"), "uses", json);

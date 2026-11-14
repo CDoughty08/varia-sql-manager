@@ -189,6 +189,20 @@ describe('View Dependencies tree', () => {
     lost.release()
     await settle()
     expect(lost.tree.node(0)?.load).toBe('error')
+
+    // What was read still expands and collapses once abandoned; nothing new is read.
+    const read = plant({ Orders: [view('a'), view('b')] })
+    await settle()
+    read.tree.abandon('The server was disconnected.')
+    const before = read.changes.mock.calls.length
+    read.tree.collapse(0)
+    expect(read.changes.mock.calls.length).toBe(before + 1)
+    expect(read.tree.rows()).toHaveLength(1)
+    read.tree.expand(0)
+    expect(read.tree.rows()).toHaveLength(3)
+    read.tree.expand(read.tree.rows()[1]!.node.id)
+    expect(read.calls).toHaveLength(1)
+    expect(read.tree.rows()[1]!.node).toMatchObject({ expanded: false, load: 'none' })
   })
 
   it('names a dependency in the root database only when the tree can read it there', () => {
@@ -263,6 +277,29 @@ describe('View Dependencies service and request', () => {
       connections: live, reveal, peek: vi.fn(),
       explorer: { menuNode: () => undefined, select: vi.fn(), objectNode: vi.fn() as never }
     })
+    // Disconnected while the root's level loads: the level ends with the reason rather than loading for ever.
+    let answer: (() => void) | undefined
+    const slow = new DependenciesService({
+      api: { explorerDependencies: vi.fn(() => new Promise<ApiResult<DependenciesResult>>(resolve => { answer = () => resolve(answers.usedBy!) })), explorerCancel: vi.fn(() => Promise.resolve({ ok: true as const, value: undefined })) } as never,
+      connections: live, reveal: vi.fn(), peek: vi.fn(), explorer: { menuNode: () => undefined, select: vi.fn(), objectNode: vi.fn() as never }
+    })
+    slow.open(graphRoot)
+    connections.list = [{ id: connectionId, lost: true }]
+    for (const listener of connections.listeners) listener()
+    expect(slow.current?.lost).toBe(true)
+    expect(slow.current?.rows[0]?.node).toMatchObject({ load: 'error', error: 'The server was disconnected.' })
+    answer?.()
+    await settle()
+    expect(slow.current?.rows[0]?.node.load).toBe('error')
+    slow.dispose()
+    connections.list = [{ id: connectionId, lost: false }]
+
+    // The root's own row, its Object Explorer node gone, is revealed through its folder; a history table's root has none.
+    const historyRoot = { ...rootNode, subtype: 'history' } as ExplorerMenuNode
+    service.open(historyRoot)
+    expect(service.canReveal(0)).toBe(false)
+    service.close()
+
     service.open(graphRoot)
     service.setDirection('uses')
     await settle()
@@ -283,6 +320,13 @@ describe('View Dependencies service and request', () => {
     service.reveal(service.current!.rows[1]!.node.id)
     expect(reveal).toHaveBeenCalledWith(connectionId, { object: { kind: 'table', database: 'Sales', schema: 'dbo', name: 'Customers' }, folder: 'tables', label: 'dbo.Customers' })
     expect(customers!.node.label).toBe('dbo.Customers')
+
+    // A trigger on the root is revealed below the root's own folder: Graph Tables, here.
+    answers.usedBy = { ok: true, value: { items: [{ name: 'TR', schema: 'dbo', kind: 'trigger', type: 'TR', parent: { kind: 'table', schema: 'dbo', name: 'Orders' } }], elapsedMs: 1 } }
+    service.open(graphRoot)
+    await settle()
+    service.reveal(service.current!.rows[1]!.node.id)
+    expect(reveal).toHaveBeenLastCalledWith(connectionId, { object: { kind: 'trigger', database: 'Sales', parent: { kind: 'table', schema: 'dbo', name: 'Orders' }, name: 'TR' }, folder: 'tableTriggers', label: 'dbo.Orders.TR', parentFolder: 'graphTables' })
     service.dispose()
   })
 

@@ -80,7 +80,8 @@ function DependenciesForm({ open }: { open: OpenDependencies }) {
       <fieldset className="property-section dependencies-choice">
         <legend className="visually-hidden">Dependencies</legend>
         {dependencyDirections.map(direction => <label key={direction} className="checkbox-label">
-          <input type="radio" name="dependencies-direction" checked={open.direction === direction} disabled={open.lost} onChange={() => dependencies.setDirection(direction)} />
+          {/* aria-disabled rather than disabled once the server is lost: disabling a focused radio would drop focus out of the dialog. */}
+          <input type="radio" name="dependencies-direction" checked={open.direction === direction} aria-disabled={open.lost || undefined} onChange={() => dependencies.setDirection(direction)} />
           {dependencyDirectionLabels[direction](name)}
         </label>)}
       </fieldset>

@@ -303,7 +303,8 @@ internal static class PeekSql
     /// so dropping it lets a reference that names this database in another case be followed, and merges one made both ways. A
     /// four-part name through the local server's own name resolves too, so it loses that server, which is harmless: SQL Server
     /// runs it locally. The test is referenced_id, not the object's row, which sys.all_objects hides from a login that may not
-    /// see the object: such a reference keeps the code's schema and name but still loses its server and database.</summary>
+    /// see the object: such a reference keeps the code's schema and name but still loses its server and database. A DML trigger
+    /// also uses its table or view, as SSMS lists it (its ON clause is not a reference the server records).</summary>
     private const string UsesRows = "SELECT CASE WHEN d.referenced_id IS NULL THEN d.referenced_server_name END AS server_name, "
         + "CASE WHEN d.referenced_id IS NULL THEN d.referenced_database_name END AS database_name, COALESCE(rs.name, d.referenced_schema_name) AS schema_name, "
         + "COALESCE(ro.name, d.referenced_entity_name) AS entity_name, ro.object_id AS id, CONVERT(bit, 0) AS via, d.is_schema_bound_reference AS bound "
@@ -311,7 +312,9 @@ internal static class PeekSql
         + "WHERE d.referencing_id = @object_id AND d.referencing_class = 1 AND d.referenced_class = 1 AND d.referenced_entity_name IS NOT NULL "
         + "AND (d.referenced_id IS NULL OR d.referenced_id <> @object_id) "
         + "UNION SELECT NULL, NULL, rs.name, ro.name, ro.object_id, CONVERT(bit, 1), CONVERT(bit, 0) FROM sys.foreign_keys AS fk JOIN sys.all_objects AS ro ON ro.object_id = fk.referenced_object_id "
-        + "JOIN sys.schemas AS rs ON rs.schema_id = ro.schema_id WHERE fk.parent_object_id = @object_id AND fk.referenced_object_id <> @object_id";
+        + "JOIN sys.schemas AS rs ON rs.schema_id = ro.schema_id WHERE fk.parent_object_id = @object_id AND fk.referenced_object_id <> @object_id "
+        + "UNION SELECT NULL, NULL, ts.name, tp.name, tp.object_id, CONVERT(bit, 0), CONVERT(bit, 0) FROM sys.triggers AS tr JOIN sys.all_objects AS tp ON tp.object_id = tr.parent_id "
+        + "JOIN sys.schemas AS ts ON ts.schema_id = tp.schema_id WHERE tr.parent_class = 1 AND tr.object_id = @object_id";
 
     /// <summary>The objects whose code references the object (resolved references only), the tables whose foreign keys point
     /// at it, and its own DML triggers (as SSMS lists them: a trigger's ON clause is not a reference the server records), in

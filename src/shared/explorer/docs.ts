@@ -310,7 +310,7 @@ export function renderExplorerDocs(): string {
     `${dependencyLimits.nodes.toLocaleString('en-US')} in all, and a level cut by either says so. A node is a leaf, and says why, when`,
     'it is on a linked server or in another database (named, never read), unresolved, of a kind the tree cannot read (a constraint),',
     `${dependencyLimits.depth} levels down, or already above it on its branch: a cycle is marked rather than followed. A table's or view's own DML`,
-    "triggers depend on it, as SSMS lists them, though the server records no reference for a trigger's ON clause. Below the tree the selected node shows",
+    "triggers depend on it, and each depends on it, as SSMS lists them, though the server records no reference for a trigger's ON clause. Below the tree the selected node shows",
     'its name, type and dependency type (foreign key, schema-bound or non-schema-bound). Enter, a double-click or Show in Object',
     "Explorer selects the node in the tree (walking and paging to it as Search Objects' Reveal does) and closes the dialog; Peek",
     "opens the node's Peek tab. A trigger is named below its table or view, so it can be read, selected and peeked too.",
