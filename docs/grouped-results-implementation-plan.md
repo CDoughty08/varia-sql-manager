@@ -613,7 +613,7 @@ Outcome, accepted by the owner:
         `ResultGroup.selected`. Column Profile follows the selected view in Tabs (in Stacked it still follows DOM focus).
       - Streaming keeps the first group selected because `focused` stays unset until a grid or tab takes it. A run that
         inherits a focused ordinal from the previous run (`refocus`, PR 9) selects that group when it arrives, even
-        mid-stream: "a tab the user picks stays picked" is read as covering the pick from the last run. Owner to confirm.
+        mid-stream: "a tab the user picks stays picked" covers the pick from the last run (the owner confirmed this on 2026-11-13).
       - A Pivot built for the selected group is selected at once (in `ResultsTabs`, not `PivotService`, which PR 10
         rewrites); a rebuilt Pivot already took the focus through `PivotService`. A Pivot that appears for another group
         selects nothing.
