@@ -66,7 +66,9 @@ internal static class PackerChecks
         {
             Store = new ResultStore(global, global) { Packing = PagePacking.OnRequest };
             Visibility = new ResultVisibility(id => (OnLookup?.Invoke(id) ?? true) && Store.Find(id) is not null, () => Clock);
-            Packer = new ResultPacker(Store, Visibility);
+            // The checks run passes on their own threads: compressing at the product's lowest priority would starve them on
+            // a busy machine (offline-stress), and the priority is not what they test (Priorities does).
+            Packer = new ResultPacker(Store, Visibility) { Priority = ThreadPriority.Normal };
             Store.Settled = () => Interlocked.Increment(ref Pokes);
         }
 
@@ -81,6 +83,8 @@ internal static class PackerChecks
         ReleaseWhilePacking(check);
         Figures(check);
         PacksAgain(check);
+        UsedWhileDue(check);
+        Priorities(check);
         Concurrent(check);
         Service(check);
         Thread(check);
@@ -290,6 +294,33 @@ internal static class PackerChecks
         rig.Packer.PackDue();
         check(AllPacked(set), "still hidden and unused for its delay, the result is packed again");
 
+        // A long operation: another wake-up scans while it still holds the result, past the delay. The delay runs from
+        // when the operation ends, so the scan after its end does not pack straight away.
+        var held = set.Pin();
+        check(set.TryUnpackAll() && !set.HasPacked, "an operation unpacks the result and still holds it");
+        rig.Packer.PackDue();
+        rig.Clock += ResultPacker.DelayMs * 2;
+        rig.Packer.PackDue();
+        held.Dispose();
+        var after = rig.Packer.PackDue();
+        check(after == rig.Clock + ResultPacker.DelayMs && !set.HasPacked, "a result held by an operation longer than the delay waits the delay from the operation's end: " + after);
+        rig.Clock += ResultPacker.DelayMs;
+        rig.Packer.PackDue();
+        check(AllPacked(set), "and is packed once unused for the delay after it");
+
+        // A plain lease (Copy, Save) on a result an operation once unpacked is not a use: once it ends the result is packed
+        // at once, as one never unpacked would be.
+        using (var sort = set.Pin()) set.TryUnpackAll();
+        rig.Packer.PackDue();
+        rig.Clock += ResultPacker.DelayMs;
+        check(set.TryLease(), "the unpacked result can be leased");
+        var leased = rig.Packer.PackDue();
+        rig.Clock += ResultPacker.DelayMs * 2;
+        var stillLeased = rig.Packer.PackDue();
+        set.ReleaseLease();
+        rig.Packer.PackDue();
+        check(leased is null && stillLeased is null && AllPacked(set), "a lease after an operation's use is not a use: no clock wait while it lasts, packed as soon as it ends");
+
         // Refused: the budget filled while the result was packed. The sort answers TOO_LARGE and nothing changes.
         var filler = rig.Store.BeginQuery("filler");
         rig.Store.TryReserve(filler, rig.Store.GlobalBytes - rig.Store.UsedBytes - 1024, false, out _);
@@ -300,6 +331,95 @@ internal static class PackerChecks
         check(code == "TOO_LARGE" && AllPacked(set) && rig.Store.UsedBytes == used, "a sort refused the budget to unpack a packed result answers TOO_LARGE and leaves it packed");
     }
 
+    private static void UsedWhileDue(Action<bool, string> check)
+    {
+        // Two results fall due together; while the larger is packed (seconds, for a large one), an operation unpacks the
+        // smaller. That is a use: the pass must not pack it straight after, but wait the delay from the use.
+        var rig = new Rig();
+        var small = Filled(rig.Store, "small", BigRows);
+        var large = Filled(rig.Store, "large", BigRows * 2);
+        rig.Show(large.ResultId);
+        rig.Packer.PackDue();
+        rig.Clock += ResultPacker.DelayMs;
+        // Pack one page of the smaller, so an operation has something to unpack and the result still needs packing.
+        var lookups = 0;
+        rig.OnLookup = id =>
+        {
+            if (id == small.ResultId && ++lookups == 3) rig.Show(large.ResultId, small.ResultId);
+            return true;
+        };
+        rig.Packer.PackDue();
+        rig.OnLookup = null;
+        check(small.HasPacked && small.NeedsPacking && !large.HasPacked, "the fixture: the smaller result is partly packed and the larger raw");
+        rig.Show();
+        rig.Clock += ResultPacker.DelayMs;
+        lookups = 0;
+        var unpacked = false;
+        rig.OnLookup = id =>
+        {
+            if (id == large.ResultId && ++lookups == 3)
+                using (small.Pin()) unpacked = small.TryUnpackAll();
+            return true;
+        };
+        var next = rig.Packer.PackDue();
+        rig.OnLookup = null;
+        check(unpacked && AllPacked(large) && !small.HasPacked && small.NeedsPacking,
+            "a result an operation unpacked while the pass packed another is not packed by that pass");
+        next = rig.Packer.PackDue();
+        check(next == rig.Clock + ResultPacker.DelayMs && !small.HasPacked, "the next scan waits the delay from that use: " + next);
+        rig.Clock += ResultPacker.DelayMs;
+        rig.Packer.PackDue();
+        check(AllPacked(small), "and packs it once it has gone unused for the delay");
+    }
+
+    private static void Priorities(Action<bool, string> check)
+    {
+        // The priority applies to compressing a page only; every lock the pass takes (here, the visibility lookup inside
+        // the table's lock) is taken at normal priority, and the thread is back at normal priority afterwards. A raised
+        // priority shows the switch without starving the check on a busy machine. Off Windows .NET accepts the request
+        // without changing the scheduling, so there this checks the bookkeeping, not the scheduler.
+        var rig = new Rig();
+        var set = Filled(rig.Store, "priorities", BigRows);
+        var page = Bodies(set)[1];
+        rig.Packer.PackDue();
+        rig.Clock += ResultPacker.DelayMs;
+        var packer = new ResultPacker(rig.Store, rig.Visibility) { Priority = ThreadPriority.AboveNormal };
+        var seen = new List<ThreadPriority>();
+        rig.OnLookup = id =>
+        {
+            if (id == set.ResultId) seen.Add(System.Threading.Thread.CurrentThread.Priority);
+            return true;
+        };
+        var priority = ThreadPriority.Lowest;
+        var worker = new System.Threading.Thread(() =>
+        {
+            packer.PackDue();
+            priority = System.Threading.Thread.CurrentThread.Priority;
+        });
+        worker.Start();
+        worker.Join();
+        rig.OnLookup = null;
+        var pages = set.SealedSnapshot().Length;
+        check(AllPacked(set) && seen.Count == pages + 1 && seen.All(value => value == ThreadPriority.Normal) && priority == ThreadPriority.Normal,
+            "the policy takes its locks at normal priority and ends a pass at normal priority: " + string.Join(",", seen.Distinct()));
+        check(packer.PagesAtPriority == pages || !packer.CanLower, "and compresses each page at its own priority where the platform allows it: " + packer.PagesAtPriority + " of " + pages);
+
+        // While lowered nothing is allocated: the thread's encoder is made and warmed before the window opens, and the room
+        // is rented and the result copied outside it. (Managed allocations are counted here; the encoder's native context
+        // is reused for the same reason.)
+        var allocated = new List<long>();
+        long opened = 0;
+        void Window(bool compressing)
+        {
+            if (compressing) opened = GC.GetAllocatedBytesForCurrentThread();
+            else allocated.Add(GC.GetAllocatedBytesForCurrentThread() - opened);
+        }
+        var first = PageCodec.Pack(page, Window);
+        var second = PageCodec.Pack(page, Window);
+        check(first is not null && second is not null && first.AsSpan().SequenceEqual(second) && PageCodec.Unpack(second, page.Length).AsSpan().SequenceEqual(page) && allocated is [0, 0],
+            "a page compressed for the policy reads back as sealed, and nothing is allocated while its thread is lowered: " + string.Join(",", allocated));
+    }
+
     private static void Concurrent(Action<bool, string> check)
     {
         var rig = new Rig();
@@ -308,16 +428,9 @@ internal static class PackerChecks
         rig.Packer.PackDue();
         rig.Clock += ResultPacker.DelayMs;
         // Reads pin the result, which stops packing at its next page; the policy finishes after the reads.
-        using var done = new CancellationTokenSource();
-        var packing = Task.Run(() =>
-        {
-            while (!done.IsCancellationRequested && set.NeedsPacking) rig.Packer.PackDue();
-        });
         var matched = true;
         var reads = 0;
-        var newQuery = Task.Run(() => Filled(rig.Store, "new", BigRows));
-        // Bounded by reads, not time: a pin stops packing at its next page, so the reads may hold it off until they end.
-        while (!packing.IsCompleted && reads < 5_000)
+        void ReadOne()
         {
             using (set.Pin())
             {
@@ -327,6 +440,15 @@ internal static class PackerChecks
             }
             reads++;
         }
+        ReadOne();
+        using var done = new CancellationTokenSource();
+        var packing = Task.Run(() =>
+        {
+            while (!done.IsCancellationRequested && set.NeedsPacking) rig.Packer.PackDue();
+        });
+        var newQuery = Task.Run(() => Filled(rig.Store, "new", BigRows));
+        // Bounded by reads, not time: a pin stops packing at its next page, so the reads may hold it off until they end.
+        while (!packing.IsCompleted && reads < 5_000) ReadOne();
         done.Cancel();
         packing.Wait();
         var stored = newQuery.Result;
@@ -347,6 +469,11 @@ internal static class PackerChecks
         using var service = new SqlService(new ResultStore(1L << 30, 1L << 30), packHidden: true);
         check(service.Packer is not null && service.Results.Packing == PagePacking.OnRequest, "the backend process's service turns packing on request and runs the policy");
         var packer = service.Packer!;
+        // This check runs passes on its own thread (below); at the product's lowest priority they could starve.
+        packer.Priority = ThreadPriority.Normal;
+        // The service's thread runs on the real clock: a long delay keeps it from packing the result before it is shown,
+        // however long this check is held up between storing and showing it.
+        packer.Delay = 1L << 40;
         var store = service.Results;
         var set = Filled(store, "service", BigRows);
         var source = Guid.NewGuid().ToString();
@@ -358,7 +485,11 @@ internal static class PackerChecks
         check(!set.HasPacked, "a result shown through results.visibility is not packed, even with no delay");
         // Hidden through results.visibility, the result is due at once with no delay. The pass runs here rather than waiting on the
         // service's lowest-priority thread, which a starved machine may not run for many seconds (Thread below checks the thread).
+        var pokes = packer.Pokes;
         Visible(2);
+        check(packer.Pokes == pokes + 1, "an applied results.visibility wakes the policy, which may have nothing else to wait for");
+        Visible(2);
+        check(packer.Pokes == pokes + 1, "a repeated results.visibility, not applied, does not");
         packer.PackDue();
         check(AllPacked(set) && store.Settled is not null, "hidden through results.visibility, the service's policy packs the result, and the store wakes it");
     }
@@ -385,8 +516,8 @@ internal static class PackerChecks
         waited.Restart();
         packer.Dispose();
         var stopped = waited.ElapsedMilliseconds;
-        var second = Filled(store, "second", BigRows);
-        Interlocked.Exchange(ref clock, 100_000);
-        check(store.Settled is null && !second.HasPacked && stopped < 5_000, "disposing the policy stops its thread and unhooks it from the store: " + stopped + " ms");
+        var passes = packer.Passes;
+        packer.Poke();
+        check(store.Settled is null && !packer.Running && packer.Passes == passes && stopped < 5_000, "disposing the policy ends its thread and unhooks it from the store, and a later poke runs no pass: " + stopped + " ms");
     }
 }

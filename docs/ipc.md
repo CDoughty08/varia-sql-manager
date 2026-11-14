@@ -1137,7 +1137,7 @@ event's with it until the check after the summary sends a new one. `resultMemory
 | `compressedBytes`, `packedLogicalBytes` | The compressed pages' size, and the rows as read they hold |
 | `cacheBytes` | Decompressed pages kept for reads |
 | `largest` | At most 8 results, largest as read first: `{ resultId, logicalBytes, storedBytes, state: 'raw' \| 'packed' \| 'unpacking', progress? (0 to 100, only while unpacking), live? (a live view's table) }`. Ids are the event's generation's |
-| `codec` | Counters since the backend started: `name` and `level` (left out while compression is off), `pagesPacked`, `pagesUnpacked`, `packInputBytes`, `packMicroseconds`, `unpackOutputBytes`, `unpackMicroseconds`, `cacheHits`, `cacheLookups`, `lastUnpackMicroseconds` (the last operation that unpacked a result; 0 before one) |
+| `codec` | Counters since the backend started: `name` and `level` (left out while compression is off), `pagesPacked`, `pagesUnpacked`, `packInputBytes`, `packMicroseconds` (elapsed time, which includes any wait while the policy compresses at low priority), `unpackOutputBytes`, `unpackMicroseconds`, `cacheHits`, `cacheLookups`, `lastUnpackMicroseconds` (the last operation that unpacked a result; 0 before one) |
 | `heap` | The managed heap after the last collection (`GC.GetGCMemoryInfo`): `committedBytes`, and `freeBytes` free inside it for reuse |
 
 Each result's figures are read under its own lock and added up (`ResultStore.MemoryDetail`), so `storedBytes` is
@@ -1267,10 +1267,12 @@ Results stay in backend memory, never on disk (`ResultStore`).
   is packed: each sealed page is replaced by its Zstandard bytes (level 2, one page's window; a page that would save
   under a tenth stays raw), and the budget is charged the packed size at once, so packing makes room. Never a result
   still storing rows, a live table, or one a read, operation, Copy or Save holds. Nothing is evicted and nothing goes to
-  disk. `ResultPacker` (`Results/ResultPacker.cs`) schedules it in the backend alone: one thread at the lowest
-  priority sleeps until the next hidden result falls due, or until a result completes, `results.visibility` changes the
+  disk. `ResultPacker` (`Results/ResultPacker.cs`) schedules it in the backend alone: one thread, which compresses
+  each page at the lowest priority (honoured on Windows; on Linux and macOS it competes as an ordinary thread) and does
+  everything that takes a lock or allocates at normal priority (so it is never preempted holding a lock a read or a new
+  query needs), sleeps until the next hidden result falls due, or until a result completes, `results.visibility` changes the
   shown set, or a read or job that stopped packing ends; it packs one result at a time, largest first, page by page
-  (about 300 to 380 MB/s, a 1 GiB result in about three seconds), and stops between pages when the result is shown
+  (about 275 to 400 MB/s, a 1 GiB result in about three seconds), and stops between pages when the result is shown
   again, held, released or the backend shuts down, keeping what it packed. It runs beside the results' workers, never
   through their gate, so sorts, reads and new queries never wait for it. Showing a packed result again needs no wait:
   `results.read` unpacks the pages it sends (0.3 ms a read through a six-page cache), and a view read unpacks the pages

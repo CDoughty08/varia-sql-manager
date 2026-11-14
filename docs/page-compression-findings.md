@@ -281,7 +281,7 @@ It is a separate step because it depends on the fused reads, and because the gri
 0.3 ms a scroll read that today costs 0.05 ms. That is invisible in a frame, but it should be measured in the app
 before it becomes the default.
 
-(As built, stage 1 packs on its own lowest-priority thread instead: see [Stage 1 as built](#stage-1-as-built).)
+(As built, stage 1 packs on a thread of its own instead, compressing at the lowest priority: see [Stage 1 as built](#stage-1-as-built).)
 Compression runs in the background on the results' workers, through `ViewSorter.Gate` at the lowest priority, page by
 page, at about 0.2 s of 16 workers per GiB. A visible operation that needs the workers stops it between pages. A
 result being compressed stays readable: each page switches when its compressed copy is ready.
@@ -366,7 +366,7 @@ forecast.
   a release triggers a compaction. The status bar's memory (status-bar-memory.md) should show compressed bytes
   separately.
 - **CPU in the background.** Compressing 8 GiB takes 1.5 to 2.0 s of 16 workers (about 6 to 8 s on 3 workers,
-  extrapolated). As built, stage 1 packs on one lowest-priority thread instead (about 3 s a GiB) and stops for any reader.
+  extrapolated). As built, stage 1 packs on one thread of its own instead, compressing at the lowest priority (about 3 s a GiB) and stops for any reader.
 - **Ratios depend on the data.** Results of random keys, hashes or GUIDs compress to 1.1 to 1.5 times or not at all.
   Pages that save less than 10 % stay raw.
 - **The numbers come from a loaded machine.** Treat the times as ranges. Ratios and memory figures are solid.
@@ -377,8 +377,10 @@ forecast.
 with these differences, decided from the code:
 
 - **Its own thread, not the worker gate.** The gate shares its threads fairly and has no priority, so packing through
-  it would take half the workers from a visible sort. One thread at the lowest priority packs a result page by page
-  and leaves every worker to visible work. It is slower than 16 workers (measured below: 275 to 400 MB/s, about three
+  it would take half the workers from a visible sort. One thread packs a result page by page, compressing each page at
+  the lowest priority where the operating system honours it (Windows; on Linux and macOS it competes as an ordinary thread), and leaves every worker to visible work. Everything it does under a lock or that allocates (the
+  visibility lookup, renting and copying the page's buffer, replacing a page, charging the budget) runs at normal priority: a lowest-priority thread preempted while holding the
+  store's or a set's lock would stall reads and new queries until the scheduler boosted it, seconds later. It is slower than 16 workers (measured below: 275 to 400 MB/s, about three
   seconds a GiB), which only delays the saving. On a machine whose processors are all busy it may barely run (the
   offline stress run showed a lowest-priority thread waiting tens of seconds); the result then simply stays raw a
   while longer.
@@ -418,7 +420,7 @@ codec measurements above predicted.
 4. **Visibility.** Done in #463. A `results.visibility` method in all five places (contract, zod, method policy, preload,
    `SqlService` dispatch), sent by the renderer when a result's grid is shown or hidden in any window.
 5. **Stage 1 policy.** Done (see [Stage 1 as built](#stage-1-as-built)); the Nerd metrics section came first, in #464. Compress complete, unpinned, hidden results of 1 MiB or more after 5 s, on a
-   lowest-priority thread of its own. `results.memory` reports compressed bytes, and the Memory popover gets its Nerd metrics section (above).
+   thread of its own that compresses at the lowest priority. `results.memory` reports compressed bytes, and the Memory popover gets its Nerd metrics section (above).
    README, status-bar memory docs, CHANGELOG, and the Getting Started guides that show the status bar.
 6. **Fused reads.** Whole-result operations decompress page by page on their workers instead of rehydrating; measure
    sort ties and Save with decompression ahead.

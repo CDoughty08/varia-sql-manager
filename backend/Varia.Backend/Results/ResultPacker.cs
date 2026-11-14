@@ -9,9 +9,11 @@ namespace Varia.Backend.Results;
 /// <remarks>
 /// Scheduling is the backend's alone: one thread that sleeps until the next hidden result is due or until something may
 /// have made one packable (a set completed, the visible set changed, a pin or lease that stopped packing ended), so an
-/// idle backend does no work. It packs one result at a time, page by page, at the lowest thread priority, on its own
+/// idle backend does no work. It packs one result at a time, page by page, compressing each at the lowest thread priority
+/// (and doing everything that takes a lock or allocates at normal priority, so it is never preempted holding a lock; only
+/// Windows honours the lowered priority, and on Linux and macOS compression competes as an ordinary thread), on its own
 /// thread rather than the results' workers: the worker gate shares its threads fairly and has no lower priority, so
-/// packing there would take a share from a visible sort. One thread packs about 300 to 380 MB/s (a 1 GiB result in about
+/// packing there would take a share from a visible sort. One thread packs about 275 to 400 MB/s (a 1 GiB result in about
 /// three seconds), and reads, operations and new queries never wait for it: a page switches under the set's lock when
 /// its packed copy is ready, and packing stops between pages as soon as the result is shown again, pinned, leased or
 /// released, or the backend shuts down. Each packed page's saving goes back to the budget at once. Nothing is evicted
@@ -37,7 +39,7 @@ internal sealed class ResultPacker : IDisposable
     /// <summary>Each result an operation has unpacked: its unpack count when the policy noticed it, and when. An operation's
     /// unpack counts as a use, so a hidden result a pivot or comparison reads again and again is not packed between runs.
     /// Only results still stored are kept.</summary>
-    private readonly Dictionary<uint, (int Unpacks, long At)> used = [];
+    private readonly Dictionary<uint, (int Unpacks, long At, bool Held)> used = [];
 
     /// <param name="delayMs">The checks pass a shorter delay; the product uses <see cref="DelayMs"/>.</param>
     public ResultPacker(ResultStore store, ResultVisibility visibility, long delayMs = DelayMs, long floorBytes = FloorBytes)
@@ -54,10 +56,27 @@ internal sealed class ResultPacker : IDisposable
     /// <summary>Scans that ran (the checks wait on it).</summary>
     public int Passes => Volatile.Read(ref passes);
 
-    /// <summary>The thread's priority, set before <see cref="Start"/>. Lowest in the product; the checks of the thread's timing
-    /// run it at normal priority, since on a starved machine (offline-stress) a lowest-priority thread may not run for many
-    /// seconds, which is the point in the product but not what those checks test.</summary>
+    /// <summary>Whether the thread is running (started and not yet ended).</summary>
+    internal bool Running => thread?.IsAlive == true;
+
+    /// <summary>The priority a pass compresses a page at, on whichever thread runs it (read before each page). Lowest in the product; the checks
+    /// of the thread's timing use normal priority, since on a starved machine (offline-stress) a lowest-priority thread may
+    /// not run for many seconds, which is the point in the product but not what those checks test. Everything else the
+    /// thread does (the scan, visibility lookups, replacing a page under the set's lock, charging the budget) runs at normal
+    /// priority: a thread preempted for seconds while it holds the store's or a set's lock would stall reads and new
+    /// queries behind it.</summary>
     internal ThreadPriority Priority { get; set; } = ThreadPriority.Lowest;
+
+    /// <summary>False once the platform refused a priority change; the thread then compresses at normal priority.</summary>
+    private volatile bool canLower = true;
+    private int pagesAtPriority;
+
+    /// <summary>Whether the platform lets the thread change its priority (for the checks).</summary>
+    internal bool CanLower => canLower;
+
+    /// <summary>The pages compressed after asking for <see cref="Priority"/> (for the checks; off Windows the request is
+    /// accepted and has no effect on scheduling).</summary>
+    internal int PagesAtPriority => Volatile.Read(ref pagesAtPriority);
 
     /// <summary>Starts the thread and hooks the store's <see cref="ResultStore.Settled"/>. Only the service starts one, for
     /// a store whose packing is on.</summary>
@@ -66,16 +85,20 @@ internal sealed class ResultPacker : IDisposable
         if (thread is not null) return;
         store.Settled = Poke;
         thread = new Thread(Run) { IsBackground = true, Name = "Varia result packer" };
-        // Lowest where the platform allows it; elsewhere it runs at normal priority, one thread of many.
-        try { thread.Priority = Priority; } catch (Exception error) when (error is PlatformNotSupportedException or ThreadStateException) { }
         thread.Start();
     }
 
     /// <summary>Something may have made a result packable, or shown one: look again now. Returns at once.</summary>
     public void Poke()
     {
+        Interlocked.Increment(ref pokes);
         if (!stopping) wake.Set();
     }
+
+    private int pokes;
+
+    /// <summary>How many times something woke the policy (for the checks).</summary>
+    internal int Pokes => Volatile.Read(ref pokes);
 
     private void Run()
     {
@@ -90,6 +113,7 @@ internal sealed class ResultPacker : IDisposable
             var wait = next is { } at ? Math.Clamp(at - visibility.Now, 0, int.MaxValue) : Timeout.Infinite;
             if (wait != 0) wake.WaitOne((int)wait);
         }
+        PageCodec.ReleaseQuietEncoder();
     }
 
     /// <summary>One scan: packs every result that is due, largest first, and returns when the next hidden one falls due (on
@@ -103,7 +127,7 @@ internal sealed class ResultPacker : IDisposable
         var now = visibility.Now;
         var wait = Delay;
         long? next = null;
-        List<(ResultSetBuffer Set, long Bytes)> due = [];
+        List<(ResultSetBuffer Set, long Bytes, int Unpacks)> due = [];
         var sets = store.Sets();
         foreach (var set in sets)
         {
@@ -112,14 +136,17 @@ internal sealed class ResultPacker : IDisposable
             // delay then rather than when it completes. Live tables are never packed and the renderer never reports them.
             if (set.Budget.Live is not null || !visibility.IsHidden(set.ResultId, out var since)) continue;
             if (!set.NeedsPacking || set.BytesStored is var bytes && bytes < floor) continue;
-            var at = Math.Max(since, UsedAt(set, now)) + wait;
+            var unpacks = set.Unpacks;
+            var at = Math.Max(since, UsedAt(set, unpacks, now)) + wait;
             if (at > now) next = Math.Min(next ?? at, at);
-            else due.Add((set, bytes));
+            else due.Add((set, bytes, unpacks));
         }
-        foreach (var (set, _) in due.OrderByDescending(item => item.Bytes))
+        // Packing a large result takes seconds, so one found due may have been used meanwhile: Pack packs nothing if an
+        // operation unpacked it since the scan (its end pokes the policy, whose next scan starts the delay again).
+        foreach (var (set, _, unpacks) in due.OrderByDescending(item => item.Bytes))
         {
             if (stopping) return null;
-            set.Pack(() => !stopping && visibility.IsHidden(set.ResultId, out _));
+            set.Pack(() => !stopping && visibility.IsHidden(set.ResultId, out _), Quiet, unpacks);
         }
         lock (used)
             if (used.Count > 0)
@@ -131,15 +158,62 @@ internal sealed class ResultPacker : IDisposable
     }
 
     /// <summary>When an operation last unpacked the result, as the policy first saw it (0 when none has).</summary>
-    private long UsedAt(ResultSetBuffer set, long now)
+    private long UsedAt(ResultSetBuffer set, int unpacks, long now)
     {
-        var unpacks = set.Unpacks;
         if (unpacks == 0) return 0;
+        // An operation runs as long as it holds the result, so a scan that finds it still held after a new unpack (another
+        // wake-up during a long sort or pivot) moves the use to now, and so does the first scan after that hold ends (its
+        // end pokes the policy): the delay runs from when the operation ended, not from when a scan first saw its unpack.
+        // Only the hold that follows an unpack counts: a plain read, Copy or Save later is not a use, as it is not on a
+        // result never unpacked.
+        var held = set.Pins > 0 || set.Leases > 0;
         lock (used)
         {
-            if (!used.TryGetValue(set.ResultId, out var seen) || seen.Unpacks != unpacks) used[set.ResultId] = seen = (unpacks, now);
+            var found = used.TryGetValue(set.ResultId, out var seen);
+            if (!found || seen.Unpacks != unpacks || seen.Held) used[set.ResultId] = seen = (unpacks, now, held);
             return seen.At;
         }
+    }
+
+    /// <summary>Whether this thread lowered itself for the compression running now (<see cref="Quiet"/>).</summary>
+    [ThreadStatic] private static bool lowered;
+
+    /// <summary>Lowers the thread to <see cref="Priority"/> just before the codec compresses a page and returns it to normal
+    /// priority just after (<see cref="PageCodec.Pack"/>): nothing that takes a lock or allocates runs lowered.</summary>
+    private void Quiet(bool compressing)
+    {
+        if (compressing) lowered = Lower();
+        else if (lowered)
+        {
+            lowered = false;
+            Raise(Thread.CurrentThread);
+        }
+    }
+
+    private bool Lower()
+    {
+        if (!canLower || Priority == ThreadPriority.Normal || stopping) return false;
+        try { Thread.CurrentThread.Priority = Priority; }
+        catch (Exception error) when (error is PlatformNotSupportedException or ThreadStateException)
+        {
+            canLower = false;
+            return false;
+        }
+        // Disposal raises the thread after setting stopping; checking it after lowering means one of the two always sees
+        // the other, so the last page before a stop is never compressed starved.
+        if (!stopping)
+        {
+            Interlocked.Increment(ref pagesAtPriority);
+            return true;
+        }
+        Raise(Thread.CurrentThread);
+        return false;
+    }
+
+    private static void Raise(Thread target)
+    {
+        try { target.Priority = ThreadPriority.Normal; }
+        catch (Exception error) when (error is PlatformNotSupportedException or ThreadStateException) { }
     }
 
     /// <summary>Stops packing between pages and ends the thread (the service's disposal). What was packed stays packed.</summary>
@@ -148,6 +222,7 @@ internal sealed class ResultPacker : IDisposable
         stopping = true;
         store.Settled = null;
         wake.Set();
+        if (thread is { } running) Raise(running);
         // One page takes about a millisecond to pack; the wait only bounds a stuck thread, which is a background one.
         thread?.Join(TimeSpan.FromSeconds(5));
     }

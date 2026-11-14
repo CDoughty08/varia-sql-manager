@@ -483,11 +483,11 @@ internal sealed class ResultSetBuffer
     /// <summary>The bytes of the sealed pages as sealed (the rows as read; the descriptor's bytesStored).</summary>
     public long BytesStored { get { lock (gate) return bytesStored; } }
 
-    /// <summary>Whether the policy (<see cref="ResultPacker"/>) may pack this result: complete, not a live table, and not
-    /// already packed by a whole pass since it was last unpacked.</summary>
     /// <summary>How many times an operation has unpacked the result whole (the policy counts each as a use).</summary>
     public int Unpacks { get { lock (gate) return unpacks; } }
 
+    /// <summary>Whether the policy (<see cref="ResultPacker"/>) may pack this result: complete, not a live table, and not
+    /// already packed by a whole pass since it was last unpacked.</summary>
     public bool NeedsPacking { get { lock (gate) return state == 1 && !packDone && Budget.Live is null; } }
 
     /// <summary>What the set holds now, for the Memory panel (ResultStore.MemoryDetail): its pages' bytes as sealed, what
@@ -513,7 +513,11 @@ internal sealed class ResultSetBuffer
     /// never toward a compacting one (ResultStore.Freed): the space is reused anyway. Returns the bytes saved.</summary>
     /// <param name="proceed">Asked before each page, outside the set's lock: false stops packing there, keeping what was
     /// packed (the policy's: the result was shown again, or the backend is shutting down).</param>
-    public long Pack(Func<bool>? proceed = null)
+    /// <param name="quiet">Passed to the codec around each page's compression (<see cref="PageCodec.Pack"/>): the policy's,
+    /// which lowers its thread's priority for the compression alone, outside every lock.</param>
+    /// <param name="unpacks">The policy's: the <see cref="Unpacks"/> it saw when it found the result due. An operation that
+    /// unpacked the result since then is a use, so nothing is packed and the policy looks again.</param>
+    public long Pack(Func<bool>? proceed = null, Action<bool>? quiet = null, int? unpacks = null)
     {
         var mode = store.Packing;
         if (mode == PagePacking.Off || Budget.Live is not null) return 0;
@@ -521,8 +525,8 @@ internal sealed class ResultSetBuffer
         int generation;
         lock (gate)
         {
-            generation = unpacks;
-            if (state != 1) return 0;
+            generation = this.unpacks;
+            if (state != 1 || unpacks is { } seen && seen != generation) return 0;
             if (pins > 0 || leases > 0)
             {
                 notifyIdle = true;
@@ -539,13 +543,20 @@ internal sealed class ResultSetBuffer
                 whole = false;
                 break;
             }
-            if (page.Stored is not byte[] raw || store.Pack(raw) is not { } bytes) continue;
+            if (page.Stored is not byte[] raw || store.Pack(raw, quiet) is not { } bytes) continue;
             var keep = mode == PagePacking.EveryComplete || bytes.Length <= raw.Length - raw.Length / 10;
             lock (gate)
             {
                 if (state != 1 || pins > 0 || leases > 0)
                 {
                     notifyIdle = state == 1;
+                    whole = false;
+                    break;
+                }
+                // An operation unpacked the result whole between two pages and has already ended (its end poked the
+                // policy): a use, so the rest waits the delay again.
+                if (unpacks is not null && this.unpacks != generation)
+                {
                     whole = false;
                     break;
                 }
@@ -569,7 +580,7 @@ internal sealed class ResultSetBuffer
         }
         if (whole)
             lock (gate)
-                packDone = state == 1 && unpacks == generation;
+                packDone = state == 1 && this.unpacks == generation;
         if (saved > 0) store.Freed(saved, Budget.Live is not null, compacts: false);
         return saved;
     }

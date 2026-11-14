@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.IO.Compression;
 
 namespace Varia.Backend.Results;
@@ -25,15 +26,53 @@ internal static class PageCodec
     public const int Quality = 2;
     public const int Window = 18;
 
+    /// <summary>The policy thread's own encoder (<see cref="Pack"/> with a quiet callback): one native context, created and
+    /// warmed at normal priority, then reset per page, so compressing at a lowered priority allocates nothing.</summary>
+    [ThreadStatic] private static ZstandardEncoder? quietEncoder;
+
     /// <summary>A page's packed bytes, or null when Zstandard could not pack it (never expected).</summary>
-    public static byte[]? Pack(ReadOnlySpan<byte> page)
+    /// <param name="quiet">Called with true just before the compressor runs and with false just after: the hidden-result
+    /// policy lowers its thread's priority for the compression alone. Never while anything allocates or takes a lock a
+    /// starved thread must not hold: the room is rented, the result copied and the room returned outside the window, and
+    /// the compression itself runs on this thread's reused encoder (the one-shot TryCompress creates and frees a native
+    /// context per call).</param>
+    public static byte[]? Pack(ReadOnlySpan<byte> page, Action<bool>? quiet = null)
     {
         var need = (int)ZstandardEncoder.GetMaxCompressedLength(page.Length);
         // A page's worst case is above the large object heap's threshold, so the room is pooled (bounded per core by the
         // shared pool) rather than allocated per page or kept on every thread that ever packs.
-        var room = System.Buffers.ArrayPool<byte>.Shared.Rent(need);
-        try { return ZstandardEncoder.TryCompress(page, room, out var written, Quality, Window) ? room.AsSpan(0, written).ToArray() : null; }
-        finally { System.Buffers.ArrayPool<byte>.Shared.Return(room); }
+        var room = ArrayPool<byte>.Shared.Rent(need);
+        try
+        {
+            if (quiet is null)
+                return ZstandardEncoder.TryCompress(page, room, out var once, Quality, Window) ? room.AsSpan(0, once).ToArray() : null;
+            var encoder = QuietEncoder(room);
+            encoder.Reset();
+            OperationStatus status;
+            int consumed, written;
+            quiet(true);
+            try { status = encoder.Compress(page, room, out consumed, out written, isFinalBlock: true); }
+            finally { quiet(false); }
+            return status == OperationStatus.Done && consumed == page.Length ? room.AsSpan(0, written).ToArray() : null;
+        }
+        finally { ArrayPool<byte>.Shared.Return(room); }
+    }
+
+    /// <summary>This thread's encoder for the policy, made on first use and warmed with one page of zeros so its working
+    /// memory exists before any compression runs lowered.</summary>
+    private static ZstandardEncoder QuietEncoder(byte[] room)
+    {
+        if (quietEncoder is { } ready) return ready;
+        var encoder = new ZstandardEncoder(Quality, Window);
+        encoder.Compress(new byte[1 << Window], room, out _, out _, isFinalBlock: true);
+        return quietEncoder = encoder;
+    }
+
+    /// <summary>Frees this thread's policy encoder (the policy's thread, as it ends).</summary>
+    public static void ReleaseQuietEncoder()
+    {
+        quietEncoder?.Dispose();
+        quietEncoder = null;
     }
 
     /// <summary>The page packed into <paramref name="packed"/>, of <paramref name="length"/> bytes as sealed.</summary>

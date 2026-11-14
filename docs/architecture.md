@@ -140,8 +140,9 @@ being true.
   unleased set (`ResultSetBuffer.RequirePins`). Packing is behind an internal switch, `ResultStore.Packing`, not a
   setting: the backend process's service turns it on request and runs the stage 1 policy (`ResultPacker`,
   docs/page-compression-findings.md), which packs a complete result of 1 MiB or more hidden in every window for 5 s
-  (`ResultVisibility`), never a live table or one still storing rows. It runs on its own lowest-priority thread, not
-  the workers' gate (which has no lower priority), waking only on a deadline, a completed result of 1 MiB or more, a
+  (`ResultVisibility`), never a live table or one still storing rows. It runs on its own thread, not the workers' gate
+  (which has no lower priority), compressing at the lowest priority (honoured on Windows) and taking locks or allocating only at normal priority, so a
+  starved packer never holds a lock a read or a new query waits on; waking only on a deadline, a completed result of 1 MiB or more, a
   visibility change, or the end of a pin or lease that stopped it or of an operation that unpacked it (`ResultStore.Settled`;
   an operation's unpack counts as a use, so the delay starts again), and stops between pages when the result is
   shown, held, released or the service disposed. The checks' stores leave packing off unless a check turns it on

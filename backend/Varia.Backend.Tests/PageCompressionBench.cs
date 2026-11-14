@@ -742,7 +742,7 @@ internal static class PageCompressionBench
         background.Join();
         var both = timer.Elapsed.TotalSeconds;
         if (!set.HasPacked) throw new InvalidOperationException("The policy packed nothing beside the second query.");
-        Print("policy.secondFillBesideSeconds", beside, "s", "the same while the policy packs the first result on a lowest-priority thread (" + both.ToString("0.00", CultureInfo.InvariantCulture) + " s until both ended); " + (beside / alone).ToString("0.00", CultureInfo.InvariantCulture) + "x alone");
+        Print("policy.secondFillBesideSeconds", beside, "s", "the same while the policy packs the first result on its own thread, compressing at the lowest priority (" + both.ToString("0.00", CultureInfo.InvariantCulture) + " s until both ended); " + (beside / alone).ToString("0.00", CultureInfo.InvariantCulture) + "x alone");
     }
 
     private static T Time<T>(string name, Func<T> work, Func<T, string> about)

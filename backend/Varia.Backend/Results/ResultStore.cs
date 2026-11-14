@@ -232,10 +232,10 @@ internal sealed partial class ResultStore
     }
 
     /// <summary>A page packed (<see cref="PageCodec.Pack"/>), timed and counted; null when the codec failed.</summary>
-    internal byte[]? Pack(byte[] page)
+    internal byte[]? Pack(byte[] page, Action<bool>? quiet = null)
     {
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
-        var packed = PageCodec.Pack(page);
+        var packed = PageCodec.Pack(page, quiet);
         Interlocked.Add(ref packTicks, System.Diagnostics.Stopwatch.GetTimestamp() - started);
         Interlocked.Add(ref packedIn, page.Length);
         if (packed is null) return null;
