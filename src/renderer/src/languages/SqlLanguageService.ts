@@ -145,8 +145,9 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
         } finally { activity.dispose(); pending.finish(); foreground.dispose() }
       }
     }), monaco.languages.registerDefinitionProvider('sql', {
-      // Monaco's own navigation is not loaded: F12, Alt+F12 and Ctrl+click are Varia's commands (contributions/languages.ts), which
-      // call definition() directly. A location still names the object, for anything that asks Monaco's provider.
+      // F12, Alt+F12 and Ctrl+click are Varia's commands (contributions/languages.ts), which call definition() directly and take
+      // their keys before Monaco's gotoSymbol actions; each editor drops Monaco's Ctrl+hover link (create-editor.ts), so nothing
+      // asks the provider as the pointer moves. A location still names the object, for anything that asks Monaco's provider.
       provideDefinition: async (model, position, token) => {
         const found = await this.definition(model, position, token).catch(() => undefined)
         return found ? { uri: monaco.Uri.from(definitionUri(found)), range: toMonacoRange(found.definition.range) } : null

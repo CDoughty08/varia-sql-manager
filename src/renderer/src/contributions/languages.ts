@@ -30,16 +30,11 @@ export function languagesContribution({ commands, documents, connections, sqlLan
   const next = commands.register('edit.nextSqlIssue', { run: () => triggerEditorAction(documents, 'editor.action.marker.next') })
   const previous = commands.register('edit.previousSqlIssue', { run: () => triggerEditorAction(documents, 'editor.action.marker.prev') })
   // The editor with focus (its text, or its find widget), whichever window and view it is in: Monaco tracks every instance.
-  // Failing that, the SQL editor that last had it, while it exists: the editor's own menu holds the focus when its Go To
-  // Definition is clicked, and the keys themselves only fire in an editor (their when clause).
-  let last: Monaco.editor.ICodeEditor | undefined
+  // The editor's menu needs nothing more: MenuService runs a chosen command once focus is back where the menu took it from.
   const focused = () => {
-    const editors = monaco?.editor.getEditors?.() ?? []
-    const editor = editors.find(editor => editor.hasWidgetFocus()) ?? (last && editors.includes(last) ? last : undefined)
+    const editor = monaco?.editor.getEditors?.().find(editor => editor.hasWidgetFocus())
     const model = editor?.getModel(), position = editor?.getPosition()
-    if (!editor || !model || !position || model.getLanguageId() !== 'sql') return undefined
-    last = editor
-    return { model, position }
+    return editor && model && position && model.getLanguageId() === 'sql' ? { model, position } : undefined
   }
   const definition = async (mode: 'script' | 'peek') => {
     const at = focused()
@@ -64,5 +59,5 @@ export function languagesContribution({ commands, documents, connections, sqlLan
   }
   const goTo = commands.register('edit.goToDefinition', { when: () => !!focused(), unavailable: () => definitionMessages.unavailable, run: () => definition('script') })
   const peek = commands.register('edit.peekDefinition', { when: () => !!focused(), unavailable: () => definitionMessages.unavailable, run: () => definition('peek') })
-  return { dispose: () => { last = undefined; refresh.dispose(); next.dispose(); previous.dispose(); goTo.dispose(); peek.dispose() } }
+  return { dispose: () => { refresh.dispose(); next.dispose(); previous.dispose(); goTo.dispose(); peek.dispose() } }
 }

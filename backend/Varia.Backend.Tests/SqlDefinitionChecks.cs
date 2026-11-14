@@ -92,6 +92,15 @@ internal static class SqlDefinitionChecks
         check(await service.ResolveAsync(Request(context: new("sqlserver")), default) is null && host.Profiles == 0, "a query without a connection answers null without SQL");
         check(await service.ResolveAsync(Request("SELECT 1", position: new(0, 3)), default) is null && host.Profiles == 0, "no name under the caret answers null without SQL");
         check(await Code(() => service.ResolveAsync(Request(), default)) == "NOT_CONNECTED" && host.Profiles == 1, "an unknown connection is NOT_CONNECTED");
+        // A database that cannot be opened is nothing to go to; a server or login that cannot be reached is an error, not "no definition".
+        var cloud = new Host(new ServerProfile(12, null, 5, null, false, true, true, 16), ConnectionFailureChecks.Sql(4060, 1, 11, "server", "Cannot open database."));
+        check(await new DefinitionService(cloud).ResolveAsync(Request("SELECT * FROM Gone.dbo.T", position: new(0, 22)), default) is null && cloud.Opened.SequenceEqual(["Gone"]),
+            "a cloud database the login cannot open answers null");
+        var refused = new Host(new ServerProfile(17, null, 3, null, false, true, true, 16), ConnectionFailureChecks.Sql(18456, 1, 14, "server", "Login failed."));
+        var surfaced = false;
+        try { await new DefinitionService(refused).ResolveAsync(Request(), default); }
+        catch (Microsoft.Data.SqlClient.SqlException error) { surfaced = error.Number == 18456; }
+        check(surfaced && refused.Opened.SequenceEqual([(string?)null]), "a failed login is the caller's error, never a null answer");
 
         using var sql = new SqlService();
         check(SqlService.MethodNames.Contains("language.definition") && sql.LaneOf("language.definition") == Varia.Backend.Protocol.RequestLane.Metadata,
@@ -129,14 +138,16 @@ internal static class SqlDefinitionChecks
             "the cross-database wrapper names the database only through QUOTENAME");
     }
 
-    /// <summary>No server: every connection is unknown, as SqlService answers before connecting.</summary>
-    private sealed class Host : IExplorerHost
+    /// <summary>No server: every connection is unknown, as SqlService answers before connecting; or, with a profile, every open
+    /// fails with <paramref name="open"/>.</summary>
+    private sealed class Host(ServerProfile? profile = null, Exception? open = null) : IExplorerHost
     {
         public int Profiles;
-        public ServerProfile Profile(string connectionId) { Profiles++; throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first."); }
-        public Microsoft.Data.SqlClient.SqlConnection Connection(string connectionId, string? database) => throw new InvalidOperationException("No SQL in offline checks.");
+        public List<string?> Opened { get; } = [];
+        public ServerProfile Profile(string connectionId) { Profiles++; return profile ?? throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first."); }
+        public Microsoft.Data.SqlClient.SqlConnection Connection(string connectionId, string? database) { Opened.Add(database); return profile is null ? throw new InvalidOperationException("No SQL in offline checks.") : new Microsoft.Data.SqlClient.SqlConnection(); }
         public Microsoft.Data.SqlClient.SqlConnection SsisConnection(string connectionId) => throw new InvalidOperationException("No SQL in offline checks.");
         public string SsisCatalog => "SSISDB";
-        public Task OpenAsync(Microsoft.Data.SqlClient.SqlConnection connection, CancellationToken token) => throw new InvalidOperationException("No SQL in offline checks.");
+        public Task OpenAsync(Microsoft.Data.SqlClient.SqlConnection connection, CancellationToken token) => throw open ?? new InvalidOperationException("No SQL in offline checks.");
     }
 }

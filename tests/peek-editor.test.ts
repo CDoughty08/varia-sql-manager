@@ -5,7 +5,7 @@ import { contextRecord, type ContextKeys } from '../src/shared/commands/context-
 import { platforms, type Platform } from '../src/shared/commands/keybindings'
 import { computeContextKeys, focusFacts, type FocusElement } from '../src/renderer/src/core/contextkeys'
 import { KeybindingService, type KeyDownEvent } from '../src/renderer/src/core/keybindings'
-import { createQueryEditor } from '../src/renderer/src/editor/create-editor'
+import { createQueryEditor, monacoDefinitionLink } from '../src/renderer/src/editor/create-editor'
 import { bridgeWhen } from '../src/renderer/src/editor/keybinding-bridge'
 import { editorIdAttribute, inPeekEditorWidgets, PeekEditor, peekEditorAttribute, peekEditorContextKey, peekEditorHasTextFocus, peekEditorUse, peekModelContext } from '../src/renderer/src/explorer/peek-editor'
 import type { QueryEditorInstance } from '../src/renderer/src/editor/create-editor'
@@ -124,7 +124,9 @@ describe('Peek editor', () => {
   it('creates the query editor read-only, compact and keyed for Peek, without Object Explorer drops, with Tools › Options bound', () => {
     const contextKeys: [string, unknown][] = [], listeners: string[] = []
     let created: Record<string, unknown> | undefined
+    const link = { dispose: vi.fn() }
     const instance = {
+      getContribution: (id: string) => id === monacoDefinitionLink ? link : null,
       createContextKey: (key: string, value: unknown) => { contextKeys.push([key, value]) },
       getContainerDomNode: () => ({ addEventListener: (type: string) => { listeners.push(type) }, removeEventListener: () => {} }),
       dispose: vi.fn(), getId: () => 'peek-1', getDomNode: () => null, onDidChangeModel: () => ({ dispose: () => {} })
@@ -151,6 +153,8 @@ describe('Peek editor', () => {
     expect(created?.readOnlyMessage).toEqual({ value: expect.stringContaining('Script to New Query') })
     expect(contextKeys).toEqual([[peekEditorContextKey, true]])
     expect(listeners).toEqual([])
+    // Monaco's Ctrl+hover definition link is dropped: it would ask the backend for each word under a Ctrl-held pointer.
+    expect(link.dispose).toHaveBeenCalledTimes(1)
     editor.dispose()
     expect(unbind).toHaveBeenCalled()
     expect(instance.dispose).toHaveBeenCalled()

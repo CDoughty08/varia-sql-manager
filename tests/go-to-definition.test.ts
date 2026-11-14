@@ -41,15 +41,12 @@ describe('Go To Definition', () => {
     expect(f.peekTabs.open).not.toHaveBeenCalled()
   })
 
-  it('acts on the SQL editor that last had focus when its own menu has taken it', async () => {
+  it('is not offered once focus has left every SQL editor', () => {
     const f = fixture(async () => customer)
     expect(f.handlers['edit.goToDefinition']!.when!()).toBe(true)
-    // The editor's context menu holds the focus while its Go To Definition is clicked.
+    // From the palette over Object Explorer or a grid, nothing is under a caret.
     f.focus.now = false
-    expect(f.handlers['edit.goToDefinition']!.when!()).toBe(true)
-    await f.handlers['edit.goToDefinition']!.run()
-    expect(f.definition).toHaveBeenCalledWith(f.model, { lineNumber: 1, column: 20 })
-    expect(f.scripting.run).toHaveBeenCalledWith('create', 'newQuery', definitionNode(customer))
+    expect(f.handlers['edit.goToDefinition']!.when!()).toBe(false)
   })
 
   it('opens the object in a Peek tab (Alt+F12)', async () => {

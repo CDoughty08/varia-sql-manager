@@ -42,8 +42,9 @@ being true.
   names only as parameters, another database's through the `QUOTENAME(@db)` wrapper, within a 10 s budget. A missing object
   or a database the login cannot open is `null`, which the renderer shows as a status-bar notice, never an error banner.
   F12, Alt+F12 and Ctrl+click are Varia commands (`edit.goToDefinition`, `edit.peekDefinition`, gesture
-  `editor.goToDefinition`), since Monaco's gotoSymbol contribution is not loaded: F12 scripts the object as CREATE to a new
-  query through Script As, Alt+F12 opens a Peek tab. Both run on `editorTextFocus || peekEditorFocus` with no query-tab
+  `editor.goToDefinition`) that `KeybindingService` takes before Monaco's gotoSymbol actions (loaded with hover), and each
+  editor drops Monaco's Ctrl+hover link, which would ask the backend for every word under a Ctrl-held pointer (`create-editor.ts`).
+  F12 scripts the object as CREATE to a new query through Script As, Alt+F12 opens a Peek tab. Both run on `editorTextFocus || peekEditorFocus` with no query-tab
   precondition, so they work in Peek's editor without enabling query commands there.
   The service serves query documents' models and Peek's read-only definition models (`peekModelContext`: connection,
   database and the model's own UUID as its document id), and nothing else. A Peek model gets hover and Go To Definition only, never
