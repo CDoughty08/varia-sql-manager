@@ -695,21 +695,28 @@ Outcome, accepted by the owner:
       - Left: rebuilding by itself (PR 17); a Pivot whose last build failed or was cancelled stays marked, with no
         record of the failure on its caption (the toolbar's notice fades).
     - **Filters compared by value** (the follow-up the owner asked for; `tests/results-pivot.test.ts`'s "does not mark a
-      Pivot for a filter made again of the same values", `FilterChecks`' lowest-row checks and `DistinctChecks`' digest
-      check hold its checks). No backend method was added; `results.view` answers its resolved filters by value:
-      - A value filter (`in`, `notIn`, `between`) resolves each value to its lowest base row (`ViewSorter.Lowest`),
-        whichever cells or rows named it, so the same values give the same rows. Rows below a sealed row are sealed, so
-        that row never changes as more arrive. The pass stops once every value has met its lowest row, at the latest at
-        the highest row named; at most 4,096 values, so a row costs one binary search over them, as the filter itself.
-      - A resolved `groups` filter carries `digest`, 32 hex digits of a SHA-256 of its column, keep or drop, NULL and its
-        frozen rows in value order, hashed in 1 KiB chunks so nothing is held a row. A snapshot's rows are each the lowest
+      Pivot for a filter made again of the same values", `FilterChecks`' lowest-row checks, `DistinctChecks`' digest
+      check and `results-smoke` step 13b2's selection and funnel cases hold its checks). No backend method was added;
+      `results.view` answers its resolved filters by value:
+      - A value filter (`in`, `notIn`, `between`) resolves each value to its lowest base row, whichever cells or rows
+        named it, so the same values give the same rows. Rows below a sealed row are sealed, so that row never changes as
+        more arrive. A view's first filter reads every row in base order anyway, so it finds them in its own pass
+        (`ViewSorter.KeepLowest`: In and NotIn from the binary search that decides a row, Between from its two
+        comparisons); a later one sees only the rows kept before it, so `ViewSorter.Lowest` finds them in a pass of its
+        own that stops once every value has met its lowest row, at the latest at the highest row named (at most 4,096
+        values, one binary search a row).
+      - A resolved `groups` filter carries `digest` (`DistinctSnapshot.Digest`), 32 hex digits of a SHA-256 of its column,
+        keep or drop, NULL and its frozen rows in value order, hashed once when the snapshot first filters, in 1 KiB chunks
+        outside the ticks' lock so nothing is held a row, and kept with the snapshot. A snapshot's rows are each the lowest
         of the rows it grouped holding its value, so two snapshots over the same rows (the grid's other filters keeping
         the same rows) that tick the same values have the same digest. The rows themselves are not sent: there is one
         a distinct value, unbounded.
       - Left: a `groups` filter and a value filter keeping the same values still differ (different ops, compared apart);
         so do snapshots over different rows (another filter of the grid changed between) that freeze to the same rows
         kept, and a snapshot frozen as `notIn` against one frozen as `in` (the result still loading, then complete).
-        Each errs towards offering Update.
+        Each errs towards offering Update. A filter's label reads its values from the resolved rows, so a selection
+        filter is named by its value's lowest row (under a CI collation 'a' for a selected 'A'), as the funnel's checklist
+        already lists that row's text.
 12. **`hasResultSets`** and its consumers (after PRs 7 and 9, which edit the same contributions). Until then an
     emptied run with captured plans still has `hasResults`, so Find and Save Results As are enabled and do nothing.
     Consumers: `contributions/output.ts`, `pivot.ts`, `transpose.ts`, `PivotService`'s sync,

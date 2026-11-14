@@ -1417,8 +1417,8 @@ itself by view position.
   `cells: { ranges: 1 – 256 [first, count], viewId? }`, positions in a view (or the result) that the backend reads (each
   once, however the ranges overlap), reduces to one row per distinct value (at most 4,096, else `TOO_LARGE`; `between` keeps only the lowest and highest) and
   answers resolved, `{ op, column, rows, nulls }`, in `filters`, so the renderer builds the same view again from rows.
-  Resolved, each value is its lowest base row (found by a pass that stops once every value has met it, at the latest at
-  the highest row named), whichever cells or rows named it, so two filters of the same values answer the same rows: a
+  Resolved, each value is its lowest base row (found by a view's first filter as it keeps rows, by a later one in a pass
+  that stops once every value has met it, at the latest at the highest row named), whichever cells or rows named it, so two filters of the same values answer the same rows: a
   Pivot compares its recorded filters with its Table's by them. Rows below a sealed row are sealed, so a value's lowest
   row never changes as more arrive.
   `{ op: 'groups', column, snapshotId }` filters by a distinct snapshot's ticks ([Distinct values](#distinct-values)). A
@@ -1855,7 +1855,7 @@ receives at most 512 values a window, never rows.
   `notIn` of the cleared ones, so values in rows still arriving stay shown. The view answers it resolved as `{ op:
   'groups', column, snapshotId, keep, values, nulls, row?, digest }` (`row` when one value is named) for its label.
   `digest` is 32 hex digits, the first half of a SHA-256 of its column, keep or drop, NULL and its frozen rows in value
-  order (each the lowest of the snapshot's rows holding its value), hashed in chunks: two snapshots over the same rows
+  order (each the lowest of the snapshot's rows holding its value), hashed once in chunks and kept with the snapshot: two snapshots over the same rows
   that tick the same values give the same digest, so a Pivot compares a `groups` filter by it rather than by snapshot id
   (the rows, one a distinct value, are too many to send). A sort or another filter builds the view again from the same
   frozen snapshot.

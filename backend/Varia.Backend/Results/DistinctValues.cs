@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace Varia.Backend.Results;
@@ -27,6 +29,7 @@ internal sealed class DistinctSnapshot
     private int ticked;
     private bool nullTicked;
     private (FilterOp Op, int[] Rows, bool Nulls)? frozen;
+    private string? digest;
     private (string Text, int[] ByValue, int[] ByCount)? lastSearch;
 
     internal DistinctSnapshot(ResultSetBuffer set, int column, ViewSorter.PageSource source, int[] reps, int[] counts, int[] byCount, bool[] ticks, long rows, long nulls, bool nullTicked, bool complete, bool approximate)
@@ -135,6 +138,35 @@ internal sealed class DistinctSnapshot
             frozen = (keep ? FilterOp.In : FilterOp.NotIn, rows, (keep ? nullTicked : !nullTicked) && Nulls > 0);
             return frozen.Value;
         }
+    }
+
+    /// <summary>What the filter its ticks make keeps (<see cref="Freeze"/>, which it calls), in 32 hex digits: the first half of
+    /// a SHA-256 of the column, whether it keeps or drops, NULL and its rows in value order, each the lowest of the rows grouped
+    /// holding its value. Two snapshots over the same rows that tick the same values have the same digest, so a Pivot's
+    /// recorded filters compare by it rather than by snapshot id; the rows themselves, one a distinct value, are too many to
+    /// send. Hashed once, in 1 KiB chunks outside the ticks' lock, and kept: the frozen filter never changes, and two callers
+    /// racing compute the same text.</summary>
+    public string Digest()
+    {
+        if (Volatile.Read(ref digest) is { } done) return done;
+        var (op, rows, nulls) = Freeze();
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        Span<byte> chunk = stackalloc byte[1024];
+        BinaryPrimitives.WriteInt32LittleEndian(chunk, Column);
+        chunk[4] = op == FilterOp.In ? (byte)1 : (byte)0;
+        chunk[5] = nulls ? (byte)1 : (byte)0;
+        hash.AppendData(chunk[..6]);
+        for (var at = 0; at < rows.Length; at += chunk.Length / 4)
+        {
+            var count = Math.Min(chunk.Length / 4, rows.Length - at);
+            for (var i = 0; i < count; i++) BinaryPrimitives.WriteInt32LittleEndian(chunk[(4 * i)..], rows[at + i]);
+            hash.AppendData(chunk[..(4 * count)]);
+        }
+        Span<byte> sum = stackalloc byte[32];
+        hash.GetHashAndReset(sum);
+        var text = Convert.ToHexStringLower(sum[..16]);
+        Volatile.Write(ref digest, text);
+        return text;
     }
 
     /// <summary>The groups whose display text contains the search, in value order and in count order, kept until another

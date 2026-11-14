@@ -24,8 +24,9 @@ internal sealed record ViewCells(int[]? Order, (long First, long Count)[] Ranges
 /// the sort's (<see cref="ViewSorter"/>): a column's collation decides which texts are equal.
 /// A distinct snapshot's checklist (<see cref="Snapshot"/>) arrives already resolved: In or NotIn with its values' rows in
 /// value order, one a value, however many. KeepRows keeps exactly the base rows it names (Rows, ascending once resolved),
-/// or those at the positions a selection named (Cells): at most <see cref="ViewSorter.MaxKeepRows"/>, and no column.</summary>
-internal sealed record ViewFilter(FilterOp Op, int Column, int[]? Rows, bool Nulls, ViewCells? Cells, int[] Columns, uint? Snapshot = null);
+/// or those at the positions a selection named (Cells): at most <see cref="ViewSorter.MaxKeepRows"/>, and no column.
+/// A checklist's filter carries its snapshot's <see cref="DistinctSnapshot.Digest"/>, which its resolved form answers.</summary>
+internal sealed record ViewFilter(FilterOp Op, int Column, int[]? Rows, bool Nulls, ViewCells? Cells, int[] Columns, uint? Snapshot = null, string? Digest = null);
 
 /// <summary>A view of one stored result: its rows in another order (and, later, only some of them), as base row numbers.
 /// Reads through it build pages in view order from the stored ones (<see cref="ViewPages"/>), so the renderer caches and
@@ -394,16 +395,20 @@ internal static partial class ViewSorter
                 if (filter.Rows is not null && (filter.Nulls || nulls || filter.Rows.Length != 2))
                     throw new RequestException("INVALID_PARAMS", "Between takes two rows with distinct values, not NULL.");
                 if (reps.Length == 0) throw new RequestException("INVALID_PARAMS", "Select at least one value that is not NULL to filter between.");
-                // Its two ends, each its value's lowest row (one value's twice).
-                var ends = Lowest(key, reps.Length == 1 ? reps : [reps[0], reps[^1]], token);
-                reps = [ends[0], ends[^1]];
+                reps = [reps[0], reps[^1]];
                 nulls = false;
             }
             else if (reps.Length > MaxFilterValues)
                 throw new RequestException("TOO_LARGE", "Select at most 4,096 different values to filter by.");
             else if (reps.Length == 0 && !nulls) throw new RequestException("INVALID_PARAMS", "A filter needs at least one value.");
-            else reps = Lowest(key, reps, token);
-            order = Keep(order, key, filter.Op, reps, nulls, token);
+            // Each value resolves to its lowest base row. The first filter's pass reads every row in base order, so it finds
+            // them as it keeps rows; a later one sees only the rows kept before it, so a pass of its own finds them.
+            if (f == 0) (order, reps) = KeepLowest(order, key, filter.Op, reps, nulls, token);
+            else
+            {
+                reps = Lowest(key, reps, token);
+                order = Keep(order, key, filter.Op, reps, nulls, token);
+            }
             resolved[f] = filter with { Rows = reps, Nulls = nulls, Cells = null };
         }
         if (keys.Count == 0 || order.Length <= 1) return (order, approximate, resolved);
@@ -568,13 +573,16 @@ internal static partial class ViewSorter
     }
 
     /// <summary>
-    /// Each value's lowest base row, for rows one a value in ascending value order: what a value filter resolves to, so two
-    /// filters of the same values resolve to the same rows whichever cells or rows named them (a Pivot compares its
-    /// recorded filters with its Table's by them). Rows below a sealed row are sealed, so a value's lowest row never changes
-    /// as more arrive. The scan stops once every value has met its lowest row, at the latest at the highest row given.
+    /// Each value's lowest base row, for a value filter's rows (one a value in ascending value order; Between's two ends, the
+    /// same row twice for one value): what a value filter resolves to, so two filters of the same values resolve to the same
+    /// rows whichever cells or rows named them (a Pivot compares its recorded filters with its Table's by them). Rows below a
+    /// sealed row are sealed, so a value's lowest row never changes as more arrive. The scan stops once every value has met
+    /// its lowest row, at the latest at the highest row given.
     /// </summary>
     internal static int[] Lowest(Key key, int[] reps, CancellationToken token)
     {
+        // Between over one value names its row twice: it is one value to find.
+        if (reps is [var low, var high] && key.Compare(low, high) == 0) return Lowest(key, [low], token) is [var one] ? [one, one] : reps;
         if (reps.Length == 0) return reps;
         var lowest = (int[])reps.Clone();
         var found = new bool[reps.Length];
@@ -592,6 +600,42 @@ internal static partial class ViewSorter
             missing--;
         }
         return lowest;
+    }
+
+    /// <summary><see cref="Keep"/> over every row in base order (a view's first filter), finding each value's lowest row
+    /// (<see cref="Lowest"/>) in the same pass: In and NotIn by the place the row's value has among them, which deciding
+    /// whether to keep it finds anyway; Between by the comparisons with its ends that decide it.</summary>
+    private static (int[] Order, int[] Lowest) KeepLowest(int[] order, Key key, FilterOp op, int[] reps, bool nulls, CancellationToken token)
+    {
+        var kept = new int[order.Length];
+        var lowest = (int[])reps.Clone();
+        var found = new bool[reps.Length];
+        var count = 0;
+        for (var i = 0; i < order.Length; i++)
+        {
+            if ((i & (CancelEvery - 1)) == 0) token.ThrowIfCancellationRequested();
+            var row = order[i];
+            bool keep;
+            if (key.IsNull(row)) keep = op == FilterOp.In ? nulls : op == FilterOp.NotIn && !nulls;
+            else if (op == FilterOp.Between)
+            {
+                // A row below the low end cannot hold the high end's value: one comparison decides it, as in Keep.
+                var low = key.Compare(row, reps[0]);
+                var high = low < 0 ? -1 : key.Compare(row, reps[1]);
+                keep = low >= 0 && high <= 0;
+                if (low == 0 && !found[0]) { found[0] = true; lowest[0] = row; }
+                if (high == 0 && !found[1]) { found[1] = true; lowest[1] = row; }
+            }
+            else
+            {
+                var at = IndexOf(key, reps, row);
+                keep = (at >= 0) == (op == FilterOp.In);
+                if (at >= 0 && !found[at]) { found[at] = true; lowest[at] = row; }
+            }
+            if (keep) kept[count++] = row;
+        }
+        Array.Resize(ref kept, count);
+        return (kept, lowest);
     }
 
     private static int[] Keep(int[] order, Key key, FilterOp op, int[] reps, bool nulls, CancellationToken token)
