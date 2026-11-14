@@ -912,6 +912,56 @@ describe('Query Output commands', () => {
     expect(commands.isEnabled('output.closeResult', { tabId: tab.id })).toBe(false)
     await running.finish()
   })
+  it('a run emptied one result at a time with captured plans left has results to close but no result sets: Find, Save, Pivot, Compare and Transpose are off', async () => {
+    const plan = { name: 'Plan', dataType: 'xml', wire: 'text', nullable: true, role: 'plan' } as ResultColumn
+    const { commands, context, results, documents, tab, on, key, element } = await ran('win32', { ...queryOutput, resultSets: [descriptor(1), descriptor(2, { index: 1 })], planSets: [descriptor(7, { index: 0, columns: [plan] })] })
+    const gridIds = ['output.find', 'output.findNext', 'output.findPrevious', 'output.saveResultsAs', 'output.pivot', 'output.compare', 'output.compareWithPrevious', 'output.compareWithPreviousExact', 'output.transpose', 'output.closeResult'] as const
+    // With result sets every one of them is offered for the palette (a grid has had the focus).
+    results.focusEntry(tab.id, key(1))
+    expect(context.getState()).toMatchObject({ hasResults: true, hasResultSets: true })
+    for (const id of gridIds) expect(commands.isEnabled(id, { tabId: tab.id }), id).toBe(true)
+    const first = on('grid'), second = on('grid', { place: 1 })
+    results.removeEntry(tab.id, key(0))
+    results.removeEntry(tab.id, key(0))
+    expect(results.getSnapshot()[tab.id]).toMatchObject({ sets: [], emptied: true, planSets: [{ descriptor: { resultId: 7 } }] })
+    // The captured plans keep hasResults (Close Results still has them to release); no grid is left, so hasResultSets is off.
+    expect(context.getState()).toMatchObject({ hasResults: true, hasResultSets: false })
+    expect(commands.isEnabled('output.closeResults', { tabId: tab.id })).toBe(true)
+    // Disabled, not merely a no-op: from the palette, the toolbar's tab, a menu left open on a closed grid, and a key in Messages.
+    const active = vi.spyOn(windowTools.windows, 'activeElement').mockReturnValue(element('messages').dom)
+    cleanups.push(() => active.mockRestore())
+    for (const args of [undefined, { tabId: tab.id }, first, second, on('messages')]) {
+      for (const id of gridIds) expect(commands.isEnabled(id, args), `${id} ${JSON.stringify(args?.target ? (args.target as OutputTarget).view : args)}`).toBe(false)
+    }
+    for (const id of gridIds) expect(await commands.execute(id, { tabId: tab.id }, 'palette'), id).toBe(false)
+    // Find Next and Previous read the tab they step through (the output a menu or the focus names), not only the active
+    // query, which the catalogue's precondition reads.
+    active.mockReturnValue(null)
+    const other = documents.create('Other.sql', 'SELECT 2', 'master', 'server-a')
+    results.begin(other.id, 'other-run')
+    void results.finish(other.id, 'other-run', { summary: { ...queryOutput, resultSets: [descriptor(9, { index: 0 })] } })
+    expect(documents.getSnapshot().activeId).toBe(other.id)
+    for (const id of ['output.findNext', 'output.findPrevious'] as const) {
+      expect(commands.isEnabled(id), id).toBe(true)
+      expect(commands.isEnabled(id, on('messages')), id).toBe(false)
+    }
+    documents.activate(tab.id)
+    // Close Results releases the plans too: then neither key holds.
+    expect(await commands.execute('output.closeResults', { tabId: tab.id }, 'palette')).toBe(true)
+    expect(context.getState()).toMatchObject({ hasResults: false, hasResultSets: false })
+  })
+  it('a run whose only result left is a comparison has result sets: Find and Save are on, Pivot and Compare are off', async () => {
+    const { commands, context, results, compare, tab, key } = await ran('win32', { ...queryOutput, resultSets: [descriptor(1), descriptor(2, { index: 1 })] })
+    await compare.compare(tab.id, key(1))
+    expect(results.getSnapshot()[tab.id].sets.map(set => set.label ?? set.number)).toEqual([1, 2, 'Differences: Result 1 → Result 2'])
+    results.removeEntry(tab.id, key(0))
+    results.removeEntry(tab.id, key(0))
+    expect(results.getSnapshot()[tab.id].sets.map(set => set.label ?? set.number)).toEqual(['Differences: Result 1 → Result 2'])
+    results.focusEntry(tab.id, key(0))
+    expect(context.getState()).toMatchObject({ hasResults: true, hasResultSets: true })
+    for (const id of ['output.find', 'output.findNext', 'output.findPrevious', 'output.saveResultsAs'] as const) expect(commands.isEnabled(id, { tabId: tab.id }), id).toBe(true)
+    for (const id of ['output.pivot', 'output.compare', 'output.compareWithPrevious', 'output.transpose'] as const) expect(commands.isEnabled(id, { tabId: tab.id }), id).toBe(false)
+  })
   it('closes the contextual or toolbar query\'s results without requiring that query to be active', async () => {
     const { commands, documents, results, tab, on } = await ran()
     const other = documents.create('Other.sql', 'SELECT 2', 'master', 'server-a')

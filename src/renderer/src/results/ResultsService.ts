@@ -431,8 +431,13 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** Saves by job id: main allows one per window, but a second request must not lose track of the first. */
   private readonly saves = new Map<string, RunningJob>()
   private readonly contextStore = new (class extends SnapshotStore<Readonly<Record<string, true>>> { set(value: Readonly<Record<string, true>>) { this.publish(value) } clear() { this.clearListeners() } })({})
-  /** The tabs whose results can be saved or closed (`hasResults`); it publishes only when that set of tabs changes. */
+  /** The tabs whose results can be closed (`hasResults`): result sets or captured plans. It publishes only when that set of
+   *  tabs changes. */
   readonly context: ExternalStore<Readonly<Record<string, true>>> = this.contextStore
+  private readonly setsStore = new (class extends SnapshotStore<Readonly<Record<string, true>>> { set(value: Readonly<Record<string, true>>) { this.publish(value) } clear() { this.clearListeners() } })({})
+  /** The tabs with a result set a grid can show (`hasResultSets`), which Find and Save Results As need: an emptied run that
+   *  keeps captured plans is in `context` but not here. It publishes only when that set of tabs changes. */
+  readonly resultSets: ExternalStore<Readonly<Record<string, true>>> = this.setsStore
   private readonly turnedStore = new (class extends SnapshotStore<Readonly<Record<string, FocusedOrientation>>> { set(value: Readonly<Record<string, FocusedOrientation>>) { this.publish(value) } clear() { this.clearListeners() } })({})
   /** The tabs whose focused grid (the one a command acts on when it names none) is drawn transposed, with that grid's entry
    *  and header column: the `resultsGridTransposed` key and the toolbar's Transposed button. It publishes only when one changes. */
@@ -1169,6 +1174,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.noticeTimers.clear()
     this.controllers.clear()
     this.contextStore.clear()
+    this.setsStore.clear()
     this.turnedStore.clear()
     this.clearListeners()
   }
@@ -1755,16 +1761,18 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     }
     if (changed || Object.keys(current).length !== Object.keys(next).length) this.turnedStore.set(next)
   }
-  /** `hasResults` per tab: a set the backend still holds, in results neither closed nor lost with the backend. */
+  /** `hasResults` per tab: a set or captured plan the backend still holds, in results neither closed nor lost with the
+   *  backend; and `hasResultSets`: the same, counting only the sets a grid shows (rows, plan sets and comparisons). */
   private updateContext(): void {
-    const current = this.contextStore.getSnapshot(), next: Record<string, true> = {}
-    let changed = false
+    const results: Record<string, true> = {}, sets: Record<string, true> = {}
     for (const [tabId, run] of this.runs) {
-      if (run.status === 'closed' || run.status === 'lost' || !(run.sets.some(held) || run.planSets.some(held))) continue
-      next[tabId] = true
-      if (!current[tabId]) changed = true
+      if (run.status === 'closed' || run.status === 'lost') continue
+      const grids = run.sets.some(held)
+      if (grids) sets[tabId] = true
+      if (grids || run.planSets.some(held)) results[tabId] = true
     }
-    if (changed || Object.keys(current).length !== Object.keys(next).length) this.contextStore.set(next)
+    publishTabs(this.contextStore, results)
+    publishTabs(this.setsStore, sets)
   }
 
   private snapshotOf(run: Run): TabResults {
@@ -1785,6 +1793,12 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private mint(): EntryKey { return 'e' + ++this.minted }
 
   private entry(run: Run | undefined, key: EntryKey): ResultSetEntry | undefined { return run?.entries.get(key) }
+}
+
+/** Publishes a set of tabs only when it differs from the one the store holds. */
+function publishTabs(store: { getSnapshot(): Readonly<Record<string, true>>; set(value: Readonly<Record<string, true>>): void }, next: Record<string, true>): void {
+  const current = store.getSnapshot(), keys = Object.keys(next)
+  if (keys.length !== Object.keys(current).length || keys.some(tabId => !current[tabId])) store.set(next)
 }
 
 const table: ViewOrientation = { transposed: false }, turnedPlain: ViewOrientation = { transposed: true }

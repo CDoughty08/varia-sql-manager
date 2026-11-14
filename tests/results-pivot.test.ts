@@ -112,6 +112,53 @@ describe('a rebuilt Pivot', () => {
 })
 
 describe('PivotService', () => {
+  it("closes the builder once its tab's results are gone, as the Compare picker does, and keeps its drafts for the next Pivot…", async () => {
+    const { results, pivot, run } = fixture()
+    const [first] = run(2)
+    const open = () => { pivot.open('t1', keyAt(results, 't1', 1)); pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] }) }
+    open()
+    // A result closed while another is left keeps the builder.
+    results.removeEntry('t1', keyAt(results, 't1', 0))
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: true, source: keyAt(results, 't1', 0) })
+    // The last one closed (an emptied run, whose captured plans may stay) closes it: nothing is left to show it beside.
+    results.removeEntry('t1', keyAt(results, 't1', 0))
+    expect(results.getSnapshot().t1).toMatchObject({ sets: [], emptied: true })
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: false, running: false })
+    expect(pivot.getSnapshot().tabs.t1.source).toBeUndefined()
+    // Nothing reopens it there, and Build makes nothing.
+    pivot.open('t1')
+    expect(pivot.getSnapshot().tabs.t1.open).toBe(false)
+    await pivot.run('t1')
+    expect(first.pivot).not.toHaveBeenCalled()
+    // The next run does not bring it back; Pivot… there finds the group's draft as it was left.
+    run(2, { queryId: 'q2' })
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: false, source: keyAt(results, 't1', 1), draft: { rows: [0] } })
+    open()
+    expect(pivot.getSnapshot().tabs.t1.open).toBe(true)
+    // A re-run releases the old results before its first set arrives: while it runs the builder stays.
+    run(0, { queryId: 'q3', finish: false })
+    expect(results.getSnapshot().t1).toMatchObject({ status: 'running', sets: [] })
+    expect(pivot.getSnapshot().tabs.t1.open).toBe(true)
+    // A finished run that returned no result closes it.
+    void results.finish('t1', 'q3', { summary: summaryOf([]) })
+    expect(pivot.getSnapshot().tabs.t1.open).toBe(false)
+    // And so does Close Results.
+    run(2, { queryId: 'q4' })
+    open()
+    results.closeResults('t1')
+    expect(results.getSnapshot().t1.status).toBe('closed')
+    expect(pivot.getSnapshot().tabs.t1.open).toBe(false)
+    // A comparison left alone is still a result: the builder stays, with no group to pivot.
+    run(2, { queryId: 'q5' })
+    const kept = results.getSnapshot().t1.sets.map(set => set.descriptor)
+    open()
+    expect(results.addSet('t1', descriptor(990, { index: 2, kind: 'diff' }), 'Differences: Result 1 → Result 2', [setKey(kept[0]), setKey(kept[1])])).toBeDefined()
+    results.removeEntry('t1', keyAt(results, 't1', 0))
+    results.removeEntry('t1', keyAt(results, 't1', 0))
+    expect(results.getSnapshot().t1.sets.map(set => set.label)).toEqual(['Differences: Result 1 → Result 2'])
+    expect(pivot.getSnapshot().tabs.t1.open).toBe(true)
+    expect(pivot.getSnapshot().tabs.t1.source).toBeUndefined()
+  })
   it("opens on a grid's group, builds the pivot from the draft, shows it under the Table as the group's Pivot, and says what it pivoted", async () => {
     const { results, pivot, run } = fixture()
     const [, second] = run(3)
@@ -813,9 +860,10 @@ describe('PivotService', () => {
     sortOf.mockRestore()
     await pivot.run('t1')
     expect(pivot.getSnapshot().info.size).toBe(1)
-    // Close Results changes no builder, but the closed pivot's strip goes.
+    // Close Results closes the builder (as it does the Compare picker), and the closed pivot's strip goes.
     results.closeResults('t1')
     expect(pivot.getSnapshot().info.size).toBe(0)
+    expect(pivot.getSnapshot().tabs.t1?.open ?? false).toBe(false)
   })
 
   it('gives up a pivot a new run replaces, releases its late answer, and keeps strips only for pivots a run still shows', async () => {
