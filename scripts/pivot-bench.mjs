@@ -92,13 +92,15 @@ const arm = index => page.evaluate(({ index, stackPart }) => {
       if (last !== undefined && marks.clicked !== undefined) marks.frames.push(now - last)
       last = now
       check()
-      // A build refused for memory adds no grid: the panel says why, and the bench stops.
+      // A refused build (low memory, the budget, a query that stopped storing, too many figures, a released result) adds
+      // no grid: the panel says why in a status of its own, holding only the sentence (the waiting note is a status that
+      // holds a note), and the bench stops with it.
       const refusal = marks.answered !== undefined && marks.mounted === undefined
-        && [...panel.querySelectorAll('[role="status"]')].map(node => node.textContent).join(' ').match(/low on memory|not enough result memory/i)
+        && [...panel.querySelectorAll('[role="status"]')].filter(node => node.childElementCount === 0).map(node => node.textContent.trim()).filter(Boolean).join(' ')
       if (refusal) {
         observer.disconnect()
         tasks.disconnect()
-        marks.refused = refusal.input.trim()
+        marks.refused = refusal
         return done(marks)
       }
       // Two frames after the cell was drawn, so the paint that showed it is counted.

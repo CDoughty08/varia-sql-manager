@@ -26,12 +26,11 @@ it('stops pivot-bench and grid-bench --live on a low-memory refusal instead of t
   const grid = readFileSync(join(root, 'scripts', 'grid-bench.mjs'), 'utf8')
   expect(pivot).toMatch(/const queryMs = await run\(sql\)\n\s+await stopIfLowMemory\(page, step\)/)
   expect(pivot).toMatch(/if \(marks\.refused\) throw new Error\(lowMemoryText\.test\(marks\.refused\) \? lowMemoryStop\(step\)/)
-  // The panel's refusal as the page-side watcher matches it: low memory, and the pivot's own budget sentence.
-  const watched = /\.match\((\/[^/]+\/i)\)/.exec(pivot)?.[1]
-  expect(watched).toBeDefined()
-  const pattern = new RegExp(watched!.slice(1, -2), 'i')
-  expect(pattern.test(constant('LowMemory'))).toBe(true)
-  expect(pattern.test('There is not enough result memory to pivot these rows. Close other results and try again.')).toBe(true)
-  expect(service).toContain('There is not enough result memory to pivot these rows. Close other results and try again.')
+  // The page-side watcher stops on any refusal the panel states, whatever its words, so no refusal waits for the watchdog:
+  // the panel's error is a status holding only its sentence, the waiting note a status holding a note.
+  expect(pivot).toContain(`[...panel.querySelectorAll('[role="status"]')].filter(node => node.childElementCount === 0)`)
+  const panel = readFileSync(join(root, 'src', 'renderer', 'src', 'results', 'PivotPanel.tsx'), 'utf8')
+  expect(panel).toMatch(/\{state\.error && <div [^>]*role="status">\{state\.error\}<\/div>\}/)
+  expect(panel).toMatch(/<div role="status">\{waiting && <div [^>]*>\{waiting\}<\/div>\}<\/div>/)
   expect(grid.match(/await stopIfLowMemory\(page, 'live (?:copy|save)'\)/g)).toHaveLength(2)
 })
