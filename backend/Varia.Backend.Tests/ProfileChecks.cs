@@ -436,7 +436,8 @@ internal static class ProfileChecks
             retried = Profiled();
             retriedReadings = readings;
             ViewSorter.Workers = 1;
-            (highReadings, readings) = (int.MaxValue, 0);
+            // High for the refused step's reading only: the answer says why it was refused, though the load has gone since.
+            (highReadings, readings) = (1, 0);
             refused = Profiled();
         }
         finally

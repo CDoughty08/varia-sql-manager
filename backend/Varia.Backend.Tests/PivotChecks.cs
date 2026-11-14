@@ -503,25 +503,28 @@ internal static class PivotChecks
     /// refused step says the computer is low on memory, not that the result memory is full, and returns what it took.</summary>
     private static void LowMemorySteps(Action<bool, string> check)
     {
+        // High always, or for the next reading only: the refused step's, the load gone by the time the answer is worded.
         var high = false;
-        string? Pivoted(long mark)
+        var once = 0;
+        string? Pivoted(long mark, bool always)
         {
-            var store = new ResultStore(1L << 30, 1L << 29, () => (high ? 100 : 0, 50)) { Packing = PagePacking.Off, WorkStepBytes = mark };
+            var store = new ResultStore(1L << 30, 1L << 29, () => (high || Interlocked.Decrement(ref once) >= 0 ? 100 : 0, 50)) { Packing = PagePacking.Off, WorkStepBytes = mark };
             using var service = new SqlService(store);
             var set = Source(store);
             var before = Held.Bytes(store);
-            high = true;
+            if (always) high = true;
+            else once = 1;
             try
             {
                 service.DispatchAsync("results.pivot", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, rows = Array.Empty<int>(), values = new object[] { new { aggregate = "count" } } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult();
                 return "kept";
             }
             catch (RequestException error) { return error.Code + ": " + error.Message + (Held.Bytes(store) == before && set.Budget.Stopped == TruncationReason.None ? "" : " (memory kept or budget stopped)"); }
-            finally { high = false; }
+            finally { (high, once) = (false, 0); }
         }
         // Under the default mark a few figures never ask, and the pivot's one page is its last, kept whole.
-        var kept = Pivoted(ResultStore.WorkCheckBytes);
-        var refused = Pivoted(1);
+        var kept = Pivoted(ResultStore.WorkCheckBytes, always: true);
+        var refused = Pivoted(1, always: false);
         check(kept == "kept" && refused == "TOO_LARGE: " + SqlService.LowMemory,
             $"a pivot whose figures pass a load reading under high memory load is refused, saying the computer is low on memory, and returns what it took: {kept} / {refused}");
     }
