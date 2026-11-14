@@ -57,7 +57,7 @@ message stays with the result it was for until that result's draft is edited or 
 ## Comparisons
 
 **Compare…** in a result's grid menu (**Compare Results…** in the command palette, or the results
-toolbar's **Compare**) opens the Compare picker in the pivot builder's place, on that result's own grid. The picker
+toolbar's **Compare**, which a narrow window hides) opens the Compare picker in the pivot builder's place, on that result's own grid. The picker
 lists the run's other results that have all their rows and share at least one column with it; Pivots, comparisons and
 plan sets are never offered, and the backend refuses them too. The grid it was opened on is the new side (+) and the
 result picked is the old side (−); **Swap old and new** turns them round, and the comparison is always named old → new

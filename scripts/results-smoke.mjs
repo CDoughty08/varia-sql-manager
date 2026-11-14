@@ -2118,8 +2118,9 @@ try {
       groups: [...tools.children].filter(child => child.getBoundingClientRect().width > 0).map(child => ({ name: child.getAttribute('aria-label'), width: child.getBoundingClientRect().width })) }
   })
   expect(toolsLayout.fits, JSON.stringify(toolsLayout)).toBe(true)
-  // Transposed gives way in a narrow window (it is in the grid's menu and the palette), so the other groups fit.
+  // Transposed and Compare give way in a narrow window (both are in the grid's menu and the palette), so the other groups fit.
   await expect(resultsToolbar(page).getByRole('button', { name: 'Transposed', exact: true })).toBeHidden()
+  await expect(resultsToolbar(page).getByRole('button', { name: 'Compare', exact: true })).toBeHidden()
   await expect(resultsToolbar(page).getByRole('button', { name: 'Close Results', exact: true })).toBeInViewport({ ratio: 1 })
   await cell(0, 0).click()
   await page.keyboard.press('Control+F')
