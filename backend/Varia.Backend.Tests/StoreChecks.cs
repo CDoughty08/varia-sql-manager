@@ -808,6 +808,73 @@ internal static class StoreChecks
         try { set.Unpin(); } catch (InvalidOperationException) { threw = true; }
         check(threw, "ending a pin that was never taken is a bug, not a silent no-op");
 
+        // An operation over the whole result stops when the result is released, rather than holding its pinned pages (and
+        // budget) until it finishes, and answers RESULT_RELEASED.
+        var running = Open(store, store.BeginQuery("running"));
+        Fill(running, 0, 5000);
+        running.Complete();
+        using (var service = new SqlService(store))
+        {
+            var started = new ManualResetEventSlim();
+            RequestException? stopped = null;
+            var operation = Task.Run(async () =>
+            {
+                try
+                {
+                    await service.UntilReleased(work =>
+                    {
+                        using var held = running.Pin();
+                        started.Set();
+                        work.WaitHandle.WaitOne(TimeSpan.FromSeconds(30));
+                        work.ThrowIfCancellationRequested();
+                    }, CancellationToken.None, running);
+                }
+                catch (RequestException error) { stopped = error; }
+            });
+            started.Wait(TimeSpan.FromSeconds(15));
+            var heldBytes = store.UsedBytes;
+            store.Release(running.ResultId);
+            var ended = operation.Wait(TimeSpan.FromSeconds(15));
+            check(heldBytes > 0 && ended && stopped?.Code == "RESULT_RELEASED" && running.Pins == 0 && running.PagesFor(0, int.MaxValue).Count == 0 && store.UsedBytes == 0
+                && running.Released.IsCancellationRequested,
+                "releasing a result stops an operation over it at once, which answers RESULT_RELEASED and frees the pages it pinned");
+        }
+
+        // A view's pages (results.read with a view) pin the set while one is built, not while the reader holds it: a read
+        // waiting for credit keeps no pin, and a release meanwhile frees the set and ends a read's pages. Copy and Save lease
+        // the set and build every page whatever the release.
+        var viewed = Open(store, store.BeginQuery("viewed"));
+        Fill(viewed, 0, 20_000);
+        viewed.Complete();
+        var order = Enumerable.Range(0, (int)viewed.RowsAvailable).Reverse().ToArray();
+        var reversed = store.AddView(viewed, order, [], false, true, 0, null);
+        var saved = Open(store, store.BeginQuery("saved"));
+        Fill(saved, 0, 20_000);
+        saved.Complete();
+        var savedView = store.AddView(saved, order, [], false, true, 0, null);
+        check(saved.TryLease(), "a complete result can be leased for a Save");
+        long savedRows = 0;
+        var savedPages = 0;
+        foreach (var built in ViewPages.Stored(savedView, 0, order.Length))
+        {
+            if (++savedPages == 1) store.Release(saved.ResultId);
+            savedRows += built.Rows;
+        }
+        var keptForLease = saved.PagesFor(0, int.MaxValue).Count > 0;
+        saved.ReleaseLease();
+        check(savedPages > 1 && savedRows == order.Length && keptForLease && saved.PagesFor(0, int.MaxValue).Count == 0,
+            "a Copy or Save through a view, leased, builds every page though its result is released mid-way, and the lease's end frees it");
+        using (var reading = ViewPages.Build(reversed, 0, order.Length).GetEnumerator())
+        {
+            var gotFirst = reading.MoveNext();
+            var heldBetween = viewed.Pins;
+            store.Release(viewed.ResultId);
+            var freedBetween = viewed.PagesFor(0, int.MaxValue).Count == 0;
+            var more = reading.MoveNext();
+            check(gotFirst && heldBetween == 0 && freedBetween && !more && viewed.Pins == 0,
+                "a view's pages keep no pin between pages, so a release while the reader waits frees the set and ends them");
+        }
+
         // A lease and a pin together: whichever ends last frees the set.
         var both = Open(store, store.BeginQuery("both"));
         Fill(both, 0, 5000);
@@ -825,7 +892,8 @@ internal static class StoreChecks
     /// <summary>results.read and results.close through ProtocolHost with the real service and synthetic results.</summary>
     private static void HostReads(Action<bool, string> check)
     {
-        using var host = new HostHarness(dispatcher: () => new SqlService(new ResultStore(1L << 30, 1L << 29), hooks: true));
+        var hostStore = new ResultStore(1L << 30, 1L << 29);
+        using var host = new HostHarness(dispatcher: () => new SqlService(hostStore, hooks: true));
         var hello = host.Hello();
         check(hello.GetProperty("methods").EnumerateArray().Any(method => method.GetString() == SqlService.SynthesizeMethod), "test hooks announce debug.results.synthesize");
         host.Request(1, SqlService.SynthesizeMethod, new { shape = "W1", rows = 10_000 });
@@ -862,6 +930,27 @@ internal static class StoreChecks
         }
         check(Code(4, "results.read", new { resultId = id, firstRow = 0, maxRows = 10 }) == "INVALID_REQUEST" && Code(5, "results.read", new { resultId = 999, firstRow = 0, maxRows = 10 }, 65_536) == "RESULT_NOT_FOUND"
             && Code(6, "results.read", new { resultId = id, firstRow = 0, maxRows = 65_537 }, 65_536) == "INVALID_PARAMS", "results.read needs credit, an existing result, and a bounded range");
+        // A read waiting for credit holds no pin: closing its result frees the result at once, and the read then ends.
+        var usedBefore = hostStore.UsedBytes;
+        host.Request(20, SqlService.SynthesizeMethod, new { shape = "W1", rows = 10_000 });
+        var stalledId = JsonBridge.ParseControl(host.Next(FrameKind.Response, 15_000)!.Value.Body).GetProperty("result").GetProperty("resultId").GetUInt32();
+        var stalledSet = hostStore.Find(stalledId)!;
+        host.Request(21, "results.read", new { resultId = stalledId, firstRow = 0, maxRows = 10_000 }, credit: 64 * 1024);
+        var firstStalled = host.Next(FrameKind.Data, 15_000) is not null;
+        while (host.Next(FrameKind.Data, 300) is not null) { }
+        host.Request(22, "results.close", new { resultIds = new[] { stalledId } });
+        // The read may answer before or after the close, whichever ends first.
+        Frame? stalledEnd = null, closeEnd = null;
+        while (closeEnd is null && host.Next(FrameKind.Response, 15_000) is { } answered)
+            if (answered.Header.Id == 21) stalledEnd = answered;
+            else closeEnd = answered;
+        var freedWhileStalled = closeEnd is not null && stalledSet.Pins == 0 && stalledSet.PagesFor(0, int.MaxValue).Count == 0 && hostStore.UsedBytes == usedBefore;
+        host.Send(FrameKind.Credit, 21, 16 * 1024 * 1024, []);
+        stalledEnd ??= host.Next(FrameKind.Response, 15_000);
+        var stalledBody = JsonBridge.ParseControl(stalledEnd!.Value.Body);
+        while (host.Next(FrameKind.Data, 0) is not null) { }
+        check(firstStalled && freedWhileStalled && stalledBody.TryGetProperty("error", out var stalledError) && stalledError.GetProperty("code").GetString() == "RESULT_RELEASED",
+            "a read stalled on credit keeps no pin, so closing its result frees it at once, and the read answers RESULT_RELEASED");
         host.Request(7, "results.close", new { resultIds = new[] { id, 12345u } });
         var closed = JsonBridge.ParseControl(host.Next(FrameKind.Response, 15_000)!.Value.Body).GetProperty("result");
         check(closed.GetProperty("closed").GetInt32() == 1 && closed.GetProperty("usedBytes").GetInt64() == 0 && Code(8, "results.read", new { resultId = id, firstRow = 0, maxRows = 10 }, 65_536) == "RESULT_RELEASED",

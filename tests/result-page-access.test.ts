@@ -27,6 +27,8 @@ describe('result page access', () => {
     expect(source).toMatch(/internal byte\[\] Stored \{ get; \}/)
     expect(source).toMatch(/public byte\[\] Body\(\) => Set is null \? Stored : Set\.Body\(this\);/)
     expect(lines(/\.Stored\b(?!\()/, [accessor])).toEqual([])
+    // A property pattern (page is { Stored: var bytes }) reads it as well.
+    expect(lines(/\bStored\s*:(?!:)/, [accessor])).toEqual([])
   })
   it('stores pages only through ResultSetBuffer, and builds set-less pages only for a view read', () => {
     expect(lines(/new StoredPage\(/, [accessor, 'backend/Varia.Backend/Results/ResultViews.cs'])).toEqual([])

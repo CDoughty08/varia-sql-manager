@@ -1609,47 +1609,62 @@ internal static partial class ViewSorter
 /// is parsed once per read.</summary>
 internal static class ViewPages
 {
-    public static IEnumerable<byte[]> Build(ResultView view, long firstRow, int maxRows)
-    {
-        foreach (var page in Stored(view, firstRow, maxRows)) yield return page.Body();
-    }
+    /// <summary>A read's pages (results.read with a view): they end early, at the next page, when the set is released.</summary>
+    public static IEnumerable<StoredPage> Build(ResultView view, long firstRow, int maxRows) => Stored(view, firstRow, maxRows, endOnRelease: true);
 
     /// <summary>The same pages as stored pages numbered by view position (Copy and Save through a view), with no length
-    /// sidecar, which neither reads.</summary>
-    public static IEnumerable<StoredPage> Stored(ResultView view, long firstRow, int maxRows)
+    /// sidecar, which neither reads. The set is pinned while a page is built, not while the caller holds it (a read's wait
+    /// for credit). With <paramref name="endOnRelease"/> (a read), a release meanwhile ends the pages at the next one;
+    /// without it (Copy and Save, which lease the set, so a release never breaks them) every page is built.</summary>
+    public static IEnumerable<StoredPage> Stored(ResultView view, long firstRow, int maxRows, bool endOnRelease = false)
     {
         var set = view.Set;
         var end = Math.Min(view.Rows, firstRow + maxRows);
         if (firstRow >= end) yield break;
-        using var pin = set.Pin();
-        var pages = set.SealedSnapshot();
-        var starts = new long[pages.Length];
-        for (var i = 0; i < pages.Length; i++) starts[i] = pages[i].FirstRow;
-        var parsed = new Dictionary<int, (byte[] Body, int[] Layout, int BlobStart)>();
-        var columns = set.Wires.Count;
-        var builder = new PageBuilder(set.ResultId, set.Wires, firstRow);
-        var start = firstRow;
-        for (var position = firstRow; position < end; position++)
+        var pin = set.Pin();
+        try
         {
-            var row = view.Order[position];
-            var index = Array.BinarySearch(starts, (long)row);
-            if (index < 0) index = ~index - 1;
-            var page = pages[index];
-            if (!parsed.TryGetValue(index, out var layout))
+            // A read of a set released before it began finds no pages (or only a lease's).
+            if (endOnRelease && set.IsReleased) yield break;
+            var pages = set.SealedSnapshot();
+            var starts = new long[pages.Length];
+            for (var i = 0; i < pages.Length; i++) starts[i] = pages[i].FirstRow;
+            var parsed = new Dictionary<int, (byte[] Body, int[] Layout, int BlobStart)>();
+            var columns = set.Wires.Count;
+            var builder = new PageBuilder(set.ResultId, set.Wires, firstRow);
+            var start = firstRow;
+            for (var position = firstRow; position < end; position++)
             {
-                var body = page.Body();
-                var first = PageView.Parse(body, columns);
-                parsed[index] = layout = (body, first.Layout, first.BlobStart);
+                var row = view.Order[position];
+                var index = Array.BinarySearch(starts, (long)row);
+                if (index < 0) index = ~index - 1;
+                var page = pages[index];
+                if (!parsed.TryGetValue(index, out var layout))
+                {
+                    var body = page.Body();
+                    var first = PageView.Parse(body, columns);
+                    parsed[index] = layout = (body, first.Layout, first.BlobStart);
+                }
+                Copy(builder, PageView.At(layout.Body, layout.BlobStart, layout.Layout, page.FirstRow, page.Rows, columns), (int)(row - page.FirstRow), set.Wires);
+                if (builder.IsFull)
+                {
+                    var full = new StoredPage(start, (int)(position + 1 - start), builder.Seal(), PageLengths.Empty);
+                    pin.Dispose();
+                    yield return full;
+                    pin = set.Pin();
+                    if (endOnRelease && set.IsReleased) yield break;
+                    start = position + 1;
+                    parsed.Clear();
+                }
             }
-            Copy(builder, PageView.At(layout.Body, layout.BlobStart, layout.Layout, page.FirstRow, page.Rows, columns), (int)(row - page.FirstRow), set.Wires);
-            if (builder.IsFull)
+            if (builder.HasRows)
             {
-                yield return new StoredPage(start, (int)(position + 1 - start), builder.Seal(), PageLengths.Empty);
-                start = position + 1;
-                parsed.Clear();
+                var last = new StoredPage(start, (int)(end - start), builder.Seal(), PageLengths.Empty);
+                pin.Dispose();
+                yield return last;
             }
         }
-        if (builder.HasRows) yield return new StoredPage(start, (int)(end - start), builder.Seal(), PageLengths.Empty);
+        finally { pin.Dispose(); }
     }
 
     private static void Copy(PageBuilder builder, PageView source, int row, IReadOnlyList<WireKind> wires)

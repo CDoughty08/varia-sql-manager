@@ -123,6 +123,9 @@ being true.
   identity, diff, pivot, Copy and Save, plan pairing) reads a page's bytes only through `StoredPage.Body()`, which is
   `ResultSetBuffer.Body`, and pins its result while it reads (`ResultSetBuffer.Pin`, a count beside the leases): a release
   meanwhile ends reads at their next check, but frees the pages and their budget only when the last pin and lease end.
+  So no pin outlasts the reading: an operation over the whole result runs through `SqlService.UntilReleased`, which the
+  release cancels (`ResultSetBuffer.Released`, answering `RESULT_RELEASED`), and results.read pins only to take or build a
+  page, never across its wait for credit. Copy and Save lease their result, so a release never cuts them short.
   The store may keep a page in another form than it sealed, so nothing else touches `StoredPage.Stored`
   (`tests/result-page-access.test.ts`), and the .NET checks refuse a read of an unpinned, unleased set
   (`ResultSetBuffer.RequirePins`).

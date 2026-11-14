@@ -519,7 +519,7 @@ internal static class ViewChecks
         catch (OperationCanceledException) { cancelled = true; }
         check(cancelled, "a Stop ends a sort");
         var view = store.AddView(set, ids, [new ViewKey(0, false, SortMode.Value)], false, true, 0, null);
-        var pages = ViewPages.Build(view, 1, 3).Select(body => PageReader.Read(body, Wires)).ToList();
+        var pages = ViewPages.Build(view, 1, 3).Select(page => PageReader.Read(page.Body(), Wires)).ToList();
         var shown = pages.SelectMany(page => page.Rows).Select(row => row[0].Text ?? "NULL").ToList();
         check(pages.Count == 1 && pages[0].FirstRow == 1 && pages[0].ResultId == set.ResultId && string.Join(",", shown) == "-5,2,2" && pages[0].Rows[1][7].Flags == PageReader.Null,
             "a view's pages hold its rows in view order, numbered by view position, with each cell's flags");
