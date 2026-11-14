@@ -135,7 +135,8 @@ internal static class StoreChecks
         check(lookups, "the page directory finds exactly the pages that overlap a row range");
         var descriptor = set.Describe();
         check(descriptor is { State: "complete", RowsRead: 10_064, RowsStored: 10_064, RowsAvailable: 10_064, Truncated: null } && descriptor.BytesStored == pages.Sum(page => (long)page.Length)
-            && query.UsedBytes == store.UsedBytes && store.UsedBytes >= descriptor.BytesStored + pages.Count * ResultStore.PageOverhead && store.UsedBytes < descriptor.BytesStored + 256 * 1024,
+            && query.UsedBytes == store.UsedBytes && Held.Bytes(store) >= pages.Sum(page => (long)page.StoredLength) + pages.Count * ResultStore.PageOverhead
+            && Held.Bytes(store) < pages.Sum(page => (long)page.StoredLength) + 256 * 1024,
             "a complete set is charged its pages plus overhead and metadata (" + store.UsedBytes + " for " + descriptor.BytesStored + " bytes)");
 
         // A full budget rolls back the row being written, stops the query, and later sets store nothing.
@@ -308,9 +309,11 @@ internal static class StoreChecks
         var late = store.BeginQuery("late");
         var refusedOpen = store.Open(late, 0, 1, 1, "rows", W1Columns, W1Wires);
         var work = store.BeginQuery("work");
-        check(StoredRows(kept) == 20_000 && kept.Describe().Truncated is null && kept.Budget.UsedBytes == keptBytes && store.UsedBytes > store.GlobalBytes && cut.Describe() is { Truncated: "globalBudget" or "queryBudget", RowsStored: >= 100 and < 20_100 }
+        // The budget before the rows are read: in the packed pass reading caches pages, charged as working memory.
+        var keptCharge = kept.Budget.UsedBytes;
+        check(StoredRows(kept) == 20_000 && kept.Describe().Truncated is null && keptCharge == keptBytes && store.UsedBytes > store.GlobalBytes && cut.Describe() is { Truncated: "globalBudget" or "queryBudget", RowsStored: >= 100 and < 20_100 }
             && loading.Stopped != TruncationReason.None && refusedOpen is null && late.Stopped == TruncationReason.GlobalBudget && !store.TryReserveWork(work, 1) && !store.TryReserveSpare(work, 1),
-            $"lowering the limit below use drops nothing, stops a running query and refuses new rows and working memory: {cut.Describe().Truncated} {cut.Describe().RowsStored} {late.Stopped} {StoredRows(kept)} {kept.Budget.UsedBytes - keptBytes} {store.UsedBytes} {store.GlobalBytes} {loading.Stopped} {refusedOpen is null}");
+            $"lowering the limit below use drops nothing, stops a running query and refuses new rows and working memory: {cut.Describe().Truncated} {cut.Describe().RowsStored} {late.Stopped} {StoredRows(kept)} {keptCharge - keptBytes} {store.UsedBytes} {store.GlobalBytes} {loading.Stopped} {refusedOpen is null}");
         store.Release(kept.ResultId);
         store.Release(cut.ResultId);
         var again = Open(store, store.BeginQuery("again"));
@@ -320,8 +323,9 @@ internal static class StoreChecks
             "once releases bring use under the lowered limit a new query stores again; the stopped one stays stopped");
 
         // The figure a query stopped at is kept as it was then: the truncation note and the summary's budget name it, not
-        // a figure the limit was changed to afterwards. Only a budget stop has one.
-        store = new ResultStore(2L << 20, 3L << 19);
+        // a figure the limit was changed to afterwards. Only a budget stop has one. Unpacked: the first set must fill the budget
+        // the second one meets.
+        store = new ResultStore(2L << 20, 3L << 19) { Packing = PagePacking.Off };
         var halfFull = store.BeginQuery("half");
         var halfSet = Open(store, halfFull);
         Fill(halfSet, 0, 20_000);
@@ -612,7 +616,8 @@ internal static class StoreChecks
     /// <summary>Released pages are large arrays that only a gen2 collection frees; the store triggers one itself.</summary>
     private static void Collection(Action<bool, string> check)
     {
-        var store = new ResultStore(1L << 30, 1L << 30);
+        // Raw pages throughout: these measure what a release gives back, and packing frees memory of its own first.
+        var store = new ResultStore(1L << 30, 1L << 30) { Packing = PagePacking.Off };
         var set = Open(store, store.BeginQuery("s"));
         Fill(set, 0, 600_000);
         set.Complete();
@@ -628,7 +633,7 @@ internal static class StoreChecks
         // results.close releases one id per call, and four results of about 25 MiB each are each below the threshold.
         foreach (var together in new[] { false, true })
         {
-            store = new ResultStore(1L << 30, 1L << 30);
+            store = new ResultStore(1L << 30, 1L << 30) { Packing = PagePacking.Off };
             List<ResultSetBuffer> sets = [];
             for (var i = 0; i < 4; i++)
             {
@@ -651,7 +656,7 @@ internal static class StoreChecks
 
         // Only a compacting collection returns memory to the operating system. Closing a large result while a small one
         // remains compacts (it copies little), and so does closing the last one, although it releases less than 64 MiB.
-        store = new ResultStore(1L << 30, 1L << 30);
+        store = new ResultStore(1L << 30, 1L << 30) { Packing = PagePacking.Off };
         var kept = Open(store, store.BeginQuery("kept"));
         Fill(kept, 0, 120_000);
         kept.Complete();

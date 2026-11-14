@@ -147,7 +147,13 @@ across the UI, and the benchmarks only when a change can move them. CI runs ever
   `VARIA_TEST_SLOW_MS` is set; a suite still running after 3 minutes is named and the run exits,
   `VARIA_TEST_OFFLINE_SUITE_MS=<ms>` to change that): a new offline suite goes in Program.cs's `offlineSuites` list, with its measured seconds in
   `OfflineSuites.Weights` if over 0.3 s, and runs in `OfflineSuites.Alone` if it changes process-wide state (the console,
-  environment variables, a static override, GC measurements); live checks follow and create only session-local temporary objects. They create databases (and logins) only
+  environment variables, a static override, GC measurements). The result suites (`packedPass` in Program.cs) then run a
+  second time with `ResultStore.DefaultPacking` = `EveryComplete`, so every complete result's pages are packed
+  (`ResultSetBuffer.Pack`) and every reader, operation and job meets packed pages through the accessor: a check that
+  compares the budget's figures uses `Held.Bytes` (without the unpacked-page cache) and `StoredPage.StoredLength`, sizes a
+  budget by what a result holds as sealed (`Held.AsSealed`), and a check about something other than pages (GC
+  measurements, a stop's figure) gives its store `Packing = PagePacking.Off`. A new result suite joins `packedPass`.
+  The checks also run with `ResultSetBuffer.RequirePins`, so a page read without a pin or lease fails. Live checks follow and create only session-local temporary objects. They create databases (and logins) only
   when `VARIA_TEST_SQL_SCRATCH=1`; scratch objects are uniquely named, marked, and dropped in `finally`
   (`ScratchDatabase.cs` also sweeps stale `VariaScratch_` ones by name and age). `InjectionMatrix.cs` (scratch only)
   scripts objects named to break out of SMO's comments, strings, brackets and lines with every DDL verb and runs each

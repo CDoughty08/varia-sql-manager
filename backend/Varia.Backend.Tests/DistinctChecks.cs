@@ -226,7 +226,7 @@ internal static class DistinctChecks
         var store = new ResultStore(1L << 30, 1L << 29);
         using var service = new SqlService(store);
         var set = Fill(store, Columns, Rows);
-        var baseline = store.UsedBytes;
+        var baseline = Held.Bytes(store);
         T Call<T>(string method, object args) => (T)service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult();
         string? Code(string method, object args)
         {
@@ -239,7 +239,7 @@ internal static class DistinctChecks
             && service.LaneOf("results.distinct") == RequestLane.Results && service.LaneOf("results.distinctRead") == RequestLane.Results && service.LaneOf("results.distinctTick") == RequestLane.Results
             && service.LaneOf("results.distinctClose") == RequestLane.Control
             && opened is { Rows: 6, Complete: true, Nulls: 1, Distinct: 2, Checked: 2, NullsChecked: true } && opened.SnapshotId > 0
-            && store.UsedBytes == baseline + ViewSorter.DistinctSnapshotBytes(2) && store.SnapshotCount == 1,
+            && Held.Bytes(store) == baseline + ViewSorter.DistinctSnapshotBytes(2) && store.SnapshotCount == 1,
             "results.distinct keeps a snapshot, charged its own memory and no more");
         var window = Call<ResultsDistinctReadResult>("results.distinctRead", new { resultId = set.ResultId, snapshotId = opened.SnapshotId, order = "count", offset = 0, count = 1 });
         check(window is { Total: 2, Offset: 0, Checked: 2 } && window.Values is [{ Group: 0, Row: 1, Text: "A", Count: 3, Checked: true }], "results.distinctRead reads a window");
@@ -303,14 +303,14 @@ internal static class DistinctChecks
         }
         check(full == "TOO_LARGE" && store.SnapshotCount == ViewSorter.MaxDistinctSnapshots, "a result keeps at most 24 snapshots and refuses more, dropping none");
         store.Release(set.ResultId);
-        check(store.SnapshotCount == 0 && store.UsedBytes == 0, "releasing a result releases its snapshots and their memory");
+        check(store.SnapshotCount == 0 && Held.Bytes(store) == 0, "releasing a result releases its snapshots and their memory");
         var tight = new ResultStore(4096, 4096);
         using var small = new SqlService(tight);
         var cramped = Fill(tight, [new("id", "int", "text")], [["1"]]);
-        var before = tight.UsedBytes;
+        var before = Held.Bytes(tight);
         string? refused;
         try { small.DispatchAsync("results.distinct", JsonSerializer.SerializeToElement(new { resultId = cramped.ResultId, column = 0 }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); refused = null; }
         catch (RequestException error) { refused = error.Code; }
-        check(refused == "TOO_LARGE" && tight.UsedBytes == before, "distinct values the budget has no room for answer TOO_LARGE and take nothing");
+        check(refused == "TOO_LARGE" && Held.Bytes(tight) == before, "distinct values the budget has no room for answer TOO_LARGE and take nothing");
     }
 }

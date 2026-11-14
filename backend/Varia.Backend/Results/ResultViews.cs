@@ -1545,6 +1545,10 @@ internal static class ViewPages
     /// <summary>A read's pages (results.read with a view): they end early, at the next page, when the set is released.</summary>
     public static IEnumerable<StoredPage> Build(ResultView view, long firstRow, int maxRows) => Stored(view, firstRow, maxRows, endOnRelease: true);
 
+    /// <summary>Base pages a view read of a packed result unpacks together on the workers (16 MiB of 256 KiB pages): a
+    /// screen of a sorted view reads about one page a row, which one thread unpacks in 45 ms and 16 in 5 ms (measured).</summary>
+    internal const int UnpackTogether = 64;
+
     /// <summary>The same pages as stored pages numbered by view position (Copy and Save through a view), with no length
     /// sidecar, which neither reads. The set is pinned while a page is built, not while the caller holds it (a read's wait
     /// for credit). With <paramref name="endOnRelease"/> (a read), a release meanwhile ends the pages at the next one;
@@ -1555,6 +1559,8 @@ internal static class ViewPages
         var end = Math.Min(view.Rows, firstRow + maxRows);
         if (firstRow >= end) yield break;
         var pin = set.Pin();
+        // A packed result's base pages are unpacked a group at a time, as working memory returned with the group.
+        long held = 0;
         try
         {
             // A read of a set released before it began finds no pages (or only a lease's).
@@ -1562,42 +1568,92 @@ internal static class ViewPages
             var pages = set.SealedSnapshot();
             var starts = new long[pages.Length];
             for (var i = 0; i < pages.Length; i++) starts[i] = pages[i].FirstRow;
+            int IndexOf(long row)
+            {
+                var index = Array.BinarySearch(starts, row);
+                return index < 0 ? ~index - 1 : index;
+            }
             var parsed = new Dictionary<int, (byte[] Body, int[] Layout, int BlobStart)>();
+            // Groups are unpacked together until the budget refuses one; then pages are read one at a time through the cache.
+            var packedSource = set.HasPacked;
+            var grouping = packedSource;
             var columns = set.Wires.Count;
             var builder = new PageBuilder(set.ResultId, set.Wires, firstRow);
             var start = firstRow;
             for (var position = firstRow; position < end; position++)
             {
                 var row = view.Order[position];
-                var index = Array.BinarySearch(starts, (long)row);
-                if (index < 0) index = ~index - 1;
+                var index = IndexOf(row);
                 var page = pages[index];
                 if (!parsed.TryGetValue(index, out var layout))
                 {
-                    var body = page.Body();
-                    var first = PageView.Parse(body, columns);
-                    parsed[index] = layout = (body, first.Layout, first.BlobStart);
+                    if (grouping)
+                    {
+                        // The next distinct pages from this row on, this one first, looking no further ahead than the rows
+                        // so many pages hold, so a small result's scan stays short.
+                        parsed.Clear();
+                        set.ReturnWork(held);
+                        held = 0;
+                        var group = new List<int> { index };
+                        var seen = new HashSet<int> { index };
+                        var horizon = Math.Min(end, position + 1 + (long)UnpackTogether * PageBuilder.MaxRows);
+                        for (var ahead = position + 1; ahead < horizon && group.Count < UnpackTogether; ahead++)
+                            if (seen.Add(IndexOf(view.Order[ahead]))) group.Add(IndexOf(view.Order[ahead]));
+                        if (group.Count > 1)
+                        {
+                            if (set.BodiesTogether([.. group.Select(at => pages[at])], out held) is { } bodies)
+                                for (var g = 0; g < group.Count; g++)
+                                {
+                                    var parse = PageView.Parse(bodies[g], columns);
+                                    parsed[group[g]] = (bodies[g], parse.Layout, parse.BlobStart);
+                                }
+                            else grouping = false;
+                        }
+                    }
+                    if (!parsed.TryGetValue(index, out layout))
+                    {
+                        var body = page.Body();
+                        var first = PageView.Parse(body, columns);
+                        layout = (body, first.Layout, first.BlobStart);
+                        // Once grouping is refused, only the latest packed page is kept (uncharged, one page), so rows on
+                        // one page unpack it once and the pages of an output page never pile up uncharged.
+                        if (packedSource && !grouping) parsed.Clear();
+                        parsed[index] = layout;
+                    }
                 }
                 Copy(builder, PageView.At(layout.Body, layout.BlobStart, layout.Layout, page.FirstRow, page.Rows, columns), (int)(row - page.FirstRow), set.Wires);
                 if (builder.IsFull)
                 {
                     var full = new StoredPage(start, (int)(position + 1 - start), builder.Seal(), PageLengths.Empty);
+                    // A read may wait for credit while it holds the page, so it keeps no unpacked group's working memory
+                    // across the wait; Copy and Save (no wait, a lease) keep the group for the next page.
+                    if (!grouping || endOnRelease)
+                    {
+                        parsed.Clear();
+                        set.ReturnWork(held);
+                        held = 0;
+                    }
                     pin.Dispose();
                     yield return full;
                     pin = set.Pin();
                     if (endOnRelease && set.IsReleased) yield break;
                     start = position + 1;
-                    parsed.Clear();
                 }
             }
             if (builder.HasRows)
             {
                 var last = new StoredPage(start, (int)(end - start), builder.Seal(), PageLengths.Empty);
+                set.ReturnWork(held);
+                held = 0;
                 pin.Dispose();
                 yield return last;
             }
         }
-        finally { pin.Dispose(); }
+        finally
+        {
+            set.ReturnWork(held);
+            pin.Dispose();
+        }
     }
 
     private static void Copy(PageBuilder builder, PageView source, int row, IReadOnlyList<WireKind> wires)
