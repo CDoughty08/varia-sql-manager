@@ -181,7 +181,7 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
 
   // A Pivot built for the selected group shows at once: Tabs draws one view, and the builder works on this group, so a
   // Pivot that stayed behind its Table's tab would be built out of sight. A rebuilt Pivot keeps its entry key and swaps in
-  // a new result, so a build is told by the Pivot's result, not its key. (A rebuilt one takes the focus in PivotService.)
+  // a new result, so a build is told by the Pivot's result, not its key. (A rebuilt grid takes the focus its old one had in ResultGrid.)
   // While a comparison or a plan set is selected the builder works on a group it can pivot, so a Pivot built for any group
   // shows. Only a Pivot that appears while the layout is drawn: one there at mount, or another group's while a group that
   // can be pivoted is selected, selects nothing. Nor does one that arrives while a grid of the layout has the focus: the

@@ -205,7 +205,20 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
   const other = lost ? undefined : snapshot.incomplete ? incompleteText : truncation ?? highlightNote
   const note = cap && other ? `${cap} ${other}` : cap ?? other
   // A comparison's strip starts with links to its inputs: one goes to that grid (focused, so the stack scrolls to it).
-  const rootEl = useRef<HTMLDivElement | null>(null)
+  const rootEl = useRef<HTMLDivElement | null>(null), hadFocus = useRef(false)
+  useLayoutEffect(() => {
+    const element = rootEl.current, owner = element?.ownerDocument
+    if (!element || !owner) return
+    const active = owner.activeElement
+    if (handoff?.owner === owner && handoff.tabId === tabId && handoff.key === key && (!active || active === owner.body)) element.focus({ preventScroll: true })
+    return () => {
+      // A removed element gets no blur, so the focus it had is read before it goes, or from the last focus it saw.
+      if (!hadFocus.current && !element.contains(owner.activeElement)) return
+      const mark = { owner, tabId, key }
+      handoff = mark
+      queueMicrotask(() => { if (handoff === mark) handoff = undefined })
+    }
+  }, [tabId, key])
   const goTo = useCallback((target: EntryKey) => {
     results.focusEntry(tabId, target)
     focusResultGrid(rootEl.current?.ownerDocument, tabId, target)
@@ -228,7 +241,8 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
       ...bare ? { 'data-result-bare': '' } : {}, 'data-pane-focus': focused ? 'selected' : 'grid',
       // The stack keeps the focused entry for its own drawing and tells the service (`focusEntry`), so the toolbar, the
       // menus' toggle and the pivot builder follow.
-      onFocus: () => onFocus(key)
+      onFocus: () => { hadFocus.current = true; onFocus(key) },
+      onBlur: event => { if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) hadFocus.current = false }
     }}
     sort={sort?.keys} onSort={(column, add) => results.cycleSort(tabId, key, column, add)} funnels={funnels}
     update={{ resultCount: count, showTypes, rowSize, ...turnedView ? { headerColumn: headerColumn ?? null } : {} }} gone={lost ? lostText : undefined}
@@ -243,6 +257,13 @@ export function focusResultGrid(owner: Document | undefined, tabId: string, key:
   if (grid) grid.focus()
   else if (frames > 0) owner?.defaultView?.requestAnimationFrame(() => focusResultGrid(owner, tabId, key, frames - 1))
 }
+
+/**
+ * A grid that unmounts holding the focus, kept until the end of its commit. A rebuilt Pivot (Update, Build Pivot) keeps
+ * its entry key but brings a new result, and the layouts key a grid by its result, so the grid the user was in is
+ * replaced by a new one in the same commit; that one takes the focus, or the grid's keys would fall to the page.
+ */
+let handoff: { readonly owner: Document; readonly tabId: string; readonly key: EntryKey } | undefined
 
 /** A result set's grid: a throw while rendering it stays in its frame (GridErrorBoundary), whose Retry renders it again. */
 export default function ResultGrid(props: ResultGridProps) {

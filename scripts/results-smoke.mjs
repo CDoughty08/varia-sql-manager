@@ -1678,7 +1678,14 @@ try {
   // The filter removed, it is out of date again (nothing rebuilds by itself).
   await outputPane(page).getByRole('group', { name: 'Filters of Result 1', exact: true }).getByRole('button', { name: 'Remove filter 10 selected rows', exact: true }).click()
   await expect(updatePivot).toBeVisible()
-  console.log('Results checks: filtering a Table marks its Pivot out of date, and Update builds it again in its slot from the filtered rows.')
+  // Update Pivot on the Pivot's own grid menu: the rebuilt Pivot is a new grid in the same slot, and it keeps the focus,
+  // so the grid's keys still work.
+  await cell(0, 0, pivoted).click({ button: 'right' })
+  await outputMenu.getByRole('menuitem', { name: 'Update Pivot', exact: true }).click()
+  await expect(strip('Pivot of Result 1')).toContainText('Pivot of Result 1: 100 rows in 2 row groups.')
+  await expect(updatePivot).toHaveCount(0)
+  await expect(pivoted).toBeFocused()
+  console.log('Results checks: filtering a Table marks its Pivot out of date, and Update (caption or grid menu) builds it again in its slot from the filtered rows, keeping the focus.')
   // The Table's close button says the Pivot goes with it; the Pivot's closes the Pivot alone.
   await expect(resultClose(page, 'Result 1')).toHaveAttribute('title', 'Close Result 1 and its Pivot')
   await resultClose(page, 'Pivot of Result 1').click()
