@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import { betterAttempt, measuresAgain } from './fixtures/bench.mjs'
 import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
+import { stopIfLowMemory } from './fixtures/memory-load.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { within } from './fixtures/smoke.mjs'
 import { backendReady, documentTabs, gridCell, gridCellSelector, gridPart, jobNotice, matching, outputPane, outputStatus, part, resultGrid, resultGridSelector, statusBar, toolbarButton, transposedCell, transposedGridSelector, transposedName } from './fixtures/ui.mjs'
@@ -564,6 +565,7 @@ try {
     const copyRows = 100_000
     const expected = Array.from({ length: copyRows }, (_, index) => liveRow(index + 1).map(value => value ?? 'NULL').join('\t')).join(eol)
     await run(liveRowsSql(copyRows), 120000)
+    await stopIfLowMemory(page, 'live copy')
     await expect(grid()).toHaveAttribute('aria-label', 'Result 1 of 1, 100,000 rows, 8 columns')
     await cell(0, 0).click()
     await page.keyboard.press('Control+A')
@@ -579,6 +581,7 @@ try {
     step = 'live save'
     const saveRows = 1_000_000, file = join(saves, 'grid-bench.csv')
     await run(liveRowsSql(saveRows), 180000)
+    await stopIfLowMemory(page, 'live save')
     await expect(grid()).toHaveAttribute('aria-label', 'Result 1 of 1, 1,000,000 rows, 8 columns')
     // Copy above uses the default without headers; this export measures a CSV with its column names included.
     expect(await page.evaluate(() => window.varia.updateSettings({ 'queryResults.grid.includeColumnHeaders': true })))

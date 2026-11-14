@@ -13,6 +13,7 @@ Varia is a cross-platform desktop workbench for Microsoft SQL Server. It combine
 - Connect to multiple servers using SQL Server, Windows, or Microsoft Entra ID authentication.
 - Write and execute T-SQL in a Monaco-based editor, with separate connections and sessions for query tabs. `GO` batches and repetitions are supported.
 - Browse databases and server objects in Object Explorer, generate scripts, and perform supported object actions.
+- See what an object depends on, or what depends on it: **View Dependencies** on the Object Explorer menu of a table, view, procedure, function, trigger, synonym, sequence or type opens Object Dependencies, a tree that reads each level as you expand it (at most 500 objects a level, marked when there are more), marks a cycle instead of following it, and shows objects in another database or on a linked server as leaves. The selected node shows its name, type and dependency type; Enter or a double-click selects it in Object Explorer, and Peek opens it. Peek's Dependencies tab stays the quick, one-level look.
 - Search every object on a server by name or inside definitions, with Match Case, Whole Word, regular expressions and filters by object type.
 - View, copy, and export query results as CSV, tab-delimited text, or JSON. The results toolbar's **White space** shows spaces and tabs, or every white space character (line breaks, no-break and zero-width spaces), without changing what is copied or saved.
 - Sort a results grid in memory, without running the query again: a column header's sort button sorts ascending, then descending, then back to SQL Server's order, Shift+click adds further columns, and the grid's menu has Sort Ascending, Sort Descending, Then Sort and Clear Sort. Text sorts by the column's collation, NULL first, or, with the results toolbar's **Sort text by**, by length in characters or bytes. Copy and Save Results As follow the order shown.
@@ -26,6 +27,7 @@ Varia is a cross-platform desktop workbench for Microsoft SQL Server. It combine
 - Profile a result's columns: the results toolbar's **Profile** (or **Column Profile** on the grid's menu) opens a panel with each column's NULLs, distinct values (exact up to 16,384, then estimated; equal under the column's collation), lowest and highest values, lengths in characters and bytes, and a histogram, computed in the backend over the rows the grid shows. **Row size** draws a bar behind each row number for the row's size (the sum of DATALENGTH over its columns); hover it for the bytes.
 - Use the Table Designer, Activity Monitor, live data views, and Integration Services Catalog tools.
 - Split query tabs into editor groups side by side or floating, as in VS Code, and keep them across restarts with hot exit.
+- Remember each query's exact connection target and database across hot exit and reload. Disconnected queries keep their server and environment labels; reconnecting opens fresh SQL sessions and never runs their buffers. Closing keeps the tabs and server associations even while an automatic reconnect is in progress. See [connection restoration](docs/hot-exit.md#connections).
 - Query tabs show the filename above their environment and live session ID, leaving short names readable without widening the tab.
 - Customize themes and workspace layouts, and access commands through the command palette.
 
@@ -77,6 +79,20 @@ association; see [editor groups](docs/editor-groups.md).
 In Connect, single-click or Space selects a saved connection for editing; Enter or double-click connects. Object
 Explorer's recovery rows offer **Retry**, **Continue loading**, and **Filter** actions. Search Objects opened from a
 database starts with that database's visible, removable scope.
+
+Object Explorer retains disconnected servers as collapsed roots. Use **Reconnect…** to connect again, **Remove from
+Explorer** for an offline root, or **Disconnect and Remove from Explorer** for a connected one. Removing a root does
+not delete saved profiles or query text. Equivalent connections select the existing root; differing
+name, color, environment or startup reconnect details receive an explicit Current/Selected confirmation.
+Server shortcuts pinned above or below the tree, including their overflow entries, offer the same full context menu
+as the server row in the tree.
+Disconnect with attached queries offers Keep Tabs, Close Query Tabs and Cancel, with save and transaction choices
+resolved before tabs close. See [connection roots in Object Explorer](docs/connections-explorer.md).
+
+Database Properties, Table Designer, SSIS and other dependent documents retain their drafts when disconnected.
+They do not follow another login or connection settings merely because the server name matches. A legacy document
+without an exact target binding stays unavailable after its connection is replaced; reopen it explicitly and keep
+the old draft for reference.
 
 The [result grid tools](docs/results-tools.md) include **Copy Column Name**, keyboard-accessible **Fit Column**, and
 **Close Results** beside the results; each result's caption has a button that closes that result alone. Located SQL errors offer **Go to line** while the source text is unchanged.

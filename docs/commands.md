@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (307)
+## Commands (310)
 
 ### File
 
@@ -128,7 +128,7 @@ keys it uses are listed below.
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
-| Execute | `query.execute` | F5 (`editorFocus \|\| queryBarFocus`), Ctrl+Enter (`editorFocus \|\| queryBarFocus`), Ctrl+E (`editorFocus \|\| queryBarFocus`) | F5 (`editorFocus \|\| queryBarFocus`), Ctrl+Enter (`editorFocus \|\| queryBarFocus`), Ctrl+E (`editorFocus \|\| queryBarFocus`) | F5 (`editorFocus \|\| queryBarFocus`), ⌘↩ (`editorFocus \|\| queryBarFocus`) | `activeDocumentIsQuery && !queryRunning && !documentBusy && (activeDocumentConnected \|\| (backendReady && !activeConnectionLost))` | Query › Execute; Editor context menu › Execute |
+| Execute | `query.execute` | F5 (`editorFocus \|\| queryBarFocus`), Ctrl+Enter (`editorFocus \|\| queryBarFocus`), Ctrl+E (`editorFocus \|\| queryBarFocus`) | F5 (`editorFocus \|\| queryBarFocus`), Ctrl+Enter (`editorFocus \|\| queryBarFocus`), Ctrl+E (`editorFocus \|\| queryBarFocus`) | F5 (`editorFocus \|\| queryBarFocus`), ⌘↩ (`editorFocus \|\| queryBarFocus`) | `activeDocumentIsQuery && !queryRunning && !documentBusy && (activeDocumentConnected \|\| backendReady)` | Query › Execute; Editor context menu › Execute |
 | Cancel Executing Query | `query.cancel` | Alt+Pause | Alt+Pause | — | `queryRunning` | Query › Cancel Executing Query; Editor context menu › Cancel Executing Query |
 | Include Actual Execution Plan | `query.includeActualPlan` | Ctrl+M (`editorFocus \|\| queryBarFocus`) | Ctrl+M (`editorFocus \|\| queryBarFocus`) | — | `activeDocumentIsQuery && !queryRunning && !documentBusy`; checked when `includeActualPlan` | Query › Include Actual Execution Plan |
 | Include Live Execution Plan | `query.includeLivePlan` | — | — | — | `activeDocumentIsQuery && !queryRunning && !documentBusy`; checked when `includeLivePlan` | Query › Include Live Execution Plan |
@@ -198,9 +198,11 @@ keys it uses are listed below.
 | --- | --- | --- | --- | --- | --- | --- |
 | Connect to Server… | `connection.connect` | — | — | — | `backendReady` | File › Connect to Server…; Query › Connection › Connect…; Object Explorer context menu › Connect… |
 | Disconnect from Server… | `connection.disconnect` | — | — | — | `hasConnection && !documentBusy` | File › Disconnect from Server…; Object Explorer context menu › Disconnect |
+| Disconnect and Remove from Explorer | `connection.disconnectAndRemove` | — | — | — | `hasConnection && !documentBusy` | Object Explorer context menu › Disconnect and Remove from Explorer |
 | Set Connection Environment… | `connection.environment` | — | — | — | `hasConnection && !documentBusy` | Query › Connection › Environment…; Object Explorer context menu › Environment… |
-| Reconnect… | `connection.reconnect` | — | — | — | `hasLostConnection && backendReady` | File › Reconnect…; Query › Connection › Reconnect…; Object Explorer context menu › Reconnect… |
-| Remove Lost Connection… | `connection.removeLost` | — | — | — | `hasLostConnection && !documentBusy` | Object Explorer context menu › Remove |
+| Reconnect… | `connection.reconnect` | — | — | — | `(hasLostConnection \|\| activeConnectionLost) && backendReady` | File › Reconnect…; Query › Connection › Reconnect…; Object Explorer context menu › Reconnect… |
+| Remove from Explorer | `connection.removeFromExplorer` | — | — | — | `hasLostConnection && !documentBusy` | Object Explorer context menu › Remove from Explorer |
+| Remove Lost Connection… (not in the palette) | `connection.removeLost` | — | — | — | `hasLostConnection && !documentBusy` | — |
 | Restart SQL Backend… | `backend.restart` | — | — | — | Always | — |
 
 ### Object Explorer
@@ -271,6 +273,7 @@ keys it uses are listed below.
 | Cancel Scripting | `explorer.cancelScripting` | — | — | — | `scriptingRunning` | — |
 | Peek | `explorer.peek` | Alt+F12 (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`), Space (`explorerFocus && !textInputFocus && !explorerTypeAhead`) | Alt+F12 (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`), Space (`explorerFocus && !textInputFocus && !explorerTypeAhead`) | ⌥F12 (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`), Space (`explorerFocus && !textInputFocus && !explorerTypeAhead`) | `backendReady && explorerSelectionPeekable` | Object Explorer context menu › Peek |
 | Open Peek as Tab | `explorer.openPeekTab` | Ctrl+Enter (`peekFocus && !outputGridFocus`), Ctrl+Enter (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`) | Ctrl+Enter (`peekFocus && !outputGridFocus`), Ctrl+Enter (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`) | ⌘↩ (`peekFocus && !outputGridFocus`), ⌘↩ (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`) | `backendReady` | — |
+| View Dependencies | `explorer.viewDependencies` | — | — | — | `backendReady && explorerSelectionDependencies` | Object Explorer context menu › View Dependencies |
 | Refresh Peek | `peek.refresh` | F5 (`peekFocus \|\| peekTabFocus`) | F5 (`peekFocus \|\| peekTabFocus`) | F5 (`peekFocus \|\| peekTabFocus`) | `backendReady` | — |
 | Copy Name | `explorer.copyName` | — | — | — | `hasConnection` | Object Explorer context menu › Copy Name |
 | Search Objects… | `explorer.searchObjects` | — | — | — | `hasConnection` | View › Search Objects…; Object Explorer context menu › Search Objects… |
@@ -629,8 +632,9 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | --- | --- | --- | --- |
 | `0_connect` | **C**onnect… | `connection.connect` | `explorerNode == 'server' \|\| explorerNode == 'background'` |
 | `0_connect` | **D**isconnect | `connection.disconnect` | `explorerNode == 'server' && !explorerServerLost` |
+| `0_connect` | Disc**o**nnect and Remove from Explorer | `connection.disconnectAndRemove` | `explorerNode == 'server' && !explorerServerLost` |
 | `0_connect` | **R**econnect… | `connection.reconnect` | `explorerServerLost` |
-| `0_connect` | Rem**o**ve | `connection.removeLost` | `explorerServerLost` |
+| `0_connect` | Rem**o**ve from Explorer | `connection.removeFromExplorer` | `explorerServerLost` |
 | `0_connect` | En**v**ironment… | `connection.environment` | `explorerNode == 'server' && !explorerServerLost` |
 | `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `explorerNode == 'folder' && (explorerFolder == 'tables' \|\| (explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance') && !explorerServerLost))` |
 | `0_new` | **N**ew Database… | `explorer.newDatabase` | `explorerNode == 'folder' && explorerFolder == 'databases' && !explorerServerLost && explorerServerEngine == 'box'` |
@@ -651,6 +655,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `1_query` | Searc**h** Objects… | `explorer.searchObjects` | `(explorerNode == 'server' && !explorerServerLost) \|\| explorerNode == 'database'` |
 | `1_query` | Pee**k** | `explorer.peek` | `explorerNodePeekable && !explorerServerLost` |
 | `2_script` | **S**cript … as › | Submenu: Object Explorer context menu › Script … as | `explorerScriptTitle != '' && explorerNode != 'background'` |
+| `2_script` | View **D**ependencies | `explorer.viewDependencies` | `explorerNodeDependencies && !explorerServerLost` |
 | `3_filter` | F**i**lter Settings… | `explorer.filter` | `explorerFolderFilterable` |
 | `3_filter` | Remove Fi**l**ter | `explorer.removeFilter` | `explorerFolderFiltered` |
 | `4_tasks` | **T**asks › | Submenu: Object Explorer context menu › Tasks | `explorerNode == 'database' && !explorerServerLost` |
@@ -962,7 +967,7 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
 | `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
 
-## Context keys (155)
+## Context keys (157)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1031,8 +1036,8 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `documentBusy` | boolean | state | A document task is in progress: opening, saving, or closing a query, or changing its connection. |
 | `hasConnection` | boolean | state | At least one server is connected (lost connections do not count). |
 | `activeDocumentConnected` | boolean | state | The active query's server is connected and its connection was not lost. |
-| `hasLostConnection` | boolean | state | A connection was lost when the SQL backend restarted and has not been reconnected or removed. |
-| `activeConnectionLost` | boolean | state | The active query's connection was lost when the SQL backend restarted. |
+| `hasLostConnection` | boolean | state | A remembered server is disconnected or was lost and has not been reconnected or removed. |
+| `activeConnectionLost` | boolean | state | The active query's remembered server is disconnected or was lost. |
 | `queryRunning` | boolean | state | The active query is running. |
 | `includeActualPlan` | boolean | state | The active query will capture actual execution plans. |
 | `includeLivePlan` | boolean | state | The active query will show live execution plans. |
@@ -1084,6 +1089,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerScriptExecute` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Script as › EXECUTE To: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerSelectionModifiable` | boolean | state | The selected Object Explorer node offers Modify: a T-SQL stored procedure, function, or trigger. |
 | `explorerSelectionPeekable` | boolean | state | The selected Object Explorer node is of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts`). |
+| `explorerSelectionDependencies` | boolean | state | The selected Object Explorer node offers View Dependencies (`dependencyKinds` in `src/shared/explorer/dependencies.ts`). |
 | `explorerActionSelectTop` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Select Top 1000 Rows: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionRename` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Rename: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionDelete` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Delete: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
@@ -1106,11 +1112,12 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `scriptingRunning` | boolean | state | A Script As request is running. |
 | `hasNotifications` | boolean | state | A notification toast is showing or waiting to show. |
 | `explorerNode` | `'background'`, `'folder'`, `'server'`, `'login'`, `'serverRole'`, `'credential'`, `'cryptographicProvider'`, `'audit'`, `'serverAuditSpecification'`, `'backupDevice'`, `'linkedServer'`, `'serverTrigger'`, `'database'`, `'user'`, `'databaseRole'`, `'applicationRole'`, `'schema'`, `'assembly'`, `'asymmetricKey'`, `'certificate'`, `'symmetricKey'`, `'columnMasterKey'`, `'columnEncryptionKey'`, `'databaseAuditSpecification'`, `'databaseTrigger'`, `'externalDataSource'`, `'externalFileFormat'`, `'fullTextCatalog'`, `'fullTextStoplist'`, `'partitionScheme'`, `'partitionFunction'`, `'searchPropertyList'`, `'planGuide'`, `'table'`, `'view'`, `'synonym'`, `'procedure'`, `'function'`, `'sequence'`, `'type'`, `'tableType'`, `'xmlSchemaCollection'`, `'rule'`, `'default'`, `'securityPolicy'`, `'column'`, `'key'`, `'constraint'`, `'trigger'`, `'index'`, `'statistic'`, `'parameter'`, `'returnValue'`, `'ssisCatalog'`, `'ssisFolder'`, `'ssisProject'`, `'ssisPackage'`, `'ssisEnvironment'`, `''` | target | The kind of Object Explorer node the menu is for: 'folder', an object kind from `src/shared/explorer/catalog.ts`, or 'background' for the empty area below the servers. |
-| `explorerServerLost` | boolean | target | The menu is for a server whose connection was lost when the SQL backend restarted. |
+| `explorerServerLost` | boolean | target | The menu is for a disconnected server, including a connection lost when the SQL backend restarted. |
 | `explorerFolderFilterable` | boolean | target | The menu is for an Object Explorer folder that Filter Settings can filter. |
 | `explorerFolderFiltered` | boolean | target | The menu is for an Object Explorer folder that has a filter. |
 | `explorerFolder` | `''`, `'databases'`, `'systemDatabases'`, `'databaseSnapshots'`, `'serverSecurity'`, `'logins'`, `'serverRoles'`, `'credentials'`, `'cryptographicProviders'`, `'audits'`, `'serverAuditSpecifications'`, `'serverObjects'`, `'backupDevices'`, `'linkedServers'`, `'serverTriggers'`, `'tables'`, `'systemTables'`, `'fileTables'`, `'externalTables'`, `'graphTables'`, `'droppedLedgerTables'`, `'views'`, `'systemViews'`, `'droppedLedgerViews'`, `'externalResources'`, `'externalDataSources'`, `'externalFileFormats'`, `'synonyms'`, `'programmability'`, `'storedProcedures'`, `'systemStoredProcedures'`, `'functions'`, `'tableValuedFunctions'`, `'scalarValuedFunctions'`, `'aggregateFunctions'`, `'databaseTriggers'`, `'assemblies'`, `'types'`, `'userDefinedDataTypes'`, `'userDefinedTableTypes'`, `'userDefinedTypes'`, `'xmlSchemaCollections'`, `'rules'`, `'defaults'`, `'planGuides'`, `'sequences'`, `'storage'`, `'fullTextCatalogs'`, `'partitionSchemes'`, `'partitionFunctions'`, `'fullTextStoplists'`, `'searchPropertyLists'`, `'databaseSecurity'`, `'users'`, `'roles'`, `'databaseRoles'`, `'applicationRoles'`, `'schemas'`, `'asymmetricKeys'`, `'certificates'`, `'symmetricKeys'`, `'alwaysEncryptedKeys'`, `'columnMasterKeys'`, `'columnEncryptionKeys'`, `'databaseAuditSpecifications'`, `'securityPolicies'`, `'columns'`, `'keys'`, `'constraints'`, `'tableTriggers'`, `'indexes'`, `'statistics'`, `'parameters'`, `'integrationServicesCatalogs'`, `'ssisProjects'`, `'ssisEnvironments'`, `'ssisPackages'` | target | The id of the Object Explorer folder the menu is for, from `src/shared/explorer/catalog.ts` ('tables' offers New › Table…), or '' for anything else. |
 | `explorerNodePeekable` | boolean | target | The menu is for an Object Explorer node of a kind Peek describes (`peekKinds` in `src/shared/explorer/peek.ts`). |
+| `explorerNodeDependencies` | boolean | target | The menu is for an Object Explorer node that offers View Dependencies (`dependencyKinds` in `src/shared/explorer/dependencies.ts`). |
 | `explorerFolderInsertable` | boolean | target | The menu is for a Columns folder whose columns have all loaded, so Copy Name copies their list. |
 | `explorerNodeStatus` | `''`, `'disabled'`, `'unavailable'`, `'readOnly'`, `'noAccess'` | target | The status badge of the Object Explorer node the menu is for ('disabled', 'unavailable', 'readOnly' or 'noAccess'), or '' for none. |
 | `explorerServerEngine` | `''`, `'box'`, `'managedInstance'`, `'cloud'` | target | The kind of server the Object Explorer node the menu is for is on: 'box', 'managedInstance' or 'cloud', or '' for the empty area. |

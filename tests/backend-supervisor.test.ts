@@ -550,7 +550,7 @@ describe('smoke-test backends', () => {
     const { password: _absent, ...withoutPassword } = checked
     for (const params of [{ ...checked, password: 'wrong' }, withoutPassword]) {
       for (const method of ['connections.connect', 'connections.databases'] as const) {
-        expect(await failure(value.request(method, params))).toMatchObject({ code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 1, class: 14, server: 'password-check' } })
+        expect(await failure(value.request(method, params))).toMatchObject({ code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 8, class: 14, server: 'password-check' } })
       }
     }
     // A password change on the server: even the right one is refused while the cue exists.

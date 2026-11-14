@@ -5,7 +5,7 @@ import type { SettingsValues } from '../../../shared/settings/catalog'
 import type { RunStatus } from './ResultsService'
 import { endedStatus, formatCount, formatElapsed, plural, statusLeads } from './status'
 
-export interface QueryStatusConnection { readonly server: string; readonly displayName?: string; readonly serverVersion?: string; readonly productVersion?: string; readonly lost?: true }
+export interface QueryStatusConnection { readonly server: string; readonly displayName?: string; readonly serverVersion?: string; readonly productVersion?: string; readonly lost?: true; readonly disconnected?: boolean }
 /** The parts of a tab's results the bar reads. */
 export interface QueryStatusRun {
   readonly status: RunStatus; readonly startedAt: number; readonly rowsRead: number; readonly summary?: { readonly status: Exclude<RunStatus, 'running' | 'lost' | 'closed'>; readonly elapsedMs: number }
@@ -52,7 +52,7 @@ export function versionLabel(connection: Pick<QueryStatusConnection, 'productVer
 /** The server's name with its version, "sql01 (16.0)"; a lost connection says so instead. */
 export function serverText(connection: QueryStatusConnection): string {
   const name = connection.displayName || connection.server, version = versionLabel(connection)
-  return connection.lost ? name + ' (connection lost)' : version ? `${name} (${version})` : name
+  return connection.disconnected ? name + ' Disconnected' : connection.lost ? name + ' (connection lost)' : version ? `${name} (${version})` : name
 }
 export const sessionText = (session: QueryStatusInput['session']): string => session ? `${session.login ?? ''} (${session.spid})`.trim() : ''
 
@@ -64,7 +64,7 @@ const icons: Readonly<Record<Exclude<RunStatus, 'running' | 'closed' | 'lost'>, 
 
 export function queryStatusModel(input: QueryStatusInput): QueryStatusModel {
   const { connection, run, settings } = input
-  const live = connection && !connection.lost ? connection : undefined
+  const live = connection && !connection.lost && !connection.disconnected ? connection : undefined
   const bar = input.variant !== 'segment'
   // A closed run keeps the sentence of how it ended; one the backend lost reads as failed.
   const ended = bar && run && !input.running ? endedStatus(run.status, run.closedFrom ?? run.summary?.status) : undefined

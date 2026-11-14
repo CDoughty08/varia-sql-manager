@@ -7,7 +7,7 @@ namespace Varia.Backend;
 /// <summary>Environment is the profile's label (Production, Staging, a custom one of at most 32 characters); the backend only
 /// bounds it, since the workbench shows it and SQL Server never sees it.</summary>
 internal sealed record ConnectOptions(string Server, string Database, string Authentication, string? Username, string? Password, bool TrustServerCertificate,
-    string Encrypt = "mandatory", string? HostNameInCertificate = null, string? DisplayName = null, string? Color = null, string? Environment = null, AdvancedConnectionOptions? Advanced = null);
+    string Encrypt = "mandatory", string? HostNameInCertificate = null, string? DisplayName = null, string? Color = null, string? Environment = null, AdvancedConnectionOptions? Advanced = null, bool NonInteractive = false);
 internal sealed record AdvancedConnectionOptions(
     int CommandTimeout = 0, int ConnectTimeout = 15, bool ColumnEncryption = false, bool SecureEnclaves = false,
     string AttestationProtocol = "None", string EnclaveAttestationUrl = "", bool MultipleActiveResultSets = false,
@@ -16,9 +16,10 @@ internal sealed record AdvancedConnectionOptions(
     string ApplicationIntent = "ReadWrite", string CurrentLanguage = "", bool Replication = false, string IpAddressPreference = "IPv4First",
     string ServerCertificate = "", string AttachDbFilename = "", string FailoverPartner = "", string FailoverPartnerSpn = "",
     bool MultiSubnetFailover = false, string ServerSpn = "", bool UserInstance = false);
-/// <summary>ProductVersion, Login, EngineEdition and Linux come from the server profile probed at connect; they are absent when the probe failed.</summary>
+/// <summary>ProductVersion, Login, EngineEdition and Linux come from the server profile probed at connect. PrincipalId is
+/// nonsecret authenticated-account evidence (SQL/Windows SID or Entra tenant/object GUIDs), at most 256 characters.</summary>
 internal sealed record ConnectionInfo(string Id, string Server, string Database, string ServerVersion, string? DisplayName = null, string? Color = null, int CommandTimeout = 0,
-    string? ProductVersion = null, string? Login = null, int? EngineEdition = null, bool? Linux = null);
+    string? ProductVersion = null, string? Login = null, int? EngineEdition = null, bool? Linux = null, string? PrincipalId = null, long BindingRevision = 0);
 /// <summary>connections.identity: the Kerberos principal integrated authentication would use off Windows, when the default
 /// credential cache holds a ticket (at most 256 characters). Windows, and Linux or macOS without a ticket, answer none.</summary>
 internal sealed record IntegratedIdentity(string? Principal);
@@ -325,10 +326,18 @@ internal sealed record PeekList(List<object?[]> Rows, bool? Truncated = null, in
 /// point at (Uses), and what references it or points at it by a foreign key (UsedBy), each truncated when there were more.
 /// Both lists are empty with an Error.</summary>
 internal sealed record PeekDependenciesResult(List<PeekDependency> Uses, List<PeekDependency> UsedBy, long ElapsedMs, bool? UsesTruncated = null, bool? UsedByTruncated = null, ExplorerError? Error = null);
-/// <summary>One object on Peek's Dependencies tab: Database and Server name another database or a linked server; Kind is its
-/// Object Explorer kind when it is in this database and listed by name, with the Subtype the tree gives it; ForeignKey is true
-/// when a foreign key makes the link.</summary>
-internal sealed record PeekDependency(string Name, string? Schema = null, string? Database = null, string? Server = null, string? Kind = null, bool? ForeignKey = null, string? Subtype = null);
+/// <summary>One object on Peek's Dependencies tab and in View Dependencies' tree: Database and Server name another database or a
+/// linked server; Kind is its Object Explorer kind when it is in this database and listed by name (a DML trigger with its table's
+/// or view's Parent), with the Subtype the tree gives it; ForeignKey is true when a foreign key makes the link. Type is the
+/// object's sys.objects type (trimmed; absent when SQL Server did not resolve the reference here), and SchemaBound is true for a
+/// schema-bound reference (sys.sql_expression_dependencies, or a column or parameter of a type).</summary>
+internal sealed record PeekDependency(string Name, string? Schema = null, string? Database = null, string? Server = null, string? Kind = null, bool? ForeignKey = null, string? Subtype = null,
+    string? Type = null, bool? SchemaBound = null, ParentRefDto? Parent = null, string? ParentSubtype = null);
+/// <summary>explorer.dependencies (src/shared/explorer/dependencies.ts): one level of View Dependencies' tree for an object of a kind
+/// whose Peek has the Dependencies tab, Direction "uses" (what it depends on) or "usedBy" (what depends on it). Cancellation as explorer.peek's.</summary>
+internal sealed record DependenciesArgs(string ConnectionId, string RequestId, ObjectRefDto Target, string Direction);
+/// <summary>At most the catalogue's level of objects in name order, Truncated when there were more; empty with an Error.</summary>
+internal sealed record DependenciesResult(List<PeekDependency> Items, long ElapsedMs, bool? Truncated = null, ExplorerError? Error = null);
 
 /// <summary>explorer.index: (re)builds the connection's object index, with module definitions unless Definitions is false. It
 /// sends droppable explorer.index.progress EVENTs and answers once every database was read or skipped; a newer build of the
@@ -717,7 +726,12 @@ internal sealed record RestoredDatabaseDto(int? State, int? UserAccess, bool? Ab
 /// renamed database's under its new name (src/shared/actions/schema.ts ActionExecuteResult); Sessions: a login action's count of the sessions
 /// connected as the login (VIEW SERVER STATE), which Disable leaves connected.</summary>
 internal sealed record ActionExecuteResult(List<ActionStepDto> Steps, List<string> Messages, long ElapsedMs, ActionError? Error = null, RestoredDatabaseDto? Restored = null,
-    List<DatabaseFileRefDto>? FilesKept = null, DatabaseIdentityDto? Identity = null, int? Sessions = null);
+    List<DatabaseFileRefDto>? FilesKept = null, DatabaseIdentityDto? Identity = null, int? Sessions = null,
+    List<ConnectionBindingChange>? BindingChanges = null, bool? BindingChangesComplete = null);
+/// <summary>A confirmed action-induced change to one live handle's backend settings. Monotonic safe-integer revision;
+/// initial connect is revision 0. At most 256 distinct handles per result. PasswordChanged carries no secret: main uses
+/// only the matching validated action's transient password. NewDatabase is the resulting catalog, at most 128 characters.</summary>
+internal sealed record ConnectionBindingChange(string ConnectionId, long BindingRevision, string? NewDatabase = null, bool? PasswordChanged = null);
 
 /// <summary>ssis.describe (src/shared/ssis/schema.ts): a view of the SSIS catalogue and the tree object it describes.</summary>
 internal sealed record SsisDescribeArgs(string ConnectionId, string RequestId, string View, ObjectRefDto Target);

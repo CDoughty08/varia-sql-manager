@@ -72,11 +72,24 @@ Renderer (sandboxed)                          Main                              
 
 - **Unary methods** stay on `ipcRenderer.invoke('varia:request')`: `trusted()`, strict zod (`requestSchemas`), and
   `ApiResult` results, now with an error `code`. `connections.connect` and `.databases` take an optional fourth
-  argument, a strict `ConnectContext` (`{ profileId?, remember?, requestId? }`: the history entry whose remembered
-  password main may fill in, whether to remember the password once connected, and the uuid the dialog's Stop cancels the
-  request by); any other method with one fails with `Invalid request.`. A failure after main filled in a remembered
-  password that was rejected (SQL Server's 18456 under SQL Server Authentication, AADSTS50126 or 7000215 under Microsoft
-  Entra Password or Service Principal) carries `passwordForgotten: true`.
+  argument, a strict `ConnectContext`: the history `profileId`, `remember` choice, `requestId` for Stop, optional durable
+  `targetId`, `setsEnvironment`, and the target's `expectedPrincipal` and exact opaque `credential` revision. Its
+  `credentialIntent` is `preserve` or the explicit `update-credentials`; `credentialPolicy` is `preserve`, `remember` or
+  `forget`. Existing dialog callers can keep using `remember`. Background `mode: 'background'` requires the prior
+  principal, exact revisions for password authentication, and preservation; it cannot carry a Remember choice or typed
+  password. Main injects backend-only `nonInteractive`, with a 15-second wire and provider budget, and never starts a
+  browser sign-in. Main returns `ConnectionInfo.authentication` only from the actual server login, validates the expected
+  account before saving anything, and disposes a mismatched handle. Any other method with a context fails with
+  `Invalid request.`. An injected saved-binding login refusal carries `credentialRejected: true`, and successful forgetting
+  also carries `passwordForgotten: true`. SQL 18456 states 2, 5 and 8 establish credential rejection; ambiguous state 1
+  suppresses queued replays while keeping ciphertext. Grant failures and unavailable databases neither suppress other
+  database targets nor erase secrets. Entra rejection uses AADSTS50126 or 7000215 only.
+  Main's bounded `ConnectionAuthenticationGuard` retains nonsecret authentication pins independently of checkpoint
+  acknowledgement. Disk restore seeds those pins; renderer hot-exit/reload snapshots project their options, principal
+  and credential references from the pins, so a forged snapshot cannot redirect an established target on restart.
+  The reuse owner calls `forget(targetId)` only after pruning a target without documents, transports or attempts.
+  Main bounds connection preparation and transport together before the first await, including keyring/gate waits;
+  target and credential-binding leases remain held through authentication, history and credential revision receipts.
 - **One MessagePort per renderer load** carries query events, the memory push, and the `results.read` / `results.close`
   streams between main and the results worker. The preload never decodes MessagePack and exposes no port.
 - **Rows stay in the backend.** `query.execute` returns a summary with a descriptor per result set; the results worker
@@ -258,6 +271,7 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `explorer.search` | invoke; cancelled with `explorerCancel` | unary | explorer | 15 s; the backend stops at 5 s and answers `partial` |
 | `explorer.peek` | invoke; cancelled with `explorerCancel` | unary | explorer (Peek's own slot per connection) | 30 s; the backend answers its own 15 s budget, from when it has the slot, as an `error: TIMEOUT` value |
 | `explorer.peekDependencies` | invoke; cancelled with `explorerCancel` | unary | explorer (Peek's own slot per connection) | 30 s; as `explorer.peek` |
+| `explorer.dependencies` | invoke; cancelled with `explorerCancel` | unary: one level of View Dependencies' tree, one direction, at most `dependencyLimits.perLevel` objects | explorer (Peek's own slot per connection) | 30 s; as `explorer.peek` |
 | `explorer.peekDefinition` | invoke; cancelled with `explorerCancel` | unary: one page of a module's text, at most `peekLimits.definitionPageChars` UTF-16 code units, asked for one at a time after `explorer.peek`'s first | explorer (Peek's own slot per connection) | 30 s; as `explorer.peek` |
 | `results.copy` | main only (`varia:results-copy`) | stream, with EVENTs | results | 120 s |
 | `results.export` | main only (`varia:results-save`) | unary with EVENTs | results | none, and no backstop: only CANCEL (reason 1) ends it |
@@ -271,7 +285,7 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `activity.details` | invoke; cancelled with `cancelActivity` (closing Details) | unary | live (the live gates) | 15 s; the backend answers its own 10 s budget as an `error: TIMEOUT` value |
 | `activity.kill` | invoke | unary | actions (its own gates) | 30 s; the backend answers its own 25 s budget as an `error: TIMEOUT` value with the outcomes of the sessions it tried. Never re-sent |
 | `entra.cache.clear` | main only (`varia:entra-cache-clear`, after its confirmation) | unary | control | 10 s. Takes `{}` (unknown members refused); answers `{ cleared: true }` |
-| `results.setMemoryLimit` | main only (`ResultMemoryLimit`, `src/main/backend/result-memory.ts`): as each generation becomes ready and when `queryResults.grid.memoryLimitGiB` changes, one request in flight at a time | unary | control | 10 s. Takes `{ limitGiB }`, a whole number 0 (automatic) to 1024 (`resultsMemoryLimitSchema`; the backend refuses anything else with `INVALID_PARAMS`, unknown members too); answers `{ applied, globalBytes, queryBytes }`, `applied` false only for the test hooks' fixed budget. A `results.memory` event with a changed figure goes out before the answer when the control lane takes it; one it refuses follows at the next once-a-second check. Main also sends it once the first settings read finishes (a read slower than the first launch's wait starts that backend on the defaults). A failed request is not re-sent: a value set while it was in flight, the generation's recovery from unresponsive, the next change or the next launch sends a new one. See [Result store and memory budget](#result-store-and-memory-budget) |
+| `results.setMemoryLimit` | main only (`ResultMemoryLimit`, `src/main/backend/result-memory.ts`): as each generation becomes ready and when `queryResults.grid.memoryLimitGiB` changes, one request in flight at a time | unary | control | 10 s. Takes `{ limitGiB }`, a whole number 0 (automatic) to 1024 (`resultsMemoryLimitSchema`; the backend refuses anything else with `INVALID_PARAMS`, unknown members too); answers `{ applied, globalBytes, queryBytes }`, `applied` false only for the test hooks' fixed budget. A `results.memory` event with a changed figure goes out before the answer when the control lane takes it; one it refuses follows at the next once-a-second check. Main also sends it once the first settings read finishes, and after every later read that succeeds (`SettingsStore.onDidLoad`; a read slower than the first launch's wait, or one that failed, leaves that backend on the defaults until then). A failed request is not re-sent: a value set while it was in flight, the generation's recovery from unresponsive, the next change or the next launch sends a new one. See [Result store and memory budget](#result-store-and-memory-budget) |
 | `debug.results.synthesize` | `__variaTest` and tests only | unary | metadata | 120 s; exists only with `VARIA_BACKEND_TEST_HOOKS=1` |
 
 `mainOnlyMethods` (`results.copy`, `results.export`, `entra.cache.clear`, `results.setMemoryLimit`, `debug.results.synthesize`) are sent only by
@@ -1189,7 +1203,10 @@ Results stay in backend memory, never on disk (`ResultStore`).
   is up to three quarters of that memory. Main reads the setting and gives it to the backend in its environment
   (`VARIA_RESULT_MEMORY_MIB`) at each launch, so a backend starts with the right figure, and sends it again with
   `results.setMemoryLimit` as each generation becomes ready (the setting may change between the spawn and HELLO) and
-  whenever it changes, so a change applies at once to the running backend. The new global figure is sized as at launch
+  whenever it changes, so a change applies at once to the running backend. It sends it again after every read of the
+  settings that succeeds (`SettingsStore.onDidLoad`): a first read slower than the first launch's 3 s wait, or one that
+  failed and succeeded later (Tools › Options reads again), would otherwise leave that backend on the automatic figure
+  while Options shows the user's. The new global figure is sized as at launch
   (the same clamp), with half of it per query and the live share keeping its fraction; the figures are replaced
   together, and each reservation reads them once, so a concurrent change applies from the next reservation. Lowered
   below what is stored, nothing is dropped: every reservation is refused, so a query storing rows stops with
@@ -1201,15 +1218,23 @@ Results stay in backend memory, never on disk (`ResultStore`).
   stays: the smaller of it and the current half holds. The test hooks' `VARIA_RESULT_BUDGET_BYTES` budget is fixed and
   ignores the limit. The budget holds the rows and the working memory of the operations on
   them alike (a sort's keys, a profile's figures), so the budget is all the backend commits to results (a quarter of memory unless the user set more); a
-  result that fills its query's half leaves no room to sort it. Working memory of 64 MiB or more, and any memory that
-  only makes an operation faster once 64 MiB of it is held, is refused under high system memory load as rows are
+  result that fills its query's half leaves no room to sort it. Working memory of 64 MiB or more, any memory that
+  only makes an operation faster once 64 MiB of it is held, and memory taken in smaller steps (a profile's long
+  values, a diff's differing cells, a pivot's figures and Distinct Count bounds: `WorkSteps`) at each further 64 MiB
+  held (the load is read then, not at every step), is refused under high system memory load as rows are
   (`TOO_LARGE`, saying the computer is low on memory, as does a pivot or diff refused while the load is
-  high). One query may use half of it. Nothing more is stored while the operating system reports high
+  high; Distinct Count bounds refused are not an error, the pivot sorts by cell and value instead, and a profile refused
+  on several threads is read again on one, which holds less). One query may use half of it. Nothing more is stored while the operating system reports high
   memory load (checked at every page seal; the load is the runtime's reading at its last garbage collection, taken
   again by a collection of the youngest generation when it is more than a second old). A release's forced collection
-  compacts, which alone returns the memory to the operating system, only when what remains is no more than was
-  released and no more than 8 GiB (compacting stops every thread for 0.1 to 0.2 s per GiB it copies); under high
-  memory load the 8 GiB does not apply. `VARIA_RESULT_BUDGET_BYTES` replaces the global figure only with the test
+  compacts, which alone returns the memory to the operating system, only when what remains is no more than has been
+  released since the last compaction and no more than 8 GiB (compacting stops every thread for 0.1 to 0.2 s per GiB it
+  copies); under high memory load the 8 GiB does not apply. So with a limit over 8 GiB, while more than 8 GiB of results
+  stay stored, closing others keeps the released memory in the process, reused by the next results, until a later close that
+  collects (past 64 MiB released, or the last results closed) leaves no more than has been released since and either no
+  more than 8 GiB or a machine low on memory; packing pages (below) does not change this, since its saving never counts toward a compacting
+  collection, and it stays until a measurement shows a pause worth taking. Every operation's reservations in
+  `SqlService` are pinned by `tests/working-memory-lint.test.ts`. `VARIA_RESULT_BUDGET_BYTES` replaces the global figure only with the test
   hooks, and turns the memory-load check off so tests see their budget's truncation reasons on a busy machine (the offline
   checks' stores never check it unless given a probe).
 - **Charges.** Each sealed page costs its length plus 96 bytes plus its cell lengths ([Cell lengths and row sizes](#cell-lengths-and-row-sizes)); a result set's metadata 512 bytes plus 2 per name
@@ -1221,7 +1246,9 @@ Results stay in backend memory, never on disk (`ResultStore`).
   set's rows are read and none stored: no set is opened, so nothing is charged to the budget; each counts in
   `discardedResultSets`, and an informational message gives the sets and the rows read, also when the run is stopped
   or fails. A set that is an execution plan (told by its column's name and first row) is kept as ever, within
-  `maxResultSets`; rows after a plan's in its set are not kept.
+  `maxResultSets`; rows after a plan's in its set are not kept. The read loop takes these decisions through
+  `ResultSetTally` (`backend/Varia.Backend/Results/ResultSetTally.cs`), which the offline `Discard` suite checks against
+  a fake reader.
 - **Rows per query.** `maxRows` 0 – 2,147,483,647 counted across result sets (0 means the budget only; the renderer
   sends `queryResults.grid.maxRows`, 0 by default). A row of an execution plan returned with the rows (the first row of a
   plan set) is kept past it and not counted. **Result sets kept** `maxResultSets` 1 – 1,000 (default 10); later sets are counted, not stored. The
@@ -2817,6 +2844,24 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Restarts | after 0 s, 1 s, 2 s; breaker at 3 unexpected losses in 120 s; reset after 300 s ready | main |
 | Registries | 1,024 lost connection ids; 4,096 abandoned request ids; 100,000 owned results per generation; stderr 32 lines × 512 characters | main |
 
+## Connection ownership and binding updates
+
+Connection requests use acknowledged main-owned receipts. `acceptConnectionRequest` and `pruneConnectionTargets` are
+bounded, trusted-sender, main-only IPC; they do not expose generic backend access. Cancelling a request releases only
+its own ownership interest. The successful receipt carries main's authoritative target and authentication evidence.
+
+`ConnectionInfo.bindingRevision` is zero for an unchanged initial registration. Administrative `actions.execute`
+results can include `bindingChanges` (at most 256 records) and `bindingChangesComplete`. Each record identifies the
+native handle and monotonic revision, with a changed initial database and/or `passwordChanged: true`; it contains no
+password. Partial-success results retain confirmed receipts. Main fences these actions, verifies ordering and updates
+its process-local equality evidence and durable credential pins.
+
+The main-only `varia:connection-bindings-changed` event, exposed by `onConnectionBindingsChanged`, carries generation,
+an optional bounded warning, and at most 200 changes with target ID, handle, increasing main revision, sanitized options
+and authentication evidence. Strict schemas reject unknown/secret fields. Renderer consumers must match the current
+target, handle, generation and principal; this channel cannot establish another account or endpoint. See
+[main connection ownership](connection-ownership.md) for mutation and checkpoint ordering.
+
 ## Error codes and fixed sentences
 
 Failures reach the renderer as `{ ok: false, error, code, details? }`. Messages are complete sentences shown as they are.
@@ -2863,9 +2908,14 @@ access, choose Help › Clear Entra ID Token Cache, then connect again." The sam
 `AUTH_ENTRA`, without `details`: a query tab's session, `databases.list`, `tables.columns`, and retryable
 `AUTH_ENTRA` values for `explorer.children`, `scripting.script` and the object actions.
 
+`AUTH_IDENTITY` means that a newly authenticated native connection has no usable stable principal proof, or its
+verified SQL/Windows SID or Entra tenant/object identity differs from the target's pinned account. The backend closes
+that connection before caller SQL; an explicit reconnect must resolve the identity. This code is nonretryable in
+Explorer, scripting, object actions and SSIS, and terminal for live probes. Display login text is never identity proof.
+
 | Origin | Codes |
 | --- | --- |
-| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot or diff of a query that stopped storing; [Pivots](#pivots)) |
+| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot or diff of a query that stopped storing; [Pivots](#pivots)) |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
 | Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads, scripting, object actions and SSIS requests), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs), `STALE` (a shortcuts save based on an older revision), `DUPLICATE_REQUEST` and `NOT_FOUND` (live streams of the results port); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |
@@ -3003,8 +3053,12 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
 - **Secrets.** Passwords exist only inside REQUEST bodies on the private pipe: never in arguments, environment,
   `BackendState`, the fake backend's call log, traces or stderr. Lost connections keep their options without the
   password. A remembered password (Remember password) is Electron `safeStorage` ciphertext in `saved-passwords.json`,
-  bound to its server, login and TLS settings by a SHA-256 hash beside it and a check over them and the password inside
-  it (so a ciphertext moved between entries, or a rewritten hash, is refused); main decrypts it (async API only) and
+  bound to its server, login and TLS settings by a SHA-256 hash beside it and a check over them, its opaque revision and
+  the password inside it (so a ciphertext moved between bindings, a rewritten hash or revision is refused). An unchanged
+  secret retains its revision; replacement rotates it. Legacy ciphertext without a revision remains picker-only.
+  Main serializes secret operations and gates saved-binding attempts through completion, so a rejected revision cannot
+  be tried again by queued reconnects, even if removing its ciphertext fails. Temporary keyring/network/TLS failures keep
+  the encrypted entry. Main decrypts it (async API only) and
   puts it into a `connections.connect` or `.databases` request whose options have that binding and an empty password,
   after `validateRequest`, and the frame is zeroed as before. The renderer only learns which history entries have one.
 - **Test seams** are honoured only when `VARIA_SMOKE_TEST=1` and the app is not packaged: `VARIA_TEST_BACKEND` (with an

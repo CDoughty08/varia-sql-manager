@@ -4,34 +4,54 @@ import { z } from 'zod'
 import { documentKinds, type DocumentKind } from '../shared/contracts'
 import { sessionLimits, type SessionWrite } from '../shared/files/session'
 import { editorGroupsLayoutSchema, layoutViews, remapEditorGroups } from '../shared/editor-groups'
+import { connectionWorkspaceSchema } from '../shared/connection-targets'
 import { quarantine, readJsonFile, replaceFile, writeBytesAtomic } from './json-file'
 import { fileKinds, maxDocumentCharacters } from './sql-files'
 
 const fits = (value: { kind: DocumentKind; text?: string }) => value.text === undefined || value.text.length <= fileKinds[value.kind].maxChars
 const name = z.string().min(1).max(sessionLimits.nameChars)
 const server = z.string().min(1).max(sessionLimits.serverChars)
-const database = z.string().min(1).max(sessionLimits.databaseChars)
-const fields = { name, baseName: name.optional(), kind: z.enum(documentKinds), eol: z.enum(['crlf', 'lf']), dirty: z.boolean(), pinned: z.boolean().optional(), server: server.optional(), database: database.optional(), text: z.string().max(maxDocumentCharacters).optional() }
+const database = z.string().max(sessionLimits.databaseChars)
+const legacyFields = { name, baseName: name.optional(), kind: z.enum(documentKinds), eol: z.enum(['crlf', 'lf']), dirty: z.boolean(), pinned: z.boolean().optional(), server: server.optional(), database: database.min(1).optional(), text: z.string().max(maxDocumentCharacters).optional() }
+const fields = { ...legacyFields, database: database.optional(), targetId: z.uuid().optional(), attachWanted: z.boolean().optional() }
+const associated = (document: { kind: string; targetId?: string; attachWanted?: boolean; database?: string }) => document.targetId
+  ? document.kind === 'sql' && document.attachWanted !== undefined && document.database !== undefined
+  : document.attachWanted === undefined
+const targetsPresent = (session: { documents: readonly { targetId?: string }[]; workspace?: { targets: readonly { id: string }[] } }) => {
+  const ids = new Set(session.workspace?.targets.map(target => target.id))
+  return session.documents.every(document => !document.targetId || ids.has(document.targetId))
+}
 /** varia:session-write: the tabs in strip order. Only a clean tab with a file may leave its text out (it reopens from the file). */
 export const sessionWriteSchema = z.object({
   documents: z.array(z.object({ ...fields, fileId: z.uuid().optional() }).strict()
+    .refine(associated, 'A query target requires its database and attachment preference.')
     .refine(fits, 'A query is too large to keep for the next start.')
     .refine(document => document.text !== undefined || (!!document.fileId && !document.dirty), 'A query without a file must keep its text.')).max(sessionLimits.documents),
   activeIndex: z.int().min(-1).max(sessionLimits.documents - 1),
-  groups: editorGroupsLayoutSchema.optional()
+  groups: editorGroupsLayoutSchema.optional(), workspace: connectionWorkspaceSchema.optional()
 }).strict().refine(session => !session.groups || layoutViews(session.groups).every(view => view < session.documents.length), 'An editor group names a query that is not kept.')
+  .refine(targetsPresent, 'A query names a connection target that is not kept.')
 
 /** `session.json`: what main wrote at the last close, with each file's path in place of its id. */
+const recordFields = { savedAt: z.iso.datetime(),
+  activeIndex: z.int().min(-1).max(sessionLimits.documents - 1), groups: editorGroupsLayoutSchema.optional() }
+const fileFields = { path: z.string().min(1).max(sessionLimits.pathChars).optional(), fileSha256: z.string().regex(/^[0-9a-f]{64}$/).optional() }
+const legacyRecordSchema = z.object({
+  ...recordFields, version: z.literal(1),
+  documents: z.array(z.object({ ...legacyFields, ...fileFields }).strict().refine(fits)
+    .refine(document => document.text !== undefined || (!!document.path && !document.dirty))
+    .refine(document => document.fileSha256 === undefined || (!!document.path && document.text !== undefined))).max(sessionLimits.documents)
+}).strict().refine(session => !session.groups || layoutViews(session.groups).every(view => view < session.documents.length))
 const recordSchema = z.object({
-  version: z.literal(1), savedAt: z.iso.datetime(),
+  ...recordFields, version: z.literal(2), workspace: connectionWorkspaceSchema.optional(),
   documents: z.array(z.object({
-    ...fields, path: z.string().min(1).max(sessionLimits.pathChars).optional(), fileSha256: z.string().regex(/^[0-9a-f]{64}$/).optional()
-  }).strict().refine(fits)
+    ...fields, ...fileFields
+  }).strict().refine(fits).refine(associated)
     .refine(document => document.text !== undefined || (!!document.path && !document.dirty))
     .refine(document => document.fileSha256 === undefined || (!!document.path && document.text !== undefined))).max(sessionLimits.documents),
-  activeIndex: z.int().min(-1).max(sessionLimits.documents - 1),
-  groups: editorGroupsLayoutSchema.optional()
-}).strict().refine(session => !session.groups || layoutViews(session.groups).every(view => view < session.documents.length))
+}).strict().refine(session => !session.groups || layoutViews(session.groups).every(view => view < session.documents.length)).refine(targetsPresent)
+/** Version 1 has only server hints. Migration cannot infer an account or manufacture a target association. */
+const storedSessionSchema = z.union([recordSchema, legacyRecordSchema.transform(record => ({ ...record, version: 2 as const }))])
 export type SessionRecord = z.infer<typeof recordSchema>
 export type SessionRecordDocument = SessionRecord['documents'][number]
 /** What `write` takes: the page's request with main's paths and disk baselines in place of file ids. */
@@ -63,27 +83,35 @@ export function encodeSession(session: SessionInput, options: SessionStoreOption
   const places = new Map(reopens.map(({ index }, place) => [index, place]))
   const groups = session.groups ? remapEditorGroups(session.groups, index => places.get(index)) : undefined
   const record: SessionRecord = {
-    version: 1, savedAt: (options.now?.() ?? new Date()).toISOString(), activeIndex: reopens.findIndex(({ index }) => index === session.activeIndex),
+    version: 2, savedAt: (options.now?.() ?? new Date()).toISOString(), activeIndex: reopens.findIndex(({ index }) => index === session.activeIndex),
     documents: reopens.map(({ document }) => ({
       name: document.name, ...document.baseName ? { baseName: document.baseName } : {}, kind: document.kind, eol: document.eol, dirty: document.dirty,
       ...document.pinned ? { pinned: true } : {},
       ...document.path && document.path.length <= sessionLimits.pathChars ? {
         path: document.path, ...document.text !== undefined && document.fileSha256 ? { fileSha256: document.fileSha256 } : {}
       } : {},
-      ...document.server ? { server: document.server } : {}, ...document.database ? { database: document.database } : {},
+      ...document.server ? { server: document.server } : {}, ...document.database !== undefined ? { database: document.database } : {},
+      ...document.targetId ? { targetId: document.targetId, attachWanted: document.attachWanted } : {},
       ...document.text !== undefined ? { text: document.text } : {}
     })),
-    ...groups ? { groups } : {}
+    ...groups ? { groups } : {}, ...session.workspace ? { workspace: session.workspace } : {}
   }
+  recordSchema.parse(record)
   const bytes = Buffer.from(JSON.stringify(record) + '\n')
   if (bytes.length > (options.totalBytes ?? sessionLimits.totalBytes)) throw new Error(sessionCapMessage)
-  return { record, bytes }
+  return { record, bytes, sourceIndices: reopens.map(({ index }) => index) }
+}
+
+/** A skipped file must not shift another query onto its AutoRecover copy. */
+export function encodeReloadSession(session: SessionInput, recoveryIds: readonly (string | null)[]) {
+  const { record, sourceIndices } = encodeSession(session)
+  return { record, recoveryIds: sourceIndices.map(index => recoveryIds[index] ?? null) }
 }
 
 /**
  * `<userData>/Session/`: hot exit's copy of the open tabs, written once as a normal close goes ahead instead of asking to
  * save them. The folder is 0700 and the file 0600 on POSIX, written atomically; it holds text, names, paths, server and
- * database names, never results, connections or credentials, and nothing here logs its content.
+ * database names and nonsecret connection targets, never results, live handles or secrets, and nothing here logs its content.
  *
  * The next start takes `session.json` and keeps it as `previous.json` until that run closes: a run that crashes or is
  * killed before its own close leaves it, and the next process's first page reopens it again (AutoRecover offers what
@@ -120,6 +148,9 @@ export class SessionStore {
     return this.serial(async () => {
       const { bytes } = encodeSession(session, this.options)
       await this.prepare()
+      // A failed restore must not allow a later close to replace the only copy we could not read or quarantine.
+      await this.read(this.current)
+      await this.read(this.previous)
       await writeBytesAtomic(this.current, bytes, { mode: 0o600 })
       await rm(this.previous, { force: true })
       this.kept = generation
@@ -134,6 +165,7 @@ export class SessionStore {
     return this.serial(async () => {
       const current = await this.read(this.current)
       if (current) {
+        await this.read(this.previous)
         await replaceFile(this.current, this.previous)
         return current
       }
@@ -144,6 +176,8 @@ export class SessionStore {
   /** Deletes what was kept when the close leaves no session to reopen. */
   clear(): Promise<void> {
     return this.serial(async () => {
+      await this.read(this.current)
+      await this.read(this.previous)
       await rm(this.current, { force: true })
       await rm(this.previous, { force: true })
       this.kept = undefined
@@ -177,9 +211,9 @@ export class SessionStore {
   private async read(path: string): Promise<SessionRecord | undefined> {
     const read = await readJsonFile(path, sessionLimits.totalBytes)
     if (read.kind === 'missing') return undefined
-    const parsed = read.kind === 'ok' ? recordSchema.safeParse(read.value) : undefined
+    const parsed = read.kind === 'ok' ? storedSessionSchema.safeParse(read.value) : undefined
     if (parsed?.success) return this.options.pathsRefused ? { ...parsed.data, documents: parsed.data.documents.map(withoutFile) } : parsed.data
-    await quarantine(path).catch(() => {})
+    await quarantine(path)
     return undefined
   }
 }

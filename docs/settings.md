@@ -19,6 +19,7 @@ from Microsoft's documentation, so Varia keeps its own.
   - Product Updates (`environment.productUpdates`)
   - Live Data (`environment.liveData`)
   - Object Explorer (`environment.objectExplorer`)
+  - Connections (`environment.connections`)
 - Text Editor
   - General (`textEditor.general`)
   - Editor Tab and Status Bar (`textEditor.editorTabAndStatusBar`)
@@ -69,7 +70,7 @@ Copies of queries with unsaved changes, offered after Varia SQL Manager closes u
 
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `environment.documents.hotExit` | Restore open queries on startup | Boolean | True |  | All | At once | Closing Varia SQL Manager keeps open queries, including unsaved text, tab names and tab order, in your profile folder. The next start reopens them disconnected. While it is False, only pinned tabs reopen, and closing asks about unsaved changes in unpinned queries. Results, connections and passwords are never kept. |
+| `environment.documents.hotExit` | Restore open queries on startup | Boolean | True |  | All | At once | Closing Varia SQL Manager keeps open queries, including unsaved text, tab names, tab order, exact connection targets and each query's database, in your profile folder. The next start reopens them disconnected before eligible targets reconnect. While it is False, only pinned tabs reopen, and closing asks about unsaved changes in unpinned queries. Results, live SQL sessions and unremembered passwords are never kept. |
 | `environment.documents.detectExternalChanges` | Detect when file is changed outside the environment | Boolean | True |  | All | At once | When the window gets focus, checks whether another program changed or deleted an open file, and asks whether to reload a changed one. Save also asks before replacing such changes. |
 | `environment.documents.autoReload` | Reload modified files unless there are unsaved changes | Boolean | False |  | All | At once | Reloads a file changed outside Varia SQL Manager without asking when its query has no unsaved changes. A query with unsaved changes still asks. Greyed while `environment.documents.detectExternalChanges` is False. |
 | `environment.documents.saveWithSpecificEncoding` | Save files with a specific encoding | Boolean | False |  | All | At once | Saves every file in Save encoding, converting files read in another encoding. While it is False, a file keeps the encoding it was opened in, and a new query is saved as UTF-8 without a byte order mark: SSMS 22 starts a new query from an empty template that has none. |
@@ -117,6 +118,14 @@ Live views, such as the Activity Monitor: when they pause while hidden, and how 
 | `objectExplorer.followActiveQuery` | Follow active query | Boolean | True |  | All | At once | When switching query tabs, bring the server into view if its header is off-screen. Not in SSMS. |
 | `objectExplorer.pinnedServerHeadersTop` | Pinned server headers at top | Integer 0–10 | 2 |  | All | At once | Maximum number of off-screen server headers to show at the top of the tree. Choose 0 to hide this edge. A short pane may fit fewer headers. Not in SSMS. |
 | `objectExplorer.pinnedServerHeadersBottom` | Pinned server headers at bottom | Integer 0–10 | 2 |  | All | At once | Maximum number of off-screen server headers to show at the bottom of the tree. Choose 0 to hide this edge. A short pane may fit fewer headers. Not in SSMS. |
+
+### Environment › Connections
+
+How remembered connection targets reconnect when the workspace opens. Not in SSMS.
+
+| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `environment.connections.autoReconnect` | Automatically reconnect on startup | Boolean | True |  | All | At once | Makes one background attempt to reconnect remembered targets that were left connected. Each connection can use this default, turn automatic reconnect On, or turn it Off. Explicitly disconnected targets stay disconnected. Reconnect uses existing credentials or silent sign-in, never opens browser sign-in, and never runs query text. Not in SSMS. |
 
 ### Text Editor › General
 
@@ -189,7 +198,7 @@ The query window's status bar: where it is, and what it shows. A property grid: 
 | `queryResults.grid.discardResults` | Discard results after execution | Boolean | False |  | All | Next execution | Every query, in every query tab, runs and has its rows read from the server, but none is kept or shown: the Messages tab says how many result sets and rows were read. Execution plans and client statistics are still collected. For timing a large query without spending memory on its rows; turn it off again to see results. |
 | `queryResults.grid.maxResultSets` | Maximum result sets kept per execution | Integer 1–1,000 | 1,000 |  | All | Next execution | Result sets after this many still run and are counted, but their rows are not kept; the Messages tab says so. Not in SSMS. |
 | `queryResults.grid.maxRows` | Maximum rows kept per execution (0: no limit) | Integer 0–2,147,483,647 | 0 |  | All | Next execution | Rows after this many, counted over every result set of one execution, are still read and counted, but not kept; the grid says how many of how many it shows. The query itself is not changed, so the server still returns every row. Not in SSMS. |
-| `queryResults.grid.memoryLimitGiB` | Result memory limit in GiB (0: automatic) | Integer 0–1,024 | 0 |  | All | At once | How much memory all query results may hold together; one query may use half of it. Automatic is a quarter of the computer's memory, at least 256 MiB and at most 16 GiB. A limit set here is used as it is, up to three quarters of the computer's memory. Rows past the limit are still read and counted, but not kept. A change applies at once: lowering the limit below what results hold keeps them, and stores nothing more until enough are closed. Sorting, filtering, pivoting or profiling a result takes its working memory from the same limit, so a result that fills its share leaves no room for them. Not in SSMS. |
+| `queryResults.grid.memoryLimitGiB` | Result memory limit in GiB (0: automatic) | Integer 0–1,024 | 0 |  | All | At once | How much memory all query results may hold together; one query may use half of it. Automatic is a quarter of the computer's memory, at least 256 MiB and at most 16 GiB. A limit set here is used as it is, up to three quarters of the computer's memory. Rows past the limit are still read and counted, but not kept. A change applies at once: lowering the limit below what results hold keeps them, and stores nothing more until enough are closed. Sorting, filtering, pivoting or profiling a result takes its working memory from the same limit, so a result that fills its share leaves no room for them. Closing results may keep the memory they used for new results instead of giving it back to the computer: Varia gives memory back after a close, once more than 64 MiB has been closed, or the last results are, and what remains is no more than has been closed since it last gave memory back, and no more than 8 GiB unless memory runs short, because giving memory back pauses Varia while it moves what stays, about a second for every 8 GiB that stays; with a limit over 8 GiB, results that stay stored past 8 GiB can keep the memory of closed results until enough of them are closed. Not in SSMS. |
 | `queryResults.grid.showColumnTypes` | Show column data types in the column headers | Boolean | True |  | All | At once | Each column header shows the column's SQL type after its name, in smaller text: int, nvarchar(50), decimal(18,2). The header's tooltip names the type either way. Column widths already set are kept when this changes. Not in SSMS. |
 | `queryResults.grid.whitespace` | Show white space in results | One of `none` (Off), `spaces` (Spaces and tabs), `all` (All white space) | Off |  | All | At once | Spaces show as a raised dot (·) and tabs as an arrow (→) in the results grid. All white space also names line breaks (CR, LF, CRLF) and the invisible characters that make values look alike: no-break and zero-width spaces, BOM and the other Unicode spaces. The marks are only drawn: Copy and Save Results As write the values as they are. The results toolbar changes this too. Not in SSMS. |
 | `queryResults.grid.sortText` | Sort text columns by | One of `value` (Value), `chars` (Length in characters), `bytes` (Length in bytes) | Value |  | All | At once | How a sorted results grid orders its text and binary columns. Value sorts as ORDER BY would, by the column's collation, with NULL first ascending. Length in characters counts every character, spaces included; length in bytes sorts by DATALENGTH. Other columns always sort by value. The results toolbar changes this too, and sorted grids sort again. Not in SSMS. |
@@ -311,4 +320,4 @@ How Varia follows the SSIS Catalog (SSISDB) as it changes. Not in SSMS.
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (116 today).
+A patch holds at most one entry per setting (117 today).

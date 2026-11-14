@@ -1,4 +1,5 @@
 using System.Data;
+using System.Data.Common;
 using System.Data.SqlTypes;
 using System.Globalization;
 using System.Text;
@@ -99,14 +100,14 @@ internal sealed class ColumnPlan
     public bool HasLong { get; }
 
     /// <summary><see cref="HasLong"/> for a set that has no plan because none of its rows are stored.</summary>
-    public static bool HasLongColumns(SqlDataReader reader) => reader.GetColumnSchema().Any(column => column.IsLong == true);
+    public static bool HasLongColumns(DbDataReader reader) => reader.GetColumnSchema().Any(column => column.IsLong == true);
 
-    public static bool MayBeExecutionPlan(SqlDataReader reader) =>
+    public static bool MayBeExecutionPlan(DbDataReader reader) =>
         reader.FieldCount == 1 && reader.GetName(0).Equals(ShowplanColumn, StringComparison.OrdinalIgnoreCase)
         && reader.GetDataTypeName(0) == "nvarchar" && reader.GetColumnSchema()[0].IsLong == true;
 
     /// <summary>Read just enough of a candidate's first row to check its XML root. The normal reader resumes at this offset.</summary>
-    public static string? ReadShowplanPrefix(SqlDataReader reader)
+    public static string? ReadShowplanPrefix(DbDataReader reader)
     {
         if (reader.IsDBNull(0)) return null;
         var prefix = new char[2048];
@@ -114,7 +115,7 @@ internal sealed class ColumnPlan
         return new string(prefix, 0, length);
     }
 
-    private static bool IsShowplan(string? prefix)
+    internal static bool IsShowplan(string? prefix)
     {
         if (string.IsNullOrEmpty(prefix)) return false;
         try

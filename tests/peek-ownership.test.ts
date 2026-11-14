@@ -11,6 +11,7 @@ import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { fakeResults, summary } from './fixtures/peek-results'
 import { commandDescriptor } from '../src/shared/commands/catalog'
 import { contextRecord } from '../src/shared/commands/context-keys'
+import type { ConnectionLifecycle } from '../src/shared/connection-targets'
 import { compileWhen, evaluateWhen } from '../src/shared/commands/when'
 
 const connectionId = '11111111-1111-4111-8111-111111111111'
@@ -36,7 +37,7 @@ function setup(options: { columns?: ApiResult<TableColumns> } = {}) {
     execute: vi.fn((query: QueryOptions) => new Promise<ApiResult<QueryResult>>(resolve => { executes.push({ options: query, resolve }) })),
     closeQuerySession: vi.fn(async () => ok({ closed: true }))
   }
-  let live: { id: string; lost?: boolean }[] = [{ id: connectionId }]
+  let live: { id: string; lost?: boolean; lifecycle?: ConnectionLifecycle }[] = [{ id: connectionId }]
   const listeners = new Set<() => void>()
   const connections = { getSnapshot: () => live, subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } } }
   let ids = 0
@@ -47,11 +48,23 @@ function setup(options: { columns?: ApiResult<TableColumns> } = {}) {
   return {
     service, api, results, executes, columns: (value: ApiResult<TableColumns>) => columns(value),
     lose: () => { live = []; for (const listener of [...listeners]) listener() },
+    disconnecting: () => { live = [{ id: connectionId, lifecycle: { state: 'disconnecting', attemptId: crypto.randomUUID(), handle: { id: connectionId, generation: 1 } } }]; for (const listener of [...listeners]) listener() },
     reconnect: (id = connectionId) => { live = [{ id }]; for (const listener of [...listeners]) listener() }
   }
 }
 
 describe('Peek Top rows on the results grid', () => {
+  it('closes its card and refuses new reads while its server is disconnecting', () => {
+    const { service, disconnecting, api } = setup()
+    service.peek(node('procedure'), 'menu')
+    expect(api.explorerPeek).toHaveBeenCalledOnce()
+    disconnecting()
+    expect(service.getSnapshot().open).toBeUndefined()
+    expect(service.canPeek(node('procedure'))).toBe(false)
+    service.peek(node('procedure'), 'menu')
+    expect(api.explorerPeek).toHaveBeenCalledOnce()
+    service.dispose()
+  })
   it('runs Select Top N Rows\' script with N = peekLimits.rows in a session and results entry of its own, and closes the session once the run settles', async () => {
     const { service, api, results, executes, columns } = setup()
     service.peek(node('table'), 'menu')
@@ -205,8 +218,9 @@ describe('Peek tabs (PeekTabService)', () => {
     }
     const listeners = new Set<() => void>()
     const servers: Record<string, string> = { [connectionId]: 'Prod\SQL01' }
-    const peekTabs = new PeekTabService({ peek: base.service, documents, connections: { get: id => servers[id] === undefined ? undefined : { server: servers[id]! } } })
-    return { ...base, peekTabs, documents, opened, providers, servers, listeners }
+    const targetIds: Record<string, string> = { [connectionId]: 'target-one' }
+    const peekTabs = new PeekTabService({ peek: base.service, documents, targetIdOf: id => targetIds[id], connections: { get: id => servers[id] === undefined ? undefined : { server: servers[id]! } } })
+    return { ...base, peekTabs, documents, opened, providers, servers, listeners, targetIds }
   }
 
   it('opens the object in a tab of its own with a view that owns its reads and rows, and closing the tab releases them', async () => {
@@ -230,8 +244,8 @@ describe('Peek tabs (PeekTabService)', () => {
     await expect(peekTabs.save()).resolves.toBe(false)
   })
 
-  it('follows Reconnect to a new connection to the server it was opened on, and reads again there', async () => {
-    const { peekTabs, documents, executes, lose, reconnect, servers, api, results } = tabs()
+  it('follows only an exact target reconnect and reads again on its new handle', async () => {
+    const { peekTabs, documents, executes, lose, reconnect, servers, api, results, targetIds } = tabs()
     const id = peekTabs.open(node('table'), 'rows')!
     const view = peekTabs.view(id)!
     view.follow({ name: 'vOrders', schema: 'dbo', kind: 'view' })
@@ -245,7 +259,10 @@ describe('Peek tabs (PeekTabService)', () => {
     // Reconnect gives the server a new connection id; the document moves only to the server the tab was opened on.
     const next = '22222222-2222-4222-8222-222222222222'
     servers[next] = 'prod\sql01'
-    expect([peekTabs.follows(id, 'PROD\SQL01 '), peekTabs.follows(id, 'Other')]).toEqual([true, false])
+    expect([peekTabs.follows(id, 'PROD\SQL01 '), peekTabs.follows(id, 'Other')]).toEqual([false, false])
+    expect(peekTabs.canFollowTarget(id, 'another-target')).toBe(false)
+    targetIds[next] = 'target-one'
+    expect(peekTabs.canFollowTarget(id, 'target-one')).toBe(true)
     reconnect(next)
     const peeks = api.explorerPeek.mock.calls.length
     documents.update(id, { connectionId: next })
@@ -257,7 +274,24 @@ describe('Peek tabs (PeekTabService)', () => {
     expect(executes.at(-1)!.options.connectionId).toBe(next)
     // A tab closed is forgotten: it no longer follows anything.
     peekTabs.closed(id)
-    expect(peekTabs.follows(id, 'Prod\SQL01')).toBe(false)
+    expect(peekTabs.canFollowTarget(id, 'target-one')).toBe(false)
+  })
+
+  it('stops dependent reads when a document receives another target even with the same server label', async () => {
+    const { peekTabs, documents, reconnect, servers, targetIds, api } = tabs()
+    const id = peekTabs.open(node('procedure'))!
+    await flush()
+    const other = 'other-handle'
+    servers[other] = servers[connectionId]!
+    targetIds[other] = 'another-target'
+    reconnect(other)
+    documents.update(id, { connectionId: other })
+    const reads = api.explorerPeek.mock.calls.length
+    const view = peekTabs.view(id)!
+    expect(view.connected).toBe(false)
+    expect(view.getSnapshot().open?.node.lost).toBe(true)
+    view.refresh()
+    expect(api.explorerPeek).toHaveBeenCalledTimes(reads)
   })
 
   it('refuses what Peek cannot describe, names the tab after a followed dependency, and lets every view go on dispose', () => {

@@ -682,7 +682,8 @@ export const explorerToolbar = page => page.getByRole('toolbar', { name: 'Object
 export const explorerTree = page => page.getByRole('tree', { name: 'Object Explorer', exact: true })
 /** The servers: the tree's first level. */
 export const serverRows = page => explorerTree(page).locator('[role="treeitem"][aria-level="1"]')
-export const lostServerRows = page => explorerTree(page).getByRole('treeitem', { name: /\(connection lost\)$/ })
+/** Offline roots may name a concise recovery reason and their environment after Disconnected. */
+export const lostServerRows = page => serverRows(page).and(explorerTree(page).getByRole('treeitem', { name: /\(Disconnected(?: · [^)\r\n]{1,80})?\)(?:, [^\r\n]{1,256})?$/ }))
 export const explorerLabel = row => row.locator(part.explorerLabel)
 export const explorerSublabel = row => row.locator(part.explorerSublabel)
 export const itemCount = row => row.locator(part.explorerCount)
@@ -713,6 +714,10 @@ export const explorerSearchOptions = page => page.locator(part.explorerSearch).g
 export const explorerSearchTypes = page => page.locator(part.explorerSearch).getByRole('button', { name: /^Object types:/ })
 export const explorerSearchPopover = (page, name) => page.locator(part.explorerSearch).getByRole('dialog', { name, exact: true })
 export const explorerSearchCheck = (page, name) => page.locator(part.explorerSearch).getByRole('checkbox', { name, exact: true })
+/** View Dependencies' dialog (Object Dependencies) for an object, its tree, and a node by its name (its type or why it is a leaf follows a comma). */
+export const dependenciesDialog = (page, name) => page.getByRole('dialog', { name: `Object Dependencies – ${name}`, exact: true })
+export const dependenciesTree = dialog => dialog.getByRole('tree', { name: 'Dependencies', exact: true })
+export const dependencyNode = (dialog, name) => dependenciesTree(dialog).getByRole('treeitem', { name: new RegExp('^' + escaped(name) + '(,|$)') })
 /** A hit's name marked as an approximate (Fuzzy Match) match. */
 export const searchHitApproximate = hit => hit.locator('mark[data-approximate]')
 export const explorerSearchTypeSummary = page => page.locator(part.explorerSearch).locator('.object-search-chosen-types')

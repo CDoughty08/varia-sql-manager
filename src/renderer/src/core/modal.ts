@@ -17,6 +17,7 @@ export const focusHeld = (): boolean => modalOpen() || (typeof document !== 'und
  * A throttled frame (a hidden or background window) can come long after the command that opened the document, after the
  * user opened the palette (F1 just after View › Activity Monitor), a menu or a dialog, which keeps focus.
  */
-export function focusWhenDrawn(frame: (callback: () => void) => unknown, focus: () => void): void {
-  frame(() => { if (!focusHeld()) focus() })
+export function focusWhenDrawn(frame: (callback: () => void) => unknown, focus: () => void, options: { preserveUserInput?: boolean } = {}): void {
+  const input = windows.inputRevision
+  frame(() => { if (!focusHeld() && (!options.preserveUserInput || input === windows.inputRevision)) focus() })
 }

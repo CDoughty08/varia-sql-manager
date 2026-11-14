@@ -8,6 +8,7 @@ import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable, ExternalStore } from '../core/types'
 import type { LiveConnection } from '../services/connections'
+import { isLiveConnection } from '../services/connection-availability'
 import { clipboardNotice, deliverScript } from './deliver'
 
 /** A running request; `visible` once it has run long enough to show in the status bar. */
@@ -151,7 +152,7 @@ export class ScriptingService extends SnapshotStore<ScriptingSnapshot> implement
   }
 
   private isLive(connectionId: string): boolean {
-    return this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost)
+    return this.options.connections.getSnapshot().some(connection => connection.id === connectionId && isLiveConnection(connection))
   }
   /** A disconnected or lost server's requests stop: their status goes, and the backend is told to stop them. */
   private connectionsChanged(): void {

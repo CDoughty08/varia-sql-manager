@@ -24,10 +24,12 @@ export function useQueryContext(): { readonly tab: QueryTab | undefined; readonl
   const { documents: tabs, activeId, busy } = useServiceSnapshot(workbench.documents)
   const queryState = useServiceSnapshot(workbench.queries)
   const connections = useServiceSnapshot(workbench.connections)
+  const rememberedTargets = useServiceSnapshot(workbench.targets)
   const databaseLists = useServiceSnapshot(workbench.databaseList)
   const tab = tabs.find(value => value.id === activeId)
   const model = queryContextModel({
-    connectionId: tab?.connectionId, database: tab?.database ?? 'master', connections, databases: tab?.connectionId ? databaseLists.get(tab.connectionId) ?? [] : [],
+    connectionId: tab?.connectionId, targetId: tab?.targetId, target: rememberedTargets.find(target => target.id === tab?.targetId), lastServer: tab?.lastServer,
+    database: tab?.database ?? 'master', connections, databases: tab?.connectionId ? databaseLists.get(tab.connectionId) ?? [] : [],
     query: !!tab && documentKind(tab) === 'sql', running: !!tab && !!queryState[tab.id]?.running, busy
   })
   return { tab, model }
@@ -43,11 +45,11 @@ export function QueryPickers({ variant }: { variant: 'bar' | 'classic' }) {
   const { targets } = useWorkbench()
   const { tab, model } = useQueryContext()
   const classic = variant === 'classic'
-  const environment = environmentTag(model.connection?.options.environment)
+  const environment = environmentTag(model.environment)
   return <>
     {classic && <label className="context-field" htmlFor="query-server">Server</label>}
     <select id="query-server" aria-label="Query server" aria-description={environment?.description} title={classic ? undefined : model.serverName ? `Server: ${model.serverName}` : 'This query is not connected'} disabled={!tab || model.serverDisabled}
-      value={model.connection?.id ?? ''} onChange={event => { if (tab) void targets.changeConnection(tab.id, event.target.value || undefined) }}>
+      value={model.serverValue} onChange={event => { if (tab) void targets.changeConnection(tab.id, event.target.value || undefined) }}>
       {model.servers.map(server => <option key={server.id} value={server.id} disabled={server.disabled}>{server.label}</option>)}
     </select>
     {classic ? <label className="context-field" htmlFor="query-database">Database</label> : <><span className="query-connection-divider" aria-hidden="true" /><Icon name="database" className="query-connection-icon" /></>}
@@ -98,8 +100,8 @@ export default function QueryBar() {
   const scope = useExecutionScope()
   const canExecute = useCommandEnabled('query.execute'), canCancel = useCommandEnabled('query.cancel')
   const keys = { execute: useKeybindingLabel('query.execute'), cancel: useKeybindingLabel('query.cancel') }
-  const accent = useConnectionAccent(model.connection?.color)
-  const environment = model.connection?.options.environment
+  const accent = useConnectionAccent(model.color)
+  const environment = model.environment
   const bar = useRef<HTMLDivElement>(null)
   const last = useRef<Control>(undefined)
   const focused = useRef<Control>(undefined)

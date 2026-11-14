@@ -14,6 +14,7 @@ import { maxClipboardText, type ApiResult, type ExplorerChildrenResult, type Que
 import { fakeResults, summary } from './fixtures/peek-results'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import type { ScriptingOptions } from '../src/shared/scripting/options'
+import { dependencyLimits } from '../src/shared/explorer/dependencies'
 
 const connectionId = '11111111-1111-4111-8111-111111111111', requestId = '22222222-2222-4222-8222-222222222222'
 const node = (kind: 'table' | 'procedure' | 'login' | 'user', id = 1, name = 'Customer'): ExplorerMenuNode => ({
@@ -41,7 +42,7 @@ describe('Peek catalogue', () => {
   })
   it('embeds the facts in reply order for the backend', () => {
     const embedded = JSON.parse(explorerCatalogJson()) as { peek: ReturnType<typeof peekCatalogBlock> }
-    expect(embedded.peek).toEqual(JSON.parse(JSON.stringify(peekCatalogBlock())))
+    expect(embedded.peek).toEqual(JSON.parse(JSON.stringify({ ...peekCatalogBlock(), dependencyLevel: dependencyLimits.perLevel })))
     expect(embedded.peek.kinds.find(kind => kind.kind === 'table')?.facts.find(fact => fact.id === 'ledger')).toEqual({ id: 'ledger', format: 'code', since: 16, optional: false })
     expect(embedded.peek.budgetMs).toBe(peekLimits.budgetMs)
   })
@@ -614,7 +615,7 @@ describe('Peek tabs', () => {
     expect(methodPolicies['explorer.peekDependencies']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 30_000 })
     expect(cancellableRequests('explorer.peekDependencies', { explorer: 'explorer', scripting: 'scripting', actions: 'actions', ssis: 'ssis', activity: 'activity', connections: 'connections' })).toBe('explorer')
     const embedded = JSON.parse(explorerCatalogJson()) as { peek: Record<string, unknown> & { kinds: Record<string, unknown>[] } }
-    expect(Object.keys(embedded.peek).sort()).toEqual(['budgetMs', 'definitionMaxChars', 'definitionPageChars', 'dependencies', 'kinds', 'listRows', 'mappingDatabases'])
+    expect(Object.keys(embedded.peek).sort()).toEqual(['budgetMs', 'definitionMaxChars', 'definitionPageChars', 'dependencies', 'dependencyLevel', 'kinds', 'listRows', 'mappingDatabases'])
     expect(embedded.peek.kinds.every(kind => !('rows' in kind))).toBe(true)
   })
   it('reads dependencies apart from the properties, only once their tab is chosen, so that either can fail alone', async () => {

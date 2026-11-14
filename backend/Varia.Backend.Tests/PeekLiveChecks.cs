@@ -60,6 +60,82 @@ internal static class PeekLiveChecks
         finally { await sql("DROP PROCEDURE IF EXISTS dbo.PeekLong;", database); }
     }
 
+    private static async Task<DependenciesResult> Level(SqlService service, string connectionId, ObjectRefDto target, string direction, JsonSerializerOptions json) =>
+        (DependenciesResult)await service.DispatchAsync("explorer.dependencies", JsonSerializer.SerializeToElement(new DependenciesArgs(connectionId, Guid.NewGuid().ToString(), target, direction), json), json);
+
+    /// <summary>View Dependencies' levels (explorer.dependencies) on a three-level chain, T &lt;- V1 (schema-bound) &lt;- V2 &lt;- P3, with a
+    /// trigger on T that runs P3, a cycle of two procedures that call each other, and a procedure that names another database's
+    /// table: each level read one way and the other as the dialog reads them when nodes expand, hostile names included.</summary>
+    private static async Task ViewDependenciesAsync(Action<bool, string> check, SqlService service, string connectionId, string database, Func<string, string, Task<SqlRun>> sql, JsonSerializerOptions json)
+    {
+        const string schema = "Dep]'Ü";
+        const string s = "[Dep]]'Ü]";
+        var created = await sql("CREATE SCHEMA " + s + ";\nGO\n"
+            + "CREATE TABLE " + s + ".[T]]'表] (Id int NOT NULL PRIMARY KEY, Name nvarchar(50) NULL);\nGO\n"
+            + "CREATE VIEW " + s + ".[V1] WITH SCHEMABINDING AS SELECT Id, Name FROM " + s + ".[T]]'表];\nGO\n"
+            + "CREATE VIEW " + s + ".[V2] AS SELECT Id FROM " + s + ".[V1];\nGO\n"
+            + "CREATE PROCEDURE " + s + ".[P3] AS SELECT Id FROM " + s + ".[V2];\nGO\n"
+            + "CREATE TRIGGER " + s + ".[TR] ON " + s + ".[T]]'表] AFTER INSERT AS SET NOCOUNT ON; EXEC " + s + ".[P3];\nGO\n"
+            // PB exists before PA names it, then names PA back, so both references resolve.
+            + "CREATE PROCEDURE " + s + ".[PB] AS SELECT 1;\nGO\n"
+            + "CREATE PROCEDURE " + s + ".[PA] AS EXEC " + s + ".[PB];\nGO\n"
+            + "ALTER PROCEDURE " + s + ".[PB] AS EXEC " + s + ".[PA];\nGO\n"
+            + "CREATE PROCEDURE " + s + ".[PX] AS SELECT * FROM [VariaNoSuchDb].[dbo].[Elsewhere];\nGO\n"
+            // A table Object Explorer lists under System Tables only for its tools-support property, with a trigger of its own.
+            + "CREATE TABLE " + s + ".[TS] (Id int NOT NULL);\nGO\n"
+            + "EXEC sys.sp_addextendedproperty @name = N'microsoft_database_tools_support', @value = 1, @level0type = N'SCHEMA', @level0name = N'Dep]''Ü', @level1type = N'TABLE', @level1name = N'TS';\nGO\n"
+            + "CREATE TRIGGER " + s + ".[TRS] ON " + s + ".[TS] AFTER INSERT AS SET NOCOUNT ON;\nGO\n", database);
+        try
+        {
+            check(created.Status == "completed", "the View Dependencies fixtures are created: " + created.Error);
+            ObjectRefDto Own(string kind, string name) => new(kind, database, schema, name);
+            static string Names(DependenciesResult level) => level.Error?.Message ?? string.Join(", ", level.Items.Select(item => item.Database + "." + item.Schema + "." + item.Name + ":" + item.Kind + ":" + item.Type
+                + (item.SchemaBound is true ? ":bound" : "") + (item.Parent is { } parent ? ":" + parent.Kind + "/" + parent.Name : "")));
+            // Down the chain, as Objects that depend on T expands it.
+            var t = await Level(service, connectionId, Own("table", "T]'表"), "usedBy", json);
+            var v1 = await Level(service, connectionId, Own("view", "V1"), "usedBy", json);
+            var v2 = await Level(service, connectionId, Own("view", "V2"), "usedBy", json);
+            var p3 = await Level(service, connectionId, Own("procedure", "P3"), "usedBy", json);
+            // The trigger names the table only in its ON clause, which sys.sql_expression_dependencies does not record: it is listed
+            // as the table's own trigger, as SSMS lists it, and again below P3, which it runs.
+            check(t is { Error: null, Truncated: null } && t.Items.Count == 2 && t.Items.Any(item => item is { Name: "V1", Kind: "view", Type: "V", SchemaBound: true, Database: null, Server: null } && item.Schema == schema)
+                && t.Items.Any(item => item is { Name: "TR", Kind: "trigger", Type: "TR", SchemaBound: null } && item.Parent is { Kind: "table", Name: "T]'表" } && item.Parent.Schema == schema)
+                && v1.Items.Count == 1 && v1.Items[0] is { Name: "V2", Kind: "view", SchemaBound: null }
+                && v2.Items.Count == 1 && v2.Items[0] is { Name: "P3", Kind: "procedure", Type: "P", Subtype: "sql" }
+                && p3.Items.Count == 1 && p3.Items[0] is { Name: "TR", Kind: "trigger" } && p3.Items[0].Parent?.Name == "T]'表",
+                "Objects that depend on a hostile-named table go three levels down, one level a request, the schema-bound view marked so and the table's trigger named below it: "
+                + Names(t) + " | " + Names(v1) + " | " + Names(v2) + " | " + Names(p3));
+            // Up the chain, from the trigger: what it depends on, then what that depends on.
+            var tr = await Level(service, connectionId, new ObjectRefDto("trigger", database, null, "TR", new ParentRefDto("table", schema, "T]'表")), "uses", json);
+            var p3Uses = await Level(service, connectionId, Own("procedure", "P3"), "uses", json);
+            var v2Uses = await Level(service, connectionId, Own("view", "V2"), "uses", json);
+            var v1Uses = await Level(service, connectionId, Own("view", "V1"), "uses", json);
+            check(tr.Items.Count == 2 && tr.Items.Any(item => item is { Name: "P3", Kind: "procedure" }) && tr.Items.Any(item => item is { Name: "T]'表", Kind: "table", Type: "U" } && item.Schema == schema) && p3Uses.Items.Count == 1 && p3Uses.Items[0].Name == "V2" && v2Uses.Items.Count == 1 && v2Uses.Items[0].Name == "V1"
+                && v1Uses.Items.Count == 1 && v1Uses.Items[0] is { Name: "T]'表", Kind: "table", Type: "U", SchemaBound: true },
+                "Objects a trigger depends on are its table and what it runs, up the chain to the table, which the schema-bound view names as such: " + Names(tr) + " | " + Names(p3Uses) + " | " + Names(v2Uses) + " | " + Names(v1Uses));
+            // The cycle: each procedure lists the other, so the dialog meets PA again below PB and marks it.
+            var pa = await Level(service, connectionId, Own("procedure", "PA"), "uses", json);
+            var pb = await Level(service, connectionId, Own("procedure", "PB"), "uses", json);
+            var paUsedBy = await Level(service, connectionId, Own("procedure", "PA"), "usedBy", json);
+            check(pa.Items.Count == 1 && pa.Items[0] is { Name: "PB", Kind: "procedure" } && pb.Items.Count == 1 && pb.Items[0] is { Name: "PA", Kind: "procedure" }
+                && paUsedBy.Items.Count == 1 && paUsedBy.Items[0].Name == "PB",
+                "two procedures that call each other each list the other both ways, the cycle the dialog marks: " + Names(pa) + " | " + Names(pb) + " | " + Names(paUsedBy));
+            // Another database's table is named, never resolved: a leaf with its database and no kind or type.
+            var px = await Level(service, connectionId, Own("procedure", "PX"), "uses", json);
+            var gone = await Level(service, connectionId, Own("view", "NoSuchView"), "usedBy", json);
+            var ts = await Level(service, connectionId, Own("table", "TS"), "usedBy", json);
+            check(ts.Items.Count == 1 && ts.Items[0] is { Name: "TRS", Kind: "trigger", ParentSubtype: "system" } && ts.Items[0].Parent?.Name == "TS",
+                "a trigger names its table's subtype, system for a table with the tools-support property, so the tree walks to System Tables: " + Names(ts) + " " + (ts.Items.FirstOrDefault()?.ParentSubtype ?? "none"));
+            check(px.Items.Count == 1 && px.Items[0] is { Name: "Elsewhere", Schema: "dbo", Database: "VariaNoSuchDb", Kind: null, Type: null } && gone.Error?.Code == "NOT_FOUND",
+                "a reference to another database is named with its database and no kind, and a level of an object that is gone is NOT_FOUND: " + Names(px) + " " + gone.Error?.Code);
+        }
+        finally
+        {
+            await sql("DROP TRIGGER IF EXISTS " + s + ".[TRS];\nDROP TABLE IF EXISTS " + s + ".[TS];\nDROP TRIGGER IF EXISTS " + s + ".[TR];\nDROP PROCEDURE IF EXISTS " + s + ".[PA], " + s + ".[PB], " + s + ".[PX], " + s + ".[P3];\n"
+                + "DROP VIEW IF EXISTS " + s + ".[V2], " + s + ".[V1];\nDROP TABLE IF EXISTS " + s + ".[T]]'表];\nGO\nDROP SCHEMA IF EXISTS " + s + ";", database);
+        }
+    }
+
     public static async Task SystemAsync(Action<bool, string> check, SqlService service, string connectionId, int major, JsonSerializerOptions json)
     {
         var options = service.Explorer.Options;
@@ -190,6 +266,7 @@ internal static class PeekLiveChecks
     {
         await KindsAsync(check, service, connectionId, database, major, sql, json, ownLogin("peek"), ownLogin("peeku"));
         await LongDefinitionAsync(check, service, connectionId, database, sql, json);
+        await ViewDependenciesAsync(check, service, connectionId, database, sql, json);
         try { await MemoryOptimizedAsync(check, service, connectionId, sql, json, memoryOptimized); }
         finally { await dropMemoryOptimized(); }
         // Hostile names, dropped afterwards so the fixture checks that follow see the database as the fixtures made it.

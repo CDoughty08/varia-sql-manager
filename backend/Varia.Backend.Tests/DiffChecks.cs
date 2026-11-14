@@ -34,6 +34,7 @@ internal static class DiffChecks
         Sizes(check);
         Host(check);
         Refusals(check);
+        LowMemorySteps(check);
     }
 
     private static ResultSetBuffer Fill(ResultStore store, QueryBudget budget, int index, string?[][] rows, ResultColumn[]? columns = null, string kind = "rows")
@@ -585,5 +586,31 @@ internal static class DiffChecks
             check(filling.Columns.OnRead is null && taken > 0 && cells == "BUDGET_STOPPED: " + SqlService.BudgetStoppedFull && Held.Bytes(open) == used,
                 $"a diff refused memory for its differing cells because its query filled the budget answers BUDGET_STOPPED: {cells} {Held.Bytes(open) - used}");
         }
+    }
+
+    /// <summary>The differing cells are charged in steps that ask the system's memory load (WorkSteps): under high load a
+    /// refused step says the computer is low on memory, not that the result memory is full, and returns what it took.</summary>
+    private static void LowMemorySteps(Action<bool, string> check)
+    {
+        var high = false;
+        ResultStore Store(long mark) => new(1L << 30, 1L << 29, () => (high ? 100 : 0, 50)) { Packing = PagePacking.Off, WorkStepBytes = mark };
+        string?[][] Rows(string price) => [.. Enumerable.Range(1, 2).Select(i => new[] { i.ToString(CultureInfo.InvariantCulture), "n", price })];
+        string? Diffed(long mark)
+        {
+            var store = Store(mark);
+            using var service = new SqlService(store);
+            high = false;
+            var (left, right) = Pair(store, Rows("1.00"), Rows("2.00"));
+            var before = Held.Bytes(store);
+            high = true;
+            try { service.DispatchAsync("results.diff", JsonSerializer.SerializeToElement(new { left = left.ResultId, right = right.ResultId, context = -1 }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); return "kept"; }
+            catch (RequestException error) { return error.Code + ": " + error.Message + (Held.Bytes(store) == before && left.Budget.Stopped == TruncationReason.None ? "" : " (memory kept or budget stopped)"); }
+            finally { high = false; }
+        }
+        // Under the default mark two rows' cells never ask, and their one page is the last, kept whole: the diff is kept.
+        var kept = Diffed(ResultStore.WorkCheckBytes);
+        var refused = Diffed(1);
+        check(kept == "kept" && refused == "TOO_LARGE: " + SqlService.LowMemory,
+            $"a diff whose cells pass a load reading under high memory load is refused, saying the computer is low on memory, and returns what it took: {kept} / {refused}");
     }
 }

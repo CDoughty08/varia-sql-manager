@@ -9,11 +9,18 @@ import { InputModeService, type InputModeName, type MonacoInputMode } from '../.
 import { KeybindingService } from '../../src/renderer/src/core/keybindings'
 import type { Timers } from '../../src/renderer/src/core/timers'
 import { ConnectionService } from '../../src/renderer/src/services/connections'
+import { ConnectionTargetService } from '../../src/renderer/src/services/connection-targets'
+import { StartupReconnectService } from '../../src/renderer/src/services/startup-reconnect'
+import { bindStartupReconnect } from '../../src/renderer/src/services/connection-startup'
+import { bindConnectionPruning } from '../../src/renderer/src/services/connection-pruning'
+import { createDisconnectCoordinator } from '../../src/renderer/src/services/disconnect-workbench'
+import { DisconnectPromptService } from '../../src/renderer/src/disconnect/DisconnectPromptService'
 import { BackendStateService } from '../../src/renderer/src/services/backend'
 import { EditorOptionsService } from '../../src/renderer/src/services/editor-options'
 import { ShellOptionsService } from '../../src/renderer/src/services/shell-options'
 import { settingsDocumentOptions } from '../../src/renderer/src/services/documents'
 import { FileService } from '../../src/renderer/src/services/files'
+import { keptSession } from '../../src/renderer/src/services/session'
 import { RecentFilesService } from '../../src/renderer/src/services/recent-files'
 import { RecoveryService } from '../../src/renderer/src/services/recovery'
 import { QueryService, type QueryApi } from '../../src/renderer/src/services/queries'
@@ -255,13 +262,21 @@ export function updatesApi(initial: UpdateState = { status: 'idle', currentVersi
  * The renderer's services and every command contribution, wired as createWorkbench does but with fake IPC and a fake
  * shell host, so command enablement can be tested in Node.
  */
-export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; settings?: Partial<SettingsValues>; recovery?: RecoveryEntry[]; helpFocus?: (id: string) => void } = {}) {
+export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; settings?: Partial<SettingsValues>; recovery?: RecoveryEntry[]; helpFocus?: (id: string) => void; startupReady?: Promise<void> } = {}) {
   // Settings apply to documents as createWorkbench applies them; `settings` exists before the first document does.
-  const doc = documentFixture(settingsDocumentOptions(() => settings.getSnapshot().values))
+  const doc = documentFixture({ ...settingsDocumentOptions(() => settings.getSnapshot().values), target: id => targets.targetForConnection(id), server: id => connections.get(id)?.server })
   /** What query.session.state answers for each tab's session: its @@TRANCOUNT, or 'unchecked'; a tab without one has no session. */
   const sessionStates = new Map<string, number | 'unchecked'>()
+  const bindingListeners = new Set<Parameters<VariaApi['onConnectionBindingsChanged']>[0]>()
   const api = {
     ...doc.api,
+    onConnectionBindingsChanged: vi.fn<VariaApi['onConnectionBindingsChanged']>(listener => { bindingListeners.add(listener); return () => { bindingListeners.delete(listener) } }),
+    pushConnectionBindings: (update: Parameters<Parameters<VariaApi['onConnectionBindingsChanged']>[0]>[0]) => { for (const listener of bindingListeners) listener(update) },
+    connect: vi.fn<VariaApi['connect']>(async () => ({ ok: false, error: 'No connection response configured in this fixture.' })),
+    disconnect: vi.fn<VariaApi['disconnect']>(async () => ({ ok: true, value: { disconnected: true } })),
+    cancelConnectionRequests: vi.fn<VariaApi['cancelConnectionRequests']>(async ids => ({ ok: true, value: { cancelled: ids.length } })),
+    acceptConnectionRequest: vi.fn<VariaApi['acceptConnectionRequest']>(async () => ({ ok: true, value: { accepted: true, retained: true } })),
+    pruneConnectionTargets: vi.fn<VariaApi['pruneConnectionTargets']>(async ids => ({ ok: true, value: { pruned: ids.length } })),
     execute: vi.fn<QueryApi['execute']>(async () => ({ ok: true, value: queryOutput })),
     estimatePlan: vi.fn<VariaApi['estimatePlan']>(async () => ({ ok: true, value: { plans: [], database: 'master' } })),
     copyResults: vi.fn<VariaApi['copyResults']>(async () => ({ ok: true, value: { rows: 0, bytes: 0, truncatedCells: 0, partial: false, capped: 0 } })),
@@ -277,6 +292,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     releaseSqlFile: vi.fn<VariaApi['releaseSqlFile']>(async () => ({ ok: true, value: undefined })),
     confirmClose: vi.fn<VariaApi['confirmClose']>(async () => ({ ok: true, value: 'discard' })),
     confirmOpenConnections: vi.fn<VariaApi['confirmOpenConnections']>(async () => ({ ok: true, value: false })),
+    hotExit: false,
+    keepSession: vi.fn<VariaApi['keepSession']>(async () => ({ ok: true, value: undefined })),
     closeWindow: vi.fn<VariaApi['closeWindow']>(async () => {}),
     closeWindowCancelled: vi.fn<VariaApi['closeWindowCancelled']>(),
     // Nothing to ask unless a test says otherwise; answers Cancel when asked.
@@ -339,7 +356,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   // Seeded values apply at once, as if main had answered before the workbench was created.
   const settings = new SettingsService(api, { ...defaultSettings, ...options.settings })
   settings.subscribe(() => documents.refreshOptions())
-  const connections = new ConnectionService(), editorOptions = new EditorOptionsService(settings), shellOptions = new ShellOptionsService(settings), panes = new PaneService()
+  const connectionTargets = new ConnectionTargetService(), connections = new ConnectionService(connectionTargets), editorOptions = new EditorOptionsService(settings), shellOptions = new ShellOptionsService(settings), panes = new PaneService()
   const bookmarks = new BookmarkService(documents, events), editorDialogs = new EditorDialogs(), tabRename = new TabRenameService(documents)
   const editorGroups = new EditorGroupService(documents)
   // Monaco's command and keybinding registries, for the editor chords the bridge registers.
@@ -360,13 +377,23 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const pivot = new PivotService(results)
   const resultsSearch = new ResultsSearchService({ results, timers: options.timers ?? browserTimers })
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
-  const files = new FileService(documents, queries, api, { autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'] })
+  const files = new FileService(documents, queries, api, {
+    autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'],
+    hotExit: () => api.hotExit ? keptSession(documents, id => connections.get(id)?.server, {
+      pinnedOnly: !settings.get('environment.documents.hotExit'), connectionTargets, assertConnectionsReady: () => connections.assertCheckpointReady()
+    }) : undefined
+  })
   const recentFiles = new RecentFilesService(api)
   // AutoRecover's timer runs only when a test advances it.
   const recoveryTimers = manualTimers()
   const recovery = new RecoveryService({ api, documents, files, settings, warn: message => commands.reportWarning(message), timers: recoveryTimers.timers, server: id => connections.get(id)?.server })
   const resultSelection = new ResultSelectionService(results)
-  const targets = new TargetService(documents, queries, connections, files)
+  const targets = new TargetService(documents, queries, connections, files, connectionTargets)
+  const targetIdOf = (connectionId: string) => targets.targetForConnection(connectionId)
+  const connectionReady = Promise.resolve()
+  const startup = options.startupReady ? bindStartupReconnect({ api, connections, documents, targets, backend, settings, ready: options.startupReady }) : undefined
+  const startupReconnect = startup?.scheduler ?? new StartupReconnectService(connectionTargets, async () => ({}), () => settings.get('environment.connections.autoReconnect'))
+  const connectionPruning = bindConnectionPruning({ registry: connectionTargets, documents, api, ready: connectionReady })
   const platform = options.platform ?? 'win32', focus = fakeFocus()
   const quickInput = new QuickInputService(focus.adapter, options.timers)
   const focused = { panel: '' as '' | 'explorer' | 'editor' | 'results' | 'messages' | 'plan' }
@@ -383,19 +410,25 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     databaseGone: gone => databaseGone(gone), tabNames: ids => queries.tabNames(ids)
   })
   const longRuns = new LongRunService({ api })
+  const disconnectPrompts = new DisconnectPromptService()
+  const disconnectCoordinator = createDisconnectCoordinator({
+    connectionTargets, documents, queries, files, longRuns, api, prompts: disconnectPrompts,
+    detached: (targetId, handle) => targets.detached(targetId, handle),
+    closeQueries: plan => files.closeDisconnectedQueries(plan, approved => documents.closeDisconnectedQueries(approved))
+  })
   const ssisCatalog = new CreateCatalogService({ api, connections, explorer, longRuns })
-  const designers = new TableDesignerService({ api, documents, files, connections, explorer })
-  const ssisProperties = new SsisPropertiesService({ api, documents, connections })
-  const properties = new DatabasePropertiesService({ api, documents, files, connections, explorer, focusEditor, close: id => { void files.close(id) }, ...(options.timers ? { timers: options.timers } : {}) })
-  const newDatabase = new NewDatabaseService({ api, documents, files, connections, explorer, longRuns, focusEditor, ...(options.timers ? { timers: options.timers } : {}) })
+  const designers = new TableDesignerService({ api, documents, files, connections, explorer, targetIdOf })
+  const ssisProperties = new SsisPropertiesService({ api, documents, connections, targetIdOf })
+  const properties = new DatabasePropertiesService({ api, documents, files, connections, explorer, targetIdOf, focusEditor, close: id => { void files.close(id) }, ...(options.timers ? { timers: options.timers } : {}) })
+  const newDatabase = new NewDatabaseService({ api, documents, files, connections, explorer, longRuns, focusEditor, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
   const actionProgress = new ActionProgressService(api)
-  const restore = new RestoreService({ api, documents, files, connections, longRuns, progress: actionProgress, explorer, transactions: queries, focusEditor, now: () => new Date(2026, 9, 30, 12, 0, 0), ...(options.timers ? { timers: options.timers } : {}) })
+  const restore = new RestoreService({ api, documents, files, connections, longRuns, progress: actionProgress, explorer, transactions: queries, focusEditor, targetIdOf, now: () => new Date(2026, 9, 30, 12, 0, 0), ...(options.timers ? { timers: options.timers } : {}) })
   // Activity Monitors subscribe through a stand-in for LiveService that records each view.
   const liveViews = fakeLiveViews()
-  const activity = new ActivityMonitorService({ api, documents, connections, live: liveViews, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values })
+  const activity = new ActivityMonitorService({ api, documents, connections, live: liveViews, targetIdOf, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values })
   const live = fakeLive()
-  const operations = new SsisOperationsService({ api, documents, panes, live, connections, settings })
-  const objectSearch = new ObjectSearchService({ api, documents, connections, settings })
+  const operations = new SsisOperationsService({ api, documents, panes, live, connections, settings, targetIdOf })
+  const objectSearch = new ObjectSearchService({ api, documents, connections, settings, targetIdOf })
   const inputMode = new InputModeService(fakeInputMode())
   const notifications = new NotificationService(options.timers ? { timers: options.timers } : {})
   const updates = new UpdateService(api)
@@ -433,6 +466,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     activeElement
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
+  const stopConnectionBindings = api.onConnectionBindingsChanged(update => { if (connections.bindingsChanged(update) && update.warning) commands.reportWarning(update.warning) })
   const actions = new ObjectActionService({
     api, explorer, documents, queries, connections, selectTopCount: () => settings.get('objectExplorer.selectTopRows'),
     report: { error: message => commands.reportError(message), warning: message => commands.reportWarning(message), clear: message => commands.clearError(message), notice: message => notifications.notify({ severity: 'info', message, key: objectActionNoticeKey }) },
@@ -441,7 +475,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen: options.modal ?? (() => false), editorHasTextFocus: () => false })
   const host: ShellHost = {
-    disconnect: vi.fn(async () => {}), reveal: vi.fn(), manageLayouts: vi.fn(), resetLayout: vi.fn(), flushLayout: vi.fn(async () => {}), layoutCloseCancelled: vi.fn(), showConnect: vi.fn(), reconnect: vi.fn(), editEnvironment: vi.fn(), closePane: vi.fn(),
+    disconnect: vi.fn(async () => {}), removeConnection: vi.fn(), reveal: vi.fn(), manageLayouts: vi.fn(), resetLayout: vi.fn(), flushLayout: vi.fn(async () => {}), layoutCloseCancelled: vi.fn(), showConnect: vi.fn(), reconnect: vi.fn(), editEnvironment: vi.fn(), closePane: vi.fn(),
     paneLocation: vi.fn<ShellHost['paneLocation']>(() => 'grid'), floatPane: vi.fn(), dockPane: vi.fn(), dockPaneAt: vi.fn(), tabPaneWith: vi.fn(), movePaneToWindow: vi.fn(), movePaneToMainWindow: vi.fn(),
     revealOutput: vi.fn(), toggleOutput: vi.fn<ShellHost['toggleOutput']>(() => 'hidden')
   }
@@ -477,6 +511,11 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     connections,
     backend,
     targets,
+    connectionTargets,
+    connectionReady,
+    startupReconnect,
+    disconnectPrompts,
+    disconnectCoordinator,
     quickInput,
     keybindings,
     events,
@@ -554,6 +593,11 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   /** Connects a server as the Connect dialog would. */
   const connect = (info: ConnectionInfo) => connections.add(info, connectionOptions)
   const dispose = () => {
+    stopConnectionBindings()
+    if (startup) startup.dispose()
+    else startupReconnect.dispose()
+    connectionPruning.dispose()
+    disconnectPrompts.dispose()
     actionProgress.dispose()
     recovery.dispose()
     menus.dispose()
@@ -570,6 +614,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     pivot.dispose()
     resultsSearch.dispose()
     results.dispose()
+    resultVisibility.dispose()
     explorer.dispose()
     databaseList.dispose()
     scripting.dispose()
@@ -595,6 +640,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     help.dispose()
     documents.dispose()
     backend.dispose()
+    connections.dispose()
+    connectionTargets.dispose()
   }
   return {
     ...doc,
@@ -603,6 +650,11 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     connections,
     backend,
     editorOptions,
+    connectionTargets,
+    connectionReady,
+    startupReconnect,
+    disconnectPrompts,
+    disconnectCoordinator,
     editorGroups,
     shellOptions,
     bookmarks,
