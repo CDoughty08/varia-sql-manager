@@ -11,7 +11,7 @@ import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import ComparePanel from '../src/renderer/src/results/ComparePanel'
 import { CompareService } from '../src/renderer/src/results/CompareService'
-import { DerivedWork } from '../src/renderer/src/results/derived-work'
+import { DerivedJobs } from '../src/renderer/src/results/derived-jobs'
 import { ResultError } from '../src/renderer/src/results/ResultClient'
 import { ResultsService } from '../src/renderer/src/results/ResultsService'
 import { descriptor, fakeResultClient, summaryOf, type FakeHandle } from './fixtures/results'
@@ -29,7 +29,7 @@ function fixture() {
     onResultsJob: vi.fn<VariaApi['onResultsJob']>(listener => { progress.add(listener); return () => { progress.delete(listener) } })
   }
   const results = new ResultsService({ client, api, events, frame: callback => callback(), timers: timers.timers, newId: () => crypto.randomUUID() })
-  const compare = new CompareService(results, { work: new DerivedWork({ timers: timers.timers }) })
+  const compare = new CompareService(results, { jobs: new DerivedJobs({ timers: timers.timers }) })
   results.begin('t1', 'q1')
   const values = [0, 1].map(index => descriptor(index + 1, { index }))
   for (const value of values) client.emit('q1', { type: 'resultSet.opened', descriptor: value })

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ResultColumn, ResultsJobProgress, VariaApi } from '../src/shared/contracts'
 import { EventBus } from '../src/renderer/src/core/events'
 import { CompareService, compareFullText, compareSources, compareText } from '../src/renderer/src/results/CompareService'
-import { DerivedWork } from '../src/renderer/src/results/derived-work'
+import { DerivedJobs } from '../src/renderer/src/results/derived-jobs'
 import { PivotService } from '../src/renderer/src/results/PivotService'
 import { ResultError } from '../src/renderer/src/results/ResultClient'
 import { ResultsService, resultLimits, setKey, slotOf, type TabResults } from '../src/renderer/src/results/ResultsService'
@@ -26,8 +26,10 @@ function fixture(o: { parallel?: number } = {}) {
     onResultsJob: vi.fn<VariaApi['onResultsJob']>(listener => { progress.add(listener); return () => { progress.delete(listener) } })
   }
   const results = new ResultsService({ client, api, events, frame: callback => callback(), timers: timers.timers, newId: () => crypto.randomUUID() })
-  const work = new DerivedWork({ timers: timers.timers, ...o.parallel ? { parallel: o.parallel } : {} })
-  const compare = new CompareService(results, { work }), pivot = new PivotService(results)
+  // One window's places and 1,000 rule, shared as the workbench shares them.
+  const jobs = new DerivedJobs({ timers: timers.timers, ...o.parallel ? { limit: o.parallel } : {} })
+  const compare: CompareService = new CompareService(results, { jobs, adding: tabId => pivot.adding(tabId) })
+  const pivot: PivotService = new PivotService(results, { jobs, adding: tabId => compare.adding(tabId) })
   let next = 1
   /** A finished run of `count` sets; `columns` gives a set's own columns, `plan` makes one a plan set, `open` leaves one loading. */
   const run = (count: number, o: { queryId?: string; columns?: Record<number, ResultColumn[]>; plan?: number; open?: number } = {}) => {
@@ -42,7 +44,7 @@ function fixture(o: { parallel?: number } = {}) {
   }
   const tab = (): TabResults => results.getSnapshot().t1
   const handle = (key: string) => tab().sets.find(set => set.key === key)!.handle as FakeHandle
-  return { client, results, compare, pivot, work, run, tab, handle }
+  return { client, results, compare, pivot, jobs, run, tab, handle }
 }
 
 describe('the Compare picker', () => {
@@ -157,7 +159,7 @@ describe('the Compare picker', () => {
   })
 
   it('runs one comparison per pair and exact-text choice, other pairs at once, at most four at a time', async () => {
-    const { compare, run, tab, handle, work } = fixture()
+    const { compare, run, tab, handle, jobs } = fixture()
     const keys = run(6)
     const answers: ReturnType<typeof held<DiffAnswer>>[] = []
     for (const key of keys) vi.mocked(handle(key).diff).mockImplementation(() => { const answer = held<DiffAnswer>(); answers.push(answer); return answer.promise })
@@ -170,7 +172,7 @@ describe('the Compare picker', () => {
     const others = [compare.comparePair('t1', keys[0], keys[1], { exact: true }), compare.comparePair('t1', keys[1], keys[2], { exact: false }), compare.comparePair('t1', keys[2], keys[3], { exact: false }),
       compare.comparePair('t1', keys[3], keys[4], { exact: false })]
     expect(answers).toHaveLength(4)
-    expect([work.running, work.waiting]).toEqual([4, 1])
+    expect(jobs.load).toEqual({ running: 4, waiting: 1 })
     expect(compare.getSnapshot().running.t1).toHaveLength(5)
     answers[0].resolve({ descriptor: descriptor(950, { index: 6, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
     await first
@@ -200,6 +202,38 @@ describe('the Compare picker', () => {
     answer.resolve({ descriptor: descriptor(5000, { index: 999, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
     await first
     expect(tab().sets).toHaveLength(resultLimits.sets)
+  })
+
+  it('shares the four places of the window and the 1,000 rule with Pivot builds', async () => {
+    const { compare, pivot, results, run, handle, jobs } = fixture()
+    const keys = run(resultLimits.sets - 2)
+    const answers: ReturnType<typeof held<DiffAnswer>>[] = []
+    for (const key of keys.slice(0, 3)) vi.mocked(handle(key).diff).mockImplementation(() => { const answer = held<DiffAnswer>(); answers.push(answer); return answer.promise })
+    const building = held<Awaited<ReturnType<FakeHandle['pivot']>>>()
+    vi.mocked(handle(keys[0]).pivot).mockReturnValueOnce(building.promise)
+    // A first Pivot in flight takes a place and counts as a result to come.
+    pivot.open('t1', keys[0])
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
+    const built = pivot.run('t1')
+    await settle()
+    expect(jobs.load).toEqual({ running: 1, waiting: 0 })
+    expect(pivot.adding('t1')).toBe(1)
+    // 998 results, a Pivot and a comparison in flight: room for no more of either.
+    const first = compare.comparePair('t1', keys[0], keys[1], { exact: false })
+    expect(compare.adding('t1')).toBe(1)
+    expect(jobs.load).toEqual({ running: 2, waiting: 0 })
+    await expect(compare.comparePair('t1', keys[1], keys[2], { exact: false, quiet: true })).resolves.toEqual({ error: compareFullText })
+    expect(answers).toHaveLength(1)
+    pivot.open('t1', keys[1])
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
+    await pivot.run('t1')
+    expect(handle(keys[1]).pivot).not.toHaveBeenCalled()
+    expect(pivot.getSnapshot().tabs.t1.error).toMatch(/already show 1,000 sets/)
+    building.reject(new DOMException('Given up.', 'AbortError'))
+    answers[0].resolve({ descriptor: descriptor(7000, { index: 998, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    await Promise.allSettled([built, first])
+    expect(results.getSnapshot().t1.comparisons).toHaveLength(1)
+    expect(jobs.load).toEqual({ running: 0, waiting: 0 })
   })
 
   it('does not count a comparison of an earlier run that was given up but has not settled yet', async () => {

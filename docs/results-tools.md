@@ -48,11 +48,16 @@ A result has at most one Pivot, and a Pivot is always read from the result's own
 pivot builder belongs to one result and names it as its source; there is nothing to pick. It follows the grid you last
 used: that grid's result, or, when the grid is a comparison or a plan set, the first result that can be pivoted. Each
 result keeps its own draft, which a re-run's result of the same number takes over. **Pivot Results…** on a Pivot's grid
-opens the builder for that Pivot's result. **Build Pivot** on a result that has a Pivot replaces it: the old Pivot is
-released first and the new one shown when it is built, so a build that fails or is cancelled leaves the result without
-one. A Pivot shown transposed is shown transposed again after a rebuild, under the same header column when the
-new Pivot still has a column of that name; its own sort, filters, column widths and selection start over. While one result's Pivot is being built the builder says so on the others, and a failed build's
-message stays with the result it was for until that result's draft is edited or it is built again.
+opens the builder for that Pivot's result, starting from what the Pivot was built with. **Build Pivot** on a result that
+has a Pivot replaces it once the new one is built: the old Pivot stays readable meanwhile, and a build that fails, is
+cancelled or does not fit in result memory leaves it as it was and says why (the old Pivot is never freed to make room;
+the builder suggests closing it and building again). A rebuilt Pivot keeps its place, its name, the focus and the way it
+is drawn (transposed, under the same header column when the new Pivot has one column of that name), and the sort keys
+and column widths you set on columns whose names appear once in both; its filters, selection and scroll start over, and
+the toolbar says when filters were removed. Pivots of different results build at the same time, at most four in a
+window (the builder says when one waits for the others), and a busy SQL backend is asked again after
+1, 4 and 16 seconds. A failed build's message stays with the result it was for until that result's draft is edited or it
+is built again. A Pivot's strip says when the result it was built from holds only part of its query's rows.
 
 ## Comparisons
 
@@ -74,8 +79,8 @@ input is sorted or filtered, and so does the strip.
 comparison takes the focus, unless you moved it meanwhile, and the picker stays open for the next one. Asking for a comparison the run
 already has (the same two results, the same way round, the same Exact text choice) shows that one (**Show It**), and
 asking again while it runs does nothing. Comparisons of other pairs run at the same time, at most four at once in a
-window (the rest wait their turn); a busy backend is asked again after 1, 4 and 16 seconds before the comparison fails.
-A run keeps at most 1,000 results, comparisons included, so a comparison that would pass that is refused with a sentence
+window together with Pivot builds (the rest wait their turn); a busy backend is asked again after 1, 4 and 16 seconds before the comparison fails.
+A run keeps at most 1,000 results, comparisons and Pivots included (counting those still being built), so a comparison that would pass that is refused with a sentence
 saying so. Only you close the picker (**Close**, its close button, the toolbar's **Compare**, or **Pivot…**). It stays
 on its result when you use another grid. When the query runs again it waits, then returns to the results of the same
 numbers; while the run has no such result, or that result was closed, it says so and offers nothing to compare. It

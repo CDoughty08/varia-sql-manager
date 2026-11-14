@@ -25,8 +25,8 @@ import { ResultVisibilityService } from '../results/ResultVisibilityService'
 import { ResultsService } from '../results/ResultsService'
 import { HighlightsService } from '../results/HighlightsService'
 import { CompareService } from '../results/CompareService'
-import { DerivedWork } from '../results/derived-work'
 import { PivotService } from '../results/PivotService'
+import { DerivedJobs } from '../results/derived-jobs'
 import { ResultsSearchService } from '../results/search'
 import { MemoryUsageService } from '../results/memory'
 import { documentOwner, documentPage, eitherHidden, LiveService, mainWindowPage } from '../live/LiveService'
@@ -148,6 +148,8 @@ export interface Workbench extends Disposable {
   /** Rows highlighted in each query tab's grids, found again by identity after sorts and re-runs. */
   readonly highlights: HighlightsService
   readonly compare: CompareService
+  /** The window's places for pivot builds and comparisons: four run at once, and a busy backend is asked again. */
+  readonly derivedJobs: DerivedJobs
   readonly pivot: PivotService
   /** Search in results: each tab's search box, its matches (found in the backend) and column-name matches. */
   readonly resultsSearch: ResultsSearchService
@@ -301,10 +303,11 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     // Sorted grids follow Sort text by as it changes, from the toolbar, the palette or Options.
     onSortTextChange: listener => settings.subscribe(listener) })
   const highlights = new HighlightsService(results)
-  // The window's places for derived results built in the backend: comparisons now (Pivot builds can share them).
-  const derivedWork = new DerivedWork()
-  const compare = new CompareService(results, { work: derivedWork })
-  const pivot = new PivotService(results)
+  // The window's places for derived results built in the backend, shared by Pivot builds and comparisons: four at once.
+  const derivedJobs = new DerivedJobs()
+  // Each counts the other's new results in flight against a run's 1,000.
+  const compare: CompareService = new CompareService(results, { jobs: derivedJobs, adding: tabId => pivot.adding(tabId) })
+  const pivot: PivotService = new PivotService(results, { jobs: derivedJobs, adding: tabId => compare.adding(tabId) })
   const resultsSearch = new ResultsSearchService({ results })
   const resultMemory = new MemoryUsageService(resultClient, 'results', events)
   const indexMemory = new MemoryUsageService(resultClient, 'index')
@@ -516,6 +519,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     results,
     highlights,
     compare,
+    derivedJobs,
     pivot,
     resultsSearch,
     resultMemory,

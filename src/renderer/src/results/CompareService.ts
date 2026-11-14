@@ -1,7 +1,7 @@
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import { pairColumns, type ColumnPairing } from './compare-pairing'
-import { DerivedWork } from './derived-work'
+import { DerivedJobs } from './derived-jobs'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import type { EntryKey, ResultSetEntry, ResultsService, SourceRef, TabResults } from './ResultsService'
 import { entryName, entryOf, resultLimits, setKey, slotOf } from './ResultsService'
@@ -85,20 +85,23 @@ type Results = Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'no
  * Compare… opens a picker (`open`) on a Table: the Table is the new side and the one picked the old, which the picker can
  * swap. Compare with Previous Result compares a Table with the nearest earlier one at once. Both start through
  * `comparePair`: one comparison per pair and exact-text choice at a time (asking again while it runs does nothing), at most
- * `derivedLimits.parallel` at once per window (`DerivedWork`, which retries a busy refusal), and none that would take the
- * run past `resultLimits.sets` results counting those in flight. Each is given up when its run ends or either input closes.
+ * `derivedLimits.parallel` at once per window (`DerivedJobs`, shared with Pivot builds, which retries a busy refusal), and
+ * none that would take the run past `resultLimits.sets` results counting those in flight and first Pivots being built. Each is given up when its run ends or either input closes.
  */
 export class CompareService extends SnapshotStore<CompareSnapshot> implements Disposable {
   private readonly results: Results
-  private readonly work: DerivedWork
+  private readonly jobs: DerivedJobs
+  /** New results other services are building for a tab's current run (first Pivots), counted against its 1,000. */
+  private readonly elsewhere: (tabId: string) => number
   /** Comparisons in flight by tab. */
   private readonly inFlight = new Map<string, Map<string, Running>>()
   private readonly unsubscribe: () => void
 
-  constructor(results: Results, o: { work?: DerivedWork } = {}) {
+  constructor(results: Results, o: { jobs?: DerivedJobs; adding?: (tabId: string) => number } = {}) {
     super({ info: new Map(), pickers: {}, running: {} })
     this.results = results
-    this.work = o.work ?? new DerivedWork()
+    this.jobs = o.jobs ?? new DerivedJobs()
+    this.elsewhere = o.adding ?? (() => 0)
     this.unsubscribe = results.subscribe(() => this.sync())
   }
 
@@ -226,6 +229,13 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     const info = this.getSnapshot().info
     return tab?.comparisons.find(slot => { const item = info.get(setKey(slot.entry.descriptor)); return item?.left === old && item.right === neu && item.exact === exact })?.entry
   }
+  /** Comparisons in flight for a tab's current run: results they will add, which Pivot builds count against its 1,000. An
+   *  earlier run's comparison given up but not yet settled is not counted. */
+  adding(tabId: string): number {
+    const queryId = this.results.getSnapshot()[tabId]?.queryId
+    return [...this.inFlight.get(tabId)?.values() ?? []].filter(item => item.queryId === queryId).length
+  }
+
   isRunning(tabId: string, old: EntryKey, neu: EntryKey, exact: boolean): boolean { return this.inFlight.get(tabId)?.has(pairId(old, neu, exact)) ?? false }
 
   /** The picker's Compare: shows the comparison of its sides when the run has it, else starts it; the comparison takes the
@@ -280,17 +290,15 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     if (items?.has(id)) return undefined
     const fail = (text: string) => { if (o.quiet) return { error: text }; this.results.notify(tabId, text); return undefined }
     // A run keeps at most resultLimits.sets results, derived ones included: one that would pass it, counting those in
-    // flight, is refused before the backend is asked.
-    // An earlier run's comparison given up but not yet settled is not counted.
-    const flying = [...items?.values() ?? []].filter(item => item.queryId === tab.queryId).length
-    if (tab.sets.length + flying >= resultLimits.sets) return fail(compareFullText)
+    // flight and the first Pivots being built, is refused before the backend is asked.
+    if (tab.sets.length + this.adding(tabId) + this.elsewhere(tabId) >= resultLimits.sets) return fail(compareFullText)
     const abort = new AbortController()
     const item: Running = { abort, queryId: tab.queryId, old, neu, id }
     if (!items) this.inFlight.set(tabId, items = new Map())
     items.set(id, item)
     this.publishRunning()
     try {
-      const result = await this.work.run(signal => from.handle.diff(to.handle, { exact: o.exact, signal }), abort.signal)
+      const result = await this.jobs.run(() => from.handle.diff(to.handle, { exact: o.exact, signal: abort.signal }), { signal: abort.signal })
       const label = `Differences: ${entryName(from)} → ${entryName(to)}`
       // Only the run that holds both sets takes the diff; otherwise (a re-run, a closed tab) it is released.
       const key = this.results.addSet(tabId, result.descriptor, label, [setKey(from.descriptor), setKey(to.descriptor)])

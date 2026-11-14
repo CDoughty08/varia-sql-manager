@@ -490,6 +490,31 @@ Builds of one source at once, each on its own thread, on `main`.
   columns, and `rows x (16 x keys + 16)` is the reservation. That turns a refusal into a wait. Without it, a user who
   starts pivots on two large groups of one query gets one of them refused.
 
+## Measured again for PR 10
+
+The parallel case once more on `main` after the threaded sorts (#432, #435, #439), where one build uses up to three
+quarters of the cores. Same machine (24 cores); other sessions were running on it throughout. Each figure is one cold
+build (median and slowest of the builds at once), as `--pivot-bench --only parallel` runs it; the five-million-row rows are three runs.
+
+| Source | Budget a query | Builds | Each took | All done | Refused |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 5,000,000 rows, 80 MiB | 1 GiB | 1 | 1.29 to 1.32 s | 1.3 s | 0 |
+| | | 2 | 2.6 to 3.1 s | 2.6 to 3.1 s | 0 |
+| | | 4 | 2.3 to 4.0 s | 2.5 to 4.1 s | 0 |
+| | | 8 | 2.2 to 3.7 s | 2.3 to 3.7 s | 3 |
+| 20,000,000 rows, 331 MiB | 1 GiB | 1 to 8 | refused | under 0.1 s | all |
+| 20,000,000 rows, 331 MiB | 8 GiB | 1 | 5.3 s | 5.3 s | 0 |
+| | | 2 | 17.4 s | 17.5 s | 0 |
+| | | 4 | 14.4 to 19.4 s | 19.4 s | 0 |
+| | | 8 | 14.9 to 19.4 s | 19.5 s | 0 |
+
+- **Builds now share the cores.** Before, each build was one thread and four took 13 to 20 % longer than one. Now each
+  takes about twice as long as one alone, and four together finish in about half the time of four in turn. Two at once
+  gain nothing over one after the other.
+- **A single 20-million-row build no longer fits a 1 GiB query budget** beside its source (725 MB of keys and 347 MB
+  stored); it is refused in under 0.1 s, as before for the second one.
+- **The cap of four stands** (PR 10): nothing starves, which is what the cap is for. A lower cap would cost little.
+
 ## Not measured
 
 - The owner's own session. The report is a screenshot; its data, build, recipe and machine state are unknown. The

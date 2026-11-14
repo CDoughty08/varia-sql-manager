@@ -140,7 +140,9 @@ being true.
   the one flat list, in the order drawn: a group's Table, its Pivot directly under it, the next group, comparisons last.
   `ResultsService.addSet` is the only way a derived result joins a run and keeps the rules that make every list
   representable: a pivot is taken only from a group's Table of rows (never from a Pivot, a comparison or a
-  SQL-returned plan set) and replaces the group's Pivot, releasing the old one first; a bare run (Peek's, `begin`'s
+  SQL-returned plan set; the backend's `results.pivot` refuses anything but `rows` too) and replaces the group's Pivot in
+  place (`replaceSet`: same entry key, next `revision`, new provenance in `ResultSlot.pivot`, then the old result is
+  released; the old one is never released early to make room); a bare run (Peek's, `begin`'s
   `bare`) takes neither a pivot nor a diff. A slot's identity is its entry key, where its grid state, sort and filters
   already live; do not add a second key for a view. Transposed is not a view either: it is how a Table or a Pivot is
   drawn (its grid state's orientation). The pivot builder belongs to one group and follows the focused grid
@@ -152,8 +154,8 @@ being true.
   read: change the rule in both and add a case. Names compare through one fixed table, `src/shared/ordinal-casing.ts`, in
   the backend (`OrdinalNames`, which embeds the file), the renderer and the fake backend, not through an ICU's casing,
   whose Unicode version differs by platform; `DiffChecks.OrdinalCasing` checks it against the runtime wherever the runtime
-  knows the letter, and `VARIA_UPDATE_ORDINAL_CASING=1 npm run backend:test` rewrites it from the runtime's casing. Derived builds go through the window's `DerivedWork` (four at once, a
-  busy refusal retried), one comparison per pair and exact-text choice at a time. A comparison's source links come from
+  knows the letter, and `VARIA_UPDATE_ORDINAL_CASING=1 npm run backend:test` rewrites it from the runtime's casing. Pivot builds and comparisons share the window's `DerivedJobs` (four at once, a
+  busy refusal retried) and count each other's new results in flight against a run's 1,000 (`adding`), one comparison per pair and exact-text choice at a time. A comparison's source links come from
   its frozen `ResultSlot.sources` and go only to an entry whose set key is still the one compared; otherwise they read
   closed.
 - Every way a result leaves its run goes through one cleanup, `ResultsService.drop`: closing one view (`removeEntry`, a

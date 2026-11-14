@@ -772,9 +772,11 @@ describe('Query Output commands', () => {
     expect(commands.isEnabled('output.pivot', on('grid', { place: 2 }))).toBe(true)
     expect(await commands.execute('output.pivot', on('grid', { place: 2 }), 'menu')).toBe(true)
     expect(builder()).toMatchObject({ source: key(1), pivot: made })
+    vi.mocked(resultClient.handle(2)!.pivot).mockResolvedValueOnce({ descriptor: descriptor(812, { index: 1, kind: 'pivot' }), rows: 3, rowGroups: 2, columnGroups: 0, approximate: false })
     await build()
-    expect(pivots().map(set => set.label)).toEqual(['Pivot of Result 2'])
-    expect(key(2)).not.toBe(made)
+    // Replaced in place: the same slot and key now show the new result.
+    expect(pivots().map(set => [set.label, set.descriptor.resultId])).toEqual([['Pivot of Result 2', 812]])
+    expect(key(2)).toBe(made)
     expect(resultClient.handle(2)!.pivot).toHaveBeenCalledTimes(2)
     expect(resultClient.handle(802)!.pivot).not.toHaveBeenCalled()
     // A key, with the focus in the Pivot's grid: the same. (The focused view is read only where there is a document.)
