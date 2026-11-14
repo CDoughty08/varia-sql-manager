@@ -83,7 +83,6 @@ import { parseDirective, shapes } from './backend/shapes.mjs'
 import { backendMethods } from '../../src/shared/ipc/methods.ts'
 import { sameName } from '../../src/shared/ordinal-casing.ts'
 import { gunzipSync } from 'node:zlib'
-import { createHash } from 'node:crypto'
 import { fixturePlan } from './plans/model.mjs'
 
 const fixturePlanXml = readFileSync(new URL('./plans/multiple.sqlplan', import.meta.url), 'utf8')

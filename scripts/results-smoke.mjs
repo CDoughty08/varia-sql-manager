@@ -1751,9 +1751,17 @@ try {
   // A filter made again of the same values is no change: W1's active is 1 for ids 0 and 3. Filtering by id 0's value and
   // updating, then removing it (out of date again) and filtering by id 3's leaves the Pivot up to date, as the backend
   // resolves a value to its lowest row whichever cell named it.
+  // The grid draws only the columns in view, and a narrow window may leave active out: scroll to the last columns first.
+  const activeCell = async row => {
+    await pivotTable.locator(gridPart.scroller).evaluate(element => { element.scrollLeft = element.scrollWidth })
+    const found = cell(row, 6, pivotTable)
+    await expect(found).toBeVisible()
+    return found
+  }
   const filterActive = async (row, name) => {
-    await cell(row, 6, pivotTable).click()
-    await cell(row, 6, pivotTable).click({ button: 'right' })
+    const target = await activeCell(row)
+    await target.click()
+    await target.click({ button: 'right' })
     await outputMenu.getByRole('menuitem', { name: 'Filter', exact: true }).click()
     await page.getByRole('menu', { name: 'Filter', exact: true }).getByRole('menuitem', { name, exact: true }).click()
   }
@@ -1770,7 +1778,7 @@ try {
   // Likewise the header funnel: values ticked again in a new value list are no change. Its list of active, built and
   // updated, then other values ticked (out of date) and the first ones ticked again leaves the Pivot up to date.
   const tickActive = async (check, uncheck) => {
-    await cell(0, 6, pivotTable).click()
+    await (await activeCell(0)).click()
     await page.keyboard.press('Alt+ArrowDown')
     const list = page.getByRole('dialog', { name: 'Filter active', exact: true })
     await list.getByRole('checkbox', { name: check, exact: true }).check()
