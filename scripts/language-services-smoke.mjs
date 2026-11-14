@@ -1,5 +1,5 @@
 import { electron, expect } from './fixtures/smoke.mjs'
-import { activeDocumentName, backendReady, documentTab, editorGroupForDocument, editorGroups, editorHover, editorOverflowHosts, editorSurface, editorText, editorTextbox, floatingEditorGroups, movePane, paneMenuButton, part, popoutDockButton, popoutTabs, queryDatabase, queryServer, suggestionItems, suggestionOption, suggestionWidget, toolbarButton } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, documentTab, errorBanner, statusSegment, editorGroupForDocument, editorGroups, editorHover, editorOverflowHosts, editorSurface, editorText, editorTextbox, floatingEditorGroups, movePane, paneMenuButton, part, popoutDockButton, popoutTabs, queryDatabase, queryServer, suggestionItems, suggestionOption, suggestionWidget, toolbarButton } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
@@ -229,6 +229,24 @@ try {
   expect((await languageCalls('language.refresh')).at(-1).params).toMatchObject({ documentId: documentA, context: { connectionId: idA, database: 'AppData' } })
   await page.keyboard.press('Escape')
   console.log('Language checks: a focused external hover keeps query-editor shortcuts and refreshes its own database.')
+
+  // Go To Definition (F12): the name at the caret, resolved on the query's own connection and database, scripted as CREATE to
+  // a new query (Script As). An unresolved name is a quiet status-bar notice, never the error banner.
+  await setText(page, page, 'SELECT * FROM dbo.Orders')
+  await page.keyboard.press('F12')
+  await expect.poll(async () => (await languageCalls('language.definition')).at(-1)?.params).toMatchObject({ documentId: documentA, text: 'SELECT * FROM dbo.Orders', context: { connectionId: idA, database: 'AppData' } })
+  await expect.poll(async () => (await languageCalls('scripting.script')).at(-1)?.params).toMatchObject({ connectionId: idA, verb: 'create', targets: [{ kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' }] })
+  await expect.poll(() => activeDocumentName(page)).not.toBe(tabA)
+  await expect.poll(() => text(page)).toContain('CREATE TABLE dbo.Orders (Id int);')
+  // The script is a new, unmodified query: Close Query leaves the language tab as it was.
+  await page.keyboard.press(`${mod}+W`)
+  await expect.poll(() => activeDocumentName(page)).toBe(tabA)
+  await setText(page, page, 'SELECT * FROM dbo.Missing')
+  await page.keyboard.press('F12')
+  await expect(statusSegment(page)).toHaveText('No definition found for Missing.')
+  await expect(errorBanner(page)).toHaveCount(0)
+  expect(await activeDocumentName(page)).toBe(tabA)
+  console.log('Language checks: F12 scripts the object under the caret to a new query tab, and an unknown name only shows a status notice.')
 
   const idB = await connect('language-server-b')
   expect(idB).not.toBe(idA)

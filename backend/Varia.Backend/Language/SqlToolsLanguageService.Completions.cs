@@ -157,7 +157,7 @@ internal sealed partial class SqlToolsLanguageService
         return visitor.Qualifiers is { Count: > 0 } qualifiers ? new(replacement, from, to, qualifiers, visitor.OutputAliases) : null;
     }
 
-    private static bool BoundedCompletionSyntax(IList<TSqlParserToken> tokens)
+    internal static bool BoundedCompletionSyntax(IList<TSqlParserToken> tokens)
     {
         // ScriptDom's grammar is recursive. Tokenize before parsing so hostile nesting cannot overflow the
         // backend stack; complex buffers still receive the out-of-process provider's ordinary suggestions.
@@ -183,7 +183,7 @@ internal sealed partial class SqlToolsLanguageService
         return true;
     }
 
-    private static int CompletionOffset(string text, LanguagePosition position)
+    internal static int CompletionOffset(string text, LanguagePosition position)
     {
         if (!PositionInText(text, position)) return -1;
         var line = 0;

@@ -36,9 +36,34 @@ being true.
   process (SIGSTOP) before it kills it, and an exit in between would leave the child stopped for good. The gate cannot
   cover a backend that main kills, so only Windows kills the child's tree (`LspClient.KillsTree`); Linux and macOS send the
   one signal, which has no stopped state.
+  Go To Definition (`language.definition`, `DefinitionService`) never goes through SQL Tools: ScriptDom finds the name under
+  the caret (white space and comments allowed around its dots) and, from the caret's batch only (or, when that does not
+  parse, the widest run of statements around the caret that does, statements starting after a semicolon or at a statement
+  keyword),
+  whether it is a column (whose table is the target) and which tables its aliases name (`DefinitionNames`, at most 8
+  candidates). Each query level's tables are its own FROM clause and DML target, never a subquery's; in a column's qualifier
+  an alias hides an object of its name, while a table reference's own name is always the object it names; a CTE, derived
+  table, table variable, PIVOT or trigger's inserted names no object; a table-valued function's alias stands for the
+  function, MERGE's target alias for its target, OUTPUT's inserted and deleted for the DML target, and a column in an
+  INSERT, OUTPUT INTO, index, key or foreign key list (or ALTER TABLE's DEFAULT FOR, ALTER COLUMN, DROP COLUMN and PERIOD FOR SYSTEM_TIME) for
+  that table. A correlated subquery's or APPLY's bare column may be
+  an outer table's (offered after its own, with the column checked); a derived table's or CTE's may not. A call on a column
+  (t.Doc.value(), x.Doc.nodes()) is its table's column, a qualified star's qualifier (o.*) is its table, an INSERT's or
+  OUTPUT INTO's table is never a source of the statement's columns, a declared column (a table's, CTE's or derived table's
+  column list, a select-list alias) names no object, and USE earlier in the script (never a query's USE HINT) is the database
+  for names without one. Constant `DefinitionSql.Lookup` resolves the candidates on the Object
+  Explorer pool, names only as parameters, another database's through the `QUOTENAME(@db)` wrapper, a one-part name in the
+  default schema, then dbo, then sys, within a 10 s budget. A missing object or a database that is gone or closed to the
+  login is `null`, which the renderer shows as a status-bar notice, never an error banner; a server or login that cannot be
+  reached is an error. A newer F12 on a document supersedes one still waiting, and a query with no connection says so.
+  F12, Alt+F12 and Ctrl+click are Varia commands (`edit.goToDefinition`, `edit.peekDefinition`, gesture
+  `editor.goToDefinition`) that `KeybindingService` takes before Monaco's gotoSymbol actions (loaded with hover), and each
+  editor drops Monaco's Ctrl+hover link, which would ask the backend for every word under a Ctrl-held pointer (`create-editor.ts`).
+  F12 scripts the object as CREATE to a new query through Script As, Alt+F12 opens a Peek tab. Both run on `editorTextFocus || peekEditorFocus` with no query-tab
+  precondition, so they work in Peek's editor without enabling query commands there.
   The service serves query documents' models and Peek's read-only definition models (`peekModelContext`: connection,
-  database and the model's own UUID as its document id), and nothing else. A Peek model gets hover only, never completion
-  or diagnostics; it is served from its first request, and its `onWillDispose` ends it as closing a query does (epoch bump,
+  database and the model's own UUID as its document id), and nothing else. A Peek model gets hover and Go To Definition only, never
+  completion or diagnostics; it is served from its first request, and its `onWillDispose` ends it as closing a query does (epoch bump,
   context, epoch and listener dropped, `language.close` if it was used). Requests in flight are capped per kind
   (`pendingLimits`): every Peek navigation makes a new document, so Peek has its own renderer cap of 2, apart from query
   documents' 8. On the backend its requests still share the metadata slots (`ProtocolHost.MetadataSlots`) with query tabs,
@@ -338,7 +363,7 @@ being true.
   Peek's definition is the query editor itself (`createQueryEditor` with `peekEditorUse`, `explorer/peek-editor.ts`), never
   a copy of it: read-only, one per card or tab, a model per definition disposed as the view moves on. Its focus key is
   `peekEditorFocus`, never `editorFocus`, and its Monaco context key `variaPeekEditor` keeps the bridge's chords off it, so no
-  query command acts on it.
+  query command acts on it. Go To Definition and Peek Definition are the exception: their keys accept `peekEditorFocus`.
   User shortcuts reach the renderer only through `ShortcutsService` (`src/renderer/src/core/ShortcutsService.ts`), which
   hands `effectiveRules` to `KeybindingService.setRules` (labels, menus, the palette and the editor bridge follow) and the
   file's gestures to `GestureService.setModifiers`; the Shortcuts page records keys only through `KeybindingService.capture`.
