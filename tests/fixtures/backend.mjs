@@ -1063,7 +1063,8 @@ async function exportResults(id, { resultId, path, format, headers, nullText, te
 /** A script with a `-- varia-fake:` first line (shapes.mjs): its sets stream at their rates, then messages, then the summary. */
 async function runDirective(id, params, directive) {
   const results = [], discarded = []
-  const maxSets = params.maxResultSets ?? 10
+  // Discard results after execution keeps no set: each is counted, and Messages says so, as SqlService does.
+  const maxSets = params.discardResults ? 0 : params.maxResultSets ?? 10
   const queryId = params.queryId
   runningDirectives.add(queryId)
   // The share is split across the sets kept; the first takes the remainder, so the sum is exact.
@@ -1097,6 +1098,10 @@ async function runDirective(id, params, directive) {
       ...Array.from({ length: directive.messages }, (_, i) => print(`Message ${i + 1}`)),
       ...Array.from({ length: directive.errors }, (_, i) => ({ text: `Msg 50000, Level 16, State 1, Line ${i + 1}\nFake error ${i + 1}.`, kind: 'error' }))
     ].slice(0, 1000)
+    if (params.discardResults && discarded.length) {
+      const rows = discarded.reduce((sum, set) => sum + set.rows, 0)
+      messages.push(info(`Discard results after execution is on: ${discarded.length} result ${discarded.length === 1 ? 'set' : 'sets'} (${rows} ${rows === 1 ? 'row' : 'rows'}) ${discarded.length === 1 ? 'was' : 'were'} read and not kept.`))
+    }
     if (status === 'cancelled') messages.push({ text: 'The script was cancelled. Remaining batches were not executed.', kind: 'error' })
     if (messages.length) write(FrameKind.EVENT, id, 0, { type: 'messages', messages })
     while (directive.hold && !cancelledQueries.has(queryId) && await controlled(join('hold', 'query.execute'))) await sleep(25)
