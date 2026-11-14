@@ -49,9 +49,10 @@ try {
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   // A hidden window draws about once a second; clicks and focus wait for frames.
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive())
-  // Wide enough for the results toolbar's Tabs, which gives way below 1,180 pixels (CI's Windows display is narrower).
-  await resizeContent(application, page, 1280, 900)
-  await expect.poll(() => page.evaluate(() => innerWidth)).toBeGreaterThanOrEqual(1180)
+  // Wide enough for the results toolbar's Tabs, which gives way at 1,440 pixels and below (CI's Windows display is
+  // narrower, but its windows may be wider than it).
+  await resizeContent(application, page, 1500, 900)
+  await expect.poll(() => page.evaluate(() => innerWidth)).toBeGreaterThan(1440)
   await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
   await toolbarButton(page, 'Connect').click()
   await page.getByLabel('Server Name', { exact: true }).fill('server-a')
@@ -65,6 +66,12 @@ try {
   await expect(page.locator(part.resultStack)).toHaveCount(1)
   await expect(anyResultGrid(page)).toHaveCount(3)
   await expect(show('Tabs')).toHaveAttribute('aria-pressed', 'false')
+  // Every group of the toolbar fits, its last one (with Tabs) clear of the status after it; report geometry and fonts if not.
+  const toolsLayout = await show('Tabs').evaluate(button => {
+    const tools = button.closest('[role="toolbar"]'), right = tools.getBoundingClientRect().right
+    return { fits: tools.scrollWidth <= tools.clientWidth && button.getBoundingClientRect().right <= right + 0.5, right, width: tools.clientWidth, scroll: tools.scrollWidth, font: getComputedStyle(tools).font }
+  })
+  expect(toolsLayout.fits, JSON.stringify(toolsLayout)).toBe(true)
   await show('Tabs').click()
   await expect(show('Tabs')).toHaveAttribute('aria-pressed', 'true')
   await expect.poll(() => page.evaluate(() => window.varia.getSettings().then(result => result.value.values['queryResults.grid.layout']))).toBe('tabs')
