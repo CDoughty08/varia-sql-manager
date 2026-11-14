@@ -615,8 +615,9 @@ Outcome, accepted by the owner:
         inherits a focused ordinal from the previous run (`refocus`, PR 9) selects that group when it arrives, even
         mid-stream: "a tab the user picks stays picked" covers the pick from the last run (the owner confirmed this on 2026-11-13).
       - A Pivot built for the selected group is selected at once (in `ResultsTabs`, not `PivotService`, which PR 10
-        rewrites); a rebuilt Pivot already took the focus through `PivotService`. A Pivot that appears for another group
-        selects nothing. A comparison made while the layout is drawn is selected the same way (it is the row's last tab,
+        rewrites); a rebuilt Pivot already took the focus through `PivotService`. A Pivot that appears for another group, or
+        while a grid of the layout has the focus (the user went back to a grid during the build, where PivotService also
+        leaves the focus), selects nothing. A comparison made while the layout is drawn is selected the same way (it is the row's last tab,
         often past the strip's edge).
       - Only the selected grid is mounted, keyed by entry key: switching unmounts the other `ResultGrid`, whose
         `GridShell` disposes its view, pool and registration; its state stays in `TabViewState.grids`. The service's
@@ -631,8 +632,8 @@ Outcome, accepted by the owner:
       - The view row carries the view's facts (rows, columns, batch), its filter chips (the stack's `FilterChips`, now
         shared) and Save Results As; there is no caption. The two rows are `gridLimits.resultTabsHeight` and
         `viewTabsHeight` (28 px each), which `tabsNeed` adds to the grid's floor (or settled rows) for the strip rule.
-      - A switch while a grid had the focus (F3 onto another view, Close Just This Result, a Pivot shown as it is built)
-        focuses the grid shown instead before its effects run, so a reveal makes the match its active cell and the grid's
+      - A switch while a grid had the focus (F3 onto another view, Close Just This Result, a comparison shown as it is
+        made) focuses the grid shown instead before its effects run, so a reveal makes the match its active cell and the grid's
         keys keep working.
       - Close focus: a closed view moves the focus to the tab selected next in the row it was in (a Pivot's to its
         Table's view tab), else the Results tab, only when the focus was in what closed or nowhere. Tab close buttons

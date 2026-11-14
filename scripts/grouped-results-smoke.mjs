@@ -8,7 +8,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import {
-  anyResultGrid, backendReady, gridCell, messagesStrip, outputStatus, part, pivotPanel, pivotSource, quickInputActive, resultGrid, resultsSearchCount, resultsToolbar, resultTab, resultTabPanel,
+  anyResultGrid, backendReady, columnProfile, gridCell, messagesStrip, outputStatus, part, pivotPanel, pivotSource, quickInputActive, resultGrid, resultsSearchCount, resultsToolbar, resultTab, resultTabPanel,
   resultTabs, tabClose, toolbarButton, viewTab, viewTabs
 } from './fixtures/ui.mjs'
 
@@ -80,6 +80,17 @@ try {
   await expect(resultTab(page, 'Result 1')).toHaveAttribute('aria-selected', 'true')
   await expect(gridCell(resultGrid(page, 'Result 1'), 5, 1)).toHaveAttribute('aria-selected', 'true')
   console.log('Grouped results checks: switching tabs, by click or arrow keys, keeps each grid\'s selection.')
+
+  // Column Profile follows the selected tab, without a grid taking the focus.
+  await show('Profile').click()
+  await expect(columnProfile(page)).toContainText('· 100 rows')
+  await resultTab(page, 'Result 2').click()
+  await expect(columnProfile(page)).toContainText('· 10 rows')
+  await resultTab(page, 'Result 1').click()
+  await expect(columnProfile(page)).toContainText('· 100 rows')
+  await show('Profile').click()
+  await expect(columnProfile(page)).toHaveCount(0)
+  console.log('Grouped results checks: Column Profile follows the selected tab.')
 
   // 3. Find Next onto a match in another result selects its tab, then reveals the match.
   const findBox = resultsToolbar(page).getByRole('textbox', { name: 'Search results', exact: true })

@@ -181,12 +181,14 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
 
   // A Pivot built for the selected group shows at once: Tabs draws one view, and the builder works on this group, so a
   // Pivot that stayed behind its Table's tab would be built out of sight. (A rebuilt one takes the focus in PivotService.)
-  // Only a Pivot that appears while the layout is drawn: one there at mount, or another group's, selects nothing.
+  // Only a Pivot that appears while the layout is drawn: one there at mount, or another group's, selects nothing. Nor
+  // does one that arrives while a grid of the layout has the focus: the Build button is in the builder, so the user went
+  // back to a grid while it was built, and PivotService leaves the focus with them then too.
   const pivots = useRef<ReadonlyMap<number, EntryKey | undefined> | undefined>(undefined)
   useLayoutEffect(() => {
     const seen = pivots.current
     pivots.current = new Map(tab.groups.map(item => [item.ordinal, item.pivot?.key]))
-    if (!seen || !group?.pivot || seen.get(group.ordinal) === group.pivot.key || !seen.has(group.ordinal)) return
+    if (!seen || !group?.pivot || seen.get(group.ordinal) === group.pivot.key || !seen.has(group.ordinal) || gridFocus.current) return
     if (selected?.key !== group.pivot.key) select(group.pivot.key)
   }, [tab.groups])
   // A comparison made while the layout is drawn shows at once too, for the same reason: it is the last tab of the row,

@@ -228,7 +228,7 @@ describe('results as tabs', () => {
   })
 
   it('show a Pivot built for the selected result at once, and leave the Pivot of another result behind its tab', () => {
-    const { results, one, draw, grids, viewTabs, chosen } = fixture()
+    const { results, one, draw, grids, viewTabs, chosen, all } = fixture()
     draw()
     const built = results.addSet('t1', descriptor(801, { index: 0, kind: 'pivot', ...rows }), 'Pivot of Result 1', ['1:1'])!
     draw()
@@ -244,6 +244,14 @@ describe('results as tabs', () => {
     results.removeEntry('t1', built)
     draw()
     expect(grids()).toEqual([one])
+    // One that arrives while the user works in a grid (they went back to it during the build) leaves them there.
+    all('[data-grid]')[0].focus()
+    const later = results.addSet('t1', descriptor(804, { index: 0, kind: 'pivot', ...rows }), 'Pivot of Result 1', ['1:1'])!
+    draw()
+    draw()
+    expect(grids()).toEqual([one])
+    expect((document.activeElement as HTMLElement).dataset.grid).toBe(one)
+    expect(later).toBeDefined()
   })
 
   it('move along the tabs with the arrow keys, Home and End, selecting as they go', () => {
@@ -287,6 +295,18 @@ describe('results as tabs', () => {
     draw()
     expect(document.activeElement).toBe(tabButton)
     expect(results.getSnapshot().t1.focused).not.toBe(two)
+    // Close Just This Result from a grid: the command focuses the Results tab (the next grid is not drawn yet) and closes
+    // the view; the grid drawn instead takes the focus back.
+    act(() => { all<HTMLElement>('[data-grid]')[0].click() })
+    draw()
+    const shown = all('[data-grid]')[0]
+    shown.focus()
+    const closing = shown.dataset.grid!
+    act(() => { document.querySelector<HTMLElement>('[data-output-tab="results"]')!.focus() })
+    act(() => { results.removeEntry('t1', closing) })
+    draw()
+    expect(grids()).not.toContain(closing)
+    expect((document.activeElement as HTMLElement).dataset.grid).toBe(grids()[0])
   })
 
   it('return a neighbour to the view it showed last when the selected result closes', () => {

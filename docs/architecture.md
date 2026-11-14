@@ -86,6 +86,9 @@ being true.
 - The grid renders cells only through `GridView` pools, and text only through `nodeValue` (`tests/grid-lint.test.ts`
   forbids HTML sinks under `grid/`, `results/`, `designer/` and `live/`); no React per row or cell, and frames stay
   O(visible cells).
+  The Tabs layout (`ResultsTabs`, `queryResults.grid.layout`) mounts only the selected view's `ResultGrid`, keyed by its
+  entry: switching unmounts the other, whose `GridShell` gives back its pool and registration while its state stays in
+  `GridViewState`; switching releases nothing in the backend. The selected view is the service's focused entry.
   `GridView` works in drawn rows and columns for geometry, pools and scrolling, and meets the result's own rows and columns
   at named seams (its `selection`/`select`, `sourceRange`, a cell's lookup in `paintCell`, `targetOf`, `buttonColumn`, Open
   Value and Fit), each the identity in a table; its saved state, marks and callbacks are always in the result's. Columns
@@ -131,7 +134,7 @@ being true.
   (`ResultsService.focusEntry`, `PivotService`); there is no source picker. Commands tell what a grid is by
   `pivotGroup`, `slotOf` and `groupOf`, and a Peek grid by its target's `bare` (the `outputGridBare` key).
 - Every way a result leaves its run goes through one cleanup, `ResultsService.drop`: closing one view (`removeEntry`, a
-  stack caption's close button or Close Result, on an ended run only; a Table closes its group, so its Pivot
+  stack caption's close button, a result or view tab's close button in the Tabs layout, or Close Result, on an ended run only; a Table closes its group, so its Pivot
   goes in the same release), Close Results, a new run and the tab closing. It aborts the entry's
   sort or filter being built, forgets its held views, sort, distinct snapshots, grid controller and state and its part of
   the stack's state, cancels a copy of it (a save the backend accepted finishes under its lease), and releases the stored
