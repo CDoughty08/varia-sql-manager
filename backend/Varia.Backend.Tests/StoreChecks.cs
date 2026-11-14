@@ -497,8 +497,11 @@ internal static class StoreChecks
         var third = Open(store, store.BeginQuery("s3"));
         Fill(third, 0, 1000);
         third.Complete();
-        var summary = service.SummaryBudget();
+        // The service's own timer checks once a second too: report the rise first, so the only event left to send is the
+        // one the summary owes, whichever check sends it.
+        service.ReportMemory();
         var before = Count();
+        var summary = service.SummaryBudget();
         service.ReportMemory();
         var afterSummary = Count();
         var detailSample = Last();
@@ -530,9 +533,10 @@ internal static class StoreChecks
         var empty = last!.Value;
         var emptyDetail = empty.GetProperty("detail");
         check(empty.GetProperty("usedBytes").GetInt64() == 0 && emptyDetail.GetProperty("logicalBytes").GetInt64() == 0 && emptyDetail.GetProperty("largest").GetArrayLength() == 0
-            && emptyDetail.GetProperty("heap").GetProperty("committedBytes").GetInt64() > 0 && emptyDetail.GetProperty("heap").GetProperty("freeBytes").GetInt64() >= 0
+            && emptyDetail.GetProperty("heap").GetProperty("committedBytes").GetInt64() is var committed && committed >= 0
+            && emptyDetail.GetProperty("heap").GetProperty("freeBytes").GetInt64() is var free && free >= 0 && free <= committed
             && empty.EnumerateObject().First().Name == "type",
-            "results.memory's detail for an empty store holds no results, names the managed heap, and the event still starts with its type: " + empty);
+            "results.memory's detail for an empty store holds no results, names the managed heap (zeros before the first collection, free within committed), and the event still starts with its type: " + empty);
 
         var sets = new List<ResultSetBuffer>();
         for (var index = 0; index < ResultStore.MaxLargest + 2; index++)

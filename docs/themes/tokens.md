@@ -79,7 +79,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `shadow` | Shadows. | `#00000085` | `#10182824` |
 | `backdrop` | Modal scrim. | `#0a0c10b3` | `#1c1f2652` |
 
-## Color keys (285)
+## Color keys (289)
 
 ### Base
 
@@ -388,6 +388,10 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `statusPill.infoForeground` | Varia | `$textAccent` | `#bcc5ff` | `#3240b0` | Text and glyph of information pills. |
 | `statusPill.neutralBackground` | Varia | `$active` | `#30343e` | `#d6dae0` | Status pills and tags without a state color, such as a canceled execution or a Test environment. |
 | `statusPill.neutralForeground` | Varia | `$textSecondary` | `#bcc1cb` | `#3a404b` | Text and glyph of neutral pills. |
+| `memoryPanel.rawBackground` | Varia | `$blue/14` | `#6ea4ea24` | `#2563a824` | The Raw state of a result in the Memory panel: pages kept uncompressed, the blue of raw pages in its bars. |
+| `memoryPanel.rawForeground` | Varia | `$blue` | `#6ea4ea` | `#2563a8` | Text of the Raw state in the Memory panel. |
+| `memoryPanel.packedBackground` | Varia | `$purple/14` | `#ab95ea24` | `#7a4bbf24` | The Packed state of a result in the Memory panel: compressed pages, the purple of packed pages in its bars. |
+| `memoryPanel.packedForeground` | Varia | `$purple` | `#ab95ea` | `#7a4bbf` | Text of the Packed state in the Memory panel. |
 | `chip.background` | Varia | `$text/0` | `#d9dce300` | `#1c1f2600` | Filter chips (toggle buttons such as All, Active, Blocked) while off; transparent by default. |
 | `chip.foreground` | Varia | `$textSecondary` | `#bcc1cb` | `#3a404b` | Label of a filter chip while off. |
 | `chip.border` | Varia | `$controlBorder/45` | `#6b728673` | `#878e9b73` | Outline of a filter chip while off. |
@@ -424,9 +428,9 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `charts.foreground` | VS Code | `$textTertiary` | `#a3a9b5` | `#4d5461` | Chart labels, legends, and the crosshair. |
 | `charts.lines` | VS Code | `$border` | `#262a31` | `#e3e6eb` | Chart grid lines and baseline. |
 | `charts.blue` | VS Code | `$chart1` | `#3987e5` | `#2a78d6` | First series of a chart; series take blue, orange, green, yellow, then purple. |
-| `charts.orange` | VS Code | `$chart2` | `#d95926` | `#d4581f` | Second series of a chart; also the decompressed-page cache in the Memory panel. |
+| `charts.orange` | VS Code | `$chart2` | `#d95926` | `#d4581f` | Second series of a chart. |
 | `charts.green` | VS Code | `$chart3` | `#199e70` | `#12936a` | Third series of a chart. |
-| `charts.yellow` | VS Code | `$chart4` | `#c98500` | `#a87200` | Fourth series of a chart. |
+| `charts.yellow` | VS Code | `$chart4` | `#c98500` | `#a87200` | Fourth series of a chart; also the cache of unpacked pages in the Memory panel. |
 | `charts.purple` | VS Code | `$chart5` | `#9085e9` | `#6250d6` | Fifth series of a chart. |
 | `charts.red` | VS Code | `$error` | `#f39a9a` | `#b42229` | A status mark on a chart, such as a failed execution on a timeline; never the color of a series. |
 | `charts.gray` | Varia | `$neutral` | `#8d939f` | `#6b7280` | "Other" in a stacked chart: everything the named series leave out. |

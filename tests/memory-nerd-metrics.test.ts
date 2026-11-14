@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import MemoryIndicator from '../src/renderer/src/results/MemoryIndicator'
@@ -10,7 +12,7 @@ import type { Workbench } from '../src/renderer/src/core/workbench'
 import { SnapshotStore } from '../src/renderer/src/core/store'
 import { SettingsService } from '../src/renderer/src/settings/SettingsService'
 import { defaultSettings, settingDef } from '../src/shared/settings/catalog'
-import { memoryEventSchema, resultMemoryDetailSchema } from '../src/shared/ipc/port-messages'
+import { maxLargestResults, memoryEventSchema, resultMemoryDetailSchema } from '../src/shared/ipc/port-messages'
 import type { ResultMemoryDetail } from '../src/shared/contracts'
 import { settingsApi } from './fixtures/workbench'
 
@@ -63,7 +65,7 @@ describe('Memory panel Nerd metrics', () => {
   it('splits compressed memory into raw, packed, cache and given back on one scale, with the codec\'s counters', () => {
     const model = nerdMetrics(packed, named)
     expect([model.compressed, model.memoryBytes, model.givenBack]).toEqual([true, 2310 * MB, 2100 * MB])
-    expect(model.tiles.map(tile => `${tile.value}${tile.unit ?? ''} ${tile.note}`)).toEqual(['85% of rows, by size', '2.40× zstd · level 2', '2,100MB 47% of 4,410 MB'])
+    expect(model.tiles.map(tile => `${tile.value}${tile.unit ?? ''} ${tile.note}`)).toEqual(['86% of rows, by size', '2.40× zstd · level 2', '2.05GB 48% of 4.31 GB'])
     expect(model.tiles[2].tone).toBe('saved')
     const [asRead, now] = model.bars
     expect(asRead.segments.map(part => [part.part, part.bytes / MB])).toEqual([['raw', 620], ['packed', 3790]])
@@ -73,9 +75,9 @@ describe('Memory panel Nerd metrics', () => {
     expect(model.biggest.map(row => row.stateLabel)).toEqual(['Packed', 'Unpacking 62%', 'Raw'])
     expect(model.biggest[0].storedShare).toBeCloseTo(880 / 1840)
     expect(Object.fromEntries(model.counters.map(counter => [counter.label, counter.value]))).toEqual({
-      'Pages packed': '15,420', 'Pack speed': '342 MB/s', 'Cache hits': '96.8%', 'Unpack speed': '1.6 GB/s', 'Last unpack': '380 ms', 'Per page': '0.5 ms'
+      'Pages packed': '15,420', 'Pack speed': '342 MB/s', 'Cache hits': '96.8%', 'Unpack speed': '1.6 GB/s', 'Last unpack': '0.38 s', 'Per page': '0.5 ms'
     })
-    expect(model.cozy).toEqual({ lead: 'Your rows are', accent: '1.9× cozier' })
+    expect(model.cozy).toEqual({ lead: 'Your rows are', accent: '2.4× cozier' })
   })
 
   it('names results by their query tab and Results caption in the generation the figures came from', () => {
@@ -103,6 +105,27 @@ describe('Memory panel Nerd metrics', () => {
     service.update({ usedBytes: 0, globalBytes: 0, generation: 2, seq: 0 })
     expect(service.getSnapshot().detail).toBeUndefined()
   })
+
+  it('samples the saved share once per event that brings a detail, for the sparkline, and empties it with the backend', () => {
+    let time = 1000
+    const service = new MemoryUsageService({ onMemory: () => ({ dispose: () => {} }) }, 'results', undefined, () => time)
+    service.update({ usedBytes: 10 * MB, globalBytes: 100 * MB, generation: 1, seq: 1, detail: raw })
+    time = 2000
+    service.update({ usedBytes: 20 * MB, globalBytes: 100 * MB, generation: 1, seq: 2 })
+    service.update({ usedBytes: 20 * MB, globalBytes: 100 * MB, generation: 1, seq: 2, detail: packed })
+    time = 3000
+    service.update({ usedBytes: 20 * MB, globalBytes: 100 * MB, generation: 1, seq: 3, detail: packed })
+    const ring = service.history
+    // The summary (seq 2, no detail) adds nothing; the stale seq-2 event is dropped; seq 3 is sampled.
+    expect(Array.from({ length: ring.length }, (_, index) => [ring.time(index), Math.round(ring.value(index, 0))])).toEqual([[1000, 0], [3000, 48]])
+    service.update({ usedBytes: 0, globalBytes: 0, generation: 2, seq: 0 })
+    expect(service.history.length).toBe(0)
+  })
+
+  it('caps the biggest results at the same count in the backend and the schema', () => {
+    const snapshot = readFileSync(resolve(__dirname, '../backend/Varia.Backend/Results/ResultStore.Snapshot.cs'), 'utf8')
+    expect(Number(/const int MaxLargest = (\d+);/.exec(snapshot)?.[1])).toBe(maxLargestResults)
+  })
 })
 
 const cleanups: (() => void)[] = []
@@ -120,7 +143,9 @@ async function mount(memory: { usedBytes: number; globalBytes: number; detail?: 
   const results = new SnapshotStore({ tab: { sets: [{ descriptor: { generation: 1, resultId: 3 }, number: 1 }] } })
   const documents = new SnapshotStore({ documents: [{ id: 'tab', name: 'Query 3' }] })
   const menus = { ownsKeyboard: () => false, controller: { subscribe: () => () => {} } }
-  const workbench = { resultMemory, indexMemory, menus, settings, results, documents } as unknown as Workbench
+  const theme = { getSnapshot: () => ({ active: { colors: {} } }), subscribe: () => () => {} }
+  const live = { page: { hidden: () => false, subscribe: () => () => {} } }
+  const workbench = { resultMemory, indexMemory, menus, settings, results, documents, theme, live } as unknown as Workbench
   const root = createRoot(host)
   await act(async () => { root.render(createElement(WorkbenchProvider, { workbench, children: createElement(MemoryIndicator) })) })
   cleanups.push(() => { act(() => { root.unmount() }); document.body.querySelectorAll('.memory-details').forEach(node => node.remove()); host.remove(); settings.dispose() })
@@ -156,12 +181,62 @@ describe('Memory panel', () => {
     expect(body.querySelector('.memory-biggest-name')!.textContent).toBe('Unlisted result')
     expect(body.querySelector('.memory-bar')!.getAttribute('aria-label')).toBe('Rows as read: 300 MB. Raw pages 300 MB')
     expect(body.textContent).toContain('Heap 512 MB · 40 MB free for reuse')
+    // Nothing compressed: no sparkline, and the rows' sizes read with their meaning, not just as figures.
+    expect(view.panel().querySelector('.memory-trend')).toBeNull()
+    expect(body.querySelector('.memory-biggest li')!.textContent).toBe('Unlisted resultrows 200 MBstored 200 MBRaw')
     cleanups.splice(0).reverse().forEach(clean => clean())
     const again = await mount({ usedBytes: 300 * MB, globalBytes: 1024 * MB, detail: raw }, { [key]: true })
     expect(again.toggle().getAttribute('aria-expanded')).toBe('true')
     await act(async () => { again.toggle().click() })
     expect(again.api.updateSettings).toHaveBeenCalledWith({ [key]: false })
     expect(again.panel().querySelector<HTMLElement>('.memory-nerd-body')!.hidden).toBe(true)
+  })
+
+  it('keeps focus on the heading as it opens and closes, and carries Tab into and out of the pinned panel', async () => {
+    const view = await mount({ usedBytes: 300 * MB, globalBytes: 1024 * MB, detail: raw })
+    const toggle = view.toggle()
+    toggle.focus()
+    await act(async () => { toggle.click() })
+    // The same button, still focused: the section must not remount its heading (Enter, then Space, in results-smoke).
+    expect([view.toggle() === toggle, document.activeElement === toggle]).toEqual([true, true])
+    await act(async () => { toggle.click() })
+    expect([view.toggle() === toggle, document.activeElement === toggle]).toEqual([true, true])
+    const trigger = document.body.querySelector<HTMLButtonElement>('.memory-indicator')!
+    const before = document.createElement('button')
+    before.textContent = 'First control'
+    document.body.prepend(before)
+    cleanups.push(() => before.remove())
+    // A stop learns which way Tab went from where focus came from (happy-dom's focus() gives no relatedTarget). React's
+    // onFocus listens for focusin; focus starts elsewhere so a stop that does nothing fails the check.
+    const arrive = async (stop: HTMLElement, from: HTMLElement | null) => {
+      await act(async () => { (document.activeElement as HTMLElement | null)?.blur() })
+      await act(async () => { stop.dispatchEvent(new FocusEvent('focusin', { bubbles: true, relatedTarget: from })) })
+      return document.activeElement
+    }
+    // Tab from the Memory control lands on the stop after it, which hands focus to the panel's heading.
+    const enter = trigger.nextElementSibling as HTMLElement
+    expect(await arrive(enter, trigger)).toBe(toggle)
+    const stops = view.panel().querySelectorAll<HTMLElement>(':scope > span[tabindex="0"]')
+    const [first, last] = [stops[0], stops[stops.length - 1]]
+    // Nothing follows the Memory control: Tab past the panel wraps to the page's first control, never back into a loop.
+    expect(await arrive(last, toggle)).toBe(before)
+    // Shift+Tab before the heading goes back to the Memory control.
+    expect(await arrive(first, toggle)).toBe(trigger)
+    // A control after the Memory control: Tab past the panel goes there, and Tab on from it passes the panel by.
+    const after = document.createElement('button')
+    after.textContent = 'Next control'
+    trigger.parentElement!.after(after)
+    cleanups.push(() => after.remove())
+    expect(await arrive(last, toggle)).toBe(after)
+    expect(await arrive(first, after)).toBe(before)
+    // Shift+Tab from the page into the panel's end goes to its heading.
+    expect(await arrive(last, before)).toBe(toggle)
+    // After a press on the panel's text nothing is focused: Shift+Tab to the start stop goes back to the Memory control,
+    // and Tab to the end stop leaves the panel, rather than stepping back to the heading.
+    expect(await arrive(first, null)).toBe(trigger)
+    view.panel().querySelector('.memory-heading')!.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+    expect(await arrive(last, null)).toBe(after)
+    expect(await arrive(last, null)).toBe(toggle)
   })
 
   it('adds the packed chip and the ring\'s second tone once pages are compressed, alongside a warning or critical level', async () => {
@@ -172,7 +247,8 @@ describe('Memory panel', () => {
     expect(row.textContent).toContain('New results may be truncated.')
     const ring = row.querySelector<HTMLElement>('.memory-ring')!
     expect([ring.hasAttribute('data-packed'), ring.style.getPropertyValue('--memory-fill'), ring.style.getPropertyValue('--memory-read')]).toEqual([true, '93%', '100%'])
-    expect(warning.panel().querySelector('.memory-nerd-ratio')!.textContent).toBe('2.40×')
+    // Once something is compressed the heading carries the saved-share sparkline, drawn through ChartView.
+    expect(warning.panel().querySelector('.memory-nerd-heading .memory-trend canvas')).not.toBeNull()
     expect(warning.panel().querySelector('.memory-biggest-name')!.textContent).toBe('Query 3 · Result 1')
     expect([...warning.panel().querySelectorAll('.memory-state')].map(node => node.textContent)).toEqual(['Packed', 'Unpacking 62%', 'Raw'])
     cleanups.splice(0).reverse().forEach(clean => clean())

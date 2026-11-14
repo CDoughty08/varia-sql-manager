@@ -20,7 +20,7 @@ const parts = (selector: string) => selector.split(/,(?![^(]*\))/).map(part => p
 const subject = (part: string) => part.split(/\s*[\s>+~]\s*(?![^(]*\))/).pop() ?? ''
 
 // A 3 px connection colour edge keeps its own rounding.
-const indicatorRadii: Readonly<Record<string, string>> = { '.connection-swatch': '1px' }
+const indicatorRadii: Readonly<Record<string, string>> = { '.connection-swatch': '1px', '.memory-swatch': '2px' }
 // Monaco's own shadow for its find and hover widgets, as VS Code defines it (theme-smoke checks the computed value).
 const shadowShims = new Set(['--vscode-shadow-lg'])
 

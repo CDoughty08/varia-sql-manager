@@ -1,40 +1,50 @@
-import { useId, type CSSProperties } from 'react'
+import { useId, type CSSProperties, type ReactNode } from 'react'
 import Icon from '../Icon'
-import type { Bar, NerdMetricsModel } from './memory-details'
-import { panelBytes } from './memory-details'
+import type { Bar, BytesFormat, NerdMetricsModel } from './memory-details'
 
 const width = (share: number) => ({ '--memory-share': `${Math.max(0, Math.min(1, share)) * 100}%` }) as CSSProperties
 
-function Usage({ bar }: { bar: Bar }) {
-  const said = bar.segments.map(part => `${part.label} ${panelBytes(part.bytes)}`).join(', ')
+function Usage({ bar, bytes, index }: { bar: Bar; bytes: BytesFormat; index: number }) {
+  const said = bar.segments.map(part => `${part.label} ${bytes(part.bytes)}`).join(', ')
   return <div className="memory-bar-row">
-    <span>{bar.label}</span><span className="memory-figure">{panelBytes(bar.total)}</span>
-    <div className="memory-bar" role="img" aria-label={`${bar.label}: ${panelBytes(bar.total)}${said ? `. ${said}` : ''}`}>
+    <span>{bar.label}</span><span className="memory-figure">{bytes(bar.total)}</span>
+    <div className="memory-bar" data-bar={index === 0 ? 'read' : 'now'} role="img" aria-label={`${bar.label}: ${bytes(bar.total)}${said ? `. ${said}` : ''}`}>
       {bar.segments.map(part => <span key={part.part} data-part={part.part} style={width(part.share)} />)}
     </div>
   </div>
 }
 
-/** The Memory panel's Nerd metrics: a heading that opens and closes it, and while open what results hold as read and in
- *  memory, the largest results, the page codec's counters and the managed heap. The heading joins the tab order only
- *  while the panel is pinned: a preview opened by focus must not catch the next Tab (the panel follows the whole window
- *  in the page's order), and Enter or Space on the Memory control pins it. */
-export function NerdMetrics({ model, open, pinned, onToggle }: { model: NerdMetricsModel | undefined; open: boolean; pinned: boolean; onToggle: () => void }) {
+/** The Memory panel's Nerd metrics: a heading that opens and closes it, and while open (`children`, the details) what
+ *  results hold as read and in memory, the largest results, the page codec's counters and the managed heap. The heading
+ *  joins the tab order only while the panel is pinned: a preview opened by focus must not catch the next Tab (the panel
+ *  follows the whole window in the page's order), and Enter or Space on the Memory control pins it. `trend` is the
+ *  sparkline of what compression gave back, beside the heading rather than in it, so it stays out of the heading's name. */
+export function NerdMetrics({ open, pinned, onToggle, trend, children }: { open: boolean; pinned: boolean; onToggle: () => void; trend?: ReactNode; children?: ReactNode }) {
   const body = useId()
   return <section className="memory-nerd" aria-label="Nerd metrics">
-    <h3 className="memory-nerd-heading">
-      <button type="button" className="memory-nerd-toggle" tabIndex={pinned ? undefined : -1} aria-expanded={open} aria-controls={body} onClick={onToggle}>
-        <Icon name="chevron-right" /><span>Nerd metrics</span>
-      </button>
-      {model?.compressed && <span className="memory-nerd-ratio">{model.tiles[1].value}×</span>}
-    </h3>
-    <div id={body} className="memory-nerd-body" hidden={!open}>
-      {open && (model ? <Details model={model} /> : <p className="memory-nerd-empty">Waiting for the backend's first report.</p>)}
+    <div className="memory-nerd-heading">
+      <h3>
+        <button type="button" className="memory-nerd-toggle" tabIndex={pinned ? undefined : -1} aria-expanded={open} aria-controls={body} onClick={onToggle}>
+          <Icon name="chevron-right" /><span>Nerd metrics</span>
+        </button>
+      </h3>
+      {trend}
     </div>
+    <div id={body} className="memory-nerd-body" hidden={!open}>{open && children}</div>
   </section>
 }
 
-function Details({ model }: { model: NerdMetricsModel }) {
+/** A result's name, its tab's part giving way first: tabs often share a long file name, and the Results caption after it
+ *  ("Result 2") is what tells their rows apart. */
+function ResultName({ name }: { name: string }) {
+  const at = name.lastIndexOf(' · ')
+  return <span className="memory-biggest-name" title={name}>
+    {at < 0 ? <span>{name}</span> : <><span className="memory-biggest-tab">{name.slice(0, at)}</span><span>{name.slice(at)}</span></>}
+  </span>
+}
+
+export function NerdDetails({ model }: { model: NerdMetricsModel }) {
+  const { bytes } = model
   return <>
     <ul className="memory-tiles">
       {model.tiles.map(tile => <li key={tile.label} className="memory-tile" data-tone={tile.tone}>
@@ -45,18 +55,19 @@ function Details({ model }: { model: NerdMetricsModel }) {
     </ul>
     <div className="memory-group">
       <h4>Where it lives<span>same scale</span></h4>
-      {model.bars.map(bar => <Usage key={bar.label} bar={bar} />)}
+      {model.bars.map((bar, index) => <Usage key={bar.label} bar={bar} bytes={bytes} index={index} />)}
       <ul className="memory-legend">
-        {model.legend.map(part => <li key={part.part}><span className="memory-swatch" data-part={part.part} aria-hidden="true" />{part.label}<span className="memory-figure">{panelBytes(part.bytes)}</span></li>)}
+        {model.legend.map(part => <li key={part.part}><span className="memory-swatch" data-part={part.part} aria-hidden="true" />{part.label}<span className="memory-figure">{bytes(part.bytes)}</span></li>)}
       </ul>
     </div>
     <div className="memory-group">
-      <h4>Biggest results<span>as read · stored</span></h4>
+      <h4>Biggest results<span>rows <Icon name="arrow-right" /> stored</span></h4>
       {model.biggest.length === 0 ? <p className="memory-nerd-empty">No results held.</p> : <ul className="memory-biggest" aria-label="Biggest results">
         {model.biggest.map(row => <li key={row.resultId}>
-          <span className="memory-biggest-name" title={row.name}>{row.name}</span>
+          <ResultName name={row.name} />
           <span className="memory-mini" aria-hidden="true"><span style={width(row.logicalShare)} /><span data-state={row.state} style={width(row.storedShare)} /></span>
-          <span className="memory-biggest-sizes"><span className="memory-muted">{row.logical}</span> <span aria-label={`stored in ${row.stored}`}>{row.stored}</span></span>
+          <span className="memory-muted"><span className="visually-hidden">rows </span>{row.logical}</span>
+          <span className="memory-stored"><span className="visually-hidden">stored </span>{row.stored}</span>
           <span className="memory-state" data-state={row.state}>{row.stateLabel}</span>
         </li>)}
       </ul>}

@@ -451,11 +451,13 @@ const globalBytes = 256 * 1024 * 1024
 // count until results.close releases them or the tab's next script replaces them (as ResultStore.BeginQuery does), and
 // usage is their sum across tabs.
 const heldBytes = new Map()
+/** Results a directive's `packed=` reports as compressed: their ratio, and whether one is unpacking. */
+const packedResults = new Map()
 const sessionResults = new Map()
 const usedBytes = () => { let used = 0; for (const bytes of heldBytes.values()) used += bytes; return used }
 /** A new script on a session releases that session's earlier results. */
 function beginQuery(sessionId) {
-  for (const resultId of sessionResults.get(sessionId) ?? []) heldBytes.delete(resultId)
+  for (const resultId of sessionResults.get(sessionId) ?? []) { heldBytes.delete(resultId); packedResults.delete(resultId) }
   sessionResults.set(sessionId, [])
 }
 // The last sample sent in an event or summary. Report changes on the timer and after a close.
@@ -470,13 +472,25 @@ function reportMemory() {
   detailPending = false
   write(FrameKind.EVENT, 0, 0, { type: 'results.memory', usedBytes: used, globalBytes, seq: ++memorySeq, detail: memoryDetail(used) })
 }
-/** The event's detail as the real backend sends it while nothing is compressed: stored equal to the rows as read, the
- *  largest eight raw, the codec off. */
+/** The event's detail as the real backend sends it. Without a `packed=` directive nothing is compressed: stored equals the
+ *  rows as read, every result is raw and the codec is off. Packed results charge their compressed size; a small cache of
+ *  unpacked pages comes out of what they charge, and the codec's counters are fixed figures. */
 function memoryDetail(used) {
-  const largest = [...heldBytes].filter(([, bytes]) => bytes > 0).sort((a, b) => b[1] - a[1]).slice(0, 8)
-    .map(([resultId, bytes]) => ({ resultId, logicalBytes: bytes, storedBytes: bytes, state: 'raw' }))
-  const codec = { pagesPacked: 0, pagesUnpacked: 0, packInputBytes: 0, packMicroseconds: 0, unpackOutputBytes: 0, unpackMicroseconds: 0, cacheHits: 0, cacheLookups: 0, lastUnpackMicroseconds: 0 }
-  return { logicalBytes: used, storedBytes: used, compressedBytes: 0, packedLogicalBytes: 0, cacheBytes: 0, largest, codec, heap: { committedBytes: 64 * 1024 * 1024, freeBytes: 8 * 1024 * 1024 } }
+  let logical = 0, compressed = 0, packedLogical = 0
+  const entries = [...heldBytes].filter(([, bytes]) => bytes > 0).map(([resultId, bytes]) => {
+    const packed = packedResults.get(resultId)
+    const logicalBytes = packed ? Math.round(bytes * packed.ratio) : bytes
+    logical += logicalBytes
+    if (packed) { compressed += bytes; packedLogical += logicalBytes }
+    return { resultId, logicalBytes, storedBytes: bytes, state: packed ? (packed.unpacking ? 'unpacking' : 'packed') : 'raw', ...packed?.unpacking ? { progress: 62 } : {} }
+  })
+  const cache = Math.round(compressed * 0.07)
+  const largest = entries.sort((a, b) => b.logicalBytes - a.logicalBytes).slice(0, 8)
+  const on = compressed > 0
+  const codec = on
+    ? { name: 'zstd', level: 2, pagesPacked: 15420, pagesUnpacked: 4210, packInputBytes: 342 * 1048576, packMicroseconds: 1_000_000, unpackOutputBytes: 1638 * 1048576, unpackMicroseconds: 1_000_000, cacheHits: 968, cacheLookups: 1000, lastUnpackMicroseconds: 380_000 }
+    : { pagesPacked: 0, pagesUnpacked: 0, packInputBytes: 0, packMicroseconds: 0, unpackOutputBytes: 0, unpackMicroseconds: 0, cacheHits: 0, cacheLookups: 0, lastUnpackMicroseconds: 0 }
+  return { logicalBytes: logical, storedBytes: used - cache, compressedBytes: compressed - cache, packedLogicalBytes: packedLogical, cacheBytes: cache, largest, codec, heap: { committedBytes: 64 * 1024 * 1024, freeBytes: 8 * 1024 * 1024 } }
 }
 const indexedConnections = new Set()
 let lastIndexBytes = -1
@@ -1063,6 +1077,7 @@ async function runDirective(id, params, directive) {
       results.push(result)
       if (share > 0) {
         heldBytes.set(result.resultId, Math.floor(share / kept) + (index === 0 ? share % kept : 0))
+        if (directive.packed && index > 0) packedResults.set(result.resultId, { ratio: directive.packed, unpacking: index === 1 && kept >= 3 })
         sessionResults.get(params.sessionId)?.push(result.resultId)
       }
       write(FrameKind.EVENT, id, 0, { type: 'resultSet.opened', descriptor: describe(result) })
@@ -1910,7 +1925,7 @@ async function workbench(id, method, params, credit) {
       let closed = 0
       for (const resultId of params.resultIds) if (stored.delete(resultId)) closed++
       // As the real backend does, the fall goes out as an event before the answer.
-      for (const resultId of params.resultIds) heldBytes.delete(resultId)
+      for (const resultId of params.resultIds) { heldBytes.delete(resultId); packedResults.delete(resultId) }
       if (closed) reportMemory()
       return respond(id, { closed, usedBytes: usedBytes() })
     }

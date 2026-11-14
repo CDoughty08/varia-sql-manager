@@ -1666,6 +1666,26 @@
           "description": "(Varia) Text and glyph of neutral pills. Default $textSecondary (Dark #bcc1cb, Light #3a404b).",
           "markdownDescription": "(Varia) Text and glyph of neutral pills. Default `$textSecondary` (Dark `#bcc1cb`, Light `#3a404b`)."
         },
+        "memoryPanel.rawBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) The Raw state of a result in the Memory panel: pages kept uncompressed, the blue of raw pages in its bars. Default $blue/14 (Dark #6ea4ea24, Light #2563a824).",
+          "markdownDescription": "(Varia) The Raw state of a result in the Memory panel: pages kept uncompressed, the blue of raw pages in its bars. Default `$blue/14` (Dark `#6ea4ea24`, Light `#2563a824`)."
+        },
+        "memoryPanel.rawForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Text of the Raw state in the Memory panel. Default $blue (Dark #6ea4ea, Light #2563a8).",
+          "markdownDescription": "(Varia) Text of the Raw state in the Memory panel. Default `$blue` (Dark `#6ea4ea`, Light `#2563a8`)."
+        },
+        "memoryPanel.packedBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) The Packed state of a result in the Memory panel: compressed pages, the purple of packed pages in its bars. Default $purple/14 (Dark #ab95ea24, Light #7a4bbf24).",
+          "markdownDescription": "(Varia) The Packed state of a result in the Memory panel: compressed pages, the purple of packed pages in its bars. Default `$purple/14` (Dark `#ab95ea24`, Light `#7a4bbf24`)."
+        },
+        "memoryPanel.packedForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Text of the Packed state in the Memory panel. Default $purple (Dark #ab95ea, Light #7a4bbf).",
+          "markdownDescription": "(Varia) Text of the Packed state in the Memory panel. Default `$purple` (Dark `#ab95ea`, Light `#7a4bbf`)."
+        },
         "chip.background": {
           "$ref": "#/definitions/value",
           "description": "(Varia) Filter chips (toggle buttons such as All, Active, Blocked) while off; transparent by default. Default $text/0 (Dark #d9dce300, Light #1c1f2600).",
@@ -1798,8 +1818,8 @@
         },
         "charts.orange": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Second series of a chart; also the decompressed-page cache in the Memory panel. Default $chart2 (Dark #d95926, Light #d4581f).",
-          "markdownDescription": "(VS Code) Second series of a chart; also the decompressed-page cache in the Memory panel. Default `$chart2` (Dark `#d95926`, Light `#d4581f`)."
+          "description": "(VS Code) Second series of a chart. Default $chart2 (Dark #d95926, Light #d4581f).",
+          "markdownDescription": "(VS Code) Second series of a chart. Default `$chart2` (Dark `#d95926`, Light `#d4581f`)."
         },
         "charts.green": {
           "$ref": "#/definitions/value",
@@ -1808,8 +1828,8 @@
         },
         "charts.yellow": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Fourth series of a chart. Default $chart4 (Dark #c98500, Light #a87200).",
-          "markdownDescription": "(VS Code) Fourth series of a chart. Default `$chart4` (Dark `#c98500`, Light `#a87200`)."
+          "description": "(VS Code) Fourth series of a chart; also the cache of unpacked pages in the Memory panel. Default $chart4 (Dark #c98500, Light #a87200).",
+          "markdownDescription": "(VS Code) Fourth series of a chart; also the cache of unpacked pages in the Memory panel. Default `$chart4` (Dark `#c98500`, Light `#a87200`)."
         },
         "charts.purple": {
           "$ref": "#/definitions/value",
