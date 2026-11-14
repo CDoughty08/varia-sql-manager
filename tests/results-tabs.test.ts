@@ -7,6 +7,7 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import type { VariaApi } from '../src/shared/contracts'
 import { EventBus } from '../src/renderer/src/core/events'
+import { gesturesFor } from '../src/renderer/src/core/gestures'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import type { ResultGridProps } from '../src/renderer/src/grid/ResultGrid'
@@ -68,7 +69,7 @@ function fixture() {
   }
   const reveal = (key: string) => act(() => { search = { t1: { reveal: (search.t1?.reveal ?? 0) + 1, revealEntry: key, marks: new Map() } }; for (const listener of [...listeners]) listener() })
   const commands = { execute: vi.fn(async () => true) }
-  const workbench = { results, resultsSearch, commands } as unknown as Workbench
+  const workbench = { results, resultsSearch, commands, gestures: gesturesFor('win32') } as unknown as Workbench
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -140,6 +141,24 @@ describe('results as tabs', () => {
     left = 0
     act(() => { strip.dispatchEvent(new WheelEvent('wheel', { deltaY: 3, deltaMode: 1, bubbles: true })) })
     expect(left).toBe(48)
+    // Control+wheel zooms the window, so the strip stays. (happy-dom's WheelEvent drops ctrlKey from its init.)
+    const zoom = new WheelEvent('wheel', { deltaY: 120, bubbles: true })
+    Object.defineProperty(zoom, 'ctrlKey', { value: true })
+    act(() => { strip.dispatchEvent(zoom) })
+    expect(left).toBe(48)
+  })
+
+  it('select a comparison made while the layout is drawn, but not one there at mount', () => {
+    const { results, diff, draw, chosen, resultTabs } = fixture()
+    draw()
+    expect(chosen(resultTabs())).toBe('Result 1')
+    expect(diff).toBeDefined()
+    const rows = { rowsRead: 10, rowsStored: 10, rowsAvailable: 10 }
+    const made = results.addSet('t1', descriptor(902, { index: 0, kind: 'diff', ...rows }), 'Differences: Result 2 → Result 3', ['1:2', '1:3'])!
+    draw()
+    draw()
+    expect(results.getSnapshot().t1.focused).toBe(made)
+    expect(chosen(resultTabs())).toBe('Differences: Result 2 → Result 3')
   })
 
   it('draw a bounded window of result tabs around the selected one', () => {

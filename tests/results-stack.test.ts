@@ -287,6 +287,24 @@ describe('the stacked results', () => {
     expect([three, pivot].every(entry => !results.getSnapshot().t1.sets.some(set => set.key === entry))).toBe(true)
   })
 
+  it('put the caption focus after a close where the service puts the grid focus: the view its neighbour last showed', () => {
+    const { results, keys, draw } = fixture()
+    const [one, two, three] = keys
+    const rows = { rowsRead: 10_000, rowsStored: 10_000, rowsAvailable: 10_000 }
+    results.removeEntry('t1', three)
+    const pivot = results.addSet('t1', descriptor(801, { index: 0, kind: 'pivot', ...rows }), 'Pivot of Result 1', ['1:1'])!
+    // Result 1 last showed its Table; Result 2, the last result, has the focus. The caption before Result 2's is the Pivot's,
+    // but the service gives the grid focus to Result 1's Table, and the caption focus goes with it.
+    results.focusEntry('t1', one)
+    results.focusEntry('t1', two)
+    draw()
+    const close = (name: string) => { const button = container!.querySelector<HTMLButtonElement>(`[aria-label="Close ${name}"]`)!; button.focus(); act(() => { button.click() }); draw() }
+    close('Result 2')
+    expect(results.getSnapshot().t1.focused).toBe(one)
+    expect((document.activeElement as HTMLElement).dataset.captionEntry).toBe(one)
+    expect(pivot).toBeDefined()
+  })
+
   it('draw a bare run as its grid alone, with a caption only to hold its filters, and size a transposed item by the rows it draws', () => {
     const client = fakeResultClient(), events = new EventBus()
     const api = { copyResults: vi.fn<VariaApi['copyResults']>(), saveResults: vi.fn<VariaApi['saveResults']>(), cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(), onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}) }

@@ -73,7 +73,8 @@ groups one at a time instead of stacked. Stacked stays the default for now.
 - One grid is mounted: the selected view's. Switching unmounts the other and releases nothing, so each grid comes back
   with its scroll, column widths, selection, orientation, sort and filters.
 - The selection is the grid you last used, so the toolbar, the menus, Column Profile and the pivot builder act on the view
-  shown. A result's tab returns to the view it showed last, and a Pivot built for the selected result is shown at once.
+  shown. A result's tab returns to the view it showed last, and a Pivot built for the selected result, or a new
+  comparison, is shown at once.
 - While a query runs the first result stays selected as the others arrive; a tab you pick stays picked. After a re-run
   the result of the same number is selected again.
 - Find Next onto a match in another result or view selects that tab and view, then reveals the match. From a grid (F3),

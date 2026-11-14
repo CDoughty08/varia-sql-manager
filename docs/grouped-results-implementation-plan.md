@@ -616,7 +616,8 @@ Outcome, accepted by the owner:
         mid-stream: "a tab the user picks stays picked" covers the pick from the last run (the owner confirmed this on 2026-11-13).
       - A Pivot built for the selected group is selected at once (in `ResultsTabs`, not `PivotService`, which PR 10
         rewrites); a rebuilt Pivot already took the focus through `PivotService`. A Pivot that appears for another group
-        selects nothing.
+        selects nothing. A comparison made while the layout is drawn is selected the same way (it is the row's last tab,
+        often past the strip's edge).
       - Only the selected grid is mounted, keyed by entry key: switching unmounts the other `ResultGrid`, whose
         `GridShell` disposes its view, pool and registration; its state stays in `TabViewState.grids`. The service's
         retiring of backend views superseded while unmounted is still as before (plan, Rendering and commands).
@@ -635,7 +636,12 @@ Outcome, accepted by the owner:
         keys keep working.
       - Close focus: a closed view moves the focus to the tab selected next in the row it was in (a Pivot's to its
         Table's view tab), else the Results tab, only when the focus was in what closed or nowhere. Tab close buttons
-        are not Tab stops (one Tab stop per row); `output.closeResult` from the palette closes the selected view.
+        are not Tab stops (one Tab stop per row); `output.closeResult` from the palette closes the selected view once a tab or
+        grid has been used: as in Stacked, it never closes the run's first result for want of one.
+      - Stacked's caption close follows the service's new rule: when the closed view had the grid focus, the caption focus
+        goes to the view the service focused (the neighbour's last-shown Pivot or Table), so the two never disagree.
+      - The strip's wheel is the fixed gesture `resultTabs.scroll` (Control+wheel still zooms), and in forced colours the
+        selected tab's focus ring is HighlightText on Highlight.
       - Existing suites that read stacked captions pin Stacked: `results-smoke`, `popout-smoke`, `electron-smoke` and
         `explorer-smoke` through `pinStackedResults` (`scripts/fixtures/results-pane.mjs`), `menus-smoke` in its seeded
         `settings.json`. The new suite's CI seconds are placeholders (25 s) until the first CI run.

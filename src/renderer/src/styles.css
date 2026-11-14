@@ -916,9 +916,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rt-results { position: relative; display: flex; flex: none; align-items: flex-end; gap: 2px; height: 28px; box-sizing: border-box; padding: 3px 4px 0; overflow: hidden; border-bottom: 1px solid var(--varia-panel-border); background: var(--varia-panelTitle-background); }
 .rt-strip { position: relative; display: flex; flex: 0 1 auto; align-items: flex-end; gap: 2px; min-width: 0; height: 100%; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .rt-strip::-webkit-scrollbar { display: none; }
-.rt-results[data-clip-start] .rt-strip { mask-image: linear-gradient(to right, transparent, currentColor var(--varia-space-4)); }
-.rt-results[data-clip-end] .rt-strip { mask-image: linear-gradient(to left, transparent, currentColor var(--varia-space-4)); }
-.rt-results[data-clip-start][data-clip-end] .rt-strip { mask-image: linear-gradient(to right, transparent, currentColor var(--varia-space-4), currentColor calc(100% - var(--varia-space-4)), transparent); }
+.rt-results[data-clip-start] .rt-strip { mask-image: linear-gradient(to right, transparent, CanvasText var(--varia-space-4)); }
+.rt-results[data-clip-end] .rt-strip { mask-image: linear-gradient(to left, transparent, CanvasText var(--varia-space-4)); }
+.rt-results[data-clip-start][data-clip-end] .rt-strip { mask-image: linear-gradient(to right, transparent, CanvasText var(--varia-space-4), CanvasText calc(100% - var(--varia-space-4)), transparent); }
 .rt-tab { display: flex; flex: none; align-items: center; height: 24px; box-sizing: border-box; padding-right: 2px; border: 1px solid transparent; border-bottom: 0; border-radius: var(--varia-radius-sm); border-bottom-left-radius: 0; border-bottom-right-radius: 0; color: var(--varia-panelTitle-inactiveForeground); }
 .rt-tab[data-selected] { background: var(--varia-panel-background); border-color: var(--varia-panel-border); color: var(--varia-foreground); box-shadow: inset 0 2px 0 var(--varia-panelTitle-activeBorder); transition: none; }
 .rt-tab > [role="tab"] { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 4px 0 8px; color: inherit; font-size: var(--varia-size-sm); white-space: nowrap; }
@@ -939,6 +939,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rt-panel { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
 @media (forced-colors: active) {
   .rt-tab[data-selected], .rt-view[data-selected] { forced-color-adjust: none; background: Highlight; color: HighlightText; box-shadow: none; }
+  .rt-tab[data-selected] > [role="tab"]:focus-visible, .rt-view[data-selected] > [role="tab"]:focus-visible, .rt-tab[data-selected] .rt-close:focus-visible { outline-color: HighlightText; }
 }
 /* A grid with its strip and lost overlay, which sit outside the grid's table structure. */
 .rg-frame { position: relative; display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; background: var(--varia-resultsGrid-background); }

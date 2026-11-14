@@ -112,7 +112,7 @@ function tabKey(event: KeyboardEvent, at: number, count: number): number {
  * the focus then goes to the tab selected next, else to the Results tab. A bare run (Peek) is never drawn here.
  */
 export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabResults }) {
-  const { results, resultsSearch } = useWorkbench()
+  const { results, resultsSearch, gestures } = useWorkbench()
   const search = useServiceSnapshot(resultsSearch)[tabId]
   const rootRef = useRef<HTMLDivElement>(null)
   const id = useId()
@@ -189,6 +189,15 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     if (!seen || !group?.pivot || seen.get(group.ordinal) === group.pivot.key || !seen.has(group.ordinal)) return
     if (selected?.key !== group.pivot.key) select(group.pivot.key)
   }, [tab.groups])
+  // A comparison made while the layout is drawn shows at once too, for the same reason: it is the last tab of the row,
+  // often past the strip's edge. One there at mount selects nothing.
+  const comparisons = useRef<ReadonlySet<EntryKey> | undefined>(undefined)
+  useLayoutEffect(() => {
+    const seen = comparisons.current
+    comparisons.current = new Set(tab.comparisons.map(slot => slot.key))
+    const made = seen && tab.comparisons.findLast(slot => !seen.has(slot.key))
+    if (made && selected?.key !== made.key) select(made.key)
+  }, [tab.comparisons])
 
   // The arrow keys, Home and End move over every result, not only the drawn window; the tab they reach may be drawn only
   // once the window has moved, so it takes the focus after that render.
@@ -230,7 +239,7 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     return () => observer.dispose()
   }, [!selected])
   const wheel = (event: WheelEvent<HTMLDivElement>) => {
-    if (event.deltaX || !event.deltaY) return
+    if (event.deltaX || !event.deltaY || gestures.matches('global.wheelZoom', event) || !gestures.matches('resultTabs.scroll', event)) return
     const strip = event.currentTarget
     strip.scrollLeft += event.deltaY * (event.deltaMode === 2 ? strip.clientWidth : event.deltaMode === 1 ? stripFade : 1)
   }

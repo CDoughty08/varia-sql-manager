@@ -253,7 +253,12 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
     const active = stack?.ownerDocument.activeElement
     const own = !active || active === stack?.ownerDocument.body || gone.has(active.closest('.rs-item')?.querySelector('[data-caption-entry]')?.getAttribute('data-caption-entry') ?? '')
     if (own && !next) resultsTab()?.focus({ preventScroll: true })
-    if (results.removeEntry(tabId, key) && own && next) pendingFocus.current = { closed: key, next: next.key }
+    const focused = results.getSnapshot()[tabId]?.focused
+    if (!results.removeEntry(tabId, key) || !own || !next) return
+    // When the closed view had the grid focus, the service passed it to the view its neighbour last showed (a group's Pivot
+    // or Table): the caption focus goes there too, so commands act on the view the focus is on.
+    const moved = focused !== undefined && gone.has(focused) ? results.getSnapshot()[tabId]?.focused : undefined
+    pendingFocus.current = { closed: key, next: moved ?? next.key }
   }, [results, tabId, slots])
   const resultsTab = () => stackRef.current?.closest('.output-panel')?.querySelector<HTMLElement>('[role="tab"][data-output-tab="results"]')
   useLayoutEffect(() => {
