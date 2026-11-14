@@ -213,7 +213,7 @@ internal static class DefinitionNames
         public bool InList { get; private set; }
         /// <summary>The caret is on the qualifier of a select list's qualified star (o.*).</summary>
         public bool Star { get; private set; }
-        /// <summary>The caret is on a FROM clause's table-valued function name, which is never a column's method.</summary>
+        /// <summary>The caret is on a table reference's or table-valued function's own name, which is never a column's method.</summary>
         public bool TableFunction { get; private set; }
 
         public bool Knows(string name, out DefinitionName? target) => aliases.TryGetValue(name, out target);
@@ -294,7 +294,7 @@ internal static class DefinitionNames
             if (errors.Count != 0) return null;
             var visitor = new CaretVisitor(offset);
             fragment.Accept(visitor);
-            var scope = new Scope { Parsed = true, Column = visitor.Column is not null, Star = visitor.Star, TableFunction = visitor.TableFunction };
+            var scope = new Scope { Parsed = true, Column = visitor.Column is not null, Star = visitor.Star, TableFunction = visitor.TableFunction || visitor.TableName is not null };
             if (visitor.Statement is null) return scope;
             var ctes = new CteCollector();
             visitor.Statement.Accept(ctes);
@@ -526,8 +526,51 @@ internal static class DefinitionNames
 
         // The table a CREATE or ALTER TABLE defines, whose key and foreign key column lists are its own columns.
         private SchemaObjectName? owner;
-        public override void Visit(CreateTableStatement node) => owner = node.SchemaObjectName;
-        public override void Visit(AlterTableStatement node) => owner = node.SchemaObjectName;
+        public override void ExplicitVisit(CreateTableStatement node) => Owned(node.SchemaObjectName, () => base.ExplicitVisit(node));
+        public override void ExplicitVisit(AlterTableAddTableElementStatement node) => Owned(node.SchemaObjectName, () => base.ExplicitVisit(node));
+        public override void ExplicitVisit(AlterTableAlterColumnStatement node) => Owned(node.SchemaObjectName, () =>
+        {
+            if (Contains(node.ColumnIdentifier)) ListName ??= owner;
+            base.ExplicitVisit(node);
+        });
+        public override void ExplicitVisit(AlterTableDropTableElementStatement node) => Owned(node.SchemaObjectName, () =>
+        {
+            // DROP COLUMN a, b drops both: an element with no type of its own has the one before it.
+            var type = TableElementType.NotSpecified;
+            foreach (var element in node.AlterTableDropTableElements)
+            {
+                if (element.TableElementType != TableElementType.NotSpecified) type = element.TableElementType;
+                if (type == TableElementType.Column && Contains(element.Name)) ListName ??= owner;
+            }
+            base.ExplicitVisit(node);
+        });
+
+        public override void ExplicitVisit(SystemTimePeriodDefinition node)
+        {
+            if ((Contains(node.StartTimeColumn) || Contains(node.EndTimeColumn)) && owner is not null) ListName ??= owner;
+            base.ExplicitVisit(node);
+        }
+
+        public override void ExplicitVisit(IndexDefinition node)
+        {
+            if ((node.Columns.Any(column => Contains(column)) || node.IncludeColumns.Any(Contains)) && owner is not null) ListName ??= owner;
+            base.ExplicitVisit(node);
+        }
+
+        public override void ExplicitVisit(DefaultConstraintDefinition node)
+        {
+            if (Contains(node.Column) && owner is not null) ListName ??= owner;
+            base.ExplicitVisit(node);
+        }
+
+        // Only within its own statement: a later table variable's or table type's key is not this table's.
+        private void Owned(SchemaObjectName name, Action visit)
+        {
+            var saved = owner;
+            owner = name;
+            visit();
+            owner = saved;
+        }
 
         public override void ExplicitVisit(SchemaObjectFunctionTableReference node)
         {

@@ -190,6 +190,19 @@ internal static class SqlDefinitionChecks
             && Candidates("CREATE TABLE dbo.T (Id int, PId int, CONSTRAINT fk FOREIGN KEY (P|Id) REFERENCES dbo.P (Id))") is [{ Schema: "dbo", Name: "T" }]
             && Candidates("ALTER TABLE dbo.Lines ADD CONSTRAINT pk PRIMARY KEY (I|d)") is [{ Schema: "dbo", Name: "Lines" }],
             "a key's or foreign key's own columns are its table's");
+        check(At("CREATE TABLE dbo.A (Id int)\nDECLARE @t TABLE (Id int, PRIMARY KEY (I|d))") is null
+            && At("CREATE TABLE dbo.A (Id int);\nCREATE TYPE dbo.TT AS TABLE (Id int, PRIMARY KEY (I|d))") is null
+            && At("CREATE PROCEDURE p AS BEGIN CREATE TABLE dbo.A (Id int); DECLARE @t TABLE (Id int, PRIMARY KEY (I|d)) END") is null,
+            "a table's key list never lends the table to a later table variable or type");
+        check(Candidates("ALTER TABLE dbo.B ADD CONSTRAINT df DEFAULT 0 FOR I|d") is [{ Schema: "dbo", Name: "B" }]
+            && Candidates("ALTER TABLE dbo.T ALTER COLUMN I|d int") is [{ Schema: "dbo", Name: "T" }]
+            && Candidates("ALTER TABLE dbo.T DROP COLUMN I|d") is [{ Schema: "dbo", Name: "T" }]
+            && Candidates("ALTER TABLE dbo.T DROP COLUMN A, B|") is [{ Schema: "dbo", Name: "T" }]
+            && Candidates("ALTER TABLE dbo.T ADD PERIOD FOR SYSTEM_TIME (Valid|From, ValidTo)") is [{ Schema: "dbo", Name: "T" }]
+            && Candidates("CREATE TABLE dbo.T (Id int, INDEX ix (I|d))") is [{ Schema: "dbo", Name: "T" }]
+            && At("DECLARE @t TABLE (Id int, INDEX ix (I|d))") is null
+            && Candidates("INSERT INTO dbo.Arch|ive (Id) SELECT Id FROM dbo.Orders") is [{ Schema: "dbo", Name: "Archive" }],
+            "ALTER TABLE's column names are its table's, and an INSERT target before its column list is that table alone");
         check(Candidates("SELECT * FROM dbo.tv|f(1) AS f") is [{ Schema: "dbo", Name: "tvf", Column: null }],
             "a FROM clause's table-valued function is never a column's method");
         check(Candidates("WITH src AS (SELECT Id, Name FROM dbo.Staging) INSERT INTO dbo.Customer (Id, Name) SELECT Id, Na|me FROM src") is []

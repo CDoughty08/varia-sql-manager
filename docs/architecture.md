@@ -45,7 +45,8 @@ being true.
   an alias hides an object of its name, while a table reference's own name is always the object it names; a CTE, derived
   table, table variable, PIVOT or trigger's inserted names no object; a table-valued function's alias stands for the
   function, MERGE's target alias for its target, OUTPUT's inserted and deleted for the DML target, and a column in an
-  INSERT, OUTPUT INTO, index, key or foreign key list for that list's table. A correlated subquery's or APPLY's bare column may be
+  INSERT, OUTPUT INTO, index, key or foreign key list (or ALTER TABLE's DEFAULT FOR, ALTER COLUMN and DROP COLUMN) for
+  that table. A correlated subquery's or APPLY's bare column may be
   an outer table's (offered after its own, with the column checked); a derived table's or CTE's may not. A call on a column
   (t.Doc.value(), x.Doc.nodes()) is its table's column, a qualified star's qualifier (o.*) is its table, an INSERT's or
   OUTPUT INTO's table is never a source of the statement's columns, a declared column (a table's, CTE's or derived table's
