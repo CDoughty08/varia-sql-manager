@@ -1,4 +1,4 @@
-import { memo, useEffect, useId, useLayoutEffect, useState, type CSSProperties, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react'
+import { memo, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { outputPaneIds, type OutputPaneId } from '../../../shared/layouts'
 import PaneMenuButton from '../PaneMenuButton'
 import Icon from '../Icon'
@@ -66,8 +66,50 @@ function plansOf(tab: TabResults | undefined): readonly ResultSetEntry[] {
   return tab && tab.status !== 'closed' ? [...tab.planSets, ...tab.sets.filter(set => set.descriptor.kind === 'executionPlan')] : []
 }
 /** Whether the run has a Results view: it has sets, or had them until they were closed (all at once, or one at a time
- *  down to the last, `emptied`), which the view then says. */
-export const hasResultsView = (tab: TabResults | undefined): boolean => !!tab && (tab.sets.length > 0 || tab.status === 'closed' || !!tab.emptied)
+ *  down to the last, `emptied`), which the view then says; or it was made with Discard results after execution and is
+ *  running or read sets it did not keep, which the view says too. */
+export const hasResultsView = (tab: TabResults | undefined): boolean => !!tab && (tab.sets.length > 0 || tab.status === 'closed' || !!tab.emptied
+  || !!tab.discard && (tab.status === 'running' || (tab.summary?.discardedResultSets ?? 0) > 0))
+
+export const discardSetting = 'queryResults.grid.discardResults'
+/** What the Results view shows in place of grids for a run made with Discard results after execution, which kept none:
+ *  why, and the one step that follows (`on` is the setting now). While it is on, that step turns it off; once it is off, a
+ *  finished run's step executes the query again, now keeping its rows. Undefined for any other run. */
+export function discardNotice(tab: Pick<TabResults, 'discard' | 'status' | 'sets' | 'summary'>, on: boolean): { title: string; detail: string; action?: 'turnOff' | 'execute' } | undefined {
+  if (!tab.discard || tab.status === 'closed' || tab.sets.length > 0) return undefined
+  const read = tab.summary?.discardedResultSets ?? 0
+  // A finished run that returned no sets kept nothing it would have kept: there is nothing to explain.
+  if (tab.status !== 'running' && read === 0) return undefined
+  const title = tab.status === 'running' ? 'Results are not being kept' : 'Results were not kept'
+  const sets = read > 0 ? `${formatCount(read)} ${plural(read, 'result set')} ${read === 1 ? 'was' : 'were'} read and not kept. ` : tab.status === 'running' ? 'Rows are read and not kept. ' : ''
+  if (!on) return { title, detail: `${sets}Discard results after execution was on for this run and is now off.${tab.status === 'running' ? '' : ' Execute the query again to see its results.'}`, ...tab.status === 'running' ? {} : { action: 'execute' as const } }
+  return { title, detail: `${sets}Discard results after execution is on, so queries in every tab keep no rows.`, action: 'turnOff' }
+}
+const discardLabels = { turnOff: 'Turn off Discard results', execute: 'Execute again' } as const
+
+/** The Results view of a run that discarded its sets: what happened, and the step that brings rows back. When the setting
+ *  changes (here, from Options or from the palette) while the button has focus, focus moves to the button that replaces it,
+ *  so the keyboard stays in the notice; while the run still runs there is none, and the run's end brings Execute again,
+ *  which takes the focus only if nothing else took it meanwhile. */
+export function DiscardNotice({ tab }: { tab: TabResults }) {
+  const { settings, commands } = useWorkbench()
+  const on = useServiceSnapshot(settings).values[discardSetting]
+  const notice = discardNotice(tab, on)!
+  const button = useRef<HTMLButtonElement>(null), refocus = useRef(false)
+  // Read while rendering, before the commit replaces the button that has the focus.
+  if (button.current && button.current === button.current.ownerDocument.activeElement) refocus.current = true
+  useEffect(() => {
+    const target = button.current, focused = target?.ownerDocument.activeElement
+    if (!refocus.current || !target || target === focused) return
+    refocus.current = false
+    if (!focused || focused === target.ownerDocument.body) target.focus()
+  }, [notice.action])
+  const run = notice.action === 'turnOff'
+    ? () => { void settings.choose(discardSetting, false) }
+    : () => void commands.execute('query.execute', undefined, 'toolbar')
+  return <EmptyState className="output-empty output-discarded" icon="circle-slash" title={notice.title} detail={notice.detail}
+    actions={notice.action ? [{ label: discardLabels[notice.action], run, primary: true, buttonRef: button }] : []} />
+}
 /** What the Results view says in place of grids, when it shows none. */
 export function emptyResultsText(tab: Pick<TabResults, 'status' | 'emptied'>): string {
   return tab.status === 'closed' ? 'Results were closed to free memory. Execute the query again to see them.'
@@ -219,7 +261,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
     tabIndex: name === pane ? 0 : -1, className: name === pane ? 'active' : '', onClick: () => select(name, true)
   })
   const labels: Record<OutputPaneId, string> = {
-    results: sets > 0 ? `Results, ${formatCount(sets)} ${plural(sets, 'result set')}` : 'Results',
+    results: sets > 0 ? `Results, ${formatCount(sets)} ${plural(sets, 'result set')}` : tab && discardNotice(tab, true) ? 'Results, not kept' : 'Results',
     messages: errors ? 'Messages, contains errors' : messages > 0 ? `Messages, ${formatCount(messages)} ${plural(messages, 'message')}` : 'Messages',
     plan: estimated ? 'Execution plan, Estimated' : plans.length > 0 ? `Execution plan, ${formatCount(plans.length)} ${plural(plans.length, 'plan')}` : 'Execution plan',
     statistics: 'Client Statistics'
@@ -259,6 +301,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
             if (entry) setProfiled({ tabId, target: profileTarget(tab.sets, entry) })
           }}>
             {shown ? <ResultsStack key={'stack:' + tab.queryId} tabId={tabId} tab={tab} />
+              : discardNotice(tab, true) ? <DiscardNotice tab={tab} />
               : <EmptyState className="output-empty" {...hasSets ? {} : { icon: 'table' as const }} detail={emptyResultsText(tab)} />}
             {profileOpen && shown && <ColumnProfilePanel key={'profile:' + tab.queryId} tabId={tabId} tab={tab}
               shown={profiled?.tabId === tabId ? profiledEntry(tab.sets, profiled.target)?.key : undefined} />}

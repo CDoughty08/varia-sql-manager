@@ -50,7 +50,7 @@ function FormRow({ row, error, focused, label, onFocus, onChange }: RowProps) {
  * and the focused row's description below. Changes on every page stay in one draft until OK saves the ones that differ
  * from what main stored; Cancel and Escape discard them, and focus returns to where it was.
  */
-export default function OptionsDialog({ page: requested }: { page?: string }) {
+export default function OptionsDialog({ page: requested, setting }: { page?: string; setting?: string }) {
   const { settings, platform, keybindings } = useWorkbench()
   const { values } = useServiceSnapshot(settings)
   const [draft, setDraft] = useState<OptionsDraft>(() => draftFrom(values))
@@ -78,7 +78,7 @@ export default function OptionsDialog({ page: requested }: { page?: string }) {
   const [saving, setSaving] = useState(false)
   // Read while rendering, before the search box takes focus.
   const [returnFocus] = useState(focusToReturn)
-  const search = useRef<HTMLInputElement>(null), tree = useRef<HTMLUListElement>(null), focusSetting = useRef<string>(undefined)
+  const search = useRef<HTMLInputElement>(null), tree = useRef<HTMLUListElement>(null), focusSetting = useRef<string | undefined>(setting)
   const found = useMemo(() => searchPages(query, platform), [query, platform])
   const rows = treeRows(expanded, found?.shown)
   const focusId = rows.some(row => row.page.id === treeFocus) ? treeFocus : rows.find(row => row.page.id === page)?.page.id ?? rows[0]?.page.id
