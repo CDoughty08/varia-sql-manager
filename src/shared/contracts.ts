@@ -218,6 +218,21 @@ export interface QueryResult {
 export interface SessionState { transactionCount: number; checked: boolean }
 /** Orders each feature's memory reports. Results events and summaries share a sequence within a backend generation. */
 export interface MemoryOrder { generation: number; seq: number }
+/** One of the largest results a results.memory event names: its rows as read and what holds them now. `progress` (0 to
+ *  100) only while it unpacks; `live` for a live view's table, which no Results tab names. */
+export interface ResultMemoryEntry { resultId: number; logicalBytes: number; storedBytes: number; state: 'raw' | 'packed' | 'unpacking'; progress?: number; live?: true }
+/** The page codec's counters since the backend started; times in microseconds. `name` and `level` only while compression is on. */
+export interface ResultCodecCounters {
+  name?: string; level?: number; pagesPacked: number; pagesUnpacked: number; packInputBytes: number; packMicroseconds: number
+  unpackOutputBytes: number; unpackMicroseconds: number; cacheHits: number; cacheLookups: number; lastUnpackMicroseconds: number
+}
+/** What the result store holds, with each results.memory event (the Memory panel's Nerd metrics). `logicalBytes` is the rows as
+ *  read, `storedBytes` what holds them (raw plus compressed pages); `compressedBytes` the packed pages, which hold
+ *  `packedLogicalBytes` of rows; `cacheBytes` the decompressed pages kept for reads. `largest` is largest as read first. */
+export interface ResultMemoryDetail {
+  logicalBytes: number; storedBytes: number; compressedBytes: number; packedLogicalBytes: number; cacheBytes: number
+  largest: ResultMemoryEntry[]; codec: ResultCodecCounters; heap: { committedBytes: number; freeBytes: number }
+}
 /** Rows read so far for one result set of a running script, and why it stopped storing them once it has. */
 export interface ResultProgress { resultId: number; rowsRead: number; rowsStored: number; rowsAvailable: number; bytesStored: number; truncated?: TruncationReason }
 /** Pushed while a script runs (EVENT frames, then the results port). The summary is authoritative once it arrives. */

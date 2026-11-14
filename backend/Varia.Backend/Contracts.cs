@@ -63,6 +63,32 @@ internal sealed record QueryFailure(string Code, string Message, int BatchNumber
 /// StoppedBytes is the figure the query stopped at for a budget reason, which a later limit change does not alter; null
 /// (left out) otherwise.</summary>
 internal sealed record ResultBudget(long UsedBytes, long GlobalBytes, long QueryBytes, long Seq, long? StoppedBytes = null);
+/// <summary>The global results.memory EVENT: the budget's figures (what the status bar's ring charges) and, for the Memory
+/// panel's Nerd metrics, what the store holds. It goes out at the same moments as before (docs/ipc.md, Global memory
+/// events); the detail is read when it does.</summary>
+internal sealed record ResultsMemoryEvent(long UsedBytes, long GlobalBytes, long Seq, ResultMemoryDetail Detail)
+{
+    [JsonPropertyOrder(-1)] public string Type => "results.memory";
+}
+/// <summary>LogicalBytes is the rows as read (their uncompressed pages), StoredBytes what holds them now: raw pages plus
+/// compressed ones. CompressedBytes is the packed pages' size and PackedLogicalBytes the rows they hold; CacheBytes the
+/// decompressed pages kept for reads. Largest names at most <see cref="Results.ResultStore.MaxLargest"/> results, largest
+/// as read first.</summary>
+internal sealed record ResultMemoryDetail(long LogicalBytes, long StoredBytes, long CompressedBytes, long PackedLogicalBytes, long CacheBytes,
+    IReadOnlyList<ResultMemoryEntry> Largest, ResultCodecCounters Codec, ManagedHeap Heap);
+/// <summary>State is "raw", "packed" or "unpacking"; Progress (0 to 100) only while unpacking. Live is true for a live
+/// view's table, which no Results tab names; left out otherwise.</summary>
+internal sealed record ResultMemoryEntry(uint ResultId, long LogicalBytes, long StoredBytes, string State, int? Progress = null, bool? Live = null);
+/// <summary>The page codec's counters since the backend started. Name and Level are left out while compression is off.
+/// Times are in microseconds; LastUnpackMicroseconds is the last operation that unpacked a result (0 before one).</summary>
+internal sealed record ResultCodecCounters(string? Name, int? Level, long PagesPacked, long PagesUnpacked, long PackInputBytes, long PackMicroseconds,
+    long UnpackOutputBytes, long UnpackMicroseconds, long CacheHits, long CacheLookups, long LastUnpackMicroseconds)
+{
+    public static readonly ResultCodecCounters Off = new(null, null, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+}
+/// <summary>The managed heap after the last collection (GC.GetGCMemoryInfo): committed bytes, and the free space inside
+/// them the runtime keeps for reuse rather than returning to the operating system.</summary>
+internal sealed record ManagedHeap(long CommittedBytes, long FreeBytes);
 /// <summary>One line of the Messages tab: kind is "info" (Varia's row counts and notes), "print" (PRINT and RAISERROR with
 /// severity 10 or less), "server" (SQL Server's other informational messages: warnings, SET STATISTICS output, DBCC) or "error"
 /// (SQL errors, cancellation and timeout, shown in red).</summary>

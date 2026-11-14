@@ -241,10 +241,13 @@ export class ResultsPortHost {
     if (message) this.post(message)
   }
 
-  /** Retain the newest samples for a port opened after the backend's initial reports or after a reload. */
-  private rememberMemory(feature: MemoryFeature, { generation, seq, usedBytes, globalBytes }: MemoryReport) {
-    if (generation !== this.generation || this.status === 'restarting' || seq <= (this.latestMemory.get(feature)?.seq ?? 0)) return
-    const message = { t: 'memory', feature, generation, seq, usedBytes, globalBytes } as const
+  /** Retain the newest samples for a port opened after the backend's initial reports or after a reload. A summary's budget
+   *  has no detail: the last event's stays with it, so a page opened after it still has the Nerd metrics. */
+  private rememberMemory(feature: MemoryFeature, { generation, seq, usedBytes, globalBytes, detail }: MemoryReport) {
+    const latest = this.latestMemory.get(feature)
+    if (generation !== this.generation || this.status === 'restarting' || seq <= (latest?.seq ?? 0)) return
+    const kept = detail ?? (latest?.generation === generation ? latest.detail : undefined)
+    const message = { t: 'memory', feature, generation, seq, usedBytes, globalBytes, ...kept ? { detail: kept } : {} } as const
     this.latestMemory.set(feature, message)
     return message
   }

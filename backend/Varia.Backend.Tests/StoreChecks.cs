@@ -492,22 +492,85 @@ internal static class StoreChecks
             && usedAfterRise > reported && usedAfterRise - reported < 64L * 1024 * 1024 && closed.Closed == 2 && Last() == 0,
             "results.memory reports a small rise and the fall to 0 before results.close answers: " + afterFirst + ", " + afterRise + ", " + Last());
 
-        // A summary counts as a report, so the same sample is deduplicated and a subsequent close still reports 0.
+        // A summary counts as a report, but has no detail: the next check sends the same sample once with it (the Memory
+        // panel's results follow the query), then nothing until a change, and a subsequent close still reports 0.
         int Count() { lock (reports) return reports.Count; }
         var third = Open(store, store.BeginQuery("s3"));
         Fill(third, 0, 1000);
         third.Complete();
-        var summary = service.SummaryBudget();
+        // The service's own timer checks once a second too: report the rise first, so the only event left to send is the
+        // one the summary owes, whichever check sends it.
+        service.ReportMemory();
         var before = Count();
+        var summary = service.SummaryBudget();
         service.ReportMemory();
         var afterSummary = Count();
+        var detailSample = Last();
+        service.ReportMemory();
+        var afterAgain = Count();
         close = JsonSerializer.SerializeToElement(new { resultIds = new[] { third.ResultId } }, HostChecks.Json);
         closed = (ResultsCloseResult)service.DispatchAsync("results.close", close, HostChecks.Json).GetAwaiter().GetResult();
-        check(summary.UsedBytes > 0 && afterSummary == before && closed.Closed == 1 && Count() == before + 1 && Last() == 0,
-            "results.memory deduplicates a summary's sample and reports the fall to 0 when the results are closed: " + before + ", " + afterSummary + ", " + Count() + ", " + Last());
+        check(summary.UsedBytes > 0 && afterSummary == before + 1 && detailSample == summary.UsedBytes && afterAgain == afterSummary && closed.Closed == 1 && Count() == afterSummary + 1 && Last() == 0,
+            "results.memory sends a summary's sample once more with its detail, then deduplicates it, and reports the fall to 0 when the results are closed: " + before + ", " + afterSummary + ", " + afterAgain + ", " + Count() + ", " + Last());
 
         MemoryBudgetReports(check);
         MemoryLimitMethod(check);
+        MemoryDetailReports(check);
+    }
+
+    /// <summary>The results.memory event's detail (the Memory panel's Nerd metrics): totals over the stored sets, the
+    /// largest few in order, and with nothing compressed yet, stored equal to the rows as read and the codec off.</summary>
+    private static void MemoryDetailReports(Action<bool, string> check)
+    {
+        JsonElement? last = null;
+        var store = new ResultStore(1L << 30, 1L << 29);
+        using var service = new SqlService(store, publish: value =>
+        {
+            var report = JsonSerializer.SerializeToElement(value, HostChecks.Json);
+            if (report.GetProperty("type").GetString() == "results.memory") last = report;
+            return true;
+        });
+        service.ReportMemory();
+        var empty = last!.Value;
+        var emptyDetail = empty.GetProperty("detail");
+        check(empty.GetProperty("usedBytes").GetInt64() == 0 && emptyDetail.GetProperty("logicalBytes").GetInt64() == 0 && emptyDetail.GetProperty("largest").GetArrayLength() == 0
+            && emptyDetail.GetProperty("heap").GetProperty("committedBytes").GetInt64() is var committed && committed >= 0
+            && emptyDetail.GetProperty("heap").GetProperty("freeBytes").GetInt64() is var free && free >= 0 && free <= committed
+            && empty.EnumerateObject().First().Name == "type",
+            "results.memory's detail for an empty store holds no results, names the managed heap (zeros before the first collection, free within committed), and the event still starts with its type: " + empty);
+
+        var sets = new List<ResultSetBuffer>();
+        for (var index = 0; index < ResultStore.MaxLargest + 2; index++)
+        {
+            var set = Open(store, store.BeginQuery("s" + index), index);
+            Fill(set, 0, 200 * (index + 1));
+            set.Complete();
+            sets.Add(set);
+        }
+        var live = store.Open(new QueryBudget("live", new LiveBudget(64L << 20)), 0, 1, 1, "rows", W1Columns, W1Wires)!;
+        Fill(live, 0, 100);
+        live.Complete();
+        service.ReportMemory();
+        var detail = last!.Value.GetProperty("detail");
+        var largest = detail.GetProperty("largest").EnumerateArray().ToArray();
+        var expected = sets.Select(set => (Id: set.ResultId, Bytes: set.Progress().BytesStored)).OrderByDescending(set => set.Bytes).Take(ResultStore.MaxLargest).ToArray();
+        var total = sets.Sum(set => set.Progress().BytesStored) + live.Progress().BytesStored;
+        var codec = detail.GetProperty("codec");
+        check(detail.GetProperty("logicalBytes").GetInt64() == total && detail.GetProperty("storedBytes").GetInt64() == total
+            && detail.GetProperty("compressedBytes").GetInt64() == 0 && detail.GetProperty("packedLogicalBytes").GetInt64() == 0 && detail.GetProperty("cacheBytes").GetInt64() == 0
+            && largest.Length == ResultStore.MaxLargest
+            && largest.Select(entry => (Id: entry.GetProperty("resultId").GetUInt32(), Bytes: entry.GetProperty("logicalBytes").GetInt64())).SequenceEqual(expected)
+            && largest.All(entry => entry.GetProperty("storedBytes").GetInt64() == entry.GetProperty("logicalBytes").GetInt64() && entry.GetProperty("state").GetString() == "raw"
+                && !entry.TryGetProperty("progress", out _) && !entry.TryGetProperty("live", out _))
+            && !codec.TryGetProperty("name", out _) && !codec.TryGetProperty("level", out _) && codec.GetProperty("pagesPacked").GetInt64() == 0 && codec.GetProperty("cacheLookups").GetInt64() == 0,
+            "results.memory's detail totals every stored set, live tables too, names the largest " + ResultStore.MaxLargest + " as read in order, raw with stored equal to read, and reports the codec off: " + detail);
+
+        // A live view's table is named as one when it is among the largest.
+        foreach (var set in sets) store.Release(set.ResultId);
+        service.ReportMemory();
+        var only = last!.Value.GetProperty("detail").GetProperty("largest").EnumerateArray().ToArray();
+        check(only is [var entry] && entry.GetProperty("resultId").GetUInt32() == live.ResultId && entry.GetProperty("live").GetBoolean(),
+            "results.memory's detail marks a live view's table, which no Results tab names: " + last);
     }
 
     private static void MemoryBudgetReports(Action<bool, string> check)
