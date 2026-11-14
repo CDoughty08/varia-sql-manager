@@ -14,9 +14,9 @@ const frame = (callback: () => void) => { if (typeof requestAnimationFrame === '
  * on a server that is still connected (not lost with a backend restart, even when the backend restarted while the menu
  * was open or the command was waiting).
  */
-export function explorerContribution({ commands, documents, connections, explorer, explorerStatus, settings, peek, peekTabs }: Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer'>
+export function explorerContribution({ commands, documents, connections, explorer, explorerStatus, settings, peek, peekTabs, dependencies }: Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer'>
   & { explorerStatus?: Pick<Workbench['explorerStatus'], 'refresh'>; settings?: Pick<Workbench['settings'], 'toggle'>; peek?: Pick<Workbench['peek'], 'canPeek' | 'peek' | 'getSnapshot' | 'close' | 'refresh'>
-    peekTabs?: Pick<Workbench['peekTabs'], 'canOpen' | 'open' | 'view'> },
+    peekTabs?: Pick<Workbench['peekTabs'], 'canOpen' | 'open' | 'view'>; dependencies?: Pick<Workbench['dependencies'], 'canOpen' | 'open'> },
   api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
   const nodeOf = (args?: CommandArgs): ExplorerMenuNode | undefined => args?.target ? explorerNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
   const live = (node: ExplorerMenuNode | undefined): node is ExplorerMenuNode => !!node && !node.lost && connections.isLive(node.connectionId)
@@ -65,6 +65,11 @@ export function explorerContribution({ commands, documents, connections, explore
         const card = args?.target ? undefined : peek?.getSnapshot().open
         if (card) { peek?.close(); peekTabs?.open(card.node, card.tab) } else peekTabs?.open(nodeOf(args))
       }
+    }),
+    // View Dependencies on the menu's node or the selection; the dialog takes focus.
+    commands.register('explorer.viewDependencies', {
+      when: args => !!dependencies?.canOpen(nodeOf(args)),
+      run: args => { peek?.close(); dependencies?.open(nodeOf(args)) }
     }),
     // F5 in the card refreshes the card; elsewhere it refreshes the active Peek tab.
     commands.register('peek.refresh', {

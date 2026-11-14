@@ -9,6 +9,7 @@ import EditorStatus from './EditorStatus'
 import Icon from './Icon'
 import ExplorerPane from './explorer/ExplorerPane'
 import FilterDialog from './explorer/FilterDialog'
+import DependenciesDialog from './explorer/DependenciesDialog'
 import OptionsDialog from './settings/OptionsDialog'
 import ObjectDialog from './dialogs/ObjectDialog'
 import CreateCatalogDialog from './ssis/CreateCatalogDialog'
@@ -268,6 +269,7 @@ export default function App() {
     {optionsDialog.open && <OptionsDialog page={optionsDialog.page} setting={optionsDialog.setting} />}
     <ObjectDialog />
     <CreateCatalogDialog />
+    <DependenciesDialog />
     <ServerFilePicker />
     {editorDialogs.goToLine && <GoToLineDialog request={editorDialogs.goToLine} />}
     {recoveryOpen && <RecoveryDialog />}
