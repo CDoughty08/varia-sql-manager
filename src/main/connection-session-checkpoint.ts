@@ -15,12 +15,15 @@ export class ConnectionSessionCheckpoint {
   private operation = 0
   private kept?: Capture
 
-  constructor(private readonly authentication: Pick<ConnectionAuthenticationGuard, 'revision' | 'project'>, private readonly store: Pick<SessionStore, 'write' | 'keptBy'>, private readonly credentialsPending: () => boolean = () => false) {}
+  constructor(private readonly authentication: Pick<ConnectionAuthenticationGuard, 'revision' | 'project'>, private readonly store: Pick<SessionStore, 'write' | 'keptBy'>, private readonly credentialsPending: () => boolean = () => false, private readonly beforeCapture: () => Promise<void> = async () => {}, private readonly requireGeneration: (generation: number) => void = () => {}) {}
 
   async write(session: SessionInput, generation: number): Promise<void> {
-    this.requireIdle()
     const operation = ++this.operation
     this.kept = undefined
+    await this.beforeCapture()
+    this.requireGeneration(generation)
+    this.requireIdle()
+    if (operation !== this.operation) throw changed()
     const workspace = session.workspace ? this.authentication.project(session.workspace) : undefined
     const capture: Capture = { generation, revision: this.authentication.revision, workspace, projection: JSON.stringify(workspace) }
     await this.store.write({ ...session, ...workspace ? { workspace } : {} }, generation)

@@ -187,7 +187,11 @@ const recent = new RecentFilesStore(join(app.getPath('userData'), 'recent-files.
 const recovery = new RecoveryStore(join(app.getPath('userData'), 'AutoRecover'), { pathsRefused })
 // Hot exit's copy of the open tabs, user-only, in the profile; see session-store.ts.
 const openSession = new SessionStore(join(app.getPath('userData'), 'Session'), { pathsRefused })
-const connectionSession = new ConnectionSessionCheckpoint(connectionAuthentication, openSession, () => credentialRequestsPending())
+const connectionSession = new ConnectionSessionCheckpoint(connectionAuthentication, openSession, () => credentialRequestsPending(), async () => {
+  await connectionOpen?.whenCancelledWorkDrained()
+}, generation => {
+  if (generation !== pageGeneration || generation !== rendererGeneration) throw new Error('The workbench changed while keeping the session.')
+})
 // Whether a page of this process has taken the session: only the first also reopens what a crashed run restored.
 let sessionTaken = false
 // Smoke suites keep the quit prompts they check unless they ask for hot exit (VARIA_TEST_HOT_EXIT=1).
@@ -999,6 +1003,19 @@ app.whenReady().then(async () => {
         if (!outcome.ok) return { ...failure(outcome.error, 'Connection failed.'), ...(outcome.passwordForgotten ? { passwordForgotten: true as const } : {}), ...(outcome.credentialRejected ? { credentialRejected: true as const } : {}), ...(outcome.connectionFailure ? { connectionFailure: outcome.connectionFailure } : {}) }
         return { ok: true, value: outcome.value }
       }
+      if (method === 'connections.databases') {
+        if (!connectionOpen) throw new Error('The connection owner is unavailable.')
+        const outcome = await connectionOpen.databases(validated as ConnectionOptions, context, async (params, signal) => {
+          const requestId = randomUUID(), load = connectionRequests.begin(requestId)
+          const cancel = () => { connectionRequests.cancel([requestId]) }
+          signal.addEventListener('abort', cancel, { once: true })
+          if (signal.aborted) cancel()
+          try { return validateResult('connections.databases', await backend.request('connections.databases', params as ConnectionOptions, { onSent: load.sent })) }
+          finally { signal.removeEventListener('abort', cancel); load.end() }
+        })
+        if (!outcome.ok) return { ...failure(outcome.error, 'Backend request failed.'), ...(outcome.passwordForgotten ? { passwordForgotten: true as const } : {}), ...(outcome.credentialRejected ? { credentialRejected: true as const } : {}) }
+        return { ok: true, value: outcome.value }
+      }
       if (method === 'connections.disconnect') {
         if (!connectionOpen) throw new Error('The connection owner is unavailable.')
         return { ok: true, value: await connectionOpen.disconnect((validated as { connectionId: string }).connectionId) }
@@ -1063,9 +1080,11 @@ app.whenReady().then(async () => {
   // Closing an Activity Monitor session's Details: its read stops in SQL Server (an attention) and answers CANCELLED.
   handle('varia:activity-cancel', value => ({ cancelled: activityRequests.cancel(activityCancelSchema.parse(value).requestIds) }))
   // The Connect dialog's Stop: a connect waiting for SQL Server or for a Microsoft Entra sign-in in the browser ends at once.
-  handle('varia:connections-cancel', value => {
+  handle('varia:connections-cancel', async value => {
     const ids = connectionCancelSchema.parse(value).requestIds
-    return { cancelled: (connectionOpen?.cancel(ids) ?? 0) + connectionRequests.cancel(ids) }
+    const draining = connectionOpen?.cancelAndDrain(ids)
+    const cancelled = connectionRequests.cancel(ids)
+    return { cancelled: (await draining ?? 0) + cancelled }
   })
   handle('varia:connections-accept', value => {
     if (!connectionOpen) throw new Error('The connection owner is unavailable.')

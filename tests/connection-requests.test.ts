@@ -59,6 +59,26 @@ describe('remembered password requests', () => {
     admitted.release?.()
     held.forEach(value => value.release?.())
   })
+  it('cancels a queued credential waiter without letting a later request leapfrog its predecessor', async () => {
+    const { deps } = await setup()
+    const predecessor = await prepare('connections.connect', options, { targetId: randomUUID() }, deps)
+    const controller = new AbortController()
+    const cancelled = prepare('connections.connect', options, { targetId: randomUUID() }, deps, controller.signal)
+    // An independent binding can finish while the same-binding waiter remains queued.
+    const independent = await prepare('connections.connect', { ...options, server: 'independent' }, { targetId: randomUUID() }, deps)
+    independent.release?.()
+    controller.abort()
+    await expect(cancelled).rejects.toMatchObject({ code: 'CANCELLED' })
+    let admitted = false
+    const later = prepare('connections.connect', options, { targetId: randomUUID() }, deps).then(value => { admitted = true; return value })
+    const probe = await prepare('connections.connect', { ...options, server: 'probe' }, { targetId: randomUUID() }, deps)
+    probe.release?.()
+    expect(admitted).toBe(false)
+    predecessor.release?.()
+    const prepared = await later
+    expect(admitted).toBe(true)
+    prepared.release?.()
+  })
   it('background reconnect requires the exact revision, preserves credentials and pins the actual account', async () => {
     const { request, remembered, savedPasswords, deps, directory } = await setup()
     const id = await remembered()

@@ -35,6 +35,7 @@ export class StartupReconnectService implements Disposable {
   private readonly active = new Map<string, PendingAttempt>()
   private readonly rejectedCredentials = new Set<string>()
   private readonly idleWaiters = new Set<() => void>()
+  private readonly activeWaiters = new Set<() => void>()
   private readonly unsubscribe: () => void
   private manual = 0
   private disposed = false
@@ -53,7 +54,7 @@ export class StartupReconnectService implements Disposable {
     return true
   }
 
-  /** Call around each manual connect, including a picker that will request interactive sign-in. */
+  /** Pause admission for a manual connect or close checkpoint; interrupted targets retain their reconnect intent. */
   beginManual(): Disposable {
     if (this.disposed) return { dispose() {} }
     this.manual++
@@ -108,6 +109,11 @@ export class StartupReconnectService implements Disposable {
     return !this.disposed && (this.queue.length || this.active.size) ? new Promise(resolve => this.idleWaiters.add(resolve)) : Promise.resolve()
   }
 
+  /** Under beginManual, wait for admitted callbacks and their cancellation acknowledgements, ignoring paused targets. */
+  whenActiveSettled(): Promise<void> {
+    return !this.disposed && this.active.size ? new Promise(resolve => this.activeWaiters.add(resolve)) : Promise.resolve()
+  }
+
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
@@ -117,6 +123,8 @@ export class StartupReconnectService implements Disposable {
     // Disposal must not wait for a provider that is still observing cancellation.
     for (const resolve of this.idleWaiters) resolve()
     this.idleWaiters.clear()
+    for (const resolve of this.activeWaiters) resolve()
+    this.activeWaiters.clear()
   }
 
   private wanted(target: ConnectionTarget): boolean { return shouldAutoReconnect(target, this.globalDefault()) }
@@ -165,6 +173,10 @@ export class StartupReconnectService implements Disposable {
     }
   }
   private notifyIdle(): void {
+    if (!this.active.size) {
+      for (const resolve of this.activeWaiters) resolve()
+      this.activeWaiters.clear()
+    }
     if (this.queue.length || this.active.size) return
     for (const resolve of this.idleWaiters) resolve()
     this.idleWaiters.clear()

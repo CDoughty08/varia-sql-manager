@@ -37,10 +37,11 @@ export function bindStartupReconnect({ api, connections, documents, targets, bac
     const options = { ...target.options, ...presentation }, requestId = crypto.randomUUID()
     const attempt = connections.beginConnect(options, pending.generation, target.id, target.details)
     if (!attempt) return {}
+    let cancellation: Promise<unknown> | undefined
     const abort = () => {
       // Foreground preemption is not the user's Disconnect intent. An older abort cannot cancel a newer operation.
       registry.failConnect(attempt.operation, 'cancelled')
-      void api.cancelConnectionRequests([requestId]).catch(() => {})
+      cancellation ??= api.cancelConnectionRequests([requestId]).catch(() => {})
     }
     pending.signal.addEventListener('abort', abort, { once: true })
     let opened: OpenedConnection | undefined
@@ -76,6 +77,8 @@ export function bindStartupReconnect({ api, connections, documents, targets, bac
       opened?.association?.abandon()
       pending.signal.removeEventListener('abort', abort)
       connections.failAttempt(attempt, pending.signal.aborted ? 'cancelled' : 'unknown')
+      // Main may have answered CANCELLED while the request's credential preparation was still draining.
+      if (cancellation) await cancellation
     }
   }, () => settings.get('environment.connections.autoReconnect'), () => !documents.getSnapshot().busy)
   const start = () => {

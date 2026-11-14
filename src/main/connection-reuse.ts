@@ -85,7 +85,7 @@ export class ConnectionReuseCoordinator<T extends BackendConnectionHandle> {
 
   constructor(deps: ConnectionReuseDeps<T>) { this.#deps = deps }
 
-  connect(request: ConnectionReuseRequest, open: (signal: AbortSignal) => Promise<AuthenticatedConnection<T>>): Promise<ConnectionReuseOutcome<T>> {
+  connect(request: ConnectionReuseRequest, open: (signal: AbortSignal) => Promise<AuthenticatedConnection<T>>, track?: (work: Promise<void>) => void): Promise<ConnectionReuseOutcome<T>> {
     const parsed = connectionOptionsSchema.safeParse(request.options)
     if (!targetIdSchema.safeParse(request.targetId).success || !parsed.success || !Number.isSafeInteger(request.generation) || request.generation < 0
       || (request.principal && !validPrincipal(request.principal)) || (request.expectedPrincipal && !validPrincipal(request.expectedPrincipal))
@@ -119,7 +119,9 @@ export class ConnectionReuseCoordinator<T extends BackendConnectionHandle> {
     if (joinKey) this.#joins.set(joinKey, pending)
     const result = this.#wait(pending, candidate)
     // The single operation owns completion, acceptance and cleanup. Joined callers only receive its immutable answer.
-    void this.#open(pending, open)
+    const work = this.#open(pending, open)
+    // A cancelled waiter can answer before its original open and late cleanup finish; only its main owner drains those.
+    track?.(work)
     return result
   }
 

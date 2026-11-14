@@ -217,6 +217,45 @@ across the original collection and corrected reruns accounts for all 32 suites; 
 passed against the merged build. The other local passes used the preceding application build; CI results for the final
 PR commit are recorded in the PR. The owned temporary SQL logins and sessions were cleaned up.
 
+## Final CI and shutdown review
+
+Run `43624353056` passed all three platform checks, all Linux Electron shards, Windows shard 3/3, all three live SQL
+groups and Linux benchmarks. Two Windows assertions exposed further timing gaps:
+
+- The core smoke helper recorded an empty query connection ID after Connect closed but before the first query's
+  attachment finished. It now waits for the exact requested server, a nonempty ID and an enabled selector. A held
+  query-session close proves that the dialog and Explorer root alone cannot satisfy readiness; UUID and routing
+  assertions remain unchanged.
+- Windows session end was accepted but the application stayed alive. A deterministic reproduction against `7175f92f`
+  held the final page's background Connect and observed main refusing the session checkpoint because connection work
+  remained pending. The old CI failure had no current-window state, so its precise historical ordering is unproven;
+  the held reproduction demonstrates a reachable cause of that symptom. Closing now pauses admission and drains
+  active work outside the document lock, including main's cancellation acknowledgement. Accepted handoffs can finish,
+  cancelled attempts retain resume intent, and approved exit cannot restart the paused queue before unload.
+
+The cancellation acknowledgement includes deferred credential preparation and authenticated storage settlement.
+Already-cancelled work from an earlier page also drains before main projects a new checkpoint, with page-generation
+checks preserved. Queued credential acquisition can be cancelled without waiting for an unrelated manual attempt or
+letting a later waiter bypass that attempt. Load Databases now owns cancellation before credential preparation, so a
+cancelled old-page read cannot escape that barrier. Active/manual work retains its ordinary refusal.
+The final hot-exit regression holds a real fake-backend Connect and still requires application exit, all three pins,
+their exact text and the remembered workspace intent; failure diagnostics use the current window.
+
+Independent review also found failed backend opens leaving their receipts in the pending allowance. Failure settlement
+now retires those receipts; a regression exceeds the eight-attempt allowance with sequential failures and then connects
+again. These changes add no IPC method, renderer authentication claim, setting or shortcut. Existing Getting Started
+sequences and fictional samples need no change; README, connection guidance and the ownership contract describe closing.
+
+The combined corrections passed the full check in 130.0 seconds: 3,427 offline .NET checks, 5,261 Vitest tests,
+TypeScript and the production build, with 24 configuration-dependent skips. The rebuilt core, hot-exit and connections
+Electron suites passed, including the held initial query attachment, held startup Connect at Windows session end,
+all details/disconnect choices and discovery cancellation. Their temporary SQL login and remaining sessions were removed.
+Independent reviews passed 110 focused main cases, 103 renderer/shutdown cases and 12 additional adversarial cases.
+The first full pass exposed an unchanged SQL-file test whose injected replacement called raw rename despite its
+replaceFile title; the spy now delegates to the actual production replacement helper, preserving the one-call, path
+and exact-content assertions. Its 51 focused file checks passed with seven existing skips; retry policy and deadlines
+were unchanged. No newly reviewed main, renderer or smoke finding remained after these corrections.
+
 ## Initial local validation and limits
 
 `npm run check` passed on the initial integration in 80.8 seconds: 2,680 offline .NET checks, 5,063 Vitest tests,

@@ -52,8 +52,9 @@ may still request unlock. Query buffers are never executed automatically.
 File operations can pause this work without discarding queued servers. Manual Connect takes priority; unrelated
 interrupted targets continue afterward. A failed Disconnect keeps the previous resume preference when the connection
 stays open. Temporary identity-probe transport failures retain their ordinary connection error and recovery behavior.
-If a connection is still being applied to its query tabs, finish or cancel Connect before closing or reloading. This
-keeps the saved server associations consistent with the tabs that will reopen.
+Closing pauses automatic reconnects and settles their in-progress work before keeping the tabs and server associations.
+An unfinished manual Connect or details review must be finished or cancelled before closing or reloading. This keeps
+the saved server associations consistent with the tabs that will reopen.
 
 Saved credentials use the existing OS-protected vault. Connection snapshots contain nonsecret settings and opaque
 credential revision references. Server, database and account metadata remain readable in local session JSON under the

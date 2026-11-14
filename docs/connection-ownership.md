@@ -106,6 +106,16 @@ closing. A close task already owns the document lock, so it must never await sta
 can restore the prior source resume intent only under the exact unchanged operation epoch; Stop, removal and explicit
 disconnect must not be undone.
 
+Window close pauses startup admission and settles active attempts before acquiring the document task. Accepted
+handoffs can finish outside that task; interrupted attempts keep their queued resume intent. Refused or cancelled
+closes release the pause, while an approved exit keeps admission paused until workbench disposal.
+The existing cancellation IPC requests cancellation immediately and acknowledges only after its named request's
+preparation, authenticated settlement and cleanup have drained. It never closes another accepted caller's transport.
+Main also waits for already-cancelled credential work from an older page before projecting a session checkpoint,
+then revalidates page ownership. Active/manual work retains its ordinary refusal; no global drain is exposed to the
+renderer. Load Databases owns its cancellation before remembered credentials are read, including a read across reset.
+Cancelling a queued credential reservation cannot let a later waiter bypass its still-active predecessor.
+
 ## Disconnect, pruning and backend loss
 
 The disconnect coordinator completes document prompts and Close Query Tabs preflight before main fences the target

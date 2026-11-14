@@ -11,6 +11,7 @@ import type { Timers } from '../../src/renderer/src/core/timers'
 import { ConnectionService } from '../../src/renderer/src/services/connections'
 import { ConnectionTargetService } from '../../src/renderer/src/services/connection-targets'
 import { StartupReconnectService } from '../../src/renderer/src/services/startup-reconnect'
+import { bindStartupReconnect } from '../../src/renderer/src/services/connection-startup'
 import { bindConnectionPruning } from '../../src/renderer/src/services/connection-pruning'
 import { createDisconnectCoordinator } from '../../src/renderer/src/services/disconnect-workbench'
 import { DisconnectPromptService } from '../../src/renderer/src/disconnect/DisconnectPromptService'
@@ -261,7 +262,7 @@ export function updatesApi(initial: UpdateState = { status: 'idle', currentVersi
  * The renderer's services and every command contribution, wired as createWorkbench does but with fake IPC and a fake
  * shell host, so command enablement can be tested in Node.
  */
-export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; settings?: Partial<SettingsValues>; recovery?: RecoveryEntry[]; helpFocus?: (id: string) => void } = {}) {
+export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; settings?: Partial<SettingsValues>; recovery?: RecoveryEntry[]; helpFocus?: (id: string) => void; startupReady?: Promise<void> } = {}) {
   // Settings apply to documents as createWorkbench applies them; `settings` exists before the first document does.
   const doc = documentFixture({ ...settingsDocumentOptions(() => settings.getSnapshot().values), target: id => targets.targetForConnection(id), server: id => connections.get(id)?.server })
   /** What query.session.state answers for each tab's session: its @@TRANCOUNT, or 'unchecked'; a tab without one has no session. */
@@ -390,7 +391,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const targets = new TargetService(documents, queries, connections, files, connectionTargets)
   const targetIdOf = (connectionId: string) => targets.targetForConnection(connectionId)
   const connectionReady = Promise.resolve()
-  const startupReconnect = new StartupReconnectService(connectionTargets, async () => ({}), () => settings.get('environment.connections.autoReconnect'))
+  const startup = options.startupReady ? bindStartupReconnect({ api, connections, documents, targets, backend, settings, ready: options.startupReady }) : undefined
+  const startupReconnect = startup?.scheduler ?? new StartupReconnectService(connectionTargets, async () => ({}), () => settings.get('environment.connections.autoReconnect'))
   const connectionPruning = bindConnectionPruning({ registry: connectionTargets, documents, api, ready: connectionReady })
   const platform = options.platform ?? 'win32', focus = fakeFocus()
   const quickInput = new QuickInputService(focus.adapter, options.timers)
@@ -591,7 +593,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const connect = (info: ConnectionInfo) => connections.add(info, connectionOptions)
   const dispose = () => {
     stopConnectionBindings()
-    startupReconnect.dispose()
+    if (startup) startup.dispose()
+    else startupReconnect.dispose()
     connectionPruning.dispose()
     disconnectPrompts.dispose()
     actionProgress.dispose()

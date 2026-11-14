@@ -1699,7 +1699,10 @@ async function workbench(id, method, params, credit) {
   }
   // A directive's `hold` and an export's hold apply later, after their first output.
   const directive = method === 'query.execute' ? parseDirective(params.sql) : undefined
-  if (!directive?.hold && method !== 'results.export' && method !== 'ssis.describe') while (await controlled(join('hold', method))) await sleep(25)
+  if (!directive?.hold && method !== 'results.export' && method !== 'ssis.describe') while (await controlled(join('hold', method))) {
+    if (method === 'connections.connect' && cancelled.delete(id)) return fail(id, 'CANCELLED', 'The operation was cancelled.')
+    await sleep(25)
+  }
   switch (method) {
     case 'system.health': return respond(id, { protocolVersion: 2, runtime: 'fake', platform: process.platform, smoVersion: 'fake', sqlClientVersion: 'fake' })
     case 'language.status': {

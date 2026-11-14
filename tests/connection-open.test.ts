@@ -745,6 +745,248 @@ describe('main connection ownership', () => {
     expect(open).toHaveBeenCalledTimes(1)
   })
 
+  it('acknowledges repeated cancellation only after a cancelled keyring preparation releases its lease', async () => {
+    const { service, request, savedPasswords, open } = await fixture()
+    const reading = deferred<void>(), entered = deferred<void>()
+    vi.spyOn(savedPasswords, 'get').mockImplementationOnce(async () => { entered.resolve(); await reading.promise; return options.password })
+    const context = request({ profileId: randomUUID() }), connecting = service.connect({ ...options, password: undefined }, context)
+    await entered.promise
+    let acknowledged = false
+    const draining = service.cancelAndDrain([context.requestId]).then(count => { acknowledged = true; return count })
+    const repeated = service.cancelAndDrain([context.requestId])
+    expect(await connecting).toMatchObject({ ok: false, connectionFailure: 'cancelled' })
+    expect(hasPendingCredentialRequests(savedPasswords)).toBe(true)
+    expect(acknowledged).toBe(false)
+    expect(open).not.toHaveBeenCalled()
+    reading.resolve()
+    expect(await draining).toBe(1)
+    expect(await repeated).toBe(0)
+    expect(hasPendingCredentialRequests(savedPasswords)).toBe(false)
+    expect(open).not.toHaveBeenCalled()
+  })
+
+  it('retires failed backend receipts so repeated failures do not exhaust the pending admission limit', async () => {
+    const { service, request, open, savedPasswords } = await fixture()
+    open.mockRejectedValue(new BackendError('BACKEND_UNAVAILABLE', 'The server is unavailable.'))
+    for (let at = 0; at < 10; at++) {
+      const context = request()
+      expect(await service.connect(options, context)).toMatchObject({ ok: false, error: { code: 'BACKEND_UNAVAILABLE' }, connectionFailure: 'network' })
+      expect(await service.cancelAndDrain([context.requestId])).toBe(0)
+      expect(hasPendingCredentialRequests(savedPasswords)).toBe(false)
+    }
+    expect(open).toHaveBeenCalledTimes(10)
+  })
+
+  it('waits for authenticated storage settlement and unaccepted transport cleanup after returning CANCELLED', async () => {
+    const { service, request, savedPasswords, close } = await fixture()
+    const writing = deferred<void>(), saving = deferred<void>(), ending = deferred<void>(), closing = deferred<void>(), save = savedPasswords.set.bind(savedPasswords)
+    vi.spyOn(savedPasswords, 'set').mockImplementationOnce(async (...args) => { saving.resolve(); await writing.promise; await save(...args) })
+    close.mockImplementationOnce(async () => { closing.resolve(); await ending.promise; return { disconnected: true } })
+    const context = request({ credentialPolicy: 'remember' }), connecting = service.connect(options, context)
+    await saving.promise
+    let acknowledged = false
+    const draining = service.cancelAndDrain([context.requestId]).then(count => { acknowledged = true; return count })
+    expect(await connecting).toMatchObject({ ok: false, connectionFailure: 'cancelled' })
+    expect(hasPendingCredentialRequests(savedPasswords)).toBe(true)
+    expect(acknowledged).toBe(false)
+    writing.resolve()
+    await closing.promise
+    expect(hasPendingCredentialRequests(savedPasswords)).toBe(false)
+    expect(acknowledged).toBe(false)
+    ending.resolve()
+    expect(await draining).toBe(1)
+    expect(await service.accept(context.requestId)).toEqual({ accepted: false, retained: false })
+    expect(close).toHaveBeenCalledTimes(1)
+  })
+
+  it('drains a cancelled reused credential write without closing its other accepted owner', async () => {
+    const { service, request, savedPasswords, close, open } = await fixture()
+    const first = request(), initial = await service.connect(options, first)
+    if (!initial.ok) throw initial.error
+    await service.accept(first.requestId)
+    const writing = deferred<void>(), entered = deferred<void>(), save = savedPasswords.set.bind(savedPasswords)
+    vi.spyOn(savedPasswords, 'set').mockImplementationOnce(async (...args) => { entered.resolve(); await writing.promise; await save(...args) })
+    const update = request({ credentialPolicy: 'remember' }), connecting = service.connect(options, update)
+    await entered.promise
+    let acknowledged = false
+    const draining = service.cancelAndDrain([update.requestId]).then(count => { acknowledged = true; return count })
+    expect(await connecting).toMatchObject({ ok: false, connectionFailure: 'cancelled' })
+    expect(hasPendingCredentialRequests(savedPasswords)).toBe(true)
+    expect(acknowledged).toBe(false)
+    writing.resolve()
+    expect(await draining).toBe(1)
+    expect(hasPendingCredentialRequests(savedPasswords)).toBe(false)
+    expect(await service.accept(update.requestId)).toEqual({ accepted: false, retained: true })
+    expect(await service.accept(first.requestId)).toEqual({ accepted: true, retained: true })
+    expect(await service.cancelAndDrain([first.requestId])).toBe(0)
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(close).not.toHaveBeenCalled()
+  })
+
+  it('drains the original open and late cleanup without requiring renderer receipt adoption', async () => {
+    const { service, request, open, close, savedPasswords } = await fixture()
+    const opening = deferred<ConnectionInfo>(), entered = deferred<void>(), ending = deferred<void>(), closing = deferred<void>()
+    open.mockImplementationOnce(async () => { entered.resolve(); return opening.promise })
+    close.mockImplementationOnce(async () => { closing.resolve(); await ending.promise; return { disconnected: true } })
+    const context = request(), connecting = service.connect(options, context)
+    await entered.promise
+    let acknowledged = false
+    const draining = service.cancelAndDrain([context.requestId]).then(count => { acknowledged = true; return count })
+    expect(await connecting).toMatchObject({ ok: false, connectionFailure: 'cancelled' })
+    expect(hasPendingCredentialRequests(savedPasswords)).toBe(false)
+    expect(acknowledged).toBe(false)
+    opening.resolve(info())
+    await closing.promise
+    expect(acknowledged).toBe(false)
+    ending.resolve()
+    expect(await draining).toBe(1)
+    expect(close).toHaveBeenCalledTimes(1)
+  })
+
+  it('drains cancelled old-page preparation before a replacement page checkpoints, but still refuses active work', async () => {
+    const { service, request, savedPasswords, authentication, open } = await fixture()
+    const reading = deferred<void>(), entered = deferred<void>()
+    vi.spyOn(savedPasswords, 'get').mockImplementationOnce(async () => { entered.resolve(); await reading.promise; return options.password })
+    const context = request({ profileId: randomUUID() }), connecting = service.connect({ ...options, password: undefined }, context)
+    await entered.promise
+    service.reset({ replaceRenderer: true })
+    const repeated = service.cancelAndDrain([context.requestId])
+    expect(await connecting).toMatchObject({ ok: false, connectionFailure: 'cancelled' })
+    const writes: SessionInput[] = []
+    let kept: number | undefined
+    const checkpoint = new ConnectionSessionCheckpoint(authentication, {
+      write: async (session, generation) => { expect(hasPendingCredentialRequests(savedPasswords)).toBe(false); writes.push(session); kept = generation },
+      keptBy: generation => generation === kept
+    }, () => hasPendingCredentialRequests(savedPasswords), () => service.whenCancelledWorkDrained())
+    const session: SessionInput = { documents: [], activeIndex: -1 }
+    const keeping = checkpoint.write(session, 2)
+    expect(hasPendingCredentialRequests(savedPasswords)).toBe(true)
+    expect(writes).toEqual([])
+    expect(await service.connect(options, context)).toMatchObject({ ok: false, error: { code: 'DUPLICATE_REQUEST' } })
+    reading.resolve()
+    await keeping
+    expect(await repeated).toBe(0)
+    expect(writes).toEqual([session])
+    expect(() => checkpoint.assertCurrent(2)).not.toThrow()
+    expect(open).not.toHaveBeenCalled()
+    const active = deferred<ConnectionInfo>(), opening = deferred<void>()
+    open.mockImplementationOnce(async () => { opening.resolve(); return active.promise })
+    const next = request(), pending = service.connect(options, next)
+    await opening.promise
+    await expect(checkpoint.write(session, 2)).rejects.toThrow('current connection attempt')
+    active.resolve(info())
+    expect(await pending).toMatchObject({ ok: true })
+    await service.accept(next.requestId)
+  })
+
+  it('keeps cancel-before-request tombstones bounded and clears them with renderer replacement', async () => {
+    const { service, request, open } = await fixture()
+    const oldest = request(), latest = request()
+    expect(await service.cancelAndDrain([oldest.requestId])).toBe(0)
+    for (let at = 0; at < 64; at++) expect(await service.cancelAndDrain([request().requestId])).toBe(0)
+    expect(await service.connect(options, oldest)).toMatchObject({ ok: true })
+    await service.accept(oldest.requestId)
+    expect(await service.cancelAndDrain([latest.requestId])).toBe(0)
+    expect(await service.connect(options, latest)).toMatchObject({ ok: false, connectionFailure: 'cancelled' })
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(await service.cancelAndDrain([latest.requestId])).toBe(0)
+    service.reset({ replaceRenderer: true })
+    expect(await service.connect(options, latest)).toMatchObject({ ok: true })
+  })
+
+  it('acknowledges a queued cancellation without waiting for an unrelated active manual owner', async () => {
+    const { service, request, open, close, savedPasswords, authentication } = await fixture()
+    const answer = deferred<ConnectionInfo>(), entered = deferred<void>()
+    open.mockImplementationOnce(async () => { entered.resolve(); return answer.promise })
+    const manual = request(), connecting = service.connect(options, manual)
+    await entered.promise
+    const queued = request(), waiting = service.connect(options, queued)
+    expect(await service.databases({ ...options, server: 'independent' }, request(), async () => [])).toEqual({ ok: true, value: [] })
+    expect(await service.cancelAndDrain([queued.requestId])).toBe(1)
+    expect(await waiting).toMatchObject({ ok: false, connectionFailure: 'cancelled' })
+    expect(hasPendingCredentialRequests(savedPasswords)).toBe(true)
+    const write = vi.fn(async () => {})
+    const checkpoint = new ConnectionSessionCheckpoint(authentication, { write, keptBy: () => false }, () => hasPendingCredentialRequests(savedPasswords), () => service.whenCancelledWorkDrained())
+    await expect(checkpoint.write({ documents: [], activeIndex: -1 }, 1)).rejects.toThrow('current connection attempt')
+    expect(write).not.toHaveBeenCalled()
+    expect(open).toHaveBeenCalledTimes(1)
+    answer.resolve(info())
+    expect(await connecting).toMatchObject({ ok: true })
+    await service.accept(manual.requestId)
+    expect(close).not.toHaveBeenCalled()
+  })
+
+  it.each(['cancel', 'reset'] as const)('drains a generic database keyring preparation after %s before a replacement checkpoint', async action => {
+    const { service, request, savedPasswords, authentication } = await fixture()
+    const reading = deferred<void>(), entered = deferred<void>()
+    vi.spyOn(savedPasswords, 'get').mockImplementationOnce(async () => { entered.resolve(); await reading.promise; return options.password })
+    const load = vi.fn(async () => [{ name: 'Sales' }])
+    const context = request({ profileId: randomUUID() }), loading = service.databases({ ...options, password: undefined }, context, load)
+    await entered.promise
+    let acknowledged = false
+    const draining = action === 'cancel' ? service.cancelAndDrain([context.requestId]).then(count => { acknowledged = true; return count }) : undefined
+    service.reset({ replaceRenderer: true })
+    expect(await loading).toMatchObject({ ok: false, error: { code: 'CANCELLED' } })
+    const write = vi.fn(async () => { expect(hasPendingCredentialRequests(savedPasswords)).toBe(false) })
+    const checkpoint = new ConnectionSessionCheckpoint(authentication, { write, keptBy: () => false }, () => hasPendingCredentialRequests(savedPasswords), () => service.whenCancelledWorkDrained())
+    const keeping = checkpoint.write({ documents: [], activeIndex: -1 }, 2)
+    expect(write).not.toHaveBeenCalled()
+    expect(hasPendingCredentialRequests(savedPasswords)).toBe(true)
+    expect(acknowledged).toBe(false)
+    reading.resolve()
+    await keeping
+    if (draining) expect(await draining).toBe(1)
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(load).not.toHaveBeenCalled()
+    expect(hasPendingCredentialRequests(savedPasswords)).toBe(false)
+  })
+
+  it('cancels a generic database backend request and waits for its original lifetime to drain', async () => {
+    const { service, request, savedPasswords } = await fixture()
+    const answer = deferred<unknown>(), entered = deferred<void>()
+    let signal: AbortSignal | undefined
+    const context = request(), loading = service.databases(options, context, async (_params, value) => { signal = value; entered.resolve(); return answer.promise })
+    await entered.promise
+    let acknowledged = false
+    const draining = service.cancelAndDrain([context.requestId]).then(count => { acknowledged = true; return count })
+    expect(await loading).toMatchObject({ ok: false, error: { code: 'CANCELLED' } })
+    expect(signal?.aborted).toBe(true)
+    expect(acknowledged).toBe(false)
+    answer.resolve([{ name: 'Sales' }])
+    expect(await draining).toBe(1)
+    expect(hasPendingCredentialRequests(savedPasswords)).toBe(false)
+  })
+
+  it('settles rejected saved credentials for generic database loads under their owned cancellation lease', async () => {
+    const { service, request, connections, savedPasswords } = await fixture()
+    const profile = await connections.rememberEntry(options, false)
+    await savedPasswords.set(profile.id, options)
+    const ending = deferred<void>(), entered = deferred<void>(), forget = savedPasswords.forgetRejected.bind(savedPasswords)
+    vi.spyOn(savedPasswords, 'forgetRejected').mockImplementationOnce(async (...args) => { entered.resolve(); await ending.promise; return forget(...args) })
+    const context = request({ profileId: profile.id })
+    const loading = service.databases({ ...options, password: undefined }, context, async () => { throw new BackendError('SQL_ERROR', 'Login failed.', { number: 18456, state: 8 }) })
+    await entered.promise
+    let acknowledged = false
+    const draining = service.cancelAndDrain([context.requestId]).then(count => { acknowledged = true; return count })
+    expect(await loading).toMatchObject({ ok: false, error: { code: 'CANCELLED' } })
+    expect(hasPendingCredentialRequests(savedPasswords)).toBe(true)
+    expect(acknowledged).toBe(false)
+    ending.resolve()
+    expect(await draining).toBe(1)
+    expect(hasPendingCredentialRequests(savedPasswords)).toBe(false)
+    expect(await savedPasswords.get(profile.id, options)).toBeUndefined()
+  })
+
+  it('rechecks the page generation synchronously after the drain await before projecting or writing', async () => {
+    let generation = 1
+    const project = vi.fn((workspace: import('../src/shared/connection-targets').ConnectionWorkspace) => workspace), write = vi.fn(async () => {})
+    const checkpoint = new ConnectionSessionCheckpoint({ revision: 0, project }, { write, keptBy: () => false }, () => false,
+      async () => { queueMicrotask(() => { generation = 2 }) }, expected => { if (expected !== generation) throw new Error('The workbench changed.') })
+    await expect(checkpoint.write({ documents: [], activeIndex: -1, workspace: { version: 1, targets: [] } }, 1)).rejects.toThrow('workbench changed')
+    expect(project).not.toHaveBeenCalled()
+    expect(write).not.toHaveBeenCalled()
+  })
+
   it('background reuse preserves the exact credential revision and sends no interactive request', async () => {
     const { service, request, savedPasswords, connections, authentication, open, directory } = await fixture()
     const first = request({ credentialPolicy: 'remember', remember: true, autoReconnect: 'on' })

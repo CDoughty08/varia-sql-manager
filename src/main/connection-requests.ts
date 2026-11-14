@@ -27,7 +27,8 @@ export class ConnectionPreparationError extends Error {
   constructor(readonly reason: ConnectionFailureReason, message: string) { super(message) }
 }
 
-const gates = new WeakMap<object, Map<string, Promise<void>>>()
+interface CredentialGate { readonly waiters: Set<() => void> }
+const gates = new WeakMap<object, Map<string, CredentialGate>>()
 const rejectionKey = randomBytes(32)
 const rejectedSecret = (password: string) => createHmac('sha256', rejectionKey).update(password).digest('base64url')
 const rejected = new WeakMap<object, Map<string, { binding: string; secret?: string }>>()
@@ -53,20 +54,44 @@ async function readmitAuthenticatedCredential(prepared: PreparedRequest, referen
   } catch { /* Keep the rejection when storage proof is unavailable. */ }
   return false
 }
-async function acquire(store: object, binding: string): Promise<() => void> {
+const requireNotCancelled = (signal?: AbortSignal) => { if (signal?.aborted) throw new BackendError('CANCELLED', 'The connection request was cancelled.') }
+async function acquire(store: object, binding: string, signal?: AbortSignal): Promise<() => void> {
+  requireNotCancelled(signal)
   const count = pending.get(store) ?? 0
   if (count >= 16) throw new BackendError('TOO_MANY_REQUESTS', 'Too many pending credential requests.')
   pending.set(store, count + 1)
   let bindings = gates.get(store)
   if (!bindings) { bindings = new Map(); gates.set(store, bindings) }
-  const previous = bindings.get(binding) ?? Promise.resolve()
-  let release!: () => void
-  const held = new Promise<void>(resolve => { release = resolve })
-  const current = previous.then(() => held)
-  bindings.set(binding, current)
-  await previous
-  let done = false
-  return () => { if (done) return; done = true; pending.set(store, (pending.get(store) ?? 1) - 1); release(); if (bindings.get(binding) === current) bindings.delete(binding) }
+  const previous = bindings.get(binding), gate = previous ?? { waiters: new Set<() => void>() }
+  if (!previous) bindings.set(binding, gate)
+  return new Promise<() => void>((resolve, reject) => {
+    let done = false
+    const decrement = () => { pending.set(store, (pending.get(store) ?? 1) - 1) }
+    const leave = () => {
+      if (done) return
+      done = true
+      decrement()
+      const next = gate.waiters.values().next().value
+      if (next) { gate.waiters.delete(next); next() }
+      else if (bindings.get(binding) === gate) bindings.delete(binding)
+    }
+    const grant = () => { signal?.removeEventListener('abort', abort); resolve(leave) }
+    const abort = () => {
+      if (!gate.waiters.delete(grant)) return
+      done = true
+      decrement()
+      signal?.removeEventListener('abort', abort)
+      reject(new BackendError('CANCELLED', 'The connection request was cancelled.'))
+    }
+    if (!previous) grant()
+    else {
+      // Remove a cancelled waiter, not the predecessor's gate: later callers remain behind that owner's lease. This
+      // keeps cancelled queue entries bounded without leaving a promise chain attached to a long-lived predecessor.
+      gate.waiters.add(grant)
+      signal?.addEventListener('abort', abort, { once: true })
+      if (signal?.aborted) abort()
+    }
+  })
 }
 
 /** `varia:request`'s fourth argument: a context only for the connect methods, and only of the strict shape. */
@@ -94,7 +119,8 @@ export function secretRejected(options: ConnectionOptions, error: unknown): bool
  * Fills in the remembered password of the entry the dialog named, when the form left Password empty and the request has
  * the credentials it was saved with. A typed password always wins. Call it after validateRequest.
  */
-export async function prepare(method: string, validated: unknown, value: unknown, deps: Pick<ConnectionRequestDeps, 'savedPasswords' | 'authentication'>): Promise<PreparedRequest> {
+export async function prepare(method: string, validated: unknown, value: unknown, deps: Pick<ConnectionRequestDeps, 'savedPasswords' | 'authentication'>, signal?: AbortSignal): Promise<PreparedRequest> {
+  requireNotCancelled(signal)
   let context = connectContext(method, value)
   if (connectMethods.has(method)) {
     try { context = deps.authentication.prepare(validated as ConnectionOptions, context) }
@@ -120,8 +146,9 @@ export async function prepare(method: string, validated: unknown, value: unknown
   }
   try {
     // A first binding is serialized too: its account reservation and later credential write are one owned operation.
-    leases.push(await acquire(deps.savedPasswords, `target:${context!.targetId}`))
-    leases.push(await acquire(deps.savedPasswords, `binding:${credentialBinding(options)}`))
+    leases.push(await acquire(deps.savedPasswords, `target:${context!.targetId}`, signal))
+    leases.push(await acquire(deps.savedPasswords, `binding:${credentialBinding(options)}`, signal))
+    requireNotCancelled(signal)
     context = deps.authentication.prepare(options, context)
     prepared.context = context
     const reference = context?.credential
@@ -136,16 +163,22 @@ export async function prepare(method: string, validated: unknown, value: unknown
       return prepared
     }
     if (reference && rejected.get(deps.savedPasswords)?.has(reference.revision)) throw new ConnectionPreparationError('credentials-required', 'The saved credential was rejected. Update credentials to reconnect.')
-    if (canRememberPassword(options.authentication) && !await deps.savedPasswords.storageAvailable()) throw new ConnectionPreparationError('secret-storage-unavailable', 'Secret storage is unavailable. Enter credentials to reconnect.')
+    if (canRememberPassword(options.authentication)) {
+      const available = await deps.savedPasswords.storageAvailable()
+      requireNotCancelled(signal)
+      if (!available) throw new ConnectionPreparationError('secret-storage-unavailable', 'Secret storage is unavailable. Enter credentials to reconnect.')
+    }
     let password: string | undefined
     try { password = reference ? await deps.savedPasswords.getReferenced(reference, options) : background ? undefined : await deps.savedPasswords.get(profileId, options) }
     catch { throw new ConnectionPreparationError('secret-storage-unavailable', 'The saved password could not be read. Enter the password.') }
+    requireNotCancelled(signal)
     if (password === undefined) {
       if (reference || background && canRememberPassword(options.authentication)) throw new ConnectionPreparationError('credentials-required', 'The saved credential revision is unavailable. Enter credentials to reconnect.')
       return prepared
     }
     if (!password.length || password.length > maxPassword) throw new ConnectionPreparationError('secret-storage-unavailable', 'The saved password could not be read. Enter the password.')
     const injectedCredential = reference ?? await deps.savedPasswords.reference(profileId, options)
+    requireNotCancelled(signal)
     if (injectedCredential && rejected.get(deps.savedPasswords)?.has(injectedCredential.revision)) throw new ConnectionPreparationError('credentials-required', 'The saved credential was rejected. Update credentials to reconnect.')
     return { ...prepared, params: { ...prepared.params as ConnectionOptions, password }, injected: true, injectedCredential }
   } catch (error) { prepared.release?.(); throw error }

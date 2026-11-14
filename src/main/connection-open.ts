@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { BackendState, ConnectionInfo, ConnectionOptions } from '../shared/contracts'
-import { connectContextSchema } from '../shared/connections'
+import { connectContextSchema, type ConnectContext } from '../shared/connections'
 import { backendConnectionHandleSchema, connectionAuthenticationSchema, connectionTargetLimits, type BackendConnectionHandle, type ConnectionCredentialReference, type ConnectionFailureReason } from '../shared/connection-targets'
 import { connectionBindingsChangedSchema, type ConnectionBindingsChanged } from '../shared/connection-bindings'
 import type { ActionExecuteRequest, ActionExecuteResult } from '../shared/actions/schema'
@@ -24,6 +24,10 @@ interface Receipt {
   state: 'pending' | 'delivered' | 'accepted' | 'cancelled'
   handle?: string
   targetId?: string
+  readonly work: Set<Promise<void>>
+  readonly completed: Promise<void>
+  readonly complete: () => void
+  finished: boolean
 }
 interface Owned {
   info: ConnectionInfo
@@ -77,6 +81,8 @@ function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
 export class ConnectionOpenService {
   private reuse: ConnectionReuseCoordinator<ConnectionInfo>
   private readonly receipts = new Map<string, Receipt>()
+  /** In-flight ownership outlives a cancelled reply, receipt pruning and renderer/backend replacement. */
+  private readonly draining = new Map<string, Receipt>()
   private readonly cancelledIds = new Set<string>()
   private readonly handles = new Map<string, Owned>()
   private readonly pendingPrunes = new Set<string>()
@@ -94,16 +100,10 @@ export class ConnectionOpenService {
   async connect(options: ConnectionOptions, contextValue: unknown): Promise<Settled> {
     let receipt: Receipt | undefined, prepared: PreparedRequest | undefined, ownsSettlement = false
     try {
-      if (this.mutationPending) throw new BackendError('BUSY', 'Wait for the connection settings change to finish before connecting.')
-      const context = connectContextSchema.parse(contextValue ?? {}), id = context.requestId ?? randomUUID()
-      if (this.cancelledIds.delete(id)) throw cancelled()
-      if (this.receipts.has(id)) throw new BackendError('DUPLICATE_REQUEST', 'This connection request already exists.')
-      if ([...this.receipts.values()].filter(value => value.state === 'pending').length >= 8) throw new BackendError('TOO_MANY_REQUESTS', 'Too many pending connection requests.')
-      this.pruneReceipts()
-      receipt = { id, epoch: this.epoch, controller: new AbortController(), state: 'pending', targetId: context.targetId }
-      this.receipts.set(id, receipt)
-      const preparing = prepare('connections.connect', options, { ...context, requestId: id }, this.deps)
-      void preparing.then(value => { if (receipt!.controller.signal.aborted) value.release?.() }, () => {})
+      const context = connectContextSchema.parse(contextValue ?? {})
+      receipt = this.begin(context)
+      const preparing = prepare('connections.connect', options, { ...context, requestId: receipt.id }, this.deps, receipt.controller.signal)
+      this.track(receipt, preparing.then(value => { if (receipt!.controller.signal.aborted) value.release?.() }, () => {}))
       prepared = await abortable(preparing, receipt.controller.signal)
       receipt.targetId = prepared.context?.targetId
       const generation = this.deps.generation()
@@ -128,10 +128,11 @@ export class ConnectionOpenService {
           throw new BackendError('AUTH_IDENTITY', 'The authenticated server account could not be verified. Reconnect explicitly.')
         }
         return { connection, principal: proof.principal }
-      })
+      }, work => this.track(active, work))
       if (result.status !== 'connected' && result.status !== 'reused') {
         if (result.status === 'failed') {
           const failure = await settle(request, { ok: false, error: result.error }, this.deps)
+          active.state = 'cancelled'
           return failure.ok ? failure : { ...failure, connectionFailure: failureReason(failure.error) }
         }
         if (result.status === 'cancelled') throw cancelled()
@@ -155,11 +156,13 @@ export class ConnectionOpenService {
         const source = { ...request, validated: request.context?.targetId === result.targetId ? request.validated : nonsecret, context: { ...request.context, targetId: result.targetId } }
         owner.initialization = this.initialize(owner, source, request.context?.targetId !== result.targetId)
       }
+      this.track(active, owner.initialization)
       const initialized = await abortable(owner.initialization, active.controller.signal)
       let info = { ...initialized }
       if (!ownsSettlement) {
         ownsSettlement = true
         const settlement = settleReused(request, info, this.deps, result.authenticated === true).finally(() => this.retainReachablePins())
+        this.track(active, settlement)
         const outcome = await abortable(settlement, active.controller.signal)
         if (!outcome.ok) throw new OpenFailure(outcome)
         info = outcome.value as ConnectionInfo
@@ -172,7 +175,59 @@ export class ConnectionOpenService {
     } catch (error) {
       if (receipt) { receipt.state = 'cancelled'; this.release(receipt) }
       return error instanceof OpenFailure ? { ...error.result, connectionFailure: failureReason(error.result.error) } : { ok: false, error, connectionFailure: failureReason(error) }
-    } finally { if (!ownsSettlement) prepared?.release?.(); this.flushPrunes() }
+    } finally {
+      if (!ownsSettlement) prepared?.release?.()
+      this.flushPrunes()
+      if (receipt) { receipt.finished = true; receipt.complete(); this.retireDrain(receipt) }
+    }
+  }
+
+  /** Load databases shares Connect's pre-keyring cancellation owner, but never creates a reusable transport receipt. */
+  async databases(options: ConnectionOptions, contextValue: unknown, load: (params: unknown, signal: AbortSignal) => Promise<unknown>): Promise<Settled> {
+    let receipt: Receipt | undefined, prepared: PreparedRequest | undefined, ownsSettlement = false
+    try {
+      const context = connectContextSchema.parse(contextValue ?? {})
+      receipt = this.begin(context)
+      const active = receipt
+      const preparing = prepare('connections.databases', options, { ...context, requestId: active.id }, this.deps, active.controller.signal)
+      this.track(active, preparing.then(value => { if (active.controller.signal.aborted) value.release?.() }, () => {}))
+      prepared = await abortable(preparing, active.controller.signal)
+      active.targetId = prepared.context?.targetId
+      const loading: Promise<Settled> = Promise.resolve().then(() => { if (active.controller.signal.aborted) throw cancelled(); return load(prepared!.params, active.controller.signal) })
+        .then(value => ({ ok: true, value }), error => ({ ok: false, error }))
+      this.track(active, loading)
+      const outcome = await abortable(loading, active.controller.signal)
+      if (active.epoch !== this.epoch) throw cancelled()
+      const settlement = settle(prepared, outcome, this.deps)
+      ownsSettlement = true
+      this.track(active, settlement)
+      const result = await abortable(settlement, active.controller.signal)
+      active.state = 'cancelled'
+      return result
+    } catch (error) {
+      if (receipt) receipt.state = 'cancelled'
+      return { ok: false, error }
+    } finally {
+      if (!ownsSettlement) prepared?.release?.()
+      this.flushPrunes()
+      if (receipt) { receipt.finished = true; receipt.complete(); this.retireDrain(receipt) }
+    }
+  }
+
+  private begin(context: ConnectContext): Receipt {
+    if (this.mutationPending) throw new BackendError('BUSY', 'Wait for the connection settings change to finish before connecting.')
+    const id = context.requestId ?? randomUUID()
+    if (this.cancelledIds.delete(id)) throw cancelled()
+    if (this.receipts.has(id) || this.draining.has(id)) throw new BackendError('DUPLICATE_REQUEST', 'This connection request already exists.')
+    if ([...this.receipts.values()].filter(value => value.state === 'pending').length >= 8) throw new BackendError('TOO_MANY_REQUESTS', 'Too many pending connection requests.')
+    if (this.draining.size >= connectionTargetLimits.targets * 4) throw new BackendError('TOO_MANY_REQUESTS', 'Too many connection requests are still ending.')
+    this.pruneReceipts()
+    let complete!: () => void
+    const completed = new Promise<void>(resolve => { complete = resolve })
+    const receipt: Receipt = { id, epoch: this.epoch, controller: new AbortController(), state: 'pending', targetId: context.targetId, work: new Set(), completed, complete, finished: false }
+    this.receipts.set(id, receipt)
+    this.draining.set(id, receipt)
+    return receipt
   }
 
   async accept(requestId: string): Promise<ConnectionReceiptResult> {
@@ -197,19 +252,56 @@ export class ConnectionOpenService {
   cancel(requestIds: readonly string[]): number {
     let count = 0
     for (const id of requestIds) {
-      const receipt = this.receipts.get(id)
+      const receipt = this.receipts.get(id) ?? this.draining.get(id)
       if (!receipt) {
         this.cancelledIds.add(id)
         if (this.cancelledIds.size > 64) this.cancelledIds.delete(this.cancelledIds.values().next().value!)
         continue
       }
-      if (receipt.state === 'accepted' || receipt.state === 'cancelled') continue
+      if (receipt.state === 'accepted' || receipt.state === 'cancelled' || receipt.controller.signal.aborted) continue
       receipt.state = 'cancelled'
       receipt.controller.abort()
       this.release(receipt)
       count++
     }
     return count
+  }
+
+  /** Stop replies promptly to Connect; this acknowledgement also waits for its owned credential and cleanup work. */
+  async cancelAndDrain(requestIds: readonly string[]): Promise<number> {
+    const receipts = new Set(requestIds.flatMap(id => this.receipts.get(id) ?? this.draining.get(id) ?? []))
+    const count = this.cancel(requestIds)
+    await Promise.all([...receipts].map(receipt => this.drain(receipt)))
+    return count
+  }
+
+  /** Main's checkpoint drains already-cancelled old-page work without cancelling or adopting any active request. */
+  async whenCancelledWorkDrained(): Promise<void> {
+    for (;;) {
+      if ([...this.draining.values()].some(receipt => receipt.state === 'pending' && !receipt.controller.signal.aborted))
+        throw new BackendError('BUSY', 'Wait for the current connection attempt to finish before keeping or closing the session.')
+      const cancelled = [...this.draining.values()].filter(receipt => receipt.controller.signal.aborted || receipt.state === 'cancelled')
+      if (!cancelled.length) return
+      await Promise.all(cancelled.map(receipt => this.drain(receipt)))
+    }
+  }
+
+  private async drain(receipt: Receipt): Promise<void> {
+    await receipt.completed
+    // Completion may have started cleanup after an aborted await, or preparation may finish after Connect replied.
+    while (receipt.work.size) await Promise.all([...receipt.work])
+  }
+
+  private track(receipt: Receipt, work: Promise<unknown>): void {
+    // Track completion only: a settled promise must not retain prepared options, plaintext or a connection answer.
+    const drained = work.then(() => {}, () => {})
+    receipt.work.add(drained)
+    this.draining.set(receipt.id, receipt)
+    void drained.then(() => { receipt.work.delete(drained); this.retireDrain(receipt) })
+  }
+
+  private retireDrain(receipt: Receipt): void {
+    if (receipt.finished && !receipt.work.size && this.draining.get(receipt.id) === receipt) this.draining.delete(receipt.id)
   }
 
   pruneTargets(targetIds: readonly string[]): number {
@@ -406,11 +498,11 @@ export class ConnectionOpenService {
     const owner = receipt.handle ? this.handles.get(receipt.handle) : undefined
     if (!owner) return
     owner.receipts.delete(receipt.id)
-    if (owner.cleanup) return
-    owner.cleanup = (async () => {
+    owner.cleanup ??= (async () => {
       await owner.initialization?.catch(() => {})
       if (!owner.accepted && !owner.receipts.size && this.handles.get(handleKey(owner.info)) === owner) await this.close(owner)
     })().catch(() => {}).finally(() => { owner.cleanup = undefined })
+    this.track(receipt, owner.cleanup)
   }
 
   private close(owner: Owned): Promise<boolean> {
@@ -445,7 +537,7 @@ export class ConnectionOpenService {
   private pruneReceipts(): void {
     for (const [id, receipt] of this.receipts) {
       if (this.receipts.size < connectionTargetLimits.targets * 4) break
-      if (receipt.state === 'accepted' || receipt.state === 'cancelled') this.receipts.delete(id)
+      if ((receipt.state === 'accepted' || receipt.state === 'cancelled') && !this.draining.has(id)) this.receipts.delete(id)
     }
     if (this.receipts.size >= connectionTargetLimits.targets * 4) throw new BackendError('TOO_MANY_REQUESTS', 'Too many unaccepted connection receipts.')
   }

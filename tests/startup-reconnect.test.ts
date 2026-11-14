@@ -123,6 +123,33 @@ describe('startup reconnect scheduling', () => {
     service.dispose()
   })
 
+  it('settles admitted work under a close pause without waiting for its interrupted or untouched queue', async () => {
+    const { service, attempts, next } = fixture([record(1), record(2), record(3)])
+    service.start(1)
+    expect(attempts[0].request.beginAcceptance()).toBe(true)
+    const paused = service.beginManual()
+    let settled = false, idle = false
+    const active = service.whenActiveSettled().then(() => { settled = true })
+    const all = service.whenIdle().then(() => { idle = true })
+    expect(attempts[0].request.signal.aborted).toBe(false)
+    expect(attempts[1].request.signal.aborted).toBe(true)
+    attempts[1].resolve({ interrupted: true })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    attempts[0].resolve({})
+    await active
+    expect(idle).toBe(false)
+    expect(attempts).toHaveLength(2)
+    await expect(service.whenActiveSettled()).resolves.toBeUndefined()
+    paused.dispose()
+    await next(2, 2)
+    await next(3)
+    attempts[2].resolve({})
+    attempts[3].resolve({})
+    await all
+    service.dispose()
+  })
+
   it('does not let foreground preemption undo adoption or drop its final attachment work', async () => {
     const { service, attempts, next } = fixture([record(1), record(2), record(3)])
     service.start(1)
@@ -284,9 +311,12 @@ describe('startup reconnect scheduling', () => {
     const { service, attempts } = fixture([record(1), record(2), record(3)])
     service.start(1)
     const done = service.whenIdle()
+    const active = service.whenActiveSettled()
     service.dispose()
     await done
+    await active
     await service.whenIdle()
+    await service.whenActiveSettled()
     expect(attempts.every(attempt => attempt.request.signal.aborted)).toBe(true)
     expect(service.start(2)).toBe(false)
     service.beginManual().dispose()

@@ -81,6 +81,35 @@ describe('workbench startup connection owner', () => {
     } finally { value.dispose() }
   })
 
+  it('keeps an interrupted callback active until main acknowledges draining its owned credential work', async () => {
+    const value = fixture(), reply = deferred<Awaited<ReturnType<typeof value.api.connect>>>()
+    const drained = deferred<Awaited<ReturnType<typeof value.api.cancelConnectionRequests>>>()
+    try {
+      value.api.connect.mockImplementationOnce(() => reply.promise)
+      value.api.cancelConnectionRequests.mockImplementationOnce(() => drained.promise)
+      value.api.push(readyBackend(1))
+      await value.settings.load()
+      value.ready.resolve()
+      await expect.poll(() => value.api.connect.mock.calls.length).toBe(1)
+      const paused = value.binding.scheduler.beginManual()
+      let settled = false
+      const active = value.binding.scheduler.whenActiveSettled().then(() => { settled = true })
+      reply.resolve({ ok: false, error: 'Cancelled.', code: 'CANCELLED' })
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(value.api.cancelConnectionRequests).toHaveBeenCalledTimes(1)
+      expect(settled).toBe(false)
+      expect(value.connectionTargets.get(id(1))?.resumeWanted).toBe(true)
+      drained.resolve({ ok: true, value: { cancelled: 1 } })
+      await active
+      expect(value.api.connect).toHaveBeenCalledTimes(1)
+      paused.dispose()
+      await value.binding.scheduler.whenIdle()
+      expect(value.api.connect).toHaveBeenCalledTimes(2)
+      expect(value.api.execute).not.toHaveBeenCalled()
+    } finally { reply.resolve({ ok: false, error: 'Cancelled.', code: 'CANCELLED' }); drained.resolve({ ok: true, value: { cancelled: 1 } }); value.dispose() }
+  })
+
   it('defers receipts and queued servers across a busy document task, then attaches every wanted query once', async () => {
     const records = [1, 2, 3, 4, 5].map(index => ({ ...target(), id: id(index), options: { ...target().options, server: `server-${index}.example` } }))
     const value = fixture(records), busy = deferred<void>()

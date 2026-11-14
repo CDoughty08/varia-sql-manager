@@ -6,6 +6,7 @@
 import { closeMs, electron, expect, within } from './fixtures/smoke.mjs'
 import { crashRenderer } from './fixtures/dialog-lifecycle.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
+import { parseCalls } from './fixtures/call-log.mjs'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import { activeDocumentName, activeGroupEditorText, backendReady, documentTab, documentTabs, editorGroups, editorGroupTabs, editorTextbox, floatingEditorGroups, gridCell, menubar, outputStatus, pinDocumentButton, queryStatus, quickInputBox, quickInputRows, resultGrid, selectOpenDocument, tabNameBox, tabShelfRows, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
@@ -492,6 +493,9 @@ try {
   await expect.poll(recoveredPins, { timeout: 30000 }).toMatchObject({ pins: ['Totals', 'Orders report', 'large-pin.xml'] })
   // A round trip after the acknowledgement, which the page sent before its tabs drew.
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.executeJavaScript('window.varia.listRecovery().then(() => true)'))
+  // Restored tabs can draw before their background reconnect finishes. End the session while that open is still held.
+  await mkdir(join(control, 'hold'), { recursive: true })
+  await writeFile(join(control, 'hold', 'connections.connect'), '')
   const stopped = async () => (await prompts()).filter(prompt => prompt === 'The workbench stopped unexpectedly.').length
   const stoppedBefore = await stopped()
   await crashRenderer(application)
@@ -503,6 +507,11 @@ try {
 
   // Windows ends its session (shut down, restart, log off) without before-quit: main holds the end, the close keeps the
   // tabs, and the app quits so Windows can go on.
+  await expect.poll(async () => {
+    const generation = await application.evaluate(() => globalThis.__variaTest.state().generation)
+    const calls = parseCalls(await readFile(join(control, 'calls.jsonl'), 'utf8'))
+    return calls.some(call => call.generation === generation && call.method === 'connections.connect')
+  }, { timeout: 10000 }).toBe(true)
   phase = 'ending the Windows session'
   const ended = new Promise(done => application.process().once('exit', done))
   expect(await application.evaluate(({ BrowserWindow }) => {
@@ -514,12 +523,27 @@ try {
   const atSessionEnd = JSON.parse(await readFile(join(profile, 'Session', 'session.json'), 'utf8'))
   expect(atSessionEnd.documents.map(tab => tab.name)).toEqual(['Totals', 'Orders report', 'large-pin.xml'])
   expect(atSessionEnd.documents[0].text).toContain('before_renderer_crash')
-  console.log('Hot exit checks: a Windows session end keeps the open tabs before the app quits.')
+  expect(atSessionEnd.workspace).toEqual(pinnedRecord.workspace)
+  expect(atSessionEnd.workspace.targets).toEqual([expect.objectContaining({ inExplorer: true, resumeWanted: true })])
+  console.log('Hot exit checks: a Windows session end cancels a pending startup reconnect, keeps its resume intent and open tabs, then quits.')
   expect(failures).toEqual([])
   console.log('Hot exit suite passed.')
 } catch (error) {
   console.error(error)
-  if (page) await page.screenshot({ path: resolve('artifacts', 'hot-exit-failure.png') }).catch(() => {})
+  const state = application && await within(application.evaluate(async ({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    if (!window) return { windows: 0 }
+    const renderer = await window.webContents.executeJavaScript(`({
+      alerts: Array.from(document.querySelectorAll('[role="alert"]'), node => node.textContent).filter(Boolean),
+      pins: Array.from(document.querySelectorAll('[data-tab-id][data-pinned]'), tab => tab.closest('[role="tab"]')?.getAttribute('aria-label')),
+      servers: Array.from(document.querySelectorAll('[data-explorer-tree] [role="treeitem"][aria-level="1"]'), node => node.getAttribute('aria-label'))
+    })`)
+    return { windowId: window.id, crashed: window.webContents.isCrashed(), backend: globalThis.__variaTest.state(), renderer }
+  }).catch(() => undefined), 1000)
+  console.error('Hot exit failure state:', { phase, state })
+  const image = application && await within(application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.capturePage()
+    .then(image => image.toPNG().toString('base64'))).catch(() => undefined), 1000)
+  if (image) await writeFile(resolve('artifacts', 'hot-exit-failure.png'), Buffer.from(image, 'base64')).catch(() => {})
   process.exitCode = 1
 } finally {
   clearTimeout(watchdog)

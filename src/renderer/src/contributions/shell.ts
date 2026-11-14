@@ -82,7 +82,7 @@ const onPane = (action: (pane: PaneId) => void) => (args?: CommandArgs) => { con
  * main's exit flow (which waits for that subscription) always finds a `window.close` handler. The panel commands act on
  * the panel whose tab menu runs them.
  */
-export function shellContribution({ commands, documents, files, quickInput, connections, shellOptions, longRuns }: Pick<Workbench, 'commands' | 'documents' | 'files' | 'quickInput' | 'connections' | 'queries' | 'panes' | 'shellOptions' | 'longRuns'>, host: ShellHost): Disposable {
+export function shellContribution({ commands, documents, files, quickInput, connections, shellOptions, longRuns, startupReconnect }: Pick<Workbench, 'commands' | 'documents' | 'files' | 'quickInput' | 'connections' | 'queries' | 'panes' | 'shellOptions' | 'longRuns' | 'startupReconnect'>, host: ShellHost): Disposable {
   const located = (args: CommandArgs | undefined, location: PaneLocation) => { const pane = paneOf(args); return !!pane && host.paneLocation(pane) === location }
   const open = (args: CommandArgs | undefined) => { const pane = paneOf(args); return !!pane && host.paneLocation(pane) !== 'closed' }
   const dockAt = (side: DockSide) => ({ when: open, run: onPane(pane => host.dockPaneAt(pane, side)) })
@@ -128,8 +128,15 @@ export function shellContribution({ commands, documents, files, quickInput, conn
     // Remembering the layout is best-effort; a failed preferences write must never prevent exit.
     // A long run (Create Catalog, a restore) would be stopped part way by the close (its request is cancelled as the page unloads), so the close is refused.
     commands.register('window.close', { run: async () => {
-      try { await files.closeWindow(async () => { await host.flushLayout().catch(() => {}) }, () => longRuns.closeRefusal()) }
-      finally { if (!files.exiting) host.layoutCloseCancelled() }
+      const paused = startupReconnect.beginManual()
+      try {
+        // Accepted handoffs may need document idle to attach; drain them before close takes that same lock.
+        await startupReconnect.whenActiveSettled()
+        await files.closeWindow(async () => { await host.flushLayout().catch(() => {}) }, () => longRuns.closeRefusal())
+      } finally {
+        // An approved exit keeps admission paused until workbench disposal, including after main acknowledges close.
+        if (!files.exiting) { paused.dispose(); host.layoutCloseCancelled() }
+      }
     } }),
     // Focus moves there too, so the F5 that follows refreshes Object Explorer rather than executing the query. Search Objects'
     // Reveal keeps it in its hits, and brings a popout window that holds Object Explorer to the top without activating it.

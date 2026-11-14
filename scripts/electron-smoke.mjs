@@ -481,10 +481,30 @@ try {
     await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
     await expect(page.getByRole('dialog')).toHaveCount(0)
     await expect(await explorerRow(page, server)).toBeVisible()
+    // The picker and provisional root finish before the unbound query's session ends and its connection is assigned.
+    // Wait for this server's selected option: any nonempty value could still be the previous server's query.
+    await expect(queryServer(page).getByRole('option', { selected: true })).toHaveText(server)
+    await expect(queryServer(page)).not.toHaveValue('')
+    await expect(queryServer(page)).toBeEnabled()
   }
   // The servers also list databases whose names differ only in their spaces.
   await writeFile(join(control, 'spaced-databases'), '')
-  await connect('server-a', 'Long environment name')
+  // Hold the initial query handoff after the dialog closes: the helper must not return the still-disconnected query.
+  const initialCloses = (await calls()).filter(call => call.method === 'query.session.close').length
+  const initialHandoff = join(control, 'hold', 'query.session.close')
+  await writeFile(initialHandoff, '')
+  let firstConnected = false
+  const connectingA = connect('server-a', 'Long environment name')
+  void connectingA.then(() => { firstConnected = true }, () => {})
+  try {
+    await expect.poll(async () => (await calls()).filter(call => call.method === 'query.session.close').length).toBe(initialCloses + 1)
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    await expect(await explorerRow(page, 'server-a')).toBeVisible()
+    await expect(queryServer(page)).toBeDisabled()
+    await expect(queryServer(page)).toHaveValue('')
+    expect(firstConnected).toBe(false)
+  } finally { await rm(initialHandoff) }
+  await connectingA
   const tabA = await activeDocument(page).getAttribute('aria-label')
   const idA = await queryServer(page).inputValue()
   await queryDatabase(page).selectOption('AppData')
