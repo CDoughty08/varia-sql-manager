@@ -90,6 +90,14 @@ internal static class ExplorerRefs
         return spec.Dependencies ? spec : throw Invalid("Peek lists no dependencies of this kind of object.");
     }
 
+    /// <summary>explorer.dependencies' request, as dependenciesParamsSchema accepts it: a peek whose kind has the Dependencies tab,
+    /// and a direction.</summary>
+    public static PeekKindSpec ValidateDependencies(DependenciesArgs args, ExplorerCatalog catalog)
+    {
+        var spec = ValidatePeekDependencies(new(args.ConnectionId, args.RequestId, args.Target), catalog);
+        return args.Direction is "uses" or "usedBy" ? spec : throw Invalid("direction.");
+    }
+
     /// <summary>explorer.peekDefinition's request, as peekDefinitionParamsSchema accepts it: a module kind's peek, and an offset past
     /// the first page and below the longest text Peek reads.</summary>
     public static PeekKindSpec ValidatePeekDefinition(PeekDefinitionArgs args, ExplorerCatalog catalog)

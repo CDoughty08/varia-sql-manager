@@ -11,6 +11,7 @@ import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts
 import type { ObjectIndexParams, ObjectIndexProgress, ObjectIndexResult, ObjectSearchParams, ObjectSearchResult } from './explorer/search.ts'
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
 import type { PeekDefinitionParams, PeekDefinitionResult, PeekDependenciesParams, PeekDependenciesResult, PeekParams, PeekResult } from './explorer/peek.ts'
+import type { DependenciesParams, DependenciesResult } from './explorer/dependencies.ts'
 import type { DatabaseRuntime } from './explorer/status.ts'
 import type { ActionPromptAnswer, ActionPromptRequest } from './actions/prompts.ts'
 import type { LongRunState } from './long-runs.ts'
@@ -497,6 +498,8 @@ export interface RpcMethods {
   /** Peek's Dependencies: what the object uses and what uses it (sys.sql_expression_dependencies and foreign keys), read apart from the facts when the tab is chosen, on Peek's slot; Stop is varia:explorer-cancel. */
   'explorer.peekDependencies': { params: PeekDependenciesParams; result: PeekDependenciesResult }
   'explorer.peekDefinition': { params: PeekDefinitionParams; result: PeekDefinitionResult }
+  /** View Dependencies: one level of its tree (one of Peek's two Dependencies listings), read when a node is expanded, on Peek's slot; Stop is varia:explorer-cancel. */
+  'explorer.dependencies': { params: DependenciesParams; result: DependenciesResult }
   'scripting.script': { params: ScriptRequest; result: ScriptResult }
   /** What an object dialog shows (Delete Object's row and warnings), read in the action's own connection. */
   'actions.describe': { params: ActionDescribeRequest; result: ActionDescribeResult }
@@ -719,6 +722,8 @@ export interface VariaApi {
   explorerPeek(params: PeekParams): Promise<ApiResult<PeekResult>>
   explorerPeekDependencies(params: PeekDependenciesParams): Promise<ApiResult<PeekDependenciesResult>>
   explorerPeekDefinition(params: PeekDefinitionParams): Promise<ApiResult<PeekDefinitionResult>>
+  /** One level of View Dependencies' tree; closing the dialog or changing its choice cancels it with explorerCancel. */
+  explorerDependencies(params: DependenciesParams): Promise<ApiResult<DependenciesResult>>
   /** A build's progress, at most 4 a second per build and only for builds this window started; droppable. Returns the unsubscribe. */
   onExplorerIndexProgress(listener: (progress: ObjectIndexProgress) => void): () => void
   /** Scripts one Object Explorer object (Script As). Failures the user can act on come back as `result.error`. */

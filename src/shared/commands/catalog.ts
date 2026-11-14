@@ -466,6 +466,14 @@ export const commandCatalog = {
     // Not in the card's grid, whose keys stay the results grid's.
     keybindings: [{ key: 'mod+enter', when: 'peekFocus && !outputGridFocus' }, { key: 'mod+enter', when: "activePanel == 'explorer' && !inputFocus && !searchHitsFocus" }]
   },
+  // SSMS's View Dependencies: a dialog whose tree lists the objects that depend on the object, or those it depends on, one
+  // level read at a time (src/shared/explorer/dependencies.ts). Peek's Dependencies tab is the quick look; this is the deep view.
+  'explorer.viewDependencies': {
+    title: 'View Dependencies', category: 'Object Explorer', icon: 'references', keywords: ['dependencies', 'depends', 'references', 'uses', 'impact'],
+    precondition: 'backendReady && explorerSelectionDependencies',
+    unavailableHint: 'Select a table, view, procedure, function, trigger, synonym, sequence, or type.',
+    menus: [{ menu: 'explorer.context', group: '2_script', order: 2, mnemonic: 'd', when: 'explorerNodeDependencies && !explorerServerLost' }]
+  },
   // The Peek card's or the active Peek tab's Refresh: it reads the object again, its script and its top rows included.
   'peek.refresh': {
     title: 'Refresh Peek', category: 'Object Explorer', icon: 'refresh',

@@ -711,6 +711,10 @@ export const explorerSearchOptions = page => page.locator(part.explorerSearch).g
 export const explorerSearchTypes = page => page.locator(part.explorerSearch).getByRole('button', { name: /^Object types:/ })
 export const explorerSearchPopover = (page, name) => page.locator(part.explorerSearch).getByRole('dialog', { name, exact: true })
 export const explorerSearchCheck = (page, name) => page.locator(part.explorerSearch).getByRole('checkbox', { name, exact: true })
+/** View Dependencies' dialog (Object Dependencies) for an object, its tree, and a node by its name (its type or why it is a leaf follows a comma). */
+export const dependenciesDialog = (page, name) => page.getByRole('dialog', { name: `Object Dependencies – ${name}`, exact: true })
+export const dependenciesTree = dialog => dialog.getByRole('tree', { name: 'Dependencies', exact: true })
+export const dependencyNode = (dialog, name) => dependenciesTree(dialog).getByRole('treeitem', { name: new RegExp('^' + escaped(name) + '(,|$)') })
 /** A hit's name marked as an approximate (Fuzzy Match) match. */
 export const searchHitApproximate = hit => hit.locator('mark[data-approximate]')
 export const explorerSearchTypeSummary = page => page.locator(part.explorerSearch).locator('.object-search-chosen-types')
