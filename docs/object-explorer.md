@@ -500,6 +500,11 @@ its name, type and dependency type (foreign key, schema-bound or non-schema-boun
 Explorer selects the node in the tree (walking and paging to it as Search Objects' Reveal does) and closes the dialog; Peek
 opens the node's Peek tab. A trigger is named below its table or view, so it can be read, selected and peeked too.
 
+While the server is disconnecting, pending reads are cancelled and new reads, Peek and Show in Object Explorer pause;
+the loaded tree and selection stay visible. If that same connection remains connected after teardown is cancelled or
+fails, explicit expansion and Retry become available again without automatically reading anything. A lost or replaced
+connection leaves the tree read-only; reconnect and open View Dependencies again.
+
 | Kinds | Leaf reasons |
 | --- | --- |
 | `table`, `view`, `procedure`, `function`, `trigger`, `synonym`, `sequence`, `type`, `tableType` | On a linked server: not followed; In another database: not followed; Unresolved reference; Not followed; Cycle: already above on this branch; Not followed past 32 levels |

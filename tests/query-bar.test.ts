@@ -13,6 +13,9 @@ import { stylesheetRules } from './fixtures/css-rules'
 import { documentUri } from '../src/renderer/src/services/documents'
 import { EditorStatusService } from '../src/renderer/src/services/editor-status'
 import { connectionInfo, connectionOptions, readyBackend, workbenchFixture } from './fixtures/workbench'
+import { connectionTargetOptions } from '../src/shared/connection-targets'
+import { ConnectionTargetService } from '../src/renderer/src/services/connection-targets'
+import { TargetService } from '../src/renderer/src/services/targets'
 
 // Server rendering reads a store through getServerSnapshot, which the services leave to their client snapshot.
 vi.mock('react', async original => {
@@ -29,6 +32,14 @@ const input = (fields: Partial<QueryContextInput> = {}): QueryContextInput =>
   ({ connectionId: 'a', database: 'AppData', connections: [live('a'), live('b')], databases: databases('master', 'AppData'), query: true, running: false, busy: false, ...fields })
 
 describe('query context lists', () => {
+  it('keeps the disconnecting query server as a disabled value and excludes other disconnecting choices', () => {
+    const closing = (id: string) => live(id, { lifecycle: { state: 'disconnecting', attemptId: crypto.randomUUID(), handle: { id, generation: 1 } } })
+    const model = queryContextModel(input({ connections: [closing('a'), closing('b'), live('c')] }))
+    expect(model.live).toBe(false)
+    expect(model.databaseDisabled).toBe(true)
+    expect(model.databases).toEqual(['AppData'])
+    expect(model.servers.map(server => [server.id, server.disabled])).toEqual([['', false], ['a', true], ['c', false]])
+  })
   it('list Disconnected and every live server, and the databases of the query\'s own one', () => {
     const model = queryContextModel(input({ connections: [live('a', { displayName: 'Orders' }), live('b')] }))
     expect(model.servers).toEqual([{ id: '', label: 'Disconnected', disabled: false }, { id: 'a', label: 'Orders (a.example)', disabled: false }, { id: 'b', label: 'b.example', disabled: false }])
@@ -42,7 +53,7 @@ describe('query context lists', () => {
   it('show a lost connection only for its own query, where it cannot be chosen again', () => {
     const connections = [live('a', { lost: true }), live('b', { lost: true }), live('c')]
     const model = queryContextModel(input({ connections }))
-    expect(model.servers.map(server => [server.id, server.label, server.disabled])).toEqual([['', 'Disconnected', false], ['a', 'a.example (connection lost)', true], ['c', 'c.example', false]])
+    expect(model.servers.map(server => [server.id, server.label, server.disabled])).toEqual([['', 'Disconnected', false], ['a', 'a.example Disconnected', true], ['c', 'c.example', false]])
     // A lost query can still be moved to a live server, but lists no databases of its lost one.
     expect([model.live, model.serverDisabled, model.databaseDisabled, model.databases]).toEqual([false, false, true, ['AppData']])
   })
@@ -98,16 +109,30 @@ describe('query bar keyboard', () => {
 describe('query bar', () => {
   function fixture() {
     const value = workbenchFixture({ platform: 'win32' })
+    const registry = new ConnectionTargetService(), targets = new TargetService(value.documents, value.queries, value.connections, value.files, registry)
     cleanups.push(value.dispose)
     value.api.push(readyBackend())
     // Server rendering has no theme store: a connection colour is drawn as the theme would give it.
     const theme = { subscribe: () => () => {}, getSnapshot: () => 0, accent: (color: string | undefined) => color ? `var(--varia-connection-${color})` : undefined }
     const editorStatus = new EditorStatusService(callback => callback())
     cleanups.push(() => editorStatus.dispose())
-    const workbench = { ...value, theme, editorStatus } as unknown as Workbench
+    const workbench = { ...value, targets, theme, editorStatus } as unknown as Workbench
     const render = (element: ReactElement) => renderToStaticMarkup(createElement(WorkbenchProvider, { workbench, children: element }))
-    return { ...value, render, editorStatus }
+    return { ...value, targets, registry, render, editorStatus }
   }
+  it('shows a remembered disconnected target and its environment while preserving the unavailable database', () => {
+    const { documents, registry, render, api } = fixture()
+    const targetId = '00000000-0000-4000-8000-000000000001'
+    registry.add({ id: targetId, options: connectionTargetOptions(connectionOptions), details: { displayName: 'Reporting', environment: 'Production', color: '#123456', autoReconnect: 'inherit' }, inExplorer: true, resumeWanted: true })
+    const query = documents.create('restored.sql', '', 'Unavailable')
+    documents.update(query.id, { targetId, attachWanted: true, lastServer: 'obsolete-server' })
+    const html = render(createElement(QueryBar))
+    expect(html).toContain('Production environment')
+    expect(html).toContain(`<option value="remembered:${targetId}" disabled="" selected="">Reporting (server.example) Disconnected</option>`)
+    expect(html).toContain('<option value="Unavailable" selected="">Unavailable</option>')
+    expect(html).toContain('aria-label="Query database" title="Database: Unavailable" disabled=""')
+    expect(api.execute).not.toHaveBeenCalled()
+  })
   it('is an ARIA toolbar with Execute, Cancel and the connection pill: colour, environment tag, server and database', () => {
     const { connections, documents, render } = fixture()
     connections.add({ ...connectionInfo('prod'), color: 'red', displayName: 'Orders' }, { ...connectionOptions, color: 'red', displayName: 'Orders', environment: 'Production' })
@@ -158,7 +183,7 @@ describe('query bar', () => {
     const lost = render(createElement(QueryBar))
     expect(lost).toContain(`title="${lostHint.replaceAll("'", '&#x27;')}"`)
     expect(lost).toContain('data-lost="true"')
-    expect(lost).toContain('<option value="a" disabled="" selected="">a.example (connection lost)</option>')
+    expect(lost).toContain('<option value="a" disabled="" selected="">a.example Disconnected</option>')
     documents.create('b.sql', '', 'master')
     const disconnected = render(createElement(QueryBar))
     expect(disconnected).not.toContain('connection-swatch')

@@ -3,6 +3,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import DocumentFrame from '../kit/DocumentFrame'
 import SearchPanel from './SearchPanel'
 import ServerPicker, { allServersValue, serverPickerOptions } from './ServerPicker'
+import { isLiveConnection } from '../services/connection-availability'
 
 export { indexSummary, searchHitPath, unindexedServers } from './SearchPanel'
 
@@ -16,7 +17,7 @@ export default function ObjectSearch({ documentId }: { readonly documentId: stri
   const state = snapshot.documents[documentId]
   if (!state) return null
   const connection = connectionList.find(item => item.id === state.connectionId)
-  const live = connectionList.filter(item => !item.lost)
+  const live = connectionList.filter(isLiveConnection)
   const server = state.allServers ? 'All servers' : connection?.displayName || connection?.server || 'Disconnected'
   const crumb = state.allServers ? { label: server, title: live.map(item => item.displayName || item.server).join(', ') } : { label: server, ...connection ? { title: `${connection.server} · ${connection.serverVersion}` } : {} }
   // The picker shows once there is a choice: several servers, or an All servers search (which may have one server left). Each

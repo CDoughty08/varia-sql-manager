@@ -94,6 +94,12 @@ internal static class ColumnProfiler
         var rows = view?.Rows ?? baseRows;
         var guessed = set.Lengths.Any(length => length.Estimated);
         var count = set.Wires.Count;
+        // A packed result is read fused: each run unpacks the page it is about to read into a room of its own, reserved from
+        // the budget (refused: the profile is too large, and SqlService tries again on one thread, which needs one room).
+        var largest = 0;
+        foreach (var page in pages) if (set.Raw(page) is null) largest = Math.Max(largest, page.Length);
+        using var rooms = largest > 0 ? new PageRooms(set, largest, 0, () => new ProfileTooLargeException()) : null;
+        ReadOnlySpan<byte> Body(StoredPage page, PageRoom? room) => room is null ? page.Body() : set.Read(page, room.Bytes).AsSpan(0, page.Length);
         // A run for each thread asked for (the working memory is reserved for that many), read on the share of the
         // threads the gate gives. A run is one item, so a profile holding more than its share gives a thread back only
         // as one of its runs ends; more, smaller runs would each need figures (and memory) of their own.
@@ -122,6 +128,7 @@ internal static class ColumnProfiler
             var own = parts[run] = [.. columns.Select(column => new Accumulator(set, column, charges))];
             var size = sized[run] = new LengthStats();
             var scratch = new int[PageView.ScratchLength(count)];
+            using var room = own.Length > 0 ? rooms?.Rent() : null;
             for (var index = From(run); index < From(run + 1); index++)
             {
                 if (Volatile.Read(ref failed) != 0) return;
@@ -132,7 +139,7 @@ internal static class ColumnProfiler
                 var estimated = new HashSet<int>();
                 if (measured) page.Lengths.EstimatedRows(0, page.Rows, row => estimated.Add(row));
                 // Row sizes come from the page's lengths: with no columns asked (the row-size bar), the body is never parsed.
-                var parsed = own.Length > 0 ? PageView.Parse(page.Body(), count, scratch) : default;
+                var parsed = own.Length > 0 ? PageView.Parse(Body(page, room), count, scratch) : default;
                 for (var r = 0; r < page.Rows; r++)
                 {
                     if (!Included(first + r)) continue;
@@ -158,12 +165,13 @@ internal static class ColumnProfiler
             {
                 var own = counts[run] = [.. binned.Select(_ => new long[Bins])];
                 var scratch = new int[PageView.ScratchLength(count)];
+                using var room = rooms?.Rent();
                 for (var index = From(run); index < From(run + 1); index++)
                 {
                     if (Volatile.Read(ref failed) != 0) return;
                     token.ThrowIfCancellationRequested();
                     var page = pages[index];
-                    var parsed = PageView.Parse(page.Body(), count, scratch);
+                    var parsed = PageView.Parse(Body(page, room), count, scratch);
                     for (var r = 0; r < page.Rows; r++)
                     {
                         if (!Included(page.FirstRow + r)) continue;

@@ -215,6 +215,28 @@ describe('Table Properties as a document', () => {
     expect(await tableProperties.apply(id)).toBe(true)
     expect(executes()).toEqual([expect.objectContaining({ tableChanges: { changeTracking: { enabled: false } } })])
   })
+  it('keeps a disconnected draft on its own target and never adopts another connection to a server of the same name', async () => {
+    const { tableProperties, documents, id, state, executes, api, connections, connect, targets } = opened()
+    await settled()
+    tableProperties.updateDraft(id, { lockEscalation: 'DISABLE' })
+    connections.remove('c1')
+    expect(tableProperties.canApply(id)).toBe(false)
+    connect({ ...connectionInfo('c3'), server: 'C1.EXAMPLE', login: 'another-account' })
+    targets.retarget('c1', 'c3')
+    // Even a central document update cannot point the draft at the other account.
+    documents.update(id, { connectionId: 'c3' })
+    await settled()
+    expect(documents.follows(id, 'c1.example')).toBe(false)
+    expect(tableProperties.canApply(id)).toBe(false)
+    expect(await tableProperties.apply(id)).toBe(false)
+    expect(executes()).toEqual([])
+    expect(state()).toMatchObject({ changed: true, draft: { lockEscalation: 'DISABLE' } })
+    // Properties from that connection is another document, not this draft.
+    const other = tableProperties.open(node(orders, 'c3'))
+    expect(other).not.toBe(id)
+    await settled()
+    expect(api.describeObject.mock.calls.at(-1)?.[0]).toMatchObject({ connectionId: 'c3' })
+  })
   it('sends nothing when the server goes while the question is open, whatever the answer', async () => {
     const { tableProperties, id, state, executes, api, connections } = opened(tableModel({ changeTracking: { databaseEnabled: true, enabled: true, trackColumnsUpdated: true, primaryKey: true } }))
     await settled()

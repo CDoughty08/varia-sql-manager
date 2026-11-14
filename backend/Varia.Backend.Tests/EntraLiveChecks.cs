@@ -23,11 +23,21 @@ internal static class EntraLiveChecks
         using var service = new SqlService();
         JsonElement Args(object value) => JsonSerializer.SerializeToElement(value, json);
         async Task<ConnectionInfo> ConnectAsync(ConnectOptions options) => (ConnectionInfo)await service.DispatchAsync("connections.connect", Args(options), json);
-        var principal = new ConnectOptions(server, database, "entraServicePrincipal", clientId, secret, false);
+        const string application = "Varia Entra application test";
+        var principal = new ConnectOptions(server, database, "entraServicePrincipal", clientId, secret, false, Advanced: new(ApplicationName: application));
         var info = await ConnectAsync(principal);
         try
         {
             check(info.Login is { Length: > 0 }, "Service Principal connects, and SUSER_SNAME() names the signed-in principal");
+            var session = Guid.NewGuid().ToString();
+            try
+            {
+                var result = (QueryResult)await service.DispatchAsync("query.execute", Args(new QueryArgs(info.Id, session, info.Database,
+                    "SELECT APP_NAME();", Guid.NewGuid().ToString(), 10, 30)), json);
+                check(result.Status == "completed" && result.ResultSets.Count == 1 && LiveResultChecks.RowsOf(service.Results, result.ResultSets[0])[0][0] == application,
+                    "a later Entra query preserves the requested APP_NAME while authenticating through its private target callback");
+            }
+            finally { await service.DispatchAsync("query.session.close", Args(new SessionArgs(session)), json); }
             var root = (ExplorerChildrenResult)await service.DispatchAsync("explorer.children",
                 Args(new ExplorerChildrenArgs(info.Id, Guid.NewGuid().ToString(), new NodeRefDto("object", new ObjectRefDto("server")))), json);
             check(root.Error is null && root.Nodes.Count > 0, "Object Explorer loads the server's folders over Entra pool connections");

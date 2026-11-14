@@ -384,6 +384,8 @@ internal static class LiveChecks
     /// per-server cap, by the server's own name.</summary>
     public static async Task LiveAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, ConnectOptions other, JsonSerializerOptions json)
     {
+        await ConnectionPrincipalChecks.LiveAsync(check, service, info);
+        await ConnectionPrincipalChecks.ReceiptLiveAsync(check, other);
         var second = (ConnectionInfo)await service.DispatchAsync("connections.connect", JsonSerializer.SerializeToElement(other, json), json);
         try
         {

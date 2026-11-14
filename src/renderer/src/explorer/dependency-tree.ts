@@ -79,6 +79,7 @@ export class DependencyTree {
   private disposed = false
   /** Abandoned (the server was lost): the tree still expands and collapses what it has read, but reads nothing more. */
   private stopped = false
+  private paused = false
 
   constructor(
     readonly connectionId: string,
@@ -105,8 +106,8 @@ export class DependencyTree {
     const node = this.nodes.get(id)
     if (this.disposed || !node || node.leaf || node.expanded && node.load !== 'error') return
     // Once stopped, a failed level only opens again to show why: it cannot be read again.
-    if (node.load === 'ready' || node.load === 'loading' || this.stopped && node.load === 'error') { this.set({ ...node, expanded: true }); return }
-    if (this.stopped) return
+    if (node.load === 'ready' || node.load === 'loading' || (this.stopped || this.paused) && node.load === 'error') { this.set({ ...node, expanded: true }); return }
+    if (this.stopped || this.paused) return
     this.set({ ...node, expanded: true, load: 'loading', error: undefined })
     void this.read(node)
   }
@@ -118,7 +119,7 @@ export class DependencyTree {
   /** Reads a failed level again. */
   retry(id: number): void {
     const node = this.nodes.get(id)
-    if (node?.load !== 'error') return
+    if (this.disposed || this.stopped || this.paused || node?.load !== 'error') return
     this.set({ ...node, expanded: false, load: 'none' })
     this.expand(id)
   }
@@ -147,6 +148,20 @@ export class DependencyTree {
   abandon(message: string): void {
     if (this.disposed || this.stopped) return
     this.stopped = true
+    this.endReads(message)
+  }
+
+  /** Disconnect may fail: keep the tree, but cancel reads until the same owner is live again. */
+  pause(message: string): void {
+    if (this.disposed || this.stopped || this.paused) return
+    this.paused = true
+    this.endReads(message)
+  }
+
+  /** Re-enable explicit expansion/Retry after rollback; never restart a cancelled read automatically. */
+  resume(): void { if (!this.disposed && !this.stopped) this.paused = false }
+
+  private endReads(message: string): void {
     const loading = [...this.running.keys()]
     this.cancelRunning()
     for (const id of loading) {

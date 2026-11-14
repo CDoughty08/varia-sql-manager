@@ -8,7 +8,7 @@ import { checkable, destinationNote, deviceDatabases, draftPlan, draftProblems, 
 import { restorePreviewDelayMs, restoreServiceMessages } from '../src/renderer/src/restore/RestoreService'
 import { restoreTestHook } from '../src/renderer/src/restore/test-hook'
 import { coverage, stepPoint, timeMs, timelineWindow, timeText } from '../src/renderer/src/restore/timeline'
-import { connectionInfo, manualTimers, workbenchFixture } from './fixtures/workbench'
+import { connectionInfo, connectionOptions, manualTimers, readyBackend, workbenchFixture } from './fixtures/workbench'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
@@ -37,12 +37,17 @@ const requestIds = { connectionId: conn, requestId: '00000000-0000-4000-8000-000
 const files = [{ logical: 'Sales', physical: 'D:\\DATA\\Sales.mdf', type: 'data' as const, filegroup: 'PRIMARY', sizeBytes: 8_388_608, fileId: 1 }, { logical: 'Sales_log', physical: 'L:\\LOG\\Sales_log.ldf', type: 'log' as const, sizeBytes: 8_388_608, fileId: 2 }]
 
 interface Options { readonly sets?: readonly BackupSetRow[]; readonly media?: readonly BackupSetRow[]; readonly server?: RestoreServerFacts; readonly failFiles?: string }
-function opened(database: string | undefined = 'Sales', options: Options = {}) {
+function opened(database: string | undefined = 'Sales', options: Options = {}, canonical = false) {
   const facts = options.server ?? server
   const clock = manualTimers()
   const fixture = workbenchFixture({ timers: clock.timers })
   cleanups.push(() => fixture.dispose())
-  fixture.connect(connectionInfo(conn))
+  const targetId = crypto.randomUUID()
+  if (canonical) {
+    fixture.api.push(readyBackend())
+    const attempt = fixture.connections.beginConnect(connectionOptions, 1, targetId)!
+    fixture.connections.accept(connectionInfo(conn), connectionOptions, targetId, { principal: { provider: 'sqlServer', authentication: 'sql', id: 'sid:reader' } }, attempt)
+  } else fixture.connect(connectionInfo(conn))
   fixture.api.describeObject.mockImplementation(async params => {
     const source = params.restore
     if (source?.kind === 'historyFiles' && source.setId === options.failFiles) return { ok: true, value: { elapsedMs: 1, error: { code: 'SQL_ERROR', message: 'The read failed.' } } as ActionDescribeResult }
@@ -56,10 +61,26 @@ function opened(database: string | undefined = 'Sales', options: Options = {}) {
   const state = () => restore.get(id)!
   const scripts = () => api.scriptObjectAction.mock.calls.map(([request]) => request as RestoreRequest)
   const describes = () => api.describeObject.mock.calls.map(([request]) => request.restore)
-  return { ...fixture, restore, documents, id, state, scripts, describes, clock }
+  return { ...fixture, restore, documents, id, state, scripts, describes, clock, targetId }
 }
 
 describe('Restore Database as a document', () => {
+  it('blocks Restore as teardown begins and keeps the loaded choices attached until completion', async () => {
+    const f = opened('Sales', {}, true)
+    await settled()
+    const draft = f.state().draft
+    expect(f.restore.canRun(f.id)).toBe(true)
+    const operation = f.connectionTargets.beginDisconnect(f.targetId, crypto.randomUUID())!
+    expect(f.restore.canRun(f.id)).toBe(false)
+    expect(f.restore.context.getSnapshot().byDocument[f.id].runnable).toBe(false)
+    await f.restore.run(f.id)
+    expect(f.api.executeObjectAction).not.toHaveBeenCalled()
+    expect(f.documents.get(f.id)).toMatchObject({ connectionId: conn, targetId: f.targetId })
+    expect(f.state().draft).toBe(draft)
+    f.connectionTargets.failDisconnect(operation)
+    expect(f.restore.canRun(f.id)).toBe(true)
+    expect(f.restore.context.getSnapshot().byDocument[f.id].runnable).toBe(true)
+  })
   it('opens a tab, reads the server, the database\'s history and its full backup\'s files, and plans the last backup', async () => {
     const { documents, id, state, describes, api } = opened()
     expect(documents.active).toMatchObject({ id, kind: 'restoreDatabase', name: 'Restore Database - Sales', connectionId: conn, database: 'master', dirty: false })

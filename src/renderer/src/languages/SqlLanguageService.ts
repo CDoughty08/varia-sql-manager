@@ -7,6 +7,7 @@ import { isQueryDocument } from '../documents'
 import { peekModelContext } from '../explorer/peek-editor'
 import type { DocumentService } from '../services/documents'
 import type { ConnectionService } from '../services/connections'
+import { isLiveConnection } from '../services/connection-availability'
 import type { BackendStateService } from '../services/backend'
 
 type LanguageApi = Pick<VariaApi, 'languageStatus' | 'languageComplete' | 'languageHover' | 'languageClose' | 'languageRefresh'> & Partial<Pick<VariaApi, 'languageDiagnostics'>>
@@ -328,7 +329,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
     if (!provider?.configured) return { label: 'IntelliSense off', detail: provider?.reason ?? `The ${id} language provider is not configured.` }
     if ((this.documents.getModel(documentId)?.getValueLength() ?? 0) > languageLimits.documentCharacters)
       return { label: 'IntelliSense paused', detail: `Language support is available for queries up to ${languageLimits.documentCharacters.toLocaleString()} characters.` }
-    if (connection?.lost) return { label: 'IntelliSense disconnected', detail: 'Reconnect this query to restore schema suggestions.' }
+    if (connection && !isLiveConnection(connection)) return { label: 'IntelliSense disconnected', detail: 'Reconnect this query to restore schema suggestions.' }
     return { label: 'IntelliSense', detail: document?.connectionId ? 'SQL completion and hover use this query’s connection and database. Ctrl+Space opens suggestions.' : 'SQL completion and hover are available. Connect this query for schema suggestions. Ctrl+Space opens suggestions.' }
   }
   /** The connection and database a served model's requests use: its query document's, or its Peek model's. */
@@ -346,7 +347,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
     const source = this.source(documentId)
     if (!source) return
     const connection = source.connectionId ? this.connections.get(source.connectionId) : undefined
-    if (source.connectionId && (!connection || connection.lost)) return
+    if (source.connectionId && !isLiveConnection(connection)) return
     const context: LanguageContext = { providerId: connection?.providerId ?? 'sqlserver',
       ...connection ? { connectionId: connection.id } : {}, ...source.database ? { database: source.database } : {} }
     return { context, key: JSON.stringify([context, connection?.generation ?? 0]) }

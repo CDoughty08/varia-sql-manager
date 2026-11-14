@@ -239,6 +239,17 @@ internal sealed partial class ResultStore
         return page;
     }
 
+    /// <summary>A packed page unpacked into a fused read's room (<see cref="PageCodec.UnpackInto"/>), timed and counted as
+    /// any unpack is.</summary>
+    internal void UnpackInto(PackedPage packed, Span<byte> room)
+    {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        PageCodec.UnpackInto(packed.Bytes, room);
+        Interlocked.Add(ref unpackTicks, System.Diagnostics.Stopwatch.GetTimestamp() - started);
+        Interlocked.Increment(ref pagesUnpacked);
+        Interlocked.Add(ref unpackedOut, room.Length);
+    }
+
     /// <summary>Moves what the sets hold packed and cached (each set keeps its own share and gives it back when freed).</summary>
     internal void Held(long packed, long logical, long cached)
     {

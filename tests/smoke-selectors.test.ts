@@ -217,6 +217,14 @@ describe('smoke selectors', () => {
     expect(bare).toEqual([])
   })
 
+  it('owns the startup benchmark process without instrumenting its raw launch', () => {
+    const source = readFileSync('scripts/startup-bench.mjs', 'utf8')
+    expect(source).toMatch(/^import \{ _electron as electron \} from '@playwright\/test'$/m)
+    expect(source).toMatch(/^import \{[^}]*\btrackElectronProcess\b[^}]*\} from '\.\/fixtures\/smoke\.mjs'$/m)
+    const launches = source.split('\n').filter(line => /\bapp\s*=.*\belectron\.launch\(/.test(line))
+    expect(launches).toHaveLength(1)
+    expect(launches[0]).toMatch(/app = trackElectronProcess\(await electron\.launch\(/)
+  })
   it('waits in the benches for the backend each launch starts', () => {
     // backendReady's default runtime is the Release backend's .NET, which the fake backend (VARIA_TEST_BACKEND, runtime
     // 'fake') never matches. `check` runs the smoke suites' waits but not the benches', so a bench that starts the fake

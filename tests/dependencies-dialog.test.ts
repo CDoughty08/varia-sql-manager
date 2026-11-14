@@ -9,6 +9,7 @@ import type { Workbench } from '../src/renderer/src/core/workbench'
 import type { ApiResult } from '../src/shared/contracts'
 import type { DependenciesResult } from '../src/shared/explorer/dependencies'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
+import type { ConnectionLifecycle } from '../src/shared/connection-targets'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 const connectionId = '00000000-0000-4000-8000-000000000001'
@@ -18,7 +19,8 @@ const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).reverse().forEach(clean => clean()) })
 
 async function mount(answer: () => Promise<ApiResult<DependenciesResult>>) {
-  const connections = { list: [{ id: connectionId, lost: false }], listeners: [] as (() => void)[] }
+  const connected = { state: 'connected', handle: { id: connectionId, generation: 1 } } as const
+  const connections = { list: [{ id: connectionId, lost: false, lifecycle: connected }] as { id: string; lost: boolean; lifecycle: ConnectionLifecycle }[], listeners: [] as (() => void)[] }
   const live = { getSnapshot: () => connections.list, subscribe: (listener: () => void) => { connections.listeners.push(listener); return () => {} } }
   const api = { explorerDependencies: vi.fn(answer), explorerCancel: vi.fn(() => Promise.resolve({ ok: true as const, value: undefined })) }
   const select = vi.fn(), reveal = vi.fn()
@@ -28,8 +30,11 @@ async function mount(answer: () => Promise<ApiResult<DependenciesResult>>) {
   const view = createRoot(host)
   await act(async () => { view.render(createElement(WorkbenchProvider, { workbench: { dependencies } as unknown as Workbench, children: createElement(DependenciesDialog) })) })
   cleanups.push(() => { act(() => view.unmount()); host.remove(); dependencies.dispose() })
-  const lose = () => act(() => { connections.list = [{ id: connectionId, lost: true }]; for (const listener of connections.listeners) listener() })
-  return { dependencies, api, select, reveal, lose }
+  const change = (lifecycle: ConnectionLifecycle, lost = false) => act(() => { connections.list = [{ id: connectionId, lost, lifecycle }]; for (const listener of connections.listeners) listener() })
+  const lose = () => change({ state: 'lost', reason: 'backend-lost' }, true)
+  const disconnect = () => change({ state: 'disconnecting', attemptId: 'attempt', handle: connected.handle })
+  const rollback = () => change(connected)
+  return { dependencies, api, select, reveal, lose, disconnect, rollback }
 }
 const settle = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
 const key = (target: Element, name: string) => act(() => { target.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true, cancelable: true })) })
@@ -69,5 +74,31 @@ describe('View Dependencies dialog', () => {
     await act(async () => { uses!.click() })
     expect(dependencies.current?.direction).toBe('usedBy')
     expect(usedBy!.checked).toBe(true)
+  })
+
+  it('keeps radio focus while disconnecting and restores actions without reloading on exact-owner rollback', async () => {
+    const { dependencies, api, disconnect, rollback } = await mount(() => Promise.resolve({ ok: true, value: { items: [], elapsedMs: 1 } }))
+    await act(async () => { dependencies.open(rootNode) })
+    await settle()
+    const [usedBy, uses] = [...document.querySelectorAll<HTMLInputElement>('input[type="radio"]')]
+    usedBy!.focus()
+    await disconnect()
+    expect(usedBy!.disabled).toBe(false)
+    expect(usedBy!.getAttribute('aria-disabled')).toBe('true')
+    expect(document.activeElement).toBe(usedBy)
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe('The server is disconnecting. Dependency reads are paused.')
+    await act(async () => { uses!.click() })
+    expect(dependencies.current?.direction).toBe('usedBy')
+    expect(api.explorerDependencies).toHaveBeenCalledTimes(1)
+    expect([...document.querySelectorAll('button')].find(button => button.textContent === 'Peek')?.disabled).toBe(true)
+    await rollback()
+    expect(document.activeElement).toBe(usedBy)
+    expect(usedBy!.getAttribute('aria-disabled')).toBeNull()
+    expect(document.querySelector('[role="alert"]')).toBeNull()
+    expect([...document.querySelectorAll('button')].find(button => button.textContent === 'Peek')?.disabled).toBe(false)
+    expect(api.explorerDependencies).toHaveBeenCalledTimes(1)
+    await act(async () => { uses!.click() })
+    expect(dependencies.current?.direction).toBe('uses')
+    expect(api.explorerDependencies).toHaveBeenCalledTimes(2)
   })
 })

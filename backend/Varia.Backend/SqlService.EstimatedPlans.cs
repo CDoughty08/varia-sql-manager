@@ -30,6 +30,7 @@ internal sealed partial class SqlService
             entered = estimatedPlans.Wait(0);
             if (!entered) throw new RequestException("BUSY", "Two estimated plans are already being acquired. Try again shortly.");
             if (args.Mode == "session") return await EstimateSessionAsync(args, batches, cancellation.Token);
+            // CreateConnection installs the identity guard; promote that same owner for the estimated-plan ledger.
             await using var connection = Owned(CreateConnection(args.ConnectionId, args.Database, stateful: true), args.ConnectionId);
             await Open(connection, cancellation.Token);
             return await EstimatedPlanCapture.ReadAsync(connection, batches, args.StartLine, cancellation.Token);

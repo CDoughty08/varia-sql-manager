@@ -1,3 +1,4 @@
+import { CustomDocumentTargets, type CustomDocumentTargetOptions } from '../services/custom-document-targets'
 import { actionLimits, dialogSpecs, dialogTitle } from '../../../shared/actions/catalog.ts'
 import { noScriptNotice } from '../../../shared/actions/database.ts'
 import type { ActionError, ActionExecuteResult, ActionRequest, ActionStep } from '../../../shared/actions/schema.ts'
@@ -48,7 +49,7 @@ export interface TablePropertiesState {
 }
 export interface TablePropertiesSnapshot { readonly documents: Readonly<Record<string, TablePropertiesState>> }
 
-export interface TablePropertiesServiceOptions {
+export interface TablePropertiesServiceOptions extends CustomDocumentTargetOptions {
   readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText' | 'confirmAction'>
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty' | 'activate' | 'getSnapshot' | 'subscribe'> & DeliverScriptDeps['documents']
   readonly files: DeliverScriptDeps['files']
@@ -86,15 +87,17 @@ export class TablePropertiesService extends SnapshotStore<TablePropertiesSnapsho
   private readonly registration: Disposable
   private readonly unsubscribe: (() => void)[]
   private readonly contextStore = new (class extends SnapshotStore<PropertiesContextState> { set(value: PropertiesContextState) { this.publish(value) } clear() { this.clearListeners() } })({ byDocument: {} })
-  private readonly requests = new Map<string, { readonly id: string; readonly kind: 'describe' | 'apply'; dropped: boolean }>()
+  private readonly requests = new Map<string, { readonly id: string; readonly kind: 'describe' | 'apply'; readonly connectionId?: string; dropped: boolean }>()
   private readonly previews = new Map<string, string>()
   private readonly previewTimers = new Map<string, unknown>()
   private readonly applies = new Map<string, Promise<boolean>>()
   private rows = 0
+  private readonly targetBindings: CustomDocumentTargets
   private disposed = false
 
   constructor(private readonly options: TablePropertiesServiceOptions) {
     super({ documents: {} })
+    this.targetBindings = new CustomDocumentTargets(options)
     this.newId = options.newId ?? (() => crypto.randomUUID())
     this.timers = options.timers ?? browserTimers
     this.registration = options.documents.registerProvider(this)
@@ -111,17 +114,20 @@ export class TablePropertiesService extends SnapshotStore<TablePropertiesSnapsho
   open(node: ExplorerMenuNode): string {
     if (this.disposed) throw new Error('Table Properties is not available.')
     const target = node.ref.type === 'object' && node.ref.object.kind === 'table' ? node.ref.object : undefined
-    const connection = this.options.connections.getSnapshot().find(item => item.id === node.connectionId && !item.lost)
+    const connection = this.options.connections.getSnapshot().find(item => item.id === node.connectionId && !item.lost && (!item.lifecycle || item.lifecycle.state === 'connected'))
     if (!target) throw new Error('Select a table in Object Explorer.')
     if (!connection) throw new Error('Connect to the server first.')
     const same = (state: TablePropertiesState) => state.target.database === target.database && state.target.schema === target.schema && state.target.name === target.name
     const documents = Object.values(this.getSnapshot().documents).filter(same)
-    const existing = documents.find(state => this.connectionOf(state.id) === node.connectionId)
+    // Only a document bound to this connection's exact target is this table's; a handle id alone never proves it.
+    const existing = documents.find(state => this.connectionOf(state.id) === node.connectionId && this.targetBindings.matchesConnection(state.id, node.connectionId))
     if (existing) { this.options.documents.activate(existing.id); return existing.id }
-    const orphan = documents.find(state => !this.live(state.id) && this.follows(state.id, connection.server))
+    // Reopening Properties can reuse a disconnected draft only after the registry proves the exact original target.
+    const orphan = documents.find(state => !this.live(state.id) && this.targetBindings.matchesConnection(state.id, connection.id))
     if (orphan) { this.rebind(orphan.id, connection); return orphan.id }
     const label = scriptObjectLabel(target)
     const document = this.options.documents.openCustom('tableProperties', dialogTitle('tableProperties', label), connection.id, target.database ?? 'master')
+    this.targetBindings.bind(document.id, connection.id)
     this.put({
       id: document.id, target, label, server: connection.server, ...connection.login ? { login: connection.login } : {},
       phase: 'loading', revision: 0, edits: 0, changed: false, stale: false, frame: initialFrameState(sections), script: { state: 'idle', message: noScriptNotice }
@@ -257,6 +263,10 @@ export class TablePropertiesService extends SnapshotStore<TablePropertiesSnapsho
     if (this.requests.get(id)?.id === requestId) this.requests.delete(id)
     this.publishContext()
     if (this.disposed || !this.get(id) || request?.dropped) return false
+    if (this.connectionOf(id) !== connectionId || !this.live(id)) {
+      this.patch(id, { phase: 'ready', stale: true, error: error('CONNECTION_LOST', tablePropertiesMessages.connectionLost) })
+      return false
+    }
     state = this.get(id)!
     const value: ActionExecuteResult | undefined = result.ok ? result.value : undefined
     if (value && !value.error) {
@@ -334,7 +344,7 @@ export class TablePropertiesService extends SnapshotStore<TablePropertiesSnapsho
     // A newer preview replaced this one: its answer is the drawer's.
     if (this.previews.get(id) !== requestId) return undefined
     this.previews.delete(id)
-    if (this.disposed || !this.get(id)) return undefined
+    if (this.disposed || !this.get(id) || this.connectionOf(id) !== connectionId || !this.live(id)) return undefined
     const failure = !result.ok ? { message: result.error, ...result.code ? { code: result.code } : {} } : result.value.error ? { message: result.value.error.message, code: result.value.error.code } : undefined
     const text = result.ok ? result.value.text : undefined
     if (failure || text === undefined) { this.patch(id, { script: { state: 'failed', error: failure ?? { message: 'No script was produced.' } }, scriptRevision: revision }); return undefined }
@@ -349,8 +359,12 @@ export class TablePropertiesService extends SnapshotStore<TablePropertiesSnapsho
   canClose(id: string): string | undefined { const phase = this.get(id)?.phase; return phase === 'applying' || phase === 'confirming' ? tablePropertiesMessages.applying : undefined }
   revision(id: string): number { return this.get(id)?.edits ?? 0 }
   focus(id: string): void { this.options.focus?.(id) }
-  follows(id: string, server: string): boolean { const state = this.get(id); return !!state && state.server.trim().toLowerCase() === server.trim().toLowerCase() }
+  /** Legacy server-name reassociation is refused; reconnect callers must supply durable identity. */
+  follows(_id: string, _server: string): boolean { return false }
+  canFollowTarget(id: string, targetId: string): boolean { return this.targetBindings.canFollowTarget(id, targetId) }
+  coalesceTarget(id: string, fromTargetId: string, toTargetId: string): boolean { return this.targetBindings.coalesceTarget(id, fromTargetId, toTargetId) }
   closed(id: string): void {
+    this.targetBindings.forget(id)
     const request = this.requests.get(id), preview = this.previews.get(id)
     this.cancel([request?.id, preview].filter((value): value is string => !!value))
     this.requests.delete(id)
@@ -362,6 +376,7 @@ export class TablePropertiesService extends SnapshotStore<TablePropertiesSnapsho
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.targetBindings.clear()
     this.cancel([...this.requests.values()].map(request => request.id).concat([...this.previews.values()]))
     for (const timer of this.previewTimers.values()) this.timers.clearTimeout(timer)
     this.requests.clear()
@@ -410,17 +425,17 @@ export class TablePropertiesService extends SnapshotStore<TablePropertiesSnapsho
   private connectionOf(id: string): string | undefined { return this.options.documents.get(id)?.connectionId }
   private live(id: string): boolean {
     const connectionId = this.connectionOf(id)
-    return !!connectionId && this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost)
+    return this.targetBindings.matchesConnection(id, connectionId) && this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'connected'))
   }
   private begin(id: string, kind: 'describe' | 'apply'): string {
     const requestId = this.newId()
-    this.requests.set(id, { id: requestId, kind, dropped: false })
+    this.requests.set(id, { id: requestId, kind, connectionId: this.connectionOf(id), dropped: false })
     return requestId
   }
   private end(id: string, requestId: string): boolean {
     const request = this.requests.get(id)
     if (request?.id === requestId) this.requests.delete(id)
-    return !this.disposed && !!this.get(id) && request?.id === requestId && !request.dropped
+    return !this.disposed && !!this.get(id) && request?.id === requestId && !request.dropped && request.connectionId === this.connectionOf(id) && this.live(id)
   }
   private async call<T>(send: () => Promise<ApiResult<T>>): Promise<ApiResult<T>> {
     try { return await send() } catch (failure) { return { ok: false, error: failure instanceof Error ? failure.message : 'The request failed.' } }
