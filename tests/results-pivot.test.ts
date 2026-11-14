@@ -112,6 +112,24 @@ describe('a rebuilt Pivot', () => {
 })
 
 describe('PivotService', () => {
+  it('builds nothing in a run emptied one result at a time, and keeps the builder for the next run as Close Results does', async () => {
+    const { results, pivot, run } = fixture()
+    const [first] = run(2)
+    pivot.open('t1', keyAt(results, 't1', 1))
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
+    results.removeEntry('t1', keyAt(results, 't1', 0))
+    results.removeEntry('t1', keyAt(results, 't1', 0))
+    expect(results.getSnapshot().t1).toMatchObject({ sets: [], emptied: true })
+    // No group is left to pivot: the builder names none, and Build makes nothing.
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: true, running: false })
+    expect(pivot.getSnapshot().tabs.t1.source).toBeUndefined()
+    await pivot.run('t1')
+    expect(first.pivot).not.toHaveBeenCalled()
+    expect(results.getSnapshot().t1.sets).toEqual([])
+    // The next run's Result 2 takes the builder back with its draft, as after Close Results.
+    run(2, { queryId: 'q2' })
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: true, source: keyAt(results, 't1', 1), draft: { rows: [0] } })
+  })
   it("opens on a grid's group, builds the pivot from the draft, shows it under the Table as the group's Pivot, and says what it pivoted", async () => {
     const { results, pivot, run } = fixture()
     const [, second] = run(3)

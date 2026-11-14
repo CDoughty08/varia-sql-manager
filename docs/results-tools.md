@@ -18,7 +18,9 @@ Right-click a result column header or cell, or press Shift+F10 in the grid, to o
   built from the closed result (a pivot, a comparison, a sort, a copy) is cancelled; a save that has
   already started writing its file finishes. The run summary and its row count do not change. Closing the last result
   leaves the Results view saying "Results were closed. Execute the query again to see them."; Messages and captured
-  execution plans stay. Closing one view is unavailable while the query is executing, and there is no undo.
+  execution plans stay, and so does Close Results, which releases those plans. Find in Results, Find Next and Previous,
+  Save Results As, Pivot, Compare and Transpose are then unavailable, as they need a grid. Closing one view is
+  unavailable while the query is executing, and there is no undo.
 - When a running query stops keeping rows because the result memory budget is full or the computer is low on memory, the
   grid's strip says so while the query keeps reading and counting rows, and offers **Stop query**. It is Cancel
   Executing Query (Alt+Pause on Windows and Linux) for that grid's query tab: Tab reaches it from the grid, and Enter or

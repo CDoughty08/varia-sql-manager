@@ -657,6 +657,27 @@ Outcome, accepted by the owner:
     emptied run with captured plans still has `hasResults`, so Find and Save Results As are enabled and do nothing.
     Consumers: `contributions/output.ts`, `pivot.ts`, `transpose.ts`, `PivotService`'s sync,
     the catalogue's preconditions for Save and Find, `PeekCard`.
+    - **What PR 12 settled or left** (`tests/menu-commands.test.ts`, `tests/results-lifecycle.test.ts`,
+      `tests/results-pivot.test.ts`, `tests/commands.test.ts` and a `results-smoke` step after the actual-plan runs hold
+      its checks):
+      - `hasResultSets` is `ResultsService.resultSets`, published beside `context` (`hasResults`) by the same pass and only
+        when its set of tabs changes: a tab whose run is neither closed nor lost and still holds a set in `sets` (a Table,
+        a Pivot, a plan set or a comparison). Captured plans (`planSets`) count only for `hasResults`.
+      - Moved to it: Find in Results' and Save Results As' `when` (`contributions/output.ts`) and the catalogue's
+        `hasResultSets` precondition on Find Next and Find Previous, so in an emptied run with captured plans they are
+        disabled from the palette, a key, the toolbar's tab and a menu left open on a closed grid.
+      - Stayed on `hasResults`: Close Results (its `when` and `results.context`), because captured plans are still there
+        for it to release; the context key's own pages; the guides' results-grid reference context, which now sets both.
+      - Needed no change, because PRs 7, 9, 10 and 16 rewrote them to read the run's `groups` and `sets`, which an emptied
+        run has none of: Pivot (`pivot.ts`, `pivotGroup`), Compare and Compare with Previous (`compare.ts`,
+        `CompareService.canPick`/`canCompare`), the transpose commands (`ResultsService.canTranspose`), Close Just This
+        Result, and `PeekCard` (which reads `tab.sets`; a bare run cannot be emptied). Checks pin each of them disabled in
+        the emptied-with-plans state, and Find and Save on while only a comparison is left (Pivot and Compare off).
+      - `PivotService`'s sync is unchanged: in an emptied run the builder names no group and Build makes nothing; it stays
+        open, hidden with the Results grids, and takes the next run's group back with its draft, as it already did after
+        Close Results ("Close Results changes no builder"). The Compare picker, by contrast, closes once its run has no
+        result; aligning the two is left for the owner to decide.
+      - The plan's "with only comparisons left, the badge hides" was already true from PR 9 (the badge counts groups).
 13. **Tabs layout**, default still Stacked. Tabs, the toggle and setting, view tabs, selection rules, Find Next across
     tabs, the strip rule, focus fallback. Existing smoke suites pin Stacked by setting; a new `grouped-results` suite
     covers Tabs, with its seconds recorded in `scripts/smoke-shards.mjs` and `docs/ci.md` (`results-smoke` is already near

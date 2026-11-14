@@ -10,7 +10,7 @@ const connectedQuery = { hasActiveDocument: true, activeDocumentIsText: true, ac
 export const lessonContexts: Record<LessonContext, { readonly title: string; readonly values: Partial<ContextKeys> }> = {
   workbench: { title: 'In the workbench', values: {} },
   queryEditor: { title: 'In the SQL query editor', values: { ...connectedQuery, activePanel: 'editor', editorFocus: true, editorTextFocus: true, textInputFocus: true } },
-  resultsGrid: { title: 'In the results grid', values: { ...connectedQuery, activePanel: 'output', outputGridFocus: true, outputView: 'grid', hasResults: true } }
+  resultsGrid: { title: 'In the results grid', values: { ...connectedQuery, activePanel: 'output', outputGridFocus: true, outputView: 'grid', hasResults: true, hasResultSets: true } }
 }
 
 /** Lesson focus is deliberate: reading Help must not hide the editor/grid shortcut it is teaching. */

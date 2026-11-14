@@ -157,8 +157,8 @@ keys it uses are listed below.
 | Fit Column (not in the palette) | `output.fitColumn` | — | — | — | Always | Query Output context menu › Fit Column |
 | Go to Error Line (not in the palette) | `output.revealError` | — | — | — | `!documentBusy` | — |
 | Find in Results | `output.find` | Ctrl+F (`outputGridFocus`) | Ctrl+F (`outputGridFocus`) | ⌘F (`outputGridFocus`) | Always | — |
-| Find Next in Results | `output.findNext` | F3 (`outputGridFocus`) | F3 (`outputGridFocus`) | ⌘G (`outputGridFocus`), F3 (`outputGridFocus`) | `hasResults` | — |
-| Find Previous in Results | `output.findPrevious` | Shift+F3 (`outputGridFocus`) | Shift+F3 (`outputGridFocus`) | ⇧⌘G (`outputGridFocus`), ⇧F3 (`outputGridFocus`) | `hasResults` | — |
+| Find Next in Results | `output.findNext` | F3 (`outputGridFocus`) | F3 (`outputGridFocus`) | ⌘G (`outputGridFocus`), F3 (`outputGridFocus`) | `hasResultSets` | — |
+| Find Previous in Results | `output.findPrevious` | Shift+F3 (`outputGridFocus`) | Shift+F3 (`outputGridFocus`) | ⇧⌘G (`outputGridFocus`), ⇧F3 (`outputGridFocus`) | `hasResultSets` | — |
 | Filter Column Values… (not in the palette) | `output.filterColumnValues` | Alt+Down (`outputGridFocus`) | Alt+Down (`outputGridFocus`) | ⌥↓ (`outputGridFocus`) | Always | Query Output context menu › Filter › Filter Column Values… |
 | Filter for Selected Values (not in the palette) | `output.filterSelection` | — | — | — | Always | Query Output context menu › Filter › Filter for Selected Values |
 | Exclude Selected Values (not in the palette) | `output.excludeSelection` | — | — | — | Always | Query Output context menu › Filter › Exclude Selected Values |
@@ -958,7 +958,7 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
 | `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
 
-## Context keys (153)
+## Context keys (154)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1033,7 +1033,8 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `includeActualPlan` | boolean | state | The active query will capture actual execution plans. |
 | `includeLivePlan` | boolean | state | The active query will show live execution plans. |
 | `includeClientStatistics` | boolean | state | The active query will collect client statistics. |
-| `hasResults` | boolean | state | The active query has result sets, and they were not closed (Close Results) or lost with a run the SQL backend stopped. |
+| `hasResults` | boolean | state | The active query has results (result sets or captured execution plans), and they were not closed (Close Results) or lost with a run the SQL backend stopped. |
+| `hasResultSets` | boolean | state | The active query has a result set a grid shows (rows, a plan set or a comparison), not closed or lost with a run the SQL backend stopped. Captured execution plans alone do not count. |
 | `anyDocumentConnected` | boolean | state | Some open query's server is connected. |
 | `outputPaneVisible` | boolean | state | An output panel (Results, Messages or Execution plan) is open and showing: its tab is selected, and no other panel is maximized. |
 | `panelTabsVisible` | boolean | state | Window › Panel Tabs is on: a panel alone in its dock group shows its tab. |

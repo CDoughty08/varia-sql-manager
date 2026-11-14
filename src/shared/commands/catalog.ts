@@ -918,11 +918,11 @@ export const commandCatalog = {
     keybindings: [{ key: 'mod+f', when: 'outputGridFocus' }]
   },
   'output.findNext': {
-    title: 'Find Next in Results', category: 'Query', keywords: ['search', 'next', 'match', 'grid'], precondition: 'hasResults', unavailableHint: 'Execute a query that returns results first.',
+    title: 'Find Next in Results', category: 'Query', keywords: ['search', 'next', 'match', 'grid'], precondition: 'hasResultSets', unavailableHint: 'Execute a query that returns results first.',
     keybindings: [{ win: 'f3', linux: 'f3', mac: 'mod+g', when: 'outputGridFocus' }, { mac: 'f3', when: 'outputGridFocus' }]
   },
   'output.findPrevious': {
-    title: 'Find Previous in Results', category: 'Query', keywords: ['search', 'previous', 'match', 'grid'], precondition: 'hasResults', unavailableHint: 'Execute a query that returns results first.',
+    title: 'Find Previous in Results', category: 'Query', keywords: ['search', 'previous', 'match', 'grid'], precondition: 'hasResultSets', unavailableHint: 'Execute a query that returns results first.',
     keybindings: [{ win: 'shift+f3', linux: 'shift+f3', mac: 'mod+shift+g', when: 'outputGridFocus' }, { mac: 'shift+f3', when: 'outputGridFocus' }]
   },
   // Filtering a grid (results.view, results PR 4): by the selected cells of one column (their values, other values, or the

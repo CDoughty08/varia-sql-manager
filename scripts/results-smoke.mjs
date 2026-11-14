@@ -1197,6 +1197,22 @@ try {
   expect(await editorText()).toContain('<unavailable-plan')
   await page.keyboard.press('Control+W')
   await expect(queryTabs()).toHaveCount(1)
+  // Its only grid closed, the run keeps its captured plans (hasResults) but has no result set (hasResultSets): the palette
+  // offers Close Results, and shows Find, Find Next and Save Results As disabled, not as commands that do nothing.
+  await outputTab(/^Results/).click()
+  await resultClose(page, 'Result 1').click()
+  await expect(outputEmpty(page)).toHaveText('Results were closed. Execute the query again to see them.')
+  await expect(outputTab(/^Execution plan/)).toHaveAccessibleName('Execution plan, 2 plans')
+  for (const [typed, name, disabled] of [['find in results', 'Find in Results', true], ['find next in results', 'Find Next in Results', true], ['save results as', 'Save Results As…', true], ['close results', 'Close Results', false]]) {
+    await page.keyboard.press('F1')
+    await page.keyboard.type(typed)
+    const option = quickInput(page).getByRole('option', { name: new RegExp(`^Query: ${name}(,|$)`) })
+    await expect(option).toHaveCount(1)
+    if (disabled) await expect(option).toHaveAttribute('aria-disabled', 'true')
+    else await expect(option).not.toHaveAttribute('aria-disabled', 'true')
+    await page.keyboard.press('Escape')
+    await expect(quickInput(page)).toHaveCount(0)
+  }
   const holdPlans = join(control, 'hold', 'mixed-plan-summary')
   await writeFile(holdPlans, '')
   await run('SELECT 42 -- MIXED_PLAN_FIXTURE', { running: true })
