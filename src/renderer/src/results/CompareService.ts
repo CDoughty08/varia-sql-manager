@@ -80,7 +80,7 @@ interface Remembered { exact: boolean; readonly groups: Map<number, { readonly t
 
 interface Running { readonly abort: AbortController; readonly queryId: string; readonly old: EntryKey; readonly neu: EntryKey; readonly id: string }
 
-type Results = Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'notify' | 'focusEntry' | 'focusStamp'>
+type Results = Pick<ResultsService, 'getSnapshot' | 'subscribe' | 'addSet' | 'notify' | 'focusEntry'>
 
 /**
  * Comparisons (results.diff): one group's Table against another's of the same run, in the backend, aligned by a key column
@@ -242,17 +242,16 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
   isRunning(tabId: string, old: EntryKey, neu: EntryKey, exact: boolean): boolean { return this.inFlight.get(tabId)?.has(pairId(old, neu, exact)) ?? false }
 
   /** The popover's Compare: shows the comparison of its sides when the run has it, else starts it. Once the comparison is
-   *  there the popover closes (while it still shows that pair) and the comparison takes the focus, unless the user moved it
-   *  meanwhile or the popover is still open on another pair (picked, swapped or Exact text changed while it ran: the
-   *  comparison is added and the popover keeps the focus). A failure is said in the popover while it shows that pair, else
-   *  in the toolbar. Returns the entry focused. */
+   *  there, while the popover still shows that pair (so the focus is in it: every way out closes it), the popover closes and
+   *  the comparison takes the focus. Closed meanwhile (Escape, Close, a press or key elsewhere) or moved to another pair,
+   *  the comparison is only added, and the focus stays where the user put it. A failure is said in the popover while it
+   *  shows that pair, else in the toolbar. Returns the entry focused. */
   async run(tabId: string): Promise<EntryKey | undefined> {
     const picker = this.getSnapshot().pickers[tabId], sides = this.sidesOf(tabId)
     if (!picker || !sides) return undefined
     const shown = this.existing(tabId, sides.old.key, sides.neu.key, picker.exact)
     if (shown) { this.remember(tabId, picker); this.close(tabId); this.results.focusEntry(tabId, shown.key); return shown.key }
     this.update(tabId, { error: undefined, cancelled: false })
-    const stamp = this.results.focusStamp(tabId)
     const outcome = await this.comparePair(tabId, sides.old.key, sides.neu.key, { exact: picker.exact, quiet: true })
     const now = this.getSnapshot().pickers[tabId]
     const same = now?.queryId === picker.queryId && this.sidesOf(tabId)?.old.key === sides.old.key && this.sidesOf(tabId)?.neu.key === sides.neu.key && now.exact === picker.exact
@@ -262,10 +261,8 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
       else this.results.notify(tabId, outcome.error)
       return undefined
     }
-    if (outcome === undefined) return undefined
-    if (same) this.close(tabId)
-    else if (now) return undefined
-    if (this.results.focusStamp(tabId) !== stamp) return undefined
+    if (outcome === undefined || !same) return undefined
+    this.close(tabId)
     this.results.focusEntry(tabId, outcome.key)
     return outcome.key
   }

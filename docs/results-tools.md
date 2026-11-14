@@ -97,13 +97,14 @@ name holds the other kind of data, and the comparison's strip names them too. **
 spaces. A comparison reads the stored results, so the inputs' sorts and filters are not applied: the popover warns while
 either input is sorted or filtered, and the strip says so.
 
-**Compare** (or Enter) starts it, and the popover closes once the comparison is there; the comparison takes the focus,
-unless you moved it meanwhile. While it runs the popover offers **Cancel**, and a failure is said there. Asking for a
-comparison the run already has (the same two results, the same way round, the same Exact text choice) shows that one
-(**Show It**), and asking again while it runs does nothing. Comparisons of other pairs run at the same time, at most four
-at once in a window together with Pivot builds (the rest wait their turn); a busy backend is asked again after 1, 4 and 16
-seconds before the comparison fails. A comparison still running when the popover closes goes on, and a failure is then said
-in the results toolbar. A run keeps at most 1,000 results, comparisons and Pivots included (counting those still being
+**Compare** (or Enter) starts it, and the popover closes once the comparison is there and the comparison takes the
+focus. If you close the popover meanwhile, or move it to another pair, the comparison is only added and the focus stays
+where it is. While it runs the popover offers **Cancel**, and a failure is said there. Asking for a comparison the run
+already has (the same two results, the same way round, the same Exact text choice) shows that one (**Show It**), and
+asking again while it runs does nothing. Comparisons of other pairs run at the same time, at most four at once in a
+window together with Pivot builds (the rest wait their turn); a busy backend is asked again after 1, 4 and 16 seconds
+before the comparison fails. A comparison still running when the popover closes goes on, and a failure is then said in
+the results toolbar. A run keeps at most 1,000 results, comparisons and Pivots included (counting those still being
 built), so a comparison that would pass that is refused with a sentence saying so.
 
 Escape, **Close** or the popover's close button close it and give the focus back to what opened it; the toolbar's

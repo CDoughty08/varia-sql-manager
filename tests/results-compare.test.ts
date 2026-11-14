@@ -116,12 +116,13 @@ describe('the Compare popover', () => {
     const answer = held<DiffAnswer>()
     vi.mocked(handle(keys[0]).diff).mockReturnValueOnce(answer.promise)
     const comparing = compare.run('t1')
+    // Moving the focus out of the popover closes it (as the popover does on a press or key elsewhere).
     results.focusEntry('t1', keys[2])
+    compare.close('t1')
     answer.resolve({ descriptor: descriptor(990, { index: 3, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
     await expect(comparing).resolves.toBeUndefined()
     expect(tab().comparisons).toHaveLength(1)
     expect(tab().focused).toBe(keys[2])
-    // The comparison is there, so the popover closed all the same.
     expect(compare.getSnapshot().pickers.t1).toBeUndefined()
     // Cancel: said in the popover until the next Compare or another choice.
     compare.open('t1', keys[1])
@@ -396,6 +397,39 @@ describe('the Compare popover', () => {
     answer.resolve({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
     await comparing
     expect(compare.getSnapshot().pickers.t1).toBeUndefined()
+  })
+
+  it('focuses the comparison in a popover reopened on its pair while it ran, though the reopen moved the focus', async () => {
+    const { compare, results, run, handle, tab } = fixture()
+    const keys = run(2)
+    compare.open('t1', keys[1])
+    const answer = held<DiffAnswer>()
+    vi.mocked(handle(keys[0]).diff).mockReturnValueOnce(answer.promise)
+    const comparing = compare.run('t1')
+    // Escape gives the focus back to the grid; Compare… on it again focuses it and opens on the same, running pair.
+    compare.close('t1')
+    results.focusEntry('t1', keys[1])
+    compare.open('t1', keys[1])
+    answer.resolve({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    const made = await comparing
+    expect(made).toBeDefined()
+    expect(tab().focused).toBe(made)
+    expect(compare.getSnapshot().pickers.t1).toBeUndefined()
+  })
+
+  it("leaves the focus alone when the popover was closed without moving it (the toolbar's Compare took it back)", async () => {
+    const { compare, run, handle, tab } = fixture()
+    const keys = run(2)
+    compare.open('t1', keys[1], 'toolbar')
+    const answer = held<DiffAnswer>()
+    vi.mocked(handle(keys[0]).diff).mockReturnValueOnce(answer.promise)
+    const comparing = compare.run('t1')
+    const before = tab().focused
+    compare.close('t1')
+    answer.resolve({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), key: 'Id', same: 1, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] })
+    expect(await comparing).toBeUndefined()
+    expect(tab().focused).toBe(before)
+    expect(tab().comparisons).toHaveLength(1)
   })
 
   it('leaves a popover moved to another pair open, and the focus where it is, when the first comparison is made', async () => {
