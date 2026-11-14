@@ -68,9 +68,10 @@ internal static class ResultSearcher
         long baseRows = 0;
         foreach (var page in pages) baseRows += page.Rows;
         long rows = view?.Rows ?? baseRows;
-        // At most the threads asked for, and no more than the operations running leave free.
+        // A run for each thread asked for, read on the share of the threads the gate gives. A run is one item, so a search
+        // holding more than its share gives a thread back only as one of its runs ends (each keeps matches of its own).
         using var threads = (gate ?? ViewSorter.Gate).Take((int)Math.Max(1, workers ?? Math.Min(rows / MinSlice, ViewSorter.Workers)));
-        var runs = (int)Math.Clamp(threads.Count, 1, Math.Max(1, Math.Min(rows, int.MaxValue)));
+        var runs = (int)Math.Clamp(threads.Wanted, 1, Math.Max(1, Math.Min(rows, int.MaxValue)));
         var parts = new Part[runs];
         long From(int run) => rows * run / runs;
         var slots = view is null ? 1 : Math.Max(1, LayoutCacheBytes / (4 * PageView.ScratchLength(Math.Max(1, columns))) / runs);
@@ -79,13 +80,7 @@ internal static class ResultSearcher
             var part = parts[run] = new Part();
             Scan(part, new Source(pages, columns, slots), view, matchers, From(run), From(run + 1), text.Length, fromRow, backward, maxMatches, token, stopped);
         }
-        if (runs == 1) Read(0);
-        else
-            try { Parallel.For(0, runs, new ParallelOptions { MaxDegreeOfParallelism = runs }, Read); }
-            catch (AggregateException error) when (error.InnerExceptions.Count > 0)
-            {
-                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerExceptions[0]).Throw();
-            }
+        threads.For(runs, Read);
         long total = 0, before = 0, first = -1;
         var approximate = false;
         var keptRows = new List<long>();

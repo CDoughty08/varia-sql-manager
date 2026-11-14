@@ -75,7 +75,7 @@ internal static class ColumnProfiler
     internal sealed class ProfileTooLargeException() : Exception("The profile needs more result memory than the budget has.");
 
     /// <summary>The profile of a result's sealed rows, or of a view's. The pages are read in <paramref name="workers"/> runs
-    /// at once (<see cref="WorkersFor"/> by default, and no more than the operations running leave free), each with figures of its own, merged in page order: every figure is a
+    /// at once (<see cref="WorkersFor"/> by default), on the share of the threads the gate gives it, each with figures of its own, merged in page order: every figure is a
     /// count, a sum, a lowest or highest, or a set, so the profile is the one a single thread gives, whose lowest and highest
     /// cells are the first rows to hold those values.</summary>
     public static ResultsProfileResult Profile(ResultSetBuffer set, StoredPage[] pages, ResultView? view, IReadOnlyList<int> columns, bool complete, CancellationToken token, Charges? charges = null, int? workers = null, ViewSorter.WorkerGate? gate = null)
@@ -93,31 +93,26 @@ internal static class ColumnProfiler
         var rows = view?.Rows ?? baseRows;
         var guessed = set.Lengths.Any(length => length.Estimated);
         var count = set.Wires.Count;
-        // At most the threads asked for, and no more than the operations running leave free.
+        // A run for each thread asked for (the working memory is reserved for that many), read on the share of the
+        // threads the gate gives. A run is one item, so a profile holding more than its share gives a thread back only
+        // as one of its runs ends; more, smaller runs would each need figures (and memory) of their own.
         using var threads = (gate ?? ViewSorter.Gate).Take(workers ?? WorkersFor(pages.Length));
-        var runs = Math.Clamp(threads.Count, 1, Math.Max(1, pages.Length));
+        var runs = Math.Clamp(threads.Wanted, 1, Math.Max(1, pages.Length));
         int From(int run) => RunStart(pages.Length, run, runs);
         // Once a run has failed (a refused charge, a cancellation) the others stop at their next page: nothing is merged.
         var failed = 0;
         void Each(Action<int> read)
         {
-            try
+            // What the one thread would have thrown: a cancellation, or a refusal of the room a value needed.
+            threads.For(runs, run =>
             {
-                Parallel.For(0, runs, new ParallelOptions { MaxDegreeOfParallelism = runs }, run =>
+                try { read(run); }
+                catch
                 {
-                    try { read(run); }
-                    catch
-                    {
-                        Volatile.Write(ref failed, 1);
-                        throw;
-                    }
-                });
-            }
-            catch (AggregateException error) when (error.InnerExceptions.Count > 0)
-            {
-                // What the one thread would have thrown: a cancellation, or a refusal of the room a value needed.
-                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerExceptions[0]).Throw();
-            }
+                    Volatile.Write(ref failed, 1);
+                    throw;
+                }
+            });
         }
         var parts = new Accumulator[runs][];
         var sized = new LengthStats[runs];

@@ -1396,9 +1396,31 @@ itself by view position.
   sealed, so the view rebuilt once the result completes keeps those and none that arrived later. A `column`, `nulls`,
   `columns` or `snapshotId` on it, or both or neither of `rows` and `cells`, is `INVALID_PARAMS`.
 - **Threads.** Keys are built a page at a time and rows sorted in slices that are merged, on several threads, with the
-  order one thread would give. All the operations running share those threads (three quarters of the machine's, 16 at
-  most): each takes what is free when it starts a step, and one at least, so several sorts at once leave the thread pool
-  that answers requests alone.
+  order one thread would give. All the operations running (sorts, filters, distinct lists, pivots, profiles, searches,
+  row identities and diffs) share those threads (three quarters of the machine's, 16 at most) in fair shares
+  (`ViewSorter.WorkerGate`, `Results/WorkerGate.cs`):
+  - Each operation keeps its own thread (the request's) and runs a parallel step's items (pages, sort slices, merges,
+    identity parts, runs of pages) on it and on workers the gate starts for it. Shares are filled from the smallest demand up: a step
+    of two items takes two threads, and the operations with more to do split the rest evenly.
+  - Workers start only while fewer than the limit are busy, so the threads busy are at most the limit and, past it, one
+    for each further operation (its own); no operation ever has none.
+  - Between two items, a worker of an operation holding more than its share hands its thread back, and it goes to the
+    operation furthest below its share; one whose step runs out of items hands its threads back as its workers find
+    none. So an operation alone has every thread, and a second started beside it has half of them after the first's
+    next items rather than the leftovers when it ends. Steps are cut into more items than threads where that costs
+    nothing: key builds and row identities take a page an item, a sort up to four slices a thread (its two extra rounds
+    of merges cost about the comparisons the smaller slices save), and the identity check up to four parts a thread.
+    A profile and a search are not: their items are runs, one per thread asked for, whose figures and matches are merged
+    in order and held per run (a profile's working memory is reserved per run), so each hands a thread back only when
+    one of its runs ends, which for a profile that started first is about when it ends.
+  - A failure or cancellation stops the step's workers at their next item and is rethrown, as itself, once they have
+    all stopped; every thread is back when the step returns. Workers still queued to the thread pool when a step closes
+    are given back at once (the owner never waits for a starved pool to run them), a lease over its share hands back a
+    queued worker before a running one, and a worker the thread pool refuses is taken back as if never granted.
+  - The limit is read at each gate event (a lease taken or given back, a step opened or closed, a worker leaving):
+    lowering it takes effect at the workers' next items, raising it at the next such event.
+  - Measured (`--fairness-bench`, 2,000,000 W1 rows, 24 cores and 16 workers, then `DOTNET_PROCESSOR_COUNT=4`, 3
+    workers): see the table under [Worker threads measured](#worker-threads-measured).
 - **Dates and times.** `date`, `time`, `datetime`, `datetime2` and `smalldatetime` cells are read as ticks from their
   fixed-width text, so 8 bytes a row are the whole value, as a number's are; a column with a cell written any other way,
   or of another width than the first, is ordered by its text's bytes instead (the same order).
@@ -1442,6 +1464,55 @@ itself by view position.
   shows (with its view's id), and keeps the resolved filter the view answers, so later views (a sort, another filter, the
   set completing) send rows; a failed view keeps the last view, keys and filters. The caption counts the rows a filtered
   view kept and names each filter by the values its rows hold ("name = 'x'", "id between '3' and '12'").
+
+### Worker threads measured
+
+`--fairness-bench` (`backend/Varia.Backend.Tests/FairnessBench.cs`, run by hand): 2,000,000 synthetic W1 rows; a sort
+by `name` (collated text), a pivot by `active` (Count, Sum of `amount`, Max of `score`) and a profile of all eight
+columns, each alone and in pairs started together. Medians of 7 runs per round, three rounds each of `main` (first
+come, first served) and the fair gate, run one after the other on a 24-core Windows desktop that other builds were
+also using; the ranges are the three rounds. "Faster" and "slower" are the two operations of a pair.
+
+| 24 cores, 16 workers | Before: faster / slower | After: faster / slower |
+| --- | ---: | ---: |
+| Sort alone | 87 – 135 ms | 86 – 164 ms |
+| Pivot alone | 118 – 121 ms | 120 – 123 ms |
+| Profile alone | 214 – 480 ms | 225 – 259 ms |
+| Two pivots | 135 – 137 / 400 – 433 ms | 141 – 184 / 146 – 188 ms |
+| Two sorts | 111 – 145 / 373 – 431 ms | 138 – 142 / 147 – 150 ms |
+| Sort, then profile | 231 – 270 / 436 – 455 ms | 261 – 272 / 288 – 331 ms |
+| Profile, then sort | 267 – 275 / 440 – 454 ms | 261 – 293 / 270 – 321 ms |
+| Sort and pivot | 117 – 134 / 376 – 434 ms | 114 – 121 / 151 – 159 ms |
+| Pivot and profile | 225 – 271 / 429 – 487 ms | 244 – 255 / 293 – 307 ms |
+
+| `DOTNET_PROCESSOR_COUNT=4`, 3 workers | Before: faster / slower | After: faster / slower |
+| --- | ---: | ---: |
+| Sort alone | 376 – 393 ms | 309 – 404 ms |
+| Pivot alone | 250 – 294 ms | 253 – 275 ms |
+| Profile alone | 845 – 906 ms | 840 – 1,593 ms (one round 1.6 s, the others 840 – 897) |
+| Two pivots | 249 – 261 / 407 – 428 ms | 268 – 487 / 383 – 660 ms |
+| Two sorts | 320 – 533 / 705 – 1,115 ms | 423 – 807 / 609 – 1,166 ms |
+| Sort, then profile | 730 – 1,144 / 870 – 1,503 ms | 718 – 1,005 / 845 – 2,520 ms |
+| Profile, then sort | 743 – 1,291 / 878 – 1,711 ms | 705 – 885 / 833 – 2,118 ms |
+| Sort and pivot | 321 – 652 / 410 – 766 ms | 369 – 416 / 395 – 504 ms |
+| Pivot and profile | 474 – 503 / 885 – 967 ms | 416 – 484 / 798 – 1,120 ms |
+
+- With 16 workers the slower of a pair now finishes 1.3 to 2.9 times sooner and the pair's wall time falls by as much;
+  an operation alone takes what it took (its ranges overlap). The most threads busy was 17: the 16 workers and the
+  second operation's own thread.
+- With three workers there are too few threads to split: a share is one or two, the two operations finish close
+  together, and the totals are about what they were, with more spread (the first round of each ran beside other
+  builds). `DOTNET_PROCESSOR_COUNT` only tells .NET it has four processors; the threads still ran on 24 cores, so this
+  measures the gate's sharing, not a four-core machine's speed.
+- A profile's items are its runs (one per thread asked for), so a profile started first hands threads back only as runs
+  end: "profile, then sort" gains least.
+- These rounds cut a sort into one slice a thread. Then cut into up to four (three rounds each, same machine, a sort by
+  the `uniqueidentifier` column, whose sort outweighs its key build): alone 75 – 78 ms before, 61 – 62 ms after (smaller
+  slices even out this CPU's fast and slow cores); two at once, the slower 116 – 169 ms before, 84 – 112 ms after; the
+  other cases unchanged within their ranges.
+- `--pivot-bench --only parallel` (5,000,000 rows, 1 GiB a query; three rounds each): builds at once took 1.3 – 2.0 s
+  each before and 0.76 – 1.1 s after; one build alone 0.84 – 1.15 s before and 0.92 – 1.26 s after (the same, within
+  this machine's spread that day).
 
 ## Row identities and highlights
 
