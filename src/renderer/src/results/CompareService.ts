@@ -242,26 +242,26 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
   isRunning(tabId: string, old: EntryKey, neu: EntryKey, exact: boolean): boolean { return this.inFlight.get(tabId)?.has(pairId(old, neu, exact)) ?? false }
 
   /** The popover's Compare: shows the comparison of its sides when the run has it, else starts it. Once the comparison is
-   *  there, while the popover still shows that pair (so the focus is in it: every way out closes it), the popover closes and
+   *  there, while the popover still shows that pair and holds the focus (`holdsFocus`, asked then), the popover closes and
    *  the comparison takes the focus. Closed meanwhile (Escape, Close, a press or key elsewhere) or moved to another pair,
-   *  the comparison is only added, and the focus stays where the user put it. A failure is said in the popover while it
-   *  shows that pair, else in the toolbar. Returns the entry focused. */
-  async run(tabId: string): Promise<EntryKey | undefined> {
+   *  the comparison is only added, and the focus stays where the user put it; with the focus in another dialog (the
+   *  palette) the popover stays, offering Show It, for that dialog to give the focus back to. A failure is said in the
+   *  popover while it shows that pair, else in the toolbar. Returns the entry focused. */
+  async run(tabId: string, o: { readonly holdsFocus?: () => boolean } = {}): Promise<EntryKey | undefined> {
     const picker = this.getSnapshot().pickers[tabId], sides = this.sidesOf(tabId)
     if (!picker || !sides) return undefined
     const shown = this.existing(tabId, sides.old.key, sides.neu.key, picker.exact)
     if (shown) { this.remember(tabId, picker); this.close(tabId); this.results.focusEntry(tabId, shown.key); return shown.key }
     this.update(tabId, { error: undefined, cancelled: false })
     const outcome = await this.comparePair(tabId, sides.old.key, sides.neu.key, { exact: picker.exact, quiet: true })
-    const now = this.getSnapshot().pickers[tabId]
-    const same = now?.queryId === picker.queryId && this.sidesOf(tabId)?.old.key === sides.old.key && this.sidesOf(tabId)?.neu.key === sides.neu.key && now.exact === picker.exact
+    const same = this.shows(tabId, picker.queryId, sides.old.key, sides.neu.key, picker.exact)
     if (outcome && 'error' in outcome) {
       // A failure is said where it was asked for: in the picker while it still shows that pair, else in the toolbar.
       if (same) this.update(tabId, { error: outcome.error })
       else this.results.notify(tabId, outcome.error)
       return undefined
     }
-    if (outcome === undefined || !same) return undefined
+    if (outcome === undefined || !same || (o.holdsFocus && !o.holdsFocus())) return undefined
     this.close(tabId)
     this.results.focusEntry(tabId, outcome.key)
     return outcome.key
@@ -272,11 +272,17 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     const item = this.inFlight.get(tabId)?.get(pairId(old, neu, exact))
     if (!item) return
     item.abort.abort()
-    const picker = this.getSnapshot().pickers[tabId], sides = this.sidesOf(tabId)
-    if (picker && sides?.old.key === old && sides.neu.key === neu && picker.exact === exact) this.update(tabId, { cancelled: true })
+    if (this.shows(tabId, undefined, old, neu, exact)) this.update(tabId, { cancelled: true })
   }
 
-  /** Compare with Previous Result: a grid's set against its previous Table; a failure is said in the toolbar. */
+  /** Whether the tab's popover is open on these inputs, this way round and with this exact-text choice (and on that run). */
+  private shows(tabId: string, queryId: string | undefined, old: EntryKey, neu: EntryKey, exact: boolean): boolean {
+    const picker = this.getSnapshot().pickers[tabId], sides = this.sidesOf(tabId)
+    return !!picker && (queryId === undefined || picker.queryId === queryId) && sides?.old.key === old && sides.neu.key === neu && picker.exact === exact
+  }
+
+  /** Compare with Previous Result: a grid's set against its previous Table; a failure is said in the toolbar, or in the
+   *  popover while it shows that pair. */
   async compare(tabId: string, key: EntryKey, o: { exact?: boolean } = {}): Promise<void> {
     const from = this.previousOf(tabId, key)
     if (from) await this.comparePair(tabId, from.key, key, { exact: o.exact ?? false })
@@ -294,7 +300,13 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     const id = pairId(old, neu, o.exact)
     let items = this.inFlight.get(tabId)
     if (items?.has(id)) return undefined
-    const fail = (text: string) => { if (o.quiet) return { error: text }; this.results.notify(tabId, text); return undefined }
+    // Said in the popover while it shows this pair (it offers this comparison's Cancel), else in the toolbar.
+    const fail = (text: string) => {
+      if (o.quiet) return { error: text }
+      if (this.shows(tabId, tab.queryId, old, neu, o.exact)) this.update(tabId, { error: text })
+      else this.results.notify(tabId, text)
+      return undefined
+    }
     // A run keeps at most resultLimits.sets results, derived ones included: one that would pass it, counting those in
     // flight and the first Pivots being built, is refused before the backend is asked.
     if (tab.sets.length + this.adding(tabId) + this.elsewhere(tabId) >= resultLimits.sets) return fail(compareFullText)

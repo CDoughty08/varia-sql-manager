@@ -214,6 +214,42 @@ describe('Compare popover', () => {
     view.unmount()
   })
 
+  it('stays open, offering Show It, when its comparison lands while the focus is in another dialog', async () => {
+    const view = fixture()
+    let finish!: (answer: DiffAnswer) => void
+    vi.mocked(view.handle(view.keys[0]).diff).mockImplementationOnce(() => new Promise<DiffAnswer>(yes => { finish = yes }))
+    await act(async () => { view.button('Compare')!.click() })
+    // F1: the palette takes the focus, and the popover stays for it to give the focus back.
+    const palette = document.body.appendChild(document.createElement('div'))
+    palette.setAttribute('role', 'dialog')
+    const input = palette.appendChild(document.createElement('input'))
+    try {
+      act(() => { input.focus() })
+      await act(async () => { finish({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), key: 'Id', same: 2, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] }) })
+      view.draw()
+      expect(view.compare.getSnapshot().pickers.t1).toBeDefined()
+      expect(view.button('Show It')).toBeDefined()
+      expect(document.activeElement).toBe(input)
+      expect(view.results.getSnapshot().t1.focused).not.toBe(view.results.getSnapshot().t1.sets.find(set => set.descriptor.kind === 'diff')?.key)
+    } finally {
+      palette.remove()
+    }
+  })
+
+  it('says a failure of Compare with Previous Result on the pair it shows, where it offered its Cancel', async () => {
+    const view = fixture()
+    let fail!: (error: unknown) => void
+    vi.mocked(view.handle(view.keys[0]).diff).mockImplementationOnce(() => new Promise<DiffAnswer>((_yes, no) => { fail = no }))
+    const notify = vi.spyOn(view.results, 'notify')
+    const running = view.compare.compare('t1', view.keys[1])
+    view.draw()
+    expect(view.button('Cancel')).toBeDefined()
+    await act(async () => { fail(new ResultError('TOO_LARGE', 'Too large to compare.')); await running })
+    view.draw()
+    expect(view.status()?.textContent).toBe('Too large to compare.')
+    expect(notify).not.toHaveBeenCalled()
+  })
+
   it('keeps the focus inside when Enter on a target starts a comparison that fails', async () => {
     const view = fixture({ count: 3, open: 2 })
     let fail!: (error: unknown) => void
