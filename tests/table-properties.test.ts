@@ -85,6 +85,16 @@ describe('Table Properties draft', () => {
     expect(tableErrors(noDatabase, { ...initialTableDraft(noDatabase), changeTracking: true }).get('changeTracking')).toBe(tableNotes.databaseTracking)
     const noKey = tableModel({ changeTracking: { databaseEnabled: true, enabled: false, trackColumnsUpdated: false, primaryKey: false } })
     expect(tableErrors(noKey, { ...initialTableDraft(noKey), changeTracking: true }).get('changeTracking')).toBe(tableNotes.primaryKey)
+    // SQL Server compares the names under the collation: a case or trailing-space variant is the same property.
+    const variant = patchPropertyRow(addPropertyRow(start, 'v'), 'v', { name: 'ms_description ', value: 'x' })
+    expect(tableErrors(model, variant).get(propertyKey(variant.extendedProperties[2]!, 'name'))).toBe(tableMessages.duplicateName)
+    // A memory-optimized table has no change tracking.
+    const memory = tableModel({ general: { ...model.general, memoryOptimized: true } })
+    expect(tableErrors(memory, { ...initialTableDraft(memory), changeTracking: true }).get('changeTracking')).toBe(tableNotes.trackingMemoryOptimized)
+    // A truncated list cannot be diffed safely: its changes are refused.
+    const truncated = tableModel({ extendedPropertiesTruncated: true })
+    const added = patchPropertyRow(addPropertyRow(initialTableDraft(truncated), 'n'), 'n', { name: 'Owner', value: 'x' })
+    expect(tableRequest(orders, truncated, added)).toEqual({ problem: tableNotes.truncated })
   })
   it('lists the facts SSMS shows, temporal and ledger ones when the table is either, and Security Predicates only when a policy names it', () => {
     const model = tableModel({ temporal: { type: 'SYSTEM_VERSIONED_TEMPORAL_TABLE', other: 'Sales.OrdersHistory', periodStart: 'ValidFrom', periodEnd: 'ValidTo', retention: '6 MONTHS' } })

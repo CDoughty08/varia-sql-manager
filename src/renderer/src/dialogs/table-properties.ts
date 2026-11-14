@@ -33,6 +33,8 @@ export const tableNotes = {
   databaseTracking: 'Change tracking is off for the database. Turn it on in Database Properties first.',
   primaryKey: tableMessages.primaryKey,
   memoryOptimized: tableMessages.memoryOptimized,
+  trackingMemoryOptimized: tableMessages.trackingMemoryOptimized,
+  truncated: 'The table has more extended properties than are listed, so they are read-only here. Change them in a query window.',
   nonString: tableMessages.nonStringValue
 } as const
 
@@ -76,21 +78,25 @@ export const propertyKey = (row: ExtendedPropertyRow, field: 'name' | 'value') =
 export function tableErrors(model: TablePropertiesModel, draft: TableDraft): Map<string, string> {
   const errors = new Map<string, string>()
   const live = draft.extendedProperties.filter(row => !row.removed)
+  // SQL Server compares the names under the database's collation, by default case-insensitive and blind to trailing spaces.
+  const nameKey = (name: string) => name.trimEnd().toLowerCase()
   const counts = new Map<string, number>()
-  for (const row of live) counts.set(row.name, (counts.get(row.name) ?? 0) + 1)
+  for (const row of live) counts.set(nameKey(row.name), (counts.get(nameKey(row.name)) ?? 0) + 1)
   for (const row of live) {
     const name = propertyKey(row, 'name'), value = propertyKey(row, 'value')
     if (row.name.length === 0) errors.set(name, tableNotes.emptyName)
     else if (row.name.length > 128) errors.set(name, tableNotes.longName)
     else if (row.name.includes('\0')) errors.set(name, tableNotes.nul)
-    else if ((counts.get(row.name) ?? 0) > 1) errors.set(name, tableMessages.duplicateName)
+    else if ((counts.get(nameKey(row.name)) ?? 0) > 1) errors.set(name, tableMessages.duplicateName)
     if (row.value.length > tableLimits.extendedPropertyValue) errors.set(value, tableNotes.longValue)
     else if (row.value.includes('\0')) errors.set(value, tableNotes.nul)
   }
   const changes = tableChanges(model, draft)
   if ((changes.extendedProperties?.length ?? 0) > tableLimits.extendedPropertyChanges) errors.set('extendedProperties', tableNotes.tooManyProperties)
   else if (tableStatements(changes) > actionLimits.statements) errors.set('extendedProperties', tableNotes.tooMany)
-  if (changes.changeTracking?.enabled && !model.changeTracking.enabled) {
+  if (changes.extendedProperties?.length && model.extendedPropertiesTruncated) errors.set('extendedProperties', tableNotes.truncated)
+  if (changes.changeTracking && model.general.memoryOptimized) errors.set('changeTracking', tableNotes.trackingMemoryOptimized)
+  else if (changes.changeTracking?.enabled && !model.changeTracking.enabled) {
     if (!model.changeTracking.databaseEnabled) errors.set('changeTracking', tableNotes.databaseTracking)
     else if (!model.changeTracking.primaryKey) errors.set('changeTracking', tableNotes.primaryKey)
   }

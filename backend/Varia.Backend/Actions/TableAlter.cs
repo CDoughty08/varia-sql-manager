@@ -75,6 +75,7 @@ internal static partial class TableAlter
         }
         if (changes.ChangeTracking is { } tracking)
         {
+            if (facts.MemoryOptimized) return (null, tables.Message("trackingMemoryOptimized"));
             var columns = tracking.TrackColumnsUpdated ?? (facts.Tracking && facts.TrackColumns);
             if (tracking.Enabled && !facts.Tracking)
             {

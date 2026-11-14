@@ -65,18 +65,19 @@ function PermissionsSection({ state, model }: Pick<SectionProps, 'state' | 'mode
 function ChangeTrackingSection({ state, model, draft, editable, errors, service }: SectionProps) {
   const tracking = model.changeTracking, id = fieldId(state.id, 'changeTracking'), columnsId = fieldId(state.id, 'trackColumnsUpdated')
   const changed = draft.changeTracking !== tracking.enabled, columnsChanged = draft.changeTracking && draft.trackColumnsUpdated !== tracking.trackColumnsUpdated
-  const note = !tracking.enabled && !tracking.databaseEnabled ? tableNotes.databaseTracking : !tracking.enabled && !tracking.primaryKey ? tableNotes.primaryKey : undefined
+  const memory = model.general.memoryOptimized
+  const note = memory ? tableNotes.trackingMemoryOptimized : !tracking.enabled && !tracking.databaseEnabled ? tableNotes.databaseTracking : !tracking.enabled && !tracking.primaryKey ? tableNotes.primaryKey : undefined
   const text = { description: 'Whether SQL Server tracks which rows change, for applications that synchronize from the table.', note, error: errors.get('changeTracking') }
   const columns = { description: 'Whether SQL Server also tracks which columns of a row changed.', ...!draft.changeTracking ? { note: 'Turn change tracking on first.' } : {} }
   return <div className="properties-change-tracking">
     <FactList facts={[{ label: 'Change tracking on the database', value: tracking.databaseEnabled ? 'True' : 'False' }, { label: 'Primary key', value: tracking.primaryKey ? 'True' : 'False', title: 'Change tracking needs one.' }]} />
     <div className="properties-fields">
       <PropertyField id={id} label="Change Tracking" changed={changed} {...text}>
-        <Switch id={id} checked={draft.changeTracking} disabled={!editable || (!tracking.enabled && (!tracking.databaseEnabled || !tracking.primaryKey))} changed={changed}
+        <Switch id={id} checked={draft.changeTracking} disabled={!editable || memory || (!tracking.enabled && (!tracking.databaseEnabled || !tracking.primaryKey))} changed={changed}
           {...fieldAria(id, { ...text, changed })} onChange={checked => service.updateDraft(state.id, { changeTracking: checked })} />
       </PropertyField>
       <PropertyField id={columnsId} label="Track Columns Updated" changed={columnsChanged} {...columns}>
-        <Switch id={columnsId} checked={draft.changeTracking && draft.trackColumnsUpdated} disabled={!editable || !draft.changeTracking} changed={columnsChanged}
+        <Switch id={columnsId} checked={draft.changeTracking && draft.trackColumnsUpdated} disabled={!editable || memory || !draft.changeTracking} changed={columnsChanged}
           {...fieldAria(columnsId, { ...columns, changed: columnsChanged })} onChange={checked => service.updateDraft(state.id, { trackColumnsUpdated: checked })} />
       </PropertyField>
     </div>
@@ -127,7 +128,9 @@ function SecurityPredicatesSection({ state, model }: Pick<SectionProps, 'state' 
   </div>
 }
 
-function ExtendedPropertiesSection({ state, draft, editable, errors, service }: SectionProps) {
+function ExtendedPropertiesSection({ state, model, draft, editable: documentEditable, errors, service }: SectionProps) {
+  // A truncated list cannot be diffed safely (an add could collide with a property not listed), so it is read-only.
+  const editable = documentEditable && !model.extendedPropertiesTruncated
   const heading = `${state.id}-extended-grid`, problem = errors.get('extendedProperties')
   const add = () => {
     const key = service.addProperty(state.id)
@@ -159,7 +162,7 @@ function ExtendedPropertiesSection({ state, draft, editable, errors, service }: 
     </div>}
     <p><button type="button" disabled={!editable} onClick={add}><Icon name="add" />New Property</button></p>
     {problem && <p className="property-field-error" role="alert"><Icon name="error" />{problem}</p>}
-    {state.model?.extendedPropertiesTruncated && <p className="field-note">The table has more extended properties than are listed.</p>}
+    {model.extendedPropertiesTruncated && <p className="field-note">{tableNotes.truncated}</p>}
   </div>
 }
 

@@ -108,8 +108,9 @@ internal static class TablePropertiesChecks
             && Plan(new("AUTO", null, null), Plain with { DroppedLedger = true }).Refusal == tables.Message("droppedLedger")
             && Plan(new("AUTO", null, null), Plain with { MemoryOptimized = true }).Refusal == tables.Message("memoryOptimized")
             && Plan(new(null, new(true, null), null), Plain with { PrimaryKey = false }).Refusal == tables.Message("primaryKey")
+            && Plan(new(null, new(true, null), null), Plain with { MemoryOptimized = true }).Refusal == tables.Message("trackingMemoryOptimized")
             && Plan(new(null, null, [new("add", "MS_Description", "x")]), Plain with { MemoryOptimized = true }).Plan is { Count: 1 },
-            "the plan refuses SQL Server's own, external and dropped ledger tables, lock escalation on a memory-optimized table and change tracking without a primary key");
+            "the plan refuses SQL Server's own, external and dropped ledger tables, lock escalation and change tracking on a memory-optimized table, and change tracking without a primary key");
         check(TableAlter.NeedsDatabaseTracking(all) && !TableAlter.NeedsDatabaseTracking(Plan(new(null, new(false, null), null), tracked).Plan!),
             "only turning change tracking on needs the database to track changes");
     }

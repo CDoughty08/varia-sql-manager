@@ -78,14 +78,14 @@ internal sealed partial class ActionService
         var messages = CollectMessages(connection);
         var (plan, facts, error) = await PlanTableAsync(connection, args, target, band, execute: true, token);
         if (plan is null) return new([], [], 0, error);
-        var planned = plan.Select(statement => TableAlter.Statement(catalog, statement)).ToList();
         async Task Recheck(StepContext context)
         {
             var now = await TableFactsAsync(connection, target, band, context.Token, context.Transaction);
             if (now is null) throw new StepRefusedException(Error("NOT_FOUND", "The table " + Display(target) + " no longer exists. Refresh Object Explorer."));
             if (now.Id != facts!.Id || now.Created != facts.Created) throw new StepRefusedException(Error("NOT_FOUND", catalog.Tables.Message("notTheTable")));
             var (again, _) = TableAlter.Plan(catalog, target.Database!, target.Schema!, target.Name!, args.TableChanges!, now);
-            if (again is null || !again.Select(statement => TableAlter.Statement(catalog, statement)).SequenceEqual(planned, StringComparer.Ordinal))
+            // TableStatement is a record: equal plans are the same statements, values and titles.
+            if (again is null || !again.SequenceEqual(plan))
                 throw new StepRefusedException(Error("NOT_SUPPORTED", catalog.Tables.Message("changed")));
         }
         var run = plan.Select((statement, index) => new RunStep(statement.Title, async context =>

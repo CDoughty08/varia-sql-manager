@@ -144,7 +144,7 @@ export class TablePropertiesService extends SnapshotStore<TablePropertiesSnapsho
   /** Extended Properties' New: an empty row, whose name field the view focuses. Returns its key. */
   addProperty(id: string): string | undefined {
     const state = this.get(id)
-    if (!state?.draft || !this.canEdit(id)) return undefined
+    if (!state?.draft || !this.canEdit(id) || state.model?.extendedPropertiesTruncated) return undefined
     const key = `new-${++this.rows}`
     this.setDraft(id, addPropertyRow(state.draft, key))
     return key

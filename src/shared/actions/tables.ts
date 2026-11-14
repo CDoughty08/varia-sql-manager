@@ -24,6 +24,7 @@ export const tableLimits = {
 export const tableMessages = {
   readFailed: 'The table could not be read.',
   memoryOptimized: 'A memory-optimized table has no lock escalation.',
+  trackingMemoryOptimized: 'A memory-optimized table has no change tracking.',
   databaseTracking: 'Change tracking is off for the database. Turn it on for the database first (ALTER DATABASE … SET CHANGE_TRACKING = ON).',
   primaryKey: 'Change tracking needs a primary key on the table.',
   trackingOff: 'Track columns updated applies only while change tracking is on.',
@@ -34,8 +35,8 @@ export const tableMessages = {
   externalTable: "An external table's properties cannot be changed here.",
   droppedLedger: 'A dropped ledger table cannot be changed.',
   nothingToChange: 'The table already has these settings.',
-  changed: 'The table changed since its properties were read. Refresh, then apply again.',
-  notTheTable: 'The table is not the one these properties were read from: it was renamed, dropped or replaced since. Read its properties again.',
+  changed: 'The table changed since its properties were read. Discard Changes, then Refresh and apply again.',
+  notTheTable: 'The table is not the one these properties were read from: it was renamed, dropped or replaced since. Discard Changes, then Refresh to read its properties again.',
   applied: 'The changes were applied.',
   rolledBack: 'SQL Server rolled back the transaction, so the table is as it was.'
 } as const
