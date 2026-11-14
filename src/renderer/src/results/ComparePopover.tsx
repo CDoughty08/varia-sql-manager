@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { focusResultGrid } from '../grid/ResultGrid'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
+import { windows } from '../core/windows'
 import { trapFocus } from '../trap-focus'
 import type { UnpairedColumn } from './compare-pairing'
 import type { CompareAnchor } from './CompareService'
@@ -14,15 +15,50 @@ const width = 300
 /** The pairing rule, said where a column was left out (the ⓘ beside "Not compared"). */
 export const pairingRule = 'Columns pair by name, ignoring case, and by both holding text or both binary data; a repeated name pairs in order. There is no manual mapping.'
 
-/** What the popover is drawn beside: the toolbar's Compare button while it shows, else the Table's grid, else the results. */
-function anchorOf(home: HTMLElement, anchor: CompareAnchor, tabId: string, key: string): { readonly rect: DOMRect; readonly button?: HTMLElement } {
+interface Box { readonly left: number; readonly top: number; readonly right: number; readonly bottom: number }
+export interface PopoverPlace { readonly left: number; readonly top?: number; readonly bottom?: number; readonly maxHeight: number }
+const margin = 8
+
+/** What the popover is drawn beside: the toolbar's Compare button while it shows, else the Table's grid, else the results;
+ *  with the results' own box (`area`), which a grid scrolled partly out of view is cut to. */
+function anchorOf(home: HTMLElement, anchor: CompareAnchor, tabId: string, key: string): { readonly rect: Box; readonly area?: Box; readonly button?: HTMLElement } {
   const pane = home.closest<HTMLElement>('[data-pane]') ?? home.ownerDocument.body
   const button = anchor === 'toolbar' ? pane.querySelector<HTMLElement>('.results-compare') : null
   const rect = button?.getBoundingClientRect()
   if (button && rect && rect.width > 0) return { rect, button }
+  const area = (home.parentElement ?? pane).getBoundingClientRect()
   const grid = pane.querySelector<HTMLElement>(`[data-result-grid][data-tab-id="${CSS.escape(tabId)}"][data-result-entry="${CSS.escape(key)}"]`)
-  return { rect: (grid ?? home.parentElement ?? pane).getBoundingClientRect() }
+  return { rect: grid?.getBoundingClientRect() ?? area, area }
 }
+
+/**
+ * Where the popover goes in a window of `width` × `height`: under the toolbar's button (`trigger`), else at the top right
+ * of the grid's part in view (the grid cut to `area`, or the area when the grid is out of view); above the anchor when
+ * there is more room there than below and the card (`wanted` tall) does not fit below. Always inside the window: it slides
+ * up rather than run off the bottom, and scrolls inside when even the window is too short.
+ */
+export function placePopover(o: { readonly anchor: Box; readonly area?: Box; readonly trigger: boolean; readonly width: number; readonly height: number; readonly cardWidth: number; readonly wanted: number }): PopoverPlace {
+  let a = o.anchor
+  if (!o.trigger && o.area) {
+    const cut = { left: Math.max(a.left, o.area.left), top: Math.max(a.top, o.area.top), right: Math.min(a.right, o.area.right), bottom: Math.min(a.bottom, o.area.bottom) }
+    a = cut.right > cut.left && cut.bottom > cut.top ? cut : o.area
+  }
+  const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(value, high))
+  const left = clamp((o.trigger ? a.right : a.right - 12) - o.cardWidth, margin, Math.max(margin, o.width - o.cardWidth - margin))
+  const floor = o.height - margin, need = Math.min(o.wanted, o.height - 2 * margin)
+  const top = clamp(o.trigger ? a.bottom + 4 : a.top + 4, margin, floor)
+  const edge = clamp(o.trigger ? a.top - 4 : a.bottom - 4, margin, floor)
+  const below = floor - top, above = edge - margin
+  if (below >= need || below >= above) {
+    const slid = Math.max(margin, Math.min(top, floor - need))
+    return { left, top: slid, maxHeight: floor - slid }
+  }
+  return { left, bottom: o.height - edge, maxHeight: above }
+}
+
+/** Popovers drawn per tab: one that goes while its picker is open (its pane hidden, another tab shown) closes the picker,
+ *  unless another takes its place at once (StrictMode's replay, a re-render under a new key). */
+const drawn = new Map<string, number>()
 
 /**
  * The Compare popover: opened on a group's Table (Compare…, Compare Results…, or the toolbar's Compare), which is the new
@@ -58,13 +94,8 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
     if (!element || !picker || !host) return
     const measure = () => {
       const view = element.ownerDocument.defaultView ?? window
-      const { rect, button: trigger } = anchorOf(element, picker.anchor, tabId, picker.active)
-      const right = trigger ? rect.right : rect.right - 12
-      const left = Math.max(8, Math.min(right - width, view.innerWidth - width - 8))
-      const top = trigger ? rect.bottom + 4 : rect.top + 4
-      const below = view.innerHeight - top - 8, above = (trigger ? rect.top : rect.bottom) - 12
-      const wanted = form?.scrollHeight ?? 0
-      const next: CSSProperties = below >= wanted || below >= above ? { left, top, maxHeight: Math.max(120, below) } : { left, bottom: view.innerHeight - (trigger ? rect.top - 4 : rect.bottom - 4), maxHeight: above }
+      const { rect, area, button: trigger } = anchorOf(element, picker.anchor, tabId, picker.active)
+      const next: CSSProperties = { ...placePopover({ anchor: rect, ...area ? { area } : {}, trigger: !!trigger, width: view.innerWidth, height: view.innerHeight, cardWidth: Math.min(width, view.innerWidth - 2 * margin), wanted: form?.scrollHeight ?? 0 }) }
       setPlace(current => current && JSON.stringify(current) === JSON.stringify(next) ? current : next)
     }
     measure()
@@ -82,6 +113,25 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
     const into = form?.querySelector<HTMLInputElement>('input[type="radio"]:checked') ?? form?.querySelector<HTMLInputElement>('input[type="radio"]') ?? button.current
     into?.focus({ preventScroll: true })
   }, [placed])
+
+  // Its pane moving to another window (popping out, docking back) closes it: its listeners and anchor are in the old one.
+  useEffect(() => {
+    if (!picker || !host) return
+    const adoption = windows.onDidAdopt(() => { if (home.current?.ownerDocument.body !== host) compare.close(tabId) })
+    return () => adoption.dispose()
+  }, [compare, tabId, !!picker, host])
+
+  // Gone while its picker is open (its pane hidden, another document shown): the picker closes too, so it does not come
+  // back, taking the focus, when the view does.
+  useEffect(() => {
+    drawn.set(tabId, (drawn.get(tabId) ?? 0) + 1)
+    return () => {
+      const left = (drawn.get(tabId) ?? 1) - 1
+      if (left > 0) drawn.set(tabId, left)
+      else drawn.delete(tabId)
+      queueMicrotask(() => { if (!drawn.has(tabId)) compare.close(tabId) })
+    }
+  }, [compare, tabId])
 
   // A press outside closes it, leaving the focus where the press put it; the toolbar's Compare closes it itself.
   useEffect(() => {
@@ -123,8 +173,9 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
   const keyDown = (event: KeyboardEvent<HTMLFormElement>) => {
     trapFocus(event)
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismiss() }
-    // Enter on a target or on Exact text compares, as it would in a form with one button.
-    else if (event.key === 'Enter' && (event.target as Element).matches('input')) { event.preventDefault(); void start() }
+    // Enter on a target or on Exact text compares, as it would in a form with one button. The focus moves to Compare first:
+    // the target and Exact text are disabled while it runs, which would drop the focus out of the popover.
+    else if (event.key === 'Enter' && (event.target as Element).matches('input')) { event.preventDefault(); button.current?.focus(); void start() }
   }
 
   const columns = (active?.descriptor.columns ?? []).filter(column => column.role !== 'tone').length

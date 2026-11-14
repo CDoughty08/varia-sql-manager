@@ -857,11 +857,15 @@ Outcome, accepted by the owner:
         the builder's slot, so Compare no longer closes the Pivot builder; Pivot… still closes the popover.
       - Transient: Escape, Close, the close button and the toolbar's Compare (`aria-expanded`) close it and return the
         focus to the trigger (the button, else the grid); a press outside closes it; it closes once its comparison is
-        shown (Compare or Show It), when the query runs again, when its Table closes, or with the results. The follow-into-
+        shown (Compare or Show It), when the query runs again, when its Table closes, or with the results; also when it is
+        no longer drawn (its pane hidden, another document shown) and when its pane moves window (`windows.onDidAdopt`).
+        It is placed by `placePopover`, held inside the window and, on a grid, to the grid's part in view. The follow-into-
         the-next-run, waiting and "no such Table" states are gone. A comparison running when it closes goes on, and its
         failure goes to the toolbar.
-      - `CompareService` remembers each tab's last choice (group number, target group number, swap, exact text) and offers
-        it again when the popover opens on that group, in this run or a later one, while the target is offered.
+      - `CompareService` remembers, per tab, the choice made on each group (target group number and swap) and the last
+        exact-text choice, and offers them when the popover opens on that group, in this run or a later one, while the
+        target is offered. Only a pick, a swap, Exact text or Compare records; opening does not. Close Results keeps it;
+        the tab going (`ResultsService.release`) forgets it.
       - Content says only what applies: no list with one target (just the two sides), an amber "N of M columns" on a
         target that does not pair every column, "Not compared" only when columns are left out (the pairing rule in its
         ⓘ), the sorted-or-filtered warning only while it holds, the comparison's name in the Compare button's tooltip.

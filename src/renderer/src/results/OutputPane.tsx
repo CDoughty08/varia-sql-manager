@@ -358,7 +358,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
             {profileOpen && shown && <ColumnProfilePanel key={'profile:' + tab.queryId} tabId={tabId} tab={tab}
               shown={tabs ? selectedEntry(tab)?.key : profiled?.tabId === tabId ? profiledEntry(tab.sets, profiled.target)?.key : undefined} />}
             {pivotOpen && shown && <PivotPanel key={'pivot:' + tab.queryId} tabId={tabId} tab={tab} />}
-            {compareOpen && shown && <ComparePopover key={'compare:' + tab.queryId} tabId={tabId} tab={tab} />}
+            {compareOpen && shown && visible[pane] && <ComparePopover key={'compare:' + tab.queryId} tabId={tabId} tab={tab} />}
           </div>
           {showStrip && <MessagesStrip tabId={tabId} tab={tab} fits={stripFits} maxHeight={stripMax} />}
         </> : pane === 'plan' ? plans.length > 0 || livePlan ? visible.plan && <ResultPlans tabId={tabId} queryId={tab.queryId} plans={plans} visible={visible.plan} order={tab.summary?.planOrder} live={livePlan} />

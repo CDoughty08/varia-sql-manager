@@ -86,8 +86,10 @@ side (−). **Swap old and new** turns them round, and the comparison is always 
 Result 3"). The popover offers the run's other results that have all their rows and share at least one column with it;
 Pivots, comparisons and plan sets are never offered, and the backend refuses them too. With one such result there is no
 list, only the two sides; with several, each row gives the result's rows, and an amber "2 of 3 columns" when not every
-column pairs. It first picks what you last chose on that result, in this run or an earlier one, while that result is
-offered; otherwise the nearest earlier result, which is what **Compare with Previous Result** compares at once.
+column pairs. It first picks what you last chose on that result in this query tab (the result compared with and which
+way round), in this run or an earlier one, while that result is offered; otherwise the nearest earlier result, which is
+what **Compare with Previous Result** compares at once. Exact text keeps your last choice in the tab. Only a choice is
+remembered (a pick, a swap, Exact text or Compare), not merely opening the popover; closing the tab forgets it.
 
 Columns pair by name, ignoring case, and by both holding text or both binary data, a repeated name in order; there is no
 manual mapping. The popover lists the columns left out only when there are any, with both types when a column of the same
@@ -105,8 +107,9 @@ in the results toolbar. A run keeps at most 1,000 results, comparisons and Pivot
 built), so a comparison that would pass that is refused with a sentence saying so.
 
 Escape, **Close**, the popover's close button or the toolbar's **Compare** close it and give the focus back to what opened
-it; a press outside closes it too. It also closes when the query runs again, when its result closes, or with the results
-themselves. A result picked that closes leaves it with nothing picked.
+it; a press outside closes it too. It also closes when the query runs again, when its result closes, with the results
+themselves, when the results pane is hidden or another document is shown, and when its pane pops out or docks back. A
+result picked that closes leaves it with nothing picked.
 
 A comparison's strip starts with its two inputs: each is a link to that result's grid while that exact result is open.
 Once one is closed it reads "Result 1 (closed)": the comparison copied what it compared, so it stays.

@@ -75,7 +75,8 @@ export function comparableTable(tab: TabResults | undefined, entry: ResultSetEnt
   return !!tab && entry !== undefined && entry.descriptor.kind === 'rows' && slotOf(tab, entry.key)?.view === 'table' && entry.handle.getSnapshot().state === 'complete'
 }
 
-interface Remembered { readonly ordinal: number; readonly targetOrdinal?: number; readonly swapped: boolean; readonly exact: boolean }
+/** What a tab's popover was last set to: per group (by number) the target's group and the way round, and exact text for all. */
+interface Remembered { exact: boolean; readonly groups: Map<number, { readonly targetOrdinal: number; readonly swapped: boolean }> }
 
 interface Running { readonly abort: AbortController; readonly queryId: string; readonly old: EntryKey; readonly neu: EntryKey; readonly id: string }
 
@@ -100,7 +101,8 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
   private readonly elsewhere: (tabId: string) => number
   /** Comparisons in flight by tab. */
   private readonly inFlight = new Map<string, Map<string, Running>>()
-  /** The last choice made in each tab's popover, by group number, offered again when it opens on that group. */
+  /** The choices made in each tab's popover, by group number, offered again when it opens on that group. Only a choice
+   *  (a pick, a swap, Exact text, Compare) is kept: opening the popover is not one. Forgotten when the tab goes. */
   private readonly remembered = new Map<string, Remembered>()
   private readonly unsubscribe: () => void
 
@@ -120,7 +122,7 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
       const tab = snapshot[tabId]
       for (const item of items.values()) if (tab?.queryId !== item.queryId || !entryOf(tab.sets, item.old) || !entryOf(tab.sets, item.neu)) item.abort.abort()
     }
-    for (const tabId of [...this.remembered.keys()]) if (!snapshot[tabId] || snapshot[tabId].status === 'closed') this.remembered.delete(tabId)
+    for (const tabId of [...this.remembered.keys()]) if (!snapshot[tabId]) this.remembered.delete(tabId)
     const pickers = this.getSnapshot().pickers
     let next: Record<string, ComparePicker> | undefined
     for (const [tabId, picker] of Object.entries(pickers)) {
@@ -181,23 +183,23 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
   /** Whether Compare… is offered for a grid's set: some Table can be compared with it. */
   canPick(tabId: string, key: EntryKey): boolean { return this.targetsOf(tabId, key, { first: true }).length > 0 }
 
-  /** Opens the popover on a Table, beside `anchor`. It offers again what the tab's popover last chose on that group (its
-   *  target, way round and exact-text choice) while that target is offered, else picks the Table's previous Table (else
-   *  the first offered); exact text is remembered across groups. */
+  /** Opens the popover on a Table, beside `anchor`. It offers again what was last chosen on that group in this tab (its
+   *  target and way round) while that target is offered, else picks the Table's previous Table (else the first offered);
+   *  the exact-text choice is the tab's last. */
   open(tabId: string, key: EntryKey, anchor: CompareAnchor = 'grid'): void {
     const tab = this.results.getSnapshot()[tabId]
     if (!tab || !this.canPick(tabId, key)) return
     const ordinal = slotOf(tab, key)?.group
     if (ordinal === undefined) return
-    const memory = this.remembered.get(tabId)
+    const memory = this.remembered.get(tabId), chosen = memory?.groups.get(ordinal)
     const targets = this.targetsOf(tabId, key)
-    const again = memory?.ordinal === ordinal && memory.targetOrdinal !== undefined ? targets.find(target => slotOf(tab, target.entry.key)?.group === memory.targetOrdinal)?.entry : undefined
+    const again = chosen ? targets.find(target => slotOf(tab, target.entry.key)?.group === chosen.targetOrdinal)?.entry : undefined
     const target = again ?? this.previousOf(tabId, key) ?? targets[0]?.entry
     const targetOrdinal = target ? slotOf(tab, target.key)?.group : undefined
     this.setPicker(tabId, {
       queryId: tab.queryId, anchor, ordinal, active: key,
       ...target === undefined ? {} : { target: target.key }, ...targetOrdinal === undefined ? {} : { targetOrdinal },
-      swapped: again ? memory!.swapped : false, exact: memory?.exact ?? false
+      swapped: again ? chosen!.swapped : false, exact: memory?.exact ?? false
     })
   }
   close(tabId: string): void {
@@ -246,7 +248,7 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     const picker = this.getSnapshot().pickers[tabId], sides = this.sidesOf(tabId)
     if (!picker || !sides) return undefined
     const shown = this.existing(tabId, sides.old.key, sides.neu.key, picker.exact)
-    if (shown) { this.close(tabId); this.results.focusEntry(tabId, shown.key); return shown.key }
+    if (shown) { this.remember(tabId, picker); this.close(tabId); this.results.focusEntry(tabId, shown.key); return shown.key }
     this.update(tabId, { error: undefined, cancelled: false })
     const stamp = this.results.focusStamp(tabId)
     const outcome = await this.comparePair(tabId, sides.old.key, sides.neu.key, { exact: picker.exact, quiet: true })
@@ -331,8 +333,14 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     for (const [tabId, items] of this.inFlight) if (items.size > 0) running[tabId] = [...items.keys()]
     this.publish({ ...this.getSnapshot(), running })
   }
+  /** Keeps the popover's choice for the next open on its group (a target that closed is not one). */
+  private remember(tabId: string, picker: ComparePicker): void {
+    let memory = this.remembered.get(tabId)
+    if (!memory) this.remembered.set(tabId, memory = { exact: picker.exact, groups: new Map() })
+    memory.exact = picker.exact
+    if (picker.target !== undefined && picker.targetOrdinal !== undefined) memory.groups.set(picker.ordinal, { targetOrdinal: picker.targetOrdinal, swapped: picker.swapped })
+  }
   private setPicker(tabId: string, picker: ComparePicker): void {
-    this.remembered.set(tabId, { ordinal: picker.ordinal, ...picker.targetOrdinal === undefined ? {} : { targetOrdinal: picker.targetOrdinal }, swapped: picker.swapped, exact: picker.exact })
     this.publish({ ...this.getSnapshot(), pickers: { ...this.getSnapshot().pickers, [tabId]: picker } })
   }
   private update(tabId: string, change: Partial<ComparePicker>): void {
@@ -342,6 +350,7 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     if (next.targetOrdinal === undefined) delete (next as { targetOrdinal?: number }).targetOrdinal
     if (next.error === undefined) delete (next as { error?: string }).error
     if (!next.cancelled) delete (next as { cancelled?: boolean }).cancelled
+    this.remember(tabId, next)
     this.setPicker(tabId, next)
   }
 
@@ -357,6 +366,7 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
 function withoutTarget(picker: ComparePicker): ComparePicker {
   const next: { -readonly [K in keyof ComparePicker]: ComparePicker[K] } = { ...picker }
   delete next.target
+  delete next.targetOrdinal
   delete next.error
   delete next.cancelled
   return next

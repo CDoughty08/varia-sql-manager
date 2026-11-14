@@ -816,6 +816,13 @@ describe('Query Output commands', () => {
     expect(await commands.execute('output.compare', on('grid', { place: 0 }), 'menu')).toBe(true)
     expect(compare.getSnapshot().pickers[tab.id]).toMatchObject({ active: key(0), target: key(1), anchor: 'grid' })
     expect(results.getSnapshot()[tab.id].focused).toBe(key(0))
+    // It is a popover, not the builder's slot: the builder stays open.
+    expect(builder().open).toBe(true)
+    // The toolbar passes its button as the anchor, so the popover is drawn under it.
+    active.mockReturnValue(element('grid', 0).dom)
+    expect(await commands.execute('output.compare', { tabId: tab.id, anchor: {} as Element }, 'toolbar')).toBe(true)
+    expect(compare.getSnapshot().pickers[tab.id]).toMatchObject({ active: key(0), anchor: 'toolbar' })
+    active.mockReturnValue(null)
     // Pivot… closes it.
     expect(await commands.execute('output.pivot', on('grid', { place: 0 }), 'menu')).toBe(true)
     expect(compare.getSnapshot().pickers[tab.id]).toBeUndefined()

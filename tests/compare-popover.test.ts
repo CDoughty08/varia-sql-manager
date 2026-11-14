@@ -4,13 +4,14 @@
 // press outside and once its comparison is shown, and while its comparison runs keeps the Compare button focusable
 // (aria-disabled) and says a failure or a cancel in the status region that is always in the accessibility tree.
 import { describe, expect, it, vi } from 'vitest'
-import { act, createElement } from 'react'
+import { act, createElement, StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { ResultColumn, ResultsJobProgress, VariaApi } from '../src/shared/contracts'
 import { EventBus } from '../src/renderer/src/core/events'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
-import ComparePopover, { pairingRule } from '../src/renderer/src/results/ComparePopover'
+import ComparePopover, { pairingRule, placePopover } from '../src/renderer/src/results/ComparePopover'
+import { windows } from '../src/renderer/src/core/windows'
 import { CompareService } from '../src/renderer/src/results/CompareService'
 import { DerivedJobs } from '../src/renderer/src/results/derived-jobs'
 import { ResultError } from '../src/renderer/src/results/ResultClient'
@@ -45,7 +46,7 @@ function fixture(o: { count?: number; columns?: Record<number, ResultColumn[]>; 
   container.setAttribute('data-pane', 'results')
   document.body.append(container)
   const root = createRoot(container)
-  const draw = () => act(() => { root.render(createElement(WorkbenchProvider, { workbench, children: createElement(ComparePopover, { tabId: 't1', tab: results.getSnapshot().t1 }) })) })
+  const draw = () => act(() => { root.render(createElement(StrictMode, null, createElement(WorkbenchProvider, { workbench, children: createElement(ComparePopover, { tabId: 't1', tab: results.getSnapshot().t1 }) }))) })
   draw()
   const popover = () => document.querySelector<HTMLElement>('[role="dialog"][aria-label="Compare"]')
   const button = (name: string) => [...popover()?.querySelectorAll('button') ?? []].find(item => item.textContent === name)
@@ -166,5 +167,67 @@ describe('Compare popover', () => {
     expect(view.button('Close')).toBeDefined()
     expect(view.compare.getSnapshot().pickers.t1).toBeDefined()
     view.unmount()
+  })
+
+  it('keeps the focus inside when Enter on a target starts a comparison that fails', async () => {
+    const view = fixture({ count: 3, open: 2 })
+    let fail!: (error: unknown) => void
+    vi.mocked(view.handle(view.keys[1]).diff).mockImplementationOnce(() => new Promise<DiffAnswer>((_yes, no) => { fail = no }))
+    const radio = view.popover()!.querySelector<HTMLInputElement>('input[type="radio"]:checked')!
+    expect(document.activeElement).toBe(radio)
+    await act(async () => { radio.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })
+    view.draw()
+    expect(radio.disabled).toBe(true)
+    const compareButton = view.popover()!.querySelector<HTMLButtonElement>('button[type="submit"]')!
+    expect(document.activeElement).toBe(compareButton)
+    await act(async () => { fail(new ResultError('TOO_LARGE', 'Too large.')) })
+    view.draw()
+    expect(document.activeElement).toBe(compareButton)
+    view.key(compareButton, 'Escape')
+    expect(view.compare.getSnapshot().pickers.t1).toBeUndefined()
+    view.unmount()
+  })
+
+  it('closes when its pane moves to another window, but not when another pane moves', () => {
+    const view = fixture()
+    act(() => { windows.adopted() })
+    expect(view.compare.getSnapshot().pickers.t1).toBeDefined()
+    const other = document.implementation.createHTMLDocument('popout')
+    act(() => { other.body.append(view.container); windows.adopted() })
+    expect(view.compare.getSnapshot().pickers.t1).toBeUndefined()
+    view.unmount()
+  })
+
+  it('closes its picker when it is no longer drawn, but not when it is drawn again at once', async () => {
+    const view = fixture()
+    // StrictMode (the fixture's, as the app's) unmounts and mounts it again at once: it stays open.
+    await act(async () => { await Promise.resolve() })
+    expect(view.compare.getSnapshot().pickers.t1).toBeDefined()
+    view.unmount()
+    await Promise.resolve()
+    expect(view.compare.getSnapshot().pickers.t1).toBeUndefined()
+  })
+})
+
+describe('Compare popover placement', () => {
+  const box = (left: number, top: number, right: number, bottom: number) => ({ left, top, right, bottom })
+  const base = { width: 1200, height: 800, cardWidth: 300, wanted: 200 }
+  it('sits under the toolbar button, right-aligned to it', () => {
+    expect(placePopover({ ...base, anchor: box(900, 100, 924, 124), trigger: true })).toEqual({ left: 624, top: 128, maxHeight: 664 })
+  })
+  it('flips above the button when the card does not fit below and there is more room above', () => {
+    expect(placePopover({ ...base, anchor: box(900, 700, 924, 724), trigger: true })).toEqual({ left: 624, bottom: 104, maxHeight: 688 })
+  })
+  it('slides up rather than run off the bottom when neither side has room for all of it', () => {
+    expect(placePopover({ ...base, height: 300, wanted: 260, anchor: box(900, 120, 924, 144), trigger: true })).toEqual({ left: 624, top: 32, maxHeight: 260 })
+  })
+  it('sits at the top right of the grid part in view, never above the results', () => {
+    // The grid's top is scrolled out of the results (area from 300): the popover starts at the results' top.
+    expect(placePopover({ ...base, anchor: box(0, -400, 1000, 900), area: box(0, 300, 1000, 800), trigger: false })).toEqual({ left: 688, top: 304, maxHeight: 488 })
+    // A grid wholly out of view: the results area itself.
+    expect(placePopover({ ...base, anchor: box(0, 900, 1000, 1200), area: box(0, 300, 1000, 800), trigger: false })).toEqual({ left: 688, top: 304, maxHeight: 488 })
+  })
+  it('stays inside a window narrower than the card', () => {
+    expect(placePopover({ ...base, width: 250, cardWidth: 234, anchor: box(200, 10, 224, 34), trigger: true }).left).toBe(8)
   })
 })

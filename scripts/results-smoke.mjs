@@ -2396,6 +2396,15 @@ try {
   await compareTool.click()
   await expect(picker).toBeVisible()
   await expect(compareTool).toHaveAttribute('aria-expanded', 'true')
+  // Under the button, inside the window; Escape gives the focus back to the button.
+  const [toolBox, pickerBox] = [await compareTool.boundingBox(), await picker.boundingBox()]
+  expect(pickerBox.y, JSON.stringify({ toolBox, pickerBox })).toBeGreaterThanOrEqual(toolBox.y + toolBox.height)
+  expect(pickerBox.x + pickerBox.width, JSON.stringify({ toolBox, pickerBox })).toBeLessThanOrEqual(toolBox.x + toolBox.width + 1)
+  await page.keyboard.press('Escape')
+  await expect(picker).toHaveCount(0)
+  await expect(compareTool).toBeFocused()
+  await compareTool.click()
+  await expect(picker).toBeVisible()
   await compareTool.click()
   await expect(picker).toHaveCount(0)
   await expect(compareTool).toHaveAttribute('aria-expanded', 'false')
