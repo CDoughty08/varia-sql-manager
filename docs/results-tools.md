@@ -107,8 +107,8 @@ in the results toolbar. A run keeps at most 1,000 results, comparisons and Pivot
 built), so a comparison that would pass that is refused with a sentence saying so.
 
 Escape, **Close** or the popover's close button close it and give the focus back to what opened it; the toolbar's
-**Compare** closes it too, and so does a press outside it or in another window. While the Results panel is hidden, Compare
-Results… is not offered. It also closes when the query runs again, when its result closes, with the results
+**Compare** closes it too, and so does a press outside it or in another window, or a key that moves the focus elsewhere
+(F6, F8). While the Results panel is hidden, Compare Results… is not offered. It also closes when the query runs again, when its result closes, with the results
 themselves, when the results pane is hidden or another document is shown, and when its pane pops out or docks back. A
 result picked that closes leaves it with nothing picked.
 

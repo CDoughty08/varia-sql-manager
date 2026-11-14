@@ -856,8 +856,8 @@ Outcome, accepted by the owner:
         `anchor`; the picker records `anchor: 'toolbar'`), else at the top right of the Table's grid. It no longer takes
         the builder's slot, so Compare no longer closes the Pivot builder; Pivot… still closes the popover.
       - Transient: Escape, Close and the close button close it and return the focus to the trigger (the button, else the
-        grid); the toolbar's Compare (`aria-expanded`), a press outside and its window losing the focus close it too
-        (`output.compare` is offered only while the Results panel shows); it closes once its comparison is
+        grid); the toolbar's Compare (`aria-expanded`), a press outside, its window losing the focus and the focus moving
+        out by key (not into another dialog) close it too (`output.compare` is offered only while the Results panel shows); it closes once its comparison is
         shown (Compare or Show It), when the query runs again, when its Table closes, or with the results; also when it is
         no longer drawn (its pane hidden, another document shown) and when its pane moves window (`windows.onDidAdopt`).
         It is placed by `placePopover`, held inside the window and, on a grid, to the grid's part in view. The follow-into-

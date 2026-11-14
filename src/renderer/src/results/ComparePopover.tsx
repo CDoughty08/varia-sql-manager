@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type FocusEvent, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { focusResultGrid } from '../grid/ResultGrid'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
@@ -131,17 +131,10 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
   // The focus goes in once it is placed, and again when it opens on another Table: to the picked target when there is a
   // list, else to Compare.
   const placed = !!place
-  // A pick or Exact text that lands on a pair already comparing (Compare with Previous Result, or a run left going) disables
-  // the control that has the focus: it moves to Compare, which stays focusable, so the keys stay inside.
-  useLayoutEffect(() => {
-    const active = card.current?.ownerDocument.activeElement
-    if (running && active && card.current?.contains(active) && active.matches(':disabled')) button.current?.focus({ preventScroll: true })
-  }, [running])
   useLayoutEffect(() => {
     if (!placed) return
     const form = card.current
-    // Never a disabled target (while its comparison runs): focusing one does nothing, and the keys would stay outside.
-    const into = form?.querySelector<HTMLInputElement>('input[type="radio"]:checked:not(:disabled)') ?? form?.querySelector<HTMLInputElement>('input[type="radio"]:not(:disabled)') ?? button.current
+    const into = form?.querySelector<HTMLInputElement>('input[type="radio"]:checked') ?? form?.querySelector<HTMLInputElement>('input[type="radio"]') ?? button.current
     // Opened from another window (the palette in the main window over a popped-out Results): that window comes forward,
     // else the keys would stay where they were and the popover could not be reached or dismissed by keyboard.
     const doc = form?.ownerDocument
@@ -191,6 +184,16 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
 
   if (!picker) return null
 
+  /** The focus moving out by key (F6, F8, a shortcut to another view) closes it, as a press outside does. Not a move into
+   *  another dialog (the command palette, a modal), which gives the focus back; not the toolbar's Compare, a toggle that
+   *  closes it itself; and not the window losing the focus (no `relatedTarget`), handled above. */
+  const leave = (event: FocusEvent<HTMLFormElement>) => {
+    const to = event.relatedTarget as Element | null
+    if (!to || event.currentTarget.contains(to) || to.closest('[role="dialog"]')) return
+    if (to.closest('.results-compare') && home.current?.closest('[data-pane]')?.contains(to)) return
+    compare.close(tabId)
+  }
+
   /** Escape, Close and the head's close button: the focus goes back to what opened it. */
   const dismiss = () => {
     const element = home.current
@@ -213,8 +216,8 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
   const keyDown = (event: KeyboardEvent<HTMLFormElement>) => {
     trapFocus(event)
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismiss() }
-    // Enter on a target or on Exact text compares, as it would in a form with one button. The focus moves to Compare first:
-    // the target and Exact text are disabled while it runs, which would drop the focus out of the popover.
+    // Enter on a target or on Exact text compares, as it would in a form with one button. The focus moves to Compare first,
+    // where a failure is said and from where Escape returns it.
     else if (event.key === 'Enter' && (event.target as Element).matches('input')) { event.preventDefault(); button.current?.focus(); void start() }
   }
 
@@ -233,7 +236,7 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
   return <>
     <span ref={home} hidden />
     {host && createPortal(<form ref={card} className="compare-popover" role="dialog" aria-label="Compare" aria-busy={running || undefined} style={place ?? { visibility: 'hidden' }}
-      onKeyDown={keyDown} onSubmit={event => { event.preventDefault(); void start() }}>
+      onKeyDown={keyDown} onBlur={leave} onSubmit={event => { event.preventDefault(); void start() }}>
       <div className="compare-head">
         <h2>Compare {name}{targets.length > 0 && <span> with</span>}</h2>
         <button type="button" className="icon-button" aria-label="Close Compare" title="Close (Escape)" onClick={dismiss}><Icon name="close" /></button>
@@ -246,7 +249,7 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
             // Columns of either result left out: "2 of 3 columns" counts both results' columns, a pair once.
             const paired = target.pairing.pairs.length, all = paired + target.pairing.oldOnly.length + target.pairing.newOnly.length
             return <label key={target.entry.key} className={picker.target === target.entry.key ? 'compare-target picked' : 'compare-target'}>
-              <input type="radio" name={ids + 'target'} disabled={running} checked={picker.target === target.entry.key} onChange={() => compare.pick(tabId, target.entry.key)} />
+              <input type="radio" name={ids + 'target'} checked={picker.target === target.entry.key} onChange={() => compare.pick(tabId, target.entry.key)} />
               <span className="compare-target-name">{entryName(target.entry)}</span>
               {paired < all && <span className="compare-chip" title={`${formatCount(paired)} of ${formatCount(all)} columns pair; the rest are not compared`}>{formatCount(paired)} of {formatCount(all)} columns</span>}
               <small>{rows(target.entry)}</small>
@@ -255,7 +258,7 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
         </fieldset>}
         {sides && <div className="compare-sides">
           {side(sides.old, true)}
-          <button type="button" className="icon-button" aria-label="Swap old and new" title="Swap old and new" disabled={running} onClick={() => compare.swap(tabId)}><Icon name="arrow-swap" /></button>
+          <button type="button" className="icon-button" aria-label="Swap old and new" title="Swap old and new" onClick={() => compare.swap(tabId)}><Icon name="arrow-swap" /></button>
           {side(sides.neu, false)}
         </div>}
         {left.length > 0 && <section className="compare-unpaired" aria-labelledby={ids + 'unpaired'}>
@@ -270,7 +273,7 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
         <p className={picker.error ? 'compare-note error' : picker.cancelled ? 'compare-note' : 'visually-hidden'} role="status">{picker.error ?? (picker.cancelled ? 'Comparison cancelled.' : '')}</p>
       </div>
       <div className="compare-foot">
-        <label className="compare-exact" title="Case and trailing spaces count"><input type="checkbox" disabled={running} checked={picker.exact} onChange={event => compare.setExact(tabId, event.target.checked)} /> Exact text</label>
+        <label className="compare-exact" title="Case and trailing spaces count"><input type="checkbox" checked={picker.exact} onChange={event => compare.setExact(tabId, event.target.checked)} /> Exact text</label>
         <span className="compare-gap" />
         {running && sides
           ? <button type="button" onClick={() => compare.cancel(tabId, sides.old.key, sides.neu.key, picker.exact)}>Cancel</button>

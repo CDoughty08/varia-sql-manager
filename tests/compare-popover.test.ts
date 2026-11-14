@@ -112,7 +112,7 @@ describe('Compare popover', () => {
     view.unmount()
   })
 
-  it('keeps the focus inside when Exact text lands on a pair already comparing', async () => {
+  it('leaves its controls usable when Exact text lands on a pair already comparing, offering Cancel', async () => {
     const view = fixture()
     // Compare with Previous Result (Exact Text) is running on the same pair.
     let finish!: (answer: DiffAnswer) => void
@@ -124,8 +124,10 @@ describe('Compare popover', () => {
     exact.focus()
     act(() => { exact.click() })
     view.draw()
-    expect(exact.disabled).toBe(true)
-    expect(document.activeElement).toBe(view.popover()!.querySelector('button[type="submit"]'))
+    expect(exact.disabled).toBe(false)
+    expect(document.activeElement).toBe(exact)
+    expect(view.button('Cancel')).toBeDefined()
+    expect(view.popover()!.querySelector('button[type="submit"]')?.getAttribute('aria-disabled')).toBe('true')
     await act(async () => { finish({ descriptor: descriptor(960, { index: 2, kind: 'diff' }), key: 'Id', same: 2, changed: 0, added: 0, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: [] }); await running })
     view.unmount()
   })
@@ -220,7 +222,7 @@ describe('Compare popover', () => {
     expect(document.activeElement).toBe(radio)
     await act(async () => { radio.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })
     view.draw()
-    expect(radio.disabled).toBe(true)
+    expect(radio.disabled).toBe(false)
     const compareButton = view.popover()!.querySelector<HTMLButtonElement>('button[type="submit"]')!
     expect(document.activeElement).toBe(compareButton)
     await act(async () => { fail(new ResultError('TOO_LARGE', 'Too large.')) })
@@ -305,16 +307,46 @@ describe('Compare popover', () => {
     view.unmount()
   })
 
-  it('opened again while its comparison runs, takes the focus on Compare rather than on a disabled target', async () => {
+  it('opened again on a pair still comparing, still offers the other targets, which compare beside it', async () => {
     const view = fixture({ count: 3, open: 2 })
     vi.mocked(view.handle(view.keys[1]).diff).mockImplementationOnce(() => new Promise<DiffAnswer>(() => {}))
     await act(async () => { view.button('Compare')!.click() })
     act(() => { view.compare.close('t1') })
     act(() => { view.compare.open('t1', view.keys[2]) })
     view.draw()
-    expect(view.popover()!.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.disabled).toBe(true)
-    expect(document.activeElement).toBe(view.popover()!.querySelector('button[type="submit"]'))
+    const radios = [...view.popover()!.querySelectorAll<HTMLInputElement>('input[type="radio"]')]
+    expect(radios.every(radio => !radio.disabled)).toBe(true)
+    expect(document.activeElement).toBe(radios[1])
+    // Picking Result 1 shows a pair that is not running: Compare is offered again.
+    act(() => { radios[0].click() })
+    view.draw()
+    expect(view.popover()!.querySelector('button[type="submit"]')?.hasAttribute('aria-disabled')).toBe(false)
+    expect(view.button('Close')).toBeDefined()
     view.unmount()
+  })
+
+  it("closes when the focus moves out by key, but not into another dialog or to the toolbar's Compare", () => {
+    const view = fixture()
+    const palette = document.createElement('div')
+    palette.setAttribute('role', 'dialog')
+    const input = palette.appendChild(document.createElement('input'))
+    const toolbar = view.container.appendChild(document.createElement('button'))
+    toolbar.className = 'results-compare'
+    const editor = document.body.appendChild(document.createElement('textarea'))
+    document.body.append(palette)
+    try {
+      act(() => { input.focus() })
+      expect(view.compare.getSnapshot().pickers.t1).toBeDefined()
+      act(() => { view.button('Compare')!.focus() })
+      act(() => { toolbar.focus() })
+      expect(view.compare.getSnapshot().pickers.t1).toBeDefined()
+      act(() => { view.button('Compare')!.focus() })
+      act(() => { editor.focus() })
+      expect(view.compare.getSnapshot().pickers.t1).toBeUndefined()
+    } finally {
+      palette.remove()
+      editor.remove()
+    }
   })
 
   it('closes when its window loses the focus (a press in another window)', () => {
