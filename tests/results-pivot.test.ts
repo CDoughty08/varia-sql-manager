@@ -322,7 +322,8 @@ describe('PivotService', () => {
     // Rebuilt and shown, but the old result stays until its save ends.
     expect(results.getSnapshot().t1.groups[0].pivot).toMatchObject({ key: old.key, revision: 2 })
     expect(client.released()).not.toContain(old.entry.descriptor.resultId)
-    dialog.resolve({ ok: true, value: { rows: 1, truncatedCells: 0, fileName: 'Query.csv', capped: false } } as Awaited<ReturnType<VariaApi['saveResults']>>)
+    // The dialog closes (cancelled, which says nothing): the save ends either way.
+    dialog.resolve({ ok: true, value: null })
     await expect(saving).resolves.toBeUndefined()
     await settle()
     expect(client.released()).toContain(old.entry.descriptor.resultId)
