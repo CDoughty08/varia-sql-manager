@@ -108,6 +108,9 @@ internal static class IdentityChecks
         var columns = Enumerable.Range(0, RowIdentity.MaxCandidates + 1).Select(c => new ResultColumn("Key" + c.ToString(System.Globalization.CultureInfo.InvariantCulture) + "Id", "int", "text")).ToArray();
         var data = Enumerable.Range(0, rows).Select(r => columns.Select(_ => (string?)(r == rows - 1 ? "0" : r.ToString(System.Globalization.CultureInfo.InvariantCulture))).ToArray()).ToArray();
         var set = Fill(store, data, columns, [.. columns.Select(_ => WireKind.Text)]);
+        // As results.identify does: a packed result is unpacked before it is read (the packed pass).
+        using var pin = set.Pin();
+        set.TryUnpackAll();
         var pages = set.SealedSnapshot();
         RowIdentity.Build(set, pages, IdentityBy.Auto, -1, CancellationToken.None);
         var before = GC.GetAllocatedBytesForCurrentThread();
@@ -170,7 +173,7 @@ internal static class IdentityChecks
         var store = new ResultStore(1L << 30, 1L << 29);
         using var service = new SqlService(store);
         var set = Fill(store, [["c", "S1", "30", "3", null], ["a", "S2", "10", "1", null], ["b", "S3", "20", "2", null], ["a", "S4", "40", "1", null]]);
-        var baseline = store.UsedBytes;
+        var baseline = Held.Bytes(store);
         T Call<T>(string method, object args) => (T)service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult()!;
         string? Code(string method, object args)
         {
@@ -180,7 +183,7 @@ internal static class IdentityChecks
         }
         check(Code("results.rowIds", new { resultId = set.ResultId, firstRow = 0, count = 4 }) == "IDENTITY_NOT_FOUND", "rows have no identities until results.identify");
         var identified = Call<ResultsIdentifyResult>("results.identify", new { resultId = set.ResultId, by = "auto" });
-        var held = store.UsedBytes - baseline;
+        var held = Held.Bytes(store) - baseline;
         check(new[] { "results.identify", "results.rowIds", "results.findRows" }.All(SqlService.MethodNames.Contains) && identified.Column == 2 && identified.Unique && identified.Rows == 4
             && held == 8 * 4 + ResultStore.ViewOverhead, "results.identify keeps one identity per row, charged to the result's budget (" + held + " bytes)");
         var ids = Call<ResultsRowIdsResult>("results.rowIds", new { resultId = set.ResultId, firstRow = 1, count = 10 });
@@ -195,7 +198,7 @@ internal static class IdentityChecks
         var byName = Call<ResultsIdentifyResult>("results.identify", new { resultId = set.ResultId, by = "column", column = 0 });
         var nameIds = Call<ResultsRowIdsResult>("results.rowIds", new { resultId = set.ResultId, firstRow = 0, count = 4 });
         var both = Call<ResultsFindRowsResult>("results.findRows", new { resultId = set.ResultId, ids = new[] { nameIds.Ids[1] } });
-        check(!byName.Unique && byName.Column == 0 && string.Join(",", both.Positions) == "1,3" && store.UsedBytes - baseline - (4 * 4 + ResultStore.ViewOverhead) == held,
+        check(!byName.Unique && byName.Column == 0 && string.Join(",", both.Positions) == "1,3" && Held.Bytes(store) - baseline - (4 * 4 + ResultStore.ViewOverhead) == held,
             "a column chosen by hand need not be unique: one identity finds every row with its value, and the new identities replace the old");
         var codes = new[]
         {
@@ -216,7 +219,7 @@ internal static class IdentityChecks
         check(Code("results.identify", new { resultId = open.ResultId, by = "auto" }) == "RESULT_OPEN", "a result still loading is identified once it finishes");
         store.Release(set.ResultId);
         store.Release(open.ResultId);
-        check(store.IdentityCount == 0 && store.UsedBytes == 0, "releasing a result returns its identities' memory");
+        check(store.IdentityCount == 0 && Held.Bytes(store) == 0, "releasing a result returns its identities' memory");
         var tight = new ResultStore(4096, 4096);
         using var small = new SqlService(tight);
         var cramped = tight.Open(tight.BeginQuery("tight"), 0, 1, 1, "rows", [new("id", "int", "text")], [WireKind.Text])!;
@@ -227,10 +230,10 @@ internal static class IdentityChecks
             cramped.TryCommitRow();
         }
         cramped.Complete();
-        var before = tight.UsedBytes;
+        var before = Held.Bytes(tight);
         string? refused;
         try { small.DispatchAsync("results.identify", JsonSerializer.SerializeToElement(new { resultId = cramped.ResultId, by = "auto" }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); refused = null; }
         catch (RequestException error) { refused = error.Code; }
-        check(refused == "TOO_LARGE" && tight.UsedBytes == before, "identities the budget has no room for answer TOO_LARGE and take nothing");
+        check(refused == "TOO_LARGE" && Held.Bytes(tight) == before, "identities the budget has no room for answer TOO_LARGE and take nothing");
     }
 }

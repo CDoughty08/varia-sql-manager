@@ -10,6 +10,7 @@ import {
   editorGroups, environmentPill, executingMark, explorerFooter, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, primaryAction, queryBar, queryBarButton, queryConnection, queryDatabase, queryServer,
   queryStatus, readOnlyMark, resultGrid, selectOpenDocument, statusChips, tabNameBox, toolbar, toolbarButton, unsavedMark, workspaceEmpty
 } from './fixtures/ui.mjs'
+import { pinStackedResults } from './fixtures/results-pane.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'electron-profile-'))
@@ -73,6 +74,8 @@ try {
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor[role=code]')).toBeVisible({ timeout: 30000 })
+  // These steps read the stacked results layout; scripts/grouped-results-smoke.mjs covers Tabs.
+  await pinStackedResults(page)
   const health = await page.evaluate(() => window.varia.health())
   expect(health.ok).toBe(true)
   expect(health.value.protocolVersion).toBe(2)

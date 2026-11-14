@@ -162,6 +162,9 @@ being true.
 - The grid renders cells only through `GridView` pools, and text only through `nodeValue` (`tests/grid-lint.test.ts`
   forbids HTML sinks under `grid/`, `results/`, `designer/` and `live/`); no React per row or cell, and frames stay
   O(visible cells).
+  The Tabs layout (`ResultsTabs`, `queryResults.grid.layout`) mounts only the selected view's `ResultGrid`, keyed by its
+  entry: switching unmounts the other, whose `GridShell` gives back its pool and registration while its state stays in
+  `GridViewState`; switching releases nothing in the backend. The selected view is the service's focused entry.
   `GridView` works in drawn rows and columns for geometry, pools and scrolling, and meets the result's own rows and columns
   at named seams (its `selection`/`select`, `sourceRange`, a cell's lookup in `paintCell`, `targetOf`, `buttonColumn`, Open
   Value and Fit), each the identity in a table; its saved state, marks and callbacks are always in the result's. Columns
@@ -202,9 +205,26 @@ being true.
   So no pin outlasts the reading: an operation over the whole result runs through `SqlService.UntilReleased`, which the
   release cancels (`ResultSetBuffer.Released`, answering `RESULT_RELEASED`), and results.read pins only to take or build a
   page, never across its wait for credit. Copy and Save lease their result, so a release never cuts them short.
-  The store may keep a page in another form than it sealed, so nothing else touches `StoredPage.Stored`
-  (`tests/result-page-access.test.ts`), and the .NET checks refuse a read of an unpinned, unleased set
-  (`ResultSetBuffer.RequirePins`).
+  The store may keep a page packed (`PackedPage`: Zstandard level 2, a one-page window, `PageCodec`), so nothing else
+  touches `StoredPage.Stored` (`tests/result-page-access.test.ts`), and the .NET checks refuse a read of an unpinned,
+  unleased set (`ResultSetBuffer.RequirePins`). Packing is behind an internal switch, `ResultStore.Packing`, off in the
+  product until a policy decides which results to pack (docs/page-compression-findings.md); the checks' second pass
+  packs every complete result. `ResultSetBuffer.Pack` packs only a complete, unpinned, unleased result that is not a
+  live table, page by page, leaving raw a page that saves under a tenth; a packed page is charged its packed length plus
+  `PageOverhead` plus its sidecar, the saving goes back to the budgets at once and counts toward `CollectNow`'s next
+  collection but never toward a compacting one. Reads of a packed page unpack it into a per-result cache of six pages
+  (`CachePages`), kept only while the budget has spare room for it (`TryReserveSpare`), so many results' caches never
+  take the budget past its figures; without room a page is unpacked for its read alone. A view read unpacks the base pages behind its rows 64 at
+  a time on the workers (`BodiesTogether`, working memory reserved and returned, one at a time when refused,
+  keeping only the latest page); an operation on the whole result (sort, filter, distinct values, profile, row identity, diff, pivot, and a
+  search, whose slots keep the pages it reads) first
+  unpacks it in place (`SqlService.Unpack`: `UnpackNeed` for every result it reads reserved together as working memory,
+  then `UnpackAll`, stopped by a release; a refusal answers `TOO_LARGE` with the operation's sentence and unpacks none).
+  A transposed Copy or Save keeps every page it reads, so it unpacks the pages its rows lie on together as working memory
+  held until the job ends (`BodiesTogether`, `TOO_LARGE` when refused); a plain Copy or Save reads page by page through
+  the cache. `ResultStore.PackingSnapshot` holds the
+  counters (packed, logical and cached bytes; pages packed, kept raw and unpacked; cache hits; time), not yet in
+  `results.memory`.
 - A run's results are groups (`TabResults.groups`): each original result owns its Table slot and at most one Pivot slot,
   and a comparison is a slot of its own with frozen references to its two inputs (`TabResults.comparisons`). `sets` stays
   the one flat list, in the order drawn: a group's Table, its Pivot directly under it, the next group, comparisons last.
@@ -229,7 +249,7 @@ being true.
   its frozen `ResultSlot.sources` and go only to an entry whose set key is still the one compared; otherwise they read
   closed.
 - Every way a result leaves its run goes through one cleanup, `ResultsService.drop`: closing one view (`removeEntry`, a
-  stack caption's close button or Close Result, on an ended run only; a Table closes its group, so its Pivot
+  stack caption's close button, a result or view tab's close button in the Tabs layout, or Close Result, on an ended run only; a Table closes its group, so its Pivot
   goes in the same release), Close Results, a new run and the tab closing. It aborts the entry's
   sort or filter being built, forgets its held views, sort, distinct snapshots, grid controller and state and its part of
   the stack's state, cancels a copy of it (a save the backend accepted finishes under its lease), and releases the stored

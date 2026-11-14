@@ -179,10 +179,10 @@ internal static class ResultSearchChecks
             catch (RequestException error) { return error.Code; }
             catch (JsonException) { return "INVALID_PARAMS"; }
         }
-        var before = store.UsedBytes;
+        var before = Held.Bytes(store);
         var found = Call<ResultsSearchResult>("results.search", new { resultId = set.ResultId, text = "cafe", fromRow = 0, maxMatches = 100 });
         check(SqlService.MethodNames.Contains("results.search") && found.Total == 4 && found.MatchRows.SequenceEqual([0L, 1, 2, 3]) && found.MatchColumns.SequenceEqual([1, 1, 1, 3])
-            && found.Complete && found.Approximate && found.Rows == 6 && store.UsedBytes == before, "results.search answers the matches of a result and holds no memory after it");
+            && found.Complete && found.Approximate && found.Rows == 6 && Held.Bytes(store) == before, "results.search answers the matches of a result and holds no memory after it");
         var view = Call<ResultsViewResult>("results.view", new { resultId = set.ResultId, sort = new[] { new { column = 0, descending = true, mode = "value" } } });
         var viewed = Call<ResultsSearchResult>("results.search", new { resultId = set.ResultId, text = "1", fromRow = 1, maxMatches = 2, viewId = view.ViewId });
         check(viewed.MatchRows.SequenceEqual([1L, 1]) && viewed.First == 1 && viewed.Total == 5, "results.search searches through a view by its positions");

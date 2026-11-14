@@ -108,6 +108,16 @@ internal sealed class RowAccess
         return PageView.At(layout.Body, layout.BlobStart, layout.Layout, stored.FirstRow, stored.Rows, columns);
     }
 
+    /// <summary>Whether a page by its index is kept parsed.</summary>
+    public bool Keeps(int page) => Volatile.Read(ref parsed[page]) is not null;
+
+    /// <summary>Keeps a page's bytes, read by the caller (unpacked together with others), as the page it reads.</summary>
+    public void Keep(int page, byte[] body)
+    {
+        var first = PageView.Parse(body, columns);
+        Volatile.Write(ref parsed[page], new Parsed(body, first.Layout, first.BlobStart));
+    }
+
     private sealed record Parsed(byte[] Body, int[] Layout, int BlobStart);
 }
 

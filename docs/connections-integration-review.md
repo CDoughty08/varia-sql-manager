@@ -206,8 +206,16 @@ The final focus-source check passed in 98.5 seconds with 2,805 offline .NET chec
 the production build; 24 configuration-dependent cases were skipped. The complete menu Electron rerun passed,
 including the focus regression, unchanged zoom assertions, native context menus, transaction/running-query prompts and
 real-server menus. Chart and live-grid reruns also passed; the corrected chart runner waited 379 seconds for admission
-without spending its unchanged execution budget. Explorer and results also hit the old collection's queue-inclusive
-watchdog and require corrected reruns; final collection/rerun outcomes are recorded in the PR.
+without spending its unchanged execution budget. Explorer and results also passed their corrected reruns after the old
+collection's queue-inclusive watchdog expired; final collection/rerun outcomes are recorded in the PR.
+
+The reviewed merge through main `66a8b51e` passed the full check in 107.8 seconds: 3,427 offline .NET checks, 5,240
+Vitest tests, TypeScript and the production build, with 24 configuration-dependent skips. Regenerated references cover
+308 commands and the merged settings/gestures; the Electron inventory now has 32 suites. This base merge leaves the
+reviewed connection authentication, startup, query affinity and disconnect implementations unchanged. Local coverage
+across the original collection and corrected reruns accounts for all 32 suites; grouped results, hot exit and editor
+passed against the merged build. The other local passes used the preceding application build; CI results for the final
+PR commit are recorded in the PR. The owned temporary SQL logins and sessions were cleaned up.
 
 ## Initial local validation and limits
 

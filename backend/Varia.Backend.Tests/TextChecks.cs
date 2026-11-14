@@ -658,6 +658,9 @@ internal static class TextChecks
     {
         var store = new ResultStore(1L << 30, 1L << 29);
         var set = Synthetic(store, "W1", 100_000);
+        // The writer's allocations, not unpacking's: the packed pass's pages are unpacked first.
+        using var pin = set.Pin();
+        set.TryUnpackAll();
         var pages = set.PagesFor(0, int.MaxValue);
         var output = new Discard();
         var scratch = new int[PageView.ScratchLength(set.Columns.Count)];

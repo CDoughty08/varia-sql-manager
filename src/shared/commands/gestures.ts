@@ -141,6 +141,11 @@ export const gestureCatalog = {
     kind: 'pointerCommand', scope: 'popouts', action: 'doubleClick', target: 'a popout tab', modifiers: ['ctrl'],
     choices: [['ctrl'], ['alt'], ['shift'], []], darwin: { modifiers: ['meta'], choices: [['meta'], ['alt'], ['shift'], []] }, keyboard: ['pane.moveToMainWindow']
   },
+  'resultTabs.scroll': {
+    title: 'Scroll Result Tabs', description: 'Scrolls the row of result tabs sideways when the pane is too narrow to show them all, in the Tabs layout.',
+    kind: 'fixed', scope: 'resultsGrid', action: 'wheel', target: 'the result tabs', modifiers: [],
+    locked: 'Wheel input scrolls the result tabs sideways; Control+wheel still zooms. Arrow keys, Home and End on a focused tab also reach every tab.'
+  },
   'documentTabs.scroll': {
     title: 'Scroll Tabs', description: 'Scrolls one-row shelves horizontally, or an expanded tab header vertically when its rows extend beyond the editor group.',
     kind: 'fixed', scope: 'documentTabs', action: 'wheel', target: 'a tab shelf', modifiers: [],

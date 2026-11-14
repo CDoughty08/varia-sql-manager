@@ -59,7 +59,13 @@ static class OfflineSuites
         Environment.Exit(1);
     }
 
-    static double Weight(string name) => Weights.TryGetValue(name, out var seconds) ? seconds : 0.1;
+    static double Weight(string name) => Weights.TryGetValue(Base(name), out var seconds) ? seconds : 0.1;
+
+    /// <summary>Prefixed to the result suites' second run with every result packed (Program.cs): the same suite, alone or
+    /// weighed as the first run's.</summary>
+    public const string PackedPrefix = "Packed ";
+
+    static string Base(string name) => name.StartsWith(PackedPrefix, StringComparison.Ordinal) ? name[PackedPrefix.Length..] : name;
 
     /// <param name="limitMs">How long one suite may run before <paramref name="stuck"/> is told (by default the run exits).</param>
     public static async Task RunAsync((string Name, Func<Task> Run)[] suites, bool serial, int? limitMs = null, Action<string>? stuck = null, Action<string>? log = null)
@@ -105,8 +111,8 @@ static class OfflineSuites
             }
             else
             {
-                foreach (var name in Alone.Where(byName.ContainsKey)) await Timed(name);
-                var rest = suites.Select(suite => suite.Name).Where(name => !Alone.Contains(name));
+                foreach (var name in suites.Select(suite => suite.Name).Where(name => Alone.Contains(Base(name)))) await Timed(name);
+                var rest = suites.Select(suite => suite.Name).Where(name => !Alone.Contains(Base(name)));
                 await Task.WhenAll(Assign(rest, lanes).Select(lane => Task.Run(async () => { foreach (var name in lane) await Timed(name); })));
             }
         }
