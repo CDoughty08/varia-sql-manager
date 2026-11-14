@@ -622,7 +622,9 @@ Outcome, accepted by the owner:
         retiring of backend views superseded while unmounted is still as before (plan, Rendering and commands).
       - Without the overflow picker, a run of more than `gridLimits.resultTabsDrawn` (64) results draws a window of 64
         result tabs around the selected one with "+N" counts either side; arrow keys and Find Next reach the rest. PR 14
-        replaces the counts with the picker. Comparisons are tabs in the same row, after the groups, with a "Comparison"
+        replaces the counts with the picker. Fewer tabs than that fit a pane, so the tabs drawn sit in a strip that scrolls
+        sideways (the wheel too) with no scroll bar, keeps the selected tab in view (`revealLeft`) and fades a clipped
+        edge. Comparisons are tabs in the same row, after the groups, with a "Comparison"
         label where view tabs would be.
       - The view row carries the view's facts (rows, columns, batch), its filter chips (the stack's `FilterChips`, now
         shared) and Save Results As; there is no caption. The two rows are `gridLimits.resultTabsHeight` and

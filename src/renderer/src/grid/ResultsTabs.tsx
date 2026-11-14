@@ -1,4 +1,4 @@
-import { memo, useCallback, useId, useLayoutEffect, useRef, useSyncExternalStore, type FocusEvent, type KeyboardEvent, type MouseEvent } from 'react'
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useSyncExternalStore, type FocusEvent, type KeyboardEvent, type MouseEvent, type WheelEvent } from 'react'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import { entryName, entryOf, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultGroup, type ResultSetEntry, type ResultSlot, type TabResults } from '../results/ResultsService'
@@ -25,6 +25,13 @@ export function topItems(tab: Pick<TabResults, 'groups' | 'comparisons'>): TopIt
 }
 /** The view a group's tab selects: the one it last showed, its Pivot while it has one, else its Table. */
 export const groupView = (group: ResultGroup): EntryKey => group.selected === 'pivot' && group.pivot ? group.pivot.key : group.table.key
+
+/** The strip's scroll offset that shows a tab from `start` to `start + width` whole, moving as little as it can (a tab wider
+ *  than the strip shows its start). */
+export function revealLeft(scrollLeft: number, viewWidth: number, start: number, width: number): number {
+  if (start < scrollLeft || width >= viewWidth) return start
+  return start + width > scrollLeft + viewWidth ? start + width - viewWidth : scrollLeft
+}
 
 /** The places of the top-row items drawn: all of them up to `size`, else a window of `size` around the selected one, so a
  *  run of 1,000 results draws a bounded row. */
@@ -190,6 +197,36 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     select(views[next].key)
     rootRef.current?.querySelector<HTMLElement>(`[data-tab-row="view"] [data-tab-entry="${views[next].key}"] [role="tab"]`)?.focus()
   }
+  // Fewer tabs fit than the window draws: the strip scrolls (the wheel scrolls it sideways), keeps the selected tab in
+  // view and fades an edge that hides tabs.
+  const stripRef = useRef<HTMLDivElement>(null)
+  const clipped = () => {
+    const strip = stripRef.current, row = strip?.parentElement
+    if (!strip || !row) return
+    row.toggleAttribute('data-clip-start', strip.scrollLeft > 0)
+    row.toggleAttribute('data-clip-end', strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 1)
+  }
+  const selectedTab = group?.table.key ?? selected?.key
+  useLayoutEffect(() => {
+    const strip = stripRef.current, target = selectedTab === undefined ? null : strip?.querySelector<HTMLElement>(`[data-tab-entry="${selectedTab}"]`)
+    if (strip && target) strip.scrollLeft = revealLeft(strip.scrollLeft, strip.clientWidth, target.offsetLeft, target.offsetWidth)
+    clipped()
+  })
+  useEffect(() => {
+    const strip = stripRef.current
+    if (!strip || typeof ResizeObserver !== 'function') return
+    const observer = new ResizeObserver(() => {
+      const target = selectedTab === undefined ? null : strip.querySelector<HTMLElement>(`[data-tab-entry="${selectedTab}"]`)
+      if (target) strip.scrollLeft = revealLeft(strip.scrollLeft, strip.clientWidth, target.offsetLeft, target.offsetWidth)
+      clipped()
+    })
+    observer.observe(strip)
+    return () => observer.disconnect()
+  }, [selectedTab, !selected])
+  const wheel = (event: WheelEvent<HTMLDivElement>) => {
+    if (event.deltaX || !event.deltaY) return
+    event.currentTarget.scrollLeft += event.deltaY
+  }
   const closeTitle = (name: string, others = '') => running ? `Close ${name} (unavailable while the query runs)` : `Close ${name}${others}`
   const refocusView = () => (rootRef.current?.querySelector<HTMLElement>('[data-tab-row="view"] [role="tab"][aria-selected="true"]')
     ?? rootRef.current?.querySelector<HTMLElement>('[data-tab-row="result"] [role="tab"][aria-selected="true"]'))?.focus()
@@ -200,6 +237,7 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
   return <div ref={rootRef} className="rt-root" onFocus={trackFocus} onBlur={trackBlur}>
     <div className="rt-results" role="tablist" aria-label="Results and comparisons" data-tab-row="result" onKeyDown={resultKey}>
       {first > 0 && <span className="rt-more" aria-hidden="true" title={`${formatCount(first)} more before`}>+{formatCount(first)}</span>}
+      <div className="rt-strip" ref={stripRef} onScroll={clipped} onWheel={wheel}>
       {shown.map((item, place) => {
         const on = item === items[at], others = item.group?.pivot ? ' and its Pivot' : ''
         const batch = item.group ? batchText(item.group.batchNumber, item.group.iteration, tab.totalBatches) : ''
@@ -212,6 +250,7 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
             onClick={event => close(item.key, 'result', event)}><Icon name="close" /></button>}
         </div>
       })}
+      </div>
       {last < items.length - 1 && <span className="rt-more" aria-hidden="true" title={`${formatCount(items.length - 1 - last)} more after`}>+{formatCount(items.length - 1 - last)}</span>}
     </div>
     <div className="rt-views">

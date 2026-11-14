@@ -913,7 +913,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* Results as tabs (queryResults.grid.layout): a row of result and comparison tabs (gridLimits.resultTabsHeight), the
    selected result's view tabs with its facts (gridLimits.viewTabsHeight), and one grid. No parent scroll bar. */
 .rt-root { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.rt-results { display: flex; flex: none; align-items: flex-end; gap: 2px; height: 28px; box-sizing: border-box; padding: 3px 4px 0; overflow: hidden; border-bottom: 1px solid var(--varia-panel-border); background: var(--varia-panelTitle-background); }
+.rt-results { position: relative; display: flex; flex: none; align-items: flex-end; gap: 2px; height: 28px; box-sizing: border-box; padding: 3px 4px 0; overflow: hidden; border-bottom: 1px solid var(--varia-panel-border); background: var(--varia-panelTitle-background); }
+.rt-strip { position: relative; display: flex; flex: 0 1 auto; align-items: flex-end; gap: 2px; min-width: 0; height: 100%; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.rt-strip::-webkit-scrollbar { display: none; }
+.rt-results[data-clip-start] .rt-strip { mask-image: linear-gradient(to right, transparent, currentColor 16px); }
+.rt-results[data-clip-end] .rt-strip { mask-image: linear-gradient(to left, transparent, currentColor 16px); }
+.rt-results[data-clip-start][data-clip-end] .rt-strip { mask-image: linear-gradient(to right, transparent, currentColor 16px, currentColor calc(100% - 16px), transparent); }
 .rt-tab { display: flex; flex: none; align-items: center; height: 24px; box-sizing: border-box; padding-right: 2px; border: 1px solid transparent; border-bottom: 0; border-radius: var(--varia-radius-sm); border-bottom-left-radius: 0; border-bottom-right-radius: 0; color: var(--varia-panelTitle-inactiveForeground); }
 .rt-tab[data-selected] { background: var(--varia-panel-background); border-color: var(--varia-panel-border); color: var(--varia-foreground); box-shadow: inset 0 2px 0 var(--varia-panelTitle-activeBorder); transition: none; }
 .rt-tab > [role="tab"] { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 4px 0 8px; color: inherit; font-size: var(--varia-size-sm); white-space: nowrap; }

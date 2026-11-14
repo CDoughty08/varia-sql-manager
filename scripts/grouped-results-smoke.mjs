@@ -1,7 +1,7 @@
 // Grouped results drawn as tabs (queryResults.grid.layout = tabs) against the fake backend's synthetic result sets: the
 // results toolbar's Tabs toggle, a row of result tabs with one grid mounted, a result's view tabs once it has a Pivot,
 // each view keeping its selection across switches, Find Next selecting the tab that holds the match, closing from the tabs
-// with the focus moving on, the Messages strip opening beside the two rows of tabs, and Stacked again from the palette.
+// with the focus moving on, a row of more tabs than fit scrolling to the selected one, the Messages strip opening beside the two rows of tabs, and Stacked again from the palette.
 // results-smoke.mjs covers the stacked layout and pins it. No assertion depends on absolute pixel sizes.
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
@@ -137,14 +137,28 @@ try {
   await expect(anyResultGrid(page)).toHaveCount(1)
   console.log('Grouped results checks: closing from the tabs selects the Table after its Pivot, else the next result, and the focus follows.')
 
-  // 6. The Messages strip opens by itself beside the two rows of tabs when an error arrives and the pane has room.
+  // 6. More result tabs than the row fits: End reaches the last, which scrolls into view and takes a click; Home goes back.
+  await run(`-- varia-fake: sets=${Array(30).fill('N1*3').join(',')}`)
+  await expect(resultTabs(page).getByRole('tab')).toHaveCount(30)
+  await resultTab(page, 'Result 1').click()
+  await expect(resultTab(page, 'Result 30')).not.toBeInViewport()
+  await resultTab(page, 'Result 1').press('End')
+  await expect(resultTab(page, 'Result 30')).toBeFocused()
+  await expect(resultTab(page, 'Result 30')).toBeInViewport({ ratio: 1 })
+  await resultTab(page, 'Result 29').click()
+  await expect(resultTab(page, 'Result 29')).toHaveAttribute('aria-selected', 'true')
+  await resultTab(page, 'Result 29').press('Home')
+  await expect(resultTab(page, 'Result 1')).toBeInViewport({ ratio: 1 })
+  console.log('Grouped results checks: a row of more tabs than fit scrolls to keep the selected tab in view.')
+
+  // 7. The Messages strip opens by itself beside the two rows of tabs when an error arrives and the pane has room.
   await run('-- varia-fake: sets=N1*3,W1*2000 messages=2 errors=1')
   await expect(resultTabs(page).getByRole('tab')).toHaveText(['Result 1', 'Result 2'])
   await expect(messagesStrip(page)).toHaveAttribute('aria-expanded', 'true')
   await expect(resultTabPanel(page)).toBeVisible()
   console.log('Grouped results checks: the Messages strip opens beside the tabs when the pane fits both rows, a grid and the strip.')
 
-  // 7. Stacked again from the palette's Show Results as Tabs: every grid is drawn, nothing was rebuilt.
+  // 8. Stacked again from the palette's Show Results as Tabs: every grid is drawn, nothing was rebuilt.
   await textbox().focus()
   await page.keyboard.press('F1')
   await page.keyboard.type('show results as tabs')
@@ -155,7 +169,7 @@ try {
   await expect(anyResultGrid(page)).toHaveCount(2)
   await expect(show('Tabs')).toHaveAttribute('aria-pressed', 'false')
   expect(failures).toEqual([])
-  console.log('Grouped results checks passed: tabs and view tabs with one grid, state kept across switches, Find Next across tabs, closing with focus, the Messages strip and Stacked again.')
+  console.log('Grouped results checks passed: tabs and view tabs with one grid, state kept across switches, Find Next across tabs, closing with focus, the Messages strip, a row too long to fit and Stacked again.')
 } catch (error) {
   await page.screenshot({ path: resolve('artifacts', 'grouped-results-failure.png') }).catch(() => {})
   throw error

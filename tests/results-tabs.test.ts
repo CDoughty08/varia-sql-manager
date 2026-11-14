@@ -12,7 +12,7 @@ import type { Workbench } from '../src/renderer/src/core/workbench'
 import type { ResultGridProps } from '../src/renderer/src/grid/ResultGrid'
 import { gridLimits as g } from '../src/renderer/src/grid/constants'
 import { scrollbarSize } from '../src/renderer/src/grid/ResultsStack'
-import ResultsTabs, { groupView, selectedEntry, tabsNeed, tabWindow, topItems } from '../src/renderer/src/grid/ResultsTabs'
+import ResultsTabs, { groupView, revealLeft, selectedEntry, tabsNeed, tabWindow, topItems } from '../src/renderer/src/grid/ResultsTabs'
 import { minGridHeight } from '../src/renderer/src/grid/stack'
 import { ResultsService } from '../src/renderer/src/results/ResultsService'
 import type { TabSearch } from '../src/renderer/src/results/search'
@@ -98,6 +98,40 @@ describe('results as tabs', () => {
     expect(selectedEntry(results.getSnapshot().t1)?.key).toBe(pivot)
   })
 
+  it('scroll the strip as little as shows the selected tab whole', () => {
+    expect(revealLeft(0, 300, 100, 80)).toBe(0)
+    expect(revealLeft(0, 300, 400, 80)).toBe(180)
+    expect(revealLeft(250, 300, 100, 80)).toBe(100)
+    expect(revealLeft(250, 300, 300, 80)).toBe(250)
+    expect(revealLeft(0, 50, 100, 80)).toBe(100)
+  })
+
+  it('keep the selected tab in view when more tabs are drawn than the strip fits', () => {
+    const { results, three, draw, all } = fixture()
+    draw()
+    const strip = all('.rt-strip')[0]
+    let left = 0
+    Object.defineProperty(strip, 'clientWidth', { configurable: true, get: () => 150 })
+    Object.defineProperty(strip, 'scrollWidth', { configurable: true, get: () => 400 })
+    Object.defineProperty(strip, 'scrollLeft', { configurable: true, get: () => left, set: value => { left = value } })
+    all('.rt-tab').forEach((tab, place) => {
+      Object.defineProperty(tab, 'offsetLeft', { configurable: true, get: () => place * 100 })
+      Object.defineProperty(tab, 'offsetWidth', { configurable: true, get: () => 100 })
+    })
+    act(() => { results.focusEntry('t1', three) })
+    draw()
+    expect(left).toBe(150)
+    expect(strip.parentElement!.hasAttribute('data-clip-start')).toBe(true)
+    expect(strip.parentElement!.hasAttribute('data-clip-end')).toBe(true)
+    act(() => { results.focusEntry('t1', results.getSnapshot().t1.sets[0].key) })
+    draw()
+    expect(left).toBe(0)
+    expect(strip.parentElement!.hasAttribute('data-clip-start')).toBe(false)
+    // The wheel scrolls the strip sideways.
+    act(() => { strip.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true })) })
+    expect(left).toBe(120)
+  })
+
   it('draw a bounded window of result tabs around the selected one', () => {
     expect(tabWindow(3, 2, 64)).toEqual([0, 2])
     expect(tabWindow(1000, 0, 64)).toEqual([0, 63])
@@ -126,6 +160,10 @@ describe('results as tabs', () => {
     expect(names(viewTabs())).toEqual(['Table'])
     expect(grids()).toEqual([one])
     expect([...mountedGrids]).toEqual([one])
+    // Drawn again with the same selection, the grid is the same one, not built again.
+    const built = all('[data-grid]')[0].dataset.instance
+    draw()
+    expect(all('[data-grid]')[0].dataset.instance).toBe(built)
     expect(all('[data-grid]')[0].dataset.focused).toBe('true')
     // The tab panel is named by the view tab that shows it.
     const panel = all('[role="tabpanel"]')[0]
@@ -359,6 +397,10 @@ describe('the results layout toggle', () => {
       await commands.execute('output.toggleResultsTabs', undefined, 'palette')
       expect(settings.getSnapshot().values['queryResults.grid.layout']).toBe('stacked')
       expect(api.updateSettings.mock.calls).toEqual([[{ 'queryResults.grid.layout': 'tabs' }], [{ 'queryResults.grid.layout': 'stacked' }]])
+      // Two quick presses, the second before the first is saved, cancel out.
+      await Promise.all([commands.execute('output.toggleResultsTabs', undefined, 'toolbar'), commands.execute('output.toggleResultsTabs', undefined, 'toolbar')])
+      expect(api.updateSettings.mock.calls.slice(2)).toEqual([[{ 'queryResults.grid.layout': 'tabs' }], [{ 'queryResults.grid.layout': 'stacked' }]])
+      expect(settings.getSnapshot().values['queryResults.grid.layout']).toBe('stacked')
     } finally { fixture.dispose() }
   })
 })
