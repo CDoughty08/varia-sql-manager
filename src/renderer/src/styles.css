@@ -897,6 +897,11 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rs-caption-facts { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 .rs-caption-batch { flex-shrink: 0; }
 .rs-caption-save, .rs-caption-close { flex-shrink: 0; }
+/* An out-of-date Pivot: a warning chip and Update beside it; while it is built again, the state and Cancel. */
+.rs-caption-stale { display: inline-flex; flex-shrink: 0; align-items: center; gap: var(--varia-space-1); height: 20px; padding: 0 var(--varia-space-2); border-radius: var(--varia-radius-pill); background: var(--varia-statusPill-warningBackground); color: var(--varia-statusPill-warningForeground); }
+.rs-caption-state { flex-shrink: 0; }
+.rs-caption-action { display: inline-flex; flex-shrink: 0; align-items: center; gap: var(--varia-space-1); height: 20px; padding: 0 var(--varia-space-2); border: 1px solid var(--varia-widget-border); border-radius: var(--varia-radius-sm); color: var(--varia-foreground); }
+.rs-caption-action:focus-visible { outline-offset: -2px; }
 /* A filtered result's filters (results PR 4), after its facts: each its words and a Remove button; they give way to the name. */
 .rs-filters { display: flex; flex: 0 1 auto; align-items: center; gap: var(--varia-space-1); min-width: 0; overflow: hidden; }
 .rs-filter { display: inline-flex; flex: 0 1 auto; align-items: center; gap: var(--varia-space-1); min-width: 0; height: 20px; padding: 0 0 0 var(--varia-space-2); border: 1px solid var(--varia-chip-activeBorder); border-radius: var(--varia-radius-pill); background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); }

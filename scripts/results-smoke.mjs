@@ -1654,6 +1654,29 @@ try {
   await expect(anyResultGrid(page)).toHaveCount(2)
   await expect(pivoted).toHaveCount(1)
   expect(await resultEntryKey(pivoted)).toBe(pivotEntry)
+  // Out of date and Update: filtering the Table (Keep Selected Rows on its first ten) marks its Pivot out of date on its
+  // caption and in its strip; Update builds it again from its own recipe over the filtered Table, in the same slot, and
+  // the mark goes.
+  const updatePivot = page.getByRole('button', { name: 'Update Pivot of Result 1', exact: true })
+  await expect(updatePivot).toHaveCount(0)
+  const pivotTable = resultGrid(page, 'Result 1', 'table')
+  await pivotTable.locator(gridPart.scroller).evaluate(element => { element.scrollLeft = 0 })
+  await cell(0, 0, pivotTable).click()
+  await cell(9, 0, pivotTable).click({ modifiers: ['Shift'] })
+  await cell(9, 0, pivotTable).click({ button: 'right' })
+  await outputMenu.getByRole('menuitem', { name: 'Filter', exact: true }).click()
+  await page.getByRole('menu', { name: 'Filter', exact: true }).getByRole('menuitem', { name: 'Keep Selected Rows', exact: true }).click()
+  await expect(strip('Pivot of Result 1')).toContainText("Out of date: Result 1's filters changed after this Pivot was built.")
+  await expect(updatePivot).toBeEnabled()
+  await updatePivot.click()
+  await expect(strip('Pivot of Result 1')).toContainText('Pivot of Result 1 (as sorted and filtered): 10 rows in 2 row groups.')
+  await expect(strip('Pivot of Result 1')).not.toContainText('Out of date')
+  await expect(updatePivot).toHaveCount(0)
+  expect(await resultEntryKey(pivoted)).toBe(pivotEntry)
+  // The filter removed, it is out of date again (nothing rebuilds by itself).
+  await outputPane(page).getByRole('group', { name: 'Filters of Result 1', exact: true }).getByRole('button', { name: 'Remove filter 10 selected rows', exact: true }).click()
+  await expect(updatePivot).toBeVisible()
+  console.log('Results checks: filtering a Table marks its Pivot out of date, and Update builds it again in its slot from the filtered rows.')
   // The Table's close button says the Pivot goes with it; the Pivot's closes the Pivot alone.
   await expect(resultClose(page, 'Result 1')).toHaveAttribute('title', 'Close Result 1 and its Pivot')
   await resultClose(page, 'Pivot of Result 1').click()

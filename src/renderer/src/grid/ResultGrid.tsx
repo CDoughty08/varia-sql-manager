@@ -5,7 +5,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { useKeybindingLabel } from '../core/useCommand'
 import { withKey } from '../query-context'
 import type { ResultHandle } from '../results/ResultClient'
-import { capStripText, filteredColumns, setKey, slotOf, type EntryKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
+import { capStripText, filteredColumns, groupOf, pivotOutOfDate, setKey, slotOf, type EntryKey, type GridSort, type ResultSetEntry } from '../results/ResultsService'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { resultsFilterSource } from '../results/ColumnFilterPopover'
 import { compareDetails, compareSources, compareText } from '../results/CompareService'
@@ -85,6 +85,12 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
     return compareSources(tab, slotOf(tab, entry.key)?.sources ?? []).map(source => source.entry ?? '').join('|')
   })
   const pivoted = useSyncExternalStore(pivot.subscribe, () => pivot.getSnapshot().info.get(setKey(entry.descriptor)))
+  // A group's Pivot whose Table's filters changed since it was built says so first in its strip.
+  const outOfDate = useSyncExternalStore(results.subscribe, () => {
+    if (!pivoted) return false
+    const tab = results.getSnapshot()[tabId], group = groupOf(tab, entry.key)
+    return !!tab && group?.pivot?.key === entry.key && pivotOutOfDate(tab, group)
+  })
   const values = useServiceSnapshot(settings).values
   const showTypes = values['queryResults.grid.showColumnTypes'], rowSize = values['queryResults.grid.rowSize']
   const viewRef = useRef<GridView | undefined>(undefined), apiRef = useRef<GridShellApi | undefined>(undefined)
@@ -191,7 +197,7 @@ function ResultGridBody({ tabId, entry, count, focused, budget, sort, view, grou
   const truncation = truncationText({ truncated: snapshot.truncated, rowsStored: snapshot.rowsStored, rowsRead: snapshot.rowsRead, budget })
   const sources = useMemo(() => { const tab = results.getSnapshot()[tabId]; return compared ? compareSources(tab, slotOf(tab, entry.key)?.sources ?? []) : undefined }, [compared, sourceKeys, results, tabId, entry])
   const compareNote = compared ? compareText(compared, sources) : undefined
-  const highlightNote = !lost && snapshot.state === 'complete' ? compareNote ?? (pivoted ? pivotStrip(pivoted, highlightText(marked)) : highlightText(marked)) : undefined
+  const highlightNote = !lost && snapshot.state === 'complete' ? compareNote ?? (pivoted ? pivotStrip(pivoted, highlightText(marked), outOfDate) : highlightText(marked)) : undefined
   // Transposed, the first rows of the view (the sorted and filtered one, when the grid shows one) are drawn as columns:
   // past them the strip says so first, since no scrolling reaches the rest.
   const shownRows = useSyncExternalStore((target ?? entry.handle).subscribe, () => (target ?? entry.handle).getSnapshot().rowsAvailable)

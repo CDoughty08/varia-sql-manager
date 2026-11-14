@@ -13,6 +13,7 @@ import type { ResultGridProps } from '../src/renderer/src/grid/ResultGrid'
 import ResultsStack, { collapsedPlaces, settledContent, stackNeed, turnedEntries, weightsOf } from '../src/renderer/src/grid/ResultsStack'
 import { ResultsService, setKey, type GridSort, type GridViewState, type ResultSetEntry } from '../src/renderer/src/results/ResultsService'
 import type { ResultView } from '../src/renderer/src/results/ResultClient'
+import { PivotService } from '../src/renderer/src/results/PivotService'
 import type { TabSearch } from '../src/renderer/src/results/search'
 import { descriptor, fakeResultClient, summaryOf } from './fixtures/results'
 
@@ -75,7 +76,8 @@ function fixture() {
   }
   const reveal = (key: string) => act(() => { search = { t1: { reveal: (search.t1?.reveal ?? 0) + 1, revealEntry: key, marks: new Map() } }; for (const listener of [...listeners]) listener() })
   const commands = { execute: vi.fn(async () => true) }
-  const workbench = { results, resultsSearch, commands } as unknown as Workbench
+  const pivot = new PivotService(results)
+  const workbench = { results, resultsSearch, commands, pivot } as unknown as Workbench
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -98,7 +100,7 @@ function fixture() {
   /** The caption's Collapse button of the entry drawn at a place. */
   const toggle = (place: number) => act(() => { all<HTMLButtonElement>('.rs-caption-toggle')[place].click() })
   const key = (name: string, place: number) => act(() => { all('.rs-splitter')[place].dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true })) })
-  return { results, client, keys, commands, draw, reveal, names, grids, grid, focused, collapsed, heights, splitters, toggle, key }
+  return { results, client, keys, commands, pivot, draw, reveal, names, grids, grid, focused, collapsed, heights, splitters, toggle, key }
 }
 
 describe('the stacked results', () => {
@@ -294,7 +296,7 @@ describe('the stacked results', () => {
     results.begin('peek', 'q1', undefined, { bare: true })
     void results.finish('peek', 'q1', { summary: summaryOf([descriptor(1)]) })
     const none = {}, resultsSearch = { subscribe: () => () => {}, getSnapshot: () => none, pendingReveal: () => false }
-    const workbench = { results, resultsSearch, commands: { execute: vi.fn(async () => true) } } as unknown as Workbench
+    const workbench = { results, resultsSearch, commands: { execute: vi.fn(async () => true) }, pivot: new PivotService(results) } as unknown as Workbench
     container = document.createElement('div')
     document.body.append(container)
     root = createRoot(container)
@@ -408,6 +410,36 @@ describe('the stacked results', () => {
     expect(document.activeElement).toBe(elsewhere)
     elsewhere.remove()
     expect([one, two]).toHaveLength(2)
+  })
+
+  it("mark an out-of-date Pivot on its caption with Update, and offer Cancel while it is built again", async () => {
+    const { results, client, commands, pivot, draw } = fixture()
+    // Result 1's Pivot was built over a Keep Selected Rows filter its Table no longer shows; Result 3's has no provenance.
+    const made = results.addSet('t1', descriptor(801, { index: 0, kind: 'pivot' }), 'Pivot of Result 1', ['1:1'], {
+      pivot: { recipe: { rows: [0], values: [{ aggregate: 'count' }] }, filters: [{ op: 'keepRows', rows: [1] }], inputRows: 1, truncated: false, incomplete: false, approximate: false }
+    })!
+    draw()
+    const update = () => container!.querySelector<HTMLButtonElement>('button[aria-label="Update Pivot of Result 1"]')
+    expect([...container!.querySelectorAll('.rs-caption-stale')].map(element => element.textContent)).toEqual(['Out of date'])
+    expect(update()!.disabled).toBe(false)
+    expect(container!.querySelector('button[aria-label="Update Pivot of Result 3"]')).toBeNull()
+    act(() => { update()!.click() })
+    expect(commands.execute).toHaveBeenCalledWith('output.updatePivot', { target: expect.objectContaining({ kind: 'output', tabId: 't1', view: 'grid', entry: made }) }, 'toolbar')
+    // Built again (here straight through the service): the caption says so and offers Cancel, which keeps the old Pivot.
+    let signal: AbortSignal | undefined
+    vi.mocked(client.handle(1)!.pivot).mockImplementationOnce((_spec, o) => new Promise((_resolve, reject) => { signal = o?.signal; o?.signal?.addEventListener('abort', () => reject(new Error('Cancelled.'))) }))
+    let updating: Promise<void> | undefined
+    act(() => { updating = pivot.update('t1', made) })
+    draw()
+    expect(update()).toBeNull()
+    expect(container!.querySelector('.rs-caption-state')!.textContent).toBe('Building again…')
+    const cancel = [...container!.querySelectorAll<HTMLButtonElement>('.rs-caption-action')].find(button => button.textContent === 'Cancel')!
+    await act(async () => { cancel.click(); await updating })
+    expect(signal?.aborted).toBe(true)
+    draw()
+    expect(container!.querySelector('.rs-caption-state')).toBeNull()
+    expect(update()).not.toBeNull()
+    expect(results.getSnapshot().t1.groups[0].pivot!.key).toBe(made)
   })
 
   it('disable the close buttons while the query runs', () => {

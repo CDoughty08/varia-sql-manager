@@ -653,6 +653,42 @@ Outcome, accepted by the owner:
         a lower cap would cost little either, but the plan's four is kept. [Pivot performance findings](pivot-performance-findings.md#measured-again-for-pr-10)
         has the table.
 11. **Out of date and Update.**
+    - **What PR 11 settled or left** (`tests/results-pivot.test.ts`'s "an out-of-date Pivot and Update",
+      `tests/menu-commands.test.ts`'s Update Pivot case and `results-smoke` step 13b2 hold its checks):
+      - Out of date is a pure function of the published run, `pivotOutOfDate(tab, group)` in `ResultsService.ts`: the
+        Pivot's recorded `filters` (PR 10's provenance) against `shownFilters`, the resolved filters of the view the
+        Table's grid shows (none while it shows its stored rows). A view still being built does not count until it
+        shows, so the mark changes with the grid. Nothing is stored for it, so nothing can fall out of step.
+      - `sameFilters` compares what filters keep: a `groups` filter by its column and snapshot (its other fields are
+        read from the snapshot), value and Keep Selected Rows filters by their rows in any order, a range by its two rows
+        in order, duplicates by its columns. Filters intersect, so their order counts only around a duplicates filter
+        (re-applying a filter moves it last, which changes nothing). Labels are not part of it, so naming a filter later
+        changes nothing. It compares the rows that stand for values, not the values: ticking the same values again in a
+        header's checklist makes a new snapshot, and a selection filter made again from other cells of the same values
+        resolves to other representative rows (the backend picks them from the cells selected), so either marks the
+        Pivot out of date though the rows kept are the same. That errs towards offering Update.
+      - Drawn on the Pivot's caption in Stacked, as the mock does: a warning chip "Out of date" and an **Update** button
+        ("Update Pivot of Result N"), disabled while the query runs or the Table cannot be pivoted (its sort or filter
+        being built, its rows lost). The strip starts with "Out of date: Result N's filters changed after this Pivot
+        was built. Update builds it again from Result N as it is filtered now." The view tab's dot belongs to PR 13's
+        tab strip, which had not merged; it reads `pivotOutOfDate` the same way.
+      - Update is a command, `output.updatePivot` ("Update Pivot"), offered for a group's Pivot or Table grid (the named
+        one, else the focused one) while the Pivot is out of date, not being built and its Table can be pivoted. It is
+        not in the grid menu (no access key is left there) nor the toolbar; the caption and the palette carry it.
+      - `PivotService.update(tabId, key)` builds from the Pivot's stored recipe, never the builder's draft (an edit not
+        yet built stays in the draft), through the same `start` path as Build Pivot: the Table's shown view held, one of
+        `DerivedJobs`' places with its retries, `addSet`'s atomic replacement, the old Pivot readable until then. A second
+        Update while one runs does nothing; Build Pivot meanwhile still gives the older build up, as before.
+      - Failure, refusal and cancellation keep the old Pivot and say why with PR 10's sentences, in the builder's error
+        for that group and, since the builder may be closed or on another group, in the results toolbar
+        (`ResultsService.notify`) while the run is still the one updated; so does any cancel by the user, Build Pivot's too. While a group's Pivot is built (by Update or
+        Build Pivot) its caption shows "Building again…" with **Cancel** (`PivotService.cancel(tabId, ordinal)`);
+        `PivotSnapshot.building` changes as builds start and end; `PivotService.building(tabId, ordinal)` says whether one of the current run is in flight. Build Pivot during an Update gives the Update up silently.
+      - A closed source: closing the Table (which closes the Pivot), closing the Pivot, a re-run, Close Results and the
+        tab closing give an Update up through PR 10's rules, its late answer released, and nothing is said. After
+        backend loss the Table cannot be pivoted, so Update is neither offered nor sent.
+      - Left: rebuilding by itself (PR 17); the Tabs dot (PR 13 or whichever lands second); a Pivot whose last build
+        failed or was cancelled stays marked, with no record of the failure on its caption (the toolbar's notice fades).
 12. **`hasResultSets`** and its consumers (after PRs 7 and 9, which edit the same contributions). Until then an
     emptied run with captured plans still has `hasResults`, so Find and Save Results As are enabled and do nothing.
     Consumers: `contributions/output.ts`, `pivot.ts`, `transpose.ts`, `PivotService`'s sync,

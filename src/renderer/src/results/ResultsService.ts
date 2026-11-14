@@ -104,6 +104,49 @@ export function groupOf(tab: Pick<TabResults, 'groups'> | undefined, key: EntryK
   if (!tab || key === undefined) return undefined
   return tab.groups.find(group => group.table.key === key || group.pivot?.key === key)
 }
+/** What a resolved filter keeps, in a form two of them compare by: a `groups` filter by the snapshot it names (its other
+ *  fields are read from it), the rows a value filter names in any order (a representative row each), a range's two in order. */
+const filterIdentity = (filter: ResolvedViewFilter): string => {
+  switch (filter.op) {
+    case 'groups': return `groups:${filter.column}:${filter.snapshotId}`
+    case 'duplicates': return `duplicates:${filter.columns.join(',')}`
+    case 'keepRows': return `keepRows:${[...filter.rows].sort((a, b) => a - b).join(',')}`
+    case 'between': return `between:${filter.column}:${filter.nulls}:${filter.rows.join(',')}`
+    default: return `${filter.op}:${filter.column}:${filter.nulls}:${[...filter.rows].sort((a, b) => a - b).join(',')}`
+  }
+}
+/** A list of filters as what it keeps: each keeps rows among those the ones before it kept, which is an intersection, so
+ *  the order matters only around a duplicates filter (it counts the rows it is given). The runs between duplicates
+ *  filters are sorted, and each duplicates filter stays where it is. */
+const filtersIdentity = (filters: readonly ResolvedViewFilter[]): string => {
+  const parts: string[] = []
+  let run: string[] = []
+  for (const filter of filters) {
+    if (filter.op !== 'duplicates') { run.push(filterIdentity(filter)); continue }
+    parts.push(...run.sort(), filterIdentity(filter))
+    run = []
+  }
+  return [...parts, ...run.sort()].join('|')
+}
+/** Whether two lists of resolved filters keep the same rows: the same filters, in any order between duplicates filters
+ *  (re-applying a filter moves it last). A filter's words are not part of it. */
+export function sameFilters(a: readonly ResolvedViewFilter[], b: readonly ResolvedViewFilter[]): boolean {
+  return a.length === b.length && filtersIdentity(a) === filtersIdentity(b)
+}
+/** The resolved filters of the view a Table's grid shows now: none while it shows its stored rows (or only the first view
+ *  is still being built). A view being built does not count until it shows, so the Pivot's mark changes with the grid. */
+export function shownFilters(tab: Pick<TabResults, 'sorts'>, key: EntryKey): readonly ResolvedViewFilter[] {
+  return tab.sorts.get(key)?.view?.filters ?? []
+}
+/**
+ * Whether a group's Pivot is out of date: the Table's resolved filters, as its grid shows them now, differ from those the
+ * Pivot's last build recorded (its provenance). Row order changes no aggregate, so a sort alone does not count, nor does a
+ * filter's label being named later. A Pivot with no provenance (none is published without one) is never marked.
+ */
+export function pivotOutOfDate(tab: Pick<TabResults, 'sorts'>, group: Pick<ResultGroup, 'table' | 'pivot'> | undefined): boolean {
+  const built = group?.pivot?.pivot
+  return !!group && !!built && !sameFilters(built.filters, shownFilters(tab, group.table.key))
+}
 /**
  * A grid's sort and filters (results.view): its keys in order, with the text mode each was sorted by, its filters, and the
  * view the grid shows. While a view is built (`sorting`) the grid keeps showing what it showed; a failed one keeps the last

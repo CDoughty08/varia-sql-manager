@@ -830,6 +830,38 @@ describe('Query Output commands', () => {
     for (const id of ['output.pivot', 'output.compare', 'output.compareWithPrevious', 'output.compareWithPreviousExact', 'output.closeResult', 'output.closeResults'] as const) expect(commands.isEnabled(id, bare(1)), id).toBe(false)
     expect(commands.isEnabled('output.copy', bare(1))).toBe(commands.isEnabled('output.copy', on('grid', { place: 1 })))
   })
+  it("Update Pivot is offered for a group's Pivot or Table while the Pivot is out of date, and builds it again from its own recipe", async () => {
+    const { commands, results, resultClient, pivot, tab, on, key } = await ran('win32', { ...queryOutput, resultSets: [descriptor(1), descriptor(2, { index: 1 })] })
+    pivot.open(tab.id, key(0))
+    pivot.setDraft(tab.id, { rows: [0], values: [{ aggregate: 'count' }] })
+    await pivot.run(tab.id)
+    const table = resultClient.handle(1)!
+    const offered = () => [0, 1, 2].map(place => commands.isEnabled('output.updatePivot', on('grid', { place })))
+    // Up to date: not offered anywhere (Result 2 has no Pivot at all).
+    expect(offered()).toEqual([false, false, false])
+    // Result 1's grid is filtered: its Pivot is out of date, and Update is offered on the Pivot and its Table.
+    const view = { ...table, viewId: 1, base: table, keys: [], filters: [{ op: 'in', column: 0, rows: [1], nulls: false }], rows: 1, baseRows: 3, complete: true, approximate: false, close: vi.fn(async () => {}), pivot: vi.fn() }
+    vi.mocked(table.sort).mockResolvedValueOnce(view as never)
+    results.sortBy(tab.id, key(0), 0, 'ascending')
+    await vi.waitFor(() => expect(results.sortOf(tab.id, key(0))?.view).toBe(view))
+    results.viewShown(tab.id, key(0), view as never)
+    expect(offered()).toEqual([true, true, false])
+    // The palette names no grid: the focused one's group.
+    results.focusEntry(tab.id, key(1))
+    expect(commands.isEnabled('output.updatePivot', { tabId: tab.id })).toBe(true)
+    results.focusEntry(tab.id, key(2))
+    expect(commands.isEnabled('output.updatePivot', { tabId: tab.id })).toBe(false)
+    // The draft changed since: Update still builds what the Pivot was built with.
+    pivot.setDraft(tab.id, { rows: [0], values: [{ aggregate: 'count' }, { aggregate: 'max', column: 0 }] })
+    view.pivot.mockResolvedValueOnce({ descriptor: descriptor(831, { index: 0, kind: 'pivot' }), rows: 1, rowGroups: 1, columnGroups: 0, approximate: false })
+    expect(await commands.execute('output.updatePivot', on('grid', { place: 1 }), 'toolbar')).toBe(true)
+    await vi.waitFor(() => expect(results.getSnapshot()[tab.id].groups[0].pivot).toMatchObject({ revision: 2, pivot: { filters: view.filters } }))
+    expect(view.pivot).toHaveBeenCalledWith({ rows: [0], values: [{ aggregate: 'count' }] }, expect.anything())
+    expect(offered()).toEqual([false, false, false])
+    // A Peek grid is never a target.
+    const bare: CommandArgs = { ...on('grid', { place: 1 }), target: { ...on('grid', { place: 1 }).target as OutputTarget, bare: true } }
+    expect(commands.isEnabled('output.updatePivot', bare)).toBe(false)
+  })
   it('Close Result closes the view the grid shows: a Table with its group, a Pivot or a comparison alone, and nothing while the query runs', async () => {
     const { commands, results, resultClient, queries, pivot, compare, tab, on, key, element, startQuery } = await ran('win32', { ...queryOutput, resultSets: [descriptor(1), descriptor(2, { index: 1 })] })
     const names = () => results.getSnapshot()[tab.id].sets.map(set => set.label ?? set.number)

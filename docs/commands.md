@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (305)
+## Commands (306)
 
 ### File
 
@@ -181,6 +181,7 @@ keys it uses are listed below.
 | Compare with Previous Result | `output.compareWithPrevious` | — | — | — | Always | Query Output context menu › Compare with Previous Result |
 | Compare Results… | `output.compare` | — | — | — | Always | Query Output context menu › Compare… |
 | Pivot Results… | `output.pivot` | — | — | — | Always | Query Output context menu › Pivot Results… |
+| Update Pivot | `output.updatePivot` | — | — | — | Always | — |
 | Transpose Results | `output.transpose` | — | — | — | Always; checked when `resultsGridTransposed` | Query Output context menu › Transpose › Transposed |
 | Transpose Selected Rows | `output.transposeSelectedRows` | — | — | — | Always | Query Output context menu › Transpose › Selected Rows |
 | Transpose Using Column as Headers | `output.transposeWithHeaders` | — | — | — | Always | Query Output context menu › Transpose › Using Column as Headers |

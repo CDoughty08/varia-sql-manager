@@ -1031,6 +1031,12 @@ export const commandCatalog = {
     title: 'Pivot Results…', category: 'Query', icon: 'pivot', keywords: ['pivot', 'group', 'aggregate', 'summarize', 'crosstab', 'count', 'sum', 'average', 'grid', 'result'],
     menus: [{ menu: 'output.context', group: '2_sort', order: 10, when: "outputView == 'grid' && !outputGridBare" }]
   },
+  // A group's Pivot is out of date once its Table's filters differ from those its last build read; Update builds it again
+  // from its own recipe over the Table as filtered now, replacing it atomically (the old one stays until the new one is
+  // built). The Pivot's caption offers it beside its Out of date mark; the grid menu has no letter left for it.
+  'output.updatePivot': {
+    title: 'Update Pivot', category: 'Query', icon: 'refresh', keywords: ['pivot', 'update', 'rebuild', 'refresh', 'outdated', 'stale', 'filters', 'grid', 'result']
+  },
   // Transposed is a way a grid is drawn, kept with the view and stored nowhere (ResultsService.setOrientation): the result's
   // columns as rows and its first limits.transpose.maxRows rows as columns, following its sort and filters. Transpose
   // Results turns it on and off; Selected Rows keeps the selected rows (Keep Selected Rows) and turns it on; Using Column
