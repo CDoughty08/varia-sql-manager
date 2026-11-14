@@ -20,12 +20,12 @@ export const queryResultsSettings = [
   },
   {
     key: 'queryResults.grid.maxResultSets', page: 'queryResults.sqlServer.grid', label: 'Maximum result sets kept per execution', type: 'integer', min: 1, max: 1000, default: 1000,
-    varia: true, applies: 'nextExecution', keywords: ['result sets', 'limit'],
+    varia: true, applies: 'nextExecution', keywords: ['result sets', 'limit', 'max result sets', 'result set limit'],
     description: 'Result sets after this many still run and are counted, but their rows are not kept; the Messages tab says so.'
   },
   {
     key: 'queryResults.grid.maxRows', page: 'queryResults.sqlServer.grid', label: 'Maximum rows kept per execution (0: no limit)', type: 'integer', min: 0, max: 2_147_483_647, default: 0,
-    varia: true, applies: 'nextExecution', keywords: ['rows', 'limit', 'truncated', 'large', 'million', 'top'],
+    varia: true, applies: 'nextExecution', keywords: ['rows', 'limit', 'truncated', 'large', 'million', 'top', 'max rows', 'row limit', 'rows kept'],
     description: 'Rows after this many, counted over every result set of one execution, are still read and counted, but not kept; the grid says how many of how many it shows. The query itself is not changed, so the server still returns every row.'
   },
   {
@@ -49,6 +49,12 @@ export const queryResultsSettings = [
     values: [{ value: 'value', label: 'Value' }, { value: 'chars', label: 'Length in characters' }, { value: 'bytes', label: 'Length in bytes' }], default: 'value',
     keywords: ['sort', 'order', 'length', 'len', 'datalength', 'characters', 'bytes', 'text'],
     description: 'How a sorted results grid orders its text and binary columns. Value sorts as ORDER BY would, by the column\'s collation, with NULL first ascending. Length in characters counts every character, spaces included; length in bytes sorts by DATALENGTH. Other columns always sort by value. The results toolbar changes this too, and sorted grids sort again.'
+  },
+  {
+    key: 'queryResults.grid.layout', page: 'queryResults.sqlServer.grid', label: 'Show results', type: 'enum', varia: true,
+    values: [{ value: 'stacked', label: 'Stacked' }, { value: 'tabs', label: 'As tabs' }], default: 'stacked',
+    keywords: ['layout', 'tabs', 'stacked', 'stack', 'groups', 'results', 'pivot', 'comparison', 'view'],
+    description: 'Stacked shows every result of a run one under another, each Pivot under its result, comparisons last. As tabs shows one at a time: a row of tabs for the results and comparisons, the selected result\'s Table and Pivot as view tabs beneath, and one grid. Switching keeps each grid\'s scroll, column widths, selection, sort and filters. The results toolbar changes this too.'
   },
   {
     key: 'queryResults.grid.rowSize', page: 'queryResults.sqlServer.grid', label: 'Show row size behind row numbers', type: 'boolean', default: true, varia: true,
